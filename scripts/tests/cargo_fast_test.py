@@ -16,7 +16,10 @@ SCRIPT = REPO_ROOT / "scripts" / "cargo_fast.sh"
 CONTROLLED_ENV_VARS = (
     "CI",
     "CARGO_BUILD_JOBS",
+    "CARGO_BUILD_TARGET",
+    "CARGO_ENCODED_RUSTFLAGS",
     "CARGO_FAST_TARGET_ROOT",
+    "CARGO_FAST_TEST_WORKSPACE_MANIFEST",
     "CARGO_INCREMENTAL",
     "CARGO_PROFILE_BENCH_BUILD_OVERRIDE_CODEGEN_UNITS",
     "CARGO_PROFILE_BENCH_CODEGEN_UNITS",
@@ -29,6 +32,7 @@ CONTROLLED_ENV_VARS = (
     "CARGO_PROFILE_TEST_BUILD_OVERRIDE_CODEGEN_UNITS",
     "CARGO_PROFILE_TEST_CODEGEN_UNITS",
     "CARGO_TARGET_DIR",
+    "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER",
     "CMAKE_BUILD_PARALLEL_LEVEL",
     "GITHUB_ACTIONS",
     "IROHA_GIT_COMMIT_HASH",
@@ -72,6 +76,17 @@ def _run_wrapper(
         fake_bin / "cargo",
         """
         #!/bin/sh
+        if [ "$1" = locate-project ]; then
+          while [ "$#" -gt 0 ]; do
+            if [ "$1" = --manifest-path ]; then
+              shift
+              printf '%s\\n' "${CARGO_FAST_TEST_WORKSPACE_MANIFEST:-$1}"
+              exit 0
+            fi
+            shift
+          done
+          exit 1
+        fi
         {
           env
           printf '%s\n' __CARGO_FAST_ARGS__
@@ -136,6 +151,24 @@ def test_default_preserves_cargo_arguments_and_profile_defaults(tmp_path: Path) 
     assert "CARGO_TARGET_DIR=workspace-default" in result.stdout
     assert "CARGO_BUILD_JOBS=cargo-default" in result.stdout
     assert "linker=system-default" in result.stdout
+
+
+def test_cargo_replaces_wrapper_process_and_preserves_its_exit(tmp_path: Path) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    pid_file = tmp_path / "cargo.pid"
+    _write_executable(fake_bin / "cargo", '#!/bin/sh\nprintf "%s\\n" "$$" > "$PID_FILE"\nexit 37\n')
+    environment = os.environ.copy()
+    for name in CONTROLLED_ENV_VARS:
+        environment.pop(name, None)
+    environment.update({"PATH": f"{fake_bin}:/usr/bin:/bin", "PID_FILE": str(pid_file)})
+    process = subprocess.Popen(
+        ["/bin/bash", str(SCRIPT), "--no-sccache", "--", "check"],
+        cwd=REPO_ROOT, env=environment, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )
+    _, stderr = process.communicate(timeout=30)
+    assert process.returncode == 37, stderr
+    assert int(pid_file.read_text(encoding="utf-8").strip()) == process.pid
 
 
 def test_default_clears_exact_local_inherited_single_worker_fingerprint(
@@ -318,6 +351,149 @@ def test_target_slot_root_can_be_persisted_outside_the_checkout(tmp_path: Path) 
     assert environment["CARGO_TARGET_DIR"] == str(target_root / "routine")
 
 
+@pytest.mark.parametrize("equal_form", (False, True))
+def test_foreign_manifest_cannot_reuse_wrapper_target(tmp_path: Path, equal_form: bool) -> None:
+    frozen = tmp_path / "frozen"
+    frozen.mkdir()
+    manifest = frozen / "Cargo.toml"
+    manifest.write_text("[workspace]\nmembers = []\n", encoding="utf-8")
+    flags = [f"--manifest-path={manifest}"] if equal_form else ["--manifest-path", str(manifest)]
+    result, captured, _ = _run_wrapper(
+        tmp_path, "--no-sccache", "--print-env", "--", "check", *flags,
+        "--target-dir", "target",
+    )
+    assert result.returncode != 0
+    assert "belongs to another source tree" in result.stderr
+    assert not captured
+
+
+@pytest.mark.parametrize("flags", (("-C", "elsewhere"), ("-Celsewhere",)))
+def test_cargo_directory_override_requires_selected_wrapper(tmp_path: Path, flags: tuple[str, ...]) -> None:
+    result, captured, _ = _run_wrapper(tmp_path, "--no-sccache", "--", *flags, "check")
+    assert result.returncode != 0
+    assert "does not accept Cargo -C" in result.stderr
+    assert not captured
+
+
+@pytest.mark.parametrize("selection", ("environment", "wrapper", "cargo", "cargo-equals"))
+def test_rejects_target_in_another_source_tree_before_cargo(
+    tmp_path: Path, selection: str
+) -> None:
+    foreign = tmp_path / "other-checkout"
+    foreign.mkdir()
+    (foreign / "Cargo.toml").write_text("[workspace]\nmembers = []\n", encoding="utf-8")
+    target = str(foreign / "target")
+    arguments = ["--no-sccache"]
+    environment = {}
+    if selection == "environment":
+        environment["CARGO_TARGET_DIR"] = target
+    elif selection == "wrapper":
+        arguments.extend(("--target-dir", target))
+    arguments.extend(("--", "check"))
+    if selection == "cargo":
+        arguments.extend(("--target-dir", target))
+    elif selection == "cargo-equals":
+        arguments.append(f"--target-dir={target}")
+    result, captured, _ = _run_wrapper(tmp_path, *arguments, extra_env=environment)
+    assert result.returncode != 0
+    assert "belongs to another source tree" in result.stderr
+    assert not captured
+    assert not Path(target).exists()  # This check never creates or cleans targets.
+
+
+def test_forwarded_target_overrides_inherited_target_for_owner_check(tmp_path: Path) -> None:
+    foreign = tmp_path / "other-checkout"
+    foreign.mkdir()
+    (foreign / "Cargo.toml").write_text("[workspace]\n", encoding="utf-8")
+    result, _, arguments = _run_wrapper(
+        tmp_path, "--no-sccache", "--", "check", "--target-dir", "target",
+        extra_env={"CARGO_TARGET_DIR": str(foreign / "target")},
+    )
+    assert result.returncode == 0, result.stderr
+    assert arguments == ["check", "--target-dir", "target"]
+
+
+def test_program_target_argument_is_not_a_cargo_override(tmp_path: Path) -> None:
+    foreign = tmp_path / "other-checkout"
+    foreign.mkdir()
+    (foreign / "Cargo.toml").write_text("[workspace]\n", encoding="utf-8")
+    result, _, arguments = _run_wrapper(
+        tmp_path, "--no-sccache", "--", "test", "--", "--target-dir", str(foreign),
+    )
+    assert result.returncode == 0, result.stderr
+    assert arguments == ["test", "--", "--target-dir", str(foreign)]
+
+
+def test_frozen_source_rejects_ancestor_target_and_symlink(tmp_path: Path) -> None:
+    ancestor = tmp_path / "checkout"
+    frozen = ancestor / "snapshots" / "frozen"
+    frozen.mkdir(parents=True)
+    (ancestor / "Cargo.toml").write_text("[workspace]\n", encoding="utf-8")
+    (frozen / "Cargo.toml").write_text("[workspace]\n", encoding="utf-8")
+    target = ancestor / "target"
+    target.mkdir()
+    alias = frozen / "target-alias"
+    alias.symlink_to(target, target_is_directory=True)
+    sentinel = target / "retained-artifact"
+    sentinel.write_bytes(b"unchanged warm artifact")
+    for selected in (target, alias):
+        result = subprocess.run(
+            ["/usr/bin/env", "python3", str(REPO_ROOT / "scripts/check_cargo_target_owner.py"),
+             "--source-root", str(frozen), "--target-dir", str(selected)],
+            check=False, capture_output=True, text=True,
+        )
+        assert result.returncode != 0
+        assert "belongs to another source tree" in result.stderr
+        assert sentinel.read_bytes() == b"unchanged warm artifact"
+
+
+def test_nested_workspace_is_distinct_but_member_target_has_same_owner(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    member = source / "member"
+    nested = source / "snapshots" / "frozen"
+    member.mkdir(parents=True)
+    nested.mkdir(parents=True)
+    (source / "Cargo.toml").write_text('[workspace]\nmembers = ["member"]\n', encoding="utf-8")
+    (member / "Cargo.toml").write_text(
+        '[package]\nname = "owner-test-member"\nversion = "0.1.0"\n[lib]\npath = "lib.rs"\n',
+        encoding="utf-8",
+    )
+    (member / "lib.rs").write_text("", encoding="utf-8")
+    (nested / "Cargo.toml").write_text("[workspace]\nmembers = []\n", encoding="utf-8")
+    for target, expected in ((nested / "target", 1), (member / "target", 0), (source / "-cache", 0)):
+        result = subprocess.run(
+            ["/usr/bin/env", "python3", str(REPO_ROOT / "scripts/check_cargo_target_owner.py"),
+             "--source-root", str(source), f"--target-dir={target}"],
+            check=False, capture_output=True, text=True,
+        )
+        assert result.returncode == expected, result.stderr
+        assert not target.exists()
+
+
+def test_symlinked_manifest_preserves_cargos_distinct_source_directory(tmp_path: Path) -> None:
+    original = tmp_path / "original"
+    alias = tmp_path / "alias"
+    original.mkdir()
+    alias.mkdir()
+    (original / "Cargo.toml").write_text(
+        '[package]\nname = "manifest-link-owner"\nversion = "0.1.0"\n[lib]\npath = "lib.rs"\n',
+        encoding="utf-8",
+    )
+    (original / "lib.rs").write_text("pub const VALUE: u8 = 1;\n", encoding="utf-8")
+    (alias / "lib.rs").write_text("pub const VALUE: u8 = 2;\n", encoding="utf-8")
+    (alias / "Cargo.toml").symlink_to(original / "Cargo.toml")
+    result = subprocess.run(
+        ["/usr/bin/env", "python3", str(REPO_ROOT / "scripts/check_cargo_target_owner.py"),
+         "--source-root", str(original), "--manifest-path", str(alias / "Cargo.toml"),
+         "--target-dir", str(original / "target")],
+        check=False, capture_output=True, text=True,
+    )
+    assert result.returncode != 0
+    assert "belongs to another source tree" in result.stderr
+    assert str(alias) in result.stderr
+    assert not (original / "target").exists()
+
+
 def test_jobs_override_is_forwarded_to_cargo(tmp_path: Path) -> None:
     result, environment, _ = _run_wrapper(
         tmp_path, "--no-sccache", "--jobs", "6", "--", "build"
@@ -444,7 +620,7 @@ def test_auto_linker_remains_an_explicit_opt_in(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stderr
     expected_linker = tmp_path / "bin" / "mold"
     assert environment["RUSTFLAGS"] == (
-        f"-Clink-arg=-fuse-ld={expected_linker}"
+        f"-Clinker={tmp_path / 'bin' / 'cc'} -Clink-arg=-fuse-ld={expected_linker}"
     )
     assert f"linker={expected_linker}" in result.stdout
 

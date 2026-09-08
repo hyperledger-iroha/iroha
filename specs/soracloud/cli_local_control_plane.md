@@ -20,6 +20,11 @@ or with `X-Iroha-Witness`. The mutation provenance signer must be one of the
 verified request signers. Torii then returns an unsigned instruction skeleton;
 account private keys stay in the client wallet.
 
+Upgrade preconditions bind the current service or app revision using manifest
+hashes decoded through Norito JSON, including each hash literal's type tag and
+checksum. Bare hexadecimal strings and malformed literals fail before artifact
+publication or mutation signing.
+
 Aggregate, status, config, secret, health, training, model, host, and agent
 GETs use the same exact-network canonical account boundary. The CLI signs the
 final method, path, sorted query, and empty body with its configured NetworkId
@@ -406,8 +411,11 @@ hosts nothing until its exact production preflight succeeds. Enablement requires
 one exact operator-approved, operator-preseeded guest artifact. Its immutable
 materialization has a separate non-zero byte bound, defaulting to 4 GiB with a
 16 GiB production ceiling; it is not charged to the hosted workload's writable
-storage budget. Taira explicitly raises this bound to 10 GiB for its canonical
-guest stage.
+storage budget. Taira uses a 1600 MiB guest-stage bound for its normalized
+1536 MiB rootfs plus the pinned kernel and initrd. Its canonical writable
+allowance separately accounts for the 1536 MiB root lease, 16 MiB temporary
+filesystem and 64 MiB shared app-data lease: 1552 MiB host-local and 1616 MiB
+total writable storage. These values come from `iroha_config::parameters::defaults::taira`.
 
 Persisted V1 runtime state is exact rather than migratory. The top-level
 snapshot and every nested mailbox, artifact, lease-volume, apartment, HF-source,

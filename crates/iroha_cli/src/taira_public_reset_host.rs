@@ -6,8 +6,9 @@ use super::{
     PinnedArtifact, RecoveryIntentV1, RecoveryMutationStateV1, RecoveryMutationV1, RecoveryOutcome,
     TrustedKeyV1, ValidatorV1, artifact, authorization_semantic_sha256,
     ensure_authorization_current, ensure_pinned_unchanged, now_unix_ms, open_pinned_regular,
-    pin_owner_private_file, read_private_json, revalidate_pinned, sha256_hex, validate_inventory,
-    validate_owner_private_dir, verify_execution_authorization,
+    pin_owner_private_file, read_pinned_bytes, read_private_json, revalidate_pinned, sha256_hex,
+    validate_inventory, validate_owner_private_dir, validate_validator_genesis_config,
+    verify_execution_authorization,
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use eyre::{Context as _, Result, eyre};
@@ -19,7 +20,7 @@ use iroha::{
         verify_account_onboarding_prepared_transaction_v1,
         verify_account_onboarding_proof_required_result_v1,
     },
-    config::{Config as ClientConfig, LoadPath},
+    config::Config as ClientConfig,
     data_model::{
         NetworkId,
         account::{AccountId, address::ChainDiscriminantGuard},
@@ -713,6 +714,26 @@ impl HostTarget {
         }
     }
 
+    fn is_vacant(&self) -> bool {
+        match self {
+            Self::Validator(value) => value.is_vacant(),
+            Self::Edge(value) => value.is_vacant(),
+        }
+    }
+
+    fn admitted_release_root(&self) -> Option<&Path> {
+        match self {
+            Self::Validator(value) => value
+                .admitted_release()
+                .ok()
+                .map(|release| Path::new(&release.release_root)),
+            Self::Edge(value) => value
+                .admitted_release()
+                .ok()
+                .map(|release| Path::new(&release.release_root)),
+        }
+    }
+
     fn endpoint(&self) -> &EndpointV1 {
         match self {
             Self::Validator(value) => &value.endpoint,
@@ -831,6 +852,7 @@ fn dispatch_host_request(request_bytes: &[u8], body: &mut impl Read) -> Result<H
         publish_host_receipt(&receipt_dir, &receipt_name, &receipt)?;
         return Ok(receipt);
     }
+    ensure_vacant_original_state_before_touch(&admitted, &progress)?;
     if let Some(mut receipt) =
         read_existing_host_receipt(&receipt_dir, &receipt_name, &admitted, action)?
     {
@@ -2909,7 +2931,7 @@ struct UnitRestartEvidence {
 impl UnitRestartEvidence {
     fn is_terminal_active(&self) -> bool {
         self.active_state == "active"
-            && !matches!(self.sub_state.as_str(), "start" | "stop" | "running")
+            && self.sub_state == "running"
             && matches!(self.job.as_str(), "" | "0")
     }
 }
@@ -3089,13 +3111,12 @@ fn admit_host_request(
             "host request embedded closure exceeded a bound or hash drifted"
         ));
     }
-    let inventory: InventoryV1 =
-        json::from_slice(&inventory_bytes).wrap_err("host request inventory is invalid")?;
+    let (inventory, chain_guard) =
+        super::decode_inventory(&inventory_bytes, "host request inventory")?;
     let authorization: AuthorizationEnvelopeV1 =
         json::from_slice(&authorization_bytes).wrap_err("host request authorization is invalid")?;
     let trusted_key: TrustedKeyV1 =
         json::from_slice(&trusted_key_bytes).wrap_err("host request trusted key is invalid")?;
-    let chain_guard = super::enter_inventory_chain_discriminant(&inventory)?;
     validate_inventory(&inventory)?;
     let inventory_sha256 = sha256_hex(&inventory_bytes);
     let authorization_sha256 = authorization_semantic_sha256(&authorization, &trusted_key)?;
@@ -3392,6 +3413,640 @@ fn require_stream_eof(body: &mut impl Read) -> Result<()> {
     Ok(())
 }
 
+fn edge_forward_operation(edge: &EdgeV1) -> (&'static str, &'static str) {
+    if edge.is_vacant() {
+        ("edge-first-start", "start")
+    } else {
+        ("edge-cutover-reload", "reload")
+    }
+}
+
+fn require_path_absent(path: &Path, label: &str) -> Result<()> {
+    match fs::symlink_metadata(path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error).wrap_err_with(|| format!("inspect {label}")),
+        Ok(_) => Err(eyre!("{label} must be absent, including dangling symlinks")),
+    }
+}
+
+fn require_empty_directory_contents(path: &Path, label: &str) -> Result<()> {
+    if fs::read_dir(path)?.next().transpose()?.is_some() {
+        return Err(eyre!("{label} must contain no entries"));
+    }
+    Ok(())
+}
+
+fn require_empty_root_directory(path: &Path, label: &str) -> Result<()> {
+    require_root_directory(path, true, label)?;
+    require_empty_directory_contents(path, label)
+}
+
+fn attest_loaded_edge_unit(edge: &EdgeV1, deadline: Instant) -> Result<()> {
+    let fragment = Path::new("/etc/systemd/system/nginx.service");
+    let evidence = run_host_command(
+        SYSTEMCTL,
+        &[
+            "show",
+            "--all",
+            "--property=FragmentPath",
+            "--property=DropInPaths",
+            "--property=NeedDaemonReload",
+            "nginx.service",
+        ],
+        deadline,
+    )?;
+    validate_loaded_unit_evidence(&evidence, fragment)?;
+    verify_regular_hash(fragment, &edge.systemd_unit_sha256)
+}
+
+fn validate_vacant_unit_evidence(bytes: &[u8], allow_failed: bool) -> Result<Option<PathBuf>> {
+    let mut fields = BTreeMap::new();
+    for line in std::str::from_utf8(bytes)?.lines() {
+        let (key, value) = line
+            .split_once('=')
+            .ok_or_else(|| eyre!("vacant unit evidence is not key=value"))?;
+        if !matches!(
+            key,
+            "ActiveState" | "SubState" | "MainPID" | "ControlPID" | "ControlGroup" | "Job"
+        ) || fields.insert(key, value).is_some()
+        {
+            return Err(eyre!(
+                "vacant unit evidence has duplicate or unknown fields"
+            ));
+        }
+    }
+    if fields.len() != 6
+        || !matches!(
+            (
+                fields.get("ActiveState").copied(),
+                fields.get("SubState").copied()
+            ),
+            (Some("inactive"), Some("dead"))
+        ) && !(allow_failed
+            && fields.get("ActiveState") == Some(&"failed")
+            && fields.get("SubState") == Some(&"failed"))
+        || fields.get("MainPID") != Some(&"0")
+        || fields.get("ControlPID") != Some(&"0")
+        || fields.get("Job") != Some(&"")
+    {
+        return Err(eyre!(
+            "vacant target has an active process, job, or nonterminal service state"
+        ));
+    }
+    match fields.get("ControlGroup").copied() {
+        Some("") => Ok(None),
+        Some(path)
+            if path.starts_with('/')
+                && !path.contains("//")
+                && path
+                    .split('/')
+                    .skip(1)
+                    .all(|part| !part.is_empty() && part != "." && part != "..") =>
+        {
+            Ok(Some(Path::new("/sys/fs/cgroup").join(&path[1..])))
+        }
+        _ => Err(eyre!("vacant target cgroup path is not canonical")),
+    }
+}
+
+fn require_vacant_unit(admitted: &HostAdmission, allow_failed: bool) -> Result<()> {
+    let unit = match &admitted.target {
+        HostTarget::Validator(validator) => {
+            attest_loaded_systemd_unit(validator, admitted.action_deadline)?;
+            validator.systemd_unit.as_str()
+        }
+        HostTarget::Edge(edge) => {
+            attest_loaded_edge_unit(edge, admitted.action_deadline)?;
+            "nginx.service"
+        }
+    };
+    let evidence = run_host_command(
+        SYSTEMCTL,
+        &[
+            "show",
+            "--all",
+            "--property=ActiveState",
+            "--property=SubState",
+            "--property=MainPID",
+            "--property=ControlPID",
+            "--property=ControlGroup",
+            "--property=Job",
+            unit,
+        ],
+        admitted.action_deadline,
+    )?;
+    if let Some(cgroup) = validate_vacant_unit_evidence(&evidence, allow_failed)? {
+        require_root_directory(&cgroup, false, "vacant target cgroup")?;
+        let events = fs::read_to_string(cgroup.join("cgroup.events"))?;
+        if events
+            .lines()
+            .filter(|line| line.starts_with("populated "))
+            .collect::<Vec<_>>()
+            != ["populated 0"]
+        {
+            return Err(eyre!("vacant target cgroup retains processes"));
+        }
+    }
+    require_no_live_target_references(admitted)
+}
+
+fn target_path_is_occupied(path: &Path, roots: &[&Path]) -> bool {
+    // procfs appends this suffix to an unlinked referenced pathname. Strip it
+    // before component matching, including an open descriptor of the root itself.
+    let path = path
+        .to_str()
+        .and_then(|path| path.strip_suffix(" (deleted)"))
+        .map(Path::new)
+        .unwrap_or(path);
+    roots.iter().any(|root| path.starts_with(root))
+}
+
+// Mark a mount namespace examined only after its evidence was read and checked.
+// An exiting representative must not suppress another live process in that namespace.
+#[cfg(any(target_os = "linux", test))]
+fn inspect_process_namespace_evidence<R: Read>(
+    roots: &[&Path],
+    namespace: Option<PathBuf>,
+    seen: &mut BTreeSet<PathBuf>,
+    open: impl FnOnce() -> std::io::Result<R>,
+) -> Result<()> {
+    if namespace
+        .as_ref()
+        .is_some_and(|namespace| seen.contains(namespace))
+    {
+        return Ok(());
+    }
+    let file = match open() {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(error).wrap_err("inspect vacant target process namespace");
+        }
+    };
+    let mut bytes = Vec::new();
+    file.take(4 * 1024 * 1024 + 1).read_to_end(&mut bytes)?;
+    if bytes.len() > 4 * 1024 * 1024 {
+        return Err(eyre!("vacant target namespace evidence exceeds its bound"));
+    }
+    for token in std::str::from_utf8(&bytes)?.split_ascii_whitespace() {
+        let decoded = token
+            .replace("\\040", " ")
+            .replace("\\011", "\t")
+            .replace("\\012", "\n")
+            .replace("\\134", "\\");
+        if decoded.starts_with('/') && target_path_is_occupied(Path::new(&decoded), roots) {
+            return Err(eyre!(
+                "vacant target retains a mapped file or namespace mount"
+            ));
+        }
+    }
+    if let Some(namespace) = namespace {
+        seen.insert(namespace);
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn require_no_live_target_references(admitted: &HostAdmission) -> Result<()> {
+    // Look outside MainPID/cgroup as well: a surviving guest or escaped child
+    // may still own a state file or a mount in another process namespace.
+    let roots = [
+        Path::new(admitted.target.service_root()),
+        Path::new(admitted.target.state_root()),
+    ];
+    let mut examined = 0_usize;
+    let mut mount_namespaces = BTreeSet::new();
+    for entry in fs::read_dir("/proc")? {
+        ensure_action_deadline(admitted)?;
+        let entry = entry?;
+        let Some(pid) = entry
+            .file_name()
+            .to_str()
+            .and_then(|value| value.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        if pid == std::process::id() {
+            continue;
+        }
+        examined += 1;
+        if examined > 65_536 {
+            return Err(eyre!("vacant target process census exceeds its bound"));
+        }
+        let proc_root = entry.path();
+        for name in ["exe", "cwd", "root"] {
+            match fs::read_link(proc_root.join(name)) {
+                Ok(path) if target_path_is_occupied(&path, &roots) => {
+                    return Err(eyre!("vacant target retains a live process path"));
+                }
+                Ok(_) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error).wrap_err("inspect vacant target process path"),
+            }
+        }
+        let fds = match fs::read_dir(proc_root.join("fd")) {
+            Ok(value) => value,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error).wrap_err("inspect vacant target process descriptors"),
+        };
+        for (index, fd) in fds.enumerate() {
+            if index >= 65_536 {
+                return Err(eyre!("vacant target descriptor census exceeds its bound"));
+            }
+            match fs::read_link(fd?.path()) {
+                Ok(path) if target_path_is_occupied(&path, &roots) => {
+                    return Err(eyre!("vacant target retains an open process descriptor"));
+                }
+                Ok(_) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error).wrap_err("inspect vacant target descriptor"),
+            }
+        }
+        for name in ["maps", "mountinfo"] {
+            let namespace = if name == "mountinfo" {
+                match fs::read_link(proc_root.join("ns/mnt")) {
+                    Ok(namespace) => Some(namespace),
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                    Err(error) => {
+                        return Err(error).wrap_err("inspect vacant target mount namespace");
+                    }
+                }
+            } else {
+                None
+            };
+            inspect_process_namespace_evidence(&roots, namespace, &mut mount_namespaces, || {
+                File::open(proc_root.join(name))
+            })?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn require_no_live_target_references(_admitted: &HostAdmission) -> Result<()> {
+    Err(eyre!(
+        "vacant target process and namespace attestation requires Linux"
+    ))
+}
+
+fn require_vacant_host_precondition(admitted: &HostAdmission) -> Result<()> {
+    let service = Path::new(admitted.target.service_root());
+    let state = Path::new(admitted.target.state_root());
+    let guard = Path::new(admitted.target.reset_guard());
+    require_root_directory(service, false, "vacant service root")?;
+    require_root_directory(guard, true, "vacant reset guard")?;
+    require_path_absent(&service.join("current"), "vacant current selector")?;
+    if service.metadata()?.dev() != guard.metadata()?.dev()
+        || state.metadata()?.dev() != guard.metadata()?.dev()
+    {
+        return Err(eyre!(
+            "vacant service, state, and guard roots require one atomic filesystem"
+        ));
+    }
+    require_empty_root_directory(Path::new(admitted.target.state_root()), "vacant state root")?;
+    for entry in fs::read_dir(admitted.target.service_root())? {
+        let entry = entry?;
+        match entry.file_name().to_str() {
+            Some(".public-reset-upload-v1") => {
+                require_root_directory(&entry.path(), true, "vacant upload namespace")?
+            }
+            Some("releases") => {
+                require_root_directory(&entry.path(), false, "vacant releases namespace")?;
+                require_empty_directory_contents(&entry.path(), "vacant releases namespace")?;
+            }
+            _ => {
+                return Err(eyre!(
+                    "vacant service root contains an unadmitted namespace entry"
+                ));
+            }
+        }
+    }
+    if let HostTarget::Edge(edge) = &admitted.target {
+        let route = Path::new(&edge.nginx_config);
+        let parent = route
+            .parent()
+            .ok_or_else(|| eyre!("edge route has no parent"))?;
+        require_root_directory(parent, false, "vacant edge route parent")?;
+        if parent.metadata()?.dev() != guard.metadata()?.dev() {
+            return Err(eyre!(
+                "vacant edge route and guard require one atomic filesystem"
+            ));
+        }
+        require_path_absent(route, "vacant edge route")?;
+        for name in [
+            ".taira.conf.public-reset.next",
+            ".taira.conf.public-reset-rollback.next",
+        ] {
+            require_path_absent(&parent.join(name), "vacant edge staging namespace")?;
+        }
+    }
+    require_vacant_unit(admitted, false)
+}
+
+fn require_absent_or_exact_edge_candidate(edge: &EdgeV1) -> Result<()> {
+    let path = Path::new(&edge.nginx_config);
+    match fs::symlink_metadata(path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error).wrap_err("inspect first edge route"),
+        Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => {
+            let expected = artifact(&edge.artifacts, "edge_config")?;
+            let (_, snapshot) = open_pinned_regular(path, "first edge route")?;
+            if snapshot.uid != 0 || snapshot.nlink != 1 || snapshot.mode & 0o022 != 0 {
+                return Err(eyre!("first edge route custody drifted"));
+            }
+            verify_regular_hash(path, &expected.sha256)
+        }
+        Ok(_) => Err(eyre!("first edge route has an unexpected occupant")),
+    }
+}
+
+fn ensure_vacant_original_state_before_touch(
+    admitted: &HostAdmission,
+    progress: &HostProgressV1,
+) -> Result<()> {
+    let HostTarget::Validator(validator) = &admitted.target else {
+        return Ok(());
+    };
+    if !validator.is_vacant() {
+        return Ok(());
+    }
+    let untouched = !progress
+        .touched_hosts
+        .iter()
+        .any(|slug| slug == &validator.slug);
+    let rollback = rollback_nonce_root(admitted)?;
+    let intent_path = rollback.join("state-move.intent.json");
+    let state = Path::new(&validator.state_root);
+    match fs::symlink_metadata(&intent_path) {
+        Ok(_) => {
+            let intent = load_state_move_intent(&rollback, admitted)?;
+            if untouched {
+                require_empty_root_directory(state, "original vacant state before first touch")?;
+                require_state_identity(state, &intent)?;
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound && untouched => {
+            // This runs under the physical-host lock, before prepare_host_progress
+            // can mark any action on this target and before any upload or service
+            // mutation. Rollback may verify this inode; it must never invent it.
+            require_vacant_host_precondition(admitted)?;
+            let intent = ensure_state_move_intent(&rollback, state, admitted)?;
+            require_state_identity(state, &intent)?;
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Err(eyre!(
+                "touched vacant validator lacks its original state identity"
+            ));
+        }
+        Err(error) => return Err(error).wrap_err("inspect original vacant state identity"),
+    }
+    Ok(())
+}
+
+fn first_edge_start_was_prepared(admitted: &HostAdmission, edge: &EdgeV1) -> Result<bool> {
+    let (label, verb) = edge_forward_operation(edge);
+    let directory = ensure_host_receipt_dir(admitted)?;
+    let path = directory.join(manager_intent_name(label)?);
+    match fs::symlink_metadata(&path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error).wrap_err("inspect first edge manager intent"),
+        Ok(_) => {
+            let (intent, _) =
+                read_private_json::<ManagerIntentV1>(&path, "first edge manager intent")?;
+            validate_manager_intent(admitted, label, verb, "nginx.service", &intent)?;
+            Ok(true)
+        }
+    }
+}
+
+fn sync_existing_file_publication(
+    destination: &Path,
+    expected_sha256: &str,
+    source_parent: &Path,
+    sync_parent: impl Fn(&Path) -> Result<()>,
+) -> Result<()> {
+    sync_verified_regular_hash(destination, expected_sha256)?;
+    let destination_parent = destination
+        .parent()
+        .ok_or_else(|| eyre!("published file has no parent"))?;
+    // A prior rename can be visible before either namespace reached disk.
+    // Both parents must be durable before a retry admits a manager intent.
+    sync_parent(destination_parent)?;
+    sync_parent(source_parent)
+}
+
+fn publish_first_edge_config(
+    admitted: &HostAdmission,
+    edge: &EdgeV1,
+    source: &Path,
+    rollback: &Path,
+) -> Result<()> {
+    let config = artifact(&edge.artifacts, "edge_config")?;
+    let route = Path::new(&edge.nginx_config);
+    require_absent_or_exact_edge_candidate(edge)?;
+    if fs::symlink_metadata(route).is_ok() {
+        return sync_existing_file_publication(route, &config.sha256, rollback, sync_directory);
+    }
+    // The only partial copy lives inside this authorization's root-private
+    // rollback namespace. The public path is published once, without replace.
+    let next = rollback.join("first-edge-config.next");
+    if !reconcile_verified_staging(&next, config.size, &config.sha256)? {
+        copy_verified_file(source, &next, config)?;
+    }
+    ensure_action_deadline(admitted)?;
+    rename_noreplace(&next, route)?;
+    verify_regular_hash(route, &config.sha256)
+}
+
+fn verify_or_recover_first_release_staging(root: &Path, admitted: &HostAdmission) -> Result<()> {
+    require_root_directory(root, false, "first-install staging directory")?;
+    let marker = root.join(".public-reset-generated-v1.json");
+    match fs::symlink_metadata(&marker) {
+        Ok(_) => {
+            require_root_directory(root, true, "marked first-install staging directory")?;
+            return verify_generated_marker(root, admitted, "release");
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error).wrap_err("inspect first-install staging marker"),
+    }
+    // The install operation publishes its marker before any artifact. A crash
+    // before marker publication can therefore own only an empty directory or
+    // the exact private marker staging slot, never an arbitrary release tree.
+    for entry in fs::read_dir(root)? {
+        if entry?.file_name() != OsStr::new("..public-reset-generated-v1.json.next") {
+            return Err(eyre!(
+                "unmarked first-install staging contains an unowned entry"
+            ));
+        }
+    }
+    #[cfg(unix)]
+    fs::set_permissions(root, fs::Permissions::from_mode(0o700))?;
+    ensure_generated_directory(root, admitted, "release", 0o700)?;
+    verify_generated_marker(root, admitted, "release")
+}
+
+fn quarantine_vacant_release(admitted: &HostAdmission, rollback: &Path) -> Result<()> {
+    let service = Path::new(admitted.target.service_root());
+    let candidate = service
+        .join("releases")
+        .join(&admitted.inventory.revision.commit);
+    for selector in [
+        service.join("current"),
+        service.join(format!(
+            ".current.{}.next",
+            admitted.inventory.authorization_nonce
+        )),
+    ] {
+        match fs::symlink_metadata(&selector) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error).wrap_err("inspect first-install selector"),
+            Ok(metadata) => {
+                if !metadata.file_type().is_symlink() || fs::read_link(&selector)? != candidate {
+                    return Err(eyre!("first-install cleanup refuses an unowned selector"));
+                }
+                verify_installed_release(admitted, &candidate)?;
+                fs::remove_file(&selector)?;
+                sync_directory(service)?;
+            }
+        }
+    }
+    // An interrupted unlink can already be visible when this retry begins.
+    // Seal the namespace even when both selectors were absent on entry.
+    sync_directory(service)?;
+    let staging = service.join("releases").join(format!(
+        ".{}.{}.next",
+        admitted.inventory.revision.commit, admitted.inventory.authorization_nonce
+    ));
+    for (source, name, complete) in [
+        (candidate, "first-release.after", true),
+        (staging, "first-release-staging.after", false),
+    ] {
+        let destination = rollback.join(name);
+        let source_exists = match fs::symlink_metadata(&source) {
+            Ok(_) => true,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+            Err(error) => return Err(error).wrap_err("inspect first-install release"),
+        };
+        let destination_exists = match fs::symlink_metadata(&destination) {
+            Ok(_) => true,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+            Err(error) => return Err(error).wrap_err("inspect quarantined first release"),
+        };
+        if source_exists && destination_exists {
+            return Err(eyre!("first release and its quarantine are both occupied"));
+        }
+        if source_exists {
+            if complete {
+                require_root_directory(&source, true, "failed first release")?;
+                verify_installed_release(admitted, &source)?;
+            } else {
+                verify_or_recover_first_release_staging(&source, admitted)?;
+            }
+            rename_noreplace(&source, &destination)?;
+            sync_directory(source.parent().expect("release has parent"))?;
+            sync_directory(rollback)?;
+        }
+        if source_exists || destination_exists {
+            require_root_directory(&destination, true, "quarantined first release")?;
+            verify_generated_marker(&destination, admitted, "release")?;
+            if complete {
+                verify_installed_release(admitted, &destination)?;
+            }
+            sync_completed_rename(&source, &destination, sync_directory)?;
+        }
+    }
+    Ok(())
+}
+
+fn rollback_vacant_edge(admitted: &HostAdmission, edge: &EdgeV1, rollback: &Path) -> Result<()> {
+    stop_unit(admitted, "rollback-edge-stop", "nginx.service")?;
+    require_vacant_unit(admitted, true)?;
+    let route = Path::new(&edge.nginx_config);
+    let quarantine = rollback.join("first-edge-config.after");
+    if fs::symlink_metadata(route).is_ok() {
+        require_absent_or_exact_edge_candidate(edge)?;
+        require_path_absent(&quarantine, "first edge route quarantine")?;
+        rename_noreplace(route, &quarantine)?;
+        sync_directory(route.parent().expect("edge route has parent"))?;
+        sync_directory(rollback)?;
+    }
+    if fs::symlink_metadata(&quarantine).is_ok() {
+        verify_regular_hash(
+            &quarantine,
+            &artifact(&edge.artifacts, "edge_config")?.sha256,
+        )?;
+        sync_completed_rename(route, &quarantine, sync_directory)?;
+    }
+    require_path_absent(route, "rolled-back first edge route")?;
+    quarantine_vacant_release(admitted, rollback)?;
+    require_vacant_rollback_postcondition(admitted)
+}
+
+fn require_vacant_rollback_postcondition(admitted: &HostAdmission) -> Result<()> {
+    let service = Path::new(admitted.target.service_root());
+    require_path_absent(&service.join("current"), "rolled-back vacant selector")?;
+    require_path_absent(
+        &service.join(format!(
+            ".current.{}.next",
+            admitted.inventory.authorization_nonce
+        )),
+        "rolled-back first-install staging selector",
+    )?;
+    let releases = service.join("releases");
+    match fs::symlink_metadata(&releases) {
+        Ok(_) => {
+            require_root_directory(&releases, false, "rolled-back vacant release namespace")?;
+            require_empty_directory_contents(&releases, "rolled-back vacant release namespace")?;
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error).wrap_err("inspect rolled-back vacant release namespace"),
+    }
+    for entry in fs::read_dir(service)? {
+        let entry = entry?;
+        match entry.file_name().to_str() {
+            Some(".public-reset-upload-v1") => {
+                require_root_directory(&entry.path(), true, "rolled-back vacant upload namespace")?
+            }
+            Some("releases") => {}
+            _ => {
+                return Err(eyre!(
+                    "rolled-back vacant service retains an unadmitted namespace entry"
+                ));
+            }
+        }
+    }
+    let state = Path::new(admitted.target.state_root());
+    require_empty_root_directory(state, "restored vacant state")?;
+    let rollback = rollback_nonce_root(admitted)?;
+    require_path_absent(&rollback.join("state"), "vacant prior state move source")?;
+    match &admitted.target {
+        HostTarget::Validator(validator) => {
+            let intent = load_state_move_intent(&rollback, admitted)?;
+            require_state_identity(state, &intent)?;
+            let fresh = rollback.join("fresh-state.after");
+            if fs::symlink_metadata(&fresh).is_ok() {
+                verify_populated_fresh_state_for_quarantine(&fresh, admitted)?;
+            }
+            require_session_manager_operation_applied(
+                admitted,
+                "rollback-stop",
+                "stop",
+                &validator.systemd_unit,
+            )?;
+        }
+        HostTarget::Edge(edge) => {
+            require_path_absent(Path::new(&edge.nginx_config), "restored vacant edge route")?;
+            require_session_manager_operation_applied(
+                admitted,
+                "rollback-edge-stop",
+                "stop",
+                "nginx.service",
+            )?;
+        }
+    }
+    require_vacant_unit(admitted, true)
+}
+
 fn host_preflight(admitted: &HostAdmission) -> Result<()> {
     #[cfg(unix)]
     if rustix::process::geteuid().as_raw() != 0 {
@@ -3413,16 +4068,6 @@ fn host_preflight(admitted: &HostAdmission) -> Result<()> {
         true,
         "upload parent",
     )?;
-    let current = validated_current_release_target(admitted)?;
-    let expected_rollback = match &admitted.target {
-        HostTarget::Validator(validator) => Path::new(&validator.rollback.release_root),
-        HostTarget::Edge(edge) => Path::new(&edge.rollback_release_root),
-    };
-    if current != expected_rollback {
-        return Err(eyre!(
-            "host preflight current selector does not equal the signed rollback release"
-        ));
-    }
     let uname_system = run_host_command("/usr/bin/uname", &["-s"], admitted.action_deadline)?;
     let uname_machine = run_host_command("/usr/bin/uname", &["-m"], admitted.action_deadline)?;
     if uname_system != b"Linux\n" || uname_machine != b"aarch64\n" {
@@ -3431,27 +4076,52 @@ fn host_preflight(admitted: &HostAdmission) -> Result<()> {
     if matches!(&admitted.target, HostTarget::Validator(_)) {
         require_kvm_api_v12()?;
     }
+    if admitted.target.is_vacant() {
+        return require_vacant_host_precondition(admitted);
+    }
+    let current = validated_current_release_target(admitted)?;
+    let expected_rollback = match &admitted.target {
+        HostTarget::Validator(validator) => Path::new(&validator.admitted_release()?.release_root),
+        HostTarget::Edge(edge) => Path::new(&edge.admitted_release()?.release_root),
+    };
+    if current != expected_rollback {
+        return Err(eyre!(
+            "host preflight current selector does not equal the signed rollback release"
+        ));
+    }
     match &admitted.target {
         HostTarget::Validator(validator) => {
             attest_loaded_systemd_unit(validator, admitted.action_deadline)?;
             require_root_directory(
-                Path::new(&validator.rollback.release_root),
+                Path::new(&validator.admitted_release()?.release_root),
                 false,
                 "validator rollback release",
             )?;
             for (name, expected) in [
-                ("bin/iroha3d_taira", &validator.rollback.iroha3d_sha256),
-                ("bin/iroha", &validator.rollback.iroha_cli_sha256),
-                ("bin/sorafs-node", &validator.rollback.sorafs_node_sha256),
-                ("config/config.toml", &validator.rollback.config_sha256),
-                ("genesis/genesis.json", &validator.rollback.genesis_sha256),
+                (
+                    "bin/iroha3d_taira",
+                    &validator.admitted_release()?.iroha3d_sha256,
+                ),
+                ("bin/iroha", &validator.admitted_release()?.iroha_cli_sha256),
+                (
+                    "bin/sorafs-node",
+                    &validator.admitted_release()?.sorafs_node_sha256,
+                ),
+                (
+                    "config/config.toml",
+                    &validator.admitted_release()?.config_sha256,
+                ),
+                (
+                    "genesis/genesis.json",
+                    &validator.admitted_release()?.genesis_sha256,
+                ),
                 (
                     "genesis/genesis.sha256",
-                    &validator.rollback.genesis_hash_sha256,
+                    &validator.admitted_release()?.genesis_hash_sha256,
                 ),
             ] {
                 verify_regular_hash(
-                    &Path::new(&validator.rollback.release_root).join(name),
+                    &Path::new(&validator.admitted_release()?.release_root).join(name),
                     expected,
                 )?;
             }
@@ -3473,18 +4143,25 @@ fn host_preflight(admitted: &HostAdmission) -> Result<()> {
             attest_validator_process(
                 admitted,
                 validator,
-                Path::new(&validator.rollback.release_root),
+                Path::new(&validator.admitted_release()?.release_root),
                 false,
             )?;
         }
         HostTarget::Edge(edge) => {
-            let root = Path::new(&edge.rollback_release_root);
+            attest_loaded_edge_unit(edge, admitted.action_deadline)?;
+            let root = Path::new(&edge.admitted_release()?.release_root);
             require_root_directory(root, false, "edge rollback release")?;
-            verify_regular_hash(&root.join("bin/iroha"), &edge.rollback_cli_sha256)?;
-            verify_regular_hash(&root.join("taira.conf"), &edge.rollback_edge_config_sha256)?;
+            verify_regular_hash(
+                &root.join("bin/iroha"),
+                &edge.admitted_release()?.cli_sha256,
+            )?;
+            verify_regular_hash(
+                &root.join("taira.conf"),
+                &edge.admitted_release()?.config_sha256,
+            )?;
             verify_regular_hash(
                 Path::new(&edge.nginx_config),
-                &edge.rollback_edge_config_sha256,
+                &edge.admitted_release()?.config_sha256,
             )?;
             run_host_command(NGINX, &["-t"], admitted.action_deadline)?;
             let active = run_host_command(
@@ -3502,17 +4179,44 @@ fn host_preflight(admitted: &HostAdmission) -> Result<()> {
     Ok(())
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", all(test, unix)))]
 #[allow(
     unsafe_code,
-    reason = "KVM_GET_API_VERSION is the fixed Linux host preflight ABI"
+    reason = "KVM_GET_API_VERSION requires a zero operand and returns its version directly"
 )]
-fn require_kvm_api_v12() -> Result<()> {
-    use std::os::fd::AsRawFd as _;
-    unsafe extern "C" {
-        fn ioctl(fd: i32, request: std::ffi::c_ulong, ...) -> i32;
+fn kvm_api_version(file: &File) -> rustix::io::Result<rustix::ioctl::IoctlOutput> {
+    struct KvmGetApiVersion;
+
+    // SAFETY: the fixed KVM query takes no memory operand, writes no userspace
+    // memory, and returns the API version in the syscall result. NoArg discards
+    // that result, so this request must preserve it for the exact version check.
+    unsafe impl rustix::ioctl::Ioctl for KvmGetApiVersion {
+        type Output = rustix::ioctl::IoctlOutput;
+        const IS_MUTATING: bool = false;
+
+        fn opcode(&self) -> rustix::ioctl::Opcode {
+            0xAE00
+        }
+
+        fn as_ptr(&mut self) -> *mut std::ffi::c_void {
+            std::ptr::null_mut()
+        }
+
+        unsafe fn output_from_ptr(
+            output: rustix::ioctl::IoctlOutput,
+            _: *mut std::ffi::c_void,
+        ) -> rustix::io::Result<Self::Output> {
+            Ok(output)
+        }
     }
-    const KVM_GET_API_VERSION: std::ffi::c_ulong = 0xAE00;
+
+    // SAFETY: production passes the fixed /dev/kvm descriptor. The Unix test
+    // passes a regular file, where this operand-free query must return ENOTTY.
+    unsafe { rustix::ioctl::ioctl(file, KvmGetApiVersion) }
+}
+
+#[cfg(target_os = "linux")]
+fn require_kvm_api_v12() -> Result<()> {
     let file = File::from(
         rustix::fs::open(
             "/dev/kvm",
@@ -3521,8 +4225,11 @@ fn require_kvm_api_v12() -> Result<()> {
         )
         .wrap_err("failed to open fixed /dev/kvm")?,
     );
-    if unsafe { ioctl(file.as_raw_fd(), KVM_GET_API_VERSION) } != 12 {
-        return Err(eyre!("validator KVM API version is not exact 12"));
+    let version = kvm_api_version(&file).wrap_err("KVM_GET_API_VERSION ioctl failed")?;
+    if version != 12 {
+        return Err(eyre!(
+            "validator KVM API version is {version}; expected exact 12"
+        ));
     }
     Ok(())
 }
@@ -3956,14 +4663,12 @@ fn host_forward_plan(admitted: &HostAdmission) -> Vec<HostActionKeyV1> {
             });
         }
     }
-    for action in [HostAction::Start, HostAction::Restart] {
-        for validator in &validators {
-            plan.push(HostActionKeyV1 {
-                host_slug: validator.slug.clone(),
-                action: action.label().to_owned(),
-                artifact_role: String::new(),
-            });
-        }
+    for validator in &validators {
+        plan.push(HostActionKeyV1 {
+            host_slug: validator.slug.clone(),
+            action: HostAction::Start.label().to_owned(),
+            artifact_role: String::new(),
+        });
     }
     if let Some(edge) = edge {
         for artifact in &edge.artifacts {
@@ -3973,17 +4678,27 @@ fn host_forward_plan(admitted: &HostAdmission) -> Vec<HostActionKeyV1> {
                 artifact_role: artifact.role.clone(),
             });
         }
-        for action in [
-            HostAction::EdgeStage,
-            HostAction::EdgeCutover,
-            HostAction::EdgeVerify,
-        ] {
+        for action in [HostAction::EdgeStage, HostAction::EdgeCutover] {
             plan.push(HostActionKeyV1 {
                 host_slug: edge.slug.clone(),
                 action: action.label().to_owned(),
                 artifact_role: String::new(),
             });
         }
+    }
+    for validator in &validators {
+        plan.push(HostActionKeyV1 {
+            host_slug: validator.slug.clone(),
+            action: HostAction::Restart.label().to_owned(),
+            artifact_role: String::new(),
+        });
+    }
+    if let Some(edge) = edge {
+        plan.push(HostActionKeyV1 {
+            host_slug: edge.slug.clone(),
+            action: HostAction::EdgeVerify.label().to_owned(),
+            artifact_role: String::new(),
+        });
     }
     for validator in &validators {
         plan.push(HostActionKeyV1 {
@@ -4565,9 +5280,25 @@ fn revalidate_cached_action_postcondition(
                     "cached install selector no longer selects the candidate"
                 ));
             }
-            Ok(())
+            // A prepared action can reach this branch without an immutable
+            // receipt. Visible release/selector names do not prove their last
+            // rename reached disk; finish publication before acknowledging it.
+            sync_release_tree(&candidate, admitted)?;
+            sync_selected_release_namespaces(&candidate, sync_directory)
         }
-        HostAction::Reset => verify_fresh_state(admitted),
+        HostAction::Reset => {
+            verify_fresh_state(admitted)?;
+            let state = Path::new(admitted.target.state_root());
+            let rollback = rollback_nonce_root(admitted)?;
+            let previous = rollback.join("state");
+            let intent = load_state_move_intent(&rollback, admitted)?;
+            require_state_identity(&previous, &intent)?;
+            // The last child marker may be visible before its directory sync.
+            // Preserve the actual prior inode and finish every namespace before
+            // the dispatcher may publish a recovered reset receipt.
+            sync_release_tree(state, admitted)?;
+            sync_reset_state_parents(state, &previous, sync_directory)
+        }
         HostAction::Preseed => preseed_inrou_stores(admitted, false),
         HostAction::Start | HostAction::Restart => {
             let HostTarget::Validator(validator) = &admitted.target else {
@@ -4604,8 +5335,8 @@ fn revalidate_cached_action_postcondition(
             )?;
             require_session_manager_operation_applied(
                 admitted,
-                "edge-cutover-reload",
-                "reload",
+                edge_forward_operation(edge).0,
+                edge_forward_operation(edge).1,
                 "nginx.service",
             )?;
             require_unit_active("nginx.service", admitted.action_deadline)?;
@@ -4659,10 +5390,29 @@ fn revalidate_current_target_postcondition(
 }
 
 fn verify_conservative_rollback_absence(admitted: &HostAdmission) -> Result<()> {
+    if admitted.target.is_vacant() {
+        require_vacant_host_precondition(admitted)?;
+        if let HostTarget::Validator(validator) = &admitted.target {
+            let rollback = Path::new(&validator.reset_guard)
+                .join("rollback")
+                .join(&admitted.inventory.authorization_nonce);
+            match fs::symlink_metadata(rollback.join("state-move.intent.json")) {
+                Ok(_) => {
+                    let intent = load_state_move_intent(&rollback, admitted)?;
+                    require_state_identity(Path::new(&validator.state_root), &intent)?;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(error).wrap_err("inspect untouched vacant state identity");
+                }
+            }
+        }
+        return Ok(());
+    }
     let selected = validated_current_release_target(admitted)?;
     match &admitted.target {
         HostTarget::Validator(validator) => {
-            if selected != Path::new(&validator.rollback.release_root) {
+            if selected != Path::new(&validator.admitted_release()?.release_root) {
                 return Err(eyre!(
                     "conservative rollback target has a non-rollback current selector"
                 ));
@@ -4677,14 +5427,14 @@ fn verify_conservative_rollback_absence(admitted: &HostAdmission) -> Result<()> 
             attest_validator_process(admitted, validator, &selected, false)
         }
         HostTarget::Edge(edge) => {
-            if selected != Path::new(&edge.rollback_release_root) {
+            if selected != Path::new(&edge.admitted_release()?.release_root) {
                 return Err(eyre!(
                     "conservative edge rollback has a non-rollback current selector"
                 ));
             }
             verify_regular_hash(
                 Path::new(&edge.nginx_config),
-                &edge.rollback_edge_config_sha256,
+                &edge.admitted_release()?.config_sha256,
             )?;
             require_unit_active("nginx.service", admitted.action_deadline)?;
             run_host_command(NGINX, &["-t"], admitted.action_deadline)?;
@@ -4715,8 +5465,8 @@ fn verify_success_seal_postcondition(admitted: &HostAdmission) -> Result<()> {
             )?;
             require_session_manager_operation_applied(
                 admitted,
-                "edge-cutover-reload",
-                "reload",
+                edge_forward_operation(edge).0,
+                edge_forward_operation(edge).1,
                 "nginx.service",
             )?;
             require_unit_active("nginx.service", admitted.action_deadline)?;
@@ -4803,6 +5553,9 @@ fn execute_host_action(
             let HostTarget::Validator(validator) = &admitted.target else {
                 return Err(eyre!("stop action requires a validator target"));
             };
+            if validator.is_vacant() {
+                require_vacant_host_precondition(admitted)?;
+            }
             stop_unit(admitted, "stop", &validator.systemd_unit)?;
             Ok((0, 0, "validator stopped".to_owned()))
         }
@@ -4862,12 +5615,17 @@ fn execute_host_action(
             Ok((0, 0, "validator restarted".to_owned()))
         }
         HostAction::EdgeCutover => {
-            let HostTarget::Edge(_) = &admitted.target else {
+            let HostTarget::Edge(edge) = &admitted.target else {
                 return Err(eyre!("edge cutover requires the edge target"));
             };
+            if edge.is_vacant() && !first_edge_start_was_prepared(admitted, edge)? {
+                require_empty_root_directory(Path::new(&edge.state_root), "vacant edge state")?;
+                require_vacant_unit(admitted, false)?;
+                require_absent_or_exact_edge_candidate(edge)?;
+            }
             install_release(admitted)?;
             cutover_edge(admitted)?;
-            Ok((0, 0, "edge release cut over and nginx reloaded".to_owned()))
+            Ok((0, 0, "edge release cut over and nginx activated".to_owned()))
         }
         HostAction::EdgeVerify => {
             let HostTarget::Edge(edge) = &admitted.target else {
@@ -5685,6 +6443,7 @@ fn install_release(admitted: &HostAdmission) -> Result<()> {
     let final_root = releases.join(&admitted.inventory.revision.commit);
     if final_root.exists() {
         verify_installed_release(admitted, &final_root)?;
+        sync_directory(&releases)?;
         return select_current_release(admitted, &final_root);
     }
     let staging = releases.join(format!(
@@ -5714,7 +6473,9 @@ fn install_release(admitted: &HostAdmission) -> Result<()> {
             ensure_generated_subdirectories(&staging, parent)?;
         }
         let source = upload.join(staged_artifact_name(&artifact.role)?);
-        copy_verified_file(&source, &destination, artifact)?;
+        if !reconcile_verified_staging(&destination, artifact.size, &artifact.sha256)? {
+            copy_verified_file(&source, &destination, artifact)?;
+        }
     }
     verify_installed_release(admitted, &staging)?;
     sync_release_tree(&staging, admitted)?;
@@ -5847,6 +6608,14 @@ fn ensure_generated_subdirectories(root: &Path, target: &Path) -> Result<()> {
 }
 
 fn sync_release_tree(root: &Path, admitted: &HostAdmission) -> Result<()> {
+    sync_release_tree_with_sync(root, admitted, sync_directory)
+}
+
+fn sync_release_tree_with_sync(
+    root: &Path,
+    admitted: &HostAdmission,
+    sync_namespace: impl Fn(&Path) -> Result<()>,
+) -> Result<()> {
     let mut directories = vec![root.to_path_buf()];
     let mut cursor = 0;
     while cursor < directories.len() {
@@ -5869,23 +6638,45 @@ fn sync_release_tree(root: &Path, admitted: &HostAdmission) -> Result<()> {
     directories.sort_by_key(|path| std::cmp::Reverse(path.components().count()));
     for directory in directories {
         ensure_action_deadline(admitted)?;
-        File::open(&directory)?.sync_all()?;
+        sync_namespace(&directory)?;
     }
     Ok(())
 }
 
+fn sync_selected_release_namespaces(
+    release: &Path,
+    sync_namespace: impl Fn(&Path) -> Result<()>,
+) -> Result<()> {
+    let releases = release
+        .parent()
+        .ok_or_else(|| eyre!("selected release has no parent"))?;
+    let service = releases
+        .parent()
+        .ok_or_else(|| eyre!("selected releases namespace has no parent"))?;
+    sync_namespace(releases)?;
+    sync_namespace(service)
+}
+
 fn select_current_release(admitted: &HostAdmission, release: &Path) -> Result<()> {
+    select_current_release_with_sync(admitted, release, sync_directory)
+}
+
+fn select_current_release_with_sync(
+    admitted: &HostAdmission,
+    release: &Path,
+    sync_namespace: impl Fn(&Path) -> Result<()>,
+) -> Result<()> {
     let service_root = Path::new(admitted.target.service_root());
     let current = service_root.join("current");
     if let Ok(target) = fs::read_link(&current)
         && target == release
     {
-        return Ok(());
+        return sync_namespace(service_root);
     }
     if fs::symlink_metadata(&current).is_ok() {
         let target = validated_current_release_target(admitted)?;
         if target == release {
-            return Ok(());
+            return sync_namespace(service_root);
         }
     }
     let next = service_root.join(format!(
@@ -5900,7 +6691,7 @@ fn select_current_release(admitted: &HostAdmission, release: &Path) -> Result<()
         symlink(release, &next)?;
     }
     fs::rename(&next, &current)?;
-    sync_directory(service_root)
+    sync_namespace(service_root)
 }
 
 fn validated_current_release_target(admitted: &HostAdmission) -> Result<PathBuf> {
@@ -5912,32 +6703,26 @@ fn validated_current_release_target(admitted: &HostAdmission) -> Result<PathBuf>
         return Err(eyre!("stable current release selector is not a symlink"));
     }
     let target = fs::read_link(&current)?;
-    let rollback_release = match &admitted.target {
-        HostTarget::Validator(validator) => Path::new(&validator.rollback.release_root),
-        HostTarget::Edge(edge) => Path::new(&edge.rollback_release_root),
-    };
-    if target == rollback_release {
-        require_root_directory(&target, false, "stable rollback release")?;
+    if admitted.target.is_vacant()
+        && target
+            != service_root
+                .join("releases")
+                .join(&admitted.inventory.revision.commit)
+    {
+        return Err(eyre!("vacant target selector names an unadmitted release"));
+    }
+    if admitted.target.admitted_release_root() == Some(target.as_path()) {
+        require_root_directory(&target, false, "stable admitted release")?;
         return Ok(target);
     }
-    let releases = service_root.join("releases");
-    let relative = target
-        .strip_prefix(&releases)
-        .wrap_err("stable current release selector escaped releases")?;
-    let mut components = relative.components();
-    let Some(std::path::Component::Normal(revision)) = components.next() else {
-        return Err(eyre!("stable current release selector lacks a revision"));
-    };
-    let revision = revision
-        .to_str()
-        .ok_or_else(|| eyre!("stable current release revision is not UTF-8"))?;
-    if components.next().is_some()
-        || revision.len() != 40
-        || !revision
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    if target
+        != service_root
+            .join("releases")
+            .join(&admitted.inventory.revision.commit)
     {
-        return Err(eyre!("stable current release selector is not canonical"));
+        return Err(eyre!(
+            "stable current release selector is outside the exact admitted release pair"
+        ));
     }
     require_root_directory(&target, false, "stable current release")?;
     Ok(target)
@@ -5950,19 +6735,49 @@ fn reset_validator_state(admitted: &HostAdmission) -> Result<()> {
     if previous.exists() {
         let intent = load_state_move_intent(&rollback, admitted)?;
         require_state_identity(&previous, &intent)?;
-        return reconcile_fresh_state(state, admitted);
+        reconcile_fresh_state(state, admitted)?;
+        return sync_reset_state_parents(state, &previous, sync_directory);
     }
     require_root_directory(state, false, "authorized validator state root")?;
+    if admitted.target.is_vacant() {
+        require_empty_root_directory(state, "vacant validator state")?;
+        require_vacant_unit(admitted, false)?;
+    }
     if state.metadata()?.dev() != rollback.metadata()?.dev() {
         return Err(eyre!(
             "state and rollback roots are not on one atomic filesystem"
         ));
     }
-    let intent = ensure_state_move_intent(&rollback, state, admitted)?;
+    let intent = if admitted.target.is_vacant() {
+        let intent = load_state_move_intent(&rollback, admitted)?;
+        require_state_identity(state, &intent)?;
+        intent
+    } else {
+        ensure_state_move_intent(&rollback, state, admitted)?
+    };
     rename_noreplace(state, &previous)?;
     require_state_identity(&previous, &intent)?;
     reconcile_fresh_state(state, admitted)?;
-    sync_directory(state.parent().expect("state has parent"))
+    sync_reset_state_parents(state, &previous, sync_directory)
+}
+
+fn sync_reset_state_parents(
+    state: &Path,
+    previous: &Path,
+    sync_parent: impl Fn(&Path) -> Result<()>,
+) -> Result<()> {
+    // Reconciliation fsyncs the fresh directory and its markers, but an
+    // already-visible directory may still have an undurable parent entry.
+    // The original state now occupies `previous`, while `state` can contain
+    // its fresh replacement, so sync_completed_rename cannot apply here.
+    let state_parent = state
+        .parent()
+        .ok_or_else(|| eyre!("reset state has no parent"))?;
+    let previous_parent = previous
+        .parent()
+        .ok_or_else(|| eyre!("retained reset state has no parent"))?;
+    sync_parent(state_parent)?;
+    sync_parent(previous_parent)
 }
 
 fn ensure_state_move_intent(
@@ -6030,23 +6845,40 @@ fn reconcile_fresh_state(state: &Path, admitted: &HostAdmission) -> Result<()> {
         ensure_root_directory_with_mode(state, 0o700)?;
     }
     require_root_directory(state, true, "fresh validator state root")?;
+    require_reconcilable_fresh_state_entries(state)?;
+    ensure_generated_directory(state, admitted, "fresh_state", 0o700)?;
+    for name in RESET_GENERATED_ENTRIES {
+        let path = state.join(name);
+        ensure_generated_directory(&path, admitted, "fresh_state_entry", 0o700)?;
+    }
+    Ok(())
+}
+
+fn require_reconcilable_fresh_state_entries(state: &Path) -> Result<()> {
+    let mut marker_present = false;
+    let mut marker_staging_present = false;
     for entry in fs::read_dir(state)? {
-        let entry = entry?;
-        let name = entry.file_name();
-        let allowed = name == OsStr::new(".public-reset-generated-v1.json")
-            || RESET_GENERATED_ENTRIES
-                .iter()
-                .any(|expected| name == OsStr::new(expected));
-        if !allowed {
+        let name = entry?.file_name();
+        if name == OsStr::new(".public-reset-generated-v1.json") {
+            marker_present = true;
+        } else if name == OsStr::new("..public-reset-generated-v1.json.next") {
+            // A crash can interrupt the root marker before publication. Its
+            // exact private staging slot must reach the existing publisher,
+            // which enforces custody, byte equality and no-replace recovery.
+            marker_staging_present = true;
+        } else if !RESET_GENERATED_ENTRIES
+            .iter()
+            .any(|expected| name == OsStr::new(expected))
+        {
             return Err(eyre!(
                 "partial fresh state contains an entry outside the exact reset closure"
             ));
         }
     }
-    ensure_generated_directory(state, admitted, "fresh_state", 0o700)?;
-    for name in RESET_GENERATED_ENTRIES {
-        let path = state.join(name);
-        ensure_generated_directory(&path, admitted, "fresh_state_entry", 0o700)?;
+    if marker_present && marker_staging_present {
+        return Err(eyre!(
+            "fresh state contains both published and unpublished root markers"
+        ));
     }
     Ok(())
 }
@@ -6235,7 +7067,12 @@ fn validator_preseed_store(
     admitted: &HostAdmission,
     validator: &ValidatorV1,
 ) -> Result<ValidatorPreseedStore> {
-    let bytes = installed_validator_config_bytes(admitted, validator)?;
+    let bytes = zeroize::Zeroizing::new(installed_validator_config_bytes(admitted, validator)?);
+    validate_validator_genesis_config(
+        &bytes,
+        Path::new(&artifact(&validator.artifacts, "genesis")?.remote_path),
+        &admitted.inventory.next_genesis_hash,
+    )?;
     let text = std::str::from_utf8(&bytes).wrap_err("installed validator config is not UTF-8")?;
     let config: toml::Value =
         toml::from_str(text).wrap_err("installed validator config is not valid TOML")?;
@@ -6416,6 +7253,34 @@ fn installed_preseed_binary(admitted: &HostAdmission, carrier: &ValidatorV1) -> 
     Ok(path)
 }
 
+fn canonical_preseed_receipt_targets(
+    stores: &[ValidatorPreseedStore],
+) -> Vec<OperatorPreseedTargetReceiptV1> {
+    let mut targets = stores
+        .iter()
+        .map(|store| OperatorPreseedTargetReceiptV1 {
+            validator_account_id: store.placement.validator_account_id.to_string(),
+            peer_id: store.placement.peer_id.clone(),
+            store_root: store.data_dir.to_string_lossy().into_owned(),
+        })
+        .collect::<Vec<_>>();
+    // The receipt protocol orders encoded identity strings, while placement
+    // targets order typed account controllers. Their orderings may differ.
+    targets.sort_by(|left, right| {
+        (
+            left.validator_account_id.as_str(),
+            left.peer_id.as_str(),
+            left.store_root.as_str(),
+        )
+            .cmp(&(
+                right.validator_account_id.as_str(),
+                right.peer_id.as_str(),
+                right.store_root.as_str(),
+            ))
+    });
+    targets
+}
+
 fn parse_preseed_session_receipt(
     output: &[u8],
     stores: &[ValidatorPreseedStore],
@@ -6436,14 +7301,7 @@ fn parse_preseed_session_receipt(
     receipt
         .validate()
         .map_err(|error| eyre!("invalid SoraFS preseed helper receipt: {error}"))?;
-    let expected_targets = stores
-        .iter()
-        .map(|store| OperatorPreseedTargetReceiptV1 {
-            validator_account_id: store.placement.validator_account_id.to_string(),
-            peer_id: store.placement.peer_id.clone(),
-            store_root: store.data_dir.to_string_lossy().into_owned(),
-        })
-        .collect::<Vec<_>>();
+    let expected_targets = canonical_preseed_receipt_targets(stores);
     let expected_mode = if verify_only { "verify_only" } else { "ingest" };
     let expected_artifacts = BTreeMap::from([
         (
@@ -6732,25 +7590,39 @@ fn cutover_edge(admitted: &HostAdmission) -> Result<()> {
         .join(&admitted.inventory.revision.commit);
     verify_installed_release(admitted, &release)?;
     let rollback = rollback_nonce_root(admitted)?;
-    let backup = rollback.join("edge-config.before");
-    if !backup.exists() {
-        verify_regular_hash(
-            Path::new(&edge.nginx_config),
-            &edge.rollback_edge_config_sha256,
-        )?;
-        snapshot_root_file(
-            admitted,
-            Path::new(&edge.nginx_config),
-            &backup,
-            &edge.rollback_edge_config_sha256,
-        )?;
+    if edge.is_vacant() {
+        if first_edge_start_was_prepared(admitted, edge)? {
+            verify_regular_hash(
+                Path::new(&edge.nginx_config),
+                &artifact(&edge.artifacts, "edge_config")?.sha256,
+            )?;
+            let (label, verb) = edge_forward_operation(edge);
+            return run_durable_manager_operation(admitted, label, verb, "nginx.service");
+        }
+        require_vacant_unit(admitted, false)?;
+        publish_first_edge_config(admitted, edge, &release.join("taira.conf"), &rollback)?;
+    } else {
+        let backup = rollback.join("edge-config.before");
+        if !backup.exists() {
+            verify_regular_hash(
+                Path::new(&edge.nginx_config),
+                &edge.admitted_release()?.config_sha256,
+            )?;
+            snapshot_root_file(
+                admitted,
+                Path::new(&edge.nginx_config),
+                &backup,
+                &edge.admitted_release()?.config_sha256,
+            )?;
+        }
+        verify_regular_hash(&backup, &edge.admitted_release()?.config_sha256)?;
+        let config = artifact(&edge.artifacts, "edge_config")?;
+        let source = release.join("taira.conf");
+        atomic_replace_verified_file(admitted, &source, Path::new(&edge.nginx_config), config)?;
     }
-    verify_regular_hash(&backup, &edge.rollback_edge_config_sha256)?;
-    let config = artifact(&edge.artifacts, "edge_config")?;
-    let source = release.join("taira.conf");
-    atomic_replace_verified_file(admitted, &source, Path::new(&edge.nginx_config), config)?;
     run_host_command(NGINX, &["-t"], admitted.action_deadline)?;
-    run_durable_manager_operation(admitted, "edge-cutover-reload", "reload", "nginx.service")?;
+    let (label, verb) = edge_forward_operation(edge);
+    run_durable_manager_operation(admitted, label, verb, "nginx.service")?;
     Ok(())
 }
 
@@ -7056,6 +7928,18 @@ fn classify_manager_operation_evidence(
     if values["LoadState"] == "not-found" {
         return Ok(ManagerOperationEvidence::Absent);
     }
+    // `systemctl show` exposes the numeric waitid(2) CLD_* code here.
+    // The human-readable `code=exited` belongs to the separate ExecStart
+    // rendering; it is not the ExecMainCode property representation.
+    let main_code = values["ExecMainCode"];
+    if !matches!(main_code, "0" | "1" | "2" | "3" | "4" | "5" | "6") {
+        return Err(eyre!("manager ExecMainCode is not a canonical CLD code"));
+    }
+    let main_status = values["ExecMainStatus"]
+        .parse::<u8>()
+        .ok()
+        .filter(|status| status.to_string() == values["ExecMainStatus"])
+        .ok_or_else(|| eyre!("manager ExecMainStatus is not a canonical exit or signal status"))?;
     let job = values["Job"];
     if !matches!(job, "" | "0")
         || matches!(
@@ -7086,14 +7970,16 @@ fn classify_manager_operation_evidence(
     if values["ActiveState"] == "active"
         && values["SubState"] == "exited"
         && values["Result"] == "success"
-        && values["ExecMainCode"] == "exited"
-        && values["ExecMainStatus"] == "0"
+        && main_code == "1"
+        && main_status == 0
     {
         return Ok(ManagerOperationEvidence::Applied);
     }
     if values["ActiveState"] == "failed"
         || values["Result"] != "success"
-        || values["ExecMainStatus"] != "0"
+        || main_status != 0
+        || matches!(main_code, "2" | "3" | "4" | "5" | "6")
+        || (values["ActiveState"] == "active" && values["SubState"] == "exited")
     {
         return Ok(ManagerOperationEvidence::Rejected);
     }
@@ -7195,7 +8081,10 @@ fn reconcile_prior_manager_operations(admitted: &HostAdmission) -> Result<()> {
             ("start", "start", validator.systemd_unit.as_str()),
             ("restart", "restart", validator.systemd_unit.as_str()),
         ],
-        HostTarget::Edge(_) => vec![("edge-cutover-reload", "reload", "nginx.service")],
+        HostTarget::Edge(edge) => {
+            let (label, verb) = edge_forward_operation(edge);
+            vec![(label, verb, "nginx.service")]
+        }
     };
     for (label, verb, target_unit) in operations {
         let path = directory.join(manager_intent_name(label)?);
@@ -7425,26 +8314,42 @@ fn attest_validator_process(
     let stable_current = Path::new(&validator.service_root).join("current");
     let stable_executable = stable_current.join("bin/iroha3d_taira");
     let stable_config = stable_current.join("config/config.toml");
-    let stable_genesis = stable_current.join("genesis/genesis.json");
     let expected_config = release_root.join("config/config.toml");
     let expected_genesis = release_root.join("genesis/genesis.json");
-    validate_validator_argv(
-        &arguments,
-        &stable_executable,
-        &stable_config,
-        &stable_genesis,
-    )?;
+    validate_validator_argv(&arguments, &stable_executable, &stable_config)?;
     let config_hash = if fresh_state {
         &artifact(&validator.artifacts, "config")?.sha256
     } else {
-        &validator.rollback.config_sha256
+        &validator.admitted_release()?.config_sha256
     };
     let genesis_hash = if fresh_state {
         &artifact(&validator.artifacts, "genesis")?.sha256
     } else {
-        &validator.rollback.genesis_sha256
+        &validator.admitted_release()?.genesis_sha256
     };
     verify_regular_hash(&expected_config, config_hash)?;
+    let (file, snapshot) = open_pinned_regular(&expected_config, "attested validator config")?;
+    let bytes = zeroize::Zeroizing::new(read_pinned_bytes(
+        &expected_config,
+        "attested validator config",
+        file,
+        &snapshot,
+        1024 * 1024,
+    )?);
+    if sha256_hex(&bytes) != *config_hash {
+        return Err(eyre!(
+            "attested validator config changed after hash verification"
+        ));
+    }
+    validate_validator_genesis_config(
+        &bytes,
+        &expected_genesis,
+        if fresh_state {
+            &admitted.inventory.next_genesis_hash
+        } else {
+            &admitted.inventory.previous_genesis_hash
+        },
+    )?;
     verify_regular_hash(&expected_genesis, genesis_hash)?;
     require_root_directory(
         Path::new(&validator.state_root),
@@ -7472,18 +8377,11 @@ fn attest_validator_process(
     Ok(())
 }
 
-fn validate_validator_argv(
-    arguments: &[PathBuf],
-    executable: &Path,
-    config: &Path,
-    genesis: &Path,
-) -> Result<()> {
+fn validate_validator_argv(arguments: &[PathBuf], executable: &Path, config: &Path) -> Result<()> {
     let expected = [
         executable.to_path_buf(),
         PathBuf::from("--config"),
         config.to_path_buf(),
-        PathBuf::from("--genesis-manifest-json"),
-        genesis.to_path_buf(),
         PathBuf::from("--sora"),
     ];
     if arguments != expected {
@@ -7499,23 +8397,40 @@ fn rollback_host(admitted: &HostAdmission) -> Result<()> {
     let rollback = rollback_nonce_root(admitted)?;
     match &admitted.target {
         HostTarget::Validator(validator) => {
-            for (name, expected) in [
-                ("bin/iroha3d_taira", &validator.rollback.iroha3d_sha256),
-                ("bin/iroha", &validator.rollback.iroha_cli_sha256),
-                ("bin/sorafs-node", &validator.rollback.sorafs_node_sha256),
-                ("config/config.toml", &validator.rollback.config_sha256),
-                ("genesis/genesis.json", &validator.rollback.genesis_sha256),
-                (
-                    "genesis/genesis.sha256",
-                    &validator.rollback.genesis_hash_sha256,
-                ),
-            ] {
-                verify_regular_hash(
-                    &Path::new(&validator.rollback.release_root).join(name),
-                    expected,
-                )?;
+            if !validator.is_vacant() {
+                for (name, expected) in [
+                    (
+                        "bin/iroha3d_taira",
+                        &validator.admitted_release()?.iroha3d_sha256,
+                    ),
+                    ("bin/iroha", &validator.admitted_release()?.iroha_cli_sha256),
+                    (
+                        "bin/sorafs-node",
+                        &validator.admitted_release()?.sorafs_node_sha256,
+                    ),
+                    (
+                        "config/config.toml",
+                        &validator.admitted_release()?.config_sha256,
+                    ),
+                    (
+                        "genesis/genesis.json",
+                        &validator.admitted_release()?.genesis_sha256,
+                    ),
+                    (
+                        "genesis/genesis.sha256",
+                        &validator.admitted_release()?.genesis_hash_sha256,
+                    ),
+                ] {
+                    verify_regular_hash(
+                        &Path::new(&validator.admitted_release()?.release_root).join(name),
+                        expected,
+                    )?;
+                }
             }
             stop_unit(admitted, "rollback-stop", &validator.systemd_unit)?;
+            if validator.is_vacant() {
+                require_vacant_unit(admitted, true)?;
+            }
             let previous = rollback.join("state");
             let fresh_trash = rollback.join("fresh-state.after");
             if previous.exists() {
@@ -7552,52 +8467,53 @@ fn rollback_host(admitted: &HostAdmission) -> Result<()> {
                 if intent_path.exists() {
                     let intent = load_state_move_intent(&rollback, admitted)?;
                     require_state_identity(state, &intent)?;
+                } else if validator.is_vacant() {
+                    return Err(eyre!(
+                        "vacant rollback lacks the original pre-mutation state identity"
+                    ));
                 } else {
                     let intent = ensure_state_move_intent(&rollback, state, admitted)?;
                     require_state_identity(state, &intent)?;
                 }
             }
-            select_rollback_release(admitted, Path::new(&validator.rollback.release_root))?;
+            // Revalidate the retained original inode above, then finish any
+            // rename interrupted before its parent barriers. A visible restore
+            // cannot authorize a restart or rollback receipt on its own.
+            sync_completed_rename(&previous, Path::new(&validator.state_root), sync_directory)?;
+            if validator.is_vacant() {
+                require_empty_root_directory(
+                    Path::new(&validator.state_root),
+                    "restored vacant validator state",
+                )?;
+                quarantine_vacant_release(admitted, &rollback)?;
+                return require_vacant_rollback_postcondition(admitted);
+            }
+            select_rollback_release(
+                admitted,
+                Path::new(&validator.admitted_release()?.release_root),
+            )?;
             start_unit(admitted, "rollback-start", &validator.systemd_unit)?;
             attest_validator_process(
                 admitted,
                 validator,
-                Path::new(&validator.rollback.release_root),
+                Path::new(&validator.admitted_release()?.release_root),
                 false,
             )
         }
         HostTarget::Edge(edge) => {
-            verify_regular_hash(
-                &Path::new(&edge.rollback_release_root).join("bin/iroha"),
-                &edge.rollback_cli_sha256,
-            )?;
-            verify_regular_hash(
-                &Path::new(&edge.rollback_release_root).join("taira.conf"),
-                &edge.rollback_edge_config_sha256,
-            )?;
-            let backup = rollback.join("edge-config.before");
-            if backup.exists() {
-                verify_regular_hash(&backup, &edge.rollback_edge_config_sha256)?;
-                atomic_restore_file(
-                    admitted,
-                    &backup,
-                    Path::new(&edge.nginx_config),
-                    &edge.rollback_edge_config_sha256,
-                )?;
-            } else if verify_regular_hash(
-                Path::new(&edge.nginx_config),
-                &edge.rollback_edge_config_sha256,
-            )
-            .is_err()
-            {
-                atomic_restore_file(
-                    admitted,
-                    &Path::new(&edge.rollback_release_root).join("taira.conf"),
-                    Path::new(&edge.nginx_config),
-                    &edge.rollback_edge_config_sha256,
-                )?;
+            if edge.is_vacant() {
+                return rollback_vacant_edge(admitted, edge, &rollback);
             }
-            select_rollback_release(admitted, Path::new(&edge.rollback_release_root))?;
+            verify_regular_hash(
+                &Path::new(&edge.admitted_release()?.release_root).join("bin/iroha"),
+                &edge.admitted_release()?.cli_sha256,
+            )?;
+            verify_regular_hash(
+                &Path::new(&edge.admitted_release()?.release_root).join("taira.conf"),
+                &edge.admitted_release()?.config_sha256,
+            )?;
+            restore_admitted_edge_config(admitted, edge, &rollback, sync_directory)?;
+            select_rollback_release(admitted, Path::new(&edge.admitted_release()?.release_root))?;
             run_host_command(NGINX, &["-t"], admitted.action_deadline)?;
             run_durable_manager_operation(
                 admitted,
@@ -7610,10 +8526,43 @@ fn rollback_host(admitted: &HostAdmission) -> Result<()> {
     }
 }
 
+fn restore_admitted_edge_config(
+    admitted: &HostAdmission,
+    edge: &EdgeV1,
+    rollback: &Path,
+    sync_parent: impl Fn(&Path) -> Result<()>,
+) -> Result<()> {
+    let release = edge.admitted_release()?;
+    let destination = Path::new(&edge.nginx_config);
+    let backup = rollback.join("edge-config.before");
+    if backup.exists() {
+        verify_regular_hash(&backup, &release.config_sha256)?;
+        atomic_restore_file(admitted, &backup, destination, &release.config_sha256)
+    } else if verify_regular_hash(destination, &release.config_sha256).is_err() {
+        atomic_restore_file(
+            admitted,
+            &Path::new(&release.release_root).join("taira.conf"),
+            destination,
+            &release.config_sha256,
+        )
+    } else {
+        // A retry can see the restored prior bytes after rename but before
+        // the route directory reached disk. Finish that publication before
+        // accepting nginx reload or a durable rollback receipt.
+        let parent = destination
+            .parent()
+            .ok_or_else(|| eyre!("restored edge config has no parent"))?;
+        sync_existing_file_publication(destination, &release.config_sha256, parent, sync_parent)
+    }
+}
+
 fn verify_rollback_postcondition(admitted: &HostAdmission) -> Result<()> {
+    if admitted.target.is_vacant() {
+        return require_vacant_rollback_postcondition(admitted);
+    }
     match &admitted.target {
         HostTarget::Validator(validator) => {
-            let rollback = Path::new(&validator.rollback.release_root);
+            let rollback = Path::new(&validator.admitted_release()?.release_root);
             if validated_current_release_target(admitted)? != rollback {
                 return Err(eyre!(
                     "rollback selector no longer selects the signed prior release"
@@ -7647,7 +8596,7 @@ fn verify_rollback_postcondition(admitted: &HostAdmission) -> Result<()> {
             attest_validator_process(admitted, validator, rollback, false)
         }
         HostTarget::Edge(edge) => {
-            let rollback = Path::new(&edge.rollback_release_root);
+            let rollback = Path::new(&edge.admitted_release()?.release_root);
             if validated_current_release_target(admitted)? != rollback {
                 return Err(eyre!(
                     "edge rollback selector no longer selects the prior release"
@@ -7655,7 +8604,7 @@ fn verify_rollback_postcondition(admitted: &HostAdmission) -> Result<()> {
             }
             verify_regular_hash(
                 Path::new(&edge.nginx_config),
-                &edge.rollback_edge_config_sha256,
+                &edge.admitted_release()?.config_sha256,
             )?;
             require_session_manager_operation_applied(
                 admitted,
@@ -7975,7 +8924,9 @@ fn build_cleanup_plan(admitted: &HostAdmission) -> Result<CleanupPlanV1> {
                 continue;
             }
             let path = entry.path();
-            if path == current_release {
+            if path == current_release
+                || admitted.target.admitted_release_root() == Some(path.as_path())
+            {
                 continue;
             }
             if let Some(candidate) = admit_cleanup_candidate(&path, admitted, "release", policy)? {
@@ -8038,6 +8989,7 @@ fn validate_cleanup_plan(admitted: &HostAdmission, plan: &CleanupPlanV1) -> Resu
     for entry in &plan.entries {
         validate_cleanup_original_name(&entry.original_name, &entry.kind)?;
         let expected_path = cleanup_original_path(admitted, &entry.kind, &entry.original_name)?;
+        require_cleanup_release_not_prior(admitted, &entry.kind, &expected_path)?;
         if entry.original_path != expected_path.to_string_lossy().as_ref()
             || entry.directory_inode == 0
             || entry.initial_bytes == 0
@@ -8078,6 +9030,20 @@ fn cleanup_original_path(admitted: &HostAdmission, kind: &str, name: &str) -> Re
             .join(name)),
         _ => Err(eyre!("generated cleanup kind is not exact V1")),
     }
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn require_cleanup_release_not_prior(
+    admitted: &HostAdmission,
+    kind: &str,
+    path: &Path,
+) -> Result<()> {
+    if kind == "release" && admitted.target.admitted_release_root() == Some(path) {
+        return Err(eyre!(
+            "cleanup must preserve the exact admitted prior release"
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(any(target_os = "linux", test))]
@@ -8249,6 +9215,7 @@ fn open_cleanup_plan_entry(
     let kind = cleanup_kind(&entry.kind)?;
     let original_path = cleanup_original_path(admitted, kind, &entry.original_name)?;
     if kind == "release" {
+        require_cleanup_release_not_prior(admitted, kind, &original_path)?;
         ensure_cleanup_plan_entry_not_selected(
             kind,
             &original_path,
@@ -8918,6 +9885,7 @@ fn remove_generated_tree_beneath(
     let tombstone_name = cleanup_tombstone_name(&candidate.name, candidate.kind)?;
     ensure_action_deadline(admitted)?;
     if candidate.kind == "release" {
+        require_cleanup_release_not_prior(admitted, candidate.kind, &candidate.path)?;
         ensure_cleanup_plan_entry_not_selected(
             candidate.kind,
             &candidate.path,
@@ -9406,6 +10374,33 @@ fn sync_regular_at(parent: &File, name: &str) -> Result<()> {
         .wrap_err("failed to fsync retained root-private file")
 }
 
+/// Finish the namespace barriers for a retained, already authenticated move.
+/// The caller verifies the destination's exact authorization and identity first.
+/// This also runs after a fresh move, so retry and first execution acknowledge
+/// the same durable postcondition.
+fn sync_completed_rename(
+    source: &Path,
+    destination: &Path,
+    sync_parent: impl Fn(&Path) -> Result<()>,
+) -> Result<()> {
+    require_path_absent(source, "completed rename source")?;
+    let metadata = fs::symlink_metadata(destination)
+        .wrap_err("completed rename destination is unavailable")?;
+    if metadata.file_type().is_symlink() || (!metadata.is_file() && !metadata.is_dir()) {
+        return Err(eyre!(
+            "completed rename destination has an unexpected occupant"
+        ));
+    }
+    let source_parent = source
+        .parent()
+        .ok_or_else(|| eyre!("completed rename source has no parent"))?;
+    let destination_parent = destination
+        .parent()
+        .ok_or_else(|| eyre!("completed rename destination has no parent"))?;
+    sync_parent(source_parent)?;
+    sync_parent(destination_parent)
+}
+
 fn rename_noreplace(source: &Path, destination: &Path) -> Result<()> {
     let source_parent = source
         .parent()
@@ -9622,6 +10617,7 @@ fn run_bounded_process(spec: &ProcessSpec) -> Result<ProcessOutput> {
     let mut file_range = 0..0;
     let mut stdin_complete = false;
     let mut stdin_aborted = false;
+    let mut stdin_error = None;
     let mut stdout_bytes = Vec::new();
     let mut stderr_bytes = Vec::new();
     let mut stdout_eof = false;
@@ -9630,18 +10626,44 @@ fn run_bounded_process(spec: &ProcessSpec) -> Result<ProcessOutput> {
     loop {
         if Instant::now() >= deadline {
             terminate_owned_child(&mut child)?;
+            let copied = sources
+                .iter()
+                .fold(prefix_offset as u64, |total, (_, _, copied)| {
+                    total.saturating_add(*copied)
+                });
+            let expected = sources
+                .iter()
+                .fold(spec.stdin_prefix.len() as u64, |total, (_, size, _)| {
+                    total.saturating_add(*size)
+                });
             return Err(eyre!(
-                "`{}` exceeded its absolute deadline while streaming or draining pipes",
-                spec.program.display()
+                "`{}` exceeded its absolute deadline while streaming or draining pipes: \
+                 copied_bytes={copied} expected_bytes={expected} source_index={source_index} \
+                 sources={} stdin_complete={stdin_complete} stdout_bytes={} stderr_bytes={} \
+                 stdout_eof={stdout_eof} stderr_eof={stderr_eof} child_exit_observed={}",
+                spec.program.display(),
+                sources.len(),
+                stdout_bytes.len(),
+                stderr_bytes.len(),
+                status.is_some()
             ));
         }
+        let mut made_progress = false;
         if !stdin_complete && !stdin_aborted {
             let writer = stdin.as_mut().expect("stdin exists until complete");
             let write_result = if prefix_offset < spec.stdin_prefix.len() {
                 writer
                     .write(&spec.stdin_prefix[prefix_offset..])
-                    .map(|written| {
+                    .and_then(|written| {
+                        if written == 0 {
+                            return Err(std::io::Error::new(
+                                std::io::ErrorKind::WriteZero,
+                                "child stdin accepted zero bytes",
+                            ));
+                        }
                         prefix_offset += written;
+                        made_progress = true;
+                        Ok(())
                     })
             } else if let Some((file, expected, copied)) = sources.get_mut(source_index) {
                 if file_range.is_empty() && *copied < *expected {
@@ -9649,56 +10671,99 @@ fn run_bounded_process(spec: &ProcessSpec) -> Result<ProcessOutput> {
                         usize::try_from((*expected - *copied).min(file_buffer.len() as u64))
                             .expect("bounded stream chunk");
                     let read = match file.read(&mut file_buffer[..remaining]) {
-                        Ok(read) => read,
+                        Ok(read) => Some(read),
+                        Err(error) if error.kind() == std::io::ErrorKind::Interrupted => None,
                         Err(error) => {
                             terminate_owned_child(&mut child)?;
                             return Err(error).wrap_err("failed to read pinned streamed input");
                         }
                     };
-                    if read == 0 {
-                        terminate_owned_child(&mut child)?;
-                        return Err(eyre!(
-                            "pinned streamed input ended before its declared length"
-                        ));
+                    if let Some(read) = read {
+                        if read == 0 {
+                            terminate_owned_child(&mut child)?;
+                            return Err(eyre!(
+                                "pinned streamed input ended before its declared length"
+                            ));
+                        }
+                        file_range = 0..read;
                     }
-                    file_range = 0..read;
                 }
-                if file_range.is_empty() {
+                if file_range.is_empty() && *copied < *expected {
+                    // An interrupted read retries on the next fair, deadline-checked turn.
+                    Ok(())
+                } else if file_range.is_empty() {
                     source_index += 1;
                     stdin_complete = source_index == sources.len();
+                    made_progress = true;
                     Ok(())
                 } else {
                     writer
                         .write(&file_buffer[file_range.clone()])
-                        .map(|written| {
+                        .and_then(|written| {
+                            if written == 0 {
+                                return Err(std::io::Error::new(
+                                    std::io::ErrorKind::WriteZero,
+                                    "child stdin accepted zero bytes",
+                                ));
+                            }
                             file_range.start += written;
                             *copied += u64::try_from(written).expect("write count fits u64");
+                            made_progress = true;
+                            Ok(())
                         })
                 }
             } else {
                 stdin_complete = true;
+                made_progress = true;
                 Ok(())
             };
             match write_result {
                 Ok(()) => {}
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
+                    ) => {}
                 Err(error) => {
-                    terminate_owned_child(&mut child)?;
-                    return Err(error).wrap_err("failed to stream bounded child stdin");
+                    // A rejecting child may close stdin before emitting its diagnostic.
+                    // Keep the same bounded drain and deadline so its exit and stderr
+                    // survive, including when the diagnostic exceeds pipe capacity.
+                    stdin_error = Some(error);
+                    stdin_aborted = true;
+                    drop(stdin.take());
+                    made_progress = true;
                 }
             }
             if stdin_complete {
                 drop(stdin.take());
             }
         }
-        if let Err(error) = drain_nonblocking(&mut stdout, &mut stdout_bytes, &mut stdout_eof) {
+        let output_before = (
+            stdout_bytes.len(),
+            stderr_bytes.len(),
+            stdout_eof,
+            stderr_eof,
+        );
+        // Bound both drains: a chatty stdout must not starve stdin, stderr or the deadline.
+        if let Err(error) =
+            drain_nonblocking_with_read_budget(&mut stdout, &mut stdout_bytes, &mut stdout_eof, 4)
+        {
             terminate_owned_child(&mut child)?;
             return Err(error).wrap_err("failed to drain bounded child stdout");
         }
-        if let Err(error) = drain_nonblocking(&mut stderr, &mut stderr_bytes, &mut stderr_eof) {
+        if let Err(error) =
+            drain_nonblocking_with_read_budget(&mut stderr, &mut stderr_bytes, &mut stderr_eof, 4)
+        {
             terminate_owned_child(&mut child)?;
             return Err(error).wrap_err("failed to drain bounded child stderr");
         }
+        made_progress |= output_before
+            != (
+                stdout_bytes.len(),
+                stderr_bytes.len(),
+                stdout_eof,
+                stderr_eof,
+            );
         if status.is_none() {
             status = match child.try_wait() {
                 Ok(value) => value,
@@ -9708,6 +10773,7 @@ fn run_bounded_process(spec: &ProcessSpec) -> Result<ProcessOutput> {
                 }
             };
             if status.is_some() {
+                made_progress = true;
                 stdin_aborted = !stdin_complete;
                 drop(stdin.take());
             }
@@ -9715,19 +10781,58 @@ fn run_bounded_process(spec: &ProcessSpec) -> Result<ProcessOutput> {
         if status.is_some() && stdout_eof && stderr_eof {
             break;
         }
+        if made_progress {
+            continue;
+        }
         let remaining = spec.deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
             continue;
         }
-        std::thread::sleep(PROCESS_POLL_INTERVAL.min(remaining));
+        // Wait only after a turn made no progress. POLLOUT wakes immediately
+        // when SSH consumes input; the polling interval limits child-exit checks,
+        // never the stream throughput. EOF streams must not cause HUP busy loops.
+        let mut descriptors = Vec::with_capacity(3);
+        if let Some(stdin) = stdin.as_ref() {
+            descriptors.push(rustix::event::PollFd::new(
+                stdin,
+                rustix::event::PollFlags::OUT,
+            ));
+        }
+        if !stdout_eof {
+            descriptors.push(rustix::event::PollFd::new(
+                &stdout,
+                rustix::event::PollFlags::IN,
+            ));
+        }
+        if !stderr_eof {
+            descriptors.push(rustix::event::PollFd::new(
+                &stderr,
+                rustix::event::PollFlags::IN,
+            ));
+        }
+        let timeout = rustix::event::Timespec::try_from(PROCESS_POLL_INTERVAL.min(remaining))
+            .expect("bounded process poll timeout");
+        match rustix::event::poll(&mut descriptors, Some(&timeout)) {
+            Ok(_) | Err(rustix::io::Errno::INTR) => {}
+            Err(error) => {
+                terminate_owned_child(&mut child)?;
+                return Err(error).wrap_err("failed to wait for bounded child pipe readiness");
+            }
+        }
     }
-    if !stdin_complete {
+    let status = status.expect("loop exits only after child status");
+    if status.success() && !stdin_complete {
+        if let Some(error) = stdin_error {
+            return Err(error).wrap_err("child exited before consuming its exact framed stdin");
+        }
         return Err(eyre!(
             "child exited before consuming its exact framed stdin"
         ));
     }
+    // Nonzero exits remain failures at the existing require_success boundary,
+    // with the child's bounded stderr instead of a secondary local pipe error.
     Ok(ProcessOutput {
-        status: status.expect("loop exits only after child status"),
+        status,
         stdout: stdout_bytes,
         stderr: stderr_bytes,
     })
@@ -9903,8 +11008,18 @@ fn run_locked_preseed_session(
 }
 
 fn drain_nonblocking(reader: &mut impl Read, output: &mut Vec<u8>, eof: &mut bool) -> Result<()> {
+    // Preserve the preseed barrier's full drain-to-WouldBlock/EOF contract.
+    drain_nonblocking_with_read_budget(reader, output, eof, usize::MAX)
+}
+
+fn drain_nonblocking_with_read_budget(
+    reader: &mut impl Read,
+    output: &mut Vec<u8>,
+    eof: &mut bool,
+    read_budget: usize,
+) -> Result<()> {
     let mut buffer = [0_u8; 16 * 1024];
-    loop {
+    for _ in 0..read_budget {
         match reader.read(&mut buffer) {
             Ok(0) => {
                 *eof = true;
@@ -9917,9 +11032,11 @@ fn drain_nonblocking(reader: &mut impl Read, output: &mut Vec<u8>, eof: &mut boo
                 output.extend_from_slice(&buffer[..count]);
             }
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => return Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
             Err(error) => return Err(error.into()),
         }
     }
+    Ok(())
 }
 
 fn require_success(output: ProcessOutput, label: &str) -> Result<Vec<u8>> {
@@ -10685,10 +11802,17 @@ fn validate_validator_client_semantics(
     inputs: &[super::PinnedInput],
     admitted: &AdmittedReset,
 ) -> Result<()> {
-    if inputs.len() != admitted.inventory.validator_clients.len() {
+    validate_validator_client_inputs(inputs, &admitted.inventory)
+}
+
+pub(super) fn validate_validator_client_inputs(
+    inputs: &[super::PinnedInput],
+    inventory: &super::InventoryV1,
+) -> Result<()> {
+    if inputs.len() != inventory.validator_clients.len() {
         return Err(eyre!("validator client semantic closure length drifted"));
     }
-    for (input, expected) in inputs.iter().zip(&admitted.inventory.validator_clients) {
+    for (input, expected) in inputs.iter().zip(&inventory.validator_clients) {
         revalidate_pinned(input, "validator client config")?;
         let config = load_client_config_from_pinned(input, "validator client config")?;
         let expected_account =
@@ -10705,27 +11829,38 @@ fn validate_validator_client_semantics(
     Ok(())
 }
 
-fn load_client_config_from_pinned(input: &super::PinnedInput, label: &str) -> Result<ClientConfig> {
+pub(super) fn load_client_config_from_pinned(
+    input: &super::PinnedInput,
+    label: &str,
+) -> Result<ClientConfig> {
     revalidate_pinned(input, label)?;
-    let retained = input
+    let mut retained = input
         .file
         .try_clone()
         .wrap_err_with(|| format!("failed to duplicate {label} descriptor"))?;
-    #[cfg(target_os = "linux")]
-    let descriptor_path = PathBuf::from(format!("/proc/self/fd/{}", retained.as_raw_fd()));
-    #[cfg(all(unix, not(target_os = "linux")))]
-    let descriptor_path = PathBuf::from(format!("/dev/fd/{}", retained.as_raw_fd()));
-    #[cfg(not(unix))]
-    return Err(eyre!(
-        "client config semantic admission requires Unix descriptors"
-    ));
-    let config = ClientConfig::load(LoadPath::Explicit(descriptor_path))
+    retained
+        .rewind()
+        .map_err(|_| eyre!("cannot rewind {label}"))?;
+    let maximum = iroha_config_base::toml::MAX_TOML_SOURCE_BYTES;
+    if input.snapshot.len == 0 || input.snapshot.len > maximum {
+        return Err(eyre!(
+            "{label} exceeds the bounded client configuration size"
+        ));
+    }
+    let bytes = zeroize::Zeroizing::new(read_pinned_bytes(
+        &input.path,
+        label,
+        retained,
+        &input.snapshot,
+        maximum,
+    )?);
+    let (config, _) = ClientConfig::load_bytes_with_musubi_publication(&input.path, &bytes)
         .map_err(|_| eyre!("{label} failed strict semantic loading"))?;
     revalidate_pinned(input, label)?;
     Ok(config)
 }
 
-fn hash_pinned_input(
+pub(super) fn hash_pinned_input(
     input: &super::PinnedInput,
     label: &str,
     deadline: Option<Instant>,
@@ -10763,6 +11898,63 @@ fn ensure_local_deadline(deadline: Option<Instant>) -> Result<()> {
     Ok(())
 }
 
+fn inherited_client_config_args(
+    input: &super::PinnedInput,
+    label: &str,
+) -> Result<(Vec<OsString>, File)> {
+    revalidate_pinned(input, label)?;
+    let file = input
+        .file
+        .try_clone()
+        .wrap_err_with(|| format!("failed to duplicate retained {label} descriptor"))?;
+    Ok((
+        vec![
+            "--config-fd".into(),
+            file.as_raw_fd().to_string().into(),
+            "--config-source-path".into(),
+            input.path.as_os_str().to_owned(),
+        ],
+        file,
+    ))
+}
+
+/// Keep SSH inputs in this launcher: OpenSSH closes every inherited descriptor
+/// above stderr before parsing its options. Parent proc paths name the pinned
+/// inodes across that sweep without reopening provenance or copying secrets.
+struct ParentHeldSshInputs {
+    identity_path: PathBuf,
+    known_hosts_path: PathBuf,
+    _identity_file: File,
+    _known_hosts_file: File,
+}
+
+impl ParentHeldSshInputs {
+    fn new(identity: &super::PinnedInput, known_hosts: &super::PinnedInput) -> Result<Self> {
+        // Fake process runners can inspect the exact Linux argv on any test host.
+        if !cfg!(any(target_os = "linux", test)) {
+            return Err(eyre!(
+                "public-reset SSH preflight and apply require a Linux controller"
+            ));
+        }
+        let identity_file = super::clone_revalidated_pinned(identity, "OpenSSH identity")?.file;
+        let known_hosts_file =
+            super::clone_revalidated_pinned(known_hosts, "OpenSSH known-hosts")?.file;
+        let parent_path = |file: &File| {
+            PathBuf::from(format!(
+                "/proc/{}/fd/{}",
+                std::process::id(),
+                file.as_raw_fd()
+            ))
+        };
+        Ok(Self {
+            identity_path: parent_path(&identity_file),
+            known_hosts_path: parent_path(&known_hosts_file),
+            _identity_file: identity_file,
+            _known_hosts_file: known_hosts_file,
+        })
+    }
+}
+
 fn inherited_input_path(input: &super::PinnedInput, label: &str) -> Result<(PathBuf, File)> {
     revalidate_pinned(input, label)?;
     let file = input
@@ -10784,7 +11976,7 @@ fn inherited_file_path(_file: &File) -> Result<PathBuf> {
     ))
 }
 
-fn validator_config_closure_sha256(
+pub(super) fn validator_config_closure_sha256(
     inputs: &[super::PinnedInput],
     deadline: Option<Instant>,
 ) -> Result<String> {
@@ -10800,7 +11992,7 @@ fn validator_config_closure_sha256(
     Ok(hex::encode(digest.finalize()))
 }
 
-fn pin_stage_tree(
+pub(super) fn pin_stage_tree(
     root: &Path,
     deadline: Option<Instant>,
 ) -> Result<(
@@ -10870,7 +12062,7 @@ fn pin_stage_tree(
     Ok((hash, bytes, files, fixed))
 }
 
-fn revalidate_stage_files(
+pub(super) fn revalidate_stage_files(
     root: &Path,
     files: &[(String, super::PinnedInput)],
     deadline: Option<Instant>,
@@ -11118,6 +12310,38 @@ impl<'a> SealCleanupSshTransport<'a> {
     }
 }
 
+/// Check all five logical targets without runtime signing custody or a journal.
+pub(super) fn preflight_hosts(admitted: &AdmittedReset) -> Result<()> {
+    preflight_hosts_with_runner(admitted, &mut RealProcessRunner)
+}
+
+fn preflight_hosts_with_runner<R: ProcessRunner>(
+    admitted: &AdmittedReset,
+    runner: &mut R,
+) -> Result<()> {
+    let timeout_secs = admitted.inventory.timeouts.install_secs;
+    for validator in &admitted.inventory.validators {
+        dispatch_custodied_host_action(
+            admitted,
+            runner,
+            &validator.slug,
+            &validator.endpoint,
+            HostAction::Preflight,
+            timeout_secs,
+        )
+        .wrap_err_with(|| format!("read-only host preflight failed for {}", validator.slug))?;
+    }
+    dispatch_custodied_host_action(
+        admitted,
+        runner,
+        &admitted.inventory.edge.slug,
+        &admitted.inventory.edge.endpoint,
+        HostAction::Preflight,
+        timeout_secs,
+    )
+    .wrap_err("read-only host preflight failed for edge")
+}
+
 fn dispatch_custodied_host_action<R: ProcessRunner>(
     admitted: &AdmittedReset,
     runner: &mut R,
@@ -11128,9 +12352,11 @@ fn dispatch_custodied_host_action<R: ProcessRunner>(
 ) -> Result<()> {
     if !matches!(
         action,
-        HostAction::Rollback | HostAction::Seal | HostAction::Cleanup
+        HostAction::Preflight | HostAction::Rollback | HostAction::Seal | HostAction::Cleanup
     ) {
-        return Err(eyre!("minimal host dispatch rejects forward action"));
+        return Err(eyre!(
+            "minimal host dispatch permits only preflight, rollback, seal, or cleanup"
+        ));
     }
     let timeout_ms = timeout_secs
         .checked_mul(1_000)
@@ -11172,11 +12398,13 @@ fn dispatch_custodied_host_action<R: ProcessRunner>(
     frame.extend_from_slice(&request_bytes);
     let remote_command = format!("{FIXED_DISPATCHER} {HOST_DISPATCH_SUFFIX}");
     validate_remote_command(&remote_command)?;
-    let (identity_path, identity_file) =
-        inherited_input_path(&admitted.ssh_identity, "OpenSSH identity")?;
-    let (known_hosts_path, known_hosts_file) =
-        inherited_input_path(&admitted.known_hosts, "OpenSSH known-hosts")?;
-    let mut args = ssh_common_args(endpoint, &identity_path, &known_hosts_path, timeout_secs);
+    let ssh_inputs = ParentHeldSshInputs::new(&admitted.ssh_identity, &admitted.known_hosts)?;
+    let mut args = ssh_common_args(
+        endpoint,
+        &ssh_inputs.identity_path,
+        &ssh_inputs.known_hosts_path,
+        timeout_secs,
+    );
     args.push(OsString::from("--"));
     args.push(OsString::from(format!(
         "{}@{}",
@@ -11190,10 +12418,10 @@ fn dispatch_custodied_host_action<R: ProcessRunner>(
             stdin_prefix: frame,
             stdin_file: None,
             stdin_files: Vec::new(),
-            inherited_files: vec![identity_file, known_hosts_file],
+            inherited_files: Vec::new(),
             deadline,
         })?,
-        "pinned SSH minimal terminal dispatch",
+        "pinned SSH minimal host dispatch",
     )?;
     let receipt: HostReceiptV1 =
         json::from_slice(&output).wrap_err("minimal host dispatch returned no exact receipt")?;
@@ -11600,11 +12828,14 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
         frame.extend_from_slice(&stage_frame);
         let remote_command = format!("{FIXED_DISPATCHER} {HOST_DISPATCH_SUFFIX}");
         validate_remote_command(&remote_command)?;
-        let (identity_path, identity_file) =
-            inherited_input_path(&self.admitted.ssh_identity, "OpenSSH identity")?;
-        let (known_hosts_path, known_hosts_file) =
-            inherited_input_path(&self.admitted.known_hosts, "OpenSSH known-hosts")?;
-        let mut args = ssh_common_args(endpoint, &identity_path, &known_hosts_path, timeout_secs);
+        let ssh_inputs =
+            ParentHeldSshInputs::new(&self.admitted.ssh_identity, &self.admitted.known_hosts)?;
+        let mut args = ssh_common_args(
+            endpoint,
+            &ssh_inputs.identity_path,
+            &ssh_inputs.known_hosts_path,
+            timeout_secs,
+        );
         args.push(OsString::from("--"));
         args.push(OsString::from(format!(
             "{}@{}",
@@ -11617,7 +12848,7 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
             stdin_prefix: frame,
             stdin_file,
             stdin_files,
-            inherited_files: vec![identity_file, known_hosts_file],
+            inherited_files: Vec::new(),
             deadline,
         };
         let ambiguous_recoverable =
@@ -12301,9 +13532,10 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
         _timeout_secs: u64,
         include_submission_secret: bool,
     ) -> Result<(Vec<OsString>, Vec<File>)> {
-        let (config_path, config_file) =
-            inherited_input_path(&self.runtime.client_config, "Taira runtime client config")?;
-        let mut args = vec!["-c".into(), config_path.into_os_string()];
+        let (mut args, config_file) = inherited_client_config_args(
+            &self.runtime.client_config,
+            "Taira runtime client config",
+        )?;
         let mut inherited_files = vec![config_file];
         args.extend(self.runtime.fee_args.iter().cloned());
         args.extend([
@@ -12346,15 +13578,15 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
             ]);
         }
         if kind == "onboarding" && include_submission_secret {
-            let (token_path, token_file) = inherited_input_path(
+            let (_token_path, token_file) = inherited_input_path(
                 self.runtime
                     .onboarding_token
                     .as_ref()
                     .ok_or_else(|| eyre!("write-canary submission lacks onboarding custody"))?,
                 "Taira onboarding token",
             )?;
-            args.push(OsString::from("--onboarding-token-file"));
-            args.push(token_path.into_os_string());
+            args.push(OsString::from("--onboarding-token-fd"));
+            args.push(token_file.as_raw_fd().to_string().into());
             inherited_files.push(token_file);
         }
         args.push(OsString::from("--json"));
@@ -12734,8 +13966,10 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
         idempotency_key: &str,
         timeout_secs: u64,
     ) -> Result<(Vec<OsString>, Vec<File>)> {
-        let (config_path, config_file) =
-            inherited_input_path(&self.runtime.client_config, "Taira runtime client config")?;
+        let (mut args, config_file) = inherited_client_config_args(
+            &self.runtime.client_config,
+            "Taira runtime client config",
+        )?;
         let operation = match kind {
             "inrou_bundle_pin" => "bundle-pin",
             "inrou_guest_pin" => "guest-pin",
@@ -12743,7 +13977,6 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
             "inrou_canary" => "service-mutation",
             _ => return Err(eyre!("unsupported prepared Inrou child kind")),
         };
-        let mut args = vec!["-c".into(), config_path.into_os_string()];
         args.extend(self.runtime.fee_args.iter().cloned());
         args.extend([
             OsString::from("taira"),
@@ -13100,10 +14333,8 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
                 "Taira runtime client config".to_owned(),
             )
         };
-        let (config_path, config_file) = inherited_input_path(config, &label)?;
-        let args = vec![
-            "-c".into(),
-            config_path.into_os_string(),
+        let (mut args, config_file) = inherited_client_config_args(config, &label)?;
+        args.extend([
             "taira".into(),
             "inrou-check".into(),
             "--public-root".into(),
@@ -13120,7 +14351,7 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
             "--timeout-secs".into(),
             timeout_secs.to_string().into(),
             "--json".into(),
-        ];
+        ]);
         let authorization_deadline_unix_ms = (!recovery_only).then_some(
             self.admitted
                 .authorization
@@ -13228,7 +14459,7 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
                         "four-validator convergence did not reach one atomic checkpoint"
                     ));
                 }
-                let (config_path, config_file) = inherited_input_path(
+                let (mut config_args, config_file) = inherited_client_config_args(
                     &self.runtime.validator_client_configs[index],
                     "validator client config",
                 )?;
@@ -13236,16 +14467,15 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
                     .checked_add(Duration::from_secs(10))
                     .ok_or_else(|| eyre!("convergence poll deadline overflow"))?
                     .min(deadline);
+                config_args.extend([
+                    "--output-format".into(),
+                    "json".into(),
+                    "ops".into(),
+                    "sumeragi".into(),
+                    "status".into(),
+                ]);
                 let output = self.run_local_cli_until(
-                    vec![
-                        "-c".into(),
-                        config_path.into_os_string(),
-                        "--output-format".into(),
-                        "json".into(),
-                        "ops".into(),
-                        "sumeragi".into(),
-                        "status".into(),
-                    ],
+                    config_args,
                     vec![config_file],
                     timeout_secs,
                     poll_deadline,
@@ -15659,7 +16889,9 @@ fn validate_receipt_name(name: &str) -> Result<()> {
         || name.len() > 128
         || !name.ends_with(".json")
         || !name.bytes().all(|byte| {
-            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'.')
+            byte.is_ascii_lowercase()
+                || byte.is_ascii_digit()
+                || matches!(byte, b'-' | b'_' | b'.')
         })
     {
         return Err(eyre!("receipt name escaped the closed local namespace"));
@@ -15914,8 +17146,8 @@ fn verify_remote_receipt(request: &HostRequestV1, receipt: &HostReceiptV1) -> Re
     let inventory = BASE64
         .decode(&request.inventory_base64)
         .wrap_err("request inventory base64 is invalid")?;
-    let inventory_value: InventoryV1 =
-        json::from_slice(&inventory).wrap_err("request inventory JSON is invalid")?;
+    let (inventory_value, _inventory_guard) =
+        super::decode_inventory(&inventory, "request inventory")?;
     if receipt.schema != HOST_RECEIPT_SCHEMA_V1
         || receipt.action != request.action
         || receipt.host_slug != request.host_slug
@@ -15941,8 +17173,8 @@ fn verify_remote_recovery_receipt(request: &HostRequestV1, receipt: &HostReceipt
     let inventory = BASE64
         .decode(&request.inventory_base64)
         .wrap_err("request inventory base64 is invalid")?;
-    let inventory_value: InventoryV1 =
-        json::from_slice(&inventory).wrap_err("request inventory JSON is invalid")?;
+    let (inventory_value, _inventory_guard) =
+        super::decode_inventory(&inventory, "request inventory")?;
     if receipt.schema != HOST_RECEIPT_SCHEMA_V1
         || receipt.action != request.action
         || receipt.host_slug != request.host_slug
@@ -15978,8 +17210,8 @@ fn verify_remote_reservation_receipt(
     let inventory = BASE64
         .decode(&request.inventory_base64)
         .wrap_err("request inventory base64 is invalid")?;
-    let inventory_value: InventoryV1 =
-        json::from_slice(&inventory).wrap_err("request inventory JSON is invalid")?;
+    let (inventory_value, _inventory_guard) =
+        super::decode_inventory(&inventory, "request inventory")?;
     if receipt.schema != HOST_RECEIPT_SCHEMA_V1
         || receipt.action != request.action
         || receipt.host_slug != request.host_slug
@@ -17159,9 +18391,8 @@ mod tests {
             validator.endpoint.host_identity_sha256 = shared_identity.clone();
         }
         inventory.edge.endpoint.host_identity_sha256 = shared_identity;
-        let inventory_bytes = json::to_json(&inventory)
-            .expect("inventory JSON")
-            .into_bytes();
+        let inventory_bytes =
+            super::super::canonical_inventory_bytes(&inventory).expect("inventory JSON");
         let inventory_sha256 = sha256_hex(&inventory_bytes);
         let claims = super::super::AuthorizationClaimsV1 {
             action: "reset_and_deploy".to_owned(),
@@ -17370,6 +18601,88 @@ mod tests {
         traversal.files[0].path = "../container.json".to_owned();
         let _error = validate_inrou_stage_upload_manifest(&admitted, &traversal)
             .expect_err("stage path traversal must fail closed");
+    }
+
+    #[test]
+    fn host_receipt_names_cover_every_action_and_artifact_role() {
+        // The same list builds the test inputs and an exhaustive enum match:
+        // adding a HostAction without testing its receipt name cannot compile.
+        macro_rules! all_host_actions {
+            ($($variant:ident),+ $(,)?) => {{
+                let actions = [$(HostAction::$variant),+];
+                for action in &actions {
+                    match action { $(HostAction::$variant => (),)+ }
+                }
+                actions
+            }};
+        }
+        let actions = all_host_actions!(
+            Preflight,
+            Upload,
+            Stage,
+            InrouStageUpload,
+            Stop,
+            Install,
+            Reset,
+            Preseed,
+            Start,
+            Restart,
+            EdgeStage,
+            EdgeCutover,
+            EdgeVerify,
+            Seal,
+            Cleanup,
+            Rollback,
+            MutationReserve,
+        );
+        let roles = super::super::VALIDATOR_ARTIFACT_ROLES
+            .iter()
+            .chain(&super::super::EDGE_ARTIFACT_ROLES)
+            .copied()
+            .collect::<BTreeSet<_>>();
+        let mut names = BTreeSet::new();
+        for action in actions {
+            assert_eq!(HostAction::parse(action.label()).unwrap(), action);
+            if action == HostAction::Upload {
+                for role in &roles {
+                    let name = host_receipt_name(action, role)
+                        .unwrap_or_else(|error| panic!("canonical upload role {role}: {error}"));
+                    assert_eq!(name, format!("upload-{role}.json"));
+                    validate_receipt_name(&name).expect("shared receipt namespace");
+                    assert!(names.insert(name), "canonical receipt names must be unique");
+                }
+            } else {
+                let name = host_receipt_name(action, "")
+                    .unwrap_or_else(|error| panic!("canonical action {action:?}: {error}"));
+                assert_eq!(name, format!("{}.json", action.label()));
+                validate_receipt_name(&name).expect("shared receipt namespace");
+                assert!(names.insert(name), "canonical receipt names must be unique");
+            }
+        }
+        // The upload fixture uses the exact inventory role constants, so a new
+        // canonical artifact role automatically participates in this gate.
+        assert!(names.contains("upload-iroha3d.json"));
+        assert!(names.contains("upload-iroha_cli.json"));
+        assert!(names.contains("inrou_stage_upload.json"));
+    }
+
+    #[test]
+    fn receipt_names_reject_path_control_and_unicode_escape() {
+        for name in [
+            "", ".", "..", "receipt", "../receipt.json", "/receipt.json",
+            "dir/receipt.json", "dir\\receipt.json", "receipt.json/..",
+            "receipt.json\0", "receipt.json\n", "receipt.json\r", "receipt\t.json",
+            "receipt name.json", "Receipt.json", "réceipt.json", "receipt．json",
+        ] {
+            assert!(validate_receipt_name(name).is_err(), "unsafe receipt {name:?}");
+        }
+        let longest = format!("{}.json", "a".repeat(123));
+        validate_receipt_name(&longest).expect("exact 128-byte bound");
+        assert!(validate_receipt_name(&format!("a{longest}")).is_err());
+        for role in ["", "../iroha_cli", "iroha/cli", "iroha\\cli", "iroha.cli", "iroha-cli", "iroha_cli\0", "iroha_cli\n", "iróha_cli"] {
+            assert!(host_receipt_name(HostAction::Upload, role).is_err(), "unsafe role {role:?}");
+        }
+        assert!(host_receipt_name(HostAction::Upload, &"a".repeat(65)).is_err());
     }
 
     #[test]
@@ -17585,6 +18898,247 @@ mod tests {
     }
 
     #[test]
+    fn process_runner_streams_large_closure_with_bidirectional_backpressure() {
+        let directory = tempfile::tempdir().expect("temporary large stream directory");
+        let prefix = b"exact-framed-prefix\n".to_vec();
+        let mut expected = Sha256::new();
+        expected.update(&prefix);
+        let file_size = 32_u64 * 1024 * 1024;
+        let mut files = Vec::new();
+        for (name, byte) in [("first", b'a'), ("second", b'b')] {
+            let path = directory.path().join(name);
+            let mut file = File::create(&path).expect("create harmless streamed fixture");
+            let chunk = [byte; 64 * 1024];
+            for _ in 0..512 {
+                file.write_all(&chunk)
+                    .expect("write harmless streamed fixture");
+                expected.update(chunk);
+            }
+            drop(file);
+            files.push((
+                File::open(path).expect("pin harmless streamed fixture"),
+                file_size,
+            ));
+        }
+        let expected_len = prefix.len() as u64 + 2 * file_size;
+        // Each output exceeds real pipe capacity before the child consumes input.
+        // The old one-64KiB-write/20ms loop takes at least 20s for these files;
+        // the 10s bound allows loaded CI without accepting that rate limiter.
+        let output = run_bounded_process(&ProcessSpec {
+            program: PathBuf::from("/usr/bin/python3"),
+            args: vec![
+                "-I".into(),
+                "-c".into(),
+                r#"
+import hashlib, sys
+sys.stdout.buffer.write(b'o' * 131072)
+sys.stdout.buffer.flush()
+sys.stderr.buffer.write(b'e' * 131072)
+sys.stderr.buffer.flush()
+h = hashlib.sha256()
+count = 0
+while True:
+    chunk = sys.stdin.buffer.read(131072)
+    if not chunk:
+        break
+    h.update(chunk)
+    count += len(chunk)
+sys.stdout.buffer.write((h.hexdigest() + ' ' + str(count) + '\n').encode())
+sys.stdout.buffer.flush()
+"#
+                .into(),
+            ],
+            stdin_prefix: prefix,
+            stdin_file: Some(files.remove(0)),
+            stdin_files: files,
+            inherited_files: Vec::new(),
+            deadline: Instant::now() + Duration::from_secs(10),
+        })
+        .expect("readiness-driven 64MiB exact stream with both output pipes backpressured");
+        assert!(output.status.success());
+        let mut expected_stdout = vec![b'o'; 131072];
+        expected_stdout
+            .extend_from_slice(format!("{:x} {expected_len}\n", expected.finalize()).as_bytes());
+        assert_eq!(output.stdout, expected_stdout);
+        assert_eq!(output.stderr, vec![b'e'; 131072]);
+    }
+
+    #[test]
+    fn process_runner_output_budget_bounds_continuous_and_interrupted_readers() {
+        struct ReadyReader {
+            calls: usize,
+            interrupted: bool,
+        }
+        impl Read for ReadyReader {
+            fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+                self.calls += 1;
+                if self.interrupted {
+                    return Err(std::io::ErrorKind::Interrupted.into());
+                }
+                buffer.fill(b'x');
+                Ok(buffer.len())
+            }
+        }
+        for interrupted in [false, true] {
+            let mut reader = ReadyReader {
+                calls: 0,
+                interrupted,
+            };
+            let mut output = Vec::new();
+            let mut eof = false;
+            drain_nonblocking_with_read_budget(&mut reader, &mut output, &mut eof, 4)
+                .expect("one bounded fair output turn");
+            assert_eq!(reader.calls, 4);
+            assert_eq!(output.len(), if interrupted { 0 } else { 64 * 1024 });
+            assert!(!eof);
+        }
+    }
+
+    #[test]
+    fn process_runner_deadline_kills_descendant_holding_output_pipes() {
+        use std::os::{fd::OwnedFd, unix::net::UnixStream};
+        let (mut observer, held) = UnixStream::pair().expect("owned descendant witness socket");
+        observer
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let held = File::from(OwnedFd::from(held));
+        let descriptor = held.as_raw_fd();
+        let started = Instant::now();
+        let error = run_bounded_process(&ProcessSpec {
+            program: PathBuf::from("/usr/bin/python3"),
+            args: vec![
+                "-I".into(),
+                "-c".into(),
+                r#"
+import os, sys, time
+if os.fork():
+    os._exit(0)
+os.write(int(sys.argv[1]), b'descendant-ready')
+time.sleep(30)
+"#
+                .into(),
+                descriptor.to_string().into(),
+            ],
+            stdin_prefix: Vec::new(),
+            stdin_file: None,
+            stdin_files: Vec::new(),
+            inherited_files: vec![held],
+            deadline: Instant::now() + Duration::from_secs(1),
+        })
+        .expect_err("a descendant retaining output must obey the same absolute deadline");
+        let diagnostic = error.to_string();
+        assert!(diagnostic.contains("copied_bytes=0 expected_bytes=0"));
+        assert!(diagnostic.contains("child_exit_observed=true"));
+        assert!(diagnostic.contains("stdout_eof=false stderr_eof=false"));
+        let mut witness = Vec::new();
+        observer
+            .read_to_end(&mut witness)
+            .expect("owned descendant must close its inherited socket");
+        assert_eq!(witness, b"descendant-ready");
+        assert!(started.elapsed() < Duration::from_secs(4));
+    }
+
+    #[test]
+    fn preseed_receipt_targets_follow_receipt_order_for_reversed_stores() {
+        use sorafs_manifest::operator_preseed::OperatorPreseedArtifactReceiptV1;
+
+        let _chain = ChainDiscriminantGuard::enter(super::super::CHAIN_DISCRIMINANT);
+        let mut admitted = progress_admission();
+        let HostTarget::Validator(target) = &mut admitted.target else {
+            panic!("validator fixture");
+        };
+        // The real parser reaches this deterministic post-binding sentinel
+        // before any filesystem access. It needs no root privileges or live state.
+        target.reset_guard = "/invalid-preseed-fixture/guard".to_owned();
+        let mut stores = admitted
+            .inventory
+            .inrou_canary
+            .placement_targets
+            .iter()
+            .enumerate()
+            .map(|(index, placement)| ValidatorPreseedStore {
+                slug: format!("taira-validator-{}", index + 1),
+                placement: placement.clone(),
+                data_dir: PathBuf::from(format!("/var/lib/taira/validator-{index}/sorafs")),
+                max_capacity_bytes: 1024,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(stores.len(), 4);
+        let mut targets = stores
+            .iter()
+            .map(|store| OperatorPreseedTargetReceiptV1 {
+                validator_account_id: store.placement.validator_account_id.to_string(),
+                peer_id: store.placement.peer_id.clone(),
+                store_root: store.data_dir.to_string_lossy().into_owned(),
+            })
+            .collect::<Vec<_>>();
+        targets.sort_by_key(|target| {
+            (
+                target.validator_account_id.clone(),
+                target.peer_id.clone(),
+                target.store_root.clone(),
+            )
+        });
+        let canary = &admitted.inventory.inrou_canary;
+        let mut artifacts = [
+            &canary.bundle_manifest_digest_hex,
+            &canary.guest_manifest_digest_hex,
+            &canary.discovery_manifest_digest_hex,
+        ]
+        .into_iter()
+        .map(|digest| OperatorPreseedArtifactReceiptV1 {
+            manifest_digest_blake3: digest.clone(),
+            payload_digest_blake3: "22".repeat(32),
+            content_length: 1,
+            store_count: 4,
+        })
+        .collect::<Vec<_>>();
+        artifacts.sort_by(|left, right| {
+            left.manifest_digest_blake3
+                .cmp(&right.manifest_digest_blake3)
+        });
+        let mut receipt = OperatorPreseedSessionReceiptV1 {
+            schema_version: 1,
+            status: "ready".to_owned(),
+            mode: "ingest".to_owned(),
+            max_capacity_bytes: 1024,
+            targets,
+            artifacts,
+        };
+        receipt.validate().expect("canonical producer receipt");
+        stores.sort_by_key(|store| store.placement.validator_account_id.to_string());
+        stores.reverse();
+        let parse = |receipt: &OperatorPreseedSessionReceiptV1| {
+            let mut wire = json::to_json(receipt)
+                .expect("canonical receipt")
+                .into_bytes();
+            wire.push(b'\n');
+            parse_preseed_session_receipt(&wire, &stores, &admitted, false)
+                .expect_err("fixture sentinel or explicit receipt rejection")
+                .to_string()
+        };
+        assert_eq!(
+            parse(&receipt),
+            "reset guard escaped the fixed host-global control root",
+            "all receipt and exact-binding checks must pass before stage access"
+        );
+
+        receipt.targets.swap(0, 1);
+        assert!(parse(&receipt).contains("targets must be strictly ordered"));
+        receipt.targets.swap(0, 1);
+        receipt.targets[0].store_root.push_str("-different");
+        receipt
+            .validate()
+            .expect("well-shaped but differently bound receipt");
+        assert_eq!(
+            parse(&receipt),
+            "SoraFS preseed helper receipt differs from the exact requested stores and artifacts"
+        );
+        receipt.targets[0] = receipt.targets[1].clone();
+        assert!(parse(&receipt).contains("identities must each be distinct"));
+    }
+
+    #[test]
     fn locked_preseed_session_releases_only_after_ready_receipt_validation() {
         let mut validated = false;
         run_locked_preseed_session(
@@ -17698,10 +19252,108 @@ mod tests {
             deadline: Instant::now() + Duration::from_secs(2),
         })
         .expect_err("early child exit must reject an incomplete framed stdin");
-        assert!(
-            error.to_string().contains("stdin") || error.to_string().contains("stream"),
-            "unexpected error: {error:?}"
+        assert_eq!(
+            error.to_string(),
+            "child exited before consuming its exact framed stdin"
         );
+    }
+
+    #[test]
+    fn process_runner_preserves_rejection_after_child_closes_stdin() {
+        const DIAGNOSTIC_SIZE: usize = 2 * 1024 * 1024;
+        let output = run_bounded_process(&ProcessSpec {
+            program: PathBuf::from("/usr/bin/python3"),
+            args: vec![
+                "-I".into(),
+                "-c".into(),
+                r#"
+import os, sys
+os.close(0)
+sys.stdout.buffer.write(b'fixture-stdout-must-not-enter-errors')
+sys.stdout.buffer.flush()
+sys.stderr.buffer.write(b'e' * (2 * 1024 * 1024))
+sys.stderr.buffer.write(b'\nfixture-remote-rejection\n')
+sys.stderr.buffer.flush()
+os._exit(23)
+"#
+                .into(),
+                "fixture-argument-must-not-enter-errors".into(),
+            ],
+            stdin_prefix: b"fixture-input-must-not-enter-errors".repeat(128 * 1024),
+            stdin_file: None,
+            stdin_files: Vec::new(),
+            inherited_files: Vec::new(),
+            deadline: Instant::now() + Duration::from_secs(5),
+        })
+        .expect("rejection must preserve the child's exit status and full bounded diagnostic");
+        assert_eq!(output.status.code(), Some(23));
+        assert_eq!(
+            output.stderr.len(),
+            DIAGNOSTIC_SIZE + b"\nfixture-remote-rejection\n".len()
+        );
+        assert!(
+            output.stderr[..DIAGNOSTIC_SIZE]
+                .iter()
+                .all(|byte| *byte == b'e')
+        );
+        assert!(output.stderr.ends_with(b"\nfixture-remote-rejection\n"));
+        let error = require_success(output, "fixture dispatch")
+            .expect_err("a rejected incomplete frame must never become success");
+        let diagnostic = error.to_string();
+        assert!(diagnostic.contains("fixture dispatch failed with"));
+        assert!(diagnostic.contains("23"));
+        assert!(diagnostic.ends_with("\nfixture-remote-rejection\n"));
+        assert!(!diagnostic.contains("fixture-stdout-must-not-enter-errors"));
+        assert!(!diagnostic.contains("fixture-argument-must-not-enter-errors"));
+        assert!(!diagnostic.contains("fixture-input-must-not-enter-errors"));
+    }
+
+    #[test]
+    fn process_runner_deadline_reaps_child_after_stdin_closure() {
+        use std::os::{fd::OwnedFd, unix::net::UnixStream};
+        let (mut observer, held) = UnixStream::pair().expect("owned child witness socket");
+        observer
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let held = File::from(OwnedFd::from(held));
+        let descriptor = held.as_raw_fd();
+        let started = Instant::now();
+        let error = run_bounded_process(&ProcessSpec {
+            program: PathBuf::from("/usr/bin/python3"),
+            args: vec![
+                "-I".into(),
+                "-c".into(),
+                r#"
+import os, sys, time
+os.close(0)
+os.write(int(sys.argv[1]), str(os.getpid()).encode('ascii'))
+time.sleep(30)
+"#
+                .into(),
+                descriptor.to_string().into(),
+            ],
+            stdin_prefix: vec![b'x'; 4 * 1024 * 1024],
+            stdin_file: None,
+            stdin_files: Vec::new(),
+            inherited_files: vec![held],
+            deadline: Instant::now() + Duration::from_secs(1),
+        })
+        .expect_err("a child closing stdin then hanging must obey the original deadline");
+        let diagnostic = error.to_string();
+        assert!(diagnostic.contains("exceeded its absolute deadline"));
+        assert!(diagnostic.contains("stdin_complete=false"));
+        assert!(diagnostic.contains("child_exit_observed=false"));
+        let mut witness = String::new();
+        observer
+            .read_to_string(&mut witness)
+            .expect("terminated child must release its inherited socket");
+        let pid = rustix::process::Pid::from_raw(witness.parse().expect("child PID witness"))
+            .expect("positive child PID");
+        assert!(matches!(
+            rustix::process::waitpid(Some(pid), rustix::process::WaitOptions::NOHANG),
+            Err(rustix::io::Errno::CHILD)
+        ));
+        assert!(started.elapsed() < Duration::from_secs(4));
     }
 
     #[test]
@@ -17726,23 +19378,28 @@ mod tests {
     fn validator_argv_rejects_duplicate_last_wins_flags() {
         let executable = PathBuf::from("/srv/taira/taira-validator-1/current/bin/iroha3d_taira");
         let config = PathBuf::from("/srv/taira/taira-validator-1/current/config/config.toml");
-        let genesis = PathBuf::from("/srv/taira/taira-validator-1/current/genesis/genesis.json");
         let exact = vec![
             executable.clone(),
             PathBuf::from("--config"),
             config.clone(),
-            PathBuf::from("--genesis-manifest-json"),
-            genesis.clone(),
             PathBuf::from("--sora"),
         ];
-        validate_validator_argv(&exact, &executable, &config, &genesis)
-            .expect("exact validator argv");
+        validate_validator_argv(&exact, &executable, &config).expect("exact validator argv");
+        let mut old_manifest = exact.clone();
+        old_manifest.splice(
+            3..3,
+            [
+                PathBuf::from("--genesis-manifest-json"),
+                PathBuf::from("/srv/taira/taira-validator-1/current/genesis/genesis.json"),
+            ],
+        );
+        assert!(validate_validator_argv(&old_manifest, &executable, &config).is_err());
         let mut duplicate = exact;
         duplicate.extend([
             PathBuf::from("--config"),
             PathBuf::from("/tmp/attacker.toml"),
         ]);
-        let _ = validate_validator_argv(&duplicate, &executable, &config, &genesis)
+        let _ = validate_validator_argv(&duplicate, &executable, &config)
             .expect_err("duplicate last-wins config flag must fail");
     }
 
@@ -17800,7 +19457,8 @@ mod tests {
 
     fn admitted_reset_fixture() -> AdmittedReset {
         let remote = progress_admission();
-        let inventory_bytes = json::to_vec(&remote.inventory).expect("fixture inventory JSON");
+        let inventory_bytes = super::super::canonical_inventory_bytes(&remote.inventory)
+            .expect("fixture inventory JSON");
         let authorization_bytes =
             json::to_vec(&remote.authorization).expect("fixture authorization JSON");
         let ssh = File::open("/dev/null").expect("open fixture SSH input");
@@ -17835,6 +19493,56 @@ mod tests {
                 snapshot: known_hosts_snapshot,
             },
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn retained_client_config_semantics_and_child_fd_share_exact_source() {
+        let directory = tempfile::Builder::new()
+            .prefix(".taira-client-fd-test-")
+            .tempdir_in(std::env::current_dir().expect("cwd"))
+            .expect("private fixture directory");
+        fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))
+            .expect("private fixture directory");
+        let path = directory
+            .path()
+            .canonicalize()
+            .expect("canonical directory")
+            .join("client.toml");
+        fs::write(&path, include_bytes!("../../../defaults/client.toml"))
+            .expect("write public fixture config");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
+            .expect("private config fixture");
+        let input = pin_owner_private_file(&path, "test client config").expect("pin config");
+        hash_pinned_input(&input, "test client config", None)
+            .expect("consume retained input offset");
+        let config = load_client_config_from_pinned(&input, "test client config")
+            .expect("semantic loading reads exact retained bytes");
+        assert_eq!(config.torii_api_url.as_str(), "http://127.0.0.1:8080/");
+        let (args, retained) = inherited_client_config_args(&input, "test client config")
+            .expect("child descriptor arguments");
+        assert_eq!(
+            args,
+            vec![
+                OsString::from("--config-fd"),
+                OsString::from(retained.as_raw_fd().to_string()),
+                OsString::from("--config-source-path"),
+                path.as_os_str().to_owned()
+            ]
+        );
+        let (child_config, _) = crate::client_config::load_inherited(
+            u32::try_from(retained.as_raw_fd()).expect("descriptor"),
+            &path,
+        )
+        .expect("actual inherited FD semantic load");
+        assert_eq!(child_config.account, config.account);
+        assert_eq!(child_config.torii_api_url, config.torii_api_url);
+        let changed = format!(
+            "{}\nunknown_runtime_key = \"private diagnostic fixture\"\n",
+            include_str!("../../../defaults/client.toml")
+        );
+        fs::write(&path, changed).expect("change fixture source");
+        assert!(load_client_config_from_pinned(&input, "test client config").is_err());
     }
 
     fn prepared_write_report_fixture(
@@ -18707,7 +20415,12 @@ mod tests {
         admitted.request.mutation_phase = typed_result.binding.phase.clone();
         admitted.request.mutation_idempotency_key = typed_result.binding.idempotency_key.clone();
         admitted.action_deadline = Instant::now() + Duration::from_secs(10);
-        let inventory_bytes = json::to_vec(&admitted.inventory).expect("fixture inventory");
+        // This captured signed proof fixture deliberately uses a foreign chain_id. Its
+        // inventory is only hashed here, never passed to the Taira admission decoder.
+        let inventory_bytes = {
+            let _guard = ChainDiscriminantGuard::enter(super::super::CHAIN_DISCRIMINANT);
+            json::to_vec(&admitted.inventory).expect("foreign-chain proof fixture inventory")
+        };
         admitted.inventory_sha256 = sha256_hex(&inventory_bytes);
 
         let envelope = norito::json!({
@@ -19277,7 +20990,7 @@ mod tests {
 
     fn manager_evidence(active: &str, sub: &str, result: &str, status: &str, job: &str) -> Vec<u8> {
         format!(
-            "LoadState=loaded\nActiveState={active}\nSubState={sub}\nResult={result}\nExecMainCode=exited\nExecMainStatus={status}\nInvocationID=0123456789abcdef0123456789abcdef\nExecStart={{ path=/usr/bin/systemctl ; argv[]=/usr/bin/systemctl restart taira-validator-1.service ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }}\nJob={job}\n"
+            "LoadState=loaded\nActiveState={active}\nSubState={sub}\nResult={result}\nExecMainCode=1\nExecMainStatus={status}\nInvocationID=0123456789abcdef0123456789abcdef\nExecStart={{ path=/usr/bin/systemctl ; argv[]=/usr/bin/systemctl restart taira-validator-1.service ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }}\nJob={job}\n"
         )
         .into_bytes()
     }
@@ -19309,6 +21022,128 @@ mod tests {
             .expect("rejected evidence"),
             ManagerOperationEvidence::Rejected
         );
+    }
+
+    #[test]
+    fn manager_evidence_accepts_captured_systemd_numeric_exit_after_deadline() {
+        let mut intent = manager_intent_fixture();
+        intent.verb = "stop".to_owned();
+        intent.target_unit = "iroha3d-taira-validator-1.service".to_owned();
+        // Actual systemctl show properties from a completed retained oneshot.
+        // ExecMainCode is numeric even though ExecStart renders code=exited.
+        let captured = b"ActiveState=active\nExecMainCode=1\nExecMainStatus=0\nExecStart={ path=/usr/bin/systemctl ; argv[]=/usr/bin/systemctl stop iroha3d-taira-validator-1.service ; ignore_errors=no ; start_time=[Mon 2026-09-07 23:57:26 UTC] ; stop_time=[Mon 2026-09-07 23:57:26 UTC] ; pid=25862 ; code=exited ; status=0 }\nInvocationID=b706c56d582b49e5b9e580fdd5d4ee14\nJob=\nLoadState=loaded\nResult=success\nSubState=exited\n";
+        assert_eq!(
+            classify_manager_operation_at(captured, &intent, intent.action_deadline_unix_ms + 1,)
+                .expect("retained successful stop remains observable after its mutation deadline"),
+            ManagerOperationEvidence::Applied
+        );
+    }
+
+    #[test]
+    fn manager_evidence_requires_exact_numeric_exit_code_and_status() {
+        let intent = manager_intent_fixture();
+        let completed = String::from_utf8(manager_evidence("active", "exited", "success", "0", ""))
+            .expect("UTF-8 fixture");
+        for code in ["0", "2", "3", "4", "5", "6"] {
+            let evidence = completed.replace("ExecMainCode=1\n", &format!("ExecMainCode={code}\n"));
+            assert_eq!(
+                classify_manager_operation_evidence(evidence.as_bytes(), &intent)
+                    .expect("canonical numeric non-exit code"),
+                ManagerOperationEvidence::Rejected,
+                "active/exited cannot prove success with CLD code {code}"
+            );
+        }
+        for code in [
+            "",
+            "exited",
+            "01",
+            "+1",
+            "-1",
+            "1 ",
+            " 1",
+            "7",
+            "2147483648",
+        ] {
+            let evidence = completed.replace("ExecMainCode=1\n", &format!("ExecMainCode={code}\n"));
+            assert!(
+                classify_manager_operation_evidence(evidence.as_bytes(), &intent).is_err(),
+                "malformed ExecMainCode {code:?} must not be accepted"
+            );
+        }
+        for status in ["", "00", "+0", "-1", "0 ", " 0", "256", "success"] {
+            let evidence =
+                completed.replace("ExecMainStatus=0\n", &format!("ExecMainStatus={status}\n"));
+            assert!(
+                classify_manager_operation_evidence(evidence.as_bytes(), &intent).is_err(),
+                "malformed ExecMainStatus {status:?} must not be accepted"
+            );
+        }
+        for status in ["1", "15", "255"] {
+            assert_eq!(
+                classify_manager_operation_evidence(
+                    &manager_evidence("failed", "failed", "exit-code", status, ""),
+                    &intent,
+                )
+                .expect("canonical nonzero status"),
+                ManagerOperationEvidence::Rejected
+            );
+        }
+    }
+
+    #[test]
+    fn manager_evidence_keeps_unexecuted_and_running_operations_pending() {
+        let intent = manager_intent_fixture();
+        let unexecuted =
+            String::from_utf8(manager_evidence("inactive", "dead", "success", "0", ""))
+                .expect("UTF-8 fixture")
+                .replace("ExecMainCode=1\n", "ExecMainCode=0\n");
+        assert_eq!(
+            classify_manager_operation_evidence(unexecuted.as_bytes(), &intent)
+                .expect("no process has exited yet"),
+            ManagerOperationEvidence::Pending
+        );
+        for (active, sub, job) in [
+            ("activating", "start", "123"),
+            ("active", "running", ""),
+            ("active", "exited", "123"),
+        ] {
+            assert_eq!(
+                classify_manager_operation_evidence(
+                    &manager_evidence(active, sub, "success", "0", job),
+                    &intent,
+                )
+                .expect("outstanding manager work"),
+                ManagerOperationEvidence::Pending
+            );
+        }
+    }
+
+    #[test]
+    fn validator_restart_evidence_requires_running_service_and_settled_job() {
+        let mut evidence = UnitRestartEvidence {
+            invocation: "0123456789abcdef0123456789abcdef".to_owned(),
+            active_enter_monotonic_ms: 1,
+            boot_id: "01234567-89ab-cdef-0123-456789abcdef".to_owned(),
+            active_state: "active".to_owned(),
+            sub_state: "running".to_owned(),
+            job: String::new(),
+        };
+        assert!(evidence.is_terminal_active());
+        evidence.job = "0".to_owned();
+        assert!(evidence.is_terminal_active());
+        for (active, sub, job) in [
+            ("active", "exited", ""),
+            ("active", "start", ""),
+            ("active", "stop", ""),
+            ("active", "running", "123"),
+            ("activating", "running", ""),
+            ("failed", "failed", ""),
+        ] {
+            evidence.active_state = active.to_owned();
+            evidence.sub_state = sub.to_owned();
+            evidence.job = job.to_owned();
+            assert!(!evidence.is_terminal_active(), "{active}/{sub} job={job}");
+        }
     }
 
     #[test]
@@ -19367,5 +21202,1097 @@ mod tests {
         duplicate.extend_from_slice(b"Result=success\n");
         let _ = classify_manager_operation_evidence(&duplicate, &intent)
             .expect_err("duplicate manager property must fail");
+    }
+    #[test]
+    fn host_dispatch_rejects_unsupported_placement_before_guard_or_body_access() {
+        struct UnreadBody;
+        impl Read for UnreadBody {
+            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                panic!("unsupported inventory must not read an artifact body");
+            }
+        }
+
+        let admitted = progress_admission();
+        validate_inventory(&admitted.inventory).expect("complete cohost fixture");
+        let trusted = TrustedKeyV1 {
+            schema: super::super::TRUSTED_KEY_SCHEMA_V1.to_owned(),
+            algorithm: "ed25519".to_owned(),
+            public_key: iroha_crypto::KeyPair::try_from_seed(
+                vec![0x73; 32],
+                iroha_crypto::Algorithm::Ed25519,
+            )
+            .expect("test public key")
+            .public_key()
+            .to_string(),
+        };
+        let trusted_bytes = json::to_json(&trusted).expect("public trust fixture");
+        for mask in 0_u8..15 {
+            let mut inventory = admitted.inventory.clone();
+            for (index, validator) in inventory.validators.iter_mut().enumerate() {
+                if mask & (1 << index) == 0 {
+                    validator.endpoint.host_identity_sha256 = hex::encode([index as u8 + 1; 32]);
+                }
+            }
+            for slug in super::super::VALIDATOR_SLUGS
+                .iter()
+                .copied()
+                .chain(std::iter::once(inventory.edge.slug.as_str()))
+            {
+                let mut request = admitted.request.clone();
+                request.host_slug = slug.to_owned();
+                request.inventory_base64 = BASE64.encode(
+                    super::super::canonical_inventory_bytes(&inventory).expect("inventory JSON"),
+                );
+                request.authorization_base64 = BASE64
+                    .encode(json::to_json(&admitted.authorization).expect("authorization JSON"));
+                request.trusted_key_base64 = BASE64.encode(trusted_bytes.as_bytes());
+                request.trusted_key_sha256 = sha256_hex(trusted_bytes.as_bytes());
+                let bytes = json::to_json(&request).expect("canonical host request");
+                let error = dispatch_host_request(bytes.as_bytes(), &mut UnreadBody)
+                    .expect_err("direct host dispatch must reject unsupported topology");
+                assert!(
+                    error
+                        .to_string()
+                        .contains("one authenticated SSH host identity"),
+                    "cohost_mask={mask} target={slug}: {error:#}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn cohost_mutation_boundaries_share_the_complete_plan_and_lock_namespace() {
+        let mut admitted = progress_admission();
+        validate_inventory(&admitted.inventory).expect("admitted cohost topology");
+        let plan = host_forward_plan(&admitted);
+        let coordination = host_coordination_path(&admitted).expect("fixed coordination path");
+        let slugs = admitted
+            .inventory
+            .validators
+            .iter()
+            .map(|v| v.slug.clone())
+            .chain(std::iter::once(admitted.inventory.edge.slug.clone()))
+            .collect::<Vec<_>>();
+        for slug in slugs {
+            select_target(&mut admitted, &slug);
+            assert_eq!(host_forward_plan(&admitted), plan, "{slug}");
+            assert_eq!(
+                host_coordination_path(&admitted).expect("same host coordination"),
+                coordination,
+                "{slug}"
+            );
+        }
+        let first_restart = plan
+            .iter()
+            .position(|key| key.action == HostAction::Restart.label())
+            .expect("first restart");
+        let first_seal = plan
+            .iter()
+            .position(|key| key.action == HostAction::Seal.label())
+            .expect("first seal");
+        assert_eq!(
+            plan[first_restart..first_restart + 4]
+                .iter()
+                .map(|key| key.host_slug.as_str())
+                .collect::<Vec<_>>(),
+            super::super::VALIDATOR_SLUGS
+        );
+        assert_eq!(
+            plan[first_restart - 1].action,
+            HostAction::EdgeCutover.label()
+        );
+        assert_eq!(plan[first_seal - 1].action, HostAction::EdgeVerify.label());
+        for (phase, ordinal) in [
+            ("pre_edge", first_restart),
+            ("restart-wave-1", first_restart + 1),
+            ("restart-wave-2", first_restart + 2),
+            ("restart-wave-3", first_restart + 3),
+            ("restart-wave-4", first_restart + 4),
+            ("post_edge", first_seal),
+        ] {
+            admitted.request.mutation_phase = phase.to_owned();
+            let mut progress = initial_host_progress(&admitted);
+            progress.next_forward_ordinal = u16::try_from(ordinal).expect("bounded plan");
+            validate_prepared_mutation_progress(&admitted, &progress)
+                .expect("exact complete-host boundary");
+            for wrong in [ordinal - 1, ordinal + 1] {
+                progress.next_forward_ordinal =
+                    u16::try_from(wrong).expect("bounded wrong ordinal");
+                assert!(
+                    validate_prepared_mutation_progress(&admitted, &progress).is_err(),
+                    "{phase} ordinal={wrong}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn shared_host_plan_cuts_over_edge_after_all_starts_before_any_restart() {
+        let admitted = progress_admission();
+        let plan = host_forward_plan(&admitted);
+        let first = |action: HostAction| {
+            plan.iter()
+                .position(|key| key.action == action.label())
+                .expect("required action")
+        };
+        let last_start = plan
+            .iter()
+            .rposition(|key| key.action == HostAction::Start.label())
+            .expect("last local validator start");
+        assert!(last_start < first(HostAction::EdgeStage));
+        assert!(first(HostAction::EdgeStage) < first(HostAction::EdgeCutover));
+        assert!(first(HostAction::EdgeCutover) < first(HostAction::Restart));
+        let last_restart = plan
+            .iter()
+            .rposition(|key| key.action == HostAction::Restart.label())
+            .expect("last local validator restart");
+        assert!(last_restart < first(HostAction::EdgeVerify));
+    }
+
+    #[test]
+    fn vacant_namespace_missing_representative_does_not_hide_live_mount() {
+        let roots = [Path::new("/var/lib/taira/validator-1")];
+        let mut seen = BTreeSet::new();
+        inspect_process_namespace_evidence(
+            &roots,
+            Some(PathBuf::from("mnt:[42]")),
+            &mut seen,
+            || Err::<std::io::Cursor<&[u8]>, _>(std::io::ErrorKind::NotFound.into()),
+        )
+        .expect("exited representative is skipped");
+        assert!(
+            seen.is_empty(),
+            "missing evidence must not mark the namespace"
+        );
+        let mut opened_live_representative = false;
+        let result = inspect_process_namespace_evidence(
+            &roots,
+            Some(PathBuf::from("mnt:[42]")),
+            &mut seen,
+            || {
+                opened_live_representative = true;
+                Ok(std::io::Cursor::new(
+                    &b"36 22 0:1 /var/lib/taira/validator-1 /mnt/held rw - ext4 /dev/sda rw\n"[..],
+                ))
+            },
+        );
+        assert!(opened_live_representative);
+        assert!(result.unwrap_err().to_string().contains("namespace mount"));
+        assert!(seen.is_empty());
+    }
+
+    #[test]
+    fn vacant_namespace_successful_scan_deduplicates_without_opening_again() {
+        let roots = [Path::new("/var/lib/taira/validator-1")];
+        let mut seen = BTreeSet::new();
+        inspect_process_namespace_evidence(
+            &roots,
+            Some(PathBuf::from("mnt:[42]")),
+            &mut seen,
+            || {
+                Ok(std::io::Cursor::new(
+                    &b"36 22 0:1 / / rw - ext4 /dev/sda rw\n"[..],
+                ))
+            },
+        )
+        .expect("unoccupied namespace checked");
+        assert!(seen.contains(Path::new("mnt:[42]")));
+        inspect_process_namespace_evidence(
+            &roots,
+            Some(PathBuf::from("mnt:[42]")),
+            &mut seen,
+            || -> std::io::Result<std::io::Cursor<&[u8]>> {
+                panic!("already checked namespace must not be reopened")
+            },
+        )
+        .expect("successful namespace evidence can be reused");
+    }
+
+    #[test]
+    fn vacant_namespace_open_and_read_errors_fail_closed_without_marking() {
+        let roots = [Path::new("/var/lib/taira/validator-1")];
+        let mut seen = BTreeSet::new();
+        let error = inspect_process_namespace_evidence(
+            &roots,
+            Some(PathBuf::from("mnt:[42]")),
+            &mut seen,
+            || Err::<std::io::Cursor<&[u8]>, _>(std::io::ErrorKind::PermissionDenied.into()),
+        )
+        .expect_err("permission failure cannot attest vacancy");
+        assert!(
+            error
+                .to_string()
+                .contains("inspect vacant target process namespace")
+        );
+        assert!(seen.is_empty());
+        struct FailedRead;
+        impl Read for FailedRead {
+            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::ErrorKind::PermissionDenied.into())
+            }
+        }
+        assert!(
+            inspect_process_namespace_evidence(
+                &roots,
+                Some(PathBuf::from("mnt:[42]")),
+                &mut seen,
+                || Ok(FailedRead),
+            )
+            .is_err()
+        );
+        assert!(seen.is_empty());
+    }
+
+    #[test]
+    fn vacant_namespace_evidence_keeps_utf8_and_exact_size_bounds() {
+        let roots = [Path::new("/var/lib/taira/validator-1")];
+        let mut seen = BTreeSet::new();
+        for bytes in [vec![0xff], vec![b' '; 4 * 1024 * 1024 + 1]] {
+            assert!(
+                inspect_process_namespace_evidence(
+                    &roots,
+                    Some(PathBuf::from("mnt:[42]")),
+                    &mut seen,
+                    || Ok(std::io::Cursor::new(bytes)),
+                )
+                .is_err()
+            );
+            assert!(seen.is_empty());
+        }
+        inspect_process_namespace_evidence(
+            &roots,
+            Some(PathBuf::from("mnt:[42]")),
+            &mut seen,
+            || Ok(std::io::Cursor::new(vec![b' '; 4 * 1024 * 1024])),
+        )
+        .expect("exactly four MiB remains admissible");
+        assert!(seen.contains(Path::new("mnt:[42]")));
+    }
+
+    #[test]
+    fn vacant_namespace_evidence_still_decodes_escaped_path_tokens() {
+        for (root, evidence) in [
+            ("/state/with space", r"/state/with\040space/data"),
+            ("/state/with\ttab", r"/state/with\011tab/data"),
+            ("/state/with\nnewline", r"/state/with\012newline/data"),
+            (r"/state/with\slash", r"/state/with\134slash/data"),
+        ] {
+            let mut seen = BTreeSet::new();
+            assert!(
+                inspect_process_namespace_evidence(
+                    &[Path::new(root)],
+                    Some(PathBuf::from("mnt:[42]")),
+                    &mut seen,
+                    || Ok(std::io::Cursor::new(evidence.as_bytes())),
+                )
+                .is_err()
+            );
+            assert!(seen.is_empty());
+        }
+    }
+
+    #[test]
+    fn vacant_namespace_maps_evidence_is_always_scanned() {
+        let roots = [Path::new("/var/lib/taira/validator-1")];
+        let mut seen = BTreeSet::from([PathBuf::from("mnt:[42]")]);
+        let mut opened = 0;
+        inspect_process_namespace_evidence(&roots, None, &mut seen, || {
+            opened += 1;
+            Ok(std::io::Cursor::new(
+                &b"0000-1000 r-xp 0 00:01 1 /usr/bin/sleep\n"[..],
+            ))
+        })
+        .expect("first process has no occupied mapping");
+        assert!(
+            inspect_process_namespace_evidence(&roots, None, &mut seen, || {
+                opened += 1;
+                Ok(std::io::Cursor::new(
+                    &b"0000-1000 r-xp 0 00:01 1 /var/lib/taira/validator-1/state\n"[..],
+                ))
+            })
+            .is_err()
+        );
+        assert_eq!(opened, 2);
+        assert_eq!(seen, BTreeSet::from([PathBuf::from("mnt:[42]")]));
+    }
+
+    #[test]
+    fn vacant_unit_requires_exact_inactive_process_and_job_evidence() {
+        let evidence =
+            b"ActiveState=inactive\nSubState=dead\nMainPID=0\nControlPID=0\nControlGroup=\nJob=\n";
+        assert_eq!(
+            validate_vacant_unit_evidence(evidence, false).expect("vacant unit"),
+            None
+        );
+        let valid = std::str::from_utf8(evidence).expect("static evidence");
+        for (from, to) in [
+            ("ActiveState=inactive", "ActiveState=active"),
+            ("SubState=dead", "SubState=running"),
+            ("MainPID=0", "MainPID=1"),
+            ("ControlPID=0", "ControlPID=1"),
+            ("Job=", "Job=1 /org/freedesktop/systemd1/job/1"),
+            ("ControlGroup=", "ControlGroup=/system.slice/../other"),
+            ("ControlGroup=", "ControlGroup=relative"),
+        ] {
+            assert!(
+                validate_vacant_unit_evidence(valid.replace(from, to).as_bytes(), false).is_err(),
+                "{from}"
+            );
+        }
+        assert!(
+            validate_vacant_unit_evidence(format!("{valid}MainPID=0\n").as_bytes(), false).is_err()
+        );
+        assert!(
+            validate_vacant_unit_evidence(format!("{valid}Extra=0\n").as_bytes(), false).is_err()
+        );
+        assert!(
+            validate_vacant_unit_evidence(valid.replace("Job=\n", "").as_bytes(), false).is_err()
+        );
+        let failed = valid
+            .replace("ActiveState=inactive", "ActiveState=failed")
+            .replace("SubState=dead", "SubState=failed");
+        assert!(validate_vacant_unit_evidence(failed.as_bytes(), false).is_err());
+        assert_eq!(
+            validate_vacant_unit_evidence(failed.as_bytes(), true)
+                .expect("failed but stopped during cleanup"),
+            None
+        );
+        assert_eq!(
+            validate_vacant_unit_evidence(
+                valid
+                    .replace("ControlGroup=", "ControlGroup=/system.slice/iroha.service")
+                    .as_bytes(),
+                false
+            )
+            .expect("bounded cgroup path"),
+            Some(PathBuf::from("/sys/fs/cgroup/system.slice/iroha.service"))
+        );
+    }
+
+    #[test]
+    fn vacancy_matches_path_components_and_rejects_hidden_entries_and_dangling_selectors() {
+        let roots = [
+            Path::new("/srv/taira/taira-validator-1"),
+            Path::new("/var/lib/taira/taira-validator-1"),
+        ];
+        assert!(target_path_is_occupied(
+            Path::new("/srv/taira/taira-validator-1/current/bin/iroha3d_taira"),
+            &roots
+        ));
+        assert!(target_path_is_occupied(
+            Path::new("/var/lib/taira/taira-validator-1/data (deleted)"),
+            &roots
+        ));
+        assert!(!target_path_is_occupied(
+            Path::new("/srv/taira/taira-validator-10/current"),
+            &roots
+        ));
+        for root in roots {
+            let deleted = PathBuf::from(format!("{} (deleted)", root.display()));
+            assert!(target_path_is_occupied(&deleted, &roots));
+        }
+        assert!(!target_path_is_occupied(
+            Path::new("/var/lib/taira/taira-validator-10 (deleted)"),
+            &roots
+        ));
+        let directory = tempfile::tempdir().expect("vacancy fixture");
+        require_empty_directory_contents(directory.path(), "empty fixture")
+            .expect("empty directory");
+        let hidden = directory.path().join(".occupied");
+        fs::write(&hidden, b"fixture").expect("hidden fixture entry");
+        assert!(require_empty_directory_contents(directory.path(), "occupied fixture").is_err());
+        let absent = directory.path().join("absent");
+        require_path_absent(&absent, "absent fixture").expect("absent pathname");
+        #[cfg(unix)]
+        {
+            let selector = directory.path().join("current");
+            symlink(&absent, &selector).expect("dangling selector fixture");
+            assert!(!selector.exists());
+            assert!(require_path_absent(&selector, "dangling selector").is_err());
+        }
+    }
+
+    #[test]
+    fn first_edge_activation_has_an_exact_start_operation() {
+        let admitted = progress_admission();
+        let mut edge = admitted.inventory.edge.clone();
+        assert_eq!(
+            edge_forward_operation(&edge),
+            ("edge-cutover-reload", "reload")
+        );
+        edge.initial_state = super::super::EdgeInitialStateV1::Vacant;
+        assert_eq!(edge_forward_operation(&edge), ("edge-first-start", "start"));
+        assert!(edge.admitted_release().is_err());
+    }
+
+    #[test]
+    fn cleanup_never_admits_the_signed_prior_release() {
+        let admitted = progress_admission();
+        let prior = admitted
+            .target
+            .admitted_release_root()
+            .expect("admitted prior release");
+        assert!(require_cleanup_release_not_prior(&admitted, "release", prior).is_err());
+        require_cleanup_release_not_prior(&admitted, "release", Path::new("/srv/taira/unrelated"))
+            .expect("other release is checked by the remaining cleanup admission rules");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn retained_selector_retry_requires_namespace_durability_before_success() {
+        let directory = tempfile::tempdir().expect("selector retry fixture");
+        let service = directory
+            .path()
+            .canonicalize()
+            .expect("canonical fixture root");
+        let candidate = service.join("releases").join("1".repeat(40));
+        fs::create_dir_all(&candidate).expect("candidate directory");
+        symlink(&candidate, service.join("current")).expect("visible prior selector rename");
+        let inode = fs::symlink_metadata(service.join("current"))
+            .expect("selector inode")
+            .ino();
+        let mut admitted = progress_admission();
+        let HostTarget::Validator(validator) = &mut admitted.target else {
+            panic!("validator fixture");
+        };
+        validator.service_root = service.to_string_lossy().into_owned();
+        let error = select_current_release_with_sync(&admitted, &candidate, |_| {
+            Err(eyre!("injected namespace sync failure"))
+        })
+        .expect_err("visible same-target selector cannot skip failed fsync");
+        assert!(error.to_string().contains("namespace sync failure"));
+        select_current_release(&admitted, &candidate).expect("durable retry succeeds");
+        assert_eq!(
+            fs::symlink_metadata(service.join("current"))
+                .expect("retained selector")
+                .ino(),
+            inode
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn retained_edge_route_retry_requires_both_rename_parents_durable() {
+        let directory = super::super::private_custody_test_dir("taira-edge-route-retry-");
+        let root = directory
+            .path()
+            .canonicalize()
+            .expect("canonical fixture root");
+        let source_parent = root.join("rollback");
+        let destination_parent = root.join("nginx");
+        fs::create_dir(&source_parent).expect("source parent");
+        fs::create_dir(&destination_parent).expect("destination parent");
+        let destination = destination_parent.join("taira.conf");
+        let bytes = b"# nonsecret test route\n";
+        fs::write(&destination, bytes).expect("visible prior rename");
+        fs::set_permissions(&destination, fs::Permissions::from_mode(0o600))
+            .expect("private fixture");
+        let expected = sha256_hex(bytes);
+        for failed_parent in [&source_parent, &destination_parent] {
+            let error =
+                sync_existing_file_publication(&destination, &expected, &source_parent, |path| {
+                    if path == failed_parent {
+                        return Err(eyre!("injected rename-parent sync failure"));
+                    }
+                    sync_directory(path)
+                })
+                .expect_err("no receipt may be admitted after either parent sync fails");
+            assert!(error.to_string().contains("rename-parent sync failure"));
+            assert_eq!(fs::read(&destination).expect("retained route"), bytes);
+        }
+        sync_existing_file_publication(&destination, &expected, &source_parent, sync_directory)
+            .expect("retry durably reconciles both parents");
+    }
+    #[cfg(unix)]
+    #[test]
+    fn rollback_retry_retained_moves_require_both_parent_barriers() {
+        // Exercise both directory rollback (release/state) and edge-file rollback
+        // after the exact crash cut: rename visible, neither parent synced yet.
+        for directory_move in [false, true] {
+            let fixture = tempfile::tempdir().expect("rollback crash fixture");
+            let source_parent = fixture.path().join("source");
+            let destination_parent = fixture.path().join("destination");
+            fs::create_dir(&source_parent).unwrap();
+            fs::create_dir(&destination_parent).unwrap();
+            let source = source_parent.join("owned");
+            let destination = destination_parent.join("retained");
+            if directory_move {
+                fs::create_dir(&source).unwrap();
+                fs::write(source.join("identity"), b"retained original state").unwrap();
+            } else {
+                fs::write(&source, b"exact authorized edge configuration").unwrap();
+            }
+            let inode = fs::symlink_metadata(&source).unwrap().ino();
+            fs::rename(&source, &destination).expect("crash immediately after visible rename");
+            for failed_parent in [&source_parent, &destination_parent] {
+                let error = sync_completed_rename(&source, &destination, |parent| {
+                    if parent == failed_parent {
+                        return Err(eyre!("injected rollback parent barrier failure"));
+                    }
+                    sync_directory(parent)
+                })
+                .expect_err("rollback must not acknowledge either incomplete parent barrier");
+                assert!(
+                    error
+                        .to_string()
+                        .contains("rollback parent barrier failure")
+                );
+                assert!(!source.exists());
+                assert_eq!(fs::symlink_metadata(&destination).unwrap().ino(), inode);
+            }
+            sync_completed_rename(&source, &destination, sync_directory)
+                .expect("a later retry completes both durable namespace barriers");
+            assert_eq!(fs::symlink_metadata(&destination).unwrap().ino(), inode);
+            if directory_move {
+                assert_eq!(
+                    fs::read(destination.join("identity")).unwrap(),
+                    b"retained original state"
+                );
+            } else {
+                assert_eq!(
+                    fs::read(&destination).unwrap(),
+                    b"exact authorized edge configuration"
+                );
+            }
+            fs::write(&source, b"unexpected new occupant").unwrap();
+            assert!(
+                sync_completed_rename(&source, &destination, |_| {
+                    panic!("a conflicting source must be rejected before any barrier")
+                })
+                .is_err()
+            );
+            assert_eq!(fs::read(&source).unwrap(), b"unexpected new occupant");
+            assert_eq!(fs::symlink_metadata(&destination).unwrap().ino(), inode);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fresh_state_retry_admits_the_exact_unpublished_root_marker_slot() {
+        // The state inode was already created after retaining the original.
+        // Exercise create, partial-write, and fully-synced-before-rename cuts.
+        let marker_bytes = b"{\"schema\":\"public-reset-test-marker\"}";
+        for contents in [&b""[..], &marker_bytes[..10], &marker_bytes[..]] {
+            let directory = tempfile::tempdir().expect("partial fresh state fixture");
+            let state = directory.path();
+            let staging = state.join("..public-reset-generated-v1.json.next");
+            fs::write(&staging, contents).expect("interrupted root marker publication");
+            fs::set_permissions(&staging, fs::Permissions::from_mode(0o600))
+                .expect("private staging fixture");
+            File::open(&staging).unwrap().sync_all().unwrap();
+            let inode = fs::symlink_metadata(&staging).unwrap().ino();
+            require_reconcilable_fresh_state_entries(state)
+                .expect("exact unpublished marker reaches the strict publication recovery");
+            assert_eq!(fs::read(&staging).unwrap(), contents);
+            assert_eq!(fs::symlink_metadata(&staging).unwrap().ino(), inode);
+
+            // Namespace admission never declares marker bytes valid or rewrites
+            // them. Only the unchanged publication/marker validators may do so.
+            let published = state.join(".public-reset-generated-v1.json");
+            assert!(!published.exists());
+            fs::rename(&staging, &published).expect("model completed marker rename");
+            for name in RESET_GENERATED_ENTRIES {
+                fs::create_dir(state.join(name)).expect("generated child namespace");
+            }
+            require_reconcilable_fresh_state_entries(state)
+                .expect("published marker and generated children retain the existing namespace");
+            assert_eq!(fs::symlink_metadata(&published).unwrap().ino(), inode);
+        }
+    }
+
+    #[test]
+    fn fresh_state_retry_preserves_and_rejects_foreign_or_ambiguous_marker_entries() {
+        let directory = tempfile::tempdir().expect("fresh state namespace fixture");
+        let state = directory.path();
+        let staging = state.join("..public-reset-generated-v1.json.next");
+        let bytes = b"unpublished marker fixture bytes";
+        fs::write(&staging, bytes).expect("unpublished marker slot");
+        for name in [
+            ".foreign",
+            ".public-reset-generated-v1.json.next",
+            "..public-reset-generated-v1.json.next.other",
+            ".public-reset-generated-v1.json",
+        ] {
+            let foreign = state.join(name);
+            fs::write(&foreign, b"preserve conflicting entry").unwrap();
+            assert!(
+                require_reconcilable_fresh_state_entries(state).is_err(),
+                "{name}"
+            );
+            assert_eq!(fs::read(&staging).unwrap(), bytes);
+            assert_eq!(fs::read(&foreign).unwrap(), b"preserve conflicting entry");
+            fs::remove_file(foreign).unwrap();
+        }
+        require_reconcilable_fresh_state_entries(state)
+            .expect("only the owned unpublished slot remains for publisher validation");
+        assert_eq!(fs::read(&staging).unwrap(), bytes);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn recovered_install_requires_release_and_selector_namespace_barriers() {
+        let fixture = tempfile::tempdir().expect("prepared install fixture");
+        let service = fixture.path();
+        let releases = service.join("releases");
+        fs::create_dir(&releases).unwrap();
+        let staging = releases.join(".candidate.next");
+        let selected = releases.join("candidate");
+        fs::create_dir(&staging).unwrap();
+        fs::rename(&staging, &selected).expect("visible completed release rename");
+        let next = service.join(".current.next");
+        let current = service.join("current");
+        symlink(&selected, &next).unwrap();
+        fs::rename(&next, &current).expect("visible selector before namespace sync");
+        let inode = fs::symlink_metadata(&selected).unwrap().ino();
+        for failed_parent in [releases.as_path(), service] {
+            let error = sync_selected_release_namespaces(&selected, |path| {
+                if path == failed_parent {
+                    return Err(eyre!("injected prepared install publication failure"));
+                }
+                sync_directory(path)
+            })
+            .expect_err("visible names cannot acknowledge either incomplete namespace");
+            assert!(
+                error
+                    .to_string()
+                    .contains("prepared install publication failure")
+            );
+            assert_eq!(fs::read_link(&current).unwrap(), selected);
+            assert_eq!(fs::symlink_metadata(&selected).unwrap().ino(), inode);
+        }
+        sync_selected_release_namespaces(&selected, sync_directory)
+            .expect("recovered publication completes both durable namespaces");
+        assert_eq!(fs::read_link(current).unwrap(), selected);
+    }
+
+    #[test]
+    fn recovered_reset_requires_the_last_visible_marker_directory_barrier() {
+        let admitted = progress_admission();
+        let fixture = tempfile::tempdir().expect("prepared reset fixture");
+        let state = fixture.path();
+        fs::write(
+            state.join(".public-reset-generated-v1.json"),
+            b"root marker fixture",
+        )
+        .unwrap();
+        for name in RESET_GENERATED_ENTRIES {
+            let child = state.join(name);
+            fs::create_dir(&child).unwrap();
+            let staging = child.join("..public-reset-generated-v1.json.next");
+            fs::write(&staging, b"child marker fixture").unwrap();
+            File::open(&staging).unwrap().sync_all().unwrap();
+            fs::rename(&staging, child.join(".public-reset-generated-v1.json"))
+                .expect("marker visible before the child directory is synced");
+        }
+        // Namespace sync is exercised after the caller's existing exact marker
+        // and retained-original-inode validation; it grants no marker authority.
+        let last_child = state.join(RESET_GENERATED_ENTRIES.last().unwrap());
+        for failed_directory in [last_child.as_path(), state] {
+            let error = sync_release_tree_with_sync(state, &admitted, |path| {
+                if path == failed_directory {
+                    return Err(eyre!("injected prepared reset marker publication failure"));
+                }
+                sync_directory(path)
+            })
+            .expect_err("layout visibility cannot acknowledge an undurable marker directory");
+            assert!(
+                error
+                    .to_string()
+                    .contains("reset marker publication failure")
+            );
+            assert_eq!(
+                fs::read(last_child.join(".public-reset-generated-v1.json")).unwrap(),
+                b"child marker fixture"
+            );
+        }
+        sync_release_tree_with_sync(state, &admitted, sync_directory)
+            .expect("retry completes the child markers and state root namespaces");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn retained_reset_state_retry_requires_original_and_fresh_namespaces_durable() {
+        let directory = tempfile::tempdir().expect("retained reset fixture");
+        let root = directory
+            .path()
+            .canonicalize()
+            .expect("canonical fixture root");
+        let state_parent = root.join("states");
+        let rollback = root.join("rollback");
+        fs::create_dir(&state_parent).expect("state parent");
+        fs::create_dir(&rollback).expect("rollback parent");
+        let state = state_parent.join("validator");
+        let previous = rollback.join("state");
+        fs::create_dir(&state).expect("original state");
+        let prior_inode = state.metadata().expect("original inode").ino();
+        fs::rename(&state, &previous).expect("visible original-state move");
+        fs::create_dir(&state).expect("visible fresh directory before parent sync");
+        let fresh_inode = state.metadata().expect("fresh inode").ino();
+        assert_ne!(prior_inode, fresh_inode);
+        for failed_parent in [&state_parent, &rollback] {
+            let error = sync_reset_state_parents(&state, &previous, |parent| {
+                if parent == failed_parent {
+                    return Err(eyre!("injected reset-parent sync failure"));
+                }
+                sync_directory(parent)
+            })
+            .expect_err("reset completion requires both namespace barriers");
+            assert!(error.to_string().contains("reset-parent sync failure"));
+            assert_eq!(
+                previous.metadata().expect("retained original").ino(),
+                prior_inode
+            );
+            assert_eq!(
+                state.metadata().expect("retained fresh state").ino(),
+                fresh_inode
+            );
+        }
+        sync_reset_state_parents(&state, &previous, sync_directory)
+            .expect("retry durably retains both state identities");
+        assert_eq!(
+            previous.metadata().expect("durable original").ino(),
+            prior_inode
+        );
+        assert_eq!(
+            state.metadata().expect("durable fresh state").ino(),
+            fresh_inode
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn admitted_edge_rollback_matching_prior_retry_requires_route_namespace_durable() {
+        let directory = super::super::private_custody_test_dir("taira-edge-rollback-");
+        let root = directory
+            .path()
+            .canonicalize()
+            .expect("canonical fixture root");
+        let route_parent = root.join("nginx");
+        let rollback = root.join("rollback");
+        fs::create_dir(&route_parent).expect("route parent");
+        fs::create_dir(&rollback).expect("rollback parent");
+        let route = route_parent.join("taira.conf");
+        let staging = route_parent.join(".taira.conf.public-reset-rollback.next");
+        let bytes = b"# exact nonsecret admitted prior route\n";
+        fs::write(&staging, bytes).expect("staged prior configuration");
+        fs::set_permissions(&staging, fs::Permissions::from_mode(0o600))
+            .expect("private fixture config");
+        File::open(&staging)
+            .expect("staged config inode")
+            .sync_all()
+            .expect("durable config bytes");
+        fs::rename(&staging, &route).expect("visible restore before parent sync");
+        let inode = route.metadata().expect("restored config inode").ino();
+        let mut admitted = progress_admission();
+        let mut edge = admitted.inventory.edge.clone();
+        edge.nginx_config = route.to_string_lossy().into_owned();
+        let super::super::EdgeInitialStateV1::AdmittedRelease(release) = &mut edge.initial_state
+        else {
+            panic!("admitted prior edge fixture");
+        };
+        release.config_sha256 = sha256_hex(bytes);
+        admitted.target = HostTarget::Edge(edge.clone());
+        let error = restore_admitted_edge_config(&admitted, &edge, &rollback, |_| {
+            Err(eyre!("injected restored-route sync failure"))
+        })
+        .expect_err("matching prior bytes cannot bypass the rename barrier");
+        assert!(error.to_string().contains("restored-route sync failure"));
+        assert!(!rollback.join("edge-config.before").exists());
+        assert!(!staging.exists());
+        assert_eq!(
+            route.metadata().expect("retained config inode").ino(),
+            inode
+        );
+        assert_eq!(fs::read(&route).expect("retained prior bytes"), bytes);
+        restore_admitted_edge_config(&admitted, &edge, &rollback, sync_directory)
+            .expect("durable retry accepts the same admitted prior inode");
+        assert_eq!(route.metadata().expect("durable config inode").ino(), inode);
+        assert_eq!(fs::read(&route).expect("durable prior bytes"), bytes);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn kvm_api_query_preserves_notty_for_regular_files() {
+        let file = tempfile::tempfile().expect("disposable regular-file descriptor");
+        assert_eq!(kvm_api_version(&file), Err(rustix::io::Errno::NOTTY));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn preflight_dispatches_five_read_only_hosts_without_runtime_custody() {
+        use std::os::unix::process::ExitStatusExt as _;
+
+        struct ProbeRunner {
+            seen: Vec<String>,
+            fail_at: Option<usize>,
+            corrupt_receipt: bool,
+            timeout_secs: u64,
+        }
+        impl ProcessRunner for ProbeRunner {
+            fn run(&mut self, spec: &ProcessSpec) -> Result<ProcessOutput> {
+                assert_eq!(spec.program, Path::new(SSH));
+                assert!(
+                    spec.inherited_files.is_empty(),
+                    "OpenSSH closes inherited inputs"
+                );
+                assert!(spec.stdin_file.is_none());
+                assert!(spec.stdin_files.is_empty());
+                assert!(
+                    spec.args
+                        .contains(&OsString::from("StrictHostKeyChecking=yes"))
+                );
+                assert!(spec.args.contains(&OsString::from("IdentityAgent=none")));
+                assert!(spec.args.contains(&OsString::from(format!(
+                    "ConnectTimeout={}",
+                    self.timeout_secs
+                ))));
+                let parent_prefix = format!("/proc/{}/fd/", std::process::id());
+                let identity_index = spec
+                    .args
+                    .iter()
+                    .position(|arg| arg == "-i")
+                    .expect("exact identity");
+                let identity = Path::new(&spec.args[identity_index + 1]);
+                assert!(identity.to_string_lossy().starts_with(&parent_prefix));
+                #[cfg(target_os = "linux")]
+                let fixture_read_path = identity.to_path_buf();
+                #[cfg(not(target_os = "linux"))]
+                let fixture_read_path = Path::new("/dev/fd").join(identity.file_name().unwrap());
+                use std::os::unix::fs::FileExt as _;
+                let mut fixture_bytes = [0_u8; b"SSH-FIXTURE-ONLY".len()];
+                File::open(fixture_read_path)
+                    .expect("live parent-held fixture")
+                    .read_exact_at(&mut fixture_bytes, 0)
+                    .expect("read fixture without changing shared offsets");
+                assert_eq!(&fixture_bytes, b"SSH-FIXTURE-ONLY");
+                assert!(spec.args.iter().any(|arg| {
+                    arg.to_string_lossy()
+                        .starts_with(&format!("UserKnownHostsFile={parent_prefix}"))
+                }));
+                assert_eq!(&spec.stdin_prefix[8..9], b"\n");
+                let length = usize::from_str_radix(
+                    std::str::from_utf8(&spec.stdin_prefix[..8]).unwrap(),
+                    16,
+                )
+                .unwrap();
+                assert_eq!(
+                    spec.stdin_prefix.len(),
+                    length + 9,
+                    "only one public request frame"
+                );
+                let request: HostRequestV1 =
+                    json::from_slice(&spec.stdin_prefix[9..]).expect("host request");
+                assert_eq!(request.action, "preflight");
+                assert!(!request.recovery_only);
+                assert!(request.artifact_role.is_empty() && request.artifact_sha256.is_empty());
+                assert_eq!(request.artifact_size, 0);
+                assert!(
+                    request.mutation_kind.is_empty() && request.mutation_prepared_base64.is_empty()
+                );
+                assert!(request.mutation_evidence_base64.is_empty());
+                for secret in [
+                    b"SSH-FIXTURE-ONLY".as_slice(),
+                    b"KNOWN-HOSTS-FIXTURE-ONLY".as_slice(),
+                ] {
+                    assert!(
+                        !spec
+                            .stdin_prefix
+                            .windows(secret.len())
+                            .any(|part| part == secret)
+                    );
+                    let encoded = BASE64.encode(secret);
+                    assert!(
+                        !spec
+                            .stdin_prefix
+                            .windows(encoded.len())
+                            .any(|part| part == encoded.as_bytes())
+                    );
+                }
+                let (inventory, _chain) = super::super::decode_inventory(
+                    &BASE64.decode(&request.inventory_base64).unwrap(),
+                    "fixture inventory",
+                )
+                .expect("inventory boundary");
+                self.seen.push(request.host_slug.clone());
+                if self.fail_at == Some(self.seen.len()) {
+                    return Err(eyre!("injected SSH preflight failure"));
+                }
+                let receipt = HostReceiptV1 {
+                    schema: HOST_RECEIPT_SCHEMA_V1.to_owned(),
+                    action: request.action.clone(),
+                    host_slug: if self.corrupt_receipt {
+                        "wrong-host".to_owned()
+                    } else {
+                        request.host_slug.clone()
+                    },
+                    request_sha256: host_request_identity_sha256(&request)?,
+                    inventory_sha256: sha256_hex(&BASE64.decode(&request.inventory_base64)?),
+                    authorization_sha256: request.authorization_semantic_sha256.clone(),
+                    authorization_nonce: inventory.authorization_nonce,
+                    status: "ok".to_owned(),
+                    idempotent: false,
+                    bytes_before: 0,
+                    bytes_after: 0,
+                    reclaimed_bytes: 0,
+                    detail: "read-only fixture preflight".to_owned(),
+                    mutation_state: String::new(),
+                    mutation_prepared_base64: String::new(),
+                    mutation_prepared_sha256: String::new(),
+                    mutation_transaction_hash: String::new(),
+                };
+                Ok(ProcessOutput {
+                    status: ExitStatus::from_raw(0),
+                    stdout: json::to_vec(&receipt)?,
+                    stderr: Vec::new(),
+                })
+            }
+        }
+        let _chain = ChainDiscriminantGuard::enter(super::super::CHAIN_DISCRIMINANT);
+        let directory = super::super::private_custody_test_dir("taira-read-only-preflight-");
+        let mut admitted = admitted_reset_fixture();
+        for (name, bytes) in [
+            ("identity", b"SSH-FIXTURE-ONLY".as_slice()),
+            ("known-hosts", b"KNOWN-HOSTS-FIXTURE-ONLY".as_slice()),
+        ] {
+            let path = directory.path().join(name);
+            fs::write(&path, bytes).expect("harmless fixture");
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).expect("private fixture");
+        }
+        admitted.ssh_identity =
+            pin_owner_private_file(&directory.path().join("identity"), "fixture identity").unwrap();
+        admitted.known_hosts =
+            pin_owner_private_file(&directory.path().join("known-hosts"), "fixture hosts").unwrap();
+        // No runtime custody, artifact descriptors or journal are available.
+        assert!(admitted.pinned_artifacts.is_empty());
+        let before = fs::read_dir(directory.path()).unwrap().count();
+        let expected = admitted
+            .inventory
+            .validators
+            .iter()
+            .map(|validator| validator.slug.clone())
+            .chain(std::iter::once(admitted.inventory.edge.slug.clone()))
+            .collect::<Vec<_>>();
+        assert_eq!(expected.len(), 5);
+        let mut runner = ProbeRunner {
+            seen: Vec::new(),
+            fail_at: None,
+            corrupt_receipt: false,
+            timeout_secs: admitted.inventory.timeouts.install_secs,
+        };
+        preflight_hosts_with_runner(&admitted, &mut runner)
+            .expect("five exact read-only host receipts");
+        assert_eq!(runner.seen, expected);
+        assert_eq!(fs::read_dir(directory.path()).unwrap().count(), before);
+        for absent in [
+            "journal-v1",
+            "local-receipts-v1",
+            "runtime-client.toml",
+            "onboarding-token",
+            "inrou-stage",
+        ] {
+            assert!(
+                !directory.path().join(absent).exists(),
+                "preflight created {absent}"
+            );
+        }
+        runner.seen.clear();
+        runner.fail_at = Some(2);
+        let error = preflight_hosts_with_runner(&admitted, &mut runner)
+            .expect_err("SSH failure cannot report readiness");
+        assert!(format!("{error:#}").contains("injected SSH preflight failure"));
+        assert_eq!(runner.seen, expected[..2]);
+        runner.seen.clear();
+        runner.fail_at = None;
+        runner.corrupt_receipt = true;
+        let error = preflight_hosts_with_runner(&admitted, &mut runner)
+            .expect_err("wrong-host receipt must fail");
+        assert!(
+            format!("{error:#}").contains("remote host receipt does not exactly bind its request")
+        );
+        assert_eq!(runner.seen.len(), 1);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn openssh_parent_pinned_inputs_survive_descriptor_sweep_without_network() {
+        let directory = super::super::private_custody_test_dir("taira-openssh-parent-fd-");
+        let identity_path = directory.path().join("identity");
+        let config_path = directory.path().join("harmless-ssh-config");
+        for (path, bytes) in [
+            (&identity_path, b"harmless-not-a-key\n".as_slice()),
+            (&config_path, b"Host *\n  User fixture-user\n".as_slice()),
+        ] {
+            fs::write(path, bytes).expect("harmless fixture");
+            fs::set_permissions(path, fs::Permissions::from_mode(0o600)).expect("private fixture");
+        }
+        let identity = pin_owner_private_file(&identity_path, "fixture identity").unwrap();
+        let config = pin_owner_private_file(&config_path, "fixture config").unwrap();
+        let inherited = identity.file.try_clone().unwrap();
+        let old_path = inherited_file_path(&inherited).unwrap();
+        let old = run_bounded_process(&ProcessSpec {
+            program: PathBuf::from(SSH),
+            args: vec![
+                "-G".into(),
+                "-F".into(),
+                "/dev/null".into(),
+                "-i".into(),
+                old_path.as_os_str().to_owned(),
+                "fixture.invalid".into(),
+            ],
+            stdin_prefix: Vec::new(),
+            stdin_file: None,
+            stdin_files: Vec::new(),
+            inherited_files: vec![inherited],
+            deadline: Instant::now() + Duration::from_secs(10),
+        })
+        .expect("actual OpenSSH configuration-only child");
+        assert!(old.status.success());
+        assert!(String::from_utf8_lossy(&old.stderr).contains(&format!(
+            "Identity file {} not accessible",
+            old_path.display()
+        )));
+        let held = ParentHeldSshInputs::new(&identity, &config).expect("parent-held custody");
+        assert!(
+            rustix::io::fcntl_getfd(&held._identity_file)
+                .unwrap()
+                .contains(rustix::io::FdFlags::CLOEXEC)
+        );
+        assert!(
+            rustix::io::fcntl_getfd(&held._known_hosts_file)
+                .unwrap()
+                .contains(rustix::io::FdFlags::CLOEXEC)
+        );
+        fs::rename(&identity_path, directory.path().join("retained-identity")).unwrap();
+        fs::rename(&config_path, directory.path().join("retained-config")).unwrap();
+        fs::write(&identity_path, b"replacement identity").unwrap();
+        fs::write(&config_path, b"this is not valid SSH config").unwrap();
+        let result = run_bounded_process(&ProcessSpec {
+            program: PathBuf::from(SSH),
+            args: vec![
+                "-G".into(),
+                "-F".into(),
+                held.known_hosts_path.as_os_str().to_owned(),
+                "-i".into(),
+                held.identity_path.as_os_str().to_owned(),
+                "fixture.invalid".into(),
+            ],
+            stdin_prefix: Vec::new(),
+            stdin_file: None,
+            stdin_files: Vec::new(),
+            inherited_files: Vec::new(),
+            deadline: Instant::now() + Duration::from_secs(10),
+        })
+        .expect("OpenSSH reads parent descriptors after closing inherited descriptors");
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&result.stdout)
+                .lines()
+                .any(|line| line == "user fixture-user")
+        );
+        assert!(!String::from_utf8_lossy(&result.stderr).contains("not accessible"));
     }
 }

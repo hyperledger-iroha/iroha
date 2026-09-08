@@ -1,5 +1,5 @@
 // Source-bounded materialization for application-API routed reads.
-use norito::core::{DecodeFlagsGuard, DeriveSmallBuf, Encoder, NoritoDeserialize};
+use norito::core::{DecodeFlagsGuard, Encoder, NoritoDeserialize};
 use std::marker::PhantomData;
 /// Borrowed wire-equivalent of a derived struct in declaration order.
 ///
@@ -8,11 +8,11 @@ use std::marker::PhantomData;
 /// canonical frame, avoiding an unmetered deep clone before the first bounded
 /// decode.
 struct ToriiBorrowedRoutedReadStruct<'a, T, const N: usize> {
-    fields: [&'a dyn norito::core::NoritoSerialize; N],
+    fields: [&'a dyn norito::core::SerializePayload; N],
     marker: PhantomData<T>,
 }
 impl<'a, T, const N: usize> ToriiBorrowedRoutedReadStruct<'a, T, N> {
-    const fn new(fields: [&'a dyn norito::core::NoritoSerialize; N]) -> Self {
+    const fn new(fields: [&'a dyn norito::core::SerializePayload; N]) -> Self {
         Self {
             fields,
             marker: PhantomData,
@@ -22,19 +22,23 @@ impl<'a, T, const N: usize> ToriiBorrowedRoutedReadStruct<'a, T, N> {
 impl<T, const N: usize> norito::core::NoritoSerialize for ToriiBorrowedRoutedReadStruct<'_, T, N>
 where
     T: norito::core::NoritoSerialize,
-{
-    fn schema_hash() -> [u8; 16] {
+{fn schema_hash() -> [u8; 16] {
         T::schema_hash()
     }
+}
+impl<T, const N: usize> norito::core::SerializePayload for ToriiBorrowedRoutedReadStruct<'_, T, N>
+where
+    T: norito::core::NoritoSerialize,
+{
+
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), norito::core::Error> {
         if norito::core::use_packed_struct() {
             return Err(norito::core::Error::UnsupportedFeature(
                 "borrowed routed-read packed struct",
             ));
         }
-        let mut scratch = DeriveSmallBuf::new();
         for value in self.fields.iter().copied() {
-            norito::core::write_len_prefixed(writer, value, &mut scratch)?;
+            norito::core::write_len_prefixed(writer, value)?;
         }
         Ok(())
     }
@@ -493,7 +497,9 @@ impl norito::json::FastJsonWrite for ToriiSpaceDirectoryBindingsJsonSource<'_> {
             }
         }
         output.push_str("],\"uaid\":")?;
-        self.uaid.json_serialize_to(output)?;
+        // The route publishes the canonical UAID literal, not the model's
+        // derived JSON representation. Its display length is fixed and bounded.
+        self.uaid.to_string().json_serialize_to(output)?;
         output.push('}')?;
         output.end_container();
         Ok(())

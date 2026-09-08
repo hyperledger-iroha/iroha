@@ -863,11 +863,7 @@ fn assert_geometry_io_error(error: &Error, expected_kind: ErrorKind, expected_me
     let Error::IO(source, _) = error else {
         panic!("unexpected lane geometry error: {error:?}");
     };
-    assert_eq!(
-        source.kind(),
-        expected_kind,
-        "unexpected geometry error: {error}"
-    );
+    assert_eq!(source.kind(), expected_kind, "lane geometry error: {error}");
     assert_eq!(source.to_string(), expected_message);
 }
 struct RetiredGeometryFixture {
@@ -1138,15 +1134,29 @@ fn append_geometry_retirement_lifecycle_transition(
     )
 }
 fn geometry_canonical_merge_terminal_projection(
-    reservation_group: LaneQueueReservationGroupBindingV1,
+    binding: &AutonomousLifecycleAttemptBindingV1,
+    ready_qc: &iroha_data_model::block::consensus::LaneBlockQcV1,
 ) -> ProductionInFlightFirstReleaseStateProjection {
+    let (_, validator_set_hash, validator_count) = binding.validator_set_identity();
+    assert_eq!(validator_count, 4);
+    assert_eq!(ready_qc.validator_set_hash, validator_set_hash);
+    assert_eq!(ready_qc.signers_bitmap.len(), 1);
+    let ready_signers = u128::from(ready_qc.signers_bitmap[0]);
+    assert_eq!(ready_signers.count_ones(), 3);
+    let validator_mask = (1_u128 << validator_count) - 1;
+    assert_eq!(ready_signers & !validator_mask, 0);
+    let producer = binding.producer_actor_projection();
+    let local_actor = binding.local_validator_identity().1;
+    assert_eq!(local_actor, producer);
+    let durable_owners = ready_signers | producer;
+    let reservation_group = binding.reservation_group_binding();
     let binding_a = canonical_lane_queue_reservation_group_identity_projection(reservation_group);
     let projection = ProductionInFlightFirstReleaseStateProjection {
-        validator_count: 1,
-        producer: 1,
-        producer_selected_owner: 1,
-        replicated_carrier_owners: 0,
-        payload_binding_a: 1,
+        validator_count: u8::try_from(validator_count).expect("retirement committee count"),
+        producer,
+        producer_selected_owner: producer,
+        replicated_carrier_owners: validator_mask & !producer,
+        payload_binding_a: durable_owners,
         binding_a,
         queue: ProductionInFlightFirstReleaseQueueProjection {
             plan_state: IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_TOMBSTONED,
@@ -1154,22 +1164,22 @@ fn geometry_canonical_merge_terminal_projection(
             reservation_state: IN_FLIGHT_FIRST_RELEASE_RESERVATION_COMMIT_FORGOTTEN,
         },
         carrier: ProductionInFlightFirstReleaseCarrierProjection {
-            kura_active: 1,
-            execution_input_durable: 1,
+            kura_active: durable_owners,
+            execution_input_durable: durable_owners,
             ready_qc_durable: true,
         },
         session: ProductionInFlightFirstReleaseSessionProjection {
-            bodies: 1,
-            ready_authorized: 1,
+            bodies: durable_owners,
+            ready_authorized: ready_signers,
             producer_alive: true,
             ..ProductionInFlightFirstReleaseSessionProjection::default()
         },
         history: ProductionInFlightFirstReleaseHistoryProjection {
             ever_queue_plan_v1: true,
             ever_reservation_v1: true,
-            ever_execution_input_durable: 1,
-            ever_ready_authorized: 1,
-            ready_signed: 1,
+            ever_execution_input_durable: durable_owners,
+            ever_ready_authorized: ready_signers,
+            ready_signed: ready_signers,
             ever_ready_qc_durable: true,
             reservation_committed_prefix: reservation_group.reservation_count,
             queue_plan_tombstoned_prefix: reservation_group.reservation_count,
@@ -1178,10 +1188,10 @@ fn geometry_canonical_merge_terminal_projection(
         },
         decision: ProductionInFlightFirstReleaseDecisionProjection {
             lane_commit_scope: binding_a,
-            lane_commit_owner: 1,
+            lane_commit_owner: local_actor,
             wsv_committed: true,
             application_count: 1,
-            applied_by: 1,
+            applied_by: local_actor,
             ..ProductionInFlightFirstReleaseDecisionProjection::default()
         },
         release: ProductionInFlightFirstReleaseReleaseProjection::default(),
@@ -1636,7 +1646,7 @@ fn prepare_native_amx_archive(root: &Path) -> (Arc<Kura>, NativeAmxArchiveFixtur
         .into();
     block
         .set_transaction_results(Vec::new(), &[], Vec::new())
-        .expect("attach the empty Native archive application's execution results");
+        .expect("attach canonical empty results to the Native archive carrier");
     let block = Arc::new(block);
     kura.store_block(Arc::clone(&block))
         .expect("persist Native archive application block");
@@ -1645,28 +1655,18 @@ fn prepare_native_amx_archive(root: &Path) -> (Arc<Kura>, NativeAmxArchiveFixtur
     let entrypoint_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(
         proposal.descriptor.accepted_transaction_hashes[0],
     );
-    let settlement = NativeAmxParticipantSettlement {
-        block_height: proposal.descriptor.lane_block_height,
-        lane_id: proposal.descriptor.lane_id,
-        lane_incarnation: proposal.descriptor.lane_incarnation,
-        dataspace_id: proposal.descriptor.dataspace_id,
-        tx_count: 1,
-        total_local_amount: "0".parse().expect("zero quantity"),
-        total_xor_due: "0".parse().expect("zero quantity"),
-        total_xor_after_haircut: "0".parse().expect("zero quantity"),
-        total_xor_variance: "0".parse().expect("zero quantity"),
-        swap_metadata: None,
-        receipts: vec![iroha_data_model::block::consensus::LaneSettlementReceipt {
-            source_id,
-            local_amount: "0".parse().expect("zero quantity"),
-            xor_due: "0".parse().expect("zero quantity"),
-            xor_after_haircut: "0".parse().expect("zero quantity"),
-            xor_variance: "0".parse().expect("zero quantity"),
-            timestamp_ms: 1,
-        }],
-        nexus_fee_receipts: Vec::new(),
-    };
-    let settlement_hash = compute_native_amx_participant_settlement_hash(&settlement)
+    let settlement = iroha_data_model::block::consensus::NativeAmxParticipantSettlement::try_new(
+        proposal.descriptor.lane_id,
+        proposal.descriptor.dataspace_id,
+        proposal.descriptor.lane_incarnation,
+        proposal.descriptor.lane_block_height,
+        1,
+        None,
+        vec![source_id],
+    )
+    .expect("valid Native participant control");
+    let settlement_hash = settlement
+        .computed_hash()
         .expect("hash Native archive settlement");
     let executed_block_wire = block
         .encode_wire()
@@ -1686,6 +1686,7 @@ fn prepare_native_amx_archive(root: &Path) -> (Arc<Kura>, NativeAmxArchiveFixtur
         descriptor_hash: proposal.descriptor.descriptor_hash,
         proposal_hash: proposal.proposal_hash,
         settlement_hash,
+        previous_native_settlement_hash: None,
         members: vec![NativeAmxApplicationManifestMemberV1 {
             entrypoint_index: proposal.descriptor.accepted_candidate_indices[0],
             source_id,
@@ -1793,8 +1794,12 @@ fn prepare_native_amx_archive(root: &Path) -> (Arc<Kura>, NativeAmxArchiveFixtur
         1
     );
     assert!(
-        kura.native_amx_participant_application_drain_evidence(&receipt)
-            .is_some(),
+        kura.read_native_amx_participant_application_history(
+            receipt.participant_proposal.descriptor.lane_id
+        )
+        .expect("authenticate Native archive history")
+        .drain_evidence(receipt.participant_proposal.descriptor.lane_block_height)
+        .is_some(),
         "complete Native archive fixture must revalidate as drain evidence"
     );
     kura.apply_lane_geometry_transition(
@@ -1981,18 +1986,23 @@ fn certified_geometry_lane_block_for_proposal(
 }
 fn certified_geometry_autonomous_lane_block(
     payload: &crate::lane_consensus::LaneExecutablePayloadV1,
-    keypair: &iroha_crypto::KeyPair,
+    validators: &[KeyPair],
 ) -> (CertifiedLaneBlockArtifact, AutonomousLaneMergeBundleV1) {
     let proposal = payload.origin_proposal.clone();
-    let signer = PeerId::new(keypair.public_key().clone());
-    let signer_pop =
-        bls_normal_pop_prove(keypair.private_key()).expect("geometry autonomous merge signer PoP");
-    let validator_set = proposal.descriptor.validator_set.clone();
-    assert_eq!(
-        validator_set,
-        vec![signer.clone()],
-        "geometry autonomous merge fixture uses its signing peer as the only validator"
-    );
+    let validator_set = validators
+        .iter()
+        .map(|keypair| PeerId::new(keypair.public_key().clone()))
+        .collect::<Vec<_>>();
+    assert_eq!(validator_set, proposal.descriptor.validator_set);
+    assert_eq!(proposal.descriptor.validator_count, 4);
+    assert_eq!(proposal.descriptor.min_quorum, 3);
+    let validator_set_pops = validators
+        .iter()
+        .map(|keypair| {
+            bls_normal_pop_prove(keypair.private_key())
+                .expect("geometry autonomous merge validator PoP")
+        })
+        .collect::<Vec<_>>();
     let availability_body = crate::lane_consensus::lane_payload_availability_body(
         payload,
         &proposal,
@@ -2000,55 +2010,59 @@ fn certified_geometry_autonomous_lane_block(
         payload.epoch,
     )
     .expect("geometry autonomous merge availability body");
-    let availability_vote = crate::lane_consensus::LanePayloadAvailabilityVoteV1::new_signed(
-        availability_body,
-        signer.clone(),
-        vec![signer_pop.clone()],
-        keypair.private_key(),
-    )
-    .expect("geometry autonomous merge availability vote");
-    let prepare_body = proposal.vote_body(CertPhase::Prepare);
-    let prepare_vote = LaneBlockVoteV1 {
-        bls_signature: Signature::try_new(
-            keypair.private_key(),
-            &prepare_body.signature_preimage(),
-        )
-        .expect("geometry autonomous merge prepare signature")
-        .payload()
-        .to_vec(),
-        body: prepare_body,
-        signer: signer.clone(),
-        payload_availability_vote: Some(availability_vote),
+    let votes = |phase| {
+        validators[..3]
+            .iter()
+            .map(|keypair| {
+                let signer = PeerId::new(keypair.public_key().clone());
+                let body = proposal.vote_body(phase);
+                LaneBlockVoteV1 {
+                    bls_signature: Signature::try_new(
+                        keypair.private_key(),
+                        &body.signature_preimage(),
+                    )
+                    .expect("geometry autonomous merge lane vote signature")
+                    .payload()
+                    .to_vec(),
+                    body,
+                    payload_availability_vote: (phase == CertPhase::Prepare).then(|| {
+                        crate::lane_consensus::LanePayloadAvailabilityVoteV1::new_signed(
+                            availability_body.clone(),
+                            signer.clone(),
+                            validator_set_pops.clone(),
+                            keypair.private_key(),
+                        )
+                        .expect("geometry autonomous merge availability vote")
+                    }),
+                    signer,
+                }
+            })
+            .collect::<Vec<_>>()
     };
     let prepare_qc = aggregate_lane_block_votes_to_qc(
-        prepare_vote.body.clone(),
+        proposal.vote_body(CertPhase::Prepare),
         validator_set.clone(),
-        std::slice::from_ref(&prepare_vote),
+        &votes(CertPhase::Prepare),
     )
     .expect("geometry autonomous merge prepare QC");
-    let commit_body = proposal.vote_body(CertPhase::Commit);
-    let commit_vote = LaneBlockVoteV1 {
-        bls_signature: Signature::try_new(keypair.private_key(), &commit_body.signature_preimage())
-            .expect("geometry autonomous merge commit signature")
-            .payload()
-            .to_vec(),
-        body: commit_body,
-        signer,
-        payload_availability_vote: None,
-    };
     let commit_qc = aggregate_lane_block_votes_to_qc(
-        commit_vote.body.clone(),
+        proposal.vote_body(CertPhase::Commit),
         validator_set,
-        std::slice::from_ref(&commit_vote),
+        &votes(CertPhase::Commit),
     )
     .expect("geometry autonomous merge commit QC");
+    let signer_pops = validators[..3]
+        .iter()
+        .zip(&validator_set_pops[..3])
+        .map(|(keypair, pop)| (keypair.public_key().clone(), pop.clone()))
+        .collect();
     let certified = CertifiedLaneBlockArtifact::new(
         CommittedLaneBlockSession {
             proposal,
             prepare_qc: prepare_qc.clone(),
             commit_qc,
         },
-        BTreeMap::from([(keypair.public_key().clone(), signer_pop)]),
+        signer_pops,
     );
     let bundle = AutonomousLaneMergeBundleV1 {
         version: AutonomousLaneMergeBundleV1::VERSION,
@@ -2082,7 +2096,16 @@ fn install_merge_applied_retirement_work(
 ) -> MergeAppliedRetirementWork {
     let lane_id = LaneId::new(1);
     let dataspace_id = DataSpaceId::new(8);
-    let producer = crate::kura::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+    let mut validators = (0..4)
+        .map(|_| crate::kura::checked_keypair_with_algorithm(Algorithm::BlsNormal))
+        .collect::<Vec<_>>();
+    validators.sort_by(|left, right| {
+        PeerId::new(left.public_key().clone()).cmp(&PeerId::new(right.public_key().clone()))
+    });
+    let validator_set = validators
+        .iter()
+        .map(|keypair| PeerId::new(keypair.public_key().clone()))
+        .collect::<Vec<_>>();
     let network_id = crate::sumeragi::synthetic_network_id("geometry-durability-merge");
     let epoch = 1;
     let transaction = TransactionBuilder::new(
@@ -2109,8 +2132,17 @@ fn install_merge_applied_retirement_work(
         1,
         0,
         Hash::from(entrypoint_hash),
-        &producer,
+        validator_set,
     );
+    let producer_id = crate::lane_consensus::deterministic_lane_author(
+        &proposal.descriptor.validator_set,
+        proposal.descriptor.lane_block_height,
+    )
+    .expect("four-validator retirement committee has a deterministic producer");
+    let producer = validators
+        .iter()
+        .find(|keypair| keypair.public_key() == producer_id.public_key())
+        .expect("retirement producer belongs to the exact committee");
     let height_context_id = HeightContextId(HashOf::<HeightContext>::from_untyped_unchecked(
         Hash::new(b"geometry-durability-merge-height-context"),
     ));
@@ -2162,7 +2194,7 @@ fn install_merge_applied_retirement_work(
     let generation = kura
         .claim_autonomous_lifecycle_process_generation(network_id, &local_peer)
         .expect("claim geometry merge lifecycle process generation");
-    let (certified, bundle) = certified_geometry_autonomous_lane_block(&payload, &producer);
+    let (certified, bundle) = certified_geometry_autonomous_lane_block(&payload, &validators);
     kura.persist_lane_executable_payload(&payload, network_id, epoch)
         .expect("persist merge-applied retirement executable payload");
     let recovered = kura
@@ -2439,7 +2471,8 @@ fn install_merge_applied_retirement_work(
         &local_peer,
     )
     .expect("bind geometry merge lifecycle attempt");
-    let terminal_projection = geometry_canonical_merge_terminal_projection(reservation_group);
+    let terminal_projection =
+        geometry_canonical_merge_terminal_projection(&binding, &certified.prepare_qc);
     let live_cursor = install_initial_geometry_retirement_lifecycle_cursor(
         kura,
         &generation,
@@ -2506,9 +2539,13 @@ fn geometry_lane_proposal_and_ownership(
     lane_block_height: u64,
     lane_block_view: u64,
     entrypoint_hash: Hash,
-    keypair: &KeyPair,
+    validator_set: Vec<PeerId>,
 ) -> (LaneBlockProposalV1, SumeragiLanePayloadOwnership) {
-    let validator_set = vec![PeerId::new(keypair.public_key().clone())];
+    let validator_count = u32::try_from(validator_set.len()).expect("geometry committee count");
+    let min_quorum = u32::try_from(crate::sumeragi::network_topology::commit_quorum_from_len(
+        validator_set.len(),
+    ))
+    .expect("geometry committee quorum");
     let mut ownership = SumeragiLanePayloadOwnership {
         proposal_height,
         proposal_view,
@@ -2528,8 +2565,8 @@ fn geometry_lane_proposal_and_ownership(
             .map(|height| Hash::new(height.to_le_bytes())),
         lane_block_descriptor_hash: Some(Hash::new(b"geometry-retirement-descriptor-placeholder")),
         lane_block_descriptor_validator_set: validator_set.clone(),
-        lane_block_descriptor_validator_count: 1,
-        lane_block_descriptor_min_quorum: 1,
+        lane_block_descriptor_validator_count: validator_count,
+        lane_block_descriptor_min_quorum: min_quorum,
         payload_ownership_hash: Hash::new(b"geometry-retirement-payload-placeholder"),
         rbc_instance_hash: Hash::new(b"geometry-retirement-rbc-placeholder"),
     };
@@ -2557,8 +2594,8 @@ fn geometry_lane_proposal_and_ownership(
         validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
         validator_set_hash: HashOf::new(&validator_set),
         validator_set,
-        validator_count: 1,
-        min_quorum: 1,
+        validator_count,
+        min_quorum,
         qc_mode_tag: ownership.qc_mode_tag.clone(),
         descriptor_hash: replay.lane_block_descriptor_hash,
     };
@@ -2598,7 +2635,7 @@ fn geometry_native_amx_receipt(
         1,
         0,
         Hash::from(entrypoint_hash),
-        participant_keypair,
+        participant_validator_set.clone(),
     );
     let participant_descriptor = &participant_proposal.descriptor;
     let mut prepare_body = NativeAmxAttestationBodyV2 {
@@ -2627,9 +2664,7 @@ fn geometry_native_amx_receipt(
         participant_lane_block_height: participant_descriptor.lane_block_height,
         participant_lane_block_view: participant_descriptor.lane_block_view,
         participant_proposal_hash: participant_proposal.proposal_hash,
-        participant_settlement_commitment: HashOf::from_untyped_unchecked(Hash::prehashed(
-            [0; Hash::LENGTH],
-        )),
+        participant_settlement_commitment: Hash::prehashed([0; Hash::LENGTH]),
         participant_validator_set_hash: HashOf::new(&participant_validator_set),
         participant_validator_count: 1,
         participant_min_quorum: 1,
@@ -2639,16 +2674,14 @@ fn geometry_native_amx_receipt(
         coordinator_proposal_hash: coordinator_proposal.proposal_hash,
     };
     prepare_body.participant_settlement_commitment = prepare_body
-        .computed_grouped_participant_settlement_commitment(&[prepare_body.source_id])
+        .computed_grouped_participant_settlement_commitment(None, &[prepare_body.source_id])
         .expect("single-source test fixture settlement is valid");
     let participant_settlement = prepare_body
-        .computed_grouped_participant_settlement(&[prepare_body.source_id])
+        .computed_grouped_participant_settlement(None, &[prepare_body.source_id])
         .expect("single-source test fixture settlement is valid");
-    let participant_settlement_hash =
-        iroha_data_model::block::consensus::compute_native_amx_participant_settlement_hash(
-            &participant_settlement,
-        )
-        .expect("fixture participant settlement encodes canonically");
+    let participant_settlement_hash = participant_settlement
+        .computed_hash()
+        .expect("geometry participant settlement hashes");
     let participant_pop = bls_normal_pop_prove(participant_keypair.private_key())
         .expect("geometry retirement participant PoP");
     let qc = |body| {
@@ -2759,7 +2792,7 @@ fn autonomous_retirement_payload_for_routes(
         1,
         0,
         Hash::from(entrypoint_hash),
-        producer,
+        vec![PeerId::new(producer.public_key().clone())],
     );
     let epoch = 9;
     let receipt = geometry_native_amx_receipt(

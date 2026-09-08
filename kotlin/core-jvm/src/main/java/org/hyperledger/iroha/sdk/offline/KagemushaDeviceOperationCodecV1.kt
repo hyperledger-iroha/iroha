@@ -410,7 +410,8 @@ class KagemushaDeviceRedemptionTerminalReceiptV1(
     private val heightContext = nonzeroDigest(heightContextId, "height_context_id")
 
     init {
-        require(version == VERSION && finalizedBlockHeight > 0)
+        require(version == VERSION && finalizedBlockHeight != 0L)
+        require(heightContext[31].toInt() and 1 == 1) { "height_context_id is not a marked hash" }
     }
 
     fun networkId(): ByteArray = network.copyOf()
@@ -537,6 +538,112 @@ class KagemushaDeviceSenderCommandV1(
  * internal until a native response-authenticator verifier can run before the parsed value escapes.
  */
 object KagemushaDeviceOperationCodecV1 {
+    // Coordinator projections share these exact device payloads. They are public selectors;
+    // decoding their shape never resolves the native journal or verifies a Core capability.
+    internal fun coordinatorInputPreimage(
+        operationId: ByteArray,
+        context: KagemushaDeviceSenderWalletContextV1,
+        inputs: KagemushaDeviceSenderPublicInputsV1,
+    ): ByteArray {
+        if (inputs is KagemushaDeviceSenderPublicInputsV1.SendSplit) {
+            val request = KagemushaNoritoV1.decodePaymentRequestShapeExact(inputs.canonicalRequest())
+            require(request.networkId.bytes().contentEquals(context.lane.networkId()) &&
+                request.releaseId().contentEquals(context.release.releaseId()) &&
+                request.asset.canonicalPayload().contentEquals(context.lane.assetCanonicalPayload()) &&
+                request.assetIncarnation.bytes().contentEquals(context.release.assetIncarnation()) &&
+                request.scale == context.lane.scale &&
+                request.liabilityPoolId().contentEquals(KagemushaNoritoV1.liabilityPoolId(
+                    request.networkId, request.asset, request.assetIncarnation))) { "sender request context mismatch" }
+        }
+        return frame("iroha.kagemusha.device.v1.sender-public-input-preimage", 16, fields(
+            u16(VERSION), digestArray(nonzeroDigest(operationId, "operation_id")), senderContext(context), senderInputs(inputs),
+        ), SENDER_COMMAND_MAX_BYTES)
+    }
+
+    internal fun encodeCoordinatorPreparation(value: KagemushaNativeSenderPreparationV1): ByteArray =
+        frame("iroha.kagemusha.core.v1.sender-preparation", 16, coordinatorPreparation(value), 16 * 1024)
+
+    internal fun decodeCoordinatorPreparation(bytes: ByteArray): KagemushaNativeSenderPreparationV1 {
+        val value = decodeCoordinatorPreparationPayload(unframe(bytes,
+            DeviceArchiveDescriptor("iroha.kagemusha.core.v1.sender-preparation", 16, 16 * 1024)))
+        require(bytes.contentEquals(encodeCoordinatorPreparation(value))) { "noncanonical preparation archive" }
+        return value
+    }
+
+    private fun coordinatorPreparation(value: KagemushaNativeSenderPreparationV1): ByteArray = fields(
+        u16(VERSION), value.operationId(), senderContext(value.context), value.inputsDigest(),
+    )
+
+    private fun decodeCoordinatorPreparationPayload(payload: ByteArray): KagemushaNativeSenderPreparationV1 {
+        val reader = DeviceReader(payload)
+        require(reader.u16Field() == VERSION) { "invalid coordinator archive version" }
+        val value = KagemushaNativeSenderPreparationV1(
+            reader.exactField(32), decodeSenderContext(reader.field()), reader.exactField(32),
+        )
+        reader.finish()
+        return value
+    }
+
+    internal fun encodeCoordinatorCandidate(value: KagemushaNativeSenderCandidateV1): ByteArray {
+        require(value.preparation.inputsDigest().contentEquals(value.selector.inputsDigest())) {
+            "candidate selector substituted preparation inputs"
+        }
+        return frame("iroha.kagemusha.core.v1.sender-candidate", 16, fields(
+            u16(VERSION), coordinatorPreparation(value.preparation), preparationSelector(value.selector),
+            value.candidateDigest(), vectorBytes(value.hardwareCommitAuthorization()),
+        ), 16 * 1024)
+    }
+
+    internal fun decodeCoordinatorCandidate(bytes: ByteArray): KagemushaNativeSenderCandidateV1 {
+        val reader = DeviceReader(unframe(bytes,
+            DeviceArchiveDescriptor("iroha.kagemusha.core.v1.sender-candidate", 16, 16 * 1024)))
+        require(reader.u16Field() == VERSION) { "invalid coordinator archive version" }
+        val value = KagemushaNativeSenderCandidateV1(
+            decodeCoordinatorPreparationPayload(reader.field()), decodePreparationSelector(reader.field()),
+            reader.exactField(32), reader.byteVectorField(HARDWARE_AUTHORIZATION_MAX),
+        )
+        reader.finish()
+        require(bytes.contentEquals(encodeCoordinatorCandidate(value))) { "noncanonical candidate archive" }
+        return value
+    }
+
+    internal fun encodeCoordinatorRecovery(value: KagemushaNativeSenderRecoveryV1): ByteArray =
+        frame("iroha.kagemusha.core.v1.sender-recovery", 16, fields(
+            u16(VERSION), value.operationId(), value.terminalId(), senderContext(value.context), value.inputsDigest(),
+        ), 16 * 1024)
+
+    internal fun decodeCoordinatorRecovery(bytes: ByteArray): KagemushaNativeSenderRecoveryV1 {
+        val reader = DeviceReader(unframe(bytes,
+            DeviceArchiveDescriptor("iroha.kagemusha.core.v1.sender-recovery", 16, 16 * 1024)))
+        require(reader.u16Field() == VERSION) { "invalid coordinator archive version" }
+        val value = KagemushaNativeSenderRecoveryV1(
+            reader.exactField(32), reader.exactField(32), decodeSenderContext(reader.field()), reader.exactField(32),
+        )
+        reader.finish()
+        require(bytes.contentEquals(encodeCoordinatorRecovery(value))) { "noncanonical recovery archive" }
+        return value
+    }
+
+    internal fun encodeCoordinatorRedemptionReceipt(value: KagemushaDeviceRedemptionTerminalReceiptV1): ByteArray =
+        frame("iroha.kagemusha.device.v1.redemption-terminal-receipt", 8, fields(
+            u16(value.version), value.networkId(), digestArray(value.operationId()), digestArray(value.redemptionId()),
+            digestArray(value.terminalNullifier()), digestArray(value.envelopeDigest()), digestArray(value.reserveReceiptDigest()),
+            digestArray(value.authenticatedStatusDigest()), u64(value.finalizedBlockHeight), fields(value.heightContextId()),
+        ), 1024)
+
+    internal fun decodeCoordinatorRedemptionReceipt(bytes: ByteArray): KagemushaDeviceRedemptionTerminalReceiptV1 {
+        val reader = DeviceReader(unframe(bytes,
+            DeviceArchiveDescriptor("iroha.kagemusha.device.v1.redemption-terminal-receipt", 8, 1024)))
+        val value = KagemushaDeviceRedemptionTerminalReceiptV1(
+            reader.u16Field(), reader.exactField(32), decodeDigestArray(reader.field()), decodeDigestArray(reader.field()),
+            decodeDigestArray(reader.field()), decodeDigestArray(reader.field()), decodeDigestArray(reader.field()), decodeDigestArray(reader.field()),
+            reader.u64Field(), decodeHeightContext(reader.field()),
+        )
+        reader.finish()
+        require(bytes.contentEquals(encodeCoordinatorRedemptionReceipt(value))) { "noncanonical redemption receipt archive" }
+        return value
+    }
+
     const val CONTROL_READ_COMMAND_MAX_BYTES = 256
     const val CONTROL_ACKNOWLEDGEMENT_COMMAND_MAX_BYTES = 12 * 1024
     const val CONTROL_MINT_COMMAND_MAX_BYTES = 2 * 1024
@@ -1042,10 +1149,10 @@ object KagemushaDeviceOperationCodecV1 {
     private fun senderContext(value: KagemushaDeviceSenderWalletContextV1): ByteArray = fields(
         lane(value.lane),
         stateContext(value.release),
-        value.credentialId(),
+        digestArray(value.credentialId()),
         hardwareEpoch(value.hardwareEpoch),
         policyBinding(value.devicePolicyBinding),
-        value.coreAuthorizationKeyReference(),
+        digestArray(value.coreAuthorizationKeyReference()),
     )
 
     private fun inboxReceipt(value: KagemushaInboxReceiptV1): ByteArray = fields(
@@ -1061,29 +1168,29 @@ object KagemushaDeviceOperationCodecV1 {
         return value
     }
 
-    private fun lane(value: KagemushaDeviceLaneIdV1): ByteArray = fields(
+    internal fun lane(value: KagemushaDeviceLaneIdV1): ByteArray = fields(
         value.networkId(),
-        value.deviceLaneId(),
+        digestArray(value.deviceLaneId()),
         value.assetCanonicalPayload(),
         u32(value.scale),
     )
 
     private fun stateContext(value: KagemushaDeviceStateContextV1): ByteArray = fields(
         u16(value.protocolVersion),
-        value.suiteId(),
-        value.vkDigest(),
-        value.releaseId(),
+        digestArray(value.suiteId()),
+        digestArray(value.vkDigest()),
+        digestArray(value.releaseId()),
         fields(value.assetIncarnation()),
-        value.hardwareProfileId(),
+        digestArray(value.hardwareProfileId()),
         u64(value.policyEpoch),
     )
 
-    private fun hardwareEpoch(value: KagemushaDeviceHardwareEpochV1): ByteArray = fields(
-        u128(value.generation), value.epochId(),
+    internal fun hardwareEpoch(value: KagemushaDeviceHardwareEpochV1): ByteArray = fields(
+        u128(value.generation), digestArray(value.epochId()),
     )
 
-    private fun policyBinding(value: KagemushaDevicePolicyBindingV1): ByteArray = fields(
-        value.deviceKeyReference(), value.hardwarePolicyId(),
+    internal fun policyBinding(value: KagemushaDevicePolicyBindingV1): ByteArray = fields(
+        digestArray(value.deviceKeyReference()), digestArray(value.hardwarePolicyId()),
     )
 
     private fun senderInputs(value: KagemushaDeviceSenderPublicInputsV1): ByteArray = when (value) {
@@ -1154,14 +1261,14 @@ object KagemushaDeviceOperationCodecV1 {
             fields(
                 u16(value.receipt.version),
                 value.receipt.networkId(),
-                value.receipt.operationId(),
-                value.receipt.redemptionId(),
-                value.receipt.terminalNullifier(),
-                value.receipt.envelopeDigest(),
-                value.receipt.reserveReceiptDigest(),
-                value.receipt.authenticatedStatusDigest(),
+                digestArray(value.receipt.operationId()),
+                digestArray(value.receipt.redemptionId()),
+                digestArray(value.receipt.terminalNullifier()),
+                digestArray(value.receipt.envelopeDigest()),
+                digestArray(value.receipt.reserveReceiptDigest()),
+                digestArray(value.receipt.authenticatedStatusDigest()),
                 u64(value.receipt.finalizedBlockHeight),
-                value.receipt.heightContextId(),
+                fields(value.receipt.heightContextId()),
             ),
         )
     }
@@ -1170,21 +1277,21 @@ object KagemushaDeviceOperationCodecV1 {
         val reader = DeviceReader(payload)
         val lane = decodeLane(reader.field())
         val release = decodeStateContext(reader.field())
-        val credential = reader.exactField(32)
+        val credential = decodeDigestArray(reader.field())
         val epoch = decodeHardwareEpoch(reader.field())
         val policy = decodePolicyBinding(reader.field())
-        val coreAuthorizationKeyReference = reader.exactField(32)
+        val coreAuthorizationKeyReference = decodeDigestArray(reader.field())
         reader.finish()
         return KagemushaDeviceSenderWalletContextV1(
             lane, release, credential, epoch, policy, coreAuthorizationKeyReference,
         )
     }
 
-    private fun decodeLane(payload: ByteArray): KagemushaDeviceLaneIdV1 {
+    internal fun decodeLane(payload: ByteArray): KagemushaDeviceLaneIdV1 {
         val reader = DeviceReader(payload)
         val value = KagemushaDeviceLaneIdV1(
             reader.exactField(32),
-            reader.exactField(32),
+            decodeDigestArray(reader.field()),
             reader.field(ACCOUNT_MAX),
             reader.u32Field(),
         )
@@ -1195,13 +1302,13 @@ object KagemushaDeviceOperationCodecV1 {
     private fun decodeStateContext(payload: ByteArray): KagemushaDeviceStateContextV1 {
         val reader = DeviceReader(payload)
         val protocol = reader.u16Field()
-        val suite = reader.exactField(32)
-        val vk = reader.exactField(32)
-        val release = reader.exactField(32)
+        val suite = decodeDigestArray(reader.field())
+        val vk = decodeDigestArray(reader.field())
+        val release = decodeDigestArray(reader.field())
         val incarnationReader = DeviceReader(reader.field())
         val incarnation = incarnationReader.exactField(32)
         incarnationReader.finish()
-        val profile = reader.exactField(32)
+        val profile = decodeDigestArray(reader.field())
         val policyEpoch = reader.u64Field()
         reader.finish()
         return KagemushaDeviceStateContextV1(
@@ -1215,16 +1322,16 @@ object KagemushaDeviceOperationCodecV1 {
         )
     }
 
-    private fun decodeHardwareEpoch(payload: ByteArray): KagemushaDeviceHardwareEpochV1 {
+    internal fun decodeHardwareEpoch(payload: ByteArray): KagemushaDeviceHardwareEpochV1 {
         val reader = DeviceReader(payload)
-        val value = KagemushaDeviceHardwareEpochV1(reader.u128Field(), reader.exactField(32))
+        val value = KagemushaDeviceHardwareEpochV1(reader.u128Field(), decodeDigestArray(reader.field()))
         reader.finish()
         return value
     }
 
-    private fun decodePolicyBinding(payload: ByteArray): KagemushaDevicePolicyBindingV1 {
+    internal fun decodePolicyBinding(payload: ByteArray): KagemushaDevicePolicyBindingV1 {
         val reader = DeviceReader(payload)
-        val value = KagemushaDevicePolicyBindingV1(reader.exactField(32), reader.exactField(32))
+        val value = KagemushaDevicePolicyBindingV1(decodeDigestArray(reader.field()), decodeDigestArray(reader.field()))
         reader.finish()
         return value
     }
@@ -1314,14 +1421,14 @@ object KagemushaDeviceOperationCodecV1 {
                 val value = KagemushaDeviceRedemptionTerminalReceiptV1(
                     receipt.u16Field(),
                     receipt.exactField(32),
-                    receipt.exactField(32),
-                    receipt.exactField(32),
-                    receipt.exactField(32),
-                    receipt.exactField(32),
-                    receipt.exactField(32),
-                    receipt.exactField(32),
+                    decodeDigestArray(receipt.field()),
+                    decodeDigestArray(receipt.field()),
+                    decodeDigestArray(receipt.field()),
+                    decodeDigestArray(receipt.field()),
+                    decodeDigestArray(receipt.field()),
+                    decodeDigestArray(receipt.field()),
                     receipt.u64Field(),
-                    receipt.exactField(32),
+                    decodeHeightContext(receipt.field()),
                 )
                 receipt.finish()
                 KagemushaDeviceSenderTerminalReceiptV1.RedemptionSettlement(value)
@@ -1532,6 +1639,24 @@ private fun unframe(bytes: ByteArray, descriptor: DeviceArchiveDescriptor): Byte
 private fun fields(vararg values: ByteArray): ByteArray = DeviceWriter().apply {
     values.forEach(::field)
 }.bytes()
+
+// Rust DigestV1 aliases use generic [u8; 32] serialization: 32 length-prefixed
+// one-byte elements. Explicit array fields optimized by derive instead use raw32.
+private fun digestArray(value: ByteArray): ByteArray {
+    require(value.size == 32) { "digest alias must contain 32 bytes" }
+    return DeviceWriter().apply { value.forEach { field(byteArrayOf(it)) } }.bytes()
+}
+
+private fun decodeDigestArray(payload: ByteArray): ByteArray {
+    require(payload.size == 64) { "invalid digest alias payload size" }
+    val reader = DeviceReader(payload)
+    return ByteArray(32) { reader.exactField(1)[0] }.also { reader.finish() }
+}
+
+private fun decodeHeightContext(payload: ByteArray): ByteArray {
+    val reader = DeviceReader(payload)
+    return reader.exactField(32).also { reader.finish() }
+}
 
 private fun pendingCreditWatermark(value: KagemushaPendingCreditWatermarkV1): ByteArray = fields(
     u128(value.hardwareEpochGeneration),

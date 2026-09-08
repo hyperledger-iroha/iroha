@@ -2,6 +2,22 @@ import XCTest
 @testable import IrohaSwift
 
 final class ConnectClientTests: XCTestCase {
+    func testExecutionProofFactorySetsAnExplicitBoundWithoutChangingOrdinaryDefaults() throws {
+        let session = URLSession(configuration: .ephemeral)
+        defer { session.invalidateAndCancel() }
+        let request = URLRequest(url: URL(string: "wss://example.test/v1/connect/ws")!)
+        let ordinary = try XCTUnwrap(ConnectWebSocketFactory.urlSession(session: session)
+            .make(request: request) as? URLSessionConnectWebSocketTask)
+        let execution = try XCTUnwrap(ConnectWebSocketFactory.urlSessionForExecutionProofs(session: session)
+            .make(request: request) as? URLSessionConnectWebSocketTask)
+        let baseline = session.webSocketTask(with: request)
+        XCTAssertEqual(ordinary.task.maximumMessageSize, baseline.maximumMessageSize)
+        XCTAssertEqual(execution.task.maximumMessageSize, 4 * 1024 * 1024 + 4096)
+        XCTAssertEqual(execution.task.maximumMessageSize,
+                       ConnectWebSocketFactory.executionProofV1MaximumMessageBytes)
+        // None of these tasks is resumed: this is configuration coverage, not wallet interoperability.
+    }
+
     private final class RequestBox: @unchecked Sendable {
         var request: URLRequest?
     }

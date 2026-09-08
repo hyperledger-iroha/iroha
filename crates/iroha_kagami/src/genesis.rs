@@ -57,7 +57,8 @@ fn complete_test_genesis_builder(
 }
 
 #[cfg(test)]
-fn complete_test_genesis_builder_for_peers(
+/// Complete fixture context and mint-finality authority for the exact supplied peers.
+pub(crate) fn complete_test_genesis_builder_for_peers(
     builder: iroha_genesis::GenesisBuilder,
     mut validators: Vec<iroha_data_model::peer::PeerId>,
 ) -> iroha_genesis::GenesisBuilder {
@@ -95,8 +96,11 @@ fn complete_test_genesis_builder_for_peers(
 }
 
 #[cfg(test)]
-trait CompleteTestGenesisBuilder {
+/// Complete test genesis builders with the required first-release authority.
+pub(crate) trait CompleteTestGenesisBuilder {
+    /// Install required context and authority for a deterministic four-validator fixture.
     fn complete_for_test(self) -> Self;
+    /// Install the supplied topology and its matching context and mint-finality authority.
     fn set_topology_for_test(self, topology: Vec<iroha_genesis::GenesisTopologyEntry>) -> Self;
 }
 

@@ -7,9 +7,9 @@ use crate::{Run, RunContext};
 use eyre::{Result, eyre};
 use iroha::client::Client;
 use iroha::data_model::{
-    account::AccountId, smart_contract::MAX_CONTRACT_EMERGENCY_HOLD_BLOCKS_V1,
+    account::AccountId,
+    smart_contract::{MAX_CONTRACT_EMERGENCY_HOLD_BLOCKS_V1, contract_code_hash},
 };
-use iroha_crypto::Hash;
 use norito::json::{Map, Value};
 #[derive(clap::Args, Debug)]
 pub struct AuditDeployArgs {
@@ -758,7 +758,7 @@ fn audit_code_map(client: &Client, code_hash: &str, code_map: &mut Map, issues: 
                 code_map.insert("hash_matches".into(), Value::from(false));
                 issues.push("code_bytes_empty".into());
             } else {
-                let computed = Hash::new(&bytes);
+                let computed = contract_code_hash(&bytes);
                 let computed_hex = hex::encode(computed.as_ref());
                 let matches = computed_hex == code_hash;
                 code_map.insert("computed_hash".into(), Value::from(computed_hex.clone()));

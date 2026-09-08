@@ -69,64 +69,6 @@ fn write_and_reopen_authenticated_wal_startup_at_path(
     )
     .expect("reopen authenticated FIFO WAL")
 }
-/// Reopen a worker fixture through the canonical authenticated LockAndCommit WAL.
-pub(in crate::sumeragi) fn worker_view_adapter_with_replayed_commit(
-    wal_path: PathBuf,
-    verified: VerifiedHeightContext,
-    local_validator: wire::ValidatorIndex,
-    generation: reducer::Generation,
-    consensus_key_hash: [u8; 32],
-    fingerprints: AdapterFingerprints,
-    locked_commit: (wire::QuorumCertificate, wire::Vote),
-) -> SumeragiV2Adapter {
-    let (mut adapter, startup) = SumeragiV2Adapter::open(
-        wal_path.clone(),
-        verified.clone(),
-        Some(local_validator),
-        generation,
-        consensus_key_hash,
-        fingerprints,
-        DeferredAdmissionOrdinalSource::new(0),
-    )
-    .expect("open worker lock fixture WAL");
-    assert!(startup.is_empty());
-    assert!(adapter.wal.recovered_records().is_empty());
-    let (prepare, vote) = locked_commit;
-    let payload = WalEnvelopeV2 {
-        protocol_version: wire::PROTOCOL_VERSION,
-        persistence_id: 1,
-        record: WalRecordV2::LockAndCommit {
-            prepare,
-            vote: vote.clone(),
-        },
-    }
-    .encode();
-    let receipt = adapter
-        .wal
-        .append(&payload)
-        .expect("fsync the exact worker lock and CommitIntent");
-    assert_eq!(receipt.sequence(), 0);
-    drop(adapter);
-    let (adapter, startup) = SumeragiV2Adapter::open(
-        wal_path,
-        verified,
-        Some(local_validator),
-        generation,
-        consensus_key_hash,
-        fingerprints,
-        DeferredAdmissionOrdinalSource::new(0),
-    )
-    .expect("authenticate and replay the exact worker lock and CommitIntent");
-    assert!(matches!(
-        startup.as_slice(),
-        [AdapterEffect::Sign { request: SignRequest::Vote(replayed), .. }]
-            if replayed == &vote
-    ));
-    let durable = adapter.reducer.durable_state();
-    let locked = durable.locked().expect("replay retains the exact lock");
-    assert!(durable.commit_intent_for_lock(locked).is_some());
-    adapter
-}
 fn take_current_sign(effects: &mut Vec<AdapterEffect>) -> AdapterEffect {
     let signs = effects
         .iter()
@@ -447,6 +389,57 @@ fn lifecycle_owner_config() -> SumeragiV2Config {
             allowed_algorithms: vec![Algorithm::BlsNormal],
         },
     }
+}
+// These production-shaped debug fixtures retain several lifecycle owners at
+// once. Keep their large test frames off libtest's small default worker stack;
+// production constructor stack use remains independently qualified.
+fn run_lifecycle_fixture_on_large_stack(name: &'static str, run: fn()) {
+    let handle = std::thread::Builder::new()
+        .name(name.to_owned())
+        .stack_size(32 * 1024 * 1024)
+        .spawn(run)
+        .expect("spawn bounded lifecycle fixture thread");
+    if let Err(payload) = handle.join() {
+        std::panic::resume_unwind(payload);
+    }
+}
+fn lifecycle_namespace_snapshot_for_test(
+    root: &std::path::Path,
+) -> std::collections::BTreeMap<std::path::PathBuf, Option<Vec<u8>>> {
+    let mut snapshot = std::collections::BTreeMap::new();
+    if !root.exists() {
+        return snapshot;
+    }
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(path) = pending.pop() {
+        let metadata = std::fs::symlink_metadata(&path).expect("inspect lifecycle fixture path");
+        assert!(
+            !metadata.file_type().is_symlink(),
+            "fixture namespace must not contain symlinks"
+        );
+        let relative = path
+            .strip_prefix(root)
+            .expect("fixture path remains below its root")
+            .to_path_buf();
+        if metadata.is_dir() {
+            snapshot.insert(relative, None);
+            pending.extend(
+                std::fs::read_dir(&path)
+                    .expect("read lifecycle fixture directory")
+                    .map(|entry| entry.expect("read lifecycle fixture entry").path()),
+            );
+        } else {
+            assert!(
+                metadata.is_file(),
+                "fixture namespace must contain only regular files"
+            );
+            snapshot.insert(
+                relative,
+                Some(std::fs::read(&path).expect("read lifecycle fixture file")),
+            );
+        }
+    }
+    snapshot
 }
 fn lifecycle_factory_state_for_test(
     kura: Arc<Kura>,
@@ -1545,4 +1538,69 @@ fn restored_body_available_reuses_logical_lifecycle_spends_one_fresh_slot_and_do
                 .is_empty(),
         "the serviced old stage cannot resurrect on a second restart"
     );
+}
+
+#[cfg(feature = "bls")]
+impl SumeragiV2Adapter {
+    /// Reopen the actual worker-fixture WAL and consume its authenticated
+    /// ProposalIntent together with the already-revalidated body store.
+    #[allow(clippy::too_many_arguments)]
+    #[inline(never)]
+    pub(in crate::sumeragi) fn reopen_proposal_owner_for_worker_restart_test(
+        wal_path: &std::path::Path,
+        verified: VerifiedHeightContext,
+        local_validator: wire::ValidatorIndex,
+        generation: reducer::Generation,
+        consensus_key_hash: [u8; 32],
+        fingerprints: AdapterFingerprints,
+        body_store: super::super::v2_body_store::RevalidatedV2BodyStore,
+        storage_root: &std::path::Path,
+        local_signer: &KeyPair,
+    ) -> Box<ProductionLifecycleOwnerV1> {
+        let startup = Self::open_recovered_startup_with_aggregator(
+            wal_path,
+            verified,
+            Some(local_validator),
+            generation,
+            consensus_key_hash,
+            fingerprints,
+            Box::<BlsNormalSignatureAggregator>::default(),
+            DeferredAdmissionOrdinalSource::new(0),
+        )
+        .expect("reopen the actual nonzero-view safety WAL behind the recovery seal");
+        assert!(matches!(
+            startup.effects.as_slice(),
+            [AdapterEffect::Sign {
+                request: SignRequest::Proposal(_),
+                ..
+            }]
+        ));
+        let authenticated = startup
+            .authenticate_final_wal_startup_authority()
+            .unwrap_or_else(|(error, _startup)| {
+                panic!("authenticate actual ProposalIntent: {error}")
+            });
+        assert!(authenticated.has_recovered_control_sign_for_test());
+        assert!(authenticated.effects.is_empty());
+        let mut owner = Box::new(
+            authenticated
+                .open_production_lifecycle_owner_v1_with_store_for_test(
+                    &lifecycle_owner_config(),
+                    4,
+                    &storage_root.join("ledger"),
+                    &storage_root.join("serve"),
+                    body_store,
+                    local_signer,
+                )
+                .unwrap_or_else(|error| {
+                    panic!("recover exact Proposal lifecycle custody: {error}")
+                }),
+        );
+        assert!(owner.exact_recovered_body_pipeline_join_for_test());
+        let (high_water, ordinal) = owner
+            .recovered_control_row_summary_for_test()
+            .expect("the genuine ProposalIntent installs its exact Ready registry carrier");
+        assert_eq!(high_water, ordinal);
+        owner
+    }
 }

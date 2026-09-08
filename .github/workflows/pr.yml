@@ -171,6 +171,30 @@ jobs:
             --tests org.hyperledger.iroha.android.tx.TransactionFixtureManifestTests \
             --tests org.hyperledger.iroha.android.tx.TransactionPayloadFixtureTests
 
+  kagemusha_evidence:
+    name: KAGEMUSHA release evidence regressions
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.11"
+      - name: Install pinned test dependency
+        run: python3 -m pip install --disable-pip-version-check pytest==9.0.3
+      - name: Verify release, provider and physical evidence rejection paths
+        run: |
+          python3 -m pytest -q \
+            pytests/scripts/kagemusha_v1_release_evidence_test.py \
+            pytests/scripts/kagemusha_v1_physical_device_test.py \
+            pytests/scripts/kagemusha_v1_physical_provenance_test.py \
+            pytests/scripts/kagemusha_v1_provider_policy_test.py \
+            scripts/tests/run_kagemusha_v1_release_evidence_test.py
+
   rust_changes:
     name: Classify affected Rust lanes
     runs-on: ubuntu-latest
@@ -265,7 +289,7 @@ jobs:
             scripts.tests.ivm_vector_metal_compaction_source_test \
             scripts.tests.kotodama_ir_compaction_source_test \
             scripts.tests.kotodama_typed_case_registry_source_test \
-            scripts.tests.norito_columnar_derive_compaction_source_test \
+            scripts.tests.norito_codec_contracts_test \
             scripts.tests.norito_scratch_retirement_source_test \
             scripts.tests.obsolete_developer_test_retirement_source_test \
             scripts.tests.shared_proc_macro_emitter_source_test

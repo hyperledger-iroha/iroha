@@ -7,9 +7,9 @@ use rustc_hash::FxHashMap;
 use crate::circuit::AssignedCell;
 use crate::{
     circuit::{
-        layouter::{RegionColumn, RegionLayouter, SyncDeps, TableLayouter},
-        table_layouter::{compute_table_lengths, SimpleTableLayouter},
         Cell, Layouter, Region, RegionIndex, Table, Value,
+        layouter::{RegionColumn, RegionLayouter, SyncDeps, TableLayouter},
+        table_layouter::{SimpleTableLayouter, compute_table_lengths},
     },
     plonk::{
         Advice, Any, Assigned, Assignment, Challenge, Circuit, Column, Error, Fixed, FloorPlanner,
@@ -301,10 +301,14 @@ impl<'r, 'a, F: Field, CS: Assignment<F> + 'a + SyncDeps> RegionLayouter<F>
         column: Column<Advice>,
         offset: usize,
         to: Value<Assigned<F>>,
-    ) {
+    ) -> Cell {
         self.layouter
             .cs
             .assign_advice_discarding_value(column, offset, to);
+        Cell {
+            row_offset: offset,
+            column: column.into(),
+        }
     }
 
     fn assign_advice_from_constant<'v>(

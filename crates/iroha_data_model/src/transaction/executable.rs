@@ -191,15 +191,16 @@ impl TryFrom<Vec<u8>> for ContractArgumentRecord {
         Self::try_new(bytes)
     }
 }
-impl ncore::NoritoSerialize for ContractArgumentRecord {
+impl ncore::NoritoSerialize for ContractArgumentRecord {}
+impl ncore::SerializePayload for ContractArgumentRecord {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
-        ncore::NoritoSerialize::serialize(&self.0, writer)
+        ncore::SerializePayload::serialize(&self.0, writer)
     }
     fn encoded_len_hint(&self) -> Option<usize> {
-        ncore::NoritoSerialize::encoded_len_hint(&self.0)
+        ncore::SerializePayload::encoded_len_hint(&self.0)
     }
     fn encoded_len_exact(&self) -> Option<usize> {
-        ncore::NoritoSerialize::encoded_len_exact(&self.0)
+        ncore::SerializePayload::encoded_len_exact(&self.0)
     }
 }
 impl<'de> NoritoDeserialize<'de> for ContractArgumentRecord {
@@ -875,6 +876,13 @@ mod tests {
             Err(norito::core::Error::LengthMismatch)
         }
         fn dyn_frame_len(&self) -> Result<usize, norito::core::Error> {
+            Err(norito::core::Error::LengthMismatch)
+        }
+        fn dyn_write_pair(
+            &self,
+            _writer: &mut norito::core::Encoder<'_>,
+            _wire_id: &str,
+        ) -> Result<(), norito::core::Error> {
             Err(norito::core::Error::LengthMismatch)
         }
         fn as_any(&self) -> &dyn Any {

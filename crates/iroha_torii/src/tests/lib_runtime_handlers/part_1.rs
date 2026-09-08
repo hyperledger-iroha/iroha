@@ -486,7 +486,24 @@ pub(crate) fn configure_private_ingress_with_offline_foreign_route_for_test(
     let local_validator = AccountId::new(local_validator_keypair.public_key().clone());
     let local_peer_id = PeerId::from(local_peer_keypair.public_key().clone());
     let foreign_validator = AccountId::new(foreign_validator_keypair.public_key().clone());
-    let foreign_peer_id = PeerId::from(foreign_peer_keypair.public_key().clone());
+    let mut local_members = vec![(local_validator.clone(), local_peer_keypair.clone())];
+    let mut foreign_members = vec![(foreign_validator, foreign_peer_keypair)];
+    for (members, seeds) in [
+        (&mut local_members, [0xc0, 0xc2, 0xc4]),
+        (&mut foreign_members, [0xc6, 0xc8, 0xca]),
+    ] {
+        for seed in seeds {
+            let validator_key = checked_torii_test_ed25519_keypair(
+                seed,
+                "derive four-validator route authority fixture key",
+            );
+            let peer_key = checked_torii_test_bls_keypair(
+                seed + 1,
+                "derive four-validator route peer fixture key",
+            );
+            members.push((AccountId::new(validator_key.public_key().clone()), peer_key));
+        }
+    }
     let local_dataspace = DataSpaceId::new(10);
     let local_lane = LaneId::new(1);
     let foreign_dataspace = DataSpaceId::new(12);
@@ -545,36 +562,65 @@ pub(crate) fn configure_private_ingress_with_offline_foreign_route_for_test(
     };
     let state = Arc::get_mut(&mut app_mut.state).expect("unique state");
     state.set_nexus(nexus.clone()).expect("apply nexus config");
-    ensure_runtime_peer_binding_for_test(state, &local_validator, &local_peer_keypair, "local");
-    ensure_runtime_peer_binding_for_test(
-        state,
-        &foreign_validator,
-        &foreign_peer_keypair,
-        "foreign",
-    );
+    for (index, (validator, peer_key)) in local_members.iter().chain(&foreign_members).enumerate() {
+        ensure_runtime_peer_binding_for_test(
+            state,
+            validator,
+            peer_key,
+            &format!("route-fixture-{index}"),
+        );
+    }
+    let bindings = |members: &[(AccountId, KeyPair)]| {
+        members
+            .iter()
+            .map(|(validator, peer_key)| {
+                (
+                    validator.clone(),
+                    PeerId::from(peer_key.public_key().clone()),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let local_bindings = bindings(&local_members);
+    let foreign_bindings = bindings(&foreign_members);
     {
         let mut topology = state.commit_topology.block();
         topology.clear();
-        topology.push(local_peer_id.clone());
-        topology.push(foreign_peer_id.clone());
+        for (_, peer) in local_bindings.iter().chain(&foreign_bindings) {
+            topology.push(peer.clone());
+        }
         topology.commit();
     }
     install_lane_manifest_registry_for_test(
         state,
         &[
-            (
-                nexus_lane,
-                vec![(local_validator.clone(), local_peer_id.clone())],
-            ),
-            (
-                local_lane,
-                vec![(local_validator.clone(), local_peer_id.clone())],
-            ),
-            (foreign_lane, vec![(foreign_validator, foreign_peer_id)]),
+            (nexus_lane, local_bindings.clone()),
+            (local_lane, local_bindings),
+            (foreign_lane, foreign_bindings),
         ],
     );
     let state_view = app_mut.state.view();
     app_mut.queue.reconfigure_nexus(&nexus, &state_view, None);
+    drop(state_view);
+    // The peer bindings activate at height one. A committed journal entry makes
+    // the same authority height available to the immutable routing state view.
+    let block = make_empty_signed_block(1, None, 0);
+    let header = block.header();
+    let block_hash = store_block(app, block);
+    record_committed_block_hash_for_test(app, header, block_hash);
+    for route in [
+        RoutingDecision::new(local_lane, local_dataspace),
+        RoutingDecision::new(foreign_lane, foreign_dataspace),
+    ] {
+        let committee = app
+            .state
+            .resolve_lane_committee(iroha_core::state::LaneAuthorityRoute::new(
+                route.lane_id,
+                route.dataspace_id,
+            ))
+            .expect("four-validator fixture authority resolves at the committed height");
+        assert_eq!(committee.validators().len(), 4);
+    }
     (
         RoutingDecision::new(local_lane, local_dataspace),
         RoutingDecision::new(foreign_lane, foreign_dataspace),
@@ -1542,6 +1588,25 @@ fn mk_app_state_for_tests_with_world_and_options_and_chain_id(
     push: Option<iroha_config::parameters::actual::Push>,
     chain_id: ChainId,
 ) -> SharedAppState {
+    mk_app_state_for_tests_with_world_and_options_and_network_id(
+        world,
+        iso,
+        deploy_limit,
+        norito_rpc,
+        push,
+        chain_id,
+        crate::signed_query_test_network_id(),
+    )
+}
+fn mk_app_state_for_tests_with_world_and_options_and_network_id(
+    world: World,
+    iso: Option<iroha_config::parameters::actual::IsoBridge>,
+    deploy_limit: Option<(u32, u32)>,
+    norito_rpc: Option<iroha_config::parameters::actual::NoritoRpcTransport>,
+    push: Option<iroha_config::parameters::actual::Push>,
+    chain_id: ChainId,
+    network_id: NetworkId,
+) -> SharedAppState {
     // Minimal core state
     let _ = &push;
     let kura = Kura::blank_kura_for_testing();
@@ -1551,7 +1616,7 @@ fn mk_app_state_for_tests_with_world_and_options_and_chain_id(
         kura.clone(),
         query_handle.clone(),
         chain_id.clone(),
-        crate::signed_query_test_network_id(),
+        network_id,
     );
     {
         let mut topo_block = state_inner.commit_topology.block();

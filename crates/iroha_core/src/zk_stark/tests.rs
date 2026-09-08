@@ -108,7 +108,7 @@ fn stark_params_decoder_rejects_retired_hash_selector_wire() {
 }
 #[test]
 fn fp4_wire_is_exactly_four_little_endian_coefficients() {
-    use norito::{NoritoSerialize, codec::Encode, core::DecodeFromSlice};
+    use norito::{SerializePayload, codec::Encode, core::DecodeFromSlice};
 
     let coefficients = [1, MOD_P_U64 - 1, 3, 4];
     let value = GoldilocksFp4V1::new(coefficients).expect("canonical field element");

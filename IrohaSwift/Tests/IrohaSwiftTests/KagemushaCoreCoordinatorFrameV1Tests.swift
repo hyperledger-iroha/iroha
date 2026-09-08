@@ -5,8 +5,8 @@ import XCTest
 final class KagemushaCoreCoordinatorFrameV1Tests: XCTestCase {
   func testAllNativeMethodsMatchSharedCurrentSchemaVectors() throws {
     let cases = try fixtures()
-    XCTAssertEqual(Set(cases.map { $0.method.rawValue }), Set(UInt8(1)...UInt8(10)))
-    XCTAssertEqual(cases.count, 14)
+    XCTAssertEqual(Set(cases.map { $0.method.rawValue }), Set(UInt8(1)...UInt8(11)))
+    XCTAssertEqual(cases.count, 18)
     for item in cases {
       let request = try KagemushaCoreCoordinatorFrameV1.decodeRequest(item.method, frame: item.request)
       let response = try KagemushaCoreCoordinatorFrameV1.decodeResponse(item.method, requestFrame: item.request, responseFrame: item.response)
@@ -59,6 +59,46 @@ final class KagemushaCoreCoordinatorFrameV1Tests: XCTestCase {
     XCTAssertThrowsError(try KagemushaCoreCoordinatorFrameV1.encodeRequest(.reserveOperationID, fields: [KagemushaCoreCoordinatorFrameV1.u32(22), id, Data(repeating: 0, count: 65537)]))
     XCTAssertThrowsError(try KagemushaCoreCoordinatorFrameV1.encodeRequest(.acceptInstalledTerminal, fields: Array(repeating: Data(repeating: 0, count: 65536), count: 5)))
     XCTAssertThrowsError(try KagemushaCoreCoordinatorFrameV1.decodeRequest(.reserveOperationID, frame: Data(repeating: 0, count: 262145)))
+  }
+
+  func testAuthenticatedReplyRequiresFullLowSAuthenticatorAndRetiresNineFields() throws {
+    let id = Data(repeating: 7, count: 32)
+    var scalar = Data(repeating: 0, count: 32)
+    scalar[31] = 1
+    let signature = scalar + scalar
+    let fields = [KagemushaCoreCoordinatorFrameV1.u32(5), id, Data([1]), Data([2]), signature,
+      KagemushaCoreCoordinatorFrameV1.u32(1), id, Data([3]), Data([4]), KagemushaCoreCoordinatorFrameV1.u32(0xffff)]
+    let frame = try KagemushaCoreCoordinatorFrameV1.encodeRequest(.acceptAuthenticatedReply, fields: fields)
+    XCTAssertEqual(try KagemushaCoreCoordinatorFrameV1.decodeRequest(.acceptAuthenticatedReply, frame: frame)[4], signature)
+    var retired = fields
+    retired.remove(at: 4)
+    XCTAssertThrowsError(try KagemushaCoreCoordinatorFrameV1.encodeRequest(.acceptAuthenticatedReply, fields: retired))
+    for invalid in [Data(), Data(repeating: 1, count: 63), Data(repeating: 0, count: 64), Data(repeating: 0xff, count: 64)] {
+      var mutation = fields
+      mutation[4] = invalid
+      XCTAssertThrowsError(try KagemushaCoreCoordinatorFrameV1.encodeRequest(.acceptAuthenticatedReply, fields: mutation))
+    }
+  }
+
+  func testObservationCodecVectorsAndClosedReadInventory() throws {
+    let commands: [KagemushaDeviceControlCommandV1] = [.readActiveHardwareCredential,
+      .readTrustedTimeOrLease, .readPendingCreditWatermark(watermark: nil, target: .drainAll), .recoverWalletSnapshot]
+    var vectors: [String: String] = [:]
+    for command in commands {
+      let canonical = try KagemushaDeviceOperationCodecV1.encodeControlCommand(command)
+      vectors[String(command.operation)] = canonical.map { String(format: "%02x", $0) }.joined()
+      let fields = [KagemushaCoreCoordinatorFrameV1.u32(UInt32(command.operation)), canonical]
+      let request = try KagemushaCoreCoordinatorFrameV1.encodeRequest(.beginObservation, fields: fields)
+      XCTAssertEqual(try KagemushaCoreCoordinatorFrameV1.decodeRequest(.beginObservation, frame: request), fields)
+      XCTAssertThrowsError(try KagemushaCoreCoordinatorFrameV1.encodeRequest(.reserveOperationID,
+        fields: [fields[0], Data(repeating: 1, count: 32), canonical]))
+      XCTAssertThrowsError(try KagemushaCoreCoordinatorFrameV1.encodeResponse(.beginObservation,
+        requestFrame: request, fields: [Data(repeating: 0, count: 32)]))
+    }
+    try JSONSerialization.data(withJSONObject: vectors, options: [.prettyPrinted, .sortedKeys])
+      .write(to: URL(fileURLWithPath: "/tmp/swift-observation-command-vectors.json"))
+    XCTAssertThrowsError(try KagemushaCoreCoordinatorFrameV1.encodeRequest(.beginObservation,
+      fields: [KagemushaCoreCoordinatorFrameV1.u32(20), Data([1])]))
   }
 
   private struct Fixture {

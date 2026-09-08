@@ -153,8 +153,7 @@ impl<F: WithSmallOrderMulGroup<3>> EvaluationDomain<F> {
             let data = OnceLock::new();
             if i == 0 {
                 assert!(
-                    data.set(FFTData::<F>::new(len, omega, omega_inv))
-                        .is_ok(),
+                    data.set(FFTData::<F>::new(len, omega, omega_inv)).is_ok(),
                     "base-domain FFT data is initialized exactly once"
                 );
             }
@@ -450,6 +449,28 @@ impl<F: WithSmallOrderMulGroup<3>> EvaluationDomain<F> {
         let data = self.get_fft_data(a.len());
         best_fft(&mut a.values, self.omega, self.k, data, false);
 
+        Polynomial {
+            values: a.values,
+            _marker: PhantomData,
+        }
+    }
+
+    /// Undo one [`Self::coeff_to_extended_part`] transform using its exact nonzero factor.
+    ///
+    /// The owned scalar buffer is inverse-transformed and unscaled, returning coefficient form
+    /// for another coset part or polynomial openings. No coefficient copy is retained. Existing
+    /// FFT scratch allocations still apply; this adds an inverse FFT and field inversion.
+    pub(crate) fn extended_part_to_coeff(
+        &self,
+        mut a: Polynomial<F, LagrangeCoeff>,
+        extended_omega_factor: F,
+    ) -> Polynomial<F, Coeff> {
+        assert_eq!(a.values.len(), 1 << self.k);
+        let inverse_coset = (self.g_coset * extended_omega_factor)
+            .invert()
+            .expect("extended-part coset factor must be nonzero");
+        self.ifft(&mut a.values, self.omega_inv, self.k, self.ifft_divisor);
+        self.distribute_powers(&mut a.values, inverse_coset);
         Polynomial {
             values: a.values,
             _marker: PhantomData,
@@ -893,8 +914,7 @@ fn extended_forward_transform_initializes_only_requested_fft_data() {
     use halo2curves::pasta::pallas::Scalar;
 
     let domain = EvaluationDomain::<Scalar>::new(4, 3);
-    let polynomial =
-        domain.coeff_from_vec((0_u64..8).map(Scalar::from).collect::<Vec<Scalar>>());
+    let polynomial = domain.coeff_from_vec((0_u64..8).map(Scalar::from).collect::<Vec<Scalar>>());
 
     let extended = domain.coeff_to_extended(&polynomial);
     let parts = domain.coeff_to_extended_parts(&polynomial);

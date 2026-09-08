@@ -24,6 +24,16 @@ macro_rules! record {
         }
     };
 }
+// These five records retain the original public frames, reject the retired
+// hash-shaped scalar payloads, and pin populated canonical private frames.
+macro_rules! kaigi_record {
+    ($test:ident, $ty:ty, $nominal:literal, $retired_case:literal) => {
+        #[test]
+        fn $test() {
+            super::kaigi_records::check::<$ty>($nominal, $retired_case);
+        }
+    };
+}
 record!(
     account_recovery_approve_account_recovery,
     crate::isi::account_recovery::ApproveAccountRecovery,
@@ -334,30 +344,35 @@ record!(
     crate::isi::kagemusha_v1::TopUpKagemushaV1,
     "iroha_data_model::isi::kagemusha_v1::TopUpKagemushaV1"
 );
-record!(
+kaigi_record!(
     kaigi_create_kaigi,
     crate::isi::kaigi::CreateKaigi,
-    "iroha_data_model::isi::kaigi::CreateKaigi"
+    "iroha_data_model::isi::kaigi::CreateKaigi",
+    0
 );
-record!(
+kaigi_record!(
     kaigi_end_kaigi,
     crate::isi::kaigi::EndKaigi,
-    "iroha_data_model::isi::kaigi::EndKaigi"
+    "iroha_data_model::isi::kaigi::EndKaigi",
+    1
 );
-record!(
+kaigi_record!(
     kaigi_join_kaigi,
     crate::isi::kaigi::JoinKaigi,
-    "iroha_data_model::isi::kaigi::JoinKaigi"
+    "iroha_data_model::isi::kaigi::JoinKaigi",
+    0
 );
-record!(
+kaigi_record!(
     kaigi_leave_kaigi,
     crate::isi::kaigi::LeaveKaigi,
-    "iroha_data_model::isi::kaigi::LeaveKaigi"
+    "iroha_data_model::isi::kaigi::LeaveKaigi",
+    0
 );
-record!(
+kaigi_record!(
     kaigi_record_kaigi_usage,
     crate::isi::kaigi::RecordKaigiUsage,
-    "iroha_data_model::isi::kaigi::RecordKaigiUsage"
+    "iroha_data_model::isi::kaigi::RecordKaigiUsage",
+    1
 );
 record!(
     kaigi_register_kaigi_relay,

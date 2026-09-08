@@ -484,6 +484,76 @@ pub(super) fn compressed_point_bytes<F: BigPrimeField>(
     encoded[31] = PastaSha256ByteV1::from_bits_le(ctx, gate, &high_bits);
     encoded
 }
+/// Split a proper three-limb integer into exactly two little-endian `u128` cells.
+///
+/// Callers retain the represented-field modulus check. This helper additionally constrains the
+/// same 256-bit ceiling as [`proper_uint_le_bytes`], without constructing byte intermediates.
+fn proper_uint_u128_limbs<F: BigPrimeField>(
+    ctx: &mut halo2_base::Context<F>,
+    range: &halo2_base::gates::RangeChip<F>,
+    value: &ProperCrtUint<F>,
+) -> [AssignedValue<F>; 2] {
+    let [limb_0, limb_1, limb_2] = value.limbs() else {
+        panic!("canonical Pasta integer must have three limbs");
+    };
+    debug_assert_eq!(LIMB_BITS, 86);
+    let gate = range.gate();
+    let limb_1_value = fe_to_biguint(limb_1.value());
+    let low_mask = (BigUint::from(1_u64) << 42) - BigUint::from(1_u64);
+    let low_part = ctx.load_witness(biguint_to_fe::<F>(&(&limb_1_value & &low_mask)));
+    let high_part = ctx.load_witness(biguint_to_fe::<F>(&(limb_1_value >> 42)));
+    range.range_check(ctx, low_part, 42);
+    range.range_check(ctx, high_part, 44);
+    let middle = gate.mul_add(
+        ctx,
+        high_part,
+        Constant(F::from_u128(1_u128 << 42)),
+        low_part,
+    );
+    ctx.constrain_equal(&middle, limb_1);
+    let low = gate.mul_add(ctx, low_part, Constant(F::from_u128(1_u128 << 86)), *limb_0);
+    let high = gate.mul_add(
+        ctx,
+        *limb_2,
+        Constant(F::from_u128(1_u128 << 44)),
+        high_part,
+    );
+    // A proper 86-bit limb makes this recomposition at most 130 bits, below either Pasta
+    // modulus. The range check therefore rules out the old encoding's missing bits 256/257
+    // as an integer constraint, rather than allowing a field-wrap encoding.
+    range.range_check(ctx, high, 128);
+    [low, high]
+}
+
+/// Constrain compressed-point chunks directly from already canonical affine coordinates.
+///
+/// The sign is the low bit of canonical y; x must have no bit 255 before the sign is appended.
+/// Both coordinates remain bound by their caller's curve and represented-modulus constraints.
+fn compressed_point_u128_limbs<F: BigPrimeField>(
+    ctx: &mut halo2_base::Context<F>,
+    range: &halo2_base::gates::RangeChip<F>,
+    x: &ProperCrtUint<F>,
+    y: &ProperCrtUint<F>,
+) -> [AssignedValue<F>; 2] {
+    let [low, high] = proper_uint_u128_limbs(ctx, range, x);
+    range.range_check(ctx, high, 127);
+    let y_low = y
+        .limbs()
+        .first()
+        .expect("canonical Pasta y has three limbs");
+    let y_low_value = fe_to_biguint(y_low.value());
+    let sign_value = &y_low_value & BigUint::from(1_u64);
+    let sign = ctx.load_witness(biguint_to_fe::<F>(&sign_value));
+    let half = ctx.load_witness(biguint_to_fe::<F>(&(y_low_value >> 1)));
+    let gate = range.gate();
+    gate.assert_bit(ctx, sign);
+    range.range_check(ctx, half, LIMB_BITS - 1);
+    let reconstructed_y_low = gate.mul_add(ctx, half, Constant(F::from(2)), sign);
+    ctx.constrain_equal(&reconstructed_y_low, y_low);
+    let signed_high = gate.mul_add(ctx, sign, Constant(F::from_u128(1_u128 << 127)), high);
+    [low, signed_high]
+}
+
 /// Pack at most sixteen proven little-endian bytes into one native field cell.
 fn pack_constrained_bytes_u128<F: BigPrimeField>(
     ctx: &mut halo2_base::Context<F>,
@@ -504,7 +574,7 @@ fn pack_constrained_bytes_u128<F: BigPrimeField>(
 ///
 /// Coordinates are represented in canonical non-native limbs in the scalar
 /// half.  The reciprocal point half assigns the same coordinates natively and
-/// equality-binds their exact byte decomposition before evaluating any MSM.
+/// equality-binds their exact canonical encoding before evaluating any MSM.
 #[derive(Clone, Debug)]
 pub(super) struct DeferredPointSource<C>
 where
@@ -1031,6 +1101,17 @@ where
         );
         [low, high]
     }
+    /// Return the stable deferred-source index carried by one assigned point.
+    #[cfg(test)]
+    pub(super) fn assigned_point_source_index(
+        &self,
+        point: &DeferredScalarPoint<C>,
+    ) -> Result<usize, Error> {
+        if bool::from(point.value.is_identity()) {
+            return Err(Error::InvalidInstances);
+        }
+        point.source_index.ok_or(Error::InvalidInstances)
+    }
     /// Constrain the injective two-`u128` encoding of one symbolic point.
     pub(super) fn assigned_point_poseidon_elements_v1(
         &self,
@@ -1317,15 +1398,12 @@ where
                 .expect("deferred source index was assigned by this chip");
             (source.x.clone(), source.y.clone())
         };
-        let bytes =
-            compressed_point_bytes(ctx.main(), self.coordinate.range, x.integer(), y.integer());
-        let encoding = std::array::from_fn(|half| {
-            pack_constrained_bytes_u128(
-                ctx.main(),
-                &self.scalar,
-                &bytes[half * 16..(half + 1) * 16],
-            )
-        });
+        let encoding = compressed_point_u128_limbs(
+            ctx.main(),
+            self.coordinate.range,
+            x.integer(),
+            y.integer(),
+        );
         let previous = self
             .state
             .borrow_mut()
@@ -2305,6 +2383,7 @@ where
             },
         ))
     }
+    #[cfg(test)]
     /// Constrain the canonical bytes of a reciprocal non-native scalar.
     pub(super) fn assigned_scalar_bytes(
         &self,
@@ -2315,21 +2394,14 @@ where
     }
     /// Return the canonical little-endian two-`u128` public limbs of a scalar.
     ///
-    /// The byte decomposition is constrained against the reduced non-native scalar, so these
-    /// limbs are an injective cross-parity representation rather than host-derived metadata.
+    /// The direct split is constrained against the reduced non-native scalar, so these limbs
+    /// retain the exact byte encoding without constructing and repacking 32 byte witnesses.
     pub(super) fn assigned_scalar_u128_limbs(
         &self,
         ctx: &mut SinglePhaseCoreManager<Outer<C>>,
         scalar: &Integer<C>,
     ) -> [AssignedValue<Outer<C>>; 2] {
-        let bytes = self.assigned_scalar_bytes(ctx, scalar);
-        std::array::from_fn(|half| {
-            pack_constrained_bytes_u128(
-                ctx.main(),
-                self.base.gate(),
-                &bytes[half * 16..(half + 1) * 16],
-            )
-        })
+        proper_uint_u128_limbs(ctx.main(), self.scalar.field.range, scalar)
     }
     /// Constrain the canonical compressed bytes of an assigned on-curve point.
     pub(super) fn assigned_point_bytes(
@@ -2347,14 +2419,9 @@ where
         ctx: &mut SinglePhaseCoreManager<Outer<C>>,
         point: &Point<C>,
     ) -> [AssignedValue<Outer<C>>; 2] {
-        let bytes = self.assigned_point_bytes(ctx, point);
-        std::array::from_fn(|half| {
-            pack_constrained_bytes_u128(
-                ctx.main(),
-                self.base.gate(),
-                &bytes[half * 16..(half + 1) * 16],
-            )
-        })
+        let x = self.canonical_coordinate(ctx.main(), point.x);
+        let y = self.canonical_coordinate(ctx.main(), point.y);
+        compressed_point_u128_limbs(ctx.main(), self.base.range, &x, &y)
     }
     /// Convert a canonical base-field coordinate to the exact residue used by the native Poseidon
     /// transcript. The quotient and every radix carry are boolean-constrained, so an outer-field
@@ -3405,6 +3472,409 @@ mod tests {
         check::<EpAffine>();
         check::<EqAffine>();
     }
+
+    #[test]
+    fn direct_carrier_limbs_match_retained_byte_encoding_and_reduce_constraints() {
+        fn check<C>()
+        where
+            C: CurveAffineExt,
+            Outer<C>: BigPrimeField,
+            Inner<C>: BigPrimeField,
+        {
+            const K: usize = 12;
+            let mut builder = BaseCircuitBuilder::<Outer<C>>::new(false)
+                .use_k(K)
+                .use_lookup_bits(K - 1)
+                .use_instance_columns(1);
+            let range = builder.range_chip();
+            let base = FpChip::<Outer<C>, Outer<C>>::new(&range, LIMB_BITS, LIMBS);
+            let scalar = FpChip::<Outer<C>, Inner<C>>::new(&range, LIMB_BITS, LIMBS);
+            let chip = PastaCycleEccChip::<C>::new(&base, &scalar);
+            let mut ctx = mem::take(builder.pool(0));
+            let mut public = Vec::new();
+            let mut expected = Vec::new();
+            let scalar_values = [
+                Inner::<C>::ZERO,
+                Inner::<C>::ONE,
+                -Inner::<C>::ONE,
+                Inner::<C>::from_u128((1_u128 << 86) - 1),
+                Inner::<C>::from_u128(1_u128 << 86),
+                Inner::<C>::from_u128(u128::MAX),
+                biguint_to_fe::<Inner<C>>(&(BigUint::from(1_u64) << 128)),
+                biguint_to_fe::<Inner<C>>(&(BigUint::from(1_u64) << 172)),
+                biguint_to_fe::<Inner<C>>(&(BigUint::from(1_u64) << 254)),
+            ];
+            for (index, value) in scalar_values.into_iter().enumerate() {
+                let assigned = scalar.load_private(ctx.main(), value);
+                let assigned: ProperCrtUint<Outer<C>> =
+                    scalar.enforce_less_than(ctx.main(), assigned).into();
+                let before = scalar_product_inventory(&builder, &ctx);
+                let direct = chip.assigned_scalar_u128_limbs(&mut ctx, &assigned);
+                let middle = scalar_product_inventory(&builder, &ctx);
+                // This is the exact previous implementation, using the untouched byte API.
+                let bytes = chip.assigned_scalar_bytes(&mut ctx, &assigned);
+                let legacy: [AssignedValue<Outer<C>>; 2] = std::array::from_fn(|half| {
+                    pack_constrained_bytes_u128(
+                        ctx.main(),
+                        base.gate(),
+                        &bytes[half * 16..(half + 1) * 16],
+                    )
+                });
+                let after = scalar_product_inventory(&builder, &ctx);
+                let direct_inventory = middle.checked_delta(before);
+                let legacy_inventory = after.checked_delta(middle);
+                assert!(direct_inventory.advice_cells < legacy_inventory.advice_cells);
+                assert!(direct_inventory.lookup_rows < legacy_inventory.lookup_rows);
+                assert!(direct_inventory.selectors < legacy_inventory.selectors);
+                if index == 0 {
+                    eprintln!(
+                        "KAGEMUSHA carrier scalar {} direct={direct_inventory:?} legacy={legacy_inventory:?}",
+                        std::any::type_name::<C>()
+                    );
+                }
+                let encoding = value.to_repr();
+                for (half, (actual, previous)) in direct.into_iter().zip(legacy).enumerate() {
+                    ctx.main().constrain_equal(&actual, &previous);
+                    let value = Outer::<C>::from_u128(u128::from_le_bytes(
+                        encoding.as_ref()[half * 16..(half + 1) * 16]
+                            .try_into()
+                            .expect("canonical scalar half"),
+                    ));
+                    assert_eq!(*actual.value(), value);
+                    public.push(actual);
+                    expected.push(value);
+                }
+            }
+            let generator = C::generator();
+            let doubled = (generator.to_curve() + generator.to_curve()).to_affine();
+            for (index, point) in [
+                generator,
+                (-generator.to_curve()).to_affine(),
+                doubled,
+                (-doubled.to_curve()).to_affine(),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let assigned = chip.assign_point(&mut ctx, point);
+                let before = scalar_product_inventory(&builder, &ctx);
+                let direct = chip.assigned_point_u128_limbs(&mut ctx, &assigned);
+                let middle = scalar_product_inventory(&builder, &ctx);
+                let bytes = chip.assigned_point_bytes(&mut ctx, &assigned);
+                let legacy: [AssignedValue<Outer<C>>; 2] = std::array::from_fn(|half| {
+                    pack_constrained_bytes_u128(
+                        ctx.main(),
+                        base.gate(),
+                        &bytes[half * 16..(half + 1) * 16],
+                    )
+                });
+                let after = scalar_product_inventory(&builder, &ctx);
+                let direct_inventory = middle.checked_delta(before);
+                let legacy_inventory = after.checked_delta(middle);
+                assert!(direct_inventory.advice_cells < legacy_inventory.advice_cells);
+                assert!(direct_inventory.lookup_rows < legacy_inventory.lookup_rows);
+                assert!(direct_inventory.selectors < legacy_inventory.selectors);
+                if index == 0 {
+                    eprintln!(
+                        "KAGEMUSHA carrier point {} direct={direct_inventory:?} legacy={legacy_inventory:?}",
+                        std::any::type_name::<C>()
+                    );
+                }
+                let encoding = point.to_bytes();
+                for (half, (actual, previous)) in direct.into_iter().zip(legacy).enumerate() {
+                    ctx.main().constrain_equal(&actual, &previous);
+                    let value = Outer::<C>::from_u128(u128::from_le_bytes(
+                        encoding.as_ref()[half * 16..(half + 1) * 16]
+                            .try_into()
+                            .expect("canonical compressed point half"),
+                    ));
+                    assert_eq!(*actual.value(), value);
+                    public.push(actual);
+                    expected.push(value);
+                }
+            }
+            *builder.pool(0) = ctx;
+            builder.assigned_instances = vec![public];
+            builder.calculate_params(Some(9));
+            MockProver::run(K as u32, &builder.deep_clone(), vec![expected.clone()])
+                .expect("direct carrier encoding mock prover")
+                .assert_satisfied();
+            for index in [0, 1, expected.len() - 2, expected.len() - 1] {
+                let mut changed = expected.clone();
+                changed[index] += Outer::<C>::ONE;
+                assert!(
+                    MockProver::run(K as u32, &builder.deep_clone(), vec![changed])
+                        .expect("changed carrier limb mock prover")
+                        .verify()
+                        .is_err(),
+                    "each scalar/point low and high limb must remain constrained"
+                );
+            }
+            let mut changed_sign = expected;
+            let high = changed_sign
+                .last_mut()
+                .expect("last compressed point high limb");
+            *high =
+                biguint_to_fe::<Outer<C>>(&(fe_to_biguint(high) ^ (BigUint::from(1_u64) << 127)));
+            assert!(
+                MockProver::run(K as u32, &builder.deep_clone(), vec![changed_sign])
+                    .expect("changed compressed sign mock prover")
+                    .verify()
+                    .is_err()
+            );
+        }
+        check::<EqAffine>();
+        check::<EpAffine>();
+    }
+
+    #[test]
+    fn direct_carrier_limbs_reject_coordinated_output_witness_mutations() {
+        fn replace_output_copies<F: BigPrimeField>(
+            builder: &mut BaseCircuitBuilder<F>,
+            target: AssignedValue<F>,
+            replacement: F,
+        ) {
+            let target = target.cell.expect("assigned carrier mutation target");
+            let equalities = builder
+                .core()
+                .copy_manager
+                .lock()
+                .expect("carrier copy manager")
+                .advice_equalities
+                .clone();
+            let mut cells = std::collections::BTreeSet::from([target]);
+            loop {
+                let previous = cells.len();
+                for (left, right) in &equalities {
+                    if cells.contains(left) || cells.contains(right) {
+                        cells.insert(*left);
+                        cells.insert(*right);
+                    }
+                }
+                if previous == cells.len() {
+                    break;
+                }
+            }
+            for cell in &cells {
+                assert_eq!(cell.type_id(), target.type_id());
+                assert_eq!(cell.context_id(), 0);
+                builder
+                    .main(0)
+                    .replace_advice_with_trivial(cell.offset(), replacement);
+            }
+            let replacement = builder
+                .main(0)
+                .get(isize::try_from(target.offset()).expect("carrier mutation offset"))
+                .value;
+            for manager in builder.lookup_manager() {
+                let mut lookups = manager
+                    .cells_to_lookup
+                    .lock()
+                    .expect("carrier lookup cells");
+                for row in lookups.values_mut().flatten() {
+                    for lookup in row {
+                        if lookup.cell.is_some_and(|cell| cells.contains(&cell)) {
+                            lookup.value = replacement;
+                        }
+                    }
+                }
+            }
+            for column in &mut builder.assigned_instances {
+                for instance in column {
+                    if instance.cell.is_some_and(|cell| cells.contains(&cell)) {
+                        instance.value = replacement;
+                    }
+                }
+            }
+        }
+
+        fn check<C>()
+        where
+            C: CurveAffineExt,
+            Outer<C>: BigPrimeField,
+            Inner<C>: BigPrimeField,
+        {
+            const K: usize = 10;
+            let mut builder = BaseCircuitBuilder::<Outer<C>>::new(false)
+                .use_k(K)
+                .use_lookup_bits(K - 1)
+                .use_instance_columns(1);
+            let range = builder.range_chip();
+            let base = FpChip::<Outer<C>, Outer<C>>::new(&range, LIMB_BITS, LIMBS);
+            let scalar = FpChip::<Outer<C>, Inner<C>>::new(&range, LIMB_BITS, LIMBS);
+            let chip = PastaCycleEccChip::<C>::new(&base, &scalar);
+            let mut ctx = mem::take(builder.pool(0));
+            let scalar_value = -Inner::<C>::ONE;
+            let assigned_scalar = scalar.load_private(ctx.main(), scalar_value);
+            let assigned_scalar: ProperCrtUint<Outer<C>> =
+                scalar.enforce_less_than(ctx.main(), assigned_scalar).into();
+            let assigned_point = chip.assign_point(&mut ctx, C::generator());
+            let mut canonical_inputs = assigned_scalar.limbs().to_vec();
+            canonical_inputs.extend([
+                *assigned_scalar.native(),
+                assigned_point.x.0,
+                assigned_point.y.0,
+            ]);
+            // This circuit contains only the new encoding path, with no old-byte equality.
+            let scalar_limbs = chip.assigned_scalar_u128_limbs(&mut ctx, &assigned_scalar);
+            let point_limbs = chip.assigned_point_u128_limbs(&mut ctx, &assigned_point);
+            let outputs = [
+                scalar_limbs[0],
+                scalar_limbs[1],
+                point_limbs[0],
+                point_limbs[1],
+            ];
+            let expected = outputs.map(|cell| *cell.value()).to_vec();
+            *builder.pool(0) = ctx;
+            builder.assigned_instances = vec![outputs.to_vec()];
+            builder.calculate_params(Some(9));
+            MockProver::run(K as u32, &builder.deep_clone(), vec![expected.clone()])
+                .expect("direct-only carrier positive control")
+                .assert_satisfied();
+            for (index, sign_flip) in [(0, false), (1, false), (2, false), (3, false), (3, true)] {
+                let mut changed = builder.deep_clone();
+                let mut changed_expected = expected.clone();
+                changed_expected[index] = if sign_flip {
+                    biguint_to_fe::<Outer<C>>(
+                        &(fe_to_biguint(&expected[index]) ^ (BigUint::from(1_u64) << 127)),
+                    )
+                } else {
+                    expected[index] + Outer::<C>::ONE
+                };
+                replace_output_copies(&mut changed, outputs[index], changed_expected[index]);
+                for input in &canonical_inputs {
+                    let cell = input.cell.expect("canonical input cell");
+                    let actual = changed
+                        .main(0)
+                        .get(isize::try_from(cell.offset()).expect("canonical input offset"));
+                    assert_eq!(actual.value(), input.value(), "canonical input stays fixed");
+                }
+                let failures = MockProver::run(K as u32, &changed, vec![changed_expected])
+                    .expect("coordinated carrier witness mutation")
+                    .verify()
+                    .expect_err("changed carrier witnesses must fail their defining relation");
+                assert!(
+                    failures.iter().any(|failure| matches!(
+                        failure,
+                        halo2_base::halo2_proofs::dev::VerifyFailure::ConstraintNotSatisfied { .. }
+                    )),
+                    "expected an arithmetic failure, not only a stale copy/instance: {failures:?}"
+                );
+            }
+        }
+        check::<EqAffine>();
+        check::<EpAffine>();
+    }
+
+    #[test]
+    fn direct_carrier_limbs_preserve_modulus_and_encoding_bounds() {
+        fn check<F, P>()
+        where
+            F: BigPrimeField,
+            P: BigPrimeField,
+        {
+            const K: usize = 10;
+            for (value, enforce_modulus, point) in [
+                (modulus::<P>(), true, false),
+                (modulus::<P>() + BigUint::from(1_u64), true, false),
+                (BigUint::from(1_u64) << 256, false, false),
+                (BigUint::from(1_u64) << 257, false, false),
+                (BigUint::from(1_u64) << 255, false, true),
+            ] {
+                let mut builder = BaseCircuitBuilder::<F>::new(false)
+                    .use_k(K)
+                    .use_lookup_bits(K - 1);
+                let range = builder.range_chip();
+                let chip = FpChip::<F, P>::new(&range, LIMB_BITS, LIMBS);
+                let ctx = builder.main(0);
+                let integer = chip.load_constant_uint(ctx, value);
+                if enforce_modulus {
+                    chip.enforce_less_than_p(ctx, integer.clone());
+                }
+                if point {
+                    let y = chip.load_constant(ctx, P::ONE);
+                    compressed_point_u128_limbs(ctx, &range, &integer, &y);
+                } else {
+                    proper_uint_u128_limbs(ctx, &range, &integer);
+                }
+                builder.calculate_params(Some(9));
+                assert!(
+                    MockProver::run(K as u32, &builder, vec![])
+                        .expect("noncanonical carrier integer mock prover")
+                        .verify()
+                        .is_err(),
+                    "the represented modulus and exact encoding ceiling remain enforced"
+                );
+            }
+        }
+        check::<Fp, Fq>();
+        check::<Fq, Fp>();
+    }
+
+    #[test]
+    fn direct_source_commitment_encoding_matches_bytes_and_reuses_original_cells() {
+        fn check<C>()
+        where
+            C: CurveAffineExt,
+            Outer<C>: BigPrimeField,
+            Inner<C>: BigPrimeField,
+        {
+            const K: usize = 12;
+            let mut builder = BaseCircuitBuilder::<Inner<C>>::new(false)
+                .use_k(K)
+                .use_lookup_bits(K - 1);
+            let range = builder.range_chip();
+            let coordinate = FpChip::<Inner<C>, Outer<C>>::new(&range, LIMB_BITS, LIMBS);
+            let scalar = FpChip::<Inner<C>, Inner<C>>::new(&range, LIMB_BITS, LIMBS);
+            let chip = DeferredScalarEccChip::<C>::new(&coordinate, &scalar);
+            let mut ctx = mem::take(builder.pool(0));
+            for point in [C::generator(), (-C::generator().to_curve()).to_affine()] {
+                let assigned = chip.assign_point(&mut ctx, point);
+                let source_index = assigned.source_index.expect("assigned source");
+                let before = scalar_product_inventory(&builder, &ctx);
+                let actual = chip.source_commitment_encoding(&mut ctx, source_index);
+                let after = scalar_product_inventory(&builder, &ctx);
+                let cached = chip.source_commitment_encoding(&mut ctx, source_index);
+                assert_eq!(actual.map(|cell| cell.cell), cached.map(|cell| cell.cell));
+                assert_eq!(after, scalar_product_inventory(&builder, &ctx));
+                assert!(
+                    chip.state.borrow().sources[source_index]
+                        .transcript_encoding
+                        .is_none()
+                );
+                let bytes = chip
+                    .assigned_point_bytes(&mut ctx, &assigned)
+                    .expect("canonical source byte encoding");
+                let legacy: [AssignedValue<Inner<C>>; 2] = std::array::from_fn(|half| {
+                    pack_constrained_bytes_u128(
+                        ctx.main(),
+                        range.gate(),
+                        &bytes[half * 16..(half + 1) * 16],
+                    )
+                });
+                let legacy_inventory =
+                    scalar_product_inventory(&builder, &ctx).checked_delta(after);
+                let direct_inventory = after.checked_delta(before);
+                assert!(direct_inventory.advice_cells < legacy_inventory.advice_cells);
+                assert!(direct_inventory.lookup_rows < legacy_inventory.lookup_rows);
+                for (actual, previous) in actual.into_iter().zip(legacy) {
+                    ctx.main().constrain_equal(&actual, &previous);
+                }
+                eprintln!(
+                    "KAGEMUSHA source commitment {} direct={direct_inventory:?} legacy={legacy_inventory:?}",
+                    std::any::type_name::<C>()
+                );
+            }
+            *builder.pool(0) = ctx;
+            builder.calculate_params(Some(9));
+            MockProver::run(K as u32, &builder, vec![])
+                .expect("direct source commitment cache mock prover")
+                .assert_satisfied();
+        }
+        check::<EqAffine>();
+        check::<EpAffine>();
+    }
+
     #[test]
     fn reciprocal_residual_enforcement_supports_both_pasta_parities() {
         let eq_generator = EqAffine::generator();

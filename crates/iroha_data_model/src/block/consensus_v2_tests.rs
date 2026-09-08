@@ -344,6 +344,7 @@ mod tests {
             descriptor_hash: Hash::new(b"native leaf descriptor"),
             proposal_hash: Hash::new(b"native leaf proposal"),
             settlement_hash: HashOf::from_untyped_unchecked(Hash::new(b"native leaf settlement")),
+            previous_native_settlement_hash: None,
             members: vec![member(1, 0x11), member(2, 0x22)],
             application_block_height: 21,
             application_block_hash: HashOf::from_untyped_unchecked(Hash::new(
@@ -352,6 +353,46 @@ mod tests {
             executed_block_wire_hash: Hash::new(b"native leaf executed wire"),
         };
         assert_eq!(leaf.validate(), Ok(()));
+        let previous_native = HashOf::from_untyped_unchecked(Hash::new(b"previous Native control"));
+        let first_native_hash = HashOf::new(&leaf);
+        leaf.previous_native_settlement_hash = Some(previous_native);
+        assert_eq!(
+            leaf.validate(),
+            Ok(()),
+            "later lane slots may link across ordinary blocks"
+        );
+        assert_ne!(
+            HashOf::new(&leaf),
+            first_native_hash,
+            "manifest authenticates the Native link"
+        );
+        let linked_bytes = norito::encode_canonical(&leaf).expect("encode linked Native leaf");
+        assert_eq!(
+            norito::decode_from_bytes::<NativeAmxApplicationManifestLeafV1>(&linked_bytes)
+                .expect("decode linked Native leaf"),
+            leaf
+        );
+        leaf.previous_native_settlement_hash = Some(HashOf::from_untyped_unchecked(
+            Hash::prehashed([0; Hash::LENGTH]),
+        ));
+        assert_eq!(
+            leaf.validate(),
+            Err(ValidationError::InvalidNativeAmxApplicationManifestLeaf)
+        );
+        leaf.previous_native_settlement_hash = Some(previous_native);
+        leaf.participant_height = 1;
+        leaf.predecessor_height = 0;
+        leaf.predecessor_descriptor_hash = None;
+        assert_eq!(
+            leaf.validate(),
+            Err(ValidationError::InvalidNativeAmxApplicationManifestLeaf),
+            "lane genesis cannot name a previous Native control"
+        );
+        leaf.previous_native_settlement_hash = None;
+        assert_eq!(leaf.validate(), Ok(()));
+        leaf.participant_height = 8;
+        leaf.predecessor_height = 7;
+        leaf.predecessor_descriptor_hash = Some(Hash::new(b"native leaf predecessor"));
         leaf.members.swap(0, 1);
         assert_eq!(
             leaf.validate(),
@@ -560,6 +601,7 @@ mod tests {
             settlement_hash: HashOf::from_untyped_unchecked(Hash::new(
                 b"current native leaf settlement",
             )),
+            previous_native_settlement_hash: None,
             members: Vec::new(),
             application_block_height: 1,
             application_block_hash: HashOf::from_untyped_unchecked(Hash::new(
@@ -1045,20 +1087,14 @@ mod tests {
             DualQuorum::from_roster(&empty.roster),
             Err(ValidationError::EmptyRoster)
         );
-        assert_eq!(
-            empty.validate(),
-            Err(ValidationError::InvalidKagemushaMintFinalityEpochRoster)
-        );
+        assert_eq!(empty.validate(), Err(ValidationError::EmptyRoster));
         let mut too_small = context(&[1, 1, 1, 1]);
         too_small.roster.truncate(MIN_VALIDATORS_PER_HEIGHT - 1);
         assert_eq!(
             DualQuorum::from_roster(&too_small.roster),
             Err(ValidationError::RosterTooSmall)
         );
-        assert_eq!(
-            too_small.validate(),
-            Err(ValidationError::InvalidKagemushaMintFinalityEpochRoster)
-        );
+        assert_eq!(too_small.validate(), Err(ValidationError::RosterTooSmall));
         let mut invalid_geometry = context(&[1, 1, 1, 1]);
         invalid_geometry.roster.push(ValidatorPower {
             validator: peer(0xFE),
@@ -1071,7 +1107,7 @@ mod tests {
         );
         assert_eq!(
             invalid_geometry.validate(),
-            Err(ValidationError::InvalidKagemushaMintFinalityEpochRoster)
+            Err(ValidationError::InvalidCommitteeGeometry)
         );
         let mut invalid = context(&[1, 1, 1, 1]);
         invalid.roster[1].validator = invalid.roster[0].validator.clone();
@@ -1079,8 +1115,14 @@ mod tests {
             DualQuorum::from_roster(&invalid.roster),
             Err(ValidationError::DuplicateValidator)
         );
+        assert_eq!(invalid.validate(), Err(ValidationError::DuplicateValidator));
+        let mut invalid_mint_roster = context(&[1, 1, 1, 1]);
+        invalid_mint_roster
+            .kagemusha_mint_finality_epoch_roster
+            .validators
+            .clear();
         assert_eq!(
-            invalid.validate(),
+            invalid_mint_roster.validate(),
             Err(ValidationError::InvalidKagemushaMintFinalityEpochRoster)
         );
         let mut invalid = context(&[1, 1, 1, 1]);
@@ -1098,10 +1140,7 @@ mod tests {
             DualQuorum::from_roster(&oversized.roster),
             Err(ValidationError::RosterTooLarge)
         );
-        assert_eq!(
-            oversized.validate(),
-            Err(ValidationError::InvalidKagemushaMintFinalityEpochRoster)
-        );
+        assert_eq!(oversized.validate(), Err(ValidationError::RosterTooLarge));
         let largest = context(&vec![1; MAX_VALIDATORS_PER_HEIGHT]);
         assert_eq!(largest.validate(), Ok(()));
         let mut odd_rs16_symbols = context(&[1, 1, 1, 1]);

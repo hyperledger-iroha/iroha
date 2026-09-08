@@ -355,7 +355,7 @@ fn instruction_box_encoded_len_exact_matches_norito() {
         .len()
         - norito::core::Header::SIZE;
     assert_eq!(
-        norito::core::NoritoSerialize::encoded_len_exact(&boxed)
+        norito::core::SerializePayload::encoded_len_exact(&boxed)
             .expect("instruction box exact len"),
         expected
     );
@@ -363,8 +363,8 @@ fn instruction_box_encoded_len_exact_matches_norito() {
 #[test]
 fn instruction_box_len_hint_does_not_force_exact_inner_len() {
     let boxed = InstructionBox::from(CustomInstruction::new("custom length hint"));
-    let exact = norito::core::NoritoSerialize::encoded_len_exact(&boxed);
-    let hint = norito::core::NoritoSerialize::encoded_len_hint(&boxed)
+    let exact = norito::core::SerializePayload::encoded_len_exact(&boxed);
+    let hint = norito::core::SerializePayload::encoded_len_hint(&boxed)
         .expect("instruction box length hint");
     let actual = norito::core::to_bytes(&boxed)
         .expect("serialize instruction box")

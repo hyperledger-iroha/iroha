@@ -1802,7 +1802,7 @@ where
     ];
     debug_assert_eq!(public.len(), PUBLIC_INSTANCE_COUNT);
     builder.assigned_instances = vec![public];
-    builder.calculate_params(Some(MINIMUM_UNUSABLE_ROWS));
+    super::base_packing::finalize_base_params_v1(&mut builder, MINIMUM_UNUSABLE_ROWS)?;
     Ok((
         builder,
         KagemushaAssignedStateRelationV1 {

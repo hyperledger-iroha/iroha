@@ -10,13 +10,15 @@
 
 use std::collections::BTreeMap;
 
+#[cfg(test)]
+use iroha_data_model::isi::{KagemushaFinalityTrustAnchorV1, KagemushaTopUpResultV1};
 use iroha_data_model::{
     NetworkId,
     account::AccountId,
     asset::{AssetDefinitionId, AssetId, AssetValue},
     isi::{
-        KagemushaFinalityTrustAnchorV1, KagemushaOperationKindV1, KagemushaRedemptionRequestV1,
-        KagemushaReserveReceiptV1, KagemushaTopUpRequestV1, KagemushaTopUpResultV1,
+        KagemushaOperationKindV1, KagemushaRedemptionRequestV1, KagemushaReserveReceiptV1,
+        KagemushaTopUpRequestV1,
     },
     kagemusha::{
         KAGEMUSHA_ASSET_SCALE_MAX_V1, KAGEMUSHA_WIRE_VERSION_V1, KagemushaLifecycleBindingV1,
@@ -28,6 +30,7 @@ use iroha_data_model::{
 use iroha_primitives::numeric::{Numeric, Quantity};
 use norito::codec::{Decode, Encode};
 use norito::derive::{JsonDeserialize, JsonSerialize};
+#[cfg(test)]
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 
@@ -37,6 +40,7 @@ use crate::zk::kagemusha_v1_recursion::VerifiedKagemushaRedemptionProofV1;
 /// Version of pooled Kagemusha reserve state and durable records.
 pub const KAGEMUSHA_RESERVE_VERSION_V1: u16 = 1;
 
+#[cfg(test)]
 const TOP_UP_RESULT_WIRE_DIGEST_DOMAIN_V1: &[u8] =
     b"iroha:kagemusha:v1:reserve:top-up-result-wire\0";
 
@@ -402,6 +406,8 @@ impl KagemushaTopUpIssuanceIntentV1 {
 ///
 /// `verified_anchor_identity` records which locally authenticated context admitted
 /// the result. It cannot authenticate itself during snapshot hydration.
+/// This attachment model exercises finality binding in reserve unit tests.
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, JsonDeserialize, JsonSerialize)]
 pub struct KagemushaMintFinalityAttachmentV1 {
     /// Attachment layout version.
@@ -703,6 +709,7 @@ pub struct KagemushaTopUpPlanV1 {
 
 impl KagemushaTopUpPlanV1 {
     /// Return the pool head that must still be present at commit.
+    #[cfg(test)]
     #[must_use]
     pub fn expected_pool_head(&self) -> Option<[u8; 32]> {
         self.expected_pool_head
@@ -731,12 +738,6 @@ pub struct KagemushaRedemptionPlanV1 {
 }
 
 impl KagemushaRedemptionPlanV1 {
-    /// Return the pool head that must still be present at commit.
-    #[must_use]
-    pub fn expected_pool_head(&self) -> Option<[u8; 32]> {
-        self.expected_pool_head
-    }
-
     /// Borrow the one projected pool entry to write.
     #[must_use]
     pub fn next_pool(&self) -> &KagemushaReservePoolV1 {
@@ -771,6 +772,7 @@ pub enum KagemushaReservePlanOutcomeV1 {
 }
 
 /// Result of committing a prepared reserve operation.
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum KagemushaReserveCommitOutcomeV1 {
     /// A new operation and authenticated pool head were installed.
@@ -780,6 +782,7 @@ pub enum KagemushaReserveCommitOutcomeV1 {
 }
 
 /// Result of attaching terminal consensus finality to an applied top-up.
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum KagemushaMintFinalizationOutcomeV1 {
     /// A new exact local result/outbox attachment must be persisted.
@@ -813,6 +816,7 @@ impl VerifiedKagemushaTopUpIntentV1 {
         &self.intent
     }
 
+    #[cfg(test)]
     fn mint_statement(
         &self,
         minted_at_ms: u64,
@@ -830,12 +834,14 @@ impl VerifiedKagemushaTopUpIntentV1 {
 }
 
 /// Fully admitted mint result and canonical finality identity used to verify it.
+#[cfg(test)]
 #[derive(Clone, Debug)]
 pub struct VerifiedKagemushaMintFinalizationV1 {
     result: KagemushaTopUpResultV1,
     trusted_anchor_identity: KagemushaFinalityTrustAnchorV1,
 }
 
+#[cfg(test)]
 impl VerifiedKagemushaMintFinalizationV1 {
     /// Seal a terminal result after verification against locally pinned consensus context.
     ///
@@ -859,12 +865,6 @@ impl VerifiedKagemushaMintFinalizationV1 {
     #[must_use]
     pub fn operation_id(&self) -> [u8; 32] {
         self.result.request.operation_id
-    }
-
-    /// Borrow the exact finalized top-up result.
-    #[must_use]
-    pub fn result(&self) -> &KagemushaTopUpResultV1 {
-        &self.result
     }
 
     /// Return the canonical finality identity used at admission.
@@ -908,6 +908,7 @@ impl VerifiedKagemushaRedemptionV1 {
 }
 
 /// Resolve a persisted finality identity from locally authenticated chain state.
+#[cfg(test)]
 pub trait KagemushaFinalityAnchorResolverV1 {
     /// Resolve an identity only when canonical local consensus state trusts it.
     fn resolve(
@@ -916,6 +917,7 @@ pub trait KagemushaFinalityAnchorResolverV1 {
     ) -> Option<KagemushaFinalityTrustAnchorV1>;
 }
 
+#[cfg(test)]
 impl<F> KagemushaFinalityAnchorResolverV1 for F
 where
     F: Fn(&KagemushaFinalityTrustAnchorV1) -> Option<KagemushaFinalityTrustAnchorV1>,
@@ -966,66 +968,18 @@ impl KagemushaReserveBookV1 {
         }
     }
 
-    /// Return the reserve-state version.
-    #[must_use]
-    pub fn version(&self) -> u16 {
-        self.version
-    }
-
     /// Return the number of durably committed public operations.
+    #[cfg(test)]
     #[must_use]
     pub fn operation_count(&self) -> usize {
         self.operations.len()
     }
 
     /// Look up one idempotent operation record.
+    #[cfg(test)]
     #[must_use]
     pub fn operation(&self, operation_id: &[u8; 32]) -> Option<&KagemushaReserveOperationRecordV1> {
         self.operations.get(operation_id)
-    }
-
-    /// Look up the operation that emitted a mint credit.
-    #[must_use]
-    pub fn operation_for_mint_credit(
-        &self,
-        credit_id: &[u8; 32],
-    ) -> Option<&KagemushaReserveOperationRecordV1> {
-        self.mint_credit_operations
-            .get(credit_id)
-            .and_then(|operation_id| self.operations.get(operation_id))
-    }
-
-    /// Look up the operation that consumed an issuance commitment.
-    #[must_use]
-    pub fn operation_for_issuance(
-        &self,
-        issuance_commitment: &[u8; 32],
-    ) -> Option<&KagemushaReserveOperationRecordV1> {
-        self.issuance_operations
-            .get(issuance_commitment)
-            .and_then(|operation_id| self.operations.get(operation_id))
-    }
-
-    /// Look up the operation that emitted a redemption identifier.
-    #[must_use]
-    pub fn operation_for_redemption(
-        &self,
-        redemption_id: &[u8; 32],
-    ) -> Option<&KagemushaReserveOperationRecordV1> {
-        self.redemption_id_operations
-            .get(redemption_id)
-            .and_then(|operation_id| self.operations.get(operation_id))
-    }
-
-    /// Look up the operation that consumed a terminal nullifier.
-    #[must_use]
-    pub fn operation_for_terminal_nullifier(
-        &self,
-        terminal_nullifier: &[u8; 32],
-    ) -> Option<&KagemushaReserveOperationRecordV1> {
-        self.terminal_nullifier_operations
-            .get(terminal_nullifier)
-            .and_then(|operation_id| self.operations.get(operation_id))
     }
 
     /// Look up one canonical pool without creating it.
@@ -1033,6 +987,7 @@ impl KagemushaReserveBookV1 {
     /// # Errors
     ///
     /// Returns an encoding error if the canonical key cannot be derived.
+    #[cfg(test)]
     pub fn pool(
         &self,
         network_id: NetworkId,
@@ -1048,6 +1003,7 @@ impl KagemushaReserveBookV1 {
     /// # Errors
     ///
     /// Returns an error if key derivation fails or persisted totals underflow.
+    #[cfg(test)]
     pub fn available(
         &self,
         network_id: NetworkId,
@@ -1066,6 +1022,7 @@ impl KagemushaReserveBookV1 {
     /// # Errors
     ///
     /// Returns an error for conflicts, malformed context, scale mismatch, or overflow.
+    #[cfg(test)]
     pub(in crate::smartcontracts::isi) fn plan_top_up(
         &self,
         verified: &VerifiedKagemushaTopUpIntentV1,
@@ -1099,6 +1056,7 @@ impl KagemushaReserveBookV1 {
     /// # Errors
     ///
     /// Returns an error for replay, conflicts, insufficient reserve, or overflow.
+    #[cfg(test)]
     pub(in crate::smartcontracts::isi) fn plan_redemption(
         &self,
         verified: &VerifiedKagemushaRedemptionV1,
@@ -1139,6 +1097,7 @@ impl KagemushaReserveBookV1 {
     /// # Errors
     ///
     /// Returns an error for a stale plan, conflict, replay, or invalid projection.
+    #[cfg(test)]
     pub(in crate::smartcontracts::isi) fn commit(
         &mut self,
         plan: KagemushaReserveMutationPlanV1,
@@ -1466,7 +1425,9 @@ pub(crate) fn validate_persisted_reserve_custody_v1<'a>(
 ///
 /// # Errors
 ///
-/// Returns an error for malformed input, conflicts, scale mismatch, or checked overflow.
+/// Returns an error for malformed input, conflicts, a new certified commit outside the
+/// authenticated credential/profile lifetime, scale mismatch, or checked overflow. Exact retries
+/// retain their original receipt's certified time and can recover after later expiry.
 pub(in crate::smartcontracts::isi) fn plan_top_up_from_entries(
     verified: &VerifiedKagemushaTopUpIntentV1,
     context: KagemushaReserveCommitContextV1,
@@ -1475,16 +1436,22 @@ pub(in crate::smartcontracts::isi) fn plan_top_up_from_entries(
     verified.intent.validate()?;
     context.validate()?;
     let request = &verified.intent.request;
-    let mint_statement_digest = verified
-        .authorization
-        .mint_statement_digest(request, context.committed_at_ms)
-        .map_err(KagemushaReserveErrorV1::InvalidWire)?;
     if let Some(existing) = read_set.existing_operation {
         return match existing {
             KagemushaReserveOperationRecordV1::TopUp(existing)
                 if existing.same_request(&verified.intent) =>
             {
                 existing.validate_basic()?;
+                // Retry recovery authenticates the exact original receipt under its certified
+                // commit time. It creates no new mint and must not re-date the old effect to
+                // this later block, after the credential/profile may have expired.
+                let historical_digest = verified
+                    .authorization
+                    .mint_statement_digest(request, existing.reserve_receipt.committed_at_ms)
+                    .map_err(KagemushaReserveErrorV1::InvalidWire)?;
+                if historical_digest != existing.reserve_receipt.mint_statement_digest {
+                    return Err(state_invariant("top_up_historical_mint_statement_mismatch"));
+                }
                 if read_set.credit_operation != Some(existing.operation_id)
                     || read_set.issuance_operation != Some(existing.operation_id)
                 {
@@ -1499,6 +1466,11 @@ pub(in crate::smartcontracts::isi) fn plan_top_up_from_entries(
             }),
         };
     }
+    // Only a new effect is admitted against the incoming authoritative block time.
+    let mint_statement_digest = verified
+        .authorization
+        .mint_statement_digest(request, context.committed_at_ms)
+        .map_err(KagemushaReserveErrorV1::InvalidWire)?;
     ensure_entry_unbound(read_set.credit_operation, request.credit_id, |credit_id| {
         KagemushaReserveErrorV1::MintCreditConflict { credit_id }
     })?;
@@ -1845,6 +1817,7 @@ pub(in crate::smartcontracts::isi) fn validate_redemption_commit_entries(
 /// # Errors
 ///
 /// Returns an error for result/intent mismatch or different already-finalized bytes.
+#[cfg(test)]
 pub(in crate::smartcontracts::isi) fn finalize_mint_credit_record(
     existing: &KagemushaTopUpRecordV1,
     existing_attachment: Option<&KagemushaMintFinalityAttachmentV1>,
@@ -1886,6 +1859,7 @@ pub(in crate::smartcontracts::isi) fn finalize_mint_credit_record(
 ///
 /// Returns an error when the immutable WSV record differs, the anchor cannot be resolved exactly,
 /// or typed finality fails cryptographic verification.
+#[cfg(test)]
 pub fn validate_mint_finality_attachment_with_anchor(
     record: &KagemushaTopUpRecordV1,
     attachment: &KagemushaMintFinalityAttachmentV1,
@@ -1982,6 +1956,17 @@ fn mint_statement_from_request(
     request: &KagemushaTopUpRequestV1,
     minted_at_ms: u64,
 ) -> Result<KagemushaMintCreditStatementV1, KagemushaReserveErrorV1> {
+    // This adapter rebuilds retained records without a runtime profile catalog. The exact
+    // credential is already in the request digest; profile authentication remains mandatory
+    // through VerifiedKagemushaTopUpAuthorizationV1 for both new plans and receipt retries.
+    if minted_at_ms == 0
+        || minted_at_ms < request.hardware_credential.issued_at_ms
+        || minted_at_ms >= request.hardware_credential.expires_at_ms
+    {
+        return Err(KagemushaReserveErrorV1::InvalidWire(
+            "top-up certified mint time is outside the credential lifetime".to_owned(),
+        ));
+    }
     let authorization_context_digest = request
         .mint_authorization_context()
         .canonical_digest()
@@ -2106,6 +2091,7 @@ fn receipt_matches_pool_projection(
         && next.latest_receipt.as_ref() == Some(receipt)
 }
 
+#[cfg(test)]
 fn validate_mint_finality_attachment(
     record: &KagemushaTopUpRecordV1,
     attachment: &KagemushaMintFinalityAttachmentV1,
@@ -2159,7 +2145,8 @@ fn validate_mint_finality_attachment(
     Ok(())
 }
 
-fn canonical_wire_digest<T: Encode>(
+#[cfg(test)]
+fn canonical_wire_digest<T: norito::NoritoSerialize>(
     domain: &[u8],
     value: &T,
 ) -> Result<[u8; 32], KagemushaReserveErrorV1> {
@@ -2906,7 +2893,9 @@ mod tests {
             encrypted_credit: request.encrypted_credit.clone(),
             artifact_manifest_digest: request.artifact_manifest_digest,
         };
-        let height = u64::from(nonce) + 100;
+        // Each nonce creates an independent first-height finality context; a later height
+        // would require an actual parent CommitQC or an authenticated snapshot anchor.
+        let height = 1_u64;
         let context = HeightContext {
             network_id: request.network_id,
             protocol_version: PROTOCOL_VERSION,
@@ -2933,6 +2922,7 @@ mod tests {
             },
             leader_seed: [nonce; 32],
         };
+        context.validate().expect("canonical first-height context");
         let subject = BlockSubject {
             parent_block_hash: None,
             block_hash: HashOf::from_untyped_unchecked(Hash::new([nonce, 3])),
@@ -3393,6 +3383,156 @@ mod tests {
             },
         )
         .expect("canonical anchor re-authenticates result");
+    }
+
+    #[test]
+    fn top_up_certified_time_boundaries_reject_before_reserve_mutation() {
+        // The fixture mocks prior recursive admission; the real reserve planner, arithmetic,
+        // canonical request/profile validation, and commit paths below are production code.
+        let verified = verified_top_up(1, 1, 50);
+        let mut book = KagemushaReserveBookV1::new();
+        let empty = book.clone();
+        for time in [1, 499, 90_000, 100_000, u64::MAX] {
+            let context = KagemushaReserveCommitContextV1::after_block_context_verification(
+                tagged_id(0x41, time),
+                time,
+            )
+            .expect("authoritative nonzero block context");
+            assert!(matches!(
+                book.plan_top_up(&verified, context),
+                Err(KagemushaReserveErrorV1::InvalidWire(_))
+            ));
+            assert!(mint_statement_from_request(&verified.intent.request, time).is_err());
+            assert_eq!(
+                book, empty,
+                "invalid certified time must not create a pool, operation, or reverse index"
+            );
+        }
+        assert!(
+            KagemushaReserveCommitContextV1::after_block_context_verification([1; 32], 0).is_err()
+        );
+        for time in [500, 89_999] {
+            let context = KagemushaReserveCommitContextV1::after_block_context_verification(
+                tagged_id(0x41, time),
+                time,
+            )
+            .unwrap();
+            let plan = expect_plan(
+                book.plan_top_up(&verified, context)
+                    .expect("inclusive start, exclusive end"),
+            );
+            assert_eq!(book, empty, "planning is read-only");
+            let record = book.commit(plan).expect("commit time-valid top-up");
+            let KagemushaReserveCommitOutcomeV1::Committed(
+                KagemushaReserveOperationRecordV1::TopUp(record),
+            ) = record
+            else {
+                panic!("expected new top-up");
+            };
+            assert_eq!(record.reserve_receipt.committed_at_ms, time);
+            assert_eq!(
+                mint_statement_from_request(&verified.intent.request, time)
+                    .unwrap()
+                    .minted_at_ms,
+                time
+            );
+            assert_eq!(
+                book.available(network(), asset(), asset_incarnation(1))
+                    .unwrap(),
+                50
+            );
+            book = KagemushaReserveBookV1::new();
+        }
+    }
+
+    #[test]
+    fn top_up_retry_after_credential_and_profile_expiry_preserves_original_certified_receipt() {
+        let verified = verified_top_up(1, 1, 50);
+        let mut book = KagemushaReserveBookV1::new();
+        let original_context =
+            KagemushaReserveCommitContextV1::after_block_context_verification([1; 32], 500)
+                .unwrap();
+        let plan = expect_plan(book.plan_top_up(&verified, original_context).unwrap());
+        book.commit(plan.clone()).expect("original valid commit");
+        let before = book.clone();
+        let original = book.operation(&verified.operation_id()).unwrap().clone();
+        let original_bytes = norito::encode_canonical(&original).unwrap();
+        for time in [90_000, 100_000, u64::MAX] {
+            let context = KagemushaReserveCommitContextV1::after_block_context_verification(
+                tagged_id(0x41, time),
+                time,
+            )
+            .unwrap();
+            let outcome = book
+                .plan_top_up(&verified, context)
+                .expect("recover original valid receipt after expiry");
+            assert_eq!(
+                outcome,
+                KagemushaReservePlanOutcomeV1::AlreadyCommitted(original.clone())
+            );
+            assert_eq!(book, before);
+            assert_eq!(
+                norito::encode_canonical(book.operation(&verified.operation_id()).unwrap())
+                    .unwrap(),
+                original_bytes
+            );
+        }
+        assert_eq!(
+            book.commit(plan).unwrap(),
+            KagemushaReserveCommitOutcomeV1::AlreadyCommitted(original)
+        );
+        // Recovery still checks the previously verified authority capability against this exact
+        // request. It cannot bypass request authentication merely because its ID was committed.
+        let mut substituted_authorization = verified.clone();
+        substituted_authorization.authorization.request_digest[0] ^= 1;
+        assert!(matches!(
+            book.plan_top_up(
+                &substituted_authorization,
+                KagemushaReserveCommitContextV1::after_block_context_verification(
+                    [2; 32],
+                    u64::MAX
+                )
+                .unwrap()
+            ),
+            Err(KagemushaReserveErrorV1::InvalidWire(_))
+        ));
+        assert_eq!(book, before);
+    }
+
+    #[test]
+    fn top_up_retained_record_rejects_rehashed_out_of_lifetime_certified_time() {
+        let verified = verified_top_up(1, 1, 50);
+        let mut book = KagemushaReserveBookV1::new();
+        commit_top_up(&mut book, &verified, 1);
+        let Some(KagemushaReserveOperationRecordV1::TopUp(original)) =
+            book.operation(&verified.operation_id())
+        else {
+            panic!("original top-up");
+        };
+        for time in [499, 90_000, u64::MAX] {
+            let mut corrupt = original.clone();
+            let mut forged_statement = verified
+                .mint_statement(original.reserve_receipt.committed_at_ms)
+                .unwrap();
+            forged_statement.minted_at_ms = time;
+            forged_statement
+                .validate_shape()
+                .expect("unqualified statement shape alone has no credential");
+            corrupt.reserve_receipt.committed_at_ms = time;
+            corrupt.reserve_receipt.mint_statement_digest =
+                forged_statement.canonical_digest().unwrap();
+            corrupt
+                .reserve_receipt
+                .validate()
+                .expect("structurally valid receipt with a positive time");
+            assert!(
+                matches!(
+                    corrupt.validate_basic(),
+                    Err(KagemushaReserveErrorV1::InvalidWire(_))
+                ),
+                "recomputing the statement digest must not legitimize a commit outside the credential lifetime"
+            );
+        }
     }
 
     #[test]

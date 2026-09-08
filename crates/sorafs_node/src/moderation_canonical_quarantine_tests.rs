@@ -134,6 +134,47 @@ fn quarantine_envelope_decoder_preserves_limits_and_rejects_compression_before_a
         .expect_err("valid envelope still requires budget")
         .is_decode_resource_limit()
     );
+    for (label, limits) in [
+        (
+            "sequence",
+            norito::DecodeLimits::new(1, usize::MAX, usize::MAX, usize::MAX, 128),
+        ),
+        (
+            "field",
+            norito::DecodeLimits::new(usize::MAX, 0, usize::MAX, usize::MAX, 128),
+        ),
+        (
+            "elements",
+            norito::DecodeLimits::new(usize::MAX, usize::MAX, 0, usize::MAX, 128),
+        ),
+        (
+            "depth",
+            norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, usize::MAX, 0),
+        ),
+    ] {
+        let error = norito::with_decode_limits_scope(limits, || {
+            decode_moderation_quarantine_object_envelope(&bytes, bytes.len() as u64)
+        })
+        .expect_err("schema allocation allowance cannot weaken any caller limit");
+        assert!(
+            matches!(
+                (label, &error),
+                (
+                    "sequence",
+                    norito::Error::SequenceLengthExceeded { limit: 1, .. }
+                ) | ("field", norito::Error::FieldLengthExceeded { limit: 0, .. })
+                    | (
+                        "elements",
+                        norito::Error::TotalElementsExceeded { limit: 0, .. }
+                    )
+                    | (
+                        "depth",
+                        norito::Error::NestingDepthExceeded { limit: 0, .. }
+                    )
+            ),
+            "{label}: {error:?}"
+        );
+    }
     let mut suffix = bytes.clone();
     suffix.push(0);
     assert!(matches!(
@@ -262,10 +303,13 @@ impl ModerationQuarantineKeyWrapper for MaximumSizeQuarantineTestWrapper {
 
 #[test]
 fn quarantine_envelope_maximum_valid_schema_fits_derived_allocation_budget() {
-    let wrapper = MaximumSizeQuarantineTestWrapper(test_key_wrapper(
-        0x76,
-        "software://sorafs/moderation/maximum-wrapped-key",
-    ));
+    let prefix = "software://sorafs/moderation/";
+    let maximum_key_id = format!(
+        "{prefix}{}",
+        "k".repeat(iroha_config::parameters::PRODUCTION_RUNTIME_HANDLE_MAX_BYTES - prefix.len())
+    );
+    validate_wrapping_key_id_text(&maximum_key_id).unwrap();
+    let wrapper = MaximumSizeQuarantineTestWrapper(test_key_wrapper(0x76, &maximum_key_id));
     let binding = test_key_provider_binding();
     let payload = vec![0xD3; MODERATION_QUARANTINE_OBJECT_MAX_PAYLOAD_BYTES_V1 as usize];
     let (record, bytes) = seal_moderation_quarantine_object(
@@ -292,6 +336,7 @@ fn quarantine_envelope_maximum_valid_schema_fits_derived_allocation_budget() {
         envelope.wrapped_dek.len(),
         MODERATION_QUARANTINE_OBJECT_MAX_WRAPPED_DEK_BYTES_V1
     );
+    assert_eq!(envelope.wrapping_key_id, maximum_key_id);
     validate_quarantine_object_envelope(&envelope).unwrap();
     assert_eq!(
         open_moderation_quarantine_object(&envelope, &record, &binding, &wrapper).unwrap(),

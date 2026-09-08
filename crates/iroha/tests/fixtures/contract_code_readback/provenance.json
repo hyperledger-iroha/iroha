@@ -1,0 +1,21 @@
+{
+  "schema": "iroha.contract-code-readback-fixture.v1",
+  "purpose": "Public test-only SDK artifact identity regression; contains no signing material or deployment authority.",
+  "source": "code_readback.ko",
+  "sourceSha256": "b5b05d57c40673888b6cf61a4fe14d5b023d7da2f5f8c4056d500a2627526263",
+  "artifact": "code_readback.to",
+  "artifactSha256": "841887acc641fb9b199647d0e43224a63bac37212a0edd84e29000329db3e033",
+  "artifactSizeBytes": 461,
+  "contractCodeHashHex": "63361387f9f575c3c4618f28b6236498a6a93c2e56579b64a58360a30f70f17b",
+  "abiHashHex": "eafe4ea7c8abe41b61757c506f607b733b4e848d0e348d6e495cd07ff8a98941",
+  "abiVersion": 1,
+  "chainDiscriminant": 369,
+  "compilerFingerprint": "kotodama_lang/2.0.0-rc.2.0",
+  "retainedDevelopmentCompilerSha256": "6b089e8d1943eb21887ec92fd5308430e65c20affd9f6055119ad1f0e00005d9",
+  "acceptedReleaseCompiler": false,
+  "compilerSourceRevisionAuthenticated": false,
+  "buildAndOutputVerificationPassed": true,
+  "retainedSdkNativeAdmission": "PASS; independently reproduced source, admitted exact artifact, and checked ABI 1 plus native/generic hash distinction",
+  "currentNativeCandidateTests": "NOT RUN; applying native owner must qualify or intentionally regenerate",
+  "retainedSdkAdmissionIvmRlibSha256": "5f01403a4fb063c5a7fa0cf9d302ad31739cb88ec8d2ca71a3f9010cf4c1a3ec"
+}

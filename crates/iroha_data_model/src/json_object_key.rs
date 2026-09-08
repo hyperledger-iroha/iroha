@@ -96,8 +96,11 @@ impl JsonObjectKey for crate::asset::AssetId {
 }
 impl JsonObjectKeyOwned for crate::asset::AssetId {
     fn from_json_key_text(key: &str) -> Result<Self, json::Error> {
-        crate::asset::AssetId::parse_literal(key)
-            .map_err(|error| json::Error::Message(error.to_string()))
+        let (definition, account, scope) = Self::parse_literal_parts(key)
+            .map_err(|error| json::Error::Message(error.to_string()))?;
+        let account =
+            <crate::account::AccountId as JsonObjectKeyOwned>::from_json_key_text(account)?;
+        Ok(Self::with_scope(definition, account, scope))
     }
 }
 
@@ -448,19 +451,20 @@ mod tests {
                 <crate::domain::DomainId as JsonObjectKeyOwned>::from_json_key_text(uppercase)
             });
         assert!(noncanonical.is_err());
-        assert_eq!(usage.total_allocated_bytes(), (uppercase.len() - 1) * 2);
+        assert_eq!(usage.total_allocated_bytes(), 0);
     }
 
     #[test]
     fn state_path_key_accounts_nfc_scratch_before_normalization() {
-        let key = "root/é";
-        // Six source scalars have a 24-scalar audited decomposition bound,
-        // which requests the first 32-element heap buffer (128 bytes).
-        let expected_allocation = key.len() + 128;
+        let key = "root/é".repeat(4);
+        // Twenty-four scalars have a 96-scalar audited decomposition bound.
+        // Growing through 32, 64 and 128 u32 elements requests 896 bytes.
+        let normalization_allocation = 896;
+        let expected_allocation = key.len() + normalization_allocation;
 
         let (decoded, usage) = norito::core::with_decode_limits_measured(
             allocation_limit(expected_allocation),
-            || <crate::state_path::StatePath as JsonObjectKeyOwned>::from_json_key_text(key),
+            || <crate::state_path::StatePath as JsonObjectKeyOwned>::from_json_key_text(&key),
         );
         assert_eq!(
             decoded
@@ -472,17 +476,29 @@ mod tests {
 
         let (rejected, usage) = norito::core::with_decode_limits_measured(
             allocation_limit(expected_allocation - 1),
-            || <crate::state_path::StatePath as JsonObjectKeyOwned>::from_json_key_text(key),
+            || <crate::state_path::StatePath as JsonObjectKeyOwned>::from_json_key_text(&key),
         );
         assert!(matches!(rejected, Err(json::Error::DecodeResourceLimit)));
-        assert_eq!(usage.total_allocated_bytes(), 0);
+        assert_eq!(usage.total_allocated_bytes(), normalization_allocation);
 
-        let decomposed = "root/e\u{301}";
+        let decomposed = "root/e\u{301}".repeat(4);
         let (rejected, usage) =
             norito::core::with_decode_limits_measured(allocation_limit(usize::MAX), || {
-                <crate::state_path::StatePath as JsonObjectKeyOwned>::from_json_key_text(decomposed)
+                <crate::state_path::StatePath as JsonObjectKeyOwned>::from_json_key_text(
+                    &decomposed,
+                )
             });
         assert!(rejected.is_err());
-        assert_eq!(usage.total_allocated_bytes(), decomposed.len() + 128);
+        assert_eq!(usage.total_allocated_bytes(), normalization_allocation);
+
+        let (inline, usage) =
+            norito::core::with_decode_limits_measured(allocation_limit(0), || {
+                <crate::state_path::StatePath as JsonObjectKeyOwned>::from_json_key_text("root/a")
+            });
+        assert_eq!(
+            inline.expect("inline path needs no heap").as_ref(),
+            "root/a"
+        );
+        assert_eq!(usage.total_allocated_bytes(), 0);
     }
 }

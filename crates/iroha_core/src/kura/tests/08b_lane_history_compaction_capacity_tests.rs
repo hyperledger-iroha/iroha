@@ -153,7 +153,7 @@ fn ensure_merge_receipt_lane_artifact_pair(
     fixture: &MergeReceiptCompactionFixture,
 ) -> (PathBuf, PathBuf) {
     let (data_path, index_path) =
-        Kura::lane_artifact_paths_for_entry(&fixture.lane_entry, fixture.temp_dir.path());
+        Kura::lane_artifact_paths_for_entry(&fixture.lane_entry, &fixture.kura.store_root());
     match (data_path.is_file(), index_path.is_file()) {
         (true, true) => {}
         (false, false) => {

@@ -49,6 +49,16 @@ impl Reducer {
             if certificate.round().view() < existing.round().view() {
                 return Ok(StepOutcome::ignored(IgnoreReason::IrrelevantView));
             }
+            if certificate.round().view() == existing.round().view()
+                && certificate.round().view() < self.durable.current_view()
+            {
+                // This historical high QC is already durable and remains an
+                // exact control/recovery witness. A duplicate owns no current
+                // body pipeline and starts no WAL append whose acknowledgement
+                // could retire a newly inserted pending entry. Keep it out of
+                // pending_prepare so the next current QC retains its one slot.
+                return Ok(StepOutcome::ignored(IgnoreReason::Duplicate));
+            }
         }
         let reference = certificate.reference();
         let certificate = self

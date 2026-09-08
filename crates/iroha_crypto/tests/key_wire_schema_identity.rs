@@ -4,7 +4,9 @@ use iroha_crypto::{
     Algorithm, ExposedPrivateKey, HashOf, KeyPair, PublicKeyCompact, Signature, SignatureOf,
 };
 use norito::schema::identity::frame_hash;
-use norito::{NoritoDeserialize, NoritoSchema, NoritoSerialize, codec::Encode, json};
+use norito::{
+    NoritoDeserialize, NoritoSchema, NoritoSerialize, SerializePayload, codec::Encode, json,
+};
 
 fn record<T: NoritoSchema + NoritoSerialize + for<'a> NoritoDeserialize<'a>>(
     case: &str,

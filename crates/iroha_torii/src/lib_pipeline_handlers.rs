@@ -769,7 +769,10 @@ fn encode_fastpq_recovery_batch(
     reconstructed: bool,
     artifact_bytes: &mut usize,
 ) -> Result<(String, bool), Error> {
-    let _canonical = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+    // Pin both bounded passes to the same canonical V1 layout, independent of
+    // any request-local Norito decode flags on this thread.
+    let _canonical_flags =
+        norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
     // Count the borrowed source before the public-model conversion clones its row buffers.
     // The final model frame is counted again by the bounded encoder before output allocation.
     let source_bytes =

@@ -2277,6 +2277,41 @@ mod tests {
         thread,
     };
     use tempfile::TempDir;
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn checkpoint_writer_allows_independent_roots_and_rejects_same_identity() {
+        let first_root = TempDir::new().expect("first checkpoint root");
+        let second_root = TempDir::new().expect("second checkpoint root");
+        let first_path = first_root
+            .path()
+            .canonicalize()
+            .unwrap()
+            .join(CHECKPOINT_LOCK_FILE_NAME);
+        let second_path = second_root
+            .path()
+            .canonicalize()
+            .unwrap()
+            .join(CHECKPOINT_LOCK_FILE_NAME);
+        let first = acquire_checkpoint_writer(&first_path).expect("first writer");
+        let _second = acquire_checkpoint_writer(&second_path)
+            .expect("an independent checkpoint root must not contend");
+        assert!(matches!(
+            acquire_checkpoint_writer(&first_path),
+            Err(PdpProviderProtocolError::CheckpointBusy)
+        ));
+        let alias = first_path
+            .parent()
+            .unwrap()
+            .join(".")
+            .join(CHECKPOINT_LOCK_FILE_NAME);
+        assert!(matches!(
+            acquire_checkpoint_writer(&alias),
+            Err(PdpProviderProtocolError::CheckpointBusy)
+        ));
+        drop(first);
+        drop(acquire_checkpoint_writer(&first_path).expect("released identity is reusable"));
+    }
     const PROVIDER_ID: [u8; 32] = [0x31; 32];
     const MANIFEST_DIGEST: [u8; 32] = [0x42; 32];
     const ISSUED_AT: u64 = 1_000;

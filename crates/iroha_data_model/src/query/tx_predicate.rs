@@ -20,7 +20,8 @@ use thiserror::Error;
 /// alternate literal spellings, and trees exceeding the shared depth, node, or membership budgets.
 /// Invalid programmatic trees evaluate to `false`, serialize as `{"op":"const","args":[false]}`,
 /// and are rejected by the binary serializer.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::query::tx_predicate::CommittedTxPredicate")]
 pub enum CommittedTxPredicate {
     /// Logical conjunction of sub-predicates.
     And(Vec<CommittedTxPredicate>),
@@ -1753,7 +1754,7 @@ mod wire {
     use iroha_crypto::HashOf;
     use iroha_primitives::json::Json;
     use iroha_schema::{IntoSchema, MetaMap, Metadata, TypeId, UnnamedFieldsMeta};
-    use norito::{NoritoDeserialize, NoritoSerialize, core::Error};
+    use norito::{NoritoDeserialize, NoritoSerialize, SerializePayload, core::Error};
     use std::cell::Cell;
     thread_local! {
         /// Remaining aggregate membership literals while decoding one predicate.
@@ -1813,14 +1814,16 @@ mod wire {
         }
         Ok(())
     }
-    #[derive(Clone)]
+    #[derive(Clone, norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::query::tx_predicate::wire::MembershipValues")]
     pub(super) struct MembershipValues<T>(Vec<T>);
     impl<T> From<Vec<T>> for MembershipValues<T> {
         fn from(values: Vec<T>) -> Self {
             Self(values)
         }
     }
-    impl<T: NoritoSerialize> NoritoSerialize for MembershipValues<T> {
+    impl<T: NoritoSerialize> NoritoSerialize for MembershipValues<T> {}
+    impl<T: NoritoSerialize> SerializePayload for MembershipValues<T> {
         fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), Error> {
             self.0.serialize(writer)
         }
@@ -1917,7 +1920,7 @@ mod wire {
     }
     fn visit_borrowed_nodes(
         node: &CommittedTxPredicate,
-        visit: &mut impl FnMut(u32, &[&dyn NoritoSerialize]) -> Result<(), Error>,
+        visit: &mut impl FnMut(u32, &[&dyn SerializePayload]) -> Result<(), Error>,
     ) -> Result<(), Error> {
         use CommittedTxPredicate as P;
         match node {
@@ -1980,7 +1983,7 @@ mod wire {
         }
         Ok(())
     }
-    fn borrowed_node_encoded_len(fields: &[&dyn NoritoSerialize]) -> Option<usize> {
+    fn borrowed_node_encoded_len(fields: &[&dyn SerializePayload]) -> Option<usize> {
         let mut total = 4_usize;
         for field in fields {
             let field_len = field.encoded_len_exact()?;
@@ -1992,16 +1995,12 @@ mod wire {
     }
     fn serialize_borrowed_node(
         index: u32,
-        fields: &[&dyn NoritoSerialize],
+        fields: &[&dyn SerializePayload],
         writer: &mut norito::core::Encoder<'_>,
     ) -> Result<(), Error> {
         index.serialize(writer)?;
-        let mut field_buffer = norito::core::DeriveSmallBuf::new();
         for field in fields {
-            if field.encoded_len_exact().is_none() {
-                return Err(Error::LengthMismatch);
-            }
-            norito::core::write_len_prefixed(writer, *field, &mut field_buffer)?;
+            norito::core::write_len_prefixed(writer, *field)?;
         }
         Ok(())
     }
@@ -2249,15 +2248,21 @@ mod wire {
     }
 
     #[cfg(test)]
-    mod captured_tx_predicate_schema_tests;
+    pub(super) mod captured_tx_predicate_schema_tests;
 }
-impl norito::core::NoritoSerialize for CommittedTxPredicate {
+
+#[cfg(all(test, feature = "json"))]
+pub(super) fn generic_membership_identity_records() -> Vec<norito::json::Value> {
+    wire::captured_tx_predicate_schema_tests::generic_membership_identity_records()
+}
+impl norito::core::NoritoSerialize for CommittedTxPredicate {}
+impl norito::core::SerializePayload for CommittedTxPredicate {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         if !norito::core::use_packed_seq() && !norito::core::use_packed_struct() {
             return wire::serialize_streaming(self, writer);
         }
         let nodes = wire::flatten(self)?;
-        norito::core::NoritoSerialize::serialize(&nodes, writer)
+        norito::core::SerializePayload::serialize(&nodes, writer)
     }
     fn encoded_len_hint(&self) -> Option<usize> {
         wire::streamed_encoded_len(self)
@@ -2305,7 +2310,7 @@ mod tests {
     use hex;
     use iroha_crypto::{Algorithm, Hash, HashOf, MerkleProof};
     use std::str::FromStr;
-    fn bare_bytes(value: &dyn norito::core::NoritoSerialize) -> Vec<u8> {
+    fn bare_bytes(value: &dyn norito::core::SerializePayload) -> Vec<u8> {
         let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
         let mut bytes = Vec::new();
         let mut encoder = norito::core::Encoder::for_buffer(&mut bytes);
@@ -2323,7 +2328,7 @@ mod tests {
         let streamed = bare_bytes(&predicate);
         assert_eq!(streamed, bare_bytes(&owned));
         assert_eq!(
-            norito::core::NoritoSerialize::encoded_len_exact(&predicate),
+            norito::core::SerializePayload::encoded_len_exact(&predicate),
             Some(streamed.len())
         );
     }
@@ -2423,7 +2428,7 @@ mod tests {
         let streamed = bare_bytes(&predicate);
         assert_eq!(streamed, bare_bytes(&owned));
         assert_eq!(
-            norito::core::NoritoSerialize::encoded_len_exact(&predicate),
+            norito::core::SerializePayload::encoded_len_exact(&predicate),
             Some(streamed.len())
         );
     }
@@ -2434,12 +2439,12 @@ mod tests {
             predicate = CommittedTxPredicate::Not(Box::new(predicate));
         }
         assert_eq!(
-            norito::core::NoritoSerialize::encoded_len_exact(&predicate),
+            norito::core::SerializePayload::encoded_len_exact(&predicate),
             None
         );
         let mut bytes = Vec::new();
         let mut encoder = norito::core::Encoder::for_buffer(&mut bytes);
-        assert!(norito::core::NoritoSerialize::serialize(&predicate, &mut encoder).is_err());
+        assert!(norito::core::SerializePayload::serialize(&predicate, &mut encoder).is_err());
         assert!(bytes.is_empty(), "validation must happen before output");
     }
     fn test_network_id() -> crate::NetworkId {

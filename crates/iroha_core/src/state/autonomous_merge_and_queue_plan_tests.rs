@@ -19,8 +19,10 @@ fn finalized_merge_execution_commit_surface_borrows_exact_carrier_hash() {
     assert_eq!(*borrowed_hash, carrier_hash);
     assert!(core::ptr::eq(borrowed_hash, &carrier_hash));
 }
-#[test]
-fn canonical_wsv_authorization_commits_exact_autonomous_execution_once() {
+state_test!(consensus_stack canonical_wsv_authorization_commits_exact_autonomous_execution_once
+    canonical_wsv_authorization_commits_exact_autonomous_execution_once_on_consensus_stack();
+);
+fn canonical_wsv_authorization_commits_exact_autonomous_execution_once_on_consensus_stack() {
     let (state, entry, carrier, _) = autonomous_merge_commit_authorization_fixture(false, false);
     commit_staged_autonomous_for_test(staged_autonomous_merge_commit_block(
         &state, &entry, &carrier,
@@ -43,8 +45,10 @@ fn canonical_wsv_authorization_commits_exact_autonomous_execution_once() {
         "canonical commit must publish its replay markers"
     );
 }
-#[test]
-fn queue_plan_synced_transfer_binds_fastpq_transcript_and_commits_after_ttl() {
+state_test!(consensus_stack queue_plan_synced_transfer_binds_fastpq_transcript_and_commits_after_ttl
+    queue_plan_synced_transfer_binds_fastpq_transcript_and_commits_after_ttl_on_consensus_stack();
+);
+fn queue_plan_synced_transfer_binds_fastpq_transcript_and_commits_after_ttl_on_consensus_stack() {
     let (state, entry, carrier) = autonomous_merge_transfer_commit_authorization_fixture();
     let batch = entry
         .execution_batch
@@ -253,12 +257,18 @@ fn assert_autonomous_batch_transfer_carrier_roundtrip(mode: QueuePlanTransferFix
     assert_eq!(balance(&destination_assets[0]), Quantity::from(3_u32));
     assert_eq!(balance(&destination_assets[1]), Quantity::from(4_u32));
 }
-#[test]
-fn autonomous_atomic_batch_receipts_survive_production_carrier_validation_and_apply_once() {
+state_test!(consensus_stack autonomous_atomic_batch_receipts_survive_production_carrier_validation_and_apply_once
+    autonomous_atomic_batch_receipts_survive_production_carrier_validation_and_apply_once_on_consensus_stack();
+);
+fn autonomous_atomic_batch_receipts_survive_production_carrier_validation_and_apply_once_on_consensus_stack()
+ {
     assert_autonomous_batch_transfer_carrier_roundtrip(QueuePlanTransferFixture::AtomicBatch);
 }
-#[test]
-fn autonomous_independent_batch_receipts_and_fastpq_survive_production_carrier_once() {
+state_test!(consensus_stack autonomous_independent_batch_receipts_and_fastpq_survive_production_carrier_once
+    autonomous_independent_batch_receipts_and_fastpq_survive_production_carrier_once_on_consensus_stack();
+);
+fn autonomous_independent_batch_receipts_and_fastpq_survive_production_carrier_once_on_consensus_stack()
+ {
     assert_autonomous_batch_transfer_carrier_roundtrip(QueuePlanTransferFixture::IndependentBatch);
 }
 fn rebind_mutated_fastpq_batch(batch: &mut MergeExecutionBatch) {
@@ -286,8 +296,10 @@ fn assert_fastpq_batch_rejected(
     }
 }
 include!("autonomous_merge_fastpq_shape_tests.rs");
-#[test]
-fn live_autonomous_merge_rejects_historical_sealed_signed_execution_alias() {
+state_test!(consensus_stack live_autonomous_merge_rejects_historical_sealed_signed_execution_alias
+    live_autonomous_merge_rejects_historical_sealed_signed_execution_alias_on_consensus_stack();
+);
+fn live_autonomous_merge_rejects_historical_sealed_signed_execution_alias_on_consensus_stack() {
     let (state, entry, _) = autonomous_sealed_reveal_merge_commit_authorization_fixture();
     let batch = entry
         .execution_batch
@@ -310,15 +322,25 @@ fn live_autonomous_merge_rejects_historical_sealed_signed_execution_alias() {
         "the regression must exercise a fresh outer carrier with a replayed signed identity"
     );
 
-    state
-        .validate_merge_execution_batch(
-            &entry.active_lanes,
-            batch,
-            &std::collections::BTreeMap::new(),
-            false,
-            None,
-        )
-        .expect("historical validation must not reject its already-committed identities");
+    {
+        // Historical acceptance needs a complete committed carrier and its
+        // resolved QueuePlan obligations. The live negative below deliberately
+        // has only the reused signed alias and a fresh outer identity.
+        let (historical_state, historical_entry, historical_carrier) =
+            autonomous_sealed_reveal_merge_commit_authorization_fixture();
+        let historical_block = production_validated_autonomous_merge_commit_block(
+            &historical_state,
+            &historical_entry,
+            &historical_carrier,
+        );
+        commit_staged_autonomous_for_test(historical_block)
+            .expect("commit the exact historical sealed carrier");
+        historical_state.validate_merge_execution_batch(
+            &historical_entry.active_lanes,
+            historical_entry.execution_batch.as_ref().expect("historical execution batch"),
+            &std::collections::BTreeMap::new(), false, None,
+        ).expect("historical validation accepts complete committed identities and registry ownership");
+    }
     assert!(matches!(
         state.validate_merge_execution_batch(
             &entry.active_lanes,
@@ -331,8 +353,10 @@ fn live_autonomous_merge_rejects_historical_sealed_signed_execution_alias() {
             if reason == "autonomous merge execution reuses a committed carrier or sealed signed-execution identity"
     ));
 }
-#[test]
-fn sealed_reveal_fastpq_transcripts_bind_inner_call_to_outer_lane_identity() {
+state_test!(consensus_stack sealed_reveal_fastpq_transcripts_bind_inner_call_to_outer_lane_identity
+    sealed_reveal_fastpq_transcripts_bind_inner_call_to_outer_lane_identity_on_consensus_stack();
+);
+fn sealed_reveal_fastpq_transcripts_bind_inner_call_to_outer_lane_identity_on_consensus_stack() {
     let (state, entry, carrier) = autonomous_merge_transfer_commit_authorization_fixture();
     let lane = &entry
         .execution_batch
@@ -375,8 +399,10 @@ fn sealed_reveal_fastpq_transcripts_bind_inner_call_to_outer_lane_identity() {
         .validate_merge_execution_commit_surface(MergeExecutionCommitSurface::Pristine)
         .expect("sealed-reveal evidence extraction leaves no unbound side effect");
 }
-#[test]
-fn sealed_reveal_batch_outcomes_bind_inner_call_to_outer_result_leaf() {
+state_test!(consensus_stack sealed_reveal_batch_outcomes_bind_inner_call_to_outer_result_leaf
+    sealed_reveal_batch_outcomes_bind_inner_call_to_outer_result_leaf_on_consensus_stack();
+);
+fn sealed_reveal_batch_outcomes_bind_inner_call_to_outer_result_leaf_on_consensus_stack() {
     let (state, entry, carrier) = autonomous_merge_batch_transfer_commit_authorization_fixture(
         QueuePlanTransferFixture::AtomicBatch,
     );
@@ -424,8 +450,10 @@ fn sealed_reveal_batch_outcomes_bind_inner_call_to_outer_result_leaf() {
         .validate_merge_execution_commit_surface(MergeExecutionCommitSurface::Pristine)
         .expect("sealed-reveal receipt extraction leaves no unbound side effect");
 }
-#[test]
-fn unbound_fastpq_transcript_remains_a_fail_closed_commit_surface() {
+state_test!(consensus_stack unbound_fastpq_transcript_remains_a_fail_closed_commit_surface
+    unbound_fastpq_transcript_remains_a_fail_closed_commit_surface_on_consensus_stack();
+);
+fn unbound_fastpq_transcript_remains_a_fail_closed_commit_surface_on_consensus_stack() {
     let (state, entry, carrier) = autonomous_merge_transfer_commit_authorization_fixture();
     let lane = &entry
         .execution_batch
@@ -451,8 +479,10 @@ fn unbound_fastpq_transcript_remains_a_fail_closed_commit_surface() {
             if reason == "autonomous merge execution staged an effect outside the bound WSV overlay"
     ));
 }
-#[test]
-fn unbound_batch_transfer_outcome_remains_a_fail_closed_commit_surface() {
+state_test!(consensus_stack unbound_batch_transfer_outcome_remains_a_fail_closed_commit_surface
+    unbound_batch_transfer_outcome_remains_a_fail_closed_commit_surface_on_consensus_stack();
+);
+fn unbound_batch_transfer_outcome_remains_a_fail_closed_commit_surface_on_consensus_stack() {
     let (state, entry, carrier) = autonomous_merge_batch_transfer_commit_authorization_fixture(
         QueuePlanTransferFixture::AtomicBatch,
     );
@@ -487,8 +517,10 @@ fn unbound_batch_transfer_outcome_remains_a_fail_closed_commit_surface() {
             if reason == "autonomous merge execution staged an effect outside the bound WSV overlay"
     ));
 }
-#[test]
-fn autonomous_execution_commit_rejects_missing_apply_carrier_authorization() {
+state_test!(consensus_stack autonomous_execution_commit_rejects_missing_apply_carrier_authorization
+    autonomous_execution_commit_rejects_missing_apply_carrier_authorization_on_consensus_stack();
+);
+fn autonomous_execution_commit_rejects_missing_apply_carrier_authorization_on_consensus_stack() {
     let (state, entry, carrier, _) = autonomous_merge_commit_authorization_fixture(false, false);
     let state_block = staged_autonomous_merge_commit_block(&state, &entry, &carrier);
     assert!(matches!(
@@ -500,8 +532,10 @@ fn autonomous_execution_commit_rejects_missing_apply_carrier_authorization() {
         autonomous_carrier_parent_height(&carrier),
     );
 }
-#[test]
-fn autonomous_execution_commit_rejects_missing_wsv_authorization() {
+state_test!(consensus_stack autonomous_execution_commit_rejects_missing_wsv_authorization
+    autonomous_execution_commit_rejects_missing_wsv_authorization_on_consensus_stack();
+);
+fn autonomous_execution_commit_rejects_missing_wsv_authorization_on_consensus_stack() {
     let (state, entry, carrier, _) = autonomous_merge_commit_authorization_fixture(false, false);
     let mut state_block = staged_autonomous_merge_commit_block(&state, &entry, &carrier);
     let _authorization = state_block
@@ -517,8 +551,10 @@ fn autonomous_execution_commit_rejects_missing_wsv_authorization() {
         autonomous_carrier_parent_height(&carrier),
     );
 }
-#[test]
-fn autonomous_execution_commit_rejects_missing_carrier_metadata_authorization() {
+state_test!(consensus_stack autonomous_execution_commit_rejects_missing_carrier_metadata_authorization
+    autonomous_execution_commit_rejects_missing_carrier_metadata_authorization_on_consensus_stack();
+);
+fn autonomous_execution_commit_rejects_missing_carrier_metadata_authorization_on_consensus_stack() {
     let (state, entry, carrier, _) = autonomous_merge_commit_authorization_fixture(false, false);
     let mut state_block = staged_autonomous_merge_commit_block(&state, &entry, &carrier);
     let _authorization = state_block
@@ -534,8 +570,10 @@ fn autonomous_execution_commit_rejects_missing_carrier_metadata_authorization() 
         autonomous_carrier_parent_height(&carrier),
     );
 }
-#[test]
-fn autonomous_execution_commit_rejects_mismatched_wsv_authorization() {
+state_test!(consensus_stack autonomous_execution_commit_rejects_mismatched_wsv_authorization
+    autonomous_execution_commit_rejects_mismatched_wsv_authorization_on_consensus_stack();
+);
+fn autonomous_execution_commit_rejects_mismatched_wsv_authorization_on_consensus_stack() {
     let (state, entry, carrier, _) = autonomous_merge_commit_authorization_fixture(false, false);
     let mut state_block = staged_autonomous_merge_commit_block(&state, &entry, &carrier);
     state_block
@@ -552,8 +590,11 @@ fn autonomous_execution_commit_rejects_mismatched_wsv_authorization() {
         autonomous_carrier_parent_height(&carrier),
     );
 }
-#[test]
-fn autonomous_execution_commit_rejects_replayed_carrier_metadata_authorization() {
+state_test!(consensus_stack autonomous_execution_commit_rejects_replayed_carrier_metadata_authorization
+    autonomous_execution_commit_rejects_replayed_carrier_metadata_authorization_on_consensus_stack();
+);
+fn autonomous_execution_commit_rejects_replayed_carrier_metadata_authorization_on_consensus_stack()
+{
     let (first_state, first_entry, first_carrier, _) =
         autonomous_merge_commit_authorization_fixture(false, false);
     let mut first_block =
@@ -577,8 +618,10 @@ fn autonomous_execution_commit_rejects_replayed_carrier_metadata_authorization()
         autonomous_carrier_parent_height(&second_carrier),
     );
 }
-#[test]
-fn autonomous_execution_commit_rejects_stale_authorized_base() {
+state_test!(consensus_stack autonomous_execution_commit_rejects_stale_authorized_base
+    autonomous_execution_commit_rejects_stale_authorized_base_on_consensus_stack();
+);
+fn autonomous_execution_commit_rejects_stale_authorized_base_on_consensus_stack() {
     let (state, entry, carrier, _) = autonomous_merge_commit_authorization_fixture(false, false);
     let mut state_block = staged_autonomous_merge_commit_block(&state, &entry, &carrier);
     state_block
@@ -595,8 +638,10 @@ fn autonomous_execution_commit_rejects_stale_authorized_base() {
         autonomous_carrier_parent_height(&carrier),
     );
 }
-#[test]
-fn autonomous_execution_commit_rejects_post_stage_wsv_drift() {
+state_test!(consensus_stack autonomous_execution_commit_rejects_post_stage_wsv_drift
+    autonomous_execution_commit_rejects_post_stage_wsv_drift_on_consensus_stack();
+);
+fn autonomous_execution_commit_rejects_post_stage_wsv_drift_on_consensus_stack() {
     let (state, entry, carrier, _) = autonomous_merge_commit_authorization_fixture(false, false);
     let mut state_block = staged_autonomous_merge_commit_block(&state, &entry, &carrier);
     let drift_key = StatePath::from_str("canonical_wsv_authorization_post_stage_drift")
@@ -614,8 +659,10 @@ fn autonomous_execution_commit_rejects_post_stage_wsv_drift() {
         autonomous_carrier_parent_height(&carrier),
     );
 }
-#[test]
-fn autonomous_execution_commit_rejects_post_stage_runtime_surface_drift() {
+state_test!(consensus_stack autonomous_execution_commit_rejects_post_stage_runtime_surface_drift
+    autonomous_execution_commit_rejects_post_stage_runtime_surface_drift_on_consensus_stack();
+);
+fn autonomous_execution_commit_rejects_post_stage_runtime_surface_drift_on_consensus_stack() {
     let (state, entry, carrier, _) = autonomous_merge_commit_authorization_fixture(false, false);
     let mut state_block = staged_autonomous_merge_commit_block(&state, &entry, &carrier);
     let peer = PeerId::new(
@@ -635,8 +682,10 @@ fn autonomous_execution_commit_rejects_post_stage_runtime_surface_drift() {
         autonomous_carrier_parent_height(&carrier),
     );
 }
-#[test]
-fn autonomous_execution_commit_rejects_post_publication_event_surface_drift() {
+state_test!(consensus_stack autonomous_execution_commit_rejects_post_publication_event_surface_drift
+    autonomous_execution_commit_rejects_post_publication_event_surface_drift_on_consensus_stack();
+);
+fn autonomous_execution_commit_rejects_post_publication_event_surface_drift_on_consensus_stack() {
     let (state, entry, carrier, _) = autonomous_merge_commit_authorization_fixture(false, false);
     let mut state_block = staged_autonomous_merge_commit_block(&state, &entry, &carrier);
     state_block.world.external_event_buf.push(
@@ -655,8 +704,10 @@ fn autonomous_execution_commit_rejects_post_publication_event_surface_drift() {
         autonomous_carrier_parent_height(&carrier),
     );
 }
-#[test]
-fn autonomous_execution_defers_expired_axt_replay_pruning() {
+state_test!(consensus_stack autonomous_execution_defers_expired_axt_replay_pruning
+    autonomous_execution_defers_expired_axt_replay_pruning_on_consensus_stack();
+);
+fn autonomous_execution_defers_expired_axt_replay_pruning_on_consensus_stack() {
     let (state, entry, carrier, expired_key) =
         autonomous_merge_commit_authorization_fixture(true, false);
     let expired_key = expired_key.expect("fixture expired replay key");
@@ -674,8 +725,10 @@ fn autonomous_execution_defers_expired_axt_replay_pruning() {
         "expired replay guards must remain for a later non-execution carrier"
     );
 }
-#[test]
-fn autonomous_execution_rejects_post_stage_axt_replay_drift() {
+state_test!(consensus_stack autonomous_execution_rejects_post_stage_axt_replay_drift
+    autonomous_execution_rejects_post_stage_axt_replay_drift_on_consensus_stack();
+);
+fn autonomous_execution_rejects_post_stage_axt_replay_drift_on_consensus_stack() {
     let (state, entry, carrier, _) = autonomous_merge_commit_authorization_fixture(false, false);
     let mut state_block = staged_autonomous_merge_commit_block(&state, &entry, &carrier);
     let replay_key = AxtHandleReplayKey::from_parts(
@@ -699,8 +752,10 @@ fn autonomous_execution_rejects_post_stage_axt_replay_drift() {
         autonomous_carrier_parent_height(&carrier),
     );
 }
-#[test]
-fn autonomous_execution_stage_rejects_preexisting_axt_replay_overlay() {
+state_test!(consensus_stack autonomous_execution_stage_rejects_preexisting_axt_replay_overlay
+    autonomous_execution_stage_rejects_preexisting_axt_replay_overlay_on_consensus_stack();
+);
+fn autonomous_execution_stage_rejects_preexisting_axt_replay_overlay_on_consensus_stack() {
     let (state, entry, carrier, _) = autonomous_merge_commit_authorization_fixture(false, false);
     let mut state_block = state.merge_preexecution_block(carrier.header().clone());
     let replay_key = AxtHandleReplayKey::from_parts(
@@ -720,8 +775,10 @@ fn autonomous_execution_stage_rejects_preexisting_axt_replay_overlay() {
         Err(MergeLedgerCommitError::ExecutionStageNotPristine)
     ));
 }
-#[test]
-fn autonomous_execution_pre_vote_rejects_due_start_of_block_effect() {
+state_test!(consensus_stack autonomous_execution_pre_vote_rejects_due_start_of_block_effect
+    autonomous_execution_pre_vote_rejects_due_start_of_block_effect_on_consensus_stack();
+);
+fn autonomous_execution_pre_vote_rejects_due_start_of_block_effect_on_consensus_stack() {
     let (state, entry, carrier, _) = autonomous_merge_commit_authorization_fixture(false, true);
     let mut state_block = state
         .block_with_certified_merge_entry(
@@ -745,8 +802,10 @@ fn autonomous_execution_pre_vote_rejects_due_start_of_block_effect() {
         "the due start-of-block mutation must remove the now-empty indexed lock container"
     );
 }
-#[test]
-fn autonomous_execution_pre_vote_requires_exact_merge_carrier_membership() {
+state_test!(consensus_stack autonomous_execution_pre_vote_requires_exact_merge_carrier_membership
+    autonomous_execution_pre_vote_requires_exact_merge_carrier_membership_on_consensus_stack();
+);
+fn autonomous_execution_pre_vote_requires_exact_merge_carrier_membership_on_consensus_stack() {
     let (state, entry, carrier, _) = autonomous_merge_commit_authorization_fixture(false, false);
     let mut state_block = state
         .block_with_certified_merge_entry(
@@ -761,8 +820,10 @@ fn autonomous_execution_pre_vote_requires_exact_merge_carrier_membership() {
             if message.contains("exact merge-only post-block/pre-vote")
     ));
 }
-#[test]
-fn autonomous_execution_pre_vote_rejects_wrong_carrier_membership_height() {
+state_test!(consensus_stack autonomous_execution_pre_vote_rejects_wrong_carrier_membership_height
+    autonomous_execution_pre_vote_rejects_wrong_carrier_membership_height_on_consensus_stack();
+);
+fn autonomous_execution_pre_vote_rejects_wrong_carrier_membership_height_on_consensus_stack() {
     let (state, entry, carrier, _) = autonomous_merge_commit_authorization_fixture(false, false);
     let mut state_block = state
         .block_with_certified_merge_entry(
@@ -787,8 +848,10 @@ fn autonomous_execution_pre_vote_rejects_wrong_carrier_membership_height() {
             if message.contains("exact merge-only post-block/pre-vote")
     ));
 }
-#[test]
-fn autonomous_execution_pre_vote_rejects_extra_carrier_membership() {
+state_test!(consensus_stack autonomous_execution_pre_vote_rejects_extra_carrier_membership
+    autonomous_execution_pre_vote_rejects_extra_carrier_membership_on_consensus_stack();
+);
+fn autonomous_execution_pre_vote_rejects_extra_carrier_membership_on_consensus_stack() {
     let (state, entry, carrier, _) = autonomous_merge_commit_authorization_fixture(false, false);
     let mut state_block = state
         .block_with_certified_merge_entry(
@@ -812,8 +875,10 @@ fn autonomous_execution_pre_vote_rejects_extra_carrier_membership() {
             if message.contains("exact merge-only post-block/pre-vote")
     ));
 }
-#[test]
-fn autonomous_execution_pre_vote_rejects_premature_pending_carrier_hash() {
+state_test!(consensus_stack autonomous_execution_pre_vote_rejects_premature_pending_carrier_hash
+    autonomous_execution_pre_vote_rejects_premature_pending_carrier_hash_on_consensus_stack();
+);
+fn autonomous_execution_pre_vote_rejects_premature_pending_carrier_hash_on_consensus_stack() {
     let (state, entry, carrier, _) = autonomous_merge_commit_authorization_fixture(false, false);
     let mut state_block = state
         .block_with_certified_merge_entry(
@@ -830,8 +895,10 @@ fn autonomous_execution_pre_vote_rejects_premature_pending_carrier_hash() {
             if message.contains("exact merge-only post-block/pre-vote")
     ));
 }
-#[test]
-fn autonomous_execution_finality_rejects_unbound_event_surface_drift() {
+state_test!(consensus_stack autonomous_execution_finality_rejects_unbound_event_surface_drift
+    autonomous_execution_finality_rejects_unbound_event_surface_drift_on_consensus_stack();
+);
+fn autonomous_execution_finality_rejects_unbound_event_surface_drift_on_consensus_stack() {
     {
         let (state, entry, carrier, _) =
             autonomous_merge_commit_authorization_fixture(false, false);
@@ -3905,8 +3972,10 @@ fn pending_queue_plan_persistence_bounds_one_ahead_wait_and_rejects_larger_skew(
     );
 }
 include!("autonomous_merge_and_queue_plan_native_diagnostic_tests.rs");
-#[test]
-fn merge_execution_prefix_budget_includes_historical_authority_catalog() {
+state_test!(consensus_stack merge_execution_prefix_budget_includes_historical_authority_catalog
+    merge_execution_prefix_budget_includes_historical_authority_catalog_on_consensus_stack();
+);
+fn merge_execution_prefix_budget_includes_historical_authority_catalog_on_consensus_stack() {
     let (_state, entry, _carrier, _) = autonomous_merge_commit_authorization_fixture(false, false);
     let mut template = crate::merge::MergeLedgerCandidate::from(&entry);
     let batch = template
@@ -3973,5 +4042,70 @@ fn merge_execution_prefix_budget_includes_historical_authority_catalog() {
         State::select_merge_execution_candidate_prefix(&template, 3, unsigned_limit, |_| None,)
             .is_none(),
         "failed source construction remains fail-closed"
+    );
+}
+
+#[test]
+fn pending_queue_plan_admission_defers_obsolete_carrier_without_rejecting_current_source() {
+    let (state, validator_keypairs, _, parent) = configured_single_lane_queue_plan_state();
+    let authority_height = parent.header().height().get();
+    let carrier_height = authority_height.checked_add(1).expect("next carrier");
+    let routing_plan = crate::queue::RoutingPlan::single(crate::queue::RoutingDecision::new(
+        LaneId::SINGLE,
+        DataSpaceId::UNIVERSAL,
+    ));
+    let (_, certificate) = queue_plan_admission_certificate_for_state_test(
+        &state,
+        routing_plan,
+        &validator_keypairs,
+        authority_height,
+        0x6b,
+    );
+    let certificate_hash = state
+        .kura
+        .persist_pending_queue_plan_admission_certificate(&certificate)
+        .expect("retain exact current-frontier certificate");
+    for obsolete_height in [0, authority_height] {
+        assert_eq!(
+            state
+                .classify_pending_queue_plan_admission(&certificate, obsolete_height)
+                .expect("authenticated admission survives obsolete worker")
+                .1,
+            PendingQueuePlanAdmissionDisposition::DeferredCarrier,
+        );
+        assert!(state.validate_queue_plan_admissions_for_carrier(
+            &[certificate.clone()], obsolete_height,
+        ).is_err(), "deferral must not authorize the certificate in an earlier carrier");
+        assert_eq!(
+            state
+                .kura
+                .pending_queue_plan_admission_certificate(certificate_hash)
+                .expect("inspect retained exact certificate"),
+            Some(certificate.clone())
+        );
+        assert!(
+            state
+                .classify_pending_queue_plan_admission(&[0xff], obsolete_height)
+                .is_err(),
+            "an obsolete caller does not bypass certificate authentication"
+        );
+    }
+    assert_eq!(
+        state
+            .classify_pending_queue_plan_admission(&certificate, carrier_height)
+            .expect("current worker classifies the same certificate")
+            .1,
+        PendingQueuePlanAdmissionDisposition::EligibleAbsent
+    );
+    let _ = state.lane_incarnations.write().insert(
+        LaneId::SINGLE,
+        Hash::new(b"queue-plan-deferred-carrier-replaced-incarnation"),
+    );
+    assert_eq!(
+        state
+            .classify_pending_queue_plan_admission(&certificate, carrier_height)
+            .expect("current worker still rejects real incarnation drift")
+            .1,
+        PendingQueuePlanAdmissionDisposition::Stale
     );
 }

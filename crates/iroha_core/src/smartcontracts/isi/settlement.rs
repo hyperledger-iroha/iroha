@@ -45,7 +45,7 @@ pub(in crate::smartcontracts::isi) struct VerifiedSettlementNumericPair {
     legs: [(AssetId, AssetId, Quantity); 2],
 }
 impl VerifiedSettlementNumericPair {
-    fn new<T: norito::codec::Encode>(
+    fn new<T: norito::NoritoSerialize>(
         authority: AccountId,
         binding: &T,
         legs: [(AssetId, AssetId, Quantity); 2],

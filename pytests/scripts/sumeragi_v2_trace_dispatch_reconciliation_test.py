@@ -16,7 +16,7 @@ import pytest
 REPO = Path(__file__).resolve().parents[2]
 TAG = "IN_FLIGHT_FIRST_RELEASE_ACTION_"
 REFINEMENT = "crates/iroha_core/src/sumeragi/v2_core/refinement.rs"
-BINDING = "authenticated_replica_queue_disposition_observation"
+BINDING = "replica_queue_disposition_observation"
 
 
 def _load_checker():
@@ -207,6 +207,8 @@ def test_dispatch_rejects_noncanonical_partition(shared_macro, tmp_path, mutatio
     CHECKER._production_trace_shared_kernel_dispatch_tags(path.read_text(), errors)
     _record_mutant(tmp_path, path, shared_macro.encode(), mutation, errors)
     assert errors
+    with pytest.raises(ValueError):
+        CHECKER._production_trace_first_release_dispatch_arms(changed)
 
 
 def test_complete_verus_observation_proof_includes_conditional_ensures_and_body():

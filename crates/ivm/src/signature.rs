@@ -163,7 +163,7 @@ pub fn verify_signature(
                 Ok(s) => s,
                 Err(_) => return false,
             };
-            dilithium::verify_detached_signature(&sig, message, &pk).is_ok()
+            iroha_crypto::verify_mldsa65_detached(&sig, message, &pk).is_ok()
         }
         SignatureScheme::Secp256k1 => {
             if signature.len() != 64 {
@@ -347,6 +347,58 @@ mod tests {
         0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
         0xff, 0x7f,
     ];
+    #[test]
+    fn mldsa_verifier_retains_validation_through_shared_cpu_dispatch() {
+        use iroha_crypto::{Algorithm, KeyPair, Signature};
+        let keypair =
+            KeyPair::try_from_seed(vec![0x55; 32], Algorithm::MlDsa).expect("fixed ML-DSA keypair");
+        let message = b"IVM ML-DSA shared verifier";
+        let signature = Signature::try_new(keypair.private_key(), message).unwrap();
+        let (_, public_key) = keypair.public_key().try_to_bytes().unwrap();
+        assert!(verify_signature(
+            SignatureScheme::MlDsa,
+            message,
+            signature.payload(),
+            public_key
+        ));
+        assert!(!verify_signature(
+            SignatureScheme::MlDsa,
+            b"changed",
+            signature.payload(),
+            public_key
+        ));
+        let mut corrupted = signature.payload().to_vec();
+        corrupted[0] ^= 1;
+        let mut overlong = signature.payload().to_vec();
+        overlong.push(1);
+        for invalid in [
+            corrupted,
+            signature.payload()[1..].to_vec(),
+            overlong,
+            vec![0; signature.payload().len()],
+        ] {
+            assert!(!verify_signature(
+                SignatureScheme::MlDsa,
+                message,
+                &invalid,
+                public_key
+            ));
+        }
+        for invalid in [public_key[1..].to_vec(), vec![0; public_key.len()]] {
+            assert!(!verify_signature(
+                SignatureScheme::MlDsa,
+                message,
+                signature.payload(),
+                &invalid
+            ));
+        }
+        assert!(!verify_signature(
+            SignatureScheme::Ed25519,
+            message,
+            signature.payload(),
+            public_key
+        ));
+    }
     #[test]
     fn ed25519_challenge_scalar_bytes_matches_cuda_selftest_vector() {
         let key = SigningKey::from_bytes(&[9u8; 32]);

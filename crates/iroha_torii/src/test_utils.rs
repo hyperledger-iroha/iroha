@@ -716,6 +716,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             max_frame_bytes_tx_gossip: 128 * 1024,
             max_frame_bytes_peer_gossip: 64 * 1024,
             max_frame_bytes_health: 32 * 1024,
+            max_frame_bytes_connect: iroha_config::parameters::defaults::network::MAX_FRAME_BYTES_CONNECT.get(),
             max_frame_bytes_other: 128 * 1024,
             quic_max_idle_timeout: None,
         },

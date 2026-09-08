@@ -1,9 +1,10 @@
 //! Content-addressed artifact resolution for the authenticated Kagemusha V1 release.
 //!
-//! The threshold-authenticated release manifest is the only role registry. Artifact files are
-//! deliberately unframed: IPA parameters use Halo2's canonical `ParamsIPA::write` bytes and keys
-//! use `SerdeFormat::Processed`. This avoids a second, potentially divergent role header and keeps
-//! the manifest's `(role, sha256, byte_len)` tuple authoritative.
+//! The threshold-authenticated release manifest is the only role registry. Artifact files
+//! use canonical `ParamsIPA::write` parameters, explicitly framed compact-v1 proving keys, and
+//! `SerdeFormat::Processed` verifying keys. The compact frame binds the codec, curve and length;
+//! it does not select a circuit role. The manifest's `(role, sha256, byte_len)` remains authoritative.
+//! There is one first-release proving-key codec; Processed proving-key artifacts are rejected.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -130,7 +131,7 @@ pub enum KagemushaCircuitFamilyV1 {
 pub enum KagemushaArtifactKindV1 {
     /// Canonical transparent IPA parameters produced by `ParamsIPA::write`.
     Parameters,
-    /// Halo2 proving key in `SerdeFormat::Processed`.
+    /// Halo2 proving key in the explicit compact-v1 codec.
     ProvingKey,
     /// Halo2 verifying key in `SerdeFormat::Processed`.
     VerifyingKey,
@@ -563,6 +564,8 @@ impl KagemushaArtifactByteResolverV1 for KagemushaMemoryArtifactResolverV1 {
 #[derive(Clone, Debug)]
 pub struct KagemushaAuthenticatedArtifactSetV1<R> {
     recursion: KagemushaRecursionArtifactsV1,
+    native_profile_digest: DigestV1,
+    provider_policy_root: DigestV1,
     suite_id: DigestV1,
     vk_set_digest: DigestV1,
     bindings: [KagemushaArtifactBindingV1; KagemushaArtifactRoleV1::ALL.len()],
@@ -578,13 +581,17 @@ impl<R: KagemushaArtifactByteResolverV1> KagemushaAuthenticatedArtifactSetV1<R> 
     ///
     /// # Errors
     ///
-    /// Returns an error for a non-uniform release suite/verifier set, any malformed artifact
-    /// binding, or an oversized complete inventory.
+    /// Returns an error for a substituted release-specific empty-effect digest, a non-uniform
+    /// release suite/verifier set, any malformed artifact binding, or an oversized inventory.
     pub fn new(
         release: &KagemushaAuthenticatedReleaseV1,
         canonical_empty_effect_digest: DigestV1,
         resolver: R,
     ) -> Result<Self, KagemushaArtifactErrorV1> {
+        validate_canonical_empty_effect_digest_v1(
+            release.release_id(),
+            canonical_empty_effect_digest,
+        )?;
         let recursion = KagemushaRecursionArtifactsV1::from_authenticated_release(
             release,
             canonical_empty_effect_digest,
@@ -629,6 +636,8 @@ impl<R: KagemushaArtifactByteResolverV1> KagemushaAuthenticatedArtifactSetV1<R> 
         }
         Ok(Self {
             recursion,
+            native_profile_digest: release.native_profile_digest(),
+            provider_policy_root: release.provider_policy_root(),
             suite_id,
             vk_set_digest,
             bindings,
@@ -640,6 +649,18 @@ impl<R: KagemushaArtifactByteResolverV1> KagemushaAuthenticatedArtifactSetV1<R> 
     #[must_use]
     pub const fn recursion_artifacts(&self) -> KagemushaRecursionArtifactsV1 {
         self.recursion
+    }
+
+    /// Return the exact native layout digest authenticated by the signed validation receipt.
+    #[must_use]
+    pub const fn native_profile_digest(&self) -> DigestV1 {
+        self.native_profile_digest
+    }
+
+    /// Return the provider registry root derived from the threshold-authenticated inventory.
+    #[must_use]
+    pub const fn provider_policy_root(&self) -> DigestV1 {
+        self.provider_policy_root
     }
 
     /// Return the sole proof-suite identity admitted by the authenticated release.
@@ -759,6 +780,22 @@ impl<R: KagemushaArtifactByteResolverV1> KagemushaAuthenticatedArtifactSetV1<R> 
     {
         verify_kagemusha_redemption_request_v1(verifier, self.recursion, request)
     }
+}
+
+/// Check the one Core-derived empty sentinel before retaining any caller-supplied context.
+fn validate_canonical_empty_effect_digest_v1(
+    release_id: DigestV1,
+    supplied: DigestV1,
+) -> Result<(), KagemushaArtifactErrorV1> {
+    let expected =
+        crate::zk::kagemusha_v1_state::canonical_empty_durable_effect_digest_v1(release_id)
+            .map_err(|error| KagemushaArtifactErrorV1::InvalidRelease(error.to_string()))?;
+    if supplied != expected {
+        return Err(KagemushaArtifactErrorV1::InvalidRelease(
+            "noncanonical release-specific empty durable-effect digest".to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 /// Bounds and hashes decoder reads, retaining any fatal I/O failure until finalization.
@@ -956,6 +993,29 @@ const _: () = {
 mod tests {
     use super::*;
 
+    #[test]
+    fn artifact_empty_effect_rejects_nonzero_and_cross_release_substitution() {
+        // This tests deterministic preflight only; a release identifier is not a capability.
+        let release_id = [0x61; 32];
+        let expected =
+            crate::zk::kagemusha_v1_state::canonical_empty_durable_effect_digest_v1(release_id)
+                .expect("canonical empty effect");
+        validate_canonical_empty_effect_digest_v1(release_id, expected)
+            .expect("same Core-derived sentinel");
+        let mut changed = expected;
+        changed[0] ^= 1;
+        assert_ne!(changed, [0; 32]);
+        let other =
+            crate::zk::kagemusha_v1_state::canonical_empty_durable_effect_digest_v1([0x62; 32])
+                .expect("other release empty effect");
+        for supplied in [[0; 32], changed, other] {
+            assert!(matches!(
+                validate_canonical_empty_effect_digest_v1(release_id, supplied),
+                Err(KagemushaArtifactErrorV1::InvalidRelease(_))
+            ));
+        }
+    }
+
     fn stream_binding(bytes: &[u8]) -> KagemushaArtifactBindingV1 {
         KagemushaArtifactBindingV1 {
             role: KagemushaArtifactRoleV1::StateVkEq,
@@ -1026,6 +1086,10 @@ mod tests {
         };
         KagemushaAuthenticatedArtifactSetV1 {
             recursion,
+            // This tests only profile preflight and storage; it is not release authority.
+            native_profile_digest: binding.sha256,
+            // Storage/profile tests do not establish provider authority.
+            provider_policy_root: [23; 32],
             suite_id: [15; 32],
             vk_set_digest: [16; 32],
             bindings: std::array::from_fn(|index| {

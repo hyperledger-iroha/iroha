@@ -153,7 +153,8 @@ fn native_amx_prepublication_transition_preflight_is_read_only_and_exact() {
         )
         .expect_err("participant-height gap must fail prepublication");
     assert!(
-        error.to_string().contains("non-contiguous"),
+        error.to_string().contains("shared predecessor")
+            || error.to_string().contains("participant"),
         "unexpected participant-gap error: {error}"
     );
     assert_eq!(snapshot(&directory), before);
@@ -188,8 +189,10 @@ fn native_amx_prepublication_transition_preflight_is_read_only_and_exact() {
         )
         .expect_err("regressed participant height must fail prepublication");
     assert!(
-        error.to_string().contains("regress"),
-        "unexpected regressed-height error: {error}"
+        matches!(&error, Error::IO(source, _)
+            if source.kind() == ErrorKind::InvalidData
+                && source.to_string() == "zero lane artifact height"),
+        "zero-height input must fail structural validation before predecessor lookup: {error}"
     );
     assert_eq!(snapshot(&directory), before);
     let mut conflict_receipt = receipts[0].clone();
@@ -212,7 +215,7 @@ fn native_amx_prepublication_transition_preflight_is_read_only_and_exact() {
     assert_eq!(snapshot(&directory), before);
 }
 #[test]
-fn native_amx_retained_history_requires_one_exact_contiguous_descriptor_chain() {
+fn native_amx_retained_history_requires_exact_native_links_and_shared_predecessors() {
     let temp_dir = TempDir::new().expect("Native retained-chain Kura directory");
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let (kura, _) =
@@ -265,7 +268,7 @@ fn native_amx_retained_history_requires_one_exact_contiguous_descriptor_chain() 
     )
     .expect_err("symmetric middle-pair deletion must puncture the retained suffix");
     assert!(
-        error.contains("contiguous"),
+        error.contains("preceding Native settlement"),
         "unexpected Native retained puncture error: {error}"
     );
     let mut drifted_manifests = manifests;
@@ -283,7 +286,7 @@ fn native_amx_retained_history_requires_one_exact_contiguous_descriptor_chain() 
     )
     .expect_err("adjacent retained predecessor drift must fail closed");
     assert!(
-        error.contains("predecessor identity"),
+        error.contains("shared predecessor"),
         "unexpected Native retained predecessor error: {error}"
     );
 }
@@ -318,7 +321,7 @@ fn native_amx_startup_rejects_symmetric_middle_pair_deletion() {
         Err(error) => error,
     };
     assert!(
-        error.to_string().contains("contiguous"),
+        error.to_string().contains("preceding Native settlement"),
         "unexpected punctured Native startup error: {error}"
     );
     assert!(
@@ -351,7 +354,7 @@ fn native_amx_startup_rejects_authenticated_retained_predecessor_drift() {
         Err(error) => error,
     };
     assert!(
-        error.to_string().contains("predecessor identity"),
+        error.to_string().contains("shared predecessor"),
         "unexpected drifted Native startup error: {error}"
     );
 }
@@ -379,6 +382,7 @@ fn native_amx_prune_intent_rejects_middle_pair_puncture() {
             identity: latest,
             receipt_artifact_hash: HashOf::new(&receipts[2]),
         },
+        removed_settlements: vec![receipts[1].participant_settlement.clone()],
         entries: vec![
             NativeAmxEvidencePruneEntryV2 {
                 kind: NativeAmxEvidencePruneIntentV2::MANIFEST_KIND,
@@ -1667,4 +1671,477 @@ fn native_amx_prepublication_retains_previous_pair_until_post_wsv_cleanup() {
         newest_manifest_path.exists() && newest_receipt_path.exists(),
         "cleanup must retain the exact newest prepublished evidence"
     );
+}
+
+/// Append an ordinary canonical carrier with actual signed finality and persist
+/// its exact application receipt. Shared lane height can follow a Native control.
+fn append_ordinary_carrier_for_native_chain(
+    kura: &Kura,
+    entry: &LaneConfigEntry,
+    blocks: &mut DummyBlocks,
+    lane_height: u64,
+    predecessor: Option<&LaneBlockProposalV1>,
+) -> LaneBlockProposalV1 {
+    let next = blocks.next();
+    let mut block = block_with_lane_payload_ownership_for_kura(
+        next.as_ref().clone(),
+        entry.lane_id,
+        entry.dataspace_id,
+        lane_height,
+    )
+    .as_ref()
+    .clone();
+    if let Some(predecessor) = predecessor {
+        assert_eq!(
+            predecessor.descriptor.lane_block_height.checked_add(1),
+            Some(lane_height)
+        );
+        rebind_kura_lane_payload_predecessor(&mut block, predecessor.descriptor.descriptor_hash);
+    }
+    attach_ok_results_to_block(&mut block);
+    let ownership = block.execution_context().unwrap().lane_payload_ownerships[0].clone();
+    let proposal = lane_block_proposal_from_ownership(&ownership);
+    let block = Arc::new(block);
+    *blocks.blocks.last_mut().expect("appended ordinary carrier") = Arc::clone(&block);
+    kura.store_block(Arc::clone(&block))
+        .expect("persist ordinary shared-lane carrier");
+    let height = block.header().height().get();
+    let parent = height
+        .checked_sub(1)
+        .filter(|height| *height > 0)
+        .map(|height| {
+            kura.v2_finality_artifact(height)
+                .unwrap()
+                .expect("exact ordinary parent finality")
+        });
+    let finality = v2_finality_artifact_for_block_with_keys(
+        block.as_ref(),
+        parent.as_ref(),
+        &v2_finality_fixture_keys(),
+        v2_finality_fixture_execution_commitment(),
+    );
+    let _ = kura.store_v2_finality_artifact(&finality)
+        .expect("publish ordinary carrier finality");
+    kura.persist_lane_block_application_receipt(&proposal)
+        .expect("publish ordinary shared-lane application receipt");
+    assert_eq!(
+        kura.read_lane_application_receipt(entry.lane_id, lane_height)
+            .unwrap()
+            .unwrap()
+            .proposal,
+        proposal,
+    );
+    proposal
+}
+
+/// Exercise the production all-item preflight and pointer publication after
+/// installing exact carrier-authenticated manifest/receipt bytes.
+fn publish_native_chain_fixture_pointer(
+    kura: &Kura,
+    entry: &LaneConfigEntry,
+    receipt: &NativeAmxParticipantApplicationReceiptArtifact,
+) {
+    let manifest_path = Kura::native_amx_application_manifest_path_for_entry(
+        entry,
+        &kura.store_root,
+        receipt.participant_proposal.descriptor.lane_block_height,
+    );
+    let manifest = norito::decode_canonical::<NativeAmxParticipantApplicationManifestArtifactV1>(
+        &fs::read(manifest_path).expect("read exact sparse Native manifest"),
+    )
+    .expect("decode sparse Native manifest");
+    let _prune_guard = kura.prune_lock.lock();
+    let before = snapshot_regular_files_recursively(&Kura::lane_artifact_dir(
+        &entry.blocks_dir(&kura.store_root),
+    ));
+    let preflight = kura
+        .preflight_native_amx_participant_application_route_under_publication_guard(
+            &manifest, receipt,
+        )
+        .expect("shared ordinary predecessor and exact Native-only link authorize publication");
+    assert_eq!(
+        snapshot_regular_files_recursively(&Kura::lane_artifact_dir(
+            &entry.blocks_dir(&kura.store_root)
+        )),
+        before,
+        "whole-plan preflight is read-only",
+    );
+    kura.write_native_amx_participant_receipt_latest_index_for_prepublication_under_publication_guard(
+        receipt, &manifest, false, &preflight,
+    ).expect("publish exact sparse Native frontier through revalidating production writer");
+}
+
+#[test]
+fn native_amx_first_control_can_follow_an_ordinary_lane_block() {
+    for authority in ["receipt", "imported snapshot", "damaged imported raw"] {
+        let (_temp_dir, _config, _lane_config, kura) = temporary_kura_fixture();
+        establish_dummy_store_primary_anchor(&kura);
+        let entry = kura.lane_storage_entry(LaneId::SINGLE).unwrap();
+        let mut blocks = DummyBlocks::new();
+        let ordinary =
+            append_ordinary_carrier_for_native_chain(&kura, &entry, &mut blocks, 1, None);
+        if authority != "receipt" {
+            let (data, index) =
+                Kura::lane_block_application_receipt_paths_for_entry(&entry, &kura.store_root);
+            fs::remove_file(data)
+                .expect("imported snapshot does not retain ordinary receipt bytes");
+            fs::remove_file(index)
+                .expect("imported snapshot does not retain ordinary receipt index");
+            let snapshot_hash = kura
+                .block_hash_at_height(nonzero!(1_usize))
+                .expect("exact canonical prefix hash");
+            kura.extend_hash_only_prefix_from_snapshot(&[snapshot_hash])
+                .expect("publish the explicit imported-prefix marker for snapshot recovery");
+            assert!(kura.is_audited_snapshot_import_height(nonzero!(1_usize)));
+            assert!(kura.read_block_body(nonzero!(1_usize)).unwrap().is_none());
+        }
+        let native_block = blocks.next();
+        kura.store_block(Arc::clone(&native_block))
+            .expect("persist first Native carrier");
+        let receipt = install_native_amx_evidence_fixture_at_block(
+            &kura,
+            &entry,
+            &[2],
+            None,
+            native_block,
+            Some(&ordinary),
+            None,
+        )
+        .pop()
+        .unwrap();
+        assert_eq!(
+            receipt
+                .participant_settlement
+                .previous_native_settlement_hash(),
+            None
+        );
+        if authority == "damaged imported raw" {
+            let (data, _) = Kura::lane_artifact_paths_for_entry(&entry, &kura.store_root);
+            let old = fs::read(&data).expect("actual occupied raw snapshot ownership");
+            fs::write(&data, vec![0xA5; old.len()])
+                .expect("damage actual indexed snapshot evidence");
+            let manifest_path =
+                Kura::native_amx_application_manifest_path_for_entry(&entry, &kura.store_root, 2);
+            let manifest = norito::decode_canonical::<
+                NativeAmxParticipantApplicationManifestArtifactV1,
+            >(&fs::read(manifest_path).unwrap())
+            .unwrap();
+            let before = snapshot_regular_files_recursively(&Kura::lane_artifact_dir(
+                &entry.blocks_dir(&kura.store_root),
+            ));
+            let _prune = kura.prune_lock.lock();
+            assert!(
+                kura.preflight_native_amx_participant_application_route_under_publication_guard(
+                    &manifest, &receipt,
+                )
+                .is_err(),
+                "an imported-prefix flag cannot hide occupied raw corruption"
+            );
+            assert_eq!(
+                snapshot_regular_files_recursively(&Kura::lane_artifact_dir(
+                    &entry.blocks_dir(&kura.store_root)
+                )),
+                before
+            );
+        } else {
+            publish_native_chain_fixture_pointer(&kura, &entry, &receipt);
+            assert_eq!(
+                kura.read_latest_native_amx_participant_application_receipt(entry.lane_id)
+                    .unwrap(),
+                NativeAmxLatestReceiptObservation::Applied(receipt),
+            );
+        }
+    }
+}
+
+#[test]
+fn native_amx_sparse_history_accepts_ordinary_interleaving_and_detects_missing_native_pair() {
+    for pointerless in [false, true] {
+        let (_temp_dir, config, lane_config, kura) = temporary_kura_fixture();
+        let entry = kura.lane_storage_entry(LaneId::SINGLE).unwrap();
+        let first = install_native_amx_latest_index_evidence_fixture(&kura, &entry);
+        publish_native_chain_fixture_pointer(&kura, &entry, &first);
+        let mut blocks = DummyBlocks {
+            blocks: vec![kura.read_block_body(nonzero!(1_usize)).unwrap().unwrap()],
+        };
+        let mut previous = first.clone();
+        let mut receipts = vec![first];
+        for native_height in [3, 5] {
+            let ordinary = append_ordinary_carrier_for_native_chain(
+                &kura,
+                &entry,
+                &mut blocks,
+                native_height - 1,
+                Some(&previous.participant_proposal),
+            );
+            let native_block = blocks.next();
+            kura.store_block(Arc::clone(&native_block))
+                .expect("persist sparse Native carrier");
+            let receipt = install_native_amx_evidence_fixture_at_block(
+                &kura,
+                &entry,
+                &[native_height],
+                None,
+                native_block,
+                Some(&ordinary),
+                Some(previous.participant_settlement_hash),
+            )
+            .pop()
+            .unwrap();
+            assert_eq!(
+                receipt
+                    .participant_settlement
+                    .previous_native_settlement_hash(),
+                Some(previous.participant_settlement_hash),
+            );
+            if pointerless {
+                fs::remove_file(
+                    Kura::native_amx_participant_receipt_latest_index_path_for_entry(
+                        &entry,
+                        &kura.store_root,
+                    ),
+                )
+                .expect("interrupt derived pointer publication before owned repair");
+            }
+            publish_native_chain_fixture_pointer(&kura, &entry, &receipt);
+            previous = receipt.clone();
+            receipts.push(receipt);
+        }
+        let history = kura
+            .read_native_amx_participant_application_history(entry.lane_id)
+            .expect("Native-only authenticated links permit ordinary gaps");
+        assert_eq!(
+            history
+                .entries()
+                .map(|(height, _)| height)
+                .collect::<Vec<_>>(),
+            vec![1, 3, 5]
+        );
+        assert_eq!(
+            kura.read_latest_native_amx_participant_application_receipt(entry.lane_id)
+                .unwrap(),
+            NativeAmxLatestReceiptObservation::Applied(receipts[2].clone()),
+        );
+        drop(kura);
+        let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+            .expect("startup accepts the authenticated sparse Native chain");
+        for path in [
+            Kura::native_amx_application_manifest_path_for_entry(&entry, &reopened.store_root, 3),
+            Kura::native_amx_participant_receipt_path_for_entry(&entry, &reopened.store_root, 3),
+        ] {
+            fs::remove_file(path).expect("remove both members of an interior Native application");
+        }
+        let before = snapshot_regular_files_recursively(&Kura::lane_artifact_dir(
+            &entry.blocks_dir(&reopened.store_root),
+        ));
+        assert!(
+            reopened
+                .read_native_amx_participant_application_history(entry.lane_id)
+                .is_err(),
+            "the signed H5 link still requires Native H3 even though numeric gaps are valid"
+        );
+        assert_eq!(
+            snapshot_regular_files_recursively(&Kura::lane_artifact_dir(
+                &entry.blocks_dir(&reopened.store_root)
+            )),
+            before,
+            "damaged history is preserved for recovery",
+        );
+        drop(reopened);
+        assert!(
+            Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).is_err(),
+            "startup cannot reinterpret missing Native H3 as ordinary history"
+        );
+    }
+}
+
+#[test]
+fn native_amx_sparse_prune_intent_authenticates_removed_preimages_after_each_unlink() {
+    for removed_members in [0, 1, 2] {
+        for tamper_preimage in [false, true] {
+            let temp_dir = TempDir::new().expect("sparse Native prune crash fixture");
+            let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+            config.lane_history_retention = nonzero!(2_usize);
+            let lane_config = RuntimeLaneConfig::default();
+            let (kura, _) =
+                Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).unwrap();
+            let entry = kura.lane_storage_entry(LaneId::SINGLE).unwrap();
+            let first = install_native_amx_latest_index_evidence_fixture(&kura, &entry);
+            publish_native_chain_fixture_pointer(&kura, &entry, &first);
+            let mut blocks = DummyBlocks {
+                blocks: vec![kura.read_block_body(nonzero!(1_usize)).unwrap().unwrap()],
+            };
+            let mut previous = first.clone();
+            for native_height in [3, 5] {
+                let ordinary = append_ordinary_carrier_for_native_chain(
+                    &kura,
+                    &entry,
+                    &mut blocks,
+                    native_height - 1,
+                    Some(&previous.participant_proposal),
+                );
+                let native_block = blocks.next();
+                kura.store_block(Arc::clone(&native_block)).unwrap();
+                let receipt = install_native_amx_evidence_fixture_at_block(
+                    &kura,
+                    &entry,
+                    &[native_height],
+                    None,
+                    native_block,
+                    Some(&ordinary),
+                    Some(previous.participant_settlement_hash),
+                )
+                .pop()
+                .unwrap();
+                publish_native_chain_fixture_pointer(&kura, &entry, &receipt);
+                previous = receipt;
+            }
+            let mut intent = native_amx_prune_intent_for_test(&kura, &entry, &previous, &[1]);
+            if tamper_preimage {
+                let settlement = &intent.removed_settlements[0];
+                intent.removed_settlements[0] =
+                    iroha_data_model::block::consensus::NativeAmxParticipantSettlement::try_new(
+                        settlement.lane_id(),
+                        settlement.dataspace_id(),
+                        settlement.lane_incarnation(),
+                        settlement.participant_lane_block_height(),
+                        settlement.authority_context_height(),
+                        settlement.previous_native_settlement_hash(),
+                        vec![[0xA7; Hash::LENGTH]],
+                    )
+                    .unwrap();
+            }
+            let (intent_path, _) = native_amx_prune_special_paths(&kura, &entry);
+            write_synced_native_amx_test_file(
+                &intent_path,
+                &norito::encode_canonical(&intent).unwrap(),
+            );
+            let removal_paths = [
+                Kura::native_amx_application_manifest_path_for_entry(&entry, &kura.store_root, 1),
+                Kura::native_amx_participant_receipt_path_for_entry(&entry, &kura.store_root, 1),
+            ];
+            for path in removal_paths.iter().take(removed_members) {
+                fs::remove_file(path).expect("interrupt authenticated prune after exact unlink");
+            }
+            let before = snapshot_regular_files_recursively(&Kura::lane_artifact_dir(
+                &entry.blocks_dir(&kura.store_root),
+            ));
+            drop(kura);
+            let reopened = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config);
+            if tamper_preimage {
+                assert!(
+                    reopened.is_err(),
+                    "a substituted preimage cannot authorize remaining unlinks"
+                );
+                assert_eq!(
+                    snapshot_regular_files_recursively(&Kura::lane_artifact_dir(
+                        &entry.blocks_dir(temp_dir.path())
+                    )),
+                    before,
+                    "failed chain closure must preserve every remaining evidence byte",
+                );
+            } else {
+                let (reopened, _) = reopened
+                    .expect("exact sparse prefix remains authenticated across partial unlink");
+                assert!(!intent_path.exists());
+                assert!(removal_paths.iter().all(|path| !path.exists()));
+                assert_eq!(
+                    reopened
+                        .read_native_amx_participant_application_history(entry.lane_id)
+                        .unwrap()
+                        .entries()
+                        .map(|(height, _)| height)
+                        .collect::<Vec<_>>(),
+                    vec![3, 5],
+                );
+                assert_eq!(
+                    reopened
+                        .read_latest_native_amx_participant_application_receipt(entry.lane_id)
+                        .unwrap(),
+                    NativeAmxLatestReceiptObservation::Applied(previous),
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn native_amx_prune_preimage_collection_stops_before_over_budget_retention_or_publication() {
+    let (_temp_dir, _config, _lane_config, kura) = temporary_kura_fixture();
+    let entry = kura.lane_storage_entry(LaneId::SINGLE).unwrap();
+    let receipts = install_native_amx_evidence_fixture_heights(&kura, &entry, &[1, 2, 3, 4]);
+    let mut intent = native_amx_prune_intent_for_test(&kura, &entry, &receipts[3], &[1, 2, 3]);
+    intent.removed_settlements.clear();
+    let directory = Kura::lane_artifact_dir(&entry.blocks_dir(&kura.store_root));
+    let before = snapshot_regular_files_recursively(&directory);
+
+    let mut exact = intent.clone();
+    exact.removed_settlements = Kura::collect_native_amx_prune_settlement_preimages(
+        &exact,
+        kura.native_amx_evidence_prune_intent_max_bytes(),
+        |height| {
+            Ok(receipts[usize::try_from(height - 1).unwrap()]
+                .participant_settlement
+                .clone())
+        },
+    )
+    .expect("small exact preimages fit the real configured shared budget");
+    {
+        let _prune = kura.prune_lock.lock();
+        let _canonical = kura.canonical_chain_lock.lock();
+        let _geometry = kura.lane_geometry_lock.lock();
+        let _sidecar = kura.sidecar_lock.lock();
+        let namespace = kura
+            .native_amx_evidence_namespace_for_entry(&entry)
+            .unwrap();
+        kura.validate_native_amx_evidence_prune_intent_locked(&entry, &namespace, &exact)
+            .expect("bounded preimage collection retains the actual authenticated intent");
+    }
+
+    let make_maximum_control = |height, previous| {
+        let source_ids = (1..=4096_u64)
+            .map(|source| {
+                let mut id = [0; Hash::LENGTH];
+                id[..8].copy_from_slice(&source.to_le_bytes());
+                id
+            })
+            .collect();
+        iroha_data_model::block::consensus::NativeAmxParticipantSettlement::try_new(
+            entry.lane_id,
+            entry.dataspace_id,
+            receipts[0].participant_settlement.lane_incarnation(),
+            height,
+            1,
+            previous,
+            source_ids,
+        )
+        .expect("maximum-size Native source vector is structurally valid")
+    };
+    let first = make_maximum_control(1, None);
+    let prefix_headroom = 3 * (u64::BITS as usize).div_ceil(7);
+    let byte_limit = norito::encode_canonical(&intent).unwrap().len()
+        + norito::encode_canonical(&first).unwrap().len()
+        + prefix_headroom;
+    let mut reads = 0;
+    let mut previous = None;
+    let error =
+        Kura::collect_native_amx_prune_settlement_preimages(&intent, byte_limit, |height| {
+            reads += 1;
+            let settlement = make_maximum_control(height, previous);
+            previous = Some(settlement.computed_hash().unwrap());
+            Ok(settlement)
+        })
+        .expect_err("retention must stop before accumulating a second maximum-source control");
+    assert!(error.to_string().contains("cumulative byte budget"));
+    assert_eq!(
+        reads, 2,
+        "the remaining receipt is never loaded after the budget failure"
+    );
+    assert_eq!(
+        snapshot_regular_files_recursively(&directory),
+        before,
+        "preimage budgeting precedes any journal publication or evidence unlink"
+    );
+    let (stable, temporary) = native_amx_prune_special_paths(&kura, &entry);
+    assert!(!stable.exists() && !temporary.exists());
 }

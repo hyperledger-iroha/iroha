@@ -141,12 +141,15 @@ fn canonical_block_hashes(count: u8) -> Vec<HashOf<BlockHeader>> {
 #[test]
 fn publication_snapshot_requires_its_exact_revision_activation_interval() {
     let block_hashes = canonical_block_hashes(9);
+    // The typed hash applies its canonical marker bit. Snapshot anchors must
+    // use those exact bytes, including at even-numbered activation heights.
+    let hash_at = |height: usize| *block_hashes[height - 1].as_ref();
     let mut world = World::new();
     world.musubi_resolver_index_checkpoints.insert(
         MusubiResolverIndexRevisionV1::new(1).expect("genesis revision"),
         MusubiRegistrySnapshotV1 {
             finalized_height: 1,
-            finalized_block_hash: [1; 32],
+            finalized_block_hash: hash_at(1),
             index_revision: 1,
         },
     );
@@ -154,7 +157,7 @@ fn publication_snapshot_requires_its_exact_revision_activation_interval() {
         MusubiResolverIndexRevisionV1::new(7).expect("revision seven"),
         MusubiRegistrySnapshotV1 {
             finalized_height: 2,
-            finalized_block_hash: [2; 32],
+            finalized_block_hash: hash_at(2),
             index_revision: 7,
         },
     );
@@ -162,7 +165,7 @@ fn publication_snapshot_requires_its_exact_revision_activation_interval() {
         MusubiResolverIndexRevisionV1::new(9).expect("revision nine"),
         MusubiRegistrySnapshotV1 {
             finalized_height: 6,
-            finalized_block_hash: [6; 32],
+            finalized_block_hash: hash_at(6),
             index_revision: 9,
         },
     );
@@ -175,8 +178,8 @@ fn publication_snapshot_requires_its_exact_revision_activation_interval() {
     );
     {
         let mut committed_hashes = state.block_hashes.block();
-        for hash in block_hashes {
-            committed_hashes.push_for_tests(hash);
+        for hash in &block_hashes {
+            committed_hashes.push_for_tests(*hash);
         }
         committed_hashes.commit_for_tests();
     }
@@ -184,7 +187,7 @@ fn publication_snapshot_requires_its_exact_revision_activation_interval() {
     validate_musubi_registry_snapshot_history_v1(
         &MusubiRegistrySnapshotV1 {
             finalized_height: 5,
-            finalized_block_hash: [5; 32],
+            finalized_block_hash: hash_at(5),
             index_revision: 7,
         },
         &view,
@@ -204,19 +207,19 @@ fn publication_snapshot_requires_its_exact_revision_activation_interval() {
     assert!(validate_musubi_registry_snapshot_history_v1(&future_height, &view).is_err());
     let future_revision = MusubiRegistrySnapshotV1 {
         finalized_height: 5,
-        finalized_block_hash: [5; 32],
+        finalized_block_hash: hash_at(5),
         index_revision: 10,
     };
     assert!(validate_musubi_registry_snapshot_history_v1(&future_revision, &view).is_err());
     let predates_activation = MusubiRegistrySnapshotV1 {
         finalized_height: 1,
-        finalized_block_hash: [1; 32],
+        finalized_block_hash: hash_at(1),
         index_revision: 7,
     };
     assert!(validate_musubi_registry_snapshot_history_v1(&predates_activation, &view).is_err());
     let successor_already_active = MusubiRegistrySnapshotV1 {
         finalized_height: 6,
-        finalized_block_hash: [6; 32],
+        finalized_block_hash: hash_at(6),
         index_revision: 7,
     };
     assert!(
@@ -224,7 +227,7 @@ fn publication_snapshot_requires_its_exact_revision_activation_interval() {
     );
     let skipped_same_block_revision = MusubiRegistrySnapshotV1 {
         finalized_height: 5,
-        finalized_block_hash: [5; 32],
+        finalized_block_hash: hash_at(5),
         index_revision: 8,
     };
     let error = validate_musubi_registry_snapshot_history_v1(&skipped_same_block_revision, &view)
@@ -400,6 +403,214 @@ fn publication_resolution_binds_rows_and_selection_state_to_snapshot() {
         validate_row(newer_yank).expect_err("future yank state did not exist at the snapshot");
     assert!(error.to_string().contains("yank state is newer"));
 }
+fn initial_executor_archive_registration_fixture() -> (World, AccountId, RegisterMusubiArchiveV1) {
+    let mut archive = retention_archive(0x34);
+    let publisher = archive.registered_by.clone();
+    let broker = archive
+        .staging_receipt
+        .payload
+        .binding
+        .ingress_broker
+        .clone();
+    let mut world = World::with(
+        [],
+        [
+            iroha_data_model::account::Account::new(publisher.clone()).build(&publisher),
+            iroha_data_model::account::Account::new(broker.clone()).build(&broker),
+            iroha_data_model::account::Account::new(account(0x90)).build(&account(0x90)),
+        ],
+        [],
+    );
+    world.provider_owners.insert(
+        archive.staging_receipt.payload.binding.seed_provider,
+        broker,
+    );
+    archive.staging_receipt.payload.binding.network_id =
+        iroha_data_model::NetworkId::from_genesis_hash(archive_location_genesis_header().hash());
+    archive.staging_receipt.payload.issued_at_ms = 500;
+    archive.staging_receipt.payload.expires_at_ms = 2_000;
+    let broker_key = KeyPair::try_from_seed(vec![0x35; 32], Algorithm::Ed25519)
+        .expect("same original fixture ingress broker key");
+    archive.staging_receipt.approvals[0].signature = SignatureOf::try_from_hash(
+        broker_key.private_key(),
+        archive.staging_receipt.payload.signing_hash(),
+    )
+    .expect("sign exact archive receipt for the actual execution network");
+    archive.commitment.validate().expect("canonical commitment");
+    archive
+        .staging_receipt
+        .verify(&archive.staging_receipt.payload.binding, 1_500)
+        .expect("authenticated fixture receipt at execution time");
+    (
+        world,
+        publisher,
+        RegisterMusubiArchiveV1::new(archive.commitment, archive.staging_receipt, 1),
+    )
+}
+
+fn initial_executor_archive_block(state: &State) -> crate::state::StateBlock<'_> {
+    state.block(BlockHeader::new(
+        std::num::NonZeroU64::new(2).expect("post-genesis archive height"),
+        Some(archive_location_genesis_header().hash()),
+        None,
+        None,
+        1_500,
+        0,
+    ))
+}
+
+#[test]
+fn initial_executor_registers_authenticated_musubi_archive_and_preserves_exact_replay() {
+    let (world, publisher, instruction) = initial_executor_archive_registration_fixture();
+    let archive_id = instruction.commitment.archive_id();
+    let receipt = instruction.staging_receipt.clone();
+    let state = archive_location_replay_state(world);
+    let mut block = initial_executor_archive_block(&state);
+    let mut transaction = block.transaction();
+    crate::executor::Executor::Initial
+        .execute_instruction(&mut transaction, &publisher, instruction.clone().into())
+        .expect("Initial executor routes the authenticated archive registration through Core");
+    let registered = transaction
+        .world
+        .musubi_archives
+        .get(&archive_id)
+        .expect("archive was actually registered")
+        .clone();
+    assert_eq!(registered.registered_by, publisher);
+    assert_eq!(registered.staging_receipt, receipt);
+    assert_eq!(registered.registered_at_height, 2);
+    assert!(
+        transaction
+            .world
+            .musubi_archive_availability
+            .get(&archive_id)
+            .is_some()
+    );
+    assert!(
+        transaction
+            .world
+            .musubi_archive_reverse_references
+            .get(&archive_id)
+            .is_some()
+    );
+    assert_eq!(take_musubi_events(&mut transaction).len(), 2);
+
+    crate::executor::Executor::Initial
+        .execute_instruction(&mut transaction, &publisher, instruction.clone().into())
+        .expect("exact original registrant replay remains idempotent");
+    assert_eq!(
+        transaction.world.musubi_archives.get(&archive_id),
+        Some(&registered)
+    );
+    assert!(take_musubi_events(&mut transaction).is_empty());
+    let error = crate::executor::Executor::Initial
+        .execute_instruction(&mut transaction, &account(0x90), instruction.into())
+        .expect_err("an unrelated authority cannot replay the registrant's receipt");
+    let iroha_data_model::ValidationFail::InstructionFailed(error) = error else {
+        panic!("unauthorized replay must reach the Core handler: {error:?}");
+    };
+    assert!(
+        error
+            .to_string()
+            .contains("only the original Musubi archive registrant")
+    );
+    assert_eq!(
+        transaction.world.musubi_archives.get(&archive_id),
+        Some(&registered)
+    );
+    assert!(take_musubi_events(&mut transaction).is_empty());
+}
+
+#[test]
+fn initial_executor_musubi_archive_registration_keeps_native_authority_and_policy_checks() {
+    for (case, expected) in [
+        ("publisher", "network, publisher, or archive body"),
+        ("closed_policy", "admission is closed"),
+        ("stale_policy", "stale Musubi registry policy revision"),
+        ("provider", "provider is not admitted"),
+        ("network", "network, publisher, or archive body"),
+        ("signature", "receipt signature failed"),
+        ("expired", "validity window does not match"),
+    ] {
+        let (mut world, publisher, mut instruction) =
+            initial_executor_archive_registration_fixture();
+        let mut authority = publisher;
+        match case {
+            "publisher" => authority = account(0x90),
+            "closed_policy" => {
+                world.musubi_registry_policy = Cell::new(MusubiRegistryPolicyV1 {
+                    mode: MusubiRegistryAdmissionModeV1::Closed,
+                    ..MusubiRegistryPolicyV1::default()
+                });
+            }
+            "stale_policy" => instruction.expected_policy_revision = 2,
+            "provider" => {
+                instruction.staging_receipt.payload.binding.seed_provider =
+                    iroha_data_model::sorafs::capacity::ProviderId::new([0xff; 32]);
+            }
+            "network" => {
+                instruction.staging_receipt.payload.binding.network_id = retention_archive(0x60)
+                    .staging_receipt
+                    .payload
+                    .binding
+                    .network_id;
+            }
+            "signature" => {
+                let wrong_key = KeyPair::try_from_seed(vec![0x99; 32], Algorithm::Ed25519)
+                    .expect("unrelated signing key");
+                instruction.staging_receipt.approvals[0].signature = SignatureOf::try_from_hash(
+                    wrong_key.private_key(),
+                    instruction.staging_receipt.payload.signing_hash(),
+                )
+                .expect("wrong-key signature is structurally well formed");
+            }
+            "expired" => {
+                instruction.staging_receipt.payload.expires_at_ms = 1_000;
+                let broker_key = KeyPair::try_from_seed(vec![0x35; 32], Algorithm::Ed25519)
+                    .expect("original admitted broker");
+                instruction.staging_receipt.approvals[0].signature = SignatureOf::try_from_hash(
+                    broker_key.private_key(),
+                    instruction.staging_receipt.payload.signing_hash(),
+                )
+                .expect("correctly signed expired receipt");
+            }
+            _ => unreachable!("closed native rejection matrix"),
+        }
+        let archive_id = instruction.commitment.archive_id();
+        let state = archive_location_replay_state(world);
+        let mut block = initial_executor_archive_block(&state);
+        let mut transaction = block.transaction();
+        let error = crate::executor::Executor::Initial
+            .execute_instruction(&mut transaction, &authority, instruction.into())
+            .expect_err("native archive checks must remain mandatory through Initial");
+        let iroha_data_model::ValidationFail::InstructionFailed(error) = error else {
+            panic!("{case} must reach the actual Core handler: {error:?}");
+        };
+        assert!(error.to_string().contains(expected), "{case}: {error}");
+        assert!(
+            transaction.world.musubi_archives.get(&archive_id).is_none(),
+            "{case}"
+        );
+        assert!(
+            transaction
+                .world
+                .musubi_archive_availability
+                .get(&archive_id)
+                .is_none(),
+            "{case}"
+        );
+        assert!(
+            transaction
+                .world
+                .musubi_archive_reverse_references
+                .get(&archive_id)
+                .is_none(),
+            "{case}"
+        );
+        assert!(take_musubi_events(&mut transaction).is_empty(), "{case}");
+    }
+}
+
 #[test]
 fn archive_registration_replay_requires_the_exact_original_receipt() {
     let mut world = World::new();
@@ -411,18 +622,14 @@ fn archive_registration_replay_requires_the_exact_original_receipt() {
     let broker = AccountId::new(broker_key.public_key().clone());
     let provider = iroha_data_model::sorafs::capacity::ProviderId::new([0x33; 32]);
     world.provider_owners.insert(provider, broker.clone());
-    let genesis = iroha_data_model::block::BlockHeader::new(
-        std::num::NonZeroU64::new(1).expect("genesis height"),
-        None,
-        None,
-        None,
-        500,
-        0,
-    );
+    let genesis = archive_replay_genesis_at(500);
     let genesis_hash = genesis.hash();
+    let kura = Kura::blank_kura_for_testing();
+    kura.store_block(std::sync::Arc::new(genesis))
+        .expect("retain the exact genesis body advertised by archive replay state");
     let state = State::new_with_chain_and_network_id_for_testing(
         world,
-        Kura::blank_kura_for_testing(),
+        kura,
         LiveQueryStore::start_test(),
         iroha_data_model::ChainId::from("archive-replay-test"),
         iroha_data_model::NetworkId::from_genesis_hash(genesis_hash),
@@ -1234,44 +1441,102 @@ fn explicit_location_invalidation_preserves_a_protected_archives_replica_quorum(
         .expect_err("one remaining fetchable replica is not a healthy release floor");
     assert!(error.to_string().contains("quorum-healthy"));
 }
+/// Retain a deterministic log-only genesis anchor for these seeded ISI unit states.
+/// Advertising only its hash would make ordinary StateBlock creation fail DA hydration
+/// before any native archive authorization or exact-receipt check could execute.
+fn archive_replay_genesis_at(creation_time_ms: u64) -> iroha_data_model::block::SignedBlock {
+    let key = KeyPair::try_from_seed(vec![0xA6; 32], Algorithm::Ed25519)
+        .expect("archive replay genesis fixture key");
+    let authority = AccountId::new(key.public_key().clone());
+    let transaction_time =
+        iroha_primitives::time::TimeSource::new_fixed(std::time::Duration::from_millis(
+            creation_time_ms
+                .checked_sub(1)
+                .expect("genesis block time follows its transaction"),
+        ));
+    let transaction =
+        iroha_data_model::transaction::TransactionBuilder::new_genesis_with_time_source(
+            authority,
+            &transaction_time,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([iroha_data_model::isi::Log::new(
+            iroha_logger::Level::INFO,
+            "archive replay anchor".to_owned(),
+        )])
+        .sign(key.private_key());
+    let mut genesis = iroha_data_model::block::SignedBlock::genesis(
+        vec![transaction],
+        key.private_key(),
+        None,
+        None,
+    );
+    let entrypoints = genesis
+        .external_entrypoints_cloned()
+        .map(|entrypoint| entrypoint.hash())
+        .collect::<Vec<_>>();
+    genesis
+        .set_transaction_results(
+            Vec::new(),
+            &entrypoints,
+            vec![Ok(
+                iroha_data_model::transaction::DataTriggerSequence::default(),
+            )],
+        )
+        .expect("retain the successful log-only genesis result");
+    let signature = iroha_data_model::block::BlockSignature::new(
+        0,
+        SignatureOf::try_from_hash(key.private_key(), genesis.hash())
+            .expect("sign the retained result-bearing genesis"),
+    );
+    genesis
+        .replace_signatures(std::collections::BTreeSet::from([signature]))
+        .expect("install exact retained genesis signature");
+    assert_eq!(
+        genesis.header().creation_time(),
+        std::time::Duration::from_millis(creation_time_ms)
+    );
+    assert_eq!(genesis.results().len(), 1);
+    assert!(genesis.results().all(|result| result.as_ref().is_ok()));
+    genesis
+        .validate_entrypoint_merkle_cache()
+        .expect("canonical genesis entrypoints");
+    genesis
+        .validate_result_merkle_cache()
+        .expect("canonical genesis results");
+    genesis
+}
 fn archive_location_genesis_header() -> iroha_data_model::block::BlockHeader {
-    iroha_data_model::block::BlockHeader::new(
-        std::num::NonZeroU64::new(1).expect("nonzero genesis height"),
-        None,
-        None,
-        None,
-        0,
-        0,
-    )
+    archive_replay_genesis_at(1).header()
 }
 fn archive_location_replay_state(world: World) -> State {
-    let header = archive_location_genesis_header();
-    let signer = KeyPair::try_from_seed(vec![0xF1; 32], Algorithm::Ed25519)
-        .expect("archive replay fixture signer");
-    let genesis = iroha_data_model::block::builder::BlockBuilder::new(header.clone())
-        .try_build_with_signature(0, signer.private_key())
-        .expect("canonical result-bearing archive replay genesis");
-    assert_eq!(genesis.hash(), header.hash());
+    let genesis = archive_replay_genesis_at(1);
+    let genesis_hash = genesis.hash();
+    assert_eq!(genesis_hash, archive_location_genesis_header().hash());
     let kura = Kura::blank_kura_for_testing();
     kura.store_block(std::sync::Arc::new(genesis))
-        .expect("retain the archive replay fixture's canonical genesis body");
-    let mut state = State::new_with_chain_and_network_id_for_testing(
+        .expect("retain the exact genesis body before advertising committed height");
+    let state = State::new_with_chain_and_network_id_for_testing(
         world,
         kura,
         LiveQueryStore::start_test(),
         iroha_data_model::ChainId::from("retention-test"),
         iroha_data_model::NetworkId::from_genesis_hash(archive_location_genesis_header().hash()),
     );
-    state.push_block_hash_for_testing(header.hash());
+    {
+        let mut block_hashes = state.block_hashes.block();
+        block_hashes.push_for_tests(genesis_hash);
+        block_hashes.commit_for_tests();
+    }
     state
 }
 fn archive_location_replay_block(state: &State) -> crate::state::StateBlock<'_> {
     let header = iroha_data_model::block::BlockHeader::new(
         std::num::NonZeroU64::new(2).expect("nonzero replay height"),
+        Some(archive_location_genesis_header().hash()),
         None,
         None,
-        None,
-        0,
+        2,
         0,
     );
     state.block(header)

@@ -522,7 +522,7 @@ where
     /// relation.  Reject them here instead of silently treating their capacity padding as an
     /// ordinary message.  The current mint-authority certificate queue contains ordinary jobs
     /// only, so this is a fail-closed protocol invariant rather than a history or count limit.
-    pub(crate) fn claim_jobs(&self) -> Result<Vec<PastaSha256ClaimJobV1<'_, F>>, String> {
+    pub(super) fn claim_jobs(&self) -> Result<Vec<PastaSha256ClaimJobV1<'_, F>>, String> {
         self.jobs
             .iter()
             .enumerate()
@@ -590,7 +590,7 @@ where
         self
     }
     #[cfg(test)]
-    fn with_output_word_xor(mut self, job: usize, word: usize, xor: u32) -> Self {
+    pub(crate) fn with_output_word_xor(mut self, job: usize, word: usize, xor: u32) -> Self {
         self.output_word_xor = Some((job, word, xor));
         self
     }

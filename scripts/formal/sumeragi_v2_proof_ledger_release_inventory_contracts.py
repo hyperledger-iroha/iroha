@@ -21,7 +21,11 @@ def _require_late_lane_recovery_runtime_source_contracts(
         late_lane_recovery_path,
         late_lane_recovery_test,
         """
-        assert!(adapter.proposal_anchor_is_committed_in_state(&proposal));
+        assert!(
+            adapter
+                .proposal_anchor_is_committed_in_state(&proposal)
+                .expect("read canonical State anchor")
+        );
         assert!(
             adapter
                 .kura
@@ -35,11 +39,14 @@ def _require_late_lane_recovery_runtime_source_contracts(
         assert!(
             !adapter
                 .state
-                .certified_lane_block_session_is_applied_or_snapshot_anchored_cached(&recovered),
+                .certified_lane_block_session_is_applied_or_snapshot_anchored(&recovered)
+                .expect("read exact lane application evidence"),
             "global application alone must not impersonate lane certificate application"
         );
         assert!(
-            adapter.proposal_body_available(&proposal),
+            adapter
+                .proposal_body_available(&proposal)
+                .expect("read exact body availability"),
             "the missing certificate must remain reconstructable from the canonical body"
         );
         """,
@@ -255,37 +262,37 @@ _PRODUCTION_LIVENESS_HELPER_SEALS = (
     ProductionLivenessHelperSeal(
         "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
         "outbound_lane_message_predecessor_is_ready",
-        "db2addffb9721cf95cd7aa71f06f1f00d1f07824bc7a2817476145cf06599d1a",
+        "29ef71b65bbd49a1387b465e55367ef226c9083c0e8227b76d0ff297ccac7a8c",
         brace_context=(("impl", "V2LaneWorkAdapter"),),
     ),
     ProductionLivenessHelperSeal(
         "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
         "historical_raw_proposal_can_solicit_certificate",
-        "f2ce1439fa32ab3dd5df854d4cf6837cab71da5ca74f9cafb5ef040d43b3a8c9",
+        "ab0b26d9251eb1aa4ee2cba434c78a551f0fdf2c97af676a29b8145eddf0a87d",
         brace_context=(("impl", "V2LaneWorkAdapter"),),
     ),
     ProductionLivenessHelperSeal(
         "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
         "proposal_can_be_transported",
-        "e071ff1d871d32a7bf9c0cb8807db0c474920618633953667aa629a5c1974275",
+        "3f4f9cc5f249974ef128f2c94a581c52704e6192b1cb1c87193b92112d487619",
         brace_context=(("impl", "V2LaneWorkAdapter"),),
     ),
     ProductionLivenessHelperSeal(
         "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
         "proposal_predecessor_is_ready_for_progress",
-        "9a952a9ee41d5ad85c2b18ccd9ea270745f06cb4a27e49550c6eeee4189733b4",
+        "73835515f534dd991fc70b65067135da93b06c78271574c45361f9a71999204b",
         brace_context=(("impl", "V2LaneWorkAdapter"),),
     ),
     ProductionLivenessHelperSeal(
         "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
         "proposal_can_progress",
-        "b41dfab022948cf8f6c33803f200b16f69458117f5cabb83c3d42f714fd9d3ee",
+        "dc1aea09b03e30d131825a50282286dbfc024f0369a1472a36f42d0064644739",
         brace_context=(("impl", "V2LaneWorkAdapter"),),
     ),
     ProductionLivenessHelperSeal(
         "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
         "historical_lane_recovery_message_is_authorized",
-        "e71f8743f602ac749495d043ebea83db81c081f00e51bf8a61bcf9904d84ba18",
+        "139fe436a3f198d7490faeedf68a8283621833c5fe563c4c2f0b307f1dc2c5ef",
         brace_context=(("impl", "V2LaneWorkAdapter"),),
     ),
     ProductionLivenessHelperSeal(
@@ -301,7 +308,7 @@ _PRODUCTION_LIVENESS_HELPER_SEALS = (
     ProductionLivenessHelperSeal(
         "crates/iroha_core/src/sumeragi/v2_worker.rs",
         "autonomous_lane_output_has_durable_reconstruction_source",
-        "0d806079c721d886405ad801b9fcb145b81387c2b9bc757534c82a4295a60e82",
+        "69bfd9d27c487fad2d01e11204e181754ed1021ce3ab5364a85f3a9e9c153b38",
     ),
 )
 
@@ -621,11 +628,11 @@ def _production_liveness_release_inventory_errors(
 
     canonical_grouped_sdk_suites = (
         ("openapi", 7),
-        ("python", 65),
-        ("javascript", 63),
-        ("swift", 5),
-        ("kotlin", 8),
-        ("java", 6),
+        ("python", 67),
+        ("javascript", 65),
+        ("swift", 9),
+        ("kotlin", 11),
+        ("java", 7),
     )
     def indented_shell_array(name: str) -> list[str]:
         matches = re.findall(
@@ -766,7 +773,7 @@ def _production_liveness_release_inventory_errors(
 
     canonical_sdk_diagnostics_suites = (
         ("python", 129),
-        ("javascript", 88),
+        ("javascript", 90),
         ("swift", 34),
         ("kotlin", 50),
         ("java", 59),
@@ -954,7 +961,7 @@ def _production_liveness_release_inventory_errors(
             f"found {tuple(harness_sdk_diagnostics_suites)!r}"
         )
     for no_skip_fragment in (
-        '      assert_node_tap "$javascript_transcript" 44',
+        '      assert_node_tap "$javascript_transcript" 45',
         'if tuple(totals) != (expected, 0, 0, 0):',
         'any("skipped" in line.lower() for line in lines)',
         'f"expected one exact no-skip {expected}-test pytest transcript"',
@@ -1005,14 +1012,14 @@ def _production_liveness_release_inventory_errors(
             else []
         )
         if (
-            len(js_diagnostics_tests) != 44
-            or len(set(js_diagnostics_tests)) != 44
+            len(js_diagnostics_tests) != 45
+            or len(set(js_diagnostics_tests)) != 45
             or "typed Sumeragi endpoints reject swapped status and diagnostics payloads"
             not in js_diagnostics_tests
         ):
             errors.append(
                 f"{js_diagnostics_test_path}: dedicated JavaScript Sumeragi "
-                "diagnostics inventory must contain exactly 44 unique tests and "
+                "diagnostics inventory must contain exactly 45 unique tests and "
                 "the swapped-endpoint negative"
             )
         elif any(

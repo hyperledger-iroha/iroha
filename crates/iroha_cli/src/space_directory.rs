@@ -38,14 +38,22 @@ const SPACE_DIRECTORY_MAX_SEQUENCE_ELEMENTS_V1: usize = 65_536;
 const SPACE_DIRECTORY_MAX_TOTAL_ELEMENTS_V1: usize = 4 * SPACE_DIRECTORY_MAX_SEQUENCE_ELEMENTS_V1;
 const SPACE_DIRECTORY_MAX_DECODE_ALLOCATION_BYTES_V1: usize = 128 * 1024 * 1024;
 const SPACE_DIRECTORY_MAX_NESTING_DEPTH_V1: usize = 64;
+const SPACE_DIRECTORY_JSON_MAX_NESTING_DEPTH_V1: usize = norito::json::MAX_JSON_VALUE_NESTING_DEPTH;
 const SPACE_DIRECTORY_ERROR_PREVIEW_BYTES_V1: usize = 4 * 1024;
 const SPACE_DIRECTORY_OUTPUT_MAX_BYTES_V1: usize = 2 * SPACE_DIRECTORY_INPUT_MAX_BYTES_V1;
-const SPACE_DIRECTORY_DECODE_LIMITS_V1: norito::DecodeLimits = norito::DecodeLimits::new(
+const SPACE_DIRECTORY_BINARY_DECODE_LIMITS_V1: norito::DecodeLimits = norito::DecodeLimits::new(
     SPACE_DIRECTORY_MAX_SEQUENCE_ELEMENTS_V1,
     SPACE_DIRECTORY_INPUT_MAX_BYTES_V1,
     SPACE_DIRECTORY_MAX_TOTAL_ELEMENTS_V1,
     SPACE_DIRECTORY_MAX_DECODE_ALLOCATION_BYTES_V1,
     SPACE_DIRECTORY_MAX_NESTING_DEPTH_V1,
+);
+const SPACE_DIRECTORY_JSON_DECODE_LIMITS_V1: norito::DecodeLimits = norito::DecodeLimits::new(
+    SPACE_DIRECTORY_MAX_SEQUENCE_ELEMENTS_V1,
+    SPACE_DIRECTORY_INPUT_MAX_BYTES_V1,
+    SPACE_DIRECTORY_MAX_TOTAL_ELEMENTS_V1,
+    SPACE_DIRECTORY_MAX_DECODE_ALLOCATION_BYTES_V1,
+    SPACE_DIRECTORY_JSON_MAX_NESTING_DEPTH_V1,
 );
 #[allow(clippy::large_enum_variant)]
 #[derive(clap::Subcommand, Debug)]
@@ -1069,7 +1077,7 @@ fn load_manifest_from_sources(
     match (manifest_path, manifest_json_path) {
         (Some(path), None) => {
             let bytes = read_space_directory_file_bounded(path, "manifest payload")?;
-            norito::with_decode_limits_scope(SPACE_DIRECTORY_DECODE_LIMITS_V1, || {
+            norito::with_decode_limits_scope(SPACE_DIRECTORY_BINARY_DECODE_LIMITS_V1, || {
                 AssetPermissionManifest::decode(&mut &*bytes)
             })
             .wrap_err("manifest is not valid bounded Norito")
@@ -1171,11 +1179,11 @@ where
         bytes,
         json::JsonPreflightLimits::from_decode_limits(
             SPACE_DIRECTORY_INPUT_MAX_BYTES_V1,
-            SPACE_DIRECTORY_DECODE_LIMITS_V1,
+            SPACE_DIRECTORY_JSON_DECODE_LIMITS_V1,
         ),
     )
     .map_err(|error| eyre!("{label} exceeds its JSON lexical resource bounds: {error}"))?;
-    norito::with_decode_limits_scope(SPACE_DIRECTORY_DECODE_LIMITS_V1, || json::from_slice(bytes))
+    norito::with_decode_limits_scope(SPACE_DIRECTORY_JSON_DECODE_LIMITS_V1, || json::from_slice(bytes))
         .map_err(|_| eyre!("{label} could not be decoded within its resource limits"))
 }
 fn encode_space_directory_json_bounded<T>(value: &T) -> Result<Vec<u8>>
@@ -1194,7 +1202,7 @@ fn extract_audit_hooks(profile: &JsonValue) -> Result<Option<AuditHookSummary>> 
         return Ok(None);
     }
     let hooks: AuditHookSummary =
-        norito::with_decode_limits_scope(SPACE_DIRECTORY_DECODE_LIMITS_V1, || {
+        norito::with_decode_limits_scope(SPACE_DIRECTORY_JSON_DECODE_LIMITS_V1, || {
             norito::json::from_value(raw_hooks.clone())
         })
         .wrap_err("profile audit_hooks could not be parsed")?;
@@ -1757,8 +1765,8 @@ mod tests {
     fn json_decoder_accepts_exact_depth_and_rejects_one_more() {
         let exact = format!(
             "{}null{}",
-            "[".repeat(SPACE_DIRECTORY_MAX_NESTING_DEPTH_V1 - 1),
-            "]".repeat(SPACE_DIRECTORY_MAX_NESTING_DEPTH_V1 - 1)
+            "[".repeat(SPACE_DIRECTORY_JSON_MAX_NESTING_DEPTH_V1 - 1),
+            "]".repeat(SPACE_DIRECTORY_JSON_MAX_NESTING_DEPTH_V1 - 1)
         );
         decode_space_directory_json::<JsonValue>(exact.as_bytes(), "test JSON")
             .expect("exact nesting depth");

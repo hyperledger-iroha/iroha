@@ -1018,6 +1018,7 @@ fn complete_tip_recovery_requires_authenticated_predecessor_retirement() {
     let error = PendingSuccessorActivation::recovered(
         RecoveredSuccessorActivationAuthority::CompleteTip(test_recovered_complete_tip_authority(
             &parent_context,
+            &keys,
             successor_context.id(),
             b"exact recovered successor context",
             directory.path(),

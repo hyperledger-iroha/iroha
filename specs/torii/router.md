@@ -105,8 +105,13 @@ request-specific response limit so receiver-side bounds validation cannot
 discard the fallback. Body-read errors use fixed local diagnostic text and
 never reflect or format an upstream body's error value.
 
-Read/query fanout starts candidate dataspace routes concurrently and returns a
-merged response from the routes that answer successfully. Responses include
+Application read fanout visits dataspace routes in sequence under its bounded
+working set and merges the routes that answer successfully. Candidate-peer
+hedging within a routed proxy request is separate from this dataspace traversal.
+Skipped not-found, unavailable, and alias-permission replies release their
+upstream bodies, headers, extensions, and memory reservations before the next
+route. The aggregate retains fixed local error text and failure counters;
+capacity and other non-skippable failures still stop collection. Responses include
 aggregate fanout headers:
 
 - `x-iroha-fanout-routes-attempted`

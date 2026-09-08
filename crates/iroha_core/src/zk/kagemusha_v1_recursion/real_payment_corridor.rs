@@ -10,6 +10,12 @@
 
 use std::fs::{File, OpenOptions, TryLockError};
 
+#[cfg(all(test, unix))]
+#[path = "real_payment_corridor/state_milestone.rs"]
+pub(super) mod state_milestone;
+#[cfg(all(test, unix))]
+pub(crate) use state_milestone::DiagnosticMintStageProofV1;
+
 use super::*;
 use crate::zk::kagemusha_v1_recursion::{
     KagemushaGeneratedMintAuthorityArtifactsV1, KagemushaGeneratedMintAuthorityProofV1,
@@ -21,7 +27,8 @@ use crate::zk::kagemusha_v1_recursion::{
     KagemushaMintAuthorizationGenerationWitnessV1, KagemushaMintAuthorizationRelationWitnessV1,
     KagemushaMintCertificateWitnessV1, KagemushaMintFinalitySignerV1, KagemushaMintFinalityTreeV1,
     KagemushaMintHashArtifactGenerationWitnessV1, KagemushaMintHashClaimGenerationWitnessV1,
-    KagemushaReceiveFoldCreditV1, KagemushaRecursiveIncomingEpGenerationWitnessV1,
+    KagemushaProviderRootCircuitParamsV1, KagemushaReceiveFoldCreditV1,
+    KagemushaRecursiveIncomingEpGenerationWitnessV1,
     KagemushaRecursiveIncomingEqGenerationWitnessV1, KagemushaRecursiveStateGenerationWitnessV1,
     KagemushaReplayInsertWitnessV1,
     accumulation::{
@@ -39,6 +46,7 @@ use crate::zk::kagemusha_v1_recursion::{
     },
     mint_authorization::{
         KagemushaMintAuthorizationEpCircuitV1, KagemushaMintAuthorizationEqCircuitV1,
+        MINT_AUTHORIZATION_INNER_SEMANTIC_INSTANCE_COUNT_V1,
         MINT_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1,
     },
     mint_hash_claim_fold::{
@@ -70,10 +78,9 @@ use iroha_data_model::{
         KagemushaTopUpMembershipWitnessV1, kagemusha_mint_finality_root_v1,
     },
     kagemusha::{
-        KAGEMUSHA_HARDWARE_REQUIRED_CAPABILITIES_V1, KAGEMUSHA_XCHACHA20POLY1305_NONCE_BYTES_V1,
-        KAGEMUSHA_XCHACHA20POLY1305_TAG_BYTES_V1, KagemushaCreditOpeningV1,
-        KagemushaDevicePublicKeyV1, KagemushaDeviceSignatureV1, KagemushaEncryptedCreditEnvelopeV1,
-        KagemushaHardwareCredentialV1, KagemushaHardwarePlatformClassV1,
+        KAGEMUSHA_XCHACHA20POLY1305_NONCE_BYTES_V1, KAGEMUSHA_XCHACHA20POLY1305_TAG_BYTES_V1,
+        KagemushaCreditOpeningV1, KagemushaDevicePublicKeyV1, KagemushaDeviceSignatureV1,
+        KagemushaEncryptedCreditEnvelopeV1, KagemushaHardwareCredentialV1,
         KagemushaHardwareProfileV1, KagemushaLifecycleBindingV1,
         KagemushaMintAuthorizationContextV1, KagemushaMintAuthorizationStatementV1,
         KagemushaMintAuthorizationV1, KagemushaMintCreditStatementV1, KagemushaOperationKindV1,
@@ -85,7 +92,6 @@ use iroha_data_model::{
 use p256::ecdsa::{Signature, signature::Signer as _};
 use zeroize::Zeroizing;
 
-const SUITE_COMMITMENT_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:suite-commitment";
 const REAL_PROOF_TEST_STACK_BYTES: usize = 64 * 1024 * 1024;
 
 /// Minimal three-column protocol used only to bootstrap recursive claim-key shape convergence.
@@ -235,6 +241,7 @@ fn device_signature(signing_key: &SigningKey, message: &[u8]) -> KagemushaDevice
 
 /// Exact recipient authorization material retained into the real MintFold witness.
 struct MintRecipientMaterial {
+    provider_policy: DiagnosticProviderPolicy,
     platform_credential: KagemushaPlatformCredentialRelationWitnessV1,
     hardware_profile: KagemushaHardwareProfileV1,
     hardware_credential: KagemushaHardwareCredentialV1,
@@ -315,47 +322,11 @@ fn mint_recipient_material(
 ) -> MintRecipientMaterial {
     let suite_id = digest(b"suite", 0);
     let issuer = deterministic_signing_key(0x7000);
-    let issuer_public_key = device_public_key(&issuer);
-    let hardware_profile = KagemushaHardwareProfileV1 {
-        version: KAGEMUSHA_WIRE_VERSION_V1,
-        protocol_version: KAGEMUSHA_WIRE_VERSION_V1,
-        hardware_profile_id: [0; 32],
-        provider_id: digest(b"mint-provider", 0),
-        platform_class: KagemushaHardwarePlatformClassV1::DedicatedSecureElement,
-        product_class_digest: digest(b"mint-product", 0),
-        firmware_policy_digest: digest(b"mint-firmware", 0),
-        enrollment_attestation_verifier_digest: digest(b"mint-enrollment-verifier", 0),
-        attestation_trust_roots_digest: digest(b"mint-attestation-root", 0),
-        allowed_suite_commitment: digest_bytes(SUITE_COMMITMENT_DOMAIN_V1, &suite_id),
-        policy_epoch: 1,
-        governance_credential_public_key: issuer_public_key,
-        capability_mask: KAGEMUSHA_HARDWARE_REQUIRED_CAPABILITIES_V1,
-        qualification_report_digest: digest(b"mint-qualification-report", 0),
-        valid_from_ms: 1,
-        expires_at_ms: 1_000_000,
-    }
-    .seal_hardware_profile_id()
-    .expect("canonical corridor hardware profile");
-
+    let hardware_profile = diagnostic_hardware_profile();
+    let provider_policy = DiagnosticProviderPolicy::new(hardware_profile);
     let empty_effect = digest(b"empty-durable-effect", 0);
     let (mut platform_credential, device_authority_secret) =
-        credential_witness(0, release_id, empty_effect);
-    platform_credential.statement.hardware_profile_id = hardware_profile.hardware_profile_id;
-    let mut hardware_policy_id = policy_leaf(&platform_credential.statement);
-    for (depth, sibling) in platform_credential
-        .policy_siblings
-        .iter()
-        .copied()
-        .enumerate()
-    {
-        hardware_policy_id =
-            if (platform_credential.statement.provider_profile_index >> depth) & 1 == 0 {
-                policy_node(hardware_policy_id, sibling)
-            } else {
-                policy_node(sibling, hardware_policy_id)
-            };
-    }
-    platform_credential.statement.hardware_policy_id = hardware_policy_id;
+        credential_witness_with_policy(0, release_id, empty_effect, &provider_policy);
 
     let mut hardware_credential = KagemushaHardwareCredentialV1 {
         version: KAGEMUSHA_WIRE_VERSION_V1,
@@ -534,6 +505,7 @@ fn mint_recipient_material(
         .validate_shape()
         .expect("valid exact mint recipient authorization relation");
     MintRecipientMaterial {
+        provider_policy,
         platform_credential,
         hardware_profile,
         hardware_credential,
@@ -689,14 +661,35 @@ impl MintAuthorizationKeys {
         generated: KagemushaGeneratedMintAuthorizationArtifactsV1,
         relation: &KagemushaMintAuthorizationRelationWitnessV1,
         recursive_inputs: PreparedMintAuthorizationRecursiveInputs,
+        provider_policy_root: DigestV1,
     ) -> Self {
+        assert_eq!(generated.provider_policy_root, provider_policy_root);
+        assert_eq!(
+            relation.platform_credential.hardware_policy_id,
+            provider_policy_root
+        );
+        assert_eq!(MINT_AUTHORIZATION_INNER_SEMANTIC_INSTANCE_COUNT_V1, 90);
+        assert_eq!(generated.inner_eq_circuit_params.num_instance_columns, 2);
+        assert_eq!(generated.inner_ep_circuit_params.num_instance_columns, 2);
+        assert_eq!(generated.eq_circuit_params.num_instance_columns, 1);
+        assert_eq!(generated.ep_circuit_params.num_instance_columns, 1);
+        let eq_transport_params = KagemushaProviderRootCircuitParamsV1::new(
+            generated.eq_circuit_params.clone(),
+            provider_policy_root,
+        )
+        .expect("explicit diagnostic Eq authorization setup root");
+        let ep_transport_params = KagemushaProviderRootCircuitParamsV1::new(
+            generated.ep_circuit_params.clone(),
+            provider_policy_root,
+        )
+        .expect("explicit diagnostic Ep authorization setup root");
         macro_rules! decode {
-            ($bytes:expr, $key:ident, $circuit:ty, $params:expr) => {{
+            ($bytes:expr, $key:ident, $circuit:ty, $params:expr, $k:expr) => {{
                 let mut cursor = Cursor::new($bytes.as_ref());
                 let key = $key::read_checked::<_, $circuit>(
                     &mut cursor,
                     SerdeFormat::Processed,
-                    u32::try_from($params.k).expect("generated authorization circuit degree"),
+                    u32::try_from($k).expect("generated authorization circuit degree"),
                     $params.clone(),
                 )
                 .expect("decode generated mint-authorization key");
@@ -721,13 +714,15 @@ impl MintAuthorizationKeys {
                 generated.eq_proving_key,
                 ProvingKey,
                 KagemushaMintAuthorizationTransportEqCircuitV1,
-                generated.eq_circuit_params
+                eq_transport_params,
+                generated.eq_circuit_params.k
             ),
             verifying_key: decode!(
                 generated.eq_verifying_key,
                 VerifyingKey,
                 KagemushaMintAuthorizationTransportEqCircuitV1,
-                generated.eq_circuit_params
+                eq_transport_params,
+                generated.eq_circuit_params.k
             ),
             circuit_params: generated.eq_circuit_params.clone(),
             protocol_digest: generated.eq_protocol_digest,
@@ -735,13 +730,15 @@ impl MintAuthorizationKeys {
                 generated.inner_eq_proving_key,
                 ProvingKey,
                 KagemushaMintAuthorizationEqCircuitV1,
-                generated.inner_eq_circuit_params
+                generated.inner_eq_circuit_params,
+                generated.inner_eq_circuit_params.k
             ),
             inner_verifying_key: decode!(
                 generated.inner_eq_verifying_key,
                 VerifyingKey,
                 KagemushaMintAuthorizationEqCircuitV1,
-                generated.inner_eq_circuit_params
+                generated.inner_eq_circuit_params,
+                generated.inner_eq_circuit_params.k
             ),
             inner_circuit_params: generated.inner_eq_circuit_params.clone(),
             release_id: context.release_id,
@@ -750,6 +747,7 @@ impl MintAuthorizationKeys {
             suite_id: context.suite_id,
             vk_digest: context.vk_digest,
             enabled_hardware_profiles: generated.enabled_hardware_profiles,
+            provider_policy_root,
         };
         let ep = KagemushaLoadedEpMintAuthorizationArtifactsV1 {
             parameters: ep_parameters,
@@ -757,13 +755,15 @@ impl MintAuthorizationKeys {
                 generated.ep_proving_key,
                 ProvingKey,
                 KagemushaMintAuthorizationTransportEpCircuitV1,
-                generated.ep_circuit_params
+                ep_transport_params,
+                generated.ep_circuit_params.k
             ),
             verifying_key: decode!(
                 generated.ep_verifying_key,
                 VerifyingKey,
                 KagemushaMintAuthorizationTransportEpCircuitV1,
-                generated.ep_circuit_params
+                ep_transport_params,
+                generated.ep_circuit_params.k
             ),
             circuit_params: generated.ep_circuit_params.clone(),
             protocol_digest: generated.ep_protocol_digest,
@@ -771,13 +771,15 @@ impl MintAuthorizationKeys {
                 generated.inner_ep_proving_key,
                 ProvingKey,
                 KagemushaMintAuthorizationEpCircuitV1,
-                generated.inner_ep_circuit_params
+                generated.inner_ep_circuit_params,
+                generated.inner_ep_circuit_params.k
             ),
             inner_verifying_key: decode!(
                 generated.inner_ep_verifying_key,
                 VerifyingKey,
                 KagemushaMintAuthorizationEpCircuitV1,
-                generated.inner_ep_circuit_params
+                generated.inner_ep_circuit_params,
+                generated.inner_ep_circuit_params.k
             ),
             inner_circuit_params: generated.inner_ep_circuit_params.clone(),
             release_id: context.release_id,
@@ -786,6 +788,7 @@ impl MintAuthorizationKeys {
             suite_id: context.suite_id,
             vk_digest: context.vk_digest,
             enabled_hardware_profiles: generated.enabled_hardware_profiles,
+            provider_policy_root,
         };
         let eq_protocol = compile(
             &eq.parameters,
@@ -829,6 +832,10 @@ impl MintAuthorizationKeys {
         credential_keys: &CredentialKeys,
         credential: &CredentialProof,
     ) -> Self {
+        assert_eq!(
+            credential_keys.provider_policy_root,
+            material.provider_policy.root
+        );
         let mut enabled_hardware_profiles = [[0; 32]; KAGEMUSHA_ENABLED_HARDWARE_PROFILE_SLOTS_V1];
         enabled_hardware_profiles[0] = material.hardware_profile.hardware_profile_id;
         let recursive_inputs = PreparedMintAuthorizationRecursiveInputs::new(
@@ -848,13 +855,17 @@ impl MintAuthorizationKeys {
             credential_keys,
             credential,
         );
-        let generated =
-            generate_kagemusha_mint_authorization_artifacts_v1(witness, &test_only_recovery_seed())
-                .expect("generate real MintAuthorization artifacts");
+        let generated = generate_kagemusha_mint_authorization_artifacts_v1(
+            witness,
+            &test_only_recovery_seed(),
+            material.provider_policy.root,
+        )
+        .expect("generate real MintAuthorization artifacts");
         Self::decode(
             generated,
             &material.authorization_relation,
             recursive_inputs,
+            material.provider_policy.root,
         )
     }
 
@@ -866,10 +877,36 @@ impl MintAuthorizationKeys {
         credential_keys: &CredentialKeys,
         credential: &CredentialProof,
     ) -> ProvenMintAuthorization {
+        self.prove_with_recursive_inputs(
+            material,
+            eq_hash,
+            ep_hash,
+            credential_keys,
+            credential,
+            &self.recursive_inputs,
+        )
+    }
+
+    /// Reuse the retained keys with fresh, exact SHA/history inputs for a changed authorization.
+    fn prove_with_recursive_inputs(
+        &self,
+        material: &MintRecipientMaterial,
+        eq_hash: &KagemushaLoadedEqMintHashArtifactsV1,
+        ep_hash: &KagemushaLoadedEpMintHashArtifactsV1,
+        credential_keys: &CredentialKeys,
+        credential: &CredentialProof,
+        recursive_inputs: &PreparedMintAuthorizationRecursiveInputs,
+    ) -> ProvenMintAuthorization {
+        assert_eq!(self.eq.provider_policy_root, self.ep.provider_policy_root);
+        assert_eq!(material.provider_policy.root, self.eq.provider_policy_root);
+        assert_eq!(
+            credential_keys.provider_policy_root,
+            self.eq.provider_policy_root
+        );
         let generated = prove_kagemusha_mint_authorization_v1(
             &self.eq,
             &self.ep,
-            self.recursive_inputs.witness(
+            recursive_inputs.witness(
                 material,
                 self.eq.enabled_hardware_profiles,
                 eq_hash,
@@ -898,6 +935,95 @@ impl MintAuthorizationKeys {
             eq_history,
             ep_history,
         }
+    }
+
+    /// A different read-time root must not reinterpret the same genuine transport key/proof.
+    /// This diagnostic exercises actual key bytes and proof decisions without admitting a release.
+    fn assert_substituted_policy_rejected(&self, proved: &ProvenMintAuthorization) {
+        let substituted_root = digest(b"unapproved-mint-transport-policy", 0);
+        assert_ne!(substituted_root, self.eq.provider_policy_root);
+        assert_eq!(self.eq.provider_policy_root, self.ep.provider_policy_root);
+        macro_rules! check {
+            ($loaded:expr, $curve:ty, $circuit:ty, $proof:expr, $instances:expr,
+             $parity:expr, $verify:ident, $accumulator:ty, $decide:ident) => {{
+                let loaded = $loaded;
+                let bytes = loaded.verifying_key.to_bytes(SerdeFormat::Processed);
+                let configured = KagemushaProviderRootCircuitParamsV1::new(
+                    loaded.circuit_params.clone(),
+                    substituted_root,
+                )
+                .expect("explicit adversarial transport root configuration");
+                let mut cursor = Cursor::new(bytes.as_slice());
+                let recovered = VerifyingKey::<$curve>::read_checked::<_, $circuit>(
+                    &mut cursor,
+                    SerdeFormat::Processed,
+                    u32::try_from(loaded.circuit_params.k).expect("transport circuit degree"),
+                    configured,
+                )
+                .expect("read genuine transport key bytes under alternate root expressions");
+                assert_eq!(
+                    usize::try_from(cursor.position()).expect("key cursor"),
+                    bytes.len()
+                );
+                assert_ne!(
+                    recovered.transcript_repr(),
+                    loaded.verifying_key.transcript_repr()
+                );
+                let substituted = compile(
+                    &loaded.parameters,
+                    &recovered,
+                    snark_verifier::system::halo2::Config::ipa()
+                        .with_num_instance(vec![MINT_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1]),
+                );
+                assert_ne!(
+                    native_parent_protocol_digest_v1(&substituted, $parity)
+                        .expect("adversarial transport protocol identity"),
+                    loaded.protocol_digest,
+                );
+                let accepted = $verify(&loaded.parameters, &substituted, $proof, $instances)
+                    .ok()
+                    .and_then(|claim| <$accumulator>::from_native(&claim).ok())
+                    .is_some_and(|claim| $decide(&loaded.parameters, &claim).is_ok());
+                assert!(
+                    !accepted,
+                    "an alternate provider root cannot reuse the original transport proof"
+                );
+            }};
+        }
+        decide_kagemusha_eq_accumulator_v1(
+            &self.eq.parameters,
+            &proved.generated.eq_current_accumulator,
+        )
+        .expect("original Eq transport current proof is valid");
+        decide_kagemusha_ep_accumulator_v1(
+            &self.ep.parameters,
+            &proved.generated.ep_current_accumulator,
+        )
+        .expect("original Ep transport current proof is valid");
+        assert_eq!(proved.generated.eq_public_instances.len(), 84);
+        assert_eq!(proved.generated.ep_public_instances.len(), 84);
+        check!(
+            &self.eq,
+            EqAffine,
+            KagemushaMintAuthorizationTransportEqCircuitV1,
+            &proved.generated.proof.eq_proof,
+            &proved.generated.eq_public_instances,
+            KagemushaPastaParityV1::Eq,
+            verify_eq_succinct_protocol,
+            KagemushaEqAccumulatorV1,
+            decide_kagemusha_eq_accumulator_v1
+        );
+        check!(
+            &self.ep,
+            EpAffine,
+            KagemushaMintAuthorizationTransportEpCircuitV1,
+            &proved.generated.proof.ep_proof,
+            &proved.generated.ep_public_instances,
+            KagemushaPastaParityV1::Ep,
+            verify_ep_succinct_protocol,
+            KagemushaEpAccumulatorV1,
+            decide_kagemusha_ep_accumulator_v1
+        );
     }
 
     fn into_protocols(self) -> MintAuthorizationProtocols {
@@ -1370,7 +1496,7 @@ impl MintKeys {
         )
         .expect("merge bootstrap Ep hash claim into authority history");
         let claim_witness = bootstrap_claim
-            .mint_authority_witness(
+            .consumer_witness(
                 &hash_eq,
                 &hash_ep,
                 eq_claim_merge.proof(),
@@ -1428,7 +1554,7 @@ impl MintKeys {
         )
         .expect("merge bootstrap Ep hash claim");
         let bootstrap_claim_witness = bootstrap_claim
-            .mint_authority_witness(
+            .consumer_witness(
                 &self.hash_eq,
                 &self.hash_ep,
                 eq_bootstrap_claim_merge.proof(),
@@ -1496,7 +1622,7 @@ impl MintKeys {
         )
         .expect("merge finalized Ep hash claim");
         let finalized_claim_witness = finalized_claim
-            .mint_authority_witness(
+            .consumer_witness(
                 &self.hash_eq,
                 &self.hash_ep,
                 eq_finalized_claim_merge.proof(),
@@ -1848,6 +1974,39 @@ struct RealFundedPrerequisite {
     mint_protocols: MintProtocols,
     funded: ProvenFunding,
     mint_credit: iroha_data_model::kagemusha::KagemushaMintCreditV1,
+    material: MintRecipientMaterial,
+    credential_keys: CredentialKeys,
+    credential: CredentialProof,
+}
+
+/// Preserve the original recipient while binding its credential to Core's exact release context.
+fn core_bound_mint_recipient_material(
+    release_id: DigestV1,
+    vk_digest: DigestV1,
+    artifact_manifest_digest: DigestV1,
+    amount: u128,
+) -> MintRecipientMaterial {
+    let mut material =
+        mint_recipient_material(release_id, vk_digest, artifact_manifest_digest, amount);
+    // Core reconstructs this release-specific digest before it accepts any Guard statement.
+    // Retain the same credential and private opening throughout reservation and MintFold.
+    let empty_effect =
+        crate::zk::kagemusha_v1_state::canonical_empty_durable_effect_digest_v1(release_id)
+            .expect("canonical diagnostic Core empty effect");
+    material
+        .platform_credential
+        .statement
+        .canonical_empty_effect_digest = empty_effect;
+    material.authorization_relation.platform_credential = material.platform_credential.statement;
+    material
+        .platform_credential
+        .validate()
+        .expect("Core-bound credential");
+    material
+        .authorization_relation
+        .validate_shape()
+        .expect("Core-bound authorization");
+    material
 }
 
 fn prove_funded_prerequisite(
@@ -1858,10 +2017,17 @@ fn prove_funded_prerequisite(
 ) -> RealFundedPrerequisite {
     let eq = canonical_kagemusha_eq_parameters_v1();
     let ep = canonical_kagemusha_ep_parameters_v1();
-    let material = mint_recipient_material(release_id, vk_digest, artifact_manifest_digest, amount);
+    let material =
+        core_bound_mint_recipient_material(release_id, vk_digest, artifact_manifest_digest, amount);
     let (hash_eq, hash_ep) = generate_mint_hash_suite(&material, &eq, &ep);
-    let credential_keys =
-        CredentialKeys::generate(&eq, &ep, &hash_eq, &hash_ep, &material.platform_credential);
+    let credential_keys = CredentialKeys::generate(
+        &eq,
+        &ep,
+        &hash_eq,
+        &hash_ep,
+        &material.platform_credential,
+        material.provider_policy.root,
+    );
     let credential = credential_keys.prove(
         &eq,
         &ep,
@@ -1897,8 +2063,6 @@ fn prove_funded_prerequisite(
             .with_num_instance(vec![KAGEMUSHA_MINT_AUTHORITY_PUBLIC_INSTANCE_COUNT_V1]),
     );
     let authorization_protocols = authorization_keys.into_protocols();
-    drop(credential_keys);
-    drop(credential);
     halo2_proofs::release_allocator_slack();
     let mint_keys = MintKeys::generate(&eq, &ep, eq_seed, ep_seed, hash_eq, hash_ep, &funding);
     let funded = mint_keys.prove_funding(&funding);
@@ -1906,7 +2070,6 @@ fn prove_funded_prerequisite(
     let mint_credit = funded.mint_credit(&material, &authorization.authorization);
     let (mint_protocols, hash_eq, hash_ep) = mint_keys.into_protocols();
     let genesis_roster_id = funding.genesis_roster_id;
-    drop(material);
     drop(funding);
     halo2_proofs::release_allocator_slack();
     RealFundedPrerequisite {
@@ -1920,6 +2083,9 @@ fn prove_funded_prerequisite(
         mint_protocols,
         funded,
         mint_credit,
+        material,
+        credential_keys,
+        credential,
     }
 }
 
@@ -2544,7 +2710,7 @@ fn generate_recursive_state_keys_for_corridor(
     );
     witness.hash_claim = Some(
         hash_claim
-            .mint_authority_witness(
+            .consumer_witness(
                 &funded.hash_eq,
                 &funded.hash_ep,
                 &eq_hash_merge,
@@ -2607,7 +2773,7 @@ fn prove_recursive_state_step(
     );
     witness.hash_claim = Some(
         hash_claim
-            .mint_authority_witness(
+            .consumer_witness(
                 &funded.hash_eq,
                 &funded.hash_ep,
                 &eq_hash_merge,
@@ -2672,7 +2838,7 @@ fn mint_authorization_sha_queue_has_exact_job_and_block_profile() {
         hardware_authorization,
     )
     .expect("Ep mint-authorization SHA queue");
-    let expected_lengths = vec![663, 422, 76, 426, 198, 363, 365, 200, 74, 367];
+    let expected_lengths = vec![422, 663, 76, 426, 198, 363, 365, 200, 74, 367];
 
     assert_eq!(
         eq.iter().map(Vec::len).collect::<Vec<_>>(),
@@ -2682,6 +2848,36 @@ fn mint_authorization_sha_queue_has_exact_job_and_block_profile() {
         ep.iter().map(Vec::len).collect::<Vec<_>>(),
         expected_lengths
     );
+    assert_eq!(
+        eq, ep,
+        "both parities must bind the same ordered SHA messages"
+    );
+    // Hardware-profile binding now runs before the platform credential. Match the first job
+    // to the model's full canonical Norito body, including its framing, rather than lengths alone.
+    let profile_preimage = material
+        .hardware_profile
+        .canonical_id_preimage_bytes()
+        .expect("canonical profile preimage");
+    let expected_profile_message = [
+        b"iroha:kagemusha:v1:hardware-profile\0".as_slice(),
+        &u64::try_from(profile_preimage.len())
+            .expect("profile length fits u64")
+            .to_le_bytes(),
+        &profile_preimage,
+    ]
+    .concat();
+    assert_eq!(eq[0], expected_profile_message);
+    assert_eq!(
+        DigestV1::from(Sha256::digest(&eq[0])),
+        material.hardware_profile.hardware_profile_id,
+    );
+    assert_eq!(
+        DigestV1::from(Sha256::digest(&eq[1])),
+        material
+            .authorization_relation
+            .platform_credential
+            .canonical_digest(),
+    );
     let blocks = |messages: &[Vec<u8>]| {
         messages
             .iter()
@@ -2690,6 +2886,56 @@ fn mint_authorization_sha_queue_has_exact_job_and_block_profile() {
     };
     assert_eq!((eq.len(), blocks(&eq)), (10, 55));
     assert_eq!((ep.len(), blocks(&ep)), (10, 55));
+}
+
+#[test]
+fn mint_authorization_key_reuse_fixture_changes_amount_with_one_provider_policy() {
+    let first = mint_recipient_material(
+        digest(b"payment-corridor-release", 0),
+        digest(b"vk-set", 0),
+        digest(b"payment-corridor-artifact-manifest", 0),
+        1_000,
+    );
+    let second = mint_recipient_material(
+        digest(b"payment-corridor-release", 0),
+        digest(b"vk-set", 0),
+        digest(b"payment-corridor-artifact-manifest", 0),
+        2_000,
+    );
+    assert_eq!(first.provider_policy.root, second.provider_policy.root);
+    assert_eq!(first.platform_credential, second.platform_credential);
+    assert_eq!(first.hardware_credential, second.hardware_credential);
+    assert_ne!(
+        first.authorization_relation.statement.credit_id,
+        second.authorization_relation.statement.credit_id
+    );
+    assert_ne!(
+        first.authorization_relation.hardware_authorization_digest(),
+        second
+            .authorization_relation
+            .hardware_authorization_digest()
+    );
+    let mut profiles = [[0; 32]; KAGEMUSHA_ENABLED_HARDWARE_PROFILE_SLOTS_V1];
+    profiles[0] = first.hardware_profile.hardware_profile_id;
+    let messages = |material: &MintRecipientMaterial| {
+        super::super::mint_authorization::mint_authorization_sha_messages_v1::<Fp>(
+            &material.authorization_relation,
+            &profiles,
+            material
+                .authorization_relation
+                .hardware_authorization_digest()
+                .expect("exact fixture hardware authorization"),
+        )
+        .expect("complete fixture authorization SHA queue")
+    };
+    let first_messages = messages(&first);
+    let second_messages = messages(&second);
+    assert_ne!(first_messages, second_messages);
+    assert_eq!(
+        first_messages.iter().map(Vec::len).collect::<Vec<_>>(),
+        second_messages.iter().map(Vec::len).collect::<Vec<_>>(),
+        "a changed amount needs fresh SHA witnesses with the same reusable circuit geometry"
+    );
 }
 
 #[test]
@@ -2716,6 +2962,7 @@ fn real_recipient_mint_authorization_uses_hardware_credential_and_paired_proofs(
                 &hash_eq,
                 &hash_ep,
                 &material.platform_credential,
+                material.provider_policy.root,
             );
             let credential = credential_keys.prove(
                 &eq,
@@ -2735,6 +2982,7 @@ fn real_recipient_mint_authorization_uses_hardware_credential_and_paired_proofs(
                 &credential,
             );
             let proved = keys.prove(&material, &hash_eq, &hash_ep, &credential_keys, &credential);
+            keys.assert_substituted_policy_rejected(&proved);
             proved
                 .authorization
                 .validate_shape()
@@ -2783,6 +3031,74 @@ fn real_recipient_mint_authorization_uses_hardware_credential_and_paired_proofs(
                 material.recipient,
                 material.authorization_relation.statement.context.recipient,
             );
+
+            // A new amount must reuse the original proving keys and policy root while obtaining
+            // its own exact typed-SHA claim and history. Reusing the first relation's claim would
+            // only exercise witness rejection and would not prove reusable production geometry.
+            let next_material = mint_recipient_material(
+                release_id,
+                digest(b"vk-set", 0),
+                digest(b"payment-corridor-artifact-manifest", 0),
+                2_000,
+            );
+            assert_eq!(next_material.platform_credential, credential.relation);
+            let next_recursive_inputs = PreparedMintAuthorizationRecursiveInputs::new(
+                &next_material,
+                &eq,
+                &ep,
+                &hash_eq,
+                &hash_ep,
+                &keys.eq.enabled_hardware_profiles,
+                &credential,
+            );
+            let next_proved = keys.prove_with_recursive_inputs(
+                &next_material,
+                &hash_eq,
+                &hash_ep,
+                &credential_keys,
+                &credential,
+                &next_recursive_inputs,
+            );
+            assert_ne!(
+                proved.generated.proof.semantic_digest,
+                next_proved.generated.proof.semantic_digest
+            );
+            assert_eq!(
+                proved.generated.proof.eq_protocol_digest,
+                next_proved.generated.proof.eq_protocol_digest
+            );
+            assert_eq!(
+                proved.generated.proof.ep_protocol_digest,
+                next_proved.generated.proof.ep_protocol_digest
+            );
+            decide_kagemusha_eq_accumulator_v1(&eq, &next_proved.eq_history)
+                .expect("decide changed-amount Eq authorization history under reused keys");
+            decide_kagemusha_ep_accumulator_v1(&ep, &next_proved.ep_history)
+                .expect("decide changed-amount Ep authorization history under reused keys");
+            for (source, target) in [(&proved, &next_proved), (&next_proved, &proved)] {
+                let accepted_eq = verify_eq_succinct_protocol(
+                    &eq,
+                    &keys.eq_protocol,
+                    &source.generated.proof.eq_proof,
+                    &target.generated.eq_public_instances,
+                )
+                .ok()
+                .and_then(|claim| KagemushaEqAccumulatorV1::from_native(&claim).ok())
+                .is_some_and(|claim| decide_kagemusha_eq_accumulator_v1(&eq, &claim).is_ok());
+                let accepted_ep = verify_ep_succinct_protocol(
+                    &ep,
+                    &keys.ep_protocol,
+                    &source.generated.proof.ep_proof,
+                    &target.generated.ep_public_instances,
+                )
+                .ok()
+                .and_then(|claim| KagemushaEpAccumulatorV1::from_native(&claim).ok())
+                .is_some_and(|claim| decide_kagemusha_ep_accumulator_v1(&ep, &claim).is_ok());
+                assert!(
+                    !accepted_eq && !accepted_ep,
+                    "a genuine authorization cannot be replayed for the other amount"
+                );
+            }
         })
         .expect("start explicitly sized MintAuthorization stack")
         .join()
@@ -2793,6 +3109,158 @@ fn real_recipient_mint_authorization_uses_hardware_credential_and_paired_proofs(
 #[ignore = "expensive real mint-authority prerequisite; not payment-corridor qualification"]
 fn real_mint_authority_bootstrap_and_positive_finalized_mint_use_reusable_keys() {
     run_guarded_real_mint_authority_proof_v1();
+}
+
+/// Exercise the actual Guard consumer of current credential proofs and their SHA histories.
+/// This cryptographic fixture does not authenticate a release or qualify physical hardware.
+#[test]
+#[ignore = "expensive real Guard/credential prerequisite; not payment-corridor qualification"]
+fn real_guard_bundle_carries_current_credential_sha_histories_with_reusable_keys() {
+    let _exclusive_proof = exclusive_real_proof_test_lock();
+    std::thread::Builder::new()
+        .name("kagemusha-real-guard".to_owned())
+        .stack_size(REAL_PROOF_TEST_STACK_BYTES)
+        .spawn(|| {
+            let release_id = digest(b"real-guard-prerequisite-release", 0);
+            let empty_effect = digest(b"empty-durable-effect", 0);
+            let material = mint_recipient_material(
+                release_id,
+                digest(b"vk-set", 0),
+                digest(b"real-guard-prerequisite-manifest", 0),
+                1_000,
+            );
+            let eq = canonical_kagemusha_eq_parameters_v1();
+            let ep = canonical_kagemusha_ep_parameters_v1();
+            let (hash_eq, hash_ep) = generate_mint_hash_suite(&material, &eq, &ep);
+            drop(material);
+            let provider_policy = DiagnosticProviderPolicy::new(diagnostic_hardware_profile());
+            let (first_relation, _) =
+                credential_witness_with_policy(0, release_id, empty_effect, &provider_policy);
+            let credential_keys = CredentialKeys::generate(
+                &eq,
+                &ep,
+                &hash_eq,
+                &hash_ep,
+                &first_relation,
+                provider_policy.root,
+            );
+            let mut guard_keys = None;
+            for index in 0..2 {
+                let (relation, device_secret) = credential_witness_with_policy(
+                    index,
+                    release_id,
+                    empty_effect,
+                    &provider_policy,
+                );
+                let state = aggregate_state(
+                    release_id,
+                    &relation.statement,
+                    digest(b"real-guard-state-nonce", index),
+                );
+                let credential =
+                    credential_keys.prove(&eq, &ep, &hash_eq, &hash_ep, relation, device_secret);
+                assert_augmented_credential_proof_rejections(
+                    &eq,
+                    &ep,
+                    &credential_keys,
+                    &credential,
+                );
+                if index == 1 {
+                    credential_keys.assert_substituted_policy_rejected(
+                        &eq,
+                        &ep,
+                        &hash_eq,
+                        &hash_ep,
+                        &credential,
+                    );
+                }
+                let guard_relation = bootstrap_guard_relation(
+                    &state,
+                    &credential.relation.statement,
+                    device_secret,
+                    empty_effect,
+                );
+                let guard = prove_guard(
+                    &eq,
+                    &ep,
+                    &credential_keys,
+                    &mut guard_keys,
+                    guard_relation,
+                    &credential,
+                    &credential,
+                );
+                let keys = guard_keys.as_ref().expect("real reusable Guard keys");
+                decide_kagemusha_eq_accumulator_v1(&eq, &guard.eq_current)
+                    .expect("decide genuine Eq Guard current proof");
+                decide_kagemusha_ep_accumulator_v1(&ep, &guard.ep_current)
+                    .expect("decide genuine Ep Guard current proof");
+                decide_kagemusha_eq_accumulator_v1(&eq, &guard.eq_history)
+                    .expect("decide complete Eq credential SHA histories");
+                decide_kagemusha_ep_accumulator_v1(&ep, &guard.ep_history)
+                    .expect("decide complete Ep credential SHA histories");
+                let eq_instances = guard_public_instances::<Fp>(
+                    &guard.relation,
+                    guard.eq_credential_audit,
+                    guard.ep_credential_audit,
+                    guard.eq_history.as_bytes(),
+                );
+                let ep_instances = guard_public_instances::<Fq>(
+                    &guard.relation,
+                    guard.eq_credential_audit,
+                    guard.ep_credential_audit,
+                    guard.ep_history.as_bytes(),
+                );
+                let accepts_eq = |proof: &[u8], instances: &[Fp]| {
+                    verify_eq_succinct_protocol(&eq, &keys.eq_protocol, proof, instances)
+                        .ok()
+                        .and_then(|claim| KagemushaEqAccumulatorV1::from_native(&claim).ok())
+                        .is_some_and(|claim| {
+                            decide_kagemusha_eq_accumulator_v1(&eq, &claim).is_ok()
+                        })
+                };
+                let accepts_ep = |proof: &[u8], instances: &[Fq]| {
+                    verify_ep_succinct_protocol(&ep, &keys.ep_protocol, proof, instances)
+                        .ok()
+                        .and_then(|claim| KagemushaEpAccumulatorV1::from_native(&claim).ok())
+                        .is_some_and(|claim| {
+                            decide_kagemusha_ep_accumulator_v1(&ep, &claim).is_ok()
+                        })
+                };
+                assert!(accepts_eq(&guard.eq_proof, &eq_instances));
+                assert!(accepts_ep(&guard.ep_proof, &ep_instances));
+                // Exact credential digest limbs and the shifted history are authenticated.
+                for offset in [0, 2, 4, 6, 7, 8, 9, 10] {
+                    let mut changed_eq = eq_instances.clone();
+                    changed_eq[offset] += Fp::ONE;
+                    assert!(!accepts_eq(&guard.eq_proof, &changed_eq));
+                    let mut changed_ep = ep_instances.clone();
+                    changed_ep[offset] += Fq::ONE;
+                    assert!(!accepts_ep(&guard.ep_proof, &changed_ep));
+                }
+                let mut changed_policy = guard.relation.clone();
+                changed_policy.statement.successor_hardware_policy_id =
+                    digest(b"unapproved-guard-policy", index);
+                let mut eq_policy = eq_instances.clone();
+                eq_policy[..2]
+                    .copy_from_slice(&digest_limbs::<Fp>(changed_policy.statement_digest()));
+                let mut ep_policy = ep_instances.clone();
+                ep_policy[..2]
+                    .copy_from_slice(&digest_limbs::<Fq>(changed_policy.statement_digest()));
+                assert!(!accepts_eq(&guard.eq_proof, &eq_policy));
+                assert!(!accepts_ep(&guard.ep_proof, &ep_policy));
+                assert!(!accepts_eq(
+                    &guard.eq_proof[..guard.eq_proof.len() - 1],
+                    &eq_instances
+                ));
+                assert!(!accepts_ep(
+                    &guard.ep_proof[..guard.ep_proof.len() - 1],
+                    &ep_instances
+                ));
+            }
+        })
+        .expect("start explicitly sized real-Guard proof stack")
+        .join()
+        .expect("real Guard proof thread");
 }
 
 pub(super) fn run_guarded_real_mint_authority_proof_v1() {

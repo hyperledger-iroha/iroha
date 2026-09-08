@@ -10,7 +10,7 @@ use crate::kagemusha_device_bridge_v1::sender_payload::{
     SenderWalletContextV1,
 };
 use norito::{
-    DecodeLimits, NoritoDeserialize, NoritoSerialize,
+    DecodeLimits, NoritoDeserialize, NoritoSerialize, SerializePayload,
     codec::{Decode, Encode},
 };
 
@@ -51,7 +51,9 @@ impl KagemushaCoreSenderPreparationArchiveV1 {
         require(self.version == VERSION)?;
         nonzero(&self.operation_id)?;
         nonzero(&self.inputs_digest)?;
-        self.context.validate_shape().map_err(sender_error)
+        self.context
+            .validate_shape()
+            .map_err(|_| KagemushaCoreCoordinatorArchiveErrorV1::Binding)
     }
 
     /// Encode this exact bounded, versioned canonical projection.
@@ -152,7 +154,9 @@ impl KagemushaCoreSenderRecoveryArchiveV1 {
         nonzero(&self.operation_id)?;
         nonzero(&self.terminal_id)?;
         nonzero(&self.inputs_digest)?;
-        self.context.validate_shape().map_err(sender_error)
+        self.context
+            .validate_shape()
+            .map_err(|_| KagemushaCoreCoordinatorArchiveErrorV1::Binding)
     }
 
     /// Encode this exact bounded, versioned recovery projection.

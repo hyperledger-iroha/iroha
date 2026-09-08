@@ -125,8 +125,15 @@ fn ordinary_certified_body_pipeline_has_no_retained_compatibility_carrier() {
 #[test]
 fn blocked_ordinary_lifecycle_owner_services_only_lane_local_fair_ingress_before_yield() {
     let run_inner = include_str!("v2_runner/lifecycle_run_inner.rs");
-    let reconciled_turn = source_region(
+    // Inspect the ordinary discovery/runtime branch, not the earlier sealed
+    // Validate-sidecar pacemaker branch that also reconciles a directive.
+    let ordinary_discovery = source_region(
         run_inner,
+        "let discovery_was_outstanding =",
+        "producer_claim = drain_disposition.producer_claim();",
+    );
+    let reconciled_turn = source_region(
+        ordinary_discovery,
         "let directive = reconcile_executor_locked_body(executor, services)?;",
         "services\n                        .replay_buffered_chunks(executor)",
     );
@@ -247,7 +254,9 @@ fn active_height_tail_bounds_executor_work_before_the_producer_point() {
         .filter(|character| !character.is_whitespace())
         .collect();
     assert_eq!(
-        compact_executor_slice,
+        compact_executor_slice
+            .strip_suffix(',')
+            .unwrap_or(&compact_executor_slice),
         "receiver,owner,executor,services,producer_claim.required_ready_ordinal(),1"
     );
     let post_slice_suffix = source_region(
@@ -330,8 +339,8 @@ fn apply_barriers_reconcile_current_serve_and_unadmitted_fetch_capacity_before_d
     let run_inner = include_str!("v2_runner/lifecycle_run_inner.rs");
     let barrier = source_region(
         run_inner,
-        "let lane_only_completion_barrier = producer_claim.blocks_runtime();",
-        "let discovery_was_outstanding = if lane_only_completion_barrier",
+        "} else if lane_only_completion_barrier {",
+        "let discovery_was_outstanding =",
     );
     assert_source_tokens_in_order(
         barrier,

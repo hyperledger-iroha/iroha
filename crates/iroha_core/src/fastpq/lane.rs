@@ -83,7 +83,7 @@ pub struct FastpqWitnessJob {
 /// Proof bytes and digest produced by the FASTPQ lane.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FastpqProofOutput {
-    /// Norito-encoded FASTPQ proof payload.
+    /// FASTPQ proof payload encoded with the canonical V1 Norito layout.
     pub proof_bytes: Vec<u8>,
     /// Stable digest of `proof_bytes` for relay metadata and telemetry.
     pub proof_digest: Hash,
@@ -91,6 +91,7 @@ pub struct FastpqProofOutput {
     pub trace_commitment: GoldilocksDigest384V1,
 }
 impl FastpqProofOutput {
+    /// Encode a generated proof within its byte budget and derive its canonical identity.
     fn encode_proof(
         proof: &fastpq_prover::Proof,
         max_bytes: usize,
@@ -762,7 +763,9 @@ mod tests {
         let expected = std::fs::read(path).expect("current raw proof fixture");
         let proof: fastpq_prover::Proof =
             norito::decode_canonical(&expected).expect("canonical raw proof fixture");
-        for flags in [0, 1, 2, 3, 4, 5, 6, 7, 0x1b, 0x3f] {
+        for flags in
+            (u8::MIN..=u8::MAX).filter(|&flags| norito::core::validate_header_flags(flags).is_ok())
+        {
             let _layout = norito::core::DecodeFlagsGuard::enter(flags);
             let effective_flags = norito::core::get_decode_flags();
             let output = FastpqProofOutput::encode_proof(&proof, expected.len())
@@ -785,6 +788,59 @@ mod tests {
                 }) if encoded_bytes == expected.len() && rejected_limit == max_bytes
             ));
         }
+    }
+    #[test]
+    fn proof_output_uses_canonical_bytes_under_every_ambient_layout() {
+        // Codec-only fixture: this is not a valid mathematical proof. Exercise
+        // the exact post-prover production helper without running the prover.
+        let zero = GoldilocksDigest384V1::default();
+        let proof = fastpq_prover::Proof {
+            protocol_version: 1,
+            parameter: FASTPQ_CANONICAL_PARAMETER_SET.to_owned(),
+            trace_commitment: GoldilocksDigest384V1::new([7; 6]).unwrap(),
+            public_io: Default::default(),
+            trace_root: zero,
+            air_trace_root: zero,
+            air_composition_root: zero,
+            lde_root: zero,
+            lde_domain_size: 0,
+            lookup_grand_product: 15,
+            lookup_challenge: 16,
+            alphas: Vec::new(),
+            betas: Vec::new(),
+            fri_layers: Vec::new(),
+            queries: Vec::new(),
+            air_openings: Vec::new(),
+            fri_queries: Vec::new(),
+        };
+        let canonical = norito::encode_canonical(&proof).unwrap();
+        let expected_digest = Hash::new(&canonical);
+        let mut saw_noncanonical_encoding = false;
+        for flags in
+            (u8::MIN..=u8::MAX).filter(|&flags| norito::core::validate_header_flags(flags).is_ok())
+        {
+            let _ambient = norito::core::DecodeFlagsGuard::enter(flags);
+            let ambient = norito::to_bytes(&proof).unwrap();
+            let decoded_ambient: fastpq_prover::Proof =
+                norito::decode_from_bytes(&ambient).unwrap();
+            assert_eq!(decoded_ambient, proof);
+            if ambient != canonical {
+                saw_noncanonical_encoding = true;
+                assert_ne!(Hash::new(&ambient), expected_digest);
+            }
+            let output = FastpqProofOutput::encode_proof(&proof, canonical.len()).unwrap();
+            assert_eq!(output.proof_bytes, canonical);
+            assert_eq!(output.proof_digest, expected_digest);
+            assert_eq!(output.trace_commitment, proof.commitment());
+            let decoded: fastpq_prover::Proof =
+                norito::decode_from_bytes(&output.proof_bytes).unwrap();
+            assert_eq!(decoded, proof);
+            assert_eq!(norito::core::effective_decode_flags(), Some(flags));
+        }
+        assert!(
+            saw_noncanonical_encoding,
+            "fixture must expose the old ambient-sensitive behavior"
+        );
     }
     fn gpu_execution_cpu_poseidon_config() -> Fastpq {
         Fastpq {
@@ -885,6 +941,7 @@ mod tests {
                 public_inputs: Some(template),
                 tx_set_hash: Some(tx_set_hash),
                 entry_dataspaces: BTreeMap::new(),
+                source_inventory: None,
             },
         };
         assert!(try_submit(job));
@@ -1028,19 +1085,23 @@ mod tests {
     async fn shutdown_keeps_generation_until_blocking_initialisation_finishes() {
         let _registry_lock = LANE_REGISTRY_TEST_LOCK.lock().await;
         let external_shutdown = ShutdownSignal::new();
-        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
-        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        // Await startup without blocking this test's single Tokio thread.
+        // Dropping the release sender also frees the blocking initializer if
+        // an assertion fails, so runtime teardown cannot hang on the fixture.
+        let (started, started_rx) = tokio::sync::oneshot::channel();
+        let (release, release_rx) = std::sync::mpsc::channel();
         let (_handle, task) =
             start_with_builder(None, None, Some(external_shutdown.clone()), move || {
-                started_tx.send(()).expect("test observes backend startup");
-                release_rx.recv().expect("test releases backend setup");
+                if started.send(()).is_ok() {
+                    let _ = release_rx.recv();
+                }
                 None
             })
             .expect("lane registers");
         tokio::time::timeout(Duration::from_secs(5), started_rx)
             .await
-            .expect("backend setup starts without blocking the async runtime")
-            .expect("backend signals startup");
+            .expect("blocking setup starts without blocking the runtime")
+            .expect("blocking setup reports startup");
         external_shutdown.send();
         tokio::task::yield_now().await;
         assert!(
@@ -1049,7 +1110,9 @@ mod tests {
         );
         assert!(!task.is_finished());
 
-        release_tx.send(()).expect("backend setup remains alive");
+        release
+            .send(())
+            .expect("blocking setup remains alive until explicitly released");
         tokio::time::timeout(Duration::from_secs(1), task)
             .await
             .expect("lane exits once blocking setup returns")
@@ -1061,19 +1124,23 @@ mod tests {
         use tokio::time::{Instant, sleep};
         let _registry_lock = LANE_REGISTRY_TEST_LOCK.lock().await;
         let external_shutdown = ShutdownSignal::new();
-        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
-        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        // Await startup without blocking this test's single Tokio thread.
+        // Dropping the release sender also frees the blocking initializer if
+        // an assertion fails, so runtime teardown cannot hang on the fixture.
+        let (started, started_rx) = tokio::sync::oneshot::channel();
+        let (release, release_rx) = std::sync::mpsc::channel();
         let (_handle, task) =
             start_with_builder(None, None, Some(external_shutdown.clone()), move || {
-                started_tx.send(()).expect("test observes backend startup");
-                release_rx.recv().expect("test releases backend setup");
+                if started.send(()).is_ok() {
+                    let _ = release_rx.recv();
+                }
                 None
             })
             .expect("lane registers");
         tokio::time::timeout(Duration::from_secs(5), started_rx)
             .await
-            .expect("backend setup starts without blocking the async runtime")
-            .expect("backend signals startup");
+            .expect("blocking setup starts without blocking the runtime")
+            .expect("blocking setup reports startup");
         external_shutdown.send();
         task.abort();
         let join_error = task.await.expect_err("aborted worker reports cancellation");
@@ -1083,7 +1150,9 @@ mod tests {
             "detached blocking setup must retain its generation lease"
         );
 
-        release_tx.send(()).expect("backend setup remains alive");
+        release
+            .send(())
+            .expect("blocking setup remains alive until explicitly released");
         let deadline = Instant::now() + Duration::from_secs(1);
         while lock_global_lane().current.is_some() {
             assert!(
@@ -1143,6 +1212,7 @@ mod tests {
                 public_inputs: Some(template),
                 tx_set_hash: Some(tx_set_hash),
                 entry_dataspaces,
+                source_inventory: None,
             },
         };
         let batches = batches_for_job(&job).expect("context builds batches");
@@ -1182,6 +1252,7 @@ mod tests {
                 public_inputs: Some(template),
                 tx_set_hash: Some(tx_set_hash),
                 entry_dataspaces: BTreeMap::from([(entry_hash, entry_dsid)]),
+                source_inventory: None,
             },
         };
 
@@ -1462,7 +1533,6 @@ mod tests {
     fn proof_completed_during_shutdown_is_not_enqueued() {
         let lane_shutdown = ShutdownSignal::new();
         let supervisor_shutdown = ShutdownSignal::new();
-        let tx_set_hash = [0x44; 32];
         let engine: Arc<dyn FastpqProofEngine> = Arc::new(ShutdownDuringProofEngine {
             shutdown: supervisor_shutdown.clone(),
         });
@@ -1487,6 +1557,13 @@ mod tests {
             new_root: [0; 32],
             perm_root: [0; 32],
         };
+        // This fixture has an internal transcript and no external transaction wires.
+        // Supply the real empty-wire commitment so admission reaches the prover.
+        let entrypoints: [iroha_data_model::transaction::TransactionEntrypoint; 0] = [];
+        let tx_set_hash =
+            iroha_data_model::nexus::axt_ordered_transaction_set_digest_v1(&entrypoints)
+                .expect("canonical empty transaction-wire commitment")
+                .into();
         let job = FastpqWitnessJob {
             block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xAC; 32])),
             height: 7,
@@ -1500,6 +1577,7 @@ mod tests {
                 public_inputs: Some(template),
                 tx_set_hash: Some(tx_set_hash),
                 entry_dataspaces: BTreeMap::new(),
+                source_inventory: None,
             },
         };
         let admitted = batches_for_job(&job).expect("shutdown fixture reaches the prover");

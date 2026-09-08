@@ -52,6 +52,9 @@ struct NativeAmxEvidencePruneIntentV2 {
     lane_incarnation: Hash,
     protected_latest: NativeAmxEvidencePruneProtectedLatestV2,
     entries: Vec<NativeAmxEvidencePruneEntryV2>,
+    /// Canonical preimages for the removed Native prefix. The retained oldest
+    /// leaf authenticates this chain even after an interrupted unlink sequence.
+    removed_settlements: Vec<iroha_data_model::block::consensus::NativeAmxParticipantSettlement>,
 }
 impl NativeAmxEvidencePruneIntentV2 {
     const VERSION: u8 = 2;
@@ -66,9 +69,10 @@ pub(crate) struct NativeAmxParticipantApplicationReceiptArtifact {
     /// Participant control proposal certified by its lane committee.
     pub participant_proposal: LaneBlockProposalV1,
     /// Exact zero-effect control settlement certified alongside the proposal.
-    pub participant_settlement: NativeAmxParticipantSettlement,
+    pub participant_settlement: iroha_data_model::block::consensus::NativeAmxParticipantSettlement,
     /// Canonical hash of `participant_settlement` carried by both participant QCs.
-    pub participant_settlement_hash: HashOf<NativeAmxParticipantSettlement>,
+    pub participant_settlement_hash:
+        HashOf<iroha_data_model::block::consensus::NativeAmxParticipantSettlement>,
     /// Canonical global block which executed the control members.
     pub application_block_height: u64,
     /// Canonical global block identity. It binds the execution context, not the
@@ -92,6 +96,69 @@ pub(crate) struct NativeAmxParticipantApplicationReceiptArtifact {
     /// Exact canonical transaction results.
     pub results: Vec<TransactionResult>,
 }
+/// Authenticated local Native AMX frontier, independent of any remote candidate.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum NativeAmxLatestReceiptObservation {
+    /// No published latest pointer or standalone application evidence exists.
+    Absent,
+    /// Exact finalized tip evidence awaits owned post-apply metadata recovery.
+    /// This occupied frontier is neither absent nor globally applied authority.
+    PendingTipMetadata(NativeAmxParticipantApplicationReceiptArtifact),
+    /// The receipt, manifest, finality, canonical wire and WSV metadata agree.
+    Applied(NativeAmxParticipantApplicationReceiptArtifact),
+}
+/// One locally authenticated Native AMX evidence slot, independent of a candidate.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum NativeAmxParticipantApplicationObservation {
+    /// Complete application authority, including exact WSV metadata.
+    Applied(NativeAmxParticipantApplicationReceiptArtifact),
+    /// The complete finalized pair awaits post-apply metadata at the durable tip.
+    PendingTipMetadata(NativeAmxParticipantApplicationReceiptArtifact),
+    /// The highest structural receipt awaits its authenticated manifest leaf.
+    /// Its finality-backed carrier is occupied, but the proposal is not applied authority.
+    PendingManifestRepair(NativeAmxParticipantApplicationReceiptArtifact),
+    /// The highest authenticated manifest leaf awaits its exact receipt.
+    /// This occupied slot must block production until owned recovery completes it.
+    PendingReceiptRepair(NativeAmxParticipantApplicationManifestArtifactV1),
+}
+
+/// A bounded, contiguous active-incarnation history authenticated in one read.
+///
+/// Exact lookups are in-memory observations. An absent key may precede the
+/// retained suffix or be genuinely unpublished; it never establishes an empty
+/// lane frontier independently of the remaining entries and replicated State.
+#[derive(Debug, Default)]
+pub(crate) struct NativeAmxParticipantApplicationHistory {
+    entries: BTreeMap<u64, NativeAmxParticipantApplicationObservation>,
+    drain_evidence: Option<(u64, LaneDrainNativeFrontierEvidenceV1)>,
+}
+
+impl NativeAmxParticipantApplicationHistory {
+    /// Iterate the authenticated retained slots in participant-height order.
+    pub(crate) fn entries(
+        &self,
+    ) -> impl DoubleEndedIterator<Item = (u64, &NativeAmxParticipantApplicationObservation)> {
+        self.entries
+            .iter()
+            .map(|(height, observation)| (*height, observation))
+    }
+
+    /// Observe one coordinate without another storage read or candidate filter.
+    pub(crate) fn get(&self, height: u64) -> Option<&NativeAmxParticipantApplicationObservation> {
+        self.entries.get(&height)
+    }
+
+    /// Project drain evidence only for the highest fully applied slot and exact pointer.
+    /// Pending slots and retained predecessors never supply retirement authority.
+    pub(crate) fn drain_evidence(&self, height: u64) -> Option<&LaneDrainNativeFrontierEvidenceV1> {
+        self.drain_evidence
+            .as_ref()
+            .and_then(|(retained_height, evidence)| {
+                (*retained_height == height).then_some(evidence)
+            })
+    }
+}
+
 type NativeAmxParticipantApplicationArtifactPair = (
     NativeAmxParticipantApplicationManifestArtifactV1,
     NativeAmxParticipantApplicationReceiptArtifact,
@@ -125,7 +192,8 @@ struct NativeAmxParticipantReceiptLatestIndexV2 {
     lane_incarnation: Hash,
     lane_block_height: u64,
     participant_proposal_hash: Hash,
-    participant_settlement_hash: HashOf<NativeAmxParticipantSettlement>,
+    participant_settlement_hash:
+        HashOf<iroha_data_model::block::consensus::NativeAmxParticipantSettlement>,
     application_block_height: u64,
     application_block_hash: HashOf<BlockHeader>,
     executed_block_wire_hash: Hash,

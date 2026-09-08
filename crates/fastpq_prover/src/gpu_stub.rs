@@ -125,14 +125,6 @@ pub fn lde_columns_async(
 ) -> Result<LdeDispatch, GpuError> {
     Err(GpuError::Unsupported(backend))
 }
-/// Poseidon row-hash stub that reports unsupported backends.
-#[cfg(any(feature = "fastpq-gpu", test))]
-pub fn poseidon_hash_rows(
-    _columns: &[Vec<u64>],
-    backend: GpuBackend,
-) -> Result<Vec<u64>, GpuError> {
-    Err(GpuError::Unsupported(backend))
-}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -164,10 +156,6 @@ mod tests {
         ));
         assert!(matches!(
             lde_columns_async(&coeffs, 0, 0, 1, 1, backend).unwrap_err(),
-            GpuError::Unsupported(GpuBackend::Cuda)
-        ));
-        assert!(matches!(
-            poseidon_hash_rows(&coeffs, backend).unwrap_err(),
             GpuError::Unsupported(GpuBackend::Cuda)
         ));
     }

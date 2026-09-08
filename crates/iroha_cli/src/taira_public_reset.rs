@@ -74,24 +74,41 @@ const RECOVERY_INTENT_SCHEMA_V1: &str = "iroha.taira.public-reset.recovery-inten
 
 #[path = "taira_public_reset_host.rs"]
 mod host;
+#[path = "taira_public_reset_inputs.rs"]
+mod inputs;
+#[path = "taira_public_reset_source.rs"]
+mod source;
 
 /// Strict compiled public-reset command.
 #[derive(clap::Args, Debug)]
 pub(crate) struct PublicReset {
-    /// Select the strict read-only admission check.
+    /// Select source export, signed admission, or reset execution.
     #[command(subcommand)]
     command: PublicResetCommand,
 }
 
 #[derive(clap::Subcommand, Debug)]
 enum PublicResetCommand {
-    /// Verify the signed reset inventory and pinned local inputs without contacting any host.
+    /// Export the exact clean local source manifest without contacting hosts or loading keys.
+    SourceManifest(PublicResetSourceManifest),
+    /// Assemble exact release inputs locally from an explicit inventory draft.
+    Assemble(inputs::Assemble),
+    /// Sign retained release inputs using an independently trusted owner key.
+    Authorize(inputs::Authorize),
+    /// Verify signed inputs and read-only readiness of all four validators and the edge host.
     Preflight(PublicResetPreflight),
     /// Execute the admitted reset with pinned SSH and runtime signing inputs.
     Apply(PublicResetApply),
     /// Internal fixed-protocol host dispatcher. Requests are read only from stdin.
     #[command(name = "host-dispatch", hide = true)]
     HostDispatch(host::PublicResetHost),
+}
+
+#[derive(clap::Args, Debug)]
+struct PublicResetSourceManifest {
+    /// Absolute path to the clean optimizations checkout with a direct .git directory.
+    #[arg(long, value_name = "DIR")]
+    source_root: PathBuf,
 }
 
 #[derive(clap::Args, Debug)]
@@ -133,7 +150,8 @@ struct PublicResetApply {
     /// Owner-private signing config for forward work or read-only mutation recovery.
     #[arg(long, value_name = "PATH")]
     runtime_client_config: Option<PathBuf>,
-    /// Four ordered validator read configs for forward work or RestartProof recovery.
+    /// Four ordered validator read configs for forward work or RestartProof recovery;
+    /// other recovery steps ignore these paths.
     #[arg(long, value_name = "PATH", num_args = 4)]
     validator_client_config: Vec<PathBuf>,
     /// Owner-private account-onboarding token required only for forward work.
@@ -164,15 +182,11 @@ impl PublicResetApply {
             executor_model::ExecutionStep::RestartProof => Err(eyre!(
                 "RestartProof recovery requires exactly four --validator-client-config values"
             )),
-            executor_model::ExecutionStep::Canary | executor_model::ExecutionStep::EdgeVerify
-                if self.validator_client_config.is_empty() =>
-            {
-                Ok(Vec::new())
-            }
             executor_model::ExecutionStep::Canary | executor_model::ExecutionStep::EdgeVerify => {
-                Err(eyre!(
-                    "Canary/EdgeVerify recovery rejects unrelated validator client configs"
-                ))
+                // Retrying the original apply command must retain its exact inputs.
+                // These steps reconcile only the runtime client's prepared mutations;
+                // do not open or admit the unused forward validator configs.
+                Ok(Vec::new())
             }
             _ => Err(eyre!("journal does not identify a recoverable V1 step")),
         }
@@ -239,6 +253,18 @@ impl PublicReset {
     /// Run before client configuration or any ledger signing identity is loaded.
     pub(super) fn run_without_client_config<W: Write>(&self, mut output: W) -> Result<()> {
         let report = match &self.command {
+            PublicResetCommand::SourceManifest(args) => {
+                source::export_manifest(&args.source_root, &mut output)?;
+                return Ok(());
+            }
+            PublicResetCommand::Assemble(args) => {
+                inputs::assemble(args)?;
+                return Ok(());
+            }
+            PublicResetCommand::Authorize(args) => {
+                inputs::authorize(args)?;
+                return Ok(());
+            }
             PublicResetCommand::Preflight(args) => {
                 let (admitted, _chain_guard) = admit(
                     &args.inventory,
@@ -247,11 +273,12 @@ impl PublicReset {
                     &args.ssh_identity,
                     &args.known_hosts,
                 )?;
+                host::preflight_hosts(&admitted)?;
                 report(
                     &admitted,
                     "preflight",
                     "ok",
-                    "signed inventory and pinned local inputs admitted",
+                    "signed inputs and read-only preflight of four validators and the edge host verified",
                 )
             }
             PublicResetCommand::Apply(args) => {
@@ -459,6 +486,28 @@ fn sample_inventory_fixture() -> InventoryV1 {
     executor_model::tests::sample_inventory()
 }
 
+/// Create a disposable fixture with the same ancestor custody as operator inputs.
+#[cfg(test)]
+fn private_custody_test_dir(prefix: &str) -> tempfile::TempDir {
+    // A private leaf below a shared temporary directory does not satisfy the
+    // public-reset custody policy. Keep fixtures beneath the owned workspace.
+    let target = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target");
+    fs::create_dir_all(&target).expect("workspace target directory");
+    let target = target.canonicalize().expect("canonical workspace target");
+    let directory = tempfile::Builder::new()
+        .prefix(prefix)
+        .tempdir_in(target)
+        .expect("private workspace fixture");
+    #[cfg(unix)]
+    {
+        fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))
+            .expect("private workspace fixture permissions");
+        validate_owner_private_dir(directory.path(), "test fixture")
+            .expect("fixture ancestors must meet operator custody policy");
+    }
+    directory
+}
+
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 struct InventoryV1 {
@@ -549,9 +598,13 @@ struct SourceManifestV1 {
 #[norito(deny_unknown_fields)]
 struct SourceFileV1 {
     path: String,
+    // Regular permissions (0644/0755), or Git type 0120000/0160000.
     mode: u16,
+    // Byte length of regular content, raw symlink text, or gitlink commit hex.
     size: u64,
+    // Git blob ID for files/links; indexed commit ID for an empty gitlink.
     git_blob_sha1: String,
+    // SHA-256 of the bytes identified by size; all entries remain in the closure.
     sha256: String,
 }
 
@@ -578,8 +631,8 @@ struct ArtifactV1 {
 
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
-struct RollbackV1 {
-    release_id: String,
+struct ValidatorAdmittedReleaseV1 {
+    commit: String,
     release_root: String,
     iroha3d_sha256: String,
     iroha_cli_sha256: String,
@@ -587,6 +640,64 @@ struct RollbackV1 {
     config_sha256: String,
     genesis_sha256: String,
     genesis_hash_sha256: String,
+}
+
+/// Signed target occupancy; a vacant target has no prior release to restore.
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(tag = "state", content = "value")]
+#[norito(deny_unknown_fields)]
+enum ValidatorInitialStateV1 {
+    #[norito(rename = "vacant")]
+    Vacant,
+    #[norito(rename = "admitted_release")]
+    AdmittedRelease(ValidatorAdmittedReleaseV1),
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(tag = "state", content = "value")]
+#[norito(deny_unknown_fields)]
+enum EdgeInitialStateV1 {
+    #[norito(rename = "vacant")]
+    Vacant,
+    #[norito(rename = "admitted_release")]
+    AdmittedRelease(EdgeAdmittedReleaseV1),
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct EdgeAdmittedReleaseV1 {
+    commit: String,
+    release_root: String,
+    cli_sha256: String,
+    config_sha256: String,
+}
+
+impl ValidatorV1 {
+    fn is_vacant(&self) -> bool {
+        matches!(self.initial_state, ValidatorInitialStateV1::Vacant)
+    }
+
+    fn admitted_release(&self) -> Result<&ValidatorAdmittedReleaseV1> {
+        match &self.initial_state {
+            ValidatorInitialStateV1::AdmittedRelease(release) => Ok(release),
+            ValidatorInitialStateV1::Vacant => {
+                Err(eyre!("vacant validator has no admitted prior release"))
+            }
+        }
+    }
+}
+
+impl EdgeV1 {
+    fn is_vacant(&self) -> bool {
+        matches!(self.initial_state, EdgeInitialStateV1::Vacant)
+    }
+
+    fn admitted_release(&self) -> Result<&EdgeAdmittedReleaseV1> {
+        match &self.initial_state {
+            EdgeInitialStateV1::AdmittedRelease(release) => Ok(release),
+            EdgeInitialStateV1::Vacant => Err(eyre!("vacant edge has no admitted prior release")),
+        }
+    }
 }
 
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
@@ -604,7 +715,7 @@ struct ValidatorV1 {
     systemd_unit: String,
     systemd_unit_sha256: String,
     artifacts: Vec<ArtifactV1>,
-    rollback: RollbackV1,
+    initial_state: ValidatorInitialStateV1,
 }
 
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
@@ -627,9 +738,8 @@ struct EdgeV1 {
     reset_guard: String,
     nginx_config: String,
     artifacts: Vec<ArtifactV1>,
-    rollback_release_root: String,
-    rollback_cli_sha256: String,
-    rollback_edge_config_sha256: String,
+    systemd_unit_sha256: String,
+    initial_state: EdgeInitialStateV1,
 }
 
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
@@ -838,14 +948,13 @@ fn admit_signed_inputs(
     ssh_identity: &Path,
     known_hosts: &Path,
 ) -> Result<(AdmittedReset, ChainDiscriminantGuard)> {
-    validate_fixed_executable(Path::new(SSH), "OpenSSH client")?;
-    let ssh_identity = pin_owner_private_file(ssh_identity, "OpenSSH identity")?;
-
-    let (inventory, inventory_bytes) = read_json::<InventoryV1>(inventory_path, "inventory")?;
-    let chain_guard = enter_inventory_chain_discriminant(&inventory)?;
+    let (inventory, inventory_bytes, chain_guard) = read_inventory(inventory_path, "inventory")?;
     validate_inventory(&inventory)?;
     validate_shared_validator_closure(&inventory)?;
+    // Reject unsupported placement before opening any deployment credential.
+    validate_fixed_executable(Path::new(SSH), "OpenSSH client")?;
     let known_hosts = validate_known_hosts(&inventory, known_hosts)?;
+    let ssh_identity = pin_owner_private_file(ssh_identity, "OpenSSH identity")?;
 
     let (authorization, authorization_bytes) =
         read_private_json::<AuthorizationEnvelopeV1>(authorization_path, "authorization")?;
@@ -883,6 +992,7 @@ fn admit_forward_closure(admitted: &mut AdmittedReset) -> Result<()> {
     let pinned_artifacts = validate_artifact_files(&admitted.inventory)?;
     validate_shared_validator_closure(&admitted.inventory)?;
     validate_genesis_hash_files(&admitted.inventory, &pinned_artifacts)?;
+    validate_pinned_validator_genesis_configs(&admitted.inventory, &pinned_artifacts)?;
     admitted.pinned_artifacts = pinned_artifacts;
     Ok(())
 }
@@ -947,6 +1057,19 @@ fn authorization_semantic_sha256(
     update_framed(&mut digest, trusted.algorithm.as_bytes());
     update_framed(&mut digest, trusted.public_key.as_bytes());
     Ok(hex::encode(digest.finalize()))
+}
+
+fn read_inventory(
+    path: &Path,
+    label: &str,
+) -> Result<(InventoryV1, Vec<u8>, ChainDiscriminantGuard)> {
+    let (file, snapshot) = open_pinned_regular(path, label)?;
+    if snapshot.len == 0 || snapshot.len > MAX_JSON_BYTES {
+        return Err(eyre!("{label} is empty or exceeds the V1 JSON bound"));
+    }
+    let bytes = read_pinned_bytes(path, label, file, &snapshot, MAX_JSON_BYTES)?;
+    let (inventory, guard) = decode_inventory(&bytes, label)?;
+    Ok((inventory, bytes, guard))
 }
 
 fn read_json<T: JsonDeserialize>(path: &Path, label: &str) -> Result<(T, Vec<u8>)> {
@@ -1160,15 +1283,26 @@ fn execution_lifetime_ms(inventory: &InventoryV1) -> Result<u64> {
         .and_then(|value| value.checked_add(timeouts.cleanup_secs.checked_mul(5)?))
         .and_then(|value| value.checked_add(timeouts.rollback_secs.checked_mul(5)?))
         .ok_or_else(|| eyre!("bounded execution timeout sum overflow"))?;
-    seconds
+    let lifetime_ms = seconds
         .checked_mul(1_000)
         // A fresh authorization may be admitted at any point in its complete
         // fifteen-minute admission window, so the execution lease must cover
         // that delay in addition to the bounded action ledger.
         .and_then(|value| value.checked_add(MAX_AUTHORIZATION_LIFETIME_MS))
         .and_then(|value| value.checked_add(EXECUTION_SAFETY_MARGIN_MS))
-        .filter(|value| *value <= MAX_EXECUTION_LIFETIME_MS)
-        .ok_or_else(|| eyre!("bounded execution plan exceeds four hours"))
+        .ok_or_else(|| eyre!("bounded execution lifetime overflow"))?;
+    if lifetime_ms > MAX_EXECUTION_LIFETIME_MS {
+        return Err(eyre!(
+            "bounded execution plan requires {} seconds (actions: {} seconds, admission: {} seconds, safety: {} seconds), exceeding the {}-second limit by {} seconds",
+            lifetime_ms / 1_000,
+            seconds,
+            MAX_AUTHORIZATION_LIFETIME_MS / 1_000,
+            EXECUTION_SAFETY_MARGIN_MS / 1_000,
+            MAX_EXECUTION_LIFETIME_MS / 1_000,
+            (lifetime_ms - MAX_EXECUTION_LIFETIME_MS) / 1_000,
+        ));
+    }
+    Ok(lifetime_ms)
 }
 
 fn authorization_message(claims: &AuthorizationClaimsV1) -> Result<Vec<u8>> {
@@ -1227,7 +1361,7 @@ fn validate_inventory(inventory: &InventoryV1) -> Result<()> {
     }
     validate_nonce(&inventory.authorization_nonce)?;
     validate_revision(&inventory.revision)?;
-    validate_timeouts(&inventory.timeouts)?;
+    validate_timeout_policy(inventory)?;
     validate_inrou(&inventory.inrou_canary)?;
     validate_canary_onboarding_request(&inventory.canary_onboarding_request)?;
     validate_faucet_policy(&inventory.faucet_policy)?;
@@ -1315,6 +1449,15 @@ fn validate_inventory(inventory: &InventoryV1) -> Result<()> {
     if !hostnames.insert(inventory.edge.endpoint.hostname.clone()) {
         return Err(eyre!("edge hostname must be distinct from every validator"));
     }
+    // V1 has one durable host progress record. Its mutation boundaries cover
+    // every validator only when all five roles share the authenticated SSH key.
+    if inventory.validators.iter().any(|validator| {
+        validator.endpoint.host_identity_sha256 != inventory.edge.endpoint.host_identity_sha256
+    }) {
+        return Err(eyre!(
+            "public-reset V1 requires all four validators and the edge on one authenticated SSH host identity"
+        ));
+    }
     validate_lower_hex(
         "artifact closure SHA-256",
         &inventory.artifact_closure_sha256,
@@ -1330,13 +1473,53 @@ fn validate_inventory(inventory: &InventoryV1) -> Result<()> {
     Ok(())
 }
 
-fn enter_inventory_chain_discriminant(inventory: &InventoryV1) -> Result<ChainDiscriminantGuard> {
+fn validate_inventory_chain_identity(inventory: &InventoryV1) -> Result<()> {
     if inventory.chain_id != CHAIN_ID || inventory.chain_discriminant != CHAIN_DISCRIMINANT {
         return Err(eyre!(
             "inventory must target the canonical Taira V1 chain identity"
         ));
     }
-    Ok(ChainDiscriminantGuard::enter(inventory.chain_discriminant))
+    Ok(())
+}
+
+fn enter_inventory_chain_discriminant(inventory: &InventoryV1) -> Result<ChainDiscriminantGuard> {
+    validate_inventory_chain_identity(inventory)?;
+    Ok(ChainDiscriminantGuard::enter(CHAIN_DISCRIMINANT))
+}
+
+fn decode_inventory(bytes: &[u8], label: &str) -> Result<(InventoryV1, ChainDiscriminantGuard)> {
+    if bytes.is_empty() || bytes.len() as u64 > MAX_JSON_BYTES {
+        return Err(eyre!("{label} is empty or exceeds the V1 JSON bound"));
+    }
+    // Nested placement AccountIds must be decoded under this protocol's fixed network,
+    // before the untrusted top-level fields can be inspected. Never infer the network
+    // from the ambient process or use an unvalidated field to choose the decoder.
+    let guard = ChainDiscriminantGuard::enter(CHAIN_DISCRIMINANT);
+    let inventory: InventoryV1 = json::from_slice(bytes)
+        .map_err(|_| eyre!("{label} is not exact Taira inventory V1 JSON"))?;
+    validate_inventory_chain_identity(&inventory)?;
+    Ok((inventory, guard))
+}
+
+fn canonical_inventory_bytes(inventory: &InventoryV1) -> Result<Vec<u8>> {
+    let _guard = enter_inventory_chain_discriminant(inventory)?;
+    let mut bytes = json::to_json(inventory)?.into_bytes();
+    bytes.push(b'\n');
+    if bytes.len() as u64 > MAX_JSON_BYTES {
+        return Err(eyre!("inventory exceeds the V1 JSON bound"));
+    }
+    Ok(bytes)
+}
+
+fn assembled_inventory_bytes(inventory: &InventoryV1) -> Result<Vec<u8>> {
+    let bytes = canonical_inventory_bytes(inventory)?;
+    let (decoded, _guard) = decode_inventory(&bytes, "assembled inventory")?;
+    if canonical_inventory_bytes(&decoded)? != bytes {
+        return Err(eyre!(
+            "assembled inventory failed its canonical V1 roundtrip"
+        ));
+    }
+    Ok(bytes)
 }
 
 fn validate_revision(revision: &RevisionV1) -> Result<()> {
@@ -1404,6 +1587,7 @@ fn validate_source_closure(revision: &RevisionV1) -> Result<()> {
     validate_source_root(source_root)?;
     validate_git_provenance(source_root, revision)?;
     let actual = inspect_source_tree(source_root, &manifest.tracked_files)?;
+    validate_git_provenance(source_root, revision)?;
     if actual != manifest.tracked_files {
         return Err(eyre!(
             "source root is dirty or differs from the exact signed tracked closure"
@@ -1441,87 +1625,19 @@ fn validate_source_root(_path: &Path) -> Result<()> {
 }
 
 fn inspect_source_tree(root: &Path, expected: &[SourceFileV1]) -> Result<Vec<SourceFileV1>> {
-    let index = git_output(root, &["ls-files", "--stage", "-z"])?;
-    let records = index
-        .split(|byte| *byte == 0)
-        .filter(|record| !record.is_empty());
-    let mut indexed = BTreeMap::new();
-    for record in records {
-        let record = std::str::from_utf8(record).wrap_err("Git index record is not UTF-8")?;
-        let (metadata, path) = record
-            .split_once('\t')
-            .ok_or_else(|| eyre!("Git index record is malformed"))?;
-        let fields: Vec<&str> = metadata.split(' ').collect();
-        if fields.len() != 3 || !matches!(fields[0], "100644" | "100755") || fields[2] != "0" {
-            return Err(eyre!(
-                "source index contains a symlink, submodule, merge stage, or unsupported mode"
-            ));
-        }
-        validate_source_relative_path(path)?;
-        validate_lower_hex("Git blob SHA-1", fields[1], 40)?;
-        if indexed
-            .insert(
-                path.to_owned(),
-                (fields[0].to_owned(), fields[1].to_owned()),
-            )
-            .is_some()
-        {
-            return Err(eyre!("Git index contains a duplicate source path"));
-        }
+    let actual = source::capture_tree(root)?;
+    if actual.as_slice() != expected {
+        return Err(eyre!("source root differs from its exact tracked manifest"));
     }
-    if indexed.len() != expected.len() || indexed.len() > MAX_SOURCE_FILES {
-        return Err(eyre!(
-            "signed source manifest is not the exact Git index closure"
-        ));
-    }
-    let mut actual = Vec::with_capacity(expected.len());
-    for entry in expected {
-        validate_source_relative_path(&entry.path)?;
-        validate_lower_hex("source file SHA-256", &entry.sha256, 64)?;
-        validate_lower_hex("source Git blob SHA-1", &entry.git_blob_sha1, 40)?;
-        let (git_mode, git_blob) = indexed
-            .get(&entry.path)
-            .ok_or_else(|| eyre!("signed source manifest names an untracked path"))?;
-        let expected_mode = if git_mode == "100755" { 0o755 } else { 0o644 };
-        if entry.mode != expected_mode || &entry.git_blob_sha1 != git_blob {
-            return Err(eyre!("signed source manifest mode/blob binding mismatch"));
-        }
-        let path = root.join(&entry.path);
-        let (mut file, snapshot) = open_pinned_regular(&path, "source closure file")?;
-        if snapshot.len != entry.size || snapshot.len > MAX_SOURCE_FILE_BYTES {
-            return Err(eyre!("source closure file size mismatch"));
-        }
-        #[cfg(unix)]
-        if snapshot.mode & 0o7777 != u32::from(entry.mode) {
-            return Err(eyre!("source closure file mode mismatch"));
-        }
-        let digest = sha256_reader(&mut file, &path)?;
-        ensure_pinned_unchanged(&path, "source closure file", &file, &snapshot)?;
-        if digest != entry.sha256 {
-            return Err(eyre!("source closure file SHA-256 mismatch"));
-        }
-        actual.push(entry.clone());
-    }
-    actual.sort_by(|left, right| left.path.cmp(&right.path));
     Ok(actual)
 }
 
 fn validate_git_provenance(root: &Path, revision: &RevisionV1) -> Result<()> {
-    let git_dir = root.join(".git");
-    let metadata =
-        fs::symlink_metadata(&git_dir).wrap_err("source .git directory is unavailable")?;
-    if metadata.file_type().is_symlink() || !metadata.is_dir() {
-        return Err(eyre!("source .git must be one direct directory"));
-    }
-    let branch = git_text(root, &["symbolic-ref", "--quiet", "--short", "HEAD"])?;
-    let head = git_text(root, &["rev-parse", "--verify", "HEAD"])?;
-    let tree = git_text(root, &["rev-parse", "--verify", "HEAD^{tree}"])?;
-    let status = git_output(root, &["status", "--porcelain=v1", "--untracked-files=all"])?;
-    if branch != SOURCE_BRANCH
+    let [branch, head, tree] = source::clean_git_identity(root)?;
+    if branch != revision.branch
         || head != revision.commit
         || head != crate::VERGEN_GIT_SHA
         || tree != revision.tree
-        || !status.is_empty()
     {
         return Err(eyre!(
             "source checkout is not the exact clean optimizations HEAD/tree compiled into this CLI"
@@ -1542,11 +1658,15 @@ fn git_text(root: &Path, args: &[&str]) -> Result<String> {
     Ok(value.to_owned())
 }
 
-fn git_output(root: &Path, args: &[&str]) -> Result<Vec<u8>> {
-    let output = std::process::Command::new(GIT)
+fn git_command(root: &Path) -> std::process::Command {
+    let mut command = std::process::Command::new(GIT);
+    command
         .env_clear()
         .env("LC_ALL", "C")
         .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_NO_LAZY_FETCH", "1")
+        .env("GIT_NO_REPLACE_OBJECTS", "1")
         .env("GIT_OPTIONAL_LOCKS", "0")
         .arg("--no-pager")
         .arg("--no-optional-locks")
@@ -1555,7 +1675,12 @@ fn git_output(root: &Path, args: &[&str]) -> Result<Vec<u8>> {
         .arg("-c")
         .arg("core.hooksPath=/dev/null")
         .arg("-C")
-        .arg(root)
+        .arg(root);
+    command
+}
+
+fn git_output(root: &Path, args: &[&str]) -> Result<Vec<u8>> {
+    let output = git_command(root)
         .args(args)
         .stdin(std::process::Stdio::null())
         .output()
@@ -1684,39 +1809,48 @@ fn validate_validator(validator: &ValidatorV1, slug: &str, revision: &RevisionV1
             "validator `{slug}` remote CLI is not the exact same-revision artifact"
         ));
     }
+    if validator.is_vacant() {
+        return Ok(());
+    }
     validate_lower_hex(
         "rollback daemon SHA-256",
-        &validator.rollback.iroha3d_sha256,
+        &validator.admitted_release()?.iroha3d_sha256,
         64,
     )?;
     validate_lower_hex(
         "rollback CLI SHA-256",
-        &validator.rollback.iroha_cli_sha256,
+        &validator.admitted_release()?.iroha_cli_sha256,
         64,
     )?;
     validate_lower_hex(
         "rollback SoraFS SHA-256",
-        &validator.rollback.sorafs_node_sha256,
+        &validator.admitted_release()?.sorafs_node_sha256,
         64,
     )?;
     for (label, value) in [
-        ("rollback config SHA-256", &validator.rollback.config_sha256),
+        (
+            "rollback config SHA-256",
+            &validator.admitted_release()?.config_sha256,
+        ),
         (
             "rollback genesis SHA-256",
-            &validator.rollback.genesis_sha256,
+            &validator.admitted_release()?.genesis_sha256,
         ),
         (
             "rollback genesis-hash SHA-256",
-            &validator.rollback.genesis_hash_sha256,
+            &validator.admitted_release()?.genesis_hash_sha256,
         ),
     ] {
         validate_lower_hex(label, value, 64)?;
     }
-    validate_slug("rollback release id", &validator.rollback.release_id)?;
-    if validator.rollback.release_root
-        != format!("{service_root}/rollback/{}", validator.rollback.release_id)
+    let release = validator.admitted_release()?;
+    validate_lower_hex("admitted validator release commit", &release.commit, 40)?;
+    if release.commit == revision.commit
+        || release.release_root != format!("{service_root}/releases/{}", release.commit)
     {
-        return Err(eyre!("validator `{slug}` rollback root is not exact"));
+        return Err(eyre!(
+            "validator `{slug}` admitted release is not a distinct canonical prior release"
+        ));
     }
     Ok(())
 }
@@ -1727,18 +1861,24 @@ fn validate_edge(edge: &EdgeV1, revision: &RevisionV1) -> Result<()> {
         || edge.state_root != "/var/lib/taira/edge"
         || edge.reset_guard != "/var/lib/taira/.public-reset-control-v1/taira-edge"
         || edge.nginx_config != "/etc/nginx/conf.d/taira.conf"
-        || edge.rollback_release_root != "/srv/taira/edge/rollback/current"
     {
         return Err(eyre!(
             "edge does not use the exact guarded V1 identity and roots"
         ));
     }
-    validate_lower_hex("edge rollback CLI SHA-256", &edge.rollback_cli_sha256, 64)?;
-    validate_lower_hex(
-        "edge rollback config SHA-256",
-        &edge.rollback_edge_config_sha256,
-        64,
-    )?;
+    validate_lower_hex("edge systemd unit SHA-256", &edge.systemd_unit_sha256, 64)?;
+    if let EdgeInitialStateV1::AdmittedRelease(release) = &edge.initial_state {
+        validate_lower_hex("admitted edge release commit", &release.commit, 40)?;
+        if release.commit == revision.commit
+            || release.release_root != format!("{}/releases/{}", edge.service_root, release.commit)
+        {
+            return Err(eyre!(
+                "edge admitted release is not a distinct canonical prior release"
+            ));
+        }
+        validate_lower_hex("edge rollback CLI SHA-256", &release.cli_sha256, 64)?;
+        validate_lower_hex("edge rollback config SHA-256", &release.config_sha256, 64)?;
+    }
     validate_platform(&edge.platform, false)?;
     validate_endpoint(&edge.endpoint, &edge.service_root, revision)?;
     validate_artifacts(
@@ -2188,6 +2328,86 @@ fn validate_artifact_files_with(
     Ok(pinned)
 }
 
+/// Admit the complete signed-genesis startup closure without external TOML sources.
+fn validate_validator_genesis_config(
+    bytes: &[u8],
+    signed_genesis: &Path,
+    expected_hash: &str,
+) -> Result<()> {
+    let text =
+        std::str::from_utf8(bytes).map_err(|_| eyre!("validator startup config is not UTF-8"))?;
+    let mut table: toml::Table =
+        toml::from_str(text).map_err(|_| eyre!("validator startup config is not TOML"))?;
+    let result = (|| {
+        if table.contains_key("extends") {
+            return Err(eyre!(
+                "validator startup config cannot inherit unbound TOML"
+            ));
+        }
+        let genesis = table
+            .get("genesis")
+            .and_then(toml::Value::as_table)
+            .ok_or_else(|| eyre!("validator startup config omits its genesis table"))?;
+        if genesis.contains_key("manifest_json") || genesis.contains_key("expected_hash_file") {
+            return Err(eyre!(
+                "validator startup config cannot use an unbound genesis manifest or identity file"
+            ));
+        }
+        if genesis.get("file").and_then(toml::Value::as_str) != signed_genesis.to_str() {
+            return Err(eyre!(
+                "validator startup config does not select its exact signed genesis artifact"
+            ));
+        }
+        let literal = genesis
+            .get("expected_hash")
+            .and_then(toml::Value::as_str)
+            .ok_or_else(|| {
+                eyre!("validator startup config requires an inline checked network identity")
+            })?;
+        let network = literal
+            .parse::<iroha::data_model::NetworkId>()
+            .map_err(|_| eyre!("validator startup network identity is not canonical"))?;
+        validate_canonical_iroha_hash("signed genesis hash", expected_hash)?;
+        let expected = hex::decode(expected_hash)?;
+        if network.to_string() != literal || network.as_bytes().as_slice() != expected.as_slice() {
+            return Err(eyre!(
+                "validator startup network identity differs from its signed genesis hash"
+            ));
+        }
+        Ok(())
+    })();
+    crate::soracloud::zeroize_taira_toml_table(&mut table);
+    result
+}
+
+fn validate_pinned_validator_genesis_configs(
+    inventory: &InventoryV1,
+    pinned: &[PinnedArtifact],
+) -> Result<()> {
+    for validator in &inventory.validators {
+        let input = &pinned
+            .iter()
+            .find(|entry| entry.slug == validator.slug && entry.role == "config")
+            .ok_or_else(|| eyre!("validator startup config was not pinned"))?
+            .input;
+        let mut file = input.file.try_clone()?;
+        file.rewind()?;
+        let bytes = zeroize::Zeroizing::new(read_pinned_bytes(
+            &input.path,
+            "validator startup config",
+            file,
+            &input.snapshot,
+            1024 * 1024,
+        )?);
+        validate_validator_genesis_config(
+            &bytes,
+            Path::new(&artifact(&validator.artifacts, "genesis")?.remote_path),
+            &inventory.next_genesis_hash,
+        )?;
+    }
+    Ok(())
+}
+
 fn validate_known_hosts(inventory: &InventoryV1, path: &Path) -> Result<PinnedInput> {
     let (file, snapshot) = open_pinned_regular(path, "OpenSSH known-hosts")?;
     require_owner_private_snapshot(&snapshot, "OpenSSH known-hosts")?;
@@ -2341,6 +2561,12 @@ fn validate_genesis_hash_files(inventory: &InventoryV1, pinned: &[PinnedArtifact
         }
     }
     Ok(())
+}
+
+/// Validate individual action bounds and their complete signed execution lease without IO.
+fn validate_timeout_policy(inventory: &InventoryV1) -> Result<()> {
+    validate_timeouts(&inventory.timeouts)?;
+    execution_lifetime_ms(inventory).map(|_| ())
 }
 
 fn validate_timeouts(timeouts: &TimeoutsV1) -> Result<()> {
@@ -4061,11 +4287,11 @@ mod executor_model {
         ExecutionStep::Reset,
         ExecutionStep::Preseed,
         ExecutionStep::Start,
+        ExecutionStep::EdgeStage,
+        ExecutionStep::EdgeCutover,
         ExecutionStep::Convergence,
         ExecutionStep::Canary,
         ExecutionStep::RestartProof,
-        ExecutionStep::EdgeStage,
-        ExecutionStep::EdgeCutover,
         ExecutionStep::EdgeVerify,
         ExecutionStep::Seal,
         ExecutionStep::Cleanup,
@@ -4742,6 +4968,56 @@ mod executor_model {
         use super::*;
         use iroha_crypto::{KeyPair, Signature};
 
+        #[test]
+        fn recovery_args_accept_identical_forward_inputs_without_admitting_unused_paths() {
+            let unavailable = PathBuf::from("/unused-public-reset-recovery-input");
+            let validator_configs = (0..4)
+                .map(|index| unavailable.join(format!("validator-{index}.toml")))
+                .collect::<Vec<_>>();
+            let mut args = PublicResetApply {
+                inventory: unavailable.join("inventory.json"),
+                authorization: unavailable.join("authorization.json"),
+                trusted_public_key: unavailable.join("trusted-key.json"),
+                ssh_identity: unavailable.join("identity"),
+                known_hosts: unavailable.join("known-hosts"),
+                runtime_client_config: Some(unavailable.join("runtime.toml")),
+                validator_client_config: validator_configs.clone(),
+                onboarding_token: Some(unavailable.join("onboarding-token")),
+                inrou_stage_dir: Some(unavailable.join("inrou-stage")),
+            };
+            for step in [ExecutionStep::Canary, ExecutionStep::EdgeVerify] {
+                assert!(
+                    args.recovery_validator_client_configs(step)
+                        .expect("identical forward arguments permit read-only recovery")
+                        .is_empty(),
+                    "unused validator paths must not reach recovery custody"
+                );
+            }
+            assert_eq!(
+                args.recovery_validator_client_configs(ExecutionStep::RestartProof)
+                    .expect("RestartProof retains its exact ordered four-config closure"),
+                validator_configs
+            );
+            for count in [0, 3, 5] {
+                args.validator_client_config = (0..count)
+                    .map(|index| unavailable.join(format!("validator-{index}.toml")))
+                    .collect();
+                assert!(
+                    args.recovery_validator_client_configs(ExecutionStep::RestartProof)
+                        .is_err(),
+                    "RestartProof must reject {count} configs"
+                );
+            }
+            args.validator_client_config.clear();
+            for step in [ExecutionStep::Canary, ExecutionStep::EdgeVerify] {
+                assert!(
+                    args.recovery_validator_client_configs(step)
+                        .expect("unused forward arguments remain optional")
+                        .is_empty()
+                );
+            }
+        }
+
         struct MemoryJournal {
             state: JournalV1,
             finished: bool,
@@ -5006,6 +5282,153 @@ mod executor_model {
         }
 
         #[test]
+        fn inventory_wire_roundtrip_scopes_nonempty_placements_before_decode() {
+            use iroha::data_model::account::address::chain_discriminant;
+            let _ambient = ChainDiscriminantGuard::enter(753);
+            let inventory = sample_inventory();
+            assert_eq!(inventory.inrou_canary.placement_targets.len(), 4);
+            let bytes = canonical_inventory_bytes(&inventory).expect("canonical Taira inventory");
+            assert_eq!(chain_discriminant(), 753, "serializer restores its caller");
+            let value: Value = json::from_slice(&bytes).expect("public inventory JSON");
+            for target in value
+                .pointer("/inrou_canary/placement_targets")
+                .and_then(Value::as_array)
+                .expect("four serialized placements")
+            {
+                assert!(
+                    target
+                        .get("validator_account_id")
+                        .and_then(Value::as_str)
+                        .expect("typed placement account")
+                        .starts_with("test")
+                );
+            }
+            assert!(
+                json::from_slice::<InventoryV1>(&bytes).is_err(),
+                "unscoped fresh-process decoding reproduces the original failure"
+            );
+            {
+                let (decoded, _guard) = decode_inventory(&bytes, "retained inventory")
+                    .expect("fixed-network boundary decodes all four placements");
+                assert_eq!(chain_discriminant(), CHAIN_DISCRIMINANT);
+                assert_eq!(
+                    decoded.inrou_canary.placement_targets,
+                    inventory.inrou_canary.placement_targets
+                );
+                validate_inventory(&decoded).expect("decoded inventory remains admissible");
+                assert_eq!(
+                    canonical_inventory_bytes(&decoded).expect("reencode"),
+                    bytes
+                );
+            }
+            assert_eq!(
+                chain_discriminant(),
+                753,
+                "decoder guard restores its caller"
+            );
+            assert_eq!(
+                assembled_inventory_bytes(&inventory).expect("assembler self-roundtrip"),
+                bytes
+            );
+            assert_eq!(
+                chain_discriminant(),
+                753,
+                "assembly check restores its caller"
+            );
+        }
+
+        #[test]
+        fn inventory_wire_rejects_wrong_chain_foreign_accounts_and_unknown_fields() {
+            use iroha::data_model::account::address::chain_discriminant;
+            let _ambient = ChainDiscriminantGuard::enter(753);
+            let inventory = sample_inventory();
+            let bytes = canonical_inventory_bytes(&inventory).expect("valid inventory");
+            let canonical: Value = json::from_slice(&bytes).expect("public inventory value");
+            let foreign_account = inventory
+                .inrou_canary
+                .placement_targets
+                .iter()
+                .next()
+                .expect("placement")
+                .validator_account_id
+                .to_string();
+            assert!(foreign_account.starts_with("sora"));
+            for (path, replacement) in [
+                ("/chain_discriminant", Value::from(753_u16)),
+                ("/chain_id", Value::String("wrong-chain".to_owned())),
+                (
+                    "/inrou_canary/placement_targets/0/validator_account_id",
+                    Value::String(foreign_account),
+                ),
+            ] {
+                let mut invalid = canonical.clone();
+                *invalid.pointer_mut(path).expect("exact inventory field") = replacement;
+                assert!(
+                    decode_inventory(
+                        &json::to_vec(&invalid).expect("invalid inventory bytes"),
+                        "inventory"
+                    )
+                    .is_err()
+                );
+                assert_eq!(
+                    chain_discriminant(),
+                    753,
+                    "failed decoding restores its caller"
+                );
+            }
+            for path in ["", "/inrou_canary/placement_targets/0"] {
+                let mut invalid = canonical.clone();
+                let object = if path.is_empty() {
+                    &mut invalid
+                } else {
+                    invalid.pointer_mut(path).expect("placement")
+                };
+                object
+                    .as_object_mut()
+                    .expect("inventory object")
+                    .insert("retired_field".to_owned(), Value::Null);
+                assert!(
+                    decode_inventory(
+                        &json::to_vec(&invalid).expect("unknown-field inventory"),
+                        "inventory"
+                    )
+                    .is_err()
+                );
+                assert_eq!(chain_discriminant(), 753);
+            }
+            let mut wrong = inventory;
+            wrong.chain_discriminant = 753;
+            assert!(canonical_inventory_bytes(&wrong).is_err());
+            assert_eq!(chain_discriminant(), 753);
+        }
+
+        #[test]
+        fn inventory_file_boundary_preserves_original_bytes_and_decode_guard() {
+            use iroha::data_model::account::address::chain_discriminant;
+            let _ambient = ChainDiscriminantGuard::enter(753);
+            let directory = private_tempdir();
+            let path = directory
+                .path()
+                .canonicalize()
+                .expect("fixture root")
+                .join("inventory.json");
+            let inventory = sample_inventory();
+            let bytes = assembled_inventory_bytes(&inventory).expect("assembler output");
+            let mut file = create_private_new(&path).expect("private inventory file");
+            file.write_all(&bytes)
+                .expect("write exact assembler output");
+            drop(file);
+            {
+                let (decoded, retained, _guard) = read_inventory(&path, "inventory")
+                    .expect("read real retained inventory under ambient SORA context");
+                assert_eq!(retained, bytes);
+                assert_eq!(decoded.inrou_canary.placement_targets.len(), 4);
+                assert_eq!(chain_discriminant(), CHAIN_DISCRIMINANT);
+            }
+            assert_eq!(chain_discriminant(), 753);
+        }
+
+        #[test]
         fn recovery_intent_rejects_noncanonical_idempotency_digests() {
             let canonical = test_recovery_intent(ExecutionStep::Canary);
             validate_recovery_intent(&canonical, ExecutionStep::Canary)
@@ -5096,28 +5519,34 @@ mod executor_model {
         }
 
         fn private_tempdir() -> tempfile::TempDir {
-            let directory = tempfile::tempdir().expect("tempdir");
-            #[cfg(unix)]
-            fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))
-                .expect("private tempdir mode");
-            directory
+            private_custody_test_dir("taira-reset-journal-")
         }
 
         #[cfg(unix)]
-        fn private_custody_tempdir() -> tempfile::TempDir {
-            let current = std::env::current_dir().expect("current directory");
-            let directory = tempfile::Builder::new()
-                .prefix(".taira-artifact-test-")
-                .tempdir_in(current)
-                .expect("workspace tempdir");
-            fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))
-                .expect("private workspace tempdir mode");
-            directory
+        #[test]
+        fn private_fixture_rejects_writable_ancestor_custody() {
+            let directory = private_tempdir();
+            let ancestor = directory.path().join("replaceable");
+            fs::create_dir(&ancestor).expect("fixture ancestor");
+            let private = ancestor.join("private");
+            fs::create_dir(&private).expect("private fixture leaf");
+            fs::set_permissions(&ancestor, fs::Permissions::from_mode(0o700))
+                .expect("safe ancestor mode");
+            fs::set_permissions(&private, fs::Permissions::from_mode(0o700))
+                .expect("private leaf mode");
+            validate_owner_private_dir(&private, "fixture").expect("safe fixture custody");
+            for mode in [0o770, 0o777, 0o1777] {
+                fs::set_permissions(&ancestor, fs::Permissions::from_mode(mode))
+                    .expect("replaceable ancestor mode");
+                let error = validate_owner_private_dir(&private, "fixture")
+                    .expect_err("a private leaf cannot repair writable ancestor custody");
+                assert!(error.to_string().contains("unsafe custody"), "{error:#}");
+            }
         }
 
         #[cfg(unix)]
         fn materialize_artifact_sources(inventory: &mut InventoryV1) -> tempfile::TempDir {
-            let directory = private_custody_tempdir();
+            let directory = private_custody_test_dir("taira-reset-artifacts-");
             let root = directory.path().canonicalize().expect("artifact root");
             let mut materialized = BTreeSet::new();
             let mut materialize = |slug: &str, artifact: &mut ArtifactV1| {
@@ -5286,8 +5715,8 @@ mod executor_model {
         #[test]
         fn authorization_rejects_wrong_signature() {
             let inventory = sample_inventory();
-            let raw = json::to_json(&inventory).expect("inventory JSON");
-            let inventory_sha = sha256_hex(raw.as_bytes());
+            let raw = canonical_inventory_bytes(&inventory).expect("inventory JSON");
+            let inventory_sha = sha256_hex(&raw);
             let key = KeyPair::try_random_with_algorithm(Algorithm::Ed25519).expect("key");
             let wrong = KeyPair::try_random_with_algorithm(Algorithm::Ed25519).expect("wrong key");
             let claims = sample_claims(&inventory, &inventory_sha);
@@ -5313,7 +5742,10 @@ mod executor_model {
 
         #[test]
         fn inventory_pins_the_complete_first_release_canary_request() {
-            let request = sample_inventory().canary_onboarding_request;
+            let inventory = sample_inventory();
+            let _chain_guard = enter_inventory_chain_discriminant(&inventory)
+                .expect("admitted Taira address context");
+            let request = inventory.canary_onboarding_request;
             validate_canary_onboarding_request(&request).expect("canonical canary request");
 
             let mut permissions = request.clone();
@@ -5529,7 +5961,9 @@ mod executor_model {
         #[test]
         fn signed_reset_documents_require_explicit_nullable_fee_policy_slots() {
             let inventory = sample_inventory();
-            let canonical = json::to_value(&inventory).expect("inventory JSON value");
+            let canonical: Value =
+                json::from_slice(&canonical_inventory_bytes(&inventory).expect("inventory bytes"))
+                    .expect("inventory JSON value");
             let fee_intent = canonical
                 .as_object()
                 .and_then(|object| object.get("fee_intent"))
@@ -5543,8 +5977,11 @@ mod executor_model {
                     "authority fee intent must serialize `{field}` as explicit null"
                 );
             }
-            json::from_value::<InventoryV1>(canonical.clone())
-                .expect("explicit nullable inventory slots");
+            decode_inventory(
+                &json::to_vec(&canonical).expect("inventory value bytes"),
+                "inventory",
+            )
+            .expect("explicit nullable inventory slots");
 
             for field in ["sponsor_program", "sponsor_program_revision"] {
                 let mut missing = canonical.clone();
@@ -5555,7 +5992,11 @@ mod executor_model {
                     .expect("fee-intent object")
                     .remove(field);
                 assert!(
-                    json::from_value::<InventoryV1>(missing).is_err(),
+                    decode_inventory(
+                        &json::to_vec(&missing).expect("missing slot bytes"),
+                        "inventory"
+                    )
+                    .is_err(),
                     "the signed V1 inventory must reject omitted `{field}`"
                 );
             }
@@ -5582,6 +6023,8 @@ mod executor_model {
         #[test]
         fn signed_faucet_policy_binds_authority_asset_and_amount() {
             let inventory = sample_inventory();
+            let _chain_guard = enter_inventory_chain_discriminant(&inventory)
+                .expect("admitted Taira address context");
             validate_faucet_policy(&inventory.faucet_policy)
                 .expect("canonical faucet policy is admitted");
 
@@ -5771,9 +6214,7 @@ mod executor_model {
 
         #[test]
         fn completed_receipt_rejects_replay() {
-            let directory = tempfile::tempdir().expect("tempdir");
-            #[cfg(unix)]
-            fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700)).expect("mode");
+            let directory = private_tempdir();
             let admitted = admitted(sample_inventory());
             let completed = directory.path().join("completed");
             fs::create_dir(&completed).expect("completed");
@@ -5865,7 +6306,7 @@ mod executor_model {
                     .iter()
                     .map(|slug| (*slug).to_owned())
                     .collect();
-                state.edge_touched = step == ExecutionStep::EdgeVerify;
+                state.edge_touched = true;
                 journal.replace(state).expect("persist prepared recovery");
                 let mut progress = JournalRecoveryProgress {
                     journal: &mut journal,
@@ -5964,6 +6405,7 @@ mod executor_model {
                 .iter()
                 .map(|slug| (*slug).to_owned())
                 .collect();
+            pending.edge_touched = true;
             journal
                 .replace(pending)
                 .expect("persist applied recovery boundary");
@@ -6180,7 +6622,10 @@ mod executor_model {
                 .expect_err("premature Applied outcome must fail closed");
             assert_eq!(transport.events, ["recover:canary"]);
             assert_eq!(journal.state.status, "recovery_pending");
-            assert_eq!(usize::from(journal.state.next_step), 7);
+            assert_eq!(
+                EXECUTION_STEPS[usize::from(journal.state.next_step)],
+                ExecutionStep::Canary
+            );
         }
 
         #[test]
@@ -6565,6 +7010,543 @@ mod executor_model {
             }
         }
 
+        #[test]
+        fn inventory_requires_all_validators_and_edge_on_one_authenticated_host() {
+            for vacant in [false, true] {
+                let original = if vacant {
+                    vacant_execution_fixture()
+                } else {
+                    sample_inventory()
+                };
+                validate_inventory(&original).expect("complete cohost inventory");
+                for mask in 0_u8..15 {
+                    let mut inventory = original.clone();
+                    for (index, validator) in inventory.validators.iter_mut().enumerate() {
+                        if mask & (1 << index) == 0 {
+                            validator.endpoint.host_identity_sha256 =
+                                hex::encode([index as u8 + 1; 32]);
+                        }
+                    }
+                    let error = validate_inventory(&inventory)
+                        .expect_err("dedicated or partial-edge placement must fail admission");
+                    assert!(
+                        error
+                            .to_string()
+                            .contains("one authenticated SSH host identity"),
+                        "vacant={vacant} cohost_mask={mask}: {error:#}"
+                    );
+                }
+            }
+        }
+
+        #[test]
+        fn cohost_inventory_preserves_exact_endpoint_and_root_boundaries() {
+            for target in 0..5 {
+                for field in [
+                    "user",
+                    "port",
+                    "remote_cli",
+                    "service_root",
+                    "state_root",
+                    "reset_guard",
+                ] {
+                    let mut inventory = sample_inventory();
+                    let (endpoint, service_root, state_root, reset_guard) = if target < 4 {
+                        let validator = &mut inventory.validators[target];
+                        (
+                            &mut validator.endpoint,
+                            &mut validator.service_root,
+                            &mut validator.state_root,
+                            &mut validator.reset_guard,
+                        )
+                    } else {
+                        let edge = &mut inventory.edge;
+                        (
+                            &mut edge.endpoint,
+                            &mut edge.service_root,
+                            &mut edge.state_root,
+                            &mut edge.reset_guard,
+                        )
+                    };
+                    match field {
+                        "user" => endpoint.user = "operator".to_owned(),
+                        "port" => endpoint.port = 2222,
+                        "remote_cli" => endpoint.remote_cli.push_str(".other"),
+                        "service_root" => service_root.push_str(".other"),
+                        "state_root" => state_root.push_str(".other"),
+                        "reset_guard" => reset_guard.push_str(".other"),
+                        _ => unreachable!(),
+                    }
+                    assert!(
+                        validate_inventory(&inventory).is_err(),
+                        "target={target} field={field}"
+                    );
+                }
+            }
+        }
+
+        #[test]
+        fn unsupported_placement_is_rejected_before_private_inputs_are_opened() {
+            let directory = private_tempdir();
+            let root = directory
+                .path()
+                .canonicalize()
+                .expect("canonical fixture root");
+            let path = root.join("inventory.json");
+            let mut inventory = sample_inventory();
+            inventory.edge.endpoint.host_identity_sha256 = "f".repeat(64);
+            let mut file = create_private_new(&path).expect("private inventory fixture");
+            file.write_all(&canonical_inventory_bytes(&inventory).expect("inventory JSON"))
+                .expect("write inventory");
+            drop(file);
+            let absent = root.join("must-not-open");
+            let error = admit_signed_inputs(&path, &absent, &absent, &absent, &absent)
+                .err()
+                .expect("unsupported placement fails before any private input");
+            assert!(
+                error
+                    .to_string()
+                    .contains("one authenticated SSH host identity"),
+                "{error:#}"
+            );
+            assert!(!absent.exists());
+            assert_eq!(fs::read_dir(&root).expect("fixture directory").count(), 1);
+        }
+
+        #[test]
+        fn cohost_known_hosts_binds_every_alias_to_the_same_actual_key() {
+            use base64::Engine as _;
+
+            let directory = private_tempdir();
+            let root = directory
+                .path()
+                .canonicalize()
+                .expect("canonical fixture root");
+            let mut inventory = sample_inventory();
+            let public_identity = |byte| {
+                let mut wire = b"\0\0\0\x0bssh-ed25519\0\0\0\x20".to_vec();
+                wire.extend_from_slice(&[byte; 32]);
+                format!(
+                    "ssh-ed25519 {}",
+                    base64::engine::general_purpose::STANDARD.encode(wire)
+                )
+            };
+            let identity = public_identity(1);
+            let mut lines = Vec::new();
+            for endpoint in inventory
+                .validators
+                .iter_mut()
+                .map(|v| &mut v.endpoint)
+                .chain(std::iter::once(&mut inventory.edge.endpoint))
+            {
+                let line = format!("{} {identity}", endpoint.hostname);
+                endpoint.host_identity_sha256 = sha256_hex(identity.as_bytes());
+                endpoint.known_host_line_sha256 = sha256_hex(line.as_bytes());
+                lines.push(line);
+            }
+            let path = root.join("known-hosts");
+            let mut file = create_private_new(&path).expect("private known-host fixture");
+            file.write_all(format!("{}\n", lines.join("\n")).as_bytes())
+                .expect("write known-hosts");
+            drop(file);
+            validate_inventory(&inventory).expect("cohost structural inventory");
+            drop(validate_known_hosts(&inventory, &path).expect("five aliases pin one actual key"));
+
+            let foreign_identity = public_identity(2);
+            lines[4] = format!("{} {foreign_identity}", inventory.edge.endpoint.hostname);
+            inventory.edge.endpoint.known_host_line_sha256 = sha256_hex(lines[4].as_bytes());
+            fs::write(&path, format!("{}\n", lines.join("\n")))
+                .expect("replace public-key fixture");
+            validate_inventory(&inventory)
+                .expect("a line digest cannot prove actual cohost identity");
+            let error = validate_known_hosts(&inventory, &path)
+                .err()
+                .expect("a substituted edge key cannot inherit the cohost label");
+            assert!(
+                error.to_string().contains("does not match inventory"),
+                "{error:#}"
+            );
+
+            inventory.edge.endpoint.host_identity_sha256 = sha256_hex(foreign_identity.as_bytes());
+            drop(validate_known_hosts(&inventory, &path).expect("truthful distinct key pins"));
+            let error =
+                validate_inventory(&inventory).expect_err("truthful dedicated edge is unsupported");
+            assert!(
+                error
+                    .to_string()
+                    .contains("one authenticated SSH host identity"),
+                "{error:#}"
+            );
+        }
+
+        #[test]
+        fn canonical_admitted_fixture_passes_positive_inventory_admission() {
+            let inventory = sample_inventory();
+            validate_inventory(&inventory).expect("positive structural inventory admission");
+            validate_shared_validator_closure(&inventory).expect("same-revision shared artifacts");
+        }
+
+        #[test]
+        fn initial_state_wire_format_is_canonical_and_roundtrips() {
+            fn check<T: JsonSerialize + JsonDeserialize>(state: &T, expected: &str) {
+                let encoded = json::to_json(state).expect("canonical initial state");
+                assert_eq!(encoded, expected);
+                let decoded: T =
+                    json::from_slice(encoded.as_bytes()).expect("initial state roundtrip");
+                assert_eq!(json::to_json(&decoded).expect("reencoded state"), expected);
+            }
+
+            let vacant = r#"{"state":"vacant","value":null}"#;
+            check(&ValidatorInitialStateV1::Vacant, vacant);
+            check(&EdgeInitialStateV1::Vacant, vacant);
+            let inventory = sample_inventory();
+            let encoded =
+                canonical_inventory_bytes(&inventory).expect("canonical admitted inventory");
+            let (decoded, _inventory_guard) =
+                decode_inventory(&encoded, "inventory").expect("admitted inventory roundtrip");
+            validate_inventory(&decoded).expect("roundtripped admitted inventory is admissible");
+            assert_eq!(
+                canonical_inventory_bytes(&decoded).expect("reencoded inventory"),
+                encoded
+            );
+            let validator_payload = json::to_json(
+                inventory.validators[0]
+                    .admitted_release()
+                    .expect("prior validator"),
+            )
+            .expect("validator release JSON");
+            check(
+                &inventory.validators[0].initial_state,
+                &format!(r#"{{"state":"admitted_release","value":{validator_payload}}}"#),
+            );
+            let edge_payload =
+                json::to_json(inventory.edge.admitted_release().expect("prior edge"))
+                    .expect("edge release JSON");
+            check(
+                &inventory.edge.initial_state,
+                &format!(r#"{{"state":"admitted_release","value":{edge_payload}}}"#),
+            );
+        }
+
+        #[test]
+        fn initial_state_discriminator_and_fields_are_strict() {
+            for invalid in [
+                r#"{}"#,
+                r#"{"value":null}"#,
+                r#"{"state":"vacant"}"#,
+                r#"{"state":null,"value":null}"#,
+                r#"{"state":"unknown","value":null}"#,
+                r#"{"state":"Vacant","value":null}"#,
+                r#"{"state":"vacant","value":{},"extra":null}"#,
+                r#"{"state":"vacant","value":null,"extra":null}"#,
+                r#"{"state":"vacant","state":"admitted_release","value":null}"#,
+                r#"{"state":"vacant","value":null,"value":{}}"#,
+                r#"{"state":"vacant","value":{}}"#,
+                r#"{"state":"vacant","value":false}"#,
+                r#"{"state":"admitted_release","value":null}"#,
+                r#"{"Vacant":null}"#,
+                r#"{"AdmittedRelease":{}}"#,
+                r#"{"rollback":{}}"#,
+                r#"{"rollback_release_root":"/srv/taira/releases/prior"}"#,
+            ] {
+                assert!(
+                    json::from_slice::<ValidatorInitialStateV1>(invalid.as_bytes()).is_err(),
+                    "validator accepted {invalid}"
+                );
+                assert!(
+                    json::from_slice::<EdgeInitialStateV1>(invalid.as_bytes()).is_err(),
+                    "edge accepted {invalid}"
+                );
+            }
+        }
+
+        #[test]
+        fn initial_state_admitted_release_rejects_unknown_payload_fields() {
+            let inventory = sample_inventory();
+            let mut validator = json::to_value(&inventory.validators[0].initial_state)
+                .expect("admitted validator state");
+            validator
+                .as_object_mut()
+                .expect("state object")
+                .get_mut("value")
+                .expect("release content")
+                .as_object_mut()
+                .expect("release object")
+                .insert("rollback".to_owned(), json::Value::Null);
+            assert!(json::from_value::<ValidatorInitialStateV1>(validator).is_err());
+
+            let mut edge =
+                json::to_value(&inventory.edge.initial_state).expect("admitted edge state");
+            edge.as_object_mut()
+                .expect("state object")
+                .get_mut("value")
+                .expect("release content")
+                .as_object_mut()
+                .expect("release object")
+                .insert("rollback_release_root".to_owned(), json::Value::Null);
+            assert!(json::from_value::<EdgeInitialStateV1>(edge).is_err());
+        }
+
+        #[test]
+        fn vacant_inventory_rejects_hidden_admitted_release_contents_at_decode() {
+            let directory = private_tempdir();
+            let root = directory
+                .path()
+                .canonicalize()
+                .expect("canonical inventory fixture root");
+            let canonical = vacant_execution_fixture();
+            let path = root.join("vacant.json");
+            let mut file = create_private_new(&path).expect("private vacant fixture");
+            file.write_all(&canonical_inventory_bytes(&canonical).expect("vacant JSON"))
+                .expect("write vacant inventory");
+            drop(file);
+            let (decoded, _, _inventory_guard) = read_inventory(&path, "inventory")
+                .expect("canonical vacant inventory decodes at admission boundary");
+            validate_inventory(&decoded).expect("canonical vacant inventory is admissible");
+            assert!(decoded.validators.iter().all(ValidatorV1::is_vacant));
+            assert!(decoded.edge.is_vacant());
+
+            for edge in [false, true] {
+                let mut invalid: Value = json::from_slice(
+                    &canonical_inventory_bytes(&sample_inventory()).expect("admitted bytes"),
+                )
+                .expect("admitted inventory");
+                let inventory = invalid.as_object_mut().expect("inventory object");
+                let target = if edge {
+                    inventory.get_mut("edge").expect("edge")
+                } else {
+                    inventory
+                        .get_mut("validators")
+                        .expect("validators")
+                        .as_array_mut()
+                        .expect("validator array")
+                        .first_mut()
+                        .expect("validator")
+                };
+                let state = target
+                    .as_object_mut()
+                    .expect("target object")
+                    .get_mut("initial_state")
+                    .expect("initial state")
+                    .as_object_mut()
+                    .expect("state object");
+                assert!(
+                    state
+                        .get("value")
+                        .expect("actual prior release")
+                        .is_object()
+                );
+                state.insert("state".to_owned(), json::Value::String("vacant".to_owned()));
+                let path = root.join(format!("hidden-release-{edge}.json"));
+                let mut file = create_private_new(&path).expect("private malformed fixture");
+                file.write_all(json::to_json(&invalid).expect("malformed JSON").as_bytes())
+                    .expect("write malformed inventory");
+                drop(file);
+                assert!(
+                    read_inventory(&path, "inventory").is_err(),
+                    "vacant target cannot discard admitted release content (edge={edge})"
+                );
+            }
+        }
+
+        #[test]
+        fn explicit_initial_state_is_required_and_retired_rollback_fields_reject() {
+            let inventory = sample_inventory();
+            let mut validator = inventory.validators[0].clone();
+            validator.initial_state = ValidatorInitialStateV1::Vacant;
+            let canonical = json::to_value(&validator).expect("canonical vacant validator");
+            let roundtrip: ValidatorV1 =
+                json::from_value(canonical.clone()).expect("vacant roundtrip");
+            assert!(roundtrip.is_vacant());
+            assert!(roundtrip.admitted_release().is_err());
+            for null_slot in [false, true] {
+                let mut invalid = canonical.clone();
+                let object = invalid.as_object_mut().expect("validator object");
+                if null_slot {
+                    object.insert("initial_state".to_owned(), norito::json::Value::Null);
+                } else {
+                    object.remove("initial_state");
+                }
+                assert!(json::from_value::<ValidatorV1>(invalid).is_err());
+            }
+            let mut retired = canonical;
+            retired
+                .as_object_mut()
+                .expect("validator object")
+                .insert("rollback".to_owned(), norito::json::Value::Null);
+            assert!(json::from_value::<ValidatorV1>(retired).is_err());
+
+            let mut edge = inventory.edge.clone();
+            edge.initial_state = EdgeInitialStateV1::Vacant;
+            let canonical = json::to_value(&edge).expect("canonical vacant edge");
+            let roundtrip: EdgeV1 =
+                json::from_value(canonical.clone()).expect("vacant edge roundtrip");
+            assert!(roundtrip.is_vacant());
+            assert!(roundtrip.admitted_release().is_err());
+            for field in ["initial_state", "systemd_unit_sha256"] {
+                let mut missing = canonical.clone();
+                missing.as_object_mut().expect("edge object").remove(field);
+                assert!(
+                    json::from_value::<EdgeV1>(missing).is_err(),
+                    "missing {field}"
+                );
+            }
+            for field in [
+                "rollback_release_root",
+                "rollback_cli_sha256",
+                "rollback_edge_config_sha256",
+            ] {
+                let mut retired = canonical.clone();
+                retired
+                    .as_object_mut()
+                    .expect("edge object")
+                    .insert(field.to_owned(), norito::json::Value::Null);
+                assert!(
+                    json::from_value::<EdgeV1>(retired).is_err(),
+                    "retired {field}"
+                );
+            }
+        }
+
+        // The prior network genesis remains an explicit reset anchor even when these
+        // Linux target namespaces have never hosted the chain.
+        fn vacant_execution_fixture() -> InventoryV1 {
+            let mut inventory = sample_inventory();
+            for validator in &mut inventory.validators {
+                validator.initial_state = ValidatorInitialStateV1::Vacant;
+            }
+            inventory.edge.initial_state = EdgeInitialStateV1::Vacant;
+            inventory.artifact_closure_sha256 = artifact_closure_sha256(&inventory);
+            inventory
+        }
+
+        #[test]
+        fn canonical_plan_establishes_edge_before_public_checks_and_restarts() {
+            assert_eq!(
+                EXECUTION_STEPS,
+                [
+                    ExecutionStep::Preflight,
+                    ExecutionStep::Stage,
+                    ExecutionStep::Stop,
+                    ExecutionStep::Install,
+                    ExecutionStep::Reset,
+                    ExecutionStep::Preseed,
+                    ExecutionStep::Start,
+                    ExecutionStep::EdgeStage,
+                    ExecutionStep::EdgeCutover,
+                    ExecutionStep::Convergence,
+                    ExecutionStep::Canary,
+                    ExecutionStep::RestartProof,
+                    ExecutionStep::EdgeVerify,
+                    ExecutionStep::Seal,
+                    ExecutionStep::Cleanup,
+                ]
+            );
+            let (inventory, mut journal) = journal(vacant_execution_fixture());
+            let mut transport = MockTransport::default();
+            execute_plan(&inventory, &mut transport, &mut journal).expect("vacant model completes");
+            let at = |event: &str| {
+                transport
+                    .events
+                    .iter()
+                    .position(|value| value == event)
+                    .expect(event)
+            };
+            assert!(at("start:taira-validator-4") < at("edge_stage"));
+            assert!(at("edge_stage") < at("edge_cutover"));
+            assert!(at("edge_cutover") < at("convergence"));
+            assert!(at("convergence") < at("canary"));
+            assert!(at("canary") < at("restart_proof"));
+            assert!(at("restart_proof") < at("edge_verify"));
+            assert!(journal.finished);
+        }
+
+        #[test]
+        fn failed_first_public_check_rolls_back_initial_edge_before_validators() {
+            let (inventory, mut journal) = journal(vacant_execution_fixture());
+            let mut transport = MockTransport {
+                fail: Some("convergence".to_owned()),
+                ..MockTransport::default()
+            };
+            let _ = execute_plan(&inventory, &mut transport, &mut journal)
+                .expect_err("failed first public check");
+            let rollback = transport
+                .events
+                .iter()
+                .filter(|event| event.starts_with("rollback:"))
+                .map(String::as_str)
+                .collect::<Vec<_>>();
+            assert_eq!(
+                rollback,
+                [
+                    "rollback:edge",
+                    "rollback:taira-validator-4",
+                    "rollback:taira-validator-3",
+                    "rollback:taira-validator-2",
+                    "rollback:taira-validator-1",
+                ]
+            );
+            assert!(journal.state.edge_touched);
+            assert!(journal.state.edge_rollback_complete);
+            assert_eq!(journal.state.status, "rolled_back");
+        }
+
+        #[test]
+        fn resumed_convergence_keeps_initial_edge_in_the_rollback_set() {
+            let (inventory, mut journal) = journal(vacant_execution_fixture());
+            journal.state.next_step = u16::try_from(
+                EXECUTION_STEPS
+                    .iter()
+                    .position(|step| *step == ExecutionStep::Convergence)
+                    .expect("convergence index"),
+            )
+            .expect("bounded step index");
+            journal.state.phase = ExecutionStep::Convergence.label().to_owned();
+            journal.state.touched_validators = VALIDATOR_SLUGS
+                .iter()
+                .map(|slug| (*slug).to_owned())
+                .collect();
+            journal.state.edge_touched = true;
+            let mut transport = MockTransport {
+                fail: Some("convergence".to_owned()),
+                ..MockTransport::default()
+            };
+            let _ = execute_plan(&inventory, &mut transport, &mut journal)
+                .expect_err("resumed first public check");
+            assert_eq!(
+                transport.events.first().map(String::as_str),
+                Some("convergence")
+            );
+            assert_eq!(
+                transport
+                    .events
+                    .iter()
+                    .find(|event| event.starts_with("rollback:"))
+                    .map(String::as_str),
+                Some("rollback:edge")
+            );
+            assert_eq!(journal.state.status, "rolled_back");
+        }
+
+        #[test]
+        fn vacant_inventory_preserves_all_other_admission_requirements() {
+            let inventory = vacant_execution_fixture();
+            validate_inventory(&inventory)
+                .expect("vacant targets with a real prior network anchor");
+            let mut wrong = inventory.clone();
+            wrong.validators[0].platform.kvm_api_version = 0;
+            assert!(validate_inventory(&wrong).is_err());
+            let mut wrong = inventory.clone();
+            wrong.validators[0].artifacts[0]
+                .remote_path
+                .push_str(".other");
+            wrong.artifact_closure_sha256 = artifact_closure_sha256(&wrong);
+            assert!(validate_inventory(&wrong).is_err());
+            let mut wrong = inventory;
+            wrong.edge.systemd_unit_sha256.clear();
+            assert!(validate_inventory(&wrong).is_err());
+        }
+
         pub(in super::super) fn sample_inventory() -> InventoryV1 {
             let _chain_guard = ChainDiscriminantGuard::enter(CHAIN_DISCRIMINANT);
             let canary_key_pair =
@@ -6580,7 +7562,7 @@ mod executor_model {
                     .expect("deterministic canary onboarding request");
             let revision = RevisionV1 {
                 branch: SOURCE_BRANCH.to_owned(),
-                commit: "1".repeat(40),
+                commit: crate::VERGEN_GIT_SHA.to_owned(),
                 tree: "2".repeat(40),
                 cargo_lock_sha256: "3".repeat(64),
                 source_root: "/private/source".to_owned(),
@@ -6589,7 +7571,7 @@ mod executor_model {
                 source_closure_sha256: "7".repeat(64),
                 target: BUILD_TARGET.to_owned(),
                 profile: BUILD_PROFILE.to_owned(),
-                build_id: "1".repeat(40),
+                build_id: crate::VERGEN_GIT_SHA.to_owned(),
             };
             let validators = VALIDATOR_SLUGS
                 .iter()
@@ -6616,16 +7598,18 @@ mod executor_model {
                         systemd_unit: format!("iroha3d-{slug}.service"),
                         systemd_unit_sha256: "9".repeat(64),
                         artifacts: artifacts(&service_root, &revision, &VALIDATOR_ARTIFACT_ROLES),
-                        rollback: RollbackV1 {
-                            release_id: "previous-release".to_owned(),
-                            release_root: format!("{service_root}/rollback/previous-release"),
-                            iroha3d_sha256: "a".repeat(64),
-                            iroha_cli_sha256: "b".repeat(64),
-                            sorafs_node_sha256: "c".repeat(64),
-                            config_sha256: "d".repeat(64),
-                            genesis_sha256: "e".repeat(64),
-                            genesis_hash_sha256: "f".repeat(64),
-                        },
+                        initial_state: ValidatorInitialStateV1::AdmittedRelease(
+                            ValidatorAdmittedReleaseV1 {
+                                commit: "4".repeat(40),
+                                release_root: format!("{service_root}/releases/{}", "4".repeat(40)),
+                                iroha3d_sha256: "a".repeat(64),
+                                iroha_cli_sha256: "b".repeat(64),
+                                sorafs_node_sha256: "c".repeat(64),
+                                config_sha256: "d".repeat(64),
+                                genesis_sha256: "e".repeat(64),
+                                genesis_hash_sha256: "f".repeat(64),
+                            },
+                        ),
                     }
                 })
                 .collect();
@@ -6684,9 +7668,13 @@ mod executor_model {
                     reset_guard: "/var/lib/taira/.public-reset-control-v1/taira-edge".to_owned(),
                     nginx_config: "/etc/nginx/conf.d/taira.conf".to_owned(),
                     artifacts: artifacts(edge_root, &revision, &EDGE_ARTIFACT_ROLES),
-                    rollback_release_root: "/srv/taira/edge/rollback/current".to_owned(),
-                    rollback_cli_sha256: "a".repeat(64),
-                    rollback_edge_config_sha256: "b".repeat(64),
+                    systemd_unit_sha256: "d".repeat(64),
+                    initial_state: EdgeInitialStateV1::AdmittedRelease(EdgeAdmittedReleaseV1 {
+                        commit: "4".repeat(40),
+                        release_root: format!("/srv/taira/edge/releases/{}", "4".repeat(40)),
+                        cli_sha256: "a".repeat(64),
+                        config_sha256: "b".repeat(64),
+                    }),
                 },
                 inrou_canary: InrouCanaryV1 {
                     public_root: PUBLIC_ROOT.to_owned(),
@@ -6791,7 +7779,7 @@ mod executor_model {
                 known_host_line_sha256: format!("{index:x}").repeat(64),
                 host_identity_sha256: "6".repeat(64),
                 upload_guard_sha256: "a".repeat(64),
-                remote_cli: format!("{root}/releases/{}/iroha", revision.commit),
+                remote_cli: format!("{root}/releases/{}/bin/iroha", revision.commit),
             }
         }
 
@@ -6800,27 +7788,130 @@ mod executor_model {
                 .iter()
                 .map(|role| {
                     let file_name = match *role {
-                        "iroha_cli" => "iroha",
-                        "sorafs_node" => "sorafs-node",
+                        "iroha3d" => "bin/iroha3d_taira",
+                        "iroha_cli" => "bin/iroha",
+                        "sorafs_node" => "bin/sorafs-node",
+                        "config" => "config/config.toml",
+                        "genesis" => "genesis/genesis.json",
+                        "genesis_hash" => "genesis/genesis.sha256",
                         "edge_config" => "taira.conf",
-                        other => other,
+                        _ => panic!("unknown fixture artifact role"),
+                    };
+                    // Use the same content/name projection as materialize_artifact_sources:
+                    // binaries/genesis are shared, while each node's config is distinct.
+                    let source_name = if *role == "config" {
+                        let slug = Path::new(root)
+                            .file_name()
+                            .and_then(std::ffi::OsStr::to_str)
+                            .expect("fixture service slug");
+                        format!("{slug}-config")
+                    } else {
+                        (*role).to_owned()
                     };
                     ArtifactV1 {
                         role: (*role).to_owned(),
-                        local_path: format!("/private/runtime/{role}"),
+                        local_path: format!("/private/runtime/{source_name}"),
                         remote_path: format!("{root}/releases/{}/{file_name}", revision.commit),
-                        sha256: role_hash(role),
-                        size: 1,
-                        mode: if *role == "iroha_cli" { 0o500 } else { 0o400 },
+                        sha256: sha256_hex(source_name.as_bytes()),
+                        size: u64::try_from(source_name.len()).expect("small fixture artifact"),
+                        mode: artifact_role_policy(role)
+                            .expect("canonical fixture artifact role")
+                            .0,
                         source_commit: revision.commit.clone(),
                         target: BUILD_TARGET.to_owned(),
                     }
                 })
                 .collect()
         }
+    }
+}
 
-        fn role_hash(role: &str) -> String {
-            sha256_hex(role.as_bytes())
+#[cfg(test)]
+mod signed_genesis_startup_tests {
+    use super::*;
+
+    fn fixture() -> (String, String, PathBuf) {
+        let hash = Hash::new(b"ephemeral genesis startup regression");
+        let network = iroha::data_model::NetworkId::from_genesis_hash(
+            iroha_crypto::HashOf::from_untyped_unchecked(hash),
+        );
+        let path =
+            PathBuf::from("/srv/taira/taira-validator-1/releases/actual/genesis/genesis.json");
+        (
+            format!(
+                "[genesis]\nfile = {:?}\nexpected_hash = {:?}\n",
+                path.to_str().unwrap(),
+                network.to_string()
+            ),
+            hash.to_string(),
+            path,
+        )
+    }
+
+    #[test]
+    fn signed_genesis_startup_accepts_exact_artifact_and_checked_identity() {
+        let (config, hash, path) = fixture();
+        validate_validator_genesis_config(config.as_bytes(), &path, &hash).unwrap();
+    }
+
+    #[test]
+    fn signed_genesis_startup_rejects_unbound_manifest_identity_and_inheritance() {
+        let (config, hash, path) = fixture();
+        for field in [
+            "manifest_json = '/tmp/manifest.json'",
+            "expected_hash_file = '/tmp/network-id'",
+        ] {
+            assert!(
+                validate_validator_genesis_config(
+                    format!("{config}{field}\n").as_bytes(),
+                    &path,
+                    &hash
+                )
+                .is_err()
+            );
         }
+        for extends in [
+            "extends = []",
+            "extends = '/tmp/base.toml'",
+            "extends = ['/tmp/base.toml']",
+        ] {
+            assert!(
+                validate_validator_genesis_config(
+                    format!("{extends}\n{config}").as_bytes(),
+                    &path,
+                    &hash
+                )
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn signed_genesis_startup_rejects_foreign_path_and_network() {
+        let (config, hash, path) = fixture();
+        assert!(
+            validate_validator_genesis_config(
+                config.as_bytes(),
+                Path::new("/tmp/genesis.nrt"),
+                &hash
+            )
+            .is_err()
+        );
+        assert!(
+            validate_validator_genesis_config(
+                config.as_bytes(),
+                &path,
+                &Hash::new(b"other network").to_string()
+            )
+            .is_err()
+        );
+        let bare = format!(
+            "[genesis]\nfile = {:?}\nexpected_hash = {:?}\n",
+            path.to_str().unwrap(),
+            hash
+        );
+        assert!(validate_validator_genesis_config(bare.as_bytes(), &path, &hash).is_err());
+        let missing = format!("[genesis]\nfile = {:?}\n", path.to_str().unwrap());
+        assert!(validate_validator_genesis_config(missing.as_bytes(), &path, &hash).is_err());
     }
 }

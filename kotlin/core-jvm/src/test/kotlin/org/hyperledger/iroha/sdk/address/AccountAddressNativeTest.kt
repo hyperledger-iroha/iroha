@@ -1,6 +1,7 @@
 package org.hyperledger.iroha.sdk.address
 
 import java.io.File
+import java.math.BigInteger
 import java.nio.file.Files
 import java.util.concurrent.TimeUnit
 import org.bouncycastle.math.ec.rfc8032.Ed25519
@@ -27,6 +28,54 @@ internal object NativeAccountFixtures {
     fun bytes(value: String): ByteArray =
         value.removePrefix("0x").chunked(2).map { it.toInt(16).toByte() }.toByteArray()
 
+    /** Test-data construction only; bypasses no SDK admission and never validates an identity. */
+    fun independentSoraI105(canonical: ByteArray): String {
+        require(canonical.isNotEmpty() && canonical[0] != 0.toByte())
+        val alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz" +
+            "ｲﾛﾊﾆﾎﾍﾄﾁﾘﾇﾙｦﾜｶﾖﾀﾚｿﾂﾈﾅﾗﾑｳヰﾉｵｸﾔﾏｹﾌｺｴﾃｱｻｷﾕﾒﾐｼヱﾋﾓｾｽ"
+        check(alphabet.length == 105)
+        val radix = BigInteger.valueOf(105)
+        var integer = BigInteger(1, canonical)
+        val digits = StringBuilder()
+        while (integer.signum() != 0) {
+            val divided = integer.divideAndRemainder(radix)
+            digits.append(alphabet[divided[1].toInt()])
+            integer = divided[0]
+        }
+        // Build the checksum words directly from bit positions, independently of
+        // the production encoder's rolling accumulator and base-conversion code.
+        val words = mutableListOf<Int>()
+        val hrp = "snx"
+        words.addAll(hrp.map { it.code ushr 5 })
+        words.add(0)
+        words.addAll(hrp.map { it.code and 31 })
+        for (offset in 0 until canonical.size * 8 step 5) {
+            var word = 0
+            for (bit in offset until offset + 5) {
+                val value = if (bit < canonical.size * 8)
+                    (canonical[bit / 8].toInt() ushr (7 - bit % 8)) and 1 else 0
+                word = (word shl 1) or value
+            }
+            words.add(word)
+        }
+        repeat(6) { words.add(0) }
+        val generators = intArrayOf(0x3b6a57b2, 0x26508e6d, 0x1ea119fa, 0x3d4233dd, 0x2a1462b3)
+        var checksum = 1
+        for (word in words) {
+            val top = checksum ushr 25
+            checksum = ((checksum and 0x1ffffff) shl 5) xor word
+            for (bit in generators.indices) {
+                if (((top ushr bit) and 1) != 0) checksum = checksum xor generators[bit]
+            }
+        }
+        checksum = checksum xor 0x2bc830a3
+        return buildString {
+            append("sora")
+            append(digits.reverse())
+            for (shift in 25 downTo 0 step 5) append(alphabet[(checksum ushr shift) and 31])
+        }
+    }
+
     fun singleKey(name: String): ByteArray {
         val canonical = bytes(positives.single { it["name"] == name }["canonical_address_hex"] as String)
         check(canonical[1].toInt() == 0 || canonical[1].toInt() == 2)
@@ -36,6 +85,14 @@ internal object NativeAccountFixtures {
 
 /** Every successful public account/key boundary must execute the complete native validator. */
 class AccountAddressNativeTest {
+    @Test
+    fun independentI105FixtureEncoderMatchesEveryRustPositiveLiteral() {
+        for (vector in NativeAccountFixtures.positives) {
+            val raw = NativeAccountFixtures.bytes(vector["canonical_address_hex"] as String)
+            assertEquals(vector["i105"], NativeAccountFixtures.independentSoraI105(raw), vector["name"] as String)
+        }
+    }
+
     @Test
     fun rawCanonicalInputBoundIsCheckedBeforeCopyingOrNativeAllocation() {
         for (size in listOf(0, -1, 64 * 1024 * 1024 + 1, Int.MAX_VALUE)) {
@@ -101,6 +158,11 @@ class AccountAddressNativeTest {
 
     @Test
     fun malformedKeysCannotEnterAddressesPoliciesOrPublicKeyCodecs() {
+        // Missing JNI must fail this test before any malformed-key rejection can
+        // be credited as complete cryptographic admission coverage.
+        val positive = NativeAccountFixtures.positives.first()
+        val admitted = AccountAddress.fromI105(positive["i105"] as String, 753)
+        assertContentEquals(NativeAccountFixtures.bytes(positive["canonical_address_hex"] as String), admitted.canonicalBytes)
         val badKeys = mutableListOf(
             1 to (byteArrayOf(1) + ByteArray(31)),
             1 to ByteArray(32) { 0xff.toByte() },
@@ -120,9 +182,12 @@ class AccountAddressNativeTest {
             val length = if (key.size <= 255) byteArrayOf(key.size.toByte())
                 else byteArrayOf((key.size ushr 8).toByte(), key.size.toByte())
             val canonical = byteArrayOf(2, if (key.size <= 255) 0 else 2, curve.toByte()) + length + key
+            val literal = NativeAccountFixtures.independentSoraI105(canonical)
             val algorithm = assertNotNull(algorithmForCurveId(curve))
             for (construct in listOf<() -> Unit>(
                 { AccountAddress.fromCanonicalBytes(canonical) },
+                { AccountAddress.fromI105(literal, 753) },
+                { AccountAddress.parseEncoded(literal, 753) },
                 { AccountAddress.fromAccount(key, algorithm) },
                 { PublicKeyPayload(curve, key) },
                 { encodePublicKeyMultihash(curve, key) },

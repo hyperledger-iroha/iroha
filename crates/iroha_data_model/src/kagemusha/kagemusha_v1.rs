@@ -412,7 +412,8 @@ pub struct KagemushaDevicePublicKeyV1([u8; KAGEMUSHA_DEVICE_PUBLIC_KEY_SEC1_BYTE
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct KagemushaDeviceSignatureV1([u8; KAGEMUSHA_DEVICE_SIGNATURE_BYTES_V1]);
 
-impl norito::NoritoSerialize for KagemushaDevicePublicKeyV1 {
+impl norito::NoritoSerialize for KagemushaDevicePublicKeyV1 {}
+impl norito::SerializePayload for KagemushaDevicePublicKeyV1 {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::Error> {
         self.validate()
             .map_err(|error| norito::Error::Message(error.to_string()))?;
@@ -457,7 +458,8 @@ impl<'a> norito::core::DecodeFromSlice<'a> for KagemushaDevicePublicKeyV1 {
     }
 }
 
-impl norito::NoritoSerialize for KagemushaDeviceSignatureV1 {
+impl norito::NoritoSerialize for KagemushaDeviceSignatureV1 {}
+impl norito::SerializePayload for KagemushaDeviceSignatureV1 {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::Error> {
         self.validate()
             .map_err(|error| norito::Error::Message(error.to_string()))?;
@@ -976,7 +978,8 @@ impl KagemushaIpm1PayloadKindV1 {
     }
 }
 
-impl norito::NoritoSerialize for KagemushaIpm1PayloadKindV1 {
+impl norito::NoritoSerialize for KagemushaIpm1PayloadKindV1 {}
+impl norito::SerializePayload for KagemushaIpm1PayloadKindV1 {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::Error> {
         writer.write_all(&[self.wire_tag()])?;
         Ok(())
@@ -1939,7 +1942,7 @@ struct HardwareCredentialIdPreimageV1 {
     expires_at_ms: u64,
 }
 
-fn fixed_canonical_preimage_bytes_v1<T: Encode, const N: usize>(
+fn fixed_canonical_preimage_bytes_v1<T: norito::NoritoSerialize, const N: usize>(
     preimage: &T,
     field: &'static str,
 ) -> Result<[u8; N], KagemushaValidationErrorV1> {
@@ -1959,7 +1962,9 @@ mod canonical_mint_frame_sealed {
 /// account/asset identity leaves. It does not validate a value or grant monetary authority; the
 /// recursive circuit must still constrain all semantic payload bytes and verify the release-pinned
 /// proofs that authenticate them.
-pub trait KagemushaCanonicalMintFrameV1: Encode + canonical_mint_frame_sealed::Sealed {
+pub trait KagemushaCanonicalMintFrameV1:
+    norito::NoritoSerialize + canonical_mint_frame_sealed::Sealed
+{
     /// Frozen offset at which this root type's bare payload starts.
     const PAYLOAD_OFFSET_V1: usize;
     /// Frozen canonical V1 layout flags for this monetary type.
@@ -2088,7 +2093,7 @@ pub fn kagemusha_canonical_mint_frame_prefix_v1<T: KagemushaCanonicalMintFrameV1
     Ok(KagemushaCanonicalFramePrefixV1 { bytes })
 }
 
-fn fixed_canonical_preimage_layout_v1<T: Encode, const N: usize>(
+fn fixed_canonical_preimage_layout_v1<T: norito::NoritoSerialize, const N: usize>(
     preimage: &T,
     ranges: &[core::ops::Range<usize>],
     values: &[&[u8]],
@@ -2468,7 +2473,7 @@ fn invalid(field: &'static str) -> KagemushaValidationErrorV1 {
     KagemushaValidationErrorV1::InvalidField { field }
 }
 
-fn digest_encoded<T: Encode>(
+fn digest_encoded<T: norito::NoritoSerialize>(
     domain: &[u8],
     value: &T,
 ) -> Result<[u8; 32], KagemushaValidationErrorV1> {
@@ -2649,7 +2654,7 @@ fn require_valid_header(
     Ok(())
 }
 
-fn require_encoded_size<T: Encode>(
+fn require_encoded_size<T: norito::NoritoSerialize>(
     value: &T,
     max: usize,
 ) -> Result<usize, KagemushaValidationErrorV1> {
@@ -2677,7 +2682,7 @@ where
     Ok(norito::decode_canonical_with_limits(bytes, limits)?)
 }
 
-fn encode_kagemusha_text_v1<T: Encode>(
+fn encode_kagemusha_text_v1<T: norito::NoritoSerialize>(
     value: &T,
     raw_max: usize,
     text_max: usize,
@@ -2753,7 +2758,7 @@ fn decode_kagemusha_text_v1<T, F>(
     decode: F,
 ) -> Result<T, KagemushaValidationErrorV1>
 where
-    T: Encode,
+    T: norito::NoritoSerialize,
     F: FnOnce(&[u8]) -> Result<T, KagemushaValidationErrorV1>,
 {
     let raw = decode_kagemusha_text_payload_v1(text, raw_max, text_max)?;
@@ -3756,6 +3761,7 @@ impl KagemushaHardwareCredentialV1 {
         if self.version != KAGEMUSHA_WIRE_VERSION_V1
             || self.network_id.as_bytes() == &[0; 32]
             || self.policy_epoch == 0
+            || self.hardware_epoch_generation == 0
             || self.issued_at_ms >= self.expires_at_ms
         {
             return Err(invalid("kagemusha.hardware_credential.header"));

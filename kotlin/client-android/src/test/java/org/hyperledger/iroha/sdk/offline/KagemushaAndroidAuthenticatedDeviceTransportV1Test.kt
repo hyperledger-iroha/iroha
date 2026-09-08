@@ -44,6 +44,7 @@ class KagemushaAndroidAuthenticatedDeviceTransportV1Test {
             assertContentEquals(byteArrayOf(operation.toByte(), 0x5a), response.canonicalReply())
             assertContentEquals(validLowSSignature(), response.authenticator())
             assertEquals(endpoint.operation, endpoint.lastVerifiedOperation)
+            assertContentEquals(byteArrayOf(operation.toByte()), endpoint.lastVerifiedCommand)
             assertContentEquals(fixed(operation, 32), endpoint.lastVerifiedRequestId!!)
             assertContentEquals(fixed(0x22, 32), endpoint.lastVerifiedHardwarePolicyId!!)
             assertContentEquals(
@@ -124,12 +125,50 @@ class KagemushaAndroidAuthenticatedDeviceTransportV1Test {
         assertTrue(endpoint.observedOperations.isEmpty())
     }
 
+    @Test fun `caller mutation cannot change the command or identity verified after dispatch`() {
+        val id = fixed(18, 32)
+        val command = byteArrayOf(18, 2, 3)
+        val original = command.copyOf()
+        val endpoint = FakeEndpoint().apply {
+            operation = KagemushaDeviceLifecycleBridgeV1.Operation.values().single { it.code == 18 }
+            onExecute = { command.fill(99); id.fill(0) }
+        }
+        val transport = KagemushaAndroidAuthenticatedDeviceTransportV1(KagemushaDeviceLifecycleBridgeV1.withEndpointForTests(endpoint))
+        transport.executeAndVerify(18, id, command, devicePublicKey())
+        assertContentEquals(original, endpoint.lastDispatchedCommand)
+        assertContentEquals(original, endpoint.lastVerifiedCommand)
+        assertContentEquals(fixed(18, 32), endpoint.lastVerifiedRequestId)
+    }
+
+    @Test fun `a response for another canonical watermark target is rejected even with the same operation and identity`() {
+        val signedCommand = KagemushaDeviceOperationCodecV1.encodeControlCommand(
+            KagemushaDeviceControlCommandV1.ReadPendingCreditWatermark(null, KagemushaPendingCreditTargetV1.DrainAll))
+        val changedCommand = KagemushaDeviceOperationCodecV1.encodeControlCommand(
+            KagemushaDeviceControlCommandV1.ReadPendingCreditWatermark(null,
+                KagemushaPendingCreditTargetV1.RequiredBalance(java.math.BigInteger.ONE)))
+        val endpoint = FakeEndpoint().apply {
+            operation = KagemushaDeviceLifecycleBridgeV1.Operation.values().single { it.code == 18 }
+            this.signedCommand = signedCommand
+        }
+        val transport = KagemushaAndroidAuthenticatedDeviceTransportV1(KagemushaDeviceLifecycleBridgeV1.withEndpointForTests(endpoint))
+        assertFailsWith<IllegalArgumentException> {
+            transport.executeAndVerify(18, fixed(18, 32), changedCommand, devicePublicKey())
+        }
+        assertContentEquals(changedCommand, endpoint.lastVerifiedCommand)
+        assertTrue(endpoint.lastResponse!!.all { it == 0.toByte() })
+        assertEquals(1, endpoint.verifierCalls)
+    }
+
     private class FakeEndpoint : KagemushaDeviceLifecycleBridgeV1.Endpoint {
         var operation = KagemushaDeviceLifecycleBridgeV1.Operation.READ_ACTIVE_HARDWARE_CREDENTIAL
         var status = KagemushaDeviceLifecycleBridgeV1.Status.SUCCESS
         var verificationResult = true
         var lastResponse: ByteArray? = null
         var verifierCalls = 0
+        var lastVerifiedCommand: ByteArray? = null
+        var onExecute: (() -> Unit)? = null
+        var signedCommand: ByteArray? = null
+        var lastDispatchedCommand: ByteArray? = null
         var lastVerifiedOperation: KagemushaDeviceLifecycleBridgeV1.Operation? = null
         var lastVerifiedRequestId: ByteArray? = null
         var lastVerifiedHardwarePolicyId: ByteArray? = null
@@ -148,6 +187,8 @@ class KagemushaAndroidAuthenticatedDeviceTransportV1Test {
             val observedOperation = command[10].toInt() and 0xff
             observedOperations += observedOperation
             val requestId = command.copyOfRange(12, 44)
+            lastDispatchedCommand = command.copyOfRange(80, command.size)
+            onExecute?.invoke()
             val success = status == KagemushaDeviceLifecycleBridgeV1.Status.SUCCESS
             return KagemushaDeviceLifecycleBridgeV1.Codec.encodeResponseForTests(
                 operation = operation,
@@ -158,8 +199,9 @@ class KagemushaAndroidAuthenticatedDeviceTransportV1Test {
             ).also { response -> lastResponse = response }
         }
 
-        override fun verifyResponseAuthenticator(
+        override fun verifyCommandResponse(
             response: ByteArray,
+            canonicalCommand: ByteArray,
             operation: KagemushaDeviceLifecycleBridgeV1.Operation,
             requestId: ByteArray,
             hardwarePolicyId: ByteArray,
@@ -167,12 +209,13 @@ class KagemushaAndroidAuthenticatedDeviceTransportV1Test {
             acceptedDevicePublicKey: ByteArray?,
         ): Boolean {
             verifierCalls += 1
+            lastVerifiedCommand = canonicalCommand.copyOf()
             lastVerifiedOperation = operation
             lastVerifiedRequestId = requestId.copyOf()
             lastVerifiedHardwarePolicyId = hardwarePolicyId.copyOf()
             lastVerifiedQualificationReportDigest = qualificationReportDigest.copyOf()
             lastVerifiedDevicePublicKey = acceptedDevicePublicKey?.copyOf()
-            return verificationResult
+            return verificationResult && (signedCommand?.contentEquals(canonicalCommand) ?: true)
         }
     }
 

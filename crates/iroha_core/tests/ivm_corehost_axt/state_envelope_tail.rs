@@ -86,13 +86,11 @@ fn core_host_from_state_enforces_space_directory_policy() {
         issuer_context: Default::default(),
         issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
     };
-    assert_ok_gas!(use_handle_with_state_policy(
-        &state,
-        &authority,
-        dsid,
-        &descriptor,
-        base_handle.clone()
-    ));
+    assert_eq!(
+        use_handle_with_state_policy(&state, &authority, dsid, &descriptor, base_handle.clone()),
+        Err(VMError::PermissionDenied),
+        "committed policy alone does not authenticate an exact finalized spend",
+    );
     let mut wrong_lane = base_handle.clone();
     wrong_lane.target_lane = LaneId::new(1);
     assert_eq!(
@@ -115,7 +113,7 @@ fn core_host_from_state_enforces_space_directory_policy() {
 
 #[cfg(feature = "app_api")]
 #[test]
-fn core_host_exports_axt_envelopes_to_state_block() {
+fn core_host_exports_axt_envelopes_to_state_block_requires_finalized_anchor() {
     let authority = fixture_authority();
     let lane = LaneId::new(3);
     let dsid = DataSpaceId::new(21);
@@ -201,59 +199,8 @@ fn core_host_exports_axt_envelopes_to_state_block() {
     vm.set_register(10, handle_ptr);
     vm.set_register(11, intent_ptr);
     vm.set_register(12, proof_ptr);
-    host.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm)
-        .expect("use handle");
-    host.syscall(ivm::syscalls::SYSCALL_AXT_COMMIT, &mut vm)
-        .expect("commit");
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
-    let mut state = State::new_for_testing(World::new(), kura, query_handle);
-    let lane_catalog = LaneCatalog::new(
-        nonzero!(4_u32),
-        vec![LaneConfig {
-            id: lane,
-            dataspace_id: dsid,
-            alias: "axt-envelope-export".to_owned(),
-            ..LaneConfig::default()
-        }],
-    )
-    .expect("AXT envelope export lane catalog");
-    *state.nexus.get_mut() = nexus_with_lane_catalog(lane_catalog);
-    state.set_axt_policy(
-        dsid,
-        AxtPolicyEntry {
-            manifest_root,
-            target_lane: lane,
-            active_handle_era: 1,
-            next_handle_counter: 1,
-            current_slot: 0,
-        },
-    );
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-    let mut block = state.block(header);
-    let mut stx = block.transaction();
-    stx.current_lane_id = Some(lane);
-    let queued = host
-        .apply_queued(&mut stx, &authority)
-        .expect("apply queued");
-    assert!(queued.is_empty());
-    stx.apply();
-    let envelopes = block.axt_envelopes();
-    assert_eq!(envelopes.len(), 1);
-    let record = &envelopes[0];
-    assert_eq!(record.lane, lane);
-    assert_eq!(record.commit_height, 1);
-    assert_eq!(record.descriptor.dsids, descriptor.dsids);
-    assert_eq!(record.touches.len(), 1);
-    assert_eq!(record.proofs.len(), 1);
-    assert_eq!(record.handles.len(), 1);
-    assert_eq!(
-        record.handles[0].intent.op.amount,
-        Some(Quantity::from(5_u64))
-    );
-    let drained = block.drain_axt_envelopes();
-    assert_eq!(drained.len(), 1);
-    assert!(block.axt_envelopes().is_empty());
+    let result = host.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm);
+    assert_unanchored_spend_rejection(&mut host, result);
 }
 #[test]
 fn core_host_rejects_cached_proof_after_manifest_rotation() {
@@ -291,8 +238,9 @@ fn core_host_rejects_cached_proof_after_manifest_rotation() {
         &intent,
         &amount,
     );
-    use_single_handle_envelope(&mut host, &descriptor, &proof_current, &handle, &intent)
-        .expect("issuer-authenticated proof matches manifest v1");
+    let result =
+        use_single_handle_envelope(&mut host, &descriptor, &proof_current, &handle, &intent);
+    assert_unanchored_spend_rejection(&mut host, result);
     let entries_v2 = vec![AxtPolicyBinding {
         dsid,
         policy: AxtPolicyEntry {
@@ -319,8 +267,8 @@ fn core_host_rejects_cached_proof_after_manifest_rotation() {
         }) if expected == expected_v2 && actual == advertised_v2
     ));
     assert!(
-        host.axt_recorded_proof_payload(dsid).is_some(),
-        "rejected refresh must preserve the authenticated proof and active envelope"
+        host.axt_recorded_proof_payload(dsid).is_none(),
+        "rejected refresh must not install an unanchored proof"
     );
     host.refresh_axt_policy_snapshot(&snapshot_v2)
         .expect("rotated AXT policy snapshot should be canonical");
@@ -358,13 +306,14 @@ fn core_host_rejects_cached_proof_after_manifest_rotation() {
         &rotated_intent,
         &rotated_amount,
     );
-    assert_ok_gas!(commit_single_handle_envelope(
+    let result = commit_single_handle_envelope(
         &mut host,
         &descriptor,
         &proof_v2,
         &rotated_handle,
         &rotated_intent,
-    ));
+    );
+    assert_unanchored_spend_rejection(&mut host, result);
 }
 #[test]
 fn core_host_timing_change_aborts_active_envelope() {
@@ -401,9 +350,9 @@ fn core_host_timing_change_aborts_active_envelope() {
         &intent,
         &amount,
     );
-    use_single_handle_envelope(&mut host, &descriptor, &proof, &handle, &intent)
-        .expect("issuer-authenticated proof matches current timing");
-    assert!(host.axt_recorded_proof_payload(dsid).is_some());
+    let result = use_single_handle_envelope(&mut host, &descriptor, &proof, &handle, &intent);
+    assert_unanchored_spend_rejection(&mut host, result);
+    assert!(host.axt_recorded_proof_payload(dsid).is_none());
     let timing = ActualAxtTiming {
         slot_length_ms: NonZeroU64::new(2).expect("slot length"),
         max_clock_skew_ms: 1,
@@ -426,17 +375,12 @@ fn core_host_timing_change_aborts_active_envelope() {
         Err(VMError::PermissionDenied),
         "an envelope accepted under the prior timing must not commit"
     );
-    assert_ok_gas!(commit_single_handle_envelope(
-        &mut host,
-        &descriptor,
-        &proof,
-        &handle,
-        &intent,
-    ));
+    let result = commit_single_handle_envelope(&mut host, &descriptor, &proof, &handle, &intent);
+    assert_unanchored_spend_rejection(&mut host, result);
 }
 #[cfg(feature = "app_api")]
 #[test]
-fn core_host_records_multi_dataspace_envelope() {
+fn core_host_records_multi_dataspace_envelope_requires_finalized_anchor() {
     let authority = fixture_authority();
     let dsid_a = DataSpaceId::new(31);
     let dsid_b = DataSpaceId::new(32);
@@ -618,75 +562,15 @@ fn core_host_records_multi_dataspace_envelope() {
     vm.set_register(10, handle_a_ptr);
     vm.set_register(11, intent_a_ptr);
     vm.set_register(12, proof_a_ptr);
-    host.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm)
-        .expect("use handle a");
+    let result = host.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm);
+    assert_unanchored_spend_rejection(&mut host, result);
     let handle_b_ptr = store_tlv_norito(&mut vm, PointerType::AssetHandle, &handle_b);
     let intent_b_ptr = store_tlv_norito(&mut vm, PointerType::NoritoBytes, &intent_b);
     vm.set_register(10, handle_b_ptr);
     vm.set_register(11, intent_b_ptr);
     vm.set_register(12, proof_b_ptr);
-    host.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm)
-        .expect("use handle b");
-    host.syscall(ivm::syscalls::SYSCALL_AXT_COMMIT, &mut vm)
-        .expect("commit");
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
-    let mut state = State::new_for_testing(World::new(), kura, query_handle);
-    let lane_catalog = LaneCatalog::new(
-        nonzero!(3_u32),
-        vec![
-            LaneConfig {
-                id: LaneId::new(1),
-                dataspace_id: dsid_a,
-                alias: "axt-multi-a".to_owned(),
-                ..LaneConfig::default()
-            },
-            LaneConfig {
-                id: LaneId::new(2),
-                dataspace_id: dsid_b,
-                alias: "axt-multi-b".to_owned(),
-                ..LaneConfig::default()
-            },
-        ],
-    )
-    .expect("multi-dataspace AXT lane catalog");
-    *state.nexus.get_mut() = nexus_with_lane_catalog(lane_catalog);
-    state.set_axt_policy(
-        dsid_a,
-        AxtPolicyEntry {
-            manifest_root: [0xA1; 32],
-            target_lane: LaneId::new(1),
-            active_handle_era: 1,
-            next_handle_counter: 1,
-            current_slot: 0,
-        },
-    );
-    state.set_axt_policy(
-        dsid_b,
-        AxtPolicyEntry {
-            manifest_root: [0xB2; 32],
-            target_lane: LaneId::new(2),
-            active_handle_era: 1,
-            next_handle_counter: 1,
-            current_slot: 0,
-        },
-    );
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-    let mut block = state.block(header);
-    let mut stx = block.transaction();
-    stx.current_lane_id = Some(LaneId::new(1));
-    let queued = host
-        .apply_queued(&mut stx, &authority)
-        .expect("apply queued");
-    assert!(queued.is_empty());
-    stx.apply();
-    let envelopes = block.axt_envelopes();
-    assert_eq!(envelopes.len(), 1);
-    let record = &envelopes[0];
-    assert_eq!(record.descriptor.dsids.len(), 2);
-    assert_eq!(record.touches.len(), 2);
-    assert_eq!(record.proofs.len(), 2);
-    assert_eq!(record.handles.len(), 2);
+    let result = host.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm);
+    assert_unanchored_spend_rejection(&mut host, result);
 }
 #[cfg(feature = "app_api")]
 #[test]

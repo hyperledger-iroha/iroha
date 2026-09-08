@@ -208,8 +208,8 @@ impl Error for QuorumError {}
 
 #[cfg(test)]
 mod tests {
+    use super::super::{ContextId, Digest, NetworkId, Validator, VotingMode};
     use super::*;
-    use crate::sumeragi::v2_core::{ContextId, Digest, NetworkId, Validator, VotingMode};
 
     fn validator_id(marker: u8) -> ValidatorId {
         ValidatorId::repeat(marker)

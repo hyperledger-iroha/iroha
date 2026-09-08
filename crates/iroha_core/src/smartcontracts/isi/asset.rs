@@ -63,6 +63,15 @@ pub mod isi {
             amount: &Quantity,
         ) -> Result<(), Error> {
             let resolved_id = self.resolve_asset_id_for_current_scope(id)?;
+            if self
+                .game_custody_by_account
+                .get(resolved_id.account())
+                .is_some()
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "native game custody requires an exact game movement capability".into(),
+                ));
+            }
             let spec = self.asset_definition(resolved_id.definition())?.spec();
             assert_numeric_spec_with(amount.as_numeric(), spec)?;
             if sccp_registry_references_custody_asset(
@@ -287,6 +296,11 @@ pub mod isi {
             id: &AssetId,
             amount: &Quantity,
         ) -> Result<Quantity, Error> {
+            if self.game_custody_by_account.get(id.account()).is_some() {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "native game custody accepts only exact native entry funding".into(),
+                ));
+            }
             self.account(id.account())?;
             let spec = self.asset_definition(id.definition())?.spec();
             assert_numeric_spec_with(amount.as_numeric(), spec)?;
@@ -474,6 +488,30 @@ pub mod isi {
             .world
             .deposit_numeric_asset(&source_id, &intervening_credit)?;
         plan.apply(state_transaction).map(|_| ())
+    }
+    /// Exercise the consumed movement boundary after a controlled prepare/apply interleave.
+    #[cfg(test)]
+    pub(super) fn apply_prepared_numeric_movement_for_test(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        authority: &AccountId,
+        source_id: AssetId,
+        destination_id: AssetId,
+        amount: Quantity,
+        before_apply: impl FnOnce(&mut StateTransaction<'_, '_>),
+        record_observability: bool,
+    ) -> Result<(), Error> {
+        let movement = PreparedNumericAssetMovement::prepare(
+            state_transaction,
+            source_id,
+            destination_id,
+            amount,
+            NumericAssetMovementAuthorization::embedded_user(
+                authority,
+                EmbeddedNumericAssetMovementPurpose::SocialSend(vec![0x71]),
+            ),
+        )?;
+        before_apply(state_transaction);
+        movement.apply_with_observability(state_transaction, record_observability)
     }
     /// Resolve the typed social-send transcript identity through the private authorization type.
     #[cfg(test)]
@@ -1351,6 +1389,7 @@ pub mod isi {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     enum NumericAssetTransferSourcePolicy {
         User,
+        GameSessionFunding,
         SccpEscrowDeposit,
         FxEscrowDeposit,
         NativeEscrowCustody,
@@ -1757,6 +1796,8 @@ pub mod isi {
         },
         /// Fund a native escrow retained record.
         NativeEscrow(Vec<u8>),
+        /// Fund an exact native racing seat.
+        GameSession(Vec<u8>),
         /// Fund a VPN lease retained record.
         VpnLease(Vec<u8>),
         /// Lock one user's outbound transfer in an exact governed SCCP route escrow.
@@ -1799,6 +1840,8 @@ pub mod isi {
         CitizenshipRelease(Vec<u8>),
         /// Move value according to an exact native escrow record.
         NativeEscrow(Vec<u8>),
+        /// Settle or refund an exact native racing liability.
+        GameSession(Vec<u8>),
         /// Move value according to an exact VPN lease record.
         VpnLease(Vec<u8>),
         /// Release one exact approved SoraFS reserve withdrawal.
@@ -1846,6 +1889,10 @@ pub mod isi {
             let is_fx_deposit = matches!(
                 &purpose,
                 EmbeddedNumericAssetMovementPurpose::FxCorridorEscrowDeposit(_)
+            );
+            let is_game_funding = matches!(
+                &purpose,
+                EmbeddedNumericAssetMovementPurpose::GameSession(_)
             );
             let (debit, tag, binding) = match purpose {
                 EmbeddedNumericAssetMovementPurpose::AccountAdmissionFee(binding) => (
@@ -1920,6 +1967,11 @@ pub mod isi {
                     "native-escrow-funding",
                     binding,
                 ),
+                EmbeddedNumericAssetMovementPurpose::GameSession(binding) => (
+                    NumericMovementDebitAuthorization::ExactUser(submitting_authority.clone()),
+                    "game-seat-funding",
+                    binding,
+                ),
                 EmbeddedNumericAssetMovementPurpose::VpnLease(binding) => (
                     NumericMovementDebitAuthorization::ExactUser(submitting_authority.clone()),
                     "vpn-lease-funding",
@@ -1952,6 +2004,8 @@ pub mod isi {
                     NumericAssetTransferSourcePolicy::SccpEscrowDeposit
                 } else if is_fx_deposit {
                     NumericAssetTransferSourcePolicy::FxEscrowDeposit
+                } else if is_game_funding {
+                    NumericAssetTransferSourcePolicy::GameSessionFunding
                 } else {
                     NumericAssetTransferSourcePolicy::User
                 },
@@ -2051,6 +2105,12 @@ pub mod isi {
                 ),
                 RetainedNumericAssetMovementPurpose::NativeEscrow(binding) => (
                     "native-escrow-retained",
+                    binding,
+                    NumericAssetTransferSourcePolicy::NativeEscrowCustody,
+                    NumericAssetTransferControlPolicy::Enforce,
+                ),
+                RetainedNumericAssetMovementPurpose::GameSession(binding) => (
+                    "game-proof-settlement",
                     binding,
                     NumericAssetTransferSourcePolicy::NativeEscrowCustody,
                     NumericAssetTransferControlPolicy::Enforce,
@@ -2295,14 +2355,19 @@ pub mod isi {
             let transcript_identity = self
                 .authorization
                 .resolve_transcript_identity(state_transaction, &bindings)?;
-            let applied = self.plan.apply(state_transaction)?;
-            if record_observability {
-                state_transaction.record_transfer_transcripts_with_batch_hash(
+            let applied = if record_observability {
+                // The precheck owns the exact full-quantity delta. Finish transcript and
+                // source-context preparation before the main movement writes balances;
+                // stage that same occurrence only when the existing plan succeeds.
+                state_transaction.apply_with_prepared_transfer_transcripts(
                     &self.authorization.transcript_authority,
                     transcript_identity,
-                    vec![applied.delta],
-                );
-            }
+                    vec![self.plan.prechecked_delta.clone()],
+                    |state_transaction| self.plan.apply(state_transaction),
+                )?
+            } else {
+                self.plan.apply(state_transaction)?
+            };
             #[allow(clippy::float_arithmetic)]
             #[cfg(feature = "telemetry")]
             if record_observability {
@@ -2392,7 +2457,7 @@ pub mod isi {
         )?
         .apply(state_transaction)
     }
-    fn canonical_numeric_movement_binding<T: norito::codec::Encode>(
+    fn canonical_numeric_movement_binding<T: norito::NoritoSerialize>(
         value: &T,
     ) -> Result<Vec<u8>, Error> {
         norito::encode_canonical(value).map_err(|error| {
@@ -3868,6 +3933,193 @@ pub mod isi {
         }
         Ok(())
     }
+    /// Consume an exact game capability; only initial awards may defer before any transfer writes.
+    pub(in crate::smartcontracts::isi) fn execute_verified_game_movement(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        authorization: crate::smartcontracts::isi::game::VerifiedGameMovement,
+    ) -> Result<bool, Error> {
+        use crate::smartcontracts::isi::game::VerifiedGameMovementPurpose;
+        use iroha_data_model::game::GamePhaseV1;
+        let (session_id, authority, purpose, legs) = authorization.into_parts();
+        let session = state_transaction
+            .world
+            .game_sessions
+            .get(&session_id)
+            .ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation(
+                    "session movement has no retained session".into(),
+                )
+            })?;
+        let expected_custody = crate::smartcontracts::isi::game::game_custody_account_v1(
+            state_transaction.network_id(),
+            &session_id,
+            &session.asset_definition,
+        );
+        if session.custody != expected_custody
+            || legs.len() > iroha_data_model::game::GAME_MAX_PARTICIPANTS_V1
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "session custody or movement bounds invalid".into(),
+            ));
+        }
+        let custody_asset = AssetId::new(session.asset_definition.clone(), expected_custody);
+        if !matches!(&purpose, VerifiedGameMovementPurpose::Funding) {
+            let resolved = state_transaction
+                .world
+                .resolve_asset_id_for_current_scope(&custody_asset)?;
+            let balance = state_transaction
+                .world
+                .assets
+                .get(&resolved)
+                .map(|value| value.as_ref().clone())
+                .unwrap_or_else(Quantity::zero);
+            if balance != session.liability {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "session claims differ from exact retained custody".into(),
+                ));
+            }
+        }
+        let binding =
+            canonical_numeric_movement_binding(&(session_id, session.revision, legs.clone()))?;
+        let may_defer = matches!(&purpose, VerifiedGameMovementPurpose::Settlement);
+        let movement = match purpose {
+            VerifiedGameMovementPurpose::Funding => {
+                if legs.as_slice()
+                    != [(
+                        AssetId::new(session.asset_definition.clone(), authority.clone()),
+                        custody_asset,
+                        session.stake.clone(),
+                    )]
+                    || session.phase != GamePhaseV1::Lobby
+                    || session
+                        .participants
+                        .iter()
+                        .any(|participant| participant.account == authority)
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "session funding differs from exact wallet-authorized seat".into(),
+                    ));
+                }
+                let current = state_transaction
+                    .world
+                    .assets
+                    .get(&AssetId::new(
+                        session.asset_definition.clone(),
+                        session.custody.clone(),
+                    ))
+                    .map(|value| value.as_ref().clone())
+                    .unwrap_or_else(Quantity::zero);
+                if current != session.liability {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "session funding reserve differs from its exact admitted liability".into(),
+                    ));
+                }
+                NumericAssetMovementAuthorization::embedded_user(
+                    &authority,
+                    EmbeddedNumericAssetMovementPurpose::GameSession(binding),
+                )
+            }
+            VerifiedGameMovementPurpose::Settlement => {
+                if authority != session.custody
+                    || matches!(session.phase, GamePhaseV1::Settled | GamePhaseV1::Cancelled)
+                    || !session.payout_claims.is_empty()
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "session custody has already settled".into(),
+                    ));
+                }
+                let mut total = Quantity::zero();
+                for (source, destination, amount) in &legs {
+                    if source != &custody_asset
+                        || destination.definition() != &session.asset_definition
+                        || !session
+                            .participants
+                            .iter()
+                            .any(|participant| &participant.account == destination.account())
+                    {
+                        return Err(InstructionExecutionError::InvariantViolation(
+                            "session payout differs from immutable roster".into(),
+                        ));
+                    }
+                    total = total.checked_add(amount).map_err(|_| MathError::Overflow)?;
+                }
+                if total != session.liability {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "session payout must consume exact retained liability".into(),
+                    ));
+                }
+                NumericAssetMovementAuthorization::retained(
+                    &authority,
+                    RetainedNumericAssetMovementPurpose::GameSession(binding),
+                )
+            }
+            VerifiedGameMovementPurpose::Claim { slot } => {
+                let claim = session
+                    .payout_claims
+                    .iter()
+                    .find(|claim| claim.slot == slot)
+                    .ok_or_else(|| {
+                        InstructionExecutionError::InvariantViolation(
+                            "session has no matching payout claim".into(),
+                        )
+                    })?;
+                let owner = &session
+                    .participants
+                    .get(usize::from(slot))
+                    .ok_or_else(|| {
+                        InstructionExecutionError::InvariantViolation(
+                            "session claim owner is absent".into(),
+                        )
+                    })?
+                    .account;
+                let [(source, destination, amount)] = legs.as_slice() else {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "session claim requires one exact transfer".into(),
+                    ));
+                };
+                if !matches!(session.phase, GamePhaseV1::Settled | GamePhaseV1::Cancelled)
+                    || source != &custody_asset
+                    || destination.definition() != &session.asset_definition
+                    || destination.account() == &session.custody
+                    || (destination.account() != owner && &authority != owner)
+                    || amount.is_zero()
+                    || amount > &claim.remaining
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "session claim exceeds its immutable owner authorization or remaining amount"
+                            .into(),
+                    ));
+                }
+                NumericAssetMovementAuthorization::retained(
+                    &session.custody,
+                    RetainedNumericAssetMovementPurpose::GameSession(binding),
+                )
+            }
+        };
+        // This purpose only admits existing destination accounts. Preparation
+        // performs policy checks and checked balance arithmetic without account,
+        // balance, control, event, or transcript writes. A failure can therefore
+        // retain all exact backed claims instead of vetoing the proved result.
+        let prepared = match PreparedNumericAssetMovementBatch::prepare_with_authorization(
+            state_transaction,
+            &legs,
+            movement,
+        ) {
+            Ok(prepared) => prepared,
+            Err(_) if may_defer => return Ok(false),
+            Err(error) => return Err(error),
+        };
+        let applied = prepared.apply(state_transaction)?;
+        for movement in applied {
+            emit_numeric_asset_transfer_events(
+                state_transaction,
+                movement.source_id,
+                movement.destination_id,
+                movement.amount,
+            );
+        }
+        Ok(true)
+    }
     /// Consume an exact VPN funding, settlement, or refund capability atomically.
     pub(in crate::smartcontracts::isi) fn execute_verified_vpn_numeric_batch(
         state_transaction: &mut StateTransaction<'_, '_>,
@@ -4162,6 +4414,8 @@ pub mod isi {
         source_id: AssetId,
         destination_id: AssetId,
         amount: Quantity,
+        // Retain the applied value for exact prepared/applied parity assertions.
+        #[cfg(test)]
         delta: TransferDeltaTranscript,
     }
     impl PreparedNumericTransferPlan {
@@ -4378,6 +4632,7 @@ pub mod isi {
                 source_id: self.event_source_id,
                 destination_id: self.event_destination_id,
                 amount: self.amount,
+                #[cfg(test)]
                 delta: self.prechecked_delta,
             })
         }
@@ -4409,6 +4664,7 @@ pub mod isi {
                 source_id: self.event_source_id,
                 destination_id: self.event_destination_id,
                 amount: self.amount,
+                #[cfg(test)]
                 delta: self.prechecked_delta,
             })
         }
@@ -4692,29 +4948,59 @@ pub mod isi {
                     ));
                 }
             }
-            let mut applied = Vec::with_capacity(self.plans.len());
-            for plan in self.plans {
-                applied.push(plan.apply_after_batch_preflight(state_transaction)?);
-            }
-            for (account, _, _, after) in self.control_updates {
-                if let Some(record) = after {
-                    update_control_record(state_transaction, &account, record)?;
-                }
-            }
-            state_transaction.record_transfer_transcripts_with_batch_hash(
+            // Aggregation has replaced every delta with its exact ordered virtual balance
+            // transition. Prepare one whole occurrence before applying the first batch leg.
+            let deltas = self
+                .plans
+                .iter()
+                .map(|plan| plan.prechecked_delta.clone())
+                .collect();
+            state_transaction.apply_with_prepared_transfer_transcripts(
                 &self.authorization.transcript_authority,
                 transcript_identity,
-                applied
-                    .iter()
-                    .map(|movement| movement.delta.clone())
-                    .collect(),
-            );
-            Ok(applied)
+                deltas,
+                |state_transaction| {
+                    let mut applied = Vec::with_capacity(self.plans.len());
+                    for plan in self.plans {
+                        applied.push(plan.apply_after_batch_preflight(state_transaction)?);
+                    }
+                    for (account, _, _, after) in self.control_updates {
+                        if let Some(record) = after {
+                            update_control_record(state_transaction, &account, record)?;
+                        }
+                    }
+                    Ok(applied)
+                },
+            )
         }
     }
     struct PreparedNumericTransferPair {
         source: PreparedNumericTransferPlan,
         destination: PreparedNumericTransferPlan,
+    }
+    impl PreparedNumericTransferPair {
+        /// Apply the ordered native FX pair and stage one occurrence after both legs succeed.
+        fn apply_with_transcript(
+            self,
+            state_transaction: &mut StateTransaction<'_, '_>,
+            authority: &AccountId,
+            transcript_identity: Hash,
+        ) -> Result<(AppliedNumericTransfer, AppliedNumericTransfer), Error> {
+            let deltas = vec![
+                self.source.prechecked_delta.clone(),
+                self.destination.prechecked_delta.clone(),
+            ];
+            state_transaction.apply_with_prepared_transfer_transcripts(
+                authority,
+                transcript_identity,
+                deltas,
+                |state_transaction| {
+                    let source = self.source.apply(state_transaction)?;
+                    let destination = self.destination.apply(state_transaction)?;
+                    Ok((source, destination))
+                },
+            )
+        }
     }
     #[allow(clippy::too_many_arguments)]
     fn prepare_authorized_numeric_asset_pair(
@@ -4992,7 +5278,8 @@ pub mod isi {
         destination_amount: Quantity,
         policy: &iroha_data_model::isi::settlement::FxCorridorPolicy,
     ) -> Result<(), Error> {
-        state_transaction.require_transfer_transcript_identity("native FX transfer")?;
+        let transcript_identity =
+            state_transaction.require_transfer_transcript_identity("native FX transfer")?;
         let prepared = prepare_native_fx_numeric_asset_pair(
             state_transaction,
             submitting_authority,
@@ -5006,11 +5293,10 @@ pub mod isi {
         )?;
         // The policies require distinct asset definitions, so applying the first prechecked
         // delta cannot invalidate the second delta prepared from the same state snapshot.
-        let source = prepared.source.apply(state_transaction)?;
-        let destination = prepared.destination.apply(state_transaction)?;
-        state_transaction.record_transfer_transcripts(
+        let (source, destination) = prepared.apply_with_transcript(
+            state_transaction,
             submitting_authority,
-            vec![source.delta, destination.delta],
+            transcript_identity,
         )?;
         let source_amount = source.amount;
         let destination_amount = destination.amount;
@@ -5189,6 +5475,17 @@ pub mod isi {
                 .into(),
             ));
         }
+        if state_transaction
+            .world
+            .game_custody_by_account
+            .get(destination_id.account())
+            .is_some()
+            && source_policy != NumericAssetTransferSourcePolicy::GameSessionFunding
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "native game custody accepts only exact native entry funding".into(),
+            ));
+        }
         let spec = state_transaction
             .numeric_spec_for(source_id.definition())
             .map_err(Error::from)?;
@@ -5235,7 +5532,8 @@ pub mod isi {
             ensure_not_fx_corridor_escrow_destination(state_transaction, &destination_id)?;
         }
         match source_policy {
-            NumericAssetTransferSourcePolicy::User => {
+            NumericAssetTransferSourcePolicy::User
+            | NumericAssetTransferSourcePolicy::GameSessionFunding => {
                 ensure_not_kagemusha_reserve_source(state_transaction, &source_id)?;
                 ensure_not_native_escrow_source(state_transaction, &source_id)?;
                 ensure_not_sccp_custody_source(state_transaction, &source_id)?;
@@ -5562,6 +5860,16 @@ pub mod isi {
             let resolved_asset_id = state_transaction
                 .world
                 .resolve_asset_id_for_current_scope(&asset_id)?;
+            if state_transaction
+                .world
+                .game_custody_by_account
+                .get(resolved_asset_id.account())
+                .is_some()
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "native game custody accepts only exact native entry funding".into(),
+                ));
+            }
             ensure_not_sccp_custody_destination(state_transaction, &resolved_asset_id)?;
             ensure_not_fx_corridor_escrow_destination(state_transaction, &resolved_asset_id)?;
             let _created = ensure_receiving_account(
@@ -6204,52 +6512,65 @@ pub mod isi {
             )
             .into());
         }
-        state_transaction
-            .world
-            .apply_prechecked_numeric_asset_transfer_delta_exact(
-                &prepared.source_id,
-                &prepared.destination_id,
-                &prepared.delta,
+        let transcript_identity = state_transaction
+            .require_transfer_transcript_identity("FastPQ transfer transcript recording")?;
+        // Source proof verification already succeeded before this apply entry. Capture the
+        // exact release occurrence before its balance/liability/control writes, not before
+        // that earlier proof work.
+        let (source_id, destination_id, amount) = state_transaction
+            .apply_with_prepared_transfer_transcripts(
+                submitting_authority,
+                transcript_identity,
+                vec![prepared.delta.clone()],
+                |state_transaction| {
+                    state_transaction
+                        .world
+                        .apply_prechecked_numeric_asset_transfer_delta_exact(
+                            &prepared.source_id,
+                            &prepared.destination_id,
+                            &prepared.delta,
+                        )?;
+                    let PreparedSccpInboundNumericAssetRelease {
+                        route_key,
+                        source_id,
+                        destination_id,
+                        amount,
+                        liability_before: _,
+                        liability_after,
+                        expected_escrow_balance_after,
+                        control_update,
+                        delta: _,
+                    } = prepared;
+                    match liability_after {
+                        Some(record) => {
+                            state_transaction
+                                .world
+                                .sccp_route_liabilities
+                                .insert(route_key, record);
+                        }
+                        None => {
+                            state_transaction
+                                .world
+                                .sccp_route_liabilities
+                                .remove(route_key);
+                        }
+                    }
+                    let actual_after = sccp_escrow_balance(state_transaction, &source_id);
+                    if actual_after != expected_escrow_balance_after {
+                        return Err(InstructionExecutionError::InvariantViolation(
+                            format!(
+                                "SCCP route escrow is not fully backed after inbound release: balance={actual_after}, liability={expected_escrow_balance_after}"
+                            )
+                            .into(),
+                        )
+                        .into());
+                    }
+                    if let Some(record) = control_update {
+                        update_control_record(state_transaction, source_id.account(), record)?;
+                    }
+                    Ok((source_id, destination_id, amount))
+                },
             )?;
-        let PreparedSccpInboundNumericAssetRelease {
-            route_key,
-            source_id,
-            destination_id,
-            amount,
-            liability_before: _,
-            liability_after,
-            expected_escrow_balance_after,
-            control_update,
-            delta,
-        } = prepared;
-        match liability_after {
-            Some(record) => {
-                state_transaction
-                    .world
-                    .sccp_route_liabilities
-                    .insert(route_key, record);
-            }
-            None => {
-                state_transaction
-                    .world
-                    .sccp_route_liabilities
-                    .remove(route_key);
-            }
-        }
-        let actual_after = sccp_escrow_balance(state_transaction, &source_id);
-        if actual_after != expected_escrow_balance_after {
-            return Err(InstructionExecutionError::InvariantViolation(
-                format!(
-                    "SCCP route escrow is not fully backed after inbound release: balance={actual_after}, liability={expected_escrow_balance_after}"
-                )
-                .into(),
-            )
-            .into());
-        }
-        if let Some(record) = control_update {
-            update_control_record(state_transaction, source_id.account(), record)?;
-        }
-        state_transaction.record_transfer_transcript(submitting_authority, delta)?;
         emit_numeric_asset_transfer_events(state_transaction, source_id, destination_id, amount);
         Ok(())
     }
@@ -6277,8 +6598,14 @@ pub mod isi {
         if plan.control_update.is_some() {
             return Ok(false);
         }
-        let applied = plan.apply(state_transaction)?;
-        state_transaction.record_transfer_transcript(authority, applied.delta)?;
+        let transcript_identity = state_transaction
+            .require_transfer_transcript_identity("FastPQ transfer transcript recording")?;
+        let applied = state_transaction.apply_with_prepared_transfer_transcripts(
+            authority,
+            transcript_identity,
+            vec![plan.prechecked_delta.clone()],
+            |state_transaction| plan.apply(state_transaction),
+        )?;
         #[allow(clippy::float_arithmetic)]
         #[cfg(feature = "telemetry")]
         state_transaction
@@ -6548,41 +6875,81 @@ pub mod isi {
                 }
                 return Ok(());
             }
-            state_transaction
+            let batch_hash = state_transaction
                 .require_transfer_transcript_identity("independent asset transfer batch")?;
-            let mut deltas = Vec::with_capacity(self.entries().len());
-            for (index, entry) in self.entries().iter().enumerate() {
-                let source_id =
-                    AssetId::new(entry.asset_definition().clone(), entry.from().clone());
-                let destination_id =
-                    AssetId::new(entry.asset_definition().clone(), entry.to().clone());
-                let amount = entry.amount().clone();
-                let plan = (|| -> Result<PreparedNumericTransferPlan, Error> {
-                    if self.mode() == &BatchMode::Independent {
-                        // Independent settlement captures participant and asset
-                        // admission as a leg-local outcome. Requiring both
-                        // accounts up front also ensures a failed leg cannot
-                        // stage implicit-account creation or its fee before the
-                        // failure is isolated.
-                        state_transaction.world.account(entry.from())?;
-                        state_transaction.world.account(entry.to())?;
+            state_transaction.apply_with_incremental_transfer_transcripts(
+                authority,
+                batch_hash,
+                self.entries().len(),
+                |state_transaction, prepare_delta| {
+                    for (index, entry) in self.entries().iter().enumerate() {
+                        let source_id =
+                            AssetId::new(entry.asset_definition().clone(), entry.from().clone());
+                        let destination_id =
+                            AssetId::new(entry.asset_definition().clone(), entry.to().clone());
+                        let amount = entry.amount().clone();
+                        let plan = (|| -> Result<PreparedNumericTransferPlan, Error> {
+                            if self.mode() == &BatchMode::Independent {
+                                // Independent settlement captures participant and asset
+                                // admission as a leg-local outcome. Requiring both
+                                // accounts up front also ensures a failed leg cannot
+                                // stage implicit-account creation or its fee before the
+                                // failure is isolated.
+                                state_transaction.world.account(entry.from())?;
+                                state_transaction.world.account(entry.to())?;
+                                state_transaction
+                                    .world
+                                    .asset_definition(entry.asset_definition())?;
+                            }
+                            PreparedNumericTransferPlan::prepare_user(
+                                state_transaction,
+                                authority,
+                                source_id.clone(),
+                                destination_id,
+                                amount.clone(),
+                            )
+                        })();
+                        let plan = match plan {
+                            Ok(plan) => plan,
+                            Err(error) if self.mode() == &BatchMode::Independent => {
+                                let message = error.to_string();
+                                let code = batch_transfer_rejection_code(&error);
+                                let outcome = AssetBatchTransferOutcome {
+                                    leg_index: u32::try_from(index).map_err(|_| {
+                                        InstructionExecutionError::InvariantViolation(
+                                            "transfer asset batch contains too many legs".into(),
+                                        )
+                                    })?,
+                                    leg_id: entry.leg_id().clone(),
+                                    asset: source_id,
+                                    destination: entry.to().clone(),
+                                    amount,
+                                    status: AssetBatchTransferLegStatus::Rejected(
+                                        AssetBatchTransferRejection { code, message },
+                                    ),
+                                };
+                                state_transaction.record_batch_transfer_outcome(outcome.clone());
+                                state_transaction
+                                    .world
+                                    .emit_asset_event(AssetEvent::BatchTransferOutcome(outcome));
+                                continue;
+                            }
+                            Err(error) => return Err(error),
+                        };
+                        prepare_delta(plan.prechecked_delta.clone());
+                        let applied = plan.apply(state_transaction)?;
+                        #[allow(clippy::float_arithmetic)]
+                        #[cfg(feature = "telemetry")]
                         state_transaction
-                            .world
-                            .asset_definition(entry.asset_definition())?;
-                    }
-                    PreparedNumericTransferPlan::prepare_user(
-                        state_transaction,
-                        authority,
-                        source_id.clone(),
-                        destination_id,
-                        amount.clone(),
-                    )
-                })();
-                let plan = match plan {
-                    Ok(plan) => plan,
-                    Err(error) if self.mode() == &BatchMode::Independent => {
-                        let message = error.to_string();
-                        let code = batch_transfer_rejection_code(&error);
+                            .telemetry
+                            .observe_tx_amount(applied.amount.as_numeric().clone().to_f64_lossy());
+                        let amount = applied.amount;
+                        emit_numeric_asset_transfer_events(
+                            state_transaction,
+                            applied.source_id,
+                            applied.destination_id,
+                            amount,
+                        );
                         let outcome = AssetBatchTransferOutcome {
                             leg_index: u32::try_from(index).map_err(|_| {
                                 InstructionExecutionError::InvariantViolation(
@@ -6592,52 +6959,17 @@ pub mod isi {
                             leg_id: entry.leg_id().clone(),
                             asset: source_id,
                             destination: entry.to().clone(),
-                            amount,
-                            status: AssetBatchTransferLegStatus::Rejected(
-                                AssetBatchTransferRejection { code, message },
-                            ),
+                            amount: entry.amount().clone(),
+                            status: AssetBatchTransferLegStatus::Applied,
                         };
                         state_transaction.record_batch_transfer_outcome(outcome.clone());
                         state_transaction
                             .world
                             .emit_asset_event(AssetEvent::BatchTransferOutcome(outcome));
-                        continue;
                     }
-                    Err(error) => return Err(error),
-                };
-                let applied = plan.apply(state_transaction)?;
-                deltas.push(applied.delta);
-                #[allow(clippy::float_arithmetic)]
-                #[cfg(feature = "telemetry")]
-                state_transaction
-                    .telemetry
-                    .observe_tx_amount(applied.amount.as_numeric().clone().to_f64_lossy());
-                let amount = applied.amount;
-                emit_numeric_asset_transfer_events(
-                    state_transaction,
-                    applied.source_id,
-                    applied.destination_id,
-                    amount,
-                );
-                let outcome = AssetBatchTransferOutcome {
-                    leg_index: u32::try_from(index).map_err(|_| {
-                        InstructionExecutionError::InvariantViolation(
-                            "transfer asset batch contains too many legs".into(),
-                        )
-                    })?,
-                    leg_id: entry.leg_id().clone(),
-                    asset: source_id,
-                    destination: entry.to().clone(),
-                    amount: entry.amount().clone(),
-                    status: AssetBatchTransferLegStatus::Applied,
-                };
-                state_transaction.record_batch_transfer_outcome(outcome.clone());
-                state_transaction
-                    .world
-                    .emit_asset_event(AssetEvent::BatchTransferOutcome(outcome));
-            }
-            state_transaction.record_transfer_transcripts(authority, deltas)?;
-            Ok(())
+                    Ok(())
+                },
+            )
         }
     }
     fn batch_transfer_rejection_code(
@@ -6745,6 +7077,11 @@ pub mod isi {
                 Ok(flipped)
             }
         }
+    }
+    #[cfg(test)]
+    mod prepared_source_additional_owner_tests {
+        use super::*;
+        include!("asset/prepared_source_additional_owner_tests.rs");
     }
 }
 /// Asset-related query implementations.
@@ -7892,6 +8229,9 @@ pub mod query {
             }
         }
         include!("asset/core_numeric_mutation_tests.rs");
+        mod prepared_independent_occurrence_tests {
+            include!("asset/prepared_independent_occurrence_tests.rs");
+        }
         include!("asset/global_scope_rejection_tests.rs");
         #[test]
         fn transfer_global_asset_rejects_explicit_dataspace_scope_on_universal_route() {

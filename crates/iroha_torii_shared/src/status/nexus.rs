@@ -44,7 +44,8 @@ impl norito::core::NoritoSerialize for NexusLaneTeuBuckets {
     fn schema_hash() -> [u8; 16] {
         norito::core::schema_hash_for_name("iroha_telemetry::metrics::NexusLaneTeuBuckets")
     }
-
+}
+impl norito::core::SerializePayload for NexusLaneTeuBuckets {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let payload = (
             self.floor,
@@ -52,7 +53,7 @@ impl norito::core::NoritoSerialize for NexusLaneTeuBuckets {
             self.must_serve,
             self.circuit_breaker,
         );
-        norito::core::NoritoSerialize::serialize(&payload, writer)
+        norito::core::SerializePayload::serialize(&payload, writer)
     }
 }
 impl<'a> norito::core::NoritoDeserialize<'a> for NexusLaneTeuBuckets {
@@ -153,7 +154,8 @@ impl norito::core::NoritoSerialize for SchedulerLayerWidthBuckets {
     fn schema_hash() -> [u8; 16] {
         norito::core::schema_hash_for_name("iroha_telemetry::metrics::SchedulerLayerWidthBuckets")
     }
-
+}
+impl norito::core::SerializePayload for SchedulerLayerWidthBuckets {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let payload = (
             self.buckets[0],
@@ -165,7 +167,7 @@ impl norito::core::NoritoSerialize for SchedulerLayerWidthBuckets {
             self.buckets[6],
             self.buckets[7],
         );
-        norito::core::NoritoSerialize::serialize(&payload, writer)
+        norito::core::SerializePayload::serialize(&payload, writer)
     }
 }
 impl<'a> norito::core::NoritoDeserialize<'a> for SchedulerLayerWidthBuckets {
@@ -239,7 +241,8 @@ impl norito::core::NoritoSerialize for NexusLaneTeuDeferrals {
     fn schema_hash() -> [u8; 16] {
         norito::core::schema_hash_for_name("iroha_telemetry::metrics::NexusLaneTeuDeferrals")
     }
-
+}
+impl norito::core::SerializePayload for NexusLaneTeuDeferrals {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let payload = (
             self.cap_exceeded,
@@ -247,7 +250,7 @@ impl norito::core::NoritoSerialize for NexusLaneTeuDeferrals {
             self.quota,
             self.circuit_breaker,
         );
-        norito::core::NoritoSerialize::serialize(&payload, writer)
+        norito::core::SerializePayload::serialize(&payload, writer)
     }
 }
 impl<'a> norito::core::NoritoDeserialize<'a> for NexusLaneTeuDeferrals {
@@ -544,7 +547,8 @@ impl norito::core::NoritoSerialize for NexusDataspaceTeuStatus {
     fn schema_hash() -> [u8; 16] {
         norito::core::schema_hash_for_name("iroha_telemetry::metrics::NexusDataspaceTeuStatus")
     }
-
+}
+impl norito::core::SerializePayload for NexusDataspaceTeuStatus {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let payload = (
             self.lane_id,
@@ -557,7 +561,7 @@ impl norito::core::NoritoSerialize for NexusDataspaceTeuStatus {
             self.alias.clone(),
             self.description.clone(),
         );
-        norito::core::NoritoSerialize::serialize(&payload, writer)
+        norito::core::SerializePayload::serialize(&payload, writer)
     }
 }
 impl<'a> norito::core::NoritoDeserialize<'a> for NexusDataspaceTeuStatus {
@@ -655,14 +659,15 @@ impl norito::core::NoritoSerialize for NexusLaneManifestValidatorBindingStatus {
             "iroha_telemetry::metrics::manifest_status::NexusLaneManifestValidatorBindingStatus",
         )
     }
-
+}
+impl norito::core::SerializePayload for NexusLaneManifestValidatorBindingStatus {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let payload = (
             self.validator.clone(),
             self.peer_id.clone(),
             self.torii_url.clone(),
         );
-        norito::core::NoritoSerialize::serialize(&payload, writer)
+        norito::core::SerializePayload::serialize(&payload, writer)
     }
 }
 
@@ -726,7 +731,8 @@ impl norito::core::NoritoSerialize for NexusLaneRuntimeUpgradeHookStatus {
             "iroha_telemetry::metrics::manifest_status::NexusLaneRuntimeUpgradeHookStatus",
         )
     }
-
+}
+impl norito::core::SerializePayload for NexusLaneRuntimeUpgradeHookStatus {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let payload = (
             self.allow,
@@ -734,7 +740,7 @@ impl norito::core::NoritoSerialize for NexusLaneRuntimeUpgradeHookStatus {
             self.metadata_key.clone(),
             self.allowed_ids.clone(),
         );
-        norito::core::NoritoSerialize::serialize(&payload, writer)
+        norito::core::SerializePayload::serialize(&payload, writer)
     }
 }
 

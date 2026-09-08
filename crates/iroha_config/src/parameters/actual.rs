@@ -1733,6 +1733,8 @@ pub struct Network {
     pub max_frame_bytes_peer_gossip: usize,
     /// Per-topic frame caps (bytes) for Health messages.
     pub max_frame_bytes_health: usize,
+    /// Per-topic frame cap for authenticated Connect relay traffic.
+    pub max_frame_bytes_connect: usize,
     /// Per-topic frame caps (bytes) for Other messages.
     pub max_frame_bytes_other: usize,
     /// QUIC max idle timeout for stream inactivity (if QUIC is enabled).

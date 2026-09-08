@@ -5,7 +5,7 @@
 #[cfg(feature = "bench-internal")]
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 #[cfg(feature = "bench-internal")]
-use norito::NoritoSerialize as _;
+use norito::SerializePayload as _;
 #[cfg(feature = "bench-internal")]
 use norito::codec::{Decode as _, Encode as _};
 #[cfg(feature = "bench-internal")]

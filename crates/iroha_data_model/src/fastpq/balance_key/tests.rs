@@ -24,14 +24,29 @@ fn balance_key_is_independent_of_chain_display_and_ambient_layout() {
     let account = account(5);
     let expected = transfer_balance_key(&asset, &account).expect("canonical key");
     let mut displays = std::collections::BTreeSet::new();
+    let bitset = norito::core::header_flags::FIELD_BITSET
+        | norito::core::header_flags::PACKED_STRUCT
+        | norito::core::header_flags::COMPACT_LEN;
+    let layouts = [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        bitset,
+        bitset | norito::core::header_flags::PACKED_SEQ,
+    ];
     for discriminant in [0, 369, 753, 65_535] {
         let _display = ChainDiscriminantGuard::enter(discriminant);
         displays.insert(account.to_string());
-        for flags in [0, 1, 2, 3, 4, 5, 6, 7, 0x1b, 0x3f] {
+        for flags in layouts {
+            norito::core::validate_header_flags(flags).expect("supported V1 layout");
             let _layout = norito::core::DecodeFlagsGuard::enter(flags);
-            let effective_flags = norito::core::get_decode_flags();
             assert_eq!(transfer_balance_key(&asset, &account).unwrap(), expected);
-            assert_eq!(norito::core::get_decode_flags(), effective_flags);
+            assert_eq!(norito::core::effective_decode_flags(), Some(flags));
         }
     }
     assert_eq!(
@@ -64,18 +79,13 @@ fn balance_key_binds_asset_and_every_multisig_policy_field() {
         base,
         transfer_balance_key(&asset(3), &policy(2, 1, true)).unwrap()
     );
-    for changed in [
-        policy(3, 1, false),
-        policy(2, 2, false),
-        first.clone(),
-        second.clone(),
-    ] {
-        assert_ne!(base, transfer_balance_key(&asset(3), &changed).unwrap());
-    }
     assert_ne!(
         base,
         transfer_balance_key(&asset(4), &policy(2, 1, false)).unwrap()
     );
+    for changed in [policy(3, 1, false), policy(2, 2, false), first, second] {
+        assert_ne!(base, transfer_balance_key(&asset(3), &changed).unwrap());
+    }
 }
 
 #[test]

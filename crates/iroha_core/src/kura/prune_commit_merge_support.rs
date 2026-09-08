@@ -1136,6 +1136,8 @@ struct MergeLedgerLog {
     #[cfg(test)]
     indexed_lookups: usize,
     #[cfg(test)]
+    indexed_lookup_hashes: BTreeSet<HashOf<MergeLedgerEntry>>,
+    #[cfg(test)]
     indexed_membership_checks: usize,
     #[cfg(test)]
     complete_execution_scans: usize,

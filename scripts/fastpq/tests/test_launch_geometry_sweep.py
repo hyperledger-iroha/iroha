@@ -11,6 +11,18 @@ import pytest
 from scripts.fastpq import launch_geometry_sweep
 
 
+def test_wrap_helpers_load_with_package_relative_dependencies():
+    helpers = launch_geometry_sweep._load_wrap_helpers()
+    assert helpers is not None
+    assert callable(helpers.validate_row_usage_snapshot)
+    assert callable(helpers.detect_device_labels)
+
+
+def test_wrap_helpers_missing_file_is_optional(tmp_path, monkeypatch):
+    monkeypatch.setattr(launch_geometry_sweep, "WRAP_BENCHMARK_PATH", tmp_path / "missing.py")
+    assert launch_geometry_sweep._load_wrap_helpers() is None
+
+
 def _run_report_payload(payload: object, tmp_path: Path, monkeypatch) -> dict:
     def complete(cmd, **_kwargs):
         output_path = Path(cmd[cmd.index("--output") + 1])

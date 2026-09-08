@@ -993,10 +993,13 @@ impl Reducer {
             Ok(outcome) => {
                 let transition = self.transition_projection(&audit_event, &next, outcome.effects());
                 let Some(checked_refinement) = refinement::check(transition) else {
-                    // Keep diagnostics derivable inside this dependency-free core. The adapter
-                    // that observes the returned error owns logging and telemetry.
-                    let _diagnostic = refinement::diagnose(transition);
-                    return Err(ReducerError::RefinementViolation);
+                    return Err(ReducerError::RefinementViolation(Box::new(
+                        RefinementFailure::Transition {
+                            event_tag: audit_event.tag(),
+                            owner_tag: self.current_tag(),
+                            diagnostic: refinement::diagnose(transition),
+                        },
+                    )));
                 };
                 let durable_intent_trace = ProductionDurableIntentTraceProjection {
                     event_tag: transition.event_tag,
@@ -1020,7 +1023,9 @@ impl Reducer {
                 let Some(checked_transition) =
                     check_production_durable_intent_transition(durable_intent_trace)
                 else {
-                    return Err(ReducerError::RefinementViolation);
+                    return Err(ReducerError::RefinementViolation(Box::new(
+                        RefinementFailure::DurableIntent(durable_intent_trace),
+                    )));
                 };
                 if let Some(violation) = next.progress_witness_violation() {
                     return Err(ReducerError::ProgressWitnessViolation(violation));
@@ -1033,8 +1038,13 @@ impl Reducer {
             Err(error) => {
                 if !self.transition_refines(&audit_event, self, &[]) {
                     let transition = self.transition_projection(&audit_event, self, &[]);
-                    let _diagnostic = refinement::diagnose(transition);
-                    return Err(ReducerError::RefinementViolation);
+                    return Err(ReducerError::RefinementViolation(Box::new(
+                        RefinementFailure::RejectedEvent {
+                            event_tag: audit_event.tag(),
+                            owner_tag: self.current_tag(),
+                            diagnostic: refinement::diagnose(transition),
+                        },
+                    )));
                 }
                 if let Some(violation) = self.progress_witness_violation() {
                     return Err(ReducerError::ProgressWitnessViolation(violation));
@@ -4632,12 +4642,42 @@ pub enum ProgressWitnessViolation {
     /// Deterministic validation marked the body of a durable decision invalid.
     DecidedBodyInvalid,
 }
+/// Primitive evidence retained when a reducer candidate fails a commit gate.
+///
+/// These projections contain only bounded consensus identities, counters, and
+/// requested/granted effect keys. They contain no private signing material,
+/// signatures, body bytes, or caller-controlled diagnostic strings. Carrying
+/// them to the adapter preserves the exact rejection without introducing I/O
+/// into the dependency-free reducer or changing either acceptance predicate.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RefinementFailure {
+    /// A successful in-place candidate failed the transition relation.
+    Transition {
+        /// Tag of the event whose candidate was discarded.
+        event_tag: EventTag,
+        /// Reducer owner before evaluating the candidate.
+        owner_tag: EventTag,
+        /// Results of the production predicates on that exact candidate.
+        diagnostic: refinement::TransitionDiagnostic,
+    },
+    /// The transition relation passed but durable-intent ownership did not.
+    DurableIntent(ProductionDurableIntentTraceProjection),
+    /// An error-returning event failed to refine to an empty state stutter.
+    RejectedEvent {
+        /// Tag of the error-returning event.
+        event_tag: EventTag,
+        /// Reducer owner used for the required empty stutter.
+        owner_tag: EventTag,
+        /// Results of the production predicates on the required stutter.
+        diagnostic: refinement::TransitionDiagnostic,
+    },
+}
 /// Failure caused by malformed authenticated input or an impossible local state.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ReducerError {
     /// The executable transition failed the mechanically verified refinement
     /// gate and was discarded before becoming caller-visible.
-    RefinementViolation,
+    RefinementViolation(Box<RefinementFailure>),
     /// A durable progress source lost every reducer-owned reconstruction path.
     ProgressWitnessViolation(ProgressWitnessViolation),
     /// The configured local validator is absent from the frozen roster.
@@ -4699,9 +4739,10 @@ pub enum ReducerError {
 impl fmt::Display for ReducerError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::RefinementViolation => {
-                formatter.write_str("reducer transition violated the verified refinement gate")
-            }
+            Self::RefinementViolation(failure) => write!(
+                formatter,
+                "reducer transition violated the verified refinement gate: {failure:?}"
+            ),
             Self::ProgressWitnessViolation(violation) => write!(
                 formatter,
                 "reducer transition violated progress witness: {violation:?}"

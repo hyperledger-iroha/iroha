@@ -1,32 +1,3 @@
-fn mint_finality_roster_fixture(
-    network_id: NetworkId,
-    epoch: u64,
-    roster: &[ValidatorPower],
-) -> iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochRosterV1 {
-    use iroha_data_model::isi::kagemusha_v1::{
-        KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterV1,
-        KagemushaMintFinalityValidatorKeysV1,
-    };
-    let mint_roster = KagemushaMintFinalityEpochRosterV1 {
-        version: KAGEMUSHA_CHAIN_VERSION_V1,
-        network_id,
-        epoch,
-        validators: roster
-            .iter()
-            .enumerate()
-            .map(|(index, validator)| KagemushaMintFinalityValidatorKeysV1 {
-                validator: validator.validator.clone(),
-                eq_proof_public_key: [u8::try_from(index + 1).expect("small fixture roster"); 32],
-                ep_proof_public_key: [u8::try_from(index + 17).expect("small fixture roster"); 32],
-            })
-            .collect(),
-    };
-    mint_roster
-        .validate()
-        .expect("valid fixture mint-finality roster");
-    mint_roster
-}
-
 fn canonical_executed_block_fixture() -> (NonZeroU64, SignedBlock, CommittedTransaction) {
     use crate::crypto::{PrivateKey, PublicKey};
     use iroha_data_model::block::builder::BlockBuilder;
@@ -220,14 +191,15 @@ fn bridge_finality_chain_fixture() -> (
         .collect::<Vec<_>>();
     let height = NonZeroU64::new(1).expect("non-zero finality height");
     let header = BlockHeader::new(height, None, None, None, 0, 0);
-    let mint_roster = mint_finality_roster_fixture(test_network_id(), 0, &roster);
+    let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
+        mint_finality_roster_fixture(&roster);
     let context = HeightContext {
         network_id: test_network_id(),
         protocol_version: PROTOCOL_VERSION,
         height: height.get(),
         epoch: 0,
-        kagemusha_mint_finality_epoch_id: mint_roster.finality_epoch_id().unwrap(),
-        kagemusha_mint_finality_epoch_roster: mint_roster,
+        kagemusha_mint_finality_epoch_id,
+        kagemusha_mint_finality_epoch_roster,
         epoch_end_height: 10,
         next_epoch_snapshot: None,
         mode: ConsensusMode::Permissioned,

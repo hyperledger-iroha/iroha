@@ -1,4 +1,4 @@
-//! Taira daemon launcher with one runtime signer inherited at fixed FD 198.
+//! Taira launcher with Soracloud signing at FD 198 and private mint-finality seed custody at FD 199.
 
 #[cfg(unix)]
 fn main() {

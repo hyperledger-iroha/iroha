@@ -356,6 +356,10 @@ enum CommandKind {
     FastpqBenchManifest {
         options: Box<BenchManifestOptions>,
     },
+    FastpqVerifyBenchManifest {
+        manifest: PathBuf,
+        trusted_public_key: String,
+    },
     FastpqStageProfile {
         options: Box<fastpq::StageProfileOptions>,
     },
@@ -1585,6 +1589,12 @@ fn entrypoint() -> Result<(), Box<dyn Error>> {
         }
         CommandKind::FastpqBenchManifest { options } => {
             fastpq::write_bench_manifest(*options)?;
+        }
+        CommandKind::FastpqVerifyBenchManifest {
+            manifest,
+            trusted_public_key,
+        } => {
+            fastpq::verify_bench_manifest(&manifest, &trusted_public_key)?;
         }
         CommandKind::FastpqStageProfile { options } => {
             fastpq::run_stage_profile(&options)?;
@@ -5635,6 +5645,43 @@ where
             };
             Ok(CommandKind::SoranetTestnetDrillBundle {
                 options: Box::new(options),
+            })
+        }
+        "fastpq-verify-bench-manifest" => {
+            let mut manifest = None;
+            let mut trusted_public_key = None;
+            let mut pending = args.peekable();
+            while let Some(arg) = pending.next() {
+                match arg.as_str() {
+                    "--manifest" => {
+                        let path = pending.next().ok_or("expected path after --manifest")?;
+                        if manifest.is_some() {
+                            return Err("duplicate --manifest".into());
+                        }
+                        manifest = Some(normalize_path(Path::new(&path))?);
+                    }
+                    "--trusted-public-key" => {
+                        if trusted_public_key.is_some() {
+                            return Err("duplicate --trusted-public-key".into());
+                        }
+                        trusted_public_key = Some(
+                            pending
+                                .next()
+                                .ok_or("expected hex key after --trusted-public-key")?,
+                        );
+                    }
+                    flag => {
+                        return Err(format!(
+                            "unknown flag for fastpq-verify-bench-manifest: {flag}"
+                        )
+                        .into());
+                    }
+                }
+            }
+            Ok(CommandKind::FastpqVerifyBenchManifest {
+                manifest: manifest.ok_or("fastpq-verify-bench-manifest requires --manifest")?,
+                trusted_public_key: trusted_public_key
+                    .ok_or("fastpq-verify-bench-manifest requires --trusted-public-key")?,
             })
         }
         "fastpq-bench-manifest" => {
@@ -11439,6 +11486,34 @@ mod acceleration_state_tests {
                 format: AccelerationOutputFormat::Json,
             } => {}
             _ => panic!("expected acceleration-state command"),
+        }
+    }
+    #[test]
+    fn parse_fastpq_manifest_verification_requires_external_trust() {
+        let args = [
+            "xtask",
+            "fastpq-verify-bench-manifest",
+            "--manifest",
+            "capture.json",
+        ];
+        assert!(parse_command(args.into_iter().map(String::from)).is_err());
+        let args = [
+            "xtask",
+            "fastpq-verify-bench-manifest",
+            "--manifest",
+            "capture.json",
+            "--trusted-public-key",
+            "external-release-key",
+        ];
+        match parse_command(args.into_iter().map(String::from)).expect("verification command") {
+            CommandKind::FastpqVerifyBenchManifest {
+                manifest,
+                trusted_public_key,
+            } => {
+                assert!(manifest.ends_with("capture.json"));
+                assert_eq!(trusted_public_key, "external-release-key");
+            }
+            _ => panic!("expected manifest verification"),
         }
     }
     #[test]

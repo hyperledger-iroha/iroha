@@ -789,10 +789,8 @@ fn fixture_kagemusha_mint_finality_roster(
         .iter()
         .enumerate()
         .map(|(index, validator)| {
-            let seed = [
-                seed_base.wrapping_add(u8::try_from(index).expect("fixture index fits u8"));
-                32
-            ];
+            let seed =
+                [seed_base.wrapping_add(u8::try_from(index).expect("fixture index fits u8")); 32];
             crate::zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
                 &seed,
                 epoch,
@@ -1156,9 +1154,7 @@ fn native_amx_output(context: &wire::HeightContext, signer: PeerId) -> NativeAmx
             participant_lane_block_height: 1,
             participant_lane_block_view: 0,
             participant_proposal_hash: Hash::new(b"worker participant proposal"),
-            participant_settlement_commitment: HashOf::from_untyped_unchecked(Hash::new(
-                b"worker participant settlement",
-            )),
+            participant_settlement_commitment: Hash::new(b"worker participant settlement"),
             participant_validator_set_hash: HashOf::new(&validator_set),
             participant_validator_count: 1,
             participant_min_quorum: 1,

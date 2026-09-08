@@ -884,7 +884,8 @@ impl KagemushaRecursiveVerifierV1 for StateFixtureVerifier {
     }
 }
 
-fn state_verification_fixture() -> (KagemushaStateRelationPublicInputsV1, KagemushaPairedProofV1) {
+pub(super) fn state_verification_fixture()
+-> (KagemushaStateRelationPublicInputsV1, KagemushaPairedProofV1) {
     let artifacts = artifacts();
     let network_id = network();
     let asset = asset();

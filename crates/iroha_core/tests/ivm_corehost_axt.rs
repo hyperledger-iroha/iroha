@@ -60,6 +60,31 @@ macro_rules! assert_ok_gas {
         gas
     }};
 }
+fn assert_unanchored_spend_rejection(host: &mut CoreHost, result: Result<u64, VMError>) {
+    assert_eq!(result, Err(VMError::PermissionDenied));
+    let rejection = host.take_axt_reject_for_tests().expect("rejection context");
+    assert_unanchored_spend_context(&rejection);
+    let dsid = rejection.dataspace.expect("remote spend dataspace");
+    assert!(host.axt_recorded_proof_payload(dsid).is_none());
+    assert!(host.axt_cached_proof_status(dsid).is_none());
+}
+fn assert_unanchored_spend_context(rejection: &iroha_data_model::nexus::AxtRejectContext) {
+    assert_eq!(rejection.reason, AxtRejectReason::Proof);
+    assert!(
+        rejection
+            .detail
+            .contains("authoritative finalized source roots and transaction set"),
+        "the missing finalized anchor must be explicit: {}",
+        rejection.detail,
+    );
+    assert!(
+        rejection.detail.contains(
+            "fresh issuer authorization of the exact intent, proof, and effective amount"
+        ),
+        "a reusable issuer-signed capability must not authorize a caller-selected spend: {}",
+        rejection.detail,
+    );
+}
 fn fixture_authority() -> AccountId {
     let public_key = FIXTURE_AUTHORITY_PUBLIC_KEY
         .parse()
@@ -805,7 +830,7 @@ fn axt_policy_snapshot_refreshes_current_slot() {
     assert_eq!(policy.current_slot, state.block_hashes.view().len() as u64);
 }
 #[test]
-fn core_host_handles_axt_flow() {
+fn core_host_handles_axt_flow_requires_finalized_anchor() {
     let authority = fixture_authority();
     let dsid = DataSpaceId::new(7);
     let manifest_root = [0x21; 32];
@@ -893,8 +918,8 @@ fn core_host_handles_axt_flow() {
     };
     let amount_a = Quantity::from(200_u64);
     let amount_b = Quantity::from(100_u64);
-    // The issuer-authenticated handle path verifies the proof inline and may
-    // reuse it only for another exact remote-spend statement in the same proof.
+    // Even an exact multi-claim proof and valid reusable issuer signatures do
+    // not provide the finalized anchor and fresh authorization required by USE.
     let proof = proof_blob_for_remote_spends(
         dsid,
         manifest_root,
@@ -911,22 +936,15 @@ fn core_host_handles_axt_flow() {
     vm.set_register(10, handle_a_ptr);
     vm.set_register(11, intent_a_ptr);
     vm.set_register(12, proof_ptr);
-    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm));
+    let result = host.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm);
+    assert_unanchored_spend_rejection(&mut host, result);
     let handle_b_ptr = store_tlv_norito(&mut vm, PointerType::AssetHandle, &handle_b);
     let intent_b_ptr = store_tlv_norito(&mut vm, PointerType::NoritoBytes, &intent_b);
     vm.set_register(10, handle_b_ptr);
     vm.set_register(11, intent_b_ptr);
-    vm.set_register(12, 0);
-    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm));
-    // Commit the envelope
-    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_AXT_COMMIT, &mut vm));
-    // Subsequent operations without an active envelope must fail
-    vm.set_register(10, ds_ptr);
-    vm.set_register(11, 0);
-    assert!(matches!(
-        host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm),
-        Err(VMError::PermissionDenied)
-    ));
+    vm.set_register(12, proof_ptr);
+    let result = host.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm);
+    assert_unanchored_spend_rejection(&mut host, result);
 }
 
 // Keep the remote-spend proof matrix in the parent's shared fixture namespace.
@@ -1028,7 +1046,7 @@ fn axt_policy_reject_exposes_context() {
     );
 }
 #[test]
-fn axt_handle_allows_configured_clock_skew_window() {
+fn axt_handle_allows_configured_clock_skew_window_requires_finalized_anchor() {
     let authority = fixture_authority();
     let dsid = DataSpaceId::new(31);
     let manifest_root = [0x66; 32];
@@ -1121,7 +1139,8 @@ fn axt_handle_allows_configured_clock_skew_window() {
     vm.set_register(10, handle_ptr);
     vm.set_register(11, intent_ptr);
     vm.set_register(12, proof_ptr);
-    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm));
+    let result = host.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm);
+    assert_unanchored_spend_rejection(&mut host, result);
 }
 #[test]
 fn axt_handle_rejects_clock_skew_above_config() {
@@ -1498,14 +1517,11 @@ fn axt_replay_ledger_persists_through_kura_replay() {
         .expect_err("replay should be rejected after kura replay");
     assert!(matches!(err, VMError::PermissionDenied));
     let reject = host.take_axt_reject_for_tests().expect("reject context");
-    assert!(
-        matches!(
-            reject.reason,
-            AxtRejectReason::ReplayCache | AxtRejectReason::Descriptor
-        ),
-        "unexpected reject reason: {:?}",
-        reject.reason
-    );
+    if reject.reason == AxtRejectReason::Proof {
+        assert_unanchored_spend_context(&reject);
+    } else {
+        assert_eq!(reject.reason, AxtRejectReason::Descriptor);
+    }
 }
 #[test]
 fn axt_replay_ledger_rejects_reuse_after_restart() {
@@ -1652,14 +1668,11 @@ fn axt_replay_ledger_rejects_reuse_after_restart() {
     let reject = host
         .take_axt_reject_for_tests()
         .expect("replay rejection recorded");
-    assert!(
-        matches!(
-            reject.reason,
-            AxtRejectReason::ReplayCache | AxtRejectReason::Descriptor
-        ),
-        "unexpected reject reason: {:?}",
-        reject.reason
-    );
+    if reject.reason == AxtRejectReason::Proof {
+        assert_unanchored_spend_context(&reject);
+    } else {
+        assert_eq!(reject.reason, AxtRejectReason::Descriptor);
+    }
     assert_eq!(reject.dataspace.unwrap_or(dsid), dsid);
 }
 #[test]
@@ -1955,7 +1968,7 @@ fn axt_replay_ledger_blocks_reuse_after_host_rebuild() {
     let context = host
         .take_axt_reject_for_tests()
         .expect("replay rejection should record context");
-    assert_eq!(context.reason, AxtRejectReason::ReplayCache);
+    assert_unanchored_spend_context(&context);
     assert_eq!(context.dataspace, Some(dsid));
     assert_eq!(context.lane, Some(target_lane));
     // Advance the ledger a few slots and rebuild the host to simulate a restart; the replay guard
@@ -2012,7 +2025,7 @@ fn axt_replay_ledger_blocks_reuse_after_host_rebuild() {
     let context = host
         .take_axt_reject_for_tests()
         .expect("replay rejection should survive host rebuild");
-    assert_eq!(context.reason, AxtRejectReason::ReplayCache);
+    assert_unanchored_spend_context(&context);
     assert_eq!(context.dataspace, Some(dsid));
     assert_eq!(context.lane, Some(target_lane));
 }
@@ -2203,7 +2216,7 @@ fn axt_replay_ledger_blocks_reuse_after_policy_reset() {
         .expect_err("replay should be rejected");
     assert!(matches!(err, VMError::PermissionDenied));
     let reject = host.take_axt_reject_for_tests().expect("reject context");
-    assert_eq!(reject.reason, AxtRejectReason::ReplayCache);
+    assert_unanchored_spend_context(&reject);
 }
 #[cfg(feature = "app_api")]
 #[test]
@@ -2452,7 +2465,7 @@ fn axt_replay_ledger_persists_across_apply_without_execution() {
         .expect_err("replay should be rejected after resync");
     assert!(matches!(err, VMError::PermissionDenied));
     let reject = host.take_axt_reject_for_tests().expect("reject context");
-    assert_eq!(reject.reason, AxtRejectReason::ReplayCache);
+    assert_unanchored_spend_context(&reject);
 }
 #[cfg(feature = "app_api")]
 #[test]
@@ -2616,15 +2629,11 @@ fn axt_replay_entries_expire_after_retention_window() {
     vm.set_register(11, intent_ptr);
     vm.set_register(12, 0);
     let result = host.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm);
-    assert!(
-        result.is_ok(),
-        "handle should be accepted after replay ledger entry expires: {result:?}"
-    );
-    assert!(host.take_axt_reject_for_tests().is_none());
+    assert_unanchored_spend_rejection(&mut host, result);
 }
 include!("ivm_corehost_axt/amx_budget_test.rs");
 #[test]
-fn core_host_requires_proof_for_all_dataspaces() {
+fn core_host_requires_proof_for_all_dataspaces_requires_finalized_anchor() {
     let authority = fixture_authority();
     let ds_a = DataSpaceId::new(101);
     let ds_b = DataSpaceId::new(102);
@@ -2782,45 +2791,16 @@ fn core_host_requires_proof_for_all_dataspaces() {
     vm.set_register(10, handle_a_ptr);
     vm.set_register(11, intent_a_ptr);
     vm.set_register(12, proof_a_ptr);
-    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm));
+    let result = host.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm);
+    assert_unanchored_spend_rejection(&mut host, result);
     let handle_b_ptr = store_tlv_norito(&mut vm, PointerType::AssetHandle, &handle_b);
     let intent_b_ptr = store_tlv_norito(&mut vm, PointerType::NoritoBytes, &intent_b);
     let proof_b_ptr = store_tlv_norito(&mut vm, PointerType::ProofBlob, &proof_b);
     vm.set_register(10, handle_b_ptr);
     vm.set_register(11, intent_b_ptr);
     vm.set_register(12, proof_b_ptr);
-    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm));
-    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_AXT_COMMIT, &mut vm));
-    // Omit proof for ds_b to confirm rejection
-    let mut vm_fail = IVM::new(1_000_000);
-    let mut host_fail = CoreHost::new(authority)
-        .with_axt_policy_snapshot(&snapshot)
-        .expect("fixture AXT policy snapshot should be canonical");
-    configure_axt_test_host(&mut host_fail, [(ds_a, root_a), (ds_b, root_b)]);
-    let desc_ptr_fail = store_tlv_codec(&mut vm_fail, PointerType::AxtDescriptor, &descriptor);
-    vm_fail.set_register(10, desc_ptr_fail);
-    assert_ok_gas!(host_fail.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm_fail));
-    let ds_a_ptr_fail = store_tlv_codec(&mut vm_fail, PointerType::DataSpaceId, &ds_a);
-    let touch_a_ptr_fail = store_tlv_norito(&mut vm_fail, PointerType::NoritoBytes, &touch_a);
-    vm_fail.set_register(10, ds_a_ptr_fail);
-    vm_fail.set_register(11, touch_a_ptr_fail);
-    assert_ok_gas!(host_fail.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm_fail));
-    let ds_b_ptr_fail = store_tlv_codec(&mut vm_fail, PointerType::DataSpaceId, &ds_b);
-    let touch_b_ptr_fail = store_tlv_norito(&mut vm_fail, PointerType::NoritoBytes, &touch_b);
-    vm_fail.set_register(10, ds_b_ptr_fail);
-    vm_fail.set_register(11, touch_b_ptr_fail);
-    assert_ok_gas!(host_fail.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm_fail));
-    let handle_a_ptr_fail = store_tlv_norito(&mut vm_fail, PointerType::AssetHandle, &handle_a);
-    let intent_a_ptr_fail = store_tlv_norito(&mut vm_fail, PointerType::NoritoBytes, &intent_a);
-    vm_fail.set_register(10, handle_a_ptr_fail);
-    vm_fail.set_register(11, intent_a_ptr_fail);
-    let proof_a_ptr_fail = store_tlv_norito(&mut vm_fail, PointerType::ProofBlob, &proof_a);
-    vm_fail.set_register(12, proof_a_ptr_fail);
-    assert_ok_gas!(host_fail.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm_fail));
-    assert!(matches!(
-        host_fail.syscall(ivm::syscalls::SYSCALL_AXT_COMMIT, &mut vm_fail),
-        Err(VMError::PermissionDenied)
-    ));
+    let result = host.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm);
+    assert_unanchored_spend_rejection(&mut host, result);
 }
 #[test]
 fn core_host_rejects_invalid_descriptor() {
@@ -2978,7 +2958,7 @@ fn core_host_policy_rejects_touch() {
     assert_eq!(context.detail, "policy hook denied touch manifest");
 }
 #[test]
-fn core_host_policy_rejects_handle() {
+fn core_host_requires_anchor_before_supplemental_handle_policy() {
     let authority = fixture_authority();
     let mut vm = IVM::new(1_000_000);
     let dsid = DataSpaceId::new(51);
@@ -3054,14 +3034,11 @@ fn core_host_policy_rejects_handle() {
     ));
     let context = host
         .take_axt_reject_for_tests()
-        .expect("custom handle policy rejection should be recorded");
-    assert_eq!(context.reason, AxtRejectReason::PolicyDenied);
+        .expect("unanchored rejection");
+    assert_unanchored_spend_context(&context);
     assert_eq!(context.dataspace, Some(dsid));
     assert_eq!(context.lane, Some(LaneId::new(0)));
     assert_eq!(context.snapshot_version, Some(snapshot.version));
-    assert_eq!(context.active_handle_era, Some(1));
-    assert_eq!(context.next_handle_counter, Some(1));
-    assert_eq!(context.detail, "policy hook denied handle usage");
 }
 fn use_handle_with_snapshot(
     authority: &AccountId,
@@ -3189,12 +3166,11 @@ fn axt_snapshot_policy_enforces_lanes_and_counters() {
         use_handle_with_snapshot(&authority, dsid, &snapshot, stale_nonce),
         Err(VMError::PermissionDenied)
     );
-    assert_ok_gas!(use_handle_with_snapshot(
-        &authority,
-        dsid,
-        &snapshot,
-        base_handle
-    ));
+    assert_eq!(
+        use_handle_with_snapshot(&authority, dsid, &snapshot, base_handle),
+        Err(VMError::PermissionDenied),
+        "a valid policy cannot substitute for a finalized source-state anchor",
+    );
 }
 #[test]
 fn core_host_reports_amx_budget_timeout() {

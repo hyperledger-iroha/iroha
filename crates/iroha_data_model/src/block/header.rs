@@ -41,6 +41,8 @@ mod model {
     )]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     #[norito(deny_unknown_fields)]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::block::header::model::BlockHeader")]
     pub struct BlockHeader {
         /// Number of blocks in the chain including this block.
         #[getset(get_copy = "pub", set = "pub")]
@@ -144,7 +146,8 @@ pub mod wire {
         /// Optional confidential feature digest committed in the header.
         pub Option<ConfidentialFeatureDigestWire>,
     );
-    impl ncore::NoritoSerialize for BlockHeaderWire {
+    impl ncore::NoritoSerialize for BlockHeaderWire {}
+    impl ncore::SerializePayload for BlockHeaderWire {
         fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
             let tuple = (
                 self.0,
@@ -174,7 +177,7 @@ pub mod wire {
                     Option<[u8; 32]>,
                     Option<ConfidentialFeatureDigestWire>,
                 ),
-            ) as ncore::NoritoSerialize>::serialize(&tuple, writer)
+            ) as ncore::SerializePayload>::serialize(&tuple, writer)
         }
         fn encoded_len_hint(&self) -> Option<usize> {
             let tuple = (
@@ -205,7 +208,7 @@ pub mod wire {
                     Option<[u8; 32]>,
                     Option<ConfidentialFeatureDigestWire>,
                 ),
-            ) as ncore::NoritoSerialize>::encoded_len_hint(&tuple)
+            ) as ncore::SerializePayload>::encoded_len_hint(&tuple)
         }
         fn encoded_len_exact(&self) -> Option<usize> {
             let tuple = (
@@ -236,7 +239,7 @@ pub mod wire {
                     Option<[u8; 32]>,
                     Option<ConfidentialFeatureDigestWire>,
                 ),
-            ) as ncore::NoritoSerialize>::encoded_len_exact(&tuple)
+            ) as ncore::SerializePayload>::encoded_len_exact(&tuple)
         }
     }
     impl<'de> ncore::NoritoDeserialize<'de> for BlockHeaderWire {
@@ -310,20 +313,21 @@ pub mod wire {
         Option<u32>,
         Option<[u8; 32]>,
     );
-    impl ncore::NoritoSerialize for ConfidentialFeatureDigestWire {
+    impl ncore::NoritoSerialize for ConfidentialFeatureDigestWire {}
+    impl ncore::SerializePayload for ConfidentialFeatureDigestWire {
         fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
-            <ConfidentialFeatureDigestTuple as ncore::NoritoSerialize>::serialize(
+            <ConfidentialFeatureDigestTuple as ncore::SerializePayload>::serialize(
                 &(self.0, self.1, self.2, self.3, self.4),
                 writer,
             )
         }
         fn encoded_len_hint(&self) -> Option<usize> {
-            <ConfidentialFeatureDigestTuple as ncore::NoritoSerialize>::encoded_len_hint(&(
+            <ConfidentialFeatureDigestTuple as ncore::SerializePayload>::encoded_len_hint(&(
                 self.0, self.1, self.2, self.3, self.4,
             ))
         }
         fn encoded_len_exact(&self) -> Option<usize> {
-            <ConfidentialFeatureDigestTuple as ncore::NoritoSerialize>::encoded_len_exact(&(
+            <ConfidentialFeatureDigestTuple as ncore::SerializePayload>::encoded_len_exact(&(
                 self.0, self.1, self.2, self.3, self.4,
             ))
         }
@@ -399,18 +403,19 @@ pub mod wire {
             ncore::seq_len_prefix_len(self.payload.len()).checked_add(self.payload.len())
         }
     }
-    impl ncore::NoritoSerialize for BlockSignatureWireRef<'_> {
+    impl ncore::NoritoSerialize for BlockSignatureWireRef<'_> {}
+    impl ncore::SerializePayload for BlockSignatureWireRef<'_> {
         fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
             let flags = Self::tuple_flags();
             let _guard = ncore::DecodeFlagsGuard::enter(flags);
-            let index_len = <u64 as ncore::NoritoSerialize>::encoded_len_exact(&self.index)
+            let index_len = <u64 as ncore::SerializePayload>::encoded_len_exact(&self.index)
                 .ok_or(ncore::Error::LengthMismatch)?;
             ncore::write_len_with_flags(
                 writer,
                 u64::try_from(index_len).map_err(|_| ncore::Error::LengthMismatch)?,
                 flags,
             )?;
-            <u64 as ncore::NoritoSerialize>::serialize(&self.index, writer)?;
+            <u64 as ncore::SerializePayload>::serialize(&self.index, writer)?;
             let payload_wire_len = self
                 .payload_wire_len()
                 .ok_or(ncore::Error::LengthMismatch)?;
@@ -427,12 +432,12 @@ pub mod wire {
             Ok(())
         }
         fn encoded_len_hint(&self) -> Option<usize> {
-            ncore::NoritoSerialize::encoded_len_exact(self)
+            ncore::SerializePayload::encoded_len_exact(self)
         }
         fn encoded_len_exact(&self) -> Option<usize> {
             let flags = Self::tuple_flags();
             let _guard = ncore::DecodeFlagsGuard::enter(flags);
-            let index_len = <u64 as ncore::NoritoSerialize>::encoded_len_exact(&self.index)?;
+            let index_len = <u64 as ncore::SerializePayload>::encoded_len_exact(&self.index)?;
             let payload_wire_len = self.payload_wire_len()?;
             ncore::len_prefix_len_with_flags(index_len, flags)
                 .checked_add(index_len)?
@@ -440,15 +445,16 @@ pub mod wire {
                 .checked_add(payload_wire_len)
         }
     }
-    impl ncore::NoritoSerialize for BlockSignatureWire {
+    impl ncore::NoritoSerialize for BlockSignatureWire {}
+    impl ncore::SerializePayload for BlockSignatureWire {
         fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
-            ncore::NoritoSerialize::serialize(&BlockSignatureWireRef::new(self.0, &self.1), writer)
+            ncore::SerializePayload::serialize(&BlockSignatureWireRef::new(self.0, &self.1), writer)
         }
         fn encoded_len_hint(&self) -> Option<usize> {
-            ncore::NoritoSerialize::encoded_len_hint(&BlockSignatureWireRef::new(self.0, &self.1))
+            ncore::SerializePayload::encoded_len_hint(&BlockSignatureWireRef::new(self.0, &self.1))
         }
         fn encoded_len_exact(&self) -> Option<usize> {
-            ncore::NoritoSerialize::encoded_len_exact(&BlockSignatureWireRef::new(self.0, &self.1))
+            ncore::SerializePayload::encoded_len_exact(&BlockSignatureWireRef::new(self.0, &self.1))
         }
     }
     impl<'de> ncore::NoritoDeserialize<'de> for BlockSignatureWire {
@@ -665,21 +671,22 @@ impl BlockSignature {
         Self { index, signature }
     }
 }
-impl ncore::NoritoSerialize for BlockSignature {
+impl ncore::NoritoSerialize for BlockSignature {}
+impl ncore::SerializePayload for BlockSignature {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
-        ncore::NoritoSerialize::serialize(
+        ncore::SerializePayload::serialize(
             &wire::BlockSignatureWireRef::new(self.index, self.signature.payload()),
             writer,
         )
     }
     fn encoded_len_hint(&self) -> Option<usize> {
-        ncore::NoritoSerialize::encoded_len_hint(&wire::BlockSignatureWireRef::new(
+        ncore::SerializePayload::encoded_len_hint(&wire::BlockSignatureWireRef::new(
             self.index,
             self.signature.payload(),
         ))
     }
     fn encoded_len_exact(&self) -> Option<usize> {
-        ncore::NoritoSerialize::encoded_len_exact(&wire::BlockSignatureWireRef::new(
+        ncore::SerializePayload::encoded_len_exact(&wire::BlockSignatureWireRef::new(
             self.index,
             self.signature.payload(),
         ))

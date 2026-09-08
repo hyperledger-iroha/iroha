@@ -63,6 +63,8 @@ pub use asset::{AssetDefinitionId, AssetId};
 pub mod block;
 /// Bridge-related data types.
 pub mod bridge;
+/// Application-owned upgraded racing replay and state types; no custody authority.
+pub mod classed_race_v1;
 /// Shared primitives reused across data model modules.
 pub mod common;
 /// Compute lane requests, manifests, and receipts.
@@ -85,6 +87,10 @@ pub mod errors;
 pub mod escrow;
 /// Event payloads emitted by the ledger.
 pub mod events;
+/// Native execution-proof statements and deterministic race replay types.
+pub mod execution_proofs;
+/// Canonical execution-witness key namespaces shared by producers and verifiers.
+pub mod execution_witness;
 /// Executor configuration and API types.
 pub mod executor;
 /// FASTPQ-specific transcripts shared between host and prover.
@@ -93,6 +99,9 @@ pub mod fastpq;
 pub mod fraud;
 // Certificate-bearing Parliament data must remain available to the always-on
 // validation-fee registry without enabling governance instructions or events.
+/// Application-independent game session records and signed gameplay messages.
+pub mod game;
+pub mod game_resources;
 /// Governance protocol types.
 pub mod governance;
 mod governance_fingerprint;
@@ -133,6 +142,8 @@ pub mod name;
 pub mod nexus;
 /// Non-fungible token structures and specs.
 pub mod nft;
+/// Native NFT custody and exact-price sale records.
+pub mod nft_market;
 /// Oracle feed schemas and deterministic committee helpers.
 pub mod oracle;
 /// Runtime parameter definitions and schema.
@@ -395,3 +406,9 @@ pub mod prelude {
 
 #[cfg(test)]
 mod captured_schema_tests;
+
+#[cfg(all(test, feature = "json"))]
+mod generic_identity_tests;
+
+#[cfg(all(test, feature = "json"))]
+mod concrete_identity_tests;

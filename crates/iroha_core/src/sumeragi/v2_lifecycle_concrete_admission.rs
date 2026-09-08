@@ -2772,6 +2772,13 @@ mod tests {
     }
     #[test]
     fn owner_settlement_rebinds_a_recovered_validate_at_the_same_ordinal() {
+        crate::sumeragi::v2_lifecycle_coordinator::coordinator_support::run_bounded_coordinator_fixture(
+            "owner_settlement_rebinds_a_recovered_validate_at_the_same_ordinal",
+            owner_settlement_rebinds_a_recovered_validate_at_the_same_ordinal_fixture_body,
+        );
+    }
+
+    fn owner_settlement_rebinds_a_recovered_validate_at_the_same_ordinal_fixture_body() {
         let fixture = Fixture::new();
         let mut live = fixture.production_owner(64);
         let (pending, _) =
@@ -3696,6 +3703,13 @@ mod tests {
     }
     #[test]
     fn owner_settlement_durability_failure_returns_owner_and_faults_closed() {
+        crate::sumeragi::v2_lifecycle_coordinator::coordinator_support::run_bounded_coordinator_fixture(
+            "owner_settlement_durability_failure_returns_owner_and_faults_closed",
+            owner_settlement_durability_failure_returns_owner_and_faults_closed_fixture_body,
+        );
+    }
+
+    fn owner_settlement_durability_failure_returns_owner_and_faults_closed_fixture_body() {
         let fixture = Fixture::new();
         let root = TempDir::new().expect("temporary durable Validate admission ledger");
         let mut owner = fixture.production_owner(64);
@@ -3726,6 +3740,13 @@ mod tests {
     }
     #[test]
     fn occupied_address_returns_pair_and_leaves_coordinator_unchanged() {
+        crate::sumeragi::v2_lifecycle_coordinator::coordinator_support::run_bounded_coordinator_fixture(
+            "occupied_address_returns_pair_and_leaves_coordinator_unchanged",
+            occupied_address_returns_pair_and_leaves_coordinator_unchanged_fixture_body,
+        );
+    }
+
+    fn occupied_address_returns_pair_and_leaves_coordinator_unchanged_fixture_body() {
         let fixture = Fixture::new();
         let effect = fixture.effect(1);
         let (incumbent_effect, incumbent_pending) = fixture.pair(effect.clone(), 90);
@@ -3766,6 +3787,13 @@ mod tests {
     }
     #[test]
     fn capacity_wait_returns_the_same_pair_for_each_exact_retry() {
+        crate::sumeragi::v2_lifecycle_coordinator::coordinator_support::run_bounded_coordinator_fixture(
+            "capacity_wait_returns_the_same_pair_for_each_exact_retry",
+            capacity_wait_returns_the_same_pair_for_each_exact_retry_fixture_body,
+        );
+    }
+
+    fn capacity_wait_returns_the_same_pair_for_each_exact_retry_fixture_body() {
         let fixture = Fixture::new();
         let mut coordinator = fixture.coordinator(1);
         let mut registry = LifecycleWorkRegistryHolder::empty();
@@ -3989,6 +4017,13 @@ mod tests {
     }
     #[test]
     fn retry_and_terminal_decisions_never_replace_incumbent_work() {
+        crate::sumeragi::v2_lifecycle_coordinator::coordinator_support::run_bounded_coordinator_fixture(
+            "retry_and_terminal_decisions_never_replace_incumbent_work",
+            retry_and_terminal_decisions_never_replace_incumbent_work_fixture_body,
+        );
+    }
+
+    fn retry_and_terminal_decisions_never_replace_incumbent_work_fixture_body() {
         let fixture = Fixture::new();
         let original = fixture.effect(5);
         let mut coordinator = fixture.coordinator(64);
@@ -4039,6 +4074,13 @@ mod tests {
     }
     #[test]
     fn recovered_retry_installs_exact_work_without_allocating() {
+        crate::sumeragi::v2_lifecycle_coordinator::coordinator_support::run_bounded_coordinator_fixture(
+            "recovered_retry_installs_exact_work_without_allocating",
+            recovered_retry_installs_exact_work_without_allocating_fixture_body,
+        );
+    }
+
+    fn recovered_retry_installs_exact_work_without_allocating_fixture_body() {
         let fixture = Fixture::new();
         let original = fixture.effect(8);
         let mut live = fixture.coordinator(64);
@@ -4098,6 +4140,13 @@ mod tests {
     }
     #[test]
     fn recovered_retry_publication_failure_rolls_back_work_and_ready_transition() {
+        crate::sumeragi::v2_lifecycle_coordinator::coordinator_support::run_bounded_coordinator_fixture(
+            "recovered_retry_publication_failure_rolls_back_work_and_ready_transition",
+            recovered_retry_publication_failure_rolls_back_work_and_ready_transition_fixture_body,
+        );
+    }
+
+    fn recovered_retry_publication_failure_rolls_back_work_and_ready_transition_fixture_body() {
         let fixture = Fixture::new();
         let original = fixture.effect(9);
         let mut live = fixture.coordinator(64);

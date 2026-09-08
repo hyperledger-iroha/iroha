@@ -133,7 +133,7 @@ STABLE_BINDING_IDENTITIES = {
         "MLAutonomousPredecessorGloballyApplied",
         "crates/iroha_core/src/state/autonomous_predecessor_application.rs",
         "method",
-        "State::certified_lane_block_session_predecessor_is_applied_cached",
+        "State::certified_lane_block_session_predecessor_is_applied",
     ),
     "autonomous_predecessor_ordinary_receipt_filter": (
         "MLAutonomousPredecessorGloballyApplied",
@@ -145,7 +145,13 @@ STABLE_BINDING_IDENTITIES = {
         "MLAutonomousPredecessorGloballyApplied",
         "crates/iroha_core/src/state/autonomous_predecessor_application.rs",
         "method",
-        "State::certified_autonomous_lane_block_predecessor_is_globally_applied_cached",
+        "State::certified_autonomous_lane_block_predecessor_is_globally_applied",
+    ),
+    "autonomous_predecessor_authenticated_receipt_dispatch": (
+        "MLAutonomousPredecessorGloballyApplied",
+        "crates/iroha_core/src/state/autonomous_predecessor_application.rs",
+        "method",
+        "State::lane_block_predecessor_has_authenticated_receipt",
     ),
     "autonomous_predecessor_merge_receipt_revalidator": (
         "MLAutonomousPredecessorGloballyApplied",
@@ -163,7 +169,7 @@ STABLE_BINDING_IDENTITIES = {
         "MLAutonomousPredecessorGloballyApplied",
         "crates/iroha_core/src/state/autonomous_predecessor_application_tests.rs",
         "fn",
-        "autonomous_lane_predecessor_accepts_exact_canonical_receipt_without_merge_frontier",
+        "autonomous_lane_predecessor_authenticates_receipt_and_preserves_occupied_corruption",
     ),
     "autonomous_current_merge_receipt_revalidator": (
         "MLAutonomousPredecessorGloballyApplied",
@@ -472,8 +478,8 @@ STABLE_BINDING_REQUIRED_ANCHORS = {
     ),
     "autonomous_predecessor_role_dispatch": (
         "session.prepare_qc.payload_availability_qc.is_some()",
-        "self.certified_autonomous_lane_block_predecessor_is_globally_applied_cached",
-        "self.certified_lane_block_predecessor_is_applied_or_snapshot_anchored_cached",
+        "self.certified_autonomous_lane_block_predecessor_is_globally_applied",
+        "self.certified_lane_block_predecessor_is_applied_or_snapshot_anchored",
     ),
     "autonomous_predecessor_ordinary_receipt_filter": (
         "let session = crate::lane_consensus::CommittedLaneBlockSession {",
@@ -483,9 +489,28 @@ STABLE_BINDING_REQUIRED_ANCHORS = {
     ),
     "autonomous_predecessor_global_application_gate": (
         "Self::canonical_merged_lane_frontier_from_world",
-        "return frontier == (previous_height, Some(previous_descriptor_hash))",
-        "self.kura.canonical_lane_block_predecessor_receipt_revalidates_without_sidecar_repair",
-        "self.kura.autonomous_lane_block_predecessor_merge_receipt_revalidates_without_sidecar_repair",
+        "Result<bool, MergeLedgerCommitError>",
+        "let native_snapshot = self.native_amx_participant_application_snapshot()?",
+        ".blocked",
+        "return Ok(frontier == (previous_height, Some(previous_descriptor_hash)))",
+        "self.lane_block_predecessor_has_authenticated_receipt(proposal, &native_snapshot)",
+    ),
+    "autonomous_predecessor_authenticated_receipt_dispatch": (
+        "Result<bool, MergeLedgerCommitError>",
+        ".read_lane_application_receipt(descriptor.lane_id, previous_height)",
+        ".read_native_amx_participant_application_history(descriptor.lane_id)",
+        ".map_err(MergeLedgerCommitError::Persistence)?",
+        "native_snapshot.applied.iter().find",
+        "native_history.get(previous_height)",
+        "ordinary.proposal != native.participant_proposal",
+        "return Err(MergeLedgerCommitError::ExecutionMarkerConflict(",
+        "previous.lane_id == descriptor.lane_id",
+        "previous.dataspace_id == descriptor.dataspace_id",
+        "previous.lane_incarnation == descriptor.lane_incarnation",
+        "previous.lane_block_height == previous_height",
+        "previous.descriptor_hash == previous_descriptor_hash",
+        "previous.proposal_height < descriptor.proposal_height",
+        "receipt.application_block_height < descriptor.proposal_height",
     ),
     "autonomous_predecessor_merge_receipt_revalidator": (
         "receipt.format == LaneBlockApplicationReceiptArtifactFormat::MergeExecution",
@@ -506,7 +531,7 @@ STABLE_BINDING_REQUIRED_ANCHORS = {
     "autonomous_predecessor_canonical_receipt_regression": (
         "persist_lane_block_application_receipt(&predecessor.proposal)",
         "canonical_lane_block_predecessor_receipt_revalidates_without_sidecar_repair",
-        "certified_autonomous_lane_block_predecessor_is_globally_applied_cached",
+        "certified_autonomous_lane_block_predecessor_is_globally_applied",
         "malformed-frontier",
     ),
     "autonomous_current_merge_receipt_revalidator": (

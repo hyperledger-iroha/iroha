@@ -9,7 +9,9 @@ async fn pipeline_status_response(
         State(app),
         HeaderMap::new(),
         crate::loopback_connect_info(),
-        None,
+        Some(crate::utils::extractors::ExtractAccept(
+            HeaderValue::from_static("application/json"),
+        )),
         crate::NoritoStringQuery(PipelineStatusQuery {
             hash: Some(hash),
             scope: scope.map(str::to_owned),
@@ -132,10 +134,10 @@ async fn pipeline_status_string_query_preserves_decimal_hash_and_whitespace() {
 }
 #[tokio::test]
 async fn pipeline_status_handler_returns_queued() {
-    let app = mk_app_state_for_tests();
     let keypair =
         checked_torii_test_ed25519_keypair(0x28, "derive Torii queued-status fixture key");
     let authority = AccountId::new(keypair.public_key().clone());
+    let app = mk_app_state_for_tests_with_world(world_with_account(&authority));
     let tx = checked_torii_test_transaction(
         TransactionBuilder::new(
             *app.state.network_id_ref(),
@@ -191,9 +193,9 @@ async fn pipeline_status_handler_returns_queued() {
 #[tokio::test]
 async fn pipeline_status_handler_returns_typed_norito_when_requested() {
     use iroha_torii_shared::PipelineTransactionStatusResponse;
-    let app = mk_app_state_for_tests();
     let keypair = checked_torii_test_ed25519_keypair(0x29, "derive Torii typed-status fixture key");
     let authority = AccountId::new(keypair.public_key().clone());
+    let app = mk_app_state_for_tests_with_world(world_with_account(&authority));
     let tx = checked_torii_test_transaction(
         TransactionBuilder::new(
             *app.state.network_id_ref(),
@@ -476,16 +478,12 @@ fn pipeline_status_local_read_keeps_approved_cache() {
 #[tokio::test]
 async fn pipeline_status_handler_uses_dedicated_rate_limiter() {
     let mut app = mk_app_state_for_tests();
-    let tx_hash =
-        HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::prehashed([0x71; Hash::LENGTH]));
+    let (block, entrypoint_hash) = make_signed_block(1, None);
+    let tx_hash = store_and_index_transaction_details_block(&app, block, entrypoint_hash);
     {
         let app_mut = Arc::get_mut(&mut app).expect("unique app state");
         app_mut.rate_limiter = limits::RateLimiter::new(Some(1), Some(1));
         app_mut.pipeline_status_rate_limiter = limits::RateLimiter::new(Some(2), Some(2));
-        app_mut.pipeline_status_cache.record_entry(
-            tx_hash,
-            PipelineStatusEntry::fresh(PipelineStatusKind::Queued, None, None),
-        );
     }
     let headers = HeaderMap::new();
     let remote_ip = std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST);
@@ -574,6 +572,50 @@ async fn pipeline_status_handler_charges_cache_hits_before_local_reads() {
         error.into_response().status(),
         StatusCode::TOO_MANY_REQUESTS
     );
+}
+#[test]
+fn pipeline_fastpq_recovery_batch_is_canonical_and_budgeted_under_ambient_flags() {
+    use base64::Engine as _;
+
+    let mut batch = fastpq_prover::TransitionBatch::new(
+        fastpq_prover::AXT_DEFAULT_PARAMETER,
+        fastpq_prover::PublicInputs::default(),
+    );
+    batch.push(fastpq_prover::StateTransition::new(
+        b"metadata/key".to_vec(),
+        b"before".to_vec(),
+        b"after".to_vec(),
+        fastpq_prover::OperationKind::MetaSet,
+    ));
+    let model = fastpq_prover::transition_batch_to_model(&batch);
+    let canonical = norito::encode_canonical(&model).unwrap();
+    let expected_base64 = base64::engine::general_purpose::STANDARD.encode(&canonical);
+    for flags in
+        (u8::MIN..=u8::MAX).filter(|&flags| norito::core::validate_header_flags(flags).is_ok())
+    {
+        let _ambient = norito::core::DecodeFlagsGuard::enter(flags);
+        for reconstructed in [false, true] {
+            let mut used = PIPELINE_FASTPQ_RECOVERY_MAX_ARTIFACT_BYTES - canonical.len();
+            let (encoded, actual_reconstructed) =
+                encode_fastpq_recovery_batch(&batch, reconstructed, &mut used).unwrap();
+            assert_eq!(encoded, expected_base64);
+            assert_eq!(actual_reconstructed, reconstructed);
+            assert_eq!(used, PIPELINE_FASTPQ_RECOVERY_MAX_ARTIFACT_BYTES);
+            assert_eq!(norito::core::effective_decode_flags(), Some(flags));
+        }
+        let initial = PIPELINE_FASTPQ_RECOVERY_MAX_ARTIFACT_BYTES - canonical.len() + 1;
+        let mut used = initial;
+        let error = encode_fastpq_recovery_batch(&batch, false, &mut used).unwrap_err();
+        assert!(matches!(
+            error,
+            Error::AppServiceUnavailable {
+                code: "pipeline_recovery_fastpq_artifact_too_large",
+                ..
+            }
+        ));
+        assert_eq!(used, initial);
+        assert_eq!(norito::core::effective_decode_flags(), Some(flags));
+    }
 }
 #[test]
 fn pipeline_fastpq_recovery_page_enforces_explicit_bounds() {
@@ -1552,7 +1594,8 @@ async fn pipeline_status_handler_returns_applied_from_state() {
     let tx = block.external_transactions().next().expect("tx");
     let tx_hash = tx.hash();
     let tx_entry_hash = tx.hash_as_entrypoint();
-    store_block(&app, block);
+    let block_hash = store_block(&app, block);
+    record_committed_block_hash_for_test(&app, header.clone(), block_hash);
     let height = header.height();
     let height_usize = usize::try_from(height.get()).expect("height usize");
     let height_nz = NonZeroUsize::new(height_usize).expect("height");
@@ -1583,7 +1626,8 @@ async fn pipeline_status_handler_rejects_inconsistent_committed_membership() {
     let app = mk_app_state_for_tests();
     let (block, _) = make_signed_block(1, None);
     let header = block.header();
-    store_block(&app, block);
+    let block_hash = store_block(&app, block);
+    record_committed_block_hash_for_test(&app, header.clone(), block_hash);
     let bogus_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::prehashed(
         [0x76; Hash::LENGTH],
     ));
@@ -1903,7 +1947,8 @@ async fn pipeline_status_handler_resolves_sealed_reveal_carrier_and_signed_alias
     let signed_entrypoint_alias =
         iroha_core::tx::external_entrypoint_hash_from_signed_hash(signed_hash.clone());
     let header = block.header();
-    store_block(&app, block);
+    let block_hash = store_block(&app, block);
+    record_committed_block_hash_for_test(&app, header.clone(), block_hash);
     let height = header.height();
     let height_usize = usize::try_from(height.get()).expect("height usize");
     let height_nz = NonZeroUsize::new(height_usize).expect("height");
@@ -1966,7 +2011,8 @@ async fn pipeline_status_handler_prefers_state_over_stale_queued_cache() {
     let tx = block.external_transactions().next().expect("tx");
     let tx_hash = tx.hash();
     let tx_entry_hash = tx.hash_as_entrypoint();
-    store_block(&app, block);
+    let block_hash = store_block(&app, block);
+    record_committed_block_hash_for_test(&app, header.clone(), block_hash);
     app.pipeline_status_cache.record_entry(
         tx_hash,
         PipelineStatusEntry::fresh(PipelineStatusKind::Queued, None, None),
@@ -2003,7 +2049,8 @@ async fn pipeline_status_handler_prefers_state_over_stale_rejected_cache() {
     let tx = block.external_transactions().next().expect("tx");
     let tx_hash = tx.hash();
     let tx_entry_hash = tx.hash_as_entrypoint();
-    store_block(&app, block);
+    let block_hash = store_block(&app, block);
+    record_committed_block_hash_for_test(&app, header.clone(), block_hash);
     let rejection = TransactionRejectionReason::Validation(ValidationFail::TooComplex);
     app.pipeline_status_cache.record_entry(
         tx_hash,

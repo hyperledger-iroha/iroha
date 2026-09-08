@@ -750,19 +750,19 @@ _CROSS_SDK_TESTS = (
 )
 _NATIVE_AMX_GROUPED_PARITY_HARNESS = "ci/run_native_amx_v2_grouped_sdk_parity.sh"
 _NATIVE_AMX_GROUPED_FIXTURE = "fixtures/sumeragi_v2/native_amx_v2_grouped.json"
-_NATIVE_AMX_GROUPED_NEGATIVE_CONTROL_COUNT = 56
+_NATIVE_AMX_GROUPED_NEGATIVE_CONTROL_COUNT = 58
 _NATIVE_AMX_GROUPED_PARITY_SUITES = (
     ("openapi", 7),
-    ("python", 65),
-    ("javascript", 63),
-    ("swift", 5),
-    ("kotlin", 8),
-    ("java", 6),
+    ("python", 67),
+    ("javascript", 65),
+    ("swift", 9),
+    ("kotlin", 11),
+    ("java", 7),
 )
 _SUMERAGI_SDK_DIAGNOSTICS_HARNESS = "ci/run_sumeragi_v2_sdk_diagnostics.sh"
 _SUMERAGI_SDK_DIAGNOSTICS_SUITES = (
     ("python", 129),
-    ("javascript", 88),
+    ("javascript", 90),
     ("swift", 34),
     ("kotlin", 50),
     ("java", 59),
@@ -2085,7 +2085,7 @@ def _run_bounded_python_validator(
     )
     return _run_bounded_replay(
         interpreter,
-        ["-I", "-S", "-c", loader, str(checker), *arguments],
+        ["-I", "-S", "-B", "-c", loader, str(checker), *arguments],
         cwd=cwd,
         environment=environment,
         name=name,

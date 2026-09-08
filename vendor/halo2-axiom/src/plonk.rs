@@ -22,6 +22,7 @@ use crate::transcript::{ChallengeScalar, EncodedChallenge, Transcript};
 
 mod assigned;
 mod circuit;
+mod compact_key;
 mod error;
 mod evaluation;
 mod keygen;
@@ -1282,18 +1283,14 @@ mod tests {
         );
 
         let (circuit, lifetime) = tracked_circuit(false);
-        let (consuming_compressed_vk, vk_profile) = keygen_vk_consuming_with_profile(
-            &params,
-            circuit,
-            true,
-            |circuit, profile| {
+        let (consuming_compressed_vk, vk_profile) =
+            keygen_vk_consuming_with_profile(&params, circuit, true, |circuit, profile| {
                 let lifetime = circuit.lifetime.as_ref().expect("tracked circuit");
                 assert!(lifetime.synthesized.load(Ordering::SeqCst));
                 assert!(!lifetime.dropped.load(Ordering::SeqCst));
                 Ok::<_, &'static str>(profile)
-            },
-        )
-        .expect("compressed consuming VK generation");
+            })
+            .expect("compressed consuming VK generation");
         assert!(lifetime.dropped.load(Ordering::SeqCst));
         assert!(vk_profile.compress_selectors);
         assert_eq!(vk_profile.domain_rows, 8);
@@ -1306,13 +1303,11 @@ mod tests {
         );
 
         let (circuit, lifetime) = tracked_circuit(false);
-        let (consuming_compressed_pk, pk_profile) = keygen_pk2_consuming_with_profile(
-            &params,
-            circuit,
-            true,
-            |_circuit, profile| Ok::<_, &'static str>(profile),
-        )
-        .expect("compressed consuming combined PK generation");
+        let (consuming_compressed_pk, pk_profile) =
+            keygen_pk2_consuming_with_profile(&params, circuit, true, |_circuit, profile| {
+                Ok::<_, &'static str>(profile)
+            })
+            .expect("compressed consuming combined PK generation");
         assert!(lifetime.dropped.load(Ordering::SeqCst));
         assert_eq!(pk_profile, vk_profile);
         assert_eq!(

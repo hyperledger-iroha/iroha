@@ -4,6 +4,8 @@
 //! supervisor.  The supervisor opens the owner-only regular file and passes it
 //! to the daemon as inherited descriptor 198.  No path, key, or alternate
 //! descriptor is accepted through arguments, configuration, or environment.
+//! Independent mint-finality seed custody uses consumed descriptor 199, bound
+//! only after the exact signed genesis has been authenticated.
 
 use crate::{
     IrohaRuntimeDeps, IrohaRuntimeProviderBindingsV1, IrohaRuntimeProviderRegistryErrorV1,
@@ -28,9 +30,15 @@ use iroha_config::parameters::{
         },
     },
 };
+use iroha_core::{
+    sumeragi::GenesisV2Bootstrap, zk::kagemusha_v1_recursion::KagemushaMintFinalityLocalAuthorityV1,
+};
 use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair, PublicKey, Signature};
 use iroha_data_model::{
+    NetworkId,
     account::AccountId,
+    isi::kagemusha_v1::KagemushaMintFinalityEpochRosterV1,
+    peer::PeerId,
     soracloud::{
         SoracloudRuntimeProvenancePurposeV1, validate_soracloud_runtime_provenance_preimage_v1,
     },
@@ -50,6 +58,8 @@ use std::{
     time::Duration,
 };
 
+use zeroize::Zeroizing;
+
 fn invocation_does_not_start_a_node(argument: &OsStr) -> bool {
     matches!(
         argument.to_str(),
@@ -59,6 +69,10 @@ fn invocation_does_not_start_a_node(argument: &OsStr) -> bool {
 
 /// Fixed inherited descriptor containing the Taira runtime signer key.
 pub const TAIRA_RUNTIME_SIGNER_FD_V1: RawFd = 198;
+/// Fixed inherited descriptor containing the independent mint-finality seed.
+pub const TAIRA_MINT_FINALITY_SEED_FD_V1: RawFd = 199;
+/// Exact byte length of the raw independent mint-finality seed record.
+pub const TAIRA_MINT_FINALITY_SEED_BYTES_V1: u64 = 32;
 /// Exact adapter/public-policy revision of the first-release Taira signer.
 pub const TAIRA_RUNTIME_SIGNER_REVISION_V1: u64 = 1;
 /// Exact byte length of one canonical Ed25519 private multihash plus newline.
@@ -70,13 +84,17 @@ pub const TAIRA_CHAIN_DISCRIMINANT_V1: u16 = 369;
 /// Exact first-release Taira validator count.
 pub const TAIRA_VALIDATOR_COUNT_V1: usize = 4;
 /// Exact aggregate Inrou CPU ceiling for one first-release Taira validator.
-pub const TAIRA_INROU_MAX_CPU_MILLIS_V1: u32 = 8_000;
+pub const TAIRA_INROU_MAX_CPU_MILLIS_V1: u32 =
+    iroha_config::parameters::defaults::taira::INROU_MAX_CPU_MILLIS;
 /// Exact aggregate Inrou memory ceiling for one first-release Taira validator.
-pub const TAIRA_INROU_MAX_MEMORY_BYTES_V1: u64 = 8 * 1024 * 1024 * 1024;
+pub const TAIRA_INROU_MAX_MEMORY_BYTES_V1: u64 =
+    iroha_config::parameters::defaults::taira::INROU_MAX_MEMORY_BYTES;
 /// Exact aggregate Inrou writable-storage ceiling for one first-release Taira validator.
-pub const TAIRA_INROU_MAX_STORAGE_BYTES_V1: u64 = 64 * 1024 * 1024 * 1024;
+pub const TAIRA_INROU_MAX_STORAGE_BYTES_V1: u64 =
+    iroha_config::parameters::defaults::taira::INROU_MAX_STORAGE_BYTES;
 /// Exact immutable Inrou guest-image ceiling for one first-release Taira validator.
-pub const TAIRA_INROU_GUEST_IMAGE_MAX_BYTES_V1: u64 = 10 * 1024 * 1024 * 1024;
+pub const TAIRA_INROU_GUEST_IMAGE_MAX_BYTES_V1: u64 =
+    iroha_config::parameters::defaults::taira::INROU_GUEST_IMAGE_MAX_BYTES;
 /// Exact Inrou startup grace for one first-release Taira validator.
 pub const TAIRA_INROU_START_GRACE_MS_V1: u64 = 30_000;
 /// Exact Inrou shutdown grace for one first-release Taira validator.
@@ -127,9 +145,16 @@ fn validate_taira_launcher_profile_v1(
     if !runtime.production_mode {
         return Err("Taira launcher requires Soracloud production mode".to_owned());
     }
-    if runtime.hydration_concurrency != soracloud_runtime_defaults::HYDRATION_CONCURRENCY
+    if runtime.hydration_concurrency
+        != std::num::NonZeroUsize::new(
+            iroha_config::parameters::defaults::taira::HYDRATION_CONCURRENCY,
+        )
+        .expect("nonzero Taira worker capacity")
         || runtime.prepared_runtime_cache_capacity
-            != soracloud_runtime_defaults::PREPARED_RUNTIME_CACHE_CAPACITY
+            != std::num::NonZeroUsize::new(
+                iroha_config::parameters::defaults::taira::PREPARED_RUNTIME_CACHE_CAPACITY,
+            )
+            .expect("nonzero Taira worker capacity")
     {
         return Err(
             "Taira launcher requires the exact V1 hydration-worker and prepared-runtime capacities"
@@ -222,6 +247,11 @@ fn validate_taira_storage_profile_v1(
 }
 
 fn validate_taira_launcher_config_v1(config: &Config) -> Result<(), String> {
+    if config.nexus.storage.max_wsv_memory_bytes.get()
+        != iroha_config::parameters::defaults::taira::NEXUS_MAX_WSV_MEMORY_BYTES
+    {
+        return Err("Taira launcher requires the exact bounded WSV memory budget".to_owned());
+    }
     let trusted_peers = config.common.trusted_peers.value();
     validate_taira_launcher_profile_v1(
         config.common.chain.as_ref(),
@@ -255,7 +285,7 @@ fn validate_taira_launcher_config_v1(config: &Config) -> Result<(), String> {
 /// Payload-free fixed-descriptor signer startup failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TairaRuntimeSignerErrorV1 {
-    /// Descriptor 198 is absent or unreadable.
+    /// A fixed runtime descriptor is absent or unreadable.
     DescriptorUnavailable,
     /// The descriptor does not identify one stable owner-only regular file.
     UntrustedDescriptor,
@@ -340,7 +370,11 @@ fn consume_trusted_key_file(
     Ok(())
 }
 
-fn load_key_pair_from_file(mut file: File) -> Result<KeyPair, TairaRuntimeSignerErrorV1> {
+fn load_private_record_from_file<T>(
+    mut file: File,
+    record_bytes: u64,
+    parse: impl FnOnce(&[u8]) -> Result<T, TairaRuntimeSignerErrorV1>,
+) -> Result<T, TairaRuntimeSignerErrorV1> {
     let before_metadata = file
         .metadata()
         .map_err(|_| TairaRuntimeSignerErrorV1::DescriptorUnavailable)?;
@@ -350,16 +384,15 @@ fn load_key_pair_from_file(mut file: File) -> Result<KeyPair, TairaRuntimeSigner
         || before.owner != effective_uid
         || before.mode & 0o7777 != 0o600
         || before.links != 1
-        || before.length != TAIRA_RUNTIME_SIGNER_KEY_FILE_BYTES_V1
+        || before.length != record_bytes
     {
         return Err(TairaRuntimeSignerErrorV1::UntrustedDescriptor);
     }
-
-    let capacity = usize::try_from(TAIRA_RUNTIME_SIGNER_KEY_FILE_BYTES_V1)
-        .expect("fixed Taira key length fits usize");
-    let mut bytes = Vec::with_capacity(capacity + 1);
+    let capacity =
+        usize::try_from(record_bytes).map_err(|_| TairaRuntimeSignerErrorV1::InvalidKey)?;
+    let mut bytes = Zeroizing::new(Vec::with_capacity(capacity + 1));
     std::io::Read::by_ref(&mut file)
-        .take(TAIRA_RUNTIME_SIGNER_KEY_FILE_BYTES_V1 + 1)
+        .take(record_bytes + 1)
         .read_to_end(&mut bytes)
         .map_err(|_| TairaRuntimeSignerErrorV1::DescriptorUnavailable)?;
     let after = DescriptorIdentityV1::from_metadata(
@@ -368,11 +401,16 @@ fn load_key_pair_from_file(mut file: File) -> Result<KeyPair, TairaRuntimeSigner
             .map_err(|_| TairaRuntimeSignerErrorV1::DescriptorUnavailable)?,
     );
     if after != before || bytes.len() != capacity {
-        bytes.fill(0);
         return Err(TairaRuntimeSignerErrorV1::UntrustedDescriptor);
     }
+    let parsed = parse(&bytes);
+    bytes.fill(0);
+    consume_trusted_key_file(&mut file, &before, &bytes)?;
+    parsed
+}
 
-    let parsed = (|| {
+fn load_key_pair_from_file(file: File) -> Result<KeyPair, TairaRuntimeSignerErrorV1> {
+    load_private_record_from_file(file, TAIRA_RUNTIME_SIGNER_KEY_FILE_BYTES_V1, |bytes| {
         let record = bytes
             .strip_suffix(b"\n")
             .ok_or(TairaRuntimeSignerErrorV1::InvalidKey)?;
@@ -390,33 +428,102 @@ fn load_key_pair_from_file(mut file: File) -> Result<KeyPair, TairaRuntimeSigner
             return Err(TairaRuntimeSignerErrorV1::InvalidKey);
         }
         KeyPair::from_private_key(exposed.0).map_err(|_| TairaRuntimeSignerErrorV1::InvalidKey)
-    })();
-    bytes.fill(0);
-    consume_trusted_key_file(&mut file, &before, &bytes)?;
-    parsed
+    })
+}
+
+fn load_mint_finality_seed_from_file(
+    file: File,
+) -> Result<Zeroizing<[u8; 32]>, TairaRuntimeSignerErrorV1> {
+    load_private_record_from_file(file, TAIRA_MINT_FINALITY_SEED_BYTES_V1, |bytes| {
+        let seed: [u8; 32] = bytes
+            .try_into()
+            .map_err(|_| TairaRuntimeSignerErrorV1::InvalidKey)?;
+        Ok(Zeroizing::new(seed))
+    })
 }
 
 #[allow(
     unsafe_code,
-    reason = "the Taira launcher contract transfers unique ownership of inherited FD 198"
+    reason = "the Taira launcher contract transfers unique ownership of fixed inherited descriptors"
 )]
-fn load_inherited_key_pair() -> Result<KeyPair, TairaRuntimeSignerErrorV1> {
+fn take_inherited_private_file(descriptor: RawFd) -> Result<File, TairaRuntimeSignerErrorV1> {
+    if !matches!(
+        descriptor,
+        TAIRA_RUNTIME_SIGNER_FD_V1 | TAIRA_MINT_FINALITY_SEED_FD_V1
+    ) {
+        return Err(TairaRuntimeSignerErrorV1::UntrustedDescriptor);
+    }
     #[cfg(any(target_os = "linux", target_os = "android"))]
-    let descriptor_path = format!("/proc/self/fd/{TAIRA_RUNTIME_SIGNER_FD_V1}");
+    let descriptor_path = format!("/proc/self/fd/{descriptor}");
     #[cfg(not(any(target_os = "linux", target_os = "android")))]
-    let descriptor_path = format!("/dev/fd/{TAIRA_RUNTIME_SIGNER_FD_V1}");
+    let descriptor_path = format!("/dev/fd/{descriptor}");
     let file = OpenOptions::new()
         .read(true)
         .write(true)
         .open(descriptor_path)
         .map_err(|_| TairaRuntimeSignerErrorV1::DescriptorUnavailable)?;
-    // SAFETY: the deployment supervisor transfers FD 198 to this launcher as
-    // its only owner. Opening its kernel descriptor path above proves that it
-    // is live before ownership is constructed. Dropping this value closes the
-    // inherited descriptor; the owned duplicate is consumed before startup.
-    let inherited = unsafe { File::from_raw_fd(TAIRA_RUNTIME_SIGNER_FD_V1) };
+    // SAFETY: the deployment supervisor transfers each fixed descriptor to this launcher as
+    // its only owner. Opening its kernel descriptor path proves it is live before ownership
+    // is constructed. Drop closes the inherited descriptor; the owned duplicate is consumed.
+    let inherited = unsafe { File::from_raw_fd(descriptor) };
     drop(inherited);
-    load_key_pair_from_file(file)
+    Ok(file)
+}
+
+fn load_inherited_key_pair() -> Result<KeyPair, TairaRuntimeSignerErrorV1> {
+    load_key_pair_from_file(take_inherited_private_file(TAIRA_RUNTIME_SIGNER_FD_V1)?)
+}
+
+fn bind_taira_mint_finality_authority(
+    network_id: NetworkId,
+    local_validator: &PeerId,
+    epoch: &KagemushaMintFinalityEpochRosterV1,
+    seed: Zeroizing<[u8; 32]>,
+) -> Result<KagemushaMintFinalityLocalAuthorityV1, String> {
+    if epoch.network_id != network_id {
+        return Err("Taira mint-finality roster does not match the configured network".to_owned());
+    }
+    let validator_index = epoch
+        .validators
+        .iter()
+        .position(|entry| &entry.validator == local_validator)
+        .and_then(|index| u32::try_from(index).ok())
+        .ok_or_else(|| "Taira mint-finality roster has no exact local validator".to_owned())?;
+    KagemushaMintFinalityLocalAuthorityV1::new(Arc::new(epoch.clone()), seed, validator_index)
+        .map_err(|_| {
+            "Taira mint-finality seed does not match its authenticated validator roster".to_owned()
+        })
+}
+
+fn resolve_taira_mint_finality_runtime(
+    config: &Config,
+    authenticated_genesis: &GenesisV2Bootstrap,
+    dependencies: IrohaRuntimeDeps,
+) -> Result<IrohaRuntimeDeps, String> {
+    if dependencies.kagemusha_mint_finality_authority.is_some() {
+        return Err("Taira rejects a second mint-finality runtime authority".to_owned());
+    }
+    let context = authenticated_genesis.context();
+    let network_id = NetworkId::from_genesis_hash(config.genesis.expected_hash);
+    if context.network_id != network_id
+        || config.common.peer.id.public_key() != config.common.key_pair.public_key()
+    {
+        return Err(
+            "Taira mint-finality context does not match the configured local node".to_owned(),
+        );
+    }
+    let seed = load_mint_finality_seed_from_file(
+        take_inherited_private_file(TAIRA_MINT_FINALITY_SEED_FD_V1)
+            .map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
+    let authority = bind_taira_mint_finality_authority(
+        network_id,
+        &config.common.peer.id,
+        &context.kagemusha_mint_finality_epoch_roster,
+        seed,
+    )?;
+    Ok(dependencies.with_kagemusha_mint_finality_authority(Arc::new(authority)))
 }
 
 fn signer_handle(public_key: &PublicKey) -> Result<String, TairaRuntimeSignerErrorV1> {
@@ -541,7 +648,7 @@ impl IrohaRuntimeProviderRegistryV1 for TairaRuntimeProviderRegistryV1 {
     }
 }
 
-/// Run the Taira daemon with the exact signer inherited at descriptor 198.
+/// Run Taira with the Soracloud signer at FD 198 and independent mint-finality seed at FD 199.
 ///
 /// Config validation, help, and version introspection remain offline and do not
 /// read the descriptor. Every node-starting invocation resolves the one
@@ -565,6 +672,7 @@ pub fn main_entry() {
     if let Err(report) = crate::run_with_runtime_provider_registry_and_config_guard(
         &registry,
         validate_taira_launcher_config_v1,
+        resolve_taira_mint_finality_runtime,
     ) {
         eprintln!("{report:?}");
         std::process::exit(1);
@@ -589,9 +697,14 @@ mod tests {
     fn canonical_runtime_profile() -> SoracloudRuntime {
         let mut runtime = SoracloudRuntime::default();
         runtime.production_mode = true;
-        runtime.hydration_concurrency = soracloud_runtime_defaults::HYDRATION_CONCURRENCY;
-        runtime.prepared_runtime_cache_capacity =
-            soracloud_runtime_defaults::PREPARED_RUNTIME_CACHE_CAPACITY;
+        runtime.hydration_concurrency = std::num::NonZeroUsize::new(
+            iroha_config::parameters::defaults::taira::HYDRATION_CONCURRENCY,
+        )
+        .expect("nonzero Taira worker capacity");
+        runtime.prepared_runtime_cache_capacity = std::num::NonZeroUsize::new(
+            iroha_config::parameters::defaults::taira::PREPARED_RUNTIME_CACHE_CAPACITY,
+        )
+        .expect("nonzero Taira worker capacity");
         runtime.inrou.enabled = true;
         runtime.inrou.portable_vm_uid = NonZeroU32::new(70_000);
         runtime.inrou.portable_vm_gid = NonZeroU32::new(70_000);
@@ -726,14 +839,25 @@ mod tests {
         };
 
         let mut changed = runtime.clone();
-        changed.hydration_concurrency =
-            NonZeroUsize::new(soracloud_runtime_defaults::HYDRATION_CONCURRENCY.get() + 1)
-                .expect("changed hydration-worker count is nonzero");
+        changed.hydration_concurrency = NonZeroUsize::new(
+            std::num::NonZeroUsize::new(
+                iroha_config::parameters::defaults::taira::HYDRATION_CONCURRENCY,
+            )
+            .expect("nonzero Taira worker capacity")
+            .get()
+                + 1,
+        )
+        .expect("changed hydration-worker count is nonzero");
         assert_rejected(&changed);
 
         let mut changed = runtime.clone();
         changed.prepared_runtime_cache_capacity = NonZeroUsize::new(
-            soracloud_runtime_defaults::PREPARED_RUNTIME_CACHE_CAPACITY.get() + 1,
+            std::num::NonZeroUsize::new(
+                iroha_config::parameters::defaults::taira::PREPARED_RUNTIME_CACHE_CAPACITY,
+            )
+            .expect("nonzero Taira worker capacity")
+            .get()
+                + 1,
         )
         .expect("changed prepared-runtime capacity is nonzero");
         assert_rejected(&changed);
@@ -819,6 +943,24 @@ mod tests {
             )
         };
         canonical().expect("canonical Taira storage profile");
+        assert_eq!(TAIRA_NEXUS_STORAGE_BUDGET_BYTES_V1, 4 * 1024 * 1024 * 1024);
+        assert_eq!(TAIRA_SORAFS_STORAGE_CAP_BYTES_V1, 2560 * 1024 * 1024);
+        assert!(
+            validate_taira_storage_profile_v1(
+                Some(1024 * 1024 * 1024),
+                Some(1024 * 1024 * 1024),
+                NexusStorageWeights {
+                    kura_blocks_bps: 6_000,
+                    wsv_snapshots_bps: 2_000,
+                    sorafs_bps: 2_000,
+                },
+                Some(214_748_364),
+                false,
+                214_748_364,
+            )
+            .is_err(),
+            "the undersized profile cannot admit the first-release guest"
+        );
 
         assert!(
             validate_taira_storage_profile_v1(
@@ -929,6 +1071,149 @@ mod tests {
             .expect("open consumable signer key")
     }
 
+    fn mint_seed_file(bytes: &[u8]) -> (tempfile::TempDir, std::path::PathBuf) {
+        let directory = tempfile::tempdir().expect("temporary seed directory");
+        let path = directory.path().join("mint-finality.fd199");
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&path)
+            .expect("create seed file");
+        file.write_all(bytes).expect("write seed file");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).expect("protect seed");
+        (directory, path)
+    }
+
+    #[test]
+    fn mint_seed_loader_consumes_exact_private_record_and_preserves_restart_source() {
+        let (directory, source) = mint_seed_file(&[0x61; 32]);
+        let launch = directory.path().join("launch.fd199");
+        fs::copy(&source, &launch).expect("stage seed");
+        let mut child = File::open(&launch).expect("inherited probe");
+        let seed = load_mint_finality_seed_from_file(open_consumable_key_file(&launch))
+            .expect("load independent seed");
+        assert_eq!(*seed, [0x61; 32]);
+        assert_eq!(fs::metadata(source).expect("restart metadata").len(), 32);
+        assert_eq!(fs::metadata(launch).expect("launch metadata").len(), 0);
+        let mut byte = [0_u8; 1];
+        assert_eq!(child.read(&mut byte).expect("probe consumed inode"), 0);
+    }
+
+    #[test]
+    fn mint_seed_loader_rejects_wrong_size_mode_links_and_read_only_descriptors() {
+        for length in [0, 31, 33, 71] {
+            let (_directory, path) = mint_seed_file(&vec![0x62; length]);
+            assert!(matches!(
+                load_mint_finality_seed_from_file(open_consumable_key_file(&path)),
+                Err(TairaRuntimeSignerErrorV1::UntrustedDescriptor)
+            ));
+        }
+        let (directory, path) = mint_seed_file(&[0x62; 32]);
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o640)).expect("weaken seed");
+        assert!(matches!(
+            load_mint_finality_seed_from_file(open_consumable_key_file(&path)),
+            Err(TairaRuntimeSignerErrorV1::UntrustedDescriptor)
+        ));
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).expect("protect seed");
+        let alias = directory.path().join("alias");
+        fs::hard_link(&path, &alias).expect("alias seed");
+        assert!(matches!(
+            load_mint_finality_seed_from_file(open_consumable_key_file(&path)),
+            Err(TairaRuntimeSignerErrorV1::UntrustedDescriptor)
+        ));
+        fs::remove_file(alias).expect("remove alias");
+        assert!(matches!(
+            load_mint_finality_seed_from_file(File::open(path).expect("read-only seed")),
+            Err(TairaRuntimeSignerErrorV1::DescriptorUnavailable)
+        ));
+    }
+
+    fn mint_runtime_roster() -> KagemushaMintFinalityEpochRosterV1 {
+        let mut peers = (1_u8..=4)
+            .map(|index| {
+                PeerId::new(
+                    KeyPair::try_from_seed(vec![index; 32], Algorithm::Ed25519)
+                        .expect("fixture peer")
+                        .public_key()
+                        .clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        peers.sort();
+        KagemushaMintFinalityEpochRosterV1 {
+            version: iroha_data_model::isi::kagemusha_v1::KAGEMUSHA_CHAIN_VERSION_V1,
+            network_id: NetworkId::from_genesis_hash(
+                iroha_crypto::HashOf::<BlockHeader>::from_untyped_unchecked(
+                    iroha_crypto::Hash::new(b"Taira mint seed admission fixture"))),
+            epoch: 0,
+            validators: peers.into_iter().enumerate().map(|(index, validator)| {
+                iroha_core::zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
+                    &[0x70 + u8::try_from(index).expect("four validators"); 32], 0, validator)
+                    .expect("derive private seed fixture public keys")
+            }).collect(),
+        }
+    }
+
+    #[test]
+    fn mint_runtime_binds_only_exact_network_validator_and_private_seed() {
+        let roster = mint_runtime_roster();
+        let local = &roster.validators[1].validator;
+        let authority = bind_taira_mint_finality_authority(
+            roster.network_id,
+            local,
+            &roster,
+            Zeroizing::new([0x71; 32]),
+        )
+        .expect("bind exact runtime seed");
+        assert_eq!(authority.signer().validator_index(), 1);
+        assert_eq!(authority.epoch(), &roster);
+        assert!(
+            bind_taira_mint_finality_authority(
+                roster.network_id,
+                local,
+                &roster,
+                Zeroizing::new([0x72; 32])
+            )
+            .is_err()
+        );
+        let foreign = NetworkId::from_genesis_hash(
+            iroha_crypto::HashOf::<BlockHeader>::from_untyped_unchecked(iroha_crypto::Hash::new(
+                b"another Taira network",
+            )),
+        );
+        assert!(
+            bind_taira_mint_finality_authority(foreign, local, &roster, Zeroizing::new([0x71; 32]))
+                .is_err()
+        );
+        let absent = PeerId::new(
+            KeyPair::try_from_seed(vec![99; 32], Algorithm::Ed25519)
+                .expect("absent fixture peer")
+                .public_key()
+                .clone(),
+        );
+        assert!(
+            bind_taira_mint_finality_authority(
+                roster.network_id,
+                &absent,
+                &roster,
+                Zeroizing::new([0x71; 32])
+            )
+            .is_err()
+        );
+        let mut wrong_epoch = roster.clone();
+        wrong_epoch.epoch = 1;
+        assert!(
+            bind_taira_mint_finality_authority(
+                roster.network_id,
+                local,
+                &wrong_epoch,
+                Zeroizing::new([0x71; 32])
+            )
+            .is_err()
+        );
+    }
+
     #[test]
     fn descriptor_loader_accepts_only_canonical_owner_only_ed25519() {
         let key_pair =
@@ -995,7 +1280,7 @@ mod tests {
     #[test]
     fn descriptor_loader_rejects_noncanonical_or_wrong_algorithm_records() {
         let key_pair =
-            KeyPair::try_from_seed(vec![0x33; 32], Algorithm::Ed25519).expect("Ed25519 key pair");
+            KeyPair::try_from_seed(vec![0xAB; 32], Algorithm::Ed25519).expect("Ed25519 key pair");
         let (_directory, path) = key_file(&key_pair);
         let mut bytes = fs::read(&path).expect("read canonical key");
         let letter = bytes
@@ -1014,6 +1299,24 @@ mod tests {
             Err(TairaRuntimeSignerErrorV1::InvalidKey)
         ));
         assert_eq!(fs::metadata(path).expect("consumed key metadata").len(), 0);
+
+        let wrong_algorithm = KeyPair::try_from_seed(vec![0xBC; 32], Algorithm::Secp256k1)
+            .expect("non-Ed25519 fixture key");
+        let (_directory, path) = key_file(&wrong_algorithm);
+        assert_eq!(
+            fs::metadata(&path).expect("wrong algorithm metadata").len(),
+            TAIRA_RUNTIME_SIGNER_KEY_FILE_BYTES_V1
+        );
+        assert!(matches!(
+            load_key_pair_from_file(open_consumable_key_file(&path)),
+            Err(TairaRuntimeSignerErrorV1::InvalidKey)
+        ));
+        assert_eq!(
+            fs::metadata(path)
+                .expect("consumed wrong algorithm metadata")
+                .len(),
+            0
+        );
     }
 
     #[test]

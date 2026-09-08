@@ -5,6 +5,21 @@ initial fixtures are implemented; **active codec cutover and complete type
 coverage remain pending**. Implementing `NoritoSchema` alone does not change
 existing headers.
 
+The concrete model fixtures now preserve seven owned records and two
+encoding-only projections: Action, DataEvent, the three execution contexts,
+block subscriptions/messages, the block-send adapter and reputation event-ID
+material. Their 52 root/container frames and three adapter projections are
+documented in
+[`model_concrete_identity_frames.md`](../crates/iroha_data_model/tests/fixtures/model_concrete_identity_frames.md).
+The borrowed adapters retain their owning decoders and exact projected bytes.
+
+DataEvent assigns explicit wire discriminants to all variants. Governance
+reserves 19 even when disabled; Social, Bridge and GameSession retain 20, 21
+and 22. A normal-dependency consumer exposed GameSession shifting to 21 when
+governance was disabled. The canonical fixture remains the governance-enabled
+capture, shared by every feature selection for common variants; disabled
+capabilities reject their reserved variant. No alternate old tags are accepted.
+
 ## One identity contract
 
 `norito::NoritoSchema` declares a nominal name and its single root-frame
@@ -31,10 +46,15 @@ modules retained by `iroha_data_model_derive/src/model.rs`.
 
 ## Final trait and framing boundary
 
-The existing serializer is used as `dyn NoritoSerialize` in Norito's bounded
-writers (`core.rs:2219`, `2240`, `2496`, `4259–4293`) and in model/Core borrowed
-field serializers. Adding the current static identity trait as a supertrait
-would break object safety. The reviewed atomic transition is:
+`SerializePayload` now owns object-safe serialization and encoded-size methods.
+Bounded writers, packed fields and borrowed model/Core adapters use that
+contract. Bare `Encode` and sequence containers accept payload-only children;
+framed writers retain `NoritoSerialize`. The typed derive emits both contracts,
+while `#[derive(SerializePayload)]` emits only payload serialization and rejects
+frame-schema attributes. Manual implementations and qualified calls use the
+same ownership boundary; no old payload-method alias remains.
+
+The remaining atomic identity transition is:
 
 1. `SerializePayload` owns object-safe serialization and encoded-size methods.
 2. `NoritoSerialize: SerializePayload + NoritoSchema` is the typed contract,
@@ -49,6 +69,12 @@ would break object safety. The reviewed atomic transition is:
 This keeps allocation-conscious bare streaming while preventing a type without
 an identity from entering a typed frame. `schema-structural` remains explicit
 inspection data, not a feature-selected active header digest.
+
+Until that transition, the active typed codec directions retain their existing
+`schema_hash` implementations. They are not yet bound to `NoritoSchema`.
+Bare canonical field decoding and `Decode` still carry typed serializer bounds;
+their re-encoding requirements must move to payload ownership during the
+coordinated identity cutover, preserving all canonical byte comparisons.
 
 ## Source review queue
 
@@ -269,6 +295,26 @@ payloads, with JSON and frame roundtrips. Coverage includes both alias scopes,
 optional anchors and all query-filter enum variants; the focused query suite
 passes 28 tests. The [query capture record](../crates/iroha_data_model/tests/fixtures/query_generated_identity_frames.md)
 records immutable fixture and pre-declaration source digests.
+
+The [generic query captures](../crates/iroha_data_model/tests/fixtures/query_generic_identity_frames.md)
+add 96 default-feature and 116 `ids_projection` frames. Five generic owners,
+four concrete query records and two typed-hash markers now declare their
+captured nominal identities. Permanent tests preserve complete frames, marker
+composition and membership decode budgets. The default query selection passes
+202 tests and `ids_projection` passes 203, with zero failures or ignored tests
+and 5,109 unchanged selected inputs in each run. Active codec dispatch and
+schema export behavior remain unchanged.
+
+The [generic model fixtures](../crates/iroha_data_model/tests/fixtures/model_generic_identity_frames.md)
+preserve another 68 complete frames and five actual FHE signing preimages.
+MetadataChanged, Validate and Mismatch compose captured nominal argument names;
+six concrete argument owners and the borrowed FHE preimage now declare their
+identities. InstructionBox preserves its existing root projection to the wire-ID
+and framed-payload pair while containers retain its nominal instruction identity.
+The FHE helper exposes encoding only; its unusable borrowed Decode derive is
+removed. All five model and four adjacent query identity tests pass on a rebuilt
+default-feature artifact with 5,613 selected inputs unchanged. These checks do
+not qualify other features or change active framing dispatch.
 
 The 62 generated privacy/spentness carriers have a separate
 [capture record](../crates/iroha_data_model/tests/fixtures/privacy_generated_identity_frames.md)

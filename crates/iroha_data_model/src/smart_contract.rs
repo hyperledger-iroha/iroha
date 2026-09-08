@@ -13,6 +13,49 @@ use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use std::{format, str::FromStr, string::String, vec::Vec};
 use thiserror::Error;
+/// Domain separator for the canonical deployable contract artifact hash.
+///
+/// The hash deliberately covers the complete `.to` image, including the fixed
+/// execution header. Contract debug information belongs in a sidecar and is
+/// therefore not part of a deployable artifact.
+pub const CONTRACT_CODE_HASH_DOMAIN: &[u8] = b"iroha:ivm:contract-artifact:v1\0";
+/// Compute the canonical identity of a deployable IVM contract artifact.
+///
+/// This binds every execution-relevant header field as well as embedded
+/// interface metadata, literals, and code. Hashing alone does not validate
+/// artifact structure, ABI compatibility, or execution admission.
+#[must_use]
+pub fn contract_code_hash(artifact: &[u8]) -> iroha_crypto::Hash {
+    iroha_crypto::Hash::new_from_chunks(&[CONTRACT_CODE_HASH_DOMAIN, artifact])
+}
+#[cfg(test)]
+mod contract_code_hash_tests {
+    use super::{CONTRACT_CODE_HASH_DOMAIN, contract_code_hash};
+    use iroha_crypto::Hash;
+
+    #[test]
+    fn contract_code_hash_uses_the_exact_domain_and_complete_image() {
+        let mut artifact = b"IVM\0header-and-contract-body".to_vec();
+        let original = contract_code_hash(&artifact);
+        assert_eq!(
+            CONTRACT_CODE_HASH_DOMAIN,
+            b"iroha:ivm:contract-artifact:v1\0"
+        );
+        assert_eq!(
+            original,
+            Hash::new_from_chunks(&[CONTRACT_CODE_HASH_DOMAIN, &artifact])
+        );
+        assert_ne!(original, Hash::new(&artifact));
+        for index in [0, artifact.len() - 1] {
+            artifact[index] ^= 1;
+            assert_ne!(contract_code_hash(&artifact), original);
+            artifact[index] ^= 1;
+        }
+        assert_eq!(contract_code_hash(&artifact), original);
+        artifact.push(0);
+        assert_ne!(contract_code_hash(&artifact), original);
+    }
+}
 pub mod payloads {
     //! Contexts with function arguments for different entrypoints
     use crate::{block::BlockHeader, prelude::*};
@@ -23,6 +66,8 @@ pub mod payloads {
     /// Context for smart contract entrypoint
     #[derive(Debug, Clone, Encode, Decode)]
     #[norito(decode_from_slice)]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::smart_contract::payloads::SmartContractContext")]
     pub struct SmartContractContext {
         /// Account that submitted the transaction containing the smart contract
         pub authority: AccountId,
@@ -32,6 +77,8 @@ pub mod payloads {
     /// Context for trigger entrypoint
     #[derive(Debug, Clone, Encode, Decode)]
     #[norito(decode_from_slice)]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::smart_contract::payloads::TriggerContext")]
     pub struct TriggerContext {
         /// Id of this trigger
         pub id: TriggerId,
@@ -45,6 +92,8 @@ pub mod payloads {
     /// Context for migrate entrypoint
     #[derive(Debug, Clone, Encode, Decode)]
     #[norito(decode_from_slice)]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::smart_contract::payloads::ExecutorContext")]
     pub struct ExecutorContext {
         /// Account that is executing the operation
         pub authority: AccountId,
@@ -52,7 +101,8 @@ pub mod payloads {
         pub curr_block: BlockHeader,
     }
     /// Generic payload for `validate_*()` entrypoints of executor.
-    #[derive(Debug, Clone, Encode, Decode)]
+    #[derive(Debug, Clone, Encode, Decode, norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::smart_contract::payloads::Validate")]
     pub struct Validate<T> {
         /// Context of the executor
         pub context: ExecutorContext,
@@ -570,15 +620,16 @@ impl AsRef<str> for ContractAlias {
         self.0.as_ref()
     }
 }
-impl norito::core::NoritoSerialize for ContractAlias {
+impl norito::core::NoritoSerialize for ContractAlias {}
+impl norito::core::SerializePayload for ContractAlias {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
-        <&str as norito::core::NoritoSerialize>::serialize(&self.as_ref(), writer)
+        <&str as norito::core::SerializePayload>::serialize(&self.as_ref(), writer)
     }
     fn encoded_len_hint(&self) -> Option<usize> {
-        <&str as norito::core::NoritoSerialize>::encoded_len_hint(&self.as_ref())
+        <&str as norito::core::SerializePayload>::encoded_len_hint(&self.as_ref())
     }
     fn encoded_len_exact(&self) -> Option<usize> {
-        <&str as norito::core::NoritoSerialize>::encoded_len_exact(&self.as_ref())
+        <&str as norito::core::SerializePayload>::encoded_len_exact(&self.as_ref())
     }
 }
 impl<'a> norito::core::NoritoDeserialize<'a> for ContractAlias {
@@ -750,15 +801,16 @@ impl AsRef<str> for ContractAddress {
         &self.0
     }
 }
-impl norito::core::NoritoSerialize for ContractAddress {
+impl norito::core::NoritoSerialize for ContractAddress {}
+impl norito::core::SerializePayload for ContractAddress {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
-        <&str as norito::core::NoritoSerialize>::serialize(&self.as_ref(), writer)
+        <&str as norito::core::SerializePayload>::serialize(&self.as_ref(), writer)
     }
     fn encoded_len_hint(&self) -> Option<usize> {
-        <&str as norito::core::NoritoSerialize>::encoded_len_hint(&self.as_ref())
+        <&str as norito::core::SerializePayload>::encoded_len_hint(&self.as_ref())
     }
     fn encoded_len_exact(&self) -> Option<usize> {
-        <&str as norito::core::NoritoSerialize>::encoded_len_exact(&self.as_ref())
+        <&str as norito::core::SerializePayload>::encoded_len_exact(&self.as_ref())
     }
 }
 impl<'a> norito::core::NoritoDeserialize<'a> for ContractAddress {

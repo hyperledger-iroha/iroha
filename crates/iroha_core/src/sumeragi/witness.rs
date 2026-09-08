@@ -13,8 +13,9 @@ use iroha_data_model::{
     asset::{AssetDefinitionId, AssetId},
     block::consensus::{ExecKv, ExecWitness},
     domain::DomainId,
+    execution_witness::ExecutionWitnessKeyTagV1,
     fastpq::{TransferTranscript, TransferTranscriptBundle},
-    isi::{KAGEMUSHA_RESERVE_RECEIPT_WITNESS_KEY_TAG_V1, KagemushaReserveReceiptV1},
+    isi::KagemushaReserveReceiptV1,
     name::Name,
     nft::NftId,
 };
@@ -25,11 +26,16 @@ use std::{
     collections::BTreeMap,
     marker::PhantomData,
     rc::Rc,
-    sync::{Mutex, MutexGuard, OnceLock},
+    sync::{Arc, Mutex, MutexGuard, OnceLock},
 };
+/// One local capture identity; its strong references prevent reuse while an old overlay exists.
+/// This token never enters witness bytes, hashes, logs or protocol identifiers.
+struct RecorderGeneration;
+
 #[derive(Default)]
 struct BlockWitness {
     active: bool,
+    generation: Option<Arc<RecorderGeneration>>,
     reads: BTreeMap<Vec<u8>, Vec<u8>>,  // key -> value (pre)
     writes: BTreeMap<Vec<u8>, Vec<u8>>, // key -> value (post; empty for delete)
     fastpq_transcripts: BTreeMap<Hash, Vec<TransferTranscript>>,
@@ -80,6 +86,9 @@ impl ExecWitnessOverlay {
         }
         self.finished = true;
         let commit = commit && !witness_recording_suppressed();
+        // Commit follows the same SLOT -> TLS order as recording and overlay creation.
+        // Rollback only pops TLS and cannot publish into any capture generation.
+        let mut witness = commit.then(lock_slot);
         let frame_for_block = EXEC_WITNESS_OVERLAYS.with(|overlays| {
             let mut overlays = overlays.borrow_mut();
             assert_eq!(
@@ -90,7 +99,10 @@ impl ExecWitnessOverlay {
             let frame = overlays
                 .pop()
                 .expect("execution-witness overlay stack must contain the active guard");
-            if !commit {
+            let Some(witness) = witness.as_deref() else {
+                return None;
+            };
+            if !witness.active || !same_recorder_generation(witness, &frame.witness) {
                 return None;
             }
             if let Some(parent) = overlays.last_mut() {
@@ -101,10 +113,12 @@ impl ExecWitnessOverlay {
             }
         });
         if let Some(frame) = frame_for_block {
-            let mut witness = lock_slot();
-            if witness.active {
-                merge_overlay_into_witness(&mut witness, frame);
-            }
+            merge_overlay_into_witness(
+                witness
+                    .as_deref_mut()
+                    .expect("committing overlay must hold SLOT"),
+                frame,
+            );
         }
     }
 }
@@ -135,11 +149,22 @@ impl Drop for WitnessRecordingSuppressionGuard {
 fn witness_recording_suppressed() -> bool {
     WITNESS_RECORDING_SUPPRESSION_DEPTH.with(|depth| depth.get() != 0)
 }
+/// Absent identities never match, including two overlays opened outside a capture.
+fn same_recorder_generation(left: &BlockWitness, right: &BlockWitness) -> bool {
+    match (&left.generation, &right.generation) {
+        (Some(left), Some(right)) => Arc::ptr_eq(left, right),
+        _ => false,
+    }
+}
+
 fn merge_witness_records(
     target: &mut BlockWitness,
     source: BlockWitness,
     replaces_fastpq_transcripts: bool,
-) {
+) -> bool {
+    if !same_recorder_generation(target, &source) {
+        return false;
+    }
     for (key, value) in source.reads {
         target.reads.entry(key).or_insert(value);
     }
@@ -155,27 +180,47 @@ fn merge_witness_records(
                 .append(&mut transcripts);
         }
     }
+    true
 }
 fn merge_overlay_frame(target: &mut WitnessOverlayFrame, source: WitnessOverlayFrame) {
     let replaces_fastpq_transcripts = source.replaces_fastpq_transcripts;
-    merge_witness_records(
+    if merge_witness_records(
         &mut target.witness,
         source.witness,
         replaces_fastpq_transcripts,
-    );
-    target.replaces_fastpq_transcripts |= replaces_fastpq_transcripts;
+    ) {
+        target.replaces_fastpq_transcripts |= replaces_fastpq_transcripts;
+    }
 }
 fn merge_overlay_into_witness(target: &mut BlockWitness, source: WitnessOverlayFrame) {
-    merge_witness_records(target, source.witness, source.replaces_fastpq_transcripts);
+    if target.active {
+        merge_witness_records(target, source.witness, source.replaces_fastpq_transcripts);
+    }
 }
 /// Begin a transaction-local execution-witness overlay on the current thread.
 ///
 /// Records are merged into the active block witness only after
 /// [`ExecWitnessOverlay::commit`]. Dropping the returned guard rolls them back.
+/// An overlay keeps the capture identity present at creation. Nested overlays inherit
+/// their parent's identity even when it is absent or stale; they never bind to a later block.
 pub(crate) fn begin_exec_witness_overlay() -> ExecWitnessOverlay {
+    let witness = lock_slot();
     let depth = EXEC_WITNESS_OVERLAYS.with(|overlays| {
         let mut overlays = overlays.borrow_mut();
-        overlays.push(WitnessOverlayFrame::default());
+        let generation = if let Some(parent) = overlays.last() {
+            parent.witness.generation.clone()
+        } else if witness.active {
+            witness.generation.clone()
+        } else {
+            None
+        };
+        overlays.push(WitnessOverlayFrame {
+            witness: BlockWitness {
+                generation,
+                ..BlockWitness::default()
+            },
+            replaces_fastpq_transcripts: false,
+        });
         overlays.len()
     });
     ExecWitnessOverlay {
@@ -244,8 +289,13 @@ fn with_active_slot(f: impl FnOnce(&mut BlockWitness)) {
         let Some(overlay) = overlays.last_mut() else {
             return false;
         };
-        f.take()
-            .expect("witness recorder closure must be available")(&mut overlay.witness);
+        if same_recorder_generation(&g, &overlay.witness) {
+            f.take()
+                .expect("witness recorder closure must be available")(
+                &mut overlay.witness
+            );
+        }
+        // A stale overlay consumes this operation. It must never fall through to the global slot.
         true
     });
     if !recorded_in_overlay {
@@ -255,11 +305,16 @@ fn with_active_slot(f: impl FnOnce(&mut BlockWitness)) {
 fn clear_block() {
     let mut g = lock_slot();
     g.active = false;
+    g.generation = None;
     g.reads.clear();
     g.writes.clear();
     g.fastpq_transcripts.clear();
 }
 /// Hold exclusive access to the global witness recorder for the duration of a block execution.
+///
+/// Join every execution worker before draining, clearing or starting another capture. Generation
+/// checks reject stale scoped overlays; direct writes from workers without overlays still rely
+/// on this caller-owned completion rule and are not authenticated by a worker-local token.
 pub fn exec_witness_guard() -> ExecWitnessGuard {
     ExecWitnessGuard {
         _guard: lock_exec_witness_lock(),
@@ -269,6 +324,7 @@ pub fn exec_witness_guard() -> ExecWitnessGuard {
 pub fn start_block() {
     let mut g = lock_slot();
     g.active = true;
+    g.generation = Some(Arc::new(RecorderGeneration));
     g.reads.clear();
     g.writes.clear();
     g.fastpq_transcripts.clear();
@@ -293,6 +349,7 @@ pub fn drain_exec_witness() -> ExecWitness {
     g.reads.clear();
     g.writes.clear();
     g.active = false;
+    g.generation = None;
     let mut fastpq_map = std::mem::take(&mut g.fastpq_transcripts);
     crate::fastpq::finalize_transfer_transcript_digests_in_map(&mut fastpq_map);
     let fastpq_transcripts = map_to_bundles(fastpq_map);
@@ -303,6 +360,103 @@ pub fn drain_exec_witness() -> ExecWitness {
         fastpq_batches: Vec::new(),
     }
 }
+/// Reset a checked capture while SLOT is still held, including validator unwinding.
+struct CheckedCaptureReset<'a> {
+    witness: &'a mut BlockWitness,
+}
+impl Drop for CheckedCaptureReset<'_> {
+    fn drop(&mut self) {
+        *self.witness = BlockWitness::default();
+    }
+}
+
+/// Drain only the exact ordinary witness content accepted by its execution owner.
+///
+/// This is a first-capture operation and requires an active global recorder.
+/// Call while holding [`ExecWitnessGuard`] after execution workers and their
+/// overlays have completed. The validator borrows the raw transcript map under
+/// the recorder lock before any digest repair or read/write copying. It must not
+/// call recorder APIs, which acquire that same lock. Accepted digest options,
+/// transcript grouping/order and private paths are preserved without repair.
+///
+/// Any current-thread overlay is rejected, including an empty one. Rejection
+/// clears and deactivates the global recorder directly while holding its lock.
+/// Unwinding from the validator also resets the recorder before unlocking, even if
+/// an outer caller catches the panic while retaining its exclusive execution guard.
+/// Overlay guards remain intact so their normal last-in, first-out cleanup works.
+/// Finish or drop every outstanding overlay before starting another capture.
+/// Other threads' overlay lifetimes remain the execution owner's responsibility.
+///
+/// # Errors
+/// Returns the validator's error unchanged, or rejects an inactive recorder or
+/// pending current-thread overlay before invoking the validator. Rejected records
+/// cannot be drained or extended until a new block capture is started.
+pub(crate) fn drain_exec_witness_checked(
+    validate: impl FnOnce(&BTreeMap<Hash, Vec<TransferTranscript>>) -> Result<(), String>,
+) -> Result<ExecWitness, String> {
+    let mut g = lock_slot();
+    let record = {
+        // This borrow drops before the mutex guard. It also clears a capture when the
+        // validator unwinds and an outer caller catches that panic without dropping its
+        // exclusive execution guard. A stale overlay keeps only its invalidated token.
+        let reset = CheckedCaptureReset { witness: &mut g };
+        if EXEC_WITNESS_OVERLAYS.with(|overlays| !overlays.borrow().is_empty()) {
+            return Err("ordinary witness capture has a pending current-thread overlay".to_owned());
+        }
+        if !reset.witness.active {
+            return Err("ordinary witness capture has no active global recorder".to_owned());
+        }
+        validate(&reset.witness.fastpq_transcripts)?;
+        std::mem::take(&mut *reset.witness)
+    };
+    let reads = record
+        .reads
+        .into_iter()
+        .map(|(key, value)| ExecKv { key, value })
+        .collect();
+    let writes = record
+        .writes
+        .into_iter()
+        .map(|(key, value)| ExecKv { key, value })
+        .collect();
+    let fastpq_transcripts = map_to_bundles(record.fastpq_transcripts);
+    Ok(ExecWitness {
+        reads,
+        writes,
+        fastpq_transcripts,
+        fastpq_batches: Vec::new(),
+    })
+}
+
+/// Confirm that an already-captured witness has no later recorder activity.
+///
+/// Call after independently checking the retained witness content and ownership.
+/// An intact cached capture has an inactive recorder with no reads, writes,
+/// FASTPQ transcripts or current-thread overlays. Any other state is discarded
+/// and deactivated directly under the same recorder lock. This does not perform
+/// another first capture or repair any transcript digest.
+///
+/// # Errors
+/// Rejects an active recorder, unexpected records or a pending current-thread
+/// overlay. Overlay guards must finish before the caller starts another capture.
+pub(crate) fn finish_cached_exec_witness_capture() -> Result<(), String> {
+    let mut g = lock_slot();
+    let error = if EXEC_WITNESS_OVERLAYS.with(|overlays| !overlays.borrow().is_empty()) {
+        Some("cached witness capture has a pending current-thread overlay")
+    } else if g.active {
+        Some("cached witness capture has an unexpected active global recorder")
+    } else if !g.reads.is_empty() || !g.writes.is_empty() || !g.fastpq_transcripts.is_empty() {
+        Some("cached witness capture has unexpected recorder contents")
+    } else {
+        None
+    };
+    if let Some(error) = error {
+        *g = BlockWitness::default();
+        return Err(error.to_owned());
+    }
+    Ok(())
+}
+
 fn map_to_bundles(map: BTreeMap<Hash, Vec<TransferTranscript>>) -> Vec<TransferTranscriptBundle> {
     map.into_iter()
         .map(|(entry_hash, transcripts)| TransferTranscriptBundle {
@@ -325,35 +479,51 @@ fn map_ref_to_bundles(
 fn key_sep() -> u8 {
     0x1F // Unit Separator
 }
-fn enc_key_prefix(tag: u8, a: &str, b: &str) -> Vec<u8> {
+fn enc_key_prefix(tag: ExecutionWitnessKeyTagV1, a: &str, b: &str) -> Vec<u8> {
     let mut out = Vec::with_capacity(1 + a.len() + 1 + b.len());
-    out.push(tag);
+    out.push(tag as u8);
     out.extend_from_slice(a.as_bytes());
     out.push(key_sep());
     out.extend_from_slice(b.as_bytes());
     out
 }
 fn key_account_kv(id: &AccountId, key: &Name) -> Vec<u8> {
-    enc_key_prefix(0xA1, &id.to_string(), key.as_ref())
+    enc_key_prefix(
+        ExecutionWitnessKeyTagV1::AccountMetadata,
+        &id.to_string(),
+        key.as_ref(),
+    )
 }
 fn key_domain_kv(id: &DomainId, key: &Name) -> Vec<u8> {
-    enc_key_prefix(0xA2, &id.to_string(), key.as_ref())
+    enc_key_prefix(
+        ExecutionWitnessKeyTagV1::DomainMetadata,
+        &id.to_string(),
+        key.as_ref(),
+    )
 }
 fn key_nft_kv(id: &NftId, key: &Name) -> Vec<u8> {
-    enc_key_prefix(0xA3, &id.to_string(), key.as_ref())
+    enc_key_prefix(
+        ExecutionWitnessKeyTagV1::NftMetadata,
+        &id.to_string(),
+        key.as_ref(),
+    )
 }
 fn key_asset_def_kv(id: &AssetDefinitionId, key: &Name) -> Vec<u8> {
-    enc_key_prefix(0xA4, &id.to_string(), key.as_ref())
+    enc_key_prefix(
+        ExecutionWitnessKeyTagV1::AssetDefinitionMetadata,
+        &id.to_string(),
+        key.as_ref(),
+    )
 }
 fn key_asset_balance(id: &AssetId) -> Vec<u8> {
     let mut out = Vec::with_capacity(1 + id.to_string().len());
-    out.push(0xB1);
+    out.push(ExecutionWitnessKeyTagV1::AssetBalance as u8);
     out.extend_from_slice(id.to_string().as_bytes());
     out
 }
 fn key_asset_def_total(id: &AssetDefinitionId) -> Vec<u8> {
     let mut out = Vec::with_capacity(1 + id.to_string().len());
-    out.push(0xB2);
+    out.push(ExecutionWitnessKeyTagV1::AssetDefinitionTotalSupply as u8);
     out.extend_from_slice(id.to_string().as_bytes());
     out
 }
@@ -484,10 +654,8 @@ pub fn record_write_asset_def_total(id: &AssetDefinitionId, val: &Quantity) {
 }
 /// Return the exact execution-witness key for one pooled Kagemusha V1 receipt.
 pub(crate) fn kagemusha_reserve_receipt_witness_key_v1(operation_id: [u8; 32]) -> Vec<u8> {
-    let mut key = Vec::with_capacity(33);
-    key.push(KAGEMUSHA_RESERVE_RECEIPT_WITNESS_KEY_TAG_V1);
-    key.extend_from_slice(&operation_id);
-    key
+    iroha_data_model::execution_witness::kagemusha_reserve_receipt_witness_key_v1(operation_id)
+        .to_vec()
 }
 /// Record the pre-state receipt bytes, or canonical absence, for one V1 operation.
 pub(crate) fn record_read_kagemusha_reserve_receipt_v1(
@@ -541,8 +709,11 @@ pub(crate) fn synchronize_fastpq_transcripts(finalized: &BTreeMap<Hash, Vec<Tran
         let Some(overlay) = overlays.last_mut() else {
             return false;
         };
-        overlay.witness.fastpq_transcripts.clone_from(finalized);
-        overlay.replaces_fastpq_transcripts = true;
+        if same_recorder_generation(&witness, &overlay.witness) {
+            overlay.witness.fastpq_transcripts.clone_from(finalized);
+            overlay.replaces_fastpq_transcripts = true;
+        }
+        // Discard stale replacement, including an empty map, without a global fallback.
         true
     });
     if !synchronized_overlay {
@@ -672,7 +843,11 @@ pub fn record_read_from_access_key(state_block: &StateBlock<'_>, access_key: &st
                     .world
                     .account_roles_iter(&acc)
                     .any(|r| r == &role);
-                let k = enc_key_prefix(0xC1, &acc.to_string(), &role.to_string());
+                let k = enc_key_prefix(
+                    ExecutionWitnessKeyTagV1::AccountRoleBinding,
+                    &acc.to_string(),
+                    &role.to_string(),
+                );
                 let v = Json::new(present).get().as_bytes().to_vec();
                 with_active_slot(|g| {
                     g.reads.entry(k).or_insert(v);
@@ -684,7 +859,7 @@ pub fn record_read_from_access_key(state_block: &StateBlock<'_>, access_key: &st
         if let Ok(role) = iroha_data_model::role::RoleId::from_str(rest) {
             let present = state_block.world.roles().get(&role).is_some();
             let mut out = Vec::with_capacity(1 + rest.len());
-            out.push(0xC2);
+            out.push(ExecutionWitnessKeyTagV1::Role as u8);
             out.extend_from_slice(rest.as_bytes());
             let v = Json::new(present).get().as_bytes().to_vec();
             with_active_slot(|g| {
@@ -704,7 +879,11 @@ pub fn record_read_from_access_key(state_block: &StateBlock<'_>, access_key: &st
                 .ok()
                 .is_some_and(|mut it| it.any(|p| p.name() == perm_s));
             let canonical_account = acc.to_string();
-            let k = enc_key_prefix(0xC3, &canonical_account, perm_s);
+            let k = enc_key_prefix(
+                ExecutionWitnessKeyTagV1::AccountPermission,
+                &canonical_account,
+                perm_s,
+            );
             let v = Json::new(present).get().as_bytes().to_vec();
             with_active_slot(|g| {
                 g.reads.entry(k).or_insert(v);
@@ -722,7 +901,7 @@ pub fn record_read_from_access_key(state_block: &StateBlock<'_>, access_key: &st
                 .role(&role_id)
                 .ok()
                 .is_some_and(|r| r.permissions().any(|p| p.name() == perm_s));
-            let k = enc_key_prefix(0xC4, role_s, perm_s);
+            let k = enc_key_prefix(ExecutionWitnessKeyTagV1::RolePermission, role_s, perm_s);
             let v = Json::new(present).get().as_bytes().to_vec();
             with_active_slot(|g| {
                 g.reads.entry(k).or_insert(v);
@@ -774,6 +953,10 @@ pub fn snapshot_exec_witness() -> ExecWitness {
         fastpq_batches: Vec::new(),
     }
 }
+#[cfg(test)]
+mod checked_tests;
+#[cfg(test)]
+mod generation_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -846,7 +1029,11 @@ mod tests {
             .expect("missing nft id");
         let role: RoleId = "auditor".parse().expect("role id");
         let unicode_role_raw = String::from("cafe\u{301}");
-        let unicode_role: RoleId = unicode_role_raw.parse().expect("unicode role id");
+        let unicode_role: RoleId = "café".parse().expect("canonical Unicode role id");
+        assert!(
+            unicode_role_raw.parse::<RoleId>().is_err(),
+            "non-NFC role spellings must remain invalid"
+        );
         let account_perm = "can_account_read";
         let role_perm = "can_role_read";
         let mut account_metadata = metadata_entry("color", "red");
@@ -1136,7 +1323,7 @@ mod tests {
         assert_read_value(
             &witness,
             enc_key_prefix(
-                0xC1,
+                ExecutionWitnessKeyTagV1::AccountRoleBinding,
                 &fixture.account.to_string(),
                 &fixture.role.to_string(),
             ),
@@ -1145,7 +1332,7 @@ mod tests {
         assert_read_value(
             &witness,
             enc_key_prefix(
-                0xC1,
+                ExecutionWitnessKeyTagV1::AccountRoleBinding,
                 &fixture.account.to_string(),
                 &missing_role.to_string(),
             ),
@@ -1159,22 +1346,38 @@ mod tests {
         assert_read_value(&witness, missing_role_key, bool_json_bytes(false));
         assert_read_value(
             &witness,
-            enc_key_prefix(0xC3, &fixture.account.to_string(), fixture.account_perm),
+            enc_key_prefix(
+                ExecutionWitnessKeyTagV1::AccountPermission,
+                &fixture.account.to_string(),
+                fixture.account_perm,
+            ),
             bool_json_bytes(true),
         );
         assert_read_value(
             &witness,
-            enc_key_prefix(0xC3, &fixture.account.to_string(), "can_missing"),
+            enc_key_prefix(
+                ExecutionWitnessKeyTagV1::AccountPermission,
+                &fixture.account.to_string(),
+                "can_missing",
+            ),
             bool_json_bytes(false),
         );
         assert_read_value(
             &witness,
-            enc_key_prefix(0xC4, &fixture.role.to_string(), fixture.role_perm),
+            enc_key_prefix(
+                ExecutionWitnessKeyTagV1::RolePermission,
+                &fixture.role.to_string(),
+                fixture.role_perm,
+            ),
             bool_json_bytes(true),
         );
         assert_read_value(
             &witness,
-            enc_key_prefix(0xC4, &fixture.role.to_string(), "can_missing"),
+            enc_key_prefix(
+                ExecutionWitnessKeyTagV1::RolePermission,
+                &fixture.role.to_string(),
+                "can_missing",
+            ),
             bool_json_bytes(false),
         );
         assert_read_value(
@@ -1214,6 +1417,11 @@ mod tests {
             format!("perm.account:{}", fixture.account),
             format!("perm.role:{}", fixture.role),
             String::from("account.detail:not_an_account:color"),
+            format!("account.detail: {} :color", fixture.account),
+            format!(
+                "perm.account: {} :{}",
+                fixture.account, fixture.account_perm
+            ),
             String::from("domain.detail:not_a_domain:region"),
             String::from("asset_def.detail:not_an_asset_definition:issuer"),
             String::from("nft.detail:not_an_nft:artist"),
@@ -1221,6 +1429,15 @@ mod tests {
             String::from("role:bad role"),
             String::from("perm.account:not_an_account:can_account_read"),
             String::from("perm.role:bad role:can_role_read"),
+            format!("role:{}", fixture.unicode_role_raw),
+            format!(
+                "role.binding:{}:{}",
+                fixture.account, fixture.unicode_role_raw
+            ),
+            format!(
+                "perm.role:{}:{}",
+                fixture.unicode_role_raw, fixture.role_perm
+            ),
             String::from("asset:not_an_asset"),
             String::from("asset_def:not_an_asset_definition"),
             format!("account.detail:{}:bad key", fixture.account),
@@ -1247,14 +1464,11 @@ mod tests {
         let issuer = "issuer".parse::<Name>().expect("metadata key");
         record_read_from_access_key(
             &state_block,
-            &format!("account.detail: {} :color", fixture.account),
+            &format!("account.detail:{}:color", fixture.account),
         );
         record_read_from_access_key(
             &state_block,
-            &format!(
-                "perm.account: {} :{}",
-                fixture.account, fixture.account_perm
-            ),
+            &format!("perm.account:{}:{}", fixture.account, fixture.account_perm),
         );
         record_read_from_access_key(
             &state_block,
@@ -1270,10 +1484,7 @@ mod tests {
         );
         record_read_from_access_key(
             &state_block,
-            &format!(
-                "perm.role:{}:{}",
-                fixture.unicode_role_raw, fixture.role_perm
-            ),
+            &format!("perm.role:{}:{}", fixture.unicode_role, fixture.role_perm),
         );
         let witness = drain_exec_witness();
         drop(guard);
@@ -1285,17 +1496,25 @@ mod tests {
         );
         assert_no_read_key(
             &witness,
-            enc_key_prefix(0xA1, &format!(" {} ", fixture.account), color.as_ref()),
+            enc_key_prefix(
+                ExecutionWitnessKeyTagV1::AccountMetadata,
+                &format!(" {} ", fixture.account),
+                color.as_ref(),
+            ),
         );
         assert_read_value(
             &witness,
-            enc_key_prefix(0xC3, &fixture.account.to_string(), fixture.account_perm),
+            enc_key_prefix(
+                ExecutionWitnessKeyTagV1::AccountPermission,
+                &fixture.account.to_string(),
+                fixture.account_perm,
+            ),
             bool_json_bytes(true),
         );
         assert_no_read_key(
             &witness,
             enc_key_prefix(
-                0xC3,
+                ExecutionWitnessKeyTagV1::AccountPermission,
                 &format!(" {} ", fixture.account),
                 fixture.account_perm,
             ),
@@ -1314,7 +1533,7 @@ mod tests {
         assert_read_value(
             &witness,
             enc_key_prefix(
-                0xC1,
+                ExecutionWitnessKeyTagV1::AccountRoleBinding,
                 &fixture.account.to_string(),
                 &fixture.role.to_string(),
             ),
@@ -1326,12 +1545,20 @@ mod tests {
         assert_no_read_key(&witness, role_fallthrough_key);
         assert_read_value(
             &witness,
-            enc_key_prefix(0xC4, &fixture.unicode_role_raw, fixture.role_perm),
+            enc_key_prefix(
+                ExecutionWitnessKeyTagV1::RolePermission,
+                &fixture.unicode_role.to_string(),
+                fixture.role_perm,
+            ),
             bool_json_bytes(true),
         );
         assert_no_read_key(
             &witness,
-            enc_key_prefix(0xC4, &fixture.unicode_role.to_string(), fixture.role_perm),
+            enc_key_prefix(
+                ExecutionWitnessKeyTagV1::RolePermission,
+                &fixture.unicode_role_raw,
+                fixture.role_perm,
+            ),
         );
     }
     #[test]
@@ -1427,7 +1654,10 @@ mod tests {
         };
         let key = kagemusha_reserve_receipt_witness_key_v1(operation_id);
         assert_eq!(key.len(), 33);
-        assert_eq!(key[0], KAGEMUSHA_RESERVE_RECEIPT_WITNESS_KEY_TAG_V1);
+        assert_eq!(
+            key[0],
+            ExecutionWitnessKeyTagV1::KagemushaReserveReceipt as u8
+        );
         assert_eq!(&key[1..], operation_id.as_slice());
         record_read_kagemusha_reserve_receipt_v1(operation_id, None);
         record_write_kagemusha_reserve_receipt_v1(&receipt).expect("encode receipt");

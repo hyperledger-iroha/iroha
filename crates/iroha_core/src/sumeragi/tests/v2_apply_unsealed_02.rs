@@ -382,16 +382,14 @@ fn native_amx_receipts_for_apply_fixture(
         source_ids[0],
         entrypoint_hashes[0],
         NativeAmxPhase::Prepare,
-        HashOf::from_untyped_unchecked(Hash::prehashed([0; Hash::LENGTH])),
+        Hash::prehashed([0; Hash::LENGTH]),
     );
     let participant_settlement = settlement_template
-        .computed_grouped_participant_settlement(&source_ids)
+        .computed_grouped_participant_settlement(None, &source_ids)
         .expect("derive exact two-source participant settlement");
-    let participant_settlement_hash =
-        iroha_data_model::block::consensus::compute_native_amx_participant_settlement_hash(
-            &participant_settlement,
-        )
-        .expect("fixture participant settlement encodes canonically");
+    let participant_settlement_hash = participant_settlement
+        .computed_hash()
+        .expect("hash exact two-source participant settlement");
     let qc_for = |body: NativeAmxAttestationBodyV2| {
         let votes = validator_keys
             .iter()
@@ -424,7 +422,7 @@ fn native_amx_receipts_for_apply_fixture(
                 source_id,
                 entrypoint_hash,
                 NativeAmxPhase::Prepare,
-                participant_settlement_hash,
+                Hash::from(participant_settlement_hash),
             );
             let request = NativeAmxAttestationRequestV2 {
                 body: prepare_body,
@@ -520,10 +518,21 @@ v2_apply_test!(
         drop(store);
         let mut reopened = fixture.reopen_body_store();
         assert!(
+            reopened.validated_recovery_catalog().is_empty(),
+            "checksummed restart markers must remain quarantined before semantic replay"
+        );
+        reopened
+            .revalidate_recovered_markers(|body| {
+                fixture
+                    .service
+                    .revalidate_recovered_candidate(&fixture.context, body)
+            })
+            .expect("authenticate recovered validation against the exact durable finality");
+        assert!(
             reopened
                 .validated_recovery_catalog()
                 .contains_key(&(fixture.manifest.round, fixture.manifest.subject)),
-            "restart must recover the exact durable validation marker"
+            "only semantically replayed exact validation may restore authority"
         );
         fixture
             .execute(&mut reopened)
@@ -856,6 +865,43 @@ v2_apply_test!(
     }
 );
 v2_apply_test!(
+    committed_apply_replay_rejects_damaged_durable_body_despite_warm_cache,
+    {
+        let fixture = ApplyFixture::new();
+        let mut body_store = fixture.reopen_body_store();
+        fixture
+            .execute(&mut body_store)
+            .expect("commit the initial decision");
+        let height = NonZeroUsize::new(1).expect("committed height");
+        assert!(
+            fixture.kura.get_block(height).is_some(),
+            "warm the canonical body cache"
+        );
+        let primary = fixture.state.nexus_snapshot().lane_config.primary().clone();
+        let body_path = primary
+            .blocks_dir(fixture.kura.store_root())
+            .join("blocks.data");
+        let mut damaged = std::fs::read(&body_path).expect("read the actual durable body");
+        *damaged.last_mut().expect("committed body bytes") ^= 1;
+        std::fs::write(&body_path, &damaged).expect("damage the actual durable body");
+        std::fs::File::open(&body_path)
+            .expect("open damaged body")
+            .sync_all()
+            .expect("synchronize damaged bytes");
+        let error = fixture
+            .execute(&mut body_store)
+            .expect_err("replay must read actual storage");
+        assert!(matches!(&error, V2ApplyError::CanonicalStorageRead(_)));
+        assert!(error.requires_restart_recovery());
+        assert_eq!(fixture.state.committed_height(), 1);
+        assert_eq!(
+            std::fs::read(&body_path).expect("failed replay preserves evidence"),
+            damaged,
+            "a warm cache cannot silently overwrite damaged committed storage",
+        );
+    }
+);
+v2_apply_test!(
     reputation_archive_virtual_base_allows_commit_owned_successor_capture,
     {
         let mut fixture = ApplyFixture::new_with_reputation_archive();
@@ -877,6 +923,11 @@ v2_apply_test!(
             .latest_at_or_before(&fixture.service.network_id, 1)
             .expect("read retention-floor projection")
             .expect("height-one archive anchor");
+        let parent_record = archive
+            .record_path(&parent.key)
+            .expect("exact pre-compaction parent record path");
+        let parent_bytes =
+            std::fs::read(&parent_record).expect("retain parent evidence before prefix compaction");
         let fence = archive
             .retention_fence_for(&parent.key)
             .expect("freeze exact authenticated retention fence");
@@ -1006,6 +1057,80 @@ v2_apply_test!(
             .expect("exact retained successor record path");
         let retained_bytes = std::fs::read(&successor_record)
             .expect("retain successor evidence before the damaged-storage probe");
+        drop(reopened);
+        std::fs::write(&parent_record, &parent_bytes)
+            .expect("restore obsolete parent row as pending cleanup evidence");
+        std::fs::remove_file(&successor_record)
+            .expect("remove the entire captured successor suffix");
+        let awaiting_capture = ReputationFinalizedArchive::try_open_with_retention_authority(
+            archive_root.path(),
+            bounds,
+            &fixture.service.network_id,
+            fixture.kura.as_ref(),
+            &retention_binding,
+            &retention_authority,
+        )
+        .expect("open an authenticated checkpoint with a recoverable missing capture suffix");
+        assert_eq!(
+            std::fs::read(&parent_record).expect("lagging reopen preserves cleanup evidence"),
+            parent_bytes,
+        );
+        assert!(matches!(
+            awaiting_capture.qualify_against_kura_tip(
+                &fixture.service.network_id,
+                fixture.kura.as_ref(),
+                0,
+            ),
+            Err(crate::query::reputation_finalized::ReputationFinalizedArchiveError::ArchiveKuraTipLagExceeded {
+                archive_height: 1,
+                kura_height: 2,
+                lag: 1,
+                maximum: 0,
+            })
+        ));
+        assert_eq!(
+            awaiting_capture
+                .capture_kura_authenticated_view(&view, fixture.kura.as_ref(), &receipt)
+                .expect("repair the missing suffix from the exact authenticated committed view"),
+            ReputationFinalizedArchiveInsertOutcome::Inserted,
+        );
+        assert_eq!(
+            std::fs::read(&successor_record).expect("reconstructed successor record"),
+            retained_bytes,
+        );
+        assert!(
+            parent_record.is_file(),
+            "capture leaves cleanup to sealed reopen"
+        );
+        drop(awaiting_capture);
+        let reopened = ReputationFinalizedArchive::try_open_with_retention_authority(
+            archive_root.path(),
+            bounds,
+            &fixture.service.network_id,
+            fixture.kura.as_ref(),
+            &retention_binding,
+            &retention_authority,
+        )
+        .expect("complete authenticated coverage permits sealed cleanup");
+        assert!(
+            !parent_record.exists(),
+            "complete reopen removes the obsolete parent row"
+        );
+        assert_eq!(
+            std::fs::read(&successor_record).expect("cleanup preserves retained successor"),
+            retained_bytes,
+        );
+        assert_eq!(
+            reopened.health_generation().expect("repaired generation"),
+            generation,
+        );
+        assert_eq!(
+            reopened
+                .qualify_against_kura_tip(&fixture.service.network_id, fixture.kura.as_ref(), 0)
+                .expect("repaired archive is completely qualified")
+                .lag_blocks(),
+            0,
+        );
         let successor_height = NonZeroUsize::new(2).expect("successor height");
         assert!(
             fixture.kura.get_block(successor_height).is_some(),

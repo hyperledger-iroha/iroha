@@ -11,7 +11,7 @@
 use core::fmt;
 use iroha_schema::{Ident, IntoSchema, MetaMap, Metadata, TypeId};
 use norito::{
-    Archived, Error as NoritoError, NoritoDeserialize, NoritoSerialize,
+    Archived, Error as NoritoError, NoritoDeserialize, NoritoSerialize, SerializePayload,
     core::{self as ncore, DecodeFromSlice},
     json::{self, FastJsonWrite, JsonDeserialize},
 };
@@ -246,7 +246,8 @@ impl Ord for BigInt {
         self.inner.cmp(&other.inner)
     }
 }
-impl NoritoSerialize for BigInt {
+impl NoritoSerialize for BigInt {}
+impl SerializePayload for BigInt {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), NoritoError> {
         let bytes = self.to_twos_bytes();
         let len: u32 = bytes

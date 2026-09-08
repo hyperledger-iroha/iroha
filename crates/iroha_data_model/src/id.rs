@@ -286,9 +286,10 @@ mod model {
         RepoAgreementId(repo::RepoAgreementId),
     }
 }
-impl norito::core::NoritoSerialize for NetworkId {
+impl norito::core::NoritoSerialize for NetworkId {}
+impl norito::core::SerializePayload for NetworkId {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
-        norito::core::NoritoSerialize::serialize(self.as_genesis_hash(), writer)
+        norito::core::SerializePayload::serialize(self.as_genesis_hash(), writer)
     }
     fn encoded_len_hint(&self) -> Option<usize> {
         Some(iroha_crypto::Hash::LENGTH)
@@ -322,15 +323,16 @@ impl<'a> DecodeFromSlice<'a> for NetworkId {
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::id::ChainIdText")]
 struct ChainIdText(ChainId);
-impl norito::core::NoritoSerialize for ChainIdText {
+impl norito::core::NoritoSerialize for ChainIdText {}
+impl norito::core::SerializePayload for ChainIdText {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
-        <&str as norito::core::NoritoSerialize>::serialize(&self.0.as_str(), writer)
+        <&str as norito::core::SerializePayload>::serialize(&self.0.as_str(), writer)
     }
     fn encoded_len_hint(&self) -> Option<usize> {
-        <&str as norito::core::NoritoSerialize>::encoded_len_hint(&self.0.as_str())
+        <&str as norito::core::SerializePayload>::encoded_len_hint(&self.0.as_str())
     }
     fn encoded_len_exact(&self) -> Option<usize> {
-        <&str as norito::core::NoritoSerialize>::encoded_len_exact(&self.0.as_str())
+        <&str as norito::core::SerializePayload>::encoded_len_exact(&self.0.as_str())
     }
 }
 impl<'a> norito::core::NoritoDeserialize<'a> for ChainIdText {
@@ -434,13 +436,14 @@ mod id_box_codec {
             }
         }
     }
-    impl norito::core::NoritoSerialize for IdBox {
+    impl norito::core::NoritoSerialize for IdBox {}
+    impl norito::core::SerializePayload for IdBox {
         fn serialize(
             &self,
             writer: &mut norito::core::Encoder<'_>,
         ) -> Result<(), norito::core::Error> {
             let candidate: IdBoxCandidate = self.clone().into();
-            norito::core::NoritoSerialize::serialize(&candidate, writer)
+            norito::core::SerializePayload::serialize(&candidate, writer)
         }
     }
     impl<'de> norito::core::NoritoDeserialize<'de> for IdBox {

@@ -3351,6 +3351,7 @@ def test_production_trace_certificate_authenticates_all_runtime_links() -> None:
         "reservation_cleanup_prefixes",
         "pre_kura_direct_reservation_release",
         "retired_nonproducer_replica_direct_release",
+        "replica_queue_disposition_observation",
         "producer_kura_activation",
         "startup_generation_crash_cas",
         "startup_generation_recover_cas",
@@ -3375,7 +3376,6 @@ def test_production_trace_certificate_authenticates_all_runtime_links() -> None:
         "startup_reverse_carrier_evidence_repair",
         "state_replay_post_carrier_evidence_repair",
         "recover_reservation_snapshot_parametric_noninterference",
-        "authenticated_replica_queue_disposition_observation",
     }
     assert all(binding["authenticated"] is True for binding in bindings.values())
     assert all(
@@ -4117,7 +4117,7 @@ def test_production_trace_certificate_rejects_direct_release_stutter_drift(
             "IN_FLIGHT_FIRST_RELEASE_ACTION_REPAIR_POST_CARRIER",
         ),
         (
-            "authenticated_replica_queue_disposition_observation",
+            "replica_queue_disposition_observation",
             "IN_FLIGHT_FIRST_RELEASE_ACTION_OBSERVE_REPLICA_QUEUE_RELEASE",
         ),
     ),

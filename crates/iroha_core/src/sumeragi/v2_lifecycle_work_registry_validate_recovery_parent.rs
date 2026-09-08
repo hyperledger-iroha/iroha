@@ -499,7 +499,7 @@ impl super::concrete_admission::LifecycleWorkRegistryHolder {
         };
         let work = ConcreteLifecycleWork {
             digest: broadcast_digest,
-            kind: ConcreteLifecycleWorkKind::DurableRecoveredLifecycleSignedBroadcast(
+            kind: ConcreteLifecycleWorkKind::DurableRecoveredLifecycleSignedBroadcast(Box::new(
                 DurableRecoveredLifecycleSignedBroadcastWork {
                     parent: DurableRecoveredLifecycleSignParentV1::NextWalVote(parent),
                     broadcast,
@@ -507,7 +507,7 @@ impl super::concrete_admission::LifecycleWorkRegistryHolder {
                     address: broadcast_address,
                     paired_next_sign: None,
                 },
-            ),
+            )),
         };
         if !work.validates_at(broadcast_address)
             || self
@@ -653,7 +653,7 @@ impl super::concrete_admission::LifecycleWorkRegistryHolder {
         };
         let broadcast_work = ConcreteLifecycleWork {
             digest: broadcast_digest,
-            kind: ConcreteLifecycleWorkKind::DurableRecoveredLifecycleSignedBroadcast(
+            kind: ConcreteLifecycleWorkKind::DurableRecoveredLifecycleSignedBroadcast(Box::new(
                 DurableRecoveredLifecycleSignedBroadcastWork {
                     parent: DurableRecoveredLifecycleSignParentV1::NextWalVote(parent),
                     broadcast,
@@ -661,7 +661,7 @@ impl super::concrete_admission::LifecycleWorkRegistryHolder {
                     address: broadcast_address,
                     paired_next_sign: Some((paired_address, paired_digest)),
                 },
-            ),
+            )),
         };
         let paired_work = ConcreteLifecycleWork {
             digest: paired_digest,

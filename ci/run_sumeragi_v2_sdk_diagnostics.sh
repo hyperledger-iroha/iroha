@@ -379,7 +379,7 @@ case "$surface" in
     assert_pytest_count "$python_transcript" "$observed_test_count"
     ;;
   javascript)
-    observed_test_count=88
+    observed_test_count=90
     if ! command -v node >/dev/null 2>&1; then
       echo "Node.js is required for Sumeragi v2 JavaScript diagnostics" >&2
       exit 1
@@ -440,8 +440,8 @@ case "$surface" in
       run_and_capture "$javascript_transcript" \
         env IROHA_JS_SUMERAGI_DIAGNOSTICS_TORII_CLIENT="$javascript_client" \
         node --test --test-reporter=tap "$javascript_test"
-      assert_node_tap "$javascript_transcript" 44
-      printf 'sumeragi-v2-sdk-diagnostics-run surface=javascript variant=%s tests=44 skipped=0\n' \
+      assert_node_tap "$javascript_transcript" 45
+      printf 'sumeragi-v2-sdk-diagnostics-run surface=javascript variant=%s tests=45 skipped=0\n' \
         "$javascript_variant"
     done
     ;;

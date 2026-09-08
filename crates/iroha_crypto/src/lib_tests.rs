@@ -130,6 +130,93 @@ mod tests {
             );
         }
     }
+    #[cfg(feature = "pqc")]
+    #[test]
+    fn mldsa_shared_verifier_preserves_signature_and_batch_admission() {
+        use pqcrypto_traits::sign::{DetachedSignature as _, PublicKey as _};
+        let keypair = checked_seed_keypair(&[0x53; 32], Algorithm::MlDsa);
+        let message = b"ML-DSA shared verifier admission";
+        let signature = checked_signature(keypair.private_key(), message);
+        let (_, public_key) = keypair.public_key().try_to_bytes().unwrap();
+        let typed_key = pqcrypto_mldsa::mldsa65::PublicKey::from_bytes(public_key).unwrap();
+        let typed_signature =
+            pqcrypto_mldsa::mldsa65::DetachedSignature::from_bytes(signature.payload()).unwrap();
+        verify_mldsa65_detached(&typed_signature, message, &typed_key)
+            .expect("shared typed verifier");
+        signature
+            .verify(keypair.public_key(), message)
+            .expect("single verification");
+        verify_signature_for_admission(&signature, keypair.public_key(), message)
+            .expect("admission verification");
+        assert!(matches!(
+            verify_signature_for_admission(&signature, keypair.public_key(), b"changed"),
+            Err(Error::BadSignature),
+        ));
+        let different_keypair = checked_seed_keypair(&[0x56; 32], Algorithm::MlDsa);
+        assert!(matches!(
+            verify_signature_for_admission(&signature, different_keypair.public_key(), message),
+            Err(Error::BadSignature),
+        ));
+        pqc_verify_batch_deterministic(&[message], &[signature.payload()], &[public_key], [0; 32])
+            .expect("batch verification");
+        assert!(matches!(
+            signature.verify(keypair.public_key(), b"changed"),
+            Err(Error::BadSignature),
+        ));
+        assert!(matches!(
+            pqc_verify_batch_deterministic(
+                &[b"changed"],
+                &[signature.payload()],
+                &[public_key],
+                [0; 32],
+            ),
+            Err(Error::BadSignature),
+        ));
+        let mut corrupt = signature.payload().to_vec();
+        corrupt[0] ^= 1;
+        let mut overlong = signature.payload().to_vec();
+        overlong.push(1);
+        for invalid in [
+            corrupt,
+            signature.payload()[1..].to_vec(),
+            overlong,
+            vec![0; signature.payload().len()],
+        ] {
+            assert!(matches!(
+                verify_signature_for_admission(
+                    &Signature::from_bytes(&invalid),
+                    keypair.public_key(),
+                    message,
+                ),
+                Err(Error::BadSignature),
+            ));
+            assert!(matches!(
+                Signature::from_bytes(&invalid).verify(keypair.public_key(), message),
+                Err(Error::BadSignature),
+            ));
+            assert!(matches!(
+                pqc_verify_batch_deterministic(&[message], &[&invalid], &[public_key], [0; 32]),
+                Err(Error::BadSignature),
+            ));
+        }
+        for invalid_key in [public_key[1..].to_vec(), vec![0; public_key.len()]] {
+            assert!(matches!(
+                pqc_verify_batch_deterministic(
+                    &[message],
+                    &[signature.payload()],
+                    &[&invalid_key],
+                    [0; 32],
+                ),
+                Err(Error::BadSignature),
+            ));
+        }
+        let wrong_algorithm = checked_seed_keypair(&[0x54; 32], Algorithm::Ed25519);
+        assert!(
+            signature
+                .verify(wrong_algorithm.public_key(), message)
+                .is_err()
+        );
+    }
     #[test]
     fn mldsa65_parse_signature_rejects_inert_or_malformed_lengths() {
         let key_pair = checked_seed_keypair(&[0x32; 32], Algorithm::MlDsa);
@@ -1264,7 +1351,7 @@ mod tests {
             .len()
             - norito::core::Header::SIZE;
         assert_eq!(
-            norito::core::NoritoSerialize::encoded_len_exact(&pk).expect("exact public key length"),
+            norito::core::SerializePayload::encoded_len_exact(&pk).expect("exact public key length"),
             expected
         );
     }
@@ -1275,10 +1362,10 @@ mod tests {
             .public_key()
             .clone();
         let compact = &public_key.0;
-        let expected_hint = <ConstVec<u8> as norito::core::NoritoSerialize>::encoded_len_hint(
+        let expected_hint = <ConstVec<u8> as norito::core::SerializePayload>::encoded_len_hint(
             &compact.algorithm_and_payload,
         );
-        let expected_exact = <ConstVec<u8> as norito::core::NoritoSerialize>::encoded_len_exact(
+        let expected_exact = <ConstVec<u8> as norito::core::SerializePayload>::encoded_len_exact(
             &compact.algorithm_and_payload,
         );
         reset_public_key_validation_call_count();
@@ -1288,19 +1375,19 @@ mod tests {
         PublicKeyFull::validate_bytes_for_decode(algorithm, payload)
             .expect("borrowed ML-DSA decode validation");
         assert_eq!(
-            norito::core::NoritoSerialize::encoded_len_hint(compact),
+            norito::core::SerializePayload::encoded_len_hint(compact),
             expected_hint
         );
         assert_eq!(
-            norito::core::NoritoSerialize::encoded_len_exact(compact),
+            norito::core::SerializePayload::encoded_len_exact(compact),
             expected_exact
         );
         assert_eq!(
-            norito::core::NoritoSerialize::encoded_len_hint(&public_key),
+            norito::core::SerializePayload::encoded_len_hint(&public_key),
             expected_hint
         );
         assert_eq!(
-            norito::core::NoritoSerialize::encoded_len_exact(&public_key),
+            norito::core::SerializePayload::encoded_len_exact(&public_key),
             expected_exact
         );
         assert_eq!(
@@ -1373,8 +1460,8 @@ mod tests {
         let mut encoded = Vec::new();
         norito::core::serialize_to_buffer(&compact, &mut encoded)
             .expect_err("malformed compact state must fail serialization");
-        assert!(norito::core::NoritoSerialize::encoded_len_hint(&compact).is_none());
-        assert!(norito::core::NoritoSerialize::encoded_len_exact(&compact).is_none());
+        assert!(norito::core::SerializePayload::encoded_len_hint(&compact).is_none());
+        assert!(norito::core::SerializePayload::encoded_len_exact(&compact).is_none());
     }
 
     #[test]
@@ -1533,8 +1620,8 @@ mod tests {
         let mut encoded = Vec::new();
         norito::core::serialize_to_buffer(&malformed, &mut encoded)
             .expect_err("malformed public-key state must fail serialization");
-        assert!(norito::core::NoritoSerialize::encoded_len_hint(&malformed).is_none());
-        assert!(norito::core::NoritoSerialize::encoded_len_exact(&malformed).is_none());
+        assert!(norito::core::SerializePayload::encoded_len_hint(&malformed).is_none());
+        assert!(norito::core::SerializePayload::encoded_len_exact(&malformed).is_none());
     }
     #[test]
     fn public_key_try_to_bytes_rejects_malformed_compact_state_without_panic() {
@@ -1991,6 +2078,135 @@ mod tests {
             norito::json::to_json_bounded(&map, expected.len() - 1),
             Err(norito::json::BoundedJsonError::BodyTooLarge)
         ));
+    }
+    #[test]
+    fn public_key_json_canonical_decoders_reject_prefixes_before_payload_allocation() {
+        use norito::json::{self, JsonDeserialize as _, JsonObjectKeyOwned as _};
+
+        type Map = std::collections::BTreeMap<PublicKey, u8>;
+        let literal = "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4";
+        let zero_budget =
+            || norito::core::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX);
+        for prefix in ["ed25519", "secp256k1"] {
+            let alias = format!("{prefix}:{literal}");
+            let value = json::Value::String(alias.clone());
+            let (direct, usage) = norito::core::with_decode_limits_measured(zero_budget(), || {
+                PublicKey::from_canonical_str_for_decode(&alias)
+            });
+            assert!(matches!(
+                direct,
+                Err(norito::core::Error::Message(message)) if message == "invalid public key"
+            ));
+            assert_eq!(usage.total_allocated_bytes(), 0);
+
+            let (from_value, usage) =
+                norito::core::with_decode_limits_measured(zero_budget(), || {
+                    PublicKey::json_from_value(&value)
+                });
+            assert!(matches!(
+                from_value,
+                Err(json::Error::Message(message)) if message == "invalid public key"
+            ));
+            assert_eq!(usage.total_allocated_bytes(), 0);
+
+            let (from_key, usage) =
+                norito::core::with_decode_limits_measured(zero_budget(), || {
+                    PublicKey::from_json_key_text(&alias)
+                });
+            assert!(matches!(
+                from_key,
+                Err(json::Error::Message(message)) if message == "invalid public key"
+            ));
+            assert_eq!(usage.total_allocated_bytes(), 0);
+
+            let scalar = format!("\"{alias}\"");
+            assert!(json::from_str::<PublicKey>(&scalar).is_err());
+            let map = format!("{{\"{alias}\":7}}");
+            assert!(json::from_str::<Map>(&map).is_err());
+        }
+
+        // A canonical key reaches payload admission on every borrowed path.
+        let value = json::Value::String(literal.to_owned());
+        let (direct, usage) = norito::core::with_decode_limits_measured(zero_budget(), || {
+            PublicKey::from_canonical_str_for_decode(literal)
+        });
+        assert!(
+            direct
+                .expect_err("zero payload budget")
+                .is_decode_resource_limit()
+        );
+        assert_eq!(usage.total_allocated_bytes(), 0);
+
+        let (from_value, usage) = norito::core::with_decode_limits_measured(zero_budget(), || {
+            PublicKey::json_from_value(&value)
+        });
+        assert!(matches!(from_value, Err(json::Error::DecodeResourceLimit)));
+        assert_eq!(usage.total_allocated_bytes(), 0);
+
+        let (from_key, usage) = norito::core::with_decode_limits_measured(zero_budget(), || {
+            PublicKey::from_json_key_text(literal)
+        });
+        assert!(matches!(from_key, Err(json::Error::DecodeResourceLimit)));
+        assert_eq!(usage.total_allocated_bytes(), 0);
+
+        let public_key: PublicKey = literal.parse().expect("canonical public key fixture");
+        let scalar = format!("\"{literal}\"");
+        assert_eq!(
+            json::from_str::<PublicKey>(&scalar).expect("canonical scalar"),
+            public_key
+        );
+        let map = format!("{{\"{literal}\":7}}");
+        assert_eq!(
+            json::from_str::<Map>(&map).expect("canonical map"),
+            Map::from([(public_key, 7)])
+        );
+    }
+    #[test]
+    fn public_key_json_object_key_map_contract_is_canonical_and_bounded() {
+        use norito::json;
+        type Map = std::collections::BTreeMap<PublicKey, u8>;
+        let literal = "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4";
+        let public_key: PublicKey = literal.parse().expect("canonical public key fixture");
+        let map = Map::from([(public_key, 7)]);
+        let expected = format!("{{\"{literal}\":7}}");
+        assert_eq!(json::to_json(&map).expect("public-key map"), expected);
+        assert_eq!(
+            json::from_str::<Map>(&expected).expect("public-key map roundtrip"),
+            map
+        );
+        assert_eq!(
+            json::to_json_bounded(&map, expected.len()).expect("exact map bound"),
+            expected
+        );
+        assert!(matches!(
+            json::to_json_bounded(&map, expected.len() - 1),
+            Err(json::BoundedJsonError::BodyTooLarge)
+        ));
+        let escaped_key = format!("\\u0065{}", &literal[1..]);
+        let escaped = format!("{{\"{escaped_key}\":7}}");
+        assert_eq!(
+            json::from_str::<Map>(&escaped).expect("escaped canonical public key"),
+            map
+        );
+        for key in [
+            format!("ed25519:{literal}"),
+            literal.to_lowercase(),
+            literal.to_uppercase(),
+            format!(" {literal}"),
+        ] {
+            let encoded = format!("{{\"{key}\":7}}");
+            assert!(
+                json::from_str::<Map>(&encoded).is_err(),
+                "noncanonical public-key map key must fail: {encoded}"
+            );
+        }
+        for second_key in [literal.to_owned(), escaped_key] {
+            let duplicate = format!("{{\"{literal}\":7,\"{second_key}\":8}}");
+            assert!(
+                json::from_str::<Map>(&duplicate).is_err(),
+                "duplicate decoded public key must fail: {duplicate}"
+            );
+        }
     }
     #[test]
     fn public_key_json_rejects_above_protocol_literal_before_hex_decode() {

@@ -15,6 +15,7 @@ from iroha_torii_client.client import (
 from iroha_torii_client.native_amx import (
     compute_native_amx_application_manifest_singleton_root,
     compute_native_amx_participant_settlement_hash,
+    parse_native_amx_participant_settlement,
 )
 
 import iroha_python.client as iroha_python_client
@@ -23,6 +24,7 @@ from iroha_python import (
     SumeragiLaneSettlementCommitment,
     SumeragiNativeAmxAttestationBody,
     SumeragiNativeAmxPhase,
+    SumeragiNativeAmxParticipantSettlement,
     SumeragiNativeAmxSourceId,
     SumeragiNativeAmxTransactionEntrypointHash,
     SumeragiV2ExecutionCommitment,
@@ -38,6 +40,48 @@ FIXTURE_PATH = (
 
 def _fixture() -> dict[str, Any]:
     return json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
+
+
+def _validate_participant_constructor_boundaries(original: dict[str, Any]) -> None:
+    first = {**deepcopy(original), "lane_id": 0, "dataspace_id": 0,
+             "participant_lane_block_height": 1, "previous_native_settlement_hash": None}
+    later = {**first, "participant_lane_block_height": 2}
+    linked = {**later, "previous_native_settlement_hash": first["lane_incarnation"]}
+    maximum_sources = [f"{index + 1:064X}" for index in range(4096)]
+    maximum = {**first, "source_ids": maximum_sources}
+    for value in (first, later, linked, maximum):
+        assert parse_native_amx_participant_settlement(value) == value
+        model = SumeragiNativeAmxParticipantSettlement.from_payload(value)
+        assert model.source_ids == tuple(value["source_ids"])
+        assert model.previous_native_settlement_hash == value["previous_native_settlement_hash"]
+    assert compute_native_amx_participant_settlement_hash(later) != (
+        compute_native_amx_participant_settlement_hash(linked))
+    assert compute_native_amx_participant_settlement_hash(first) != (
+        compute_native_amx_participant_settlement_hash(
+            {**first, "source_ids": list(reversed(first["source_ids"]))}))
+    invalid = [{key: value for key, value in first.items() if key != missing}
+               for missing in first]
+    invalid.extend({**first, retired: None} for retired in (
+        "block_height", "tx_count", "receipts", "total_local_amount", "total_xor_due",
+        "total_xor_after_haircut", "total_xor_variance", "swap_metadata",
+        "nexus_fee_receipts", "native_amx_receipts"))
+    invalid.extend({**first, **update} for update in (
+        {"previous_native_settlement_hash": first["lane_incarnation"]},
+        {"source_ids": []}, {"source_ids": ["00" * 32]},
+        {"source_ids": [first["source_ids"][0]] * 2},
+        {"source_ids": maximum_sources + ["FF" * 32]},
+        {"source_ids": [first["source_ids"][0].lower()]},
+        {"participant_lane_block_height": 0}, {"authority_context_height": 0},
+        {"lane_id": 1 << 32}, {"dataspace_id": 1 << 64},
+        {"participant_lane_block_height": 2,
+         "previous_native_settlement_hash": "hash:" + "00" * 31 + "01#C50E"},
+        {"lane_incarnation": "hash:" + "00" * 31 + "01#C50E"},
+    ))
+    for value in invalid:
+        for parse in (parse_native_amx_participant_settlement,
+                      SumeragiNativeAmxParticipantSettlement.from_payload):
+            with pytest.raises((TypeError, ValueError)):
+                parse(value)
 
 
 def _tokens(pointer: str) -> list[str]:
@@ -228,6 +272,10 @@ def _validate_application_evidence(document: dict[str, Any]) -> None:
             and leg["participant_settlement_hash"] == leaf["settlement_hash"],
             "manifest participant identity",
         )
+        require("previous_native_settlement_hash" in leaf, "manifest Native history link is required")
+        settlement = parse_native_amx_participant_settlement(leg["participant_settlement"])
+        require(leaf["previous_native_settlement_hash"] == settlement["previous_native_settlement_hash"],
+                "manifest Native history link differs from participant settlement")
         body = leg["prepare_qc"]["body"]
         require(
             body["source_id"] == member["source_id"]
@@ -271,6 +319,23 @@ def test_grouped_native_amx_v2_golden_fixture() -> None:
     } <= {control["id"] for control in fixture["negative_controls"]}
 
     payload = fixture["golden"]["receipt_group"]
+    _validate_participant_constructor_boundaries(
+        payload["native_amx_receipts"][0]["legs"][0]["participant_settlement"])
+    # Coherent commitments using raw Hash encoding for the Rust [u8; 32]
+    # source elements must not be accepted as the canonical settlement hash.
+    raw_group = deepcopy(payload)
+    raw_leg = raw_group["native_amx_receipts"][0]["legs"][0]
+    raw_hash = "hash:F4FBF033695C8BE66DAD0D4296C8C20207C2558175D7FC7E30284A1685F007E3#ED3B"
+    assert raw_hash != raw_leg["participant_settlement_hash"]
+    raw_leg["participant_settlement_hash"] = raw_hash
+    for qc in ("prepare_qc", "commit_qc"):
+        raw_leg[qc]["body"]["participant_settlement_commitment"] = raw_hash
+    with pytest.raises(ValueError, match="participant settlement hash"):
+        SumeragiLaneSettlementCommitment.from_payload(raw_group)
+    raw_diagnostics = deepcopy(fixture["golden"]["expected_diagnostics"])
+    raw_diagnostics["lane_settlement_commitments"] = [raw_group]
+    with pytest.raises(RuntimeError, match="participant_settlement_hash"):
+        CanonicalSumeragiDiagnosticsStatus.from_payload(raw_diagnostics)
     parsed = SumeragiLaneSettlementCommitment.from_payload(payload)
 
     assert len(parsed.native_amx_receipts) == 2
@@ -279,8 +344,8 @@ def test_grouped_native_amx_v2_golden_fixture() -> None:
     ]["ordered_source_ids"]
     assert 1 <= len(parsed.native_amx_receipts) <= 4096
     expected_settlement_hashes = {
-        (7, 11): "hash:2DA510B86888B5D77EA760618AF06BE5511D39E8588156639EEAB566A91F2F5D#5534",
-        (8, 12): "hash:0CDECBD738386DFB71F6ADB85E49799EC6982634632C99E6E81149E7F7F42FA5#B635",
+        (7, 11): "hash:32950D237EC6ACA2B345D3EFFBD0FE7E30C6E9AF9BD90EE18F8FBFDBDE2A8699#E813",
+        (8, 12): "hash:954C813DA9EC5BE63036F21582293E718CF706A2275B25DA96E061FED76492CB#3240",
     }
     for receipt in parsed.native_amx_receipts:
         assert len(receipt.legs) == 2
@@ -312,9 +377,7 @@ def test_grouped_native_amx_v2_golden_fixture() -> None:
             assert len(leg.prepare_qc.validator_set) == 4
             assert all(len(pop) == 96 for pop in leg.prepare_qc.validator_set_pops)
             assert len(leg.prepare_qc.bls_aggregate_signature) == 96
-            assert [
-                grouped.source_id for grouped in leg.participant_settlement.receipts
-            ] == fixture["golden"]["ordered_source_ids"]
+            assert list(leg.participant_settlement.source_ids) == fixture["golden"]["ordered_source_ids"]
 
     projection = fixture["golden"]["expected_diagnostics"]
     assert projection["lane_settlement_commitments"] == [payload]
@@ -420,28 +483,23 @@ def test_grouped_native_amx_v2_owns_immutable_checked_participant_settlement() -
         == checked_hash
     )
 
-    input_settlement["receipts"][0]["local_amount"] = "1"
-    input_settlement["receipts"].pop()
-    input_settlement["nexus_fee_receipts"].append({})
-    input_settlement["native_amx_receipts"].append({})
-    input_settlement["tx_count"] = 0
+    input_settlement["source_ids"][0] = "FF" * 32
+    input_settlement["source_ids"].pop()
+    input_settlement["native_amx_receipts"] = [{}]
+    input_settlement["authority_context_height"] = 0
     assert json.loads(json.dumps(asdict(settlement))) == expected
 
-    assert isinstance(settlement.receipts, tuple)
+    assert isinstance(settlement.source_ids, tuple)
     with pytest.raises(FrozenInstanceError):
-        settlement.tx_count = 0
+        settlement.authority_context_height = 0
     with pytest.raises(FrozenInstanceError):
-        settlement.receipts = ()
-    with pytest.raises(FrozenInstanceError):
-        settlement.receipts[0].local_amount = "1"
+        settlement.source_ids = ()
     with pytest.raises(TypeError):
-        settlement.receipts[0] = settlement.receipts[1]
+        settlement.source_ids[0] = settlement.source_ids[1]
     with pytest.raises(AttributeError):
-        settlement.receipts.pop()
-    with pytest.raises(AttributeError):
-        settlement.nexus_fee_receipts.append({})
-    with pytest.raises(AttributeError):
-        settlement.native_amx_receipts.append({})
+        settlement.source_ids.pop()
+    with pytest.raises(FrozenInstanceError):
+        settlement.native_amx_receipts = ()
 
     assert json.loads(json.dumps(asdict(settlement))) == expected
     assert (
@@ -451,32 +509,21 @@ def test_grouped_native_amx_v2_owns_immutable_checked_participant_settlement() -
     assert leg.prepare_qc.body.participant_settlement_commitment == checked_hash
     assert leg.commit_qc.body.participant_settlement_commitment == checked_hash
 
-    caller_receipts = list(settlement.receipts)
-    caller_fee_receipts = []
-    caller_native_receipts = []
-    constructed = SumeragiLaneSettlementCommitment(
-        block_height=settlement.block_height,
+    caller_sources = list(settlement.source_ids)
+    constructed = SumeragiNativeAmxParticipantSettlement(
         lane_id=settlement.lane_id,
-        lane_incarnation=settlement.lane_incarnation,
         dataspace_id=settlement.dataspace_id,
-        tx_count=settlement.tx_count,
-        total_local_amount=settlement.total_local_amount,
-        total_xor_due=settlement.total_xor_due,
-        total_xor_after_haircut=settlement.total_xor_after_haircut,
-        total_xor_variance=settlement.total_xor_variance,
-        receipts=caller_receipts,
-        nexus_fee_receipts=caller_fee_receipts,
-        native_amx_receipts=caller_native_receipts,
-        swap_metadata=settlement.swap_metadata,
+        lane_incarnation=settlement.lane_incarnation,
+        participant_lane_block_height=settlement.participant_lane_block_height,
+        authority_context_height=settlement.authority_context_height,
+        previous_native_settlement_hash=settlement.previous_native_settlement_hash,
+        source_ids=caller_sources,
     )
     constructed_wire = json.dumps(asdict(constructed))
     assert json.loads(constructed_wire) == expected
-    caller_receipts.pop()
-    caller_fee_receipts.append({})
-    caller_native_receipts.append(parsed.native_amx_receipts[0])
-    assert isinstance(constructed.receipts, tuple)
-    assert isinstance(constructed.nexus_fee_receipts, tuple)
-    assert isinstance(constructed.native_amx_receipts, tuple)
+    caller_sources[0] = "FF" * 32
+    caller_sources.pop()
+    assert isinstance(constructed.source_ids, tuple)
     assert json.dumps(asdict(constructed)) == constructed_wire
     assert (
         compute_native_amx_participant_settlement_hash(asdict(constructed))
@@ -527,10 +574,12 @@ def test_native_amx_source_and_entrypoint_domains_are_distinct_public_types() ->
 
 
 def test_grouped_native_amx_v2_corpus_includes_required_controls() -> None:
-    identifiers = {
-        control["id"] for control in _fixture()["negative_controls"]
-    }
+    controls = _fixture()["negative_controls"]
+    assert len(controls) == 58
+    identifiers = {control["id"] for control in controls}
     assert {
+        "missing_previous_native_settlement_hash",
+        "manifest_missing_previous_native_settlement_hash",
         "coherent_forged_validator_set_hash",
         "coherent_stale_descriptor_hash",
         "coherent_stale_proposal_hash",

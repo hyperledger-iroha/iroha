@@ -6,7 +6,7 @@ pub use getrandom;
 pub use iroha_smart_contract_codec::{
     decode_with_length_prefix_from_raw, encode_with_length_prefix,
 };
-pub use norito::{NoritoDeserialize, NoritoSerialize};
+pub use norito::{NoritoDeserialize, NoritoSerialize, SerializePayload};
 mod dbg;
 pub mod log;
 /// Registers a custom `getrandom` function that:

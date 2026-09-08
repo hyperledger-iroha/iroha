@@ -10,7 +10,6 @@ mod sorafs_provider_governance_admission {
         },
         sorafs::capacity::ProviderId,
     };
-    use norito::Encode;
 
     #[test]
     fn initial_executor_provider_governance_requires_current_citizenship_bond() {

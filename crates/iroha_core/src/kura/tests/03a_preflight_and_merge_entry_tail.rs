@@ -5,6 +5,13 @@ fn restart_publishes_complete_carrier_temp_for_durable_block() {
     let (kura, _) =
         Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
             .expect("initialize Kura");
+    // Bind the configured initial incarnation before this fixture writes
+    // durable blocks or recovery sidecars into the primary store.
+    publish_initial_configured_lane_geometry_for_test(
+        &kura,
+        &RuntimeLaneConfig::default(),
+        &BTreeMap::new(),
+    );
     let (carrier, entry) = store_genesis_and_build_merge_carrier(&kura, 1);
     let carrier_hash = carrier.hash();
     let entry_hash = entry.canonical_hash();
@@ -38,6 +45,13 @@ fn restart_rolls_back_uncommitted_merge_publication_suffixes() {
             &RuntimeLaneConfig::default(),
         )
         .expect("initialize Kura");
+        // Bind the configured initial incarnation before this fixture writes
+        // durable blocks or recovery sidecars into the primary store.
+        publish_initial_configured_lane_geometry_for_test(
+            &kura,
+            &RuntimeLaneConfig::default(),
+            &BTreeMap::new(),
+        );
         let (carrier, entry) = store_genesis_and_build_merge_carrier(&kura, 1);
         let record = MergeLedgerCarrierRecord::new(&entry, &carrier);
         kura.append_merge_entry_for_test(&entry)
@@ -89,6 +103,13 @@ fn restart_rejects_torn_or_noncanonical_carrier_temporary() {
             &RuntimeLaneConfig::default(),
         )
         .expect("initialize Kura");
+        // Bind the configured initial incarnation before this fixture writes
+        // durable blocks or recovery sidecars into the primary store.
+        publish_initial_configured_lane_geometry_for_test(
+            &kura,
+            &RuntimeLaneConfig::default(),
+            &BTreeMap::new(),
+        );
         let (_carrier, entry) = store_genesis_and_build_merge_carrier(&kura, 1);
         kura.append_merge_entry_for_test(&entry)
             .expect("stage merge log frame");

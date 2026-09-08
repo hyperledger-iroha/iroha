@@ -32,9 +32,10 @@ use halo2_proofs::{
 use sha2::{compress256, digest::generic_array::GenericArray};
 
 use super::{DigestV1, KagemushaPastaParityV1};
+#[cfg(test)]
+use crate::zk::pasta_sha256::PastaSha256JobsV1;
 use crate::zk::{
     kagemusha_v1_poseidon::{KagemushaPoseidonFieldV1, digest_limbs, from_u128},
-    pasta_sha256::PastaSha256JobsV1,
     pasta_sha256_table8::{
         AssignedBits, AssignedBlockWord, BLOCK_BYTE_SIZE, BLOCK_SIZE, DIGEST_SIZE, IV,
         Sha256Instructions as _, TABLE8_COMPRESSION_ROWS_ESTIMATE_UNMEASURED, Table8Chip,
@@ -149,6 +150,7 @@ pub(crate) struct KagemushaMintHashPlanV1 {
 
 impl KagemushaMintHashPlanV1 {
     /// Derive leaves from the exact messages already queued by the typed monetary relation.
+    #[cfg(test)]
     pub(crate) fn from_sha_jobs<F: KagemushaPoseidonFieldV1>(
         release_id: DigestV1,
         parity: KagemushaPastaParityV1,
@@ -473,7 +475,7 @@ impl<F: KagemushaPoseidonFieldV1> KagemushaMintHashShardCircuitV1<F> {
         {
             return Err("mint hash shard assigned instance shape drifted".to_owned());
         }
-        builder.calculate_params(Some(MINIMUM_UNUSABLE_ROWS));
+        super::base_packing::finalize_base_params_v1(&mut builder, MINIMUM_UNUSABLE_ROWS)?;
         let usable_rows = (1_usize << KAGEMUSHA_MINT_HASH_SHARD_K_V1) - MINIMUM_UNUSABLE_ROWS;
         if TABLE8_COMPRESSION_ROWS_ESTIMATE_UNMEASURED > usable_rows {
             return Err("one Table8 compression does not fit the mint hash shard".to_owned());

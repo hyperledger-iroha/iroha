@@ -3134,6 +3134,21 @@ mod test {
         let snapshot: Configuration = json::from_json(fixture).expect("decode snapshot");
         let encoded = json::to_json_pretty(&snapshot).expect("encode snapshot");
         assert_eq!(format!("{encoded}\n"), fixture);
+        for decoded in [
+            json::from_json_fast::<Configuration>(&encoded),
+            json::from_json_fast_smart::<Configuration>(&encoded),
+        ] {
+            let decoded = decoded.expect("all configuration JSON paths must decode");
+            assert_eq!(decoded.public_key, snapshot.public_key);
+            assert_eq!(
+                decoded.confidential_gas.proof_base,
+                snapshot.confidential_gas.proof_base
+            );
+            assert_eq!(
+                decoded.network.chain_discriminant,
+                snapshot.network.chain_discriminant
+            );
+        }
     }
     #[test]
     fn logger_filters_escape_json_and_roundtrip_without_a_logging_runtime() {

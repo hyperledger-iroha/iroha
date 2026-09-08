@@ -246,5 +246,3 @@ def assert_reputation_docs_track_projector_hard_cut_and_remaining_runtime_work()
     )
     assert missing == []
     assert not any(phrase in normalized for phrase in stale_missing_adapter_claims)
-
-

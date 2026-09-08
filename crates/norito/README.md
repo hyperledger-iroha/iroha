@@ -509,7 +509,7 @@ Norito derives now implement an optional `encoded_len_hint(&self) -> Option<usiz
 
 ## Exact Encoded Length
 
-For faster serialization without reallocations, Norito adds `encoded_len_exact(&self) -> Option<usize>` on `NoritoSerialize`:
+`SerializePayload` owns bare serialization and the `encoded_len_exact(&self) -> Option<usize>` sizing hint. `NoritoSerialize` adds the typed frame contract. Erased writers accept `dyn SerializePayload`; borrowed field adapters can derive `SerializePayload` without acquiring a frame identity. Framed encoders require `NoritoSerialize`:
 
 - Returns the precise number of bytes that `serialize()` will write for the value (payload only).
 - Implemented for primitives, strings/`&str`/`Box<str>`, `Option<T>`, `Result<T,E>`, arrays `[T; N]`, and `Vec<T>` (packed‑seq), and is derived for structs/enums by summing field exact sizes plus their per‑field length prefixes.

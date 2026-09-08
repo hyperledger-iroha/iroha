@@ -53,8 +53,7 @@ PRODUCTION_TRACE_EXTRACTION_REQUIRED_MODEL_ACTIONS = (
     "AdvanceReleasePendingPrefix", "PrepareReservationRelease",
     "AdvanceReleasedPrefix", "CompleteReservationRelease",
     "RestoreReleasedFifo", "ForgetReservationRelease",
-    "RepairPostCarrierEvidence",
-    "ObserveReplicaQueueRelease",
+    "RepairPostCarrierEvidence", "ObserveReplicaQueueRelease",
 )
 
 # These are the concrete authorization seams which must consume the
@@ -2408,6 +2407,65 @@ def _tla_dependency_present(proof: str, dependency: str) -> bool:
     return bool(_tla_dependency_positions(proof, dependency))
 
 
+def _rust_function_body_span(structural: str, start: int) -> tuple[int, int] | None:
+    """Locate a function body after balanced Rust/Verus header expressions.
+
+    Contract clauses may contain unparenthesized conditional or match blocks.
+    Those blocks belong to the signature, not the proof body. Nested branch
+    bodies are skipped iteratively, while if/else chains remain in the header.
+    """
+    parens = 0
+    brackets = 0
+    in_contract = False
+    pending_blocks = 0
+    pending_else = False
+    identifier_pattern = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+    cursor = start
+    while cursor < len(structural):
+        char = structural[cursor]
+        if char == "(":
+            parens += 1
+        elif char == ")":
+            parens = max(0, parens - 1)
+        elif char == "[":
+            brackets += 1
+        elif char == "]":
+            brackets = max(0, brackets - 1)
+        elif parens == 0 and brackets == 0:
+            identifier = identifier_pattern.match(structural, cursor)
+            if identifier is not None:
+                word = identifier.group()
+                if word in ("requires", "ensures", "recommends", "decreases", "returns"):
+                    in_contract = True
+                elif in_contract and word in ("if", "match"):
+                    pending_blocks += 1
+                    pending_else = False
+                elif in_contract and word == "else":
+                    pending_else = True
+                cursor += len(word)
+                continue
+            if char == ";":
+                return None
+            if char == "{":
+                opening = cursor
+                depth = 1
+                cursor += 1
+                while cursor < len(structural) and depth:
+                    depth += (structural[cursor] == "{") - (structural[cursor] == "}")
+                    cursor += 1
+                if depth:
+                    return None
+                if pending_else:
+                    pending_else = False
+                elif pending_blocks:
+                    pending_blocks -= 1
+                else:
+                    return opening, cursor
+                continue
+        cursor += 1
+    return None
+
+
 def rust_items(source: str, name: str) -> tuple[RustItem, ...]:
     """Extract all real Rust/Verus function items named ``name``."""
     structural = mask_rust_comments_and_literals(source)
@@ -2419,38 +2477,10 @@ def rust_items(source: str, name: str) -> tuple[RustItem, ...]:
     )
     items: list[RustItem] = []
     for match in declaration.finditer(structural):
-        paren_depth = 0
-        bracket_depth = 0
-        body_start = -1
-        for index in range(match.end(), len(structural)):
-            char = structural[index]
-            if char == "(":
-                paren_depth += 1
-            elif char == ")":
-                paren_depth = max(0, paren_depth - 1)
-            elif char == "[":
-                bracket_depth += 1
-            elif char == "]":
-                bracket_depth = max(0, bracket_depth - 1)
-            elif char == "{" and paren_depth == 0 and bracket_depth == 0:
-                body_start = index
-                break
-            elif char == ";" and paren_depth == 0 and bracket_depth == 0:
-                break
-        if body_start < 0:
+        span = _rust_function_body_span(structural, match.end())
+        if span is None:
             continue
-        depth = 0
-        body_end = -1
-        for index in range(body_start, len(structural)):
-            if structural[index] == "{":
-                depth += 1
-            elif structural[index] == "}":
-                depth -= 1
-                if depth == 0:
-                    body_end = index + 1
-                    break
-        if body_end < 0:
-            continue
+        body_start, body_end = span
         start = match.start()
         item_source = source[start:body_end]
         delimiter_context = _rust_delimiter_context(structural, start)
@@ -2494,38 +2524,10 @@ def rust_function_items_from_structural(
     )
     items: list[RustItem] = []
     for match in declaration.finditer(structural):
-        paren_depth = 0
-        bracket_depth = 0
-        body_start = -1
-        for index in range(match.end(), len(structural)):
-            char = structural[index]
-            if char == "(":
-                paren_depth += 1
-            elif char == ")":
-                paren_depth = max(0, paren_depth - 1)
-            elif char == "[":
-                bracket_depth += 1
-            elif char == "]":
-                bracket_depth = max(0, bracket_depth - 1)
-            elif char == "{" and paren_depth == 0 and bracket_depth == 0:
-                body_start = index
-                break
-            elif char == ";" and paren_depth == 0 and bracket_depth == 0:
-                break
-        if body_start < 0:
+        span = _rust_function_body_span(structural, match.end())
+        if span is None:
             continue
-        depth = 0
-        body_end = -1
-        for index in range(body_start, len(structural)):
-            if structural[index] == "{":
-                depth += 1
-            elif structural[index] == "}":
-                depth -= 1
-                if depth == 0:
-                    body_end = index + 1
-                    break
-        if body_end < 0:
-            continue
+        body_start, body_end = span
         start = match.start()
         items.append(
             RustItem(
@@ -2573,46 +2575,10 @@ def _rust_all_function_items(
     )
     items: list[RustItem] = []
     for match in declaration.finditer(structural):
-        paren_depth = 0
-        bracket_depth = 0
-        body_start = -1
-        for index in range(match.end(), len(structural)):
-            character = structural[index]
-            if character == "(":
-                paren_depth += 1
-            elif character == ")":
-                paren_depth = max(0, paren_depth - 1)
-            elif character == "[":
-                bracket_depth += 1
-            elif character == "]":
-                bracket_depth = max(0, bracket_depth - 1)
-            elif (
-                character == "{"
-                and paren_depth == 0
-                and bracket_depth == 0
-            ):
-                body_start = index
-                break
-            elif (
-                character == ";"
-                and paren_depth == 0
-                and bracket_depth == 0
-            ):
-                break
-        if body_start < 0:
+        span = _rust_function_body_span(structural, match.end())
+        if span is None:
             continue
-        depth = 0
-        body_end = -1
-        for index in range(body_start, len(structural)):
-            if structural[index] == "{":
-                depth += 1
-            elif structural[index] == "}":
-                depth -= 1
-                if depth == 0:
-                    body_end = index + 1
-                    break
-        if body_end < 0:
-            continue
+        body_start, body_end = span
         if (
             reference_pattern is not None
             and reference_pattern.search(
@@ -70075,74 +70041,102 @@ def _kura_application_receipt_production_source_fidelity_errors(
     release_path = repo_root / "scripts" / "run_sumeragi_v2_release_gates.sh"
     errors = list(kura_inventory_errors)
 
+    receipt_reads_path, receipt_reads_source = {
+        relative: (path, source)
+        for relative, path, source in _kura_component_sources
+    }.get(
+        "kura/consensus_storage_reads.rs",
+        (repo_root / "crates/iroha_core/src/kura/consensus_storage_reads.rs", ""),
+    )
     kura_context = (("impl", "Kura"),)
     observation = _require_rust_item(
-        kura_path,
-        kura_source,
-        "read_active_lane_block_application_receipt_for_write_observation",
+        receipt_reads_path,
+        receipt_reads_source,
+        "read_lane_completion_receipt_structural",
         errors,
     )
     _require_rust_item_context(
-        kura_path,
+        receipt_reads_path,
         observation,
         kura_context,
-        "non-attesting application-receipt writer observation",
+        "shared application-receipt structural observation",
         errors,
     )
     _require_exact_rust_tokens(
-        kura_path,
+        receipt_reads_path,
         observation,
         """
-fn read_active_lane_block_application_receipt_for_write_observation(
-    &self,
-    lane_id: LaneId,
-    lane_block_height: u64,
-) -> Option<LaneBlockApplicationReceiptArtifact> {
-    let _geometry_guard = self.lane_geometry_lock.lock();
-    let entry = self.lane_storage_entry(lane_id).ok()?;
-    let (data_path, index_path) =
-        Self::lane_block_application_receipt_paths_for_entry(&entry, &self.store_root);
-    let _guard = self.sidecar_lock.lock();
-    if self.prune_recovery_is_required() {
-        return None;
+fn read_lane_completion_receipt_structural(
+        &self,
+        lane_id: LaneId,
+        lane_block_height: u64,
+        attest_durability: bool,
+    ) -> Result<Option<LaneBlockApplicationReceiptArtifact>> {
+        let _geometry = self.lane_geometry_lock.lock();
+        let entry = self.lane_storage_entry(lane_id)?;
+        self.active_lane_incarnation_marker(&entry)?;
+        let (data_path, index_path) =
+            Self::lane_block_application_receipt_paths_for_entry(&entry, &self.store_root);
+        let _sidecar = self.sidecar_lock.lock();
+        self.ensure_prune_recovery_not_required()?;
+        if self.bound_progress_sidecar_directory_is_absent(&data_path, &index_path)? {
+            return Ok(None);
+        }
+        let namespace = self.open_bound_progress_namespace(&data_path, &index_path)?;
+        self.ensure_bound_progress_pair_has_no_recovery_artifacts_locked(
+            &namespace,
+            &data_path,
+            &index_path,
+            "lane receipt",
+        )?;
+        let mut pair = self.open_bound_progress_pair(&data_path, &index_path)?;
+        let artifact = match &mut pair {
+            BoundProgressPair::Absent(_) => None,
+            BoundProgressPair::Present(bound) => self.read_populated_consensus_lane_slot(
+                bound,
+                lane_block_height,
+                "lane receipt",
+                |bound| {
+                    self.read_lane_block_application_receipt_from_bound_locked(
+                        lane_id,
+                        lane_block_height,
+                        bound,
+                    )
+                },
+            )?,
+        };
+        if let Some(artifact) = &artifact {
+            self.require_active_lane_artifact(&entry, &artifact.proposal.descriptor)?;
+            if attest_durability
+                && let BoundProgressPair::Present(bound) = &pair
+                && !self.sync_bound_progress_sidecar(bound, "lane receipt")
+            {
+                return Err(Self::invalid_lane_artifact_error(
+                    index_path,
+                    "lane receipt durability barrier failed",
+                ));
+            }
+        }
+        Ok(artifact)
     }
-    let mut bound = self
-        .open_bound_progress_sidecar(&data_path, &index_path)
-        .ok()?;
-    let artifact = self.read_lane_block_application_receipt_from_bound_locked(
-        lane_id,
-        lane_block_height,
-        &mut bound,
-    )?;
-    if let Err(error) = self.require_active_lane_artifact(&entry, &artifact.proposal.descriptor) {
-        iroha_logger::warn!(
-            ?error,
-            lane = %entry.lane_id.as_u32(),
-            lane_block_height,
-            "observed lane application receipt targets stale lane geometry"
-        );
-        return None;
-    }
-    Some(artifact)
-}
 """,
         "application-receipt writer observation control flow",
         errors,
     )
     _require_rust_token_sequence(
-        kura_path,
+        receipt_reads_path,
         observation,
         """
-let mut bound = self
-    .open_bound_progress_sidecar(&data_path, &index_path)
-    .ok()?;
-let artifact = self.read_lane_block_application_receipt_from_bound_locked(
-    lane_id,
-    lane_block_height,
-    &mut bound,
+let namespace = self.open_bound_progress_namespace(&data_path, &index_path)?;
+self.ensure_bound_progress_pair_has_no_recovery_artifacts_locked(
+    &namespace,
+    &data_path,
+    &index_path,
+    "lane receipt",
 )?;
+let mut pair = self.open_bound_progress_pair(&data_path, &index_path)?;
 """,
-        "application-receipt writer observation must use the structural bound open/read path",
+        "application-receipt writer observation must use the strict non-recovering bound pair",
         errors,
     )
     for prohibited, description in (
@@ -70157,10 +70151,6 @@ let artifact = self.read_lane_block_application_receipt_from_bound_locked(
         (
             "read_active_lane_block_application_receipt_durability_attested(",
             "application-receipt writer observation may not use an attesting reader",
-        ),
-        (
-            "sync_bound_progress_sidecar(",
-            "application-receipt writer observation may not sync a sidecar",
         ),
         (
             "sync_bound_progress_absence(",
@@ -70180,7 +70170,7 @@ let artifact = self.read_lane_block_application_receipt_from_bound_locked(
         ),
     ):
         _require_rust_token_sequence(
-            kura_path,
+            receipt_reads_path,
             observation,
             prohibited,
             description,
@@ -70204,28 +70194,91 @@ let artifact = self.read_lane_block_application_receipt_from_bound_locked(
     if writer is not None:
         ordered_fragments = (
             (
-                "optimistic structural observation",
+                "prune lock, recovery exclusion and mutation authority",
                 """
-let observed_existing = self
-    .read_active_lane_block_application_receipt_for_write_observation(
-        lane_id,
-        lane_block_height,
-    );
+let _prune_guard = self.prune_lock.lock();
+self.ensure_prune_recovery_not_required()?;
+self.durable_mutation_authorized()?;
+Self::validate_lane_block_application_receipt_artifact(artifact)
+""",
+            ),
+            ("canonical lock", "let _canonical_chain_guard = self.canonical_chain_lock.lock();"),
+            (
+                "canonical carrier authentication",
+                """
+self.read_block_body_under_prune_and_canonical_guards(canonical_height)?;
+if !self.lane_block_application_receipt_matches_available_evidence_under_prune_and_canonical_guards(
+    artifact, false,
+) { return Err
 """,
             ),
             (
-                "geometry lock",
-                "let _geometry_guard = self.lane_geometry_lock.lock();",
+                "non-attesting strict observation",
+                """
+let observed_existing =
+    self.read_lane_completion_receipt_structural(lane_id, lane_block_height, false)?;
+""",
             ),
             (
-                "sidecar lock and recovery",
+                "occupied canonical evidence authentication",
+                """
+self.read_block_body_under_prune_and_canonical_guards(height)?;
+self.lane_block_application_receipt_matches_available_evidence_under_prune_and_canonical_guards(
+    existing, false,
+)
+""",
+            ),
+            ("geometry lock", "let _geometry_guard = self.lane_geometry_lock.lock();"),
+            (
+                "active geometry identity",
+                """
+let entry = self.lane_storage_entry(lane_id)?;
+self.require_active_lane_artifact(&entry, descriptor)?;
+""",
+            ),
+            (
+                "sidecar lock and recovery-artifact rejection",
                 """
 let _guard = self.sidecar_lock.lock();
-if !self.recover_bound_progress_sidecar_artifacts(
+let mutation_namespace = self.open_bound_progress_namespace(&data_path, &index_path)?;
+self.ensure_bound_progress_pair_has_no_recovery_artifacts_locked(
+    &mutation_namespace,
     &data_path,
     &index_path,
-    "lane block application receipt",
-)
+    "lane receipt writer preflight",
+)?;
+""",
+            ),
+            (
+                "strict occupied-slot reread",
+                """
+let mut existing_pair = self.open_bound_progress_pair(&data_path, &index_path)?;
+let existing = match &mut existing_pair {
+    BoundProgressPair::Absent(_) => None,
+    BoundProgressPair::Present(bound) => self.read_populated_consensus_lane_slot(
+        bound,
+        lane_block_height,
+        "lane receipt writer preflight",
+        |bound| {
+            self.read_lane_block_application_receipt_from_bound_locked(
+                lane_id,
+                lane_block_height,
+                bound,
+            )
+        },
+    )?,
+};
+""",
+            ),
+            (
+                "exact observation revalidation",
+                """
+if existing != observed_existing {
+    return Err(Self::invalid_lane_artifact_error(
+        data_path,
+        "lane receipt changed after canonical authority validation",
+    ));
+}
 """,
             ),
             (
@@ -70246,6 +70299,75 @@ if existing == *artifact {
     let _ = self.publish_lane_merge_application_frontier_locked(pending_canonical_bytes, &entry, artifact,)?;
     return Ok(());
 }
+""",
+            ),
+            (
+                'competing valid receipt rejection',
+                """
+if self
+                .require_active_lane_artifact(&entry, &existing.proposal.descriptor)
+                .is_ok()
+            {
+                if observed_existing.as_ref() != Some(&existing) {
+                    return Err(Self::invalid_lane_artifact_error(
+                        data_path,
+                        "active lane application receipt changed while evidence was validated",
+                    ));
+                }
+                if observed_existing_matches_evidence {
+                    return Err(Self::invalid_lane_artifact_error(
+                        data_path,
+                        format!(
+                            "lane application receipt already has different valid evidence for lane {} height {}",
+                            lane_id.as_u32(),
+                            lane_block_height
+                        ),
+                    ));
+                }
+            }
+""",
+            ),
+            (
+                'bound append and failure propagation',
+                """
+let wrote = Self::append_indexed_progress_sidecar(
+    &data_path,
+    &index_path,
+    lane_block_height,
+    &payload,
+    "lane block application receipt",
+    None,
+    &mutation_namespace,
+);
+if !wrote {
+    return Err(Error::IO(
+        std::io::Error::other("failed to persist lane block application receipt"),
+        data_path,
+    ));
+}
+""",
+            ),
+            (
+                'exact post-write durability attestation',
+                """
+if self
+            .read_lane_block_application_receipt_from_paths_durability_attested_locked(
+                lane_id,
+                lane_block_height,
+                &data_path,
+                &index_path,
+                false,
+            )
+            .as_ref()
+            != Some(artifact)
+        {
+            return Err(Error::IO(
+                std::io::Error::other(
+                    "failed to make lane application receipt directory chain durable",
+                ),
+                data_path,
+            ));
+        }
 """,
             ),
         )
@@ -70272,8 +70394,8 @@ if existing == *artifact {
         if complete_order and positions != sorted(positions):
             errors.append(
                 f"{kura_path}:{writer.line}: application-receipt observation, "
-                "geometry lock, sidecar recovery, and exact-existing barrier "
-                "reissue must retain their reviewed production order"
+                "canonical and geometry locks, recovery-artifact rejection, exact-existing barrier "
+                "reissue, append and attestation must retain their reviewed production order"
             )
         _require_rust_token_sequence(
             kura_path,
@@ -70291,6 +70413,95 @@ if existing == *artifact {
             errors,
             count=1,
         )
+
+    _require_rust_token_sequence(
+        kura_path, writer, "recover_bound_progress_sidecar_artifacts(",
+        "locked application-receipt writer may not recover sidecars", errors, count=0,
+    )
+    # The strict observation must preserve the occupied-slot and recovery errors
+    # of these shared owners, rather than turning them into an absent receipt.
+    for symbol, fragments in (
+        (
+            "ensure_bound_progress_pair_has_no_recovery_artifacts_locked",
+            (
+                """
+let paths = [
+    data_path.with_extension("norito.tmp"),
+    index_path.with_extension("index.tmp"),
+    index_path.with_extension("index.prepend.tmp"),
+    Self::bound_progress_append_build_path(index_path),
+    Self::bound_progress_append_intent_path(index_path),
+];
+""",
+                """
+for path in paths {
+    if self.open_optional_bound_progress_file(namespace, &path)?.is_some() {
+        return Err(Self::invalid_lane_artifact_error(path, format!("{kind} has unresolved recovery state; read-only startup planning cannot mutate it"),));
+    }
+}
+""",
+            ),
+        ),
+        (
+            "read_populated_consensus_lane_slot",
+            (
+                """
+let value = if slot.len == 0 {
+    if slot.offset != 0 {
+        return Err(invalid("empty indexed slot has a nonzero offset"));
+    }
+    None
+} else {
+    Some(decode(pair).ok_or_else(|| invalid("occupied indexed slot is unreadable, malformed, or conflicts with its authority"))?)
+};
+""",
+                """
+if !self.bound_progress_sidecar_unchanged(pair) {
+    return Err(invalid("indexed storage changed during slot authentication",));
+}
+Ok(value)
+""",
+            ),
+        ),
+        (
+            "read_lane_block_application_receipt_from_bound_locked",
+            (
+                "norito::decode_canonical::<LaneBlockApplicationReceiptArtifact>",
+                """
+if descriptor.lane_id != lane_id || descriptor.lane_block_height != lane_block_height {
+    iroha_logger::warn!(
+        lane = %lane_id.as_u32(), lane_block_height,
+        actual_lane = %descriptor.lane_id.as_u32(),
+        actual_height = descriptor.lane_block_height,
+        "durability-attested lane application receipt identity mismatch"
+    );
+    return None;
+}
+""",
+                """
+if let Err(message) = Self::validate_lane_block_application_receipt_artifact(&artifact) {
+    iroha_logger::warn!(lane = %lane_id.as_u32(), lane_block_height, message,
+        "durability-attested lane application receipt validation failed");
+    return None;
+}
+Some(artifact)
+""",
+            ),
+        ),
+    ):
+        owner_path, owner_source = (
+            (receipt_reads_path, receipt_reads_source)
+            if symbol == "read_populated_consensus_lane_slot"
+            else (kura_path, kura_source)
+        )
+        owner = _require_rust_item(owner_path, owner_source, symbol, errors)
+        _require_rust_item_context(owner_path, owner, kura_context, "receipt strict observation owner", errors)
+        for fragment in fragments:
+            _require_rust_token_sequence(
+                owner_path, owner, fragment,
+                f"receipt strict observation owner {symbol} must retain its exact failure semantics",
+                errors,
+            )
 
     release_test = (
         "kura::tests::progress_witness_durability::"
@@ -70325,37 +70536,43 @@ _KURA_RETIREMENT_FIXED_PROGRESS_PAIR_CONTRACTS = (
         "lane_data",
         "lane_index",
         "lane_artifact_paths_for_entry",
-        "lane retirement lane-block artifact",
+        '"lane retirement lane-block artifact"',
     ),
     (
         "input_data",
         "input_index",
         "lane_block_execution_input_paths_for_entry",
-        "lane retirement execution input",
+        '"lane retirement execution input"',
     ),
     (
         "preflight_data",
         "preflight_index",
         "lane_block_execution_preflight_paths_for_entry",
-        "lane retirement execution preflight",
+        '"lane retirement execution preflight"',
     ),
     (
         "certified_data",
         "certified_index",
         "certified_lane_block_paths_for_entry",
-        "lane retirement certified lane block",
+        '"lane retirement certified lane block"',
     ),
     (
         "merge_bundle_data",
         "merge_bundle_index",
         "autonomous_lane_merge_bundle_paths_for_entry",
-        "lane retirement autonomous merge bundle",
+        '"lane retirement autonomous merge bundle"',
+    ),
+    (
+        "canonical_replica_data",
+        "canonical_replica_index",
+        "canonical_autonomous_lane_replica_paths_for_entry",
+        "CANONICAL_AUTONOMOUS_LANE_REPLICA_FORMAT_LABEL",
     ),
     (
         "receipt_data",
         "receipt_index",
         "lane_block_application_receipt_paths_for_entry",
-        "lane retirement application receipt",
+        '"lane retirement application receipt"',
     ),
 )
 
@@ -70429,52 +70646,34 @@ let artifact_snapshot = self.geometry_bound_progress_directory_snapshot(
         errors,
     )
 
-    # Token checks intentionally ignore literals. Extract the one real array
-    # and bind its ordered identifiers and diagnostic kinds together, excluding
-    # tuple-shaped text in comments or literals via the structural mask.
+    # Unlike the general code-token checks, this complete array contract
+    # retains string contents and constant expressions. No unrecognized tuple
+    # can disappear from the inventory because its label is not a literal.
     if retirement is not None:
         structural = mask_rust_comments_and_literals(retirement.source)
         declaration = re.search(r"\blet\s+fixed_progress_pairs\s*:", structural)
-        array_end = (
-            -1
-            if declaration is None
-            else structural.find("];", declaration.end())
-        )
-        if declaration is None or array_end < 0:
+        array_end = -1 if declaration is None else structural.find("];", declaration.end())
+        assignment = -1 if declaration is None else structural.find("=", declaration.end(), array_end)
+        if assignment < 0 or array_end < 0:
             errors.append(
                 f"{lane_geometry_path}:{retirement.line}: exact fixed retirement "
                 "progress-pair array must remain structurally extractable"
             )
         else:
-            array_source = retirement.source[declaration.start() : array_end + 2]
-            array_structural = structural[
-                declaration.start() : array_end + 2
+            array_source = mask_rust_comments(retirement.source[assignment + 1:array_end + 2])
+            members = [
+                r"\(\s*&\s*" + re.escape(data_name)
+                + r"\s*,\s*&\s*" + re.escape(index_name)
+                + r"\s*,\s*" + re.escape(kind_expression) + r"\s*,?\s*\)"
+                for data_name, index_name, _path_builder, kind_expression
+                in _KURA_RETIREMENT_FIXED_PROGRESS_PAIR_CONTRACTS
             ]
-            tuple_pattern = re.compile(
-                r"\(\s*&\s*([A-Za-z_][A-Za-z0-9_]*)\s*,\s*"
-                r"&\s*([A-Za-z_][A-Za-z0-9_]*)\s*,\s*"
-                r"(\"(?:\\.|[^\"\\])*\")\s*,?\s*\)"
-            )
-            observed_pairs: list[tuple[str, str, str]] = []
-            for match in tuple_pattern.finditer(array_source):
-                if array_structural[match.start()] != "(":
-                    continue
-                try:
-                    kind = json.loads(match.group(3))
-                except json.JSONDecodeError:
-                    continue
-                observed_pairs.append((match.group(1), match.group(2), kind))
-            expected_pair_membership = [
-                (data_name, index_name, kind)
-                for data_name, index_name, _path_builder, kind in (
-                    _KURA_RETIREMENT_FIXED_PROGRESS_PAIR_CONTRACTS
-                )
-            ]
-            if observed_pairs != expected_pair_membership:
+            pattern = r"\s*\[\s*" + r"\s*,\s*".join(members) + r"\s*,?\s*\]\s*;\s*"
+            if re.fullmatch(pattern, array_source) is None:
                 errors.append(
                     f"{lane_geometry_path}:{retirement.line}: fixed retirement "
-                    "progress pairs must preserve exact six-member artifact "
-                    f"membership and order; found {observed_pairs!r}"
+                    "progress pairs must preserve exact artifact membership, "
+                    "label expressions and order"
                 )
 
     recovery = _require_qualified_rust_item(
@@ -70520,12 +70719,22 @@ if let Err(failure) = self
             """
 BoundProgressRecoveryFailure::RetryableIo => ErrorKind::WouldBlock,
 BoundProgressRecoveryFailure::InvalidData => ErrorKind::InvalidData,
+};
+return Err(self.geometry_error_owned(
+    error_kind,
+    format!("{kind} recovery did not reach a durable fixed point"),
+));
 """,
             "retirement recovery failure classification",
         ),
         (
             """
 if !Self::progress_mutation_namespace_unchanged(&pair_namespace) {
+    return Err(self.geometry_error_owned(
+        ErrorKind::InvalidData,
+        format!("{kind} namespace changed during progress recovery"),
+    ));
+}
 """,
             "retirement recovery must reject a replaced pair namespace",
         ),
@@ -70574,6 +70783,180 @@ if recovery_directory.expected_path != immutable_directory.expected_path
             description,
             errors,
         )
+
+    # The added pair is an independent durable owner, with a shared format
+    # label and path constructor. Bind those declarations, not a string copy
+    # that can diverge from the reader or its recovery classifier.
+    def require_constant(path: Path, owner: str, name: str, declaration: str) -> None:
+        candidates = [
+            statement for statement in rust_top_level_statements(owner)
+            if re.search(r"\bconst\s+" + re.escape(name) + r"\b", mask_rust_comments_and_literals(statement.source))
+        ]
+        if (
+            len(candidates) != 1
+            or candidates[0].tokens != rust_code_tokens(declaration)
+            or candidates[0].ancestor_inner_attributes
+            or re.findall(r'"(?:\\.|[^"\\])*"', mask_rust_comments(candidates[0].source))
+            != re.findall(r'"(?:\\.|[^"\\])*"', declaration)
+        ):
+            errors.append(f"{path}: retirement owner constant {name} must retain its exact declaration")
+
+    require_constant(
+        lane_geometry_path, source, "LANE_RETIREMENT_REGULAR_SIDECARS_PER_ROUTE",
+        f"const LANE_RETIREMENT_REGULAR_SIDECARS_PER_ROUTE: usize = {pair_count};",
+    )
+    require_constant(
+        lane_geometry_path, source, "LANE_RETIREMENT_FIXED_ARTIFACT_FILES_PER_ROUTE",
+        "const LANE_RETIREMENT_FIXED_ARTIFACT_FILES_PER_ROUTE: usize = "
+        "LANE_RETIREMENT_REGULAR_SIDECARS_PER_ROUTE * 2 + LANE_RETIREMENT_FIXED_FRONTIERS_PER_ROUTE;",
+    )
+    replica_path = lane_geometry_path.with_name("canonical_autonomous_replica.rs")
+    if not replica_path.is_file() or replica_path.is_symlink():
+        errors.append(f"{replica_path}: canonical retirement replica owner must be a regular file")
+    else:
+        replica_source = replica_path.read_text(encoding="utf-8")
+        require_constant(
+            replica_path, replica_source, "CANONICAL_AUTONOMOUS_LANE_REPLICA_FORMAT_LABEL",
+            'const CANONICAL_AUTONOMOUS_LANE_REPLICA_FORMAT_LABEL: &str = "lane.canonical_autonomous_replica.v1";',
+        )
+        path_owner = _require_qualified_rust_item(
+            replica_path, replica_source, "Kura", "canonical_autonomous_lane_replica_paths_for_entry",
+            errors, "canonical retirement replica path owner",
+        )
+        _require_exact_rust_tokens(replica_path, path_owner, """
+fn canonical_autonomous_lane_replica_paths_for_entry(
+    entry: &LaneConfigEntry, store_root: &Path,
+) -> (PathBuf, PathBuf) {
+    let directory = Self::lane_artifact_dir(&entry.blocks_dir(store_root));
+    (
+        directory.join(CANONICAL_AUTONOMOUS_LANE_REPLICAS_DATA_FILE),
+        directory.join(CANONICAL_AUTONOMOUS_LANE_REPLICAS_INDEX_FILE),
+    )
+}
+""", "canonical retirement replica paths must bind both files to the active entry", errors)
+
+    for fragment, description in (
+        ("""
+let mut canonical_replica_bound = self.open_geometry_bound_progress_sidecar(
+    &canonical_replica_data, &canonical_replica_index,
+)?;
+self.ensure_geometry_progress_pair_uses_directory(
+    &canonical_replica_bound, &lane_artifacts_guard,
+    &canonical_replica_data, &canonical_replica_index,
+    "lane retirement canonical autonomous replica",
+)?;
+""", "canonical retirement replica must open a strict snapshot-bound pair"),
+        ("""
+let canonical_replica_heights = canonical_replica_bound.sidecar_mut().map_or_else(
+    || Ok(BTreeSet::new()),
+    |bound| {
+        self.validate_canonical_autonomous_lane_replica_pair_layout_locked(bound)
+            .map(|(_, heights)| heights)
+            .map_err(|message| {
+                self.geometry_error_owned(ErrorKind::InvalidData, format!(
+                    "lane retirement canonical autonomous replica pair is invalid: {message}"
+                ),)
+            })
+    },
+)?;
+""", "canonical retirement replica must propagate bounded pair-layout rejection"),
+        ("""
+count_work_items(&mut work_items_seen, canonical_replica_heights.len())?;
+for lane_block_height in canonical_replica_heights {
+""", "canonical retirement replica heights must consume the aggregate work bound"),
+        ("""
+let (record, _) = self.read_canonical_autonomous_lane_replica_from_bound_locked(
+    storage_lane_id, lane_block_height,
+    canonical_replica_bound.sidecar_mut().expect(
+        "non-empty height set has a bound canonical autonomous replica sidecar",
+    ),
+)
+.map_err(|message| {
+    self.geometry_error_owned(ErrorKind::InvalidData, format!(
+        "lane retirement canonical autonomous replica is invalid: {message}"
+    ),)
+})?
+.ok_or_else(|| {
+    self.geometry_error(ErrorKind::InvalidData,
+        "lane retirement canonical autonomous replica disappeared during validation",
+    )
+})?;
+""", "canonical retirement replica must reject corrupt or missing occupied records"),
+        ("""
+self.require_active_lane_artifact(
+    &entry, &record.bundle.certified.proposal.descriptor,
+)?;
+self.validate_canonical_autonomous_lane_replica_against_kura_under_prune_and_canonical_guards(
+    &record,
+)?;
+""", "canonical retirement replica must propagate active identity and carrier validation failures"),
+        ("""
+let identity = (storage_lane_id, lane_block_height);
+if certified.get(&identity).is_some_and(|existing| existing != &record.bundle.certified)
+    || inputs.get(&identity).is_some_and(|existing| existing != &record.input)
+    || merge_bundles.get(&identity).is_some_and(|existing| existing != &record.bundle)
+{
+    return Err(self.geometry_error(
+        ErrorKind::InvalidData,
+        "lane retirement canonical autonomous replica conflicts with committee-owned durable evidence",
+    ));
+}
+certified.entry(identity).or_insert_with(|| record.bundle.certified.clone());
+inputs.entry(identity).or_insert_with(|| record.input.clone());
+merge_bundles.entry(identity).or_insert(record.bundle);
+""", "canonical retirement replica must reject conflicting committee evidence before filling absent records"),
+        ("""
+if canonical_replica_bound.sidecar().is_some_and(|bound| {
+    !self.sync_bound_progress_sidecar(bound, CANONICAL_AUTONOMOUS_LANE_REPLICA_FORMAT_LABEL,)
+}) {
+    return Err(self.geometry_error(
+        ErrorKind::WouldBlock,
+        "lane retirement canonical autonomous replica durability attestation failed",
+    ));
+}
+""", "canonical retirement replica must propagate strict durability failure"),
+    ):
+        _require_rust_token_sequence(lane_geometry_path, retirement, fragment, description, errors)
+
+    # These two checks include the rejection bodies: retaining a comparison
+    # while discarding its error must not satisfy the directory identity gate.
+    for variable, label in (
+        ("refreshed_directory", "retirement recovery must reject a changed directory after each pair"),
+        ("immutable_directory", "retirement recovery must reject a changed final snapshot directory"),
+    ):
+        message = "{kind} artifact directory changed during progress recovery" if variable == "refreshed_directory" else "{context} artifact namespace changed before its immutable scan"
+        _require_rust_token_sequence(lane_geometry_path, recovery, f"""
+if recovery_directory.expected_path != {variable}.expected_path
+    || recovery_directory.canonical_path != {variable}.canonical_path
+    || !Self::sidecar_metadata_same_object(&recovery_directory.metadata, &{variable}.metadata,)
+    || !self.geometry_bound_progress_directory_unchanged(&{variable})
+{{
+    return Err(self.geometry_error_owned(ErrorKind::InvalidData, format!("{message}"),));
+}}
+""", label, errors)
+
+    if recovery is not None:
+        tokens = rust_code_tokens(recovery.source)
+        anchors = (
+            "let mut recovery_directory = Self::open_bound_progress_directory(&self.store_root, lane_artifacts)?;",
+            "for &(data_path, index_path, kind) in pairs {",
+            "let pair_namespace = self.open_bound_progress_namespace(data_path, index_path)?;",
+            "self.ensure_geometry_progress_namespace_uses_directory(",
+            "if let Err(failure) = self.recover_bound_progress_sidecar_artifacts_in_namespace_classified(",
+            "if !Self::progress_mutation_namespace_unchanged(&pair_namespace)",
+            "let refreshed_directory = Self::open_bound_progress_directory(&self.store_root, lane_artifacts)?;",
+            "if recovery_directory.expected_path != refreshed_directory.expected_path",
+            "recovery_directory = refreshed_directory;",
+            "let immutable_directory = Self::open_bound_progress_directory(&self.store_root, lane_artifacts)?;",
+            "if recovery_directory.expected_path != immutable_directory.expected_path",
+            "Ok(immutable_directory)",
+        )
+        positions = [_token_sequence_positions(tokens, rust_code_tokens(anchor)) for anchor in anchors]
+        if any(len(found) != 1 for found in positions) or positions != sorted(positions):
+            errors.append(
+                f"{lane_geometry_path}:{recovery.line}: retirement recovery must retain "
+                "authentication, recovery, per-pair refresh and final snapshot order"
+            )
     return errors
 
 

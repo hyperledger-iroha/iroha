@@ -38,7 +38,6 @@ use ivm_abi::state_value::{
     StateValueAtomV1, StateValueKindV1, StateValueNodeV1, StateValueRecordV1, StateValueSchemaV1,
     state_value_schema_hash_v1,
 };
-use norito::codec::Encode;
 use norito::json::{self, Value};
 use std::{
     any::Any,
@@ -2367,7 +2366,7 @@ fn eval_json_payload(args: &[Expr]) -> Result<String, String> {
         )),
     }
 }
-fn make_norito_envelope<T: Encode>(value: &T) -> Result<Vec<u8>, String> {
+fn make_norito_envelope<T: norito::NoritoSerialize>(value: &T) -> Result<Vec<u8>, String> {
     let bytes = norito::encode_canonical(value)
         .map_err(|err| format!("failed to encode canonical Norito value: {err}"))?;
     Ok(make_tlv(PointerType::NoritoBytes, &bytes))

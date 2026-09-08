@@ -1101,79 +1101,98 @@ where
             // multi-million-entry map beside the dense trace.
             Some(copy_manager.lock().map_err(|_| Error::Synthesis)?)
         };
-        let mut lane_rows = (0..configured_lanes)
-            .map(|_| Vec::<RawRow<Base<C>>>::new())
-            .collect::<Vec<_>>();
-        let mut rings = Vec::<Vec<LaneEndpoint>>::with_capacity(self.jobs.len());
-        for (job_index, job) in self.jobs.iter().enumerate() {
-            let lane_count = job.source_count_tags.len();
-            let mut offset = choose_offset::<C>(&job.sources).map_err(|_| Error::Synthesis)?;
-            let mut endpoints = Vec::with_capacity(lane_count);
-            for (logical_lane, physical_lane) in job.physical_lanes.iter().copied().enumerate() {
-                let (source_start, source_end) =
-                    dense_shard_bounds(job.sources.len(), lane_count, logical_lane);
-                let rows_for_lane = &mut lane_rows[physical_lane];
-                let row_start = rows_for_lane.len();
-                let (mut rows, terminal) = build_job_lane_rows::<C>(
-                    job,
-                    job_index,
-                    logical_lane,
-                    source_start,
-                    source_end,
-                    offset,
-                )?;
-                endpoints.push(LaneEndpoint {
-                    lane: physical_lane,
-                    offset_x_row: row_start + OFFSET_X_BRIDGE_ROW,
-                    offset_y_row: row_start + OFFSET_Y_BRIDGE_ROW,
-                    terminal_x_row: row_start + rows.len() - 2,
-                    terminal_y_row: row_start + rows.len() - 1,
-                });
-                rows_for_lane.append(&mut rows);
-                offset = terminal;
-            }
-            rings.push(endpoints);
-        }
+        let plan = plan_dense_rows(&self.jobs, configured_lanes, usable_rows)?;
         layouter.assign_region(
             || "Paired Pasta dense normalized-GLV MSM",
             |mut region| {
-                let mut buses = (0..configured_lanes)
-                    .map(|_| Vec::<Cell>::new())
-                    .collect::<Vec<_>>();
-                let schedule_rows = lane_rows.iter().map(Vec::len).max().unwrap_or(0);
-                for row_index in 0..schedule_rows {
-                    region.assign_fixed(
-                        config.packed_schedule,
-                        row_index,
-                        packed_enable_tag_at(&lane_rows, row_index)?,
-                    );
+                // Keep fixed values and their assignment order identical. The checked geometry
+                // determines tags without generating affine witnesses or retaining raw rows.
+                for (row_index, packed) in plan.packed_schedule.iter().copied().enumerate() {
+                    region.assign_fixed(config.packed_schedule, row_index, Base::<C>::from(packed));
                 }
-                for (lane, rows) in lane_rows.iter().enumerate() {
-                    let lane_config = &config.lanes[lane];
-                    buses[lane].reserve(rows.len());
-                    for (row_index, row) in rows.iter().enumerate() {
-                        for column in 0..DENSE_COLUMNS {
-                            let value = if self.use_unknown {
-                                Value::unknown()
-                            } else {
-                                Value::known(row.values[column])
-                            };
-                            let cell = region
-                                .assign_advice(lane_config.columns[column], row_index, value)
-                                .cell();
-                            if column == BUS {
-                                buses[lane].push(cell);
-                            }
+                // Copy-edge insertion order can affect permutation cycles. Retain only bound
+                // BUS metadata, then emit lane-major virtual edges and job-major rings exactly
+                // as the former vector implementation did. All other row data dies at emission.
+                let mut bindings = plan
+                    .bound_bus_counts
+                    .iter()
+                    .map(|count| Vec::<(Cell, BusBinding)>::with_capacity(*count))
+                    .collect::<Vec<_>>();
+                let mut rings = Vec::<Vec<[Cell; 4]>>::with_capacity(self.jobs.len());
+                for (job_index, (job, shards)) in self.jobs.iter().zip(&plan.jobs).enumerate() {
+                    let mut offset =
+                        choose_offset::<C>(&job.sources).map_err(|_| Error::Synthesis)?;
+                    let mut endpoints = Vec::with_capacity(shards.len());
+                    for shard in shards {
+                        let columns = &config.lanes[shard.physical_lane].columns;
+                        let mut cells = [None; 4];
+                        let (row_count, terminal) = emit_job_lane_rows::<C>(
+                            job,
+                            job_index,
+                            shard.logical_lane,
+                            shard.source_start,
+                            shard.source_end,
+                            offset,
+                            |local_row, row| {
+                                if local_row >= shard.row_count
+                                    || row.enable_tag
+                                        != dense_row_enable_tag(local_row, shard.row_count)?
+                                {
+                                    return Err(Error::Synthesis);
+                                }
+                                let row_index = shard.row_start + local_row;
+                                for (column, column_id) in columns.iter().copied().enumerate() {
+                                    let value = if self.use_unknown {
+                                        Value::unknown()
+                                    } else {
+                                        Value::known(row.values[column])
+                                    };
+                                    let cell = region.assign_advice_discarding_value(
+                                        column_id, row_index, value,
+                                    );
+                                    if column == BUS {
+                                        if let Some(binding) = row.binding {
+                                            bindings[shard.physical_lane].push((cell, binding));
+                                        }
+                                        for (endpoint, endpoint_row) in [
+                                            OFFSET_X_BRIDGE_ROW,
+                                            OFFSET_Y_BRIDGE_ROW,
+                                            shard.row_count - 2,
+                                            shard.row_count - 1,
+                                        ]
+                                        .into_iter()
+                                        .enumerate()
+                                        {
+                                            if local_row == endpoint_row {
+                                                cells[endpoint] = Some(cell);
+                                            }
+                                        }
+                                    }
+                                }
+                                Ok(())
+                            },
+                        )?;
+                        if row_count != shard.row_count {
+                            return Err(Error::Synthesis);
                         }
+                        let [
+                            Some(offset_x),
+                            Some(offset_y),
+                            Some(terminal_x),
+                            Some(terminal_y),
+                        ] = cells
+                        else {
+                            return Err(Error::Synthesis);
+                        };
+                        endpoints.push([offset_x, offset_y, terminal_x, terminal_y]);
+                        offset = terminal;
                     }
+                    rings.push(endpoints);
                 }
                 if let Some(physical_cells) = &physical_cells {
-                    for (lane, rows) in lane_rows.iter().enumerate() {
-                        for (row_index, row) in rows.iter().enumerate() {
-                            let Some(binding) = row.binding else {
-                                continue;
-                            };
-                            let virtual_value = match binding {
+                    for lane_bindings in &bindings {
+                        for (raw, binding) in lane_bindings {
+                            let virtual_value = match *binding {
                                 BusBinding::Start { job } => self.jobs[job].start_tag,
                                 BusBinding::SourceCount { job, lane } => {
                                     self.jobs[job].source_count_tags[lane]
@@ -1192,7 +1211,7 @@ where
                             };
                             bind_virtual(
                                 &mut region,
-                                buses[lane][row_index],
+                                *raw,
                                 virtual_value,
                                 &physical_cells.assigned_advices,
                             )?;
@@ -1202,14 +1221,8 @@ where
                 for endpoints in &rings {
                     for (index, endpoint) in endpoints.iter().enumerate() {
                         let next = endpoints[(index + 1) % endpoints.len()];
-                        region.constrain_equal(
-                            buses[endpoint.lane][endpoint.terminal_x_row],
-                            buses[next.lane][next.offset_x_row],
-                        );
-                        region.constrain_equal(
-                            buses[endpoint.lane][endpoint.terminal_y_row],
-                            buses[next.lane][next.offset_y_row],
-                        );
+                        region.constrain_equal(endpoint[2], next[0]);
+                        region.constrain_equal(endpoint[3], next[1]);
                     }
                 }
                 Ok(())
@@ -1217,6 +1230,109 @@ where
         )
     }
 }
+// Small geometry-only descriptors replace the complete scalar trace. There is one shard
+// descriptor per logical lane, at most n u64 schedule entries, and 2 + 21*source_count
+// retained BUS bindings per shard. Each emitted RawRow is consumed before the next row.
+#[derive(Clone, Debug)]
+struct DenseShardRows {
+    physical_lane: usize,
+    logical_lane: usize,
+    source_start: usize,
+    source_end: usize,
+    row_start: usize,
+    row_count: usize,
+}
+#[derive(Clone, Debug)]
+struct DenseStreamingPlan {
+    jobs: Vec<Vec<DenseShardRows>>,
+    packed_schedule: Vec<u64>,
+    bound_bus_counts: Vec<usize>,
+}
+fn dense_row_enable_tag(row: usize, row_count: usize) -> Result<u64, Error> {
+    if row_count < ROWS_PER_SOURCE + ROWS_PER_JOB || row >= row_count {
+        return Err(Error::Synthesis);
+    }
+    Ok(if row == 0 {
+        1
+    } else if row + 1 == row_count {
+        0
+    } else {
+        2
+    })
+}
+fn plan_dense_rows<C>(
+    jobs: &[DenseMsmJob<C>],
+    configured_lanes: usize,
+    usable_rows: usize,
+) -> Result<DenseStreamingPlan, Error>
+where
+    C: CurveAffineExt,
+    Base<C>: BigPrimeField,
+{
+    if !(1..=DENSE_LANES).contains(&configured_lanes) {
+        return Err(Error::Synthesis);
+    }
+    let mut lane_rows = vec![0_usize; configured_lanes];
+    let mut bound_bus_counts = vec![0_usize; configured_lanes];
+    let mut packed_schedule = Vec::<u64>::new();
+    let mut planned_jobs = Vec::with_capacity(jobs.len());
+    for job in jobs {
+        let lane_count = job.source_count_tags.len();
+        if lane_count == 0
+            || lane_count > job.sources.len()
+            || job.physical_lanes.len() != lane_count
+        {
+            return Err(Error::Synthesis);
+        }
+        let mut used = vec![false; configured_lanes];
+        let mut shards = Vec::with_capacity(lane_count);
+        for (logical_lane, physical_lane) in job.physical_lanes.iter().copied().enumerate() {
+            if physical_lane >= configured_lanes || used[physical_lane] {
+                return Err(Error::Synthesis);
+            }
+            used[physical_lane] = true;
+            let (source_start, source_end) =
+                dense_shard_bounds(job.sources.len(), lane_count, logical_lane);
+            let row_count = dense_shard_rows(job.sources.len(), lane_count, logical_lane)
+                .map_err(|_| Error::Synthesis)?;
+            let row_start = lane_rows[physical_lane];
+            let row_end = row_start.checked_add(row_count).ok_or(Error::Synthesis)?;
+            if row_end > usable_rows {
+                return Err(Error::Synthesis);
+            }
+            if packed_schedule.len() < row_end {
+                packed_schedule.resize(row_end, 0);
+            }
+            let radix = PACKED_TAG_RADIX.pow(physical_lane as u32);
+            for (row, packed) in packed_schedule[row_start..row_end].iter_mut().enumerate() {
+                *packed += dense_row_enable_tag(row, row_count)? * radix;
+            }
+            let bound_count = (source_end - source_start)
+                .checked_mul(2 + SEGMENTS_PER_SCALAR)
+                .and_then(|count| count.checked_add(2))
+                .ok_or(Error::Synthesis)?;
+            bound_bus_counts[physical_lane] = bound_bus_counts[physical_lane]
+                .checked_add(bound_count)
+                .ok_or(Error::Synthesis)?;
+            shards.push(DenseShardRows {
+                physical_lane,
+                logical_lane,
+                source_start,
+                source_end,
+                row_start,
+                row_count,
+            });
+            lane_rows[physical_lane] = row_end;
+        }
+        planned_jobs.push(shards);
+    }
+    Ok(DenseStreamingPlan {
+        jobs: planned_jobs,
+        packed_schedule,
+        bound_bus_counts,
+    })
+}
+#[cfg(test)]
 #[derive(Clone, Copy, Debug)]
 struct LaneEndpoint {
     lane: usize,
@@ -1225,7 +1341,7 @@ struct LaneEndpoint {
     terminal_x_row: usize,
     terminal_y_row: usize,
 }
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum BusBinding {
     Start {
         job: usize,
@@ -1254,6 +1370,7 @@ struct RawRow<F: PrimeField> {
     binding: Option<BusBinding>,
     enable_tag: u64,
 }
+#[cfg(test)]
 fn packed_enable_tag_at<F: PrimeField>(
     lane_rows: &[Vec<RawRow<F>>],
     row_index: usize,
@@ -1337,17 +1454,14 @@ where
         )
     });
     let zeta = scalar_chip.load_constant(ctx, Scalar::<C>::ZETA);
-    let zeta_v2_unreduced = scalar_chip.mul_no_carry(ctx, v2.clone(), zeta);
-    let zeta_v2 = scalar_chip.carry_mod(ctx, zeta_v2_unreduced);
-    let combined_unreduced = scalar_chip.add_no_carry(ctx, v1, zeta_v2);
-    let combined = scalar_chip.carry_mod(ctx, combined_unreduced);
+    let combined = fused_glv_combination(ctx, scalar_chip, v1, v2, zeta);
     let zeta_squared = scalar_chip.load_constant(ctx, Scalar::<C>::ZETA.square());
     let opposite_unreduced = scalar_chip.mul_no_carry(ctx, combined.clone(), zeta_squared);
     let opposite_value = scalar_chip.carry_mod(ctx, opposite_unreduced);
     let unsigned = scalar_chip.select(ctx, opposite_value, combined, opposite);
     let negative = scalar_chip.negate(ctx, unsigned.clone());
     let signed = scalar_chip.select(ctx, negative, unsigned, sign);
-    scalar_chip.assert_equal(ctx, source.coefficient.clone(), signed);
+    assert_canonical_source_equal(ctx, scalar_chip, source.coefficient.clone(), signed);
     let beta_squared_x = gate.mul(ctx, Existing(source.x), Constant(Base::<C>::ZETA.square()));
     let r_x = <GateChip<Base<C>> as GateInstructions<Base<C>>>::select(
         gate,
@@ -1383,6 +1497,53 @@ where
         bits: [scalar_bits(normalized.v1), scalar_bits(normalized.v2)],
     })
 }
+/// Bind the computed GLV result to a canonical source through every proper limb.
+///
+/// Both operands retain the original proper-limb range and CRT constraints. Their limbs are
+/// smaller than the native field modulus, so these cell equalities are integer equalities.
+/// Checking the source below the scalar modulus therefore also makes the equal result
+/// canonical; a second modulus check on the result is redundant. Equality of native residues
+/// alone would not imply this result and must never replace the complete limb equalities.
+fn assert_canonical_source_equal<F, S>(
+    ctx: &mut Context<F>,
+    scalar_chip: &FpChip<'_, F, S>,
+    source: ProperCrtUint<F>,
+    result: ProperCrtUint<F>,
+) where
+    F: BigPrimeField,
+    S: BigPrimeField,
+{
+    assert_eq!(source.limbs().len(), scalar_chip.num_limbs);
+    assert_eq!(result.limbs().len(), scalar_chip.num_limbs);
+    for (source_limb, result_limb) in source.limbs().iter().zip(result.limbs()) {
+        ctx.constrain_equal(source_limb, result_limb);
+    }
+    scalar_chip.enforce_less_than_p(ctx, source);
+}
+
+/// Reduce `v1 + zeta * v2` once after the complete integer addition.
+///
+/// The caller's segmented-scalar constraints give two proper 86-bit limbs and a zero
+/// third limb for both inputs. Thus the integer is below 2^428 even before the dense
+/// machine proves the stronger 128-bit bound, within `carry_mod`'s 2^510 allowance.
+/// Multiplication and addition propagate maximum limb widths 174 and 175 respectively;
+/// all radix carries and the native CRT equality remain in the final reduction.
+fn fused_glv_combination<F, S>(
+    ctx: &mut Context<F>,
+    scalar_chip: &FpChip<'_, F, S>,
+    v1: ProperCrtUint<F>,
+    v2: ProperCrtUint<F>,
+    zeta: ProperCrtUint<F>,
+) -> ProperCrtUint<F>
+where
+    F: BigPrimeField,
+    S: BigPrimeField,
+{
+    let product = scalar_chip.mul_no_carry(ctx, v2, zeta);
+    let combined = scalar_chip.add_no_carry(ctx, v1, product);
+    scalar_chip.carry_mod(ctx, combined)
+}
+
 fn load_segmented_scalar<F, S>(
     ctx: &mut Context<F>,
     scalar_chip: &FpChip<'_, F, S>,
@@ -1752,14 +1913,15 @@ where
         value | (u64::from(source.bits[scalar][bit_start + bit]) << bit)
     })
 }
-fn build_job_lane_rows<C>(
+fn emit_job_lane_rows<C>(
     job: &DenseMsmJob<C>,
     job_index: usize,
     lane: usize,
     source_start: usize,
     source_end: usize,
     offset: C::Curve,
-) -> Result<(Vec<RawRow<Base<C>>>, C::Curve), Error>
+    mut emit: impl FnMut(usize, RawRow<Base<C>>) -> Result<(), Error>,
+) -> Result<(usize, C::Curve), Error>
 where
     C: CurveAffineExt,
     Base<C>: BigPrimeField + WithSmallOrderMulGroup<3>,
@@ -1767,7 +1929,12 @@ where
 {
     debug_assert!(source_start < source_end && source_end <= job.sources.len());
     let (offset_x, offset_y) = affine_coordinates::<C>(&offset).map_err(|_| Error::Synthesis)?;
-    let mut rows = Vec::new();
+    let mut row_count = 0_usize;
+    let mut emit_row = |row| {
+        emit(row_count, row)?;
+        row_count = row_count.checked_add(1).ok_or(Error::Synthesis)?;
+        Ok::<_, Error>(())
+    };
     let mut state = MachineWitness::<Base<C>>::default();
     let mut start = raw_row(
         state,
@@ -1778,13 +1945,13 @@ where
     start.values[START] = Base::<C>::ONE;
     start.values[ADD_INVERSE] =
         Option::<Base<C>>::from(offset_y.invert()).ok_or(Error::Synthesis)?;
-    rows.push(start);
+    emit_row(start)?;
     state.acc_x = offset_x;
     state.acc_y = offset_y;
     state.offset_x = offset_x;
     state.offset_y = offset_y;
     let source_count = u64::try_from(source_end - source_start).map_err(|_| Error::Synthesis)?;
-    rows.push(raw_row(
+    emit_row(raw_row(
         state,
         Base::<C>::from(source_count),
         Some(MODE_COUNT),
@@ -1792,14 +1959,14 @@ where
             job: job_index,
             lane,
         }),
-    ));
+    ))?;
     state.remaining_sources = Base::<C>::from(source_count);
     state.remaining_segments = Base::<C>::from(SEGMENTS_PER_SCALAR as u64);
     let mut accumulator = offset;
     for (source_offset, source) in job.sources[source_start..source_end].iter().enumerate() {
         let source_index = source_start + source_offset;
         let (r_x, r_y) = source.r.into_coordinates();
-        rows.push(raw_row(
+        emit_row(raw_row(
             state,
             r_x,
             Some(MODE_LOAD_X),
@@ -1807,7 +1974,7 @@ where
                 job: job_index,
                 source: source_index,
             }),
-        ));
+        ))?;
         state.source_x = r_x;
         state.source_y = Base::<C>::ZERO;
         state.remaining_segments = Base::<C>::from(SEGMENTS_PER_SCALAR as u64);
@@ -1822,7 +1989,7 @@ where
         );
         load_y.values[ADD_INVERSE] =
             Option::<Base<C>>::from(r_y.invert()).ok_or(Error::Synthesis)?;
-        rows.push(load_y);
+        emit_row(load_y)?;
         state.source_y = r_y;
         let mut running_source = source.r.to_curve();
         for segment in 0..SEGMENTS_PER_SCALAR {
@@ -1915,7 +2082,7 @@ where
                 } else {
                     offset_x
                 };
-                rows.push(operation);
+                emit_row(operation)?;
                 state.acc_x = next_acc_x;
                 state.acc_y = next_acc_y;
                 state.part_1 = Base::<C>::from(part_1 >> (local_bit + 1));
@@ -1932,13 +2099,43 @@ where
     }
     // The final operation constrains this otherwise inactive bus cell to the
     // terminal accumulator's y coordinate.
-    rows.push(raw_row(state, state.acc_y, None, None));
+    emit_row(raw_row(state, state.acc_y, None, None))?;
     debug_assert_eq!(
-        rows.len(),
+        row_count,
         (source_end - source_start) * ROWS_PER_SOURCE + ROWS_PER_JOB
     );
-    Ok((rows, accumulator))
+    Ok((row_count, accumulator))
 }
+#[cfg(test)]
+fn build_job_lane_rows<C>(
+    job: &DenseMsmJob<C>,
+    job_index: usize,
+    lane: usize,
+    source_start: usize,
+    source_end: usize,
+    offset: C::Curve,
+) -> Result<(Vec<RawRow<Base<C>>>, C::Curve), Error>
+where
+    C: CurveAffineExt,
+    Base<C>: BigPrimeField + WithSmallOrderMulGroup<3>,
+    Scalar<C>: BigPrimeField,
+{
+    let mut rows = Vec::new();
+    let (_, terminal) = emit_job_lane_rows::<C>(
+        job,
+        job_index,
+        lane,
+        source_start,
+        source_end,
+        offset,
+        |_, row| {
+            rows.push(row);
+            Ok(())
+        },
+    )?;
+    Ok((rows, terminal))
+}
+
 #[cfg(test)]
 fn build_job_rows<C>(job: &DenseMsmJob<C>, job_index: usize) -> Result<Vec<RawRow<Base<C>>>, Error>
 where
@@ -1989,6 +2186,466 @@ mod tests {
         .map(|value| biguint_to_fe::<F>(&value))
         .collect()
     }
+    fn unfused_glv_combination_reference<F, S>(
+        ctx: &mut Context<F>,
+        chip: &FpChip<'_, F, S>,
+        v1: ProperCrtUint<F>,
+        v2: ProperCrtUint<F>,
+        zeta: ProperCrtUint<F>,
+    ) -> ProperCrtUint<F>
+    where
+        F: BigPrimeField,
+        S: BigPrimeField,
+    {
+        let product = chip.mul_no_carry(ctx, v2, zeta);
+        let product = chip.carry_mod(ctx, product);
+        let sum = chip.add_no_carry(ctx, v1, product);
+        chip.carry_mod(ctx, sum)
+    }
+
+    fn glv_combination_boundary_pairs<C>() -> Vec<(u128, u128)>
+    where
+        C: CurveAffineExt,
+        Scalar<C>: BigPrimeField + WithSmallOrderMulGroup<3>,
+    {
+        let bound = match <C::Curve as CurveExt>::CURVE_ID {
+            "vesta" => FP_NORMALIZED_SUM_STRICT_BOUND,
+            "pallas" => FQ_NORMALIZED_SUM_STRICT_BOUND,
+            _ => panic!("GLV fixture requires a Pasta curve"),
+        };
+        let mut pairs = vec![
+            (0, 0),
+            (1, 1),
+            (bound - 1, bound - 1),
+            (u128::MAX, u128::MAX),
+        ];
+        pairs.extend(edge_scalars::<Scalar<C>>().into_iter().map(|scalar| {
+            let original = decompose_pasta_scalar::<C>(&scalar).expect("edge decomposition");
+            let normalized = normalize_decomposition::<C>(original).expect("edge normalization");
+            (normalized.v1, normalized.v2)
+        }));
+        pairs
+    }
+
+    fn assign_glv_combination_input<F, S>(
+        ctx: &mut Context<F>,
+        chip: &FpChip<'_, F, S>,
+        value: S,
+    ) -> ProperCrtUint<F>
+    where
+        F: BigPrimeField,
+        S: BigPrimeField,
+    {
+        let assigned = chip.load_private(ctx, value);
+        // The unconditional pre-dense bound used by the fused carry argument.
+        chip.gate()
+            .assert_is_const(ctx, &assigned.limbs()[2], &F::ZERO);
+        assigned
+    }
+
+    fn glv_combination_graph<F, S>(
+        pairs: &[(u128, u128)],
+        fused: bool,
+        bad_scalar: bool,
+        overflow_input: bool,
+        lookup_bits: usize,
+    ) -> (BaseCircuitBuilder<F>, (usize, usize))
+    where
+        F: BigPrimeField,
+        S: BigPrimeField + WithSmallOrderMulGroup<3>,
+    {
+        let mut builder = BaseCircuitBuilder::<F>::new(false)
+            .use_k(if lookup_bits == 15 { 16 } else { 12 })
+            .use_lookup_bits(lookup_bits);
+        let range = builder.range_chip();
+        let chip = FpChip::<F, S>::new(&range, LIMB_BITS, 3);
+        let mut total = (0, 0);
+        for &(v1, v2) in pairs {
+            let v1_value = S::from_u128(v1);
+            let v2_value = if overflow_input {
+                S::from(2).pow_vartime([172])
+            } else {
+                S::from_u128(v2)
+            };
+            let v1 = assign_glv_combination_input(builder.main(0), &chip, v1_value);
+            let v2 = assign_glv_combination_input(builder.main(0), &chip, v2_value);
+            let zeta = chip.load_constant(builder.main(0), S::ZETA);
+            let before = builder.statistics();
+            let combined = if fused {
+                fused_glv_combination(builder.main(0), &chip, v1, v2, zeta)
+            } else {
+                unfused_glv_combination_reference(builder.main(0), &chip, v1, v2, zeta)
+            };
+            let after = builder.statistics();
+            total.0 += after.gate.total_advice_per_phase[0] - before.gate.total_advice_per_phase[0];
+            total.1 +=
+                after.total_lookup_advice_per_phase[0] - before.total_lookup_advice_per_phase[0];
+            let expected =
+                v1_value + S::ZETA * v2_value + if bad_scalar { S::ONE } else { S::ZERO };
+            let expected = chip.load_constant(builder.main(0), expected);
+            // Keep the existing generic canonicalization on both operands.
+            chip.assert_equal(builder.main(0), combined, expected);
+        }
+        (builder, total)
+    }
+
+    fn assert_glv_fused_emitted_counts<C>()
+    where
+        C: CurveAffineExt,
+        Base<C>: BigPrimeField,
+        Scalar<C>: BigPrimeField + WithSmallOrderMulGroup<3>,
+    {
+        let pairs = glv_combination_boundary_pairs::<C>();
+        let (_, old) = glv_combination_graph::<Base<C>, Scalar<C>>(&pairs, false, false, false, 15);
+        let (_, new) = glv_combination_graph::<Base<C>, Scalar<C>>(&pairs, true, false, false, 15);
+        assert_eq!(
+            old.0 - new.0,
+            pairs.len() * 260,
+            "actual emitted Base cells"
+        );
+        assert_eq!(
+            old.1 - new.1,
+            pairs.len() * 60,
+            "actual emitted lookup entries"
+        );
+        eprintln!(
+            "glv_fused_count parity={} cases={} old_base={} old_lookup={} new_base={} new_lookup={}",
+            <C::Curve as CurveExt>::CURVE_ID,
+            pairs.len(),
+            old.0,
+            old.1,
+            new.0,
+            new.1
+        );
+    }
+
+    fn assert_glv_fused_constraints<C>()
+    where
+        C: CurveAffineExt,
+        Base<C>: BigPrimeField + WithSmallOrderMulGroup<3>,
+        Scalar<C>: BigPrimeField + WithSmallOrderMulGroup<3>,
+    {
+        let pairs = glv_combination_boundary_pairs::<C>();
+        for fused in [false, true] {
+            let (mut valid, _) =
+                glv_combination_graph::<Base<C>, Scalar<C>>(&pairs, fused, false, false, 8);
+            valid.calculate_params(Some(9));
+            MockProver::run(12, &valid, vec![])
+                .expect("GLV sum fixture synthesis")
+                .assert_satisfied();
+            for (bad_scalar, overflow_input) in [(true, false), (false, true)] {
+                let (mut invalid, _) = glv_combination_graph::<Base<C>, Scalar<C>>(
+                    &[(1, 1)],
+                    fused,
+                    bad_scalar,
+                    overflow_input,
+                    8,
+                );
+                invalid.calculate_params(Some(9));
+                assert!(
+                    MockProver::run(12, &invalid, vec![])
+                        .expect("invalid GLV fixture synthesis")
+                        .verify()
+                        .is_err(),
+                    "the exact scalar and unconditional input bound must both remain constrained"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn eq_glv_fused_carry_emits_260_fewer_cells_and_60_fewer_lookups() {
+        assert_glv_fused_emitted_counts::<EqAffine>();
+    }
+    #[test]
+    fn ep_glv_fused_carry_emits_260_fewer_cells_and_60_fewer_lookups() {
+        assert_glv_fused_emitted_counts::<EpAffine>();
+    }
+    #[test]
+    fn eq_glv_fused_carry_preserves_boundary_and_negative_constraints() {
+        assert_glv_fused_constraints::<EqAffine>();
+    }
+    #[test]
+    fn ep_glv_fused_carry_preserves_boundary_and_negative_constraints() {
+        assert_glv_fused_constraints::<EpAffine>();
+    }
+
+    fn source_equality_for_test<F, S>(
+        ctx: &mut Context<F>,
+        chip: &FpChip<'_, F, S>,
+        source: ProperCrtUint<F>,
+        result: ProperCrtUint<F>,
+        implied: bool,
+    ) where
+        F: BigPrimeField,
+        S: BigPrimeField,
+    {
+        if implied {
+            assert_canonical_source_equal(ctx, chip, source, result);
+        } else {
+            // Retained original boundary: every limb equality and both modulus checks.
+            chip.assert_equal(ctx, source, result);
+        }
+    }
+
+    fn replace_remainder_copies<F: BigPrimeField>(
+        builder: &mut BaseCircuitBuilder<F>,
+        target: AssignedValue<F>,
+    ) {
+        let target_cell = target.cell.expect("fused remainder has a virtual cell");
+        let equalities = builder
+            .core()
+            .copy_manager
+            .lock()
+            .expect("GLV remainder copy manager")
+            .advice_equalities
+            .clone();
+        let mut cells = std::collections::BTreeSet::from([target_cell]);
+        loop {
+            let before = cells.len();
+            for (left, right) in &equalities {
+                if cells.contains(left) || cells.contains(right) {
+                    cells.insert(*left);
+                    cells.insert(*right);
+                }
+            }
+            if cells.len() == before {
+                break;
+            }
+        }
+        for cell in &cells {
+            assert_eq!(cell.type_id(), target_cell.type_id());
+            assert_eq!(cell.context_id(), 0);
+            builder
+                .main(0)
+                .replace_advice_with_trivial(cell.offset(), *target.value() + F::ONE);
+        }
+        let replacement = builder
+            .main(0)
+            .get(isize::try_from(target_cell.offset()).expect("remainder offset fits isize"))
+            .value;
+        // Keep every duplicate and lookup witness consistent with the attempted remainder.
+        // Rejection must come from the remaining arithmetic, not a stale duplicate copy.
+        for manager in builder.lookup_manager() {
+            let mut lookups = manager
+                .cells_to_lookup
+                .lock()
+                .expect("GLV remainder lookups");
+            for row in lookups.values_mut().flatten() {
+                for lookup in row {
+                    if lookup.cell.is_some_and(|cell| cells.contains(&cell)) {
+                        lookup.value = replacement;
+                    }
+                }
+            }
+        }
+    }
+
+    fn glv_source_equality_graph<C>(
+        scalars: &[Scalar<C>],
+        implied: bool,
+        wrong_source: bool,
+        tampered_remainder_limb: Option<usize>,
+        lookup_bits: usize,
+    ) -> (BaseCircuitBuilder<Base<C>>, (usize, usize))
+    where
+        C: CurveAffineExt,
+        Base<C>: BigPrimeField + WithSmallOrderMulGroup<3>,
+        Scalar<C>: BigPrimeField + WithSmallOrderMulGroup<3>,
+    {
+        let mut builder = BaseCircuitBuilder::<Base<C>>::new(false)
+            .use_k(if lookup_bits == 15 { 16 } else { 12 })
+            .use_lookup_bits(lookup_bits);
+        let range = builder.range_chip();
+        let chip = FpChip::<Base<C>, Scalar<C>>::new(&range, LIMB_BITS, 3);
+        let mut equality_cost = (0, 0);
+        for scalar in scalars {
+            let normalized = normalize_decomposition::<C>(
+                decompose_pasta_scalar::<C>(scalar).expect("canonical source decomposition"),
+            )
+            .expect("canonical source normalization");
+            let ctx = builder.main(0);
+            let source = chip.load_private(
+                ctx,
+                *scalar
+                    + if wrong_source {
+                        Scalar::<C>::ONE
+                    } else {
+                        Scalar::<C>::ZERO
+                    },
+            );
+            let sign = ctx.load_witness(Base::<C>::from(normalized.negative as u64));
+            let opposite = ctx.load_witness(Base::<C>::from(normalized.opposite as u64));
+            chip.gate().assert_bit(ctx, sign);
+            chip.gate().assert_bit(ctx, opposite);
+            let segments = [
+                scalar_segments(normalized.v1),
+                scalar_segments(normalized.v2),
+            ]
+            .map(|values| values.map(|value| ctx.load_witness(Base::<C>::from(u64::from(value)))));
+            let v1 = load_segmented_scalar(ctx, &chip, normalized.v1, &segments[0]);
+            let v2 = load_segmented_scalar(ctx, &chip, normalized.v2, &segments[1]);
+            let zeta = chip.load_constant(ctx, Scalar::<C>::ZETA);
+            let combined = fused_glv_combination(ctx, &chip, v1, v2, zeta);
+            let target = tampered_remainder_limb.map(|index| combined.limbs()[index]);
+            let zeta_squared = chip.load_constant(ctx, Scalar::<C>::ZETA.square());
+            let opposite_unreduced = chip.mul_no_carry(ctx, combined.clone(), zeta_squared);
+            let opposite_value = chip.carry_mod(ctx, opposite_unreduced);
+            let unsigned = chip.select(ctx, opposite_value, combined, opposite);
+            let negative = chip.negate(ctx, unsigned.clone());
+            let signed = chip.select(ctx, negative, unsigned, sign);
+            let before = builder.statistics();
+            source_equality_for_test(builder.main(0), &chip, source, signed, implied);
+            let after = builder.statistics();
+            equality_cost.0 +=
+                after.gate.total_advice_per_phase[0] - before.gate.total_advice_per_phase[0];
+            equality_cost.1 +=
+                after.total_lookup_advice_per_phase[0] - before.total_lookup_advice_per_phase[0];
+            if let Some(target) = target {
+                replace_remainder_copies(&mut builder, target);
+            }
+        }
+        (builder, equality_cost)
+    }
+
+    fn assert_glv_source_canonicality_counts<C>()
+    where
+        C: CurveAffineExt,
+        Base<C>: BigPrimeField + WithSmallOrderMulGroup<3>,
+        Scalar<C>: BigPrimeField + WithSmallOrderMulGroup<3>,
+    {
+        let scalars = edge_scalars::<Scalar<C>>();
+        let (_, old) = glv_source_equality_graph::<C>(&scalars, false, false, None, 15);
+        let (_, new) = glv_source_equality_graph::<C>(&scalars, true, false, None, 15);
+        assert_eq!(old.0 - new.0, scalars.len() * 110);
+        assert_eq!(old.1 - new.1, scalars.len() * 21);
+        eprintln!(
+            "glv_implied_canonicality parity={} cases={} old_base={} old_lookup={} new_base={} new_lookup={}",
+            <C::Curve as CurveExt>::CURVE_ID,
+            scalars.len(),
+            old.0,
+            old.1,
+            new.0,
+            new.1,
+        );
+    }
+
+    fn source_integer_equality_graph<F, S>(
+        source: BigUint,
+        result: BigUint,
+        implied: bool,
+    ) -> BaseCircuitBuilder<F>
+    where
+        F: BigPrimeField,
+        S: BigPrimeField,
+    {
+        // Fixed proper integers permit noncanonical values without reducing through S first.
+        // All cases fit three 86-bit limbs, including the deliberately wider 2^255 scalar.
+        assert!(source.bits() <= 3 * LIMB_BITS as u64);
+        assert!(result.bits() <= 3 * LIMB_BITS as u64);
+        let mut builder = BaseCircuitBuilder::<F>::new(false)
+            .use_k(12)
+            .use_lookup_bits(8);
+        let range = builder.range_chip();
+        let chip = FpChip::<F, S>::new(&range, LIMB_BITS, 3);
+        let source = chip.load_constant_uint(builder.main(0), source);
+        let result = chip.load_constant_uint(builder.main(0), result);
+        source_equality_for_test(builder.main(0), &chip, source, result, implied);
+        builder.calculate_params(Some(9));
+        builder
+    }
+
+    fn assert_glv_source_canonicality_constraints<C>()
+    where
+        C: CurveAffineExt,
+        Base<C>: BigPrimeField + WithSmallOrderMulGroup<3>,
+        Scalar<C>: BigPrimeField + WithSmallOrderMulGroup<3>,
+    {
+        let scalar_modulus = modulus::<Scalar<C>>();
+        let native_modulus = modulus::<Base<C>>();
+        let zero = BigUint::from(0_u8);
+        let one = BigUint::from(1_u8);
+        let wider: BigUint = &one << 255_usize;
+        let mut integer_cases = vec![
+            (zero.clone(), zero.clone(), true),
+            (&scalar_modulus - &one, &scalar_modulus - &one, true),
+            (scalar_modulus.clone(), scalar_modulus.clone(), false),
+            (&scalar_modulus + &one, &scalar_modulus + &one, false),
+            (wider.clone(), wider, false),
+            (zero.clone(), scalar_modulus, false),
+            // Equal native-field residues must still fail complete integer equality.
+            (zero.clone(), native_modulus, false),
+        ];
+        integer_cases.extend((0..3).map(|limb| (zero.clone(), &one << (LIMB_BITS * limb), false)));
+        for implied in [false, true] {
+            for (source, result, expected) in &integer_cases {
+                let graph = source_integer_equality_graph::<Base<C>, Scalar<C>>(
+                    source.clone(),
+                    result.clone(),
+                    implied,
+                );
+                let accepted = MockProver::run(12, &graph, vec![])
+                    .expect("proper-integer source equality synthesis")
+                    .verify()
+                    .is_ok();
+                assert_eq!(
+                    accepted, *expected,
+                    "implied={implied} source={source} result={result}"
+                );
+            }
+            let (mut valid, _) = glv_source_equality_graph::<C>(
+                &edge_scalars::<Scalar<C>>(),
+                implied,
+                false,
+                None,
+                8,
+            );
+            valid.calculate_params(Some(9));
+            MockProver::run(12, &valid, vec![])
+                .expect("full normalized GLV source equality synthesis")
+                .assert_satisfied();
+            for (wrong_source, tampered_limb) in [
+                (true, None),
+                (false, Some(0)),
+                (false, Some(1)),
+                (false, Some(2)),
+            ] {
+                let (mut invalid, _) = glv_source_equality_graph::<C>(
+                    &[Scalar::<C>::ONE],
+                    implied,
+                    wrong_source,
+                    tampered_limb,
+                    8,
+                );
+                invalid.calculate_params(Some(9));
+                assert!(
+                    MockProver::run(12, &invalid, vec![])
+                        .expect("incorrect source or carry remainder synthesis")
+                        .verify()
+                        .is_err(),
+                    "implied={implied} wrong_source={wrong_source} remainder={tampered_limb:?}",
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn eq_glv_source_canonicality_emits_110_fewer_cells_and_21_fewer_lookups() {
+        assert_glv_source_canonicality_counts::<EqAffine>();
+    }
+    #[test]
+    fn ep_glv_source_canonicality_emits_110_fewer_cells_and_21_fewer_lookups() {
+        assert_glv_source_canonicality_counts::<EpAffine>();
+    }
+    #[test]
+    fn eq_glv_source_canonicality_preserves_integer_and_remainder_constraints() {
+        assert_glv_source_canonicality_constraints::<EqAffine>();
+    }
+    #[test]
+    fn ep_glv_source_canonicality_preserves_integer_and_remainder_constraints() {
+        assert_glv_source_canonicality_constraints::<EpAffine>();
+    }
+
     fn assert_decomposition_edges<C>(strict_bound: u128)
     where
         C: CurveAffineExt,
@@ -2665,4 +3322,5 @@ mod tests {
         .expect("mock prover runs");
         assert!(prover.verify().is_err());
     }
+    include!("pasta_dense_msm_streaming_tests.rs");
 }

@@ -58,7 +58,8 @@ fn failed_new_uncertified_fetch_admission_preserves_exact_projection() {
     services.fail_on = Some("fetch");
     assert!(
         executor
-            .consume_effects(
+            .consume_admitted_fixture_effects(
+                &fixture,
                 vec![AdapterEffect::FetchBody {
                     tag: tag(0),
                     round: fixture.manifest.round,
@@ -147,7 +148,8 @@ fn failed_existing_fetch_certificate_upgrade_preserves_request_indexes() {
     let mut executor = fixture.executor(EffectQueueConfig::default());
     let mut services = fixture.services();
     executor
-        .consume_effects(
+        .consume_admitted_fixture_effects(
+            &fixture,
             vec![AdapterEffect::FetchBody {
                 tag: tag(0),
                 round: fixture.manifest.round,
@@ -165,7 +167,8 @@ fn failed_existing_fetch_certificate_upgrade_preserves_request_indexes() {
     services.fail_on = Some("fetch");
     assert!(
         executor
-            .consume_effects(
+            .consume_admitted_fixture_effects(
+                &fixture,
                 vec![AdapterEffect::FetchBody {
                     tag: tag(0),
                     round: fixture.manifest.round,
@@ -199,7 +202,8 @@ fn failed_staged_exact_body_runtime_admission_preserves_ready_owner() {
     executor.runtime.fail_enqueue = true;
     assert!(
         executor
-            .consume_effects(
+            .consume_admitted_fixture_effects(
+                &fixture,
                 vec![AdapterEffect::FetchBody {
                     tag: tag(0),
                     round: key.0,
@@ -234,7 +238,8 @@ fn failed_staged_conflict_replacement_preserves_ready_bytes() {
     services.fail_on = Some("fetch");
     assert!(
         executor
-            .consume_effects(
+            .consume_admitted_fixture_effects(
+                &fixture,
                 vec![AdapterEffect::FetchBody {
                     tag: tag(0),
                     round: key.0,
@@ -267,7 +272,8 @@ fn failed_retained_locked_body_runtime_admission_preserves_exact_projection() {
     executor.runtime.fail_enqueue = true;
     assert!(
         executor
-            .consume_effects(
+            .consume_admitted_fixture_effects(
+                &fixture,
                 vec![AdapterEffect::FetchBody {
                     tag: tag(0),
                     round: fixture.manifest.round,
@@ -348,7 +354,8 @@ fn failed_detached_store_runtime_admission_preserves_exact_projection() {
     executor.runtime.fail_enqueue = true;
     assert!(
         executor
-            .consume_effects(
+            .consume_admitted_fixture_effects(
+                &fixture,
                 vec![AdapterEffect::FetchBody {
                     tag: tag(0),
                     round: key.0,
@@ -383,7 +390,8 @@ fn failed_recovered_body_runtime_admission_preserves_durable_catalogue() {
     executor.runtime.fail_enqueue = true;
     assert!(
         executor
-            .consume_effects(
+            .consume_admitted_fixture_effects(
+                &fixture,
                 vec![AdapterEffect::FetchBody {
                     tag: tag(0),
                     round: key.0,
@@ -437,7 +445,8 @@ fn successful_fetch_certificate_upgrade_commits_exact_delta_once() {
     let mut executor = fixture.executor(EffectQueueConfig::default());
     let mut services = fixture.services();
     executor
-        .consume_effects(
+        .consume_admitted_fixture_effects(
+            &fixture,
             vec![AdapterEffect::FetchBody {
                 tag: tag(0),
                 round: fixture.manifest.round,
@@ -453,7 +462,8 @@ fn successful_fetch_certificate_upgrade_commits_exact_delta_once() {
     let prepare = fixture.qc(wire::GlobalPhase::Prepare);
     let sources = certified_sources(&fixture, &prepare);
     executor
-        .consume_effects(
+        .consume_admitted_fixture_effects(
+            &fixture,
             vec![AdapterEffect::FetchBody {
                 tag: tag(0),
                 round: fixture.manifest.round,
@@ -495,7 +505,8 @@ fn successful_staged_conflict_retires_old_ready_only_after_fetch_admission() {
     executor.ready_bodies.insert(key, ready);
     let mut services = fixture.services();
     executor
-        .consume_effects(
+        .consume_admitted_fixture_effects(
+            &fixture,
             vec![AdapterEffect::FetchBody {
                 tag: tag(0),
                 round: key.0,

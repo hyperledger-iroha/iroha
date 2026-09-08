@@ -30,6 +30,9 @@
 //!   decoding headers.
 //!
 //! Helpers
+//! - [`SerializePayload`] owns object-safe bare serialization and size hints.
+//!   Borrowed field adapters can derive this contract without a frame identity.
+//!   [`NoritoSerialize`] adds the typed frame contract used by framed encoders.
 //! - [`encode_canonical`], [`decode_canonical`], and
 //!   [`decode_canonical_with_limits`] provide exact uncompressed V1 boundaries
 //!   with payload-derived decode budgets and byte-for-byte re-encoding checks.
@@ -56,8 +59,8 @@ pub use schema::identity::NoritoSchema;
 pub mod streaming;
 pub use core::{
     Archived, ArchivedBox, Compression, CompressionConfig, DecodeLimits, Encoder, Error,
-    NoritoDeserialize, NoritoSerialize, crc64_fallback, default_encode_flags, from_bytes,
-    from_compressed_bytes, hardware_crc64, to_bytes, to_bytes_auto, to_bytes_in,
+    NoritoDeserialize, NoritoSerialize, SerializePayload, crc64_fallback, default_encode_flags,
+    from_bytes, from_compressed_bytes, hardware_crc64, to_bytes, to_bytes_auto, to_bytes_in,
     to_compressed_bytes, with_decode_limits, with_decode_limits_scope,
 };
 #[doc(hidden)]
@@ -160,14 +163,14 @@ pub mod yaml;
 pub mod derive {
     pub use norito_derive::{
         Decode, Encode, FastJson, FastJsonWrite, JsonDeserialize, JsonSerialize, NoritoDeserialize,
-        NoritoSchema, NoritoSerialize,
+        NoritoSchema, NoritoSerialize, SerializePayload,
     };
 }
 pub use derive::*;
 /// Bare Norito `Encode` and `Decode` traits used for compact payloads without a Norito header.
 pub mod codec {
     pub use super::Error;
-    use super::{NoritoDeserialize, NoritoSerialize, core};
+    use super::{NoritoDeserialize, NoritoSerialize, SerializePayload, core};
     pub use crate::derive::{Decode, Encode};
     use std::io::{Read, Write};
     struct CountingWriter<'a, W: Write> {
@@ -196,7 +199,7 @@ pub mod codec {
         }
     }
     /// Encode values into bytes using Norito.
-    pub trait Encode: NoritoSerialize + Sized {
+    pub trait Encode: SerializePayload + Sized {
         /// Encode `self` into a new `Vec<u8>` without compression.
         ///
         /// Uses the fixed v1 bare layout (no adaptive layout flags).
@@ -213,7 +216,7 @@ pub mod codec {
             encode_adaptive_into(self, &mut sink).expect("encoding should not fail")
         }
     }
-    impl<T: NoritoSerialize + Sized> Encode for T {}
+    impl<T: SerializePayload + Sized> Encode for T {}
     /// Input stream for decoding.
     pub trait Input: Read {}
     impl<T: Read> Input for T {}
@@ -230,10 +233,10 @@ pub mod codec {
     }
     impl<T> Decode for T where T: for<'de> NoritoDeserialize<'de> + NoritoSerialize + Sized {}
     /// Bare encode using the fixed v1 layout flags.
-    pub fn encode_adaptive<T: NoritoSerialize>(value: &T) -> Vec<u8> {
+    pub fn encode_adaptive<T: SerializePayload>(value: &T) -> Vec<u8> {
         encode_adaptive_with_flags(value, core::default_encode_flags())
     }
-    fn encode_adaptive_with_flags<T: NoritoSerialize>(value: &T, flags: u8) -> Vec<u8> {
+    fn encode_adaptive_with_flags<T: SerializePayload>(value: &T, flags: u8) -> Vec<u8> {
         core::validate_header_flags(flags).expect("adaptive encode flags must be supported");
         #[cfg(debug_assertions)]
         if crate::debug_trace_enabled() {
@@ -251,13 +254,13 @@ pub mod codec {
     /// Bare encode into the provided writer using the fixed v1 layout flags.
     ///
     /// Returns the number of payload bytes written.
-    pub fn encode_adaptive_into<T: NoritoSerialize, W: Write>(
+    pub fn encode_adaptive_into<T: SerializePayload, W: Write>(
         value: &T,
         writer: &mut W,
     ) -> Result<usize, Error> {
         encode_adaptive_into_with_flags(value, writer, core::default_encode_flags())
     }
-    fn encode_adaptive_into_with_flags<T: NoritoSerialize, W: Write>(
+    fn encode_adaptive_into_with_flags<T: SerializePayload, W: Write>(
         value: &T,
         writer: &mut W,
         flags: u8,
@@ -271,7 +274,7 @@ pub mod codec {
         {
             let _fg = core::DecodeFlagsGuard::enter(flags);
             let mut encoder = core::Encoder::new(&mut counting);
-            NoritoSerialize::serialize(value, &mut encoder)?;
+            SerializePayload::serialize(value, &mut encoder)?;
         }
         let payload_len = counting.bytes_written();
         Ok(payload_len)
@@ -280,13 +283,14 @@ pub mod codec {
     #[allow(clippy::items_after_test_module)]
     mod encode_tests {
         use super::Encode;
-        use crate::{NoritoDeserialize, NoritoSerialize};
+        use crate::{NoritoDeserialize, NoritoSerialize, SerializePayload};
         use std::sync::atomic::{AtomicUsize, Ordering};
         static HINT_CALLS: AtomicUsize = AtomicUsize::new(0);
         static EXACT_CALLS: AtomicUsize = AtomicUsize::new(0);
         #[derive(Clone, Copy)]
         struct Hinted(u8);
-        impl NoritoSerialize for Hinted {
+        impl NoritoSerialize for Hinted {}
+        impl SerializePayload for Hinted {
             fn serialize(
                 &self,
                 encoder: &mut crate::core::Encoder<'_>,
@@ -303,7 +307,8 @@ pub mod codec {
             }
         }
         struct ExactLenOnly(u8);
-        impl NoritoSerialize for ExactLenOnly {
+        impl NoritoSerialize for ExactLenOnly {}
+        impl SerializePayload for ExactLenOnly {
             fn serialize(
                 &self,
                 encoder: &mut crate::core::Encoder<'_>,
@@ -317,7 +322,8 @@ pub mod codec {
             }
         }
         struct HugeHint(u8);
-        impl NoritoSerialize for HugeHint {
+        impl NoritoSerialize for HugeHint {}
+        impl SerializePayload for HugeHint {
             fn serialize(
                 &self,
                 encoder: &mut crate::core::Encoder<'_>,
@@ -330,7 +336,8 @@ pub mod codec {
             }
         }
         struct AlwaysFails;
-        impl NoritoSerialize for AlwaysFails {
+        impl NoritoSerialize for AlwaysFails {}
+        impl SerializePayload for AlwaysFails {
             fn serialize(
                 &self,
                 _encoder: &mut crate::core::Encoder<'_>,
@@ -427,7 +434,7 @@ pub mod codec {
     }
     /// Encode `value` and return both the bare payload and the exact header flags required
     /// to frame it for header-based decoding.
-    pub fn encode_with_header_flags<T: NoritoSerialize>(value: &T) -> (Vec<u8>, u8) {
+    pub fn encode_with_header_flags<T: SerializePayload>(value: &T) -> (Vec<u8>, u8) {
         let (payload, flags) =
             core::encode_bare_with_flags(value).expect("encode_with_header_flags should succeed");
         (payload, flags)
@@ -4489,152 +4496,15 @@ pub mod json {
                 }
             }
         }
-        /// Read a JSON object key using the same hash as compile-time field dispatch.
+        /// Read a JSON object key using the same hash as compile-time and tape dispatch.
+        /// The existing string parser borrows unescaped keys and validates/unescapes
+        /// escaped keys. The colon remains unconsumed, as with the tape reader.
         pub fn read_key_hash(&mut self) -> Result<u64, Error> {
-            self.skip_ws();
-            self.expect(b'"')?;
-            let mut hash = key_hash::KeyHasher::new();
-            loop {
-                let b = self.bump().ok_or_else(|| {
-                    let (byte, line, col) = self.pos_meta(self.i);
-                    Error::UnterminatedString { byte, line, col }
-                })?;
-                match b {
-                    b'"' => break,
-                    b'\\' => {
-                        // Hash the escaped char logically (treat escape as the resulting byte where trivial)
-                        let esc = self.bump().ok_or_else(|| {
-                            let (byte, line, col) = self.pos_meta(self.i);
-                            Error::EofEscape { byte, line, col }
-                        })?;
-                        match esc {
-                            b'"' => {
-                                hash.update(b'"');
-                            }
-                            b'\\' => {
-                                hash.update(b'\\');
-                            }
-                            b'/' => {
-                                hash.update(b'/');
-                            }
-                            b'b' => {
-                                hash.update(0x08);
-                            }
-                            b'f' => {
-                                hash.update(0x0C);
-                            }
-                            b'n' => {
-                                hash.update(b'\n');
-                            }
-                            b'r' => {
-                                hash.update(b'\r');
-                            }
-                            b't' => {
-                                hash.update(b'\t');
-                            }
-                            b'u' => {
-                                // Consume 4 hex digits; combine surrogate pairs when present and hash UTF‑8 bytes
-                                let hex_to_u32 = |p: &mut Self| -> Result<u32, Error> {
-                                    let mut v: u32 = 0;
-                                    for _ in 0..4 {
-                                        let c = p.bump().ok_or_else(|| {
-                                            let (byte, line, col) = p.pos_meta(p.i);
-                                            Error::EofHex { byte, line, col }
-                                        })?;
-                                        v = (v << 4)
-                                            | match c {
-                                                b'0'..=b'9' => (c - b'0') as u32,
-                                                b'a'..=b'f' => (c - b'a' + 10) as u32,
-                                                b'A'..=b'F' => (c - b'A' + 10) as u32,
-                                                _ => {
-                                                    let (byte, line, col) =
-                                                        p.pos_meta(p.i.saturating_sub(1));
-                                                    return Err(Error::InvalidHex {
-                                                        byte,
-                                                        line,
-                                                        col,
-                                                    });
-                                                }
-                                            };
-                                    }
-                                    Ok(v)
-                                };
-                                let hi = hex_to_u32(self)?;
-                                let cp = if (0xD800..=0xDBFF).contains(&hi) {
-                                    if self.peek() != Some(b'\\') {
-                                        let (byte, line, col) = self.pos_meta(self.i);
-                                        return Err(Error::WithPos {
-                                            msg: "expected low surrogate",
-                                            byte,
-                                            line,
-                                            col,
-                                        });
-                                    }
-                                    self.bump();
-                                    if self.bump() != Some(b'u') {
-                                        let (byte, line, col) = self.pos_meta(self.i);
-                                        return Err(Error::WithPos {
-                                            msg: "expected \\u for low surrogate",
-                                            byte,
-                                            line,
-                                            col,
-                                        });
-                                    }
-                                    let lo = hex_to_u32(self)?;
-                                    if !(0xDC00..=0xDFFF).contains(&lo) {
-                                        let (byte, line, col) = self.pos_meta(self.i);
-                                        return Err(Error::WithPos {
-                                            msg: "invalid low surrogate",
-                                            byte,
-                                            line,
-                                            col,
-                                        });
-                                    }
-                                    0x10000 + (((hi - 0xD800) << 10) | (lo - 0xDC00))
-                                } else if (0xDC00..=0xDFFF).contains(&hi) {
-                                    let (byte, line, col) = self.pos_meta(self.i);
-                                    return Err(Error::WithPos {
-                                        msg: "unexpected low surrogate",
-                                        byte,
-                                        line,
-                                        col,
-                                    });
-                                } else {
-                                    hi
-                                };
-                                if let Some(ch) = char::from_u32(cp) {
-                                    let mut buf = [0u8; 4];
-                                    let s = ch.encode_utf8(&mut buf);
-                                    for &bb in s.as_bytes() {
-                                        hash.update(bb);
-                                    }
-                                } else {
-                                    let (byte, line, col) = self.pos_meta(self.i);
-                                    return Err(Error::WithPos {
-                                        msg: "invalid codepoint",
-                                        byte,
-                                        line,
-                                        col,
-                                    });
-                                }
-                            }
-                            _ => {
-                                let (byte, line, col) = self.pos_meta(self.i.saturating_sub(1));
-                                return Err(Error::WithPos {
-                                    msg: "bad escape",
-                                    byte,
-                                    line,
-                                    col,
-                                });
-                            }
-                        }
-                    }
-                    _ => {
-                        hash.update(b);
-                    }
-                }
-            }
-            Ok(hash.finish())
+            let mut arena = Arena::new();
+            let key = self.parse_string_ref(&mut arena)?;
+            Ok(key_hash_const(match key {
+                StrRef::Borrowed(value) | StrRef::Owned(value) => value,
+            }))
         }
         /// Parse a JSON object key and return a borrowed `&str` when no escapes are present,
         /// or an owned `String` otherwise. This avoids allocating in the common fast path.

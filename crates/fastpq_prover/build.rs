@@ -25,6 +25,7 @@ fn main() {
     println!("cargo:rerun-if-changed=metal/kernels/field.metal");
     println!("cargo:rerun-if-changed=metal/kernels/ntt_stage.metal");
     println!("cargo:rerun-if-changed=metal/kernels/poseidon.metal");
+    println!("cargo:rerun-if-changed=metal/kernels/digest384.metal");
     println!("cargo:rerun-if-changed=metal/kernels/bn254.metal");
     let fastpq_gpu_feature = env::var_os("CARGO_FEATURE_FASTPQ_GPU").is_some();
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
@@ -141,6 +142,7 @@ fn compile_metal_shaders() -> Result<(), String> {
     let kernels = [
         ("ntt_stage", Path::new("metal/kernels/ntt_stage.metal")),
         ("poseidon", Path::new("metal/kernels/poseidon.metal")),
+        ("digest384", Path::new("metal/kernels/digest384.metal")),
         ("bn254", Path::new("metal/kernels/bn254.metal")),
     ];
     let include_dir = Path::new("metal/include");

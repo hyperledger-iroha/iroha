@@ -33,6 +33,31 @@ envelope containing the nine ordered prerequisite IDs, and emit
 `recognized_summary_count=17`. Documentation, canary builders, dry runs, and
 synthetic fixtures cannot override a blocked aggregate.
 
+## 2026-09-08 merge and security follow-up
+
+The active repository merge changes shared Norito and SoraFS sources. The
+retained Core **406-pass** and Node **74-pass/4-fail** results below qualify their
+recorded premerge snapshots only. A fresh combined source manifest and native
+capture are required before applying those results to the merged candidate.
+
+The four Node failures have source corrections under review: quarantine decoding
+now derives a schema-specific cumulative allocation bound from the actual frame;
+outbox fixtures use the production private checkpoint writer; and PoP layout
+tests reuse one encrypted enrollment while independently testing fresh encryption
+against canonical plaintext and AAD. Cryptographic entropy hedging remains
+intact. Quarantine tests cover every input alignment, exact and one-byte-short
+allocation budgets, stricter caller limits, and the maximum valid envelope.
+The general Norito ceiling still applies; the maximum-input cases require native
+execution before this correction is qualified.
+
+Merge review also found that the incoming custom boxed completion decoder omits
+the owned-box allocation charge. Its prior-byte-preservation wrapper must be
+removed in favor of the standard Norito `Box<StoredCompletionDeliveryV1>` codec,
+with populated checkpoint/restart and allocation-boundary tests. This is an open
+first-release correction; the previous private checkpoint layout has no
+compatibility requirement. The merge owner retains source ownership until its
+checks finish. No new native or deployment qualification is claimed here.
+
 ## 2026-09-07 post-reboot checkpoint
 
 The host reboot removed the earlier `/tmp` SoraFS logs and source snapshots and

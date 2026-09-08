@@ -9,8 +9,8 @@ use core::ops::Deref;
 use iroha_schema::{IntoSchema, MetaMap, Metadata, TypeId, VecMeta};
 #[cfg(feature = "json")]
 use norito::json::{self, JsonDeserialize, JsonSerialize};
-use norito::{NoritoDeserialize, NoritoSerialize, core as ncore};
-use std::{boxed::Box, format, io::Write, string::String, vec::Vec};
+use norito::{NoritoDeserialize, NoritoSerialize, SerializePayload, core as ncore};
+use std::{boxed::Box, format, string::String, vec::Vec};
 ffi::ffi_item! {
     /// Stores bytes that are not supposed to change during the runtime of the
     /// program in a compact way.
@@ -120,30 +120,12 @@ where
         Ok(ConstVec::from(values))
     }
 }
-impl<T: NoritoSerialize> NoritoSerialize for ConstVec<T> {
+impl<T: NoritoSerialize> NoritoSerialize for ConstVec<T> {}
+impl<T: SerializePayload> SerializePayload for ConstVec<T> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
-        let slice: &[T] = &self.0;
-        #[cfg(debug_assertions)]
-        let trace_enabled = norito::debug_trace_enabled();
-        #[cfg(not(debug_assertions))]
-        let trace_enabled = false;
-        #[cfg(debug_assertions)]
-        if trace_enabled {
-            eprintln!(
-                "ConstVec::<{}>::serialize len={} use_packed_seq={}",
-                core::any::type_name::<T>(),
-                slice.len(),
-                ncore::use_packed_seq(),
-            );
-        }
-        let flags = ncore::effective_decode_flags().unwrap_or_else(ncore::default_encode_flags);
-        ncore::write_seq_len(writer, slice.len() as u64)?;
-        if ncore::packed_seq_enabled_for_flags(flags) {
-            Self::serialize_packed(slice, writer, trace_enabled)
-        } else {
-            Self::serialize_unpacked(slice, writer, flags)
-        }
+        ncore::write_element_sequence::<T, _>(writer, self.0.iter(), ncore::max_archive_len())
     }
+
     fn encoded_len_hint(&self) -> Option<usize> {
         let slice: &[T] = &self.0;
         let len = slice.len();
@@ -198,94 +180,6 @@ impl<T: NoritoSerialize> NoritoSerialize for ConstVec<T> {
         }
         total = total.checked_add(data_total)?;
         Some(total)
-    }
-}
-impl<T: NoritoSerialize> ConstVec<T> {
-    fn serialize_unpacked<W: Write>(
-        slice: &[T],
-        writer: &mut W,
-        flags: u8,
-    ) -> Result<(), ncore::Error> {
-        for item in slice {
-            let encoded_len = ncore::encoded_payload_len(item)?;
-            ncore::write_len_with_flags(
-                writer,
-                u64::try_from(encoded_len).map_err(|_| ncore::Error::LengthMismatch)?,
-                flags,
-            )?;
-            ncore::serialize_to_writer_exact(item, writer, encoded_len)?;
-        }
-        Ok(())
-    }
-    fn serialize_packed<W: Write>(
-        slice: &[T],
-        writer: &mut W,
-        trace_enabled: bool,
-    ) -> Result<(), ncore::Error> {
-        #[cfg(not(debug_assertions))]
-        let _ = trace_enabled;
-        let table_bytes = slice
-            .len()
-            .checked_add(1)
-            .and_then(|entries| entries.checked_mul(core::mem::size_of::<u64>()))
-            .ok_or(ncore::Error::LengthMismatch)?;
-        let mut lengths = Vec::new();
-        lengths
-            .try_reserve_exact(slice.len())
-            .map_err(|_| ncore::Error::LengthMismatch)?;
-        let mut data_bytes = 0usize;
-        for (idx, item) in slice.iter().enumerate() {
-            #[cfg(not(debug_assertions))]
-            let _ = idx;
-            let elem_len = ncore::encoded_payload_len(item)?;
-            #[cfg(debug_assertions)]
-            if trace_enabled && idx == 0 {
-                eprintln!(
-                    "ConstVec::<{}> encode first_elem len={} total_before={}",
-                    core::any::type_name::<T>(),
-                    elem_len,
-                    data_bytes
-                );
-            }
-            #[cfg(debug_assertions)]
-            if trace_enabled && core::any::type_name::<T>().contains("InstructionBox") && idx < 32 {
-                eprintln!(
-                    "ConstVec::<InstructionBox> encode idx={idx} len={elem_len} total_before={data_bytes}"
-                );
-            }
-            data_bytes = data_bytes
-                .checked_add(elem_len)
-                .ok_or(ncore::Error::LengthMismatch)?;
-            lengths.push(elem_len);
-        }
-        let limit = ncore::max_archive_len();
-        if limit != 0 {
-            let packed_total = table_bytes
-                .checked_add(data_bytes)
-                .and_then(|bytes| u64::try_from(bytes).ok())
-                .ok_or(ncore::Error::LengthMismatch)?;
-            if packed_total > limit {
-                return Err(ncore::Error::ArchiveLengthExceeded {
-                    length: packed_total,
-                    limit,
-                });
-            }
-        }
-        ncore::note_fixed_offsets_emitted();
-        #[cfg(debug_assertions)]
-        if trace_enabled && core::any::type_name::<T>().contains("InstructionBox") {
-            eprintln!(
-                "ConstVec::<{}> offsets_summary len={} data_len={}",
-                core::any::type_name::<T>(),
-                slice.len().saturating_add(1),
-                data_bytes,
-            );
-        }
-        ncore::write_fixed_offsets(writer, &lengths)?;
-        for (item, expected_len) in slice.iter().zip(lengths) {
-            ncore::serialize_to_writer_exact(item, writer, expected_len)?;
-        }
-        Ok(())
     }
 }
 impl<'a, T> ncore::DecodeFromSlice<'a> for ConstVec<T>
@@ -384,14 +278,15 @@ impl<T: Clone> ToConstVec for [T] {
 mod tests {
     use super::{ConstVec, ToConstVec, decode_const_vec_exact, ncore};
     use norito::{
-        NoritoDeserialize, NoritoSerialize,
+        NoritoDeserialize, NoritoSerialize, SerializePayload,
         codec::{self, Decode, Encode},
     };
     use std::cell::Cell;
     #[repr(transparent)]
     #[derive(Clone, Debug, PartialEq, Eq)]
     struct InexactBytes(Vec<u8>);
-    impl norito::NoritoSerialize for InexactBytes {
+    impl norito::NoritoSerialize for InexactBytes {}
+    impl norito::SerializePayload for InexactBytes {
         fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
             self.0.serialize(writer)
         }
@@ -406,7 +301,8 @@ mod tests {
     }
     #[derive(Clone, Debug, PartialEq, Eq)]
     struct InexactByte(u8);
-    impl norito::NoritoSerialize for InexactByte {
+    impl norito::NoritoSerialize for InexactByte {}
+    impl norito::SerializePayload for InexactByte {
         fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
             self.0.serialize(writer)
         }
@@ -420,7 +316,8 @@ mod tests {
     #[test]
     fn packed_serialization_rejects_a_changed_counted_payload() {
         struct Growing(Cell<usize>);
-        impl NoritoSerialize for Growing {
+        impl NoritoSerialize for Growing {}
+        impl SerializePayload for Growing {
             fn serialize(
                 &self,
                 writer: &mut norito::core::Encoder<'_>,
@@ -431,13 +328,88 @@ mod tests {
                 Ok(())
             }
         }
-        let values = [Growing(Cell::new(0))];
+        let values = ConstVec::new(vec![Growing(Cell::new(0))]);
         let mut encoded = Vec::new();
         let _guard = ncore::DecodeFlagsGuard::enter(ncore::header_flags::PACKED_SEQ);
-        let error = ConstVec::<Growing>::serialize_packed(&values, &mut encoded, false)
+        let error = ncore::serialize_to_buffer(&values, &mut encoded)
             .expect_err("a changed second pass must invalidate packed offsets");
         assert!(matches!(error, ncore::Error::LengthMismatch));
         assert_eq!(values[0].0.get(), 2);
+    }
+    #[test]
+    fn nested_const_vec_measurement_visits_each_leaf_once_in_every_layout() {
+        struct Leaf<'a>(&'a Cell<usize>);
+        impl NoritoSerialize for Leaf<'_> {}
+        impl SerializePayload for Leaf<'_> {
+            fn serialize(&self, writer: &mut ncore::Encoder<'_>) -> Result<(), ncore::Error> {
+                self.0.set(self.0.get() + 1);
+                writer.write_all(&[0xAB])?;
+                Ok(())
+            }
+        }
+        for flags in (0..=ncore::supported_header_flags())
+            .filter(|flags| ncore::validate_header_flags(*flags).is_ok())
+        {
+            let _flags = ncore::DecodeFlagsGuard::enter(flags);
+            let calls = Cell::new(0);
+            let value = ConstVec::new(vec![ConstVec::new(vec![ConstVec::new(vec![Leaf(&calls)])])]);
+            let measured = ncore::encoded_payload_len(&value).unwrap();
+            assert_eq!(calls.get(), 1, "flags {flags:#x}");
+            let mut bytes = Vec::new();
+            ncore::serialize_to_buffer(&value, &mut bytes).unwrap();
+            assert_eq!(measured, bytes.len());
+        }
+    }
+    #[test]
+    fn primitive_containers_accept_bare_only_children_in_every_layout() {
+        use crate::{small::SmallVec, unique_vec::UniqueVec};
+
+        // This leaf deliberately has neither a frame identity nor NoritoSerialize.
+        #[derive(PartialEq)]
+        struct BareLeaf(u16);
+        impl SerializePayload for BareLeaf {
+            fn serialize(&self, writer: &mut ncore::Encoder<'_>) -> Result<(), ncore::Error> {
+                self.0.serialize(writer)
+            }
+        }
+
+        fn assert_payload(value: &dyn SerializePayload, expected: &dyn SerializePayload) {
+            let mut expected_bytes = Vec::new();
+            ncore::serialize_to_buffer(expected, &mut expected_bytes).unwrap();
+            let mut bytes = Vec::new();
+            ncore::serialize_to_buffer(value, &mut bytes).unwrap();
+            assert_eq!(bytes, expected_bytes);
+            assert_eq!(ncore::encoded_payload_len(value).unwrap(), bytes.len());
+            let mut checked_bytes = Vec::new();
+            ncore::serialize_to_writer_exact(value, &mut checked_bytes, bytes.len()).unwrap();
+            assert_eq!(checked_bytes, bytes);
+        }
+
+        for flags in (0..=ncore::supported_header_flags())
+            .filter(|flags| ncore::validate_header_flags(*flags).is_ok())
+        {
+            let _flags = ncore::DecodeFlagsGuard::enter(flags);
+            for values in [Vec::new(), vec![0x1020_u16, 0x3040]] {
+                let constant =
+                    ConstVec::new(values.iter().copied().map(BareLeaf).collect::<Vec<_>>());
+                assert_payload(&constant, &ConstVec::new(values.clone()));
+                // ConstVec and UniqueVec retain the canonical element sequence layout.
+                assert_payload(&constant, &values);
+                let unique: UniqueVec<_> = values.iter().copied().map(BareLeaf).collect();
+                assert_payload(&unique, &values);
+                let small: SmallVec<[BareLeaf; 2]> = values.iter().copied().map(BareLeaf).collect();
+                assert_payload(&small, &SmallVec::<[u16; 2]>::from(values.clone()));
+                // SmallVec retains its distinct fixed count and field-prefix layout.
+                let mut fixed = u64::try_from(values.len()).unwrap().to_le_bytes().to_vec();
+                for value in &values {
+                    fixed.extend_from_slice(&2_u64.to_le_bytes());
+                    fixed.extend_from_slice(&value.to_le_bytes());
+                }
+                let mut small_bytes = Vec::new();
+                ncore::serialize_to_buffer(&small, &mut small_bytes).unwrap();
+                assert_eq!(small_bytes, fixed);
+            }
+        }
     }
     #[test]
     fn encode_decode_round_trip() {

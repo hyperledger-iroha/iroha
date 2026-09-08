@@ -1,7 +1,7 @@
 //! Direct adversarial tests for Native AMX participant application classification.
 
 use super::*;
-use iroha_data_model::block::consensus::LaneBlockCommitment;
+use iroha_data_model::block::consensus::{LaneBlockCommitment, NativeAmxParticipantSettlement};
 use iroha_primitives::numeric::Quantity;
 
 const INCONSISTENT_IDENTITY: &str =
@@ -112,13 +112,20 @@ fn rebind_participant_identity(leg: &mut NativeAmxLegRecordV2) {
     descriptor.descriptor_hash = descriptor.computed_descriptor_hash();
     leg.lane_id = descriptor.lane_id;
     leg.dataspace_id = descriptor.dataspace_id;
-    leg.participant_settlement.lane_id = descriptor.lane_id;
-    leg.participant_settlement.dataspace_id = descriptor.dataspace_id;
-    leg.participant_settlement.lane_incarnation = descriptor.lane_incarnation;
-    leg.participant_settlement.block_height = descriptor.lane_block_height;
-    leg.participant_settlement_hash =
-        compute_native_amx_participant_settlement_hash(&leg.participant_settlement)
-            .expect("mutated fixture settlement hashes");
+    leg.participant_settlement = NativeAmxParticipantSettlement::try_new(
+        descriptor.lane_id,
+        descriptor.dataspace_id,
+        descriptor.lane_incarnation,
+        descriptor.lane_block_height,
+        descriptor.proposal_height,
+        leg.participant_settlement.previous_native_settlement_hash(),
+        leg.participant_settlement.source_ids().to_vec(),
+    )
+    .expect("mutated fixture has valid participant control coordinates");
+    leg.participant_settlement_hash = leg
+        .participant_settlement
+        .computed_hash()
+        .expect("mutated fixture settlement hashes");
     leg.participant_proposal.proposal_hash = leg.participant_proposal.computed_proposal_hash();
     let descriptor = &leg.participant_proposal.descriptor;
     for body in [&mut leg.prepare_qc.body, &mut leg.commit_qc.body] {
@@ -132,7 +139,7 @@ fn rebind_participant_identity(leg: &mut NativeAmxLegRecordV2) {
         body.participant_lane_block_height = descriptor.lane_block_height;
         body.participant_lane_block_view = descriptor.lane_block_view;
         body.participant_proposal_hash = leg.participant_proposal.proposal_hash;
-        body.participant_settlement_commitment = leg.participant_settlement_hash;
+        body.participant_settlement_commitment = Hash::from(leg.participant_settlement_hash);
     }
 }
 
@@ -261,8 +268,7 @@ const BODY_IDENTITY_MUTATIONS: &[BodyIdentityMutation] = &[
         body.participant_proposal_hash = Hash::new(b"phase-proposal-drift")
     }),
     ("participant settlement", |body| {
-        body.participant_settlement_commitment =
-            HashOf::from_untyped_unchecked(Hash::new(b"phase-settlement-drift"))
+        body.participant_settlement_commitment = Hash::new(b"phase-settlement-drift")
     }),
     ("coordinator lane", |body| {
         body.coordinator_lane_id = LaneId::new(90)
@@ -337,25 +343,64 @@ fn participant_application_role_rejects_coherent_same_route_coordinator_drift() 
     }
 }
 
+struct ParticipantSettlementFields {
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+    lane_incarnation: Hash,
+    participant_lane_block_height: u64,
+    authority_context_height: u64,
+    source_ids: Vec<[u8; Hash::LENGTH]>,
+}
+
+fn mutate_participant_settlement(
+    leg: &mut NativeAmxLegRecordV2,
+    mutate: impl FnOnce(&mut ParticipantSettlementFields),
+) {
+    let settlement = &leg.participant_settlement;
+    let mut fields = ParticipantSettlementFields {
+        lane_id: settlement.lane_id(),
+        dataspace_id: settlement.dataspace_id(),
+        lane_incarnation: settlement.lane_incarnation(),
+        participant_lane_block_height: settlement.participant_lane_block_height(),
+        authority_context_height: settlement.authority_context_height(),
+        source_ids: settlement.source_ids().to_vec(),
+    };
+    mutate(&mut fields);
+    leg.participant_settlement = NativeAmxParticipantSettlement::try_new(
+        fields.lane_id,
+        fields.dataspace_id,
+        fields.lane_incarnation,
+        fields.participant_lane_block_height,
+        fields.authority_context_height,
+        settlement.previous_native_settlement_hash(),
+        fields.source_ids,
+    )
+    .expect("tampered control still satisfies intrinsic constructor invariants");
+}
+
 #[test]
 fn participant_application_role_rejects_settlement_identity_and_content_tampering() {
     type Mutation = (&'static str, fn(&mut NativeAmxLegRecordV2));
     let mutations: &[Mutation] = &[
         ("lane", |leg| {
-            leg.participant_settlement.lane_id = LaneId::new(90)
+            mutate_participant_settlement(leg, |fields| fields.lane_id = LaneId::new(90))
         }),
         ("dataspace", |leg| {
-            leg.participant_settlement.dataspace_id = DataSpaceId::new(90)
+            mutate_participant_settlement(leg, |fields| fields.dataspace_id = DataSpaceId::new(90))
         }),
         ("incarnation", |leg| {
-            leg.participant_settlement.lane_incarnation = Hash::new(b"settlement-incarnation-drift")
+            mutate_participant_settlement(leg, |fields| {
+                fields.lane_incarnation = Hash::new(b"settlement-incarnation-drift")
+            })
         }),
-        ("height", |leg| leg.participant_settlement.block_height += 1),
+        ("height", |leg| {
+            mutate_participant_settlement(leg, |fields| fields.participant_lane_block_height += 1)
+        }),
         ("source", |leg| {
-            leg.participant_settlement.receipts[0].source_id = [0x11; Hash::LENGTH]
+            mutate_participant_settlement(leg, |fields| fields.source_ids[0] = [0x11; Hash::LENGTH])
         }),
-        ("timestamp", |leg| {
-            leg.participant_settlement.receipts[0].timestamp_ms += 1
+        ("authority height", |leg| {
+            mutate_participant_settlement(leg, |fields| fields.authority_context_height += 1)
         }),
         ("advertised hash", |leg| {
             leg.participant_settlement_hash =

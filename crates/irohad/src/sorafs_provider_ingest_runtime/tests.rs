@@ -1862,7 +1862,9 @@ fn state_free_preflight_fixture() -> (
             max_active_entries: 32,
             max_terminal_entries: 4_096,
             max_attempts: 8,
-            checkpoint_max_bytes: Bytes(160 * 1024 * 1024),
+            // Retained completion identities and both transaction copies must fit
+            // the native worst-case checkpoint bound before adapter checks run.
+            checkpoint_max_bytes: provider_ingest_outbox_defaults::CHECKPOINT_MAX_BYTES,
             checkpoint_operation_timeout_ms: 30_000,
             source_lease_ttl_ms: 30_000,
             retry_base_delay_ms: 1_000,
@@ -1873,6 +1875,7 @@ fn state_free_preflight_fixture() -> (
         },
         provider_attestation_journal: None,
     };
+    validate_config(&config).expect("valid state-free adapter preflight configuration");
     let source = Arc::new(TestAuthenticatedSourceInventoryV1::new(vec![
         [0x22; 32], [0x33; 32],
     ]));

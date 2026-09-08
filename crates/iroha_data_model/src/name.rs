@@ -204,6 +204,24 @@ impl Name {
         }
         Ok(Self(ConstString::from(candidate)))
     }
+    /// Check exact NFC spelling while charging the audited normalization scratch.
+    #[cfg(feature = "json")]
+    pub(crate) fn ensure_nfc_for_json_decode(candidate: &str) -> Result<(), norito::json::Error> {
+        let normalizer = nfc_normalizer().map_err(|err| name_json_error(err.reason()))?;
+        if candidate.is_ascii() {
+            return Ok(());
+        }
+
+        let source_scalars = candidate.chars().count();
+        let buffer_request_bytes = json_nfc_buffer_request_bytes(source_scalars);
+        norito::core::reserve_decode_allocation(buffer_request_bytes)
+            .map_err(norito::json::Error::from_decode_resource)?;
+        let (_, tail) = normalizer.split_normalized(candidate);
+        if tail.is_empty() {
+            return Ok(());
+        }
+        Err(name_json_error(ERR_NAME_NFC))
+    }
     #[cfg(feature = "json")]
     fn parse_for_json_decode(candidate: &str) -> Result<Self, norito::json::Error> {
         fn retain_exact(value: &str) -> Result<Name, norito::json::Error> {
@@ -218,20 +236,8 @@ impl Name {
         // ASCII is already NFC and never enters ICU's decomposition buffer. For non-ASCII input,
         // charge the audited per-input upper bound for the normalization check. Alternate Unicode
         // spellings are rejected; the decoder never rewrites identity text before admission.
-        let normalizer = nfc_normalizer().map_err(|err| name_json_error(err.reason()))?;
-        if candidate.is_ascii() {
-            return retain_exact(candidate);
-        }
-
-        let source_scalars = candidate.chars().count();
-        let buffer_request_bytes = json_nfc_buffer_request_bytes(source_scalars);
-        norito::core::reserve_decode_allocation(buffer_request_bytes)
-            .map_err(norito::json::Error::from_decode_resource)?;
-        let (_, tail) = normalizer.split_normalized(candidate);
-        if tail.is_empty() {
-            return retain_exact(candidate);
-        }
-        Err(name_json_error(ERR_NAME_NFC))
+        Self::ensure_nfc_for_json_decode(candidate)?;
+        retain_exact(candidate)
     }
     fn decode_wire(bytes: &[u8]) -> Result<(Self, usize), NoritoError> {
         let (len, header_len) = norito::core::inspect_len_from_slice(bytes)?;
@@ -260,15 +266,16 @@ impl Name {
         self.0.as_ref().eq_ignore_ascii_case("genesis")
     }
 }
-impl norito::core::NoritoSerialize for Name {
+impl norito::core::NoritoSerialize for Name {}
+impl norito::core::SerializePayload for Name {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
-        <&str as norito::core::NoritoSerialize>::serialize(&self.as_ref(), writer)
+        <&str as norito::core::SerializePayload>::serialize(&self.as_ref(), writer)
     }
     fn encoded_len_hint(&self) -> Option<usize> {
-        <&str as norito::core::NoritoSerialize>::encoded_len_hint(&self.as_ref())
+        <&str as norito::core::SerializePayload>::encoded_len_hint(&self.as_ref())
     }
     fn encoded_len_exact(&self) -> Option<usize> {
-        <&str as norito::core::NoritoSerialize>::encoded_len_exact(&self.as_ref())
+        <&str as norito::core::SerializePayload>::encoded_len_exact(&self.as_ref())
     }
 }
 impl<'a> norito::core::NoritoDeserialize<'a> for Name {

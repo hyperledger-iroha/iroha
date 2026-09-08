@@ -6,6 +6,7 @@
 
 use super::private_journal::{PrivateJournal, PrivateJournalError, PrivateJournalFormat};
 use super::*;
+use iroha_data_model::nexus::AxtAssetIncarnationV1;
 use norito::{Decode, Encode};
 use std::{collections::BTreeMap, path::Path};
 
@@ -13,6 +14,7 @@ use std::{collections::BTreeMap, path::Path};
 pub const KAGEMUSHA_COORDINATOR_PUBLIC_BINDING_MAX_BYTES_V1: usize = 64 * 1024;
 /// Maximum canonical sender intent retained before device preparation.
 pub const KAGEMUSHA_COORDINATOR_INTENT_MAX_BYTES_V1: usize = 128 * 1024;
+const RETIREMENT_MAX_BYTES: usize = 4 * 1024;
 const FORMAT: PrivateJournalFormat = PrivateJournalFormat {
     filename: "operations.norito.wal",
     magic: b"IKGOW1\0\0",
@@ -41,7 +43,7 @@ pub enum KagemushaCoordinatorOperationStoreErrorV1 {
     /// The same operation identifier was used with different immutable inputs.
     #[error("conflicting coordinator operation binding")]
     Conflict,
-    /// No additional physical reservation can be admitted; existing retries remain usable.
+    /// No additional live reservation allowance can be admitted; existing retries remain usable.
     #[error("coordinator operation storage capacity exhausted")]
     Capacity,
     /// Restored Core state has an operation missing from or conflicting with this journal.
@@ -60,25 +62,35 @@ struct Reservation {
 
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 enum Record {
-    Initialize(KagemushaLaneIdV1),
+    Initialize {
+        lane: KagemushaLaneIdV1,
+        asset_incarnation: AxtAssetIncarnationV1,
+    },
     Reserve(Reservation),
     BeginIntent(Box<KagemushaOutgoingPublicInputPreimageV1>),
+    RetireSender(Box<KagemushaOutgoingOperationRecordV1>),
 }
 
 #[derive(Clone, Debug)]
 struct RetainedOperation {
     reservation: Reservation,
     intent: Option<KagemushaOutgoingPublicInputPreimageV1>,
+    retired_sender: Option<KagemushaOutgoingOperationRecordV1>,
 }
 
 /// A real private operation WAL. Open and mutation are exposed through the Core state machine.
 ///
-/// The byte admission budget applies only to new reservations. Reopening with a lower budget
-/// retains and serves every acknowledged decision; no history count, age or budget evicts it.
+/// The byte admission budget covers outstanding reservations and bounded future intent growth.
+/// A sender allowance retires only after fsync of the exact Core-authenticated Released record.
+/// Reopening with a lower budget retains every decision; no history count, age or budget evicts
+/// its binding. Historical bytes remain on disk and can fail on real storage exhaustion.
 /// No private witness, recovery seed, signing key or unsealed snapshot is written to this file.
+/// Observation reads are excluded: their native challenges are transient and cannot become
+/// durable retry authority. Other command allowances require authenticated lifecycle completion.
 pub struct KagemushaCoordinatorOperationStoreV1 {
     pub(super) wal: PrivateJournal,
     lane: KagemushaLaneIdV1,
+    asset_incarnation: AxtAssetIncarnationV1,
     operations: BTreeMap<DigestV1, RetainedOperation>,
     reserved_bytes: u64,
     maximum_reserved_bytes: u64,
@@ -96,54 +108,89 @@ pub enum KagemushaCoordinatorSenderIntentRecoveryV1 {
 }
 
 impl KagemushaCoordinatorOperationStoreV1 {
-    fn create_new(
+    /// Return this descriptor-owned, fully replayed and fsynced WAL prefix.
+    /// It is durable byte evidence only; the hardware checkpoint must still select it.
+    pub fn recovery_prefix(&self) -> Result<KagemushaRecoveryJournalPrefixV1> {
+        self.wal.recovery_prefix().map_err(storage_error)
+    }
+
+    /// Return the bounded live admission charge. Retained terminal history is never evicted.
+    #[must_use]
+    pub const fn live_reserved_bytes(&self) -> u64 {
+        self.reserved_bytes
+    }
+
+    pub(super) fn create_new(
         path: &Path,
         lane: KagemushaLaneIdV1,
+        asset_incarnation: AxtAssetIncarnationV1,
         maximum_reserved_bytes: u64,
     ) -> Result<Self> {
         lane.validate().map_err(|_| Error::InvalidBinding)?;
+        asset_incarnation
+            .validate()
+            .map_err(|_| Error::InvalidBinding)?;
         let wal = PrivateJournal::create_new(path, FORMAT).map_err(storage_error)?;
         let mut store = Self {
             wal,
             lane,
+            asset_incarnation,
             operations: BTreeMap::new(),
             reserved_bytes: 0,
             maximum_reserved_bytes,
         };
-        store.persist(&Record::Initialize(store.lane.clone()))?;
+        store.persist(&Record::Initialize {
+            lane: store.lane.clone(),
+            asset_incarnation: store.asset_incarnation,
+        })?;
         Ok(store)
     }
 
-    fn open_existing(
+    pub(super) fn open_existing(
         path: &Path,
         lane: KagemushaLaneIdV1,
+        asset_incarnation: AxtAssetIncarnationV1,
         maximum_reserved_bytes: u64,
     ) -> Result<Self> {
         lane.validate().map_err(|_| Error::InvalidBinding)?;
+        asset_incarnation
+            .validate()
+            .map_err(|_| Error::InvalidBinding)?;
         let wal = PrivateJournal::open_existing(path, FORMAT).map_err(storage_error)?;
         let mut store = Self {
             wal,
             lane,
+            asset_incarnation,
             operations: BTreeMap::new(),
             reserved_bytes: 0,
             maximum_reserved_bytes,
         };
         while let Some((sequence, payload)) = store.wal.replay_next().map_err(storage_error)? {
-            let record: Record =
-                norito::decode_canonical(&payload).map_err(|_| Error::JournalCorrupt)?;
+            let maximum = FORMAT.maximum_payload_bytes as usize;
+            let record: Record = norito::decode_canonical_with_limits(
+                &payload,
+                norito::DecodeLimits::new(maximum, maximum, maximum * 4, maximum * 8, 32),
+            )
+            .map_err(|_| Error::JournalCorrupt)?;
             if encode(&record)? != payload {
                 return Err(Error::JournalCorrupt);
             }
             if sequence == 0 {
-                if record != Record::Initialize(store.lane.clone()) {
+                if record
+                    != (Record::Initialize {
+                        lane: store.lane.clone(),
+                        asset_incarnation: store.asset_incarnation,
+                    })
+                {
                     return Err(Error::JournalCorrupt);
                 }
                 continue;
             }
             match record {
-                Record::Initialize(_) => return Err(Error::JournalCorrupt),
+                Record::Initialize { .. } => return Err(Error::JournalCorrupt),
                 Record::Reserve(reservation) => {
                     validate_reservation(&reservation)?;
+                    store.validate_reservation_scope(&reservation)?;
                     if store.operations.contains_key(&reservation.operation_id) {
                         return Err(Error::JournalCorrupt);
                     }
@@ -156,6 +203,9 @@ impl KagemushaCoordinatorOperationStoreV1 {
                         .get_mut(&intent.operation_id)
                         .ok_or(Error::JournalCorrupt)?;
                     operation.intent = Some(*intent);
+                }
+                Record::RetireSender(record) => {
+                    store.apply_sender_retirement(*record)?;
                 }
             }
         }
@@ -177,9 +227,71 @@ impl KagemushaCoordinatorOperationStoreV1 {
             RetainedOperation {
                 reservation,
                 intent: None,
+                retired_sender: None,
             },
         );
         Ok(())
+    }
+
+    fn validate_sender_retirement(
+        &self,
+        record: &KagemushaOutgoingOperationRecordV1,
+    ) -> Result<()> {
+        record
+            .validate_terminal_release_state()
+            .map_err(|_| Error::CoreMismatch)?;
+        if record.phase != KagemushaOutgoingOperationPhaseV1::Released
+            || encode(&Record::RetireSender(Box::new(record.clone())))?.len() > RETIREMENT_MAX_BYTES
+        {
+            return Err(Error::CoreMismatch);
+        }
+        let retained = self
+            .operations
+            .get(&record.operation_id)
+            .ok_or(Error::CoreMismatch)?;
+        let intent = retained.intent.as_ref().ok_or(Error::CoreMismatch)?;
+        if retained.reservation.operation != 5
+            || intent.context != record.context
+            || intent.canonical_digest().map_err(|_| Error::CoreMismatch)? != record.inputs_digest
+            || intent.inputs.operation_kind() != record.operation_kind
+            || retained.retired_sender.is_some()
+        {
+            return Err(Error::CoreMismatch);
+        }
+        Ok(())
+    }
+
+    fn apply_sender_retirement(
+        &mut self,
+        record: KagemushaOutgoingOperationRecordV1,
+    ) -> Result<()> {
+        self.validate_sender_retirement(&record)?;
+        let retained = self
+            .operations
+            .get_mut(&record.operation_id)
+            .ok_or(Error::CoreMismatch)?;
+        self.reserved_bytes = self
+            .reserved_bytes
+            .checked_sub(reservation_growth(&retained.reservation)?)
+            .ok_or(Error::JournalCorrupt)?;
+        retained.retired_sender = Some(record);
+        Ok(())
+    }
+
+    fn retire_sender(&mut self, record: &KagemushaOutgoingOperationRecordV1) -> Result<bool> {
+        if self
+            .operations
+            .get(&record.operation_id)
+            .is_some_and(|entry| entry.retired_sender.as_ref() == Some(record))
+        {
+            return Ok(false);
+        }
+        self.validate_sender_retirement(record)?;
+        // Capacity is reusable only after durable retirement. A lost response is recovered by
+        // exact replay; an uncertain current writer cannot admit another operation.
+        self.persist(&Record::RetireSender(Box::new(record.clone())))?;
+        self.apply_sender_retirement(record.clone())?;
+        Ok(true)
     }
 
     fn reserve(
@@ -192,6 +304,7 @@ impl KagemushaCoordinatorOperationStoreV1 {
         // Check bounds before allocating a caller-controlled buffer.
         if operation_id == [0; 32]
             || !(1..=22).contains(&operation)
+            || matches!(operation, 1 | 13 | 18 | 21)
             || public_binding.is_empty()
             || public_binding.len() > KAGEMUSHA_COORDINATOR_PUBLIC_BINDING_MAX_BYTES_V1
         {
@@ -212,6 +325,7 @@ impl KagemushaCoordinatorOperationStoreV1 {
             public_binding: public_binding.to_vec(),
         };
         validate_reservation(&reservation)?;
+        self.validate_reservation_scope(&reservation)?;
         let growth = reservation_growth(&reservation)?;
         if self
             .reserved_bytes
@@ -225,8 +339,35 @@ impl KagemushaCoordinatorOperationStoreV1 {
         Ok(operation_id)
     }
 
+    fn validate_reservation_scope(&self, reservation: &Reservation) -> Result<()> {
+        if reservation.operation == 5 {
+            let maximum = KAGEMUSHA_COORDINATOR_PUBLIC_BINDING_MAX_BYTES_V1;
+            let inputs: KagemushaOutgoingPublicInputsV1 = norito::decode_canonical_with_limits(
+                &reservation.public_binding,
+                norito::DecodeLimits::new(maximum, maximum, maximum * 4, maximum * 8, 32),
+            )
+            .map_err(|_| Error::InvalidBinding)?;
+            if matches!(inputs, KagemushaOutgoingPublicInputsV1::SendSplit { .. }) {
+                let request = inputs
+                    .decode_send_parts()
+                    .map_err(|_| Error::InvalidBinding)?;
+                if request.network_id != self.lane.network_id
+                    || request.asset != self.lane.asset
+                    || request.scale != self.lane.scale
+                    || request.asset_incarnation != self.asset_incarnation
+                {
+                    return Err(Error::InvalidBinding);
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn require_new_intent(&self, intent: &KagemushaOutgoingPublicInputPreimageV1) -> Result<()> {
         validate_intent(intent, &self.lane)?;
+        if intent.context.release.asset_incarnation != self.asset_incarnation {
+            return Err(Error::InvalidBinding);
+        }
         let retained = self
             .operations
             .get(&intent.operation_id)
@@ -274,21 +415,25 @@ fn encode(record: &Record) -> Result<Vec<u8>> {
 fn validate_reservation(reservation: &Reservation) -> Result<()> {
     if reservation.operation_id == [0; 32]
         || !(1..=22).contains(&reservation.operation)
+        || matches!(reservation.operation, 1 | 13 | 18 | 21)
         || reservation.public_binding.is_empty()
         || reservation.public_binding.len() > KAGEMUSHA_COORDINATOR_PUBLIC_BINDING_MAX_BYTES_V1
     {
         return Err(Error::InvalidBinding);
     }
     if reservation.operation == 5 {
-        let inputs: KagemushaOutgoingPublicInputsV1 =
-            norito::decode_canonical(&reservation.public_binding)
-                .map_err(|_| Error::InvalidBinding)?;
+        let maximum = KAGEMUSHA_COORDINATOR_PUBLIC_BINDING_MAX_BYTES_V1;
+        let inputs: KagemushaOutgoingPublicInputsV1 = norito::decode_canonical_with_limits(
+            &reservation.public_binding,
+            norito::DecodeLimits::new(maximum, maximum, maximum * 4, maximum * 8, 32),
+        )
+        .map_err(|_| Error::InvalidBinding)?;
         if sender_public_binding(&inputs)? != reservation.public_binding {
             return Err(Error::InvalidBinding);
         }
         match inputs {
             KagemushaOutgoingPublicInputsV1::SendSplit { .. } => {
-                // The reservation is durable and consumes physical capacity. Reject a malformed
+                // The reservation is durable and consumes live capacity. Reject a malformed
                 // nested request now rather than retaining an intent that can never begin.
                 inputs
                     .decode_send_parts()
@@ -309,7 +454,10 @@ fn reservation_growth(reservation: &Reservation) -> Result<u64> {
         + private_journal::FRAME_HEADER_BYTES as u64;
     // Reserve the full bounded future Intent append before accepting any sender work.
     let intent = if reservation.operation == 5 {
-        KAGEMUSHA_COORDINATOR_INTENT_MAX_BYTES_V1 as u64 + 1024
+        KAGEMUSHA_COORDINATOR_INTENT_MAX_BYTES_V1 as u64
+            + 1024
+            + RETIREMENT_MAX_BYTES as u64
+            + private_journal::FRAME_HEADER_BYTES as u64
     } else {
         0
     };
@@ -375,6 +523,7 @@ where
         KagemushaCoordinatorOperationStoreV1::create_new(
             path,
             self.state.lane.clone(),
+            self.state.asset_incarnation,
             maximum_reserved_bytes,
         )
     }
@@ -385,17 +534,20 @@ where
         path: &Path,
         maximum_reserved_bytes: u64,
     ) -> Result<KagemushaCoordinatorOperationStoreV1> {
-        let store = KagemushaCoordinatorOperationStoreV1::open_existing(
+        let mut store = KagemushaCoordinatorOperationStoreV1::open_existing(
             path,
             self.state.lane.clone(),
+            self.state.asset_incarnation,
             maximum_reserved_bytes,
         )?;
-        self.reconcile_coordinator_operations(&store)?;
+        self.retire_released_coordinator_sender_operations(&mut store)?;
         Ok(store)
     }
 
     /// Admit a caller-persisted ID only after its exact operation/binding is durably retained.
     /// The returned ID equals the caller's ID and confers no qualification or monetary capability.
+    /// Native dispatch must first decode non-sender bindings using their exact typed command codec;
+    /// this Core storage layer owns bounded immutable bytes, not the bridge's device command types.
     pub fn reserve_coordinator_operation(
         &self,
         store: &mut KagemushaCoordinatorOperationStoreV1,
@@ -403,19 +555,20 @@ where
         operation: u8,
         public_binding: &[u8],
     ) -> Result<DigestV1> {
-        self.reconcile_coordinator_operations(store)?;
+        self.retire_released_coordinator_sender_operations(store)?;
         store.reserve(operation_id, operation, public_binding)
     }
 
     /// Durably bind one sender intent before hardware preparation. Exact retries do not append.
-    /// Credential identity must already be authenticated by the native owner, as for existing Core
-    /// preparation APIs; a raw credential ID or this return value is never an authentication token.
+    /// Credential identity and the Core authorization key reference must already be authenticated
+    /// by the native owner, as for existing Core preparation APIs. A raw identifier or this return
+    /// value is never an authentication token.
     pub fn begin_coordinator_sender_intent(
         &self,
         store: &mut KagemushaCoordinatorOperationStoreV1,
         intent: &KagemushaOutgoingPublicInputPreimageV1,
     ) -> Result<()> {
-        self.reconcile_coordinator_operations(store)?;
+        self.retire_released_coordinator_sender_operations(store)?;
         validate_intent(intent, &self.state.lane)?;
         let existing = self
             .classify_outgoing_operation_prepare(intent)
@@ -458,13 +611,47 @@ where
         }
     }
 
+    /// Retire live sender journal allowances after the actual Core index accepts a terminal
+    /// receipt. All closed IDs, original inputs and exact release evidence remain retained.
+    /// Missing or changed Core records are errors; raw receipts or host flags cannot call this
+    /// transition. Providers call this after installing the authenticated Core release successor.
+    pub fn retire_released_coordinator_sender_operations(
+        &self,
+        store: &mut KagemushaCoordinatorOperationStoreV1,
+    ) -> Result<usize> {
+        self.reconcile_coordinator_operations(store)?;
+        let mut retired = 0;
+        for record in self.outgoing_operation_index().records() {
+            if record.phase == KagemushaOutgoingOperationPhaseV1::Released
+                && store.retire_sender(record)?
+            {
+                retired += 1;
+            }
+        }
+        Ok(retired)
+    }
+
     fn reconcile_coordinator_operations(
         &self,
         store: &KagemushaCoordinatorOperationStoreV1,
     ) -> Result<()> {
         store.wal.check_owned().map_err(storage_error)?;
-        if store.lane != self.state.lane {
+        if store.lane != self.state.lane || store.asset_incarnation != self.state.asset_incarnation
+        {
             return Err(Error::CoreMismatch);
+        }
+        // A journal-ahead terminal marker must not authorize capacity reuse against an older
+        // Core snapshot. Host retirement bytes are a projection, never release authority.
+        for retained in store.operations.values() {
+            if let Some(terminal) = &retained.retired_sender {
+                if self
+                    .outgoing_operation_index()
+                    .lookup(terminal.operation_id)
+                    != Some(terminal)
+                {
+                    return Err(Error::CoreMismatch);
+                }
+            }
         }
         // Full coverage matters: an older valid journal prefix must not hide a different Core
         // operation merely because the caller happens to request an unrelated ID this time.

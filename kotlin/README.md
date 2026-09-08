@@ -333,12 +333,50 @@ identity before executing a device operation. Payment and redemption reservation
 carry the canonical tagged `iroha.kagemusha.device.v1.sender-public-inputs` Norito
 archive, shared with the native outgoing-operation index.
 
+Authenticated provider construction requires an app-owned `KagemushaOperationIntentStoreV1`
+and an explicit current onboarding-approval callback. The store must synchronously retain
+immutable account/runtime scope, operation identity, exact typed command, and creation
+qualification before dispatch; after Core accepts the response it retains the exact reply,
+original authenticator, and reply qualification. Its shared reentrant lock and durable storage
+must exclude multiple owners across providers and processes. There is no in-memory default.
+The SDK resumes unfinished bootstrap, fold, and rotation commands before another transition.
+Rotation retries use their retained original response key, while fresh qualification and state
+reads use the current epoch. Coordinator method 11 begins each transient native observation
+for operations 1, 13, 18, and 21; those reads never enter the operation intent store or durable
+reservation method. Native recreation requires a fresh challenge, and each new challenge
+invalidates its predecessor. Historical read replies are never treated as current state.
+Bootstrap admission is checked again immediately before
+dispatch, including a retry when fresh authenticated state remains uninitialized.
+
+Apps call `acknowledgeDurableResult(operationId, canonicalResult)` only after syncing and
+reopening the exact request, payment, acknowledgement, or redemption transcript. Receiver ACK
+completion uses its credit identity. Internal transitions are acknowledged after a fresh
+authenticated snapshot proves the accepted aggregate installed; its exact command, challenge,
+reply, authenticator, and qualification are retained as immutable evidence on that mutation
+before acknowledgement. Sender installation retains the same evidence on its operation-10
+record. Such evidence never restores a read challenge.
+Acknowledgement retains immutable history; errors, sign-out, and lost approval must not delete
+uncertain obligations. Acknowledged history is not charged against a lifetime operation limit.
+
 `KagemushaCoreCoordinatorBridgeV1.open(storagePath)` in `client-android` provides
 the strict schema-2 JNI transport, backed by the pure `core-jvm` frame codec.
 It checks the complete ABI-23 inventory and rejects substituted response bindings;
-missing JNI or an absent qualified native coordinator fails closed. Its opaque
-archives do not implement the typed wallet coordinator: the remaining native-owned
-archive schemas and integration are recorded in [the source contract](../specs/kagemusha_device_bridge_v1.md).
+missing JNI or an absent qualified native coordinator fails closed.
+`KagemushaNativeCoreCoordinatorAdapterV1.open(storagePath)` implements the typed
+wallet coordinator over that transport. Its pure `KagemushaCoreCoordinatorArchiveV1`
+codec handles bounded canonical preparation, candidate, recovery, and redemption
+receipt projections. The adapter checks public-input digests, operation identities,
+qualified creation context, retained recovery scope, and installed aggregate scope.
+Device-reply admission retains the original 64-byte response authenticator so
+native Core independently verifies the exact response transcript.
+The sole JNI verifier is `nativeVerifyCommandResponseV1`: its response signature
+binds the exact canonical command body digest as well as the response header and
+payload digest, hardware policy, and qualification report. The Android bridge
+captures the dispatched command and request identity before execution and passes
+those detached bytes to verification; no old verifier symbol or overload remains.
+Those projections remain selectors: the qualified native backend must authenticate
+the journal, release, Core authorization, and actual recursive proof. No software
+backend or stock provider factory is supplied. See [the source contract](../specs/kagemusha_device_bridge_v1.md).
 
 Online reserve top-ups use the same payer authority as the debit. Build one
 `TopUpKagemushaV1Instruction` from the proof-bearing request, put that sole

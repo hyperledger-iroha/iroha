@@ -109,8 +109,11 @@ struct KagemushaRecursiveVerifierProfileFileV1 {
 
 /// Non-serializable authority proving that one exact top-up request selected an enabled profile
 /// from its authenticated release.
+///
+/// Returned by [`KagemushaV1RuntimeVerifier`]; its private fields prevent callers from
+/// constructing an authorization without authenticated release verification.
 #[derive(Clone, Debug)]
-pub(in crate::smartcontracts::isi) struct VerifiedKagemushaTopUpAuthorizationV1 {
+pub struct VerifiedKagemushaTopUpAuthorizationV1 {
     request_digest: [u8; 32],
     mint_authorization_digest: [u8; 32],
     profile: KagemushaHardwareProfileV1,
@@ -1660,14 +1663,6 @@ pub mod isi {
             state_transaction,
             &AssetId::new(request.asset.clone(), request.payer.clone()),
         )?;
-        let reserve_account = resolve_kagemusha_reserve_account(state_transaction, &request.asset)?;
-        ensure_distinct_kagemusha_reserve_account(
-            &reserve_account,
-            &request.payer,
-            "payer",
-            &request.asset,
-        )?;
-        let destination_id = kagemusha_reserve_asset_id(&source_id, reserve_account);
         let pool_key = KagemushaReservePoolKeyV1::new(
             request.network_id,
             request.asset.clone(),
@@ -1745,6 +1740,16 @@ pub mod isi {
                 return Ok(());
             }
         }
+        // Materialize reserve custody only after a new, time-valid plan survives retry checks.
+        let reserve_account =
+            resolve_kagemusha_reserve_account(state_transaction, &plan.record().pool.asset)?;
+        ensure_distinct_kagemusha_reserve_account(
+            &reserve_account,
+            &plan.record().payer,
+            "payer",
+            &plan.record().pool.asset,
+        )?;
+        let destination_id = kagemusha_reserve_asset_id(&source_id, reserve_account);
         crate::smartcontracts::isi::asset::isi::execute_verified_kagemusha_top_up_transfer_v1(
             state_transaction,
             VerifiedKagemushaTopUpDebitV1::new(

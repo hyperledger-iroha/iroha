@@ -4779,20 +4779,15 @@ export interface ToriiNativeAmxParticipantLaneBlockProposal {
   payload_block_hint: null;
 }
 
-/** Exact nonrecursive zero-effect settlement certified by a Native AMX participant. */
+/** Seven-field nonrecursive participant control commitment in candidate order. */
 export interface ToriiNativeAmxParticipantSettlement {
-  block_height: ToriiU64;
-  lane_id: number;
-  lane_incarnation: string;
-  dataspace_id: ToriiU64;
-  tx_count: ToriiU64;
-  total_local_amount: string;
-  total_xor_due: string;
-  total_xor_after_haircut: string;
-  total_xor_variance: string;
-  swap_metadata: null;
-  receipts: ReadonlyArray<Readonly<ToriiLaneSettlementReceipt>>;
-  nexus_fee_receipts: readonly [];
+  readonly lane_id: number;
+  readonly dataspace_id: ToriiU64;
+  readonly lane_incarnation: string;
+  readonly participant_lane_block_height: ToriiU64;
+  readonly authority_context_height: ToriiU64;
+  readonly previous_native_settlement_hash: string | null;
+  readonly source_ids: ReadonlyArray<ToriiNativeAmxSourceId>;
 }
 
 export interface ToriiNativeAmxLeg {

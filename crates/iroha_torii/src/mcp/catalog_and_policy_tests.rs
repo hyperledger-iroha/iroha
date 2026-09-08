@@ -2967,5 +2967,5 @@ fn generated_projection_schema_bounds_selector_work() {
     )]);
     assert!(validate_projection(too_long).is_err());
 }
-#[path = "catalog_and_policy_tests/security_and_registry.rs"]
-mod security_and_registry;
+#[path = "catalog_and_policy_tests/registry_security.rs"]
+mod registry_security;

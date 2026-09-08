@@ -318,6 +318,9 @@ fn canonical_authorization_seal_and_signing_frames_keep_exact_budgets_in_every_l
 
 #[test]
 fn musubi_context_is_bounded_and_separates_job_identity() {
+    use iroha_crypto::HashOf;
+    use iroha_data_model::block::BlockHeader;
+
     let generic = authorization(0x5A, 7);
     let commitment = musubi_commitment(&generic, 0x31);
     let first_context =
@@ -339,6 +342,7 @@ fn musubi_context_is_bounded_and_separates_job_identity() {
     assert_ne!(first.job_id(), second.job_id());
     assert!(!generic.same_binding(&first));
     assert!(!first.same_binding(&second));
+    assert_musubi_context_rejects_unmarked_network(&first_context);
     let mut unmarked_network = first_context.clone();
     let mut unmarked_hash = Hash::prehashed([0; 32]);
     iroha_crypto::zeroize_value_for_confidential_discard(&mut unmarked_hash);

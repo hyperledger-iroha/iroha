@@ -128,18 +128,11 @@ pub struct BorrowedPublicKeyHex<'a> {
 /// Longest canonical public-key literal accepted by the current protocol.
 pub const MAX_PUBLIC_KEY_LITERAL_BYTES: usize =
     28 + 1 + 2 * (2 + 2 + crate::MAX_PUBLIC_KEY_PAYLOAD_BYTES);
-/// Parse canonical public-key multihash text without allocating payload or diagnostics.
-pub fn decode_public_key_str_borrowed(s: &str) -> Option<BorrowedPublicKeyHex<'_>> {
-    if s.len() > MAX_PUBLIC_KEY_LITERAL_BYTES {
+/// Parse canonical bare public-key multihash text without allocating payload or diagnostics.
+pub fn decode_public_key_str_borrowed(encoded: &str) -> Option<BorrowedPublicKeyHex<'_>> {
+    if encoded.len() > MAX_PUBLIC_KEY_LITERAL_BYTES {
         return None;
     }
-    let (prefix, encoded) = match s.split_once(':') {
-        Some((prefix, encoded)) if !encoded.contains(':') => {
-            (Some(prefix.parse::<Algorithm>().ok()?), encoded)
-        }
-        Some(_) => return None,
-        None => (None, s),
-    };
     if encoded.len() < 4 || encoded.len() % 2 != 0 {
         return None;
     }
@@ -153,9 +146,6 @@ pub fn decode_public_key_str_borrowed(s: &str) -> Option<BorrowedPublicKeyHex<'_
         return None;
     }
     let algorithm = digest_function_public::decode_option(digest_function)?;
-    if prefix.is_some_and(|prefix| prefix != algorithm) {
-        return None;
-    }
     let payload_hex = encoded.get(cursor..)?;
     if !payload_hex
         .as_bytes()
@@ -468,6 +458,7 @@ mod tests {
             "ED01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4",
             "ed8120001509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4",
             "ed01201509a611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4",
+            "ed25519:ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4",
             "secp256k1:ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4",
         ] {
             assert!(decode_public_key_str_borrowed(invalid).is_none());

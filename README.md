@@ -80,6 +80,21 @@ Notes:
   visual-codec commands. The SoraFS browser/SDK local QUIC proxy is available
   with `cargo build -p sorafs_orchestrator --features local-quic-proxy`.
 
+### AArch64 Linux cross builds
+
+Use the corrected Zig driver for GNU/Linux release builds; it preserves static
+crypto libraries and the assembly features already requested by their sources:
+
+```sh
+scripts/cargo_zigbuild_linux.sh --jobs 6 -- zigbuild --locked --profile release \
+  --target aarch64-unknown-linux-gnu -p irohad --bin iroha3d_taira
+```
+
+Prerequisites are Python 3.10+, Cargo with `cargo-zigbuild`, Zig, and the Rust
+Linux target. Set `IROHA_ZIG_BINARY` to an absolute Zig executable when pinning a
+release toolchain. Reuse the same Cargo target directory. A release still needs
+its clean signed source, recorded tool identities and runtime qualification.
+
 ### Fast Local Rust Loops
 
 Keep Cargo's default target directory warm and scope the command to the crate

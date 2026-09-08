@@ -18,6 +18,17 @@ The canonical implementation lives under
 Runtime metadata (`metal_kernel_descriptors`) mirrors the information below so
 benchmarks and diagnostics can surface the same facts programmatically.【crates/fastpq_prover/metal/kernels/ntt_stage.metal:1】【crates/fastpq_prover/metal/kernels/poseidon.metal:1】【crates/fastpq_prover/build.rs:1】【crates/fastpq_prover/src/metal.rs:248】
 
+Goldilocks Poseidon kernels use an explicit three-scalar-word state structure.
+On Apple Metal 32023.883, the previous `ulong3` arrays produced incorrect
+non-leading sponge states when a lane processed multiple states. The scalar
+structure passes direct native permutation, row-hash and column-hash parity
+against an independent big-integer oracle on Apple M4 Max, including partial
+chunks and near-modulus inputs. The Rust hardware regression
+`poseidon_multi_state_chunks_match_cpu_edge_vectors` exercises 1/4/8 states per
+lane and repeated dispatches. Production retains one state per lane until the
+supported-device qualification matrix is complete; local kernel parity is not
+an end-to-end prover or production performance qualification.
+
 ## Kernel inventory
 
 | Entry point | Operation | Threadgroup cap | Tile stage cap | Notes |

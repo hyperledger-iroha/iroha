@@ -41,20 +41,20 @@ fn pending_queue_plan_evidence_blocks_every_bound_route_and_classifies_losers() 
             .1,
         PendingQueuePlanAdmissionDisposition::Stale
     );
-    assert!(
+    assert_eq!(
         queue_plan_admission_registry_match(
             &state.view(),
             binding.entrypoint_hash.clone(),
             binding.canonical_hash(),
         )
-        .is_err(),
-        "Queue recovery must not reacquire an exact owner bound to incarnation A"
+        .expect("a Kura-only certificate is not a WSV registry owner"),
+        QueuePlanAdmissionRegistryMatch::Absent
     );
-    assert!(
+    assert_eq!(
         state
             .queue_plan_admission_binding_registry_match(&binding)
-            .is_err(),
-        "public binding acknowledgement must report a stale pending incarnation"
+            .expect("a sidecar alone cannot acknowledge a WSV owner"),
+        QueuePlanAdmissionRegistryMatch::Absent
     );
     assert!(
         !state.lane_has_drain_blocking_evidence(
@@ -155,6 +155,22 @@ fn pending_queue_plan_evidence_blocks_every_bound_route_and_classifies_losers() 
             .1,
         PendingQueuePlanAdmissionDisposition::Stale
     );
+    assert!(
+        queue_plan_admission_registry_match(
+            &state.view(),
+            binding.entrypoint_hash.clone(),
+            binding.canonical_hash(),
+        )
+        .is_err(),
+        "Queue recovery must not reacquire an exact owner bound to incarnation A"
+    );
+    assert!(
+        state
+            .queue_plan_admission_binding_registry_match(&binding)
+            .is_err(),
+        "public binding acknowledgement must report a stale pending incarnation"
+    );
+
     let lifecycle = state.lane_consensus_lifecycle_snapshot();
     let_row! { active_lanes = lifecycle .nexus .lane_catalog .lanes() .iter() .map(|lane| MergeLaneBinding { lane_id: lane.id, dataspace_id: lane.dataspace_id, lane_config_hash: merge_lane_config_hash(lane), incarnation: lifecycle.incarnations[&lane.id], activation_height: lifecycle.activation_heights[&lane.id].saturating_add(1), }) .collect::<Vec<_>>() };
     let carrier = empty_global_block_after(Some(&parent));
@@ -1360,6 +1376,31 @@ fn setup_nexus_fee_merge_state(
     // The governed proof is verified at proposal height 1, so publish the
     // corresponding committed carrier before the record is admitted.
     ensure_merge_carrier_parent_for_test(&state);
+    // This fixture seeds the fee definition before genesis execution. Retain
+    // the same incarnation derived by the production empty-parent boundary.
+    let genesis = state
+        .kura
+        .get_block(NonZeroUsize::new(1).expect("genesis height"))
+        .expect("exact fee fixture genesis");
+    let genesis_hash = genesis.header().hash();
+    let genesis_execution = Hash::new_from_chunks(&[
+        b"iroha:axt:genesis-asset-incarnation:v1\0",
+        genesis_hash.as_ref(),
+    ]);
+    let incarnation = AxtAssetIncarnationV1::derive(
+        state.network_id_ref(),
+        &asset_def_id,
+        &genesis_hash,
+        &genesis_execution,
+        0,
+    );
+    {
+        let mut world = state.world.block();
+        world
+            .axt_asset_incarnations
+            .insert(asset_def_id.clone(), incarnation);
+        world.commit();
+    }
     seed_verified_lane_relay_record(&state, &envelope);
     state.record_lane_relay(&envelope).expect("relay accepted");
     if state.latest_block_hash_fast().is_none() {
@@ -1613,8 +1654,11 @@ state_test! { sync staged_fee_merge_kura_failure_publishes_no_burn_or_receipt_ca
     );
     assert!(state.merge_ledger().is_empty());
 }
-#[test]
-fn staged_fee_merge_missing_transaction_membership_publishes_no_burn_or_receipt_cache() {
+state_test!(consensus_stack staged_fee_merge_missing_transaction_membership_publishes_no_burn_or_receipt_cache
+    staged_fee_merge_missing_transaction_membership_publishes_no_burn_or_receipt_cache_on_consensus_stack();
+);
+fn staged_fee_merge_missing_transaction_membership_publishes_no_burn_or_receipt_cache_on_consensus_stack()
+ {
     let source_id = [0x46; 32];
     let_row! { (state, sponsor_id, asset_def_id, commit_keypairs) = setup_nexus_fee_merge_state(Quantity::from(10_u32), Quantity::from(3_u32), source_id) };
     let_row! { candidate = state .merge_entry_candidates_from_lane_relays() .into_iter() .next() .expect("fee merge candidate") };
@@ -1628,9 +1672,28 @@ fn staged_fee_merge_missing_transaction_membership_publishes_no_burn_or_receipt_
         .expect("persist exact fee merge carrier");
     let_row! { receipt_marker = State::nexus_fee_receipt_marker_key(&source_id).expect("fee receipt marker key") };
     let_row! { mut state_block = state .block_with_certified_merge_entry(carrier.header().clone(), &entry, ConsensusMode::Permissioned) .expect("stage exact fee merge carrier") };
+    state_block
+        .finalize_axt_asset_incarnations()
+        .expect("validate retained fee asset incarnation");
+    assert!(!state_block.transactions.has_staged_block());
     state_block.block_hashes.push(carrier.hash());
+    let carrier_hash = carrier.hash();
+    let surface_error = state_block
+        .validate_merge_execution_commit_surface(MergeExecutionCommitSurface::FinalizedCarrier {
+            carrier_height: carrier.header().height().get(),
+            carrier_hash: &carrier_hash,
+        })
+        .expect_err("the absent transaction block must invalidate finalized merge membership");
+    assert!(matches!(
+        surface_error,
+        MergeLedgerCommitError::ExecutionBatchInvalid(detail)
+            if detail == "autonomous merge carrier metadata differs from the required exact finalized-carrier surface"
+    ));
     let_row! { error = state_block .commit() .expect_err("missing transaction membership must abort fee merge publication") };
-    assert!(matches!(error, TransactionsBlockError::MissingInsertBlock));
+    assert!(
+        matches!(error, TransactionsBlockError::MergeAdmission),
+        "exact missing-membership rejection: {error:?}"
+    );
     assert_eq!(state.committed_height(), 1);
     assert_eq!(
         account_asset_balance(&state, &asset_def_id, &sponsor_id),

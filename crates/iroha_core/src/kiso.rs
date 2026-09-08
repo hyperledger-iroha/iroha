@@ -975,6 +975,7 @@ mod tests {
                     iroha_config::parameters::defaults::network::MAX_FRAME_BYTES_PEER_GOSSIP.get(),
                 max_frame_bytes_health:
                     iroha_config::parameters::defaults::network::MAX_FRAME_BYTES_HEALTH.get(),
+                max_frame_bytes_connect: iroha_config::parameters::defaults::network::MAX_FRAME_BYTES_CONNECT.get(),
                 max_frame_bytes_other:
                     iroha_config::parameters::defaults::network::MAX_FRAME_BYTES_OTHER.get(),
                 quic_max_idle_timeout: None,

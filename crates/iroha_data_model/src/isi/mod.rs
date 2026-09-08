@@ -57,6 +57,16 @@ pub mod ministry;
 /// ```
 #[repr(transparent)]
 pub struct InstructionBox(Box<dyn Instruction>);
+impl norito::NoritoSchema for InstructionBox {
+    fn nominal_name() -> String {
+        "iroha_data_model::isi::InstructionBox".to_owned()
+    }
+    fn frame_name() -> String {
+        // The root codec writes the registry wire ID and framed payload pair.
+        // Containers still compose the nominal instruction identity above.
+        <(String, Vec<u8>) as norito::NoritoSchema>::frame_name()
+    }
+}
 impl core::ops::Deref for InstructionBox {
     type Target = dyn Instruction;
     fn deref(&self) -> &Self::Target {
@@ -282,6 +292,25 @@ impl_direct_instruction_box!(crate::isi::endorsement::SubmitDomainEndorsement);
 impl_direct_instruction_box!(crate::isi::social::ClaimTwitterFollowReward);
 impl_direct_instruction_box!(crate::isi::social::SendToTwitter);
 impl_direct_instruction_box!(crate::isi::social::CancelTwitterEscrow);
+// Generic game session lifecycle is a public consensus-owned instruction surface.
+impl_direct_instruction_box!(crate::isi::game::RegisterExecutionProofProfileV1);
+impl_direct_instruction_box!(crate::isi::game::VerifyExecutionProofV1);
+impl_direct_instruction_box!(crate::isi::game::SettleGameSessionV1);
+impl_direct_instruction_box!(crate::isi::game::OpenGameSessionV1);
+impl_direct_instruction_box!(crate::isi::game::JoinGameSessionV1);
+impl_direct_instruction_box!(crate::isi::game::StartGameSessionV1);
+impl_direct_instruction_box!(crate::isi::game::CommitGameCheckpointV1);
+impl_direct_instruction_box!(crate::isi::game::ChallengeGameSessionV1);
+impl_direct_instruction_box!(crate::isi::game::CommitGameInputsV1);
+impl_direct_instruction_box!(crate::isi::game::RevealGameInputsV1);
+impl_direct_instruction_box!(crate::isi::game::AdvanceGameDeadlineV1);
+impl_direct_instruction_box!(crate::isi::game::ExpireGameSessionV1);
+impl_direct_instruction_box!(crate::isi::game::ClaimGamePayoutV1);
+impl_direct_instruction_box!(crate::isi::game::StakeGameItemV1);
+// Native exact-price NFT offers.
+impl_direct_instruction_box!(crate::isi::nft_market::OfferNftV1);
+impl_direct_instruction_box!(crate::isi::nft_market::BuyNftV1);
+impl_direct_instruction_box!(crate::isi::nft_market::CancelNftOfferV1);
 // Allow direct boxing of native asset escrow instructions.
 impl_direct_instruction_box!(crate::isi::escrow::OpenAssetEscrow);
 impl_direct_instruction_box!(crate::isi::escrow::AcceptAssetEscrow);
@@ -535,6 +564,19 @@ pub trait Instruction: InstructionDynClone + seal::Instruction + Send + Sync + '
     /// Returns an error if canonical frame encoding fails or the destination writer rejects the
     /// frame.
     fn dyn_write_frame(&self, writer: &mut dyn std::io::Write) -> Result<(), norito::core::Error>;
+    /// Write the registry wire identifier and framed instruction as one canonical tuple.
+    ///
+    /// The concrete instruction owns frame measurement while retaining the encoder's
+    /// destination, including length-only encoding passes.
+    ///
+    /// # Errors
+    ///
+    /// Returns tuple-prefix, frame-measurement, or checked-output errors.
+    fn dyn_write_pair(
+        &self,
+        writer: &mut norito::core::Encoder<'_>,
+        wire_id: &str,
+    ) -> Result<(), norito::core::Error>;
     /// Return the exact canonical Norito frame length without allocating.
     ///
     /// # Errors
@@ -576,7 +618,15 @@ where
 }
 impl<T> Instruction for T
 where
-    T: Clone + Debug + PartialEq + PartialOrd + Encode + seal::Instruction + Send + Sync + 'static,
+    T: Clone
+        + Debug
+        + PartialEq
+        + PartialOrd
+        + norito::NoritoSerialize
+        + seal::Instruction
+        + Send
+        + Sync
+        + 'static,
 {
     fn dyn_encode(&self) -> Vec<u8> {
         self.encode()
@@ -585,15 +635,24 @@ where
         Encode::encode_to(self, out);
     }
     fn dyn_encode_capacity_hint(&self) -> Option<usize> {
-        norito::NoritoSerialize::encoded_len_exact(self)
-            .or_else(|| norito::NoritoSerialize::encoded_len_hint(self))
+        norito::SerializePayload::encoded_len_exact(self)
+            .or_else(|| norito::SerializePayload::encoded_len_hint(self))
     }
     fn dyn_encoded_len(&self) -> Option<usize> {
-        norito::NoritoSerialize::encoded_len_exact(self)
+        norito::SerializePayload::encoded_len_exact(self)
     }
     fn dyn_write_frame(&self, writer: &mut dyn std::io::Write) -> Result<(), norito::core::Error> {
         let mut writer = writer;
         norito::core::write_frame_to_writer(self, &mut writer)
+    }
+    fn dyn_write_pair(
+        &self,
+        writer: &mut norito::core::Encoder<'_>,
+        wire_id: &str,
+    ) -> Result<(), norito::core::Error> {
+        norito::core::write_frame_with_prefix(self, writer, |writer, frame_len| {
+            write_instruction_pair_prefix(writer, wire_id, frame_len)
+        })
     }
     fn dyn_frame_len(&self) -> Result<usize, norito::core::Error> {
         norito::core::encoded_frame_len(self)
@@ -665,12 +724,6 @@ impl<'a, W: std::io::Write + ?Sized> ExactInstructionFrameWriter<'a, W> {
     }
     fn is_complete(&self) -> bool {
         !self.rejected_write && self.written == self.expected
-    }
-    fn rejected_write(&self) -> bool {
-        self.rejected_write
-    }
-    fn written(&self) -> usize {
-        self.written
     }
     fn admit(&mut self, additional: usize) -> std::io::Result<()> {
         let Some(end) = self.written.checked_add(additional) else {
@@ -801,6 +854,8 @@ impl norito::core::NoritoSerialize for InstructionBox {
         // Match the archived layout used in `serialize`: `(wire_id, payload_with_header)`.
         norito::core::type_name_schema_hash::<(String, Vec<u8>)>()
     }
+}
+impl norito::core::SerializePayload for InstructionBox {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let inner = &**self;
         let type_name = Instruction::id(inner);
@@ -811,20 +866,7 @@ impl norito::core::NoritoSerialize for InstructionBox {
         .ok_or_else(|| {
             norito::core::Error::Message("failed to encode instruction payload".to_owned())
         })?;
-        let framed_payload_len = inner.dyn_frame_len()?;
-        write_instruction_pair_prefix(&mut *writer, entry.wire_id, framed_payload_len)?;
-        let (write_result, rejected_write, written) = {
-            let mut exact = ExactInstructionFrameWriter::new(writer, framed_payload_len);
-            let write_result = inner.dyn_write_frame(&mut exact);
-            (write_result, exact.rejected_write(), exact.written())
-        };
-        if rejected_write {
-            return Err(norito::core::Error::LengthMismatch);
-        }
-        write_result?;
-        (written == framed_payload_len)
-            .then_some(())
-            .ok_or(norito::core::Error::LengthMismatch)
+        inner.dyn_write_pair(writer, entry.wire_id)
     }
     fn encoded_len_hint(&self) -> Option<usize> {
         encoded_instruction_pair_len(self).or_else(|| encoded_instruction_pair_hint(self))
@@ -1890,6 +1932,11 @@ pub use staking::*;
 pub use transfer::*;
 pub use transparent::*;
 pub use vpn::*;
+/// Generic game session lifecycle instructions.
+pub mod game;
+/// Generic native NFT sales.
+pub mod nft_market;
+pub use game::*;
 pub use zk::*;
 isi_box! {
     /// Enum with all supported [`SetKeyValue`] instructions.
@@ -2400,6 +2447,8 @@ pub mod error {
         )]
         #[display("Expected {expected:?}, actual {actual:?}")]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(name = "iroha_data_model::isi::error::model::Mismatch")]
         pub struct Mismatch<T>
         where
             T: Debug,
@@ -2796,6 +2845,9 @@ mod test_support;
 #[cfg(test)]
 #[path = "instruction_enum_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod framing_tests;
 
 #[cfg(test)]
 mod generated_argument_identity_tests;

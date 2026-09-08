@@ -1,0 +1,256 @@
+{
+  "version": 1,
+  "network_id": "hash:0303030303030303030303030303030303030303030303030303030303030303#62EA",
+  "note": "Compiled SORA CARS adapter values only; all chain instructions use generic game sessions.",
+  "vectors": [
+    {
+      "name": "RaceTrackV1",
+      "value": {
+        "kind": "neon_tokyo",
+        "value": null
+      },
+      "encoded_hex": "00000000"
+    },
+    {
+      "name": "RaceStateV1",
+      "value": {
+        "tick": 1,
+        "track": {
+          "kind": "neon_tokyo",
+          "value": null
+        },
+        "cars": [
+          {
+            "progress_mm": 40,
+            "lateral_mm": -1776,
+            "speed_mm_per_tick": 40,
+            "lateral_velocity_mm_per_tick": 24,
+            "boost_energy": 975,
+            "finish_tick": null,
+            "dnf_tick": null
+          },
+          {
+            "progress_mm": 40,
+            "lateral_mm": 1776,
+            "speed_mm_per_tick": 40,
+            "lateral_velocity_mm_per_tick": -24,
+            "boost_energy": 975,
+            "finish_tick": null,
+            "dnf_tick": null
+          },
+          {
+            "progress_mm": -3960,
+            "lateral_mm": -1776,
+            "speed_mm_per_tick": 40,
+            "lateral_velocity_mm_per_tick": 24,
+            "boost_energy": 975,
+            "finish_tick": null,
+            "dnf_tick": null
+          },
+          {
+            "progress_mm": -3960,
+            "lateral_mm": 1776,
+            "speed_mm_per_tick": 40,
+            "lateral_velocity_mm_per_tick": -24,
+            "boost_energy": 1000,
+            "finish_tick": null,
+            "dnf_tick": null
+          },
+          {
+            "progress_mm": -7960,
+            "lateral_mm": -1776,
+            "speed_mm_per_tick": 40,
+            "lateral_velocity_mm_per_tick": 24,
+            "boost_energy": 1000,
+            "finish_tick": null,
+            "dnf_tick": null
+          },
+          {
+            "progress_mm": -7960,
+            "lateral_mm": 1776,
+            "speed_mm_per_tick": 40,
+            "lateral_velocity_mm_per_tick": -24,
+            "boost_energy": 1000,
+            "finish_tick": null,
+            "dnf_tick": null
+          },
+          {
+            "progress_mm": -11960,
+            "lateral_mm": -1776,
+            "speed_mm_per_tick": 40,
+            "lateral_velocity_mm_per_tick": 24,
+            "boost_energy": 1000,
+            "finish_tick": null,
+            "dnf_tick": null
+          },
+          {
+            "progress_mm": -11960,
+            "lateral_mm": 1776,
+            "speed_mm_per_tick": 40,
+            "lateral_velocity_mm_per_tick": -24,
+            "boost_energy": 1000,
+            "finish_tick": null,
+            "dnf_tick": null
+          }
+        ]
+      },
+      "encoded_hex": "04010000000400000000880208000000000000001F0828000000000000000410F9FFFF0428000000041800000002CF03010001001F08280000000000000004F0060000042800000004E8FFFFFF02CF03010001001F0888F0FFFFFFFFFFFF0410F9FFFF0428000000041800000002CF03010001001F0888F0FFFFFFFFFFFF04F0060000042800000004E8FFFFFF02E803010001001F08E8E0FFFFFFFFFFFF0410F9FFFF0428000000041800000002E803010001001F08E8E0FFFFFFFFFFFF04F0060000042800000004E8FFFFFF02E803010001001F0848D1FFFFFFFFFFFF0410F9FFFF0428000000041800000002E803010001001F0848D1FFFFFFFFFFFF04F0060000042800000004E8FFFFFF02E80301000100",
+      "domain": "simulation-state",
+      "gameplay_digest_hex": "45FB767A10655FE99EC1D5AB6AED2A80F73385009B38091BD6E76B26DC484177"
+    },
+    {
+      "name": "RaceReplayV1",
+      "value": {
+        "track": {
+          "kind": "neon_tokyo",
+          "value": null
+        },
+        "player_count": 8,
+        "frames": [
+          {
+            "tick": 0,
+            "controls": [
+              57,
+              53,
+              57,
+              21,
+              25,
+              21,
+              25,
+              21
+            ]
+          },
+          {
+            "tick": 1,
+            "controls": [
+              57,
+              53,
+              57,
+              21,
+              25,
+              21,
+              25,
+              21
+            ]
+          },
+          {
+            "tick": 2,
+            "controls": [
+              57,
+              53,
+              57,
+              21,
+              25,
+              21,
+              25,
+              21
+            ]
+          },
+          {
+            "tick": 3,
+            "controls": [
+              57,
+              53,
+              25,
+              21,
+              25,
+              21,
+              25,
+              21
+            ]
+          },
+          {
+            "tick": 4,
+            "controls": [
+              57,
+              53,
+              25,
+              21,
+              25,
+              21,
+              25,
+              21
+            ]
+          },
+          {
+            "tick": 5,
+            "controls": [
+              57,
+              53,
+              25,
+              21,
+              25,
+              21,
+              25,
+              21
+            ]
+          }
+        ],
+        "dnf_events": []
+      },
+      "encoded_hex": "04000000000108F2010600000000000000260400000000200800000000000000023900023500023900021500021900021500021900021500260401000000200800000000000000023900023500023900021500021900021500021900021500260402000000200800000000000000023900023500023900021500021900021500021900021500260403000000200800000000000000023900023500021900021500021900021500021900021500260404000000200800000000000000023900023500021900021500021900021500021900021500260405000000200800000000000000023900023500021900021500021900021500021900021500080000000000000000",
+      "domain": "input-transcript",
+      "gameplay_digest_hex": "0C32E852DA556FE1633FF2FF6F863D284E5A99F43D0185D43AA504E37E49732B"
+    },
+    {
+      "name": "RaceResultV1",
+      "value": {
+        "ticks": 5400,
+        "standings": [
+          {
+            "slot": 0,
+            "finish_tick": 2594,
+            "dnf_tick": null,
+            "progress_mm": 6000000
+          },
+          {
+            "slot": 1,
+            "finish_tick": 2600,
+            "dnf_tick": null,
+            "progress_mm": 6000000
+          },
+          {
+            "slot": 6,
+            "finish_tick": 2612,
+            "dnf_tick": null,
+            "progress_mm": 6000000
+          },
+          {
+            "slot": 3,
+            "finish_tick": null,
+            "dnf_tick": null,
+            "progress_mm": 334880
+          },
+          {
+            "slot": 4,
+            "finish_tick": null,
+            "dnf_tick": null,
+            "progress_mm": 334040
+          },
+          {
+            "slot": 5,
+            "finish_tick": null,
+            "dnf_tick": null,
+            "progress_mm": 331400
+          },
+          {
+            "slot": 2,
+            "finish_tick": null,
+            "dnf_tick": null,
+            "progress_mm": 331160
+          },
+          {
+            "slot": 7,
+            "finish_tick": null,
+            "dnf_tick": 1200,
+            "progress_mm": 165520
+          }
+        ],
+        "winners": [
+          0
+        ]
+      },
+      "encoded_hex": "04181500009C010800000000000000140100060104220A0000010008808D5B0000000000140101060104280A0000010008808D5B0000000000140106060104340A0000010008808D5B00000000000F01030100010008201C0500000000000F01040100010008D8180500000000000F01050100010008880E0500000000000F01020100010008980D0500000000001401070100060104B004000008908602000000000009010000000000000000"
+    }
+  ]
+}

@@ -881,7 +881,9 @@ fn restored_timeout_vote_reactivation_binds_fresh_carrier_before_runtime_admissi
             64,
             512 * 1024 * 1024,
             64 * 1024 * 1024,
-            super::super::CERTIFIED_FENCE_ESCAPE_RESERVE_BYTES,
+            super::super::fair_v2_ingress_required_certified_fence_escape_bytes(
+                context.roster.len(),
+            ),
             8 * 1024 * 1024,
             8 * 1024 * 1024,
             usize::MAX,
@@ -1367,13 +1369,14 @@ fn exact_authenticated_retransmission_preserves_capacity_fifo_and_cursor() {
             proposal_round: round,
             phase: wire::GlobalPhase::Prepare,
             subject,
-            execution_commitment: wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
-                Hash::new(b"capacity parent state"),
-                Hash::new(b"capacity post state"),
-                Hash::new(b"capacity ordinary writes"),
-                1,
-                Hash::new(b"capacity executed block wire"),
-            ),
+            execution_commitment:
+                wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+                    Hash::new(b"capacity parent state"),
+                    Hash::new(b"capacity post state"),
+                    Hash::new(b"capacity ordinary writes"),
+                    1,
+                    Hash::new(b"capacity executed block wire"),
+                ),
             signer: 0,
             signature: vec![signature],
         })

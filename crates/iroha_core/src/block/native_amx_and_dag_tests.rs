@@ -54,16 +54,15 @@ fn native_amx_receipt_survives_into_final_header_bound_lane_statement() {
         .insert(authority_uaid, bindings);
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    let mut state = State::try_new_with_chain_and_network_id_with_default_telemetry(
+    let mut state = State::new_with_chain_and_network_id_for_testing(
         world,
         kura,
         query_handle,
         chain_id.clone(),
         native_amx_test_network_id(),
-    )
-    .expect("native AMX test state accepts its explicit network id");
+    );
     {
-        let nexus = state.nexus.get_mut();
+        let mut nexus = state.nexus_snapshot();
         nexus.lane_catalog = LaneCatalog::new(
             nonzero!(4_u32),
             vec![
@@ -86,6 +85,9 @@ fn native_amx_receipt_survives_into_final_header_bound_lane_statement() {
         nexus.lane_config =
             iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
         nexus.dataspace_catalog = native_amx_test_catalog(paynet, cbuae);
+        state
+            .set_nexus(nexus)
+            .expect("install complete Native AMX lane incarnations before execution");
     }
     install_test_lane_manifests(&state);
     for (dataspace, lane) in [(paynet, LaneId::new(1)), (cbuae, LaneId::new(2))] {
@@ -141,6 +143,18 @@ fn native_amx_receipt_survives_into_final_header_bound_lane_statement() {
     );
     let context = crate::queue::execution_context_for_routing_plan(tx.hash_as_entrypoint(), &plan)
         .with_native_amx_receipt(receipt.clone());
+    let coordinator_manifest_root: [u8; Hash::LENGTH] =
+        Hash::new(b"native AMX coordinator finality manifest").into();
+    state.set_axt_policy(
+        context.dataspace_id,
+        iroha_data_model::nexus::AxtPolicyEntry {
+            manifest_root: coordinator_manifest_root,
+            target_lane: context.lane_id,
+            active_handle_era: 1,
+            next_handle_counter: 1,
+            current_slot: 0,
+        },
+    );
     let mut validator_set = keypairs
         .iter()
         .map(|keypair| PeerId::new(keypair.public_key().clone()))
@@ -215,6 +229,7 @@ fn native_amx_receipt_survives_into_final_header_bound_lane_statement() {
     assert_eq!(statements.len(), 1);
     let statement = &statements[0];
     assert_eq!(statement.block_header_hash, valid_block.as_ref().hash());
+    assert_eq!(statement.manifest_root, coordinator_manifest_root);
     let commitment = &statement.settlement_commitment;
     assert_eq!(commitment.tx_count, 1);
     assert_eq!(commitment.native_amx_receipts, vec![receipt]);

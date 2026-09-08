@@ -27,8 +27,12 @@ Features:
 
 ### KAGEMUSHA V1 wallet
 
-`KagemushaWalletV1.open(provider:)` accepts only a provider attesting the complete
-non-forking hardware contract. The wallet stages incoming payments before returning
+`KagemushaWalletV1.open(provider:allowBootstrap:)` accepts only a provider attesting
+the complete non-forking hardware contract. The required admission callback is
+checked after qualification and recovery, immediately before creating an absent
+aggregate. Retail apps must check current MiBank approval for the exact account
+and authority scope in that callback; `{ false }` permits committed recovery
+without creating a new aggregate. The wallet stages incoming payments before returning
 their durable acknowledgement, treats exact delivery duplicates idempotently, folds
 an opaque durable inbox prefix without a note-count limit, and folds only the pending
 credits needed to fund a send or redemption. Sender successors are usable immediately;
@@ -45,12 +49,49 @@ identity before executing a device operation. Payment and redemption reservation
 carry the canonical tagged `iroha.kagemusha.device.v1.sender-public-inputs` Norito
 archive, shared with the native outgoing-operation index.
 
+Authenticated providers require an injected `KagemushaOperationIntentOwnerV1`
+backed by a durable `KagemushaOperationIntentStoringV1`. Its shared scope lock must
+serialize all owners, and the store must persist and reopen exact bytes before
+returning. The owner records full qualification and canonical commands before
+dispatch, and retains authenticated results after native acceptance. Apps call
+`acknowledgeDurableResult(operationID:canonicalResult:)` only after the dependent
+transcript is durable, including when resuming after an interrupted acknowledgement.
+Completed monetary records retain their evidence. Reads 1, 13, 18, and 21 use
+native `BeginObservation` (coordinator method 11) and never enter the durable
+intent store. Each begin supplies the exact canonical read command and receives
+a native random nonce. A new begin supersedes the prior challenge for that read;
+native owner recreation requires a fresh begin. Lost read replies are retried
+with a fresh challenge. Before a snapshot acknowledges an installed mutation,
+its exact accepted reply, nonce, authenticator, command, and qualification are
+saved on that mutation as historical evidence, never as a current read response.
+If native acceptance of a verified mutation fails, the live provider retains that
+exact response for acceptance and original-intent persistence before further work.
+After provider recreation, recovery replays unresolved internal commands with
+their durable identity and original qualification, then obtains a new signed
+snapshot before acknowledging installation. An absent aggregate cannot authorize
+replaying a bootstrap draft: the current `allowBootstrap` gate must approve it.
+The required live `bootstrapState(allowBootstrap:)` callback is checked again after
+durable/native reservation, immediately before device dispatch. An approval value
+is never persisted as authority.
+
 `KagemushaCoreCoordinatorBridgeV1.open(storagePath:)` provides the strict native
 schema-2 transport. It checks the complete ABI-23 inventory and correlates method
 responses with the caller's request. It fails closed when the native coordinator
-is unavailable. Embedded preparation/candidate/recovery archives remain opaque;
-the typed wallet coordinator integration still requires the canonical native
-archive codecs described in [the source contract](../specs/kagemusha_device_bridge_v1.md).
+is unavailable. `KagemushaNativeCoreCoordinatorAdapterV1.open(storagePath:)`
+implements the wallet coordinator interface over that transport and the exact
+`KagemushaCoreCoordinatorArchiveV1` codecs. It binds preparations to the caller,
+original public inputs, and qualification; candidates retain that exact preparation.
+Recovery and release retain the creation context across ordinary epoch rotation.
+Archive parsing proves canonical shape, while native Core must resolve each selector
+against its authenticated durable journal and verify proof and hardware authority.
+Authenticated reply admission carries the original full 64-byte low-S P-256
+response authenticator and exact canonical command so native Core can independently
+authenticate the transcript. Its signature binds the response header, command digest,
+hardware policy, and qualification report. The sole native verifier export is
+`connect_norito_kagemusha_device_command_response_v1_verify`; a library exposing the
+earlier response-only verifier cannot qualify. Historical mutation replies are
+re-admitted with their original command and qualification before recovery acknowledges them.
+The adapter supplies no software monetary backend. See [the source contract](../specs/kagemusha_device_bridge_v1.md).
 
 Online top-up is payer-signed. Build a transaction containing exactly one
 `KagemushaNoritoV1.topUpInstructionFrame(_:)` result with `QueuePlanSynced`
@@ -1834,6 +1875,14 @@ outputs and all generated SDK mirrors together; never use Java resources, an arc
 or a retained historical payload as an alternate Swift fixture source.
 
 ### Connect (WalletConnect-style relay)
+
+For a qualified deployment carrying complete native execution proofs, construct
+`ConnectClient` with `webSocketFactory: .urlSessionForExecutionProofs()`. This
+explicitly sets the URLSession WebSocket message bound to four MiB plus 4,096
+framing bytes. Ordinary factories retain their platform defaults. This option
+does not qualify a wallet or proof profile: Torii, P2P peers and proxies must use
+the matching reviewed execution transport configuration, and wallets must still
+validate the complete canonical transaction and its approved fee limit.
 
 The SDK ships `ConnectClient` and `ConnectSession` helpers for WebSocket
 session management, typed frame exchange, and encrypted envelope handling.

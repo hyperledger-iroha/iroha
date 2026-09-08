@@ -28,6 +28,7 @@ export function parseSumeragiV2QcResponse(
 /** Native-AMX fixture resealing helpers used by the direct typed-parser tests. */
 export const __sumeragiNativeAmxTestHelpers: Readonly<{
   computeDescriptorHash(value: unknown): string;
+  parseParticipantSettlement(value: unknown, context: string): import("./index.js").ToriiNativeAmxParticipantSettlement;
   computeParticipantSettlementHash(value: unknown): string;
   computeProposalHash(value: unknown): string;
   computeValidatorSetHash(value: unknown): string;

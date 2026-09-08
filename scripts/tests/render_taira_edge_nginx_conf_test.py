@@ -251,7 +251,7 @@ def test_render_edge_nginx_conf_includes_all_public_routes() -> None:
     assert "server_name *.mon.taira.sora.net ~^.+\\.mon\\.taira\\.sora\\.net$;" in rendered
     assert "proxy_set_header Host $taira_mon_alias_host;" in rendered
     assert "proxy_set_header X-Forwarded-Host $host;" in rendered
-    assert "proxy_set_header Host taira-validator-1.sora.org;" in rendered
+    assert "proxy_set_header Host taira-validator-1.sora.org;" not in rendered
     public_upstream = rendered.split(
         "upstream taira_public_edge_upstream {", 1
     )[1].split("}", 1)[0]
@@ -455,7 +455,10 @@ def test_render_edge_nginx_conf_uses_explicit_canonical_public_validator() -> No
     public_server = rendered.split("server_name taira.sora.org;", 1)[1].split(
         "server_name mon.taira.sora.net;", 1
     )[0]
-    assert "proxy_set_header Host taira-validator-3.sora.org;" in public_server
+    assert "proxy_set_header Host taira-validator-3.sora.org;" not in public_server
+    assert "proxy_set_header Host $host;" in public_server
+    host_lines = [line.strip() for line in public_server.splitlines() if "proxy_set_header Host " in line]
+    assert host_lines and all(line == "proxy_set_header Host $host;" for line in host_lines)
     assert "proxy_pass http://taira_validator_3_upstream;" in public_server
 
 

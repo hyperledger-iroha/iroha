@@ -44,15 +44,16 @@ impl EscrowId {
         Self(Hash::new(format!("{KOTODAMA_ESCROW_ID_PREFIX}{name}")))
     }
 }
-impl norito::core::NoritoSerialize for EscrowId {
+impl norito::core::NoritoSerialize for EscrowId {}
+impl norito::core::SerializePayload for EscrowId {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
-        norito::core::NoritoSerialize::serialize(&self.0, writer)
+        norito::core::SerializePayload::serialize(&self.0, writer)
     }
     fn encoded_len_hint(&self) -> Option<usize> {
-        norito::core::NoritoSerialize::encoded_len_hint(&self.0)
+        norito::core::SerializePayload::encoded_len_hint(&self.0)
     }
     fn encoded_len_exact(&self) -> Option<usize> {
-        norito::core::NoritoSerialize::encoded_len_exact(&self.0)
+        norito::core::SerializePayload::encoded_len_exact(&self.0)
     }
 }
 impl<'de> norito::core::NoritoDeserialize<'de> for EscrowId {

@@ -16,7 +16,6 @@ use iroha::{
             consensus::{
                 COMMITTED_LANE_STATUS_STATE_APPLIED_BY_CANONICAL_BLOCK, LaneBlockCommitment,
                 NativeAmxLegRecordV2, NativeAmxPhase, NativeAmxReceipt,
-                compute_native_amx_participant_settlement_hash,
             },
         },
         da::commitment::DaProofPolicyBundle,
@@ -1900,7 +1899,7 @@ fn assert_grouped_native_amx_execution(
     )?
     .clone();
     ensure!(
-        compute_native_amx_participant_settlement_hash(&canonical_bank_leg.participant_settlement)?
+        canonical_bank_leg.participant_settlement.computed_hash()?
             == canonical_bank_leg.participant_settlement_hash,
         "BANK participant settlement hash must bind the exact finite settlement record"
     );
@@ -1910,36 +1909,17 @@ fn assert_grouped_native_amx_execution(
         "BANK participant proposal did not bind the exact ordered two-source entrypoint group"
     );
     ensure!(
-        canonical_bank_leg.participant_settlement.tx_count == u64::try_from(NATIVE_AMX_GROUP_SIZE)?
-            && canonical_bank_leg
-                .participant_settlement
-                .receipts
-                .iter()
-                .map(|receipt| receipt.source_id)
-                .collect::<Vec<_>>()
-                == ordered_sources,
+        canonical_bank_leg.participant_settlement.tx_count()
+            == u64::try_from(NATIVE_AMX_GROUP_SIZE)?
+            && canonical_bank_leg.participant_settlement.source_ids() == ordered_sources.as_slice(),
         "BANK participant settlement did not bind the exact ordered two-source group"
     );
     ensure!(
         canonical_bank_leg
             .participant_settlement
-            .receipts
-            .iter()
-            .all(|receipt| {
-                receipt.local_amount == Quantity::zero()
-                    && receipt.xor_due == Quantity::zero()
-                    && receipt.xor_after_haircut == Quantity::zero()
-                    && receipt.xor_variance == Quantity::zero()
-                    && receipt.timestamp_ms == block.header().height().get()
-            })
-            && canonical_bank_leg
-                .participant_settlement
-                .nexus_fee_receipts
-                .is_empty()
-            && norito::json::to_value(&canonical_bank_leg.participant_settlement)?
-                .get("native_amx_receipts")
-                .is_none(),
-        "BANK participant settlement must remain zero-effect and contain no nested receipts"
+            .authority_context_height()
+            == block.header().height().get(),
+        "BANK participant control did not bind its exact application authority height"
     );
     for (transaction, receipt) in transactions.iter().zip(&receipts) {
         let leg = bank_participant_leg(receipt)?;
@@ -1962,7 +1942,7 @@ fn assert_grouped_native_amx_execution(
                     && body.participant_proposal_hash
                         == canonical_bank_leg.participant_proposal.proposal_hash
                     && body.participant_settlement_commitment
-                        == canonical_bank_leg.participant_settlement_hash
+                        == Hash::from(canonical_bank_leg.participant_settlement_hash)
                     && body.participant_previous_block_height
                         == descriptor.previous_lane_block_height
                     && body.participant_previous_block_descriptor_hash

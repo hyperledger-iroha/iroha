@@ -143,18 +143,18 @@
       "coverage": "invariant_chain",
       "path": "crates/iroha_core/src/state/autonomous_predecessor_application.rs",
       "kind": "method",
-      "symbol": "State::certified_lane_block_session_predecessor_is_applied_cached",
+      "symbol": "State::certified_lane_block_session_predecessor_is_applied",
       "required_tokens": [
         "session.prepare_qc.payload_availability_qc.is_some()",
-        "self.certified_autonomous_lane_block_predecessor_is_globally_applied_cached",
-        "self.certified_lane_block_predecessor_is_applied_or_snapshot_anchored_cached",
+        "self.certified_autonomous_lane_block_predecessor_is_globally_applied",
+        "self.certified_lane_block_predecessor_is_applied_or_snapshot_anchored",
         "&session.proposal"
       ],
       "ordered_tokens": [
         "if session.prepare_qc.payload_availability_qc.is_some()",
-        "self.certified_autonomous_lane_block_predecessor_is_globally_applied_cached",
+        "self.certified_autonomous_lane_block_predecessor_is_globally_applied",
         "else",
-        "self.certified_lane_block_predecessor_is_applied_or_snapshot_anchored_cached"
+        "self.certified_lane_block_predecessor_is_applied_or_snapshot_anchored"
       ]
     },
     {
@@ -183,27 +183,71 @@
       "coverage": "invariant_chain",
       "path": "crates/iroha_core/src/state/autonomous_predecessor_application.rs",
       "kind": "method",
-      "symbol": "State::certified_autonomous_lane_block_predecessor_is_globally_applied_cached",
+      "symbol": "State::certified_autonomous_lane_block_predecessor_is_globally_applied",
       "required_tokens": [
         "descriptor.previous_lane_block_height",
         "descriptor.previous_lane_block_descriptor_hash",
         "previous_height.checked_add(1) != Some(descriptor.lane_block_height)",
+        "Result<bool, MergeLedgerCommitError>",
+        "let native_snapshot = self.native_amx_participant_application_snapshot()?",
+        ".blocked",
         "Self::canonical_merged_lane_frontier_from_world",
         "if frontier.0 >= previous_height",
-        "return frontier == (previous_height, Some(previous_descriptor_hash))",
-        "self.kura.canonical_lane_block_predecessor_receipt_revalidates_without_sidecar_repair",
-        "self.kura.autonomous_lane_block_predecessor_merge_receipt_revalidates_without_sidecar_repair",
-        "proposal"
+        "return Ok(frontier == (previous_height, Some(previous_descriptor_hash)))",
+        "self.lane_block_predecessor_has_authenticated_receipt(proposal, &native_snapshot)"
       ],
       "ordered_tokens": [
         "let previous_height = descriptor.previous_lane_block_height",
-        "let Some(previous_descriptor_hash) = descriptor.previous_lane_block_descriptor_hash else",
         "previous_height.checked_add(1) != Some(descriptor.lane_block_height)",
+        "let native_snapshot = self.native_amx_participant_application_snapshot()?",
+        ".blocked",
+        "let Some(previous_descriptor_hash) = descriptor.previous_lane_block_descriptor_hash else",
         "Self::canonical_merged_lane_frontier_from_world",
         "if frontier.0 >= previous_height",
-        "return frontier == (previous_height, Some(previous_descriptor_hash))",
-        "canonical_lane_block_predecessor_receipt_revalidates_without_sidecar_repair",
-        "autonomous_lane_block_predecessor_merge_receipt_revalidates_without_sidecar_repair"
+        "return Ok(frontier == (previous_height, Some(previous_descriptor_hash)))",
+        "self.lane_block_predecessor_has_authenticated_receipt(proposal, &native_snapshot)"
+      ]
+    },
+    {
+      "id": "autonomous_predecessor_authenticated_receipt_dispatch",
+      "invariant": "MLAutonomousPredecessorGloballyApplied",
+      "coverage": "invariant_chain",
+      "path": "crates/iroha_core/src/state/autonomous_predecessor_application.rs",
+      "kind": "method",
+      "symbol": "State::lane_block_predecessor_has_authenticated_receipt",
+      "required_tokens": [
+        "Result<bool, MergeLedgerCommitError>",
+        ".read_lane_application_receipt(descriptor.lane_id, previous_height)",
+        ".read_native_amx_participant_application_history(descriptor.lane_id)",
+        ".map_err(MergeLedgerCommitError::Persistence)?",
+        "native_snapshot.applied.iter().find",
+        "native_history.get(previous_height)",
+        "ordinary.proposal != native.participant_proposal",
+        "return Err(MergeLedgerCommitError::ExecutionMarkerConflict(",
+        "previous.lane_id == descriptor.lane_id",
+        "previous.dataspace_id == descriptor.dataspace_id",
+        "previous.lane_incarnation == descriptor.lane_incarnation",
+        "previous.lane_block_height == previous_height",
+        "previous.descriptor_hash == previous_descriptor_hash",
+        "previous.proposal_height < descriptor.proposal_height",
+        "receipt.application_block_height < descriptor.proposal_height"
+      ],
+      "ordered_tokens": [
+        "Result<bool, MergeLedgerCommitError>",
+        ".read_lane_application_receipt(descriptor.lane_id, previous_height)",
+        ".read_native_amx_participant_application_history(descriptor.lane_id)",
+        ".map_err(MergeLedgerCommitError::Persistence)?",
+        "native_snapshot.applied.iter().find",
+        "native_history.get(previous_height)",
+        "ordinary.proposal != native.participant_proposal",
+        "return Err(MergeLedgerCommitError::ExecutionMarkerConflict(",
+        "previous.lane_id == descriptor.lane_id",
+        "previous.dataspace_id == descriptor.dataspace_id",
+        "previous.lane_incarnation == descriptor.lane_incarnation",
+        "previous.lane_block_height == previous_height",
+        "previous.descriptor_hash == previous_descriptor_hash",
+        "previous.proposal_height < descriptor.proposal_height",
+        "receipt.application_block_height < descriptor.proposal_height"
       ]
     },
     {
@@ -276,19 +320,21 @@
       "coverage": "invariant_chain",
       "path": "crates/iroha_core/src/state/autonomous_predecessor_application_tests.rs",
       "kind": "fn",
-      "symbol": "autonomous_lane_predecessor_accepts_exact_canonical_receipt_without_merge_frontier",
+      "symbol": "autonomous_lane_predecessor_authenticates_receipt_and_preserves_occupied_corruption",
       "required_tokens": [
         "persist_lane_block_application_receipt(&predecessor.proposal)",
         "canonical_lane_block_predecessor_receipt_revalidates_without_sidecar_repair",
-        "certified_autonomous_lane_block_predecessor_is_globally_applied_cached",
+        "certified_autonomous_lane_block_predecessor_is_globally_applied",
         "malformed-frontier"
       ],
       "ordered_tokens": [
         "persist_lane_block_application_receipt(&predecessor.proposal)",
         "canonical_lane_block_predecessor_receipt_revalidates_without_sidecar_repair",
-        "state.certified_autonomous_lane_block_predecessor_is_globally_applied_cached",
+        ".certified_autonomous_lane_block_predecessor_is_globally_applied(&successor)",
+        ".expect(\"authenticate predecessor evidence\")",
         "malformed-frontier",
-        "!malformed.certified_autonomous_lane_block_predecessor_is_globally_applied_cached"
+        "malformed .certified_autonomous_lane_block_predecessor_is_globally_applied(&successor)",
+        ".is_err()"
       ]
     },
     {

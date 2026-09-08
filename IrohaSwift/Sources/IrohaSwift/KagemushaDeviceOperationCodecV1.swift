@@ -1,6 +1,7 @@
 // Copyright 2026 Hyperledger Iroha Contributors
 // SPDX-License-Identifier: Apache-2.0
 
+import CryptoKit
 import Foundation
 
 /// Authenticated inbox holding one pending monetary credit.
@@ -672,24 +673,24 @@ extension KagemushaDeviceOperationCodecV1 {
   fileprivate static func encodeSenderContext(
     _ value: KagemushaDeviceSenderWalletContextV1
   ) throws -> Data {
-    deviceFields([
+    try deviceFields([
       deviceFields([
-        value.lane.networkID, value.lane.deviceLaneID,
+        value.lane.networkID, deviceAliasDigest(value.lane.deviceLaneID),
         value.lane.asset.canonicalPayload, deviceU32(value.lane.scale),
       ]),
       deviceFields([
-        deviceU16(value.release.protocolVersion), value.release.suiteID,
-        value.release.vkDigest, value.release.releaseID,
+        deviceU16(value.release.protocolVersion), deviceAliasDigest(value.release.suiteID),
+        deviceAliasDigest(value.release.vkDigest), deviceAliasDigest(value.release.releaseID),
         deviceFields([value.release.assetIncarnation.bytes]),
-        value.release.hardwareProfileID, deviceU64(value.release.policyEpoch),
+        deviceAliasDigest(value.release.hardwareProfileID), deviceU64(value.release.policyEpoch),
       ]),
-      value.credentialID,
-      deviceFields([value.hardwareEpoch.generation.littleEndianBytes, value.hardwareEpoch.epochID]),
+      deviceAliasDigest(value.credentialID),
+      deviceFields([value.hardwareEpoch.generation.littleEndianBytes, deviceAliasDigest(value.hardwareEpoch.epochID)]),
       deviceFields([
-        value.devicePolicyBinding.deviceKeyReference,
-        value.devicePolicyBinding.hardwarePolicyID,
+        deviceAliasDigest(value.devicePolicyBinding.deviceKeyReference),
+        deviceAliasDigest(value.devicePolicyBinding.hardwarePolicyID),
       ]),
-      value.coreAuthorizationKeyReference,
+      deviceAliasDigest(value.coreAuthorizationKeyReference),
     ])
   }
 
@@ -700,7 +701,7 @@ extension KagemushaDeviceOperationCodecV1 {
     var laneReader = DeviceOperationReader(try reader.field())
     let lane = try KagemushaDeviceLaneIDV1(
       networkID: laneReader.digestField(),
-      deviceLaneID: laneReader.digestField(),
+      deviceLaneID: laneReader.aliasDigestField(),
       asset: KagemushaAssetDefinitionIDV1(
         canonicalPayload: laneReader.field(maximum: accountMaximum)
       ),
@@ -710,9 +711,9 @@ extension KagemushaDeviceOperationCodecV1 {
 
     var releaseReader = DeviceOperationReader(try reader.field())
     let protocolVersion = try releaseReader.u16Field()
-    let suiteID = try releaseReader.digestField()
-    let vkDigest = try releaseReader.digestField()
-    let releaseID = try releaseReader.digestField()
+    let suiteID = try releaseReader.aliasDigestField()
+    let vkDigest = try releaseReader.aliasDigestField()
+    let releaseID = try releaseReader.aliasDigestField()
     var incarnationReader = DeviceOperationReader(try releaseReader.field())
     let incarnation = try KagemushaAssetIncarnationV1(bytes: incarnationReader.exactField(32))
     try incarnationReader.finish()
@@ -722,24 +723,24 @@ extension KagemushaDeviceOperationCodecV1 {
       vkDigest: vkDigest,
       releaseID: releaseID,
       assetIncarnation: incarnation,
-      hardwareProfileID: releaseReader.digestField(),
+      hardwareProfileID: releaseReader.aliasDigestField(),
       policyEpoch: releaseReader.u64Field()
     )
     try releaseReader.finish()
 
-    let credentialID = try reader.digestField()
+    let credentialID = try reader.aliasDigestField()
     var epochReader = DeviceOperationReader(try reader.field())
     let epoch = try KagemushaDeviceHardwareEpochV1(
-      generation: epochReader.u128Field(), epochID: epochReader.digestField()
+      generation: epochReader.u128Field(), epochID: epochReader.aliasDigestField()
     )
     try epochReader.finish()
     var policyReader = DeviceOperationReader(try reader.field())
     let policy = try KagemushaDevicePolicyBindingV1(
-      deviceKeyReference: policyReader.digestField(),
-      hardwarePolicyID: policyReader.digestField()
+      deviceKeyReference: policyReader.aliasDigestField(),
+      hardwarePolicyID: policyReader.aliasDigestField()
     )
     try policyReader.finish()
-    let coreAuthorizationKeyReference = try reader.digestField()
+    let coreAuthorizationKeyReference = try reader.aliasDigestField()
     try reader.finish()
     return try KagemushaDeviceSenderWalletContextV1(
       lane: lane, release: release, credentialID: credentialID,
@@ -939,12 +940,7 @@ extension KagemushaDeviceOperationCodecV1 {
         try deviceVector(try bounded(acknowledgement, acknowledgementMaximum, "acknowledgement"))
       ])
     case .redemptionSettlement(let receipt):
-      return deviceEnum(1, [deviceFields([
-        deviceU16(receipt.version), receipt.networkID, receipt.operationID,
-        receipt.redemptionID, receipt.terminalNullifier, receipt.envelopeDigest,
-        receipt.reserveReceiptDigest, receipt.authenticatedStatusDigest,
-        deviceU64(receipt.finalizedBlockHeight), receipt.heightContextID,
-      ])])
+      return try deviceEnum(1, [encodeRedemptionReceiptPayload(receipt)])
     }
   }
 
@@ -959,19 +955,44 @@ extension KagemushaDeviceOperationCodecV1 {
         canonicalAcknowledgement: try reader.byteVectorField(maximum: acknowledgementMaximum)
       )
     case 1:
-      var receipt = DeviceOperationReader(try reader.field())
-      value = .redemptionSettlement(try KagemushaDeviceRedemptionTerminalReceiptV1(
-        version: receipt.u16Field(), networkID: receipt.digestField(),
-        operationID: receipt.digestField(), redemptionID: receipt.digestField(),
-        terminalNullifier: receipt.digestField(), envelopeDigest: receipt.digestField(),
-        reserveReceiptDigest: receipt.digestField(),
-        authenticatedStatusDigest: receipt.digestField(),
-        finalizedBlockHeight: receipt.u64Field(), heightContextID: receipt.digestField()
-      ))
-      try receipt.finish()
+      value = .redemptionSettlement(try decodeRedemptionReceiptPayload(reader.field()))
     default: throw deviceInvalid("senderTerminalReceipt.tag")
     }
     try reader.finish()
+    return value
+  }
+
+  fileprivate static func encodeRedemptionReceiptPayload(_ value: KagemushaDeviceRedemptionTerminalReceiptV1) throws -> Data {
+    guard value.heightContextID.last.map({ $0 & 1 == 1 }) == true else { throw deviceInvalid("heightContextID.hash") }
+    return try deviceFields([
+      deviceU16(value.version), value.networkID, deviceAliasDigest(value.operationID),
+      deviceAliasDigest(value.redemptionID), deviceAliasDigest(value.terminalNullifier),
+      deviceAliasDigest(value.envelopeDigest), deviceAliasDigest(value.reserveReceiptDigest),
+      deviceAliasDigest(value.authenticatedStatusDigest), deviceU64(value.finalizedBlockHeight),
+      deviceFields([value.heightContextID]),
+    ])
+  }
+
+  fileprivate static func decodeRedemptionReceiptPayload(_ payload: Data) throws -> KagemushaDeviceRedemptionTerminalReceiptV1 {
+    var reader = DeviceOperationReader(payload)
+    let version = try reader.u16Field()
+    let networkID = try reader.digestField()
+    let operationID = try reader.aliasDigestField()
+    let redemptionID = try reader.aliasDigestField()
+    let terminalNullifier = try reader.aliasDigestField()
+    let envelopeDigest = try reader.aliasDigestField()
+    let reserveReceiptDigest = try reader.aliasDigestField()
+    let authenticatedStatusDigest = try reader.aliasDigestField()
+    let height = try reader.u64Field()
+    var context = DeviceOperationReader(try reader.field())
+    let heightContextID = try context.digestField()
+    try context.finish()
+    try reader.finish()
+    let value = try KagemushaDeviceRedemptionTerminalReceiptV1(version: version, networkID: networkID, operationID: operationID,
+      redemptionID: redemptionID, terminalNullifier: terminalNullifier, envelopeDigest: envelopeDigest,
+      reserveReceiptDigest: reserveReceiptDigest, authenticatedStatusDigest: authenticatedStatusDigest,
+      finalizedBlockHeight: height, heightContextID: heightContextID)
+    guard try encodeRedemptionReceiptPayload(value) == payload else { throw deviceInvalid("redemptionReceipt.canonical") }
     return value
   }
 
@@ -997,6 +1018,154 @@ extension KagemushaDeviceOperationCodecV1 {
 /// Closed codec failures. They grant no secure-device or monetary authority.
 public enum KagemushaDeviceOperationCodecErrorV1: Error, Equatable {
   case invalid(String)
+}
+
+/// Canonical public projections for native coordinator selectors. Shape parsing does not
+/// recover a verified capability; native Core resolves every archive against its durable journal.
+public enum KagemushaCoreCoordinatorArchiveV1 {
+  public static let maximumBytes = 16 * 1024
+
+  /// Bind the caller identity, immutable context and exact original public inputs.
+  public static func senderInputsDigestShape(
+    operationID: Data, context: KagemushaDeviceSenderWalletContextV1,
+    inputs: KagemushaDeviceSenderPublicInputsV1
+  ) throws -> Data {
+    switch inputs {
+    case .sendSplit(let bytes):
+      let request = try KagemushaNoritoV1.decodePaymentRequestShapeExact(bytes)
+      guard request.networkID == context.lane.networkID,
+        request.releaseID == context.release.releaseID,
+        request.asset == context.lane.asset,
+        request.assetIncarnation == context.release.assetIncarnation,
+        request.scale == context.lane.scale,
+        request.liabilityPoolID == KagemushaNoritoV1.liabilityPoolID(
+          networkID: context.lane.networkID, asset: context.lane.asset,
+          incarnation: context.release.assetIncarnation)
+      else { throw deviceInvalid("corePreparation.publicInputs") }
+    case .redeemSplit(let amount, _):
+      guard !amount.isZero else { throw deviceInvalid("redeem.amount") }
+    }
+    let bytes = try deviceFrame(deviceFields([
+      deviceU16(1), deviceAliasDigest(operationID),
+      KagemushaDeviceOperationCodecV1.encodeSenderContext(context),
+      KagemushaDeviceOperationCodecV1.encodeSenderInputs(inputs),
+    ]), .init(schema: "iroha.kagemusha.device.v1.sender-public-input-preimage", alignment: 16, maximum: maximumBytes))
+    return digest(domain: "iroha:kagemusha:device:v1:sender-public-inputs", bytes: bytes)
+  }
+
+  /// Digest the exact retained terminal envelope using Core's full-byte transcript.
+  public static func terminalEnvelopeDigestShape(_ bytes: Data) throws -> Data {
+    try digest(domain: "iroha:kagemusha:v1:terminal-envelope",
+      bytes: bounded(bytes, terminalEnvelopeMaximum, "terminalEnvelope"))
+  }
+
+  private static func digest(domain: String, bytes: Data) -> Data {
+    var preimage = Data(domain.utf8)
+    preimage.append(0)
+    preimage.append(deviceU64(UInt64(bytes.count)))
+    preimage.append(bytes)
+    return Data(SHA256.hash(data: preimage))
+  }
+
+  /// Encode the fixed version-one preparation projection.
+  public static func encodePreparationShape(_ value: KagemushaNativeSenderPreparationV1) throws -> Data {
+    try deviceFrame(preparationPayload(value), descriptor("sender-preparation"))
+  }
+
+  /// Decode an exact preparation projection without admitting monetary authority.
+  public static func decodePreparationShapeExact(_ bytes: Data) throws -> KagemushaNativeSenderPreparationV1 {
+    let value = try decodePreparationPayload(deviceUnframe(bytes, descriptor("sender-preparation")))
+    guard try encodePreparationShape(value) == bytes else { throw deviceInvalid("corePreparation.canonical") }
+    return value
+  }
+
+  /// Encode a candidate selector. Native Core verifies its commit authorization and journal entry.
+  public static func encodeCandidateShape(_ value: KagemushaNativeSenderCandidateV1) throws -> Data {
+    guard value.selector.inputsDigest == value.preparation.inputsDigest else {
+      throw deviceInvalid("coreCandidate.inputsDigest")
+    }
+    return try deviceFrame(deviceFields([
+      deviceU16(1), preparationPayload(value.preparation),
+      KagemushaDeviceOperationCodecV1.encodePreparationSelector(value.selector),
+      deviceDigest(value.candidateDigest, "candidateDigest"),
+      deviceVector(bounded(value.hardwareCommitAuthorization, hardwareAuthorizationMaximum, "hardwareCommitAuthorization")),
+    ]), descriptor("sender-candidate"))
+  }
+
+  /// Decode canonical candidate shape. Native authorization verification remains mandatory.
+  public static func decodeCandidateShapeExact(_ bytes: Data) throws -> KagemushaNativeSenderCandidateV1 {
+    var reader = DeviceOperationReader(try deviceUnframe(bytes, descriptor("sender-candidate")))
+    guard try reader.u16Field() == 1 else { throw deviceInvalid("coreCandidate.version") }
+    let value = try KagemushaNativeSenderCandidateV1(
+      preparation: decodePreparationPayload(reader.field()),
+      selector: KagemushaDeviceOperationCodecV1.decodePreparationSelector(reader.field()),
+      candidateDigest: reader.digestField(),
+      hardwareCommitAuthorization: reader.byteVectorField(maximum: hardwareAuthorizationMaximum))
+    try reader.finish()
+    guard try encodeCandidateShape(value) == bytes else { throw deviceInvalid("coreCandidate.canonical") }
+    return value
+  }
+
+  /// Encode the original creation context and terminal selector for native recovery.
+  public static func encodeRecoveryShape(_ value: KagemushaNativeSenderRecoveryV1) throws -> Data {
+    try deviceFrame(deviceFields([
+      deviceU16(1), deviceDigest(value.operationID, "operationID"),
+      deviceDigest(value.terminalID, "terminalID"),
+      KagemushaDeviceOperationCodecV1.encodeSenderContext(value.context),
+      deviceDigest(value.inputsDigest, "inputsDigest"),
+    ]), descriptor("sender-recovery"))
+  }
+
+  /// Decode exact recovery selectors without treating them as authenticated current state.
+  public static func decodeRecoveryShapeExact(_ bytes: Data) throws -> KagemushaNativeSenderRecoveryV1 {
+    var reader = DeviceOperationReader(try deviceUnframe(bytes, descriptor("sender-recovery")))
+    guard try reader.u16Field() == 1 else { throw deviceInvalid("coreRecovery.version") }
+    let value = try KagemushaNativeSenderRecoveryV1(
+      operationID: reader.digestField(), terminalID: reader.digestField(),
+      context: KagemushaDeviceOperationCodecV1.decodeSenderContext(reader.field()),
+      inputsDigest: reader.digestField())
+    try reader.finish()
+    guard try encodeRecoveryShape(value) == bytes else { throw deviceInvalid("coreRecovery.canonical") }
+    return value
+  }
+
+  /// Encode the finalized-redemption public receipt projection. It is not a verified release capability.
+  public static func encodeRedemptionTerminalReceiptShape(_ value: KagemushaDeviceRedemptionTerminalReceiptV1) throws -> Data {
+    try deviceFrame(KagemushaDeviceOperationCodecV1.encodeRedemptionReceiptPayload(value), redemptionReceiptDescriptor)
+  }
+
+  /// Decode exact canonical receipt shape; finalized-status authentication belongs to native Core.
+  public static func decodeRedemptionTerminalReceiptShapeExact(_ bytes: Data) throws -> KagemushaDeviceRedemptionTerminalReceiptV1 {
+    let value = try KagemushaDeviceOperationCodecV1.decodeRedemptionReceiptPayload(deviceUnframe(bytes, redemptionReceiptDescriptor))
+    guard try encodeRedemptionTerminalReceiptShape(value) == bytes else { throw deviceInvalid("redemptionReceipt.canonical") }
+    return value
+  }
+
+  private static let redemptionReceiptDescriptor = DeviceOperationArchiveDescriptor(
+    schema: "iroha.kagemusha.device.v1.redemption-terminal-receipt", alignment: 8, maximum: maximumBytes)
+
+  private static func preparationPayload(_ value: KagemushaNativeSenderPreparationV1) throws -> Data {
+    try deviceFields([
+      deviceU16(1), deviceDigest(value.operationID, "operationID"),
+      KagemushaDeviceOperationCodecV1.encodeSenderContext(value.context),
+      deviceDigest(value.inputsDigest, "inputsDigest"),
+    ])
+  }
+
+  private static func decodePreparationPayload(_ payload: Data) throws -> KagemushaNativeSenderPreparationV1 {
+    var reader = DeviceOperationReader(payload)
+    guard try reader.u16Field() == 1 else { throw deviceInvalid("corePreparation.version") }
+    let value = try KagemushaNativeSenderPreparationV1(
+      operationID: reader.digestField(),
+      context: KagemushaDeviceOperationCodecV1.decodeSenderContext(reader.field()),
+      inputsDigest: reader.digestField())
+    try reader.finish()
+    return value
+  }
+
+  private static func descriptor(_ name: String) -> DeviceOperationArchiveDescriptor {
+    DeviceOperationArchiveDescriptor(schema: "iroha.kagemusha.core.v1." + name, alignment: 16, maximum: maximumBytes)
+  }
 }
 
 private struct DeviceOperationArchiveDescriptor {
@@ -1107,6 +1276,12 @@ private func deviceFields(_ values: [Data]) -> Data {
   var writer = DeviceOperationWriter()
   for value in values { writer.field(value) }
   return writer.data
+}
+
+/// Named Rust `DigestV1` aliases use the generic fixed-array serializer, with one
+/// compact field per byte. Direct `[u8; 32]` fields use a different optimized layout.
+private func deviceAliasDigest(_ bytes: Data) throws -> Data {
+  try deviceFields(deviceDigest(bytes, "aliasDigest").map { Data([$0]) })
 }
 
 private func deviceEnum(_ tag: UInt32, _ values: [Data]) -> Data {
@@ -1251,6 +1426,14 @@ private struct DeviceOperationReader {
 
   mutating func digestField() throws -> Data {
     try deviceDigest(exactField(32), "digest")
+  }
+
+  mutating func aliasDigestField() throws -> Data {
+    var reader = DeviceOperationReader(try exactField(64))
+    var bytes = Data()
+    for _ in 0..<32 { bytes.append(try reader.u8Field()) }
+    try reader.finish()
+    return try deviceDigest(bytes, "aliasDigest")
   }
 
   mutating func u8Field() throws -> UInt8 { try exactField(1)[0] }

@@ -3,6 +3,9 @@
 // TODO: Move the remaining synchronous read/query and WebSocket operations out
 // of `client::Client`, then expose their canonical forms only through this facade.
 
+mod subscriptions;
+pub use subscriptions::{AccountSubscriptions, Subscriptions};
+
 use std::{
     future::Future,
     sync::{Arc, Mutex},
@@ -151,6 +154,30 @@ pub struct Client {
     inner: AsyncClient,
     account: AsyncAccountClient,
     runtime: Arc<RuntimeOwner>,
+}
+
+/// Immutable blocking account context backed by one reusable owned runtime.
+#[derive(Clone, Debug)]
+pub struct AccountClient {
+    inner: AsyncAccountClient,
+    runtime: Arc<RuntimeOwner>,
+}
+
+impl AccountClient {
+    /// Own a blocking facade for an already validated asynchronous account context.
+    ///
+    /// # Errors
+    /// Returns a structured error if the owned runtime cannot be constructed.
+    pub fn from_client(client: AsyncAccountClient) -> crate::Result<Self> {
+        let runtime =
+            RuntimeOwner::new().map_err(|error| crate::Error::BlockingRuntimeConstruction {
+                details: error.to_string(),
+            })?;
+        Ok(Self {
+            inner: client,
+            runtime: Arc::new(runtime),
+        })
+    }
 }
 
 impl Client {

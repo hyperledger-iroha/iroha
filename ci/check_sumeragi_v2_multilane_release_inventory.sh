@@ -333,18 +333,34 @@ require_exact_token \
   "    native_amx_grouped_fixture_sha256 \"\$native_amx_grouped_fixture_sha256\" \\"
 require_exact_token \
   "$release_runner" \
-  "    native_amx_grouped_negative_control_count 56 \\"
+  "    native_amx_grouped_negative_control_count 58 \\"
 require_exact_token \
   "$grouped_parity_harness" \
-  "readonly expected_negative_control_count=56"
-for grouped_test_count in 7 65 63 5 8 6; do
-  require_exact_token \
-    "$grouped_parity_harness" \
-    "    observed_test_count=${grouped_test_count}"
+  "readonly expected_negative_control_count=58"
+require_exact_fragment "$grouped_parity_harness" "    observed_test_count=" 6
+for grouped_surface_count in openapi:7 python:67 javascript:65 swift:9 kotlin:11 java:7; do
+  grouped_surface="${grouped_surface_count%%:*}"
+  grouped_test_count="${grouped_surface_count#*:}"
+  grouped_case="  ${grouped_surface})"
+  require_exact_token "$grouped_parity_harness" "$grouped_case"
+  # Different consumers may require the same number of tests. Bind the count
+  # to its exact case instead of requiring globally unique numeric assignments.
+  grouped_count_matches="$(
+    awk -v expected_case="$grouped_case" \
+      -v expected_assignment="    observed_test_count=${grouped_test_count}" '
+      previous == expected_case && $0 == expected_assignment { count += 1 }
+      { previous = $0 }
+      END { print count + 0 }
+    ' "$grouped_parity_harness"
+  )"
+  if [[ "$grouped_count_matches" != 1 ]]; then
+    echo "grouped Native AMX test count differs for ${grouped_surface}: expected ${grouped_test_count}" >&2
+    exit 1
+  fi
 done
 require_exact_token \
   "$release_receipt_writer" \
-  "_NATIVE_AMX_GROUPED_NEGATIVE_CONTROL_COUNT = 56"
+  "_NATIVE_AMX_GROUPED_NEGATIVE_CONTROL_COUNT = 58"
 require_exact_token \
   "$release_receipt_writer" \
   "_G_UNIT_TEST_COUNT = 531"
@@ -380,22 +396,22 @@ require_exact_token \
   '        "native_grouped_pruning_evidence": "passed",'
 for grouped_suite in \
   '    ("openapi", 7),' \
-  '    ("python", 65),' \
-  '    ("javascript", 63),' \
-  '    ("swift", 5),' \
-  '    ("kotlin", 8),' \
-  '    ("java", 6),'; do
+  '    ("python", 67),' \
+  '    ("javascript", 65),' \
+  '    ("swift", 9),' \
+  '    ("kotlin", 11),' \
+  '    ("java", 7),'; do
   require_exact_token "$release_receipt_writer" "$grouped_suite"
 done
 for sdk_diagnostics_suite in \
   '    ("python", 129),' \
-  '    ("javascript", 88),' \
+  '    ("javascript", 90),' \
   '    ("swift", 34),' \
   '    ("kotlin", 50),' \
   '    ("java", 59),'; do
   require_exact_token "$release_receipt_writer" "$sdk_diagnostics_suite"
 done
-for sdk_diagnostics_test_count in 129 88 34 50 59; do
+for sdk_diagnostics_test_count in 129 90 34 50 59; do
   require_exact_token \
     "$sdk_diagnostics_harness" \
     "    observed_test_count=${sdk_diagnostics_test_count}"
@@ -412,7 +428,7 @@ require_exact_token \
   '      --tests org.hyperledger.iroha.sdk.consensus.SumeragiV2WireFixtureTests \'
 require_exact_token \
   "$sdk_diagnostics_harness" \
-  '      assert_node_tap "$javascript_transcript" 44'
+  '      assert_node_tap "$javascript_transcript" 45'
 require_exact_token \
   "$js_sdk_diagnostics_test" \
   '  "typed Sumeragi endpoints reject swapped status and diagnostics payloads",'
@@ -1386,11 +1402,11 @@ native_amx_parity_inventory = """\
   )
   native_amx_grouped_parity_test_counts=(
     7
+    67
     65
-    63
-    5
-    8
-    6
+    9
+    11
+    7
   )"""
 if source.count(native_amx_parity_inventory) != 1:
     reject(
@@ -2955,7 +2971,7 @@ if [[ "$(grep -Fxc -- "authenticated_remote_recovery=passed exact_once=passed\";
   echo "mandatory Native AMX test must publish the exact grouped/pruning marker" >&2
   exit 1
 fi
-if [[ "$(grep -Fxc -- "        .submit_prepared_transaction_payload_batch_async(&payloads)" "$native_recovery_file" || true)" != 1 ]]; then
+if [[ "$(grep -Fxc -- "        .submit_prepared_transaction_payload_batch(&payloads)" "$native_recovery_file" || true)" != 1 ]]; then
   echo "mandatory Native AMX test must use one exact Torii batch submission" >&2
   exit 1
 fi

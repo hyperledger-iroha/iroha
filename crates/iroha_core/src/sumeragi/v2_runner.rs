@@ -39,6 +39,7 @@ use super::{
     v2_apply::{
         LaneReservationReconciliationPlanning, V2ReservationLifecycleError,
         apply_lane_reservation_reconciliation_plan,
+        observe_completed_lane_reservation_reconciliation,
         persist_preflighted_historical_autonomous_lane_recoveries, plan_lane_reservation_ownership,
         preflight_historical_autonomous_lane_recovery,
         validate_installed_historical_autonomous_lane_recoveries,
@@ -2818,15 +2819,9 @@ const fn certified_merge_selection_for_npos(
 }
 fn adapter_fingerprints(local_peer: &PeerId, config: &SumeragiV2Config) -> AdapterFingerprints {
     let node = Hash::new(local_peer.encode());
-    let mut build_preimage = env!("CARGO_PKG_VERSION").as_bytes().to_vec();
-    build_preimage.extend_from_slice(
-        option_env!("GIT_COMMIT_HASH")
-            .unwrap_or("unknown")
-            .as_bytes(),
-    );
     AdapterFingerprints {
         node,
-        build: Hash::new(build_preimage),
+        build: crate::release_identity::build_fingerprint(),
         config: config.fingerprint(),
     }
 }
@@ -3058,39 +3053,41 @@ fn dispatch_lane_work_effects_with_progress(
             .can_retain_lane_work_effect_from_snapshot(&next_effect, queue_plan_sources.as_mut())
             .map_err(V2RunnerError::Service)?
         {
-            let effect = require_peeked_lane_work_effect(lane_work.drain_effects(1).pop())?;
-            drop(effect);
             if next_effect.retries_from_native_catalog_after_source_retention() {
+                let _ = require_peeked_lane_work_effect(lane_work.drain_effects(1).pop())?;
                 // Catalog ownership survives a known-full worker just as it
                 // survives an enqueue race below. Do not let this peer pin the
                 // adapter's bounded delivery queue.
                 continue;
             }
-            if !lane_work.requeue_effect(next_effect) {
+            if !lane_work.rotate_next_effect() {
                 return Err(V2RunnerError::Service(
                     "lane-work scheduler could not restore a reserved effect".to_owned(),
                 ));
             }
             continue;
         }
-        let effect = require_peeked_lane_work_effect(lane_work.drain_effects(1).pop())?;
-        drop(effect);
+        // Keep the original effect, exact reply routes and fair-ingress owner
+        // until the worker confirms transfer. Late local validation can fail
+        // after the capacity preflight, before any worker ownership exists.
         match dispatch_lane_work_effect_from_snapshot(
             services,
             next_effect,
             queue_plan_sources.as_mut(),
         )? {
             LaneWorkEffectDispatch::Complete => {
+                let _ = require_peeked_lane_work_effect(lane_work.drain_effects(1).pop())?;
                 dispatched = dispatched.saturating_add(1);
             }
             LaneWorkEffectDispatch::SourceRetained(effect) => {
                 if effect.retries_from_native_catalog_after_source_retention() {
+                    let _ = require_peeked_lane_work_effect(lane_work.drain_effects(1).pop())?;
                     // The compact body/peer catalog remains the source owner.
                     // Free this bounded delivery slot so the next cadence can
                     // rotate past a worker-saturated or silent peer.
                     continue;
                 }
-                if !lane_work.requeue_effect(effect) {
+                if !lane_work.rotate_next_effect() {
                     return Err(V2RunnerError::Service(
                         "lane-work scheduler could not retain a source-backpressured sidecar effect"
                             .to_owned(),
@@ -3234,6 +3231,11 @@ fn dispatch_lane_work_effect_from_snapshot(
                 ));
             }
         }
+    }
+    if services.lifecycle_output_guard().restart_required() {
+        return Err(V2RunnerError::Service(
+            "lane-work service admission requires process restart".to_owned(),
+        ));
     }
     Ok(LaneWorkEffectDispatch::Complete)
 }

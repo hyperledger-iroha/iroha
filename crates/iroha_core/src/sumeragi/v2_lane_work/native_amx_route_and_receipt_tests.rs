@@ -151,8 +151,8 @@ fn native_amx_request_accepts_exact_autonomous_lane_author() {
     }));
 }
 #[test]
-fn native_amx_request_rejects_global_leader_without_frozen_lane_authority() {
-    let (adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
+fn native_amx_request_rejects_global_hint_without_autonomous_authority() {
+    let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
     let request = native_request(&adapter, &keys);
     let leader = usize::try_from(adapter.context.leader(request.body.round.view))
         .ok()
@@ -168,11 +168,32 @@ fn native_amx_request_rejects_global_leader_without_frozen_lane_authority() {
         .find(|peer| peer != &leader)
         .expect("fixture has a non-leader validator");
 
-    assert!(
-        !adapter.native_request_sender_authorized(&request, &leader),
-        "global leadership alone cannot authorize a Native AMX coordinator request"
-    );
+    assert!(request.coordinator_proposal.payload_block_hint.is_some());
+    assert!(!adapter.native_request_sender_authorized(&request, &leader));
     assert!(!adapter.native_request_sender_authorized(&request, &non_leader));
+    let mut routes = NetworkReplyRouteTestFixture::new(non_leader);
+    let reply_route = routes.mint(leader.clone());
+    assert_eq!(
+        adapter.accept_native_amx(
+            leader,
+            Some(reply_route),
+            NativeAmxMessage::PrepareRequest(request),
+            0,
+        ),
+        V2LaneIngressOutcome::Rejected,
+        "a global carrier hint cannot replace autonomous coordinator authority"
+    );
+    assert!(adapter.local_native_claims.is_empty());
+    assert!(adapter.drain_effects(usize::MAX).is_empty());
+    assert_eq!(
+        adapter
+            .native_signing_guard
+            .as_ref()
+            .expect("validator signing guard")
+            .record_count_for_test(),
+        0,
+    );
+    assert!(!adapter.output_guard.restart_required());
 }
 #[test]
 fn native_amx_request_respects_the_configured_source_bound() {
@@ -200,13 +221,14 @@ fn native_amx_request_respects_the_configured_source_bound() {
     request.body.participant_proposal_hash = request.participant_proposal.proposal_hash;
     request.participant_settlement = request
         .body
-        .computed_grouped_participant_settlement(&[second_source, request.body.source_id])
+        .computed_grouped_participant_settlement(None, &[second_source, request.body.source_id])
         .expect("build a canonical two-source settlement");
-    request.body.participant_settlement_commitment =
-        iroha_data_model::block::consensus::compute_native_amx_participant_settlement_hash(
-            &request.participant_settlement,
-        )
-        .expect("fixture participant settlement encodes canonically");
+    request.body.participant_settlement_commitment = Hash::from(
+        request
+            .participant_settlement
+            .computed_hash()
+            .expect("hash the canonical two-source settlement"),
+    );
     assert!(request.validate_plan_binding().is_ok());
     assert!(!adapter.native_request_matches_context(&request, request.body.round.view));
 }
@@ -353,7 +375,7 @@ fn native_request_claims_reject_recomputed_source_and_slot_bodies_within_view() 
     changed_slot.source_id = [0xD4; Hash::LENGTH];
     changed_slot.participant_proposal_hash = Hash::new(b"recomputed participant proposal");
     changed_slot.participant_settlement_commitment =
-        HashOf::from_untyped_unchecked(Hash::new(b"recomputed participant settlement"));
+        Hash::new(b"recomputed participant settlement");
     assert!(
         !adapter.authorize_native_request_bodies(&[changed_slot]),
         "distinct sources cannot race incompatible claims for one participant slot"
@@ -419,106 +441,62 @@ fn global_body_lock_retires_and_fences_native_request_ownership() {
 }
 #[test]
 fn native_amx_request_rejects_same_next_height_wrong_coordinator_predecessor_hash() {
-    let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
-    let participant_lane_id = LaneId::new(1);
-    let participant_dataspace_id = DataSpaceId::new(7);
-    let _participant_validators = enable_multilane_nexus(
-        &mut adapter,
-        &keys,
-        participant_lane_id,
-        participant_dataspace_id,
-    );
-    let coordinator_lane_incarnation = adapter
-        .state
-        .lane_incarnation_at_height(LaneId::SINGLE, adapter.context.height)
-        .expect("fixture coordinator lane incarnation");
-    let predecessor = proposal_for_route(
-        &adapter,
-        &keys,
-        LaneId::SINGLE,
-        DataSpaceId::UNIVERSAL,
-        coordinator_lane_incarnation,
-        adapter.context.height,
-        1,
-    );
-    let predecessor = store_canonical_anchor(&adapter, &predecessor, &keys[0]);
-    let exact_predecessor_hash = predecessor.descriptor.descriptor_hash;
-    let exact = native_request_with_distinct_participant(
-        &adapter,
-        &keys,
-        participant_lane_id,
-        participant_dataspace_id,
-        2,
-        Some(exact_predecessor_hash),
-    );
-    assert_eq!(exact.validate_plan_binding(), Ok(()));
-    assert!(adapter.native_body_matches_context(&exact.body, 0));
+    let (mut adapter, _, lane_id, dataspace_id, previous) =
+        native_coordinator_after_applied_participant_fixture();
+    let exact = native_coordinator_successor_request(&adapter, lane_id, dataspace_id, &previous);
     assert!(adapter.native_request_matches_context(&exact, 0));
-    let forged = native_request_with_distinct_participant(
-        &adapter,
-        &keys,
-        participant_lane_id,
-        participant_dataspace_id,
-        2,
-        Some(Hash::new(b"wrong-coordinator-predecessor-at-height-one")),
-    );
+    let mut forged = exact.clone();
+    let wrong_hash = Hash::new(b"wrong-coordinator-predecessor-at-height-one");
+    for proposal in [
+        &mut forged.coordinator_proposal,
+        &mut forged.participant_proposal,
+    ] {
+        let mut ownership = ownership_from_proposal(proposal);
+        ownership.previous_lane_block_descriptor_hash = Some(wrong_hash);
+        let replay = ownership
+            .compute_replay_hashes()
+            .expect("a competing predecessor is structurally valid replay material");
+        ownership.subject_hash = replay.subject_hash;
+        ownership.payload_ownership_hash = replay.payload_ownership_hash;
+        ownership.rbc_instance_hash = replay.rbc_instance_hash;
+        ownership.lane_block_descriptor_hash = Some(replay.lane_block_descriptor_hash);
+        *proposal = proposal_from_ownership(
+            &ownership,
+            HashOf::from_untyped_unchecked(Hash::new(b"unused competing proposal hint")),
+        )
+        .expect("reconstruct exact competing proposal");
+        proposal.payload_block_hint = None;
+    }
+    forged.body.coordinator_proposal_hash = forged.coordinator_proposal.proposal_hash;
+    forged.body.participant_proposal_hash = forged.participant_proposal.proposal_hash;
+    forged.body.participant_previous_block_descriptor_hash = Some(wrong_hash);
     assert_eq!(forged.validate_plan_binding(), Ok(()));
     assert_eq!(
-        forged.body.planned_coordinator_block_height, exact.body.planned_coordinator_block_height,
-        "the adversarial request must preserve the exact next height"
-    );
-    assert_eq!(
-        forged
-            .coordinator_proposal
-            .descriptor
-            .previous_lane_block_height,
-        predecessor.descriptor.lane_block_height,
-        "the adversarial request must preserve the exact predecessor height"
+        forged.body.planned_coordinator_block_height,
+        exact.body.planned_coordinator_block_height
     );
     assert!(
-        adapter.native_body_matches_context(&forged.body, 0),
-        "the body-only height guard cannot distinguish the forged predecessor hash"
+        adapter
+            .native_coordinator_height_is_current(&forged.body)
+            .expect("height alone does not authenticate the previous hash")
+    );
+    assert!(
+        !adapter
+            .native_coordinator_predecessor_is_current(&forged)
+            .expect("valid competing descriptor is not local corruption")
     );
     assert!(!adapter.native_request_matches_context(&forged, 0));
-    assert!(
-        adapter.sign_native_request_once(&forged, 0).is_none(),
-        "the production signing boundary must retain and reject the forged proposal"
-    );
-    let leader = usize::try_from(adapter.context.leader(forged.body.round.view))
-        .ok()
-        .and_then(|index| adapter.context.roster.get(index))
-        .expect("fixture view has a leader")
-        .validator
-        .clone();
-    let relay = adapter
-        .context
-        .roster
-        .iter()
-        .map(|entry| entry.validator.clone())
-        .find(|peer| peer != &leader)
-        .expect("fixture has a distinct authenticated relay");
-    let mut routes = NetworkReplyRouteTestFixture::new(relay);
-    let route = routes.mint(leader.clone());
-    assert_eq!(
-        adapter.accept_native_amx(
-            leader,
-            Some(route),
-            NativeAmxMessage::PrepareRequest(forged),
-            0,
-        ),
-        V2LaneIngressOutcome::Rejected,
-        "request admission must use the exact production signing predicate"
-    );
+    assert!(adapter.sign_native_request_once(&forged, 0).is_none());
     assert!(adapter.local_native_claims.is_empty());
     assert_eq!(
         adapter
             .native_signing_guard
             .as_ref()
-            .expect("validator has durable Native AMX guard")
+            .unwrap()
             .record_count_for_test(),
-        0,
-        "a forged predecessor must be rejected before durable authority is recorded"
+        0
     );
+    assert!(!adapter.output_guard.restart_required());
 }
 #[test]
 fn native_coordinator_height_ignores_retired_incarnation_artifacts() {
@@ -543,7 +521,7 @@ fn native_coordinator_height_ignores_retired_incarnation_artifacts() {
         adapter
             .kura
             .latest_lane_block_artifact(lane_id)
-            .expect("read durable lane artifact")
+            .expect("authenticate the current lane frontier")
             .is_some_and(|artifact| artifact.ownership.lane_block_height == 100),
         "fixture must first install a reachable high lane-local artifact"
     );
@@ -562,6 +540,31 @@ fn native_coordinator_height_ignores_retired_incarnation_artifacts() {
         nexus.lane_catalog = recreated_catalog;
     }
     adapter.state.reseed_static_lane_incarnations_for_tests();
+    assert_eq!(
+        adapter
+            .state
+            .lane_incarnation_at_height(lane_id, adapter.context.height),
+        Some(retired_incarnation),
+        "an alias is display metadata and cannot retire a consensus namespace"
+    );
+    let recreated_incarnation = Hash::new(b"recreated Native coordinator lane incarnation");
+    assert_eq!(
+        adapter
+            .state
+            .set_lane_incarnation_for_test(lane_id, recreated_incarnation),
+        Some(retired_incarnation),
+    );
+    let recreated_entry = adapter
+        .state
+        .nexus_snapshot()
+        .lane_config
+        .entry(lane_id)
+        .expect("recreated lane storage entry")
+        .clone();
+    adapter
+        .kura
+        .install_lane_incarnation_marker_for_test(&recreated_entry, recreated_incarnation, 0)
+        .expect("install the explicit recreated consensus namespace");
     assert_ne!(
         adapter
             .state
@@ -573,13 +576,15 @@ fn native_coordinator_height_ignores_retired_incarnation_artifacts() {
         adapter
             .kura
             .latest_lane_block_artifact(lane_id)
-            .expect("read durable lane artifact")
+            .expect("authenticate absence in the recreated lane namespace")
             .is_none(),
         "the active Kura marker must hide the retired high artifact"
     );
     let body = native_body(&adapter);
     assert!(
-        adapter.native_coordinator_height_is_current(&body),
+        adapter
+            .native_coordinator_height_is_current(&body)
+            .expect("authenticate the active coordinator frontier"),
         "retired-incarnation history must not advance the active coordinator height"
     );
     assert!(adapter.native_body_matches_context(&body, 0));
@@ -675,4 +680,353 @@ fn lane_signing_boundary_requires_exact_descriptor_membership() {
             .is_none(),
         "configured validator role cannot sign a descriptor which omits the local key"
     );
+}
+
+fn native_coordinator_after_applied_participant_fixture() -> (
+    V2LaneWorkAdapter,
+    Vec<KeyPair>,
+    LaneId,
+    DataSpaceId,
+    NativeBodyRecoveryPayload,
+) {
+    let (adapter, keys, lane_id, dataspace_id) = native_body_recovery_adapter();
+    assert!(
+        adapter
+            .state
+            .native_amx_participant_application_tips_snapshot()
+            .expect("empty Native authority is readable")
+            .is_empty()
+    );
+    let payload = native_body_recovery_payload(&adapter, &keys, lane_id, dataspace_id);
+    let carrier = native_body_recovery_carrier(&adapter, &keys, &payload);
+    let (_, finality) = native_body_recovery_finality(&adapter, &keys, &carrier);
+    adapter
+        .kura
+        .store_block(carrier.clone())
+        .expect("store actual Native carrier");
+    let _ = adapter
+        .kura
+        .store_v2_finality_artifact(&finality)
+        .expect("publish actual Native manifest and complete wire authority");
+    commit_test_block_to_state(
+        adapter.state.as_ref(),
+        &ValidBlock::committed_from_replay_signed_block(carrier.clone()),
+        &adapter.context,
+    );
+    let checkpoint = crate::snapshot::canonical_state_snapshot_hash(adapter.state.as_ref());
+    adapter
+        .kura
+        .store_wsv_checkpoint(carrier.header().height().get(), carrier.hash(), checkpoint)
+        .expect("publish exact committed Native checkpoint");
+    adapter
+        .kura
+        .store_commit_manifest(
+            crate::kura::CommitManifest::new(
+                carrier.header().height().get(),
+                carrier.hash(),
+                None,
+                None,
+                checkpoint,
+                None,
+            )
+            .with_authenticated_v2_commit_authority(&finality),
+        )
+        .expect("publish exact Native commit metadata");
+    let pending = adapter
+        .state
+        .native_amx_participant_frontiers_pending_durable_evidence_snapshot()
+        .expect("genuinely missing Native receipt remains recoverable");
+    assert_eq!(pending.len(), 1);
+    assert_eq!(
+        adapter
+            .state
+            .unapplied_native_amx_participant_control_heights_snapshot()
+            .expect("pending Native marker is readable")
+            .get(&(lane_id, dataspace_id)),
+        Some(&pending[0].lane_block_height)
+    );
+    adapter
+        .kura
+        .repair_native_amx_participant_application_evidence_for_markers(&carrier, &pending)
+        .expect("publish authentic receipt through the production repair boundary");
+    assert!(
+        adapter
+            .state
+            .native_amx_participant_frontiers_pending_durable_evidence_snapshot()
+            .expect("read complete Native authority")
+            .is_empty()
+    );
+    assert_eq!(
+        adapter
+            .state
+            .native_amx_participant_application_tips_snapshot()
+            .expect("read exact applied Native tip")
+            .len(),
+        1
+    );
+
+    let mut context = adapter.context.clone();
+    context.height += 1;
+    context.parent_commit_qc = Some(finality.commit_qc.clone());
+    context.snapshot_bootstrap = None;
+    context.nexus_amx_context_hash =
+        super::super::v2_recovery::committed_nexus_amx_context_hash(adapter.state.as_ref());
+    let restart = LaneAdapterRestartParts::capture(&adapter);
+    drop(adapter);
+    let adapter = restart
+        .reopen_isolated(context, true)
+        .expect("reopen successor under exact signed Native application authority");
+    (adapter, keys, lane_id, dataspace_id, payload)
+}
+fn native_coordinator_successor_request(
+    adapter: &V2LaneWorkAdapter,
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+    previous: &NativeBodyRecoveryPayload,
+) -> NativeAmxAttestationRequestV2 {
+    let transaction_key = KeyPair::try_from_seed(vec![0xE9; 32], Algorithm::Ed25519)
+        .expect("deterministic successor transaction key");
+    let transaction = TransactionBuilder::new(
+        adapter.context.network_id,
+        AccountId::new(transaction_key.public_key().clone()),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .sign(transaction_key.private_key());
+    let entrypoint_hash = transaction.hash_as_entrypoint();
+    let mut source_id = [0_u8; Hash::LENGTH];
+    source_id.copy_from_slice(transaction.hash().as_ref());
+    let route = RoutingDecision::new(lane_id, dataspace_id);
+    let plan = prepare_v2_lane_payload_plan(
+        adapter.state.as_ref(),
+        adapter.kura.as_ref(),
+        &adapter.context,
+        0,
+        &adapter.local_peer,
+        &[route],
+        &[Hash::from(entrypoint_hash)],
+    )
+    .expect("actual production planner extends the applied Native participant");
+    assert!(plan.unavailable_indices.is_empty());
+    assert_eq!(plan.proposals.len(), 1);
+    let proposal = plan.proposals[0].clone();
+    let descriptor = &proposal.descriptor;
+    assert_eq!(descriptor.previous_lane_block_height, 1);
+    assert_eq!(descriptor.lane_block_height, 2);
+    assert_eq!(
+        descriptor.previous_lane_block_descriptor_hash,
+        Some(
+            previous
+                .request
+                .participant_proposal
+                .descriptor
+                .descriptor_hash
+        )
+    );
+    let routing_plan =
+        RoutingPlan::native_amx(route, vec![RouteLeg::new(route, RouteLegRole::Participant)]);
+    let mut body = native_body(adapter);
+    body.source_id = source_id;
+    body.tx_entrypoint_hash = entrypoint_hash;
+    body.plan_digest = routing_plan.digest();
+    body.coordinator_lane_id = lane_id;
+    body.coordinator_dataspace_id = dataspace_id;
+    body.coordinator_lane_incarnation = descriptor.lane_incarnation;
+    body.planned_coordinator_block_height = descriptor.lane_block_height;
+    body.coordinator_lane_block_view = descriptor.lane_block_view;
+    body.coordinator_proposal_hash = proposal.proposal_hash;
+    body.participant_lane_id = lane_id;
+    body.participant_dataspace_id = dataspace_id;
+    body.participant_lane_incarnation = descriptor.lane_incarnation;
+    body.participant_previous_block_height = descriptor.previous_lane_block_height;
+    body.participant_previous_block_descriptor_hash =
+        descriptor.previous_lane_block_descriptor_hash;
+    body.participant_lane_block_height = descriptor.lane_block_height;
+    body.participant_lane_block_view = descriptor.lane_block_view;
+    body.participant_proposal_hash = proposal.proposal_hash;
+    body.participant_validator_set_hash = descriptor.validator_set_hash;
+    body.participant_validator_count = descriptor.validator_count;
+    body.participant_min_quorum = descriptor.min_quorum;
+    let previous_hash = previous
+        .request
+        .participant_settlement
+        .computed_hash()
+        .expect("hash actual prior Native settlement");
+    let participant_settlement = body
+        .computed_grouped_participant_settlement(Some(previous_hash), &[source_id])
+        .expect("construct linked successor Native control");
+    body.participant_settlement_commitment = Hash::from(
+        participant_settlement
+            .computed_hash()
+            .expect("hash linked successor control"),
+    );
+    let request = NativeAmxAttestationRequestV2 {
+        body,
+        plan_legs: routing_plan.legs(),
+        coordinator_proposal: proposal.clone(),
+        participant_proposal: proposal,
+        participant_settlement,
+    };
+    request
+        .validate_plan_binding()
+        .expect("exact production planner request binding");
+    request
+}
+#[test]
+fn applied_native_participant_becomes_coordinator_at_shared_successor_height() {
+    let (mut adapter, _, lane_id, dataspace_id, previous) =
+        native_coordinator_after_applied_participant_fixture();
+    assert!(
+        adapter
+            .kura
+            .latest_lane_block_artifact(lane_id)
+            .expect("raw history is independently readable")
+            .is_none(),
+        "the Native participant must not be replaced by a fake raw artifact"
+    );
+    let request = native_coordinator_successor_request(&adapter, lane_id, dataspace_id, &previous);
+    assert!(
+        adapter
+            .native_coordinator_height_is_current(&request.body)
+            .expect("authenticate shared coordinator height")
+    );
+    assert!(
+        adapter
+            .native_coordinator_predecessor_is_current(&request)
+            .expect("authenticate exact shared coordinator predecessor")
+    );
+    assert!(adapter.native_request_matches_context(&request, 0));
+    let slot = plan_autonomous_lane_reservation_slot(
+        adapter.state.as_ref(),
+        adapter.kura.as_ref(),
+        &adapter.context,
+        lane_id,
+        dataspace_id,
+    )
+    .expect("actual deterministic coordinator reservation authority");
+    assert!(adapter.native_request_sender_authorized(&request, &slot.author));
+    let relay = adapter
+        .context
+        .roster
+        .iter()
+        .map(|power| power.validator.clone())
+        .find(|peer| peer != &slot.author)
+        .expect("distinct authenticated physical relay");
+    let mut routes = NetworkReplyRouteTestFixture::new(relay);
+    let reply_route = routes.mint(slot.author.clone());
+    assert_eq!(
+        adapter.accept_native_amx(
+            slot.author.clone(),
+            Some(reply_route),
+            NativeAmxMessage::PrepareRequest(request),
+            0
+        ),
+        V2LaneIngressOutcome::Inserted,
+        "the exact Native H1 to coordinator H2 request reaches durable signing and reply publication"
+    );
+    let effects = adapter.drain_effects(usize::MAX);
+    let vote = effects
+        .iter()
+        .find_map(|effect| match effect {
+            V2LaneWorkEffect::PostNativeAmx {
+                peer,
+                message: NativeAmxMessage::PrepareVote(vote),
+                ..
+            } if peer == &slot.author => Some(vote),
+            _ => None,
+        })
+        .expect("exact signed vote is published to the authenticated coordinator");
+    assert_eq!(
+        vote.validate_ingress(NativeAmxPhase::Prepare, Some(&adapter.local_peer)),
+        Ok(())
+    );
+    assert_eq!(
+        adapter
+            .native_signing_guard
+            .as_ref()
+            .unwrap()
+            .record_count_for_test(),
+        1
+    );
+    assert!(!adapter.output_guard.restart_required());
+}
+#[test]
+fn native_coordinator_successor_rejects_wrong_signed_native_history_link() {
+    let (mut adapter, _, lane_id, dataspace_id, previous) =
+        native_coordinator_after_applied_participant_fixture();
+    let mut request =
+        native_coordinator_successor_request(&adapter, lane_id, dataspace_id, &previous);
+    let wrong = HashOf::from_untyped_unchecked(Hash::new(b"wrong prior Native settlement"));
+    request.participant_settlement = request
+        .body
+        .computed_grouped_participant_settlement(Some(wrong), &[request.body.source_id])
+        .expect("a nonzero competing link is structurally valid");
+    request.body.participant_settlement_commitment = Hash::from(
+        request
+            .participant_settlement
+            .computed_hash()
+            .expect("hash competing link"),
+    );
+    assert_eq!(request.validate_plan_binding(), Ok(()));
+    assert!(
+        adapter
+            .native_coordinator_predecessor_is_current(&request)
+            .expect("ordinary shared predecessor remains exact")
+    );
+    assert!(!adapter.native_control_predecessor_is_current(&request));
+    assert!(!adapter.native_request_matches_context(&request, 0));
+    assert!(adapter.sign_native_request_once(&request, 0).is_none());
+    assert_eq!(
+        adapter
+            .native_signing_guard
+            .as_ref()
+            .unwrap()
+            .record_count_for_test(),
+        0
+    );
+    assert!(
+        !adapter.output_guard.restart_required(),
+        "valid remote competition is not corruption"
+    );
+}
+#[test]
+fn native_coordinator_successor_fails_closed_on_corrupt_applied_native_receipt() {
+    let (mut adapter, _, lane_id, dataspace_id, previous) =
+        native_coordinator_after_applied_participant_fixture();
+    let request = native_coordinator_successor_request(&adapter, lane_id, dataspace_id, &previous);
+    let receipt_path = adapter
+        .state
+        .nexus_snapshot()
+        .lane_config
+        .entry(lane_id)
+        .expect("actual participant storage route")
+        .blocks_dir(adapter.kura.store_root())
+        .join("lane_artifacts/native_amx_receipt_v1_00000000000000000001.norito");
+    assert!(
+        !std::fs::read(&receipt_path)
+            .expect("actual durable receipt")
+            .is_empty()
+    );
+    corrupt_durable_file_for_test(&receipt_path);
+    let damaged = std::fs::read(&receipt_path).unwrap();
+    assert!(!adapter.output_guard.restart_required());
+    assert!(matches!(
+        adapter.native_coordinator_height_is_current(&request.body),
+        Err(V2LaneWorkError::Persistence(_))
+    ));
+    assert!(adapter.output_guard.restart_required());
+    assert!(
+        adapter
+            .native_coordinator_predecessor_is_current(&request)
+            .is_err()
+    );
+    assert!(adapter.sign_native_request_once(&request, 0).is_none());
+    assert_eq!(
+        adapter
+            .native_signing_guard
+            .as_ref()
+            .unwrap()
+            .record_count_for_test(),
+        0
+    );
+    assert_eq!(std::fs::read(receipt_path).unwrap(), damaged);
 }

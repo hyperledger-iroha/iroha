@@ -944,7 +944,7 @@ fn signed_query_scope_uses_escrow_party_discriminants() {
     );
 }
 #[tokio::test]
-async fn public_peer_inventory_does_not_require_foreign_dataspace_read_grants() {
+async fn peer_inventory_requires_ledger_permission_and_executes_locally() {
     let key_pair = checked_torii_test_ed25519_keypair(
         0xf9,
         "derive public peer inventory handler fixture key",
@@ -956,6 +956,26 @@ async fn public_peer_inventory_does_not_require_foreign_dataspace_read_grants() 
         super::torii_all_dataspace_routes(app.as_ref()).len() > 1,
         "test requires multiple restricted dataspace routes",
     );
+    let signed = authorize_query_for_test(
+        iroha_data_model::query::QueryRequest::Start(build_find_peers_query_for_test()),
+        authority.clone(),
+    )
+    .sign(&key_pair);
+    let denied = super::handler_signed_query(
+        State(app.clone()),
+        HeaderMap::new(),
+        crate::loopback_connect_info(),
+        None,
+        crate::NoritoQuery(QueryOptions::default()),
+        versioned_query_for_test(signed),
+    )
+    .await;
+    assert!(matches!(
+        denied,
+        Err(Error::Query(ValidationFail::NotPermitted(message)))
+            if message.contains("CanReadAllLedgerData")
+    ));
+    grant_account_permission_for_test(&app, &authority, CanReadAllLedgerData.into());
     let signed = authorize_query_for_test(
         iroha_data_model::query::QueryRequest::Start(build_find_peers_query_for_test()),
         authority,
@@ -970,7 +990,7 @@ async fn public_peer_inventory_does_not_require_foreign_dataspace_read_grants() 
         versioned_query_for_test(signed),
     )
     .await
-    .expect("canonical public peer inventory should execute locally")
+    .expect("authorized peer inventory should execute locally")
     .into_response();
     assert_eq!(response.status(), StatusCode::OK);
     assert!(response.headers().get("x-iroha-routed-by").is_none());

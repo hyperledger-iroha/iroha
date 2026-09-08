@@ -225,6 +225,7 @@ impl MergeLedgerLog {
         #[cfg(test)]
         {
             self.indexed_lookups = self.indexed_lookups.saturating_add(1);
+            self.indexed_lookup_hashes.insert(hash);
         }
         let Some(frame) = self.frames_by_hash.get(&hash).copied() else {
             return Ok(None);

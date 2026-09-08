@@ -1,5 +1,5 @@
 #[test]
-fn axt_commit_enforces_amx_budget() {
+fn axt_commit_enforces_amx_budget_requires_finalized_anchor() {
     let authority = fixture_authority();
     let dsid = DataSpaceId::new(11);
     let manifest_root = [0x31; 32];
@@ -94,11 +94,6 @@ fn axt_commit_enforces_amx_budget() {
     vm.set_register(10, handle_ptr);
     vm.set_register(11, intent_ptr);
     vm.set_register(12, proof_ptr);
-    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm));
-    match host.syscall(ivm::syscalls::SYSCALL_AXT_COMMIT, &mut vm) {
-        Err(VMError::AmxBudgetExceeded { stage, .. }) => {
-            assert_eq!(stage, iroha_data_model::errors::AmxStage::Commit);
-        }
-        other => panic!("expected AMX budget error, got {other:?}"),
-    }
+    let result = host.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm);
+    assert_unanchored_spend_rejection(&mut host, result);
 }

@@ -258,7 +258,9 @@ def parse_run(
         diagnostics = _FAILURE_DIAGNOSTIC.findall(stdout)
         if diagnostics:
             raise ReportError(f"{name}: passing TLC output contains failure diagnostics")
-        if not depth_matches[0].end() < success_offset < terminal_matches[0].start():
+        # Pinned TLC 2.19 reports success before its final state-count and
+        # graph-depth statistics, then emits the terminal marker last.
+        if not run_header.end() < success_offset < state.start():
             raise ReportError(f"{name}: passing TLC result markers are out of order")
         observed_outcome = "pass"
     elif expected_outcome == "safety_violation":

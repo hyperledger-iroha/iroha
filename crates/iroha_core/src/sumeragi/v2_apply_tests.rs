@@ -180,6 +180,9 @@ fn reconcile_lane_reservation_ownership(
     verified_active_context: &VerifiedHeightContext,
 ) -> Result<LaneReservationReconciliationSummary, V2ReservationLifecycleError> {
     match plan_lane_reservation_ownership(state, queue, kura, verified_active_context, None)? {
+        LaneReservationReconciliationPlanning::AlreadyCompleted(observation) => {
+            observe_completed_lane_reservation_reconciliation(queue, kura, observation)
+        }
         LaneReservationReconciliationPlanning::Ready(plan) => {
             apply_lane_reservation_reconciliation_plan(state, queue, kura, plan)
         }

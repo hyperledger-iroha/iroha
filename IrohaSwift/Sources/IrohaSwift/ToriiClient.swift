@@ -19616,10 +19616,10 @@ enum ToriiNativeAmxWire {
         "iroha_data_model::block::consensus::LaneBlockDescriptorPreimage"
     private static let proposalPreimageType =
         "iroha_data_model::block::consensus::LaneBlockProposalPreimage"
-    private static let participantSettlementType =
+    private static let settlementType =
         "iroha_data_model::block::consensus::NativeAmxParticipantSettlement"
-    private static let participantSettlementHashDomain =
-        Data("iroha.consensus.native-amx.participant-settlement.v1".utf8)
+    private static let settlementHashDomain =
+        Data("iroha:native-amx:participant-settlement:v1".utf8)
     private static let blsKeyAdmissionMessage =
         Data("native-amx:bls-normal-key-admission:v1".utf8)
     /// A valid compressed BLS-Normal signature used only to make the native
@@ -20062,108 +20062,36 @@ enum ToriiNativeAmxWire {
         return hashLiteral(noritoFrame(typeName: proposalPreimageType, payload: payload))
     }
 
-    private static func unsignedMagnitude(_ decimal: String) -> Data? {
-        var bytes: [UInt8] = []
-        for character in decimal {
-            guard let digit = character.wholeNumberValue, digit < 10 else {
-                return nil
-            }
-            var carry = digit
-            for index in bytes.indices {
-                let next = Int(bytes[index]) * 10 + carry
-                bytes[index] = UInt8(next & 0xFF)
-                carry = next >> 8
-            }
-            while carry != 0 {
-                bytes.append(UInt8(carry & 0xFF))
-                carry >>= 8
-            }
-        }
-        while bytes.last == 0 {
-            bytes.removeLast()
-        }
-        if let last = bytes.last, last & 0x80 != 0 {
-            bytes.append(0)
-        }
-        return Data(bytes)
-    }
-
-    private static func quantity(_ value: String) -> Data? {
-        let parts = value.split(
-            separator: ".",
-            maxSplits: 1,
-            omittingEmptySubsequences: false
-        )
-        guard !parts.isEmpty, parts.count <= 2 else {
-            return nil
-        }
-        let whole = String(parts[0])
-        let fraction = parts.count == 2 ? String(parts[1]) : ""
-        guard let magnitude = unsignedMagnitude(whole + fraction) else {
-            return nil
-        }
-        var bigint = littleEndian(UInt32(magnitude.count))
-        bigint.append(magnitude)
-        return structure([
-            bigint,
-            littleEndian(UInt32(fraction.count)),
-        ])
-    }
-
-    private static func settlementReceipt(_ receipt: ToriiLaneSettlementReceipt) -> Data? {
-        guard let sourceId = Data(hexString: receipt.sourceId),
-              sourceId.count == 32,
-              let localAmount = quantity(receipt.localAmount),
-              let xorDue = quantity(receipt.xorDue),
-              let xorAfterHaircut = quantity(receipt.xorAfterHaircut),
-              let xorVariance = quantity(receipt.xorVariance)
-        else {
-            return nil
-        }
-        return structure([
-            sourceId,
-            localAmount,
-            xorDue,
-            xorAfterHaircut,
-            xorVariance,
-            littleEndian(receipt.timestampMs),
-        ])
-    }
-
-    static func participantSettlementHash(
-        _ settlement: ToriiNativeAmxParticipantSettlement
-    ) -> String? {
-        guard settlement.swapMetadata == nil,
-              settlement.nexusFeeReceipts.isEmpty,
-              let laneIncarnation = hashBytes(settlement.laneIncarnation),
-              let totalLocalAmount = quantity(settlement.totalLocalAmount),
-              let totalXorDue = quantity(settlement.totalXorDue),
-              let totalXorAfterHaircut = quantity(settlement.totalXorAfterHaircut),
-              let totalXorVariance = quantity(settlement.totalXorVariance),
-              let receipts = vector(settlement.receipts, encode: settlementReceipt),
-              let emptyNexusReceipts = vector([Data](), encode: { $0 })
-        else {
-            return nil
+    static func settlementHash(_ settlement: ToriiNativeAmxParticipantSettlement) -> String? {
+        guard let laneIncarnation = hashBytes(settlement.laneIncarnation),
+              let sources = vector(settlement.sourceIds, encode: { source in
+                  guard let bytes = Data(hexString: source.rawValue) else { return nil }
+                  // Norito [u8; 32] frames each byte, unlike the raw Hash representation.
+                  return structure(bytes.map { Data([$0]) })
+              })
+        else { return nil }
+        let previous: Data
+        if let literal = settlement.previousNativeSettlementHash {
+            guard let bytes = hashBytes(literal) else { return nil }
+            previous = Data([1]) + field(bytes)
+        } else {
+            previous = Data([0])
         }
         let payload = structure([
-            littleEndian(settlement.blockHeight),
             field(littleEndian(settlement.laneId)),
-            laneIncarnation,
             field(littleEndian(settlement.dataspaceId)),
-            littleEndian(settlement.transactionCount),
-            totalLocalAmount,
-            totalXorDue,
-            totalXorAfterHaircut,
-            totalXorVariance,
-            Data([0]),
-            receipts,
-            emptyNexusReceipts,
+            laneIncarnation,
+            littleEndian(settlement.participantLaneBlockHeight),
+            littleEndian(settlement.authorityContextHeight),
+            previous,
+            sources,
         ])
-        var hashPreimage = littleEndian(UInt64(participantSettlementHashDomain.count))
-        hashPreimage.append(participantSettlementHashDomain)
-        hashPreimage.append(noritoFrame(typeName: participantSettlementType, payload: payload))
+        var hashPreimage = littleEndian(UInt64(settlementHashDomain.count))
+        hashPreimage.append(settlementHashDomain)
+        hashPreimage.append(noritoFrame(typeName: settlementType, payload: payload))
         return hashLiteral(hashPreimage)
     }
+
 }
 
 func rejectUnknownNativeAmxFields(
@@ -20186,7 +20114,7 @@ public struct ToriiNativeAmxSourceId: RawRepresentable, Decodable, Sendable, Has
     public let rawValue: String
 
     public init?(rawValue: String) {
-        guard rawValue.count == 64,
+        guard rawValue.count == 64, rawValue.contains(where: { $0 != "0" }),
               rawValue.allSatisfy({
                   ToriiNativeAmxWire.isAsciiHex($0, uppercaseOnly: true)
               })
@@ -20199,12 +20127,12 @@ public struct ToriiNativeAmxSourceId: RawRepresentable, Decodable, Sendable, Has
     public init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
         let value = try container.decode(String.self)
-        guard value.count == 64,
+        guard value.count == 64, value.contains(where: { $0 != "0" }),
               value.allSatisfy({ ToriiNativeAmxWire.isAsciiHex($0, uppercaseOnly: true) })
         else {
             throw DecodingError.dataCorruptedError(
                 in: container,
-                debugDescription: "native AMX source_id must be exactly 32 uppercase hexadecimal bytes."
+                debugDescription: "native AMX source_id must be exactly 32 nonzero uppercase hexadecimal bytes."
             )
         }
         rawValue = value
@@ -20945,18 +20873,17 @@ public struct ToriiNativeAmxLeg: Decodable, Sendable, Equatable {
             descriptor.acceptedTransactionHashes[$0] == body.transactionEntrypointHash.rawValue
         }
         requiresMixedRoleAnchorValidation = matchingEntrypointPositions.isEmpty
-        let settlementReceipts = participantSettlement.receipts
-        let settlementSources = settlementReceipts.map(\.sourceId)
+        let settlementSources = participantSettlement.sourceIds.map(\.rawValue)
         let sourcePositions = settlementSources.indices.filter {
             settlementSources[$0] == body.sourceId.rawValue
         }
         let alignedCurrentSource = matchingEntrypointPositions.first.map { position in
-            position < settlementReceipts.count
-                && settlementReceipts[position].sourceId == body.sourceId.rawValue
+            position < settlementSources.count
+                && settlementSources[position] == body.sourceId.rawValue
         } ?? true
         let presentEntrypointMembershipIsAligned = requiresMixedRoleAnchorValidation
-            || (descriptor.acceptedCandidateIndices.count == settlementReceipts.count
-                && descriptor.acceptedTransactionHashes.count == settlementReceipts.count
+            || (descriptor.acceptedCandidateIndices.count == settlementSources.count
+                && descriptor.acceptedTransactionHashes.count == settlementSources.count
                 && alignedCurrentSource)
         let participantSharesCoordinatorRoute = laneId == body.coordinatorLaneId
             && dataspaceId == body.coordinatorDataspaceId
@@ -20966,13 +20893,6 @@ public struct ToriiNativeAmxLeg: Decodable, Sendable, Equatable {
                 && participantProposal.proposalHash == body.coordinatorProposalHash
                 && descriptor.laneBlockHeight == body.plannedCoordinatorBlockHeight
                 && descriptor.laneBlockView == body.coordinatorLaneBlockView)
-        let settlementIsZeroEffect = settlementReceipts.allSatisfy { receipt in
-            receipt.localAmount == "0"
-                && receipt.xorDue == "0"
-                && receipt.xorAfterHaircut == "0"
-                && receipt.xorVariance == "0"
-                && receipt.timestampMs == body.authorityContextHeight
-        }
         guard prepareQc.body.phase == .prepare,
               commitQc.body.phase == .commit,
               prepareQc.body.hasSameIdentity(as: commitQc.body),
@@ -21002,22 +20922,13 @@ public struct ToriiNativeAmxLeg: Decodable, Sendable, Equatable {
               coordinatorParticipantProposalMatches,
               participantSettlementHash == body.participantSettlementCommitment,
               participantSettlementHash
-                == ToriiNativeAmxWire.participantSettlementHash(participantSettlement),
-              participantSettlement.blockHeight == body.participantLaneBlockHeight,
+                == ToriiNativeAmxWire.settlementHash(participantSettlement),
+              participantSettlement.participantLaneBlockHeight == body.participantLaneBlockHeight,
+              participantSettlement.authorityContextHeight == body.authorityContextHeight,
               participantSettlement.laneId == laneId,
               participantSettlement.dataspaceId == dataspaceId,
               participantSettlement.laneIncarnation == body.participantLaneIncarnation,
-              participantSettlement.transactionCount == UInt64(settlementReceipts.count),
-              participantSettlement.totalLocalAmount == "0",
-              participantSettlement.totalXorDue == "0",
-              participantSettlement.totalXorAfterHaircut == "0",
-              participantSettlement.totalXorVariance == "0",
-              participantSettlement.swapMetadata == nil,
-              !settlementReceipts.isEmpty,
-              Set(settlementSources).count == settlementSources.count,
-              sourcePositions.count == 1,
-              settlementIsZeroEffect,
-              participantSettlement.nexusFeeReceipts.isEmpty
+              sourcePositions.count == 1
         else {
             throw DecodingError.dataCorruptedError(
                 forKey: .prepareQc,
@@ -21507,8 +21418,7 @@ public struct ToriiLaneSettlementCommitment: Decodable, Sendable, Equatable {
         nativeAmxReceipts = try container.decode([ToriiNativeAmxReceipt].self, forKey: .nativeAmxReceipts)
         let orderedNativeSources = nativeAmxReceipts.map(\.sourceId.rawValue)
         let feeSources = Set(nexusFeeReceipts.map { $0.sourceId.lowercased() })
-        guard zip(orderedNativeSources, orderedNativeSources.dropFirst())
-                .allSatisfy({ $0.0 < $0.1 }),
+        guard Set(orderedNativeSources).count == orderedNativeSources.count,
               feeSources.count == nexusFeeReceipts.count,
               nativeAmxReceipts.allSatisfy({
                   $0.laneId == laneId
@@ -21518,8 +21428,9 @@ public struct ToriiLaneSettlementCommitment: Decodable, Sendable, Equatable {
               }),
               nativeAmxReceipts.allSatisfy({ receipt in
                   receipt.legs.allSatisfy({ leg in
-                      leg.participantSettlement.receipts.map(\.sourceId)
-                          == orderedNativeSources
+                      leg.laneId != laneId || leg.dataspaceId != dataspaceId
+                          || leg.participantSettlement.laneIncarnation != laneIncarnation
+                          || leg.participantSettlement.sourceIds.map(\.rawValue) == orderedNativeSources
                   })
               }),
               nexusFeeReceipts.allSatisfy({

@@ -696,7 +696,7 @@ def test_release_gate_is_clean_pinned_and_replays_complete_bundles_independently
     assert "authenticated OpenAPI Node control metadata changed" in harness
     assert 'record.get("mode") != format(stat.S_IMODE(metadata.st_mode), "04o")' in harness
     assert "metadata.st_uid != os.geteuid()" in harness
-    assert harness.count("observed_test_count=7") == 1
+    assert harness.count("  openapi)\n    observed_test_count=7\n") == 1
     assert "assert_openapi_replay_marker" in harness
     assert (
         "openapi-two-mirror-replay status=success "

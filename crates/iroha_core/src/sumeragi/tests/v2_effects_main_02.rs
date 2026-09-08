@@ -8,7 +8,8 @@ fn durable_sign_preemption_orders_speculative_certified_and_locked_fetches() {
     let certified = manifest_for_payload(&fixture, b"certified non-lock fetch");
     let locked = manifest_for_payload(&fixture, b"durable locked fetch");
     executor
-        .consume_effects(
+        .consume_admitted_fixture_effects(
+            &fixture,
             vec![AdapterEffect::FetchBody {
                 tag: tag(0),
                 round: speculative_old.round,
@@ -21,7 +22,8 @@ fn durable_sign_preemption_orders_speculative_certified_and_locked_fetches() {
         )
         .expect("start oldest speculative fetch");
     executor
-        .consume_effects(
+        .consume_admitted_fixture_effects(
+            &fixture,
             vec![AdapterEffect::FetchBody {
                 tag: tag(0),
                 round: speculative_new.round,
@@ -35,7 +37,8 @@ fn durable_sign_preemption_orders_speculative_certified_and_locked_fetches() {
         .expect("start newer speculative fetch");
     let certified_qc = prepare_qc_for_subject(certified.round, certified.subject);
     executor
-        .consume_effects(
+        .consume_admitted_fixture_effects(
+            &fixture,
             vec![AdapterEffect::FetchBody {
                 tag: tag(0),
                 round: certified.round,
@@ -50,7 +53,8 @@ fn durable_sign_preemption_orders_speculative_certified_and_locked_fetches() {
     let locked_qc = prepare_qc_for_subject(locked.round, locked.subject);
     executor.protected_lock = Some((locked.round, locked.subject));
     executor
-        .consume_effects(
+        .consume_admitted_fixture_effects(
+            &fixture,
             vec![AdapterEffect::FetchBody {
                 tag: tag(0),
                 round: locked.round,
@@ -70,7 +74,11 @@ fn durable_sign_preemption_orders_speculative_certified_and_locked_fetches() {
     assert_eq!(executor.pending_work(), 4);
     for view in 0_u64..4 {
         executor
-            .consume_effects(vec![timeout_sign(&fixture, view)], &mut services)
+            .consume_admitted_fixture_effects(
+                &fixture,
+                vec![timeout_sign(&fixture, view)],
+                &mut services,
+            )
             .expect("each durable Sign owns one deterministically preempted slot");
     }
     assert_eq!(services.cancelled_fetches, fetch_ids);
@@ -82,7 +90,8 @@ fn durable_sign_preemption_orders_speculative_certified_and_locked_fetches() {
     let mut services = fixture.services();
     let decided_qc = fixture.qc(wire::GlobalPhase::Prepare);
     executor
-        .consume_effects(
+        .consume_admitted_fixture_effects(
+            &fixture,
             vec![AdapterEffect::FetchBody {
                 tag: tag(0),
                 round: decided_qc.round,
@@ -101,7 +110,7 @@ fn durable_sign_preemption_orders_speculative_certified_and_locked_fetches() {
         decided_qc.execution_commitment,
     ));
     executor
-        .consume_effects(vec![timeout_sign(&fixture, 0)], &mut services)
+        .consume_admitted_fixture_effects(&fixture, vec![timeout_sign(&fixture, 0)], &mut services)
         .expect("decided fetch is protected and Sign remains bounded debt");
     assert!(services.cancelled_fetches.is_empty());
     assert_eq!(executor.pending_fetches.len(), 1);
@@ -181,7 +190,8 @@ fn retained_producer_suffix_allows_exact_payload_chunk_to_release_fetch_capacity
     let mut executor = fixture.executor(EffectQueueConfig::new(1, 2, 1 << 20, 2));
     let mut services = fixture.services();
     executor
-        .consume_effects(
+        .consume_admitted_fixture_effects(
+            &fixture,
             vec![AdapterEffect::FetchBody {
                 tag: tag(0),
                 round: fixture.manifest.round,
@@ -201,7 +211,7 @@ fn retained_producer_suffix_allows_exact_payload_chunk_to_release_fetch_capacity
         fixture_execution_commitment(),
     ));
     executor
-        .consume_effects(vec![timeout_sign(&fixture, 0)], &mut services)
+        .consume_admitted_fixture_effects(&fixture, vec![timeout_sign(&fixture, 0)], &mut services)
         .expect("retain the producer behind decided-body fetch capacity");
     assert_eq!(executor.status().effect_dispatch_queue.depth, 1);
     let chunk = signed_payload_chunk(&fixture);
@@ -420,12 +430,12 @@ fn exact_candidate_retry_coalesces_under_the_incumbent_owner() {
     let mut services = fixture.services();
     let effect = timeout_sign(&fixture, 0);
     executor
-        .consume_effects(vec![effect.clone()], &mut services)
+        .consume_admitted_fixture_effects(&fixture, vec![effect.clone()], &mut services)
         .expect("dispatch the first exact candidate owner");
     assert_eq!(executor.pending_signatures.len(), 1);
     assert_eq!(services.sign_tasks.len(), 1);
     executor
-        .consume_effects(vec![effect.clone()], &mut services)
+        .consume_admitted_fixture_effects(&fixture, vec![effect.clone()], &mut services)
         .expect("equal-owner retransmission coalesces into the live task");
     assert_eq!(executor.pending_signatures.len(), 1);
     assert_eq!(services.sign_tasks.len(), 1);
@@ -491,7 +501,7 @@ fn exact_candidate_retry_coalesces_under_the_incumbent_owner() {
         certificate: None,
     };
     fetch_executor
-        .consume_effects(vec![fetch_effect.clone()], &mut fetch_services)
+        .consume_admitted_fixture_effects(&fixture, vec![fetch_effect.clone()], &mut fetch_services)
         .expect("admit one exact Fetch stage owner");
     let incumbent = fetch_executor
         .pending_fetches
@@ -861,7 +871,7 @@ fn fetch_owner_replacement_is_rejected_before_upgrade_refinement_or_request_work
         certificate: None,
     };
     executor
-        .consume_effects(vec![ordinary], &mut services)
+        .consume_admitted_fixture_effects(&fixture, vec![ordinary], &mut services)
         .expect("admit the incumbent ordinary Fetch owner");
     let certificate = fixture.qc(wire::GlobalPhase::Prepare);
     let sources = certified_sources(&fixture, &certificate);
@@ -1373,7 +1383,8 @@ fn retained_locked_body_finishes_an_already_started_exact_origin_fetch() {
         )
         .expect("publish the exact protected proposal origin");
     executor
-        .consume_effects(
+        .consume_admitted_fixture_effects(
+            &fixture,
             vec![AdapterEffect::FetchBody {
                 tag: current_tag,
                 round: manifest.round,
@@ -1432,7 +1443,8 @@ fn retained_locked_body_cannot_rebind_to_a_later_proposal_origin() {
         )
         .expect("retain exact locked bytes at their immutable origin");
     executor
-        .consume_effects(
+        .consume_admitted_fixture_effects(
+            &fixture,
             vec![AdapterEffect::FetchBody {
                 tag: later_tag,
                 round: later_manifest.round,
@@ -1474,7 +1486,8 @@ fn same_tag_higher_lock_retires_exact_origin_ownership_before_staging() {
         .expect("stage the first lock under its exact proposal origin");
     let staged = manifest_at_view(&fixture, first_lock.0.view);
     executor
-        .consume_effects(
+        .consume_admitted_fixture_effects(
+            &fixture,
             vec![AdapterEffect::FetchBody {
                 tag: consumer,
                 round: staged.round,
@@ -1568,6 +1581,12 @@ fn next_view_higher_lock_cancels_old_signer_before_fresh_dispatch() {
     let fixture = Fixture::new();
     let mut executor = fixture.executor(EffectQueueConfig::default());
     let mut services = fixture.services();
+    install_fsynced_validation_fixture(
+        &mut executor,
+        &mut services,
+        &fixture,
+        fixture.manifest.clone(),
+    );
     let old_tag = tag(1);
     let next_tag = tag(2);
     let first = (round(&fixture.context, 0), fixture.manifest.subject);
@@ -1580,7 +1599,8 @@ fn next_view_higher_lock_cancels_old_signer_before_fresh_dispatch() {
     old_vote.round = first.0;
     old_vote.proposal_round = first.0;
     executor
-        .consume_effects(
+        .consume_admitted_fixture_effects(
+            &fixture,
             vec![AdapterEffect::Sign {
                 tag: old_tag,
                 request: SignRequest::Vote(old_vote),
@@ -1604,9 +1624,25 @@ fn next_view_higher_lock_cancels_old_signer_before_fresh_dispatch() {
     executor
         .park_retained_effect_batch()
         .expect("park old-view suffix");
-    let (higher_subject, _) = distinct_body(&fixture);
+    let (higher_subject, higher_body) = distinct_body(&fixture);
     let higher_round = round(&fixture.context, 1);
     let higher = (higher_round, higher_subject);
+    let higher_manifest =
+        canonical_payload_manifest(&fixture.context, higher_round, higher_subject, &higher_body);
+    let higher_durable = services
+        .body_store
+        .as_mut()
+        .expect("body store")
+        .store(higher_manifest.clone(), higher_body)
+        .expect("persist the independently signed higher body");
+    let higher_validated =
+        validate_durable_body_fixture(&mut services, &higher_manifest, higher_durable.clone());
+    executor
+        .recovered_bodies
+        .insert(higher, (higher_manifest, higher_durable.clone()));
+    executor.durable_bodies.insert(higher, higher_durable);
+    executor.validated_bodies.insert(higher, higher_validated);
+
     let mut high_prepare = fixture.qc(wire::GlobalPhase::Prepare);
     high_prepare.round = higher_round;
     high_prepare.proposal_round = higher_round;
@@ -1621,7 +1657,8 @@ fn next_view_higher_lock_cancels_old_signer_before_fresh_dispatch() {
     executor.runtime.round_tag = Some(next_tag);
     executor.runtime.locked_body = Some(higher);
     executor
-        .consume_effects(
+        .consume_admitted_fixture_effects(
+            &fixture,
             vec![
                 AdapterEffect::EnterView {
                     tag: next_tag,

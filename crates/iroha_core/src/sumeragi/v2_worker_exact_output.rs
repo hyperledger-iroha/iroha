@@ -3458,7 +3458,8 @@ fn durable_history_source_covers(
                 return Err("durable lane certificate belongs to a future height".to_owned());
             }
             let source = kura
-                .read_certified_lane_block_artifact(*lane_id, *lane_block_height)
+                .read_certified_lane_block_artifact_read_only(*lane_id, *lane_block_height)
+                .map_err(|error| format!("durable lane certificate source is unreadable: {error}"))?
                 .ok_or_else(|| {
                     "durable lane certificate lost its certified Kura source".to_owned()
                 })?;

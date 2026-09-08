@@ -1206,6 +1206,7 @@ region|adapter_high_accessor|adapter|at|pub(crate) fn replayed_highest_prepare_c
 region|leader_wire_replay_lock_authority|adapter|at|pub(crate) fn leader_wire_recovery_authority(|before|/// Mint the sole fixed leader-wire sibling owner from this exact open WAL.
 region|actual_consumer_factory|leader_wire_consumer|at|pub(super) fn from_adapter(|before|pub(crate) fn matches_geometry(
 region|actual_consumer_publication|worker|at|fn finish_runtime_step_reconciliation(|before|fn complete_leader_wire_runtime_terminal(
+region|leader_wire_exact_entered_view|leader_wire_consumer|at|pub(crate) fn matches_entered_view(|before|fn protects_commit_vote(
 region|runtime_high_accessor|runtime|at|pub(crate) fn replayed_highest_prepare_certificate_ref(|before|/// Return the exact Decision key reconstructed by safety-WAL replay.
 region|leader_wire_live_lock_authority|worker|at|fn entered_view(\n        &mut self,\n        tag: EventTag,\n        certificate: wire::TimeoutCertificate,\n        protected_lock: Option<(wire::ConsensusRound, wire::BlockSubject)>,|before|    fn report_equivocation(
 region|callers|adapter|begin|-|before|\n#[cfg(test)]\nmod tests {
@@ -1326,8 +1327,8 @@ required|leader_wire_live_lock_authority|protected_lock: Option<(wire::Consensus
 required|actual_consumer_publication|authority.ok_or_else(|production publication requires actual adapter authority
 required|actual_consumer_publication|if !next.monotonically_extends(self.leader_wire_recovery_authority)|production publication must reject a regressed WAL consumer
 order|actual_consumer_publication|5|authority.ok_or_else(|.acquire()|if !next.monotonically_extends(self.leader_wire_recovery_authority)|.advance_leader_wire_recovery_cut(next)?|self.leader_wire_recovery_authority = next;|guarded consumer publication must authenticate monotonicity and persist the ingress cut before exposing authority
-required|leader_wire_live_lock_authority|if tag != self.leader_wire_recovery_authority.consumer_tag()|EnterView must require the exact already-published adapter consumer tag
-order|leader_wire_live_lock_authority|3|.acquire()|if tag != self.leader_wire_recovery_authority.consumer_tag()|self.active_tag = tag;|EnterView must guard and authenticate the exact WAL consumer before changing the active tag
+required|leader_wire_exact_entered_view|self.consumer_tag == tag && self.protected_lock == protected_lock|EnterView must match both the sealed consumer incarnation and exact protected body owner
+order|leader_wire_live_lock_authority|3|.acquire()|.matches_entered_view(tag, protected_lock)|self.active_tag = tag;|EnterView must consume the already-published actual WAL incarnation and protected lock before exposing the view
 forbidden|leader_wire_live_lock_authority|.advance_view(|EnterView must not synthesize a consumer from a view and caller-provided lock
 forbidden|token|Decode|remote Proposal replay token exposed forbidden surface {forbidden}
 forbidden|token|fn from_parts(|remote Proposal replay token exposed forbidden surface {forbidden}
@@ -4743,7 +4744,7 @@ region|formal_direct|formal_first_release|at|ReleaseReservationDirect ==|before|
 region|formal_released|formal_first_release|at|AdvanceReleasedPrefix ==|before|CompleteReservationRelease ==
 region|startup|lifecycle_recovery|at|let mut recovered_attempts = 0_usize;|before|if !queue\n        .revalidate_lane_reservation_startup_reconciliation_receipt
 region|replay_enum|v2_core|at|pub(crate) enum ProductionInFlightFirstReleaseReplayStepV1 {|before|fn append_first_release_identity_v1(
-region|replay_reducer|v2_core|at|pub(crate) fn check_production_in_flight_first_release_replay_step_v1(|before|/// Check and witness any of the 27 first-release production actions.
+region|replay_reducer|v2_core|at|pub(crate) fn check_production_in_flight_first_release_replay_step_v1(|before|pub(crate) fn check_production_in_flight_first_release_transition(
 region|replay_wrapper|v2_core|at|pub(crate) fn check_production_in_flight_first_release_transition(|before|fn witness_derived_first_release_transition(
 region|legacy_guard|queue|begin|-|end|-
 required|token|store_root: PathBuf|replica Kura authority lost its source-instance binding

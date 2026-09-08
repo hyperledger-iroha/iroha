@@ -2205,6 +2205,17 @@ pub(crate) struct LaneReservationStartupReconciliationReceipt {
     plan_replay_receipt: QueuePlanStartupReplayReceiptV1,
     initial_snapshot: LaneQueueReservationReconciliationSnapshotV1,
 }
+/// Non-authorizing observation of an already published startup reconciliation.
+///
+/// This identity is process-local and is distinct from the move-only receipt
+/// which authorized the original publication. Observing it cannot resume Queue
+/// mutations or replace either immutable installed journal replay identity.
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) struct CompletedLaneReservationStartupReconciliation {
+    replay_receipt: LaneReservationSnapshotReplayReceipt,
+    plan_replay_receipt: QueuePlanStartupReplayReceiptV1,
+    final_snapshot: LaneQueueReservationReconciliationSnapshotV1,
+}
 /// One complete composed state selected from an authenticated signed lifecycle cursor.
 ///
 /// The constructor accepts only the public projection surface of a V1 cursor. The caller remains
@@ -4121,6 +4132,9 @@ pub struct Queue {
     /// into the process-local Queue indexes.
     lane_reservation_snapshot_replay_receipt:
         parking_lot::Mutex<Option<LaneReservationSnapshotReplayReceipt>>,
+    /// Evidence installed only after the State/Kura-aware startup publication.
+    lane_reservation_startup_completion:
+        parking_lot::Mutex<Option<CompletedLaneReservationStartupReconciliation>>,
     /// Live sponsor-program capacity holds keyed by canonical entrypoint hash.
     fee_admission_reservations: parking_lot::Mutex<FeeAdmissionReservationStore>,
     /// Sticky process-lifetime fault after an ambiguous pending-plan journal boundary.
@@ -8497,6 +8511,41 @@ impl Queue {
             {
                 return Err(LaneQueueReservationError::Conflict { hash });
             }
+            // Phase two durably records PlanTombstoned before removing this
+            // member's payload and FIFO identity. A crash before ForgetCommit
+            // therefore legitimately replays only these two exact terminal
+            // markers. Do not resurrect FIFO ownership, or mistake any partial
+            // remaining owner for the fully consumed member.
+            if retrying_commit_barrier
+                && plan_tombstone_marked
+                && !self.fifo_order_by_hash.contains_key(&hash)
+            {
+                if seen_live {
+                    return Err(LaneQueueReservationError::InvalidIdentity(
+                        "lane reservation group has a Commit barrier after a live suffix"
+                            .to_owned(),
+                    ));
+                }
+                let expected_terminal_markers = (1_u32 << 1) | (1_u32 << 2);
+                if self
+                    .canonical_queue_hash_terminal_owner_mask_locked(store, hash, ownership, false)
+                    != expected_terminal_markers
+                {
+                    return Err(LaneQueueReservationError::Conflict { hash });
+                }
+                seen_commit_barrier = true;
+                journal
+                    .active_phases
+                    .push(LaneQueueReservationRecoveryPhaseV1 {
+                        key: *key,
+                        reservation_phase: LaneQueueReservationOwnerPhaseV1::CommitBarrier,
+                        queue_plan_phase: QueuePlanReservationPhaseV1::Tombstoned,
+                        plan_tombstone_marked: true,
+                    });
+                // The caller still authenticates this exact phase against both
+                // retained journals before the cleanup transition can mutate.
+                continue;
+            }
             let fifo_order = self
                 .fifo_order_by_hash
                 .get(&hash)
@@ -10395,6 +10444,12 @@ impl Queue {
         expected_snapshot: &LaneQueueReservationReconciliationSnapshotV1,
     ) -> Result<Option<LaneReservationStartupReconciliationReceipt>, LaneQueueReservationError>
     {
+        if self.lane_reservation_startup_completion.lock().is_some() {
+            return Err(LaneQueueReservationError::InvalidIdentity(
+                "startup reconciliation was already published; no new mutation receipt is permitted"
+                    .to_owned(),
+            ));
+        }
         let observed = self.lane_reservation_reconciliation_snapshot()?;
         if observed != *expected_snapshot {
             return Ok(None);
@@ -10954,7 +11009,8 @@ impl Queue {
         receipt: &LaneReservationStartupReconciliationReceipt,
         expected_snapshot: &LaneQueueReservationReconciliationSnapshotV1,
     ) -> Result<bool, LaneQueueReservationError> {
-        if receipt.initial_snapshot != *expected_snapshot
+        if self.lane_reservation_startup_completion.lock().is_some()
+            || receipt.initial_snapshot != *expected_snapshot
             || receipt.replay_receipt != self.lane_reservation_snapshot_replay_receipt()?
             || receipt.plan_replay_receipt != self.queue_plan_startup_replay_receipt()?
         {
@@ -10975,7 +11031,8 @@ impl Queue {
         receipt: &LaneReservationStartupReconciliationReceipt,
         expected_snapshot: &LaneQueueReservationReconciliationSnapshotV1,
     ) -> Result<bool, LaneQueueReservationError> {
-        if receipt.initial_snapshot != *expected_snapshot
+        if self.lane_reservation_startup_completion.lock().is_some()
+            || receipt.initial_snapshot != *expected_snapshot
             || self
                 .lane_reservation_snapshot_replay_receipt
                 .lock()
@@ -10988,6 +11045,67 @@ impl Queue {
             return Ok(false);
         }
         Ok(true)
+    }
+    /// Observe an unchanged, empty Queue after actual startup publication.
+    ///
+    /// A fresh empty replay has no completion evidence and must still cross the
+    /// ordinary State/Kura-aware gate. New owners, barriers, faults, or changed
+    /// journal identities cannot be mistaken for the completed startup cut.
+    pub(crate) fn observe_completed_lane_reservation_startup_reconciliation(
+        &self,
+        expected_snapshot: &LaneQueueReservationReconciliationSnapshotV1,
+    ) -> Result<Option<CompletedLaneReservationStartupReconciliation>, LaneQueueReservationError>
+    {
+        let _reservation_transition_guard = self.lane_reservation_transition_lock.lock();
+        let _queue_guard = self.push_remove_lock.lock();
+        if self.emergency_fast_startup.load(Ordering::Acquire) {
+            return Err(LaneQueueReservationError::InvalidIdentity(
+                "emergency Fast queue quarantine requires a Strict restart".to_owned(),
+            ));
+        }
+        if self.transaction_selection_durability_faulted() {
+            return Err(LaneQueueReservationError::DurabilityFault);
+        }
+        let Some(completed) = self.lane_reservation_startup_completion.lock().clone() else {
+            return Ok(None);
+        };
+        if self
+            .lane_reservation_reconciliation_pending
+            .load(Ordering::Acquire)
+            || !completed.final_snapshot.is_empty()
+            || completed.final_snapshot != *expected_snapshot
+            || self
+                .lane_reservation_snapshot_replay_receipt
+                .lock()
+                .as_ref()
+                != Some(&completed.replay_receipt)
+            || self.plan_journal_startup_replay_receipt.lock().as_ref()
+                != Some(&completed.plan_replay_receipt)
+            || self.lane_reservation_reconciliation_snapshot_locked()? != *expected_snapshot
+        {
+            return Err(LaneQueueReservationError::InvalidIdentity(
+                "completed startup reconciliation no longer matches its exact empty publication cut"
+                    .to_owned(),
+            ));
+        }
+        let store = self.lane_reservations.lock();
+        if !store.missing_payload_hashes.is_empty() || !store.plan_tombstoned.is_empty() {
+            return Err(LaneQueueReservationError::InvalidIdentity(
+                "completed startup reconciliation acquired unresolved payload or tombstone state"
+                    .to_owned(),
+            ));
+        }
+        Ok(Some(completed))
+    }
+    /// Revalidate a read-only completion observation without reusing startup authority.
+    pub(crate) fn revalidate_completed_lane_reservation_startup_reconciliation(
+        &self,
+        observation: &CompletedLaneReservationStartupReconciliation,
+    ) -> Result<bool, LaneQueueReservationError> {
+        Ok(self
+            .observe_completed_lane_reservation_startup_reconciliation(&observation.final_snapshot)?
+            .as_ref()
+            == Some(observation))
     }
     /// Return whether replayed reservation ownership is still quarantined
     /// behind the State/Kura-aware startup publication gate.
@@ -11039,7 +11157,9 @@ impl Queue {
         let reconciliation_pending = self
             .lane_reservation_reconciliation_pending
             .load(Ordering::Acquire);
-        if !receipt.initial_snapshot.is_empty() && !reconciliation_pending {
+        if self.lane_reservation_startup_completion.lock().is_some()
+            || (!receipt.initial_snapshot.is_empty() && !reconciliation_pending)
+        {
             return Err(LaneQueueReservationError::InvalidIdentity(
                 "startup reconciliation receipt is stale at the final publication gate".to_owned(),
             ));
@@ -11078,6 +11198,13 @@ impl Queue {
             ));
         }
         drop(store);
+        let final_snapshot = self.lane_reservation_reconciliation_snapshot_locked()?;
+        *self.lane_reservation_startup_completion.lock() =
+            Some(CompletedLaneReservationStartupReconciliation {
+                replay_receipt: receipt.replay_receipt,
+                plan_replay_receipt: receipt.plan_replay_receipt,
+                final_snapshot,
+            });
         self.lane_reservation_reconciliation_pending
             .store(false, Ordering::Release);
         drop(queue_guard);
@@ -13813,6 +13940,7 @@ impl Queue {
                 lane_reservations: parking_lot::Mutex::new(LaneQueueReservationStore::default()),
                 lane_reservation_journal: parking_lot::Mutex::new(None),
                 lane_reservation_snapshot_replay_receipt: parking_lot::Mutex::new(None),
+                lane_reservation_startup_completion: parking_lot::Mutex::new(None),
                 fee_admission_reservations: parking_lot::Mutex::new(
                     FeeAdmissionReservationStore::default(),
                 ),
@@ -21685,9 +21813,12 @@ impl Queue {
         let lane_catalog = Arc::new(nexus.lane_catalog.clone());
         let dataspace_catalog = Arc::new(nexus.dataspace_catalog.clone());
         let router = Self::router_for_nexus(nexus, &lane_catalog, &dataspace_catalog);
+        // State owns the installed consensus policy. A Queue cache may lag
+        // startup replay or committed lifecycle publication and cannot supply
+        // authority for this refresh.
         let registry = Arc::new(
-            self.lane_manifests
-                .read()
+            state_view
+                .lane_manifests
                 .rebind(&lane_catalog, &nexus.governance),
         );
         if let Err(err) = registry.validate_active_coverage_for_catalog(&lane_catalog) {
@@ -21730,8 +21861,11 @@ impl Queue {
         let lane_catalog = Arc::new(nexus.lane_catalog.clone());
         let dataspace_catalog = Arc::new(nexus.dataspace_catalog.clone());
         let router = Self::router_for_nexus(nexus, &lane_catalog, &dataspace_catalog);
+        // State owns the installed consensus policy. Rebinding a stale Queue
+        // cache here could erase or resurrect validator authority after Apply.
         let registry = Arc::new(
-            self.lane_manifests
+            state
+                .lane_manifests
                 .read()
                 .rebind(&lane_catalog, &nexus.governance),
         );
@@ -21741,9 +21875,9 @@ impl Queue {
                 "rebound lane-manifest snapshot is incomplete; affected ingress remains fail-closed"
             );
         }
-        // State and queue receive the same Arc while queue manifest admission is
-        // write-locked; publish routing only after that shared generation lands.
-        self.install_lane_manifests_with_state(&registry, state);
+        // Refresh the Queue projection before routing. Only explicit manifest
+        // installation or an authenticated lifecycle may publish State policy.
+        self.install_lane_manifests(&registry);
         *self.router.write() = Arc::clone(&router);
         *self.nexus_limits.write() = QueueLimits::from_nexus(nexus);
         *self.lane_catalog.write() = Arc::clone(&lane_catalog);

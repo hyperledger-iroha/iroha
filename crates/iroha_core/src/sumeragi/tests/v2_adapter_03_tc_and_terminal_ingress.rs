@@ -29,19 +29,17 @@ fn prelock_current_commit_is_readmitted_with_priority_neutral_service_identity()
         .expect("deliver the current Commit before its Prepare lock is durable");
     assert_eq!(
         premature.disposition(),
-        reducer::StepDisposition::Ignored(reducer::IgnoreReason::IrrelevantView)
+        reducer::StepDisposition::Ignored(reducer::IgnoreReason::Busy)
     );
     let key = IngressSemanticKey::Vote {
         round: wire_round,
         phase: wire::GlobalPhase::Commit,
         signer: 1,
     };
-    let delivered = adapter
-        .ingress_deliveries
-        .get(&key)
-        .expect("the pre-lock reducer delivery is recorded");
-    assert_eq!(delivered.consumer_tag, consumer_tag);
-    assert!(!delivered.locked_commit_progress);
+    assert!(
+        !adapter.ingress_deliveries.contains_key(&key),
+        "a pre-lock Commit has no consumer and cannot allocate duplicate history"
+    );
     assert_eq!(
         adapter.serviced_candidate_count_for_test(),
         serviced_before,
@@ -77,7 +75,7 @@ fn prelock_current_commit_is_readmitted_with_priority_neutral_service_identity()
             ))
             .expect("marker-free policy discard remains reducer-idempotent")
             .disposition(),
-        reducer::StepDisposition::Ignored(reducer::IgnoreReason::IrrelevantView)
+        reducer::StepDisposition::Ignored(reducer::IgnoreReason::Busy)
     );
     assert_eq!(
         adapter.serviced_candidate_count_for_test(),
@@ -482,9 +480,34 @@ fn tc_reset_readmits_exact_locked_commit_once_per_consumer_tag() {
             conflict.clone()
         ))
     );
+    let semantic_records_before = adapter.ingress_equivocations.len();
+    let candidate_records_before = adapter.serviced_candidate_count_for_test();
+    let mut unpaired_conflict = conflict.clone();
+    let wire::ConsensusMessageV2Payload::Vote(vote) = &mut unpaired_conflict.payload else {
+        unreachable!("fixture carries one Commit vote")
+    };
+    vote.signer = 2;
+    let ignored = adapter
+        .receive_authenticated(AuthenticatedConsensusMessage::for_test(unpaired_conflict))
+        .expect("discard an ineligible vote with no retained conflicting counterpart");
+    assert_eq!(
+        ignored.disposition(),
+        reducer::StepDisposition::Ignored(reducer::IgnoreReason::IrrelevantView)
+    );
+    assert!(ignored.effects().is_empty());
+    assert_eq!(adapter.ingress_equivocations.len(), semantic_records_before);
+    assert_eq!(
+        adapter.serviced_candidate_count_for_test(),
+        candidate_records_before
+    );
     let evidence = adapter
         .receive_authenticated(AuthenticatedConsensusMessage::for_test(conflict.clone()))
         .expect("report the conflicting locked-round vote");
+    assert_eq!(adapter.ingress_equivocations.len(), semantic_records_before);
+    assert_eq!(
+        adapter.serviced_candidate_count_for_test(),
+        candidate_records_before
+    );
     let [AdapterEffect::ReportEquivocation { evidence }] = evidence.effects() else {
         panic!("conflicting locked-round vote must emit exact evidence")
     };
@@ -558,37 +581,42 @@ fn tc_reset_readmits_exact_locked_commit_once_per_consumer_tag() {
         .iter()
         .filter(|input| input.protected_progress)
         .count();
+    let terminal_counts = (
+        adapter.ingress_deliveries.len(),
+        adapter.ingress_equivocations.len(),
+        adapter.serviced_candidate_count_for_test(),
+    );
     assert_eq!(
         adapter
             .receive_authenticated(authenticated)
-            .expect("terminally ignore a new vote after Decision")
+            .expect("reject the old-round vote after Decision")
             .disposition(),
-        reducer::StepDisposition::Ignored(reducer::IgnoreReason::AlreadyDecided)
+        reducer::StepDisposition::Ignored(reducer::IgnoreReason::IrrelevantView),
     );
-    for generation in 1..=3 {
-        // Model successive pool generations retaining the same semantic
-        // delivery. Once Decision is durable, the old locked vote must be
-        // height-long duplicate history rather than a per-generation retry.
-        let delivery = adapter
-            .ingress_deliveries
-            .get_mut(&decided_key)
-            .expect("terminal AlreadyDecided delivery remains recorded");
-        delivery.consumer_tag = reducer::EventTag::new(
-            delivery.consumer_tag.height(),
-            delivery.consumer_tag.view(),
-            reducer::Generation::new(generation),
+    for _ in 0..3 {
+        assert!(
+            !adapter.ingress_deliveries.contains_key(&decided_key),
+            "an ineligible post-Decision vote cannot mint a generation-scoped delivery owner"
         );
         assert_eq!(
             adapter
                 .receive_authenticated(AuthenticatedConsensusMessage::for_test(
-                    decided_vote.clone(),
+                    decided_vote.clone()
                 ))
-                .expect("suppress the decided vote through the full ingress path")
+                .expect("repeated old-round votes remain allocation-free")
                 .disposition(),
-            reducer::StepDisposition::Ignored(reducer::IgnoreReason::Duplicate),
-            "a durable Decision closes generation-scoped locked-vote retries"
+            reducer::StepDisposition::Ignored(reducer::IgnoreReason::IrrelevantView),
+        );
+        assert_eq!(
+            (
+                adapter.ingress_deliveries.len(),
+                adapter.ingress_equivocations.len(),
+                adapter.serviced_candidate_count_for_test()
+            ),
+            terminal_counts
         );
     }
+
     let conflicting_decided_vote =
         wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Vote(wire::Vote {
             round: wire_round,
@@ -606,7 +634,16 @@ fn tc_reset_readmits_exact_locked_commit_once_per_consumer_tag() {
         .expect("terminally absorb a newly discovered semantic conflict after Decision");
     assert_eq!(
         conflict.disposition(),
-        reducer::StepDisposition::Ignored(reducer::IgnoreReason::AlreadyDecided)
+        reducer::StepDisposition::Ignored(reducer::IgnoreReason::IrrelevantView)
+    );
+    assert_eq!(
+        (
+            adapter.ingress_deliveries.len(),
+            adapter.ingress_equivocations.len(),
+            adapter.serviced_candidate_count_for_test()
+        ),
+        terminal_counts,
+        "unpaired post-Decision conflicts cannot allocate retained ingress ownership"
     );
     assert!(
         conflict.effects().is_empty(),

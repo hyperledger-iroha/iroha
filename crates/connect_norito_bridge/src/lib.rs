@@ -91,7 +91,7 @@ use iroha_version::codec::{DecodeVersioned as _, EncodeVersioned as _};
 use ivm::{AccelerationConfig, BackendRuntimeStatus};
 use libc::{c_char, c_int, c_uchar, c_ulong, free, malloc};
 use norito::json::{Map as JsonMap, Value as JsonValue};
-use norito::{NoritoDeserialize, NoritoSerialize, decode_from_bytes};
+use norito::{NoritoDeserialize, NoritoSerialize, SerializePayload, decode_from_bytes};
 use sha2::{Digest as _, Sha256};
 use sorafs_car::{
     ChunkStore, ChunkStoreError, InMemoryPayload, PorProof, build_plan_from_da_manifest,
@@ -160,6 +160,12 @@ pub use kagemusha_core_coordinator_v1::{
     kagemusha_core_coordinator_validate_storage_path_v1,
 };
 mod kagemusha_device_bridge_v1;
+#[cfg(any(test, feature = "dev-tools"))]
+mod kagemusha_sender_release_evidence;
+#[cfg(feature = "dev-tools")]
+pub use kagemusha_sender_release_evidence::{
+    KAGEMUSHA_SENDER_RELEASE_COMMAND_MAX_BYTES_V1, kagemusha_sender_release_command_projection_v1,
+};
 #[cfg(test)]
 mod kagemusha_fixture_tests;
 mod parliament_timed_ovn_ffi;
@@ -1451,7 +1457,9 @@ pub unsafe extern "C" fn connect_norito_kagemusha_core_coordinator_invoke_v1(
         return ERR_KAGEMUSHA_V1;
     }
     let request_frame = unsafe { slice::from_raw_parts(request_frame_ptr, request_frame_len) };
-    if kagemusha_core_coordinator_validate_method_request_v1(method, request_frame).is_err() {
+    if kagemusha_core_coordinator_v1::archive_boundary::validate_request(method, request_frame)
+        .is_err()
+    {
         return ERR_KAGEMUSHA_V1;
     }
     let Some(backend) =
@@ -1471,7 +1479,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_core_coordinator_invoke_v1(
         }
     };
     if response_frame.len() > KAGEMUSHA_CORE_COORDINATOR_MAX_RESPONSE_BYTES_V1
-        || kagemusha_core_coordinator_validate_method_response_v1(
+        || kagemusha_core_coordinator_v1::archive_boundary::validate_response(
             method,
             request_frame,
             &response_frame,
@@ -1539,7 +1547,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_device_execute_v1(
     }
 }
 
-/// Verify the fixed low-S P-256 authenticator on one successful device response.
+/// Verify the fixed low-S P-256 authenticator binding one exact command and device response.
 ///
 /// `hardware_policy_id` and `qualification_report_digest` are the exact
 /// 32-byte bindings accepted from the capability frame. For operation 1,
@@ -1549,9 +1557,11 @@ pub unsafe extern "C" fn connect_norito_kagemusha_device_execute_v1(
 /// accepted from that operation-1 exchange. Authenticated release membership
 /// remains a Core wallet-session check outside this codec boundary.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_kagemusha_device_response_authenticator_v1_verify(
+pub unsafe extern "C" fn connect_norito_kagemusha_device_command_response_v1_verify(
     response_ptr: *const c_uchar,
     response_len: usize,
+    canonical_command_ptr: *const c_uchar,
+    canonical_command_len: usize,
     expected_operation: c_uchar,
     expected_request_id_ptr: *const c_uchar,
     expected_request_id_len: usize,
@@ -1563,6 +1573,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_device_response_authenticator_
     device_public_key_len: usize,
 ) -> c_int {
     if response_ptr.is_null()
+        || canonical_command_ptr.is_null()
         || expected_request_id_ptr.is_null()
         || hardware_policy_id_ptr.is_null()
         || qualification_report_digest_ptr.is_null()
@@ -1570,6 +1581,8 @@ pub unsafe extern "C" fn connect_norito_kagemusha_device_response_authenticator_
         return ERR_NULL_PTR;
     }
     if expected_request_id_len != 32
+        || canonical_command_len == 0
+        || canonical_command_len > kagemusha_device_bridge_v1::MAX_COMMAND_PAYLOAD_BYTES_V1
         || hardware_policy_id_len != 32
         || qualification_report_digest_len != 32
         || !(kagemusha_device_bridge_v1::RESPONSE_HEADER_BYTES_V1
@@ -1582,6 +1595,8 @@ pub unsafe extern "C" fn connect_norito_kagemusha_device_response_authenticator_
         return ERR_KAGEMUSHA_V1;
     };
     let response = unsafe { slice::from_raw_parts(response_ptr, response_len) };
+    let canonical_command =
+        unsafe { slice::from_raw_parts(canonical_command_ptr, canonical_command_len) };
     let request_id = unsafe { slice::from_raw_parts(expected_request_id_ptr, 32) }
         .try_into()
         .expect("fixed request ID slice");
@@ -1600,6 +1615,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_device_response_authenticator_
         }
         kagemusha_device_bridge_v1::verify_qualification_response_authenticator_v1(
             response,
+            canonical_command,
             request_id,
             hardware_policy_id,
             qualification_report_digest,
@@ -1620,6 +1636,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_device_response_authenticator_
         };
         kagemusha_device_bridge_v1::verify_success_response_authenticator_v1(
             response,
+            canonical_command,
             operation,
             request_id,
             hardware_policy_id,
@@ -1629,6 +1646,43 @@ pub unsafe extern "C" fn connect_norito_kagemusha_device_response_authenticator_
     };
     if verified { 0 } else { ERR_KAGEMUSHA_V1 }
 }
+
+#[cfg(test)]
+mod kagemusha_command_response_ffi_tests {
+    use super::*;
+
+    #[test]
+    fn command_response_verifier_requires_bounded_nonempty_command_memory() {
+        let response = vec![0; kagemusha_device_bridge_v1::RESPONSE_HEADER_BYTES_V1];
+        let identity = [1; 32];
+        let verify = |command: *const u8, length: usize| unsafe {
+            connect_norito_kagemusha_device_command_response_v1_verify(
+                response.as_ptr(),
+                response.len(),
+                command,
+                length,
+                1,
+                identity.as_ptr(),
+                identity.len(),
+                identity.as_ptr(),
+                identity.len(),
+                identity.as_ptr(),
+                identity.len(),
+                ptr::null(),
+                0,
+            )
+        };
+        assert_eq!(verify(ptr::null(), 1), ERR_NULL_PTR);
+        let empty = Vec::<u8>::new();
+        assert_eq!(verify(empty.as_ptr(), 0), ERR_KAGEMUSHA_V1);
+        let oversized = vec![0; kagemusha_device_bridge_v1::MAX_COMMAND_PAYLOAD_BYTES_V1 + 1];
+        assert_eq!(
+            verify(oversized.as_ptr(), oversized.len()),
+            ERR_KAGEMUSHA_V1
+        );
+    }
+}
+
 #[cfg(any(
     test,
     target_os = "android",
@@ -10297,10 +10351,11 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaDeviceLif
     target_os = "windows"
 ))]
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaDeviceLifecycleBridgeV1_00024NativeEndpoint_nativeVerifyResponseAuthenticatorV1(
+pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaDeviceLifecycleBridgeV1_00024NativeEndpoint_nativeVerifyCommandResponseV1(
     env: jni::JNIEnv<'_>,
     _class: jni::objects::JClass<'_>,
     response: jni::objects::JByteArray<'_>,
+    canonical_command: jni::objects::JByteArray<'_>,
     operation: jni::sys::jint,
     request_id: jni::objects::JByteArray<'_>,
     hardware_policy_id: jni::objects::JByteArray<'_>,
@@ -10309,7 +10364,35 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaDeviceLif
 ) -> jni::sys::jboolean {
     use jni::sys::{JNI_FALSE, JNI_TRUE};
 
+    let Ok(operation) = u8::try_from(operation) else {
+        return JNI_FALSE;
+    };
+    if KagemushaDeviceLifecycleOperationV1::from_code(operation).is_none() {
+        return JNI_FALSE;
+    }
+    let bounded = |array: &jni::objects::JByteArray<'_>, minimum: usize, maximum: usize| {
+        env.get_array_length(array).is_ok_and(|length| {
+            usize::try_from(length).is_ok_and(|length| (minimum..=maximum).contains(&length))
+        })
+    };
+    if !bounded(
+        &response,
+        kagemusha_device_bridge_v1::RESPONSE_HEADER_BYTES_V1,
+        kagemusha_device_bridge_v1::MAX_RESPONSE_BYTES_V1,
+    ) || !bounded(
+        &canonical_command,
+        1,
+        kagemusha_device_bridge_v1::MAX_COMMAND_PAYLOAD_BYTES_V1,
+    ) || !bounded(&request_id, 32, 32)
+        || !bounded(&hardware_policy_id, 32, 32)
+        || !bounded(&qualification_report_digest, 32, 32)
+    {
+        return JNI_FALSE;
+    }
     let Ok(response) = env.convert_byte_array(&response) else {
+        return JNI_FALSE;
+    };
+    let Ok(canonical_command) = env.convert_byte_array(&canonical_command) else {
         return JNI_FALSE;
     };
     let Ok(request_id) = env.convert_byte_array(&request_id) else {
@@ -10326,6 +10409,9 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaDeviceLif
         None
     } else {
         let key = jni::objects::JByteArray::from(accepted_device_public_key);
+        if !bounded(&key, 65, 65) {
+            return JNI_FALSE;
+        }
         let Ok(bytes) = env.convert_byte_array(&key) else {
             return JNI_FALSE;
         };
@@ -10335,10 +10421,12 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaDeviceLif
         .as_ref()
         .map_or((ptr::null(), 0), |key| (key.as_ptr(), key.len()));
     let status = unsafe {
-        connect_norito_kagemusha_device_response_authenticator_v1_verify(
+        connect_norito_kagemusha_device_command_response_v1_verify(
             response.as_ptr(),
             response.len(),
-            operation as u8,
+            canonical_command.as_ptr(),
+            canonical_command.len(),
+            operation,
             request_id.as_ptr(),
             request_id.len(),
             hardware_policy_id.as_ptr(),
@@ -10351,6 +10439,7 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaDeviceLif
     };
     if status == 0 { JNI_TRUE } else { JNI_FALSE }
 }
+
 fn providers_from_json(value: &JsonValue) -> Result<Vec<LocalProviderInput>, c_int> {
     let arr = value.as_array().ok_or(ERR_FETCH_PROVIDERS_JSON)?;
     let mut providers = Vec::with_capacity(arr.len());

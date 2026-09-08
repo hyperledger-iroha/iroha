@@ -60,18 +60,12 @@ pub type ConfidentialTreeFrontierV2 = [Option<[u8; 32]>; CONFIDENTIAL_TREE_DEPTH
 pub(crate) enum ConfidentialUnsignedRangeV1 {
     /// Atomic confidential amounts and public redemption amounts.
     Amount,
-    /// Fixed-point asset scale.
-    AssetScale,
-    /// Commitment-tree leaf position.
-    LeafIndex,
 }
 impl ConfidentialUnsignedRangeV1 {
     /// Exact bit width enforced by every circuit projection.
     pub(crate) const fn bits(self) -> usize {
         match self {
             Self::Amount => 128,
-            Self::AssetScale => 32,
-            Self::LeafIndex => CONFIDENTIAL_TREE_DEPTH_V2,
         }
     }
 }
@@ -1366,14 +1360,34 @@ pub(in crate::zk) mod secure_relation_v3 {
         /// Existing standalone public schema in its exact order.
         pub(crate) public: [AssignedValue<Scalar>; 9],
         /// Sum of the one or two constrained input openings.
+        #[expect(
+            dead_code,
+            reason = "Retain the exact constrained cell for recursive transfer composition"
+        )]
         pub(crate) input_amount: AssignedValue<Scalar>,
         /// Constrained recipient opening amount.
+        #[expect(
+            dead_code,
+            reason = "Retain the exact constrained cell for recursive transfer composition"
+        )]
         pub(crate) recipient_amount: AssignedValue<Scalar>,
         /// Constrained optional change opening amount, exactly zero when absent.
+        #[expect(
+            dead_code,
+            reason = "Retain the exact constrained cell for recursive transfer composition"
+        )]
         pub(crate) change_amount: AssignedValue<Scalar>,
         /// Constrained optional-input presence bit.
+        #[expect(
+            dead_code,
+            reason = "Retain the exact constrained cell for recursive transfer composition"
+        )]
         pub(crate) has_second_input: AssignedValue<Scalar>,
         /// Constrained change-output presence bit.
+        #[expect(
+            dead_code,
+            reason = "Retain the exact constrained cell for recursive transfer composition"
+        )]
         pub(crate) has_change: AssignedValue<Scalar>,
     }
     /// Assign the complete secure transfer relation into an existing Eq/Fp
@@ -1905,6 +1919,10 @@ pub(in crate::zk) mod secure_relation_v3 {
     }
     /// Already-constrained change-unshield cells needed by recursive StepEq.
     #[derive(Clone, Debug)]
+    #[expect(
+        dead_code,
+        reason = "Retain the exact constrained amount and presence cells for recursive unshield composition"
+    )]
     pub(crate) struct AssignedConfidentialUnshieldChangeStepV4 {
         /// Existing standalone public schema in its exact order.
         pub(crate) public: [AssignedValue<Scalar>; 9],
@@ -1917,6 +1935,10 @@ pub(in crate::zk) mod secure_relation_v3 {
     }
     /// Assign the secure change-unshield relation into an existing Eq/Fp
     /// builder and retain its constrained amount cells for StepEq copy-binding.
+    #[expect(
+        dead_code,
+        reason = "Retain the shared relation adapter for recursive unshield composition"
+    )]
     pub(crate) fn assign_confidential_unshield_change_step_v4<const DEPTH: usize>(
         ctx: &mut Context<Scalar>,
         range: &halo2_base::gates::RangeChip<Scalar>,

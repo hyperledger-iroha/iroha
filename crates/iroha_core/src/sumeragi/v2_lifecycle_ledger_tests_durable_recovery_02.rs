@@ -564,6 +564,13 @@ fn consuming_storage_cut_censes_every_live_fetch_and_binds_exact_ledger_frame() 
 }
 #[test]
 fn production_owner_opens_empty_and_two_fetch_storage_atomically() {
+    crate::sumeragi::v2_lifecycle_coordinator::coordinator_support::run_bounded_coordinator_fixture(
+        "production_owner_opens_empty_and_two_fetch_storage_atomically",
+        production_owner_opens_empty_and_two_fetch_storage_atomically_fixture_body,
+    );
+}
+
+fn production_owner_opens_empty_and_two_fetch_storage_atomically_fixture_body() {
     let empty_fixture = RecoveryFixture::new("empty-production-lifecycle-owner", 0x11);
     let empty_body_directory = TempDir::new().expect("temporary empty production body store");
     let empty_body_store = empty_fixture.open_store(&empty_body_directory);
@@ -614,10 +621,7 @@ fn production_owner_opens_empty_and_two_fetch_storage_atomically() {
 fn cold_broadcast_output_fixture(
     fixture: &RecoveryFixture,
     ordinal: u128,
-) -> (
-    crate::sumeragi::v2::AdapterEffect,
-    LifecycleLedgerRecordV1,
-) {
+) -> (crate::sumeragi::v2::AdapterEffect, LifecycleLedgerRecordV1) {
     use crate::sumeragi::{
         v2::AdapterEffect,
         v2_lifecycle_coordinator::work_registry::PreparedLifecycleAdmissionV1,
@@ -637,13 +641,14 @@ fn cold_broadcast_output_fixture(
         )),
         payload_hash: Hash::new(b"source-retained cold Broadcast payload"),
     };
-    let execution_commitment = wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
-        Hash::new(b"source-retained cold Broadcast parent state"),
-        Hash::new(b"source-retained cold Broadcast post state"),
-        Hash::new(b"source-retained cold Broadcast writes"),
-        1,
-        Hash::new(b"source-retained cold Broadcast fee summary"),
-    );
+    let execution_commitment =
+        wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+            Hash::new(b"source-retained cold Broadcast parent state"),
+            Hash::new(b"source-retained cold Broadcast post state"),
+            Hash::new(b"source-retained cold Broadcast writes"),
+            1,
+            Hash::new(b"source-retained cold Broadcast fee summary"),
+        );
     let mut vote = wire::Vote {
         round,
         proposal_round: round,
@@ -836,8 +841,7 @@ fn later_cold_broadcast_stays_passive_until_an_older_fetch_retires() {
     let fetch_ordinal = 1;
     let broadcast_ordinal = 2;
     let fetch = fixture.fetch_record(&mut body_store, 0, 0x34, fetch_ordinal, None, false);
-    let (broadcast_effect, broadcast) =
-        cold_broadcast_output_fixture(&fixture, broadcast_ordinal);
+    let (broadcast_effect, broadcast) = cold_broadcast_output_fixture(&fixture, broadcast_ordinal);
     let payload_directory = TempDir::new().expect("temporary ordered cold-output payload store");
     let (payload_store, payloads) =
         fixture.open_empty_serve_payloads(&payload_directory, &body_store);
@@ -879,9 +883,8 @@ fn later_cold_broadcast_stays_passive_until_an_older_fetch_retires() {
         .physical_slots
         .first_key_value()
         .expect("recovered Fetch retains one exact physical slot");
-    let fetch_address =
-        ConcreteWorkAddress::new(fetch_record.owner, fetch_ordinal, fetch_slot)
-            .expect("recovered Fetch retains an exact registry address");
+    let fetch_address = ConcreteWorkAddress::new(fetch_record.owner, fetch_ordinal, fetch_slot)
+        .expect("recovered Fetch retains an exact registry address");
     let mut staged = owner.coordinator.stage_durable_transaction();
     staged
         .finish_terminal(fetch_ordinal, TerminalOutcome::Cancelled)
@@ -1350,159 +1353,161 @@ fn production_owner_keeps_terminal_validate_and_live_serve_together() {
 fn fresh_certified_serve_publishes_exact_ledger_beside_fetch_and_broadcast() {
     run_durable_recovery_test_on_stack(|| {
         let fixture = RecoveryFixture::new("fresh-serve-owner", 0x81);
-    let body_directory = TempDir::new().expect("temporary fresh Serve body store");
-    let mut body_store = fixture.open_store(&body_directory);
-    let fetch = fixture.fetch_record(&mut body_store, 0, 0x82, 1, None, false);
-    let payload_directory = TempDir::new().expect("temporary fresh Serve payload store");
-    let (payload_store, payloads) =
-        fixture.open_empty_serve_payloads(&payload_directory, &body_store);
-    let ledger = fixture.ledger(vec![fetch]);
-    let ledger_directory = TempDir::new().expect("temporary fresh Serve ledger store");
-    let ledger_store = fixture.persist_ledger(&ledger_directory, &ledger);
-    let cut = ledger
-        .into_durable_certified_body_pipeline_storage_recovery_cut(
-            fixture.verified.clone(),
-            ledger_store,
-            body_store,
+        let body_directory = TempDir::new().expect("temporary fresh Serve body store");
+        let mut body_store = fixture.open_store(&body_directory);
+        let fetch = fixture.fetch_record(&mut body_store, 0, 0x82, 1, None, false);
+        let payload_directory = TempDir::new().expect("temporary fresh Serve payload store");
+        let (payload_store, payloads) =
+            fixture.open_empty_serve_payloads(&payload_directory, &body_store);
+        let ledger = fixture.ledger(vec![fetch]);
+        let ledger_directory = TempDir::new().expect("temporary fresh Serve ledger store");
+        let ledger_store = fixture.persist_ledger(&ledger_directory, &ledger);
+        let cut = ledger
+            .into_durable_certified_body_pipeline_storage_recovery_cut(
+                fixture.verified.clone(),
+                ledger_store,
+                body_store,
+            )
+            .expect("seal fresh Serve storage cut");
+        let mut owner = cut
+            .open_owner_for_test(payload_store, payloads)
+            .expect("open fresh Serve production owner");
+        let context = fixture.verified.context();
+        let round = wire::ConsensusRound {
+            context_id: context.id(),
+            height: context.height,
+            view: 4,
+        };
+        let subject = wire::BlockSubject {
+            parent_block_hash: None,
+            block_hash: iroha_crypto::HashOf::from_untyped_unchecked(Hash::new([0x82, 0xA1])),
+            payload_hash: Hash::new([0x82, 0xA2]),
+        };
+        let execution_commitment =
+            wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+                Hash::new([0x82, 0xB1]),
+                Hash::new([0x82, 0xB2]),
+                Hash::new([0x82, 0xB3]),
+                1,
+                Hash::new([0x82, 0xB4]),
+            );
+        let mut vote = wire::Vote {
+            round,
+            proposal_round: round,
+            phase: wire::GlobalPhase::Prepare,
+            subject,
+            execution_commitment,
+            signer: 0,
+            signature: Vec::new(),
+        };
+        vote.signature = Signature::new(
+            fixture.keys[0].private_key(),
+            &crate::sumeragi::v2::SignRequest::Vote(vote.clone()).signature_preimage(),
         )
-        .expect("seal fresh Serve storage cut");
-    let mut owner = cut
-        .open_owner_for_test(payload_store, payloads)
-        .expect("open fresh Serve production owner");
-    let context = fixture.verified.context();
-    let round = wire::ConsensusRound {
-        context_id: context.id(),
-        height: context.height,
-        view: 4,
-    };
-    let subject = wire::BlockSubject {
-        parent_block_hash: None,
-        block_hash: iroha_crypto::HashOf::from_untyped_unchecked(Hash::new([0x82, 0xA1])),
-        payload_hash: Hash::new([0x82, 0xA2]),
-    };
-    let execution_commitment = wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
-        Hash::new([0x82, 0xB1]),
-        Hash::new([0x82, 0xB2]),
-        Hash::new([0x82, 0xB3]),
-        1,
-        Hash::new([0x82, 0xB4]),
-    );
-    let mut vote = wire::Vote {
-        round,
-        proposal_round: round,
-        phase: wire::GlobalPhase::Prepare,
-        subject,
-        execution_commitment,
-        signer: 0,
-        signature: Vec::new(),
-    };
-    vote.signature = Signature::new(
-        fixture.keys[0].private_key(),
-        &crate::sumeragi::v2::SignRequest::Vote(vote.clone()).signature_preimage(),
-    )
-    .payload()
-    .to_vec();
-    let broadcast = crate::sumeragi::v2::AdapterEffect::Broadcast(wire::ConsensusMessageV2::new(
-        wire::ConsensusMessageV2Payload::Vote(vote),
-    ));
-    let ownership = crate::sumeragi::v2_runtime::bind_adapter_effect_batch_ownership(
-        core::slice::from_ref(&broadcast),
-        vec![
-            crate::sumeragi::v2_runtime::RuntimeEffectOwnership::fresh_for_test(
-                EventTag::new(context.height, round.view, Generation::new(1)),
-                0x82,
-            ),
-        ],
-    )
-    .expect("bind unrelated live Broadcast")
-    .pop()
-    .expect("one unrelated live Broadcast owner");
-    let pending = ownership
-        .exact_pending_adapter_effect_binding(&broadcast)
-        .expect("mint unrelated live Broadcast binding");
-    let prepared = owner
-        .coordinator
-        .prepare_direct_signed_lifecycle_admission(&fixture.verified, broadcast, pending)
-        .expect("unrelated live Broadcast has mandatory replay authority");
-    assert!(matches!(
-        owner
+        .payload()
+        .to_vec();
+        let broadcast = crate::sumeragi::v2::AdapterEffect::Broadcast(
+            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Vote(vote)),
+        );
+        let ownership = crate::sumeragi::v2_runtime::bind_adapter_effect_batch_ownership(
+            core::slice::from_ref(&broadcast),
+            vec![
+                crate::sumeragi::v2_runtime::RuntimeEffectOwnership::fresh_for_test(
+                    EventTag::new(context.height, round.view, Generation::new(1)),
+                    0x82,
+                ),
+            ],
+        )
+        .expect("bind unrelated live Broadcast")
+        .pop()
+        .expect("one unrelated live Broadcast owner");
+        let pending = ownership
+            .exact_pending_adapter_effect_binding(&broadcast)
+            .expect("mint unrelated live Broadcast binding");
+        let prepared = owner
             .coordinator
-            .admit_prepared_lifecycle(&mut owner.registry, prepared),
-        super::super::super::concrete_admission::AdapterEffectAdmissionTransaction::Admitted(
-            super::super::super::AdmissionDecision::Admitted { ordinal: 2, .. }
-        )
-    ));
-    assert!(
-        owner
-            .registry
-            .registry_mut()
-            .exactly_covers_all_live_work(&fixture.verified, &owner.coordinator)
-    );
-    let request = fixture.authenticated_serve_request(1, 0x83, 3);
-    let target = super::super::super::LifecycleIngressIoTargetSeal::for_certified_serve_test(
-        fixture.verified.context(),
-        request.request_hash(),
-        1,
-    );
+            .prepare_direct_signed_lifecycle_admission(&fixture.verified, broadcast, pending)
+            .expect("unrelated live Broadcast has mandatory replay authority");
+        assert!(matches!(
+            owner
+                .coordinator
+                .admit_prepared_lifecycle(&mut owner.registry, prepared),
+            super::super::super::concrete_admission::AdapterEffectAdmissionTransaction::Admitted(
+                super::super::super::AdmissionDecision::Admitted { ordinal: 2, .. }
+            )
+        ));
+        assert!(
+            owner
+                .registry
+                .registry_mut()
+                .exactly_covers_all_live_work(&fixture.verified, &owner.coordinator)
+        );
+        let request = fixture.authenticated_serve_request(1, 0x83, 3);
+        let target = super::super::super::LifecycleIngressIoTargetSeal::for_certified_serve_test(
+            fixture.verified.context(),
+            request.request_hash(),
+            1,
+        );
 
-    let outcome = owner.admit_selected_certified_serve(target, &fixture.keys[0], &request);
-    assert!(matches!(
-        outcome.decision(),
-        Some(super::super::super::AdmissionDecision::Admitted {
-            ordinal: 3,
-            producer_turn_ordinal: Some(4),
-            ..
-        })
-    ));
-    assert!(!outcome.restart_required());
-    let Ok(continuation) = outcome.into_safe_continuation() else {
-        panic!("published fresh Serve must return its safe selector continuation")
-    };
-    assert!(continuation.failure().is_none());
-    assert!(
-        continuation
-            .into_target()
-            .matches_certified_serve_request(request.request_hash())
-    );
-    assert_eq!(owner.live_fetch_count_for_test(), 1);
-    assert_eq!(
-        owner.certified_serve_and_producer_carrier_counts_for_test(),
-        (1, 1)
-    );
-    assert!(
-        owner
-            .registry
-            .registry_mut()
-            .one_certified_serve_pair_shares_replay_family()
-    );
-    assert!(
-        owner
-            .registry
-            .registry_mut()
-            .exactly_covers_all_live_work(&fixture.verified, &owner.coordinator)
-    );
-    let store = owner
-        .coordinator
-        .ledger_store
-        .as_ref()
-        .expect("fresh owner retains LedgerV1 store");
-    assert_eq!(
-        store.load().expect("reload fresh Serve LedgerV1"),
-        LifecycleLedgerV1::from_coordinator(&owner.coordinator)
-            .expect("project fresh Serve coordinator")
-    );
+        let outcome = owner.admit_selected_certified_serve(target, &fixture.keys[0], &request);
+        assert!(matches!(
+            outcome.decision(),
+            Some(super::super::super::AdmissionDecision::Admitted {
+                ordinal: 3,
+                producer_turn_ordinal: Some(4),
+                ..
+            })
+        ));
+        assert!(!outcome.restart_required());
+        let Ok(continuation) = outcome.into_safe_continuation() else {
+            panic!("published fresh Serve must return its safe selector continuation")
+        };
+        assert!(continuation.failure().is_none());
+        assert!(
+            continuation
+                .into_target()
+                .matches_certified_serve_request(request.request_hash())
+        );
+        assert_eq!(owner.live_fetch_count_for_test(), 1);
+        assert_eq!(
+            owner.certified_serve_and_producer_carrier_counts_for_test(),
+            (1, 1)
+        );
+        assert!(
+            owner
+                .registry
+                .registry_mut()
+                .one_certified_serve_pair_shares_replay_family()
+        );
+        assert!(
+            owner
+                .registry
+                .registry_mut()
+                .exactly_covers_all_live_work(&fixture.verified, &owner.coordinator)
+        );
+        let store = owner
+            .coordinator
+            .ledger_store
+            .as_ref()
+            .expect("fresh owner retains LedgerV1 store");
+        assert_eq!(
+            store.load().expect("reload fresh Serve LedgerV1"),
+            LifecycleLedgerV1::from_coordinator(&owner.coordinator)
+                .expect("project fresh Serve coordinator")
+        );
 
-    let retry_target = super::super::super::LifecycleIngressIoTargetSeal::for_certified_serve_test(
-        fixture.verified.context(),
-        request.request_hash(),
-        2,
-    );
-    let retry = owner.admit_selected_certified_serve(retry_target, &fixture.keys[0], &request);
-    assert!(matches!(
-        retry.decision(),
-        Some(super::super::super::AdmissionDecision::Retry { ordinal: 3, .. })
-    ));
-    assert!(retry.into_safe_continuation().is_ok());
+        let retry_target =
+            super::super::super::LifecycleIngressIoTargetSeal::for_certified_serve_test(
+                fixture.verified.context(),
+                request.request_hash(),
+                2,
+            );
+        let retry = owner.admit_selected_certified_serve(retry_target, &fixture.keys[0], &request);
+        assert!(matches!(
+            retry.decision(),
+            Some(super::super::super::AdmissionDecision::Retry { ordinal: 3, .. })
+        ));
+        assert!(retry.into_safe_continuation().is_ok());
         assert_eq!(owner.live_fetch_count_for_test(), 1);
         assert_eq!(
             owner.certified_serve_and_producer_carrier_counts_for_test(),
@@ -2536,15 +2541,37 @@ fn fresh_certified_serve_rejects_foreign_target_and_rolls_back_capacity_wait() {
             .into_target()
             .matches_certified_serve_request(waiting.request_hash())
     );
+    let removed_leaf = std::path::PathBuf::from(format!(
+        "certified-serve-payload-v1/{}.norito.removed",
+        hex::encode(waiting.request_hash().as_ref())
+    ));
+    let mut payload_after_wait = snapshot_files(payload_directory.path());
+    let removed_frame = payload_after_wait
+        .remove(&removed_leaf)
+        .expect("capacity decline durably journals the exact waiting Pending frame");
+    assert!(!removed_frame.is_empty());
     assert_eq!(
-        snapshot_files(payload_directory.path()),
-        payload_after_first,
-        "a proven pre-ledger capacity decline must synchronously remove only its fresh Pending frame"
+        payload_after_wait, payload_after_first,
+        "capacity decline preserves every incumbent byte and leaves no active waiting frame"
     );
     assert_eq!(owner.coordinator.records.len(), 2);
     assert_eq!(
         owner.certified_serve_and_producer_carrier_counts_for_test(),
         (1, 1)
+    );
+    drop(owner);
+    let (_reopened, recovered) =
+        CertifiedServePayloadStoreV1::open(payload_directory.path(), fixture.verified.context())
+            .expect("restart validates the removal journal and the retained Pending frame");
+    assert_eq!(
+        recovered.len(),
+        1,
+        "removed request cannot regain live ownership"
+    );
+    assert_eq!(
+        snapshot_files(payload_directory.path()).get(&removed_leaf),
+        Some(&removed_frame),
+        "read-only recovery preserves the exact removal evidence"
     );
 }
 #[test]

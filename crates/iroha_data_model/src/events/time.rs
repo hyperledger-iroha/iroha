@@ -112,9 +112,10 @@ mod wire {
             }
         }
     }
-    impl ncore::NoritoSerialize for TimeIntervalWire {
+    impl ncore::NoritoSerialize for TimeIntervalWire {}
+    impl ncore::SerializePayload for TimeIntervalWire {
         fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
-            <(u64, u64) as ncore::NoritoSerialize>::serialize(&(self.0, self.1), writer)
+            <(u64, u64) as ncore::SerializePayload>::serialize(&(self.0, self.1), writer)
         }
     }
     impl<'de> ncore::NoritoDeserialize<'de> for TimeIntervalWire {

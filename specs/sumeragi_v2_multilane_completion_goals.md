@@ -560,3 +560,29 @@ old logs, skipped tests and mutable-tree inventories cannot close a release gate
   current archive recovery and finalization/error ordering are retained. Ingress
   effects separately pass 81 copied positives and 81 rehashed negatives. The
   full source diagnostic and release gates remain open.
+
+### 2026-09-08 resumed validation and merge reconciliation
+
+- The third-build copied Core binary completed all 91 exact regressions at
+  `2026-09-07T06:03:36Z`: **74 passed, 17 failed**, with every captured source
+  and the copied binary unchanged. The 24 SDK status tests passed separately.
+  Retained raw results are under `core-direct-91-retry3-matched/` and
+  `sdk-status-direct-24-retry3/`; these are pre-merge results, not current-source
+  or full-build qualification.
+- Three failures expose invalid fixture setup: two voting journals were opened
+  before final lane context installation, and historical READY recovery lacked
+  the carrier's signed finality proof. Fourteen application failures split into
+  missing executed results, invalid reservation authority, an undersized startup
+  route budget and a fabricated zero-length hash-only block record. Incoming
+  source already corrects several of these boundaries; reconcile exact functions
+  before adding changes and retain the original rejection/ownership assertions.
+- The incoming merge changes 8 of the 19 actual Verus compiler inputs and 12 of
+  the 48 wider proof inputs. The reviewed pre-merge 221-obligation census and
+  previous source seals cannot qualify those changes. The next Verus launch is
+  held for source and census review. The two existing Apalache processes remain
+  live as directly observed on September 8; neither has a terminal result.
+- Shared Rust and source-checker conflict resolution belongs to the merge task.
+  No multilane Cargo process is launched while those inputs are unresolved.
+  Current SDK/CLI changes also require fresh provenance and execution. The
+  private transaction collector includes fixed-slot completion ordering and
+  exact deadline tests; no private test is reported as an executed Rust test.

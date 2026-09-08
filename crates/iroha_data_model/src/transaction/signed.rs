@@ -170,6 +170,8 @@ mod model {
         rename_all = "snake_case",
         deny_unknown_fields
     )]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::transaction::signed::model::TransactionDomain")]
     pub enum TransactionDomain {
         /// Exact deployment identity for every non-genesis transaction.
         Network(NetworkId),
@@ -356,6 +358,8 @@ mod model {
     #[norito(deny_unknown_fields)]
     #[display("{}", self.hash())]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::transaction::signed::model::SignedTransaction")]
     pub struct SignedTransaction {
         /// Signature of [`Self::payload`].
         pub(super) signature: TransactionSignature,
@@ -404,6 +408,8 @@ mod model {
         IntoSchema,
     )]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::transaction::signed::model::TransactionEntrypoint")]
     pub enum TransactionEntrypoint {
         /// User request that initiates a transaction.
         External(SignedTransaction),
@@ -2140,11 +2146,11 @@ impl norito::json::JsonDeserialize for ExecutionStep {
     }
 }
 struct ExternalEntrypointRef<'a>(&'a SignedTransaction);
-impl norito::core::NoritoSerialize for ExternalEntrypointRef<'_> {
+
+impl norito::core::SerializePayload for ExternalEntrypointRef<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
-        norito::core::NoritoSerialize::serialize(&0_u32, writer)?;
-        let mut tmp = norito::core::DeriveSmallBuf::new();
-        norito::core::write_len_prefixed(writer, self.0.payload(), &mut tmp)?;
+        norito::core::SerializePayload::serialize(&0_u32, writer)?;
+        norito::core::write_len_prefixed(writer, self.0.payload())?;
         Ok(())
     }
     fn encoded_len_hint(&self) -> Option<usize> {

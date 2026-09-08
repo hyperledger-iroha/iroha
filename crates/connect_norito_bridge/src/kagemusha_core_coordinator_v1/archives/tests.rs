@@ -169,3 +169,90 @@ fn coordinator_recovery_rejects_missing_selector_context_and_version() {
         assert!(KagemushaCoreSenderRecoveryArchiveV1::decode_canonical_exact(&raw).is_err());
     }
 }
+
+#[test]
+fn coordinator_archive_fixture_material_is_canonical() {
+    use iroha_core::zk::kagemusha_v1_state::KagemushaRedemptionTerminalReceiptV1;
+    use iroha_data_model::block::consensus_v2::HeightContextId;
+
+    let candidate = candidate();
+    let recovery = recovery();
+    let receipt = KagemushaRedemptionTerminalReceiptV1 {
+        version: VERSION,
+        network_id: recovery.context.lane.network_id,
+        operation_id: recovery.operation_id,
+        redemption_id: recovery.terminal_id,
+        terminal_nullifier: [0x82; 32],
+        envelope_digest: [0x83; 32],
+        reserve_receipt_digest: [0x84; 32],
+        authenticated_status_digest: [0x85; 32],
+        finalized_block_height: 17,
+        height_context_id: HeightContextId(iroha_crypto::HashOf::from_untyped_unchecked(
+            iroha_crypto::Hash::prehashed([0x87; 32]),
+        )),
+    };
+    receipt.validate_shape().unwrap();
+    let vectors = [
+        (
+            "preparation",
+            candidate.preparation.encode_canonical().unwrap(),
+        ),
+        ("candidate", candidate.encode_canonical().unwrap()),
+        ("recovery", recovery.encode_canonical().unwrap()),
+        (
+            "redemption_terminal_receipt",
+            norito::encode_canonical(&receipt).unwrap(),
+        ),
+    ];
+    let fixture: norito::json::Value = norito::json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../fixtures/offline/kagemusha_core_coordinator_archives_v1.json"
+    )))
+    .expect("shared canonical archive fixture");
+    assert_eq!(
+        fixture["schema"].as_str(),
+        Some("iroha.kagemusha.core.v1.archive-fixtures")
+    );
+    assert_eq!(fixture["version"].as_u64(), Some(1));
+    for (name, bytes) in vectors {
+        assert_eq!(
+            fixture[name]["byte_len"].as_u64(),
+            Some(bytes.len() as u64),
+            "{name}"
+        );
+        assert_eq!(
+            fixture[name]["norito_hex"].as_str(),
+            Some(hex::encode(bytes).as_str()),
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn coordinator_candidate_rejects_oversized_and_corrupt_nested_authorization() {
+    let mut archive = candidate();
+    archive.hardware_commit_authorization = vec![0x11; 2 * 1024 + 1];
+    assert_eq!(
+        archive.encode_canonical(),
+        Err(KagemushaCoreCoordinatorArchiveErrorV1::Size)
+    );
+    let unchecked = norito::encode_canonical(&archive).unwrap();
+    assert!(unchecked.len() < KAGEMUSHA_CORE_COORDINATOR_ARCHIVE_MAX_BYTES_V1);
+    assert_eq!(
+        KagemushaCoreSenderCandidateArchiveV1::decode_canonical_exact(&unchecked),
+        Err(KagemushaCoreCoordinatorArchiveErrorV1::Size)
+    );
+
+    let valid = candidate();
+    // Mutate authenticated Norito header bytes inside a valid outer archive. Re-encoding the
+    // outer object preserves its checksum, so failure must come from the nested boundary.
+    for position in 0..48 {
+        let mut archive = valid.clone();
+        archive.hardware_commit_authorization[position] ^= 0x80;
+        let unchecked = norito::encode_canonical(&archive).unwrap();
+        assert!(
+            KagemushaCoreSenderCandidateArchiveV1::decode_canonical_exact(&unchecked).is_err(),
+            "nested authorization header byte {position}"
+        );
+    }
+}

@@ -62,6 +62,184 @@ impl FilesystemConfig {
     }
 }
 
+/// Load an explicitly inherited configuration without reopening its provenance path or using SDK environment overrides.
+pub(crate) fn load_inherited(
+    fd: u32,
+    source_path: &Path,
+) -> Result<(iroha::config::Config, FilesystemConfig)> {
+    if !source_path.is_absolute()
+        || source_path.components().any(|part| {
+            matches!(
+                part,
+                std::path::Component::ParentDir | std::path::Component::CurDir
+            )
+        })
+    {
+        return Err(eyre!(
+            "inherited config source path must be absolute and normalized"
+        ));
+    }
+    let bytes = read_inherited_private_file(
+        fd,
+        iroha_config_base::toml::MAX_TOML_SOURCE_BYTES,
+        "inherited client config",
+    )?;
+    let text = std::str::from_utf8(&bytes)
+        .map_err(|_| eyre!("inherited client config is not UTF-8 TOML"))?;
+    let mut table = text
+        .parse::<toml::Table>()
+        .map_err(|_| eyre!("inherited client config is not valid TOML"))?;
+    let filesystem = FilesystemConfig::take_from(&mut table, source_path)
+        .map_err(|_| eyre!("inherited client config has invalid CLI filesystem parameters"))?;
+    let transaction = table.get("transaction").cloned();
+    let sdk_source = zeroize::Zeroizing::new(
+        toml::to_string(&table).map_err(|_| eyre!("cannot encode inherited SDK configuration"))?,
+    );
+    let (mut config, _) = iroha::config::Config::load_bytes_with_musubi_publication(
+        source_path,
+        sdk_source.as_bytes(),
+    )
+    .map_err(|_| eyre!("inherited client config failed strict semantic loading"))?;
+    if let Some(transaction) = transaction {
+        super::apply_transaction_overrides(
+            &mut config,
+            &toml::Value::Table(toml::Table::from_iter([(
+                "transaction".to_owned(),
+                transaction,
+            )])),
+        );
+    }
+    Ok((config, filesystem))
+}
+
+/// Read a bounded owner-private regular inherited descriptor without following a filesystem path.
+#[cfg(unix)]
+pub(crate) fn read_inherited_private_file(
+    fd: u32,
+    maximum: u64,
+    label: &str,
+) -> Result<zeroize::Zeroizing<Vec<u8>>> {
+    use std::os::unix::fs::{FileExt as _, MetadataExt as _};
+    if !(3..=65535).contains(&fd) {
+        return Err(eyre!(
+            "{label} requires an inherited descriptor in 3..=65535"
+        ));
+    }
+    let file = duplicate_inherited_descriptor(fd)?;
+    let access =
+        rustix::fs::fcntl_getfl(&file).map_err(|_| eyre!("cannot inspect {label} access mode"))?;
+    if access & rustix::fs::OFlags::ACCMODE != rustix::fs::OFlags::RDONLY {
+        return Err(eyre!("{label} descriptor must be read-only"));
+    }
+    let before = file
+        .metadata()
+        .map_err(|_| eyre!("cannot inspect {label}"))?;
+    if !before.is_file()
+        || before.uid() != rustix::process::geteuid().as_raw()
+        || !matches!(before.mode() & 0o7777, 0o400 | 0o600)
+        || before.nlink() != 1
+        || before.len() == 0
+        || before.len() > maximum
+    {
+        return Err(eyre!(
+            "{label} must be a bounded owner-private regular file"
+        ));
+    }
+    let len =
+        usize::try_from(before.len()).map_err(|_| eyre!("{label} length is not representable"))?;
+    let mut bytes = zeroize::Zeroizing::new(vec![0_u8; len]);
+    file.read_exact_at(&mut bytes, 0)
+        .map_err(|_| eyre!("cannot read {label}"))?;
+    let after = file
+        .metadata()
+        .map_err(|_| eyre!("cannot revalidate {label}"))?;
+    let snapshot = |metadata: &std::fs::Metadata| {
+        (
+            metadata.dev(),
+            metadata.ino(),
+            metadata.uid(),
+            metadata.mode(),
+            metadata.nlink(),
+            metadata.len(),
+            metadata.mtime(),
+            metadata.mtime_nsec(),
+            metadata.ctime(),
+            metadata.ctime_nsec(),
+        )
+    };
+    if snapshot(&before) != snapshot(&after)
+        || file
+            .read_at(&mut [0_u8; 1], before.len())
+            .map_err(|_| eyre!("cannot verify {label} boundary"))?
+            != 0
+    {
+        return Err(eyre!("{label} changed while loading"));
+    }
+    Ok(bytes)
+}
+
+/// Descriptor input is a Unix-only CLI capability.
+#[cfg(not(unix))]
+pub(crate) fn read_inherited_private_file(
+    _: u32,
+    _: u64,
+    _: &str,
+) -> Result<zeroize::Zeroizing<Vec<u8>>> {
+    Err(eyre!("inherited client inputs require Unix descriptors"))
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[allow(
+    unsafe_code,
+    reason = "fcntl F_DUPFD_CLOEXEC validates an untrusted raw descriptor and atomically duplicates it before constructing an owned File"
+)]
+fn duplicate_inherited_descriptor(fd: u32) -> Result<std::fs::File> {
+    use std::os::fd::FromRawFd as _;
+    // Native ABI constants from Linux fcntl.h and the Darwin SDK sys/fcntl.h.
+    #[cfg(target_os = "linux")]
+    const DUPFD_CLOEXEC: std::ffi::c_int = 1030;
+    #[cfg(target_os = "macos")]
+    const DUPFD_CLOEXEC: std::ffi::c_int = 67;
+    unsafe extern "C" {
+        fn fcntl(fd: std::ffi::c_int, command: std::ffi::c_int, ...) -> std::ffi::c_int;
+    }
+    // SAFETY: this command consumes an integer minimum descriptor and atomically validates
+    // the untrusted input. No borrowed descriptor is constructed before validation.
+    let copied = unsafe {
+        fcntl(
+            i32::try_from(fd).map_err(|_| eyre!("invalid inherited descriptor"))?,
+            DUPFD_CLOEXEC,
+            3 as std::ffi::c_int,
+        )
+    };
+    if copied < 0 {
+        return Err(eyre!("cannot duplicate inherited descriptor"));
+    }
+    // SAFETY: success returns a new CLOEXEC descriptor owned exclusively by this call.
+    let retained = unsafe { std::fs::File::from_raw_fd(copied) };
+    // The launcher explicitly cleared CLOEXEC on the original to grant this process access.
+    // Restore it without closing the caller's descriptor or changing its shared file offset.
+    // F_GETFD=1, F_SETFD=2, and FD_CLOEXEC=1 are the native Linux and Darwin fcntl ABIs.
+    // SAFETY: these commands take only the validated integer descriptor and integer flags;
+    // the kernel rejects a descriptor closed concurrently without constructing a Rust borrow.
+    let protected = unsafe {
+        let original = i32::try_from(fd).map_err(|_| eyre!("invalid inherited descriptor"))?;
+        let flags = fcntl(original, 1);
+        flags >= 0 && fcntl(original, 2, flags | 1) == 0
+    };
+    if !protected {
+        return Err(eyre!("cannot protect inherited descriptor lifetime"));
+    }
+    Ok(retained)
+}
+
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
+fn duplicate_inherited_descriptor(_: u32) -> Result<std::fs::File> {
+    Err(eyre!(
+        "inherited private inputs require a supported atomic descriptor ABI"
+    ))
+}
+
 fn take_section(table: &mut toml::Table, name: &str) -> Result<Option<toml::Table>> {
     table
         .remove(name)
@@ -105,6 +283,166 @@ fn reject_unknown_keys(section: &str, table: &toml::Table) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn inherited_config_loads_exact_descriptor_without_reopening_provenance() {
+        use std::os::{fd::AsRawFd as _, unix::fs::PermissionsExt as _};
+        let file = tempfile::NamedTempFile::new().expect("private config fixture");
+        std::fs::write(
+            file.path(),
+            format!(
+                "{}\n[connect]\nqueue_root = \"queue-state\"\n",
+                include_str!("../../../defaults/client.toml")
+            ),
+        )
+        .expect("write public config fixture");
+        std::fs::set_permissions(file.path(), std::fs::Permissions::from_mode(0o600))
+            .expect("private fixture");
+        let retained = std::fs::File::open(file.path()).expect("read-only config descriptor");
+        let provenance = file
+            .path()
+            .parent()
+            .expect("fixture parent")
+            .join("does-not-exist/client.toml");
+        assert!(!provenance.exists());
+        let (config, filesystem) = load_inherited(
+            u32::try_from(retained.as_raw_fd()).expect("descriptor"),
+            &provenance,
+        )
+        .expect("load retained descriptor on native host");
+        assert_eq!(config.torii_api_url.as_str(), "http://127.0.0.1:8080/");
+        assert_eq!(
+            filesystem.connect_queue_root,
+            provenance
+                .parent()
+                .expect("provenance parent")
+                .join("queue-state")
+        );
+        assert!(
+            !provenance.exists(),
+            "loader never creates or reopens provenance path"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn inherited_private_descriptor_rejects_writable_unsafe_and_nonregular_inputs() {
+        use std::io::{Seek as _, SeekFrom};
+        use std::os::{fd::AsRawFd as _, unix::fs::PermissionsExt as _};
+        let file = tempfile::NamedTempFile::new().expect("private fixture");
+        std::fs::write(file.path(), b"fixture").expect("write fixture");
+        std::fs::set_permissions(file.path(), std::fs::Permissions::from_mode(0o600))
+            .expect("private fixture");
+        let writable = u32::try_from(file.as_file().as_raw_fd()).expect("writable descriptor");
+        assert!(
+            read_inherited_private_file(writable, 64, "test config")
+                .expect_err("read-write descriptor rejected")
+                .to_string()
+                .contains("read-only")
+        );
+        let mut retained = std::fs::File::open(file.path()).expect("read-only descriptor");
+        retained.seek(SeekFrom::Start(2)).expect("caller offset");
+        rustix::io::fcntl_setfd(&retained, rustix::io::FdFlags::empty())
+            .expect("simulate inherited descriptor");
+        let fd = u32::try_from(retained.as_raw_fd()).expect("read-only fd");
+        assert_eq!(
+            read_inherited_private_file(fd, 64, "test config")
+                .expect("positive native FD")
+                .as_slice(),
+            b"fixture"
+        );
+        assert_eq!(
+            retained.stream_position().expect("preserved caller offset"),
+            2
+        );
+        assert!(
+            rustix::io::fcntl_getfd(&retained)
+                .expect("original descriptor remains open")
+                .contains(rustix::io::FdFlags::CLOEXEC)
+        );
+        assert!(read_inherited_private_file(fd, 3, "test config").is_err());
+        std::fs::set_permissions(file.path(), std::fs::Permissions::from_mode(0o644))
+            .expect("unsafe fixture");
+        assert!(read_inherited_private_file(fd, 64, "test config").is_err());
+        let directory = std::fs::File::open(file.path().parent().expect("parent"))
+            .expect("directory descriptor");
+        assert!(
+            read_inherited_private_file(
+                u32::try_from(directory.as_raw_fd()).expect("fd"),
+                64,
+                "test config"
+            )
+            .is_err()
+        );
+        for invalid in [0, 1, 2, 65536, u32::MAX] {
+            assert!(read_inherited_private_file(invalid, 64, "test config").is_err());
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn inherited_private_descriptor_rejects_pipe_socket_and_closed_fd() {
+        use std::os::fd::AsRawFd as _;
+        let (socket, _) = std::os::unix::net::UnixStream::pair().expect("socket fixture");
+        assert!(
+            read_inherited_private_file(
+                u32::try_from(socket.as_raw_fd()).expect("socket fd"),
+                64,
+                "test input"
+            )
+            .is_err()
+        );
+        let mut child = std::process::Command::new("/bin/sh")
+            .args(["-c", "exit 0"])
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .expect("pipe fixture");
+        let stdout = child.stdout.take().expect("pipe descriptor");
+        assert!(
+            read_inherited_private_file(
+                u32::try_from(stdout.as_raw_fd()).expect("pipe fd"),
+                64,
+                "test input"
+            )
+            .is_err()
+        );
+        child.wait().expect("fixture child reaped");
+        // Reserve a high descriptor before closing it so unrelated low-FD test activity cannot reuse it.
+        let file = std::fs::File::open("/dev/null").expect("closed-FD fixture");
+        let limit = rustix::process::getrlimit(rustix::process::Resource::Nofile)
+            .current
+            .unwrap_or(65_536)
+            .min(65_536);
+        let high = i32::try_from(limit.saturating_sub(1)).expect("bounded fixture limit");
+        assert!(high >= 3, "test process must permit inherited descriptors");
+        let closed = rustix::io::fcntl_dupfd_cloexec(&file, high)
+            .expect("reserve high fixture fd within the host limit");
+        let number = u32::try_from(closed.as_raw_fd()).expect("high fixture fd");
+        drop(closed);
+        assert!(read_inherited_private_file(number, 64, "test input").is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn inherited_config_errors_never_include_source_values() {
+        use std::os::{fd::AsRawFd as _, unix::fs::PermissionsExt as _};
+        let file = tempfile::NamedTempFile::new().expect("private fixture");
+        std::fs::write(
+            file.path(),
+            b"private_key = \"unclosed-runtime-secret-fixture",
+        )
+        .expect("write malformed fixture");
+        std::fs::set_permissions(file.path(), std::fs::Permissions::from_mode(0o600))
+            .expect("private fixture");
+        let retained = std::fs::File::open(file.path()).expect("read-only descriptor");
+        let error = load_inherited(
+            u32::try_from(retained.as_raw_fd()).expect("fd"),
+            Path::new("/private/inherited/client.toml"),
+        )
+        .expect_err("invalid TOML rejected");
+        assert!(!format!("{error:#}").contains("unclosed-runtime-secret-fixture"));
+    }
 
     #[test]
     fn extracts_cli_paths_and_removes_owned_sections() {

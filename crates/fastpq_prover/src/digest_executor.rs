@@ -2,6 +2,7 @@
 use fastpq_isi::{GoldilocksDigest384FrameV1, GoldilocksDigest384V1, GoldilocksDigestDomainV1};
 
 use crate::{Error, Result};
+use rayon::prelude::*;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum DigestExecutionV1 {
@@ -15,10 +16,21 @@ pub(crate) fn execute_digest384_frames_v1(
     execution: DigestExecutionV1,
 ) -> Result<Vec<GoldilocksDigest384V1>> {
     match execution {
-        DigestExecutionV1::Cpu => Ok(frames
-            .iter()
-            .map(GoldilocksDigest384FrameV1::hash)
-            .collect()),
+        DigestExecutionV1::Cpu => {
+            // Indexed independent jobs preserve the canonical frame order. Keep
+            // small batches sequential to avoid Rayon scheduling overhead.
+            if frames.len() < 64 {
+                Ok(frames
+                    .iter()
+                    .map(GoldilocksDigest384FrameV1::hash)
+                    .collect())
+            } else {
+                Ok(frames
+                    .par_iter()
+                    .map(GoldilocksDigest384FrameV1::hash)
+                    .collect())
+            }
+        }
         #[cfg(feature = "fastpq-gpu")]
         DigestExecutionV1::Device(backend) => {
             use crate::digest384_gpu::{
@@ -231,7 +243,7 @@ mod tests {
         })
         .unwrap();
         assert_eq!(sizes, [1024, 2]);
-        for (index, pair) in leaves.chunks_exact(2).enumerate().skip(1023) {
+        for (index, pair) in leaves.chunks_exact(2).enumerate() {
             let left = pair[0].to_le_bytes();
             let right = pair[1].to_le_bytes();
             let expected = GoldilocksDigest384FrameV1::new(domain(index), &[&left, &right])

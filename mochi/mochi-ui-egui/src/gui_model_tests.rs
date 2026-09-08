@@ -117,19 +117,20 @@ fn compose_launch_recipe_includes_current_flags() {
 #[test]
 fn compose_app_env_recipe_emits_local_bootstrap_exports() {
     let recipe = compose_app_env_recipe(
+        "/tmp/mochi app",
         "127.0.0.1:8080",
         "127.0.0.1:8080",
         Some("http://127.0.0.1:8080/v1/mcp"),
         "mochi-local",
         Some("alice@wonderland"),
-        Some("deadbeef"),
     );
     assert!(recipe.contains("export IROHA_API_BASE=http://127.0.0.1:8080"));
     assert!(recipe.contains("export IROHA_TORII_URL=http://127.0.0.1:8080"));
     assert!(recipe.contains("export IROHA_MCP_URL=http://127.0.0.1:8080/v1/mcp"));
     assert!(recipe.contains("export IROHA_CHAIN_ID=mochi-local"));
     assert!(recipe.contains("export IROHA_ACCOUNT_ID=alice@wonderland"));
-    assert!(recipe.contains("export IROHA_PRIVATE_KEY=deadbeef"));
+    assert!(recipe.contains("export IROHA_ENV_FILE='/tmp/mochi app/.env.local'"));
+    assert!(!recipe.contains("IROHA_PRIVATE_KEY"));
 }
 #[test]
 fn render_view_tabs_keeps_active_view() {

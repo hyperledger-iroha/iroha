@@ -3112,6 +3112,108 @@ mod tests {
         );
     }
     #[test]
+    fn signed_envelope_rejects_invalid_frames_without_consuming_signing_claim() {
+        let signer = key(4);
+        let authority = AccountId::new(signer.public_key().clone());
+        let context = drawdown_context();
+        let claimed_forwarder = |policy| {
+            let forwarder = AppealFinanceTransactionForwarder::in_memory(policy).unwrap();
+            let operation_id = forwarder
+                .enqueue_unsigned_operation(authority.clone(), drawdown_operation(), &context)
+                .unwrap()
+                .operation_id();
+            forwarder
+                .claim_for_signing(operation_id, cursor(7, 7))
+                .unwrap();
+            (forwarder, operation_id)
+        };
+        let limited_policy = AppealFinanceTransactionForwarderPolicyV1 {
+            max_transaction_bytes: 64 * 1024,
+            ..policy()
+        };
+        let valid = signed_bytes(&signer, authority.clone(), drawdown_operation());
+        assert!(valid.len() < limited_policy.max_transaction_bytes);
+        let (baseline, operation_id) = claimed_forwarder(limited_policy);
+        assert_eq!(
+            baseline
+                .store_signed_transaction(operation_id, &valid)
+                .unwrap(),
+            transaction_digest(&valid)
+        );
+
+        // This frame is canonical and authorized; only the configured byte limit rejects it.
+        let padding = "x".repeat(limited_policy.max_transaction_bytes);
+        let mut metadata = iroha_data_model::metadata::Metadata::default();
+        metadata.insert("padding".parse().unwrap(), padding.as_str());
+        let oversized = TransactionBuilder::new(
+            test_network_id(),
+            authority.clone(),
+            FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([InstructionBox::from(drawdown_operation())])
+        .with_metadata(metadata)
+        .try_sign(signer.private_key())
+        .unwrap();
+        let oversized = norito::to_bytes(&oversized).unwrap();
+        assert!(oversized.len() > limited_policy.max_transaction_bytes);
+        assert!(oversized.len() <= policy().max_transaction_bytes);
+        let (permissive_baseline, oversized_operation_id) = claimed_forwarder(policy());
+        assert_eq!(
+            permissive_baseline
+                .store_signed_transaction(oversized_operation_id, &oversized)
+                .unwrap(),
+            transaction_digest(&oversized)
+        );
+
+        let truncated = valid[..valid.len() - 1].to_vec();
+        let mut trailing = valid.clone();
+        trailing.push(0);
+        let mut wrong_header = valid.clone();
+        wrong_header[..4].copy_from_slice(b"BAD!");
+        let (forwarder, claimed_operation_id) = claimed_forwarder(limited_policy);
+        assert_eq!(claimed_operation_id, operation_id);
+        let claimed_checkpoint = forwarder.state.lock().unwrap().checkpoint.clone();
+        for (label, bytes) in [
+            ("truncated", truncated),
+            ("trailing", trailing),
+            ("wrong header", wrong_header),
+            ("over policy", oversized),
+        ] {
+            if label != "over policy" {
+                assert!(bytes.len() <= limited_policy.max_transaction_bytes);
+            }
+            assert!(
+                matches!(
+                    forwarder.store_signed_transaction(operation_id, &bytes),
+                    Err(AppealFinanceTransactionForwarderError::InvalidSignedTransaction)
+                ),
+                "{label} frame must be rejected"
+            );
+            assert_eq!(
+                forwarder.state.lock().unwrap().checkpoint,
+                claimed_checkpoint,
+                "{label} rejection must preserve the complete signing claim"
+            );
+        }
+        assert_eq!(
+            forwarder
+                .store_signed_transaction(operation_id, &valid)
+                .unwrap(),
+            transaction_digest(&valid)
+        );
+        let pending = forwarder.pending_after(None, 1).unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(
+            pending[0].state,
+            AppealFinanceTransactionDeliveryStateV1::Signed
+        );
+        assert_eq!(pending[0].attempts, claimed_checkpoint.pending[0].attempts);
+        assert_eq!(
+            pending[0].signed_transaction_bytes.as_deref(),
+            Some(valid.as_slice())
+        );
+    }
+    #[test]
     fn signed_envelope_rejects_proof_and_even_empty_multisig_sidecars() {
         let forwarder = AppealFinanceTransactionForwarder::in_memory(policy()).unwrap();
         let context = drawdown_context();
@@ -3154,7 +3256,9 @@ mod tests {
         empty_multisig.set_multisig_signatures(MultisigSignatures::new(Vec::new()));
         assert_eq!(
             empty_multisig.verify_signature(),
-            Err(iroha_data_model::transaction::signed::TransactionSignatureError::UnexpectedMultisigSignatures)
+            Err(
+                iroha_data_model::transaction::signed::TransactionSignatureError::UnexpectedMultisigSignatures
+            )
         );
         assert!(matches!(
             forwarder.store_signed_transaction(

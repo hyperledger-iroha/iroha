@@ -788,6 +788,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
     ),
     'crates/iroha_core/src/smartcontracts/ivm/host.rs': (
         'host/axt_persistent_budget_tests.rs',
+        'host/axt_unanchored_admission_tests.rs',
         'host/core_codec_and_contract_tests.rs',
         'host/core_query_execution_tests.rs',
         'host/core_query_pagination_tests.rs',
@@ -1098,6 +1099,8 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'tests/v2_lane_work_native_body_recovery.rs',
         'tests/v2_lane_work_lifecycle_and_recovery_cases.rs',
         'v2_lane_work/strict_historical_read_tests.rs',
+        'v2_lane_work/strict_volatile_owner_tests.rs',
+        'v2_lane_work/strict_receipt_gate_tests.rs',
         'v2_lane_work/canonical_executed_block_recovery_drift_test.rs',
         'v2_lane_work/historical_recovery_and_carrier_tests.rs',
         'v2_lane_work_autonomous_ready_durability_tests.rs',
@@ -2608,7 +2611,7 @@ _PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 = (
     "6045ac0993327ed787010c626227580899c1561aae9366318438840870f0c815"
 )
 _PRODUCTION_LIVENESS_INVENTORY_GUARD_SHA256 = (
-    "e9d14ff4c001fc37cf1a71ef24e065d50d0a058581bad92b3656bd0ec5900d94"
+    "172cdeba0914a253cb22c9158b5c09fb08469ca74c55617655d5261b13bae5b7"
 )
 _SUMERAGI_V2_PACKAGE_LAYOUT_GUARD_SHA256 = (
     "e99da2c824b86930b76c741d2f7aa47ab16092c2f84e43550fb6362a36133268"
@@ -2697,13 +2700,13 @@ _PRODUCTION_TERMINAL_LANE_ITEM_SHA256 = {
     "validate_terminal_autonomous_availability": "98375f790b5b28adef571a5e85521a555a40b5a7b1547834a4e5d96a88860c1c",
     "validate_terminal_autonomous_vote": "59fd4fc9cf8b3e68bd08f45530106f384f63c4ca55aae83f435dbecd93ae3097",
     "validate_terminal_autonomous_qc": "4868a5cda0cfd9deb257b53fb0e88feb4090557b32350f23d93f121f46ce44dc",
-    "V2LaneWorkAdapter::retire_applied_autonomous_sessions": "fa85a04b0bae5d4af30d096dd6ed7a402eae8507a1adf11d55278020b4fc3516",
+    "V2LaneWorkAdapter::retire_applied_autonomous_sessions": "72baad150ea75f2a504dabb25fffc520451b7f698acd17640660c5a0d12cce46",
     "LaneBlockSessionCache::retained_vote_bodies": "41a3819825f8a9dd22ae06965bc668858139f008bec1b0649d00cd3b51e2a307",
     "LaneBlockSessionCache::preflight_canonical_evidence": "5dc4a01f143db878457bf3467c1f9452ac5523d6289647d7659c61512511721f",
     "LaneBlockSessionCache::retire_applied_proposals": "4b2604c5d6bd7be393f0ce540ea3641e03c7997e8fe46f99b838af4dfcdd169d",
 }
 _LATE_LANE_RECOVERY_TEST_SHA256 = (
-    "4acdfce3df1deeb4551dab6bc612bc1090168cd7724148c89d562ebf9e168390"
+    "b31ab74157f710d3dc6bfcffd0e8b99416f54d30ff5fc3e4b8de5f042d39eaeb"
 )
 _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS = (
     ("production-kura-progress-durability", "kura::tests", 18),
@@ -4472,7 +4475,7 @@ _PRODUCTION_LANE_ACK_SEAM_ITEM_SHA256 = {
     "V2LaneWorkAdapter::stranded_retryable_sidecar_control_index": "09ed26efa19aefc39d448b1bee81d5b070c272557137e89a51c4f1dc6334419b",
     "V2LaneWorkAdapter::replace_stranded_retryable_sidecar_control": "13094aa7fc37a32648ebf74c461802e857173858f09d7c61ef0054530e340e4c",
     "V2LaneWorkAdapter::service_next_certified_merge_sidecar_materialization": "d4529f8571223adf943e5ed147663df6d0078fcb4fea3b3d94c84797eb263473",
-    "V2LaneWorkAdapter::persist_anchored_sessions": "6763560f161f68dd9b8bfc7be066fb6cbb121ef2f9333483a5c2e328ea12f68d",
+    "V2LaneWorkAdapter::persist_anchored_sessions": "7ab8795c69064a7ed9c81c943183e539466009197e7caf12b823e51d9c3b5bc9",
     "V2LaneWorkAdapter::hydrate_canonical_lane_artifacts": "9a40579664a5c2306d65100830e7d247a7d89b3c301492d99a635951b4ecaa56",
     "V2LaneWorkAdapter::next_effect": "62af9ea4c3707845b5b097a27f5cc9281b8ade4bc60db49cdbc9f1c3e2b3496a",
     "V2LaneWorkAdapter::effect_count": "3be06e0c96fdc63e06952ec83b5aa900daf39912955249ca6aad64ec50e1354a",
@@ -5349,7 +5352,7 @@ _PRODUCTION_EXACT_OUTPUT_INGRESS_SEAM_ITEM_SHA256 = {
         "f4341f1f806d10adab9e14b0c4b13c463fc7c6dae22bd7056863548d0912fb5b"
     ),
     "lane::accept_lane_message_owned": (
-        "9adbf291932c054e248fa2bfed4d02c9f777d41d9faad247a7cc1e3680f9b6c3"
+        "464bd177aa3cc94fc76e9d57397cdf5c4e22c521deb68dcb76bb592d342bbc0f"
     ),
     "effects::v2_ingress_head_can_drain": (
         "86553a8a1f1a5618a06f6c49849f1d8d5feb5e59528690e61cb597ef5c4b913c"

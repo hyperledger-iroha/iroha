@@ -837,7 +837,7 @@ fn find_tool_spec_by_name_rejects_removed_post_transaction_alias() {
 #[tokio::test]
 async fn dispatch_route_preserves_inbound_remote_addr_for_internal_allowlist_checks() {
     let mut app = mk_app_state_for_tests();
-    install_remote_addr_probe_router(&mut app);
+    let _router_owner = install_remote_addr_probe_router(&mut app);
     let mut inbound_headers = HeaderMap::new();
     inbound_headers.insert(
         HeaderName::from_static(crate::limits::REMOTE_ADDR_HEADER),
@@ -881,7 +881,7 @@ async fn dispatch_route_preserves_inbound_remote_addr_for_internal_allowlist_che
 async fn governance_mcp_rejects_noncanonical_ids_before_inner_dispatch() {
     let mut app = mk_app_state_for_tests();
     let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    install_request_counting_router(&mut app, std::sync::Arc::clone(&calls));
+    let _router_owner = install_request_counting_router(&mut app, std::sync::Arc::clone(&calls));
     let headers = HeaderMap::new();
     let proposal = norito::json!({ "path": { "id": ("AA".repeat(32)) } });
     dispatch_iroha_gov_proposals_get(
@@ -944,7 +944,7 @@ async fn governance_mcp_rejects_noncanonical_ids_before_inner_dispatch() {
 async fn openapi_governance_mcp_rejects_noncanonical_ids_before_inner_dispatch() {
     let mut app = mk_app_state_for_tests();
     let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    install_request_counting_router(&mut app, std::sync::Arc::clone(&calls));
+    let _router_owner = install_request_counting_router(&mut app, std::sync::Arc::clone(&calls));
     let headers = HeaderMap::new();
     for (path, arguments) in [
         (
@@ -1030,7 +1030,7 @@ async fn openapi_governance_mcp_rejects_noncanonical_ids_before_inner_dispatch()
 async fn canonical_governance_mcp_ids_reach_inner_dispatch_once_per_call() {
     let mut app = mk_app_state_for_tests();
     let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    install_request_counting_router(&mut app, std::sync::Arc::clone(&calls));
+    let _router_owner = install_request_counting_router(&mut app, std::sync::Arc::clone(&calls));
     let headers = HeaderMap::new();
     let proposal_id = "ab".repeat(32);
     let maximum_selector = "a".repeat(128);
@@ -1203,7 +1203,7 @@ async fn canonical_governance_mcp_ids_reach_inner_dispatch_once_per_call() {
 #[tokio::test]
 async fn dispatch_route_blocks_remote_addr_spoofing_from_extra_headers() {
     let mut app = mk_app_state_for_tests();
-    install_remote_addr_probe_router(&mut app);
+    let _router_owner = install_remote_addr_probe_router(&mut app);
     let mut extra_headers = Map::new();
     extra_headers.insert(
         crate::limits::REMOTE_ADDR_HEADER.to_owned(),
@@ -1241,7 +1241,7 @@ async fn dispatch_route_blocks_remote_addr_spoofing_from_extra_headers() {
 #[tokio::test]
 async fn dispatch_route_fails_closed_when_required_api_tokens_are_unconfigured() {
     let mut app = mk_app_state_for_tests();
-    install_api_token_probe_router(&mut app, &[]);
+    let _router_owner = install_api_token_probe_router(&mut app, &[]);
     let result = dispatch_route(
         &app,
         &HeaderMap::new(),
@@ -1259,7 +1259,7 @@ async fn dispatch_route_fails_closed_when_required_api_tokens_are_unconfigured()
 #[tokio::test]
 async fn dispatch_route_extra_headers_cannot_inject_an_api_token() {
     let mut app = mk_app_state_for_tests();
-    install_api_token_probe_router(&mut app, &["configured-token"]);
+    let _router_owner = install_api_token_probe_router(&mut app, &["configured-token"]);
     let extra_headers = norito::json!({
         "x-api-token": "configured-token"
     });

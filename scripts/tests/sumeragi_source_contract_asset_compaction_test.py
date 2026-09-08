@@ -28,9 +28,14 @@ ORIGINAL_POSTIMAGE_RUST_LINES = 3_618
 # original historical measurements and net-reduction floor unchanged.
 MIGRATED_SOURCE_COVERAGE_GROWTH_RUST_LINES = 31
 WAL_CONSUMER_SOURCE_COVERAGE_GROWTH_RUST_LINES = 3
+# The merged owner fixes add a 22-line inline-storage regression and 20 lines
+# for the complete adapter source projection plus bounded fixture runner.
+# Account for that independent coverage equally in both compared forms.
+OWNER_FIX_COVERAGE_GROWTH_RUST_LINES = 42
 CURRENT_SOURCE_COVERAGE_GROWTH_RUST_LINES = (
     MIGRATED_SOURCE_COVERAGE_GROWTH_RUST_LINES
     + WAL_CONSUMER_SOURCE_COVERAGE_GROWTH_RUST_LINES
+    + OWNER_FIX_COVERAGE_GROWTH_RUST_LINES
 )
 BASELINE_RUST_LINES = (
     ORIGINAL_PREIMAGE_RUST_LINES + CURRENT_SOURCE_COVERAGE_GROWTH_RUST_LINES
@@ -38,8 +43,8 @@ BASELINE_RUST_LINES = (
 MAX_POSTIMAGE_RUST_LINES = (
     ORIGINAL_POSTIMAGE_RUST_LINES + CURRENT_SOURCE_COVERAGE_GROWTH_RUST_LINES
 )
-EXPECTED_ASSET_LENGTH = 629_258
-EXPECTED_ASSET_SHA256 = "c67e3ba5522638d49e5942f3dc31caaaef1793e4d5b231be87311b488dd103d6"
+EXPECTED_ASSET_LENGTH = 629_411
+EXPECTED_ASSET_SHA256 = "423628c7691416f6d027f20a3f9d531d23f02f0c59ebf4ecdaf2655b0c241db1"
 EXPECTED_CASE_IDS_SHA256 = "77db5140892b9c541a0e4e08b0b70648210765ebce8a828514ca1cc006427284"
 
 HOST_PREIMAGE_SHA256 = {
@@ -57,11 +62,12 @@ COMPACTED_HOST_POSTIMAGE_SHA256 = {
     "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator_support.rs": "c2f419913582f0b15a2f3209f8f0b45e90cbe84d608764a7dd6bcfd7299cef06",
 }
 
-# Preserve every original compacted host hash as historical evidence. Only the
-# explicit three-line source provider has changed the current support host.
+# Preserve the original compacted host hashes as historical evidence. Pin the
+# current source provider, bounded runner and inline-storage regression separately.
 HOST_POSTIMAGE_SHA256 = {
     **COMPACTED_HOST_POSTIMAGE_SHA256,
-    "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator_support.rs": "2730b23d1731d602404c83cee672437891e9d5ee8abde0af9ee01ddd37cd3f53",
+    "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator_support.rs": "ca34500a6a77acaf9e8eae975af97a59f342941f047e3be99a47cf4fee15c860",
+    "crates/iroha_core/src/sumeragi/tests/v2_lifecycle_work_registry_exact_registry_cases.rs": "0b1e3fae6fcf6a915b75013b880f952aba8034d3d938585d24c2952431fd8fcc",
 }
 
 MIGRATED_TESTS = {
@@ -154,6 +160,7 @@ BOUNDARY_CASE_REGIONS = {
         "actual_consumer_factory",
         "actual_consumer_publication",
         "leader_wire_live_lock_authority",
+        "leader_wire_exact_entered_view",
     ),
     "certified_serve_replay_pair_is_opaque_exact_and_fixed_admission_only": (
         "terminal_next_sign_pair",
@@ -230,9 +237,21 @@ BOUNDARY_MUTATIONS = (
     ),
     (
         "entered-view exact consumer tag",
+        "leader_wire_consumer",
+        "self.consumer_tag == tag && self.protected_lock == protected_lock",
+        "true && self.protected_lock == protected_lock",
+    ),
+    (
+        "entered-view exact protected lock",
+        "leader_wire_consumer",
+        "self.consumer_tag == tag && self.protected_lock == protected_lock",
+        "self.consumer_tag == tag && true",
+    ),
+    (
+        "entered-view exact consumer and lock",
         "worker",
-        "if tag != self.leader_wire_recovery_authority.consumer_tag()",
-        "if false",
+        ".matches_entered_view(tag, protected_lock)",
+        ".matches_entered_view(tag, None)",
     ),
 )
 

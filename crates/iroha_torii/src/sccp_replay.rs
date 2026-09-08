@@ -3386,8 +3386,10 @@ mod tests {
         key_pairs: &[KeyPair; 3],
         replicas: &[ToriiSccpReplayArchiveReplica; 3],
     ) -> Vec<u8> {
-        let entries = snapshots
-            .iter()
+        let mut snapshots = snapshots.iter().collect::<Vec<_>>();
+        snapshots.sort_by(|left, right| left.accumulator_id.cmp(&right.accumulator_id));
+        let entries: Vec<_> = snapshots
+            .into_iter()
             .map(|snapshot| {
                 let body = SccpReplayArchiveCheckpointBodyV1::from_snapshot(snapshot)
                     .expect("valid snapshot produces a checkpoint");

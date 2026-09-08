@@ -74,7 +74,7 @@ pub(super) fn preflight_finalized_lane_rollover(
     }
     let _ = lane_work.persist_anchored_sessions()?;
     let _ = service_historical_recovery_tick(lane_work, services)?;
-    if lane_work.has_pending_historical_recovery() {
+    if lane_work.has_pending_historical_recovery()? {
         return Ok(false);
     }
     lane_work
@@ -102,7 +102,7 @@ fn rollover_finalized_height_outputs(
     let _ = lane_work.recover_decided_canonical_lane_body(receipt, artifact)?;
     lane_work.persist_anchored_sessions()?;
     let _ = service_historical_recovery_tick(&mut lane_work, services)?;
-    if lane_work.has_pending_historical_recovery() {
+    if lane_work.has_pending_historical_recovery()? {
         return Err(V2RunnerError::Service(
             "finalized lane output still owns predecessor-height recovery".to_owned(),
         ));
@@ -132,7 +132,7 @@ fn rollover_finalized_height_outputs(
         &durable_lane_authority,
         control_queue_capacity,
     )?;
-    if lane_work.has_pending_committed_output_handoff()
+    if lane_work.has_pending_committed_output_handoff()?
         || lane_work.effect_count() != 0
         || services
             .has_pending_exact_output()

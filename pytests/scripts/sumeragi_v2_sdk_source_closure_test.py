@@ -303,7 +303,7 @@ def test_wire_fixture_drift_rotates_only_diagnostics_suite_digest(
     )
     assert grouped_records.returncode == 0, grouped_records.stderr
     grouped_record_lines = grouped_records.stdout.splitlines()
-    assert len(grouped_record_lines) == 872
+    assert len(grouped_record_lines) == 895
     diagnostics_records = _run_resolver(
         ROOT,
         "--suite",
@@ -311,7 +311,7 @@ def test_wire_fixture_drift_rotates_only_diagnostics_suite_digest(
         "--print-records",
     )
     assert diagnostics_records.returncode == 0, diagnostics_records.stderr
-    assert len(diagnostics_records.stdout.splitlines()) == 875
+    assert len(diagnostics_records.stdout.splitlines()) == 899
     assert sum(
         line.startswith("ci/check_openapi_spec.sh\t")
         for line in grouped_record_lines
@@ -322,7 +322,7 @@ def test_wire_fixture_drift_rotates_only_diagnostics_suite_digest(
     ) == 1
     harness = NATIVE_HARNESS.read_text(encoding="utf-8")
     assert 'bash "${repo_root}/ci/check_openapi_spec.sh"' in harness
-    assert harness.count("observed_test_count=7") == 1
+    assert harness.count("  openapi)\n    observed_test_count=7\n") == 1
     assert "assert_openapi_replay_marker" in harness
     assert "openapi_require_signed=0" in harness
     assert "openapi_require_signed=1" in harness

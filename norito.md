@@ -8,6 +8,12 @@ Norito's first-release Rust implementation targets `std` only. There is no
 WASM/no-`std` codec branch, panic containment is always active at fallible
 decode boundaries, and build features do not weaken those safety rules.
 
+Rust bare payload writers use the object-safe `SerializePayload` contract.
+`NoritoSerialize` adds typed frame ownership. Borrowed field adapters can
+implement or derive `SerializePayload` without acquiring a root-frame identity;
+generic frame writers require `NoritoSerialize` explicitly. This separation
+does not change the V1 header, payload layout, checksum or signed bytes.
+
 ## Header
 
 The Norito header is always present on wire and on disk. It frames the payload
@@ -115,6 +121,33 @@ copy of the encoded payload. The write pass verifies every counted length and
 fails with a length mismatch if a stateful serializer changes between passes.
 Allocation failures in temporary codec buffers are returned as errors rather
 than using infallible `Vec` growth. These rules do not change the v1 bytes.
+The field writer takes only its destination and value. Generated serializers
+and manual callers do not construct per-field scratch buffers.
+
+The length-only encoder has its own counting destination. Core field and
+container helpers measure each child once during that pass, then add its measured
+length without replaying its body. This prevents nested count/write pairs from
+doubling work at every level. Only a helper that owns the measurement may do this;
+caller-supplied lengths and optional length hints remain untrusted. Byte writers,
+checksum writers, canonical comparisons, and separately constructed nested
+buffers always receive actual bytes. Count overflow remains an error even if a
+custom serializer ignores an individual failed write.
+
+Embedded instruction frames retain the counting destination through a
+codec-owned prefix writer. A size-only pass measures the concrete payload and
+adds the fixed header/alignment overhead; it does not construct a checksum writer.
+Actual frame output still computes and checks length, checksum, and finalized
+flags across its two passes. The tuple prefix runs in the enclosing layout
+context. `ConstVec` retains individually framed byte elements and its packed
+table/payload bound; `SmallVec` retains fixed-width element length prefixes.
+
+`Metadata` projects borrowed entry views into the same element-sequence writer
+as `ConstVec`, preserving its sequence-of-tuples layout without collecting entries.
+The writer derives cardinality from a cloneable exact-size iterator and checks
+the number of elements yielded during measurement and emission. Packed Metadata
+also enforces the configured archive limit over its offset table plus payload
+(excluding the sequence count), rejecting an oversized table before allocation
+and an oversized payload total before writing offsets or payloads.
 
 Varint encodings must fit in `u64` and use the shortest (canonical) encoding;
 overflow or overlong encodings are rejected.
@@ -266,7 +299,8 @@ hiding beneath a typed outer object or array.
 JSON field dispatch uses one key hash implementation for compile-time constants,
 the scalar parser, and the tape parser. With `crc-key-hash`, the portable
 Castagnoli byte update and runtime-detected ARM CRC or x86 SSE4.2 update use
-the same accumulator convention and final mixing. Without that feature they
+the same raw register seeded with `0xffffffff`, without a final complement,
+before the fixed 64-bit avalanche. Without that feature they
 all use FNV-1a. These hashes select JSON fields internally; they do not alter
 the serialized JSON or binary schema hashes. Key comparisons still guard
 against hash collisions.

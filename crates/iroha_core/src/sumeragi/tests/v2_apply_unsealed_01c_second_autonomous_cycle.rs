@@ -102,9 +102,10 @@ fn second_autonomous_cycle_preserves_terminal_replay(
     assert!(
         fixture
             .state
-            .certified_autonomous_lane_block_predecessor_is_globally_applied_cached(
+            .certified_autonomous_lane_block_predecessor_is_globally_applied(
                 &payload.origin_proposal
             )
+            .expect("authenticate exact durable application evidence")
     );
     let reservation_keys = payload.reservation_keys.clone();
     let envelope = crate::lane_consensus::autonomous_lane_payload_envelope(
@@ -337,19 +338,20 @@ fn second_autonomous_cycle_preserves_terminal_replay(
     assert!(
         fixture
             .state
-            .certified_autonomous_lane_block_is_globally_applied_cached(&certificate.proposal)
+            .certified_autonomous_lane_block_is_globally_applied(&certificate.proposal)
+            .expect("authenticate exact durable application evidence")
     );
     assert!(
         !fixture
             .state
-            .certified_autonomous_lane_block_predecessor_is_globally_applied_cached(
-                &certificate.proposal
-            )
+            .certified_autonomous_lane_block_predecessor_is_globally_applied(&certificate.proposal)
+            .expect("authenticate exact durable application evidence")
     );
     assert!(
         fixture
             .state
-            .certified_autonomous_lane_block_is_globally_applied_cached(original)
+            .certified_autonomous_lane_block_is_globally_applied(original)
+            .expect("authenticate exact durable application evidence")
     );
     assert!(
         fixture
@@ -380,9 +382,13 @@ fn second_autonomous_cycle_preserves_terminal_replay(
         assert!(
             !fixture
                 .state
-                .certified_autonomous_lane_block_is_globally_applied_cached(&wrong)
+                .certified_autonomous_lane_block_is_globally_applied(&wrong)
+                .expect("authenticate exact durable application evidence")
         );
     }
+    // Reopening the same signer must follow release of the previous process owner.
+    // Keep the journal on disk so restart authenticates its retained signing history.
+    drop(lane_work);
     let context_six = verified_successor_context_at_fixture_tip(fixture);
     assert_eq!(context_six.context().height, 6);
     crate::sumeragi::v2_lane_work::tests::inspect_applied_public_lane_qc_replay_for_test(

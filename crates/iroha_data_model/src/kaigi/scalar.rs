@@ -55,7 +55,8 @@ impl AsRef<[u8; KaigiAuthorizationScalarV1::BYTES]> for KaigiAuthorizationScalar
     }
 }
 
-impl norito::core::NoritoSerialize for KaigiAuthorizationScalarV1 {
+impl norito::core::NoritoSerialize for KaigiAuthorizationScalarV1 {}
+impl norito::core::SerializePayload for KaigiAuthorizationScalarV1 {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         writer.write_all(&self.0)?;
         Ok(())

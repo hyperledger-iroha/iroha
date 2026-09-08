@@ -24,7 +24,7 @@ use iroha_data_model::{
     },
 };
 use norito::{
-    DecodeLimits, NoritoDeserialize, NoritoSerialize,
+    DecodeLimits, NoritoDeserialize, NoritoSerialize, SerializePayload,
     codec::{Decode, Encode},
 };
 
@@ -99,12 +99,10 @@ pub(super) enum ControlErrorV1 {
 }
 type Result<T> = std::result::Result<T, ControlErrorV1>;
 
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-#[norito(schema_name = "iroha.kagemusha.device.v1.read-active-hardware-credential-command")]
-struct ReadCredentialPayloadV1 {
-    version: u16,
-    operation: u8,
-}
+use iroha_data_model::kagemusha::{
+    KagemushaDeviceQualificationReplyV1 as QualificationReplyV1,
+    KagemushaDeviceReadCredentialCommandV1 as ReadCredentialPayloadV1,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(schema_name = "iroha.kagemusha.device.v1.sign-receive-acknowledgement-command")]
@@ -361,6 +359,49 @@ fn decode_exchange(
     Ok((request, payment))
 }
 
+/// Decode only a read body before a native observation challenge exists.
+/// Device dispatch still validates its actual nonzero outer request ID separately.
+pub(super) fn decode_observation_command_v1(
+    operation: u8,
+    bytes: &[u8],
+) -> Result<ControlCommandV1> {
+    match operation {
+        READ_CREDENTIAL => {
+            let value: ReadCredentialPayloadV1 = exact(bytes, READ_COMMAND_MAX)?;
+            header(value.version, value.operation, operation)?;
+            Ok(ControlCommandV1::ReadCredential)
+        }
+        READ_TIME_OR_LEASE => {
+            let value: ReadTimeOrLeasePayloadV1 = exact(bytes, READ_COMMAND_MAX)?;
+            header(value.version, value.operation, operation)?;
+            Ok(ControlCommandV1::ReadTimeOrLease)
+        }
+        READ_PENDING_WATERMARK => {
+            let value: ReadPendingWatermarkPayloadV1 = exact(bytes, READ_COMMAND_MAX)?;
+            header(value.version, value.operation, operation)?;
+            if let Some(watermark) = value.watermark {
+                validate_pending_watermark(watermark)?;
+            }
+            if matches!(value.target, PendingCreditTargetV1::RequiredBalance(0))
+                || matches!(value.target, PendingCreditTargetV1::RequiredBalance(_))
+                    && value.watermark.is_some()
+            {
+                return Err(ControlErrorV1::Binding);
+            }
+            Ok(ControlCommandV1::ReadPendingWatermark {
+                watermark: value.watermark,
+                target: value.target,
+            })
+        }
+        RECOVER_WALLET_SNAPSHOT => {
+            let value: RecoverWalletSnapshotPayloadV1 = exact(bytes, READ_COMMAND_MAX)?;
+            header(value.version, value.operation, operation)?;
+            Ok(ControlCommandV1::RecoverWalletSnapshot)
+        }
+        _ => Err(ControlErrorV1::UnsupportedOperation),
+    }
+}
+
 /// Decode exactly one bounded operation body and bind it to the outer request ID.
 pub(super) fn decode_control_command_v1(
     operation: u8,
@@ -369,10 +410,8 @@ pub(super) fn decode_control_command_v1(
 ) -> Result<ControlCommandV1> {
     nonzero(&request_id)?;
     match operation {
-        READ_CREDENTIAL => {
-            let value: ReadCredentialPayloadV1 = exact(bytes, READ_COMMAND_MAX)?;
-            header(value.version, value.operation, operation)?;
-            Ok(ControlCommandV1::ReadCredential)
+        READ_CREDENTIAL | READ_TIME_OR_LEASE | READ_PENDING_WATERMARK | RECOVER_WALLET_SNAPSHOT => {
+            decode_observation_command_v1(operation, bytes)
         }
         SIGN_ACKNOWLEDGEMENT => {
             let value: SignAcknowledgementPayloadV1 = exact(bytes, ACKNOWLEDGEMENT_COMMAND_MAX)?;
@@ -391,11 +430,6 @@ pub(super) fn decode_control_command_v1(
                 payment,
                 inbox_receipt: value.inbox_receipt,
             })
-        }
-        READ_TIME_OR_LEASE => {
-            let value: ReadTimeOrLeasePayloadV1 = exact(bytes, READ_COMMAND_MAX)?;
-            header(value.version, value.operation, operation)?;
-            Ok(ControlCommandV1::ReadTimeOrLease)
         }
         PREPARE_MINT => {
             let value: PrepareMintPayloadV1 = exact(bytes, MINT_COMMAND_MAX)?;
@@ -438,23 +472,6 @@ pub(super) fn decode_control_command_v1(
                 },
             })
         }
-        READ_PENDING_WATERMARK => {
-            let value: ReadPendingWatermarkPayloadV1 = exact(bytes, READ_COMMAND_MAX)?;
-            header(value.version, value.operation, operation)?;
-            if let Some(watermark) = value.watermark {
-                validate_pending_watermark(watermark)?;
-            }
-            if matches!(value.target, PendingCreditTargetV1::RequiredBalance(0))
-                || matches!(value.target, PendingCreditTargetV1::RequiredBalance(_))
-                    && value.watermark.is_some()
-            {
-                return Err(ControlErrorV1::Binding);
-            }
-            Ok(ControlCommandV1::ReadPendingWatermark {
-                watermark: value.watermark,
-                target: value.target,
-            })
-        }
         ROTATE_HARDWARE_EPOCH => {
             let value: RotateHardwareEpochPayloadV1 = exact(bytes, READ_COMMAND_MAX)?;
             header(value.version, value.operation, operation)?;
@@ -476,11 +493,6 @@ pub(super) fn decode_control_command_v1(
             Ok(ControlCommandV1::BootstrapAggregateState {
                 operation_id: value.operation_id,
             })
-        }
-        RECOVER_WALLET_SNAPSHOT => {
-            let value: RecoverWalletSnapshotPayloadV1 = exact(bytes, READ_COMMAND_MAX)?;
-            header(value.version, value.operation, operation)?;
-            Ok(ControlCommandV1::RecoverWalletSnapshot)
         }
         CREATE_SIGNED_PAYMENT_REQUEST => {
             let value: CreateSignedPaymentRequestPayloadV1 =
@@ -505,16 +517,19 @@ pub(super) fn decode_control_command_v1(
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-#[norito(schema_name = "iroha.kagemusha.device.v1.active-hardware-credential-reply")]
-struct QualificationReplyV1 {
-    version: u16,
-    operation: u8,
-    release_id: [u8; 32],
-    hardware_policy_digest: [u8; 32],
-    core_authorization_key_reference: [u8; 32],
-    profile: KagemushaHardwareProfileV1,
-    credential: KagemushaHardwareCredentialV1,
+/// Decode the exact operation-1 projection for the native startup owner.
+pub(super) fn qualification_projection_v1(
+    bytes: &[u8],
+) -> Result<super::QualificationProjectionV1> {
+    validate_control_reply_v1(&ControlCommandV1::ReadCredential, bytes)?;
+    let reply: QualificationReplyV1 = exact(bytes, QUALIFICATION_REPLY_MAX)?;
+    Ok(super::QualificationProjectionV1 {
+        release_id: reply.release_id,
+        hardware_policy_digest: reply.hardware_policy_digest,
+        core_authorization_key_reference: reply.core_authorization_key_reference,
+        profile: reply.profile,
+        credential: reply.credential,
+    })
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
@@ -594,6 +609,53 @@ struct SignedPaymentRequestReplyV1 {
     version: u16,
     operation: u8,
     canonical_request: Vec<u8>,
+}
+
+/// Correlate signed reads with independently pinned native wallet and credential selectors.
+/// This still does not authenticate a recursive aggregate witness, a revocation decision or a
+/// private clock/lease opening; the state backend must establish those before a transition.
+pub(super) fn validate_observation_reply_context_v1(
+    operation: u8,
+    bytes: &[u8],
+    qualification: &super::QualificationProjectionV1,
+    wallet: &super::ObservationWalletContextV1,
+) -> Result<()> {
+    match operation {
+        READ_CREDENTIAL | READ_TIME_OR_LEASE => Ok(()),
+        READ_PENDING_WATERMARK => {
+            let reply: PendingWatermarkReplyV1 = exact(bytes, WATERMARK_REPLY_MAX)?;
+            if reply.watermark.hardware_epoch_generation
+                != u128::from(qualification.credential.hardware_epoch_generation)
+                || reply.watermark.hardware_epoch_id != qualification.credential.hardware_epoch_id
+            {
+                return Err(ControlErrorV1::Binding);
+            }
+            Ok(())
+        }
+        RECOVER_WALLET_SNAPSHOT => {
+            let reply: WalletRecoverySnapshotReplyV1 = exact(bytes, WALLET_SNAPSHOT_REPLY_MAX)?;
+            if let Some(bytes) = reply.canonical_aggregate_state {
+                let state = KagemushaAggregateStateCommitmentV1::decode_canonical_exact(&bytes)
+                    .map_err(|_| ControlErrorV1::PublicShape)?;
+                if state.release_id != qualification.release_id
+                    || state.hardware_policy_id != qualification.hardware_policy_digest
+                    || state.network_id != wallet.network_id
+                    || state.lane_id != wallet.lane_id
+                    || state.asset != wallet.asset
+                    || state.asset_incarnation != wallet.asset_incarnation
+                    || state.scale != wallet.scale
+                    || state.hardware_epoch_id != qualification.credential.hardware_epoch_id
+                    || state.key_reference != qualification.credential.device_key_reference
+                {
+                    return Err(ControlErrorV1::Binding);
+                }
+            }
+            // An absent public aggregate is observation evidence only, never permission to
+            // bootstrap or discard retained pending credits/outbox obligations.
+            Ok(())
+        }
+        _ => Err(ControlErrorV1::UnsupportedOperation),
+    }
 }
 
 /// Validate a canonical success body against the exact decoded command.

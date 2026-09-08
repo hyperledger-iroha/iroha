@@ -199,17 +199,16 @@ class AutonomousRecoveryCapacityContractTests(unittest.TestCase):
         source = path.read_text(encoding="utf-8")
         item, extraction_error = self.checker._extract_rust_method(
             source,
-            "State::certified_autonomous_lane_block_predecessor_is_globally_applied_cached",
+            "State::certified_autonomous_lane_block_predecessor_is_globally_applied",
         )
         self.assertIsNone(extraction_error)
         self.assertIsNotNone(item)
         assert item is not None
         self.assertNotIn("hash_only_snapshot_anchor", item)
         self.assertIn("canonical_merged_lane_frontier_from_world", item)
-        self.assertIn(
-            "autonomous_lane_block_predecessor_merge_receipt_revalidates_without_sidecar_repair",
-            item,
-        )
+        self.assertIn("native_amx_participant_application_snapshot()?", item)
+        self.assertIn("lane_block_predecessor_has_authenticated_receipt", item)
+        self.assertIn("Result<bool, MergeLedgerCommitError>", item)
 
     def test_ready_certificate_cannot_enter_ordinary_receipt_repair_binding(self) -> None:
         contract = copy.deepcopy(self.contract)

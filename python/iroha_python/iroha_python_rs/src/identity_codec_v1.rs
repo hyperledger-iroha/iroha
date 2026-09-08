@@ -158,7 +158,8 @@ mod tests {
             serialization_passes: Cell<usize>,
         }
 
-        impl norito::NoritoSerialize for OversizedPayload {
+        impl norito::NoritoSerialize for OversizedPayload {}
+        impl norito::SerializePayload for OversizedPayload {
             fn serialize(
                 &self,
                 encoder: &mut norito::core::Encoder<'_>,

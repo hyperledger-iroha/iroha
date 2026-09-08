@@ -30,7 +30,7 @@ use iroha_data_model::{
 };
 use iroha_primitives::json::Json;
 use norito::{
-    NoritoSerialize,
+    NoritoSerialize, SerializePayload,
     codec::Encode,
     json::{self, JsonDeserialize, JsonSerialize, Map, Number, Value},
 };
@@ -3556,7 +3556,11 @@ mod tests {
                 &malformed,
             )
             .expect_err("peer semantic source shape must fail closed");
-            assert!(error.to_string().contains("semantic instruction shape mismatch"));
+            assert!(
+                error
+                    .to_string()
+                    .contains("semantic instruction shape mismatch")
+            );
         }
     }
     #[test]

@@ -9,6 +9,8 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
 import org.hyperledger.iroha.sdk.address.AccountAddress
+import org.hyperledger.iroha.sdk.address.AccountAddressException
+import org.hyperledger.iroha.sdk.address.MultisigPolicyPayload
 import org.hyperledger.iroha.sdk.client.JsonParser
 import org.hyperledger.iroha.sdk.core.model.Executable
 import org.hyperledger.iroha.sdk.core.model.ExecutableBatchItem
@@ -32,7 +34,6 @@ import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
-import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
 /** Rust-owned wire parity checks for the complete typed Musubi V1 mutation surface. */
@@ -743,7 +744,7 @@ class MusubiInstructionsV1FixtureTest {
     }
 
     @Test
-    fun `recovery normalizes multisig owners before distinctness and encoding`() {
+    fun `recovery rejects duplicate owners after canonical multisig construction`() {
         val recover = cases(fixture())
             .first { it["id"] == "recover-domain-package-three-owners" }
             .objectValue("semantic")
@@ -759,11 +760,19 @@ class MusubiInstructionsV1FixtureTest {
                 "0100020020d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737" +
                 "01000100205c9c6df261c9cb840475776aaefcd944b405328fab28f9b3a95ef40490d3de84",
         )
-        val sortedOwner = AccountAddress.fromCanonicalBytes(sortedBytes)
-            .toI105(SccpV1.TAIRA_I105_DISCRIMINANT_V1)
-        val reversedOwner = AccountAddress.fromCanonicalBytes(reversedBytes)
-            .toI105(SccpV1.TAIRA_I105_DISCRIMINANT_V1)
-        assertNotEquals(sortedOwner, reversedOwner)
+        val sortedAddress = AccountAddress.fromCanonicalBytes(sortedBytes)
+        val sortedOwner = sortedAddress.toI105(SccpV1.TAIRA_I105_DISCRIMINANT_V1)
+        // External encodings must already be canonical; construction sorts member inputs.
+        assertFailsWith<AccountAddressException> {
+            AccountAddress.fromCanonicalBytes(reversedBytes)
+        }
+        val policy = requireNotNull(sortedAddress.multisigPolicyPayload())
+        val reversedAddress = AccountAddress.fromMultisigPolicy(
+            MultisigPolicyPayload.of(policy.version, policy.threshold, policy.members.reversed()),
+        )
+        assertContentEquals(sortedBytes, reversedAddress.canonicalBytes)
+        val reversedOwner = reversedAddress.toI105(SccpV1.TAIRA_I105_DISCRIMINANT_V1)
+        assertEquals(sortedOwner, reversedOwner)
 
         val sorted = MusubiInstructionsV1.RecoverMusubiPackageV1(
             decision,

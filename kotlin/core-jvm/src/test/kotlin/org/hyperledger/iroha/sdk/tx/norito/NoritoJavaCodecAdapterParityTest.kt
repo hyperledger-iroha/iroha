@@ -225,16 +225,17 @@ class NoritoJavaCodecAdapterParityTest {
         assertEquals(2, threshold)
         assertEquals(2L, memberCount)
 
-        assertMultisigMember(
-            policyDecoder,
-            compactPublicKeyPayload(0x01, memberKeyA),
-            1,
-            "member[0]",
-        )
+        // Unsigned public-key order places seed 0x22 (a09a...) before seed 0x11 (d04a...).
         assertMultisigMember(
             policyDecoder,
             compactPublicKeyPayload(0x01, memberKeyB),
             2,
+            "member[0]",
+        )
+        assertMultisigMember(
+            policyDecoder,
+            compactPublicKeyPayload(0x01, memberKeyA),
+            1,
             "member[1]",
         )
         assertEquals(0, policyDecoder.remaining())

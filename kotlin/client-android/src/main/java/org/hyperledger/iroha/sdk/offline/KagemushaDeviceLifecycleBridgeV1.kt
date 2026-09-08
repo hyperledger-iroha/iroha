@@ -119,15 +119,20 @@ class KagemushaDeviceLifecycleBridgeV1 private constructor(
         val status: Status,
         payload: ByteArray,
         authenticator: ByteArray,
+        canonicalResponseFrame: ByteArray,
     ) {
         // The decoder creates these arrays solely for this result and transfers
         // ownership exactly once. Public accessors still return caller-owned copies.
         private val payloadBytes = payload
         private val authenticatorBytes = authenticator
+        private val responseFrameBytes = canonicalResponseFrame
 
         fun payload(): ByteArray = payloadBytes.copyOf()
 
         fun authenticator(): ByteArray = authenticatorBytes.copyOf()
+
+        /** Exact bounded frame; framing alone grants no device or enrollment authority. */
+        fun canonicalResponseFrame(): ByteArray = responseFrameBytes.copyOf()
     }
 
     /** Stable local mode. Unsupported devices are intentionally not exceptional at discovery. */
@@ -169,35 +174,47 @@ class KagemushaDeviceLifecycleBridgeV1 private constructor(
             }
             else -> requireDevicePublicKey(acceptedDevicePublicKey)
         }
-        val request = Codec.encodeCommand(operation, requestId, canonicalCommand)
-        val rawResponse = try {
-            nativeEndpoint.execute(request)
-        } catch (error: RuntimeException) {
-            throw IllegalStateException("KAGEMUSHA V1 secure backend execution failed", error)
-        } catch (error: LinkageError) {
-            throw IllegalStateException("KAGEMUSHA V1 secure backend execution failed", error)
-        } finally {
-            request.fill(0)
-        }
+        // Verify the exact bytes dispatched, even if a caller changes its arrays during execution.
+        val retainedId = requestId.copyOf()
+        val retainedCommand = canonicalCommand.copyOf()
         return try {
-            val result = Codec.decodeResponse(rawResponse, operation, requestId)
-            if (result.status == Status.SUCCESS) {
-                val capabilities = checkNotNull(acceptedCapabilities)
-                require(
-                    nativeEndpoint.verifyResponseAuthenticator(
-                        rawResponse,
-                        operation,
-                        requestId,
-                        capabilities.hardwarePolicyId(),
-                        capabilities.qualificationReportDigest(),
-                        responseKey,
-                    ),
-                ) { "KAGEMUSHA response authenticator verification failed" }
+            val request = Codec.encodeCommand(operation, retainedId, retainedCommand)
+            val rawResponse = try {
+                nativeEndpoint.execute(request)
+            } catch (error: RuntimeException) {
+                throw IllegalStateException("KAGEMUSHA V1 secure backend execution failed", error)
+            } catch (error: LinkageError) {
+                throw IllegalStateException("KAGEMUSHA V1 secure backend execution failed", error)
+            } finally {
+                request.fill(0)
             }
-            result
+            try {
+                val result = Codec.decodeResponse(rawResponse, operation, retainedId)
+                if (result.status == Status.SUCCESS) {
+                    val capabilities = checkNotNull(acceptedCapabilities)
+                    val verificationFrame = result.canonicalResponseFrame()
+                    try {
+                        require(nativeEndpoint.verifyCommandResponse(
+                            verificationFrame,
+                            retainedCommand,
+                            operation,
+                            retainedId,
+                            capabilities.hardwarePolicyId(),
+                            capabilities.qualificationReportDigest(),
+                            responseKey,
+                        )) { "KAGEMUSHA command response verification failed" }
+                    } finally {
+                        verificationFrame.fill(0)
+                    }
+                }
+                result
+            } finally {
+                rawResponse.fill(0)
+            }
         } finally {
+            retainedId.fill(0)
+            retainedCommand.fill(0)
             responseKey?.fill(0)
-            rawResponse.fill(0)
         }
     }
 
@@ -206,16 +223,18 @@ class KagemushaDeviceLifecycleBridgeV1 private constructor(
 
         fun execute(command: ByteArray): ByteArray
 
-        fun verifyResponseAuthenticator(
+        fun verifyCommandResponse(
             response: ByteArray,
+            canonicalCommand: ByteArray,
             operation: Operation,
             requestId: ByteArray,
             hardwarePolicyId: ByteArray,
             qualificationReportDigest: ByteArray,
             acceptedDevicePublicKey: ByteArray?,
         ): Boolean = try {
-            NativeEndpoint.verifyResponseAuthenticator(
+            NativeEndpoint.verifyCommandResponse(
                 response,
+                canonicalCommand,
                 operation,
                 requestId,
                 hardwarePolicyId,
@@ -317,15 +336,17 @@ class KagemushaDeviceLifecycleBridgeV1 private constructor(
             }
         }
 
-        override fun verifyResponseAuthenticator(
+        override fun verifyCommandResponse(
             response: ByteArray,
+            canonicalCommand: ByteArray,
             operation: Operation,
             requestId: ByteArray,
             hardwarePolicyId: ByteArray,
             qualificationReportDigest: ByteArray,
             acceptedDevicePublicKey: ByteArray?,
-        ): Boolean = nativeVerifyResponseAuthenticatorV1(
+        ): Boolean = nativeVerifyCommandResponseV1(
             response,
+            canonicalCommand,
             operation.code,
             requestId,
             hardwarePolicyId,
@@ -343,8 +364,9 @@ class KagemushaDeviceLifecycleBridgeV1 private constructor(
         private external fun nativeExecuteV1(command: ByteArray): ByteArray?
 
         @JvmStatic
-        private external fun nativeVerifyResponseAuthenticatorV1(
+        private external fun nativeVerifyCommandResponseV1(
             response: ByteArray,
+            canonicalCommand: ByteArray,
             operation: Int,
             requestId: ByteArray,
             hardwarePolicyId: ByteArray,
@@ -408,7 +430,9 @@ class KagemushaDeviceLifecycleBridgeV1 private constructor(
             require(encoded.size <= RESPONSE_HEADER_BYTES + MAXIMUM_RESPONSE_PAYLOAD_BYTES + MAXIMUM_AUTHENTICATOR_BYTES) {
                 "oversized KAGEMUSHA V1 response"
             }
-            val input = reader(encoded)
+            // Decode the same owned snapshot that will be retained and authenticated.
+            val responseFrame = encoded.copyOf()
+            val input = reader(responseFrame)
             var payload = ByteArray(0)
             var authenticator = ByteArray(0)
             var transferred = false
@@ -446,13 +470,14 @@ class KagemushaDeviceLifecycleBridgeV1 private constructor(
                         "failed KAGEMUSHA response must not expose bytes"
                     }
                 }
-                val result = Result(operation, status, payload, authenticator)
+                val result = Result(operation, status, payload, authenticator, responseFrame)
                 transferred = true
                 return result
             } finally {
                 if (!transferred) {
                     payload.fill(0)
                     authenticator.fill(0)
+                    responseFrame.fill(0)
                 }
             }
         }

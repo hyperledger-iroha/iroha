@@ -4,6 +4,8 @@
 package org.hyperledger.iroha.sdk.offline
 
 import java.math.BigInteger
+import java.text.Normalizer
+import org.hyperledger.iroha.sdk.address.AccountAddress
 import org.hyperledger.iroha.sdk.core.model.NetworkId
 import org.hyperledger.iroha.sdk.core.model.instructions.TransferWirePayloadEncoder
 
@@ -15,6 +17,13 @@ import org.hyperledger.iroha.sdk.core.model.instructions.TransferWirePayloadEnco
 /** Exact typed `AssetDefinitionId` payload used by KAGEMUSHA V1. */
 class KagemushaAssetDefinitionIdV1 private constructor(payload: ByteArray) {
     private val value = payload.copyOf()
+
+    init {
+        requireFixedByteArrayPayload(value, 16, "asset")
+        require(value[13].toInt() and 0xf0 == 0x40 && value[17].toInt() and 0xc0 == 0x80) {
+            "asset must encode canonical UUIDv4 version and variant bytes"
+        }
+    }
 
     /** Return a defensive copy of the canonical bare Norito payload. */
     fun canonicalPayload(): ByteArray = value.copyOf()
@@ -35,7 +44,6 @@ class KagemushaAssetDefinitionIdV1 private constructor(payload: ByteArray) {
         /** Parse an exact canonical bare Norito `AssetDefinitionId` payload. */
         @JvmStatic
         fun fromCanonicalPayload(payload: ByteArray): KagemushaAssetDefinitionIdV1 {
-            requireFixedByteArrayPayload(payload, 16, "asset")
             return KagemushaAssetDefinitionIdV1(payload)
         }
     }
@@ -71,6 +79,96 @@ class KagemushaAccountIdV1 private constructor(payload: ByteArray) {
             ) { "KAGEMUSHA V1 account payload is not canonical" }
             return KagemushaAccountIdV1(payload)
         }
+    }
+}
+
+/** Untrusted immutable bank, authentication, ledger and asset scope for enrolled lookup. */
+class KagemushaRetailEnrollmentRuntimeV1(
+    @JvmField val fiId: String,
+    @JvmField val ledgerDataspaceId: Long,
+    @JvmField val authenticationNamespace: String,
+    @JvmField val networkId: NetworkId,
+    @JvmField val asset: KagemushaAssetDefinitionIdV1,
+    @JvmField val assetIncarnation: KagemushaAssetIncarnationV1,
+    @JvmField val scale: Int,
+) {
+    init {
+        requireEnrollmentName(fiId, "fiId")
+        requireEnrollmentName(authenticationNamespace, "authenticationNamespace")
+        requireHeader(KagemushaWireV1.WIRE_VERSION, networkId, scale, null)
+    }
+}
+
+/** Full immutable account and governed-lane projection; possession is not authenticated. */
+class KagemushaRetailEnrollmentOwnerV1(
+    @JvmField val accountId: KagemushaAccountIdV1,
+    @JvmField val runtime: KagemushaRetailEnrollmentRuntimeV1,
+    laneId: ByteArray,
+) {
+    private val laneIdValue = fixed32(laneId, "laneId")
+
+    fun laneId(): ByteArray = laneIdValue.copyOf()
+}
+
+/**
+ * Untrusted native enrollment/recovery lookup data. This type proves no MiBank approval,
+ * hardware possession, current selection or monetary authority.
+ */
+class KagemushaEnrolledOpenSelectorV1(
+    @JvmField val version: Int,
+    @JvmField val owner: KagemushaRetailEnrollmentOwnerV1,
+    enrollmentId: ByteArray,
+) {
+    private val enrollmentIdValue = raw32(enrollmentId, "enrollmentId")
+
+    init {
+        require(version == KagemushaWireV1.WIRE_VERSION) { "enrolled-open selector version must be 1" }
+        val literal = TransferWirePayloadEncoder.decodeAccountIdPayload(owner.accountId.canonicalPayload(), 0)
+        require(AccountAddress.parseEncoded(literal, 0).singleKeyPayload()?.curveId == 1) {
+            "enrolled-open selector requires a single Ed25519 account"
+        }
+    }
+
+    fun enrollmentId(): ByteArray = enrollmentIdValue.copyOf()
+
+    companion object {
+        /** Derive correlation bytes for the exact owner without granting authority. */
+        @JvmStatic
+        fun fromOwner(owner: KagemushaRetailEnrollmentOwnerV1): KagemushaEnrolledOpenSelectorV1 =
+            KagemushaEnrolledOpenSelectorV1(
+                KagemushaWireV1.WIRE_VERSION,
+                owner,
+                KagemushaNoritoV1.retailEnrollmentIdentityShape(owner),
+            )
+    }
+}
+
+/** Validate exact Name spelling without silently repairing untrusted scope. */
+private fun requireEnrollmentName(value: String, field: String) {
+    require(value.isNotEmpty() && value.toByteArray(Charsets.UTF_8).size <= 255) {
+        "$field must contain 1 to 255 UTF-8 bytes"
+    }
+    var index = 0
+    while (index < value.length) {
+        val character = value[index]
+        if (Character.isHighSurrogate(character)) {
+            require(index + 1 < value.length && Character.isLowSurrogate(value[index + 1])) {
+                "$field contains invalid Unicode"
+            }
+            index += 2
+            continue
+        }
+        require(!Character.isLowSurrogate(character)) { "$field contains invalid Unicode" }
+        require(
+            !Character.isISOControl(character) && !character.isWhitespace() &&
+                character !in "@#$" && character.code != 0x061c &&
+                character.code !in 0x200e..0x200f && character.code !in 0x202a..0x202e &&
+                character.code !in 0x2066..0x2069,
+        ) { "$field contains a forbidden Name character" }
+        index++
+    }
+    require(Normalizer.normalize(value, Normalizer.Form.NFC) == value) {
+        "$field must already use its exact NFC spelling"
     }
 }
 

@@ -5,7 +5,7 @@ use std::{collections::BTreeMap, fmt::Debug};
 
 use iroha_data_model::{account::address::ChainDiscriminantGuard, musubi::*};
 use norito::{
-    NoritoDeserialize, NoritoSerialize,
+    NoritoDeserialize, NoritoSerialize, SerializePayload,
     json::{self, JsonSerialize, Value},
 };
 

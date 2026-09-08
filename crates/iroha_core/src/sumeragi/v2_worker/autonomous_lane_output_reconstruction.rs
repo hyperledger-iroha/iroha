@@ -411,12 +411,13 @@ fn autonomous_lane_output_has_durable_reconstruction_source(
                     );
                 }
                 let durable = kura
-                    .read_autonomous_lane_block_artifact(
+                    .read_current_autonomous_lane_block_artifact(
                         descriptor.lane_id,
                         descriptor.lane_block_height,
                         network_id,
                         epoch,
                     )
+                    .map_err(|error| error.to_string())?
                     .ok_or_else(|| {
                         "autonomous-lane payload has no durable reconstruction artifact".to_owned()
                     })?;
@@ -436,12 +437,13 @@ fn autonomous_lane_output_has_durable_reconstruction_source(
                 vote.validate_ingress().map_err(|error| error.to_string())?;
                 let body = &vote.body;
                 let (payload, current) = kura
-                    .current_autonomous_lane_payload(
+                    .read_current_autonomous_lane_payload(
                         body.lane_id,
                         body.lane_block_height,
                         network_id,
                         epoch,
                     )
+                    .map_err(|error| error.to_string())?
                     .ok_or_else(|| {
                         "autonomous NewView vote has no durable payload cursor".to_owned()
                     })?;
@@ -484,12 +486,13 @@ fn autonomous_lane_output_has_durable_reconstruction_source(
             BlockMessage::LaneBlockNewViewCertificate(certificate) => {
                 let body = &certificate.body;
                 let durable = kura
-                    .read_autonomous_lane_block_artifact(
+                    .read_current_autonomous_lane_block_artifact(
                         body.lane_id,
                         body.lane_block_height,
                         network_id,
                         epoch,
                     )
+                    .map_err(|error| error.to_string())?
                     .ok_or_else(|| {
                         "autonomous NewView certificate has no durable payload cursor".to_owned()
                     })?;
@@ -536,11 +539,10 @@ fn payload_chunk_output_has_applied_height_authority(
     artifact: &wire::finality::V2FinalityArtifact,
 ) -> Result<(), String> {
     let context = &artifact.height_context;
-    let validated = wire::ValidatedPayloadManifest::new(context, manifest.clone()).map_err(
-        |error| {
+    let validated =
+        wire::ValidatedPayloadManifest::new(context, manifest.clone()).map_err(|error| {
             format!("payload-chunk rollover manifest is invalid for the applied context: {error}")
-        },
-    )?;
+        })?;
     let manifest_hash = validated.manifest_hash();
     if messages.len() != manifest.chunk_hashes.len() {
         return Err("payload-chunk rollover changed the exact chunk count".to_owned());
@@ -570,9 +572,11 @@ fn payload_chunk_output_has_applied_height_authority(
                 "payload-chunk rollover differs from its exact manifest coordinates".to_owned(),
             );
         }
-        let signature_payload = chunk.validate_for_authentication(&validated).map_err(|error| {
-            format!("payload-chunk rollover is invalid for its exact manifest: {error}")
-        })?;
+        let signature_payload = chunk
+            .validate_for_authentication(&validated)
+            .map_err(|error| {
+                format!("payload-chunk rollover is invalid for its exact manifest: {error}")
+            })?;
         let sender = validated
             .validator(chunk.sender)
             .map_err(|error| error.to_string())?;

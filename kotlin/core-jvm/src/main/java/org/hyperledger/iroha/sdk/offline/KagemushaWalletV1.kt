@@ -291,6 +291,9 @@ interface KagemushaHardwareProviderV1 {
     /** Recover a redemption before its terminal ID was exposed to the caller. */
     fun recoverRedemptionByOperationId(operationId: ByteArray): ByteArray?
 
+    /** Acknowledge only after an exact request or terminal result is durable in the application transcript. */
+    fun acknowledgeDurableResult(operationId: ByteArray, canonicalResult: ByteArray)
+
     /** Rotate the complete private aggregate state and replay root to a qualified epoch. */
     fun rotateHardwareEpoch(): ByteArray
 }
@@ -368,6 +371,11 @@ class KagemushaWalletV1 private constructor(
             recovered.recovery.pendingCreditCount,
             recovered.recovery.retryOutboxCount,
         )
+    }
+
+    /** Retire a host retry obligation only after its exact result is durably owned by the caller. */
+    fun acknowledgeDurableResult(operationId: ByteArray, canonicalResult: ByteArray) = transitionLock.withLock {
+        provider.acknowledgeDurableResult(fixed32(operationId, "operationId"), canonicalResult.copyOf())
     }
 
     /** Create a signed exact-amount receiver request. */
@@ -536,6 +544,7 @@ class KagemushaWalletV1 private constructor(
      */
     fun drainPendingCredits(): BigInteger {
         val snapshot = transitionLock.withLock {
+            recover()
             Pair(
                 currentQualification.credential.hardwareEpochId(),
                 currentQualification.credential.hardwareEpochGeneration,
@@ -729,6 +738,7 @@ class KagemushaWalletV1 private constructor(
 
     /** Drain the provider-visible mixed mint/peer inbox without an item-count ceiling. */
     private fun drainPendingCreditsLocked() {
+        recover()
         var watermark: KagemushaPendingCreditWatermarkV1? = null
         while (true) {
             val selection = provider.selectPendingCredit(
@@ -743,6 +753,7 @@ class KagemushaWalletV1 private constructor(
     }
 
     private fun foldRequiredCreditsLocked(requiredBalance: BigInteger) {
+        recover()
         while (true) {
             val selection = provider.selectPendingCredit(
                 null,
@@ -764,8 +775,8 @@ class KagemushaWalletV1 private constructor(
     companion object {
         /** Open only after the complete native/hardware contract and recovery succeed. */
         @JvmStatic
-        fun open(provider: KagemushaHardwareProviderV1): KagemushaWalletV1 {
-            val recovered = recoverAuthoritativeSnapshot(provider, allowBootstrap = true).host
+        fun open(provider: KagemushaHardwareProviderV1, authorizeBootstrap: () -> Unit): KagemushaWalletV1 {
+            val recovered = recoverAuthoritativeSnapshot(provider, allowBootstrap = true, authorizeBootstrap = authorizeBootstrap).host
             return KagemushaWalletV1(
                 provider,
                 recovered.qualification,
@@ -777,6 +788,7 @@ class KagemushaWalletV1 private constructor(
         private fun recoverAuthoritativeSnapshot(
             provider: KagemushaHardwareProviderV1,
             allowBootstrap: Boolean,
+            authorizeBootstrap: (() -> Unit)? = null,
         ): RecoverySnapshot {
             requireQualified(provider.qualification())
             var recovery = provider.recover()
@@ -785,6 +797,7 @@ class KagemushaWalletV1 private constructor(
             var stateBytes = recovery.aggregateState()
             if (stateBytes == null) {
                 require(allowBootstrap) { "recovery lost an existing aggregate state" }
+                requireNotNull(authorizeBootstrap) { "bootstrap requires explicit admission" }.invoke()
                 val bootstrapped = provider.bootstrapState().copyOf()
                 // A successful return is not proof that bootstrap was durably installed.
                 // Observe its persisted state and revision together, without repeating bootstrap.

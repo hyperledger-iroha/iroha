@@ -3,8 +3,8 @@ use super::{SignedTransaction, signed::TransactionEntrypoint};
 use iroha_crypto::{Algorithm, HashOf, KeyPair, PublicKey, Signature};
 use iroha_schema::IntoSchema;
 use norito::{
+    SerializePayload,
     codec::{Decode, Encode},
-    core::NoritoSerialize,
 };
 fn verify_signature_for_signer(
     signature: &Signature,

@@ -46,6 +46,12 @@ macro_rules! schema_types {
             iroha_data_model::fastpq::FastpqTransitionBatch,
             iroha_data_model::fastpq::FastpqStateTransition,
             iroha_data_model::fastpq::FastpqBalanceKeyV1,
+            iroha_data_model::fastpq::FastpqOrdinaryCompactArtifactV1,
+            iroha_data_model::fastpq::FastpqAxtCompactArtifactV1,
+            iroha_data_model::fastpq::FastpqArtifactIdentityDescriptionV1,
+            iroha_data_model::fastpq::FastpqOrdinarySourceStatementOpeningV1,
+            iroha_data_model::fastpq::FastpqOrdinarySourceStatementArchiveV1,
+            iroha_data_model::fastpq::FastpqSourceExecutionEntryV1,
             // Never referenced, but present in type signature. Like `PhantomData<X>`
             MerkleTree<SignedTransaction>,
             // Default permissions
@@ -278,5 +284,36 @@ mod tests {
             schemas.contains_key::<FastpqBalanceKeyV1>(),
             "FastpqBalanceKeyV1 missing from schema map"
         );
+        assert!(
+            schemas.contains_key::<iroha_data_model::fastpq::FastpqOrdinaryCompactArtifactV1>()
+        );
+        assert!(schemas.contains_key::<iroha_data_model::fastpq::FastpqAxtCompactArtifactV1>());
+        assert!(
+            schemas.contains_key::<iroha_data_model::fastpq::FastpqArtifactIdentityDescriptionV1>()
+        );
+        assert!(
+            schemas.contains_key::<iroha_data_model::fastpq::FastpqPublicTransferStatementV1>()
+        );
+        assert!(
+            schemas
+                .contains_key::<iroha_data_model::fastpq::FastpqOrdinarySourceStatementOpeningV1>()
+        );
+        assert!(
+            schemas.contains_key::<iroha_data_model::fastpq::FastpqOrdinarySourceStatementLeafV1>()
+        );
+        assert!(
+            schemas
+                .contains_key::<iroha_data_model::fastpq::FastpqOrdinarySourceStatementManifestV1>(
+                )
+        );
+        assert!(
+            schemas
+                .contains_key::<iroha_data_model::fastpq::FastpqOrdinarySourceStatementArchiveV1>()
+        );
+        assert!(schemas.contains_key::<iroha_data_model::fastpq::FastpqSourceStatementContextV1>());
+        assert!(schemas.contains_key::<iroha_data_model::fastpq::FastpqSourceRouteV1>());
+        assert!(schemas.contains_key::<iroha_data_model::fastpq::FastpqSourceLaneV1>());
+        assert!(schemas.contains_key::<iroha_data_model::fastpq::FastpqSourceExecutionKindV1>());
+        assert!(schemas.contains_key::<iroha_data_model::fastpq::FastpqSourceExecutionEntryV1>());
     }
 }

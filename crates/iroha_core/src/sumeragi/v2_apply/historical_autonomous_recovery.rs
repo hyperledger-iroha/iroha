@@ -242,10 +242,9 @@ fn preflight_historical_autonomous_lane_recovery_inner(
                 descriptor.dataspace_id,
                 descriptor.lane_incarnation,
                 height,
-            ) || !state
-                .certified_autonomous_lane_block_predecessor_is_globally_applied_cached(
-                    &input.payload.origin_proposal,
-                )))
+            ) || !state.certified_autonomous_lane_block_predecessor_is_globally_applied(
+                &input.payload.origin_proposal,
+            )?))
     {
         return Err(invalid_historical_autonomous_recovery(
             input,

@@ -515,6 +515,8 @@ mod tests {
     include!("soracloud/tests/proof_schemas.rs");
     include!("soracloud/tests/proof_validation.rs");
     include!("soracloud/tests/provenance.rs");
+    #[cfg(feature = "json")]
+    include!("soracloud/tests/generic_identity_tests.rs");
     include!("soracloud/tests/manifest_validation.rs");
     include!("soracloud/tests/fhe_policy.rs");
     include!("soracloud/tests/decryption_and_records.rs");

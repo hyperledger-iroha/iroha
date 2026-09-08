@@ -191,6 +191,9 @@ impl TransferSmtProof {
     }
 }
 /// Merkle proof payload describing the path for a single leaf.
+///
+/// Validated roots and siblings retain their complete canonical Iroha hash
+/// bytes, including byte 31's required low-bit marker.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TransferMerkleProof {
     /// Root before applying this update.
@@ -220,6 +223,22 @@ impl TransferMerkleProof {
                     witness.siblings.len()
                 ),
             });
+        }
+        // Hash::prehashed normalizes the marker bit. Untrusted witness bytes
+        // must already be canonical so that normalization cannot silently
+        // authenticate a different full-width sibling encoding.
+        for (index, hash) in [&witness.root_before, &witness.root_after]
+            .into_iter()
+            .chain(witness.siblings.iter())
+            .enumerate()
+        {
+            if hash[Hash::LENGTH - 1] & 1 == 0 {
+                return Err(Error::TransferInvariant {
+                    details: format!(
+                        "transfer SMT hash at position {index} has a noncanonical Iroha marker"
+                    ),
+                });
+            }
         }
         Ok(Self {
             root_before: witness.root_before,
@@ -938,6 +957,9 @@ fn transcript_balance_keys(transcripts: &[TransferTranscript]) -> Result<BTreeSe
     Ok(keys)
 }
 /// Compute the Poseidon digest committed by a transfer transcript entry.
+///
+/// Each `NoritoEncode::encode_to` uses the codec's fixed default V1 bare layout
+/// and restores the caller's ambient flags. No enclosing archive header is hashed.
 pub fn compute_poseidon_digest(delta: &TransferDeltaTranscript, batch_hash: &Hash) -> Hash {
     let mut hasher = poseidon::PoseidonByteHasher::new();
     append_encoded(&mut hasher, &delta.from_account);
@@ -1292,6 +1314,64 @@ mod tests {
         );
     }
     #[test]
+    fn compute_poseidon_digest_ignores_and_restores_every_supported_ambient_layout() {
+        use norito::core;
+
+        let transcript = sample_transcript();
+        let delta = &transcript.deltas[0];
+        let (expected, expected_preimage, canonical_control) = {
+            let _canonical = core::DecodeFlagsGuard::enter(core::default_encode_flags());
+            let mut bytes = Vec::new();
+            bytes.extend_from_slice(&delta.from_account.encode());
+            bytes.extend_from_slice(&delta.to_account.encode());
+            bytes.extend_from_slice(&delta.asset_definition.encode());
+            bytes.extend_from_slice(&delta.amount.encode());
+            bytes.extend_from_slice(transcript.batch_hash.as_ref());
+            (
+                Hash::prehashed(poseidon::hash_bytes(&bytes)),
+                bytes,
+                core::to_bytes(&transcript.deltas).expect("canonical control archive"),
+            )
+        };
+        let mut checked = 0;
+        let mut different_control_layouts = 0;
+        for flags in (u8::MIN..=u8::MAX).filter(|&flags| core::validate_header_flags(flags).is_ok())
+        {
+            let _ambient = core::DecodeFlagsGuard::enter(flags);
+            let before = core::to_bytes(&transcript.deltas).expect("ambient control archive");
+            different_control_layouts += usize::from(before != canonical_control);
+            assert_eq!(core::get_decode_flags(), flags);
+            assert_eq!(
+                compute_poseidon_digest(delta, &transcript.batch_hash),
+                expected,
+                "Poseidon digest changed under supported flags {flags:#04x}"
+            );
+            assert_eq!(core::get_decode_flags(), flags);
+            let mut streamed = Vec::new();
+            append_encoded(&mut streamed, &delta.from_account);
+            append_encoded(&mut streamed, &delta.to_account);
+            append_encoded(&mut streamed, &delta.asset_definition);
+            append_encoded(&mut streamed, &delta.amount);
+            streamed.extend_from_slice(transcript.batch_hash.as_ref());
+            assert_eq!(
+                streamed, expected_preimage,
+                "streamed preimage flags {flags:#04x}"
+            );
+            assert_eq!(core::get_decode_flags(), flags);
+            assert_eq!(
+                core::to_bytes(&transcript.deltas).expect("restored ambient control archive"),
+                before,
+                "digest and append encoding must restore the caller's full layout"
+            );
+            checked += 1;
+        }
+        assert_eq!(checked, 10, "exhaustive current V1 layout combinations");
+        assert!(
+            different_control_layouts > 0,
+            "exercise genuinely different ambient layouts"
+        );
+    }
+    #[test]
     fn verify_transcripts_rejects_unmatched_transfer_rows() {
         let transcript = sample_transcript();
         let mut transitions = sample_transitions(&transcript);
@@ -1602,6 +1682,53 @@ mod tests {
         witness.siblings.push([0xAA; 32]);
         let err = TransferMerkleProof::from_witness(&witness).expect_err("extra sibling fails");
         assert!(matches!(err, Error::TransferInvariant { details } if details.contains("sibling")));
+    }
+    #[test]
+    fn transfer_merkle_proof_rejects_unmarked_roots_and_every_sibling() {
+        let transcript = sample_transcript();
+        let delta = &transcript.deltas[0];
+        for original in [&delta.from_smt_witness, &delta.to_smt_witness] {
+            TransferMerkleProof::from_witness(original).expect("canonical witness");
+            for index in 0..TRANSFER_MERKLE_HEIGHT + 2 {
+                let mut changed = original.clone();
+                let hash = match index {
+                    0 => &mut changed.root_before,
+                    1 => &mut changed.root_after,
+                    _ => &mut changed.siblings[index - 2],
+                };
+                assert_eq!(hash[Hash::LENGTH - 1] & 1, 1);
+                hash[Hash::LENGTH - 1] &= !1;
+                let error = TransferMerkleProof::from_witness(&changed)
+                    .expect_err("untrusted hashes must carry the exact marker encoding");
+                assert!(matches!(error, Error::TransferInvariant { details }
+                    if details.contains("noncanonical Iroha marker")));
+            }
+        }
+    }
+    #[test]
+    fn transcripts_reject_sibling_marker_alias_even_when_roots_are_unchanged() {
+        let mut transcript = sample_transcript();
+        let (old_root, new_root) = transcript_roots(&transcript);
+        let delta = &mut transcript.deltas[0];
+        let snapshot = BalanceSnapshot::from_delta(delta).unwrap();
+        let key = balance_key(&delta.asset_definition, &delta.from_account).unwrap();
+        let mut unchecked = TransferMerkleProof::from_witness(&delta.from_smt_witness).unwrap();
+        unchecked.siblings[0][Hash::LENGTH - 1] &= !1;
+        // This is the original alias: prehashed() repairs the supplied marker,
+        // so merely recomputing the roots cannot detect the byte change.
+        assert_eq!(
+            <[u8; 32]>::from(unchecked.compute_root(&key, snapshot.from_before)),
+            unchecked.root_before
+        );
+        assert_eq!(
+            <[u8; 32]>::from(unchecked.compute_root(&key, snapshot.from_after)),
+            unchecked.root_after
+        );
+        delta.from_smt_witness.siblings[0] = unchecked.siblings[0];
+        let error = transcripts_to_witnesses(&[transcript], &old_root, &new_root)
+            .expect_err("root-equivalent noncanonical sibling bytes must be rejected");
+        assert!(matches!(error, Error::TransferInvariant { details }
+            if details.contains("noncanonical Iroha marker")));
     }
     #[test]
     fn attach_transfer_smt_witnesses_rejects_empty_material() {

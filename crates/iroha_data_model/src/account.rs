@@ -353,15 +353,16 @@ impl FromStr for OpaqueAccountId {
         Ok(opaque)
     }
 }
-impl norito::NoritoSerialize for AccountId {
+impl norito::NoritoSerialize for AccountId {}
+impl norito::SerializePayload for AccountId {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::Error> {
-        norito::core::NoritoSerialize::serialize(&self.controller, writer)
+        norito::core::SerializePayload::serialize(&self.controller, writer)
     }
     fn encoded_len_hint(&self) -> Option<usize> {
-        norito::core::NoritoSerialize::encoded_len_hint(&self.controller)
+        norito::core::SerializePayload::encoded_len_hint(&self.controller)
     }
     fn encoded_len_exact(&self) -> Option<usize> {
-        norito::core::NoritoSerialize::encoded_len_exact(&self.controller)
+        norito::core::SerializePayload::encoded_len_exact(&self.controller)
     }
 }
 impl<'de> norito::NoritoDeserialize<'de> for AccountId {
@@ -1490,6 +1491,73 @@ mod json_tests {
             norito::json::to_json_bounded(&map, expected_map.len() - 1),
             Err(norito::json::BoundedJsonError::BodyTooLarge)
         ));
+    }
+    #[test]
+    fn account_id_json_object_key_roundtrip_and_bounds() {
+        use norito::json::{self, BoundedJsonError, JsonObjectKey};
+        use std::collections::BTreeMap;
+
+        let _guard = guard_chain_discriminant();
+        let single = AccountId::new(
+            checked_keypair_from_seed(vec![0x61; 32])
+                .public_key()
+                .clone(),
+        );
+        let members = [0x62, 0x63, 0x64]
+            .into_iter()
+            .map(|seed| {
+                MultisigMember::new(
+                    checked_keypair_from_seed(vec![seed; 32])
+                        .public_key()
+                        .clone(),
+                    1,
+                )
+                .expect("multisig member")
+            })
+            .collect();
+        let multisig = AccountId::new_multisig(MultisigPolicy::new(2, members).expect("policy"));
+        for id in [single, multisig] {
+            let literal = id.canonical_i105().expect("canonical account text");
+            let map = BTreeMap::from([(id.clone(), 7_u8)]);
+            let expected = format!("{{\"{literal}\":7}}");
+            assert_eq!(json::to_json(&map).expect("account-key map"), expected);
+            assert_eq!(
+                json::to_json_bounded(&map, expected.len()).expect("exact account-key bound"),
+                expected
+            );
+            assert_eq!(
+                json::to_json_bounded(&map, expected.len() - 1),
+                Err(BoundedJsonError::BodyTooLarge)
+            );
+            assert_eq!(
+                json::from_str::<BTreeMap<AccountId, u8>>(&expected)
+                    .expect("account-key roundtrip"),
+                map
+            );
+            let value: json::Value = json::from_str(&expected).expect("object value");
+            assert_eq!(
+                <BTreeMap<AccountId, u8> as json::JsonDeserialize>::json_from_value(&value)
+                    .expect("account-key value roundtrip"),
+                map
+            );
+            let duplicate = format!("{{\"{literal}\":7,\"{literal}\":8}}");
+            assert!(json::from_str::<BTreeMap<AccountId, u8>>(&duplicate).is_err());
+            assert_eq!(id.visit_json_key_text(|_| Err(17_u8)), Err(17));
+            for failure in [
+                BoundedJsonError::BodyTooLarge,
+                BoundedJsonError::AllocationFailed,
+                BoundedJsonError::LengthMismatch,
+                BoundedJsonError::Unsupported,
+            ] {
+                let mut visits = 0;
+                let result = id.visit_json_key_text_checked(|_| {
+                    visits += 1;
+                    Err(failure)
+                });
+                assert_eq!(result, Err(failure));
+                assert_eq!(visits, 1, "stop on the first visitor failure");
+            }
+        }
     }
     #[test]
     fn account_id_value_and_map_key_json_decoders_are_borrowed_and_measured() {

@@ -69,8 +69,7 @@ fn axt_validation_enforces_shared_budget_across_envelopes() {
             .expect("each below-cap envelope must execute");
         executed.apply();
     }
-    validate_axt_envelopes(&control, &control_state_block)
-        .expect("two completed envelopes may consume exactly the shared signed budget");
+    expect_unanchored_axt_spend_rejection(validate_axt_envelopes(&control, &control_state_block));
 }
 
 #[test]
@@ -254,15 +253,12 @@ fn axt_validation_persists_hidden_family_budget_across_blocks() {
         AxtRejectReason::Budget,
         "shared handle budget exceeded across blocks or AXT envelopes",
     );
-    run_case(Some(5), 5, true).expect(
-        "two blocks may consume exactly the signed family allowance while post-execution validation hydrates the prior record",
-    );
-    run_case(None, 7, true)
-        .expect("post-execution validation must preserve a family's pre-block absence");
+    expect_unanchored_axt_spend_rejection(run_case(Some(5), 5, true));
+    expect_unanchored_axt_spend_rejection(run_case(None, 7, true));
 }
 
 #[test]
-fn axt_validation_accepts_authenticated_hidden_amount() {
+fn axt_validation_rejects_unanchored_authenticated_hidden_amount() {
     let (state, envelope) = hidden_amount_fixture(17, 0x31, b"authenticated-hidden-amount");
     let mut snapshot = axt_policy_snapshot_for_validation_test(&state);
     snapshot.entries[0].policy.next_handle_counter = 2;
@@ -276,8 +272,7 @@ fn axt_validation_accepts_authenticated_hidden_amount() {
             .expect("authenticated hidden-amount control must execute");
         executed.apply();
     }
-    validate_axt_envelopes(&block, &state_block)
-        .expect("authenticated hidden amount must pass block admission");
+    expect_unanchored_axt_spend_rejection(validate_axt_envelopes(&block, &state_block));
 }
 
 #[test]
@@ -296,12 +291,7 @@ fn axt_validation_rejects_opaque_authorization_carrier_at_generic_boundary() {
         touches: Vec::new(),
         proofs: vec![AxtProofFragment {
             dsid,
-            proof: opaque_proof_blob_for(
-                dsid,
-                manifest_root,
-                b"opaque-generic-block-attack",
-                12,
-            ),
+            proof: opaque_proof_blob_for(dsid, manifest_root, b"opaque-generic-block-attack", 12),
         }],
         handles: Vec::new(),
         commit_height: 1,
@@ -331,8 +321,10 @@ fn axt_validation_enforces_registered_asset_balance_policy() {
             .expect("restricted asset control must execute");
         executed.apply();
     }
-    validate_axt_envelopes(&restricted_block, &restricted_state_block)
-        .expect("a registered restricted asset may use its exact signed intent dataspace");
+    expect_unanchored_axt_spend_rejection(validate_axt_envelopes(
+        &restricted_block,
+        &restricted_state_block,
+    ));
     drop(restricted_state_block);
 
     let (global_state, global_envelope) = hidden_amount_fixture_with_asset_policy(

@@ -1,7 +1,7 @@
 //! Deterministic fixed-k artifact generation and proving for the recursive aggregate state.
 //!
 //! The emitted files use exactly the raw formats authenticated by the V1 release manifest:
-//! `ParamsIPA::write` and Halo2 `SerdeFormat::Processed`. State-role keys are derived only from
+//! `ParamsIPA::write`, compact-v1 proving keys and Processed verifying keys. State-role keys are derived only from
 //! the complete recursive circuit: the six-operation balance relation, predecessor recursion,
 //! delayed-history fold, mint-finality helper, normalized hardware GuardBundle, and reciprocal
 //! Pasta equation audit are one inseparable proving authority. Device proof writers require a
@@ -19,7 +19,7 @@ use std::{
 #[cfg(feature = "zk-halo2-ipa")]
 use ff::{Field as _, FromUniformBytes, WithSmallOrderMulGroup};
 #[cfg(feature = "zk-halo2-ipa")]
-use halo2_base::gates::circuit::BaseCircuitParams;
+use halo2_base::{gates::circuit::BaseCircuitParams, utils::CurveAffineExt};
 use halo2_proofs::{
     SerdeFormat,
     halo2curves::{
@@ -127,7 +127,7 @@ mod mint_hash_generation;
 pub(super) use artifact_resource_preflight::keygen_pk_with_helper_resource_preflight_consuming_v1;
 #[cfg(feature = "zk-halo2-ipa")]
 use artifact_resource_preflight::{
-    KagemushaProcessedKeyLimitsV1, keygen_pk_with_key_resource_limits_consuming_v1,
+    KagemushaCompactKeyLimitsV1, keygen_pk_with_key_resource_limits_consuming_v1,
     keygen_vk_with_helper_resource_preflight_consuming_v1,
     keygen_vk_with_key_resource_limits_consuming_v1, preflight_helper_key_configuration_v1,
 };
@@ -288,7 +288,7 @@ pub struct KagemushaGeneratedOperationArtifactsV1 {
     pub parity: KagemushaPastaParityV1,
     /// Canonical transparent IPA parameter bytes.
     pub parameters: Arc<[u8]>,
-    /// Processed native state proving key.
+    /// Compact-v1 native state proving key.
     pub proving_key: Arc<[u8]>,
     /// Processed native state verifying key.
     pub verifying_key: Arc<[u8]>,
@@ -625,13 +625,13 @@ pub struct KagemushaGeneratedRecursiveStateArtifactsV1 {
     pub inner_eq: KagemushaGeneratedOperationArtifactsV1,
     /// Ep/Fq parameter and private recursive aggregate-state carrier key bytes.
     pub inner_ep: KagemushaGeneratedOperationArtifactsV1,
-    /// Exact Eq outer-decider layout required to decode the processed key.
+    /// Exact Eq outer-decider layout required to decode the compact proving key and Processed verifying key.
     pub eq_circuit_params: BaseCircuitParams,
-    /// Exact Ep outer-decider layout required to decode the processed key.
+    /// Exact Ep outer-decider layout required to decode the compact proving key and Processed verifying key.
     pub ep_circuit_params: BaseCircuitParams,
-    /// Exact Eq inner-carrier layout required to decode the processed key.
+    /// Exact Eq inner-carrier layout required to decode the compact proving key and Processed verifying key.
     pub inner_eq_circuit_params: BaseCircuitParams,
-    /// Exact Ep inner-carrier layout required to decode the processed key.
+    /// Exact Ep inner-carrier layout required to decode the compact proving key and Processed verifying key.
     pub inner_ep_circuit_params: BaseCircuitParams,
     /// Eq compiled outer transport-decider identity committed by every payment proof.
     pub eq_protocol_digest: [u8; 32],
@@ -642,59 +642,115 @@ pub struct KagemushaGeneratedRecursiveStateArtifactsV1 {
     /// Ep compiled private recursive-carrier identity.
     pub inner_ep_protocol_digest: [u8; 32],
     /// Measured Eq outer-decider row and cell inventory.
+    #[cfg_attr(
+        not(any(test, feature = "kagemusha-real-proof-harness")),
+        expect(
+            dead_code,
+            reason = "Measured capacity is retained for the guarded proof qualification harness"
+        )
+    )]
     pub(super) eq_transport_capacity: KagemushaTransportDeciderCapacityProfileV1,
     /// Measured Ep outer-decider row and cell inventory.
+    #[cfg_attr(
+        not(any(test, feature = "kagemusha-real-proof-harness")),
+        expect(
+            dead_code,
+            reason = "Measured capacity is retained for the guarded proof qualification harness"
+        )
+    )]
     pub(super) ep_transport_capacity: KagemushaTransportDeciderCapacityProfileV1,
 }
 
 /// Loaded Eq production recursive-state parameters and keys.
+///
+/// Obtain this opaque value through [`load_kagemusha_eq_recursive_state_artifacts_v1`].
+/// Its authenticated keys, layout and release identities remain private to the recursion
+/// implementation. External callers can store and pass the loaded value, but cannot replace
+/// its fields or manufacture one. Gated qualification constructors remain internal.
+///
+/// ```compile_fail,E0616
+/// use iroha_core::zk::kagemusha_v1_recursion::KagemushaLoadedEqRecursiveStateArtifactsV1;
+///
+/// fn substitute_release(loaded: &mut KagemushaLoadedEqRecursiveStateArtifactsV1) {
+///     loaded.release_id = [7; 32];
+/// }
+/// ```
+///
+/// ```compile_fail,E0451
+/// use iroha_core::zk::kagemusha_v1_recursion::KagemushaLoadedEqRecursiveStateArtifactsV1;
+///
+/// fn reconstruct(loaded: KagemushaLoadedEqRecursiveStateArtifactsV1) -> KagemushaLoadedEqRecursiveStateArtifactsV1 {
+///     KagemushaLoadedEqRecursiveStateArtifactsV1 { ..loaded }
+/// }
+/// ```
 #[cfg(feature = "zk-halo2-ipa")]
 pub struct KagemushaLoadedEqRecursiveStateArtifactsV1 {
     /// Threshold-authenticated release which owns these artifacts.
-    pub release_id: [u8; 32],
+    pub(super) release_id: [u8; 32],
     /// Release-wide proof suite installed for the successor.
-    pub suite_id: [u8; 32],
+    pub(super) suite_id: [u8; 32],
     /// Release-wide verifier-set digest installed for the successor.
-    pub vk_digest: [u8; 32],
+    pub(super) vk_digest: [u8; 32],
     /// Canonical Eq transparent IPA parameters.
-    pub parameters: ParamsIPA<EqAffine>,
-    /// Exact processed Eq compact transport-decider proving key.
-    pub proving_key: ProvingKey<EqAffine>,
+    pub(super) parameters: ParamsIPA<EqAffine>,
+    /// Reconstructed native Eq compact transport-decider proving key.
+    pub(super) proving_key: ProvingKey<EqAffine>,
     /// Exact processed Eq compact transport-decider verifying key.
-    pub verifying_key: VerifyingKey<EqAffine>,
+    pub(super) verifying_key: VerifyingKey<EqAffine>,
     /// Authenticated outer-decider layout used to parse both keys.
-    pub circuit_params: BaseCircuitParams,
-    /// Exact processed Eq private recursive-carrier proving key.
-    pub inner_proving_key: ProvingKey<EqAffine>,
+    pub(super) circuit_params: BaseCircuitParams,
+    /// Reconstructed native Eq private recursive-carrier proving key.
+    pub(super) inner_proving_key: ProvingKey<EqAffine>,
     /// Exact processed Eq private recursive-carrier verifying key.
-    pub inner_verifying_key: VerifyingKey<EqAffine>,
+    pub(super) inner_verifying_key: VerifyingKey<EqAffine>,
     /// Authenticated private-carrier layout used to parse both inner keys.
-    pub inner_circuit_params: BaseCircuitParams,
+    pub(super) inner_circuit_params: BaseCircuitParams,
 }
 
 /// Loaded Ep production recursive-state parameters and keys.
+///
+/// Obtain this opaque value through [`load_kagemusha_ep_recursive_state_artifacts_v1`].
+/// Its authenticated keys, layout and release identities remain private to the recursion
+/// implementation. External callers can store and pass the loaded value, but cannot replace
+/// its fields or manufacture one. Gated qualification constructors remain internal.
+///
+/// ```compile_fail,E0616
+/// use iroha_core::zk::kagemusha_v1_recursion::KagemushaLoadedEpRecursiveStateArtifactsV1;
+///
+/// fn substitute_release(loaded: &mut KagemushaLoadedEpRecursiveStateArtifactsV1) {
+///     loaded.release_id = [7; 32];
+/// }
+/// ```
+///
+/// ```compile_fail,E0451
+/// use iroha_core::zk::kagemusha_v1_recursion::KagemushaLoadedEpRecursiveStateArtifactsV1;
+///
+/// fn reconstruct(loaded: KagemushaLoadedEpRecursiveStateArtifactsV1) -> KagemushaLoadedEpRecursiveStateArtifactsV1 {
+///     KagemushaLoadedEpRecursiveStateArtifactsV1 { ..loaded }
+/// }
+/// ```
 #[cfg(feature = "zk-halo2-ipa")]
 pub struct KagemushaLoadedEpRecursiveStateArtifactsV1 {
     /// Threshold-authenticated release which owns these artifacts.
-    pub release_id: [u8; 32],
+    pub(super) release_id: [u8; 32],
     /// Release-wide proof suite installed for the successor.
-    pub suite_id: [u8; 32],
+    pub(super) suite_id: [u8; 32],
     /// Release-wide verifier-set digest installed for the successor.
-    pub vk_digest: [u8; 32],
+    pub(super) vk_digest: [u8; 32],
     /// Canonical Ep transparent IPA parameters.
-    pub parameters: ParamsIPA<EpAffine>,
-    /// Exact processed Ep compact transport-decider proving key.
-    pub proving_key: ProvingKey<EpAffine>,
+    pub(super) parameters: ParamsIPA<EpAffine>,
+    /// Reconstructed native Ep compact transport-decider proving key.
+    pub(super) proving_key: ProvingKey<EpAffine>,
     /// Exact processed Ep compact transport-decider verifying key.
-    pub verifying_key: VerifyingKey<EpAffine>,
+    pub(super) verifying_key: VerifyingKey<EpAffine>,
     /// Authenticated outer-decider layout used to parse both keys.
-    pub circuit_params: BaseCircuitParams,
-    /// Exact processed Ep private recursive-carrier proving key.
-    pub inner_proving_key: ProvingKey<EpAffine>,
+    pub(super) circuit_params: BaseCircuitParams,
+    /// Reconstructed native Ep private recursive-carrier proving key.
+    pub(super) inner_proving_key: ProvingKey<EpAffine>,
     /// Exact processed Ep private recursive-carrier verifying key.
-    pub inner_verifying_key: VerifyingKey<EpAffine>,
+    pub(super) inner_verifying_key: VerifyingKey<EpAffine>,
     /// Authenticated private-carrier layout used to parse both inner keys.
-    pub inner_circuit_params: BaseCircuitParams,
+    pub(super) inner_circuit_params: BaseCircuitParams,
 }
 
 /// One complete constant-size production recursive state proof pair.
@@ -976,6 +1032,8 @@ pub struct KagemushaTerminalAuthorizationGenerationWitnessV1<'a> {
     /// Sorted nonzero-prefix release-enabled profile IDs with canonical zero padding.
     pub enabled_hardware_profiles:
         [[u8; 32]; KAGEMUSHA_TERMINAL_AUTHORIZATION_ENABLED_PROFILE_SLOTS_V1],
+    /// Verified complete SHA claim and folds merging its history after candidate and Guard.
+    pub hash_claim: KagemushaMintHashClaimGenerationWitnessV1<'a>,
     /// Eq/Fp nested proof inputs.
     pub eq: KagemushaTerminalAuthorizationEqGenerationWitnessV1<'a>,
     /// Ep/Fq nested proof inputs.
@@ -990,11 +1048,11 @@ pub struct KagemushaGeneratedTerminalAuthorizationArtifactsV1 {
     pub eq_parameters: Arc<[u8]>,
     /// Canonical Ep transparent IPA parameters used during key generation.
     pub ep_parameters: Arc<[u8]>,
-    /// Processed Eq terminal-authorization proving key.
+    /// Compact-v1 Eq terminal-authorization proving key.
     pub eq_proving_key: Arc<[u8]>,
     /// Processed Eq terminal-authorization verifying key.
     pub eq_verifying_key: Arc<[u8]>,
-    /// Processed Ep terminal-authorization proving key.
+    /// Compact-v1 Ep terminal-authorization proving key.
     pub ep_proving_key: Arc<[u8]>,
     /// Processed Ep terminal-authorization verifying key.
     pub ep_verifying_key: Arc<[u8]>,
@@ -1012,58 +1070,116 @@ pub struct KagemushaGeneratedTerminalAuthorizationArtifactsV1 {
 }
 
 /// Loaded authenticated Eq terminal-authorization parameters and keys.
+///
+/// Obtain this opaque value through [`load_kagemusha_eq_terminal_authorization_artifacts_v1`].
+/// Its authenticated keys, layout and release identities remain private to the recursion
+/// implementation. External callers can store and pass the loaded value, but cannot replace
+/// its fields or manufacture one. Gated qualification constructors remain internal.
+///
+/// ```compile_fail,E0616
+/// use iroha_core::zk::kagemusha_v1_recursion::KagemushaLoadedEqTerminalAuthorizationArtifactsV1;
+///
+/// fn substitute_release(loaded: &mut KagemushaLoadedEqTerminalAuthorizationArtifactsV1) {
+///     loaded.release_id = [7; 32];
+/// }
+/// ```
+///
+/// ```compile_fail,E0451
+/// use iroha_core::zk::kagemusha_v1_recursion::KagemushaLoadedEqTerminalAuthorizationArtifactsV1;
+///
+/// fn reconstruct(loaded: KagemushaLoadedEqTerminalAuthorizationArtifactsV1) -> KagemushaLoadedEqTerminalAuthorizationArtifactsV1 {
+///     KagemushaLoadedEqTerminalAuthorizationArtifactsV1 { ..loaded }
+/// }
+/// ```
 #[cfg(feature = "zk-halo2-ipa")]
 pub struct KagemushaLoadedEqTerminalAuthorizationArtifactsV1 {
     /// Canonical Eq transparent IPA parameters.
-    pub parameters: ParamsIPA<EqAffine>,
-    /// Exact processed Eq terminal-authorization proving key.
-    pub proving_key: ProvingKey<EqAffine>,
+    pub(super) parameters: ParamsIPA<EqAffine>,
+    /// Reconstructed native Eq terminal-authorization proving key.
+    pub(super) proving_key: ProvingKey<EqAffine>,
     /// Exact processed Eq terminal-authorization verifying key.
-    pub verifying_key: VerifyingKey<EqAffine>,
+    pub(super) verifying_key: VerifyingKey<EqAffine>,
     /// Authenticated circuit layout.
-    pub circuit_params: BaseCircuitParams,
+    pub(super) circuit_params: BaseCircuitParams,
     /// Compiled protocol identity for this verifying key.
-    pub protocol_digest: [u8; 32],
+    pub(super) protocol_digest: [u8; 32],
     /// Authenticated release owning every loaded role.
-    pub release_id: [u8; 32],
+    pub(super) release_id: [u8; 32],
     /// Authenticated circuit-profile digest.
-    pub profile_digest: [u8; 32],
+    pub(super) profile_digest: [u8; 32],
     /// Digest of the complete authenticated artifact inventory.
-    pub artifact_manifest_digest: [u8; 32],
+    pub(super) artifact_manifest_digest: [u8; 32],
     /// Release-wide proof suite.
-    pub suite_id: [u8; 32],
+    pub(super) suite_id: [u8; 32],
     /// Digest of the release-pinned verifier set.
-    pub vk_digest: [u8; 32],
+    pub(super) vk_digest: [u8; 32],
+    /// Release-pinned Eq ordered-claim protocol consumed by this circuit.
+    pub(super) eq_claim_protocol_digest: [u8; 32],
+    /// Release-pinned Ep ordered-claim protocol consumed by the paired circuit.
+    pub(super) ep_claim_protocol_digest: [u8; 32],
+    /// Release-pinned Eq one-block SHA shard protocol.
+    pub(super) eq_shard_protocol_digest: [u8; 32],
+    /// Release-pinned Ep one-block SHA shard protocol.
+    pub(super) ep_shard_protocol_digest: [u8; 32],
     /// Exact enabled-profile constants committed by this verifying key.
-    pub enabled_hardware_profiles:
+    pub(super) enabled_hardware_profiles:
         [[u8; 32]; KAGEMUSHA_TERMINAL_AUTHORIZATION_ENABLED_PROFILE_SLOTS_V1],
 }
 
 /// Loaded authenticated Ep terminal-authorization parameters and keys.
+///
+/// Obtain this opaque value through [`load_kagemusha_ep_terminal_authorization_artifacts_v1`].
+/// Its authenticated keys, layout and release identities remain private to the recursion
+/// implementation. External callers can store and pass the loaded value, but cannot replace
+/// its fields or manufacture one. Gated qualification constructors remain internal.
+///
+/// ```compile_fail,E0616
+/// use iroha_core::zk::kagemusha_v1_recursion::KagemushaLoadedEpTerminalAuthorizationArtifactsV1;
+///
+/// fn substitute_release(loaded: &mut KagemushaLoadedEpTerminalAuthorizationArtifactsV1) {
+///     loaded.release_id = [7; 32];
+/// }
+/// ```
+///
+/// ```compile_fail,E0451
+/// use iroha_core::zk::kagemusha_v1_recursion::KagemushaLoadedEpTerminalAuthorizationArtifactsV1;
+///
+/// fn reconstruct(loaded: KagemushaLoadedEpTerminalAuthorizationArtifactsV1) -> KagemushaLoadedEpTerminalAuthorizationArtifactsV1 {
+///     KagemushaLoadedEpTerminalAuthorizationArtifactsV1 { ..loaded }
+/// }
+/// ```
 #[cfg(feature = "zk-halo2-ipa")]
 pub struct KagemushaLoadedEpTerminalAuthorizationArtifactsV1 {
     /// Canonical Ep transparent IPA parameters.
-    pub parameters: ParamsIPA<EpAffine>,
-    /// Exact processed Ep terminal-authorization proving key.
-    pub proving_key: ProvingKey<EpAffine>,
+    pub(super) parameters: ParamsIPA<EpAffine>,
+    /// Reconstructed native Ep terminal-authorization proving key.
+    pub(super) proving_key: ProvingKey<EpAffine>,
     /// Exact processed Ep terminal-authorization verifying key.
-    pub verifying_key: VerifyingKey<EpAffine>,
+    pub(super) verifying_key: VerifyingKey<EpAffine>,
     /// Authenticated circuit layout.
-    pub circuit_params: BaseCircuitParams,
+    pub(super) circuit_params: BaseCircuitParams,
     /// Compiled protocol identity for this verifying key.
-    pub protocol_digest: [u8; 32],
+    pub(super) protocol_digest: [u8; 32],
     /// Authenticated release owning every loaded role.
-    pub release_id: [u8; 32],
+    pub(super) release_id: [u8; 32],
     /// Authenticated circuit-profile digest.
-    pub profile_digest: [u8; 32],
+    pub(super) profile_digest: [u8; 32],
     /// Digest of the complete authenticated artifact inventory.
-    pub artifact_manifest_digest: [u8; 32],
+    pub(super) artifact_manifest_digest: [u8; 32],
     /// Release-wide proof suite.
-    pub suite_id: [u8; 32],
+    pub(super) suite_id: [u8; 32],
     /// Digest of the release-pinned verifier set.
-    pub vk_digest: [u8; 32],
+    pub(super) vk_digest: [u8; 32],
+    /// Release-pinned Eq ordered-claim protocol consumed by the paired circuit.
+    pub(super) eq_claim_protocol_digest: [u8; 32],
+    /// Release-pinned Ep ordered-claim protocol consumed by this circuit.
+    pub(super) ep_claim_protocol_digest: [u8; 32],
+    /// Release-pinned Eq one-block SHA shard protocol.
+    pub(super) eq_shard_protocol_digest: [u8; 32],
+    /// Release-pinned Ep one-block SHA shard protocol.
+    pub(super) ep_shard_protocol_digest: [u8; 32],
     /// Exact enabled-profile constants committed by this verifying key.
-    pub enabled_hardware_profiles:
+    pub(super) enabled_hardware_profiles:
         [[u8; 32]; KAGEMUSHA_TERMINAL_AUTHORIZATION_ENABLED_PROFILE_SLOTS_V1],
 }
 
@@ -1207,11 +1323,11 @@ pub struct KagemushaGeneratedCommitWrapperArtifactsV1 {
     pub eq_parameters: Arc<[u8]>,
     /// Canonical Ep transparent IPA parameters.
     pub ep_parameters: Arc<[u8]>,
-    /// Processed Eq authorization proving key.
+    /// Compact-v1 Eq authorization proving key.
     pub eq_proving_key: Arc<[u8]>,
     /// Processed Eq authorization verifying key.
     pub eq_verifying_key: Arc<[u8]>,
-    /// Processed Ep authorization proving key.
+    /// Compact-v1 Ep authorization proving key.
     pub ep_proving_key: Arc<[u8]>,
     /// Processed Ep authorization verifying key.
     pub ep_verifying_key: Arc<[u8]>,
@@ -1233,62 +1349,104 @@ pub struct KagemushaGeneratedCommitWrapperArtifactsV1 {
 }
 
 /// Loaded authenticated Eq CommitWrapper parameters and keys.
+///
+/// Obtain this opaque value through [`load_kagemusha_eq_commit_wrapper_artifacts_v1`].
+/// Its authenticated keys, layout and release identities remain private to the recursion
+/// implementation. External callers can store and pass the loaded value, but cannot replace
+/// its fields or manufacture one. Gated qualification constructors remain internal.
+///
+/// ```compile_fail,E0616
+/// use iroha_core::zk::kagemusha_v1_recursion::KagemushaLoadedEqCommitWrapperArtifactsV1;
+///
+/// fn substitute_release(loaded: &mut KagemushaLoadedEqCommitWrapperArtifactsV1) {
+///     loaded.release_id = [7; 32];
+/// }
+/// ```
+///
+/// ```compile_fail,E0451
+/// use iroha_core::zk::kagemusha_v1_recursion::KagemushaLoadedEqCommitWrapperArtifactsV1;
+///
+/// fn reconstruct(loaded: KagemushaLoadedEqCommitWrapperArtifactsV1) -> KagemushaLoadedEqCommitWrapperArtifactsV1 {
+///     KagemushaLoadedEqCommitWrapperArtifactsV1 { ..loaded }
+/// }
+/// ```
 #[cfg(feature = "zk-halo2-ipa")]
 pub struct KagemushaLoadedEqCommitWrapperArtifactsV1 {
     /// Canonical Eq transparent IPA parameters.
-    pub parameters: ParamsIPA<EqAffine>,
-    /// Dedicated processed Eq proving key.
-    pub proving_key: ProvingKey<EqAffine>,
+    pub(super) parameters: ParamsIPA<EqAffine>,
+    /// Dedicated reconstructed native Eq proving key.
+    pub(super) proving_key: ProvingKey<EqAffine>,
     /// Dedicated processed Eq verifying key.
-    pub verifying_key: VerifyingKey<EqAffine>,
+    pub(super) verifying_key: VerifyingKey<EqAffine>,
     /// Authenticated circuit layout.
-    pub circuit_params: BaseCircuitParams,
+    pub(super) circuit_params: BaseCircuitParams,
     /// Compiled protocol identity for this verifying key.
-    pub protocol_digest: [u8; 32],
+    pub(super) protocol_digest: [u8; 32],
     /// Release-pinned Eq `TerminalAuthorization` protocol consumed recursively.
-    pub terminal_authorization_protocol_digest: [u8; 32],
+    pub(super) terminal_authorization_protocol_digest: [u8; 32],
     /// Authenticated release owning every loaded role.
-    pub release_id: [u8; 32],
+    pub(super) release_id: [u8; 32],
     /// Authenticated circuit-profile digest.
-    pub profile_digest: [u8; 32],
+    pub(super) profile_digest: [u8; 32],
     /// Digest of the complete authenticated artifact inventory.
-    pub artifact_manifest_digest: [u8; 32],
+    pub(super) artifact_manifest_digest: [u8; 32],
     /// Release-wide proof suite.
-    pub suite_id: [u8; 32],
+    pub(super) suite_id: [u8; 32],
     /// Digest of the release-pinned verifier set.
-    pub vk_digest: [u8; 32],
+    pub(super) vk_digest: [u8; 32],
     /// Exact enabled-profile constants committed by this key.
-    pub enabled_hardware_profiles:
+    pub(super) enabled_hardware_profiles:
         [[u8; 32]; KAGEMUSHA_TERMINAL_AUTHORIZATION_ENABLED_PROFILE_SLOTS_V1],
 }
 
 /// Loaded authenticated Ep CommitWrapper parameters and keys.
+///
+/// Obtain this opaque value through [`load_kagemusha_ep_commit_wrapper_artifacts_v1`].
+/// Its authenticated keys, layout and release identities remain private to the recursion
+/// implementation. External callers can store and pass the loaded value, but cannot replace
+/// its fields or manufacture one. Gated qualification constructors remain internal.
+///
+/// ```compile_fail,E0616
+/// use iroha_core::zk::kagemusha_v1_recursion::KagemushaLoadedEpCommitWrapperArtifactsV1;
+///
+/// fn substitute_release(loaded: &mut KagemushaLoadedEpCommitWrapperArtifactsV1) {
+///     loaded.release_id = [7; 32];
+/// }
+/// ```
+///
+/// ```compile_fail,E0451
+/// use iroha_core::zk::kagemusha_v1_recursion::KagemushaLoadedEpCommitWrapperArtifactsV1;
+///
+/// fn reconstruct(loaded: KagemushaLoadedEpCommitWrapperArtifactsV1) -> KagemushaLoadedEpCommitWrapperArtifactsV1 {
+///     KagemushaLoadedEpCommitWrapperArtifactsV1 { ..loaded }
+/// }
+/// ```
 #[cfg(feature = "zk-halo2-ipa")]
 pub struct KagemushaLoadedEpCommitWrapperArtifactsV1 {
     /// Canonical Ep transparent IPA parameters.
-    pub parameters: ParamsIPA<EpAffine>,
-    /// Dedicated processed Ep proving key.
-    pub proving_key: ProvingKey<EpAffine>,
+    pub(super) parameters: ParamsIPA<EpAffine>,
+    /// Dedicated reconstructed native Ep proving key.
+    pub(super) proving_key: ProvingKey<EpAffine>,
     /// Dedicated processed Ep verifying key.
-    pub verifying_key: VerifyingKey<EpAffine>,
+    pub(super) verifying_key: VerifyingKey<EpAffine>,
     /// Authenticated circuit layout.
-    pub circuit_params: BaseCircuitParams,
+    pub(super) circuit_params: BaseCircuitParams,
     /// Compiled protocol identity for this verifying key.
-    pub protocol_digest: [u8; 32],
+    pub(super) protocol_digest: [u8; 32],
     /// Release-pinned Ep `TerminalAuthorization` protocol consumed recursively.
-    pub terminal_authorization_protocol_digest: [u8; 32],
+    pub(super) terminal_authorization_protocol_digest: [u8; 32],
     /// Authenticated release owning every loaded role.
-    pub release_id: [u8; 32],
+    pub(super) release_id: [u8; 32],
     /// Authenticated circuit-profile digest.
-    pub profile_digest: [u8; 32],
+    pub(super) profile_digest: [u8; 32],
     /// Digest of the complete authenticated artifact inventory.
-    pub artifact_manifest_digest: [u8; 32],
+    pub(super) artifact_manifest_digest: [u8; 32],
     /// Release-wide proof suite.
-    pub suite_id: [u8; 32],
+    pub(super) suite_id: [u8; 32],
     /// Digest of the release-pinned verifier set.
-    pub vk_digest: [u8; 32],
+    pub(super) vk_digest: [u8; 32],
     /// Exact enabled-profile constants committed by this key.
-    pub enabled_hardware_profiles:
+    pub(super) enabled_hardware_profiles:
         [[u8; 32]; KAGEMUSHA_TERMINAL_AUTHORIZATION_ENABLED_PROFILE_SLOTS_V1],
 }
 
@@ -1784,11 +1942,11 @@ pub struct KagemushaGeneratedMintAuthorizationArtifactsV1 {
     pub eq_parameters: Arc<[u8]>,
     /// Canonical Ep transparent IPA parameters.
     pub ep_parameters: Arc<[u8]>,
-    /// Processed Eq mint-authorization proving key.
+    /// Compact-v1 Eq mint-authorization proving key.
     pub eq_proving_key: Arc<[u8]>,
     /// Processed Eq mint-authorization verifying key.
     pub eq_verifying_key: Arc<[u8]>,
-    /// Processed Ep mint-authorization proving key.
+    /// Compact-v1 Ep mint-authorization proving key.
     pub ep_proving_key: Arc<[u8]>,
     /// Processed Ep mint-authorization verifying key.
     pub ep_verifying_key: Arc<[u8]>,
@@ -1800,11 +1958,11 @@ pub struct KagemushaGeneratedMintAuthorizationArtifactsV1 {
     pub eq_protocol_digest: [u8; 32],
     /// Compiled Ep mint-authorization protocol digest.
     pub ep_protocol_digest: [u8; 32],
-    /// Processed Eq private SHA/credential carrier proving key.
+    /// Compact-v1 Eq private SHA/credential carrier proving key.
     pub inner_eq_proving_key: Arc<[u8]>,
     /// Processed Eq private SHA/credential carrier verifying key.
     pub inner_eq_verifying_key: Arc<[u8]>,
-    /// Processed Ep private SHA/credential carrier proving key.
+    /// Compact-v1 Ep private SHA/credential carrier proving key.
     pub inner_ep_proving_key: Arc<[u8]>,
     /// Processed Ep private SHA/credential carrier verifying key.
     pub inner_ep_verifying_key: Arc<[u8]>,
@@ -1814,6 +1972,8 @@ pub struct KagemushaGeneratedMintAuthorizationArtifactsV1 {
     pub inner_ep_circuit_params: BaseCircuitParams,
     /// Enabled-profile constants committed by both keys.
     pub enabled_hardware_profiles: [[u8; 32]; KAGEMUSHA_ENABLED_HARDWARE_PROFILE_SLOTS_V1],
+    /// Governed provider-policy root fixed in the outer circuit/key configuration.
+    pub provider_policy_root: [u8; 32],
 }
 
 #[cfg(feature = "zk-halo2-ipa")]
@@ -1877,69 +2037,115 @@ impl KagemushaGeneratedMintAuthorizationArtifactsV1 {
 }
 
 /// Loaded authenticated Eq mint-authorization artifacts.
+///
+/// Obtain this opaque value through [`load_kagemusha_eq_mint_authorization_artifacts_v1`].
+/// Its authenticated keys, layout and release identities remain private to the recursion
+/// implementation. External callers can store and pass the loaded value, but cannot replace
+/// its fields or manufacture one. Gated qualification constructors remain internal.
+///
+/// ```compile_fail,E0616
+/// use iroha_core::zk::kagemusha_v1_recursion::KagemushaLoadedEqMintAuthorizationArtifactsV1;
+///
+/// fn substitute_release(loaded: &mut KagemushaLoadedEqMintAuthorizationArtifactsV1) {
+///     loaded.release_id = [7; 32];
+/// }
+/// ```
+///
+/// ```compile_fail,E0451
+/// use iroha_core::zk::kagemusha_v1_recursion::KagemushaLoadedEqMintAuthorizationArtifactsV1;
+///
+/// fn reconstruct(loaded: KagemushaLoadedEqMintAuthorizationArtifactsV1) -> KagemushaLoadedEqMintAuthorizationArtifactsV1 {
+///     KagemushaLoadedEqMintAuthorizationArtifactsV1 { ..loaded }
+/// }
+/// ```
 #[cfg(feature = "zk-halo2-ipa")]
 pub struct KagemushaLoadedEqMintAuthorizationArtifactsV1 {
     /// Canonical Eq transparent IPA parameters.
-    pub parameters: ParamsIPA<EqAffine>,
-    /// Processed Eq proving key.
-    pub proving_key: ProvingKey<EqAffine>,
+    pub(super) parameters: ParamsIPA<EqAffine>,
+    /// Reconstructed native Eq proving key.
+    pub(super) proving_key: ProvingKey<EqAffine>,
     /// Processed Eq verifying key.
-    pub verifying_key: VerifyingKey<EqAffine>,
+    pub(super) verifying_key: VerifyingKey<EqAffine>,
     /// Authenticated circuit layout.
-    pub circuit_params: BaseCircuitParams,
+    pub(super) circuit_params: BaseCircuitParams,
     /// Compiled Eq protocol identity.
-    pub protocol_digest: [u8; 32],
+    pub(super) protocol_digest: [u8; 32],
     /// Authenticated private SHA/credential carrier proving key.
-    pub inner_proving_key: ProvingKey<EqAffine>,
+    pub(super) inner_proving_key: ProvingKey<EqAffine>,
     /// Authenticated private SHA/credential carrier verifying key.
-    pub inner_verifying_key: VerifyingKey<EqAffine>,
+    pub(super) inner_verifying_key: VerifyingKey<EqAffine>,
     /// Authenticated private-carrier layout, distinct from the outer layout.
-    pub inner_circuit_params: BaseCircuitParams,
+    pub(super) inner_circuit_params: BaseCircuitParams,
     /// Authenticated release identity.
-    pub release_id: [u8; 32],
+    pub(super) release_id: [u8; 32],
     /// Authenticated circuit-profile identity.
-    pub profile_digest: [u8; 32],
+    pub(super) profile_digest: [u8; 32],
     /// Authenticated artifact-manifest identity.
-    pub artifact_manifest_digest: [u8; 32],
+    pub(super) artifact_manifest_digest: [u8; 32],
     /// Release-wide proof suite.
-    pub suite_id: [u8; 32],
+    pub(super) suite_id: [u8; 32],
     /// Complete release-pinned verifier-set digest.
-    pub vk_digest: [u8; 32],
+    pub(super) vk_digest: [u8; 32],
     /// Enabled-profile constants committed by this key.
-    pub enabled_hardware_profiles: [[u8; 32]; KAGEMUSHA_ENABLED_HARDWARE_PROFILE_SLOTS_V1],
+    pub(super) enabled_hardware_profiles: [[u8; 32]; KAGEMUSHA_ENABLED_HARDWARE_PROFILE_SLOTS_V1],
+    /// Governed provider-policy root fixed in the outer circuit/key configuration.
+    pub(super) provider_policy_root: [u8; 32],
 }
 
 /// Loaded authenticated Ep mint-authorization artifacts.
+///
+/// Obtain this opaque value through [`load_kagemusha_ep_mint_authorization_artifacts_v1`].
+/// Its authenticated keys, layout and release identities remain private to the recursion
+/// implementation. External callers can store and pass the loaded value, but cannot replace
+/// its fields or manufacture one. Gated qualification constructors remain internal.
+///
+/// ```compile_fail,E0616
+/// use iroha_core::zk::kagemusha_v1_recursion::KagemushaLoadedEpMintAuthorizationArtifactsV1;
+///
+/// fn substitute_release(loaded: &mut KagemushaLoadedEpMintAuthorizationArtifactsV1) {
+///     loaded.release_id = [7; 32];
+/// }
+/// ```
+///
+/// ```compile_fail,E0451
+/// use iroha_core::zk::kagemusha_v1_recursion::KagemushaLoadedEpMintAuthorizationArtifactsV1;
+///
+/// fn reconstruct(loaded: KagemushaLoadedEpMintAuthorizationArtifactsV1) -> KagemushaLoadedEpMintAuthorizationArtifactsV1 {
+///     KagemushaLoadedEpMintAuthorizationArtifactsV1 { ..loaded }
+/// }
+/// ```
 #[cfg(feature = "zk-halo2-ipa")]
 pub struct KagemushaLoadedEpMintAuthorizationArtifactsV1 {
     /// Canonical Ep transparent IPA parameters.
-    pub parameters: ParamsIPA<EpAffine>,
-    /// Processed Ep proving key.
-    pub proving_key: ProvingKey<EpAffine>,
+    pub(super) parameters: ParamsIPA<EpAffine>,
+    /// Reconstructed native Ep proving key.
+    pub(super) proving_key: ProvingKey<EpAffine>,
     /// Processed Ep verifying key.
-    pub verifying_key: VerifyingKey<EpAffine>,
+    pub(super) verifying_key: VerifyingKey<EpAffine>,
     /// Authenticated circuit layout.
-    pub circuit_params: BaseCircuitParams,
+    pub(super) circuit_params: BaseCircuitParams,
     /// Compiled Ep protocol identity.
-    pub protocol_digest: [u8; 32],
+    pub(super) protocol_digest: [u8; 32],
     /// Authenticated private SHA/credential carrier proving key.
-    pub inner_proving_key: ProvingKey<EpAffine>,
+    pub(super) inner_proving_key: ProvingKey<EpAffine>,
     /// Authenticated private SHA/credential carrier verifying key.
-    pub inner_verifying_key: VerifyingKey<EpAffine>,
+    pub(super) inner_verifying_key: VerifyingKey<EpAffine>,
     /// Authenticated private-carrier layout, distinct from the outer layout.
-    pub inner_circuit_params: BaseCircuitParams,
+    pub(super) inner_circuit_params: BaseCircuitParams,
     /// Authenticated release identity.
-    pub release_id: [u8; 32],
+    pub(super) release_id: [u8; 32],
     /// Authenticated circuit-profile identity.
-    pub profile_digest: [u8; 32],
+    pub(super) profile_digest: [u8; 32],
     /// Authenticated artifact-manifest identity.
-    pub artifact_manifest_digest: [u8; 32],
+    pub(super) artifact_manifest_digest: [u8; 32],
     /// Release-wide proof suite.
-    pub suite_id: [u8; 32],
+    pub(super) suite_id: [u8; 32],
     /// Complete release-pinned verifier-set digest.
-    pub vk_digest: [u8; 32],
+    pub(super) vk_digest: [u8; 32],
     /// Enabled-profile constants committed by this key.
-    pub enabled_hardware_profiles: [[u8; 32]; KAGEMUSHA_ENABLED_HARDWARE_PROFILE_SLOTS_V1],
+    pub(super) enabled_hardware_profiles: [[u8; 32]; KAGEMUSHA_ENABLED_HARDWARE_PROFILE_SLOTS_V1],
+    /// Governed provider-policy root fixed in the outer circuit/key configuration.
+    pub(super) provider_policy_root: [u8; 32],
 }
 
 /// Generated constant-size mint-authorization proof and recursive openings.
@@ -1958,7 +2164,7 @@ pub struct KagemushaGeneratedMintAuthorizationProofV1 {
     pub ep_current_accumulator: KagemushaEpAccumulatorV1,
 }
 
-/// Complete private input for one stable recursive mint-authority carrier step.
+/// Complete private input for a typed consumer of the ordered SHA claim.
 #[cfg(feature = "zk-halo2-ipa")]
 #[derive(Clone)]
 pub struct KagemushaMintHashClaimGenerationWitnessV1<'a> {
@@ -1990,88 +2196,146 @@ pub struct KagemushaMintHashClaimGenerationWitnessV1<'a> {
     pub eq_history_fold_proof: &'a KagemushaEqFoldProofV1,
     /// Ep proof folding the terminal claim into its complete claim history.
     pub ep_history_fold_proof: &'a KagemushaEpFoldProofV1,
-    /// Eq proof merging the complete claim into the MintAuthority history.
+    /// Eq proof merging the consumer's preceding history with the complete claim.
     pub eq_merge_fold_proof: &'a KagemushaEqFoldProofV1,
-    /// Ep proof merging the complete claim into the MintAuthority history.
+    /// Ep proof merging the consumer's preceding history with the complete claim.
     pub ep_merge_fold_proof: &'a KagemushaEpFoldProofV1,
 }
 
 /// Authenticated Eq shard/claim artifacts used by the real mint-issuance prover.
+///
+/// Obtain this opaque value through [`load_kagemusha_eq_mint_hash_artifacts_v1`]. Its
+/// keys and release identities remain private to the fixed recursion implementation, so callers
+/// cannot replace authenticated material or manufacture a loaded value. The non-shipping
+/// qualification corridor retains its separate, explicitly gated internal constructor.
+///
+/// ```compile_fail,E0616
+/// use iroha_core::zk::kagemusha_v1_recursion::KagemushaLoadedEqMintHashArtifactsV1;
+///
+/// fn substitute_release(loaded: &mut KagemushaLoadedEqMintHashArtifactsV1) {
+///     loaded.release_id = [7; 32];
+/// }
+/// ```
+///
+/// ```compile_fail,E0451
+/// use iroha_core::zk::kagemusha_v1_recursion::KagemushaLoadedEqMintHashArtifactsV1;
+///
+/// fn reconstruct(loaded: KagemushaLoadedEqMintHashArtifactsV1) -> KagemushaLoadedEqMintHashArtifactsV1 {
+///     KagemushaLoadedEqMintHashArtifactsV1 { ..loaded }
+/// }
+/// ```
 #[cfg(feature = "zk-halo2-ipa")]
 pub struct KagemushaLoadedEqMintHashArtifactsV1 {
     /// Release-authenticated `k = 16` carrier parameters.
-    pub carrier_parameters: ParamsIPA<EqAffine>,
+    pub(super) carrier_parameters: ParamsIPA<EqAffine>,
     /// Deterministic `k = 12` prefix parameters used by one-block shards.
-    pub shard_parameters: ParamsIPA<EqAffine>,
+    pub(super) shard_parameters: ParamsIPA<EqAffine>,
     /// Authenticated one-block shard proving key.
-    pub shard_proving_key: ProvingKey<EqAffine>,
+    pub(super) shard_proving_key: ProvingKey<EqAffine>,
     /// Authenticated one-block shard verifying key.
-    pub shard_verifying_key: VerifyingKey<EqAffine>,
+    #[expect(
+        dead_code,
+        reason = "Validated key retained alongside its compiled protocol for artifact qualification"
+    )]
+    pub(super) shard_verifying_key: VerifyingKey<EqAffine>,
     /// Authenticated one-block shard circuit layout.
-    pub shard_circuit_params: BaseCircuitParams,
+    pub(super) shard_circuit_params: BaseCircuitParams,
     /// Compiled one-block shard protocol.
-    pub shard_protocol: PlonkProtocol<EqAffine>,
+    pub(super) shard_protocol: PlonkProtocol<EqAffine>,
     /// Authenticated one-block shard protocol identity.
-    pub shard_protocol_digest: [u8; 32],
+    pub(super) shard_protocol_digest: [u8; 32],
     /// Authenticated ordered-claim proving key.
-    pub claim_proving_key: ProvingKey<EqAffine>,
+    pub(super) claim_proving_key: ProvingKey<EqAffine>,
     /// Authenticated ordered-claim verifying key.
-    pub claim_verifying_key: VerifyingKey<EqAffine>,
+    #[expect(
+        dead_code,
+        reason = "Validated key retained alongside its compiled protocol for artifact qualification"
+    )]
+    pub(super) claim_verifying_key: VerifyingKey<EqAffine>,
     /// Authenticated ordered-claim circuit layout.
-    pub claim_circuit_params: BaseCircuitParams,
+    pub(super) claim_circuit_params: BaseCircuitParams,
     /// Compiled ordered-claim protocol.
-    pub claim_protocol: PlonkProtocol<EqAffine>,
+    pub(super) claim_protocol: PlonkProtocol<EqAffine>,
     /// Authenticated ordered-claim protocol identity.
-    pub claim_protocol_digest: [u8; 32],
+    pub(super) claim_protocol_digest: [u8; 32],
     /// Authenticated release identity.
-    pub release_id: [u8; 32],
+    pub(super) release_id: [u8; 32],
     /// Authenticated recursive profile identity.
-    pub profile_digest: [u8; 32],
+    pub(super) profile_digest: [u8; 32],
     /// Authenticated artifact manifest identity.
-    pub artifact_manifest_digest: [u8; 32],
+    pub(super) artifact_manifest_digest: [u8; 32],
     /// Release-wide proof suite.
-    pub suite_id: [u8; 32],
+    pub(super) suite_id: [u8; 32],
     /// Complete release-pinned verifier-set digest.
-    pub vk_digest: [u8; 32],
+    pub(super) vk_digest: [u8; 32],
 }
 
 /// Authenticated Ep shard/claim artifacts used by the real mint-issuance prover.
+///
+/// Obtain this opaque value through [`load_kagemusha_ep_mint_hash_artifacts_v1`]. Its
+/// keys and release identities remain private to the fixed recursion implementation, so callers
+/// cannot replace authenticated material or manufacture a loaded value. The non-shipping
+/// qualification corridor retains its separate, explicitly gated internal constructor.
+///
+/// ```compile_fail,E0616
+/// use iroha_core::zk::kagemusha_v1_recursion::KagemushaLoadedEpMintHashArtifactsV1;
+///
+/// fn substitute_release(loaded: &mut KagemushaLoadedEpMintHashArtifactsV1) {
+///     loaded.release_id = [7; 32];
+/// }
+/// ```
+///
+/// ```compile_fail,E0451
+/// use iroha_core::zk::kagemusha_v1_recursion::KagemushaLoadedEpMintHashArtifactsV1;
+///
+/// fn reconstruct(loaded: KagemushaLoadedEpMintHashArtifactsV1) -> KagemushaLoadedEpMintHashArtifactsV1 {
+///     KagemushaLoadedEpMintHashArtifactsV1 { ..loaded }
+/// }
+/// ```
 #[cfg(feature = "zk-halo2-ipa")]
 pub struct KagemushaLoadedEpMintHashArtifactsV1 {
     /// Release-authenticated `k = 16` carrier parameters.
-    pub carrier_parameters: ParamsIPA<EpAffine>,
+    pub(super) carrier_parameters: ParamsIPA<EpAffine>,
     /// Deterministic `k = 12` prefix parameters used by one-block shards.
-    pub shard_parameters: ParamsIPA<EpAffine>,
+    pub(super) shard_parameters: ParamsIPA<EpAffine>,
     /// Authenticated one-block shard proving key.
-    pub shard_proving_key: ProvingKey<EpAffine>,
+    pub(super) shard_proving_key: ProvingKey<EpAffine>,
     /// Authenticated one-block shard verifying key.
-    pub shard_verifying_key: VerifyingKey<EpAffine>,
+    #[expect(
+        dead_code,
+        reason = "Validated key retained alongside its compiled protocol for artifact qualification"
+    )]
+    pub(super) shard_verifying_key: VerifyingKey<EpAffine>,
     /// Authenticated one-block shard circuit layout.
-    pub shard_circuit_params: BaseCircuitParams,
+    pub(super) shard_circuit_params: BaseCircuitParams,
     /// Compiled one-block shard protocol.
-    pub shard_protocol: PlonkProtocol<EpAffine>,
+    pub(super) shard_protocol: PlonkProtocol<EpAffine>,
     /// Authenticated one-block shard protocol identity.
-    pub shard_protocol_digest: [u8; 32],
+    pub(super) shard_protocol_digest: [u8; 32],
     /// Authenticated ordered-claim proving key.
-    pub claim_proving_key: ProvingKey<EpAffine>,
+    pub(super) claim_proving_key: ProvingKey<EpAffine>,
     /// Authenticated ordered-claim verifying key.
-    pub claim_verifying_key: VerifyingKey<EpAffine>,
+    #[expect(
+        dead_code,
+        reason = "Validated key retained alongside its compiled protocol for artifact qualification"
+    )]
+    pub(super) claim_verifying_key: VerifyingKey<EpAffine>,
     /// Authenticated ordered-claim circuit layout.
-    pub claim_circuit_params: BaseCircuitParams,
+    pub(super) claim_circuit_params: BaseCircuitParams,
     /// Compiled ordered-claim protocol.
-    pub claim_protocol: PlonkProtocol<EpAffine>,
+    pub(super) claim_protocol: PlonkProtocol<EpAffine>,
     /// Authenticated ordered-claim protocol identity.
-    pub claim_protocol_digest: [u8; 32],
+    pub(super) claim_protocol_digest: [u8; 32],
     /// Authenticated release identity.
-    pub release_id: [u8; 32],
+    pub(super) release_id: [u8; 32],
     /// Authenticated recursive profile identity.
-    pub profile_digest: [u8; 32],
+    pub(super) profile_digest: [u8; 32],
     /// Authenticated artifact manifest identity.
-    pub artifact_manifest_digest: [u8; 32],
+    pub(super) artifact_manifest_digest: [u8; 32],
     /// Release-wide proof suite.
-    pub suite_id: [u8; 32],
+    pub(super) suite_id: [u8; 32],
     /// Complete release-pinned verifier-set digest.
-    pub vk_digest: [u8; 32],
+    pub(super) vk_digest: [u8; 32],
 }
 
 /// Terminal ordered claim generated from every exact SHA-256 block in one typed relation queue.
@@ -2121,16 +2385,16 @@ pub struct KagemushaGeneratedMintHashClaimV1 {
 
 #[cfg(feature = "zk-halo2-ipa")]
 impl KagemushaGeneratedMintHashClaimV1 {
-    /// Borrow this terminal result in the exact form consumed by MintAuthority.
+    /// Borrow this terminal result for a typed consumer of the complete SHA claim.
     ///
-    /// The merge proofs must fold `self.*_complete_history` into the MintAuthority predecessor
-    /// histories supplied to that carrier step.  They are deliberately provided by the caller
-    /// because only that caller owns the monetary predecessor.
+    /// The merge proofs must fold the consumer's existing history with
+    /// `self.*_complete_history`, in that order. The caller supplies these proofs
+    /// because it owns the candidate, Guard or monetary predecessor history.
     ///
     /// # Errors
     ///
     /// Rejects substituted loaded protocols or a terminal public-column shape mismatch.
-    pub fn mint_authority_witness<'a>(
+    pub fn consumer_witness<'a>(
         &'a self,
         eq: &'a KagemushaLoadedEqMintHashArtifactsV1,
         ep: &'a KagemushaLoadedEpMintHashArtifactsV1,
@@ -2247,9 +2511,9 @@ pub struct KagemushaGeneratedMintAuthorityArtifactsV1 {
     pub eq_parameters: Arc<[u8]>,
     /// Canonical Ep transparent IPA parameters.
     pub ep_parameters: Arc<[u8]>,
-    /// Processed Eq mint-authority proving key.
+    /// Compact-v1 Eq mint-authority proving key.
     pub eq_proving_key: Arc<[u8]>,
-    /// Processed Ep mint-authority proving key.
+    /// Compact-v1 Ep mint-authority proving key.
     pub ep_proving_key: Arc<[u8]>,
     /// Processed Eq mint-authority verifying key.
     pub eq_verifying_key: Arc<[u8]>,
@@ -2282,61 +2546,103 @@ pub struct KagemushaGeneratedMintAuthorityArtifactsV1 {
 }
 
 /// Loaded Eq parameters and keys for production mint-authority proving.
+///
+/// Obtain this opaque value through [`load_kagemusha_eq_mint_authority_artifacts_v1`].
+/// Its authenticated keys, layout and release identities remain private to the recursion
+/// implementation. External callers can store and pass the loaded value, but cannot replace
+/// its fields or manufacture one. Gated qualification constructors remain internal.
+///
+/// ```compile_fail,E0616
+/// use iroha_core::zk::kagemusha_v1_recursion::KagemushaLoadedEqMintAuthorityArtifactsV1;
+///
+/// fn substitute_release(loaded: &mut KagemushaLoadedEqMintAuthorityArtifactsV1) {
+///     loaded.release_id = [7; 32];
+/// }
+/// ```
+///
+/// ```compile_fail,E0451
+/// use iroha_core::zk::kagemusha_v1_recursion::KagemushaLoadedEqMintAuthorityArtifactsV1;
+///
+/// fn reconstruct(loaded: KagemushaLoadedEqMintAuthorityArtifactsV1) -> KagemushaLoadedEqMintAuthorityArtifactsV1 {
+///     KagemushaLoadedEqMintAuthorityArtifactsV1 { ..loaded }
+/// }
+/// ```
 #[cfg(feature = "zk-halo2-ipa")]
 pub struct KagemushaLoadedEqMintAuthorityArtifactsV1 {
     /// Canonical Eq transparent IPA parameters.
-    pub parameters: ParamsIPA<EqAffine>,
-    /// Exact processed Eq mint-authority proving key.
-    pub proving_key: ProvingKey<EqAffine>,
+    pub(super) parameters: ParamsIPA<EqAffine>,
+    /// Reconstructed native Eq mint-authority proving key.
+    pub(super) proving_key: ProvingKey<EqAffine>,
     /// Exact processed Eq mint-authority verifying key.
-    pub verifying_key: VerifyingKey<EqAffine>,
+    pub(super) verifying_key: VerifyingKey<EqAffine>,
     /// Authenticated circuit layout.
-    pub circuit_params: BaseCircuitParams,
+    pub(super) circuit_params: BaseCircuitParams,
     /// Private SHA/quorum carrier proving key.
-    pub inner_proving_key: ProvingKey<EqAffine>,
+    pub(super) inner_proving_key: ProvingKey<EqAffine>,
     /// Private carrier verifying key pinned by the compact outer key.
-    pub inner_verifying_key: VerifyingKey<EqAffine>,
+    pub(super) inner_verifying_key: VerifyingKey<EqAffine>,
     /// Authenticated private-carrier layout.
-    pub inner_circuit_params: BaseCircuitParams,
+    pub(super) inner_circuit_params: BaseCircuitParams,
     /// Authenticated compact outer protocol identity.
-    pub protocol_digest: [u8; 32],
+    pub(super) protocol_digest: [u8; 32],
     /// Authenticated release identity.
-    pub release_id: [u8; 32],
+    pub(super) release_id: [u8; 32],
     /// Authenticated recursive profile identity.
-    pub profile_digest: [u8; 32],
+    pub(super) profile_digest: [u8; 32],
     /// Authenticated artifact manifest identity.
-    pub artifact_manifest_digest: [u8; 32],
+    pub(super) artifact_manifest_digest: [u8; 32],
     /// Release-pinned initial roster identity.
-    pub genesis_roster_id: [u8; 32],
+    pub(super) genesis_roster_id: [u8; 32],
 }
 
 /// Loaded Ep parameters and keys for production mint-authority proving.
+///
+/// Obtain this opaque value through [`load_kagemusha_ep_mint_authority_artifacts_v1`].
+/// Its authenticated keys, layout and release identities remain private to the recursion
+/// implementation. External callers can store and pass the loaded value, but cannot replace
+/// its fields or manufacture one. Gated qualification constructors remain internal.
+///
+/// ```compile_fail,E0616
+/// use iroha_core::zk::kagemusha_v1_recursion::KagemushaLoadedEpMintAuthorityArtifactsV1;
+///
+/// fn substitute_release(loaded: &mut KagemushaLoadedEpMintAuthorityArtifactsV1) {
+///     loaded.release_id = [7; 32];
+/// }
+/// ```
+///
+/// ```compile_fail,E0451
+/// use iroha_core::zk::kagemusha_v1_recursion::KagemushaLoadedEpMintAuthorityArtifactsV1;
+///
+/// fn reconstruct(loaded: KagemushaLoadedEpMintAuthorityArtifactsV1) -> KagemushaLoadedEpMintAuthorityArtifactsV1 {
+///     KagemushaLoadedEpMintAuthorityArtifactsV1 { ..loaded }
+/// }
+/// ```
 #[cfg(feature = "zk-halo2-ipa")]
 pub struct KagemushaLoadedEpMintAuthorityArtifactsV1 {
     /// Canonical Ep transparent IPA parameters.
-    pub parameters: ParamsIPA<EpAffine>,
-    /// Exact processed Ep mint-authority proving key.
-    pub proving_key: ProvingKey<EpAffine>,
+    pub(super) parameters: ParamsIPA<EpAffine>,
+    /// Reconstructed native Ep mint-authority proving key.
+    pub(super) proving_key: ProvingKey<EpAffine>,
     /// Exact processed Ep mint-authority verifying key.
-    pub verifying_key: VerifyingKey<EpAffine>,
+    pub(super) verifying_key: VerifyingKey<EpAffine>,
     /// Authenticated circuit layout.
-    pub circuit_params: BaseCircuitParams,
+    pub(super) circuit_params: BaseCircuitParams,
     /// Private SHA/quorum carrier proving key.
-    pub inner_proving_key: ProvingKey<EpAffine>,
+    pub(super) inner_proving_key: ProvingKey<EpAffine>,
     /// Private carrier verifying key pinned by the compact outer key.
-    pub inner_verifying_key: VerifyingKey<EpAffine>,
+    pub(super) inner_verifying_key: VerifyingKey<EpAffine>,
     /// Authenticated private-carrier layout.
-    pub inner_circuit_params: BaseCircuitParams,
+    pub(super) inner_circuit_params: BaseCircuitParams,
     /// Authenticated compact outer protocol identity.
-    pub protocol_digest: [u8; 32],
+    pub(super) protocol_digest: [u8; 32],
     /// Authenticated release identity.
-    pub release_id: [u8; 32],
+    pub(super) release_id: [u8; 32],
     /// Authenticated recursive profile identity.
-    pub profile_digest: [u8; 32],
+    pub(super) profile_digest: [u8; 32],
     /// Authenticated artifact manifest identity.
-    pub artifact_manifest_digest: [u8; 32],
+    pub(super) artifact_manifest_digest: [u8; 32],
     /// Release-pinned initial roster identity.
-    pub genesis_roster_id: [u8; 32],
+    pub(super) genesis_roster_id: [u8; 32],
 }
 
 /// One generated stable carrier proof with the exact fields required to construct a mint credit.
@@ -2480,7 +2786,7 @@ pub enum KagemushaArtifactGenerationErrorV1 {
     },
     /// The configured compressed Processed key layout cannot fit immutable helper limits.
     #[error(
-        "Kagemusha V1 {parity:?} {kind} compressed Processed key profile (advice={advice_columns}, instance={instance_columns}, fixed={configured_fixed_columns}, original_selectors={selector_columns}, materialized_selectors={materialized_selector_columns}, selector_bitmap_bytes={selector_bitmap_bytes}, permutation={permutation_columns}) predicts proving-key length {predicted_proving_key_bytes}/{proving_key_maximum} and verifying-key length {predicted_verifying_key_bytes}/{verifying_key_maximum}"
+        "Kagemusha V1 {parity:?} {kind} compact proving/Processed verifying key profile (advice={advice_columns}, instance={instance_columns}, fixed={configured_fixed_columns}, original_selectors={selector_columns}, materialized_selectors={materialized_selector_columns}, selector_bitmap_bytes={selector_bitmap_bytes}, permutation={permutation_columns}) predicts proving-key length {predicted_proving_key_bytes}/{proving_key_maximum} and verifying-key length {predicted_verifying_key_bytes}/{verifying_key_maximum}"
     )]
     PredictedKeyResourceLimit {
         /// Pasta parity being configured.
@@ -3038,6 +3344,117 @@ pub fn prove_kagemusha_mint_authorization_hash_claim_v1(
         eq,
         ep,
         mint_authorization_sha_messages_v1(witness, enabled_profiles)?,
+        recovery_seed,
+    )
+}
+
+/// Exact compiled candidate and Guard columns needed for one Terminal SHA planning parity.
+///
+/// Nested proof bytes and successor histories are consumed by Terminal proving, after this
+/// independent ordered claim has been generated and merged into the complete history.
+#[cfg(feature = "zk-halo2-ipa")]
+#[derive(Clone, Copy)]
+pub struct KagemushaTerminalAuthorizationHashClaimParityWitnessV1<'a, C: CurveAffineExt> {
+    /// Actual compiled candidate-state protocol.
+    pub candidate_protocol: &'a PlonkProtocol<C>,
+    /// Exact candidate column, including its existing history tail.
+    pub candidate_instances: &'a [Vec<C::ScalarExt>],
+    /// Actual compiled terminal-Guard protocol.
+    pub terminal_guard_protocol: &'a PlonkProtocol<C>,
+    /// Exact terminal-Guard column.
+    pub terminal_guard_instances: &'a [Vec<C::ScalarExt>],
+}
+
+/// Borrowed semantic input for Terminal's complete ordered SHA claim.
+///
+/// This input deliberately precedes the Terminal claim, own audits, own protocol identities and
+/// successor history. None of those later values is an input to its 26 canonical SHA jobs.
+#[cfg(feature = "zk-halo2-ipa")]
+#[derive(Clone, Copy)]
+pub struct KagemushaTerminalAuthorizationHashClaimGenerationWitnessV1<'a> {
+    /// Released post-commit terminal projection.
+    pub public: &'a KagemushaTerminalAuthorizationTerminalGenerationPublicV1,
+    /// Complete private aggregate and hardware transition.
+    pub private_transition: &'a KagemushaTerminalAuthorizationPrivateGenerationWitnessV1,
+    /// Complete private terminal-Guard relation.
+    pub terminal_guard_relation: &'a KagemushaGuardBundleRelationWitnessV1,
+    /// Exact release-enabled hardware profile constants.
+    pub enabled_hardware_profiles:
+        &'a [[u8; 32]; KAGEMUSHA_TERMINAL_AUTHORIZATION_ENABLED_PROFILE_SLOTS_V1],
+    /// Eq candidate and Guard roles.
+    pub eq: KagemushaTerminalAuthorizationHashClaimParityWitnessV1<'a, EqAffine>,
+    /// Ep candidate and Guard roles.
+    pub ep: KagemushaTerminalAuthorizationHashClaimParityWitnessV1<'a, EpAffine>,
+}
+
+/// Prove all ordered SHA jobs emitted by the shared Terminal semantic assignment.
+///
+/// The resulting claim grants no terminal or wallet authority by itself. Terminal proving must
+/// verify the claim against its original assigned queue, authenticate both hybrid carriers and
+/// merge the claim's complete histories after the complete candidate and Guard histories.
+///
+/// # Errors
+///
+/// Rejects mixed hash releases, invalid private/public/Guard inputs or protocol roles, an
+/// incomplete paired queue, and any failed shard, claim or complete-history proof.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn prove_kagemusha_terminal_authorization_hash_claim_v1(
+    eq: &KagemushaLoadedEqMintHashArtifactsV1,
+    ep: &KagemushaLoadedEpMintHashArtifactsV1,
+    witness: KagemushaTerminalAuthorizationHashClaimGenerationWitnessV1<'_>,
+    recovery_seed: &KagemushaRecoverySeedV1,
+) -> Result<KagemushaGeneratedMintHashClaimV1, KagemushaArtifactGenerationErrorV1> {
+    use super::terminal_authorization::{
+        TerminalSemanticPlanInputsV1, TerminalSemanticPlanParityV1, plan_terminal_semantic_sha_v1,
+    };
+    use crate::zk::kagemusha_v1_poseidon::encode;
+
+    validate_loaded_typed_sha_pair_v1(eq, ep)?;
+    if witness.public.lifecycle.release_id != eq.release_id {
+        return Err(KagemushaArtifactGenerationErrorV1::CircuitBuild(
+            "TerminalAuthorization hash claim does not belong to the authenticated release"
+                .to_owned(),
+        ));
+    }
+    // These distinct canonical values occupy only Terminal's own non-SHA cells. The typed
+    // planning input cannot provide those later proof outputs; no circuit escapes this path.
+    let public = witness
+        .public
+        .clone()
+        .into_internal(
+            encode(Fp::from(3)),
+            encode(Fq::from(4)),
+            encode(Fp::from(1)),
+            encode(Fq::from(2)),
+        )
+        .map_err(KagemushaArtifactGenerationErrorV1::CircuitBuild)?;
+    let private = witness.private_transition.clone().into_internal();
+    let history = [0; super::KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1];
+    let plan = plan_terminal_semantic_sha_v1(TerminalSemanticPlanInputsV1 {
+        public: &public,
+        private_transition: &private,
+        terminal_guard_relation: witness.terminal_guard_relation,
+        enabled_hardware_profiles: witness.enabled_hardware_profiles,
+        eq: TerminalSemanticPlanParityV1 {
+            candidate_protocol: witness.eq.candidate_protocol,
+            candidate_instances: witness.eq.candidate_instances,
+            terminal_guard_protocol: witness.eq.terminal_guard_protocol,
+            terminal_guard_instances: witness.eq.terminal_guard_instances,
+            successor_history: &history,
+        },
+        ep: TerminalSemanticPlanParityV1 {
+            candidate_protocol: witness.ep.candidate_protocol,
+            candidate_instances: witness.ep.candidate_instances,
+            terminal_guard_protocol: witness.ep.terminal_guard_protocol,
+            terminal_guard_instances: witness.ep.terminal_guard_instances,
+            successor_history: &history,
+        },
+    })
+    .map_err(KagemushaArtifactGenerationErrorV1::CircuitBuild)?;
+    prove_kagemusha_typed_sha_claim_v1(
+        eq,
+        ep,
+        KagemushaPairedShaMessagesV1::try_new(plan.eq_messages, plan.ep_messages)?,
         recovery_seed,
     )
 }
@@ -4273,7 +4690,7 @@ pub fn prove_kagemusha_mint_authority_bootstrap_v1(
         OsRng,
     )
     .map_err(|error| KagemushaArtifactGenerationErrorV1::CircuitBuild(error.to_string()))?;
-    let hash_claim_witness = hash_claim.mint_authority_witness(
+    let hash_claim_witness = hash_claim.consumer_witness(
         hash_eq,
         hash_ep,
         eq_claim_merge.proof(),
@@ -4640,7 +5057,7 @@ fn prove_kagemusha_mint_authority_from_checkpoint_v1(
         OsRng,
     )
     .map_err(|error| KagemushaArtifactGenerationErrorV1::CircuitBuild(error.to_string()))?;
-    let hash_claim_witness = hash_claim.mint_authority_witness(
+    let hash_claim_witness = hash_claim.consumer_witness(
         hash_eq,
         hash_ep,
         eq_claim_merge.proof(),
@@ -5147,6 +5564,10 @@ pub fn generate_kagemusha_recursive_state_artifacts_v1(
             reason: error.to_string(),
         }
     })?;
+    // Key generation only borrows the Base graph. Release it before allocating the other key
+    // and the final audit/proof graphs below.
+    drop(eq_circuit);
+    halo2_proofs::release_allocator_slack();
     let ep_vk = keygen_vk(&ep_parameters, &ep_circuit).map_err(|error| {
         KagemushaArtifactGenerationErrorV1::KeyGeneration {
             parity: KagemushaPastaParityV1::Ep,
@@ -5161,6 +5582,8 @@ pub fn generate_kagemusha_recursive_state_artifacts_v1(
             reason: error.to_string(),
         }
     })?;
+    drop(ep_circuit);
+    halo2_proofs::release_allocator_slack();
     let eq_protocol = compile(
         &eq_parameters,
         &eq_vk,
@@ -5324,18 +5747,18 @@ pub fn generate_kagemusha_recursive_state_artifacts_v1(
         .map_err(|error| KagemushaArtifactGenerationErrorV1::CircuitBuild(error.to_string()))?;
 
     Ok(KagemushaGeneratedRecursiveStateArtifactsV1 {
-        eq: build_generated(KagemushaPastaParityV1::Eq, &eq_parameters, &eq_pk, &eq_vk)?,
-        ep: build_generated(KagemushaPastaParityV1::Ep, &ep_parameters, &ep_pk, &ep_vk)?,
+        eq: build_generated(KagemushaPastaParityV1::Eq, &eq_parameters, eq_pk, &eq_vk)?,
+        ep: build_generated(KagemushaPastaParityV1::Ep, &ep_parameters, ep_pk, &ep_vk)?,
         inner_eq: build_generated(
             KagemushaPastaParityV1::Eq,
             &eq_parameters,
-            &inner_eq_pk,
+            inner_eq_pk,
             &inner_eq_vk,
         )?,
         inner_ep: build_generated(
             KagemushaPastaParityV1::Ep,
             &ep_parameters,
-            &inner_ep_pk,
+            inner_ep_pk,
             &inner_ep_vk,
         )?,
         eq_circuit_params,
@@ -5847,6 +6270,7 @@ fn terminal_authorization_internal_witness_v1<'a>(
         private_transition: witness.private_transition.into_internal(),
         terminal_guard_relation: witness.terminal_guard_relation,
         enabled_hardware_profiles: witness.enabled_hardware_profiles,
+        hash_claim: witness.hash_claim,
         eq: KagemushaTerminalAuthorizationEqWitnessV1 {
             candidate_protocol: witness.eq.candidate_protocol,
             candidate_instances: witness.eq.candidate_instances,
@@ -5932,6 +6356,7 @@ pub fn generate_kagemusha_terminal_authorization_artifacts_v1(
     witness: KagemushaTerminalAuthorizationGenerationWitnessV1<'_>,
 ) -> Result<KagemushaGeneratedTerminalAuthorizationArtifactsV1, KagemushaArtifactGenerationErrorV1>
 {
+    preflight_kagemusha_terminal_authorization_key_configuration_v1()?;
     let enabled_hardware_profiles = witness.enabled_hardware_profiles;
     let eq_parameters = canonical_kagemusha_eq_parameters_v1();
     let ep_parameters = canonical_kagemusha_ep_parameters_v1();
@@ -6325,6 +6750,34 @@ fn validate_terminal_authorization_release_alignment_v1(
 ) -> Result<(), KagemushaArtifactGenerationErrorV1> {
     let (eq_protocol_digest, ep_protocol_digest) = release
         .qualified_relation_protocol_digests(KagemushaQualifiedRelationV1::TerminalAuthorization);
+    let claim = release
+        .helper_protocol(KagemushaQualifiedHelperCircuitV1::MintHashClaim)
+        .ok_or_else(|| {
+            KagemushaArtifactGenerationErrorV1::CircuitBuild(
+                "authenticated Terminal release omits ordered SHA claim protocols".to_owned(),
+            )
+        })?;
+    let shard = release
+        .helper_protocol(KagemushaQualifiedHelperCircuitV1::MintHashShard)
+        .ok_or_else(|| {
+            KagemushaArtifactGenerationErrorV1::CircuitBuild(
+                "authenticated Terminal release omits SHA shard protocols".to_owned(),
+            )
+        })?;
+    validate_terminal_hash_protocol_pins_v1(
+        [
+            claim.eq_protocol_digest,
+            claim.ep_protocol_digest,
+            shard.eq_protocol_digest,
+            shard.ep_protocol_digest,
+        ],
+        [
+            artifacts.mint_hash_claim_eq_protocol_digest,
+            artifacts.mint_hash_claim_ep_protocol_digest,
+            artifacts.mint_hash_shard_eq_protocol_digest,
+            artifacts.mint_hash_shard_ep_protocol_digest,
+        ],
+    )?;
     if artifacts.release_id != release.release_id()
         || artifacts.profile_digest != release.profile_digest()
         || artifacts.artifact_manifest_digest != release.manifest_digest()
@@ -6333,6 +6786,20 @@ fn validate_terminal_authorization_release_alignment_v1(
     {
         return Err(KagemushaArtifactGenerationErrorV1::CircuitBuild(
             "TerminalAuthorization artifacts and authenticated release do not match".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+/// Compare all claim/shard identities with independently authenticated release pins.
+#[cfg(feature = "zk-halo2-ipa")]
+fn validate_terminal_hash_protocol_pins_v1(
+    expected: [[u8; 32]; 4],
+    supplied: [[u8; 32]; 4],
+) -> Result<(), KagemushaArtifactGenerationErrorV1> {
+    if expected.contains(&[0; 32]) || expected != supplied {
+        return Err(KagemushaArtifactGenerationErrorV1::CircuitBuild(
+            "Terminal SHA protocols differ from the authenticated claim and shard suite".to_owned(),
         ));
     }
     Ok(())
@@ -6404,6 +6871,10 @@ where
         artifact_manifest_digest: recursion_release.artifact_manifest_digest,
         suite_id,
         vk_digest,
+        eq_claim_protocol_digest: recursion_release.mint_hash_claim_eq_protocol_digest,
+        ep_claim_protocol_digest: recursion_release.mint_hash_claim_ep_protocol_digest,
+        eq_shard_protocol_digest: recursion_release.mint_hash_shard_eq_protocol_digest,
+        ep_shard_protocol_digest: recursion_release.mint_hash_shard_ep_protocol_digest,
         enabled_hardware_profiles,
     })
 }
@@ -6474,6 +6945,10 @@ where
         artifact_manifest_digest: recursion_release.artifact_manifest_digest,
         suite_id,
         vk_digest,
+        eq_claim_protocol_digest: recursion_release.mint_hash_claim_eq_protocol_digest,
+        ep_claim_protocol_digest: recursion_release.mint_hash_claim_ep_protocol_digest,
+        eq_shard_protocol_digest: recursion_release.mint_hash_shard_eq_protocol_digest,
+        ep_shard_protocol_digest: recursion_release.mint_hash_shard_ep_protocol_digest,
         enabled_hardware_profiles,
     })
 }
@@ -6669,6 +7144,30 @@ pub fn prove_kagemusha_terminal_authorization_v1(
     recovery_seed: &KagemushaRecoverySeedV1,
 ) -> Result<KagemushaGeneratedTerminalAuthorizationProofV1, KagemushaArtifactGenerationErrorV1> {
     let generation_public = witness.public.clone();
+    let expected_hash_protocols = [
+        eq.eq_claim_protocol_digest,
+        eq.ep_claim_protocol_digest,
+        eq.eq_shard_protocol_digest,
+        eq.ep_shard_protocol_digest,
+    ];
+    validate_terminal_hash_protocol_pins_v1(
+        expected_hash_protocols,
+        [
+            ep.eq_claim_protocol_digest,
+            ep.ep_claim_protocol_digest,
+            ep.eq_shard_protocol_digest,
+            ep.ep_shard_protocol_digest,
+        ],
+    )?;
+    validate_terminal_hash_protocol_pins_v1(
+        expected_hash_protocols,
+        [
+            witness.hash_claim.eq_claim_protocol_digest,
+            witness.hash_claim.ep_claim_protocol_digest,
+            witness.hash_claim.eq_shard_protocol_digest,
+            witness.hash_claim.ep_shard_protocol_digest,
+        ],
+    )?;
     validate_terminal_authorization_profile(KagemushaPastaParityV1::Eq, &eq.circuit_params)?;
     validate_terminal_authorization_profile(KagemushaPastaParityV1::Ep, &ep.circuit_params)?;
     if eq.release_id != ep.release_id
@@ -7066,20 +7565,53 @@ fn auxiliary_only_k16_base_params_v1() -> BaseCircuitParams {
     }
 }
 
+/// Reject an oversized fixed TerminalAuthorization auxiliary configuration before deriving
+/// parameters or constructing either parity's scalar graph.
+///
+/// The generator fixes k=16 and release helper-key limits. The reciprocal MSM configuration is
+/// independent of the enabled hardware-profile IDs and the as-yet unknown Base layout. Empty
+/// Base parameters inventory only those unconditional auxiliaries; they are never used for
+/// synthesis, and passing this check does not establish full circuit or witness capacity.
+#[cfg(feature = "zk-halo2-ipa")]
+fn preflight_kagemusha_terminal_authorization_key_configuration_v1()
+-> Result<(), KagemushaArtifactGenerationErrorV1> {
+    // TODO: Qualify the complete claim-consumer graph and actual proof/key memory. Its fixed
+    // dense-MSM auxiliaries fit this lower bound; Base columns and full graph costs remain.
+    preflight_helper_key_configuration_v1::<EqAffine, KagemushaTerminalAuthorizationEqCircuitV1>(
+        KAGEMUSHA_HALO2_K_V1 as usize,
+        auxiliary_only_k16_base_params_v1(),
+        KagemushaPastaParityV1::Eq,
+        "terminal authorization auxiliary geometry",
+    )?;
+    preflight_helper_key_configuration_v1::<EpAffine, KagemushaTerminalAuthorizationEpCircuitV1>(
+        KAGEMUSHA_HALO2_K_V1 as usize,
+        auxiliary_only_k16_base_params_v1(),
+        KagemushaPastaParityV1::Ep,
+        "terminal authorization auxiliary geometry",
+    )?;
+    Ok(())
+}
+
 /// Qualify the fixed PlatformCredential claim-consumer auxiliaries before the real-proof fixture
 /// builds either parity's Base graph or calls raw Halo2 key generation.
 #[cfg(all(
     any(test, feature = "kagemusha-real-proof-harness"),
     feature = "zk-halo2-ipa"
 ))]
-pub(super) fn preflight_kagemusha_platform_credential_key_configuration_v1()
--> Result<(), KagemushaArtifactGenerationErrorV1> {
+pub(super) fn preflight_kagemusha_platform_credential_key_configuration_v1(
+    provider_policy_root: [u8; 32],
+) -> Result<(), KagemushaArtifactGenerationErrorV1> {
+    let params = super::KagemushaProviderRootCircuitParamsV1::new(
+        auxiliary_only_k16_base_params_v1(),
+        provider_policy_root,
+    )
+    .map_err(KagemushaArtifactGenerationErrorV1::CircuitBuild)?;
     preflight_helper_key_configuration_v1::<
         EqAffine,
         super::KagemushaPlatformCredentialRelationCircuitV1<Fp>,
     >(
         KAGEMUSHA_HALO2_K_V1 as usize,
-        auxiliary_only_k16_base_params_v1(),
+        params.clone(),
         KagemushaPastaParityV1::Eq,
         "PlatformCredential claim-consumer auxiliary geometry",
     )?;
@@ -7088,7 +7620,7 @@ pub(super) fn preflight_kagemusha_platform_credential_key_configuration_v1()
         super::KagemushaPlatformCredentialRelationCircuitV1<Fq>,
     >(
         KAGEMUSHA_HALO2_K_V1 as usize,
-        auxiliary_only_k16_base_params_v1(),
+        params,
         KagemushaPastaParityV1::Ep,
         "PlatformCredential claim-consumer auxiliary geometry",
     )?;
@@ -7195,6 +7727,9 @@ fn trim_hybrid_instance_key_v1<C: CurveAffine>(
 /// Generate eight inner/outer MintAuthorization keys from a real inner proof.
 ///
 /// The operation's sealed recovery seed separates private and transported proof streams.
+/// The explicit, nonzero `provider_policy_root` must match the SHA-bound private credential.
+/// It fixes both outer constraint systems for key generation and grants no runtime authority;
+/// production loaders independently select the root from the authenticated release artifacts.
 /// Only the compact outer protocols are admitted against the unchanged transport ceiling.
 ///
 /// # Errors
@@ -7205,7 +7740,12 @@ fn trim_hybrid_instance_key_v1<C: CurveAffine>(
 pub fn generate_kagemusha_mint_authorization_artifacts_v1(
     witness: KagemushaMintAuthorizationGenerationWitnessV1<'_>,
     recovery_seed: &KagemushaRecoverySeedV1,
+    provider_policy_root: [u8; 32],
 ) -> Result<KagemushaGeneratedMintAuthorizationArtifactsV1, KagemushaArtifactGenerationErrorV1> {
+    validate_mint_authorization_provider_policy_root_v1(
+        provider_policy_root,
+        witness.relation.platform_credential.hardware_policy_id,
+    )?;
     let enabled_hardware_profiles = witness.enabled_hardware_profiles;
     // Qualify the bounded dense-MSM auxiliary geometry before audit discovery constructs either
     // Base witness graph. SHA-256 is proved by the k=12 typed claim supplied in this witness and
@@ -7314,7 +7854,7 @@ pub fn generate_kagemusha_mint_authorization_artifacts_v1(
     halo2_proofs::release_allocator_slack();
 
     let eq_circuit = prepared.build_eq(&eq_parameters, &ep_parameters)?;
-    let eq_circuit_params = eq_circuit.params();
+    let eq_circuit_params = eq_circuit.params().base;
     validate_recursive_profile(KagemushaPastaParityV1::Eq, &eq_circuit_params)?;
     let eq_pk = keygen_pk_with_helper_resource_preflight_consuming_v1(
         &eq_parameters,
@@ -7349,7 +7889,7 @@ pub fn generate_kagemusha_mint_authorization_artifacts_v1(
     halo2_proofs::release_allocator_slack();
 
     let ep_circuit = prepared.build_ep(&eq_parameters, &ep_parameters)?;
-    let ep_circuit_params = ep_circuit.params();
+    let ep_circuit_params = ep_circuit.params().base;
     validate_recursive_profile(KagemushaPastaParityV1::Ep, &ep_circuit_params)?;
     drop(prepared);
     halo2_proofs::release_allocator_slack();
@@ -7401,6 +7941,7 @@ pub fn generate_kagemusha_mint_authorization_artifacts_v1(
         eq_protocol_digest,
         ep_protocol_digest,
         enabled_hardware_profiles,
+        provider_policy_root,
         inner_eq_proving_key,
         inner_eq_verifying_key,
         inner_ep_proving_key,
@@ -7408,6 +7949,20 @@ pub fn generate_kagemusha_mint_authorization_artifacts_v1(
         inner_eq_circuit_params,
         inner_ep_circuit_params,
     })
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn validate_mint_authorization_provider_policy_root_v1(
+    configured: [u8; 32],
+    actual: [u8; 32],
+) -> Result<(), KagemushaArtifactGenerationErrorV1> {
+    if configured == [0; 32] || configured != actual {
+        return Err(KagemushaArtifactGenerationErrorV1::CircuitBuild(
+            "MintAuthorization provider-policy root does not match its configured authority"
+                .to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(feature = "zk-halo2-ipa")]
@@ -7455,6 +8010,16 @@ where
     validate_mint_authorization_inner_profile(KagemushaPastaParityV1::Eq, &inner_circuit_params)?;
     let recursion_release = artifacts.recursion_artifacts();
     validate_mint_authorization_release_alignment_v1(recursion_release, release)?;
+    let provider_policy_root = artifacts.provider_policy_root();
+    validate_mint_authorization_provider_policy_root_v1(
+        provider_policy_root,
+        release.provider_policy_root(),
+    )?;
+    let provider_params = super::KagemushaProviderRootCircuitParamsV1::new(
+        circuit_params.clone(),
+        provider_policy_root,
+    )
+    .map_err(KagemushaArtifactGenerationErrorV1::CircuitBuild)?;
     let helper = release
         .helper_protocol(KagemushaQualifiedHelperCircuitV1::MintAuthorization)
         .expect("release alignment established helper presence");
@@ -7462,7 +8027,7 @@ where
     let parameters = artifacts.load_eq_params()?;
     let verifying_bytes = artifacts.resolve(KagemushaArtifactRoleV1::MintAuthorizationVkEq)?;
     let verifying_key =
-        read_eq_mint_authorization_vk(verifying_bytes.as_ref(), circuit_params.clone())?;
+        read_eq_mint_authorization_vk(verifying_bytes.as_ref(), provider_params.clone())?;
     let proving_key = load_authenticated_proving_key_v1::<
         EqAffine,
         KagemushaMintAuthorizationTransportEqCircuitV1,
@@ -7471,7 +8036,7 @@ where
         artifacts,
         KagemushaArtifactRoleV1::MintAuthorizationPkEq,
         KagemushaPastaParityV1::Eq,
-        circuit_params.clone(),
+        provider_params,
     )?;
     ensure_embedded_vk(
         KagemushaPastaParityV1::Eq,
@@ -7531,6 +8096,7 @@ where
         suite_id: release.enabled_profiles()[0].suite_id,
         vk_digest: release.vk_set_digest(),
         enabled_hardware_profiles,
+        provider_policy_root,
     })
 }
 
@@ -7554,6 +8120,16 @@ where
     validate_mint_authorization_inner_profile(KagemushaPastaParityV1::Ep, &inner_circuit_params)?;
     let recursion_release = artifacts.recursion_artifacts();
     validate_mint_authorization_release_alignment_v1(recursion_release, release)?;
+    let provider_policy_root = artifacts.provider_policy_root();
+    validate_mint_authorization_provider_policy_root_v1(
+        provider_policy_root,
+        release.provider_policy_root(),
+    )?;
+    let provider_params = super::KagemushaProviderRootCircuitParamsV1::new(
+        circuit_params.clone(),
+        provider_policy_root,
+    )
+    .map_err(KagemushaArtifactGenerationErrorV1::CircuitBuild)?;
     let helper = release
         .helper_protocol(KagemushaQualifiedHelperCircuitV1::MintAuthorization)
         .expect("release alignment established helper presence");
@@ -7561,7 +8137,7 @@ where
     let parameters = artifacts.load_ep_params()?;
     let verifying_bytes = artifacts.resolve(KagemushaArtifactRoleV1::MintAuthorizationVkEp)?;
     let verifying_key =
-        read_ep_mint_authorization_vk(verifying_bytes.as_ref(), circuit_params.clone())?;
+        read_ep_mint_authorization_vk(verifying_bytes.as_ref(), provider_params.clone())?;
     let proving_key = load_authenticated_proving_key_v1::<
         EpAffine,
         KagemushaMintAuthorizationTransportEpCircuitV1,
@@ -7570,7 +8146,7 @@ where
         artifacts,
         KagemushaArtifactRoleV1::MintAuthorizationPkEp,
         KagemushaPastaParityV1::Ep,
-        circuit_params.clone(),
+        provider_params,
     )?;
     ensure_embedded_vk(
         KagemushaPastaParityV1::Ep,
@@ -7630,6 +8206,7 @@ where
         suite_id: release.enabled_profiles()[0].suite_id,
         vk_digest: release.vk_set_digest(),
         enabled_hardware_profiles,
+        provider_policy_root,
     })
 }
 
@@ -7648,6 +8225,14 @@ pub fn prove_kagemusha_mint_authorization_v1(
 ) -> Result<KagemushaGeneratedMintAuthorizationProofV1, KagemushaArtifactGenerationErrorV1> {
     validate_recursive_profile(KagemushaPastaParityV1::Eq, &eq.circuit_params)?;
     validate_recursive_profile(KagemushaPastaParityV1::Ep, &ep.circuit_params)?;
+    validate_mint_authorization_provider_policy_root_v1(
+        eq.provider_policy_root,
+        ep.provider_policy_root,
+    )?;
+    validate_mint_authorization_provider_policy_root_v1(
+        eq.provider_policy_root,
+        witness.relation.platform_credential.hardware_policy_id,
+    )?;
     let context = &witness.relation.statement.context;
     if eq.release_id != ep.release_id
         || eq.profile_digest != ep.profile_digest
@@ -7700,7 +8285,7 @@ pub fn prove_kagemusha_mint_authorization_v1(
     let eq_instances = prepared.eq_instances.clone();
     let ep_instances = prepared.ep_instances.clone();
     let eq_circuit = prepared.build_eq(&eq.parameters, &ep.parameters)?;
-    if !same_base_params(&eq_circuit.params(), &eq.circuit_params) {
+    if !same_base_params(&eq_circuit.params().base, &eq.circuit_params) {
         return Err(KagemushaArtifactGenerationErrorV1::CircuitProfileMismatch(
             KagemushaPastaParityV1::Eq,
         ));
@@ -7715,7 +8300,7 @@ pub fn prove_kagemusha_mint_authorization_v1(
     )?;
     halo2_proofs::release_allocator_slack();
     let ep_circuit = prepared.build_ep(&eq.parameters, &ep.parameters)?;
-    if !same_base_params(&ep_circuit.params(), &ep.circuit_params) {
+    if !same_base_params(&ep_circuit.params().base, &ep.circuit_params) {
         return Err(KagemushaArtifactGenerationErrorV1::CircuitProfileMismatch(
             KagemushaPastaParityV1::Ep,
         ));
@@ -7858,6 +8443,7 @@ struct KagemushaPreparedMintAuthorizationTransportV1 {
     semantic_digest: [u8; 32],
     recipient_credential_commitment: [u8; 32],
     hardware_authorization: [u8; 32],
+    provider_policy_root: [u8; 32],
 }
 
 #[cfg(feature = "zk-halo2-ipa")]
@@ -7894,6 +8480,7 @@ impl KagemushaPreparedMintAuthorizationTransportV1 {
             ep_parameters,
             self.witness(),
             &self.audits,
+            self.provider_policy_root,
         )
         .map_err(KagemushaArtifactGenerationErrorV1::CircuitBuild)?;
         if instances != self.eq_instances {
@@ -7916,6 +8503,7 @@ impl KagemushaPreparedMintAuthorizationTransportV1 {
             ep_parameters,
             self.witness(),
             &self.audits,
+            self.provider_policy_root,
         )
         .map_err(KagemushaArtifactGenerationErrorV1::CircuitBuild)?;
         if instances != self.ep_instances {
@@ -8238,6 +8826,7 @@ fn prepare_mint_authorization_transport_from_inner_proofs_v1(
         semantic_digest,
         recipient_credential_commitment,
         hardware_authorization,
+        provider_policy_root: witness.relation.platform_credential.hardware_policy_id,
     })
 }
 
@@ -8580,7 +9169,7 @@ pub(super) fn read_ep_commit_wrapper_vk(
 #[cfg(feature = "zk-halo2-ipa")]
 fn read_eq_mint_authorization_vk(
     bytes: &[u8],
-    circuit_params: BaseCircuitParams,
+    circuit_params: super::KagemushaProviderRootCircuitParamsV1,
 ) -> Result<VerifyingKey<EqAffine>, KagemushaArtifactGenerationErrorV1> {
     let parity = KagemushaPastaParityV1::Eq;
     let mut cursor = Cursor::new(bytes);
@@ -8728,7 +9317,7 @@ fn read_eq_inner_mint_authorization_vk(
 #[cfg(feature = "zk-halo2-ipa")]
 fn read_ep_mint_authorization_vk(
     bytes: &[u8],
-    circuit_params: BaseCircuitParams,
+    circuit_params: super::KagemushaProviderRootCircuitParamsV1,
 ) -> Result<VerifyingKey<EpAffine>, KagemushaArtifactGenerationErrorV1> {
     let parity = KagemushaPastaParityV1::Ep;
     let mut cursor = Cursor::new(bytes);
@@ -10112,21 +10701,21 @@ where
     C::Scalar: halo2_proofs::SerdePrimeField + ff::FromUniformBytes<64>,
     ConcreteCircuit: halo2_proofs::plonk::Circuit<C::Scalar>,
 {
-    let key = ProvingKey::read_checked::<_, ConcreteCircuit>(
+    let key = ProvingKey::read_compact_v1_checked::<_, ConcreteCircuit>(
         &mut reader,
-        SerdeFormat::Processed,
         expected_k,
+        binding.byte_len,
         circuit_params,
     )
     .map_err(|error| key_decode_error(parity, "proving key", error))?;
     let mut canonical = CanonicalArtifactDigestWriterV1::new(binding.byte_len);
-    key.write_streaming(&mut canonical, SerdeFormat::Processed)
+    key.write_compact_v1(&mut canonical)
         .map_err(|error| key_decode_error(parity, "proving key canonical encoding", error))?;
     if !canonical.matches(binding) {
         return Err(key_decode_message(
             parity,
             "proving key",
-            "processed encoding is non-canonical",
+            "compact proving-key encoding is non-canonical",
         ));
     }
     Ok(key)
@@ -10221,10 +10810,39 @@ fn key_decode_message(
     }
 }
 
+/// Check the exact compact shape against the caller's unchanged cap before allocating output.
+fn compact_proving_key_buffer_v1<C>(
+    parity: KagemushaPastaParityV1,
+    kind: &'static str,
+    maximum: u64,
+    key: &ProvingKey<C>,
+) -> Result<Vec<u8>, KagemushaArtifactGenerationErrorV1>
+where
+    C: CurveAffine + halo2_proofs::SerdeCurveAffine,
+    C::Scalar: halo2_proofs::SerdePrimeField + ff::FromUniformBytes<64>,
+{
+    let length = key.compact_v1_bytes_length().map_err(|error| {
+        KagemushaArtifactGenerationErrorV1::KeyGeneration {
+            parity,
+            kind,
+            reason: error.to_string(),
+        }
+    })?;
+    let length = usize::try_from(length).map_err(|error| {
+        KagemushaArtifactGenerationErrorV1::KeyGeneration {
+            parity,
+            kind,
+            reason: error.to_string(),
+        }
+    })?;
+    validate_length(parity, kind, length, maximum, false)?;
+    Ok(Vec::with_capacity(length))
+}
+
 fn build_generated<C>(
     parity: KagemushaPastaParityV1,
     params: &ParamsIPA<C>,
-    proving_key: &ProvingKey<C>,
+    proving_key: ProvingKey<C>,
     verifying_key: &VerifyingKey<C>,
 ) -> Result<KagemushaGeneratedOperationArtifactsV1, KagemushaArtifactGenerationErrorV1>
 where
@@ -10239,7 +10857,19 @@ where
             reason: error.to_string(),
         }
     })?;
-    let proving_key_bytes = proving_key.to_bytes(SerdeFormat::Processed);
+    let mut proving_key_bytes = compact_proving_key_buffer_v1(
+        parity,
+        "proving key",
+        KAGEMUSHA_STATE_PROVING_KEY_MAX_BYTES_V1,
+        &proving_key,
+    )?;
+    proving_key
+        .write_compact_v1_consuming(&mut proving_key_bytes)
+        .map_err(|error| KagemushaArtifactGenerationErrorV1::KeyGeneration {
+            parity,
+            kind: "proving key",
+            reason: error.to_string(),
+        })?;
     let verifying_key_bytes = verifying_key.to_bytes(SerdeFormat::Processed);
     validate_length(
         parity,
@@ -10303,7 +10933,19 @@ where
         KAGEMUSHA_VERIFYING_KEY_MAX_BYTES_V1,
         false,
     )?;
-    let proving_key_bytes = proving_key.into_bytes(SerdeFormat::Processed);
+    let mut proving_key_bytes = compact_proving_key_buffer_v1(
+        parity,
+        "mint-authority proving key",
+        KAGEMUSHA_HELPER_PROVING_KEY_MAX_BYTES_V1,
+        &proving_key,
+    )?;
+    proving_key
+        .write_compact_v1_consuming(&mut proving_key_bytes)
+        .map_err(|error| KagemushaArtifactGenerationErrorV1::KeyGeneration {
+            parity,
+            kind: "mint-authority proving key",
+            reason: error.to_string(),
+        })?;
     validate_length(
         parity,
         "mint-authority proving key",
@@ -10352,7 +10994,19 @@ where
         KAGEMUSHA_VERIFYING_KEY_MAX_BYTES_V1,
         false,
     )?;
-    let proving_key_bytes = proving_key.into_bytes(SerdeFormat::Processed);
+    let mut proving_key_bytes = compact_proving_key_buffer_v1(
+        parity,
+        label,
+        KAGEMUSHA_HELPER_PROVING_KEY_MAX_BYTES_V1,
+        &proving_key,
+    )?;
+    proving_key
+        .write_compact_v1_consuming(&mut proving_key_bytes)
+        .map_err(|error| KagemushaArtifactGenerationErrorV1::KeyGeneration {
+            parity,
+            kind: label,
+            reason: error.to_string(),
+        })?;
     validate_length(
         parity,
         label,
@@ -10407,6 +11061,27 @@ mod tests {
 
     #[cfg(feature = "zk-halo2-ipa")]
     #[test]
+    fn terminal_hash_protocol_pins_reject_every_substituted_or_absent_role() {
+        let authenticated = [[1; 32], [2; 32], [3; 32], [4; 32]];
+        validate_terminal_hash_protocol_pins_v1(authenticated, authenticated)
+            .expect("all four release pins match");
+        for index in 0..authenticated.len() {
+            let mut substituted = authenticated;
+            substituted[index][17] ^= 1;
+            assert!(validate_terminal_hash_protocol_pins_v1(authenticated, substituted).is_err());
+            substituted[index] = [0; 32];
+            assert!(validate_terminal_hash_protocol_pins_v1(authenticated, substituted).is_err());
+            assert!(validate_terminal_hash_protocol_pins_v1(substituted, substituted).is_err());
+        }
+        for pair in [(0, 1), (2, 3), (0, 2), (1, 3)] {
+            let mut swapped = authenticated;
+            swapped.swap(pair.0, pair.1);
+            assert!(validate_terminal_hash_protocol_pins_v1(authenticated, swapped).is_err());
+        }
+    }
+
+    #[cfg(feature = "zk-halo2-ipa")]
+    #[test]
     fn recursive_state_key_convergence_never_replaces_a_monetary_parent() {
         require_recursive_state_bootstrap_keygen_v1(KagemushaOperationV1::Bootstrap)
             .expect("zero-balance Bootstrap can seed release keys");
@@ -10426,7 +11101,13 @@ mod tests {
     fn recursive_state_key_convergence_distinguishes_shape_from_authenticated_identity() {
         macro_rules! check {
             ($curve:ty, $field:ty, $parity:expr) => {{
-                let parameters = ParamsIPA::<$curve>::new(6);
+                // Compiling an ordinary IPA protocol commits every public instance using a
+                // domain basis point. The recursive column has 85 semantic plus 34 history
+                // cells, so the unrelated k=6 recovery fixture's 64-point basis is too short.
+                const TEST_K: u32 = 8;
+                assert_eq!(recursive_public_instance_count(), 119);
+                assert!(recursive_public_instance_count() <= (1_usize << TEST_K));
+                let parameters = ParamsIPA::<$curve>::new(TEST_K);
                 let circuit =
                     SmallRecoveryCircuit(halo2_proofs::circuit::Value::known(<$field>::from(7)));
                 let vk = keygen_vk(&parameters, &circuit).expect("small shape-test VK");
@@ -10875,7 +11556,15 @@ mod tests {
                 let circuit = SmallRecoveryCircuit(halo2_proofs::circuit::Value::known(value));
                 let vk = keygen_vk(&params, &circuit).expect("small canonical VK");
                 let pk = keygen_pk(&params, vk, &circuit).expect("small canonical PK");
-                let bytes = pk.to_bytes(SerdeFormat::Processed);
+                let processed = pk.to_bytes(SerdeFormat::Processed);
+                let mut bytes = compact_proving_key_buffer_v1(
+                    KagemushaPastaParityV1::$parity, "test proving key", 64 * 1024 * 1024, &pk,
+                ).expect("bounded compact output");
+                pk.write_compact_v1(&mut bytes).expect("compact proving key");
+                assert!(bytes.len() < processed.len());
+                assert!(compact_proving_key_buffer_v1(
+                    KagemushaPastaParityV1::$parity, "test proving key", bytes.len() as u64 - 1, &pk,
+                ).is_err(), "enforce cap before allocating output");
                 let binding = binding(KagemushaArtifactRoleV1::$role, &bytes);
                 let mut cursor = Cursor::new(bytes.as_slice());
                 let recovered = read_canonical_proving_key_v1::<
@@ -10893,14 +11582,14 @@ mod tests {
                     bytes.len(),
                 )
                 .expect("complete input consumed");
-                assert_eq!(recovered.to_bytes(SerdeFormat::Processed), bytes);
+                assert_eq!(recovered.to_bytes(SerdeFormat::Processed), processed);
                 ensure_embedded_vk(
                     KagemushaPastaParityV1::$parity,
                     &recovered,
                     &pk.get_vk().to_bytes(SerdeFormat::Processed),
                 )
                 .expect("same embedded VK");
-                let vk_len = pk.get_vk().to_bytes(SerdeFormat::Processed).len();
+                let vk_len = 56 + pk.get_vk().to_bytes(SerdeFormat::Processed).len();
                 let mut invalid_length = bytes.clone();
                 invalid_length[vk_len..vk_len + 4].copy_from_slice(&u32::MAX.to_be_bytes());
                 let mut invalid_field = bytes.clone();
@@ -10919,6 +11608,28 @@ mod tests {
                         )
                     });
                     assert!(result.expect("malformed key must not panic").is_err());
+                }
+                let old_binding = KagemushaArtifactBindingV1 {
+                    byte_len: processed.len() as u64,
+                    sha256: Sha256::digest(&processed).into(),
+                    ..binding
+                };
+                assert!(read_canonical_proving_key_v1::<$curve, SmallRecoveryCircuit<$scalar>>(
+                    &mut Cursor::new(processed.as_slice()), old_binding,
+                    KagemushaPastaParityV1::$parity, 6, (),
+                ).is_err(), "even authenticated old Processed PKs are rejected");
+                let mut wrong_version = bytes.clone();
+                wrong_version[14] ^= 1;
+                let mut wrong_curve = bytes.clone();
+                wrong_curve[16] ^= 1;
+                for malformed in [wrong_version, wrong_curve] {
+                    let changed = KagemushaArtifactBindingV1 {
+                        sha256: Sha256::digest(&malformed).into(), ..binding
+                    };
+                    assert!(read_canonical_proving_key_v1::<$curve, SmallRecoveryCircuit<$scalar>>(
+                        &mut Cursor::new(malformed.as_slice()), changed,
+                        KagemushaPastaParityV1::$parity, 6, (),
+                    ).is_err(), "authentication never selects a different codec or curve");
                 }
                 let seed = KagemushaRecoverySeedV1::from_unsealed([0xC7; 32])
                     .expect("public test seed only");
@@ -10988,7 +11699,7 @@ mod tests {
                         )
                     })
                     .expect("complete K6 stream authentication and canonical key decoding");
-                assert_eq!(streamed.to_bytes(SerdeFormat::Processed), bytes);
+                assert_eq!(streamed.to_bytes(SerdeFormat::Processed), processed);
                 assert!(matches!(
                     load_authenticated_proving_key_v1::<
                         $curve,
@@ -11313,3 +12024,7 @@ mod tests {
 #[cfg(all(test, feature = "zk-halo2-ipa"))]
 #[path = "generation_mint_transport_tests.rs"]
 mod mint_transport_tests;
+
+#[cfg(all(test, feature = "zk-halo2-ipa"))]
+#[path = "generation_lookup_recovery_tests.rs"]
+mod lookup_recovery_tests;

@@ -97,11 +97,11 @@ pub(crate) fn data_trigger_action_matches(
 }
 struct BorrowedEnumVariant<'a, T> {
     discriminant: u32,
-    value: &'a dyn norito::core::NoritoSerialize,
+    value: &'a dyn norito::core::SerializePayload,
     marker: core::marker::PhantomData<T>,
 }
 impl<'a, T> BorrowedEnumVariant<'a, T> {
-    fn new(discriminant: u32, value: &'a dyn norito::core::NoritoSerialize) -> Self {
+    fn new(discriminant: u32, value: &'a dyn norito::core::SerializePayload) -> Self {
         Self {
             discriminant,
             value,
@@ -115,13 +115,16 @@ impl<T: norito::core::NoritoSerialize> norito::core::NoritoSerialize
     fn schema_hash() -> [u8; 16] {
         T::schema_hash()
     }
+}
+impl<T: norito::core::NoritoSerialize> norito::core::SerializePayload
+    for BorrowedEnumVariant<'_, T>
+{
     fn serialize(
         &self,
         writer: &mut norito::core::Encoder<'_>,
     ) -> core::result::Result<(), norito::core::Error> {
-        norito::core::NoritoSerialize::serialize(&self.discriminant, writer)?;
-        let mut scratch = norito::core::DeriveSmallBuf::new();
-        norito::core::write_len_prefixed(writer, self.value, &mut scratch)
+        norito::core::SerializePayload::serialize(&self.discriminant, writer)?;
+        norito::core::write_len_prefixed(writer, self.value)
     }
     fn encoded_len_exact(&self) -> Option<usize> {
         let discriminant = self.discriminant.encoded_len_exact()?;
@@ -170,6 +173,7 @@ enum DataTriggerFamily {
     Social,
     Bridge,
     Governance,
+    GameSession,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -184,6 +188,7 @@ enum DataTriggerSubjectKind {
     Nft,
     Rwa,
     Trigger,
+    GameSession,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -293,6 +298,15 @@ fn data_trigger_filter_index_keys(filter: &DataEventFilter) -> Vec<DataTriggerIn
     let family = |family| vec![DataTriggerIndexKey::Family(family)];
     match filter {
         DataEventFilter::Any => vec![DataTriggerIndexKey::Any],
+        DataEventFilter::GameSession(id) => id.as_ref().map_or_else(
+            || family(DataTriggerFamily::GameSession),
+            |id| {
+                vec![data_trigger_subject_key(
+                    DataTriggerSubjectKind::GameSession,
+                    id,
+                )]
+            },
+        ),
         DataEventFilter::Peer(_) => family(DataTriggerFamily::Peer),
         DataEventFilter::Domain(filter) => filter.id_matcher().as_ref().map_or_else(
             || family(DataTriggerFamily::Domain),
@@ -405,6 +419,13 @@ fn add_asset_event_index_keys(keys: &mut BTreeSet<DataTriggerIndexKey>, event: &
 fn data_event_index_keys(event: &DataEvent) -> BTreeSet<DataTriggerIndexKey> {
     let mut keys = BTreeSet::from([DataTriggerIndexKey::Any]);
     match event {
+        DataEvent::GameSession(event) => {
+            keys.insert(DataTriggerIndexKey::Family(DataTriggerFamily::GameSession));
+            keys.insert(data_trigger_subject_key(
+                DataTriggerSubjectKind::GameSession,
+                &event.session_id,
+            ));
+        }
         DataEvent::Peer(_) => {
             keys.insert(DataTriggerIndexKey::Family(DataTriggerFamily::Peer));
         }
@@ -1384,7 +1405,7 @@ pub trait SetReadOnly {
     where
         F: norito::core::NoritoSerialize,
     {
-        let (executable_discriminant, executable): (u32, &dyn norito::core::NoritoSerialize) =
+        let (executable_discriminant, executable): (u32, &dyn norito::core::SerializePayload) =
             match &action.executable {
                 ExecutableRef::Instructions(instructions) => (0, instructions),
                 ExecutableRef::ContractCall(invocation) => (1, invocation),

@@ -5,19 +5,21 @@
 //! then operation rank; equal key/rank pairs retain their supplied order through
 //! the stable sort. Columns are padded to the next power-of-two trace length and
 //! exposed as Goldilocks field elements.
+#[cfg(test)]
+use crate::gadgets::transfer_integer_air::TransferIntegerWitness;
 #[cfg(feature = "fastpq-gpu")]
 use crate::gpu;
 use crate::{
     Error, Result, StateTransition, TransitionBatch,
     backend::{self, ExecutionMode, PoseidonExecutionMode},
     fft::Planner,
-    gadgets::transfer::{self, TransferRowKey},
+    gadgets::{transfer, transfer_integer_air, transfer_row_binding},
     pack_bytes, poseidon,
 };
 use core::convert::TryFrom;
 #[cfg(test)]
 use fastpq_isi::StarkParameterSet;
-#[cfg(any(test, feature = "dev-tools", feature = "fastpq-gpu"))]
+#[cfg(any(test, feature = "fastpq-gpu", feature = "dev-tools"))]
 use fastpq_isi::poseidon::PoseidonSponge as CpuPoseidonSponge;
 #[cfg(feature = "fastpq-gpu")]
 use fastpq_isi::poseidon::RATE;
@@ -34,7 +36,7 @@ use std::sync::Mutex;
 #[cfg(feature = "fastpq-gpu")]
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::{
-    collections::{BTreeMap, HashMap, VecDeque},
+    collections::{BTreeMap, HashMap},
     sync::{Arc, OnceLock, RwLock},
 };
 /// Goldilocks modulus used by the FASTPQ AIR.
@@ -59,7 +61,7 @@ const PERMISSION_KEY_PREFIX: &[u8] = b"permission/";
 #[cfg(test)]
 const TRACE_COLUMN_DOMAIN_PREFIX: &str = "fastpq:v1:trace:column:";
 /// Domain tag used for Merkle interior nodes.
-#[cfg(any(test, feature = "dev-tools", feature = "fastpq-gpu"))]
+#[cfg(any(test, feature = "fastpq-gpu", feature = "dev-tools"))]
 const TRACE_NODE_DOMAIN: &[u8] = b"fastpq:v1:trace:node";
 #[cfg(feature = "fastpq-gpu")]
 static POSEIDON_PIPELINE_STATS_ENABLED: AtomicBool = AtomicBool::new(false);
@@ -135,7 +137,6 @@ impl PoseidonPipelinePolicy {
     pub const fn resolved(self) -> ExecutionMode {
         self.resolved
     }
-    #[cfg(test)]
     fn cpu_label(self) -> &'static str {
         if matches!(self.requested, PoseidonExecutionMode::Cpu) {
             "cpu_forced"
@@ -231,6 +232,19 @@ pub(crate) fn notify_poseidon_pipeline_observer(
         }
     }
 }
+/// Report the actual native-STARK Digest384 route while preserving the requested override.
+///
+/// The six-lane native-STARK hash currently has a scalar implementation only.
+/// GPU availability for FFT or the separate 64-bit diagnostic hash does not
+/// imply accelerated execution of this commitment and transcript pipeline.
+pub(crate) fn notify_native_stark_cpu_hashing(policy: PoseidonPipelinePolicy) {
+    let actual_policy = PoseidonPipelinePolicy {
+        requested: policy.requested(),
+        resolved: ExecutionMode::Cpu,
+    };
+    notify_poseidon_pipeline_observer(actual_policy, actual_policy.cpu_label(), None);
+}
+
 #[cfg(test)]
 pub(crate) fn notify_trace_merkle_mode_observer(mode: ExecutionMode) {
     let observer = clone_observer(trace_merkle_mode_observer_slot(), "trace_merkle_mode");
@@ -358,6 +372,7 @@ pub struct TraceColumn {
 /// Column digest set containing leaf hashes plus an optional precomputed first level.
 #[cfg(any(test, feature = "fastpq-gpu"))]
 #[derive(Clone, Debug)]
+#[cfg(any(test, feature = "fastpq-gpu"))]
 pub struct ColumnDigests {
     /// Poseidon hash for each column (leaf nodes).
     leaves: Vec<u64>,
@@ -396,6 +411,8 @@ struct RowData {
     key_limbs: Vec<u64>,
     value_old_limbs: Vec<u64>,
     value_new_limbs: Vec<u64>,
+    value_old_len: u64,
+    value_new_len: u64,
     asset_limbs: Vec<u64>,
     delta: u64,
     running_asset_delta: u64,
@@ -411,12 +428,23 @@ struct RowData {
     slot: u64,
 }
 /// Transfer-only SMT projection retained only when a batch contains transfers.
-#[derive(Default)]
 struct TransferRowData {
     path_bits: [u64; SMT_HEIGHT],
     siblings: [u64; SMT_HEIGHT],
     node_in: [u64; SMT_HEIGHT],
     node_out: [u64; SMT_HEIGHT],
+    integer_auxiliary: [u64; transfer_integer_air::AUXILIARY_COLUMN_COUNT],
+}
+impl Default for TransferRowData {
+    fn default() -> Self {
+        Self {
+            path_bits: [0; SMT_HEIGHT],
+            siblings: [0; SMT_HEIGHT],
+            node_in: [0; SMT_HEIGHT],
+            node_out: [0; SMT_HEIGHT],
+            integer_auxiliary: [0; transfer_integer_air::AUXILIARY_COLUMN_COUNT],
+        }
+    }
 }
 #[derive(Debug, Clone, Copy, Default)]
 struct Selectors {
@@ -439,6 +467,8 @@ impl RowData {
             key_limbs: Vec::new(),
             value_old_limbs: Vec::new(),
             value_new_limbs: Vec::new(),
+            value_old_len: 0,
+            value_new_len: 0,
             asset_limbs: Vec::new(),
             delta: 0,
             running_asset_delta: 0,
@@ -704,7 +734,8 @@ pub fn build_trace(batch: &TransitionBatch) -> Result<Trace> {
         &canonical.transitions,
         &canonical.public_inputs,
     )?;
-    let mut transfer_proof_index = transfer::index_row_proofs(&transfer_witnesses)?;
+    let transfer_bindings =
+        transfer_row_binding::bind_canonical_rows(&canonical.transitions, &transfer_witnesses)?;
     let metadata_hash_limbs = metadata_commitment_limbs(&canonical.metadata)?;
     let dsid_hash = hash_with_domain(DSID_DOMAIN, &canonical.public_inputs.dsid)?;
     // The exact `u64` remains bound by `PublicIO`; trace columns must use the
@@ -718,7 +749,7 @@ pub fn build_trace(batch: &TransitionBatch) -> Result<Trace> {
         .iter()
         .any(|transition| matches!(&transition.operation, crate::OperationKind::Transfer))
         .then(|| Vec::with_capacity(canonical.transitions.len()));
-    for transition in &canonical.transitions {
+    for (transition, binding) in canonical.transitions.iter().zip(transfer_bindings) {
         let mut selectors = Selectors {
             active: 1,
             ..Selectors::default()
@@ -798,15 +829,24 @@ pub fn build_trace(batch: &TransitionBatch) -> Result<Trace> {
                 _ => {}
             }
             let delta_signed = i128::from(post_value_u64) - i128::from(pre_value_u64);
-            ensure_signed_field_bound(delta_signed, "delta")?;
+            if selectors.transfer != 1 {
+                ensure_signed_field_bound(delta_signed, "delta")?;
+            }
             (delta_signed, pre_value_u64, post_value_u64)
         } else {
             (0, 0, 0)
         };
         let running_previous = running_per_asset.get(&asset_id_bytes).copied().unwrap_or(0);
         let running_next = if numeric_values {
-            let next =
-                checked_accumulate_delta(running_previous, delta_signed, "running_asset_delta")?;
+            let next = if selectors.transfer == 1 {
+                running_previous
+                    .checked_add(delta_signed)
+                    .ok_or(Error::TransferNumericBounds {
+                        field: "running_asset_delta",
+                    })?
+            } else {
+                checked_accumulate_delta(running_previous, delta_signed, "running_asset_delta")?
+            };
             running_per_asset.insert(asset_id_bytes.clone(), next);
             next
         } else {
@@ -824,6 +864,16 @@ pub fn build_trace(batch: &TransitionBatch) -> Result<Trace> {
             key_limbs,
             value_old_limbs,
             value_new_limbs,
+            value_old_len: u64::try_from(transition.pre_value.len()).map_err(|_| {
+                Error::PayloadLengthOverflow {
+                    length: transition.pre_value.len(),
+                }
+            })?,
+            value_new_len: u64::try_from(transition.post_value.len()).map_err(|_| {
+                Error::PayloadLengthOverflow {
+                    length: transition.post_value.len(),
+                }
+            })?,
             asset_limbs,
             delta: field_from_i128(delta_signed),
             running_asset_delta: field_from_i128(running_next),
@@ -842,13 +892,19 @@ pub fn build_trace(batch: &TransitionBatch) -> Result<Trace> {
         if let Some(projection) = transfer_rows.as_mut() {
             let mut transfer_row = TransferRowData::default();
             if selectors.transfer == 1 {
-                let proof = take_transfer_row_proof(&mut transfer_proof_index, transition)?;
+                // Use the exact validated occurrence's amount and declared role;
+                // a zero sender must remain a debit. This constructor binding
+                // still relies on the mandatory native transcript validation.
+                let binding = binding.ok_or_else(|| Error::TransferInvariant {
+                    details: "transfer row is missing its canonical occurrence binding".into(),
+                })?;
+                transfer_row.integer_auxiliary = binding.integer_witness().auxiliary_values();
                 populate_merkle_columns(
                     &mut transfer_row,
                     transition.key.as_slice(),
                     pre_value_u64,
                     post_value_u64,
-                    &proof,
+                    binding.proof(),
                 );
             }
             projection.push(transfer_row);
@@ -905,6 +961,8 @@ pub fn build_trace(batch: &TransitionBatch) -> Result<Trace> {
         ),
         TraceColumn::new("s_meta_set", rows.iter().map(|row| row.selectors.meta_set)),
         TraceColumn::new("s_perm", rows.iter().map(|row| row.selectors.perm)),
+        TraceColumn::new("value_old_len", rows.iter().map(|row| row.value_old_len)),
+        TraceColumn::new("value_new_len", rows.iter().map(|row| row.value_new_len)),
     ];
     for idx in 0..max_key_limbs {
         columns.push(TraceColumn::new(
@@ -972,6 +1030,17 @@ pub fn build_trace(batch: &TransitionBatch) -> Result<Trace> {
     columns.push(TraceColumn::new("dsid", rows.iter().map(|row| row.dsid)));
     columns.push(TraceColumn::new("slot", rows.iter().map(|row| row.slot)));
     if let Some(transfer_rows) = &transfer_rows {
+        for (column, name) in transfer_integer_air::auxiliary_column_names()
+            .into_iter()
+            .enumerate()
+        {
+            columns.push(TraceColumn::new(
+                name,
+                transfer_rows
+                    .iter()
+                    .map(|row| row.integer_auxiliary[column]),
+            ));
+        }
         for level in 0..SMT_HEIGHT {
             columns.push(TraceColumn::new(
                 format!("path_bit_{level}"),
@@ -1000,17 +1069,6 @@ pub fn build_trace(batch: &TransitionBatch) -> Result<Trace> {
     })
 }
 
-fn take_transfer_row_proof(
-    proof_index: &mut HashMap<TransferRowKey, VecDeque<transfer::TransferMerkleProof>>,
-    transition: &StateTransition,
-) -> Result<transfer::TransferMerkleProof> {
-    proof_index
-        .get_mut(&TransferRowKey::from_transition(transition))
-        .and_then(VecDeque::pop_front)
-        .ok_or_else(|| Error::TransferInvariant {
-            details: "transfer row is missing its canonical SMT proof witness".into(),
-        })
-}
 #[derive(Clone, Copy)]
 struct TraceSchemaLimbWidths {
     key: usize,
@@ -1043,6 +1101,10 @@ fn trace_schema_limb_widths(batch: &TransitionBatch) -> Result<TraceSchemaLimbWi
                 canonical_asset_id_bytes(&transition.key)?.len()
             }
         };
+        if matches!(&transition.operation, crate::OperationKind::Transfer) {
+            decode_u64_le(&transition.pre_value)?;
+            decode_u64_le(&transition.post_value)?;
+        }
         widths.key = widths.key.max(packed_limb_len(transition.key.len()));
         widths.old_value = widths
             .old_value
@@ -1059,13 +1121,15 @@ pub(crate) fn column_count_for_batch(batch: &TransitionBatch) -> Result<usize> {
     const SELECTOR_COLUMNS: usize = 8;
     const DELTA_COLUMNS: usize = 2;
     const TRAILING_COLUMNS: usize = 8;
+    const VALUE_LENGTH_COLUMNS: usize = 2;
     let widths = trace_schema_limb_widths(batch)?;
     let fixed_columns = SELECTOR_COLUMNS
+        + VALUE_LENGTH_COLUMNS
         + DELTA_COLUMNS
         + METADATA_COMMITMENT_LIMBS
         + TRAILING_COLUMNS
         + if widths.has_transfer {
-            SMT_HEIGHT * 4
+            SMT_HEIGHT * 4 + transfer_integer_air::AUXILIARY_COLUMN_COUNT
         } else {
             0
         };
@@ -1103,6 +1167,8 @@ pub(crate) fn column_names_for_batch(batch: &TransitionBatch) -> Result<Vec<Stri
         "s_role_revoke",
         "s_meta_set",
         "s_perm",
+        "value_old_len",
+        "value_new_len",
     ]
     .into_iter()
     .map(str::to_owned)
@@ -1132,6 +1198,7 @@ pub(crate) fn column_names_for_batch(batch: &TransitionBatch) -> Result<Vec<Stri
         .map(str::to_owned),
     );
     if widths.has_transfer {
+        columns.extend(transfer_integer_air::auxiliary_column_names());
         for level in 0..SMT_HEIGHT {
             columns.push(format!("path_bit_{level}"));
             columns.push(format!("sibling_{level}"));
@@ -1279,7 +1346,7 @@ fn hash_with_domain(domain: &[u8], payload: &[u8]) -> Result<u64> {
     limbs.extend(payload_packed.limbs);
     Ok(poseidon::hash_field_elements_cpu(&limbs))
 }
-#[cfg(any(test, feature = "dev-tools", feature = "fastpq-gpu"))]
+#[cfg(any(test, feature = "fastpq-gpu", feature = "dev-tools"))]
 fn domain_seed(domain: &[u8]) -> u64 {
     let digest = Hash::new(domain);
     let bytes = digest.as_ref();
@@ -1289,7 +1356,7 @@ fn domain_seed(domain: &[u8]) -> u64 {
     let reduced = u128::from(raw) % u128::from(GOLDILOCKS_MODULUS);
     u64::try_from(reduced).expect("modulus reduction fits u64")
 }
-#[cfg(any(test, feature = "dev-tools", feature = "fastpq-gpu"))]
+#[cfg(any(test, feature = "fastpq-gpu", feature = "dev-tools"))]
 fn hash_field_with_domain_cpu(domain: &[u8], values: &[u64]) -> u64 {
     let mut sponge = CpuPoseidonSponge::new();
     sponge.absorb(domain_seed(domain));
@@ -1634,14 +1701,6 @@ pub fn hash_columns_gpu_batch(batch: &PoseidonColumnBatch) -> Option<Vec<u64>> {
 #[cfg(feature = "fastpq-gpu")]
 fn poseidon_column_result_count_matches(batch: &PoseidonColumnBatch, result: &[u64]) -> bool {
     result.len() == batch.columns()
-}
-#[cfg(feature = "fastpq-gpu")]
-pub(crate) fn disable_poseidon_column_gpu_after_parity_mismatch(
-    backend: backend::GpuBackend,
-    operation: &'static str,
-    item_count: usize,
-) {
-    disable_poseidon_column_gpu_with_warning(backend, operation, item_count, None);
 }
 #[cfg(feature = "fastpq-gpu")]
 fn poseidon_column_disable_reason(
@@ -2119,7 +2178,7 @@ fn merkle_pairs(input: &[u64]) -> Vec<[u64; 2]> {
     }
     pairs
 }
-#[cfg(any(test, feature = "dev-tools", feature = "fastpq-gpu"))]
+#[cfg(any(test, feature = "fastpq-gpu", feature = "dev-tools"))]
 fn hash_trace_merkle_pairs_cpu(pairs: &[[u64; 2]]) -> Vec<u64> {
     pairs
         .iter()
@@ -2409,6 +2468,20 @@ mod tests {
         fn drop(&mut self) {
             clear_poseidon_gpu_event_observer();
         }
+    }
+    #[test]
+    fn column_digest_accessors_preserve_optional_parent_layer() {
+        let digests = ColumnDigests::new(vec![11, 22, 33], Some(vec![44, 55]));
+        assert_eq!(digests.leaves(), &[11, 22, 33]);
+        assert_eq!(digests.first_level_parents(), Some([44, 55].as_slice()));
+
+        let without_parents = ColumnDigests::new(vec![11], None);
+        assert_eq!(without_parents.leaves(), &[11]);
+        assert_eq!(without_parents.first_level_parents(), None);
+
+        let empty_layer = ColumnDigests::new(Vec::new(), Some(Vec::new()));
+        assert!(empty_layer.leaves().is_empty());
+        assert_eq!(empty_layer.first_level_parents(), Some([].as_slice()));
     }
     fn sample_balance_key(label: &str) -> Vec<u8> {
         let asset = iroha_data_model::asset::id::AssetDefinitionId::derive_from_components(
@@ -3798,19 +3871,22 @@ mod tests {
             .into_iter()
             .next()
             .expect("sender transition");
+        let proofs = proof_index
+            .get_mut(&transfer::TransferRowKey::from_transition(
+                &sender_transition,
+            ))
+            .expect("repeated sender occurrences");
 
         assert_eq!(
-            take_transfer_row_proof(&mut proof_index, &sender_transition)
-                .expect("first repeated proof"),
+            proofs.pop_front().expect("first repeated proof"),
             first_proof
         );
         assert_eq!(
-            take_transfer_row_proof(&mut proof_index, &sender_transition)
-                .expect("second repeated proof"),
+            proofs.pop_front().expect("second repeated proof"),
             later_proof
         );
         assert!(
-            take_transfer_row_proof(&mut proof_index, &sender_transition).is_err(),
+            proofs.pop_front().is_none(),
             "a third identical row must not reuse an earlier proof"
         );
     }
@@ -3861,6 +3937,7 @@ mod tests {
                 && !column.name.starts_with("sibling_")
                 && !column.name.starts_with("node_in_")
                 && !column.name.starts_with("node_out_")
+                && !column.name.starts_with("transfer_")
         }));
         assert_eq!(
             trace.columns.len(),
@@ -3874,6 +3951,352 @@ mod tests {
                 .collect::<Vec<_>>(),
             column_names_for_batch(&batch).expect("metadata-only schema names")
         );
+    }
+    fn assert_integer_air_rows(trace: &Trace) {
+        let names = transfer_integer_air::auxiliary_column_names();
+        for row in 0..trace.padded_len {
+            let value = |name: &str| {
+                trace
+                    .columns
+                    .iter()
+                    .find(|column| column.name == name)
+                    .unwrap_or_else(|| panic!("missing test column {name}"))
+                    .values[row]
+            };
+            let auxiliary = core::array::from_fn(|index| value(&names[index]));
+            let witness = TransferIntegerWitness::from_auxiliary(
+                [value("value_old_limb_0"), value("value_old_limb_1")],
+                [value("value_new_limb_0"), value("value_new_limb_1")],
+                &auxiliary,
+            );
+            let selector = value("s_transfer");
+            assert!(
+                transfer_integer_air::constraint_residues(
+                    selector,
+                    value("value_old_len"),
+                    value("value_new_len"),
+                    &witness,
+                )
+                .iter()
+                .all(|&residue| residue == 0),
+                "trace row {row} must satisfy the integer AIR"
+            );
+            if selector == 0 {
+                assert!(auxiliary.iter().all(|&entry| entry == 0));
+            } else {
+                assert_eq!(value("value_old_len"), 8);
+                assert_eq!(value("value_new_len"), 8);
+                for column in &trace.columns {
+                    if let Some(index) = column
+                        .name
+                        .strip_prefix("value_old_limb_")
+                        .or_else(|| column.name.strip_prefix("value_new_limb_"))
+                        .and_then(|index| index.parse::<usize>().ok())
+                    {
+                        if index >= 2 {
+                            assert_eq!(column.values[row], 0, "{} must be zero", column.name);
+                        }
+                    }
+                }
+            }
+            if row >= trace.rows {
+                assert_eq!(value("value_old_len"), 0);
+                assert_eq!(value("value_new_len"), 0);
+            }
+        }
+        assert!(trace.columns.iter().all(|column| {
+            column.values.len() == trace.padded_len
+                && column
+                    .values
+                    .iter()
+                    .all(|&value| value < GOLDILOCKS_MODULUS)
+        }));
+    }
+    #[test]
+    fn transfer_integer_columns_zero_metadata_and_padding_with_wide_value_schema() {
+        let (mut batch, _) = batch_with_transfer_metadata();
+        batch.push(StateTransition::new(
+            b"metadata/wide".to_vec(),
+            vec![0xA5; 93],
+            vec![0xB6; 121],
+            OperationKind::MetaSet,
+        ));
+        let trace = build_trace(&batch).expect("mixed transfer and wide metadata trace");
+        assert_eq!(trace.rows, 3);
+        assert_eq!(trace.padded_len, 4);
+        assert_integer_air_rows(&trace);
+        assert_eq!(column_count_for_batch(&batch).unwrap(), trace.columns.len());
+        assert_eq!(
+            column_names_for_batch(&batch).unwrap(),
+            trace
+                .columns
+                .iter()
+                .map(|column| column.name.clone())
+                .collect::<Vec<_>>()
+        );
+        let metadata_row = trace
+            .columns
+            .iter()
+            .find(|column| column.name == "s_meta_set")
+            .unwrap()
+            .values
+            .iter()
+            .position(|&selector| selector == 1)
+            .unwrap();
+        assert_eq!(
+            trace
+                .columns
+                .iter()
+                .find(|column| column.name == "value_old_len")
+                .unwrap()
+                .values[metadata_row],
+            93
+        );
+        assert_eq!(
+            trace
+                .columns
+                .iter()
+                .find(|column| column.name == "value_new_len")
+                .unwrap()
+                .values[metadata_row],
+            121
+        );
+    }
+    #[test]
+    fn transfer_integer_columns_preserve_full_u64_range_above_the_field_modulus() {
+        for amount in [1_u64 << 32, GOLDILOCKS_MODULUS, u64::MAX] {
+            let mut transcript = sample_transfer_transcript();
+            let delta = &mut transcript.deltas[0];
+            delta.amount = Quantity::from(amount);
+            delta.from_balance_before = Quantity::from(u64::MAX);
+            delta.from_balance_after = Quantity::from(u64::MAX - amount);
+            delta.to_balance_before = Quantity::from(0_u64);
+            delta.to_balance_after = Quantity::from(amount);
+            attach_delta_witnesses(delta);
+            transcript.poseidon_preimage_digest = Some(transfer::compute_poseidon_digest(
+                delta,
+                &transcript.batch_hash,
+            ));
+            let (old_root, new_root) = transcript_roots(&transcript);
+            let mut batch = TransitionBatch::new(
+                "fastpq-state-transition-stark-v1",
+                PublicInputs {
+                    old_root,
+                    new_root,
+                    ..PublicInputs::default()
+                },
+            );
+            for transition in sample_transitions(&transcript) {
+                batch.push(transition);
+            }
+            batch.metadata.insert(
+                TRANSFER_TRANSCRIPTS_METADATA_KEY.into(),
+                to_bytes(&vec![transcript]).expect("encode full-width transcript"),
+            );
+            let trace =
+                build_trace(&batch).expect("u64 balances must remain injective in two limbs");
+            assert_integer_air_rows(&trace);
+            let expected = transfer_integer_air::Unsigned64Witness::from_integer(amount).packed;
+            for (limb, expected) in expected.into_iter().enumerate() {
+                let column = trace
+                    .columns
+                    .iter()
+                    .find(|column| column.name == format!("transfer_amount_limb_{limb}"))
+                    .unwrap();
+                assert!(column.values.iter().all(|&actual| actual == expected));
+            }
+        }
+    }
+
+    #[test]
+    fn transfer_integer_columns_preserve_zero_sender_and_receiver_roles() {
+        for same_account in [false, true] {
+            let mut transcript = sample_transfer_transcript();
+            let delta = &mut transcript.deltas[0];
+            delta.amount = Quantity::from(0_u64);
+            delta.from_balance_after = delta.from_balance_before.clone();
+            if same_account {
+                delta.to_account = delta.from_account.clone();
+                delta.to_balance_before = delta.from_balance_before.clone();
+            }
+            delta.to_balance_after = delta.to_balance_before.clone();
+            attach_delta_witnesses(delta);
+            transcript.poseidon_preimage_digest = Some(transfer::compute_poseidon_digest(
+                delta,
+                &transcript.batch_hash,
+            ));
+            let sender_key = iroha_data_model::fastpq::transfer_balance_key(
+                &delta.asset_definition,
+                &delta.from_account,
+            )
+            .unwrap();
+            let (old_root, new_root) = transcript_roots(&transcript);
+            let mut batch = TransitionBatch::new(
+                "fastpq-state-transition-stark-v1",
+                PublicInputs {
+                    old_root,
+                    new_root,
+                    ..PublicInputs::default()
+                },
+            );
+            batch.transitions = sample_transitions(&transcript);
+            batch.push(StateTransition::new(
+                b"metadata/zero-transfer".to_vec(),
+                b"old".to_vec(),
+                b"new".to_vec(),
+                OperationKind::MetaSet,
+            ));
+            batch.metadata.insert(
+                TRANSFER_TRANSCRIPTS_METADATA_KEY.into(),
+                to_bytes(&vec![transcript]).expect("encode zero transfer"),
+            );
+            let trace = build_trace(&batch).expect("zero-amount transfer trace");
+            assert_integer_air_rows(&trace);
+            assert_eq!(trace.rows, 3);
+            assert_eq!(trace.padded_len, 4);
+            assert_eq!(trace.columns.len(), column_count_for_batch(&batch).unwrap());
+            let column = |name: &str| {
+                &trace
+                    .columns
+                    .iter()
+                    .find(|column| column.name == name)
+                    .unwrap()
+                    .values
+            };
+            let mut seen_self_sender = false;
+            for (row, transition) in batch.canonicalized().transitions.iter().enumerate() {
+                let expected_role = if transition.operation != OperationKind::Transfer {
+                    0
+                } else if same_account {
+                    let role = u64::from(!seen_self_sender);
+                    seen_self_sender = true;
+                    role
+                } else {
+                    u64::from(transition.key == sender_key)
+                };
+                assert_eq!(column("transfer_is_debit")[row], expected_role);
+            }
+            assert_eq!(column("transfer_is_debit")[3], 0);
+            for name in ["transfer_amount_limb_0", "transfer_amount_limb_1"] {
+                assert!(column(name).iter().all(|&amount| amount == 0));
+            }
+        }
+    }
+
+    #[test]
+    fn same_account_transfer_rows_preserve_occurrence_alignment_after_reordering() {
+        let mut transcript = sample_transfer_transcript();
+        let mut zero = transcript.deltas[0].clone();
+        zero.to_account = zero.from_account.clone();
+        zero.amount = Quantity::from(0_u64);
+        zero.from_balance_before = Quantity::from(200_u64);
+        zero.from_balance_after = Quantity::from(200_u64);
+        zero.to_balance_before = Quantity::from(200_u64);
+        zero.to_balance_after = Quantity::from(200_u64);
+        let mut nonzero = zero.clone();
+        nonzero.amount = Quantity::from(7_u64);
+        nonzero.from_balance_after = Quantity::from(193_u64);
+        nonzero.to_balance_before = Quantity::from(193_u64);
+        transcript.deltas = vec![zero.clone(), nonzero, zero];
+        transcript.poseidon_preimage_digest = None;
+        let (old_root, new_root) =
+            transfer::attach_transfer_smt_witnesses(std::slice::from_mut(&mut transcript))
+                .expect("chained repeated self-transfer witnesses");
+        let expected = transfer::transcripts_to_witnesses(
+            std::slice::from_ref(&transcript),
+            &old_root,
+            &new_root,
+        )
+        .expect("validated self-transfer occurrences");
+        let mut batch = TransitionBatch::new(
+            "fastpq-state-transition-stark-v1",
+            PublicInputs {
+                old_root,
+                new_root,
+                ..PublicInputs::default()
+            },
+        );
+        batch.transitions = sample_transitions(&transcript);
+        batch.transitions.reverse(); // Canonical stable sorting keeps this equal-key order.
+        batch.metadata.insert(
+            TRANSFER_TRANSCRIPTS_METADATA_KEY.into(),
+            to_bytes(&vec![transcript]).expect("encode repeated self-transfers"),
+        );
+        let trace = build_trace(&batch).expect("reordered self-transfer trace");
+        assert_integer_air_rows(&trace);
+        let column = |name: &str| {
+            &trace
+                .columns
+                .iter()
+                .find(|column| column.name == name)
+                .unwrap()
+                .values
+        };
+        assert_eq!(column("transfer_is_debit"), &[1, 0, 0, 1, 1, 0, 0, 0]);
+        assert_eq!(column("transfer_amount_limb_0"), &[0, 0, 7, 7, 0, 0, 0, 0]);
+        let deltas = &expected[0].deltas;
+        let proofs = [
+            &deltas[0].smt_proof.from,
+            &deltas[0].smt_proof.to,
+            &deltas[1].smt_proof.to,
+            &deltas[1].smt_proof.from,
+            &deltas[2].smt_proof.from,
+            &deltas[2].smt_proof.to,
+        ];
+        for (row, (transition, proof)) in batch.transitions.iter().zip(proofs).enumerate() {
+            let mut projection = TransferRowData::default();
+            populate_merkle_columns(
+                &mut projection,
+                &transition.key,
+                decode_u64_le(&transition.pre_value).unwrap(),
+                decode_u64_le(&transition.post_value).unwrap(),
+                proof,
+            );
+            for level in 0..SMT_HEIGHT {
+                for (prefix, expected) in [
+                    ("path_bit", projection.path_bits[level]),
+                    ("sibling", projection.siblings[level]),
+                    ("node_in", projection.node_in[level]),
+                    ("node_out", projection.node_out[level]),
+                ] {
+                    assert_eq!(column(&format!("{prefix}_{level}"))[row], expected);
+                }
+            }
+        }
+        assert_eq!(trace.columns.len(), column_count_for_batch(&batch).unwrap());
+    }
+    #[test]
+    fn transfer_integer_schema_cost_is_subject_to_the_existing_column_limit() {
+        let (batch, _) = batch_with_transfer_metadata();
+        let count = column_count_for_batch(&batch).expect("integer schema count");
+        assert!(count > transfer_integer_air::AUXILIARY_COLUMN_COUNT + 2);
+        assert!(count <= DEFAULT_MAX_TRACE_COLUMNS);
+        assert_eq!(DEFAULT_MAX_TRACE_COLUMNS, 512);
+        assert!(matches!(
+            ensure_trace_schema_limit(&batch, count - 1),
+            Err(Error::VerifierLimitExceeded { limit: "max_air_row_values", actual, max })
+                if actual == count && max == count - 1
+        ));
+    }
+    #[test]
+    fn transfer_schema_preflight_rejects_every_noncanonical_balance_length() {
+        for length in [0_usize, 1, 7, 9, 16, 23] {
+            for before in [true, false] {
+                let (mut batch, _) = batch_with_transfer_metadata();
+                let transition = &mut batch.transitions[0];
+                if before {
+                    transition.pre_value = vec![0; length];
+                } else {
+                    transition.post_value = vec![0; length];
+                }
+                assert!(
+                    matches!(column_count_for_batch(&batch), Err(Error::InvalidAssetValueLength { length: actual }) if actual == length)
+                );
+                assert!(
+                    matches!(column_names_for_batch(&batch), Err(Error::InvalidAssetValueLength { length: actual }) if actual == length)
+                );
+            }
+        }
     }
     #[test]
     fn generic_rows_do_not_embed_the_transfer_projection() {

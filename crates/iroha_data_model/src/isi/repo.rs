@@ -211,7 +211,7 @@ impl iroha_schema::IntoSchema for RepoInstructionBox {
     }
 }
 impl RepoInstructionBox {
-    fn tag_and_payload(&self) -> (u32, &dyn norito::core::NoritoSerialize) {
+    fn tag_and_payload(&self) -> (u32, &dyn norito::core::SerializePayload) {
         match self {
             Self::Initiate(instruction) => (0, instruction.as_ref()),
             Self::Reverse(instruction) => (1, instruction),
@@ -223,11 +223,12 @@ impl norito::core::NoritoSerialize for RepoInstructionBox {
     fn schema_hash() -> [u8; 16] {
         norito::core::type_name_schema_hash::<Self>()
     }
+}
+impl norito::core::SerializePayload for RepoInstructionBox {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let (tag, payload) = self.tag_and_payload();
-        norito::core::NoritoSerialize::serialize(&tag, writer)?;
-        let mut buffer = norito::core::DeriveSmallBuf::new();
-        norito::core::write_len_prefixed(writer, payload, &mut buffer)
+        norito::core::SerializePayload::serialize(&tag, writer)?;
+        norito::core::write_len_prefixed(writer, payload)
     }
     fn encoded_len_hint(&self) -> Option<usize> {
         let (_, payload) = self.tag_and_payload();

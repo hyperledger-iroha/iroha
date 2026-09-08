@@ -45,7 +45,7 @@ def _load_wrap_helpers():
     if not WRAP_BENCHMARK_PATH.exists():
         return None
     spec = importlib.util.spec_from_file_location(
-        "fastpq_wrap_benchmark", WRAP_BENCHMARK_PATH
+        "scripts.fastpq._geometry_wrap_benchmark", WRAP_BENCHMARK_PATH
     )
     if spec is None or spec.loader is None:
         return None

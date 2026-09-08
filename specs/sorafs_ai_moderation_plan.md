@@ -233,6 +233,10 @@ input, not a local gateway pack.
   bounded canonical admission: alternate layouts and compressed frames are
   rejected before key-provider access, while configured byte/allocation limits,
   chunk limits and exact index, payload-digest and AEAD checks remain enforced.
+  The envelope allocation allowance derives from actual frame length and the
+  schema's nested field, alignment-copy and owned-chunk charges. It intersects
+  Norito's general ceiling and every stricter caller limit. Maximum-input and
+  alignment regressions must demonstrate admission without weakening those caps.
 - Access to quarantine requires Just-In-Time approvals; all accesses logged.
 - Runner sandboxes untrusted content, enforcing 512 MiB memory limits and 120s
   wall-clock guards.

@@ -7,6 +7,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertArrayEquals;
 
 import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
 import java.math.BigInteger;
 import java.util.Arrays;
 import java.util.HashSet;
@@ -28,6 +29,7 @@ public final class KagemushaWalletV1Tests {
   public void facadePublishesOnlyTheDirectThreeMessageLifecycle() {
     final Set<String> methods =
         Arrays.stream(KagemushaWalletV1.class.getDeclaredMethods())
+            .filter(method -> Modifier.isPublic(method.getModifiers()) && !method.isSynthetic())
             .map(Method::getName)
             .collect(Collectors.toSet());
 
@@ -35,6 +37,7 @@ public final class KagemushaWalletV1Tests {
         new HashSet<>(
             Arrays.asList(
                 "open",
+                "acknowledgeDurableResult",
                 "recover",
                 "hardwareCredential",
                 "aggregateState",
@@ -64,6 +67,10 @@ public final class KagemushaWalletV1Tests {
 
   @Test
   public void facadeSignaturesBindRequestPaymentAndAcknowledgementDirectly() throws Exception {
+    assertEquals(KagemushaWalletV1.class,
+        KagemushaWalletV1.class.getMethod("open", KagemushaHardwareProviderV1.class, Runnable.class).getReturnType());
+    assertEquals(void.class,
+        KagemushaWalletV1.class.getMethod("acknowledgeDurableResult", byte[].class, byte[].class).getReturnType());
     assertEquals(
         KagemushaPaymentRequestV1.class,
         KagemushaWalletV1.class

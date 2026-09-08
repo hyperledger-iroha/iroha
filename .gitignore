@@ -146,6 +146,16 @@ java/iroha_android/.gradle-home/
 /.taira-source-*/
 /.taira-verify-index.*/
 
+# Runtime environment files may contain signing keys and access tokens.
+*.env
+*.env.*
+!*.env.example
+!*.env.sample
+!*.env.template
+!*.env.*.example
+!*.env.*.sample
+!*.env.*.template
+
 # Taira operator-local runtime inputs; keep populated copies out of public repos.
 configs/soranexus/taira/validator_roster.local.toml
 configs/soranexus/taira/validator_secrets.local.toml
@@ -259,9 +269,7 @@ target-codex-run*/
 /tmp*
 tmp/*
 *.tmp
-security_*
-!crates/iroha_torii/src/mcp/catalog_and_policy_tests/security_and_registry.rs
-!circuits/sccp/vendor/golang.org/x/sys/windows/security_windows.go
+/security_*
 _apalache-out*
 .tlacache/
 
@@ -367,6 +375,9 @@ artifacts/*.json
 
 # Runtime output from the interactive setup wizard (may contain private keys).
 /wizard-output/
+
+# Mochi sandbox state and generated bootstrap material are runtime-only.
+.mochi/
 
 # Relay tests and local runs create tempfile-backed replay stores and links in
 # either the repository root or the relay crate, depending on the test cwd.

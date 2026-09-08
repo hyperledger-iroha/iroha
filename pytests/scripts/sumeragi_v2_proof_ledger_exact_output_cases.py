@@ -49,8 +49,8 @@ _TERMINAL_LANE_MUTATIONS = (
     ("validate_terminal_autonomous_qc", "qc.body.phase,", "CertPhase::Commit,",
      "complete aggregate before exact availability"),
     ("V2LaneWorkAdapter::insert_lane_vote",
-     ".certified_autonomous_lane_block_is_globally_applied_cached(",
-     ".certified_autonomous_lane_block_predecessor_is_globally_applied_cached(",
+     ".certified_autonomous_lane_block_is_globally_applied(",
+     ".certified_autonomous_lane_block_predecessor_is_globally_applied(",
      "authenticate exact applied replay before the first cache clone"),
     ("V2LaneWorkAdapter::insert_lane_vote",
      "validate_terminal_autonomous_vote(&vote, payload).is_ok()", "true",
@@ -59,8 +59,8 @@ _TERMINAL_LANE_MUTATIONS = (
      "let _outcome = if validate_terminal_autonomous_vote",
      "authenticate exact applied replay before the first cache clone"),
     ("V2LaneWorkAdapter::insert_lane_qc",
-     ".certified_autonomous_lane_block_is_globally_applied_cached(",
-     ".certified_autonomous_lane_block_predecessor_is_globally_applied_cached(",
+     ".certified_autonomous_lane_block_is_globally_applied(",
+     ".certified_autonomous_lane_block_predecessor_is_globally_applied(",
      "authenticate exact applied replay before the first cache clone"),
     ("V2LaneWorkAdapter::insert_lane_qc",
      "validate_terminal_autonomous_qc(&qc, payload, &pops).is_ok()", "true",
@@ -75,12 +75,12 @@ _TERMINAL_LANE_MUTATIONS = (
     ("V2LaneWorkAdapter::insert_lane_certificate", "move_availability_after_historical", "",
      "availability before any historical shortcut"),
     ("V2LaneWorkAdapter::canonical_finalized_autonomous_payload_for_vote_body",
-     ".certified_autonomous_lane_block_is_globally_applied_cached(proposal)",
-     ".certified_autonomous_lane_block_predecessor_is_globally_applied_cached(proposal)",
+     ".certified_autonomous_lane_block_is_globally_applied(proposal)",
+     ".certified_autonomous_lane_block_predecessor_is_globally_applied(proposal)",
      "either exact own application or the exact applied predecessor"),
     ("V2LaneWorkAdapter::canonical_finalized_autonomous_payload_for_vote_body",
-     ".certified_autonomous_lane_block_is_globally_applied_cached(proposal)\n                && !self",
-     ".certified_autonomous_lane_block_is_globally_applied_cached(proposal)\n                || !self",
+     ".map_err(|error| error.to_string())?\n                && !self",
+     ".map_err(|error| error.to_string())?\n                || !self",
      "either exact own application or the exact applied predecessor"),
     ("V2LaneWorkAdapter::canonical_finalized_autonomous_payload_for_vote_body",
      "let proposal = &payload.origin_proposal;",
@@ -104,8 +104,8 @@ _TERMINAL_LANE_MUTATIONS = (
      "for qc in [&artifact.prepare_qc, &artifact.commit_qc] {",
      "for qc in [] as [&LaneBlockQcV1; 0] {", "authenticate bounded read-only candidates"),
     ("V2LaneWorkAdapter::retire_applied_autonomous_sessions",
-     ".certified_autonomous_lane_block_is_globally_applied_cached(&proposal)",
-     ".certified_autonomous_lane_block_predecessor_is_globally_applied_cached(&proposal)",
+     ".certified_autonomous_lane_block_is_globally_applied(&proposal)",
+     ".certified_autonomous_lane_block_predecessor_is_globally_applied(&proposal)",
      "exact application"),
     ("V2LaneWorkAdapter::retire_applied_autonomous_sessions",
      ".is_some_and(|existing| existing != &proposal)",
@@ -131,17 +131,17 @@ _TERMINAL_LANE_MUTATIONS = (
      "self.hydrate_canonical_lane_artifacts()?;\n        self.retire_applied_autonomous_sessions()?;",
      "inside its fail-stop operation before hydration"),
     ("V2LaneWorkAdapter::proposal_can_progress",
-     ".certified_autonomous_lane_block_is_globally_applied_cached(proposal)",
-     ".certified_autonomous_lane_block_predecessor_is_globally_applied_cached(proposal)",
+     ".certified_autonomous_lane_block_is_globally_applied(proposal)",
+     ".certified_autonomous_lane_block_predecessor_is_globally_applied(proposal)",
      "reject exact own application"),
     ("V2LaneWorkAdapter::proposal_can_progress",
-     "if (historical || self.autonomous_payload_is_expected_for(proposal) || finalized_autonomous)",
+     "if (historical\n            || self.autonomous_payload_is_expected_for(proposal)?\n            || finalized_autonomous)",
      "if true", "only for authenticated autonomous roles"),
     ("V2LaneWorkAdapter::proposal_can_progress",
      "|| finalized_autonomous)", "|| finalized_observer)",
      "only for authenticated autonomous roles"),
     ("V2LaneWorkAdapter::proposal_can_progress",
-     "historical || self.autonomous_payload_is_expected_for(proposal) || finalized_autonomous",
+     "historical\n            || self.autonomous_payload_is_expected_for(proposal)?\n            || finalized_autonomous",
      "finalized_autonomous", "only for authenticated autonomous roles"),
     ("LaneBlockSessionCache::preflight_canonical_evidence",
      "for ((slot, signer), locked_proposal_hash) in &self.commit_vote_locks {",
@@ -190,14 +190,14 @@ _TERMINAL_LANE_MUTATIONS = (
     ("validate_vote_matches_proposal",
      "|| availability_vote\n                    .validate_against_validator_set(&proposal.descriptor.validator_set)\n                    .is_err()",
      "|| false", "exact complete committee and its PoPs"),
-    ("State::certified_autonomous_lane_block_is_globally_applied_cached", "replace_exact_frontier_with_height", "",
+    ("State::certified_autonomous_lane_block_is_globally_applied", "replace_exact_frontier_with_height", "",
      "exact route/incarnation frontier identity"),
-    ("State::certified_autonomous_lane_block_is_globally_applied_cached",
-     ".autonomous_lane_block_merge_receipt_revalidates_without_sidecar_repair(proposal)",
-     ".lane_block_application_receipt_available(proposal)", "exact authenticated merge receipt"),
-    ("State::certified_autonomous_lane_block_is_globally_applied_cached",
-     ") else {\n            return false;\n        };",
-     ") else {\n            return self.kura.autonomous_lane_block_merge_receipt_revalidates_without_sidecar_repair(proposal);\n        };",
+    ("State::certified_autonomous_lane_block_is_globally_applied",
+     "receipt.proposal == *proposal",
+     "true", "exact authenticated merge receipt"),
+    ("State::certified_autonomous_lane_block_is_globally_applied",
+     "descriptor.lane_incarnation,\n        )?;",
+     "descriptor.lane_incarnation,\n        ).unwrap_or((0, None));",
      "fail closed on malformed frontier bytes"),
 )
 
@@ -218,8 +218,8 @@ def _terminal_lane_order_mutation(item, mutation: str) -> tuple[str, str]:
         end = old.index("        if proposal.descriptor.proposal_height < self.context.height {", start)
         block = old[start:end]
         new = old.replace(block, "", 1).replace(
-            "        if !self.proposal_body_available(&proposal)",
-            block + "        if !self.proposal_body_available(&proposal)", 1,
+            "        if !self\n            .proposal_body_available(&proposal)",
+            block + "        if !self\n            .proposal_body_available(&proposal)", 1,
         )
     elif mutation == "move_cleanup_before_cache":
         start = old.index("        let retired = self")
@@ -245,9 +245,9 @@ def _terminal_lane_order_mutation(item, mutation: str) -> tuple[str, str]:
         end = old.index("        let mut retained_sessions = BTreeMap::new();", start)
         new = old[:start] + old[end:]
     elif mutation == "replace_exact_frontier_with_height":
-        start = old.index("        frontier\n            == (")
-        end = old.index("            || self", start)
-        new = old[:start] + "        frontier.0 >= descriptor.lane_block_height\n" + old[end:]
+        start = old.index("        if frontier\n            == (")
+        end = old.index("        {\n            return Ok(true);", start)
+        new = old[:start] + "        if frontier.0 >= descriptor.lane_block_height\n" + old[end:]
     else:
         raise AssertionError(mutation)
     assert new != old, mutation
@@ -4553,7 +4553,7 @@ def _apply_exact_output_non_runtime_extended_mutations(
     (
         (
             "proposal_predecessor_is_ready_for_progress",
-            "|| self.autonomous_payload_is_expected_for(proposal)",
+            "|| self.autonomous_payload_is_expected_for(proposal)?",
             "|| false",
             "lane predecessor readiness must dispatch autonomous and ordinary proofs",
         ),
@@ -4571,25 +4571,25 @@ def _apply_exact_output_non_runtime_extended_mutations(
         ),
         (
             "proposal_predecessor_is_ready_for_progress",
-            ".is_ok_and(|payload| payload.is_some())",
-            ".is_ok()",
+            "})?\n                .is_some()",
+            "})?\n                .is_none()",
             "lane predecessor readiness must dispatch autonomous and ordinary proofs",
         ),
         (
             "proposal_predecessor_is_ready_for_progress",
-            ".certified_autonomous_lane_block_predecessor_is_globally_applied_cached(proposal)",
-            ".certified_lane_block_predecessor_is_applied_or_snapshot_anchored_cached(proposal)",
+            ".certified_autonomous_lane_block_predecessor_is_globally_applied(proposal)",
+            ".certified_lane_block_predecessor_is_applied_or_snapshot_anchored(proposal)",
             "lane predecessor readiness must dispatch autonomous and ordinary proofs",
         ),
         (
             "persist_anchored_sessions",
-            "if !self.proposal_predecessor_is_ready_for_progress(&session.proposal) {",
+            "if !self.proposal_predecessor_is_ready_for_progress(&session.proposal)? {",
             "if false {",
             "anchored lane persistence must retain a certified successor",
         ),
         (
             "reconstruct_durable_lane_certificate",
-            "if !self.proposal_predecessor_is_ready_for_progress(proposal) {",
+            "if !self\n            .proposal_predecessor_is_ready_for_progress(proposal)\n            .map_err(|_| ())?\n        {",
             "if false {",
             "lane recovery reconstruction must not emit a successor certificate",
         ),
@@ -4796,8 +4796,8 @@ def _apply_exact_output_non_runtime_extended_mutations(
         ),
         (
             "hydrate_canonical_lane_artifacts",
-            "if !canonical_raw_lane_predecessor_matches_proposal(",
-            "if false && !canonical_raw_lane_predecessor_matches_proposal(",
+            "if !self.consensus_storage_read(canonical_raw_lane_predecessor_matches_proposal(",
+            "if false && !self.consensus_storage_read(canonical_raw_lane_predecessor_matches_proposal(",
             "raw lane hydration must authenticate every unapplied predecessor link",
         ),
         (

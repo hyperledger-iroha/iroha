@@ -390,6 +390,12 @@ codegen-units = 256
 [profile.test.package.iroha_data_model]
 codegen-units = 8
 
+# The six-lane native-STARK digest dominates FASTPQ's proof regression tests.
+# Optimize this small arithmetic crate while retaining the test profile's
+# overflow checks and debug assertions. This does not change release settings.
+[profile.test.package.fastpq_isi]
+opt-level = 2
+
 # `iroha_data_model` is a very broad derive-heavy crate. LLVM `-O3` for this
 # one package exceeds the reviewed mobile/KAGEMUSHA release-build memory
 # envelope even with a single job and hundreds of codegen units. Measured O2

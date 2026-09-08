@@ -8192,6 +8192,9 @@ pub struct Network {
     /// Maximum frame size for health monitoring traffic.
     #[config(default = "defaults::network::MAX_FRAME_BYTES_HEALTH")]
     pub max_frame_bytes_health: NonZeroUsize,
+    /// Maximum frame size for authenticated Connect relay traffic.
+    #[config(default = "defaults::network::MAX_FRAME_BYTES_CONNECT")]
+    pub max_frame_bytes_connect: NonZeroUsize,
     /// Maximum frame size for miscellaneous topics.
     #[config(default = "defaults::network::MAX_FRAME_BYTES_OTHER")]
     pub max_frame_bytes_other: NonZeroUsize,
@@ -8316,6 +8319,7 @@ impl Network {
             max_frame_bytes_tx_gossip,
             max_frame_bytes_peer_gossip,
             max_frame_bytes_health,
+            max_frame_bytes_connect,
             max_frame_bytes_other,
             quic_max_idle_timeout_ms,
             ..
@@ -8550,6 +8554,7 @@ impl Network {
                 max_frame_bytes_tx_gossip: max_frame_bytes_tx_gossip.get(),
                 max_frame_bytes_peer_gossip: max_frame_bytes_peer_gossip.get(),
                 max_frame_bytes_health: max_frame_bytes_health.get(),
+                max_frame_bytes_connect: max_frame_bytes_connect.get(),
                 max_frame_bytes_other: max_frame_bytes_other.get(),
                 quic_max_idle_timeout: quic_max_idle_timeout_ms
                     .map(iroha_config_base::util::DurationMs::get),
@@ -37854,6 +37859,46 @@ publish_delay_seconds = 17
             actual.transaction_gossiper.dataspace.restricted_target_cap,
             defaults::network::TX_GOSSIP_RESTRICTED_TARGET_CAP
         );
+    }
+    #[test]
+    fn execution_proof_transport_overlay_preserves_ordinary_defaults() {
+        let default = load_root(base_table());
+        assert_eq!(default.network.max_frame_bytes_health, 32_768);
+        assert_eq!(default.network.max_frame_bytes_connect, 131_072);
+        assert_eq!(default.network.max_frame_bytes_tx_gossip, 262_144);
+        assert_eq!(default.torii.connect.frame_max_bytes, 64_000);
+        let overlay: Table = toml::from_str(include_str!(
+            "../../../../configs/soranexus/execution-proof-transport.toml"
+        ))
+        .expect("execution transport overlay TOML");
+        let mut table = base_table();
+        for (key, value) in overlay {
+            let fields = value.as_table().expect("overlay section");
+            let target = table
+                .entry(key)
+                .or_insert_with(|| Value::Table(Table::new()))
+                .as_table_mut()
+                .expect("runtime section");
+            for (name, value) in fields {
+                target.insert(name.clone(), value.clone());
+            }
+        }
+        let configured = load_root(table);
+        assert_eq!(configured.network.max_frame_bytes_health, 32_768);
+        assert_eq!(configured.network.max_frame_bytes_connect, 8 * 1024 * 1024);
+        assert_eq!(
+            configured.network.max_frame_bytes_tx_gossip,
+            8 * 1024 * 1024
+        );
+        assert_eq!(
+            configured.torii.connect.frame_max_bytes,
+            4 * 1024 * 1024 + 4096
+        );
+        assert_eq!(
+            configured.torii.connect.session_buffer_max_bytes,
+            8 * 1024 * 1024
+        );
+        assert_eq!(configured.torii.connect.ws_max_sessions, 16);
     }
     #[test]
     fn trusted_peer_full_fanout_must_fit_the_effective_network_capacity() {

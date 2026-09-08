@@ -1,0 +1,17 @@
+{
+  "schema": "iroha-js.classed-race-native-fixtures.v1",
+  "scope": "isolated exact canonical top-level native model and unchanged reference; JSON feature enabled; not normal Cargo model or proof qualification",
+  "model_module": "iroha_data_model::classed_race_v1",
+  "model_sha256": "85939503c937e2f24bce0f6168ad5b6259c4efd1bc65536f9292320ba16cd474",
+  "fixture_sha256": "7733987e6764a0abf3023a9b32c049c36e9f94fa22a8d71b398d6d1c486e9e39",
+  "vectors": 36,
+  "native_exporter_binary_sha256": "663bb0fd6aad2050b70afe949116691ce78e2bae1efc4cf6896cf0df4547cd2b",
+  "source_manifest": "/Users/takemiyamakoto/dev/sora-cars/output/qualification/classed-codecs-v1/sources-before.json",
+  "dependency_manifest": "/Users/takemiyamakoto/dev/sora-cars/output/qualification/classed-codecs-v1/dependencies.json",
+  "command": "/Users/takemiyamakoto/dev/sora-cars/output/qualification/classed-codecs-v1/command.json",
+  "export_command": "/Users/takemiyamakoto/dev/sora-cars/output/qualification/classed-codecs-v1/export-result.json",
+  "native_json_extra_fields_rejected": true,
+  "native_result_examples": "derived by the actual native reference from validated example states; reachability is not asserted",
+  "profile_registered": false,
+  "normal_cargo_model_qualified": false
+}

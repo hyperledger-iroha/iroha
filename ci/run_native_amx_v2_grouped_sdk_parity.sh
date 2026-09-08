@@ -7,7 +7,7 @@ repo_root="$(cd -- "${BASH_SOURCE[0]%/*}/.." && pwd -P)"
 readonly repo_root
 readonly fixture_path="${repo_root}/fixtures/sumeragi_v2/native_amx_v2_grouped.json"
 readonly gradle_init_path="${repo_root}/ci/native_amx_v2_grouped_gradle_init.gradle"
-readonly expected_negative_control_count=56
+readonly expected_negative_control_count=58
 readonly source_closure_resolver="${repo_root}/ci/resolve_sumeragi_v2_sdk_source_closure.py"
 readonly source_closure_manifest="${repo_root}/ci/sumeragi_v2_sdk_source_closure.json"
 
@@ -515,7 +515,7 @@ case "$surface" in
     assert_openapi_replay_marker
     ;;
   python)
-    observed_test_count=65
+    observed_test_count=67
     "$python_bin" -c \
       'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else "Python Native AMX V2 parity requires Python >=3.10")'
     if [[ "${IROHA_PYTHON_TEST_INSTALLED_PACKAGE:-}" == "1" ]]; then
@@ -532,7 +532,7 @@ case "$surface" in
     assert_pytest_count "$observed_test_count"
     ;;
   javascript)
-    observed_test_count=63
+    observed_test_count=65
     if ! command -v node >/dev/null 2>&1; then
       echo "Node.js is required for grouped Native AMX V2 JavaScript parity" >&2
       exit 1
@@ -601,7 +601,7 @@ case "$surface" in
     fi
     ;;
   swift)
-    observed_test_count=5
+    observed_test_count=9
     if ! command -v swift >/dev/null 2>&1; then
       echo "Swift is required for grouped Native AMX V2 Swift parity" >&2
       exit 1
@@ -640,7 +640,7 @@ if not matches or any(int(match.group(1)) != expected for match in matches):
 PY
     ;;
   kotlin)
-    observed_test_count=8
+    observed_test_count=11
     java_home="$(resolve_java_home)"
     readonly java_home
     readonly gradle_build_root="${temporary_root}/gradle-build"
@@ -667,7 +667,7 @@ PY
       "$observed_test_count"
     ;;
   java)
-    observed_test_count=6
+    observed_test_count=7
     java_home="$(resolve_java_home)"
     readonly java_home
     readonly gradle_build_root="${temporary_root}/gradle-build"

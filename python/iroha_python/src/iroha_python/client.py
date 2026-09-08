@@ -171,6 +171,7 @@ from iroha_torii_client.governance_proposals import (
 from iroha_torii_client.native_amx import (
     compute_native_amx_descriptor_hash,
     compute_native_amx_participant_settlement_hash,
+    parse_native_amx_participant_settlement,
     compute_native_amx_proposal_hash,
     compute_native_amx_validator_set_hash,
     validate_bls_normal_validator_set,
@@ -10026,13 +10027,6 @@ def _strict_hex_string(
     return value
 
 
-def _require_strictly_ordered_source_ids(source_ids: Sequence[str], context: str) -> None:
-    if any(
-        left >= right
-        for left, right in zip(source_ids, source_ids[1:], strict=False)
-    ):
-        raise ValueError(f"{context} source IDs must be strictly ordered and unique")
-
 
 def _crc16_ccitt_false(value: bytes) -> int:
     crc = 0xFFFF
@@ -10465,6 +10459,29 @@ class SumeragiNativeAmxParticipantSettlement:
 
 
 @dataclass(frozen=True)
+class SumeragiNativeAmxParticipantSettlement:
+    """Nonrecursive participant control identity; source IDs retain candidate order."""
+
+    lane_id: int
+    dataspace_id: int
+    lane_incarnation: str
+    participant_lane_block_height: int
+    authority_context_height: int
+    previous_native_settlement_hash: Optional[str]
+    source_ids: Tuple[SumeragiNativeAmxSourceId, ...]
+
+    def __post_init__(self) -> None:
+        parsed = parse_native_amx_participant_settlement(asdict(self))
+        object.__setattr__(self, "source_ids", tuple(
+            SumeragiNativeAmxSourceId(source) for source in parsed["source_ids"]
+        ))
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "SumeragiNativeAmxParticipantSettlement":
+        return cls(**parse_native_amx_participant_settlement(payload))
+
+
+@dataclass(frozen=True)
 class SumeragiNativeAmxLeg:
     """Prepare and commit v2 certificates for one participant lane/dataspace."""
 
@@ -10508,9 +10525,7 @@ class SumeragiNativeAmxLeg:
         ):
             raise TypeError(f"{context} participant artifacts and QCs must be objects")
         proposal = SumeragiNativeAmxParticipantLaneBlockProposal.from_payload(proposal_payload)
-        settlement = SumeragiNativeAmxParticipantSettlement.from_payload(
-            settlement_payload
-        )
+        settlement = SumeragiNativeAmxParticipantSettlement.from_payload(settlement_payload)
         prepare = SumeragiNativeAmxAttestationQc.from_payload(prepare_payload)
         commit = SumeragiNativeAmxAttestationQc.from_payload(commit_payload)
         if prepare.body.phase is not SumeragiNativeAmxPhase.PREPARE:
@@ -10555,10 +10570,7 @@ class SumeragiNativeAmxLeg:
             or descriptor.min_quorum != body.participant_min_quorum
         ):
             raise ValueError(f"{context} participant proposal differs from its QC bodies")
-        settlement_sources = [receipt.source_id for receipt in settlement.receipts]
-        _require_strictly_ordered_source_ids(
-            settlement_sources, f"{context} participant settlement"
-        )
+        settlement_sources = settlement.source_ids
         matching_entrypoint_positions = tuple(
             index
             for index, entrypoint_hash in enumerate(descriptor.accepted_transaction_hashes)
@@ -10572,36 +10584,21 @@ class SumeragiNativeAmxLeg:
         if not requires_mixed_role_anchor_validation:
             position = matching_entrypoint_positions[0]
             if (
-                len(descriptor.accepted_candidate_indices) != len(settlement.receipts)
-                or len(descriptor.accepted_transaction_hashes) != len(settlement.receipts)
-                or settlement.receipts[position].source_id != body.source_id
+                len(descriptor.accepted_candidate_indices) != len(settlement_sources)
+                or len(descriptor.accepted_transaction_hashes) != len(settlement_sources)
+                or settlement_sources[position] != body.source_id
             ):
                 raise ValueError(
                     f"{context} participant descriptor and grouped settlement are not aligned"
                 )
         if (
             settlement_hash != body.participant_settlement_commitment
-            or settlement.block_height != body.participant_lane_block_height
+            or settlement.participant_lane_block_height != body.participant_lane_block_height
             or settlement.lane_id != lane_id
             or settlement.dataspace_id != dataspace_id
             or settlement.lane_incarnation != body.participant_lane_incarnation
-            or settlement.tx_count != len(settlement.receipts)
-            or settlement.total_local_amount != "0"
-            or settlement.total_xor_due != "0"
-            or settlement.total_xor_after_haircut != "0"
-            or settlement.total_xor_variance != "0"
-            or settlement.swap_metadata is not None
-            or len(set(settlement_sources)) != len(settlement_sources)
+            or settlement.authority_context_height != body.authority_context_height
             or settlement_sources.count(body.source_id) != 1
-            or any(
-                receipt.local_amount != "0"
-                or receipt.xor_due != "0"
-                or receipt.xor_after_haircut != "0"
-                or receipt.xor_variance != "0"
-                or receipt.timestamp_ms != body.authority_context_height
-                for receipt in settlement.receipts
-            )
-            or settlement.nexus_fee_receipts
         ):
             raise ValueError(f"{context} participant settlement differs from its QC body")
         return cls(
@@ -10923,9 +10920,7 @@ class SumeragiLaneSettlementCommitment:
             SumeragiNativeAmxReceipt.from_payload(receipt) for receipt in native_amx_payload
         )
         native_amx_sources = tuple(receipt.source_id for receipt in native_amx_receipts)
-        _require_strictly_ordered_source_ids(
-            native_amx_sources, "lane settlement native AMX receipt group"
-        )
+
         for receipt in nexus_fee_receipts:
             if (
                 receipt.lane_id != lane_id
@@ -10949,11 +10944,9 @@ class SumeragiLaneSettlementCommitment:
             raise ValueError("lane settlement contains duplicate Nexus fee receipt sources")
         for receipt in native_amx_receipts:
             for leg in receipt.legs:
-                participant_sources = tuple(
-                    settlement_receipt.source_id
-                    for settlement_receipt in leg.participant_settlement.receipts
-                )
-                if participant_sources != native_amx_sources:
+                participant_sources = leg.participant_settlement.source_ids
+                if (leg.lane_id == receipt.lane_id and leg.dataspace_id == receipt.dataspace_id
+                        and participant_sources != native_amx_sources):
                     raise ValueError(
                         "lane settlement native AMX receipt does not bind the exact "
                         "ordered source group"
@@ -13707,6 +13700,7 @@ __all__ = [
     "SumeragiNativeAmxAttestationQc",
     "SumeragiNativeAmxParticipantLaneBlockDescriptor",
     "SumeragiNativeAmxParticipantLaneBlockProposal",
+    "SumeragiNativeAmxParticipantSettlement",
     "SumeragiNativeAmxLeg",
     "SumeragiNativeAmxParticipantSettlement",
     "SumeragiNativeAmxReceipt",

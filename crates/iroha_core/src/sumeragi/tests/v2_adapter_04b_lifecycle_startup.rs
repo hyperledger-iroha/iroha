@@ -3,6 +3,13 @@ use crate::{BlockMessage, state::State};
 
 #[test]
 fn production_lifecycle_owner_factory_opens_the_private_recovered_vote_branch() {
+    run_lifecycle_fixture_on_large_stack(
+        "production_lifecycle_owner_factory_opens_the_private_recovered_vote_branch",
+        production_lifecycle_owner_factory_opens_the_private_recovered_vote_branch_body,
+    );
+}
+
+fn production_lifecycle_owner_factory_opens_the_private_recovered_vote_branch_body() {
     let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
     crate::sumeragi::status::clear_v2_status();
     let safety = TempDir::new().expect("temporary recovered-vote safety store");
@@ -113,6 +120,13 @@ fn production_lifecycle_owner_factory_rejects_residual_effects_before_storage_op
 
 #[test]
 fn production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout() {
+    run_lifecycle_fixture_on_large_stack(
+        "production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout",
+        production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout_body,
+    );
+}
+
+fn production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout_body() {
     let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
     crate::sumeragi::status::clear_v2_status();
     let kura = Kura::blank_kura_for_testing();
@@ -344,13 +358,14 @@ fn production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout() {
             proposal_round: finality_round,
             phase: wire::GlobalPhase::Commit,
             subject: finality_subject,
-            execution_commitment: wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
-                iroha_crypto::Hash::new(b"lifecycle retirement pre-state"),
-                iroha_crypto::Hash::new(b"lifecycle retirement post-state"),
-                iroha_crypto::Hash::new(b"lifecycle retirement writes"),
-                0,
-                iroha_crypto::Hash::new(b"lifecycle retirement block execution"),
-            ),
+            execution_commitment:
+                wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+                    iroha_crypto::Hash::new(b"lifecycle retirement pre-state"),
+                    iroha_crypto::Hash::new(b"lifecycle retirement post-state"),
+                    iroha_crypto::Hash::new(b"lifecycle retirement writes"),
+                    0,
+                    iroha_crypto::Hash::new(b"lifecycle retirement block execution"),
+                ),
             signers: Vec::new(),
             aggregate_signature: Vec::new(),
         },
@@ -395,6 +410,8 @@ fn production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout() {
         &local_signer,
     );
     let mismatched_body = quarantined_lifecycle_body_store_for_test(mismatched_body);
+    let mismatched_lifecycle_before =
+        lifecycle_namespace_snapshot_for_test(&mismatched_root.join("lifecycle-v1"));
     let error = match mismatched.open_production_lifecycle_owner_v1(
         &lifecycle_owner_config(),
         4,
@@ -408,7 +425,11 @@ fn production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout() {
         error.to_string(),
         "recovered adapter safety WAL changed its Kura-derived storage path"
     );
-    assert!(!mismatched_root.join("lifecycle-v1").exists());
+    assert_eq!(
+        lifecycle_namespace_snapshot_for_test(&mismatched_root.join("lifecycle-v1")),
+        mismatched_lifecycle_before,
+        "rejected factory must preserve its existing lifecycle namespace"
+    );
 
     let foreign_kura = Kura::blank_kura_for_testing();
     let foreign_storage_root = foreign_kura.sumeragi_v2_storage_root();
@@ -442,6 +463,7 @@ fn production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout() {
     );
     let foreign_body = quarantined_lifecycle_body_store_for_test(foreign_body);
     let foreign_lifecycle_parent = foreign_kura.sumeragi_v2_storage_root().join("lifecycle-v1");
+    let foreign_lifecycle_before = lifecycle_namespace_snapshot_for_test(&foreign_lifecycle_parent);
     let error = match foreign.open_production_lifecycle_owner_v1(
         &lifecycle_owner_config(),
         4,
@@ -455,7 +477,11 @@ fn production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout() {
         error.to_string(),
         "recovered body-store handoff failed: Sumeragi v2 body-store publication target mismatch"
     );
-    assert!(!foreign_lifecycle_parent.exists());
+    assert_eq!(
+        lifecycle_namespace_snapshot_for_test(&foreign_lifecycle_parent),
+        foreign_lifecycle_before,
+        "foreign body rejection cannot create or change lifecycle storage"
+    );
 
     let wrong_kura = Kura::blank_kura_for_testing();
     let wrong_storage_root = wrong_kura.sumeragi_v2_storage_root();
@@ -487,6 +513,8 @@ fn production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout() {
         &local_signer,
     );
     let wrong_body = quarantined_lifecycle_body_store_for_test(wrong_body);
+    let wrong_lifecycle_before =
+        lifecycle_namespace_snapshot_for_test(&wrong_storage_root.join("lifecycle-v1"));
     let error = match wrong_policy.open_production_lifecycle_owner_v1(
         &lifecycle_owner_config(),
         4,
@@ -500,7 +528,11 @@ fn production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout() {
         error.to_string(),
         "recovered body-store handoff failed: Sumeragi v2 body-store publication target mismatch"
     );
-    assert!(!wrong_storage_root.join("lifecycle-v1").exists());
+    assert_eq!(
+        lifecycle_namespace_snapshot_for_test(&wrong_storage_root.join("lifecycle-v1")),
+        wrong_lifecycle_before,
+        "rejected factory must preserve its existing lifecycle namespace"
+    );
     crate::sumeragi::status::clear_v2_status();
 }
 
@@ -508,6 +540,14 @@ fn production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout() {
 #[test]
 #[allow(clippy::too_many_lines)]
 fn production_empty_genesis_complete_tip_adopts_control_repair_and_launches() {
+    run_lifecycle_fixture_on_large_stack(
+        "production_empty_genesis_complete_tip_adopts_control_repair_and_launches",
+        production_empty_genesis_complete_tip_adopts_control_repair_and_launches_body,
+    );
+}
+
+#[cfg(feature = "bls")]
+fn production_empty_genesis_complete_tip_adopts_control_repair_and_launches_body() {
     let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
     crate::sumeragi::status::clear_v2_status();
     let (kura, state, verified, storage_authority, local_signer, retirement) =
@@ -817,10 +857,15 @@ fn recovered_lifecycle_factory_inputs_bind_exact_state_kura_and_network() {
     };
     let exact_state =
         lifecycle_factory_state_for_test(Arc::clone(&kura), recovered_context.network_id);
+    // Storage-authority minting creates and seals its bounded Serve directory.
+    // Snapshot after that distinct prerequisite, before the read-only input bind.
+    let exact_storage = storage();
+    let lifecycle_before =
+        lifecycle_namespace_snapshot_for_test(&storage_root.join("lifecycle-v1"));
     assert!(
         try_lifecycle_factory_inputs_for_test(
             &authenticated,
-            storage(),
+            exact_storage,
             exact_state,
             Arc::clone(&kura),
             &signer,
@@ -876,9 +921,10 @@ fn recovered_lifecycle_factory_inputs_bind_exact_state_kura_and_network() {
         wrong_network_error.to_string(),
         "recovered lifecycle execution dependencies changed identity"
     );
-    assert!(
-        !storage_root.join("lifecycle-v1").exists(),
-        "input binding must not open lifecycle storage"
+    assert_eq!(
+        lifecycle_namespace_snapshot_for_test(&storage_root.join("lifecycle-v1")),
+        lifecycle_before,
+        "input binding must not create or change lifecycle storage"
     );
 
     let exact_state =
@@ -950,6 +996,8 @@ fn recovered_lifecycle_factory_inputs_reject_a_same_context_foreign_startup() {
     )
     .expect("open exact-startup splice body store");
     let body_store = quarantined_lifecycle_body_store_for_test(body_store);
+    let lifecycle_before =
+        lifecycle_namespace_snapshot_for_test(&storage_root.join("lifecycle-v1"));
     let error = match second.open_production_lifecycle_owner_v1(
         &lifecycle_owner_config(),
         4,
@@ -963,9 +1011,10 @@ fn recovered_lifecycle_factory_inputs_reject_a_same_context_foreign_startup() {
         error.to_string(),
         "recovered lifecycle execution dependencies changed identity"
     );
-    assert!(
-        !storage_root.join("lifecycle-v1").exists(),
-        "exact-startup rejection must precede lifecycle store creation"
+    assert_eq!(
+        lifecycle_namespace_snapshot_for_test(&storage_root.join("lifecycle-v1")),
+        lifecycle_before,
+        "exact-startup rejection must not create or change lifecycle storage"
     );
 }
 
@@ -1549,6 +1598,8 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
             );
             continue;
         }
+        let lifecycle_before =
+            lifecycle_namespace_snapshot_for_test(&storage_root.join("lifecycle-v1"));
         let prepromoted_error = match body_store.into_quarantined_recovered_startup() {
             Ok(_body_store) => {
                 panic!("a caller-promoted marker cannot enter production quarantine")
@@ -1559,9 +1610,10 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
             prepromoted_error.to_string(),
             "recovered Sumeragi v2 validation markers were already promoted before startup"
         );
-        assert!(
-            !storage_root.join("lifecycle-v1").exists(),
-            "pre-promoted marker rejection must precede lifecycle-store creation"
+        assert_eq!(
+            lifecycle_namespace_snapshot_for_test(&storage_root.join("lifecycle-v1")),
+            lifecycle_before,
+            "pre-promoted marker rejection must not create or change lifecycle storage"
         );
 
         let wal_path = storage_root
@@ -1615,6 +1667,10 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
         let lifecycle_root = storage_root
             .join("lifecycle-v1")
             .join(hex::encode(recovered_context.id().0.as_ref()));
+        // Storage-authority admission has already sealed the bounded Serve
+        // namespace. Semantic replay must preserve that exact prior namespace.
+        let lifecycle_before_semantic_replay =
+            lifecycle_namespace_snapshot_for_test(&lifecycle_root);
         let result = authenticated.open_production_lifecycle_owner_v1(
             &lifecycle_owner_config(),
             4,
@@ -2011,9 +2067,13 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                 "terminal handoff must retain the exact fair-ingress occurrence"
             );
             let mut terminal_block_sync_server =
-                super::super::v2_block_sync::V2BlockSyncServer::new(
-                    recovered_context.network_id.clone(),
+                super::super::v2_block_sync::V2BlockSyncServer::new_with_historical_body_service(
+                    recovered_context.network_id,
                     4,
+                    Arc::clone(&kura),
+                    local_signer.clone(),
+                    super::super::v2_block_sync::HistoricalBodyServeLimits::first_release(4, 4)
+                        .expect("bound the terminal historical-body worker"),
                 )
                 .expect("open terminal CurrentServe block-sync server");
             let terminal_serve_drained = activated.with_runner_runtime(
@@ -2081,27 +2141,78 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                 Ok(crate::sumeragi::FairV2IngressPushDisposition::Enqueued)
             ));
             let ordinary_ordinal = leader_wire_ingress.state.lock().last_admission_ordinal;
-            let invalid_response = wire::CertifiedBodyResponse {
-                request_hash: HashOf::from_untyped_unchecked(Hash::new(
-                    b"unrelated malformed response family",
-                )),
-                manifest: manifest.clone(),
-                body: canonical_wire.clone(),
-                responder: local_peer.clone(),
-                signature: Vec::new(),
+            // Both carriers use the isolated TransportCompletion partition. The
+            // already queued orphan owns the local source's only completion slot.
+            let malformed_response = |responder: PeerId| {
+                BlockMessage::V2(wire::ConsensusMessageV2::new(
+                    wire::ConsensusMessageV2Payload::CertifiedBodyResponse(
+                        wire::CertifiedBodyResponse {
+                            request_hash: HashOf::from_untyped_unchecked(Hash::new(
+                                b"unrelated malformed response family",
+                            )),
+                            manifest: manifest.clone(),
+                            body: canonical_wire.clone(),
+                            responder,
+                            signature: Vec::new(),
+                        },
+                    ),
+                ))
             };
-            let invalid_response_message = wire::ConsensusMessageV2::new(
-                wire::ConsensusMessageV2Payload::CertifiedBodyResponse(invalid_response),
-            );
-            assert!(matches!(
-                leader_wire_ingress.try_push(
-                    crate::sumeragi::InboundBlockMessage::from_authenticated_peer(
-                        crate::sumeragi::message::BlockMessage::V2(invalid_response_message),
-                        local_peer.clone(),
-                    )
+            let retained_lifecycle_count = leader_wire_ingress
+                .state
+                .lock()
+                .leader_wire_lifecycles
+                .len();
+            let same_source_response = malformed_response(local_peer.clone());
+            let returned = match leader_wire_ingress.try_push(
+                crate::sumeragi::InboundBlockMessage::from_authenticated_peer(
+                    same_source_response.clone(),
+                    local_peer.clone(),
                 ),
-                Ok(crate::sumeragi::FairV2IngressPushDisposition::Enqueued)
-            ));
+            ) {
+                Err(crate::sumeragi::FairV2IngressPushError::Full(inbound)) => inbound,
+                unexpected => panic!(
+                    "the occupied source completion slot must retain the response: {unexpected:?}"
+                ),
+            };
+            assert_eq!(returned.message().encode(), same_source_response.encode());
+            assert_eq!(leader_wire_ingress.len(), 1);
+            {
+                let ingress_state = leader_wire_ingress.state.lock();
+                assert_eq!(ingress_state.last_admission_ordinal, ordinary_ordinal);
+                assert_eq!(
+                    ingress_state.leader_wire_lifecycles.len(),
+                    retained_lifecycle_count,
+                    "source backpressure cannot allocate a durable response owner"
+                );
+            }
+            assert_eq!(
+                std::fs::read(lifecycle_root.join("lifecycle-ledger-v1.norito"))
+                    .expect("read terminal ledger after source backpressure"),
+                terminal_ledger_before,
+            );
+            // A separate authenticated roster source has independent completion
+            // capacity. Decision alone cannot obsolete certified body responses.
+            let response_peer = recovered_context
+                .roster
+                .iter()
+                .find(|entry| entry.validator != local_peer)
+                .expect("the frozen roster contains another response source")
+                .validator
+                .clone();
+            let response_admission = leader_wire_ingress.try_push(
+                crate::sumeragi::InboundBlockMessage::from_authenticated_peer(
+                    malformed_response(response_peer.clone()),
+                    response_peer,
+                ),
+            );
+            assert!(
+                matches!(
+                    response_admission,
+                    Ok(crate::sumeragi::FairV2IngressPushDisposition::Enqueued)
+                ),
+                "the independent response source must enqueue: {response_admission:?}"
+            );
             let invalid_response_ordinal = leader_wire_ingress.state.lock().last_admission_ordinal;
             assert!(ordinary_ordinal < invalid_response_ordinal);
             let (ordinary_turn, after_ordinary_ingress) =
@@ -2181,7 +2292,7 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                     ProductionLifecycleIngressTurnV1::Ordinary(turn) => turn,
                     ProductionLifecycleIngressTurnV1::PassThrough(runner) => {
                         drop(runner);
-                        panic!("invalid-signature response is a drainable ordinary winner")
+                        panic!("unrelated malformed response is a drainable ordinary winner")
                     }
                     ProductionLifecycleIngressTurnV1::Selected(_) => {
                         panic!("invalid unrelated response cannot claim recovered Phase A")
@@ -2606,10 +2717,12 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                     .to_string()
                     .contains("validation outcome differs from semantic replay")
             );
-            assert!(
-                !lifecycle_root.exists(),
-                "semantic marker mismatch must precede lifecycle-store creation"
+            assert_eq!(
+                lifecycle_namespace_snapshot_for_test(&lifecycle_root),
+                lifecycle_before_semantic_replay,
+                "semantic marker mismatch must preserve the admitted storage namespace"
             );
+            assert!(!lifecycle_root.join("lifecycle-ledger-v1.norito").exists());
         }
     }
 }
@@ -2629,6 +2742,13 @@ fn expect_recovered_open_error<'registry>(
 
 #[test]
 fn recovered_prepare_wal_vote_fsyncs_repair_and_installs_exact_sign() {
+    run_lifecycle_fixture_on_large_stack(
+        "recovered_prepare_wal_vote_fsyncs_repair_and_installs_exact_sign",
+        recovered_prepare_wal_vote_fsyncs_repair_and_installs_exact_sign_body,
+    );
+}
+
+fn recovered_prepare_wal_vote_fsyncs_repair_and_installs_exact_sign_body() {
     let directory = TempDir::new().expect("temporary Prepare recovery directory");
     let (startup, expected_vote, proposal, manifest, validated) =
         reopen_with_prepare_intent(&directory, 0xD1);
@@ -2822,6 +2942,13 @@ fn recovered_prepare_sign_install_rejects_wrong_store_before_registry_mutation()
 
 #[test]
 fn recovered_prepare_restart_reenters_repaired_frame_and_installs_sign() {
+    run_lifecycle_fixture_on_large_stack(
+        "recovered_prepare_restart_reenters_repaired_frame_and_installs_sign",
+        recovered_prepare_restart_reenters_repaired_frame_and_installs_sign_body,
+    );
+}
+
+fn recovered_prepare_restart_reenters_repaired_frame_and_installs_sign_body() {
     let directory = TempDir::new().expect("temporary re-entry Prepare recovery directory");
     let (startup, _expected_vote, proposal, manifest, validated) =
         reopen_with_prepare_intent(&directory, 0xD5);
@@ -2883,6 +3010,13 @@ fn recovered_prepare_restart_reenters_repaired_frame_and_installs_sign() {
 
 #[test]
 fn recovered_owner_seal_cannot_relabel_the_authenticated_payload_store() {
+    run_lifecycle_fixture_on_large_stack(
+        "recovered_owner_seal_cannot_relabel_the_authenticated_payload_store",
+        recovered_owner_seal_cannot_relabel_the_authenticated_payload_store_body,
+    );
+}
+
+fn recovered_owner_seal_cannot_relabel_the_authenticated_payload_store_body() {
     let safety = TempDir::new().expect("temporary owner-seal safety store");
     let ledger = TempDir::new().expect("temporary owner-seal ledger");
     let payload = TempDir::new().expect("temporary owner-seal payload store");
@@ -2940,6 +3074,18 @@ fn recovered_owner_seal_cannot_relabel_the_authenticated_payload_store() {
         )
         .into_production_owner_open()
         .unwrap_or_else(|_opened| panic!("convert exact open into owner seal"));
+    assert!(
+        matches!(
+            super::super::v2_certified_serve_payload_store::CertifiedServePayloadStoreV1::open(
+                payload.path(),
+                &verified_context,
+            ),
+            Err(super::super::v2_certified_serve_payload_store::CertifiedServePayloadStoreError::Io { source, .. })
+                if source.kind() == std::io::ErrorKind::WouldBlock
+        ),
+        "the live payload owner must exclude a concurrent same-path writer"
+    );
+    drop(payload_store);
     let (foreign_payload_store, _foreign_recovery) =
         super::super::v2_certified_serve_payload_store::CertifiedServePayloadStoreV1::open(
             payload.path(),
@@ -3006,6 +3152,13 @@ fn recovered_prepare_opens_exact_coordinator_before_status_publication() {
 
 #[test]
 fn recovered_prepare_open_failures_retain_authority_and_publish_no_status() {
+    run_lifecycle_fixture_on_large_stack(
+        "recovered_prepare_open_failures_retain_authority_and_publish_no_status",
+        recovered_prepare_open_failures_retain_authority_and_publish_no_status_body,
+    );
+}
+
+fn recovered_prepare_open_failures_retain_authority_and_publish_no_status_body() {
     let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
 
     // A same-context cut with no exact parent or child is rejected before

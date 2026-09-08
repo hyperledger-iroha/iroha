@@ -90,6 +90,9 @@ public struct KagemushaDeviceLifecycleResultV1: Equatable, Sendable {
   public let status: KagemushaDeviceLifecycleStatusV1
   public let payload: Data
   public let authenticator: Data
+  /// Exact bounded response frame retained before transport buffers are cleared.
+  /// Framing alone does not authenticate the device or confer enrollment authority.
+  public let canonicalResponseFrame: Data
 }
 
 protocol KagemushaDeviceLifecycleEndpointV1 {
@@ -97,6 +100,7 @@ protocol KagemushaDeviceLifecycleEndpointV1 {
   func execute(_ command: Data) throws -> Data
   func verifyResponseAuthenticator(
     response: Data,
+    canonicalCommand: Data,
     operation: KagemushaDeviceLifecycleOperationV1,
     requestID: Data,
     hardwarePolicyID: Data,
@@ -108,6 +112,7 @@ protocol KagemushaDeviceLifecycleEndpointV1 {
 extension KagemushaDeviceLifecycleEndpointV1 {
   func verifyResponseAuthenticator(
     response: Data,
+    canonicalCommand: Data,
     operation: KagemushaDeviceLifecycleOperationV1,
     requestID: Data,
     hardwarePolicyID: Data,
@@ -116,6 +121,7 @@ extension KagemushaDeviceLifecycleEndpointV1 {
   ) -> Bool {
     KagemushaDeviceNativeResponseAuthenticatorVerifierV1.verify(
       response: response,
+      canonicalCommand: canonicalCommand,
       operation: operation,
       requestID: requestID,
       hardwarePolicyID: hardwarePolicyID,
@@ -191,6 +197,20 @@ public final class KagemushaDeviceLifecycleBridgeV1 {
     NativeContractVector.load()
   }
 
+  /// Decode one bounded response without authenticating it or granting authority.
+  /// Custom device transports must pass the retained frame to the native verifier
+  /// with the exact command, request ID, policy and accepted device key before use.
+  public static func decodeUnverifiedResponse(
+    _ frame: Data,
+    expectedOperation: KagemushaDeviceLifecycleOperationV1,
+    expectedRequestID: Data
+  ) throws -> KagemushaDeviceLifecycleResultV1 {
+    try Codec.decodeResponse(
+      frame, expectedOperation: expectedOperation,
+      expectedRequestID: expectedRequestID
+    )
+  }
+
   /// Execute and expose a success only after native verification of its complete response.
   /// Operation 1 bootstraps the device key; operations 2 through 22 require that accepted key.
   public func executeAuthenticated(
@@ -243,7 +263,8 @@ public final class KagemushaDeviceLifecycleBridgeV1 {
     if result.status == .success {
       guard let acceptedCapabilities,
         endpoint.verifyResponseAuthenticator(
-          response: response,
+          response: result.canonicalResponseFrame,
+          canonicalCommand: canonicalCommand,
           operation: operation,
           requestID: requestID,
           hardwarePolicyID: acceptedCapabilities.hardwarePolicyID,
@@ -499,6 +520,9 @@ public final class KagemushaDeviceLifecycleBridgeV1 {
       expectedOperation: KagemushaDeviceLifecycleOperationV1,
       expectedRequestID: Data
     ) throws -> KagemushaDeviceLifecycleResultV1 {
+      guard isDigest(expectedRequestID) else {
+        throw invalid("invalid expected response request ID")
+      }
       guard encoded.count >= responseHeaderBytes,
         encoded.count <= responseHeaderBytes
           + maximumResponsePayloadBytes
@@ -562,7 +586,8 @@ public final class KagemushaDeviceLifecycleBridgeV1 {
         operation: operation,
         status: status,
         payload: payload,
-        authenticator: authenticator
+        authenticator: authenticator,
+        canonicalResponseFrame: encoded
       )
     }
 
@@ -699,6 +724,7 @@ public final class KagemushaDeviceLifecycleBridgeV1 {
 private enum KagemushaDeviceNativeResponseAuthenticatorVerifierV1 {
   #if canImport(Darwin)
     private typealias VerifyFn = @convention(c) (
+      UnsafePointer<UInt8>?, Int,
       UnsafePointer<UInt8>?, Int, UInt8,
       UnsafePointer<UInt8>?, Int,
       UnsafePointer<UInt8>?, Int,
@@ -711,7 +737,7 @@ private enum KagemushaDeviceNativeResponseAuthenticatorVerifierV1 {
       guard let handle,
         let symbol = dlsym(
           handle,
-          "connect_norito_kagemusha_device_response_authenticator_v1_verify"
+          "connect_norito_kagemusha_device_command_response_v1_verify"
         )
       else { return nil }
       return unsafeBitCast(symbol, to: VerifyFn.self)
@@ -720,6 +746,7 @@ private enum KagemushaDeviceNativeResponseAuthenticatorVerifierV1 {
 
   static func verify(
     response: Data,
+    canonicalCommand: Data,
     operation: KagemushaDeviceLifecycleOperationV1,
     requestID: Data,
     hardwarePolicyID: Data,
@@ -730,19 +757,22 @@ private enum KagemushaDeviceNativeResponseAuthenticatorVerifierV1 {
       guard let function else { return false }
       let key = acceptedDevicePublicKey ?? Data()
       return response.withUnsafeBytes { responseRaw in
-        requestID.withUnsafeBytes { requestRaw in
-          hardwarePolicyID.withUnsafeBytes { policyRaw in
-            qualificationReportDigest.withUnsafeBytes { qualificationRaw in
-              key.withUnsafeBytes { keyRaw in
-                function(
-                  responseRaw.bindMemory(to: UInt8.self).baseAddress, response.count,
-                  operation.rawValue,
-                  requestRaw.bindMemory(to: UInt8.self).baseAddress, requestID.count,
-                  policyRaw.bindMemory(to: UInt8.self).baseAddress, hardwarePolicyID.count,
-                  qualificationRaw.bindMemory(to: UInt8.self).baseAddress,
-                  qualificationReportDigest.count,
-                  keyRaw.bindMemory(to: UInt8.self).baseAddress, key.count
-                ) == 0
+        canonicalCommand.withUnsafeBytes { commandRaw in
+          requestID.withUnsafeBytes { requestRaw in
+            hardwarePolicyID.withUnsafeBytes { policyRaw in
+              qualificationReportDigest.withUnsafeBytes { qualificationRaw in
+                key.withUnsafeBytes { keyRaw in
+                  function(
+                    responseRaw.bindMemory(to: UInt8.self).baseAddress, response.count,
+                    commandRaw.bindMemory(to: UInt8.self).baseAddress, canonicalCommand.count,
+                    operation.rawValue,
+                    requestRaw.bindMemory(to: UInt8.self).baseAddress, requestID.count,
+                    policyRaw.bindMemory(to: UInt8.self).baseAddress, hardwarePolicyID.count,
+                    qualificationRaw.bindMemory(to: UInt8.self).baseAddress,
+                    qualificationReportDigest.count,
+                    key.isEmpty ? nil : keyRaw.bindMemory(to: UInt8.self).baseAddress, key.count
+                  ) == 0
+                }
               }
             }
           }

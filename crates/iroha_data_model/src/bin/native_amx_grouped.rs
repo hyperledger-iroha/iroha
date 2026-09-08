@@ -5,13 +5,13 @@ use iroha_data_model::{
     block::{
         Header as BlockHeader,
         consensus::{
-            LaneBlockCommitment, LaneBlockDescriptorV1, LaneBlockProposalV1, LaneSettlementReceipt,
+            LaneBlockCommitment, LaneBlockDescriptorV1, LaneBlockProposalV1,
             NATIVE_AMX_BLS_PROOF_BYTES, NATIVE_AMX_GROUP_SOURCES_MAX,
             NATIVE_AMX_PARTICIPANT_LEGS_MAX, NATIVE_AMX_VALIDATORS_MAX, NativeAmxAttestationBodyV2,
             NativeAmxAttestationQcV2, NativeAmxLegRecordV2, NativeAmxParticipantSettlement,
             NativeAmxPhase, NativeAmxReceipt, SumeragiDiagnosticsStatus,
             SumeragiNativeAmxParticipantApplication, SumeragiNativeAmxParticipantApplicationState,
-            SumeragiPipelineExecutionStatus, compute_native_amx_participant_settlement_hash,
+            SumeragiPipelineExecutionStatus,
         },
         consensus_v2::{
             ConsensusRound, ExecutionCommitment, HeightContext, HeightContextId,
@@ -110,7 +110,8 @@ fn fixture_context() -> Result<FixtureContext, Box<dyn Error>> {
         // Deliberately independent from the global round view.
         coordinator_lane_block_view: 9,
         coordinator_proposal_hash: Hash::new(b"native-amx-v2-grouped-fixture-coordinator-proposal"),
-        sources: [[0xAB; 32], [0xCD; 32]],
+        // Deliberately descending hashes prove that canonical membership follows FIFO.
+        sources: [[0xCD; 32], [0xAB; 32]],
         entrypoints: [
             HashOf::from_untyped_unchecked(Hash::prehashed([0x61; 32])),
             HashOf::from_untyped_unchecked(Hash::prehashed([0x63; 32])),
@@ -141,33 +142,15 @@ fn grouped_settlement(
     dataspace_id: DataSpaceId,
     lane_incarnation: Hash,
 ) -> Result<NativeAmxParticipantSettlement, Box<dyn Error>> {
-    let receipts = context
-        .sources
-        .iter()
-        .copied()
-        .map(|source_id| LaneSettlementReceipt {
-            source_id,
-            local_amount: Quantity::zero(),
-            xor_due: Quantity::zero(),
-            xor_after_haircut: Quantity::zero(),
-            xor_variance: Quantity::zero(),
-            timestamp_ms: context.authority_context_height,
-        })
-        .collect::<Vec<_>>();
-    Ok(NativeAmxParticipantSettlement {
-        block_height: context.coordinator_lane_block_height,
+    Ok(NativeAmxParticipantSettlement::try_new(
         lane_id,
-        lane_incarnation,
         dataspace_id,
-        tx_count: u64::try_from(receipts.len())?,
-        total_local_amount: Quantity::zero(),
-        total_xor_due: Quantity::zero(),
-        total_xor_after_haircut: Quantity::zero(),
-        total_xor_variance: Quantity::zero(),
-        swap_metadata: None,
-        receipts,
-        nexus_fee_receipts: Vec::new(),
-    })
+        lane_incarnation,
+        context.coordinator_lane_block_height,
+        context.authority_context_height,
+        None,
+        context.sources.to_vec(),
+    )?)
 }
 fn participant_fixture(
     context: &FixtureContext,
@@ -178,7 +161,7 @@ fn participant_fixture(
 ) -> Result<ParticipantFixture, Box<dyn Error>> {
     let lane_incarnation = participant_incarnation(context, lane_id, dataspace_id);
     let settlement = grouped_settlement(context, lane_id, dataspace_id, lane_incarnation)?;
-    let settlement_hash = compute_native_amx_participant_settlement_hash(&settlement)?;
+    let settlement_hash = settlement.computed_hash()?;
     let mut descriptor = LaneBlockDescriptorV1 {
         lane_id,
         dataspace_id,
@@ -269,7 +252,7 @@ fn body(
         participant_lane_block_height: descriptor.lane_block_height,
         participant_lane_block_view: descriptor.lane_block_view,
         participant_proposal_hash: participant.proposal.proposal_hash,
-        participant_settlement_commitment: participant.settlement_hash,
+        participant_settlement_commitment: Hash::from(participant.settlement_hash),
         participant_validator_set_hash: context.validator_set_hash,
         participant_validator_count: u32::try_from(context.validators.len())?,
         participant_min_quorum: u32::try_from(MIN_QUORUM)?,
@@ -586,6 +569,7 @@ fn application_evidence(
         descriptor_hash: descriptor.descriptor_hash,
         proposal_hash: remote.proposal.proposal_hash,
         settlement_hash: remote.settlement_hash,
+        previous_native_settlement_hash: remote.settlement.previous_native_settlement_hash(),
         members,
         application_block_height: 42,
         application_block_hash: application_block_hash(),
@@ -1156,6 +1140,7 @@ fn hash_consistency_controls(commitment: &LaneBlockCommitment) -> Vec<Value> {
 fn negative_controls(
     context: &FixtureContext,
     commitment: &LaneBlockCommitment,
+    application_evidence: &Value,
 ) -> Result<Vec<Value>, Box<dyn Error>> {
     let receipt = "/golden/receipt_group/native_amx_receipts";
     let first = format!("{receipt}/0");
@@ -1179,16 +1164,44 @@ fn negative_controls(
         b"native-amx-v2-grouped-fixture-coordinator-incarnation",
     ))
     .expect("hash serializes to JSON");
-    // The participant wire type has no nested Native AMX receipt field. Replace
-    // the complete object so the control injects the forbidden field without
-    // requiring that field to exist in the canonical fixture.
-    let mut nested_native_settlement =
+    // Removed economic/nested fields remain explicit rejection controls.
+    // Replace the whole object so every mutation resolves an existing path.
+    let with_forbidden_settlement_field = |field: &str, value: Value| {
+        let mut wire =
+            json::to_value(&commitment.native_amx_receipts[0].legs[0].participant_settlement)
+                .expect("flat participant settlement serializes");
+        wire.as_object_mut()
+            .expect("participant settlement is an object")
+            .insert(field.to_owned(), value);
+        wire
+    };
+    let mut unlinked_six_field_settlement =
         json::to_value(&commitment.native_amx_receipts[0].legs[0].participant_settlement)?;
-    nested_native_settlement
+    unlinked_six_field_settlement
         .as_object_mut()
-        .ok_or("participant settlement must serialize to a JSON object")?
-        .insert("native_amx_receipts".to_owned(), norito::json!([{}]));
+        .expect("flat settlement object")
+        .remove("previous_native_settlement_hash");
+    let mut unlinked_manifest_leaf = application_evidence
+        .pointer("/manifest_artifacts/0/leaf")
+        .expect("canonical application evidence contains one leaf")
+        .clone();
+    unlinked_manifest_leaf
+        .as_object_mut()
+        .expect("manifest leaf object")
+        .remove("previous_native_settlement_hash");
     let mut controls = vec![
+        control(
+            "missing_previous_native_settlement_hash",
+            mutation("replace", &settlement, Some(unlinked_six_field_settlement)),
+        ),
+        evidence_control(
+            "manifest_missing_previous_native_settlement_hash",
+            vec![mutation(
+                "replace",
+                "/golden/application_evidence/manifest_artifacts/0/leaf",
+                Some(unlinked_manifest_leaf),
+            )],
+        ),
         control(
             "flattened_phase",
             mutation(
@@ -1386,15 +1399,15 @@ fn negative_controls(
             "duplicate_group_source",
             mutation(
                 "copy",
-                &format!("{settlement}/receipts/1/source_id"),
-                Some(norito::json!({"from": (format!("{settlement}/receipts/0/source_id"))})),
+                &format!("{settlement}/source_ids/1"),
+                Some(norito::json!({"from": (format!("{settlement}/source_ids/0"))})),
             ),
         ),
         control(
             "missing_current_source",
             mutation(
                 "replace",
-                &format!("{settlement}/receipts/0/source_id"),
+                &format!("{settlement}/source_ids/0"),
                 Some(norito::json!(
                     "EFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEF"
                 )),
@@ -1404,15 +1417,18 @@ fn negative_controls(
             "group_tx_count_mismatch",
             mutation(
                 "replace",
-                &format!("{settlement}/tx_count"),
-                Some(norito::json!(1)),
+                &settlement,
+                Some(with_forbidden_settlement_field(
+                    "tx_count",
+                    norito::json!(1),
+                )),
             ),
         ),
         control(
             "group_source_overflow",
             mutation(
                 "repeat",
-                &format!("{settlement}/receipts"),
+                &format!("{settlement}/source_ids"),
                 Some(norito::json!({
                     "source_index": 0,
                     "count": (NATIVE_AMX_GROUP_SOURCES_MAX + 1)
@@ -1423,7 +1439,7 @@ fn negative_controls(
             "participant_timestamp_drift",
             mutation(
                 "replace",
-                &format!("{settlement}/receipts/1/timestamp_ms"),
+                &format!("{settlement}/authority_context_height"),
                 Some(norito::json!(41)),
             ),
         ),
@@ -1431,20 +1447,33 @@ fn negative_controls(
             "nonzero_participant_effect",
             mutation(
                 "replace",
-                &format!("{settlement}/total_local_amount"),
-                Some(norito::json!("1")),
+                &settlement,
+                Some(with_forbidden_settlement_field(
+                    "total_local_amount",
+                    norito::json!("1"),
+                )),
             ),
         ),
         control(
             "nested_native_receipt",
-            mutation("replace", &settlement, Some(nested_native_settlement)),
+            mutation(
+                "replace",
+                &settlement,
+                Some(with_forbidden_settlement_field(
+                    "native_amx_receipts",
+                    norito::json!([{}]),
+                )),
+            ),
         ),
         control(
             "nested_fee_receipt",
             mutation(
                 "replace",
-                &format!("{settlement}/nexus_fee_receipts"),
-                Some(norito::json!([{}])),
+                &settlement,
+                Some(with_forbidden_settlement_field(
+                    "nexus_fee_receipts",
+                    norito::json!([{}]),
+                )),
             ),
         ),
         control(
@@ -1765,8 +1794,14 @@ fn validate_golden(diagnostics: &SumeragiDiagnosticsStatus) -> Result<(), Box<dy
         .iter()
         .map(|receipt| receipt.source_id)
         .collect::<Vec<_>>();
-    if expected_sources.windows(2).any(|pair| pair[0] >= pair[1]) {
-        return Err("grouped source receipts must be strictly ordered".into());
+    if expected_sources
+        .iter()
+        .copied()
+        .collect::<BTreeSet<_>>()
+        .len()
+        != expected_sources.len()
+    {
+        return Err("grouped source receipts must be unique in canonical FIFO order".into());
     }
     for receipt in &commitment.native_amx_receipts {
         if receipt.version != 2 || receipt.legs.len() != 2 {
@@ -1788,13 +1823,8 @@ fn validate_golden(diagnostics: &SumeragiDiagnosticsStatus) -> Result<(), Box<dy
             );
         }
         for leg in &receipt.legs {
-            let settlement_sources = leg
-                .participant_settlement
-                .receipts
-                .iter()
-                .map(|settlement_receipt| settlement_receipt.source_id)
-                .collect::<Vec<_>>();
-            if settlement_sources != expected_sources
+            let settlement_sources = leg.participant_settlement.source_ids();
+            if settlement_sources != expected_sources.as_slice()
                 || settlement_sources.len() > NATIVE_AMX_GROUP_SOURCES_MAX
                 || settlement_sources
                     .iter()
@@ -1828,7 +1858,7 @@ fn document() -> Result<Value, Box<dyn Error>> {
     let diagnostics = diagnostics(commitment.clone(), &remote);
     validate_golden(&diagnostics)?;
     let application_evidence = application_evidence(&context, &remote)?;
-    let controls = negative_controls(&context, &commitment)?;
+    let controls = negative_controls(&context, &commitment, &application_evidence)?;
     let mut ids = BTreeSet::new();
     for control in &controls {
         let Some(id) = control

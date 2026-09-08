@@ -3,16 +3,7 @@
 use iroha_data_model::{
     account::AccountId, asset::id::AssetDefinitionId, fastpq::transfer_balance_key,
 };
-use norito::json::Value;
-
-fn object<const N: usize>(entries: [(&str, Value); N]) -> Value {
-    Value::Object(
-        entries
-            .into_iter()
-            .map(|(key, value)| (key.to_owned(), value))
-            .collect(),
-    )
-}
+use norito::{json, json::Value};
 
 pub(crate) fn emit() {
     let source: Value = norito::json::from_str(include_str!(
@@ -40,21 +31,18 @@ pub(crate) fn emit() {
                 norito::decode_canonical(&key).unwrap();
             assert_eq!(decoded.asset_definition, asset);
             assert_eq!(decoded.account, account);
-            object([
-                ("name", Value::String(name.into())),
-                ("account_id_frame_hex", Value::String(account_hex.into())),
-                ("key_frame_hex", Value::String(hex::encode(key))),
-            ])
+            json!({
+                "name": name,
+                "account_id_frame_hex": account_hex,
+                "key_frame_hex": (hex::encode(key)),
+            })
         })
         .collect::<Vec<_>>();
-    let fixture = object([
-        (
-            "schema",
-            Value::String("iroha.fastpq.balance-key.v1".into()),
-        ),
-        ("asset_uuid_hex", Value::String(hex::encode(uuid))),
-        ("layout_flags", 2u64.into()),
-        ("positive", Value::Array(positive)),
-    ]);
+    let fixture = json!({
+        "schema": "iroha.fastpq.balance-key.v1",
+        "asset_uuid_hex": (hex::encode(uuid)),
+        "layout_flags": 2u64,
+        "positive": positive,
+    });
     println!("{}", norito::json::to_json(&fixture).unwrap());
 }

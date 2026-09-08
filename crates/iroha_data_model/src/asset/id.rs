@@ -5,7 +5,7 @@ use getset::{CopyGetters, Getters};
 use iroha_data_model_derive::model;
 use iroha_schema::IntoSchema;
 use norito::{
-    NoritoDeserialize, NoritoSerialize,
+    NoritoDeserialize, NoritoSerialize, SerializePayload,
     codec::{Decode, Encode},
 };
 use std::{array, fmt, format, str::FromStr, string::String};
@@ -118,15 +118,16 @@ fn asset_definition_id_json_error(message: &'static str) -> norito::json::Error 
         col: 1,
     }
 }
-impl NoritoSerialize for AssetDefinitionId {
+impl NoritoSerialize for AssetDefinitionId {}
+impl SerializePayload for AssetDefinitionId {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
-        <[u8; 16] as NoritoSerialize>::serialize(&self.aid_bytes, writer)
+        <[u8; 16] as SerializePayload>::serialize(&self.aid_bytes, writer)
     }
     fn encoded_len_hint(&self) -> Option<usize> {
-        <[u8; 16] as NoritoSerialize>::encoded_len_hint(&self.aid_bytes)
+        <[u8; 16] as SerializePayload>::encoded_len_hint(&self.aid_bytes)
     }
     fn encoded_len_exact(&self) -> Option<usize> {
-        <[u8; 16] as NoritoSerialize>::encoded_len_exact(&self.aid_bytes)
+        <[u8; 16] as SerializePayload>::encoded_len_exact(&self.aid_bytes)
     }
 }
 impl<'de> NoritoDeserialize<'de> for AssetDefinitionId {
@@ -212,6 +213,16 @@ impl AssetId {
     /// `<base58-asset-definition-id>#<i105-account-id>` form, or uses an invalid
     /// dataspace scope suffix.
     pub fn parse_literal(input: &str) -> Result<Self, ParseError> {
+        let (definition, account_literal, scope) = Self::parse_literal_parts(input)?;
+        let account = AccountId::parse_encoded(account_literal)
+            .map_err(|_| ParseError::new("Asset ID account is invalid"))?;
+        Ok(Self::with_scope(definition, account, scope))
+    }
+
+    /// Parse the allocation-free envelope shared by text and JSON key decoders.
+    pub(crate) fn parse_literal_parts(
+        input: &str,
+    ) -> Result<(AssetDefinitionId, &str, AssetBalanceScope), ParseError> {
         let trimmed = input.trim();
         if trimmed.is_empty() {
             return Err(ParseError::new(
@@ -232,8 +243,6 @@ impl AssetId {
             ));
         }
         let definition = AssetDefinitionId::parse_address_literal(definition_literal)?;
-        let account = AccountId::parse_encoded(account_literal)
-            .map_err(|_| ParseError::new("Asset ID account is invalid"))?;
         let scope = match scope_literal {
             None => AssetBalanceScope::Global,
             Some(raw) => {
@@ -249,7 +258,7 @@ impl AssetId {
                 AssetBalanceScope::Dataspace(dataspace)
             }
         };
-        Ok(Self::with_scope(definition, account, scope))
+        Ok((definition, account_literal, scope))
     }
 }
 impl AssetDefinitionId {

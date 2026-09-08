@@ -26,14 +26,25 @@ fn autonomous_test_fixture(
     author: bool,
 ) -> (V2LaneWorkAdapter, Vec<KeyPair>) {
     let local_validator_index = if author { 0 } else { 1 };
-    fixture_at_height_inner_with_kura_and_local_index(
+    let (mut observer, keys) = fixture_at_height_inner_with_kura_and_local_index(
         mode,
         9,
         true,
         locked_lane_work_test_kura(iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY),
         Some(local_validator_index),
-        true,
-    )
+        false,
+    );
+    // Complete the static authority before opening any voting journal. A
+    // journal opened before these context hashes change cannot be replayed
+    // under the finished lane geometry at the same height.
+    enable_multilane_nexus(&mut observer, &keys, LaneId::new(1), DataSpaceId::new(7));
+    let context = observer.context.clone();
+    let restart = LaneAdapterRestartParts::capture(&observer);
+    drop(observer);
+    let adapter = restart
+        .reopen_isolated(context, true)
+        .expect("open autonomous voting journals under the completed lane context");
+    (adapter, keys)
 }
 
 fn assert_autonomous_test_role(
@@ -451,7 +462,11 @@ fn autonomous_ready_crosses_payload_and_certificate_durability_before_commit_vot
     adapter
         .locally_bound_lane_proposals
         .insert(proposal.proposal_hash, protected_hint);
-    assert!(adapter.proposal_body_available(&proposal));
+    assert!(
+        adapter
+            .proposal_body_available(&proposal)
+            .expect("read exact autonomous body availability")
+    );
     // Model the live late-ingress race: the ingress precheck observed the
     // protected carrier, then a higher global transition retired that
     // in-memory witness before the durable READY boundary ran.
@@ -783,7 +798,8 @@ fn autonomous_ready_crosses_payload_and_certificate_durability_before_commit_vot
     .expect("derive exact terminal NewView body");
     assert!(
         !adapter
-            .autonomous_new_view_transition_is_current(&terminal_new_view_body, locked_round.view,),
+            .autonomous_new_view_transition_is_current(&terminal_new_view_body, locked_round.view,)
+            .expect("read current autonomous transition"),
         "an exact receipt must close the central NewView transition predicate"
     );
     let terminal_new_view_vote = crate::lane_consensus::LaneBlockNewViewVoteV1::new_signed(
@@ -859,7 +875,9 @@ fn autonomous_ready_crosses_payload_and_certificate_durability_before_commit_vot
         AutonomousPayloadDurabilityError::MissingLaneArtifact(_)
     ));
     assert!(
-        adapter.missing_autonomous_artifact_became_terminal(&proposal, &restore_error),
+        adapter
+            .missing_autonomous_artifact_became_terminal(&proposal, &restore_error)
+            .expect("read exact terminal receipt"),
         "a terminal missing-evidence race must downgrade only exact missing terminal evidence"
     );
     assert_eq!(
@@ -868,7 +886,9 @@ fn autonomous_ready_crosses_payload_and_certificate_durability_before_commit_vot
         "an exact receipt must stop READY authorization even when durable payload evidence remains"
     );
     assert!(
-        !adapter.proposal_can_progress(&proposal),
+        !adapter
+            .proposal_can_progress(&proposal)
+            .expect("read lane progress eligibility"),
         "an exact application receipt must terminally gate the retained lane session"
     );
     assert!(
@@ -954,6 +974,66 @@ fn autonomous_ready_crosses_payload_and_certificate_durability_before_commit_vot
     assert!(
         !adapter.output_guard.restart_required(),
         "terminal autonomous ingress must not stop consensus output"
+    );
+    let mut competing = proposal.clone();
+    competing.descriptor.lane_block_view = competing.descriptor.lane_block_view.saturating_add(1);
+    competing.descriptor.descriptor_hash = competing.descriptor.computed_descriptor_hash();
+    competing.proposal_hash = competing.computed_proposal_hash();
+    validate_lane_block_proposal(&competing)
+        .expect("the competing candidate is structurally valid");
+    assert!(
+        !adapter
+            .lane_application_receipt_available(&competing)
+            .expect("authenticate the occupied receipt independently of the candidate")
+    );
+    assert!(
+        !adapter
+            .proposal_can_progress(&competing)
+            .expect("a valid applied slot rejects the competing candidate")
+    );
+    assert!(
+        !adapter
+            .proposal_can_be_transported(&competing)
+            .expect("a valid applied slot rejects competing transport")
+    );
+    assert!(
+        !adapter.output_guard.restart_required(),
+        "a losing candidate cannot poison local storage"
+    );
+    let source = adapter
+        .state
+        .nexus_snapshot()
+        .lane_config
+        .entry(proposal.descriptor.lane_id)
+        .expect("configured lane")
+        .blocks_dir(adapter.kura.store_root())
+        .join("lane_artifacts");
+    let receipt_path = source.join("application_receipts.norito");
+    let index_path = source.join("application_receipts.index");
+    std::fs::write(
+        &receipt_path,
+        b"damaged previously authenticated application receipt",
+    )
+    .expect("damage the occupied durable receipt after its successful read");
+    let before = (
+        std::fs::read(&receipt_path).unwrap(),
+        std::fs::read(&index_path).unwrap(),
+    );
+    assert!(
+        adapter.proposal_can_progress(&competing).is_err(),
+        "a foreign candidate cannot hide corruption in the occupied local receipt"
+    );
+    assert!(adapter.output_guard.restart_required());
+    assert!(
+        adapter.lane_sessions.get(&session_key).is_some(),
+        "failure retains the certified owner"
+    );
+    assert_eq!(
+        (
+            std::fs::read(receipt_path).unwrap(),
+            std::fs::read(index_path).unwrap()
+        ),
+        before
     );
 }
 
@@ -1201,7 +1281,9 @@ fn committee_payload_replay_defers_until_decided_carrier_recovery_binds_session(
             .is_none()
     );
     assert!(
-        adapter.proposal_body_available(&proposal),
+        adapter
+            .proposal_body_available(&proposal)
+            .expect("read exact autonomous body availability"),
         "public finality exposes the carrier body but not committee-local READY authority"
     );
     assert_eq!(
@@ -1433,86 +1515,73 @@ fn canonical_decision_rebinds_quarantined_higher_view_autonomous_payload() {
 
 #[test]
 fn voting_validator_outside_lane_committee_skips_private_new_view_cursor_restore() {
-    let (mut adapter, keys) = fixture_with_durable_parent(wire::ConsensusMode::Permissioned);
-    let (block, proposal) = planned_autonomous_lane_candidate_block_at_view(&adapter, &keys, 0);
-    let entrypoint = block
-        .external_entrypoints_cloned()
-        .next()
-        .expect("planned autonomous entrypoint");
-    let (payload, _) = signed_autonomous_payload_for_entrypoint(
+    let NonmemberCanonicalReplicaPreQcFixture {
+        mut adapter,
+        global_keys,
+        lane_keys,
+        proposal,
+        payload,
+        key,
+        locked_round,
+        decided,
+        ..
+    } = nonmember_canonical_replica_pre_qc_fixture();
+    let payload = attach_finalized_nonmember_public_payload(
         &adapter,
-        &keys,
         &proposal,
-        entrypoint,
-        b"outside-committee-queue-plan-admission-binding",
-        b"outside-committee-reservation-owner",
-        "deterministic autonomous producer",
-        "autonomous producer key",
-        "signed autonomous payload",
+        payload,
+        &locked_round,
+        &decided,
     );
-    let (locked_round, _) = mark_global_body_locked_for_block(&mut adapter, &block);
-    let protected_hint = proposal
-        .payload_block_hint
-        .expect("autonomous proposal carries its candidate binding");
-    adapter
-        .locally_bound_lane_proposals
-        .insert(proposal.proposal_hash, protected_hint);
-    assert!(adapter.proposal_body_available(&proposal));
+    let proposal = payload.origin_proposal.clone();
+    assert!(adapter.voting_enabled);
+    assert!(adapter.frozen_roster_contains(&adapter.local_peer));
+    assert!(!adapter.local_can_own_autonomous_payload(&proposal));
+    assert!(adapter.lane_sessions.contains_proposal(&proposal));
+    assert!(
+        adapter
+            .proposal_body_available(&proposal)
+            .expect("the exact protected autonomous carrier is available")
+    );
+    assert!(autonomous_artifact(&adapter, &proposal, adapter.context.epoch).is_none());
+
+    // Read the same retained carrier as a real overlapping committee member.
+    // Membership requires private cursor custody even when public replica bytes exist.
+    let observer = adapter.local_peer.clone();
+    let member = lane_keys
+        .iter()
+        .find(|key| {
+            global_keys
+                .iter()
+                .any(|global| global.public_key() == key.public_key())
+        })
+        .expect("the fixture has a validator in both global and lane committees");
+    adapter.local_peer = PeerId::new(member.public_key().clone());
+    assert!(adapter.frozen_roster_contains(&adapter.local_peer));
+    assert!(adapter.local_can_own_autonomous_payload(&proposal));
     assert!(matches!(
         adapter.restore_autonomous_new_view_state(&payload, locked_round.view, Instant::now()),
         Err(AutonomousPayloadDurabilityError::MissingLaneArtifact(_))
     ));
-    let key = AutonomousLanePayloadKey::from(&proposal);
+    adapter.local_peer = observer;
     adapter
         .autonomous_new_view_started_at
         .insert(key, (proposal.descriptor.lane_block_view, Instant::now()));
-
-    let outside_committee_key = KeyPair::try_from_seed(vec![0xF1; 32], Algorithm::BlsNormal)
-        .expect("deterministic outside-committee BLS key");
-    adapter.local_peer = PeerId::new(outside_committee_key.public_key().clone());
-    assert!(adapter.voting_enabled);
-    assert_eq!(
-        adapter.local_peer.public_key().try_algorithm().ok(),
-        Some(Algorithm::BlsNormal)
-    );
-    assert!(
-        !proposal
-            .descriptor
-            .validator_set
-            .contains(&adapter.local_peer)
-    );
-    assert!(!adapter.local_can_own_autonomous_payload(&proposal));
-    assert!(
-        autonomous_artifact(&adapter, &proposal, adapter.context.epoch).is_none(),
-        "a validator outside the lane committee must not own its private durable artifact"
-    );
-    assert_eq!(
-        adapter
-            .lane_sessions
-            .insert_recovered_proposal_replacing_uncommitted_conflict(proposal.clone()),
-        Ok(crate::lane_consensus::LaneBlockSessionInsertOutcome::Inserted),
-        "the globally protected carrier must install its exact observer session before READY authorization"
-    );
-
     assert_eq!(
         adapter.persist_and_authorize_autonomous_payload(&payload, &proposal),
         Ok(AutonomousPayloadDurabilityOutcome::Authorized),
-        "a non-member still verifies the globally protected carrier without minting READY authority"
+        "a non-member verifies the exact protected carrier without private READY custody",
     );
     adapter
         .restore_autonomous_new_view_state(&payload, locked_round.view, Instant::now())
         .expect("a non-member has no committee-local NewView cursor to restore");
-
-    assert!(
-        !adapter.autonomous_new_view_started_at.contains_key(&key),
-        "committee removal must clear any stale local timeout"
-    );
+    assert!(!adapter.autonomous_new_view_started_at.contains_key(&key));
     assert!(
         autonomous_artifact(&adapter, &proposal, adapter.context.epoch).is_none(),
-        "verification-only handling must not synthesize private committee custody"
+        "verification must not synthesize private committee custody",
     );
+    assert!(!adapter.output_guard.restart_required());
 }
-
 #[test]
 fn voting_validator_outside_lane_committee_retires_transport_only_loser_without_queue() {
     let (mut adapter, global_keys) = fixture_at_height_inner_with_kura_and_local_index(
@@ -1722,7 +1791,10 @@ fn authorized_ready_session_without_one_shot_token_fails_stop() {
         "the regression fixture deliberately models the consumed-token failure window"
     );
 
-    adapter.drive_lane_sessions();
+    assert!(matches!(
+        adapter.sign_lane_vote(&proposal, CertPhase::Prepare),
+        Err(V2LaneWorkError::SigningGuard(_))
+    ));
 
     assert!(
         adapter.output_guard.restart_required(),
@@ -1819,6 +1891,11 @@ fn autonomous_producer_retries_after_predecessor_application_receipt_arrives() {
         .kura
         .store_block(predecessor_block.clone())
         .expect("persist the raw canonical predecessor");
+    let finality = verified_finality_artifact_for_block(&parent, &keys, &predecessor_block);
+    let _ = parent
+        .kura
+        .store_v2_finality_artifact(&finality)
+        .expect("publish the finalized predecessor's complete-wire authority");
     let committed_predecessor =
         ValidBlock::committed_from_replay_signed_block(predecessor_block.clone());
     commit_test_block_to_state(
@@ -1830,7 +1907,7 @@ fn autonomous_producer_retries_after_predecessor_application_receipt_arrives() {
         parent
             .state
             .unapplied_lane_block_artifact_heights_snapshot_cached()
-            .expect("read exact pending lane artifact frontier")
+            .expect("read authenticated pending lane frontier")
             .get(&(lane_id, dataspace_id)),
         Some(&predecessor_proposal.descriptor.lane_block_height),
         "the raw predecessor must block a successor reservation until its exact receipt exists"
@@ -1841,7 +1918,7 @@ fn autonomous_producer_retries_after_predecessor_application_receipt_arrives() {
             .lane_block_application_receipt_available(&predecessor_proposal)
     );
 
-    let successor_context = successor_context_for_parent(&parent, &predecessor_block);
+    let successor_context = successor_context_for_parent(&parent, &predecessor_block, &keys);
     let validator_set = parent
         .state
         .resolve_lane_committee_at_height(
@@ -1929,7 +2006,7 @@ fn autonomous_producer_retries_after_predecessor_application_receipt_arrives() {
         !adapter
             .state
             .unapplied_lane_block_artifact_heights_snapshot_cached()
-            .expect("read exact pending lane artifact frontier")
+            .expect("read authenticated pending lane frontier")
             .contains_key(&route)
     );
     let recovered_slot = plan_autonomous_lane_reservation_slot(
@@ -2923,7 +3000,7 @@ fn historical_autonomous_lane_certificate_parts()
 
 #[test]
 fn historical_autonomous_hydration_replaces_same_slot_conflict_at_capacity() {
-    let (adapter, _keys, certificate) = historical_autonomous_lane_certificate_parts();
+    let (adapter, keys, certificate) = historical_autonomous_lane_certificate_parts();
     let proposal = &certificate.proposal;
     let carrier = adapter
         .kura
@@ -2934,7 +3011,7 @@ fn historical_autonomous_hydration_replaces_same_slot_conflict_at_capacity() {
             .expect("nonzero carrier height"),
         )
         .expect("record-backed historical carrier");
-    let successor_context = successor_context_for_parent(&adapter, carrier.as_ref());
+    let successor_context = successor_context_for_parent(&adapter, carrier.as_ref(), &keys);
     let mut restart = LaneAdapterRestartParts::capture(&adapter);
     restart.limits.session_capacity = NonZeroUsize::new(1).expect("one recovery slot");
     drop(adapter);
@@ -3023,7 +3100,7 @@ fn historical_autonomous_hydration_preserves_conflicting_quorum_at_capacity() {
                 .expect("nonzero carrier height"),
             )
             .expect("record-backed historical carrier");
-        let successor_context = successor_context_for_parent(&adapter, carrier.as_ref());
+        let successor_context = successor_context_for_parent(&adapter, carrier.as_ref(), &keys);
         let mut restart = LaneAdapterRestartParts::capture(&adapter);
         restart.limits.session_capacity = NonZeroUsize::new(1).expect("one recovery slot");
         drop(adapter);
@@ -3473,7 +3550,7 @@ fn nonmember_canonical_replica_pre_qc_fixture() -> NonmemberCanonicalReplicaPreQ
         .kura
         .store_v2_finality_artifact(&finality)
         .expect("persist canonical non-member finality");
-    let successor_context = successor_context_for_parent(&adapter, &carrier);
+    let successor_context = successor_context_for_parent(&adapter, &carrier, &global_keys);
     let committed = ValidBlock::committed_from_replay_signed_block(carrier);
     commit_test_block_to_state(adapter.state.as_ref(), &committed, &adapter.context);
     assert_ne!(
@@ -3703,7 +3780,11 @@ fn finalized_public_autonomous_certificate_is_served_across_disjoint_rosters() {
             .expect("an absent finality artifact is pending authority"),
         None
     );
-    assert!(adapter.proposal_predecessor_is_ready_for_progress(&public_proposal));
+    assert!(
+        adapter
+            .proposal_predecessor_is_ready_for_progress(&public_proposal)
+            .expect("authenticate retained predecessor readiness")
+    );
     assert_eq!(
         adapter.reconstruct_durable_lane_certificate(&public_proposal, &requester),
         Err(()),
@@ -4269,7 +4350,7 @@ pub(in crate::sumeragi) fn retain_public_lane_evidence_before_application_for_te
     state: Arc<State>,
     kura: Arc<Kura>,
     context: wire::HeightContext,
-    mut limits: V2LaneWorkLimits,
+    limits: V2LaneWorkLimits,
     certificate: &LaneBlockCertificateV1,
     commit_vote: &LaneBlockVoteV1,
 ) -> Vec<V2LaneWorkAdapter> {
@@ -4283,9 +4364,10 @@ pub(in crate::sumeragi) fn retain_public_lane_evidence_before_application_for_te
         source_height.checked_add(1).expect("next context height")
     );
     assert!(
-        !state.certified_autonomous_lane_block_is_globally_applied_cached(&certificate.proposal)
+        !state
+            .certified_autonomous_lane_block_is_globally_applied(&certificate.proposal)
+            .expect("authenticate exact durable application evidence")
     );
-    limits.session_capacity = NonZeroUsize::new(1).expect("one retained recovery slot");
     [false, true]
         .into_iter()
         .map(|partial_vote| {
@@ -4310,6 +4392,12 @@ pub(in crate::sumeragi) fn retain_public_lane_evidence_before_application_for_te
                 None,
             )
             .expect("create public observer before economic application");
+            // Startup may hydrate this exact public proposal. Apply one-slot pressure
+            // through normal cache eviction; never replace protected recovery owners.
+            adapter.limits.session_capacity = NonZeroUsize::new(1).expect("one live recovery slot");
+            adapter
+                .lane_sessions
+                .set_unprotected_capacity_for_testing(adapter.limits.session_capacity);
             assert_eq!(
                 adapter.insert_lane_qc(certificate.prepare_qc.clone(), 0),
                 V2LaneIngressOutcome::Inserted
@@ -4320,9 +4408,18 @@ pub(in crate::sumeragi) fn retain_public_lane_evidence_before_application_for_te
                 adapter.insert_lane_qc(certificate.commit_qc.clone(), 0)
             };
             assert_eq!(outcome, V2LaneIngressOutcome::Inserted);
-            assert_eq!(adapter.lane_sessions.len(), 1);
-            assert!(adapter.effects.is_empty());
-            assert!(adapter.proposal_can_progress(&certificate.proposal));
+            assert_eq!(
+                adapter.lane_sessions.len(),
+                1,
+                "{:#?}",
+                adapter.lane_sessions
+            );
+            assert!(adapter.effects.is_empty(), "{:#?}", adapter.effects);
+            assert!(
+                adapter
+                    .proposal_can_progress(&certificate.proposal)
+                    .expect("authenticate lane progress authority")
+            );
             adapter
         })
         .collect()
@@ -4333,7 +4430,7 @@ pub(in crate::sumeragi) fn inspect_applied_public_lane_qc_replay_for_test(
     state: Arc<State>,
     kura: Arc<Kura>,
     context: wire::HeightContext,
-    mut limits: V2LaneWorkLimits,
+    limits: V2LaneWorkLimits,
     certificate: LaneBlockCertificateV1,
     votes: [&[LaneBlockVoteV1]; 2],
     validator_keys: &[KeyPair],
@@ -4391,14 +4488,22 @@ pub(in crate::sumeragi) fn inspect_applied_public_lane_qc_replay_for_test(
         state.committed_block_hash_at_height(terminal_receipt.application_block_height),
         Some(terminal_receipt.application_block_hash)
     );
-    assert!(state.certified_autonomous_lane_block_is_globally_applied_cached(proposal));
+    assert!(
+        state
+            .certified_autonomous_lane_block_is_globally_applied(proposal)
+            .expect("authenticate exact durable application evidence")
+    );
     let state_hash = crate::snapshot::canonical_state_snapshot_hash(state.as_ref());
     let session = CommittedLaneBlockSession {
         proposal: certificate.proposal.clone(),
         prepare_qc: certificate.prepare_qc.clone(),
         commit_qc: certificate.commit_qc.clone(),
     };
-    assert!(state.certified_lane_block_session_is_applied_or_snapshot_anchored_cached(&session));
+    assert!(
+        state
+            .certified_lane_block_session_is_applied_or_snapshot_anchored(&session)
+            .expect("authenticate exact durable application evidence")
+    );
     assert!(kura.lane_block_application_receipt_available(proposal));
     for (index, mut retained) in retained_terminal_adapters.into_iter().enumerate() {
         assert_eq!(retained.lane_sessions.len(), 1);
@@ -4412,14 +4517,27 @@ pub(in crate::sumeragi) fn inspect_applied_public_lane_qc_replay_for_test(
             retained.committed_lane_outputs.len(),
             retained.limits.session_capacity.get()
         );
-        assert!(!retained.proposal_can_progress(proposal));
+        assert!(
+            !retained
+                .proposal_can_progress(proposal)
+                .expect("authenticate lane progress authority")
+        );
         if index == 0 {
             retained.drive_lane_sessions();
         } else {
+            // First prove terminal retirement while the one-slot output queue is full.
+            // The following guarded persistence also inventories both durable cycles,
+            // so it must use the fixture's valid whole-context inventory budget.
+            retained
+                .retire_applied_autonomous_sessions()
+                .expect("retire partial terminal evidence under full output pressure");
+            assert!(retained.lane_sessions.is_empty());
+            assert!(retained.lane_sessions.rollover_slots().is_empty());
+            retained.limits.session_capacity = limits.session_capacity;
             assert_eq!(
                 retained
                     .persist_anchored_sessions()
-                    .expect("retire partial evidence at guarded persistence"),
+                    .expect("guarded persistence rechecks the complete durable inventory"),
                 0
             );
         }
@@ -4457,7 +4575,6 @@ pub(in crate::sumeragi) fn inspect_applied_public_lane_qc_replay_for_test(
         .find(|peer| context.roster.iter().any(|entry| &entry.validator == *peer))
         .expect("historical public certificate has an authenticated connected sender")
         .clone();
-    limits.session_capacity = NonZeroUsize::new(1).expect("one ordinary recovery slot");
     let mut observer = V2LaneWorkAdapter::new(
         context.clone(),
         observer_peer,
@@ -4469,6 +4586,14 @@ pub(in crate::sumeragi) fn inspect_applied_public_lane_qc_replay_for_test(
         None,
     )
     .expect("reopen a public observer after the real terminal merge application");
+    // Startup must inspect every active route before this test constrains live recovery.
+    assert!(
+        observer.lane_sessions.is_empty(),
+        "startup must not discard retained sessions"
+    );
+    observer.lane_sessions.set_unprotected_capacity_for_testing(
+        NonZeroUsize::new(1).expect("one live recovery slot"),
+    );
     assert!(!observer.local_can_own_autonomous_payload(proposal));
     assert_eq!(
         observer
@@ -4701,9 +4826,19 @@ pub(in crate::sumeragi) fn inspect_applied_public_lane_qc_replay_for_test(
         }
         assert_eq!(observer.lane_sessions, empty_cache);
     }
-    assert!(!observer.has_pending_historical_recovery());
-    assert!(!observer.proposal_can_progress(proposal));
-    observer.collect_committed_lane_sessions();
+    assert!(
+        !observer
+            .has_pending_historical_recovery()
+            .expect("authenticate pending historical recovery")
+    );
+    assert!(
+        !observer
+            .proposal_can_progress(proposal)
+            .expect("authenticate lane progress authority")
+    );
+    observer
+        .collect_committed_lane_sessions()
+        .expect("collect terminal lane owners after verified application");
     assert_eq!(observer.lane_sessions, empty_cache);
     assert_eq!(
         observer
@@ -4763,6 +4898,90 @@ pub(in crate::sumeragi) fn inspect_applied_public_lane_qc_replay_for_test(
     assert!(member.historical_recovery_sessions.is_empty());
     assert!(member.effects.is_empty());
     assert!(!member.output_guard.restart_required());
+    if proposal.descriptor.previous_lane_block_height != 0 {
+        assert!(
+            !member
+                .proposal_predecessor_is_ready_for_progress(proposal)
+                .expect("authenticate the real advanced economic frontier"),
+            "an applied non-genesis slot is no longer eligible for fresh voting"
+        );
+    }
+    let remote_member = proposal
+        .descriptor
+        .validator_set
+        .iter()
+        .find(|peer| *peer != &member.local_peer)
+        .expect("the exact four-validator committee has a remote member")
+        .clone();
+    for requester in [remote_member, observer.local_peer.clone()] {
+        let mut routes = NetworkReplyRouteTestFixture::new(requester.clone());
+        let route = routes.mint(requester.clone());
+        let admitted = fair_v2_ingress_admit_for_test(
+            InboundBlockMessage::try_from_transport_with_reply_route(
+                BlockMessage::LaneBlockProposal(proposal.clone()),
+                requester.clone(),
+                requester.clone(),
+                route.clone(),
+            )
+            .expect("a lagging peer retains its authenticated recovery route"),
+        );
+        assert_eq!(
+            member
+                .accept_lane_message_with_ingress_ownership(admitted, 0)
+                .expect("serve an exact stored certificate after economic application"),
+            V2LaneIngressOutcome::Inserted
+        );
+        member
+            .purge_queued_global_body_effects_except_committed_outputs()
+            .expect("a later global decision retains the historical certificate response");
+        let effects = member.drain_effects(usize::MAX);
+        assert_eq!(effects.len(), 1);
+        assert!(matches!(
+            &effects[0],
+            V2LaneWorkEffect::PostDurableLaneCertificate {
+                peer,
+                reply_routes: Some(reply_routes),
+                ingress_ownership: Some(ownership),
+                certificate: recovered,
+            } if peer == &requester
+                && recovered == &certificate
+                && reply_routes.len() == 1
+                && reply_routes.iter().any(|retained| retained.same_delivery(&route))
+                && ownership.validate_exact()
+                && ownership.matches_reply_routes(Some(reply_routes))
+        ));
+        for phase in [CertPhase::Prepare, CertPhase::Commit] {
+            assert!(
+                member
+                    .sign_lane_vote(proposal, phase)
+                    .expect("recovery does not reopen an applied slot for signing")
+                    .is_none()
+            );
+        }
+        assert!(member.lane_sessions.is_empty());
+        assert!(member.lane_ready_authorizations.is_empty());
+        assert!(member.pending_committed_lanes.is_empty());
+        assert!(member.historical_recovery_sessions.is_empty());
+        assert!(member.effects.is_empty());
+        assert!(!member.output_guard.restart_required());
+    }
+    for change_incarnation in [false, true] {
+        let mut other = proposal.clone();
+        if change_incarnation {
+            other.descriptor.lane_incarnation = Hash::new(b"another applied recovery incarnation");
+        } else {
+            other.descriptor.subject_hash = Hash::new(b"another applied recovery subject");
+        }
+        other.descriptor.descriptor_hash = other.descriptor.computed_descriptor_hash();
+        other.proposal_hash = other.computed_proposal_hash();
+        validate_lane_block_proposal(&other).expect("a structurally valid substituted proposal");
+        assert!(
+            member
+                .reconstruct_durable_lane_certificate(&other, &sender)
+                .expect("reject a distinct proposal without changing durable state")
+                .is_none()
+        );
+    }
     assert_eq!(
         kura.get_block(source_height)
             .expect("original source survives replay")
@@ -4889,7 +5108,11 @@ fn restarted_nonmember_accepts_public_qcs_and_persists_only_canonical_replica() 
             .expect("owned lane ingress remains available"),
         V2LaneIngressOutcome::Inserted
     );
-    assert!(recovered.has_pending_historical_recovery());
+    assert!(
+        recovered
+            .has_pending_historical_recovery()
+            .expect("read pending historical recovery")
+    );
     assert!(matches!(
         recovered
             .service_next_historical_recovery()
@@ -5244,6 +5467,11 @@ fn recovered_autonomous_certificate_repairs_ready_before_certified_publication()
         .kura
         .store_block(block.clone())
         .expect("persist autonomous recovery carrier");
+    let finality = verified_finality_artifact_for_block(&adapter, &keys, &block);
+    let _ = adapter
+        .kura
+        .store_v2_finality_artifact(&finality)
+        .expect("publish complete-wire authority for historical READY recovery");
     let proposal_block = block.canonical_resultless_proposal();
     let (_locked_round, _locked_subject) =
         mark_global_body_locked_for_block(&mut adapter, &proposal_block);
@@ -5330,7 +5558,7 @@ fn recovered_autonomous_certificate_repairs_ready_before_certified_publication()
     let committed = ValidBlock::committed_from_replay_signed_block(block.clone());
     commit_test_block_to_state(adapter.state.as_ref(), &committed, &adapter.context);
     let current_context = adapter.context.clone();
-    let mut sidecar_only_successor = successor_context_for_parent(&adapter, &block);
+    let mut sidecar_only_successor = successor_context_for_parent(&adapter, &block, &keys);
     sidecar_only_successor.epoch = {
         let world = adapter.state.world_view();
         crate::sumeragi::epoch_for_height_from_world(
@@ -5458,7 +5686,7 @@ fn recovered_autonomous_certificate_repairs_ready_before_certified_publication()
             .expect("current-height alternate READY proof reuses the durable subject proof"),
         1
     );
-    let mut successor_context = successor_context_for_parent(&adapter, &block);
+    let mut successor_context = successor_context_for_parent(&adapter, &block, &keys);
     successor_context.epoch = {
         let world = adapter.state.world_view();
         crate::sumeragi::epoch_for_height_from_world(

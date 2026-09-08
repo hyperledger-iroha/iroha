@@ -551,7 +551,11 @@ v2_apply_test!(
                 .expect("persist exact historical autonomous certificate and bundle"),
             crate::sumeragi::v2_lane_work::HistoricalRecoveryServiceOutcome::Complete(_)
         ));
-        assert!(!lane_work.has_pending_historical_recovery());
+        assert!(
+            !lane_work
+                .has_pending_historical_recovery()
+                .expect("inspect completed historical recovery")
+        );
         let source = fixture
             .kura
             .durable_autonomous_lane_merge_source(
@@ -1084,12 +1088,11 @@ v2_apply_test!(
             2
         );
         assert_eq!(native_entry.leaf.application_block_height, 3);
-        assert!(
+        assert_eq!(
             native_entry
                 .participant_settlement
-                .receipts
-                .iter()
-                .all(|receipt| receipt.timestamp_ms == 2)
+                .authority_context_height(),
+            2
         );
         assert_eq!(native_entry.leaf.members.len(), 2);
         let native_amx_frontiers = State::native_amx_participant_frontier_markers_and_merge_entry(
@@ -1398,7 +1401,7 @@ v2_apply_test!(
         assert!(
             fixture
                 .state
-                .native_amx_participant_frontiers_pending_durable_evidence_snapshot_cached()
+                .native_amx_participant_frontiers_pending_durable_evidence_snapshot()
                 .expect("read repaired Native State frontiers")
                 .is_empty()
         );

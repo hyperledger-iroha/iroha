@@ -2078,6 +2078,120 @@ async fn drops_oversized_frames_on_p2p_ingress() {
     assert_eq!(status.frames_out_total, 0, "no frames delivered");
 }
 #[tokio::test]
+async fn execution_transport_config_relays_complete_large_frames_after_signed_approval() {
+    // These opaque ciphertext bytes exercise relay admission and delivery;
+    // payload decryption and transaction approval belong to the wallet SDK.
+    for execution_transport in [false, true] {
+        let mut cfg = enabled_test_config();
+        cfg.relay_enabled = false;
+        if execution_transport {
+            cfg.frame_max_bytes = 4 * 1024 * 1024 + 4096;
+            cfg.session_buffer_max_bytes = 8 * 1024 * 1024;
+        }
+        let bus = Bus::from_config(&cfg, test_network_id());
+        assert_eq!(
+            bus.frame_limits(),
+            (cfg.frame_max_bytes, cfg.session_buffer_max_bytes)
+        );
+        let (sid, app_pk, nonce) = test_session_identity(0x76);
+        bus.register_tokens(
+            sid,
+            app_pk,
+            nonce,
+            "app-token".into(),
+            "wallet-token".into(),
+            "management-token".into(),
+            "relay-token".into(),
+        )
+        .await
+        .expect("session registration");
+        let mut app_inbox = bus.attach(sid, proto::Role::App).await;
+        let mut wallet_inbox = bus.attach(sid, proto::Role::Wallet).await;
+        let constraints = proto::Constraints {
+            network_id: test_network_id(),
+        };
+        bus.relay(proto::ConnectFrameV1 {
+            sid,
+            dir: proto::Dir::AppToWallet,
+            seq: 1,
+            kind: proto::FrameKind::Control(proto::ConnectControlV1::Open {
+                app_pk,
+                app_meta: None,
+                constraints: constraints.clone(),
+                permissions: None,
+            }),
+        })
+        .await;
+        wallet_inbox.recv().await.expect("wallet receives Open");
+        let key_pair =
+            KeyPair::try_from_seed(vec![0x77; 32], Algorithm::Ed25519).expect("approval keypair");
+        bus.relay(proto::ConnectFrameV1 {
+            sid,
+            dir: proto::Dir::WalletToApp,
+            seq: 1,
+            kind: proto::FrameKind::Control(signed_approval_control(
+                &key_pair,
+                &constraints,
+                &sid,
+                &app_pk,
+                [0x78; 32],
+                "relay-token",
+            )),
+        })
+        .await;
+        assert!(matches!(
+            app_inbox.recv().await.expect("verified approval").kind,
+            proto::FrameKind::Control(proto::ConnectControlV1::Approve { .. })
+        ));
+        let large = proto::ConnectFrameV1 {
+            sid,
+            dir: proto::Dir::AppToWallet,
+            seq: 2,
+            kind: proto::FrameKind::Ciphertext(proto::ConnectCiphertextV1 {
+                dir: proto::Dir::AppToWallet,
+                aead: vec![0xA5; 4 * 1024 * 1024],
+            }),
+        };
+        let wire = norito::to_bytes(&large).expect("encode complete frame");
+        assert!(wire.len() < 4 * 1024 * 1024 + 4096);
+        bus.relay(large).await;
+        if execution_transport {
+            let received = timeout(Duration::from_secs(1), wallet_inbox.recv())
+                .await
+                .expect("configured relay delivers complete frame")
+                .expect("frame");
+            assert_eq!(
+                norito::to_bytes(&received).expect("encode delivered frame"),
+                wire
+            );
+        } else {
+            assert!(
+                timeout(Duration::from_millis(50), wallet_inbox.recv())
+                    .await
+                    .is_err(),
+                "ordinary configuration must retain its original frame bound"
+            );
+        }
+        bus.relay(proto::ConnectFrameV1 {
+            sid,
+            dir: proto::Dir::AppToWallet,
+            seq: if execution_transport { 3 } else { 2 },
+            kind: proto::FrameKind::Ciphertext(proto::ConnectCiphertextV1 {
+                dir: proto::Dir::AppToWallet,
+                aead: vec![0xA5; cfg.frame_max_bytes],
+            }),
+        })
+        .await;
+        assert!(
+            timeout(Duration::from_millis(50), wallet_inbox.recv())
+                .await
+                .is_err(),
+            "encoded frame overhead cannot bypass the configured bound"
+        );
+    }
+}
+
+#[tokio::test]
 async fn ciphertext_before_verified_approval_terminates_session() {
     let bus = Bus::new();
     let (sid, app_pk, nonce) = test_session_identity(0x70);

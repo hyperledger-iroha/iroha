@@ -71,55 +71,15 @@ impl StatePath {
         Ok(Self(ConstString::from(candidate)))
     }
 
-    #[cfg(feature = "json")]
-    fn json_nfc_buffer_request_bytes(source_scalars: usize) -> Result<usize, norito::json::Error> {
-        const PROFILE_MAX_DECOMPOSITION_SCALARS: usize = 4;
-        const INLINE_SCALARS: usize = 17;
-        const FIRST_HEAP_CAPACITY: usize = 32;
-
-        let max_decomposed = source_scalars
-            .checked_mul(PROFILE_MAX_DECOMPOSITION_SCALARS)
-            .ok_or(norito::json::Error::DecodeResourceLimit)?;
-        if max_decomposed <= INLINE_SCALARS {
-            return Ok(0);
-        }
-        let max_capacity = max_decomposed
-            .checked_next_power_of_two()
-            .ok_or(norito::json::Error::DecodeResourceLimit)?;
-        let requested_scalars = max_capacity
-            .checked_mul(2)
-            .and_then(|value| value.checked_sub(FIRST_HEAP_CAPACITY))
-            .ok_or(norito::json::Error::DecodeResourceLimit)?;
-        requested_scalars
-            .checked_mul(core::mem::size_of::<u32>())
-            .ok_or(norito::json::Error::DecodeResourceLimit)
-    }
-
     /// Parse one canonical JSON object-key spelling with bounded decode accounting.
     #[cfg(feature = "json")]
     pub(crate) fn parse_json_object_key(candidate: &str) -> Result<Self, norito::json::Error> {
         Self::validate_str(candidate)
             .map_err(|error| norito::json::Error::Message(error.reason().into()))?;
-        let normalization_bytes = if candidate.is_ascii() {
-            0
-        } else {
-            Self::json_nfc_buffer_request_bytes(candidate.chars().count())?
-        };
-        let requested_bytes = candidate
-            .len()
-            .checked_add(normalization_bytes)
-            .ok_or(norito::json::Error::DecodeResourceLimit)?;
-        norito::core::reserve_decode_allocation(requested_bytes)
+        Name::ensure_nfc_for_json_decode(candidate)?;
+        let value = ConstString::try_from_str_for_decode(candidate)
             .map_err(norito::json::Error::from_decode_resource)?;
-
-        let normalized = Name::normalize(candidate)
-            .map_err(|error| norito::json::Error::Message(error.reason().into()))?;
-        if normalized.as_ref() != candidate {
-            return Err(norito::json::Error::Message(
-                "StatePath must already use the exact NFC spelling".to_owned(),
-            ));
-        }
-        Ok(Self(ConstString::from(candidate)))
+        Ok(Self(value))
     }
     fn decode_wire(bytes: &[u8]) -> Result<(Self, usize), NoritoError> {
         let (len, header_len) = norito::core::inspect_len_from_slice(bytes)?;
@@ -141,15 +101,16 @@ impl StatePath {
         Ok((path, end))
     }
 }
-impl norito::core::NoritoSerialize for StatePath {
+impl norito::core::NoritoSerialize for StatePath {}
+impl norito::core::SerializePayload for StatePath {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
-        <&str as norito::core::NoritoSerialize>::serialize(&self.as_ref(), writer)
+        <&str as norito::core::SerializePayload>::serialize(&self.as_ref(), writer)
     }
     fn encoded_len_hint(&self) -> Option<usize> {
-        <&str as norito::core::NoritoSerialize>::encoded_len_hint(&self.as_ref())
+        <&str as norito::core::SerializePayload>::encoded_len_hint(&self.as_ref())
     }
     fn encoded_len_exact(&self) -> Option<usize> {
-        <&str as norito::core::NoritoSerialize>::encoded_len_exact(&self.as_ref())
+        <&str as norito::core::SerializePayload>::encoded_len_exact(&self.as_ref())
     }
 }
 impl<'a> norito::core::NoritoDeserialize<'a> for StatePath {

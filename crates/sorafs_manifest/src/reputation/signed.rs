@@ -1240,7 +1240,8 @@ mod tests {
     #[test]
     fn bounded_encoder_rejects_exact_oversize_before_serialization() {
         struct MustNotSerialize;
-        impl norito::NoritoSerialize for MustNotSerialize {
+        impl norito::NoritoSerialize for MustNotSerialize {}
+        impl norito::SerializePayload for MustNotSerialize {
             fn serialize(
                 &self,
                 _writer: &mut norito::core::Encoder<'_>,

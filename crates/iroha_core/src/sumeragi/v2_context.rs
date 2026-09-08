@@ -1113,14 +1113,15 @@ mod tests {
         isi::{RegisterCommitteePeerWithPop, RegisterPeerWithPop, SetParameter},
         metadata::Metadata,
         nexus::{
-            DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, LaneId, PublicLaneValidatorRecord,
-            PublicLaneValidatorStatus,
+            DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, LaneId, PublicLaneStakeShare,
+            PublicLaneValidatorRecord, PublicLaneValidatorStatus,
         },
         parameter::{
             Parameter,
             custom::CustomParameter,
             system::{
-                ConsensusFingerprint, ConsensusHandshakeMetadata, SumeragiConsensusMode,
+                ConsensusFingerprint, ConsensusHandshakeMetadata,
+                KagemushaMintFinalityNextEpochParameterV1, SumeragiConsensusMode,
                 SumeragiNposParameters, consensus_metadata,
             },
         },
@@ -1240,8 +1241,20 @@ mod tests {
             )));
         }
         instructions.extend(extra_instructions);
-        if voters.len() == 4 && !duplicate_first && !corrupt_first_pop {
-            let mut roster = voters
+        if (voters.is_empty() || voters.len() == 4) && !duplicate_first && !corrupt_first_pop {
+            // The empty-voter negative still needs a well-formed signed metadata
+            // instruction so it reaches the independent voting-roster boundary.
+            let metadata_voters = if voters.is_empty() {
+                (1_u8..=4)
+                    .map(|seed| {
+                        KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                            .expect("deterministic metadata-only voter")
+                    })
+                    .collect::<Vec<_>>()
+            } else {
+                voters.to_vec()
+            };
+            let mut roster = metadata_voters
                 .iter()
                 .map(|key| wire::ValidatorPower {
                     validator: PeerId::new(key.public_key().clone()),
@@ -1453,6 +1466,13 @@ mod tests {
     #[test]
     fn staged_genesis_rejects_an_empty_signed_voting_roster() {
         let genesis = signed_roster_genesis(&[], false, false);
+        iroha_genesis::signed_genesis_consensus_metadata(&genesis.0)
+            .expect("the empty-voter negative carries valid signed metadata");
+        assert!(
+            signed_genesis_voting_peers(&genesis)
+                .expect("the signed voting roster is independently readable")
+                .is_empty()
+        );
         let state = lane_hash_world(&[]);
         let staged = state.block(BlockHeader::new(
             NonZeroU64::new(1).expect("non-zero test height"),
@@ -1486,10 +1506,24 @@ mod tests {
     fn lane_hash_world(records: &[(LaneId, PeerId, u64)]) -> State {
         let world = World::default();
         {
-            let mut block = world.public_lane_validators.block();
+            let mut block = world.block();
             for (lane, peer, stake) in records {
                 let record = lane_record(peer, *lane, *stake);
-                block.insert((*lane, record.validator.clone()), record);
+                let validator = record.validator.clone();
+                block
+                    .public_lane_validators
+                    .insert((*lane, validator.clone()), record);
+                block.public_lane_stake_shares.insert(
+                    (*lane, validator.clone(), validator.clone()),
+                    PublicLaneStakeShare {
+                        lane_id: *lane,
+                        validator: validator.clone(),
+                        staker: validator,
+                        bonded: Quantity::from(*stake),
+                        pending_unbonds: Default::default(),
+                        metadata: Metadata::default(),
+                    },
+                );
             }
             block.commit();
         }
@@ -1730,7 +1764,7 @@ mod tests {
                     1,
                     Hash::new(b"context fixture executed block wire"),
                 ),
-            signers: vec![0, 1, 2, 3],
+            signers: (0..context.quorum.min_signers).collect(),
             aggregate_signature: vec![0xA5; 48],
         };
         let validator_set_pops = vec![vec![0xA6]; context.roster.len()];
@@ -1822,6 +1856,27 @@ mod tests {
             next_pops
         );
     }
+    fn install_next_mint_roster(
+        world: &World,
+        network_id: NetworkId,
+        epoch: u64,
+        roster: &[wire::ValidatorPower],
+    ) {
+        let parameter = KagemushaMintFinalityNextEpochParameterV1 {
+            roster: crate::kagemusha_v1_test_fixtures::mint_finality_roster(
+                network_id, epoch, roster,
+            ),
+        };
+        parameter
+            .validate()
+            .expect("valid separately finalized next-epoch mint roster");
+        let mut block = world.block();
+        block.parameters.get_mut().custom.insert(
+            KagemushaMintFinalityNextEpochParameterV1::parameter_id(),
+            parameter.into_custom_parameter(),
+        );
+        block.commit();
+    }
     #[test]
     fn next_epoch_snapshot_obeys_successor_key_activation_and_expiry() {
         const BOUNDARY_HEIGHT: u64 = 7;
@@ -1841,6 +1896,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let chain_id = ChainId::from("v2-expiry-boundary-test");
+        let network_id = test_network_id(0x72);
         let state_with_lifecycle = |expire_first: bool| {
             let mut world = World::new();
             for (index, key) in keys.iter().enumerate() {
@@ -1867,11 +1923,13 @@ mod tests {
                     .consensus_keys_by_pk
                     .insert(record.public_key.to_string(), vec![id]);
             }
-            State::new_with_chain_for_testing(
+            install_next_mint_roster(&world, network_id, 5, &roster);
+            State::new_with_chain_and_network_id_for_testing(
                 world,
                 Kura::blank_kura_for_testing(),
                 LiveQueryStore::start_test(),
                 chain_id.clone(),
+                network_id,
             )
         };
         let expiring_state = state_with_lifecycle(true);
@@ -1929,7 +1987,7 @@ mod tests {
             kagemusha_mint_finality_epoch_roster,
             epoch_end_height: BOUNDARY_HEIGHT,
             mode: wire::ConsensusMode::Permissioned,
-            roster,
+            roster: roster.clone(),
             leader_seed: [0x72; 32],
         };
         assert!(matches!(
@@ -1963,7 +2021,10 @@ mod tests {
     fn npos_boundary_fails_closed_without_finalized_pre_boundary_beacon_pulse() {
         const BOUNDARY_HEIGHT: u64 = 7;
         let chain_id = ChainId::from("v2-npos-missing-pre-boundary-record");
+        let network_id = test_network_id(0x73);
+        let election_roster = roster(&[1, 1, 1, 1]);
         let world = World::new();
+        install_next_mint_roster(&world, network_id, 4, &election_roster);
         {
             let mut block = world.block();
             let mut params = SumeragiNposParameters::default();
@@ -1976,14 +2037,14 @@ mod tests {
             );
             block.commit();
         }
-        let state = State::new_with_chain_for_testing(
+        let state = State::new_with_chain_and_network_id_for_testing(
             world,
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
-            chain_id.clone(),
+            chain_id,
+            network_id,
         );
         let view = state.view();
-        let election_roster = roster(&[1, 1, 1, 1]);
         let election = FrozenElectionInputs {
             epoch: 3,
             kagemusha_mint_finality_epoch_roster:

@@ -6,7 +6,6 @@ package org.hyperledger.iroha.sdk.offline
 import java.math.BigInteger
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
-import java.security.SecureRandom
 import java.util.EnumSet
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
@@ -61,8 +60,8 @@ class KagemushaAuthenticatedDeviceResponseV1(
  *
  * Operation 1 must pass `null` for [acceptedDevicePublicKey]. Operations 2 through 22 must pass
  * the exact 65-byte P-256 key pinned from that operation-1 exchange. Implementations must invoke
- * `connect_norito_kagemusha_device_response_authenticator_v1_verify`; JVM signature verification
- * is not an implementation of this boundary.
+ * `connect_norito_kagemusha_device_command_response_v1_verify` with the exact canonical command
+ * body; JVM signature verification is not an implementation of this boundary.
  */
 interface KagemushaNativeAuthenticatedDeviceTransportV1 {
     fun hardwarePolicyId(): ByteArray
@@ -76,7 +75,7 @@ interface KagemushaNativeAuthenticatedDeviceTransportV1 {
     ): KagemushaAuthenticatedDeviceResponseV1
 }
 
-/** A sender transition prepared under one durable native-Core operation identity. */
+/** Public preparation selector. Native Core must authenticate its durable operation identity. */
 class KagemushaNativeSenderPreparationV1(
     operationId: ByteArray,
     @JvmField val context: KagemushaDeviceSenderWalletContextV1,
@@ -88,7 +87,7 @@ class KagemushaNativeSenderPreparationV1(
     fun inputsDigest(): ByteArray = inputsDigestValue.copyOf()
 }
 
-/** Native-Core proof material admitted after the authenticated operation-5/6 reply. */
+/** Public candidate selector; serialized bytes never reconstruct native proof or journal authority. */
 class KagemushaNativeSenderCandidateV1(
     @JvmField val preparation: KagemushaNativeSenderPreparationV1,
     @JvmField val selector: KagemushaDeviceSenderPreparationSelectorV1,
@@ -105,7 +104,7 @@ class KagemushaNativeSenderCandidateV1(
     fun hardwareCommitAuthorization(): ByteArray = commitAuthorization.copyOf()
 }
 
-/** Native-Core lookup state for byte-identical operation-10 recovery. */
+/** Public selector for native operation-10 recovery; only the backend authenticates retained state. */
 class KagemushaNativeSenderRecoveryV1(
     operationId: ByteArray,
     terminalId: ByteArray,
@@ -212,12 +211,16 @@ enum class KagemushaNativeSenderKindV1 { PAYMENT, REDEMPTION }
 /**
  * Audited native Core authority required by [KagemushaAuthenticatedHardwareProviderV1].
  *
- * This interface intentionally has no stock implementation. It owns durable operation IDs,
+ * The Android native adapter forwards this contract to the qualified native backend. Core owns durable operation IDs,
  * signed release-catalog membership, recursive proof generation/verification, sender typestate,
  * and byte-identical terminal recovery. A service loaded factory must fail closed when exactly one
- * implementation is not installed by the qualified device/runtime package.
+ * implementation is not installed by the qualified device/runtime package. The adapter supplies
+ * neither a software backend nor a stock factory; an absent qualified backend fails closed.
  */
 interface KagemushaNativeCoreCoordinatorV1 {
+    /** Begin a transient native read challenge; it is never restored from host storage. */
+    fun beginObservation(operation: Int, canonicalCommand: ByteArray): ByteArray
+
     /** Fsync the caller's already durable action binding and echo its exact non-zero ID. */
     fun reserveOperationId(operation: Int, operationId: ByteArray, publicBinding: ByteArray): ByteArray
 
@@ -227,12 +230,13 @@ interface KagemushaNativeCoreCoordinatorV1 {
         hardwarePolicyDigest: ByteArray,
     )
 
-    /** Admit one already P-256-authenticated canonical device reply into Core's typestate. */
+    /** Retain the original device authenticator so native Core independently verifies this reply. */
     fun acceptAuthenticatedDeviceReply(
         operation: Int,
         requestId: ByteArray,
         canonicalCommand: ByteArray,
         canonicalReply: ByteArray,
+        responseAuthenticator: ByteArray,
         qualification: KagemushaHardwareQualificationV1,
     )
 
@@ -300,8 +304,10 @@ interface KagemushaNativeCoreCoordinatorV1 {
 class KagemushaAuthenticatedDeviceClientV1(
     private val transport: KagemushaNativeAuthenticatedDeviceTransportV1,
     internal val core: KagemushaNativeCoreCoordinatorV1,
+    intentStore: KagemushaOperationIntentStoreV1,
 ) {
-    private val lock = ReentrantLock(true)
+    internal val intents = KagemushaOperationIntentOwnerV1(intentStore)
+    private val lock = intents.lock
     @Volatile private var session: Session? = null
 
     private class Session(
@@ -321,10 +327,11 @@ class KagemushaAuthenticatedDeviceClientV1(
     internal fun control(
         command: KagemushaDeviceControlCommandV1,
         requestId: ByteArray,
+        beforeDispatch: (() -> Unit)? = null,
     ): AuthenticatedCall = lock.withLock {
         val canonical = KagemushaDeviceOperationCodecV1.encodeControlCommand(command)
         KagemushaDeviceOperationCodecV1.decodeControlCommand(command.operation, requestId, canonical)
-        executeLocked(command.operation, requestId, canonical, ReplyLane.CONTROL)
+        executeLocked(command.operation, requestId, canonical, ReplyLane.CONTROL, beforeDispatch)
     }
 
     internal fun receiver(
@@ -354,23 +361,30 @@ class KagemushaAuthenticatedDeviceClientV1(
     /** Persist the caller-owned identity without allowing native Core to substitute another ID. */
     internal fun reserveOperationId(operation: Int, operationId: ByteArray, publicBinding: ByteArray): ByteArray {
         val expected = authenticatedDigest(operationId, "operationId")
+        val purpose = intents.load(operation, expected)?.purpose ?: KagemushaOperationIntentPurposeV1.CALLER
+        intents.reserve(operation, expected, publicBinding, purpose)
         val reserved = core.reserveOperationId(operation, expected.copyOf(), publicBinding.copyOf())
         require(reserved.contentEquals(expected)) { "native Core substituted the reserved operation ID" }
         return expected
     }
 
-    /** Internal operations recover through the authoritative wallet snapshot or credit selector. */
-    internal fun reserveInternalOperationId(operation: Int, publicBinding: ByteArray): ByteArray {
-        val id = ByteArray(32).also { SecureRandom().nextBytes(it) }
-        return reserveOperationId(operation, id, publicBinding)
+    /** Qualify before starting the read, since a new native challenge invalidates its predecessor. */
+    internal fun observe(command: KagemushaDeviceControlCommandV1): AuthenticatedCall = lock.withLock {
+        intents.requireCurrentScope()
+        require(command.operation in setOf(13, 18, 21))
+        session ?: qualifyLocked()
+        val canonical = KagemushaDeviceOperationCodecV1.encodeControlCommand(command)
+        val id = authenticatedDigest(core.beginObservation(command.operation, canonical), "observationChallenge")
+        executeLocked(command.operation, id, canonical, ReplyLane.CONTROL)
     }
 
     private fun qualifyLocked(): Session {
+        intents.requireCurrentScope()
         val operation = 1
-        val requestId = reserveInternalOperationId(operation, byteArrayOf(operation.toByte()))
         val command = KagemushaDeviceOperationCodecV1.encodeControlCommand(
             KagemushaDeviceControlCommandV1.ReadActiveHardwareCredential,
         )
+        val requestId = authenticatedDigest(core.beginObservation(operation, command), "observationChallenge")
         val response = transport.executeAndVerify(operation, requestId, command, null)
         require(response.operation == operation) { "device response substituted operation 1" }
         require(response.status == KagemushaAuthenticatedDeviceStatusV1.SUCCESS) {
@@ -409,6 +423,7 @@ class KagemushaAuthenticatedDeviceClientV1(
             requestId,
             command,
             reply.canonicalArchive(),
+            response.authenticator(),
             qualification,
         )
         return Session(qualification, responseKey).also { session = it }
@@ -419,10 +434,23 @@ class KagemushaAuthenticatedDeviceClientV1(
         requestId: ByteArray,
         command: ByteArray,
         lane: ReplyLane,
+        beforeDispatch: (() -> Unit)? = null,
     ): AuthenticatedCall {
         val accepted = session ?: qualifyLocked()
-        val key = accepted.responseKey.copyOf()
+        val isObservation = operation in setOf(1, 13, 18, 21)
+        val previous = if (isObservation) null else intents.load(operation, requestId)
+        val purpose = previous?.purpose ?: KagemushaOperationIntentPurposeV1.CALLER
+        // Every exact retry retains its creation epoch's authenticator, including after rotation.
+        // This tuple is history, not authority: native transport and Core must both accept it.
+        val replyQualification = if (previous?.canonicalQualification() != null) {
+            KagemushaOperationIntentCodecV1.decodeQualification(requireNotNull(previous.canonicalQualification()))
+        } else accepted.qualification
+        if (!isObservation) intents.dispatched(operation, requestId, command,
+            KagemushaOperationIntentCodecV1.encodeQualification(accepted.qualification), purpose)
+        val key = replyQualification.credential.devicePublicKey.sec1Bytes()
         val response = try {
+            if (operation == 20) requireNotNull(beforeDispatch) { "bootstrap dispatch requires explicit admission or authenticated recovery" }.invoke()
+            else beforeDispatch?.invoke()
             transport.executeAndVerify(operation, requestId, command, key)
         } finally {
             key.fill(0)
@@ -450,9 +478,13 @@ class KagemushaAuthenticatedDeviceClientV1(
             requestId,
             command,
             archive,
-            accepted.qualification,
+            response.authenticator(),
+            replyQualification,
         )
-        return AuthenticatedCall(operation, response.status, command, reply, archive)
+        if (!isObservation) intents.accepted(operation, requestId, archive, response.authenticator(),
+            KagemushaOperationIntentCodecV1.encodeQualification(replyQualification))
+        return AuthenticatedCall(operation, response.status, command, reply, archive,
+            requestId, response.authenticator(), replyQualification)
     }
 
     private enum class ReplyLane { CONTROL, RECEIVER, SENDER, MINT }
@@ -464,28 +496,48 @@ internal class AuthenticatedCall(
     canonicalCommand: ByteArray,
     val reply: KagemushaDeviceAuthenticatedReplyV1?,
     canonicalReply: ByteArray? = null,
+    requestId: ByteArray? = null,
+    responseAuthenticator: ByteArray? = null,
+    private val qualification: KagemushaHardwareQualificationV1? = null,
 ) {
     private val command = canonicalCommand.copyOf()
     private val archive = canonicalReply?.copyOf() ?: reply?.canonicalArchive()
+    private val id = requestId?.copyOf()
+    private val authenticator = responseAuthenticator?.copyOf()
     fun canonicalCommand(): ByteArray = command.copyOf()
     fun canonicalReply(): ByteArray = checkNotNull(archive).copyOf()
+    fun reconciliationEvidence(): ByteArray {
+        require(operation == 21 && status == KagemushaAuthenticatedDeviceStatusV1.SUCCESS)
+        return KagemushaOperationIntentCodecV1.encodeReconciliation(checkNotNull(id), command, canonicalReply(),
+            checkNotNull(authenticator), checkNotNull(qualification))
+    }
 }
 
 /** High-level offline wallet provider backed only by authenticated KAGEMUSHA V1 and native Core. */
 class KagemushaAuthenticatedHardwareProviderV1(
     private val client: KagemushaAuthenticatedDeviceClientV1,
+    private val authorizeBootstrap: () -> Unit,
 ) : KagemushaHardwareProviderV1 {
-    private val lock = ReentrantLock(true)
+    private val lock = client.intents.lock
 
     constructor(
         transport: KagemushaNativeAuthenticatedDeviceTransportV1,
         core: KagemushaNativeCoreCoordinatorV1,
-    ) : this(KagemushaAuthenticatedDeviceClientV1(transport, core))
+        intentStore: KagemushaOperationIntentStoreV1,
+        authorizeBootstrap: () -> Unit,
+    ) : this(KagemushaAuthenticatedDeviceClientV1(transport, core, intentStore), authorizeBootstrap)
 
     override fun qualification(): KagemushaHardwareQualificationV1 = client.qualification()
 
     override fun recover(): KagemushaHardwareRecoveryV1 = lock.withLock {
-        val call = control(KagemushaDeviceControlCommandV1.RecoverWalletSnapshot, freshId(21))
+        resumeInternalOperations()
+        readFreshWalletSnapshot()
+    }
+
+    private fun readFreshWalletSnapshot(): KagemushaHardwareRecoveryV1 = readFreshWalletSnapshotEvidence().first
+
+    private fun readFreshWalletSnapshotEvidence(): Pair<KagemushaHardwareRecoveryV1, AuthenticatedCall> {
+        val call = observe(KagemushaDeviceControlCommandV1.RecoverWalletSnapshot)
         val reader = payloadReader(call, 21)
         val aggregate = reader.optionVector(768)
         val journal = reader.u128Field()
@@ -493,13 +545,12 @@ class KagemushaAuthenticatedHardwareProviderV1(
         val retry = reader.u128Field()
         reader.finish()
         aggregate?.let(KagemushaNoritoV1::decodeAggregateStateShapeExact)
-        KagemushaHardwareRecoveryV1(aggregate, journal, pending, retry)
+        return Pair(KagemushaHardwareRecoveryV1(aggregate, journal, pending, retry), call)
     }
 
     override fun bootstrapState(): ByteArray = lock.withLock {
-        val id = freshId(20)
-        val call = control(KagemushaDeviceControlCommandV1.BootstrapAggregateState(id), id)
-        payloadReader(call, 20).singleVector(768).also(KagemushaNoritoV1::decodeAggregateStateShapeExact)
+        authorizeBootstrap()
+        executeInternal(client.intents.beginInternal(KagemushaDeviceControlCommandV1::BootstrapAggregateState)).first
     }
 
     override fun reservePaymentRequestOperationId(
@@ -626,10 +677,7 @@ class KagemushaAuthenticatedHardwareProviderV1(
         target: KagemushaPendingCreditTargetV1,
     ): KagemushaPendingCreditSelectionV1 = lock.withLock {
         val reader = payloadReader(
-            control(
-                KagemushaDeviceControlCommandV1.ReadPendingCreditWatermark(watermark, target),
-                freshId(18),
-            ),
+            observe(KagemushaDeviceControlCommandV1.ReadPendingCreditWatermark(watermark, target)),
             18,
         )
         val returnedWatermark = decodePendingCreditWatermarkReply(reader.field())
@@ -646,20 +694,11 @@ class KagemushaAuthenticatedHardwareProviderV1(
     override fun foldPendingCredit(
         selector: KagemushaPendingCreditSelectorV1,
     ): KagemushaHardwareReceiveFoldV1 = lock.withLock {
-        val credit = authenticatedDigest(selector.creditId(), "creditId")
-        val binding = byteArrayOf(selector.kind.ordinal.toByte()) + credit
-        val id = client.reserveInternalOperationId(17, binding)
-        val call = client.control(
-            KagemushaDeviceControlCommandV1.FoldReceiveCredit(id, selector),
-            id,
-        )
-        val reader = payloadReader(requireSuccess(call), 17)
-        require(reader.pendingCreditKindField() == selector.kind)
-        require(reader.digestField().contentEquals(credit))
-        val aggregate = reader.vectorField(768)
-        reader.finish()
-        KagemushaNoritoV1.decodeAggregateStateShapeExact(aggregate)
-        KagemushaHardwareReceiveFoldV1(aggregate, selector)
+        authenticatedDigest(selector.creditId(), "creditId")
+        val intent = client.intents.beginInternal { KagemushaDeviceControlCommandV1.FoldReceiveCredit(it, selector) }
+        val result = executeInternal(intent)
+        requireNotNull(result.second)
+        KagemushaHardwareReceiveFoldV1(result.first, result.second!!)
     }
 
     override fun reservePaymentOperationId(operationId: ByteArray, canonicalRequest: ByteArray): ByteArray = lock.withLock {
@@ -728,14 +767,25 @@ class KagemushaAuthenticatedHardwareProviderV1(
             terminalReceipt,
             qualified,
         )
-        require(
-            release.context.devicePolicyBinding.hardwarePolicyId()
-                .contentEquals(qualified.hardwarePolicyDigest()),
-        ) { "outbox release hardware-policy scope mismatch" }
-        require(
-            release.context.coreAuthorizationKeyReference()
-                .contentEquals(qualified.coreAuthorizationKeyReference()),
-        ) { "outbox release Core authorization key mismatch" }
+        // Native Core resolves and authenticates the original record and release authorization.
+        // The op12 command retains its creation policy/key; its response is authenticated with
+        // the active device key. Re-pinning creation authority would strand outboxes after rotation.
+        require(KagemushaDeviceOperationCodecV1.encodeSenderPublicInputs(release.inputs).contentEquals(
+            KagemushaDeviceOperationCodecV1.encodeSenderPublicInputs(inputs))) { "outbox release substituted public inputs" }
+        require(release.canonicalEnvelope().contentEquals(canonicalPayment)) { "outbox release substituted payment" }
+        require(release.inputsDigest().contentEquals(KagemushaCoreCoordinatorArchiveV1.inputsDigestShape(
+            release.operationId(), release.context, inputs))) { "outbox release input digest mismatch" }
+        require(release.envelopeDigest().contentEquals(KagemushaCoreCoordinatorArchiveV1.terminalEnvelopeDigestShape(
+            canonicalPayment))) { "outbox release envelope digest mismatch" }
+        val creation = release.context
+        val active = qualified.credential
+        val generation = BigInteger(java.lang.Long.toUnsignedString(active.hardwareEpochGeneration))
+        require(creation.lane.networkId().contentEquals(active.networkId.bytes()) &&
+            creation.lane.deviceLaneId().contentEquals(active.laneCommitment()) &&
+            creation.hardwareEpoch.generation <= generation &&
+            (creation.hardwareEpoch.generation != generation || creation.hardwareEpoch.epochId().contentEquals(active.hardwareEpochId()))) {
+            "outbox release retained context mismatch"
+        }
         val command = KagemushaDeviceSenderCommandV1(
             operation = 12,
             operationId = release.operationId(),
@@ -796,22 +846,12 @@ class KagemushaAuthenticatedHardwareProviderV1(
     }
 
     override fun rotateHardwareEpoch(): ByteArray = lock.withLock {
-        val id = freshId(19)
-        val aggregate = payloadReader(
-            control(KagemushaDeviceControlCommandV1.RotateHardwareEpoch(id), id),
-            19,
-        ).singleVector(768)
-        KagemushaNoritoV1.decodeAggregateStateShapeExact(aggregate)
-        client.invalidateQualification()
-        client.qualification()
-        aggregate
+        executeInternal(client.intents.beginInternal(KagemushaDeviceControlCommandV1::RotateHardwareEpoch)).first
     }
 
-    /** Operation 13 exposes qualified trusted-time evidence. */
+    /** Operation 13 always exposes a fresh qualified trusted-time observation. */
     fun readTrustedTimeOrLease(): ByteArray = lock.withLock {
-        requireSuccess(
-            client.control(KagemushaDeviceControlCommandV1.ReadTrustedTimeOrLease, freshId(13)),
-        ).canonicalReply()
+        observe(KagemushaDeviceControlCommandV1.ReadTrustedTimeOrLease).canonicalReply()
     }
 
     override fun reserveMintOperationId(
@@ -820,8 +860,9 @@ class KagemushaAuthenticatedHardwareProviderV1(
         payerAccount: ByteArray,
         recipientAccount: ByteArray,
     ): ByteArray = lock.withLock {
-        val binding = unsigned128(amount) + payerAccount + recipientAccount
-        client.reserveOperationId(14, authenticatedDigest(operationId, "operationId"), binding)
+        val id = authenticatedDigest(operationId, "operationId")
+        val command = KagemushaDeviceControlCommandV1.PrepareMintAuthorization(id, amount, payerAccount, recipientAccount)
+        client.reserveOperationId(14, id, KagemushaDeviceOperationCodecV1.encodeControlCommand(command))
     }
 
     /** Operation 14 prepares one proof-bearing authorization plus its exact encrypted credit. */
@@ -966,14 +1007,17 @@ class KagemushaAuthenticatedHardwareProviderV1(
                 ),
             ),
         )
-        val snapshot = control(KagemushaDeviceControlCommandV1.RecoverWalletSnapshot, freshId(21))
-        return client.core.acceptInstalledTerminal(
+        val snapshot = observe(KagemushaDeviceControlCommandV1.RecoverWalletSnapshot)
+        val result = client.core.acceptInstalledTerminal(
             candidate,
             envelope,
             install.canonicalReply(),
             installed.canonicalReply(),
             snapshot.canonicalReply(),
         )
+        client.intents.reconciled(10, operationId, snapshot.reconciliationEvidence())
+        client.intents.completedResult(10, operationId, result.canonicalEnvelope())
+        return result
     }
 
     private fun recoverTerminal(kind: KagemushaNativeSenderKindV1, id: ByteArray): ByteArray? {
@@ -1000,6 +1044,7 @@ class KagemushaAuthenticatedHardwareProviderV1(
         requireSuccess(call)
         return client.core.recoverTerminalEnvelope(recovery, call.canonicalReply()).also {
             require(it.isNotEmpty()) { "native Core recovered an empty terminal envelope" }
+            client.intents.completedResult(10, recovery.operationId(), it)
         }
     }
 
@@ -1008,8 +1053,89 @@ class KagemushaAuthenticatedHardwareProviderV1(
         requestId: ByteArray,
     ): AuthenticatedCall = requireSuccess(client.control(command, requestId))
 
-    private fun freshId(operation: Int): ByteArray =
-        client.reserveInternalOperationId(operation, byteArrayOf(operation.toByte()))
+    /** Called only after the application has durably stored the exact result in its own transcript. */
+    override fun acknowledgeDurableResult(operationId: ByteArray, canonicalResult: ByteArray) = lock.withLock {
+        val id = authenticatedDigest(operationId, "operationId")
+        val acknowledgementIntent = client.intents.load(11, id)
+        val requestIntent = client.intents.load(22, id)
+        if (acknowledgementIntent != null) {
+            val reply = KagemushaDeviceOperationCodecV1.decodeControlReplyAfterAuthentication(11,
+                requireNotNull(acknowledgementIntent.canonicalReply()))
+            val reader = AuthenticatedReplyReader(reply.payload())
+            require(reader.u16Field() == 1 && reader.u8Field() == 11)
+            require(reader.singleVector(256).contentEquals(canonicalResult)) { "durable acknowledgement differs from accepted device result" }
+            for (operation in listOf(2, 3, 11)) {
+                if (client.intents.load(operation, id)?.canonicalReply() != null) client.intents.acknowledge(operation, id)
+            }
+        } else if (requestIntent != null) {
+            val reply = KagemushaDeviceOperationCodecV1.decodeControlReplyAfterAuthentication(22,
+                requireNotNull(requestIntent.canonicalReply()))
+            val reader = AuthenticatedReplyReader(reply.payload())
+            require(reader.u16Field() == 1 && reader.u8Field() == 22)
+            require(reader.singleVector(928).contentEquals(canonicalResult)) { "durable request differs from accepted device result" }
+            client.intents.acknowledge(22, id)
+        } else {
+            val installed = requireNotNull(client.intents.load(10, id)) { "installed terminal recovery intent is missing" }
+            require(requireNotNull(installed.canonicalResult()).contentEquals(canonicalResult)) {
+                "durable terminal differs from the Core-accepted installed result"
+            }
+            require(installed.canonicalReply() != null) { "installed terminal has no Core-accepted reply" }
+            client.intents.load(9, id)?.canonicalCommand()?.let {
+                val command = KagemushaDeviceOperationCodecV1.decodeSenderCommand(9, id, it)
+                val body = command.body as? KagemushaDeviceSenderCommandBodyV1.Install
+                    ?: error("installed terminal intent has the wrong command")
+                require(body.canonicalEnvelope().contentEquals(canonicalResult)) { "durable terminal differs from the installation command" }
+            }
+            for (operation in 5..10) {
+                if (client.intents.load(operation, id)?.canonicalReply() != null) client.intents.acknowledge(operation, id)
+            }
+        }
+        Unit
+    }
+
+    private fun observe(command: KagemushaDeviceControlCommandV1): AuthenticatedCall =
+        requireSuccess(client.observe(command))
+
+    private fun resumeInternalOperations() {
+        val pending = client.intents.pendingInternal()
+        require(pending.size <= 1) { "multiple unresolved internal transitions require reconciliation" }
+        pending.forEach(::executeInternal)
+    }
+
+    /** Resolve the previous exact command before another credit or epoch transition may start. */
+    private fun executeInternal(intent: KagemushaOperationIntentV1): Pair<ByteArray, KagemushaPendingCreditSelectorV1?> {
+        val id = intent.operationId()
+        val canonical = intent.publicBinding()
+        val command = KagemushaDeviceOperationCodecV1.decodeControlCommand(intent.operation, id, canonical)
+        val needsBootstrapAdmission = intent.operation == 20 && readFreshWalletSnapshot().aggregateState() == null
+        if (needsBootstrapAdmission) authorizeBootstrap()
+        client.reserveOperationId(intent.operation, id, canonical)
+        val call = requireSuccess(client.control(command, id) {
+            // Recheck after both host and Core sync, immediately before a first bootstrap dispatch.
+            if (needsBootstrapAdmission) authorizeBootstrap()
+        })
+        val reader = payloadReader(call, intent.operation)
+        val selector = if (command is KagemushaDeviceControlCommandV1.FoldReceiveCredit) {
+            require(reader.pendingCreditKindField() == command.selector.kind)
+            require(reader.digestField().contentEquals(command.selector.creditId()))
+            command.selector
+        } else null
+        val aggregate = reader.vectorField(768)
+        reader.finish()
+        KagemushaNoritoV1.decodeAggregateStateShapeExact(aggregate)
+        if (intent.operation == 19) {
+            client.invalidateQualification()
+            client.qualification()
+        }
+        val snapshot = readFreshWalletSnapshotEvidence()
+        val installed = snapshot.first.aggregateState()
+        require(installed != null && installed.contentEquals(aggregate)) {
+            "internal transition differs from the fresh authenticated wallet snapshot"
+        }
+        client.intents.reconciled(intent.operation, id, snapshot.second.reconciliationEvidence())
+        client.intents.acknowledge(intent.operation, id)
+        return Pair(aggregate, selector)
+    }
 }
 
 private fun requireSuccess(call: AuthenticatedCall): AuthenticatedCall {

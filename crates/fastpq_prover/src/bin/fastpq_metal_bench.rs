@@ -1356,7 +1356,12 @@ mod harness {
         enable_lde_host_stats(true);
         let mut zero_fill = ZeroFillAccumulator::default();
         for _ in 0..warmups {
-            let result = planner.lde_gpu(source);
+            let result = planner
+                .lde_gpu_pending(source)
+                .expect("GPU LDE benchmark requires an actual GPU dispatch")
+                .wait()
+                .expect("GPU LDE benchmark dispatch failed")
+                .expect("GPU LDE benchmark returned no GPU result");
             black_box(result);
             take_lde_host_stats();
         }
@@ -1364,7 +1369,12 @@ mod harness {
         for _ in 0..iterations {
             let queue_before = snapshot_queue_depth_stats();
             let started = Instant::now();
-            let result = planner.lde_gpu(source);
+            let result = planner
+                .lde_gpu_pending(source)
+                .expect("GPU LDE benchmark requires an actual GPU dispatch")
+                .wait()
+                .expect("GPU LDE benchmark dispatch failed")
+                .expect("GPU LDE benchmark returned no GPU result");
             samples.push(elapsed_ms(started.elapsed()));
             black_box(result);
             let queue_after = snapshot_queue_depth_stats();
@@ -3262,6 +3272,49 @@ mod harness {
             domains,
         }
     }
+    #[test]
+    fn collect_operations_rejects_gpu_timings_without_a_dispatch() {
+        let planner = Planner::new(find_by_name("fastpq-state-transition-stark-v1").unwrap());
+        let columns = ColumnSets {
+            time: Vec::new(),
+            coeff: Vec::new(),
+            freq: Vec::new(),
+            domains: Vec::new(),
+        };
+        for operation in ["fft", "ifft", "lde"] {
+            let config = Config::from_iter(
+                [
+                    "--rows",
+                    "8",
+                    "--iterations",
+                    "1",
+                    "--warmups",
+                    "0",
+                    "--operation",
+                    operation,
+                ]
+                .into_iter()
+                .map(String::from),
+            )
+            .unwrap();
+            // Require a real dispatch even when the initial device probe was
+            // successful. This also covers measure_gpu_lde's no-dispatch path.
+            let failure = std::panic::catch_unwind(|| {
+                collect_operations(&planner, &config, 8, 64, 0, &columns, true)
+            });
+            let payload = match failure {
+                Ok(_) => panic!("missing GPU dispatch must abort capture"),
+                Err(payload) => payload,
+            };
+            let message = payload
+                .downcast_ref::<&str>()
+                .copied()
+                .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+                .unwrap();
+            assert!(message.contains("requires an actual GPU dispatch"));
+        }
+    }
+
     fn collect_operations(
         planner: &Planner,
         config: &Config,
@@ -3281,7 +3334,11 @@ mod harness {
                 }),
                 gpu: gpu_available.then(|| {
                     measure_in_place(&columns.time, config.warmups, config.iterations, |cols| {
-                        planner.fft_gpu(cols)
+                        planner
+                            .fft_gpu_pending(cols)
+                            .expect("GPU FFT benchmark requires an actual GPU dispatch")
+                            .wait()
+                            .expect("GPU FFT benchmark dispatch failed")
                     })
                 }),
             };
@@ -3301,7 +3358,11 @@ mod harness {
                 }),
                 gpu: gpu_available.then(|| {
                     measure_in_place(&columns.freq, config.warmups, config.iterations, |cols| {
-                        planner.ifft_gpu(cols)
+                        planner
+                            .ifft_gpu_pending(cols)
+                            .expect("GPU IFFT benchmark requires an actual GPU dispatch")
+                            .wait()
+                            .expect("GPU IFFT benchmark dispatch failed")
                     })
                 }),
             };

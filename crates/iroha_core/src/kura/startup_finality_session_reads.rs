@@ -1,5 +1,5 @@
 impl V2StartupFinalityVerificationSession<'_> {
-    /// Load one canonical body through this session's exact Kura owner.
+    /// Load the canonical durable-tip body through this session's exact Kura owner.
     ///
     /// Hash-only audited snapshot heights are the only legitimate absence.
     /// Any missing or conflicting executable body is corruption, not pending
@@ -17,7 +17,10 @@ impl V2StartupFinalityVerificationSession<'_> {
         })?;
         let block = self
             .kura
-            .read_block_body_under_prune_and_canonical_guards(height)?
+            .read_block_body_with_authority_under_guards(
+                height,
+                CanonicalBlockReadAuthority::Startup(self),
+            )?
             .ok_or_else(|| {
                 Kura::invalid_lane_artifact_error(
                     self.kura.store_root.clone(),
@@ -31,6 +34,62 @@ impl V2StartupFinalityVerificationSession<'_> {
             ));
         }
         Ok(Some(block))
+    }
+    /// Reattest the bounded authority retained by this mutation-closed session.
+    /// Stable file and directory identities reject occupied corruption without
+    /// re-reading or re-verifying historical sidecar payloads.
+    fn canonical_tip_finality_for_read(
+        &self,
+        kura: &Kura,
+        height: u64,
+        blocks_dir: &Path,
+    ) -> Result<&V2FinalityArtifact> {
+        if !std::ptr::eq(self.kura, kura) {
+            return Err(Kura::invalid_lane_artifact_error(
+                kura.store_root.clone(),
+                "startup canonical body authority belongs to another Kura",
+            ));
+        }
+        let artifact = self
+            .durable_tip_finality_artifact(height)
+            .ok_or(Error::MissingV2FinalityArtifact { height })?;
+        let entry = self
+            .inventory
+            .entries
+            .get(&height)
+            .ok_or(Error::MissingV2FinalityArtifact { height })?;
+        let finality_directory = Kura::v2_finality_artifact_dir_for(blocks_dir);
+        let retained_directory = Kura::retained_block_record_dir_for(blocks_dir);
+        for (directory, expected_directory, path, expected) in [
+            (
+                &finality_directory,
+                &self.inventory.finality_directory,
+                Kura::v2_finality_artifact_path_for(blocks_dir, height),
+                &entry.finality.metadata,
+            ),
+            (
+                &retained_directory,
+                &self.inventory.retained_directory,
+                Kura::retained_block_record_path_for(blocks_dir, height),
+                &entry.retained_block.metadata,
+            ),
+        ] {
+            let current_directory = kura.stable_sidecar_directory_metadata(directory)?;
+            let current = kura.regular_sidecar_metadata(&path, directory)?;
+            if !Kura::stable_sidecar_directory_metadata_unchanged(
+                expected_directory,
+                &current_directory,
+            ) || current
+                .as_ref()
+                .is_none_or(|current| !Kura::stable_sidecar_metadata_unchanged(expected, current))
+            {
+                return Err(Kura::invalid_lane_artifact_error(
+                    path,
+                    "startup canonical body finality or retained evidence changed after its audit",
+                ));
+            }
+        }
+        Ok(artifact)
     }
     /// Read an exact certified lane slot without repairing any sidecar.
     pub(crate) fn certified_lane_block_artifact(

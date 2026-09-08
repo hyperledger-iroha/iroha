@@ -323,6 +323,9 @@ impl StrictAbsenceDirectReleaseAuthorization {
 /// identities. A ready plan owns every Queue mutation input and can be
 /// applied only after its exact Queue snapshot is revalidated.
 pub(crate) enum LaneReservationReconciliationPlanning {
+    /// Startup was published already; only a fresh read-only Queue/Kura
+    /// completion check is permitted, without a mutation receipt.
+    AlreadyCompleted(CompletedLaneReservationStartupReconciliation),
     /// Every dependency is locally durable; mutation may begin under the
     /// process fail-stop operation.
     Ready(LaneReservationReconciliationPlan),

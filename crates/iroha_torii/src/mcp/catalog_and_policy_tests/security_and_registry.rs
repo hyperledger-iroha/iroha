@@ -833,7 +833,7 @@ fn every_openapi_derived_tool_has_an_enabled_exact_catalog_projection() {
 }
 #[test]
 fn musubi_mcp_guide_lists_the_exact_curated_tool_inventory() {
-    let guide = include_str!("../../docs/mcp_api.md");
+    let guide = include_str!("../../../docs/mcp_api.md");
     let section = guide
         .split_once("### Musubi Package Registry Tools")
         .expect("Musubi MCP guide section")
@@ -903,14 +903,14 @@ fn musubi_v1_mcp_bodies_are_self_contained_closed_schemas() {
         .and_then(Value::as_object)
         .expect("OpenAPI paths");
     let query_fixture: Value =
-        json::from_str(include_str!("../../../../fixtures/musubi/sdk_v1.json"))
+        json::from_str(include_str!("../../../../../fixtures/musubi/sdk_v1.json"))
             .expect("Musubi SDK fixture");
     let query_routes = query_fixture
         .get("routes")
         .and_then(Value::as_array)
         .expect("Musubi query fixture routes");
     let instruction_fixture: Value = json::from_str(include_str!(
-        "../../../../fixtures/musubi/instructions_v1.json"
+        "../../../../../fixtures/musubi/instructions_v1.json"
     ))
     .expect("Musubi instruction fixture");
     let instruction_cases = instruction_fixture
@@ -1005,7 +1005,7 @@ fn musubi_v1_mcp_bodies_are_self_contained_closed_schemas() {
     reason = "the fixture contract and cache-retention tooling route stay visible in one matrix"
 )]
 fn musubi_v1_fixture_routes_match_catalog_openapi_and_mcp() {
-    let fixture: Value = json::from_str(include_str!("../../../../fixtures/musubi/sdk_v1.json"))
+    let fixture: Value = json::from_str(include_str!("../../../../../fixtures/musubi/sdk_v1.json"))
         .expect("Musubi SDK V1 fixture must parse");
     let fixture_routes = fixture
         .get("routes")

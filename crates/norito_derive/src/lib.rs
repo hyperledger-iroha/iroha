@@ -1114,7 +1114,7 @@ fn enum_field_len_add(binding: &syn::Ident, ty: &syn::Type, kind: EncodedLenKind
     let length = if u8_array_len(ty).is_some() {
         quote! { core::mem::size_of_val(#binding) }
     } else {
-        quote! { norito::core::NoritoSerialize::#method(#binding)? }
+        quote! { norito::core::SerializePayload::#method(#binding)? }
     };
     if is_self_delimiting(ty) || is_fixed_size(ty).is_some() {
         quote! {
@@ -1163,7 +1163,7 @@ fn derive_struct_len_body(
         let length = if u8_array_len(&field.field.ty).is_some() && !field.attrs.flatten {
             quote! { core::mem::size_of_val(&self.#member) }
         } else {
-            quote! { norito::core::NoritoSerialize::#method(&self.#member)? }
+            quote! { norito::core::SerializePayload::#method(&self.#member)? }
         };
         let compat_sum = if field.attrs.flatten {
             quote! { __sum = __sum.checked_add(#len_var)?; }
@@ -1233,47 +1233,31 @@ fn generic_arguments(generics: &Generics) -> TokenStream2 {
 
 struct PackedSerializeParts {
     direct: Vec<TokenStream2>,
-    checked: Vec<TokenStream2>,
-    lengths: Vec<TokenStream2>,
+    descriptors: Vec<TokenStream2>,
 }
 
 fn packed_serialize_parts(fields: &[StructField<'_>]) -> PackedSerializeParts {
     let mut direct = Vec::new();
-    let mut checked = Vec::new();
-    let mut lengths = Vec::new();
-    for (packed_index, field) in active_struct_fields(fields).enumerate() {
+    let mut descriptors = Vec::new();
+    for field in active_struct_fields(fields) {
         let member = &field.member;
         if u8_array_len(&field.field.ty).is_some() {
             direct.push(quote! { writer.write_all(&self.#member)?; });
-            checked.push(quote! {
-                if __field_lens[#packed_index] != core::mem::size_of_val(&self.#member) {
-                    return Err(norito::core::Error::LengthMismatch);
-                }
-                writer.write_all(&self.#member)?;
-            });
-            lengths.push(quote! {
-                __field_lens.push(core::mem::size_of_val(&self.#member));
+            descriptors.push(quote! {
+                norito::core::PackedField::Bytes(&self.#member)
             });
             continue;
         }
         direct.push(quote! {
-            norito::core::NoritoSerialize::serialize(&self.#member, writer)?;
+            norito::core::SerializePayload::serialize(&self.#member, writer)?;
         });
-        checked.push(quote! {
-            norito::core::serialize_to_writer_exact(
-                &self.#member,
-                writer,
-                __field_lens[#packed_index],
-            )?;
-        });
-        lengths.push(quote! {
-            __field_lens.push(norito::core::encoded_payload_len(&self.#member)?);
+        descriptors.push(quote! {
+            norito::core::PackedField::Value(&self.#member)
         });
     }
     PackedSerializeParts {
         direct,
-        checked,
-        lengths,
+        descriptors,
     }
 }
 
@@ -1287,12 +1271,12 @@ fn struct_serialize_calls(
             add_bound(
                 generics,
                 &field.field.ty,
-                quote!(norito::core::NoritoSerialize),
+                quote!(norito::core::SerializePayload),
             );
             if field.attrs.flatten {
                 quote! {
                     let _flatten_guard = norito::core::SequentialOverrideGuard::enter();
-                    norito::core::NoritoSerialize::serialize(&self.#member, writer)?;
+                    norito::core::SerializePayload::serialize(&self.#member, writer)?;
                 }
             } else if u8_array_len(&field.field.ty).is_some() {
                 quote! {
@@ -1302,41 +1286,18 @@ fn struct_serialize_calls(
                 }
             } else {
                 quote! {
-                    norito::core::write_len_prefixed(
-                        writer,
-                        &self.#member,
-                        &mut __norito_tmp,
-                    )?;
+                    norito::core::write_len_prefixed(writer, &self.#member)?;
                 }
             }
         })
         .collect()
 }
 
-fn packed_size_headers(fields: &[StructField<'_>]) -> (TokenStream2, TokenStream2, bool) {
-    let needs = active_struct_fields(fields)
-        .map(|field| needs_packed_size_with_attrs(&field.field.ty, &field.attrs))
-        .collect::<Vec<_>>();
+fn packed_size_headers(fields: &[StructField<'_>]) -> (TokenStream2, bool) {
     let bytes = packed_field_bitset_from(fields);
     let bitset = quote! { [ #( #bytes ),* ] };
-    let sized_indices = needs
-        .into_iter()
-        .enumerate()
-        .filter(|(_, needs_size)| *needs_size)
-        .map(|(index, _)| index)
-        .collect::<Vec<_>>();
     let all_needs_false = bytes.is_empty() || bytes.iter().all(|byte| *byte == 0);
-    (
-        bitset,
-        quote! {
-            norito::core::write_packed_size_headers(
-                writer,
-                &__field_lens,
-                &[#(#sized_indices),*],
-            )?;
-        },
-        all_needs_false,
-    )
+    (bitset, all_needs_false)
 }
 
 /// Generate `NoritoSerialize` implementation for a struct.
@@ -1349,6 +1310,7 @@ fn derive_struct_serialize(
     fields: &Fields,
     container_attrs: &[Attribute],
     schema_name: Option<&str>,
+    framed: bool,
 ) -> TokenStream2 {
     let schema_hash_body = schema_hash_body(schema_name);
     let parsed_fields = struct_fields(fields);
@@ -1357,10 +1319,8 @@ fn derive_struct_serialize(
     let serialize_calls = struct_serialize_calls(&parsed_fields, &mut r#gen);
     let PackedSerializeParts {
         direct: packed_field_ser_calls,
-        checked: packed_field_checked_ser_calls,
-        lengths: packed_field_len_stmts,
+        descriptors: packed_field_descriptors,
     } = packed_serialize_parts(&parsed_fields);
-    let packed_field_count = active_struct_fields(&parsed_fields).count();
     let field_bitset_enabled = if struct_has_signature_like(&parsed_fields) {
         quote! { false }
     } else {
@@ -1389,8 +1349,8 @@ fn derive_struct_serialize(
     let archived = format_ident!("Archived{}", ident);
     let alias_generics = generic_arguments(generics);
     let (impl_generics, ty_generics, where_clause) = r#gen.split_for_impl();
-    let (bitset_bytes, write_sizes_code, all_needs_false) = packed_size_headers(&parsed_fields);
-    let alias_decl = if reuse_archived_alias(container_attrs) {
+    let (bitset_bytes, all_needs_false) = packed_size_headers(&parsed_fields);
+    let alias_decl = if !framed || reuse_archived_alias(container_attrs) {
         quote! {}
     } else {
         let archived_doc = format!(
@@ -1402,13 +1362,22 @@ fn derive_struct_serialize(
             pub type #archived #alias_generics = norito::core::Archived<#ident #ty_generics>;
         }
     };
+    let frame_impl = if framed {
+        quote! {
+            impl #impl_generics norito::core::NoritoSerialize for #ident #ty_generics #where_clause {
+                #[inline]
+                fn schema_hash() -> [u8; 16] {
+                    #schema_hash_body
+                }
+            }
+        }
+    } else {
+        quote! {}
+    };
     quote! {
         #alias_decl
-        impl #impl_generics norito::core::NoritoSerialize for #ident #ty_generics #where_clause {
-            #[inline]
-            fn schema_hash() -> [u8; 16] {
-                #schema_hash_body
-            }
+        #frame_impl
+        impl #impl_generics norito::core::SerializePayload for #ident #ty_generics #where_clause {
             fn encoded_len_hint(&self) -> Option<usize> {
                 let _norito_depth = norito::core::EncodeValueDepthGuard::enter().ok()?;
                 let mut __sum: usize = 0;
@@ -1434,36 +1403,22 @@ fn derive_struct_serialize(
                             #( #packed_field_ser_calls )*
                             Ok(())
                         } else {
-                            // Count every field, emit the dynamic sizes, then
-                            // serialize payloads directly without field-sized copies.
-                            let mut __field_lens: ::std::vec::Vec<usize> = ::std::vec::Vec::new();
-                            __field_lens.try_reserve_exact(#packed_field_count)
-                                .map_err(|_| norito::core::Error::LengthMismatch)?;
-                            #(
-                                { #packed_field_len_stmts }
-                            )*
-                            writer.write_all(&#bitset_bytes)?;
-                            {
-                                #write_sizes_code
-                            }
-                            #( #packed_field_checked_ser_calls )*
-                            Ok(())
+                            norito::core::write_packed_fields(
+                                writer,
+                                &[#(#packed_field_descriptors),*],
+                                Some(&#bitset_bytes),
+                            )
                         }
                     } else {
-                        // Compat packed-struct: emit per-field lengths (or offsets) followed by payload data.
-                        let mut __field_lens: ::std::vec::Vec<usize> = ::std::vec::Vec::new();
-                        __field_lens.try_reserve_exact(#packed_field_count)
-                            .map_err(|_| norito::core::Error::LengthMismatch)?;
-                        #(
-                            { #packed_field_len_stmts }
-                        )*
-                        norito::core::write_packed_offset_table(writer, &__field_lens)?;
-                        #( #packed_field_checked_ser_calls )*
-                        Ok(())
+                        // Packed offsets and their payloads share one measurement owner.
+                        norito::core::write_packed_fields(
+                            writer,
+                            &[#(#packed_field_descriptors),*],
+                            None,
+                        )
                     }
                 } else {
                     // Count each field before streaming it into its declared frame.
-                    let mut __norito_tmp: norito::core::DeriveSmallBuf = norito::core::DeriveSmallBuf::new();
                     #(#serialize_calls)*
                     Ok(())
                 }
@@ -2179,6 +2134,7 @@ fn derive_enum_serialize(
     data: &DataEnum,
     container_attrs: &[Attribute],
     schema_name: Option<&str>,
+    framed: bool,
 ) -> TokenStream2 {
     let schema_hash_body = schema_hash_body(schema_name);
     let mut r#gen = generics.clone();
@@ -2196,7 +2152,7 @@ fn derive_enum_serialize(
             Fields::Unit => {
                 arms.push(quote! {
                     Self::#v_ident => {
-                        norito::core::NoritoSerialize::serialize(&(#disc as u32), writer)?;
+                        norito::core::SerializePayload::serialize(&(#disc as u32), writer)?;
                     }
                 });
                 hint_arms.push(quote! { Self::#v_ident => Some(4) });
@@ -2226,7 +2182,7 @@ fn derive_enum_serialize(
                             if attrs.skip {
                                 return None;
                             }
-                            add_bound(&mut r#gen, &f.ty, quote!(norito::core::NoritoSerialize));
+                            add_bound(&mut r#gen, &f.ty, quote!(norito::core::SerializePayload));
                             let is_sd = is_self_delimiting(&f.ty);
                             let is_fixed = is_fixed_size(&f.ty).is_some();
                             let is_u8_array = u8_array_len(&f.ty).is_some();
@@ -2244,24 +2200,16 @@ fn derive_enum_serialize(
                                 } else {
                                     quote! {
                                         if __norito_packed {
-                                            norito::core::NoritoSerialize::serialize(#b, writer)?;
+                                            norito::core::SerializePayload::serialize(#b, writer)?;
                                         } else {
-                                            norito::core::write_len_prefixed(
-                                                writer,
-                                                #b,
-                                                &mut __norito_tmp,
-                                            )?;
+                                            norito::core::write_len_prefixed(writer, #b)?;
                                         }
                                     }
                                 }
                             } else {
                                 quote! {
                                     // Non self-delimiting, non-fixed types keep outer length framing even in packed builds
-                                    norito::core::write_len_prefixed(
-                                        writer,
-                                        #b,
-                                        &mut __norito_tmp,
-                                    )?;
+                                    norito::core::write_len_prefixed(writer, #b)?;
                                 }
                             };
                             Some(ser)
@@ -2270,8 +2218,7 @@ fn derive_enum_serialize(
                 arms.push(quote! {
                     Self::#v_ident(#(#bindings),*) => {
                         let __norito_packed = norito::core::use_packed_struct();
-                        norito::core::NoritoSerialize::serialize(&(#disc as u32), writer)?;
-                        let mut __norito_tmp: norito::core::DeriveSmallBuf = norito::core::DeriveSmallBuf::new();
+                        norito::core::SerializePayload::serialize(&(#disc as u32), writer)?;
                         #(#ignored_bindings)*
                         #(#serialize_calls)*
                     }
@@ -2319,7 +2266,7 @@ fn derive_enum_serialize(
                         return None;
                     }
                     let name = f.ident.as_ref().unwrap();
-                    add_bound(&mut r#gen, &f.ty, quote!(norito::core::NoritoSerialize));
+                    add_bound(&mut r#gen, &f.ty, quote!(norito::core::SerializePayload));
                     let is_sd = is_self_delimiting(&f.ty);
                     let is_fixed = is_fixed_size(&f.ty).is_some();
                     let is_u8_array = u8_array_len(&f.ty).is_some();
@@ -2337,13 +2284,9 @@ fn derive_enum_serialize(
                         } else {
                             quote! {
                                 if __norito_packed {
-                                    norito::core::NoritoSerialize::serialize(#name, writer)?;
+                                    norito::core::SerializePayload::serialize(#name, writer)?;
                                 } else {
-                                    norito::core::write_len_prefixed(
-                                        writer,
-                                        #name,
-                                        &mut __norito_tmp,
-                                    )?;
+                                    norito::core::write_len_prefixed(writer, #name)?;
                                 }
                             }
                         }
@@ -2351,11 +2294,7 @@ fn derive_enum_serialize(
                         // Non self-delimiting, non-fixed: always write an outer length header
                         // for named enum fields (both in packed and non-packed modes).
                         quote! {
-                            norito::core::write_len_prefixed(
-                                writer,
-                                #name,
-                                &mut __norito_tmp,
-                            )?;
+                            norito::core::write_len_prefixed(writer, #name)?;
                         }
                     };
                     Some(ser)
@@ -2363,8 +2302,7 @@ fn derive_enum_serialize(
                 arms.push(quote! {
                     Self::#v_ident { #(#names),* } => {
                         let __norito_packed = norito::core::use_packed_struct();
-                        norito::core::NoritoSerialize::serialize(&(#disc as u32), writer)?;
-                        let mut __norito_tmp: norito::core::DeriveSmallBuf = norito::core::DeriveSmallBuf::new();
+                        norito::core::SerializePayload::serialize(&(#disc as u32), writer)?;
                         #(#ignored_names)*
                         #(#serialize_calls)*
                     }
@@ -2418,7 +2356,7 @@ fn derive_enum_serialize(
         quote! { < #( #params ),* > }
     };
     let archived = format_ident!("Archived{}", ident);
-    let alias_decl = if reuse_archived_alias(container_attrs) {
+    let alias_decl = if !framed || reuse_archived_alias(container_attrs) {
         quote! {}
     } else {
         let archived_doc = format!(
@@ -2430,13 +2368,22 @@ fn derive_enum_serialize(
             pub type #archived #alias_generics = norito::core::Archived<#ident #ty_generics>;
         }
     };
+    let frame_impl = if framed {
+        quote! {
+            impl #impl_generics norito::core::NoritoSerialize for #ident #ty_generics #where_clause {
+                #[inline]
+                fn schema_hash() -> [u8; 16] {
+                    #schema_hash_body
+                }
+            }
+        }
+    } else {
+        quote! {}
+    };
     quote! {
         #alias_decl
-        impl #impl_generics norito::core::NoritoSerialize for #ident #ty_generics #where_clause {
-            #[inline]
-            fn schema_hash() -> [u8; 16] {
-                #schema_hash_body
-            }
+        #frame_impl
+        impl #impl_generics norito::core::SerializePayload for #ident #ty_generics #where_clause {
             fn encoded_len_hint(&self) -> Option<usize> {
                 let _norito_depth = norito::core::EncodeValueDepthGuard::enter().ok()?;
                 match self { #( #hint_arms ),* }
@@ -2771,7 +2718,16 @@ mod deserialize_codegen_tests {
 #[proc_macro_derive(NoritoSerialize, attributes(codec, norito))]
 /// Entry point for the `#[derive(NoritoSerialize)]` macro.
 pub fn derive_norito_serialize(input: TokenStream) -> TokenStream {
-    let input = parse_macro_input!(input as DeriveInput);
+    expand_serialize(parse_macro_input!(input as DeriveInput), true)
+}
+
+/// Derive only object-safe bare payload serialization, without a frame identity.
+#[proc_macro_derive(SerializePayload, attributes(codec, norito))]
+pub fn derive_serialize_payload(input: TokenStream) -> TokenStream {
+    expand_serialize(parse_macro_input!(input as DeriveInput), false)
+}
+
+fn expand_serialize(input: DeriveInput, framed: bool) -> TokenStream {
     if let Err(error) = validate_data_field_attrs(&input.data) {
         return error.to_compile_error().into();
     }
@@ -2780,6 +2736,11 @@ pub fn derive_norito_serialize(input: TokenStream) -> TokenStream {
         Err(error) => return error.to_compile_error().into(),
     };
     let schema_name = container_attrs.schema_name.as_deref();
+    if !framed && schema_name.is_some() {
+        return syn::Error::new_spanned(&input.ident, "SerializePayload has no frame schema")
+            .to_compile_error()
+            .into();
+    }
     match &input.data {
         Data::Struct(data) => derive_struct_serialize(
             &input.ident,
@@ -2787,6 +2748,7 @@ pub fn derive_norito_serialize(input: TokenStream) -> TokenStream {
             &data.fields,
             &input.attrs,
             schema_name,
+            framed,
         )
         .into(),
         Data::Enum(data) => derive_enum_serialize(
@@ -2795,11 +2757,16 @@ pub fn derive_norito_serialize(input: TokenStream) -> TokenStream {
             data,
             &input.attrs,
             schema_name,
+            framed,
         )
         .into(),
         _ => syn::Error::new_spanned(
             &input.ident,
-            "NoritoSerialize only supports structs and enums",
+            if framed {
+                "NoritoSerialize only supports structs and enums"
+            } else {
+                "SerializePayload only supports structs and enums"
+            },
         )
         .to_compile_error()
         .into(),

@@ -11,15 +11,14 @@
 //! does not establish knowledge of the witness-bearing row. Callers of this substrate must commit
 //! and query every masked witness column, bind composition quotients to those same openings, and
 //! perform the complete FRI terminal-degree check.
-pub(crate) use fastpq_prover::fastpq_isi_v1::GoldilocksDigest384V1;
+pub(crate) use fastpq_isi::GoldilocksDigest384V1;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
-use fastpq_prover::fastpq_isi_v1::{
-    GoldilocksDigest384LastFieldStreamErrorV1, GoldilocksDigest384LastFieldStreamV1,
-};
-use fastpq_prover::fastpq_isi_v1::{GoldilocksDigestDomainV1, hash_bytes_384_v1};
+use fastpq_isi::{GoldilocksDigest384LastFieldStreamErrorV1, GoldilocksDigest384LastFieldStreamV1};
+use fastpq_isi::{GoldilocksDigestDomainV1, hash_bytes_384_v1};
 use iroha_data_model::privacy::{PRIVACY_EXACT12_CATALOG_COMMITMENT_WORDS_V1, PrivacyProtocolIdV1};
 use rand::TryRngCore;
 use rayon::prelude::*;
+use sha2::Digest as _;
 use std::collections::BTreeMap;
 #[cfg(test)]
 use std::collections::BTreeSet;
@@ -47,6 +46,7 @@ const MERKLE_PARALLEL_PARENT_THRESHOLD_V1: usize = 256;
 const GRINDING_PARALLEL_MIN_BITS_V1: u8 = 12;
 /// Search canonical nonce intervals in this fixed order while parallelizing within each interval.
 const GRINDING_PARALLEL_CHUNK_SIZE_V1: u64 = 4_096;
+#[cfg(test)]
 const FRAME_PHASE_V1: &[u8] = b"framed-message";
 /// Fixed rejection budget for canonical field and transcript sampling.
 pub(crate) const MAX_FIELD_REJECTION_ATTEMPTS_V1: u64 = 16;
@@ -66,13 +66,48 @@ const GOLDILOCKS_FP4_NONRESIDUE_V1: GoldilocksFieldV1 = GoldilocksFieldV1(GOLDIL
 /// fields and never concatenated into an ambiguous free-form domain string.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct TransparentStarkDigestContextV1 {
-    protocol: PrivacyProtocolIdV1,
+    protocol: Option<PrivacyProtocolIdV1>,
     profile: &'static [u8],
 }
 impl TransparentStarkDigestContextV1 {
     /// Construct a typed context for one final protocol/profile pair.
     pub(crate) const fn new(protocol: PrivacyProtocolIdV1, profile: &'static [u8]) -> Self {
-        Self { protocol, profile }
+        Self {
+            protocol: Some(protocol),
+            profile,
+        }
+    }
+    /// Native execution proofs occupy a separate catalog and protocol namespace.
+    #[cfg(test)]
+    pub(crate) const fn execution_v1(profile: &'static [u8]) -> Self {
+        Self {
+            protocol: None,
+            profile,
+        }
+    }
+    /// Proof byte ceiling is an admission bound, independent of cryptographic geometry.
+    pub(crate) fn maximum_proof_bytes_v1(self) -> usize {
+        if self.protocol.is_some() {
+            iroha_data_model::privacy::TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1 as usize
+        } else {
+            iroha_data_model::execution_proofs::EXECUTION_PROOF_MAX_ENVELOPE_BYTES_V1
+        }
+    }
+    /// Whether the closed native execution catalog, rather than a privacy catalog, is selected.
+    pub(crate) const fn is_execution_v1(self) -> bool {
+        self.protocol.is_none()
+    }
+    fn catalog_v1(self) -> [u8; 48] {
+        if self.protocol.is_some() {
+            exact12_catalog_commitment_bytes_v1()
+        } else {
+            sha2::Sha384::digest(b"iroha:execution:catalog:v1:race-v1").into()
+        }
+    }
+    fn protocol_label_v1(self) -> &'static [u8] {
+        self.protocol.map_or(b"native-execution-v1", |protocol| {
+            protocol.canonical_label().as_bytes()
+        })
     }
     pub(crate) fn validate(self) -> Result<(), TransparentStarkErrorV1> {
         if self.profile.is_empty() || u16::try_from(self.profile.len()).is_err() {
@@ -269,6 +304,7 @@ impl GoldilocksFp4V1 {
         ])
     }
     /// Decode the canonical fixed-width big-endian wire encoding.
+    #[cfg(test)]
     pub(crate) fn canonical_be_bytes(bytes: [u8; 32]) -> Option<Self> {
         let mut values = [0_u64; GOLDILOCKS_FP4_DEGREE_V1];
         for (index, chunk) in bytes.chunks_exact(8).enumerate() {
@@ -1048,11 +1084,11 @@ pub(crate) fn goldilocks_digest384_frame_v1(
     {
         return Err(TransparentStarkErrorV1::InvalidDigestDomain);
     }
-    let catalog = exact12_catalog_commitment_bytes_v1();
+    let catalog = context.catalog_v1();
     hash_bytes_384_v1(
         GoldilocksDigestDomainV1 {
             catalog: &catalog,
-            protocol: context.protocol.canonical_label().as_bytes(),
+            protocol: context.protocol_label_v1(),
             profile: context.profile,
             role,
             phase,
@@ -1085,11 +1121,11 @@ pub(crate) fn goldilocks_digest384_last_field_stream_v1(
     {
         return Err(TransparentStarkErrorV1::InvalidDigestDomain);
     }
-    let catalog = exact12_catalog_commitment_bytes_v1();
+    let catalog = context.catalog_v1();
     GoldilocksDigest384LastFieldStreamV1::new(
         GoldilocksDigestDomainV1 {
             catalog: &catalog,
-            protocol: context.protocol.canonical_label().as_bytes(),
+            protocol: context.protocol_label_v1(),
             profile: context.profile,
             role,
             phase,

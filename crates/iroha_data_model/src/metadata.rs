@@ -22,41 +22,18 @@ mod model {
     #[norito_schema(name = "iroha_data_model::metadata::model::Metadata")]
     pub struct Metadata(pub(super) BTreeMap<Name, Json>);
 }
-impl ncore::NoritoSerialize for Metadata {
+impl ncore::NoritoSerialize for Metadata {}
+impl ncore::SerializePayload for Metadata {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
-        ncore::write_seq_len(
+        // Metadata retains sequence-of-tuples bytes, including in packed mode.
+        // Project borrowed entry views without a second collection or payload staging.
+        ncore::write_element_sequence::<MetadataEntryRef<'_>, _>(
             writer,
-            u64::try_from(self.0.len()).map_err(|_| ncore::Error::LengthMismatch)?,
-        )?;
-        if ncore::use_packed_seq() {
-            let allocation_bytes = self
-                .0
-                .len()
-                .checked_mul(core::mem::size_of::<usize>())
-                .and_then(|bytes| u64::try_from(bytes).ok())
-                .ok_or(ncore::Error::LengthMismatch)?;
-            let mut lengths = Vec::new();
-            lengths.try_reserve_exact(self.0.len()).map_err(|_| {
-                ncore::Error::AllocationFailed {
-                    bytes: allocation_bytes,
-                }
-            })?;
-            for (name, json) in &self.0 {
-                lengths.push(ncore::encoded_payload_len(&MetadataEntryRef(name, json))?);
-            }
-            ncore::note_fixed_offsets_emitted();
-            ncore::write_fixed_offsets(writer, &lengths)?;
-            for ((name, json), length) in self.0.iter().zip(lengths) {
-                ncore::serialize_to_writer_exact(&MetadataEntryRef(name, json), writer, length)?;
-            }
-            return Ok(());
-        }
-        // Use canonical field writers so entry lengths inherit the exact frame layout.
-        let mut scratch = ncore::DeriveSmallBuf::new();
-        for (name, json) in &self.0 {
-            ncore::write_len_prefixed(writer, &MetadataEntryRef(name, json), &mut scratch)?;
-        }
-        Ok(())
+            self.0
+                .iter()
+                .map(|(name, json)| MetadataEntryRef(name, json)),
+            ncore::max_archive_len(),
+        )
     }
     fn encoded_len_hint(&self) -> Option<usize> {
         self.encoded_len_exact()
@@ -82,11 +59,10 @@ impl ncore::NoritoSerialize for Metadata {
 // Payload-only borrowed tuple view; never used as a separately framed wire record.
 struct MetadataEntryRef<'a>(&'a Name, &'a Json);
 
-impl ncore::NoritoSerialize for MetadataEntryRef<'_> {
+impl ncore::SerializePayload for MetadataEntryRef<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
-        let mut scratch = ncore::DeriveSmallBuf::new();
-        ncore::write_len_prefixed(writer, self.0, &mut scratch)?;
-        ncore::write_len_prefixed(writer, self.1, &mut scratch)
+        ncore::write_len_prefixed(writer, self.0)?;
+        ncore::write_len_prefixed(writer, self.1)
     }
     fn encoded_len_exact(&self) -> Option<usize> {
         let name = self.0.encoded_len_exact()?;
@@ -145,14 +121,14 @@ mod tests {
         let mut vec_bytes = Vec::new();
         ncore::serialize_to_buffer(&reference, &mut vec_bytes).unwrap();
         assert_eq!(metadata_bytes, vec_bytes);
-        let hint = <Metadata as ncore::NoritoSerialize>::encoded_len_hint(&metadata)
+        let hint = <Metadata as ncore::SerializePayload>::encoded_len_hint(&metadata)
             .expect("metadata hint");
         assert!(
             hint >= metadata_bytes.len(),
             "encoded_len_hint should not under-estimate"
         );
         assert_eq!(
-            <Metadata as ncore::NoritoSerialize>::encoded_len_exact(&metadata),
+            <Metadata as ncore::SerializePayload>::encoded_len_exact(&metadata),
             Some(metadata_bytes.len())
         );
     }
@@ -174,7 +150,7 @@ mod tests {
 
     #[test]
     fn metadata_entries_preserve_the_enclosing_layout() {
-        use ncore::{DecodeFlagsGuard, NoritoSerialize, header_flags};
+        use ncore::{DecodeFlagsGuard, SerializePayload, header_flags};
 
         let mut metadata = Metadata::default();
         metadata.insert("alpha".parse().unwrap(), Json::new("value"));
@@ -206,6 +182,10 @@ mod tests {
                 (payload.clone(), flags),
                 norito::codec::encode_with_header_flags(&reference),
                 "metadata must preserve its canonical sequence-of-tuples layout"
+            );
+            assert_eq!(
+                ncore::encoded_payload_len(&metadata).unwrap(),
+                payload.len()
             );
             assert_eq!(metadata.encoded_len_exact(), Some(payload.len()));
             assert!(metadata.encoded_len_hint().unwrap() >= payload.len());

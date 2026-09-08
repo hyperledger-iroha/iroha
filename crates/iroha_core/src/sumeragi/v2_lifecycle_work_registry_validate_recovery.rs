@@ -1954,9 +1954,11 @@ pub(super) struct PreparedRecoveredLifecycleSignBroadcastSuccessor<'registry, 'a
 ///
 /// The registry address does not exist until actor-global durable admission
 /// has reserved and staged the child ordinal. Dropping this token before
-/// LedgerV1 publication leaves the original Sign carrier installed.
+/// LedgerV1 publication leaves the original Sign carrier installed and frees
+/// its reserved, uninitialized Broadcast allocation.
 #[must_use = "bound recovered signed Broadcast successor has not been published"]
 pub(super) struct BoundRecoveredLifecycleSignBroadcastSuccessor<'registry, 'adapter> {
+    broadcast_storage: Box<std::mem::MaybeUninit<DurableRecoveredLifecycleSignedBroadcastWork>>,
     registry: &'registry mut ConcreteLifecycleWorkRegistry,
     sign_address: ConcreteWorkAddress,
     broadcast_address: ConcreteWorkAddress,
@@ -1982,10 +1984,12 @@ pub(super) struct PreparedRecoveredLifecycleSignBroadcastAndSignSuccessor<'regis
 ///
 /// Dropping this before LedgerV1 publication leaves the original Sign carrier
 /// installed. Only the post-fsync commit may split the opaque combined
-/// projection into its two concrete registry entries.
+/// projection into its two concrete registry entries. Broadcast heap storage
+/// is reserved during binding so this split needs no new carrier allocation.
 #[must_use = "bound combined recovered Sign successor has not been published"]
 #[cfg_attr(not(test), allow(dead_code))]
 pub(super) struct BoundRecoveredLifecycleSignBroadcastAndSignSuccessor<'registry, 'adapter> {
+    broadcast_storage: Box<std::mem::MaybeUninit<DurableRecoveredLifecycleSignedBroadcastWork>>,
     registry: &'registry mut ConcreteLifecycleWorkRegistry,
     sign_address: ConcreteWorkAddress,
     broadcast_address: ConcreteWorkAddress,

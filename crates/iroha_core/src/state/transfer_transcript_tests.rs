@@ -293,6 +293,16 @@ fn transfer_transcripts_batch_flushes_each_recorded_transaction_hash() {
 }
 #[test]
 fn detached_asset_transfer_matches_sequential_transcript_and_events() {
+    std::thread::Builder::new()
+        .name("detached_asset_transfer_matches_sequential_transcript_and_events".to_owned())
+        .stack_size(16 * 1024 * 1024)
+        .spawn(check_detached_asset_transfer_matches_sequential_transcript_and_events)
+        .expect("spawn state test with an explicit stack budget")
+        .join()
+        .unwrap_or_else(|panic| std::panic::resume_unwind(panic));
+}
+
+fn check_detached_asset_transfer_matches_sequential_transcript_and_events() {
     use crate::smartcontracts::Execute as _;
     use iroha_data_model::isi::Transfer;
     fn build_transfer_world(receiver_asset_balance: Option<u32>) -> (World, AssetId, AssetId) {
@@ -356,6 +366,12 @@ fn detached_asset_transfer_matches_sequential_transcript_and_events() {
     }
     let events_seq = block_seq.world.take_external_events();
     let transcripts_seq = block_seq.drain_transfer_transcripts();
+    let sources_seq = block_seq
+        .captured_fastpq_transcript_sources()
+        .unwrap()
+        .clone();
+    assert_eq!(sources_seq.len(), 1);
+    assert!(!sources_seq[&call_hash].is_protocol_purpose());
     block_seq
         .commit_world_overlay_for_testing()
         .expect("commit sequential block");
@@ -384,6 +400,10 @@ fn detached_asset_transfer_matches_sequential_transcript_and_events() {
         .expect("detached transfer merge");
     let events_det = block_det.world.take_external_events();
     let transcripts_det = block_det.drain_transfer_transcripts();
+    assert_eq!(
+        block_det.captured_fastpq_transcript_sources().unwrap(),
+        &sources_seq
+    );
     block_det
         .commit_world_overlay_for_testing()
         .expect("commit detached block");
@@ -407,6 +427,12 @@ fn detached_asset_transfer_matches_sequential_transcript_and_events() {
     }
     let events_existing_tx = block_existing_tx.world.take_external_events();
     let transcripts_existing_tx = block_existing_tx.drain_transfer_transcripts();
+    assert_eq!(
+        block_existing_tx
+            .captured_fastpq_transcript_sources()
+            .unwrap(),
+        &sources_seq
+    );
     block_existing_tx
         .commit_world_overlay_for_testing()
         .expect("commit existing-transaction detached block");
@@ -416,6 +442,7 @@ fn detached_asset_transfer_matches_sequential_transcript_and_events() {
     let query_batch = crate::query::store::LiveQueryStore::start_test();
     let state_batch = State::new(world_batch, Arc::clone(&kura_batch), query_batch);
     let mut block_batch = state_batch.block(header);
+    let batch_start_fragments = block_batch.committed_fragment_count();
     let mut first_delta = DetachedStateTransactionDelta::default();
     let first_instruction: InstructionBox =
         Transfer::asset_quantity(alice_asset_id.clone(), 3_u32, BOB_ID.clone()).into();
@@ -446,7 +473,10 @@ fn detached_asset_transfer_matches_sequential_transcript_and_events() {
         tx.apply();
     }
     block_batch.add_committed_fragments(1);
-    assert_eq!(block_batch.committed_fragment_count(), 2);
+    assert_eq!(
+        block_batch.committed_fragment_count(),
+        batch_start_fragments + 2
+    );
     let events_batch = block_batch.world.take_external_events();
     let transcripts_batch = block_batch.drain_transfer_transcripts();
     block_batch

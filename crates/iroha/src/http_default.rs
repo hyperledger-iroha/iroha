@@ -283,10 +283,11 @@ fn enforce_transport_response_bound(
         return Err(eyre!("HTTP response byte limit must be positive"));
     }
     if response.body().len() > maximum {
-        return Err(eyre!(
-            "HTTP response exceeds the {maximum} byte limit: transport returned {} bytes",
-            response.body().len()
-        ));
+        return Err(crate::Error::ResponseTooLarge {
+            maximum,
+            actual: Some(response.body().len()),
+        }
+        .into());
     }
     if response
         .headers()
@@ -295,9 +296,11 @@ fn enforce_transport_response_bound(
         .and_then(|value| value.parse::<u64>().ok())
         .is_some_and(|length| length > u64::try_from(maximum).unwrap_or(u64::MAX))
     {
-        return Err(eyre!(
-            "HTTP response exceeds the {maximum} byte limit according to transport Content-Length"
-        ));
+        return Err(crate::Error::ResponseTooLarge {
+            maximum,
+            actual: None,
+        }
+        .into());
     }
     Ok(response)
 }
@@ -1139,10 +1142,12 @@ mod tests {
         let sync_error = build_adversarial_request()
             .send_blocking()
             .expect_err("sync custom transport response must be bounded by the SDK");
-        assert!(
-            sync_error
-                .to_string()
-                .contains("transport returned 9 bytes")
+        assert_eq!(
+            sync_error.downcast_ref::<crate::Error>(),
+            Some(&crate::Error::ResponseTooLarge {
+                maximum: 8,
+                actual: Some(9),
+            })
         );
 
         let runtime = tokio::runtime::Builder::new_current_thread()
@@ -1152,10 +1157,12 @@ mod tests {
         let async_error = runtime
             .block_on(build_adversarial_request().send())
             .expect_err("async custom transport response must be bounded by the SDK");
-        assert!(
-            async_error
-                .to_string()
-                .contains("transport returned 9 bytes")
+        assert_eq!(
+            async_error.downcast_ref::<crate::Error>(),
+            Some(&crate::Error::ResponseTooLarge {
+                maximum: 8,
+                actual: Some(9),
+            })
         );
     }
     #[test]

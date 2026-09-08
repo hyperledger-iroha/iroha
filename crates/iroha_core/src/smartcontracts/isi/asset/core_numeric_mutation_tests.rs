@@ -28,13 +28,13 @@ fn raw_numeric_balance_mutation_is_reachable_only_inside_asset_module() {
         let source = std::fs::read_to_string(&path).expect("read Rust source");
         if path != asset_source_path {
             for raw_call in [
-                ".withdraw_numeric_asset(",
-                ".deposit_numeric_asset(",
-                ".deposit_numeric_asset_exact(",
-                ".apply_prechecked_numeric_asset_transfer_delta_exact(",
+                [".withdraw_numeric_asset", "("].concat(),
+                [".deposit_numeric_asset", "("].concat(),
+                [".deposit_numeric_asset_exact", "("].concat(),
+                [".apply_prechecked_numeric_asset_transfer_delta_exact", "("].concat(),
             ] {
                 assert!(
-                    !source.contains(raw_call),
+                    !source.contains(&raw_call),
                     "{} reaches raw balance mutation through {raw_call}",
                     path.display()
                 );
@@ -42,7 +42,7 @@ fn raw_numeric_balance_mutation_is_reachable_only_inside_asset_module() {
         }
         if path != asset_source_path && path != state_source_path {
             assert!(
-                !source.contains("record_transfer_transcripts_with_batch_hash("),
+                !source.contains(&["record_transfer_transcripts_with_", "batch_hash("].concat()),
                 "{} bypasses the typed movement transcript boundary",
                 path.display()
             );
@@ -172,10 +172,7 @@ fn fee_sponsor_custody_transfer_needs_no_custody_signature_and_conserves_balance
     );
     assert!(stx.world.internal_event_buf.iter().any(|event| matches!(
         event.as_ref(),
-        DataEvent::Domain(DomainEvent::Asset(ScopedAsset {
-            event: AssetEvent::Transferred(transfer),
-            ..
-        })) if transfer.source() == &source_id
+        DataEvent::Asset(AssetEvent::Transferred(transfer)) if transfer.source() == &source_id
             && transfer.destination() == &destination_id
             && transfer.amount() == &Quantity::from(4_u32)
     )));
@@ -218,10 +215,11 @@ fn fee_sponsor_custody_burn_reduces_balance_and_total_supply_together() {
     assert!(
         stx.world.internal_event_buf.iter().all(|event| !matches!(
             event.as_ref(),
-            DataEvent::Domain(DomainEvent::Asset(ScopedAsset {
-                event: AssetEvent::Transferred(_),
-                ..
-            }))
+            DataEvent::Asset(AssetEvent::Transferred(_))
+                | DataEvent::Domain(DomainEvent::Asset(ScopedAsset {
+                    event: AssetEvent::Transferred(_),
+                    ..
+                }))
         )),
         "burn must never be represented as an account-to-account transfer"
     );
@@ -1015,10 +1013,7 @@ fn full_balance_self_transfer_preserves_asset_metadata_and_indexes() {
     );
     assert!(stx.world.internal_event_buf.iter().any(|event| matches!(
         event.as_ref(),
-        DataEvent::Domain(DomainEvent::Asset(ScopedAsset {
-            event: AssetEvent::Transferred(transfer),
-            ..
-        })) if transfer.source() == &asset_id
+        DataEvent::Asset(AssetEvent::Transferred(transfer)) if transfer.source() == &asset_id
             && transfer.destination() == &asset_id
             && transfer.amount() == &Quantity::one()
     )));
@@ -1409,10 +1404,11 @@ fn availability_is_revisioned_and_only_blocks_account_transfers_until_reopened()
     assert!(
         !stx.world.internal_event_buf.iter().any(|event| matches!(
             event.as_ref(),
-            DataEvent::Domain(DomainEvent::Asset(ScopedAsset {
-                event: AssetEvent::Transferred(_),
-                ..
-            }))
+            DataEvent::Asset(AssetEvent::Transferred(_))
+                | DataEvent::Domain(DomainEvent::Asset(ScopedAsset {
+                    event: AssetEvent::Transferred(_),
+                    ..
+                }))
         )),
         "mint and burn must not emit the transfer-specific event"
     );
@@ -1840,7 +1836,15 @@ fn atomic_batch_aggregates_repeated_source_before_enforcing_cap() {
     let error = batch
         .execute(&ALICE_ID, &mut stx)
         .expect_err("aggregate six-unit debit must exceed five-unit cap");
-    assert!(error.to_string().contains("cap exceeded"), "{error}");
+    assert!(
+        matches!(
+            &error,
+            InstructionExecutionError::AssetTransferAdmission(
+                AssetTransferAdmissionError::PolicyRejected(message)
+            ) if message.contains("outbound transfer cap exceeded")
+        ),
+        "unexpected admission error: {error:?}"
+    );
     assert_eq!(
         asset_balance_or_zero(&stx, &source_asset_id),
         Quantity::from(10_u32)
@@ -1902,8 +1906,13 @@ fn transfer_allows_exact_cap_and_preserves_usage_on_rejected_overage() {
         .execute(&ALICE_ID, &mut stx)
         .expect_err("over-cap transfer must be rejected");
     assert!(
-        err.to_string().contains("cap exceeded"),
-        "unexpected error: {err}"
+        matches!(
+            &err,
+            InstructionExecutionError::AssetTransferAdmission(
+                AssetTransferAdmissionError::PolicyRejected(message)
+            ) if message.contains("outbound transfer cap exceeded")
+        ),
+        "unexpected admission error: {err:?}"
     );
     assert_eq!(
         asset_balance_or_zero(&stx, &source_asset_id),
@@ -1925,7 +1934,7 @@ fn transfer_allows_exact_cap_and_preserves_usage_on_rejected_overage() {
     assert_eq!(record_after_rejection.usages[0].bucket_start_ms, 86_400_000);
 }
 #[test]
-fn transfer_rejects_configured_kagemusha_reserve_source() {
+fn transfer_rejects_materialized_kagemusha_reserve_source() {
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
     let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
     let alice_account = build_account_in_domain(&ALICE_ID, &domain_id);
@@ -1945,28 +1954,39 @@ fn transfer_rejects_configured_kagemusha_reserve_source() {
         )
     }
     .build(&ALICE_ID);
-    let alice_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
-    let alice_asset = Asset::new(alice_asset_id.clone(), Quantity::from(10_u32));
-    let world = World::with_assets(
-        [domain],
-        [alice_account, bob_account],
-        [asset_def],
-        [alice_asset],
-        [],
-    );
+    let world = World::with([domain], [alice_account, bob_account], [asset_def]);
     let kura = Kura::blank_kura_for_testing();
     let query_store = LiveQueryStore::start_test();
-    let mut state = State::new(world, kura, query_store);
-    state
-        .settlement
-        .kagemusha
-        .reserve_accounts
-        .insert(asset_def_id.clone(), ALICE_ID.clone());
+    let state = State::new(world, kura, query_store);
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
-    let err = Transfer::asset_quantity(alice_asset_id.clone(), 1_u32, BOB_ID.clone())
+    seed_test_call_hash(&mut stx, 0xD6);
+    let asset_definition = stx
+        .world
+        .asset_definition(&asset_def_id)
+        .expect("registered asset definition");
+    crate::smartcontracts::isi::domain::isi::ensure_kagemusha_reserve_account(
+        &asset_definition,
+        &ALICE_ID,
+        &mut stx,
+    )
+    .expect("materialize deterministic Kagemusha reserve account");
+    let reserve_account = crate::smartcontracts::isi::domain::isi::kagemusha_reserve_account_id(
+        stx.network_id(),
+        &asset_def_id,
+    );
+    assert_eq!(
+        stx.settlement.kagemusha.reserve_accounts.get(&asset_def_id),
+        Some(&reserve_account),
+        "the runtime cache must retain the exact deterministic custody account"
+    );
+    let reserve_asset_id = AssetId::new(asset_def_id.clone(), reserve_account.clone());
+    Mint::asset_quantity(10_u32, reserve_asset_id.clone())
         .execute(&ALICE_ID, &mut stx)
+        .expect("fund the materialized reserve for the debit rejection test");
+    let err = Transfer::asset_quantity(reserve_asset_id.clone(), 1_u32, BOB_ID.clone())
+        .execute(&reserve_account, &mut stx)
         .expect_err("generic transfer from escrow source must be rejected");
     assert!(
         err.to_string().contains("Kagemusha reserve account"),
@@ -1975,7 +1995,7 @@ fn transfer_rejects_configured_kagemusha_reserve_source() {
     let source_balance = stx
         .world
         .assets
-        .get(&alice_asset_id)
+        .get(&reserve_asset_id)
         .map(|asset| asset.as_ref().clone())
         .unwrap_or_else(Quantity::zero);
     assert_eq!(source_balance, Quantity::from(10_u32));
@@ -2042,6 +2062,7 @@ fn transfer_rejects_deterministically_derived_kagemusha_reserve_source() {
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
+    seed_test_call_hash(&mut stx, 0xD7);
     let err = Transfer::asset_quantity(escrow_asset_id.clone(), 1_u32, BOB_ID.clone())
         .execute(&escrow_account, &mut stx)
         .expect_err("deterministically derived escrow source must be rejected");
@@ -2729,4 +2750,194 @@ fn mint_global_asset_rejects_non_authoritative_dataspace_route() {
         }
         other => panic!("unexpected error: {other:?}"),
     }
+}
+
+#[test]
+fn prepared_movement_records_exact_delta_under_current_apply_context() {
+    let _suppression = crate::sumeragi::witness::suppress_recording_for_current_thread();
+    let (state, definition, source) = build_asset_transfer_control_test_state(10);
+    let destination = AssetId::new(definition.clone(), BOB_ID.clone());
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 7, 0);
+    let mut block = state.block(header);
+    let hash = iroha_crypto::Hash::new(b"identity at movement apply");
+    {
+        let mut tx = block.transaction();
+        seed_test_call_hash(&mut tx, 0x70);
+        super::super::isi::apply_prepared_numeric_movement_for_test(
+            &mut tx,
+            &ALICE_ID,
+            source.clone(),
+            destination.clone(),
+            Quantity::from(3_u32),
+            |tx| {
+                tx.tx_call_hash = Some(hash);
+                tx.current_lane_id = Some(iroha_data_model::nexus::LaneId::SINGLE);
+                tx.current_dataspace_id = Some(iroha_data_model::nexus::DataSpaceId::new(7));
+            },
+            true,
+        )
+        .unwrap();
+        assert_eq!(asset_balance_or_zero(&tx, &source), Quantity::from(7_u32));
+        assert_eq!(
+            asset_balance_or_zero(&tx, &destination),
+            Quantity::from(3_u32)
+        );
+        tx.apply();
+    }
+    let transcripts = block.drain_transfer_transcripts();
+    assert_eq!(transcripts.len(), 1);
+    let transcript = &transcripts[&hash][0];
+    let expected = iroha_data_model::fastpq::TransferDeltaTranscript {
+        from_account: ALICE_ID.clone(),
+        to_account: BOB_ID.clone(),
+        asset_definition: definition,
+        amount: Quantity::from(3_u32),
+        from_balance_before: Quantity::from(10_u32),
+        from_balance_after: Quantity::from(7_u32),
+        to_balance_before: Quantity::zero(),
+        to_balance_after: Quantity::from(3_u32),
+        from_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
+        to_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
+    };
+    assert_eq!(transcript.deltas, vec![expected.clone()]);
+    assert_eq!(
+        transcript.authority_digest,
+        crate::fastpq::authority_digest(&ALICE_ID)
+    );
+    assert_eq!(
+        transcript.poseidon_preimage_digest,
+        Some(crate::fastpq::poseidon_preimage_digest(&expected, &hash))
+    );
+    let capture = block.captured_fastpq_transcript_sources().unwrap()[&hash];
+    assert_eq!(
+        capture.dataspace_id(),
+        iroha_data_model::nexus::DataSpaceId::new(7)
+    );
+    assert!(!capture.is_protocol_purpose());
+}
+
+#[test]
+fn prepared_movement_preserves_direct_typed_purpose_identity() {
+    let _suppression = crate::sumeragi::witness::suppress_recording_for_current_thread();
+    let (state, definition, source) = build_asset_transfer_control_test_state(10);
+    let destination = AssetId::new(definition, BOB_ID.clone());
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 7, 0);
+    let mut block = state.block(header);
+    let hash;
+    {
+        let mut tx = block.transaction();
+        assert!(tx.tx_call_hash.is_none());
+        hash = super::super::isi::resolve_social_send_movement_identity_for_test(
+            &tx,
+            &ALICE_ID,
+            &[(source.clone(), destination.clone(), Quantity::from(3_u32))],
+            vec![0x71],
+        )
+        .unwrap();
+        super::super::isi::apply_prepared_numeric_movement_for_test(
+            &mut tx,
+            &ALICE_ID,
+            source,
+            destination,
+            Quantity::from(3_u32),
+            |_| {},
+            true,
+        )
+        .unwrap();
+        tx.apply();
+    }
+    let transcripts = block.drain_transfer_transcripts();
+    assert_eq!(transcripts.len(), 1);
+    assert_eq!(transcripts[&hash].len(), 1);
+    assert_eq!(transcripts[&hash][0].batch_hash, hash);
+    assert!(block.captured_fastpq_transcript_sources().unwrap()[&hash].is_protocol_purpose());
+}
+
+#[test]
+fn stale_prepared_movement_discards_its_prepared_occurrence() {
+    let _guard = crate::sumeragi::witness::exec_witness_guard();
+    crate::sumeragi::witness::start_block();
+    let (state, definition, source) = build_asset_transfer_control_test_state(10);
+    let destination = AssetId::new(definition, BOB_ID.clone());
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 7, 0);
+    let mut block = state.block(header);
+    let mut tx = block.transaction();
+    seed_test_call_hash(&mut tx, 0x72);
+    let error = super::super::isi::apply_prepared_numeric_movement_for_test(
+        &mut tx,
+        &ALICE_ID,
+        source.clone(),
+        destination.clone(),
+        Quantity::from(3_u32),
+        |tx| **tx.world.assets.get_mut(&source).unwrap() = Quantity::from(11_u32),
+        true,
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("source balance changed"));
+    assert_eq!(asset_balance_or_zero(&tx, &source), Quantity::from(11_u32));
+    assert_eq!(asset_balance_or_zero(&tx, &destination), Quantity::zero());
+    assert_eq!(tx.pending_transfer_transcript_count_for_testing(), 0);
+    tx.apply();
+    assert!(block.drain_transfer_transcripts().is_empty());
+    assert!(
+        block
+            .captured_fastpq_transcript_sources()
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        crate::sumeragi::witness::drain_exec_witness()
+            .fastpq_transcripts
+            .is_empty()
+    );
+}
+
+#[test]
+fn suppressed_prepared_movement_keeps_events_without_source_occurrence() {
+    let _guard = crate::sumeragi::witness::exec_witness_guard();
+    crate::sumeragi::witness::start_block();
+    let (state, definition, source) = build_asset_transfer_control_test_state(10);
+    let destination = AssetId::new(definition, BOB_ID.clone());
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 7, 0);
+    let mut block = state.block(header);
+    let mut tx = block.transaction();
+    super::super::isi::apply_prepared_numeric_movement_for_test(
+        &mut tx,
+        &ALICE_ID,
+        source.clone(),
+        destination.clone(),
+        Quantity::from(3_u32),
+        |_| {},
+        false,
+    )
+    .unwrap();
+    assert_eq!(asset_balance_or_zero(&tx, &source), Quantity::from(7_u32));
+    assert_eq!(
+        asset_balance_or_zero(&tx, &destination),
+        Quantity::from(3_u32)
+    );
+    assert!(
+        tx.world
+            .internal_event_buf
+            .iter()
+            .any(|event| matches!(event.as_ref(),
+                DataEvent::Asset(AssetEvent::Transferred(transfer))
+                    if transfer.source() == &source && transfer.destination() == &destination
+                        && transfer.amount() == &Quantity::from(3_u32)
+            ))
+    );
+    assert_eq!(tx.pending_transfer_transcript_count_for_testing(), 0);
+    tx.apply();
+    assert!(block.drain_transfer_transcripts().is_empty());
+    assert!(
+        block
+            .captured_fastpq_transcript_sources()
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        crate::sumeragi::witness::drain_exec_witness()
+            .fastpq_transcripts
+            .is_empty()
+    );
 }

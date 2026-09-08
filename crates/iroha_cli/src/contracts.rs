@@ -3501,11 +3501,8 @@ fn parse_debug_durable_state_fixture(raw: &str) -> Result<BTreeMap<StatePath, Ve
             .as_str()
             .ok_or_else(|| eyre!("durable state values must be strings"))?;
         let bytes = decode_debug_fixture_bytes(encoded)?;
-        if state.insert(path.clone(), bytes).is_some() {
-            return Err(eyre!(
-                "duplicate durable state key after canonicalization `{path}`"
-            ));
-        }
+        // JSON rejects duplicate keys and StatePath rejects noncanonical spelling.
+        state.insert(path, bytes);
     }
     Ok(state)
 }
@@ -5349,7 +5346,7 @@ mod tests {
                 0,
                 0,
             );
-            let mut block = state.block(header);
+            let mut block = state.block(header.clone());
             let mut transaction = block.transaction();
             let registered_hash =
                 code::register_code_bytes(&authority, program.clone(), &mut transaction)
@@ -5375,6 +5372,7 @@ mod tests {
             block
                 .commit_world_overlay_for_testing()
                 .expect("commit contract deployment");
+            state.append_committed_block_header_for_tests(header);
         }
         let tx = TransactionBuilder::new(
             ctx.config().network_id,
@@ -5462,14 +5460,20 @@ mod tests {
         let error = parse_debug_durable_state_fixture(&fixture)
             .expect_err("oversized StatePath fixture must fail");
         assert!(error.to_string().contains("invalid durable state key"));
-        let duplicate = r#"{"root/e\u0301":"0x01","root/é":"0x02"}"#;
-        let error = parse_debug_durable_state_fixture(duplicate)
-            .expect_err("canonically equivalent StatePath keys must not overwrite");
-        assert!(
-            error
-                .to_string()
-                .contains("duplicate durable state key after canonicalization")
-        );
+        let canonical = parse_debug_durable_state_fixture(r#"{"root/é":"0x01"}"#)
+            .expect("exact NFC state path");
+        assert_eq!(canonical.keys().next().unwrap().as_ref(), "root/é");
+        for fixture in [
+            r#"{"root/e\u0301":"0x01"}"#,
+            r#"{"root/e\u0301":"0x01","root/é":"0x02"}"#,
+        ] {
+            let error = parse_debug_durable_state_fixture(fixture)
+                .expect_err("noncanonical StatePath spelling must fail");
+            assert!(error.to_string().contains("exact NFC spelling"), "{error:?}");
+        }
+        let error = parse_debug_durable_state_fixture(r#"{"root/é":"0x01","root/\u00e9":"0x02"}"#)
+            .expect_err("duplicate decoded JSON keys must not overwrite");
+        assert!(format!("{error:?}").contains("duplicate"), "{error:?}");
     }
     #[test]
     fn load_contract_payload_value_accepts_json_file() {

@@ -691,6 +691,8 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
     let mut errors: Vec<String> = Vec::new();
     let client = HttpClient::builder()
         .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(Duration::from_secs(5))
+        .timeout(Duration::from_secs(30))
         .build()
         .map_err(|err| format!("failed to construct HTTP client: {err}"))?;
     let artifacts = build_deploy_artifacts(
@@ -780,7 +782,9 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
         }
     };
     insert_json!(receipt["registration"] = Value::Object(registration_summary));
-    insert_json!(receipt["paid_pin_fee"] = paid_pin_fee);
+    // Submission HTTP is not a finalized fee receipt. Keep the endpoint's claim explicitly
+    // labelled until a native finalized-ledger proof authenticates the exact transaction.
+    insert_json!(receipt["reported_pin_fee"] = paid_pin_fee);
     let discovery = if peer_discovery_enabled {
         discover_publish_peers(&client, &torii_base_url)
     } else {
@@ -810,11 +814,9 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
     insert_json!(receipt["peer_discovery"] = Value::Object(discovery_json));
     insert_json!(
         receipt["provider_ingest"] = Value::Object(Map::from_iter([
-            (
-                "state".into(),
-                Value::from("awaiting_finalized_provider_assignment"),
-            ),
-            ("queued".into(), Value::from(false)),
+            ("state".into(), Value::from("unverified"),),
+            ("assignment_finalized".into(), Value::Null),
+            ("completion_finalized".into(), Value::Null),
             ("direct_http_ingest".into(), Value::from(false)),
         ]))
     );
@@ -835,6 +837,11 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
     if !gateway_success {
         errors.push("gateway verification failed".to_string());
     }
+    // TODO: authenticate registration and provider completion against a pinned finalized
+    // ledger, and supply an authenticated publisher source before claiming publication.
+    // Existing bytes at a gateway prove only readback of these bytes, not paid replication.
+    insert_value!(receipt["publication_verified"] = false);
+    errors.push("publication is not qualified: finalized registration, provider completion, and authenticated publisher-source availability have not been verified".to_owned());
     let success = errors.is_empty();
     insert_value!(receipt["success"] = success);
     insert_json!(
@@ -985,9 +992,8 @@ fn build_deploy_artifacts(
                 Cursor::new(payload),
             )
         } else if metadata.is_file() {
-            let payload = fs::read(payload_path).map_err(|err| {
-                format!("failed to read payload `{}`: {err}", payload_path.display())
-            })?;
+            let payload =
+                read_file_bounded(payload_path, PREPARED_STORAGE_MAX_PAYLOAD_BYTES, "payload")?;
             let plan = CarBuildPlan::single_file_with_profile(&payload, descriptor.profile)
                 .map_err(|err| format!("failed to chunk payload: {err}"))?;
             (
@@ -1074,9 +1080,9 @@ fn build_deploy_artifacts(
         .digest()
         .map_err(|err| format!("failed to compute manifest digest: {err}"))?;
     let (payload_bytes, storage_files, payload_kind) =
-        load_storage_pin_payload(payload_path, &manifest)?;
+        load_prepared_storage_payload(payload_path, &manifest)?;
     let gateway_expectations =
-        build_gateway_expectations(payload_path, storage_files.as_deref(), &payload_bytes)?;
+        build_gateway_expectations(storage_files.as_deref(), &payload_bytes)?;
     let payload_digest_hex = hex_encode(blake3_hash(&payload_bytes).as_bytes());
     let root_cid_hex = hex_encode(&root_cid);
     let root_cid_base32 = encode_content_cid_base32(&root_cid);
@@ -1092,26 +1098,43 @@ fn build_deploy_artifacts(
     })
 }
 fn build_gateway_expectations(
-    payload_path: &Path,
     files: Option<&[StorageFileEntryOwned]>,
     payload_bytes: &[u8],
 ) -> Result<Vec<GatewayExpectation>, String> {
     if let Some(entries) = files {
-        let mut expectations = Vec::new();
-        if let Some(index) = entries
-            .iter()
-            .find(|entry| entry.path.len() == 1 && entry.path[0] == "index.html")
-        {
-            expectations.push(read_gateway_expectation(payload_path, None, index)?);
+        if entries.windows(2).any(|pair| pair[0].path >= pair[1].path) {
+            return Err("prepared file inventory is not in canonical path order".to_owned());
         }
-        let mut ordered = entries.to_vec();
-        ordered.sort_by(|left, right| left.path.cmp(&right.path));
-        for entry in ordered.iter().take(32) {
-            expectations.push(read_gateway_expectation(
-                payload_path,
-                Some(entry.path.clone()),
-                entry,
-            )?);
+        let mut expectations = Vec::new();
+        let mut offset = 0_usize;
+        for entry in entries {
+            let size = usize::try_from(entry.size)
+                .map_err(|_| "prepared file size exceeds host limits".to_owned())?;
+            let end = offset
+                .checked_add(size)
+                .ok_or_else(|| "prepared file offset overflow".to_owned())?;
+            let bytes = payload_bytes
+                .get(offset..end)
+                .ok_or_else(|| "prepared file inventory exceeds payload".to_owned())?;
+            let expected = GatewayExpectation {
+                path: Some(entry.path.clone()),
+                bytes: entry.size,
+                blake3_hex: hex_encode(blake3_hash(bytes).as_bytes()),
+            };
+            if entry.path.as_slice() == ["index.html"] {
+                expectations.insert(
+                    0,
+                    GatewayExpectation {
+                        path: None,
+                        ..expected.clone()
+                    },
+                );
+            }
+            expectations.push(expected);
+            offset = end;
+        }
+        if offset != payload_bytes.len() {
+            return Err("prepared file inventory does not cover the payload".to_owned());
         }
         return Ok(expectations);
     }
@@ -1120,27 +1143,6 @@ fn build_gateway_expectations(
         bytes: payload_bytes.len() as u64,
         blake3_hex: hex_encode(blake3_hash(payload_bytes).as_bytes()),
     }])
-}
-fn read_gateway_expectation(
-    root: &Path,
-    gateway_path: Option<Vec<String>>,
-    entry: &StorageFileEntryOwned,
-) -> Result<GatewayExpectation, String> {
-    let file_path = entry
-        .path
-        .iter()
-        .fold(root.to_path_buf(), |acc, component| acc.join(component));
-    let bytes = fs::read(&file_path).map_err(|err| {
-        format!(
-            "failed to read gateway verification file `{}`: {err}",
-            file_path.display()
-        )
-    })?;
-    Ok(GatewayExpectation {
-        path: gateway_path,
-        bytes: entry.size,
-        blake3_hex: hex_encode(blake3_hash(&bytes).as_bytes()),
-    })
 }
 fn submit_pin_register(
     request: &ManifestSubmitRequest<'_>,
@@ -1170,10 +1172,7 @@ fn submit_pin_register(
         .send()
         .map_err(|err| format!("failed to submit manifest to Torii: {err}"))?;
     let status = response.status();
-    let response_bytes = response
-        .bytes()
-        .map_err(|err| format!("failed to read Torii response: {err}"))?
-        .to_vec();
+    let response_bytes = read_publish_response_bounded(response, "pin registration")?;
     if status.is_success() {
         return Ok(ManifestRegisterSubmission {
             endpoint_requested: requested_endpoint.clone(),
@@ -1217,8 +1216,8 @@ fn discover_publish_peers(client: &HttpClient, torii_base_url: &Url) -> PublishP
         }
     };
     let status = response.status();
-    let response_bytes = match response.bytes() {
-        Ok(bytes) => bytes.to_vec(),
+    let response_bytes = match read_publish_response_bounded(response, "peer discovery") {
+        Ok(bytes) => bytes,
         Err(err) => {
             return PublishPeerDiscovery {
                 gateway_base_url: None,
@@ -1326,17 +1325,18 @@ fn fetch_gateway_check(
     match client.get(url).send() {
         Ok(response) => {
             let status = response.status();
-            let bytes = match response.bytes() {
-                Ok(bytes) => bytes,
-                Err(err) => {
-                    insert_value!(map["status"] = status.as_u16() as u64);
-                    insert_value!(map["success"] = false);
-                    insert_value!(map["error"] = format!("failed to read gateway response: {err}"));
-                    return Value::Object(map);
-                }
-            };
-            let actual = bytes.len() as u64;
-            let actual_hash = hex_encode(blake3_hash(&bytes).as_bytes());
+            let (actual, actual_hash) =
+                match hash_gateway_response_bounded(response, expectation.bytes) {
+                    Ok(result) => result,
+                    Err(err) => {
+                        insert_value!(map["status"] = status.as_u16() as u64);
+                        insert_value!(map["success"] = false);
+                        insert_value!(
+                            map["error"] = format!("failed to read gateway response: {err}")
+                        );
+                        return Value::Object(map);
+                    }
+                };
             let length_ok = expectation.bytes == actual;
             let hash_ok = expectation.blake3_hex == actual_hash;
             insert_value!(map["status"] = status.as_u16() as u64);
@@ -1352,6 +1352,63 @@ fn fetch_gateway_check(
         }
     }
     Value::Object(map)
+}
+const PUBLISH_RESPONSE_MAX_BYTES: u64 = 1024 * 1024;
+fn read_publish_response_bounded(
+    response: reqwest::blocking::Response,
+    label: &str,
+) -> Result<Vec<u8>, String> {
+    if response
+        .content_length()
+        .is_some_and(|length| length > PUBLISH_RESPONSE_MAX_BYTES)
+    {
+        return Err(format!(
+            "{label} response exceeds {PUBLISH_RESPONSE_MAX_BYTES} bytes"
+        ));
+    }
+    let mut bytes = Vec::new();
+    response
+        .take(PUBLISH_RESPONSE_MAX_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("failed to read bounded {label} response: {error}"))?;
+    if bytes.len() as u64 > PUBLISH_RESPONSE_MAX_BYTES {
+        return Err(format!(
+            "{label} response exceeds {PUBLISH_RESPONSE_MAX_BYTES} bytes"
+        ));
+    }
+    Ok(bytes)
+}
+fn hash_gateway_response_bounded(
+    response: reqwest::blocking::Response,
+    expected_bytes: u64,
+) -> Result<(u64, String), String> {
+    if response
+        .content_length()
+        .is_some_and(|length| length > expected_bytes)
+    {
+        return Err("gateway response exceeds the exact expected asset size".to_owned());
+    }
+    let maximum = expected_bytes
+        .checked_add(1)
+        .ok_or_else(|| "gateway response byte limit overflow".to_owned())?;
+    let mut reader = response.take(maximum);
+    let mut hasher = blake3::Hasher::new();
+    let mut count = 0_u64;
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = reader
+            .read(&mut buffer)
+            .map_err(|error| format!("failed to read bounded gateway response: {error}"))?;
+        if read == 0 {
+            break;
+        }
+        count += read as u64;
+        if count > expected_bytes {
+            return Err("gateway response exceeds the exact expected asset size".to_owned());
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok((count, hasher.finalize().to_hex().to_string()))
 }
 fn gateway_url_for_cid(gateway_base_url: &str, cid_base32: &str) -> Result<String, String> {
     let base = Url::parse(gateway_base_url)
@@ -14082,14 +14139,13 @@ fn manifest_submit(raw_args: Vec<String>) -> Result<(), String> {
     })?;
     authority_network_prefix =
         authority_network_prefix.or_else(|| infer_i105_network_prefix(&authority_str));
-    let manifest_bytes = fs::read(&manifest_path).map_err(|err| {
-        format!(
-            "failed to read manifest `{}`: {err}",
-            manifest_path.display()
-        )
-    })?;
-    let manifest: ManifestV1 = decode_from_bytes(&manifest_bytes)
-        .map_err(|err| format!("failed to decode manifest: {err}"))?;
+    let manifest_bytes = read_file_bounded(
+        &manifest_path,
+        MAX_MANIFEST_ENCODED_BYTES as u64,
+        "manifest",
+    )?;
+    let manifest = decode_manifest_v1_canonical(&manifest_bytes)
+        .map_err(|err| format!("failed to decode exact canonical manifest: {err}"))?;
     let manifest_digest = manifest
         .digest()
         .map_err(|err| format!("failed to compute manifest digest: {err}"))?;
@@ -14176,6 +14232,8 @@ fn manifest_submit(raw_args: Vec<String>) -> Result<(), String> {
     };
     let client = HttpClient::builder()
         .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(Duration::from_secs(5))
+        .timeout(Duration::from_secs(30))
         .build()
         .map_err(|err| format!("failed to construct HTTP client: {err}"))?;
     let submission = submit_pin_register(
@@ -14238,7 +14296,9 @@ struct StorageFileEntryOwned {
     path: Vec<String>,
     size: u64,
 }
-type StoragePinPayload = (Vec<u8>, Option<Vec<StorageFileEntryOwned>>, &'static str);
+type PreparedStoragePayload = (Vec<u8>, Option<Vec<StorageFileEntryOwned>>, &'static str);
+const PREPARED_STORAGE_MAX_PAYLOAD_BYTES: u64 =
+    sorafs_car::DEFAULT_CHUNK_STORE_MAX_ESTIMATED_HEAP_BYTES as u64;
 fn manifest_root_cid_hex(manifest: &ManifestV1) -> Result<String, String> {
     let root_cid = ManifestRootCid::try_from_slice(&manifest.root_cid)
         .map_err(|err| format!("manifest root_cid is not canonical: {err}"))?;
@@ -14332,20 +14392,20 @@ fn storage_prepare(raw_args: Vec<String>) -> Result<(), String> {
     let files_out = files_out.ok_or_else(|| {
         "missing required `--files-out=PATH` for `sorafs_cli storage prepare`".to_string()
     })?;
-    let manifest_bytes = fs::read(&manifest_path).map_err(|err| {
-        format!(
-            "failed to read manifest `{}`: {err}",
-            manifest_path.display()
-        )
-    })?;
-    let manifest: ManifestV1 = decode_from_bytes(&manifest_bytes)
-        .map_err(|err| format!("failed to decode manifest: {err}"))?;
+    let manifest_bytes = read_file_bounded(
+        &manifest_path,
+        MAX_MANIFEST_ENCODED_BYTES as u64,
+        "manifest",
+    )?;
+    let manifest = decode_manifest_v1_canonical(&manifest_bytes)
+        .map_err(|err| format!("failed to decode exact canonical manifest: {err}"))?;
     let manifest_digest = manifest
         .digest()
         .map_err(|err| format!("failed to compute manifest digest: {err}"))?;
     let manifest_digest_hex = hex_encode(manifest_digest.as_bytes());
     let manifest_id_hex = manifest_root_cid_hex(&manifest)?;
-    let (payload_bytes, files, payload_kind) = load_storage_pin_payload(&payload_path, &manifest)?;
+    let (payload_bytes, files, payload_kind) =
+        load_prepared_storage_payload(&payload_path, &manifest)?;
     let payload_bytes_len = u64::try_from(payload_bytes.len())
         .map_err(|_| "payload exceeds host limits".to_string())?;
     let payload_file_count = files.as_ref().map_or(0_u64, |entries| {
@@ -14380,16 +14440,22 @@ fn storage_prepare(raw_args: Vec<String>) -> Result<(), String> {
     }
     Ok(())
 }
-fn load_storage_pin_payload(
+fn load_prepared_storage_payload(
     input: &Path,
     manifest: &ManifestV1,
-) -> Result<StoragePinPayload, String> {
-    let metadata = fs::metadata(input)
+) -> Result<PreparedStoragePayload, String> {
+    if manifest.content_length > PREPARED_STORAGE_MAX_PAYLOAD_BYTES {
+        return Err(format!(
+            "manifest payload exceeds the bounded preparation limit ({PREPARED_STORAGE_MAX_PAYLOAD_BYTES} bytes)"
+        ));
+    }
+    let metadata = fs::symlink_metadata(input)
         .map_err(|err| format!("failed to access payload `{}`: {err}", input.display()))?;
+    let profile = chunk_profile_from_manifest(manifest)?;
     if metadata.is_dir() {
-        let profile = chunk_profile_from_manifest(manifest)?;
         let (plan, payload) = CarBuildPlan::from_directory_with_profile(input, profile)
             .map_err(|err| format!("failed to build directory payload plan: {err}"))?;
+        validate_prepared_storage_payload(manifest, &plan, &payload)?;
         let files = plan
             .files
             .iter()
@@ -14401,11 +14467,52 @@ fn load_storage_pin_payload(
         return Ok((payload, Some(files), "directory"));
     }
     if metadata.is_file() {
-        let payload = fs::read(input)
-            .map_err(|err| format!("failed to read payload `{}`: {err}", input.display()))?;
+        let payload = read_file_bounded(input, manifest.content_length, "payload")?;
+        let plan = CarBuildPlan::single_file_with_profile(&payload, profile)
+            .map_err(|err| format!("failed to build file payload plan: {err}"))?;
+        validate_prepared_storage_payload(manifest, &plan, &payload)?;
         return Ok((payload, None, "file"));
     }
     Err("payload input must be a file or directory".to_string())
+}
+fn validate_prepared_storage_payload(
+    manifest: &ManifestV1,
+    plan: &CarBuildPlan,
+    payload: &[u8],
+) -> Result<(), String> {
+    if manifest.content_length != plan.content_length
+        || manifest.content_length != payload.len() as u64
+    {
+        return Err("payload length does not match the canonical manifest".to_owned());
+    }
+    let specs = plan
+        .try_chunk_fetch_specs()
+        .map_err(|error| format!("invalid prepared chunk plan: {error}"))?;
+    if chunk_digest_sha3_from_specs(&specs) != manifest.chunk_digest_sha3_256 {
+        return Err(
+            "payload chunk-plan commitment does not match the canonical manifest".to_owned(),
+        );
+    }
+    if compute_por_root(payload, plan)
+        .map_err(|error| format!("failed to reproduce prepared PoR root: {error}"))?
+        != manifest.por_root
+    {
+        return Err("payload PoR root does not match the canonical manifest".to_owned());
+    }
+    let stats = CarStreamingWriter::new(plan)
+        .write_from_reader(&mut payload.as_ref(), &mut io::sink())
+        .map_err(format_car_error)?;
+    if stats.root_cids.as_slice() != [manifest.root_cid.clone()]
+        || stats.dag_codec != manifest.dag_codec.0
+        || stats.car_size != manifest.car_size
+        || stats.car_archive_digest.as_bytes() != &manifest.car_digest
+    {
+        return Err(
+            "payload paths, root CID, or canonical CAR commitment do not match the manifest"
+                .to_owned(),
+        );
+    }
+    Ok(())
 }
 fn storage_files_to_json_value(files: Option<&[StorageFileEntryOwned]>) -> Value {
     match files {
@@ -21362,3 +21469,7 @@ impl JsonSource {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "sorafs_cli/deployment_integrity_tests.rs"]
+mod deployment_integrity_tests;
