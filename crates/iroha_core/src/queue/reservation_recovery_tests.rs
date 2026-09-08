@@ -941,7 +941,7 @@ fn state_committed_live_reservation_replays_quarantined_until_explicit_proof_com
         queue
             .install_lane_reservation_journal(&reservation_path, 1024 * 1024)
             .expect("install committed-owner reservation journal");
-        push_globally_bound_lane_reservation_candidate(&queue, &state, &dir, transaction);
+        push_globally_bound_lane_reservation_candidate(&queue, &state, &dir, transaction.clone());
         *queue
             .reserve_transactions_for_lane(
                 &state,
@@ -951,14 +951,7 @@ fn state_committed_live_reservation_replays_quarantined_until_explicit_proof_com
             .expect("reserve transaction before canonical commit")[0]
             .key()
     };
-    let block_header = ValidBlock::new_dummy(&checked_random_queue_keypair().into_parts().1)
-        .as_ref()
-        .header();
-    let mut state_block = state.block(block_header);
-    state_block
-        .transactions
-        .insert_block(HashSet::from([hash]), nonzero!(1_usize));
-    state_block.commit().expect("commit transaction identity");
+    commit_queue_plan_transactions_for_test(&state, vec![transaction]);
     let queue = Arc::new(Queue::test(config_factory(), &time_source));
     let reservation_replay = queue
         .install_lane_reservation_journal(&reservation_path, 1024 * 1024)
@@ -1488,10 +1481,17 @@ fn restart_commit_barrier_stays_quarantined_until_explicit_proof_commit() {
         queue
             .install_lane_reservation_journal(&reservation_path, 1024 * 1024)
             .expect("install reservation journal");
-        let binding =
-            push_globally_bound_lane_reservation_candidate(&queue, &state, &dir, transaction);
+        let binding = push_globally_bound_lane_reservation_candidate(
+            &queue,
+            &state,
+            &dir,
+            transaction.clone(),
+        );
         assert_eq!(binding.admission_context.proposal_height, 1);
-        seed_committed_height_for_queue_test(&state, 4);
+        for _ in 0..4 {
+            commit_queue_plan_transactions_for_test(&state, Vec::new());
+        }
+        assert_eq!(state.view().height(), 4);
         let mut later_scope =
             lane_reservation_scope(&state, b"commit-window-owner", b"commit-window-proposal");
         later_scope.proposal_height = 5;
@@ -1515,14 +1515,8 @@ fn restart_commit_barrier_stays_quarantined_until_explicit_proof_commit() {
             .expect("durable commit barrier");
         key
     };
-    let block_header = ValidBlock::new_dummy(&checked_random_queue_keypair().into_parts().1)
-        .as_ref()
-        .header();
-    let mut state_block = state.block(block_header);
-    state_block
-        .transactions
-        .insert_block(HashSet::from([hash]), nonzero!(1_usize));
-    state_block.commit().expect("commit transaction identity");
+    commit_queue_plan_transactions_for_test(&state, vec![transaction]);
+    assert_eq!(state.view().height(), 5);
     let queue = Arc::new(Queue::test(config_factory(), &time_source));
     let restored = queue
         .install_lane_reservation_journal(&reservation_path, 1024 * 1024)
@@ -1688,6 +1682,7 @@ fn high_volume_commit_barriers_require_explicit_proof_before_consumption() {
             &time_source,
         )
     };
+    let mut committed_transactions = Vec::with_capacity(256);
     let keys = {
         let queue = Arc::new(make_queue());
         queue
@@ -1695,28 +1690,20 @@ fn high_volume_commit_barriers_require_explicit_proof_before_consumption() {
             .expect("install reservation journal");
         let mut keys = Vec::with_capacity(256);
         for index in 0_u16..256 {
+            let transaction = accepted_queue_plan_tx_by_someone(&time_source);
+            committed_transactions.push(transaction.clone());
             keys.push(persist_unreconciled_commit_barrier(
                 &queue,
                 &state,
                 &dir,
-                accepted_queue_plan_tx_by_someone(&time_source),
+                transaction,
                 &index.to_le_bytes(),
                 &index.wrapping_add(1).to_le_bytes(),
             ));
         }
         keys
     };
-    let block_header = ValidBlock::new_dummy(&checked_random_queue_keypair().into_parts().1)
-        .as_ref()
-        .header();
-    let mut state_block = state.block(block_header);
-    state_block.transactions.insert_block(
-        keys.iter().map(|key| key.entrypoint_hash).collect(),
-        nonzero!(1_usize),
-    );
-    state_block
-        .commit()
-        .expect("commit high-volume transaction identities");
+    commit_queue_plan_transactions_for_test(&state, committed_transactions);
     {
         let queue = make_queue();
         let replay = queue
@@ -1875,6 +1862,7 @@ fn restart_commit_barrier_rejects_mismatched_queue_hash_without_tombstone_or_for
     let dir = tempdir().expect("tempdir");
     let plan_path = test_lane_reservation_plan_path(&dir);
     let reservation_path = dir.path().join("restart-mismatched-queue-hash.norito");
+    let transaction = accepted_queue_plan_tx_by_someone(&time_source);
     let key = {
         let queue = Queue::test(config_factory(), &time_source);
         queue
@@ -1884,21 +1872,12 @@ fn restart_commit_barrier_rejects_mismatched_queue_hash_without_tombstone_or_for
             &queue,
             &state,
             &dir,
-            accepted_queue_plan_tx_by_someone(&time_source),
+            transaction.clone(),
             b"mismatched-hash-owner",
             b"mismatched-hash-proposal",
         )
     };
-    let block_header = ValidBlock::new_dummy(&checked_random_queue_keypair().into_parts().1)
-        .as_ref()
-        .header();
-    let mut state_block = state.block(block_header);
-    state_block
-        .transactions
-        .insert_block(HashSet::from([key.entrypoint_hash]), nonzero!(1_usize));
-    state_block
-        .commit()
-        .expect("commit exact transaction identity");
+    commit_queue_plan_transactions_for_test(&state, vec![transaction]);
     {
         let queue = Queue::test(config_factory(), &time_source);
         assert_eq!(
@@ -1970,6 +1949,7 @@ fn restart_commit_barrier_rejects_retargeted_coordinator_without_tombstone_or_fo
     let dir = tempdir().expect("tempdir");
     let plan_path = test_lane_reservation_plan_path(&dir);
     let reservation_path = dir.path().join("restart-retargeted-coordinator.norito");
+    let transaction = accepted_queue_plan_tx_by_someone(&time_source);
     let key = {
         let queue = Queue::test(config_factory(), &time_source);
         queue
@@ -1979,21 +1959,12 @@ fn restart_commit_barrier_rejects_retargeted_coordinator_without_tombstone_or_fo
             &queue,
             &state,
             &dir,
-            accepted_queue_plan_tx_by_someone(&time_source),
+            transaction.clone(),
             b"retargeted-owner",
             b"retargeted-proposal",
         )
     };
-    let block_header = ValidBlock::new_dummy(&checked_random_queue_keypair().into_parts().1)
-        .as_ref()
-        .header();
-    let mut state_block = state.block(block_header);
-    state_block
-        .transactions
-        .insert_block(HashSet::from([key.entrypoint_hash]), nonzero!(1_usize));
-    state_block
-        .commit()
-        .expect("commit exact transaction identity");
+    commit_queue_plan_transactions_for_test(&state, vec![transaction]);
     {
         let queue = Queue::test(config_factory(), &time_source);
         queue
@@ -2155,6 +2126,7 @@ fn plan_tombstoned_commit_barrier_replays_absent_until_explicit_proof() {
     let dir = tempdir().expect("tempdir");
     let plan_path = test_lane_reservation_plan_path(&dir);
     let reservation_path = dir.path().join("restart-after-plan-tombstone.norito");
+    let transaction = accepted_queue_plan_tx_by_someone(&time_source);
     let key = {
         let queue = Queue::test(config_factory(), &time_source);
         queue
@@ -2164,7 +2136,7 @@ fn plan_tombstoned_commit_barrier_replays_absent_until_explicit_proof() {
             &queue,
             &state,
             &dir,
-            accepted_queue_plan_tx_by_someone(&time_source),
+            transaction.clone(),
             b"tombstone-owner",
             b"tombstone-proposal",
         );
@@ -2180,16 +2152,7 @@ fn plan_tombstoned_commit_barrier_replays_absent_until_explicit_proof() {
         );
         key
     };
-    let block_header = ValidBlock::new_dummy(&checked_random_queue_keypair().into_parts().1)
-        .as_ref()
-        .header();
-    let mut state_block = state.block(block_header);
-    state_block
-        .transactions
-        .insert_block(HashSet::from([key.entrypoint_hash]), nonzero!(1_usize));
-    state_block
-        .commit()
-        .expect("commit exact transaction identity");
+    commit_queue_plan_transactions_for_test(&state, vec![transaction]);
     let queue = Queue::test(config_factory(), &time_source);
     assert_eq!(
         queue
@@ -2229,6 +2192,27 @@ fn plan_tombstoned_commit_barrier_replays_absent_until_explicit_proof() {
             plan_tombstone_marked: false,
         }]
     );
+    // Without the retained exact QueuePlan tombstone, a bare Commit barrier
+    // cannot authorize the next durable cleanup phase.
+    let reservation_bytes_before =
+        std::fs::read(&reservation_path).expect("read reservation journal");
+    let plan_bytes_before = std::fs::read(&plan_path).expect("read plan journal");
+    let journal = queue.plan_journal.lock().take();
+    assert!(matches!(
+        queue.commit_lane_reservation_for_test(&key),
+        Err(LaneQueueReservationError::JournalNotInstalled)
+    ));
+    *queue.plan_journal.lock() = journal;
+    assert_eq!(
+        std::fs::read(&reservation_path).expect("reread reservation journal"),
+        reservation_bytes_before
+    );
+    assert_eq!(
+        std::fs::read(&plan_path).expect("reread plan journal"),
+        plan_bytes_before
+    );
+    assert_eq!(queue.lane_reservation_commit_barriers(), vec![key]);
+    assert!(queue.lane_reservations.lock().plan_tombstoned.is_empty());
     // Simulate proof of the exact canonical carrier. The absent payload is safe only because
     // State membership and the durable Commit identity were both retained for this check.
     queue.hold_next_lane_reservation_commit_after_plan_marker_for_test();
@@ -2372,6 +2356,7 @@ fn commit_barrier_pressure_clears_only_after_explicit_proof_commit() {
             &time_source,
         )
     };
+    let transaction = accepted_queue_plan_tx_by_someone(&time_source);
     let key = {
         let queue = make_queue();
         queue
@@ -2381,21 +2366,12 @@ fn commit_barrier_pressure_clears_only_after_explicit_proof_commit() {
             &queue,
             &state,
             &dir,
-            accepted_queue_plan_tx_by_someone(&time_source),
+            transaction.clone(),
             b"pressure-owner",
             b"pressure-proposal",
         )
     };
-    let block_header = ValidBlock::new_dummy(&checked_random_queue_keypair().into_parts().1)
-        .as_ref()
-        .header();
-    let mut state_block = state.block(block_header);
-    state_block
-        .transactions
-        .insert_block(HashSet::from([key.entrypoint_hash]), nonzero!(1_usize));
-    state_block
-        .commit()
-        .expect("commit exact transaction identity");
+    commit_queue_plan_transactions_for_test(&state, vec![transaction]);
     let queue = make_queue();
     assert_eq!(
         queue

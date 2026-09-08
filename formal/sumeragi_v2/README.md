@@ -652,7 +652,13 @@ height-context state are not migrated in place.
   must produce the named invariant counterexample.
   `multilane_source_bindings.json` binds each kernel to current Rust items and
   semantic tokens; `check_sumeragi_v2_multilane_models.py` validates that
-  structure before the default TLC matrix. The Native binding includes the
+  structure before the default TLC matrix. QueuePlan exact membership reads
+  validate only the requested obligation's route-member keys. Full bounded
+  roster validation remains mandatory for insertion, idempotent staging,
+  capacity checks, drain evidence and resolution. The source gate rejects
+  whole-roster scans in exact reads and missing mutation prevalidation;
+  Python mutation tests cover those boundaries and pending/direct terminal
+  alias exclusion. The Native binding includes the
   QC-authenticated manifest builder, manifest-before-receipt publication,
   atomic latest-index write/readback, authenticated crash-durable temporary
   recovery, exact-object pruning through authenticated open handles plus
