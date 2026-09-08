@@ -57161,7 +57161,7 @@ pub struct AccountOnboardingPlanBodyDto {
     #[norito(required)]
     pub owner_auto_renew_instruction:
         Option<iroha_data_model::alias_setup::AliasFramedInstructionV1>,
-    /// Last block timestamp at which this receipt may be applied.
+    /// Service expiry and last execution-block timestamp allowed by the signed quote guard.
     pub valid_until_ms: u64,
 }
 }
@@ -58267,6 +58267,19 @@ mod prepared_transaction_signature_fixture_tests {
         body.instructions[0] = onboarding_frame(&ensure).expect("reframe guarded fixture instruction");
         let signer = checked_routing_fixture_keypair(0x51, Algorithm::Ed25519, "prepared receipt fixture signer");
         AccountOnboardingPlanReceiptDto::try_new(body, signer.private_key()).expect("sign bounded prepared fixture receipt")
+    }
+
+    routing_test! { sync onboarding_receipt_lifetime_expires_without_new_committed_blocks
+        let receipt = onboarding_receipt_fixture();
+        assert!(receipt.verify());
+        let deadline = receipt.body.valid_until_ms;
+        assert!(validate_onboarding_receipt_lifetime(&receipt, deadline - 1).is_ok());
+        assert!(validate_onboarding_receipt_lifetime(&receipt, deadline).is_ok());
+        assert!(matches!(
+            validate_onboarding_receipt_lifetime(&receipt, deadline + 1),
+            Err(Error::AppConflict { code: "alias.onboarding.receipt_expired", .. })
+        ));
+        assert!(receipt.verify(), "expiry must not mutate the signed receipt");
     }
 
     fn fixture_binding(kind: &str, semantic_hash_hex: &str, deadline: u64, digest_byte: char) -> PreparedOperationBindingV1 {
@@ -59556,16 +59569,16 @@ fn build_account_onboarding_plan(
     let Some(signer) = app.account_onboarding.as_ref() else {
         return Err(onboarding_invalid_request("account onboarding is disabled"));
     };
-    let (anchor, now_ms) = onboarding_committed_anchor(app.state.as_ref())?;
+    let (anchor, committed_time_ms) = onboarding_committed_anchor(app.state.as_ref())?;
     let normalized =
-        normalize_account_onboarding_request(app, authenticated_scope, request, now_ms)?;
+        normalize_account_onboarding_request(app, authenticated_scope, request, committed_time_ms)?;
     let world = app.state.world_view();
     let catalog = app.state.nexus_snapshot().dataspace_catalog;
     let disposition = iroha_core::alias_setup::classify_alias_intent(
         &world,
         &catalog,
         &normalized.intent,
-        now_ms,
+        committed_time_ms,
     )
     .map_err(|error| Error::AppConflict {
         code: error.code(),
@@ -59573,10 +59586,13 @@ fn build_account_onboarding_plan(
     })?;
     let target = normalized.intent.target();
     let acquisition = AliasLeaseAcquisitionV1::new(signer.alias_lease_term_years, None);
-    let valid_until_ms = now_ms.saturating_add(APP_API_TRANSACTION_TTL_SECS.saturating_mul(1_000));
+    // The committed anchor timestamps state and lease observations, not a newly issued
+    // service capability. An idle chain must still issue a fresh bounded receipt.
+    let valid_until_ms = current_time_millis()
+        .saturating_add(APP_API_TRANSACTION_TTL_SECS.saturating_mul(1_000));
     let configured_fee_asset_selector = app.state.nexus_snapshot().fees.fee_asset_id;
     let configured_fee_asset =
-        resolve_asset_definition_selector(&world, &configured_fee_asset_selector, now_ms).map_err(
+        resolve_asset_definition_selector(&world, &configured_fee_asset_selector, committed_time_ms).map_err(
             |error| Error::AppConflict {
                 code: "alias.onboarding.payment_asset_invalid",
                 message: format!("configured onboarding payment asset is unavailable: {error}"),
@@ -59620,7 +59636,7 @@ fn build_account_onboarding_plan(
             iroha_core::alias_setup::alias_intent_owner(&normalized.intent),
             acquisition.term_years,
             acquisition.pricing_class_hint,
-            now_ms,
+            committed_time_ms,
         )
         .map_err(|error| Error::AppConflict {
             code: "alias.onboarding.quote_unavailable",
@@ -59628,7 +59644,7 @@ fn build_account_onboarding_plan(
         })?;
         guard.expected_payment_asset = quote.payment_asset_definition_id.clone();
         guard.max_amount = quote.charge_amount.clone();
-        iroha_core::alias_setup::validate_alias_quote_guard(&world, &quote, &guard, now_ms)
+        iroha_core::alias_setup::validate_alias_quote_guard(&world, &quote, &guard, committed_time_ms)
             .map_err(|error| Error::AppConflict {
                 code: error.code(),
                 message: error.message().to_owned(),
@@ -59664,7 +59680,7 @@ fn build_account_onboarding_plan(
         .map(onboarding_frame)
         .collect::<Result<Vec<_>>>()?;
     let owner_auto_renew_instruction =
-        onboarding_owner_auto_renew_follow_up(app, signer, &normalized.intent, now_ms)?;
+        onboarding_owner_auto_renew_follow_up(app, signer, &normalized.intent, committed_time_ms)?;
     let body = AccountOnboardingPlanBodyDto {
         version: AccountOnboardingPlanBodyDto::VERSION,
         request: normalized.request,
@@ -59741,6 +59757,19 @@ fn validate_onboarding_prepared_receipt_context(
     ensure_authenticated_onboarding_name(&intent.alias, authenticated_scope)
 }
 
+fn validate_onboarding_receipt_lifetime(
+    receipt: &AccountOnboardingPlanReceiptDto,
+    service_time_ms: u64,
+) -> Result<()> {
+    if service_time_ms > receipt.body.valid_until_ms {
+        return Err(Error::AppConflict {
+            code: "alias.onboarding.receipt_expired",
+            message: "onboarding receipt has expired".to_owned(),
+        });
+    }
+    Ok(())
+}
+
 fn revalidate_onboarding_prepared_work(
     app: &crate::SharedAppState,
     authenticated_scope: &crate::AuthenticatedOnboardingScope,
@@ -59752,12 +59781,7 @@ fn revalidate_onboarding_prepared_work(
         return Err(onboarding_invalid_request("account onboarding is disabled"));
     };
     let (_, now_ms) = onboarding_committed_anchor(app.state.as_ref())?;
-    if now_ms > receipt.body.valid_until_ms {
-        return Err(Error::AppConflict {
-            code: "alias.onboarding.receipt_expired",
-            message: "onboarding receipt has expired".to_owned(),
-        });
-    }
+    validate_onboarding_receipt_lifetime(receipt, current_time_millis())?;
     let normalized = normalize_account_onboarding_request(
         &app,
         &authenticated_scope,
@@ -72995,6 +73019,7 @@ pub fn handle_status_peers(telemetry: &MaybeTelemetry, online_peer_count: u64) -
 #[cfg(feature = "telemetry")]
 /// Render the complete status document with content negotiation.
 pub async fn handle_status(
+    build: &iroha_torii_shared::status::BuildStatus,
     telemetry: &MaybeTelemetry,
     accept: Option<axum::http::HeaderValue>,
     nexus_routing_policy: ActualLaneRoutingPolicy,
@@ -73020,7 +73045,7 @@ pub async fn handle_status(
                     "status metrics could not reach a fresh classified frontier: {error}"
                 ),
             })?;
-    let mut status = metrics.status_snapshot();
+    let mut status = metrics.status_snapshot(build);
     ensure_status_metrics_match_authoritative_height(&status, authoritative_block_height)?;
     status.nexus = Some(iroha_torii_shared::status::NexusStatus::from(
         &nexus_routing_policy,

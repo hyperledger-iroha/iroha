@@ -33,15 +33,17 @@ const PUBLIC_IO_SCHEMA_NAME: &str = "fastpq_prover::proof::FastpqStateTransition
 /// Canonical first-release root-frame identity for [`Proof`].
 const PROOF_SCHEMA_NAME: &str = "fastpq_prover::proof::FastpqStateTransitionProofV1";
 /// Default maximum transitions accepted by the V1 verifier.
-const DEFAULT_MAX_VERIFY_TRANSITIONS: usize = 256;
+const DEFAULT_MAX_VERIFY_TRANSITIONS: usize =
+    fastpq_isi::resource_limits::FASTPQ_DEFAULT_MAX_TRANSITIONS_V1;
 /// Default maximum batch payload bytes accepted by the V1 verifier.
 const DEFAULT_MAX_VERIFY_BATCH_BYTES: usize = 256 * 1024;
 /// Default maximum approximate proof payload bytes accepted by the V1 verifier.
-const DEFAULT_MAX_VERIFY_PROOF_BYTES: usize = 512 * 1024;
+const DEFAULT_MAX_VERIFY_PROOF_BYTES: usize =
+    fastpq_isi::resource_limits::FASTPQ_DEFAULT_MAX_PROOF_PAYLOAD_BYTES_V1;
 /// Default maximum FRI layers accepted by the V1 verifier.
 const DEFAULT_MAX_VERIFY_FRI_LAYERS: usize = 19;
 /// Default maximum query openings accepted by the V1 verifier.
-const DEFAULT_MAX_VERIFY_QUERIES: usize = 136;
+const DEFAULT_MAX_VERIFY_QUERIES: usize = fastpq_isi::FASTPQ_FINAL_V1.fri.queries as usize;
 /// Default maximum LDE values carried by a single query chunk.
 const DEFAULT_MAX_VERIFY_QUERY_CHUNK_VALUES: usize = 128;
 /// Default maximum Merkle siblings carried by a single query opening.
@@ -201,10 +203,9 @@ impl Proof {
 }
 /// Limits applied before FASTPQ V1 proof verification consumes proof-carried openings.
 ///
-/// These are independent ceilings, not an admitted workload guarantee. A batch
-/// below the 256-transition default can still exceed the 512-KiB approximate
-/// proof-size ceiling because AIR width, query count, and authentication paths
-/// also contribute to the proof size.
+/// The default payload ceiling is derived from the complete canonical opening
+/// geometry for 256 transitions and 512 AIR columns. Batch bytes and per-field
+/// limits remain independent; complete Norito frames have a separate shared bound.
 #[allow(clippy::struct_field_names)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VerifyLimits {
@@ -2281,7 +2282,10 @@ mod tests {
                 ..
             })
         ));
-        assert_eq!(VerifyLimits::default().max_proof_bytes, 512 * 1024);
+        assert_eq!(
+            VerifyLimits::default().max_proof_bytes,
+            DEFAULT_MAX_VERIFY_PROOF_BYTES
+        );
     }
     #[test]
     fn raw_proof_is_independent_of_ambient_norito_layout() {
@@ -2339,26 +2343,26 @@ mod tests {
             })
         ));
     }
-    #[test]
-    fn default_proof_ceiling_rejects_sixteen_row_transfer_opening_shape() {
-        // Construct only the opening shape, without costly witness generation,
-        // hashing or FRI. Even omitting every key/value column, sixteen transfer
-        // rows require more than the default byte budget in the current wire.
-        let batch = sample_batch_with_size(16);
+    fn canonical_opening_shape(rows: usize, columns: usize) -> Proof {
         let mut proof = materialise_sample_artifact(sample_backend_artifact()).unwrap();
         let zero = wire_digest384(0);
-        let columns = 12 + 128 + 196;
-        let query_count = 128;
-        proof.lde_domain_size = 128;
+        let domain =
+            rows.next_power_of_two() * fastpq_isi::FASTPQ_FINAL_V1.fri.blowup_factor as usize;
+        let depth = domain.ilog2() as usize;
+        let rounds = depth - fastpq_isi::FASTPQ_FRI_TERMINAL_DOMAIN_SIZE_V1.ilog2() as usize;
+        let query_count = domain.min(fastpq_isi::FASTPQ_FINAL_V1.fri.queries as usize);
+        let chunk = domain.min(backend::lde_chunk_size(2).unwrap());
+        proof.parameter = fastpq_isi::FASTPQ_FINAL_V1_ID.into();
+        proof.lde_domain_size = domain as u32;
         proof.alphas = vec![fp4(0); AIR_COMPOSITION_ALPHA_COUNT];
-        proof.betas = vec![fp4(0); 5];
-        proof.fri_layers = vec![zero; 6];
+        proof.betas = vec![fp4(0); rounds];
+        proof.fri_layers = vec![zero; rounds + 1];
         proof.queries = vec![
             QueryOpening {
                 index: 0,
                 value: fp4(0),
-                chunk_values: vec![fp4(0); 64],
-                merkle_path: vec![zero; 1],
+                chunk_values: vec![fp4(0); chunk],
+                merkle_path: vec![zero; (domain / chunk).ilog2().max(1) as usize],
             };
             query_count
         ];
@@ -2367,42 +2371,72 @@ mod tests {
                 index: 0,
                 current_row: vec![0; columns],
                 next_row: vec![0; columns],
-                current_row_path: vec![zero; 7],
-                next_row_path: vec![zero; 7],
+                current_row_path: vec![zero; depth],
+                next_row_path: vec![zero; depth],
                 composition_value: fp4(0),
-                composition_path: vec![zero; 7],
+                composition_path: vec![zero; depth],
             };
             query_count
         ];
         proof.fri_queries = vec![
             FriQueryOpening {
                 initial_index: 0,
-                rounds: (0..5)
+                rounds: (0..rounds)
                     .map(|round| FriRoundOpening {
                         round: round as u32,
                         index: 0,
                         values: vec![fp4(0); 2],
                         folded_value: fp4(0),
-                        merkle_path: vec![zero; 6 - round],
+                        merkle_path: vec![zero; depth - round - 1],
                     })
                     .collect(),
                 final_index: 0,
-                final_values: vec![fp4(0); 4],
+                final_values: vec![fp4(0); fastpq_isi::FASTPQ_FRI_TERMINAL_DOMAIN_SIZE_V1 as usize],
                 final_merkle_path: vec![zero; 1],
             };
             query_count
         ];
-        let bytes = proof_size_hint(&proof);
-        assert!(bytes > VerifyLimits::default().max_proof_bytes);
-        assert!(matches!(
-            enforce_default_verify_limits(&batch, &proof),
-            Err(Error::VerifierLimitExceeded { limit: "max_proof_bytes", actual, .. })
-                if actual == bytes
-        ));
-        // Explicit developer-only diagnostic limits still admit the shape;
-        // this is not a valid cryptographic proof and is never verified here.
-        enforce_verify_limits(&batch, &proof, prover_self_check_limits(&batch, &proof))
-            .expect("diagnostic geometry may exceed production byte limits");
+        proof
+    }
+    #[test]
+    fn default_resource_profile_covers_canonical_opening_shapes_and_wire_frames() {
+        use fastpq_isi::resource_limits::FASTPQ_DEFAULT_MAX_PROOF_FRAME_BYTES_V1;
+        let _canonical =
+            norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+        for rows in [8, 16, DEFAULT_MAX_VERIFY_TRANSITIONS] {
+            let batch = sample_batch_with_size(rows);
+            // The maximum admitted width is intentionally larger than genesis.
+            // This proves the resource bound without doing expensive proof work;
+            // the separate public transfer tests generate and verify real proofs.
+            let proof = canonical_opening_shape(rows, DEFAULT_MAX_VERIFY_AIR_ROW_VALUES);
+            enforce_default_verify_limits(&batch, &proof).expect("supported opening geometry fits");
+            let bytes =
+                norito::core::to_bytes_bounded(&proof, FASTPQ_DEFAULT_MAX_PROOF_FRAME_BYTES_V1)
+                    .expect("complete canonical frame fits its distinct wire budget");
+            assert_eq!(
+                bytes.len(),
+                norito::core::encoded_frame_len(&proof).unwrap()
+            );
+            assert!(
+                proof_size_hint(&proof) > 512 * 1024,
+                "fixture crosses the retired arbitrary cap"
+            );
+            if rows == DEFAULT_MAX_VERIFY_TRANSITIONS {
+                assert_eq!(proof_size_hint(&proof), DEFAULT_MAX_VERIFY_PROOF_BYTES);
+                assert_eq!(bytes.len(), FASTPQ_DEFAULT_MAX_PROOF_FRAME_BYTES_V1);
+                let too_small = VerifyLimits {
+                    max_proof_bytes: proof_size_hint(&proof) - 1,
+                    ..VerifyLimits::default()
+                };
+                assert!(matches!(
+                    enforce_verify_limits(&batch, &proof, too_small),
+                    Err(Error::VerifierLimitExceeded {
+                        limit: "max_proof_bytes",
+                        ..
+                    })
+                ));
+            }
+        }
     }
     #[test]
     fn full_width_slot_uses_a_canonical_trace_residue() {

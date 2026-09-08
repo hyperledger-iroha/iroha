@@ -7,6 +7,13 @@ the completed attempt's custody, and runs native assemble, authorize, preflight,
 and apply. It then verifies seed continuity and boot persistence. It does not
 build or transfer unchanged binaries or source.
 
+For a changed release, freeze the source once and run `scripts/taira_release.py
+prepare` with the existing repository `target/` lane. Preparation runs the native
+CLI regressions before the Linux build. Use the routine development check while
+editing; a separate cold development check adds a second dependency build to a
+release that already runs the same gate. Keep each lane's Cargo home, profile and
+source location consistent so subsequent builds reuse its artifacts.
+
 After an operator has prepared one owner-only runtime plan, each retry is:
 
 ```sh
@@ -53,6 +60,11 @@ The `guest` object contains exactly these fields:
   `guard_support`, `unit_renderer`, `local_node`. These refer to the existing
   admitted owner-guard, service-unit renderer and native Inrou controller helpers.
 - `expected_mac`: the actual approved guest's lowercase colon-delimited MAC.
+- `retired_public_imports`: an explicit list, empty when no older imports are
+  superseded, with at most four entries. Each entry names `inventory`,
+  `retirement`, `binary_manifest` and `source_manifest` using the public
+  `{ "path": "...", "sha256": "..." }` reference shape, plus `source_pack`
+  pointing to that source manifest's sibling `source.pack`.
 
 Use the preceding native assembly's actual inventory and the imported source's
 actual `verified-manifest.json` path. The command derives the retry directory,
@@ -62,6 +74,34 @@ by deployment identity. Runtime paths, topology, initial state, source identity,
 artifact identity and endpoint guard pins remain exact. Native assemble derives
 and validates every new inventory field; cloning JSON alone never admits an
 attempt. No per-attempt directory names, nonces or capacity figures need editing.
+
+Each of the four ordered `validator_clients` requires an explicit public
+`probe_origin`, for example `http://127.0.0.1:18081/`. Use four distinct actual
+Torii ports on the approved cohosted validator machine. Native assembly joins
+each origin to its signed validator config; the retry producer rejects missing
+or ambiguous origins before retirement. Configs bind validator slots 1–4 to
+the dedicated Inrou UID/GID pairs 70000–70003. Old inventories and journals do
+not gain a compatibility path: prepare the current first-release inventory and
+use a fresh attempt for the current execution plan.
+
+The inventory also requires a canonical Ed25519 `operator_public_key`, and the
+retained native input list requires `--validator-operator-key PATH` before
+`--validator-unit`. This path identifies the same dedicated owner-private
+operator key admitted with all four validator configs. The native
+`iroha taira public-reset operator-keygen --private-key-file PATH` command creates
+a fresh key outside repositories and prints only its public identity and path;
+`config-rebase --operator-public-key PUBLIC_KEY` installs that identity while
+rebasing retained validator configs. Retry keeps the key unchanged and rejects
+missing or noncanonical public identity before retirement. Native assembly and
+child descriptor custody verify the actual credential; Python reads no key bytes.
+
+Native apply qualifies four-peer convergence, prepared application mutations,
+Inrou runtime health and all four recovery restarts through these direct
+endpoints before staging or switching the public edge. The same retained
+mutations and restart evidence flow into the release proof. After cutover,
+`EdgeVerify` proves public HTTPS, discovery and doctor checks. Candidate failures
+remain before public cutover; a failed rollback remains resumable and must be
+verified complete before another attempt is admitted.
 
 Read-only admission measures current artifact lengths and the public stage tree.
 It reads the small public container/service manifests and bounded bundle archive
@@ -79,9 +119,35 @@ physical backing plan charges the full additional guest allocation plus another
 allocation definitions. Unknown stage layouts or additional service artifacts
 fail closed instead of silently omitting their capacity.
 
-The command checks the backing host before entering the mutation corridor and
-checks the guest again before retirement, assembly, authorization and apply.
-It neither reserves space nor credits anticipated cleanup. During native apply,
+Retirement first admits one dispatcher copy and up to 64 MiB of publication
+and cleanup records, plus the existing guest and backing reserves. After the
+native rolled-back terminal and retired custody are verified under their locks,
+it prunes disposable executable and guest-image copies, including the three
+public image payloads in the archived physical host's `inrou-stage-v1/<nonce>`,
+and chunks belonging to
+the three admitted public SoraFS manifests. Runtime keys and configs, unrelated
+manifests, storage metadata and native history remain intact. Unadmitted partial
+ingestion data is preserved. An owner-only intent makes interrupted unlink and
+trim operations resumable.
+
+The same retirement owner also removes explicitly superseded public imports.
+Their completed native retirement and transfer receipts must agree on the old
+inventory, signed source tree and canonical binaries. Current candidate and
+replay inputs remain protected. Source removal admits the complete tracked path
+set and import-created Git metadata, checks process and mount references, and
+uses a durable quarantine intent so interrupted deletion can resume. Canonical
+binary and transport-pack removal requires exact file custody. Import manifests,
+source closure records, native authority and terminal receipts are retained;
+release-number patterns never select deletion targets.
+
+After pruning, native `sync -f` flushes the runtime filesystem before `fstrim`
+requests discard of freed blocks. Each command has a 60-second timeout. Both
+operations repeat on resume, and either failure stops the attempt. Fresh guest
+and physical backing observations must admit the full next-deployment peak
+before assembly or apply. Retirement
+admission cannot authorize deployment. The command checks the guest again before
+assembly, authorization and apply; it neither reserves space nor credits
+anticipated cleanup. During native apply,
 the 30-second heartbeat includes only the current native phase, step, touched
 validator count and edge flag. It never prints journal nonces or failure text,
 and progress reporting does not hash artifacts.
@@ -92,6 +158,9 @@ The remote `attempts_root/latest.json` tracks the attempt automatically. Repeati
 the command after a failure before native apply resumes that same attempt and
 nonce. Existing preapply evidence is retained before assemble and authorize run
 again. Completed retirement is reattested under the same custody locks.
+Native rollback failure history remains after a successful resume. Retirement
+requires the exact rolled-back terminal and completed host counters; historical
+failure entries do not turn a completed recovery into an unfinished rollback.
 
 An exclusive, durable `apply-started.json` is published before native apply is
 spawned. Once it exists, the command requires that exact attempt's real native
@@ -107,6 +176,15 @@ the durable apply marker. Wrapper status or an apply exit code cannot grant it.
 It holds the native coordinator lock, keeps the original nonce and prestart
 record, and archives incomplete observations before repeating postconditions.
 It performs no retirement, assembly, authorization or apply.
+
+Seed verification uses `taira_seed_observation.py` to read the public committed
+height and request a fresh challenge-bound finality attestation. The attestation
+supplies the applied status; the check needs no operator credentials. It retains
+process, executable, listener and configuration identity checks. Only native
+`sha256sum` consumes the held configuration descriptor; Python never reads the
+private TOML. Transient startup responses have three attempts within a shared
+30-second deadline, while invalid identities and successful malformed responses
+fail immediately.
 
 Because the deployment's files already exist, the completed route admits only
 64 MiB for remaining evidence plus guest/backing reserves, instead of charging
@@ -137,4 +215,5 @@ Run the focused offline tests without Cargo or SSH:
 
 ```sh
 python3 -B -m unittest discover -s scripts/tests -p 'taira_retry_test.py'
+python3 -B -m unittest discover -s scripts/tests -p 'taira_seed_observation_test.py'
 ```

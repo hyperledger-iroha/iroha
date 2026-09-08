@@ -1,13 +1,92 @@
-# Taira CLI release checks
+# Taira release checks
 
-Run `python3 scripts/taira_release_check.py` before the existing Taira four-binary
-Linux release build. It compiles the native `iroha_cli` test harness once through
-`scripts/cargo_fast.sh`, reuses the warm Cargo target and native jobserver, and
-reports build, stage and test durations. Python 3.11+ and the repository Rust
-and Cargo toolchain are required. Use an existing `CARGO_TARGET_DIR` only for
-an established separate native build lane; no clean or per-run target is needed.
+Run either `python3 scripts/taira_release.py check` or
+`python3 scripts/taira_release_check.py` before the Taira four-binary Linux
+release build. Both compile focused CLI, Core, proof, Torii and consensus
+harnesses plus native network binaries with six Cargo jobs
+and report build, stage and test durations. Python 3.11+, the repository Rust
+toolchain, and previously fetched dependencies are required; Cargo runs offline.
 
-The check runs 51 regressions for secure inherited configuration and signing FDs,
+The Torii harness executes the shipping routes through plan, prepare and submit,
+checks SDK receipt verification, and applies queued fixture transactions. It
+covers a 33-hour-old committed anchor, expiry without a new block, exact replay,
+onboarding identity binding, faucet funding and proof-of-work anchor aging. A
+fresh onboarding receipt uses service time for its lifetime; committed height,
+hash and ledger time remain the anchor for state and lease observations. These
+contract tests use real route and ledger code with disposable inputs; they do
+not replace the deployed four-validator consensus and public application checks.
+
+The Core gate exercises the real candidate provider with multiple routable lanes.
+Ordinary transactions remain eligible for global proposals; `QueuePlanSynced`
+transactions require their autonomous reservations, and actual reservation
+conflicts still defer ordinary work. A regression in any of these paths stops
+preparation before the Linux release build.
+
+The proof gate produces and verifies fully witnessed eight- and sixteen-row
+transfers with the default resource limits, checks the maximum admitted proof
+shape against its canonical frame, and rejects proofs beyond explicit limits.
+Payload accounting and framed persistence use separate ceilings derived from
+the same canonical geometry. The CLI confirmation gate follows a queued hash
+through its exact Applied wire proof, retaining ambiguous expiry as pending and
+rejecting malformed or failed status responses without resubmission.
+
+The final native gate launches four validators from the freshly emitted native
+`iroha3d` binary using the same three-route fixture as the consensus integration
+suite. It requires one exact ordinary transaction to reach Applied on every
+validator. Cargo emits both node and client paths explicitly; fallback builds and
+sandbox skips are disabled. The focused `taira_consensus_contracts` harness avoids
+compiling the full consensus suite, and keeps private fixture logs in the warm
+target for failure diagnosis.
+
+For a testnet attempt stuck on an unresolved canary before edge staging,
+`iroha taira public-reset abandon` takes the original signed inventory,
+authorization and SSH custody, `--expected-journal-sha256`, and the explicit
+`--abandon-pending-mutations` flag. It preserves the exact unresolved journal
+before running ordinary rollback; cache expiry never becomes a chain rejection.
+Keep the original fixed host dispatcher until rollback completes. Use the
+original journal digest again to resume an interrupted abandonment.
+
+Ordinary checks use the existing sibling `.taira-testnet-build-targets/routine`
+directory. `--target-dir` or `TAIRA_TESTNET_CARGO_TARGET_DIR` can select another
+existing development lane; both must agree if supplied. Ambient
+`CARGO_TARGET_DIR` does not select this lane. Neither command creates or cleans
+a Cargo target. Keep a stable lane for repeated checks.
+
+The focused native gate enables incremental compilation in that existing lane.
+An explicit `CARGO_INCREMENTAL=0` preserves a constrained or CI build policy;
+only `0` and `1` are admitted. This preference is passed only to native builds
+and tests, and preparation records it with the native-check checkpoint. Linux
+release compilation retains its original sanitized environment and release
+profile. Each feature graph keeps its own Cargo cache; no test features are
+added or removed to force reuse. The first incremental run populates those
+caches, so a speed improvement must be measured on subsequent focused changes.
+The four-validator runtime check runs first, so source-staging or consensus
+failures stop before compiling the independent contract harnesses. Its log
+records the actual Cargo-selected native binary paths and profiles separately
+from the later Linux release artifacts.
+
+Authenticated `prepare` retains the repository's `target/` lane and its fixed
+Git-object source capture. Its explicit `--target-dir` override remains available;
+the development environment selector does not affect preparation. Checks refuse
+the exact repository `target/`, existing source capture lanes, and lanes marked
+for release. Preparation refuses the routine lane and lanes marked for development.
+A stable `.taira-build-lane/` owner-private directory records the role and canonical
+repository root and holds a nonblocking mode lock through Cargo and every harness
+child. Another checkout must select its own stable lane, so alternating checkouts
+cannot churn the same lane's source paths. Preparation also
+retains its original source-custody and output locks. A busy lane fails before
+compilation. Existing target permissions remain unchanged.
+
+Both modes use the same isolated `target/taira-release-cargo-home`, including the
+same lexical registry paths, selected Rust toolchain, explicit repository Cargo
+configuration, optional persistent sccache and the existing linker selection.
+Cargo starts from `/` to exclude ancestor configuration. Ambient Cargo settings
+and runtime credentials are not inherited. Diagnostic checks still compile the
+mutable working tree and verify HEAD continuity; they never qualify a release.
+The mode locks coordinate these entry points only: arbitrary direct Cargo commands
+do not acquire them. Keep those commands out of an active preparation lane.
+
+The check runs focused regressions for secure inherited configuration and signing FDs,
 network-369 inventory decoding, aggregate timeout admission before custody,
 required preseed budgets, per-host carrier verification and the exact action ledger,
 native genesis-path rebasing with secret-free errors and owner-only output,
@@ -31,6 +110,30 @@ pending jobs, malformed evidence and read-only recovery after a deadline.
 Start and restart also wait for the signed Python launcher to execute the exact
 daemon within the original deadline, without submitting another manager job.
 Changed launcher commands remain immediate failures.
+The active journaled restart path also waits for four actual Torii backends before
+onboarding, using the deadline captured before its one restart submission.
+Convergence waits within that deadline until the active height has advanced beyond
+a positive committed frontier. A CommitQC or an `Applied` body at the same height
+can still precede the durable application anchor needed by onboarding. Tests keep
+both intermediate states out of retained proof; identity mismatches and restart
+requirements remain immediate failures, with public progress in deadline errors.
+Converged certificates use Core's committed-decision comparison, allowing
+different re-proposal rounds for the same subject and execution commitment while
+retaining each validator's actual certificate and requiring a higher committed
+height after restart.
+Candidate tests exercise the real HTTP producer and strict host receipt consumer,
+direct signed probe origins, private signer descriptor lifetime, ordered recovery
+and failure before edge cutover. Prepared-envelope tests cross the actual typed
+write producer into the authenticated host consumer and all four Inrou variants
+through inherited descriptors and predecessor decoding. Binding checks cover
+canonical object metadata before submission and after commit, rejecting changed
+fields and JSON strings substituted for objects. Unknown envelope fields remain
+invalid. Stopped-owner tests preserve the slot lock while
+releasing exact empty worker cgroups, reject live or substituted runtime state,
+and verify idempotent cleanup before a stop receipt can be reused. Firewall
+fixtures admit only exact slot-owned rules and real construction/deletion cuts;
+foreign references or changed rules keep the barrier in place. Cleanup removes
+each admitted rule explicitly and never flushes a chain.
 Linux also runs a real OpenSSH
 configuration-only check that verifies parent-held descriptor paths survive its
 descriptor cleanup and replacement of the original paths. Every selected test
@@ -38,10 +141,11 @@ must exist and execute exactly once. Missing,
 ignored, failed or empty selections fail the command. Fix the named failure and
 rerun the same command to reuse compiled dependencies.
 
-The native compile command is:
+The selected toolchain's Cargo executes this command from `/` with the isolated
+environment and selected `CARGO_TARGET_DIR`:
 
 ```sh
-scripts/cargo_fast.sh -- test --locked -p iroha_cli --bin iroha --no-run --message-format=json-render-diagnostics
+cargo --config /absolute/repo/.cargo/config.toml test --manifest-path /absolute/repo/Cargo.toml --locked --offline -p iroha_cli --bin iroha --no-run --message-format=json-render-diagnostics
 ```
 
 Only existing disposable test fixtures are used. The gate accepts no live
@@ -52,8 +156,17 @@ probes against actual Linux release binaries. Public readiness still requires
 the end-to-end live checks.
 
 The `build` job in `.github/workflows/workspace_release.yml` runs this check
-before its full workspace build using the same Cargo cache. The existing local
-Taira release caller should run it before cross-compilation. The canonical
+before its full workspace build. CI provisions the stable `target/taira-native-checks`
+subdirectory and passes it explicitly; the existing root target cache includes that
+independent diagnostic target. CI runs `cargo fetch --locked` first to initialize
+the same isolated registry cache, using the selected toolchain, explicit source
+configuration and mode lock. Only this fetch sets `CARGO_NET_OFFLINE=false`; the
+gate itself remains offline. The subsequent
+full workspace build acquires the same development lane lock and uses the same
+target, isolated Cargo home and explicit configuration. It explicitly preserves
+CI's `CARGO_INCREMENTAL=0` after sanitizing the environment, as does the native gate. Matching dependencies can
+therefore reuse the gate's artifacts instead of being rebuilt into a second tree. The existing local Taira release caller should run
+it before cross-compilation. The canonical
 release artifact producer remains `scripts/run_release_pipeline.py`; it does
 not gain a hidden build step or additional runtime authority.
 

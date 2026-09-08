@@ -532,16 +532,15 @@ proof semantics profile.
 
 ### Admission limits and fixture scope
 
-The production verifier's default approximate proof-payload cap remains
-512 KiB; AXT also caps its encoded FASTPQ payload at 1 MiB before the model's
-outer blob limit. These are admission limits, not guarantees that every trace
-within the parameter set's maximum row geometry fits a deployed action.
-The final 64-row mixed raw fixture has 136 query openings, a 1,026,222-byte
-admission estimate, and a 1,136,406-byte Norito frame. Its test explicitly requires
-the default verifier to reject that size, then performs complete raw verification
-with a fixed 2 MiB diagnostic cap through a test/dev-tools-only entry point.
-It cannot be admitted as a production state-transition or AXT payload by those
-defaults.
+The replay verifier's default approximate payload cap is derived from the
+256-transition, 512-column opening geometry: 2,163,774 bytes. Its complete Norito
+frame bound is 2,372,085 bytes, shared by Core encoding and the sidecar default.
+AXT retains its separate 1 MiB encoded-payload limit before the outer blob limit;
+changing replay resource defaults grants no exception to that boundary.
+The 64-row mixed raw fixture has 136 query openings, a 1,026,222-byte admission
+estimate, and a 1,136,406-byte frame. The test verifies it through the raw
+fixture-only API and retains an explicit too-small-budget rejection. Resource
+admission never assigns state-transition semantics or AXT authority to a raw fixture.
 
 The two-row witnessed remittance smoke uses the sole canonical parameter set
 and fits the unchanged production limits. Its 16-point evaluation domain is

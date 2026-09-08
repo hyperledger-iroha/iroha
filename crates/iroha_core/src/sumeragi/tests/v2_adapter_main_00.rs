@@ -834,7 +834,16 @@ fn successor_context_requires_the_durable_cryptographic_parent() {
 fn fingerprints() -> AdapterFingerprints {
     AdapterFingerprints {
         node: Hash::new(b"node"),
-        build: Hash::new(b"build"),
+        build: crate::release_identity::BuildIdentity::from_compiled_parts(
+            "test-executable",
+            Some("1111111111111111111111111111111111111111"),
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("explicit recovery executable identity")
+        .build_fingerprint(),
         config: Hash::new(b"config"),
     }
 }

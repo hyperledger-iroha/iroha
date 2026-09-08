@@ -8,8 +8,6 @@
 //! a losing global proposal can therefore never advance the durable lane tip.
 mod lane_authority_methods;
 
-#[cfg(test)]
-use super::v2_worker::durable_exact_output_handoff_owner_pair;
 use super::{
     FairV2IngressOwnershipEvidence, InboundBlockMessage, LaneRelayMessage,
     lane_planner::{
@@ -17,7 +15,7 @@ use super::{
         autonomous_lane_reservation_identity_hashes_for_proposal,
         pinned_autoscale_validator_pops_for_set, plan_autonomous_lane_reservation_slot,
         prepare_v2_lane_payload_plan, prepare_v2_lane_payload_validation_plan,
-        proposal_lookahead_enabled, v2_known_lane_tip_for_route,
+        v2_known_lane_tip_for_route,
     },
     message::{
         BlockMessage, CanonicalExecutedBlockNeedV1, LANE_HISTORICAL_RECOVERY_VERSION_V1,
@@ -59,6 +57,10 @@ use super::{
         DurableExactOutputHandoffReceipt, DurableExactOutputServiceOwner,
         DurableExactOutputTransportOwner, ExactFanoutOwnership, ProductionV2Services,
     },
+};
+#[cfg(test)]
+use super::{
+    lane_planner::proposal_lookahead_enabled, v2_worker::durable_exact_output_handoff_owner_pair,
 };
 #[cfg(test)]
 use crate::kura::LaneBlockApplicationReceiptArtifactFormat;
@@ -19432,41 +19434,24 @@ impl CandidateWorkProvider for &mut V2LaneWorkAdapter {
                 .values()
                 .flat_map(|payload| payload.entrypoint_hashes.iter().copied())
                 .collect::<BTreeSet<_>>();
-            let nexus = self.state.nexus_snapshot();
-            if !candidates.is_empty() {
-                let autonomous_routes = self
-                    .state
-                    .consensus_lane_routes_at_height(self.context.height);
-                // QueuePlanSynced ownership always belongs to the autonomous
-                // corridor, including a topology with only one routable lane.
-                // Multi-lane scheduling retains its broader route exclusion.
-                let broad_autonomous_route_exclusion =
-                    proposal_lookahead_enabled(&nexus, self.context.height);
-                let unavailable = candidates
-                    .iter()
-                    .copied()
-                    .enumerate()
-                    .filter_map(|(index, candidate)| {
-                        let route = candidate.routing_plan().coordinator_route();
-                        let is_queue_plan_synced = candidate
-                            .transaction()
-                            .entrypoint()
-                            .admission_intent()
-                            == iroha_data_model::transaction::TransactionAdmissionIntent::
-                                QueuePlanSynced;
-                        (is_queue_plan_synced
-                            || (broad_autonomous_route_exclusion
-                                && autonomous_routes
-                                    .contains_key(&(route.lane_id, route.dataspace_id))))
+            // Signed admission intent determines the execution corridor. An
+            // Ordinary transaction has no global QueuePlan admission and cannot
+            // acquire an autonomous reservation, even in a multi-route world.
+            let unavailable = candidates
+                .iter()
+                .copied()
+                .enumerate()
+                .filter_map(|(index, candidate)| {
+                    (candidate.transaction().entrypoint().admission_intent()
+                        == iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced)
                         .then_some(index)
-                    })
-                    .collect::<BTreeSet<_>>();
-                if !unavailable.is_empty() {
-                    return Err(CandidateWorkUnavailable::new(
-                        unavailable,
-                        "waiting for deterministic autonomous lane authors to publish durable FIFO reservations",
-                    ));
-                }
+                })
+                .collect::<BTreeSet<_>>();
+            if !unavailable.is_empty() {
+                return Err(CandidateWorkUnavailable::new(
+                    unavailable,
+                    "QueuePlanSynced work requires its globally admitted autonomous reservation",
+                ));
             }
             let unavailable = candidates
                 .iter()
@@ -31258,6 +31243,76 @@ pub(super) mod tests {
     }
     include!("v2_lane_work_autonomous_ready_durability_tests.rs");
     #[test]
+    fn candidate_provider_admits_ordinary_work_in_multiroute_world_and_excludes_queue_plan_synced()
+    {
+        let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
+        let lane_id = LaneId::new(1);
+        let dataspace_id = DataSpaceId::new(7);
+        enable_multilane_nexus(&mut adapter, &keys, lane_id, dataspace_id);
+        assert!(proposal_lookahead_enabled(
+            &adapter.state.nexus_snapshot(),
+            adapter.context.height,
+        ));
+        let context = adapter.context.clone();
+        // Both the default route used by application onboarding and another
+        // routable lane must retain ordinary proposal eligibility.
+        for (lane_id, dataspace_id) in [
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (lane_id, dataspace_id),
+        ] {
+            let routing_plan = RoutingPlan::single(RoutingDecision::new(lane_id, dataspace_id));
+            let (ordinary, _) = planned_lane_candidate_block_for_route_at_view(
+                &adapter,
+                &keys,
+                0,
+                lane_id,
+                dataspace_id,
+            );
+            let ordinary = AcceptedTransaction::new_unchecked_entrypoint(std::borrow::Cow::Owned(
+                ordinary
+                    .external_entrypoints_cloned()
+                    .next()
+                    .expect("ordinary entrypoint"),
+            ));
+            let prepared = (&mut adapter)
+                .prepare(
+                    &context,
+                    0,
+                    &[CandidateDescriptor::new(&ordinary, &routing_plan)],
+                )
+                .expect("ordinary work cannot wait for an unavailable autonomous reservation");
+            assert_eq!(prepared.native_amx_receipts.len(), 1);
+            assert!(prepared.native_amx_receipts[0].is_none());
+            assert_eq!(prepared.lane_payload_ownerships.len(), 1);
+            assert!(prepared.autonomous_lane_payloads.is_empty());
+            let (synced, _) = planned_autonomous_lane_candidate_block_for_route_at_view(
+                &adapter,
+                &keys,
+                0,
+                lane_id,
+                dataspace_id,
+            );
+            let synced = AcceptedTransaction::new_unchecked_entrypoint(std::borrow::Cow::Owned(
+                synced
+                    .external_entrypoints_cloned()
+                    .next()
+                    .expect("QueuePlanSynced entrypoint"),
+            ));
+            let unavailable = (&mut adapter)
+                .prepare(
+                    &context,
+                    0,
+                    &[CandidateDescriptor::new(&synced, &routing_plan)],
+                )
+                .expect_err("QueuePlanSynced cannot bypass its autonomous ownership corridor");
+            assert_eq!(unavailable.indices(), &BTreeSet::from([0]));
+            assert_eq!(
+                unavailable.reason(),
+                "QueuePlanSynced work requires its globally admitted autonomous reservation",
+            );
+        }
+    }
+    #[test]
     fn candidate_provider_anchors_pending_autonomous_payload_and_defers_queue_conflict() {
         let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
         let (block, mut proposal) =
@@ -31267,9 +31322,15 @@ pub(super) mod tests {
             .external_entrypoints_cloned()
             .next()
             .expect("pending autonomous entrypoint");
-        let accepted = crate::tx::AcceptedTransaction::new_unchecked_entrypoint(
-            std::borrow::Cow::Owned(entrypoint.clone()),
-        );
+        let (ordinary, _) = planned_lane_candidate_block_at_view(&adapter, &keys, 0);
+        let accepted =
+            crate::tx::AcceptedTransaction::new_unchecked_entrypoint(std::borrow::Cow::Owned(
+                ordinary
+                    .external_entrypoints_cloned()
+                    .next()
+                    .expect("ordinary conflicting entrypoint"),
+            ));
+        assert_ne!(accepted.hash_as_entrypoint(), entrypoint.hash());
         let routing_plan = RoutingPlan::single(RoutingDecision::new(
             proposal.descriptor.lane_id,
             proposal.descriptor.dataspace_id,
@@ -31333,6 +31394,10 @@ pub(super) mod tests {
             .prepare(&context, 0, &[conflicting])
             .expect_err("ordinary ownership cannot overlap a live lane reservation");
         assert_eq!(unavailable.indices(), &BTreeSet::from([0]));
+        assert_eq!(
+            unavailable.reason(),
+            "ordinary work conflicts with an already-reserved autonomous lane slot",
+        );
         let prepared = provider
             .prepare(&context, 0, &[])
             .expect("empty ordinary batch carries the pending autonomous anchor");

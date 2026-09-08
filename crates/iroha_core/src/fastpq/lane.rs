@@ -303,7 +303,7 @@ fn build_engine(cfg: &Fastpq) -> Option<Arc<dyn FastpqProofEngine>> {
             prover,
             max_proof_bytes: usize::try_from(cfg.proof_sidecar_max_bytes.get())
                 .unwrap_or(usize::MAX)
-                .min(fastpq_prover::VerifyLimits::default().max_proof_bytes),
+                .min(fastpq_prover::fastpq_isi_v1::resource_limits::FASTPQ_DEFAULT_MAX_PROOF_FRAME_BYTES_V1),
         })),
         Err(err) => {
             warn!(?err, "fastpq lane: failed to construct canonical prover");
@@ -756,8 +756,8 @@ mod tests {
     static LANE_REGISTRY_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
     #[test]
     fn persisted_proof_encoding_is_canonical_bounded_and_digest_bound() {
-        // This independently replayed raw proof exercises serialization only. Its size exceeds
-        // the production verifier cap and must therefore be rejected by the production budget.
+        // This independently replayed raw proof exercises serialization only. Its size crosses
+        // the former arbitrary byte cap but fits the derived sidecar resource profile.
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../fastpq_prover/tests/fixtures/v1_raw_transcript_64.bin");
         let expected = std::fs::read(path).expect("current raw proof fixture");
@@ -775,10 +775,19 @@ mod tests {
             assert_eq!(output.trace_commitment, proof.commitment());
             assert_eq!(norito::core::get_decode_flags(), effective_flags);
         }
-        for max_bytes in [
-            expected.len() - 1,
-            fastpq_prover::VerifyLimits::default().max_proof_bytes,
-        ] {
+        let default_frame_bytes =
+            fastpq_prover::fastpq_isi_v1::resource_limits::FASTPQ_DEFAULT_MAX_PROOF_FRAME_BYTES_V1;
+        assert_eq!(
+            iroha_config::parameters::defaults::zk::fastpq::PROOF_SIDECAR_MAX_BYTES.get(),
+            default_frame_bytes as u64
+        );
+        assert_eq!(
+            FastpqProofOutput::encode_proof(&proof, default_frame_bytes)
+                .unwrap()
+                .proof_bytes,
+            expected
+        );
+        for max_bytes in [expected.len() - 1, 512 * 1024] {
             assert!(max_bytes < expected.len());
             assert!(matches!(
                 FastpqProofOutput::encode_proof(&proof, max_bytes),

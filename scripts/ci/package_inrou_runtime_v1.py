@@ -18,11 +18,13 @@ import os
 import platform
 import re
 import secrets
+import selectors
 import shutil
 import stat
 import struct
 import subprocess
 import sys
+import time
 from pathlib import Path, PurePosixPath
 from typing import Iterable, Sequence, Union
 
@@ -38,6 +40,8 @@ MAX_TOTAL_BYTES = 2 * 1024 * 1024 * 1024
 MAX_ENTRIES = 512
 COPY_CHUNK_BYTES = 1024 * 1024
 LDD_OUTPUT_MAX_BYTES = 1024 * 1024
+QEMU_HELP_MAX_BYTES = 16 * 1024
+QEMU_PROBE_TIMEOUT_SECONDS = 5
 RENAME_NOREPLACE = 1
 
 QEMU_TARGET = PurePosixPath("/inrou/bin/qemu")
@@ -106,6 +110,14 @@ class RuntimeFile:
     target: PurePosixPath
     source: Path
     mode: int
+    source_identity: tuple[int, ...] = dataclasses.field(init=False)
+
+    def __post_init__(self) -> None:
+        try:
+            identity = _source_identity(os.lstat(self.source))
+        except OSError as error:
+            raise PackagingError(f"cannot pin runtime source {self.source}") from error
+        object.__setattr__(self, "source_identity", identity)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -116,6 +128,117 @@ class ManifestFile:
     sha256: str
     exact_bytes: int
     mode: int
+
+
+def _source_identity(metadata: os.stat_result) -> tuple[int, ...]:
+    fields = (
+        "st_dev", "st_ino", "st_mode", "st_uid", "st_gid", "st_nlink",
+        "st_size", "st_mtime_ns", "st_ctime_ns",
+    )
+    return tuple(getattr(metadata, field) for field in fields)
+
+
+def _qemu_parser_help(descriptor: int) -> tuple[int, bytes]:
+    """Bound parser help to five seconds, plus one second for failed-child cleanup."""
+    deadline = time.monotonic() + QEMU_PROBE_TIMEOUT_SECONDS
+    command = [f"/proc/self/fd/{descriptor}", "-run-with", "help"]
+    child = subprocess.Popen(
+        command,
+        cwd="/",
+        env={"LC_ALL": "C", "LANG": "C", "PATH": "/usr/bin:/bin"},
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        pass_fds=(descriptor,),
+    )
+    assert child.stdout is not None
+    output = bytearray()
+    try:
+        with selectors.DefaultSelector() as selector:
+            selector.register(child.stdout, selectors.EVENT_READ)
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0 or not selector.select(remaining):
+                    raise PackagingError("QEMU run-with capability probe exceeded 5 seconds")
+                chunk = os.read(
+                    child.stdout.fileno(), QEMU_HELP_MAX_BYTES + 1 - len(output)
+                )
+                if not chunk:
+                    break
+                output.extend(chunk)
+                if len(output) > QEMU_HELP_MAX_BYTES:
+                    raise PackagingError("QEMU run-with help exceeded its 16 KiB output bound")
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise PackagingError("QEMU run-with capability probe exceeded 5 seconds")
+        return child.wait(timeout=remaining), bytes(output)
+    except BaseException as error:
+        try:
+            child.kill()
+            child.wait(timeout=1)
+        except (OSError, subprocess.TimeoutExpired) as cleanup_error:
+            raise PackagingError(
+                f"{error}; QEMU probe cleanup failed within its 1-second bound "
+                f"({type(cleanup_error).__name__})"
+            ) from error
+        raise
+    finally:
+        child.stdout.close()
+
+
+def _validate_qemu_capability(
+    qemu: RuntimeFile,
+    *,
+    owner_uid: int,
+    owner_gid: int,
+) -> None:
+    """Reject unsupported QEMU before installation without removing parent-exit policy."""
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(qemu.source, flags)
+        try:
+            before = os.fstat(descriptor)
+            _validate_attested_source_metadata(
+                before,
+                qemu.source,
+                owner_uid=owner_uid,
+                owner_gid=owner_gid,
+                executable=True,
+                phase="before QEMU capability probe",
+            )
+            if _source_identity(before) != qemu.source_identity:
+                raise PackagingError("QEMU source changed before its capability probe")
+            returncode, output = _qemu_parser_help(descriptor)
+            if _source_identity(os.fstat(descriptor)) != qemu.source_identity:
+                raise PackagingError("QEMU source changed during its capability probe")
+        finally:
+            os.close(descriptor)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise PackagingError(
+            f"QEMU capability probe failed for {qemu.source}: {type(error).__name__}"
+        ) from error
+    try:
+        lines = output.decode("ascii").splitlines()
+    except UnicodeDecodeError as error:
+        raise PackagingError("QEMU run-with help is not ASCII") from error
+    # QEMU's option-specific help exits 1 in supported releases. Require its
+    # complete parser-help shape, not a version number or a substring in errors.
+    if (
+        returncode not in (0, 1)
+        or not lines
+        or lines[0] != "run-with options:"
+        or any(
+            re.fullmatch(r"[ \t]+[a-z][a-z0-9-]*=<[^<>\r\n]+>", line) is None
+            for line in lines[1:]
+        )
+        or not any(line.strip() == "exit-with-parent=<bool (on/off)>" for line in lines[1:])
+    ):
+        diagnostic = output[:512].decode("ascii", "backslashreplace")
+        raise PackagingError(
+            f"QEMU {qemu.source} lacks required -run-with exit-with-parent=on "
+            f"parser capability (status {returncode}, help {diagnostic!r}); "
+            "install a supporting QEMU build before packaging the Inrou runtime"
+        )
 
 
 def _default_qemu() -> Path:
@@ -543,6 +666,7 @@ def collect_runtime_files(
             ):
                 raise PackagingError(f"dynamic dependency target has conflicting sources: {target}")
             files[target] = record
+    _validate_qemu_capability(files[QEMU_TARGET], owner_uid=owner_uid, owner_gid=owner_gid)
     return tuple(sorted(files.values(), key=lambda item: item.target.as_posix().encode("ascii")))
 
 
@@ -578,6 +702,7 @@ def _copy_attested_file(
     source: Path,
     destination: Path,
     *,
+    source_identity: tuple[int, ...],
     mode: int,
     owner_uid: int,
     owner_gid: int,
@@ -604,6 +729,8 @@ def _copy_attested_file(
             executable=mode == 0o555,
             phase="before copy",
         )
+        if _source_identity(source_before) != source_identity:
+            raise PackagingError(f"runtime source changed after closure qualification: {source}")
         destination_descriptor = os.open(destination, destination_flags, 0o600)
         try:
             digest = hashlib.sha256()
@@ -787,6 +914,7 @@ def materialize_runtime(
         digest, exact_bytes = _copy_attested_file(
             runtime_file.source,
             destination,
+            source_identity=runtime_file.source_identity,
             mode=runtime_file.mode,
             owner_uid=owner_uid,
             owner_gid=owner_gid,

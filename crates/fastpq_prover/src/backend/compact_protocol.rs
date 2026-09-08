@@ -1356,7 +1356,7 @@ mod tests {
         assert_eq!(work.air_evaluations, 136);
         assert_eq!(work.row_leaves, 272);
         assert_eq!(work.fri_queries, 136);
-        assert!(work.proof_bytes > VerifyLimits::default().max_proof_bytes);
+        assert!(work.proof_bytes > 512 * 1024);
         assert_eq!(fixture.proof.queries.len(), 136);
         assert!(
             fixture
@@ -1366,10 +1366,16 @@ mod tests {
                 .all(|query| query.current.len() == 310 && query.next.len() == 310)
         );
         eprintln!(
-            "compact_single_hash_verify={:?}; work={work:?}; canonical_queries=136; production_512KiB_admitted=false; profile_security_qualified=false",
+            "compact_single_hash_verify={:?}; work={work:?}; canonical_queries=136; explicit_512KiB_budget_admitted=false; profile_security_qualified=false",
             started.elapsed()
         );
-        rejected_before_hashing(&fixture.proof, VerifyLimits::default());
+        rejected_before_hashing(
+            &fixture.proof,
+            VerifyLimits {
+                max_proof_bytes: 512 * 1024,
+                ..VerifyLimits::default()
+            },
+        );
     }
 
     #[test]

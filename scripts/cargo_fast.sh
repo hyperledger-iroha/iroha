@@ -37,6 +37,7 @@ Options:
   --incremental           Set CARGO_INCREMENTAL=1 for warm local edit loops
   --no-incremental        Set CARGO_INCREMENTAL=0 for sccache-heavy builds
   --stable-local-metadata Set VERGEN_GIT_SHA=local-fast-build
+                          Reject an inherited IROHA_GIT_COMMIT_HASH before Cargo
   --zero-debug            Set CARGO_PROFILE_{DEV,TEST}_DEBUG=0
   --linker MODE           Linker: off (default)|auto|mold|lld|ld.lld|zld|ld64.lld|<path>
                           Explicit modes must pass the native compiler probe
@@ -339,6 +340,10 @@ if [[ "${no_incremental}" == true ]]; then
 fi
 
 if [[ "${stable_local_metadata}" == true ]]; then
+	if [[ "${IROHA_GIT_COMMIT_HASH+x}" == x ]]; then
+		echo "error: --stable-local-metadata conflicts with IROHA_GIT_COMMIT_HASH; omit the local flag for an exact release build, or unset the sealed marker for development" >&2
+		exit 1
+	fi
 	export VERGEN_GIT_SHA=local-fast-build
 fi
 

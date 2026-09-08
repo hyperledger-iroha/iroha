@@ -16,6 +16,10 @@ import org.hyperledger.iroha.android.client.JsonParser;
 import org.hyperledger.iroha.android.address.AssetDefinitionIdEncoder;
 import org.hyperledger.iroha.android.model.FeePaymentIntent;
 import org.hyperledger.iroha.android.model.NetworkId;
+import org.hyperledger.iroha.android.model.JsonValue;
+import org.hyperledger.iroha.android.model.TransactionPayload;
+import org.hyperledger.iroha.android.norito.SignedTransactionEncoder;
+import org.hyperledger.iroha.android.tx.SignedTransaction;
 import org.hyperledger.iroha.android.numeric.NumericV1;
 import org.junit.Test;
 
@@ -36,7 +40,7 @@ public final class PreparedTransactionSignatureFixtureTests {
                 new String(Files.readAllBytes(resolveFixture()), StandardCharsets.UTF_8)),
             "fixture");
     assertEquals(
-        "iroha.taira.prepared-transaction-signature-fixture.v1", string(root, "schema"));
+        "iroha.prepared-transaction-signature-fixture.v1", string(root, "schema"));
     assertEquals("u64_be", string(root, "frame_length_encoding"));
     assertEquals("iroha_blake2b_256", string(root, "digest_algorithm"));
     assertEquals(
@@ -174,6 +178,7 @@ public final class PreparedTransactionSignatureFixtureTests {
                 networkId,
                 string(proofRequiredVector, "signer_account_id")));
 
+    assertPublicBindingRejectsRetiredFields(prepared);
     assertPreparedTamperRejected(
         prepared, networkId, string(preparedVector, "signer_account_id"));
     final Map<String, Object> faucetVector = vectors.get("faucet_prepared");
@@ -220,14 +225,12 @@ public final class PreparedTransactionSignatureFixtureTests {
                 prepared,
                 networkId,
                 authority));
-    final TairaPublicResetMutationBindingV1 binding = prepared.binding();
-    final TairaPublicResetMutationBindingV1 alteredBinding =
-        new TairaPublicResetMutationBindingV1(
-            flipHex(binding.authorizationSha256()),
-            binding.authorizationNonce(),
+    final PreparedOperationBindingV1 binding = prepared.binding();
+    final PreparedOperationBindingV1 alteredBinding =
+        new PreparedOperationBindingV1(
+            flipHex(binding.semanticHashHex()),
             binding.kind(),
-            binding.phase(),
-            binding.idempotencyKey(),
+            binding.requestId(),
             binding.executionExpiresAtUnixMs());
     expectIllegalArgument(
         () ->
@@ -276,13 +279,28 @@ public final class PreparedTransactionSignatureFixtureTests {
             string(vector, "signer_account_id"),
             FAUCET_ASSET_DEFINITION_ID,
             NumericV1.QuantityValue.parseCanonical(FAUCET_AMOUNT));
-    AccountFaucetPreparedVerifier.requireValidPrepared(
+    final SignedTransaction transaction = AccountFaucetPreparedVerifier.requireValidPrepared(
         prepared,
         prepared.claim(),
         prepared.binding(),
         expectedFeePayment,
         policy,
         networkId);
+    final TransactionPayload payload = SignedTransactionEncoder.decodeCanonicalPayload(transaction);
+    assertEquals(4, payload.metadata().size());
+    assertEquals(JsonValue.number(1L), payload.metadata().get("taira_faucet_claim_marker_version"));
+    assertFaucetMetadataRejectsSubstitution(payload.metadata(), prepared);
+    prepared.binding().requireTransactionLifetime(payload);
+    final long creation = payload.creationTimeMs();
+    final long ttl = payload.timeToLiveMs().get();
+    final PreparedOperationBindingV1 boundary = new PreparedOperationBindingV1(
+        prepared.binding().semanticHashHex(), PreparedOperationBindingV1.FAUCET,
+        prepared.binding().requestId(), creation + ttl);
+    boundary.requireTransactionLifetime(payload);
+    expectIllegalArgument(() -> boundary.requireTransactionLifetime(
+        payload.toBuilder().setTimeToLiveMs(ttl + 1).build()));
+    expectIllegalArgument(() -> boundary.requireTransactionLifetime(
+        payload.toBuilder().setCreationTimeMs(Long.MAX_VALUE - 1).setTimeToLiveMs(2L).build()));
     final PreparedTransactionSubmitResponseV1 submitResponse =
         new PreparedTransactionSubmitResponseV1(
             PreparedTransactionSubmitResponseV1.SCHEMA,
@@ -337,6 +355,73 @@ public final class PreparedTransactionSignatureFixtureTests {
     }
   }
 
+  private static void assertPublicBindingRejectsRetiredFields(
+      final AccountOnboardingPreparedTransactionV1 prepared) {
+    final PreparedOperationBindingV1 binding = prepared.binding();
+    assertEquals(5, binding.toJsonMap().size());
+    assertEquals(prepared.semanticHashHex(), binding.semanticHashHex());
+    for (final String key : new String[] {
+        "authorization_sha256", "authorization_nonce", "phase", "idempotency_key"}) {
+      final Map<String, Object> response = new LinkedHashMap<>(prepared.toJsonMap());
+      final Map<String, Object> fields = new LinkedHashMap<>(binding.toJsonMap());
+      fields.put(key, "retired");
+      response.put("binding", fields);
+      expectBindingParseRejected(response);
+    }
+    for (final String key : binding.toJsonMap().keySet()) {
+      final Map<String, Object> response = new LinkedHashMap<>(prepared.toJsonMap());
+      final Map<String, Object> fields = new LinkedHashMap<>(binding.toJsonMap());
+      fields.remove(key);
+      response.put("binding", fields);
+      expectBindingParseRejected(response);
+    }
+    expectIllegalArgument(() -> new PreparedOperationBindingV1(
+        "iroha.taira.public-reset.mutation-binding.v1", binding.semanticHashHex(),
+        binding.kind(), binding.requestId(), binding.executionExpiresAtUnixMs()));
+    for (final long deadline : new long[] {0L, -1L}) {
+      expectIllegalArgument(() -> new PreparedOperationBindingV1(
+          binding.semanticHashHex(), binding.kind(), binding.requestId(), deadline));
+    }
+    expectIllegalArgument(() -> new PreparedOperationBindingV1(
+        "AB".repeat(32), binding.kind(), binding.requestId(), binding.executionExpiresAtUnixMs()));
+    expectIllegalArgument(() -> new PreparedOperationBindingV1(
+        binding.semanticHashHex(), binding.kind(), "AB".repeat(32), binding.executionExpiresAtUnixMs()));
+    expectIllegalArgument(() -> new PreparedOperationBindingV1(
+        binding.semanticHashHex(), "write_canary", binding.requestId(), binding.executionExpiresAtUnixMs()));
+    expectIllegalArgument(() -> new PreparedOperationBindingV1(
+        binding.semanticHashHex(), binding.kind(), binding.requestId(),
+        prepared.receipt().body().validUntilMs() + 1).requireOnboardingReceipt(prepared.receipt()));
+  }
+
+  private static void expectBindingParseRejected(final Map<String, Object> response) {
+    try {
+      AccountOnboardingJsonParser.parsePrepareResponse(
+          JsonEncoder.encode(response).getBytes(StandardCharsets.UTF_8));
+      throw new AssertionError("noncanonical public binding must be rejected");
+    } catch (final IllegalArgumentException | IllegalStateException expected) {
+      // Exact parser rejects missing or retired fields before authentication.
+    }
+  }
+
+  private static void assertFaucetMetadataRejectsSubstitution(
+      final Map<String, JsonValue> original, final AccountFaucetPreparedTransactionV1 prepared) {
+    for (final JsonValue marker : new JsonValue[] {null, JsonValue.number(2L), JsonValue.string("1")}) {
+      final Map<String, JsonValue> metadata = new LinkedHashMap<>(original);
+      metadata.remove("taira_faucet_claim_marker_version");
+      if (marker != null) metadata.put("taira_faucet_claim_marker_version", marker);
+      expectIllegalArgument(() -> AccountFaucetPreparedVerifier.requireExactMetadata(
+          metadata, prepared.binding(), prepared.semanticHashHex()));
+    }
+    final Map<String, JsonValue> extra = new LinkedHashMap<>(original);
+    extra.put("unexpected", JsonValue.number(1L));
+    expectIllegalArgument(() -> AccountFaucetPreparedVerifier.requireExactMetadata(
+        extra, prepared.binding(), prepared.semanticHashHex()));
+    final Map<String, JsonValue> stringBinding = new LinkedHashMap<>(original);
+    stringBinding.put("prepared_operation_binding", JsonValue.string(JsonEncoder.encode(prepared.binding().toJsonMap())));
+    expectIllegalArgument(() -> AccountFaucetPreparedVerifier.requireExactMetadata(
+        stringBinding, prepared.binding(), prepared.semanticHashHex()));
+  }
+
   private static void assertVectorTranscript(
       final Map<String, Object> vector,
       final byte[] transcript,
@@ -354,7 +439,7 @@ public final class PreparedTransactionSignatureFixtureTests {
 
   private static AccountOnboardingPreparedTransactionV1 copyPrepared(
       final AccountOnboardingPreparedTransactionV1 source,
-      final TairaPublicResetMutationBindingV1 binding,
+      final PreparedOperationBindingV1 binding,
       final String transactionHashHex,
       final String signedTransactionWireHex,
       final String serverSignature) {

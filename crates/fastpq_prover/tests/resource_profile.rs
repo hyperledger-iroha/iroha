@@ -130,6 +130,42 @@ fn resource_fixtures_are_deterministic_fully_witnessed_transfers() {
     }
 }
 
+fn assert_default_profile_accepts_transfer(rows: usize) {
+    use fastpq_isi::resource_limits::{
+        FASTPQ_DEFAULT_MAX_PROOF_FRAME_BYTES_V1, FASTPQ_DEFAULT_MAX_PROOF_PAYLOAD_BYTES_V1,
+    };
+    let batch = transfer_fixture(rows);
+    let prover = Prover::canonical_with_execution_mode(FASTPQ_FINAL_V1_ID, ExecutionMode::Cpu)
+        .expect("canonical CPU prover");
+    let proof = prover
+        .prove(&batch)
+        .expect("supported witnessed transfer proof fits default profile");
+    verify(&batch, &proof).expect("same default verifier accepts the generated proof");
+    assert_eq!(
+        VerifyLimits::default().max_proof_bytes,
+        FASTPQ_DEFAULT_MAX_PROOF_PAYLOAD_BYTES_V1
+    );
+    let _canonical = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+    let bytes = norito::core::to_bytes_bounded(&proof, FASTPQ_DEFAULT_MAX_PROOF_FRAME_BYTES_V1)
+        .expect("sidecar frame fits the shared encoded bound");
+    assert!(
+        bytes.len() > 512 * 1024,
+        "exercise the genesis failure range"
+    );
+    let decoded: Proof = norito::decode_from_bytes(&bytes).expect("decode complete proof frame");
+    assert_eq!(decoded, proof);
+}
+
+#[test]
+fn public_transfer_default_profile_accepts_eight_rows() {
+    assert_default_profile_accepts_transfer(8);
+}
+
+#[test]
+fn public_transfer_default_profile_accepts_sixteen_rows() {
+    assert_default_profile_accepts_transfer(16);
+}
+
 fn measure_public_cpu(rows: usize) {
     let batch = transfer_fixture(rows);
     let batch_bytes = to_bytes(&batch).expect("encode input outside measured segment");

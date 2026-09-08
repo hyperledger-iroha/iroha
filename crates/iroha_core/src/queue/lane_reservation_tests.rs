@@ -2493,7 +2493,7 @@ fn reservation_group_commit_stages_complete_commit_prefix_before_tombstones() {
     let state = lane_reservation_test_state();
     let queue = Queue::test(config_factory(), &time_source);
     let dir = tempdir().expect("tempdir");
-    install_globally_certified_test_reservation_journals(&queue, &dir);
+    let reservation_path = install_globally_certified_test_reservation_journals(&queue, &dir);
     for _ in 0..3 {
         push_globally_bound_lane_reservation_candidate(
             &queue,
@@ -2553,17 +2553,21 @@ fn reservation_group_commit_stages_complete_commit_prefix_before_tombstones() {
     );
     let durable_before = std::fs::read(dir.path().join("queue-plans-for-reservations.norito"))
         .expect("retain the exact QueuePlan tombstone history");
-    // Missing FIFO is valid only for the exact durable marked terminal cut.
+    let reservations_before =
+        std::fs::read(&reservation_path).expect("retain the complete reservation Commit prefix");
+    // Without the PlanTombstoned marker, the retained exact QueuePlan tombstone
+    // must remain available for preflight before any sibling cleanup effect.
     queue
         .lane_reservations
         .lock()
         .plan_tombstoned
         .retain(|key| key != &keys[0]);
+    let journal = queue.plan_journal.lock().take();
     assert!(matches!(
         queue.commit_lane_reservation_group(&keys),
-        Err(LaneQueueReservationError::ReconciliationFifoOrderMismatch { hash })
-            if hash == consumed
+        Err(LaneQueueReservationError::JournalNotInstalled)
     ));
+    *queue.plan_journal.lock() = journal;
     queue.lane_reservations.lock().plan_tombstoned.push(keys[0]);
     // An otherwise consumed member cannot retain another queue ownership index.
     queue.tx_encoded_len.insert(consumed, 1);
@@ -2573,6 +2577,11 @@ fn reservation_group_commit_stages_complete_commit_prefix_before_tombstones() {
     ));
     queue.tx_encoded_len.remove(&consumed);
     assert_eq!(queue.lane_reservation_commit_barriers(), expected_barriers);
+    assert_eq!(
+        std::fs::read(&reservation_path).unwrap(),
+        reservations_before,
+        "missing terminal evidence must not advance any sibling reservation"
+    );
     assert_eq!(
         std::fs::read(dir.path().join("queue-plans-for-reservations.norito")).unwrap(),
         durable_before,

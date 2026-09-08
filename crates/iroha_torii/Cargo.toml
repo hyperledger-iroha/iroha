@@ -6,7 +6,6 @@ version.workspace = true
 authors.workspace = true
 autotests = false
 
-build = "../build-support/script.rs"
 
 description.workspace = true
 repository.workspace = true
@@ -188,9 +187,6 @@ jsonwebtoken = { version = "9", default-features = false, features = ["use_pem"]
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1.1.4", features = ["fs", "process"] }
 
-[build-dependencies]
-build-support = { path = "../build-support", default-features = false }
-
 [dev-dependencies]
 iroha_service_model = { workspace = true }
 criterion = { workspace = true }
@@ -214,6 +210,11 @@ harness = false
 name = "torii_hot_paths"
 harness = false
 required-features = ["app_api", "bench"]
+
+[[test]]
+name = "taira_app_contracts"
+path = "tests/grouped/taira_app_contracts.rs"
+required-features = ["node-api"]
 
 [[test]]
 name = "torii_core_routes"

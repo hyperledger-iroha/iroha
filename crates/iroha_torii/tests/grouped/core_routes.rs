@@ -4,10 +4,6 @@
 mod account_query_subrouter_smoke;
 #[path = "../accounts_endpoints.rs"]
 mod accounts_endpoints;
-#[path = "../accounts_faucet.rs"]
-mod accounts_faucet;
-#[path = "../accounts_onboard.rs"]
-mod accounts_onboard;
 #[path = "../accounts_portfolio.rs"]
 mod accounts_portfolio;
 #[path = "../address_parsing.rs"]

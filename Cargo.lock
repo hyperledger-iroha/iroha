@@ -4842,6 +4842,7 @@ dependencies = [
  "blake2",
  "error-stack",
  "expect-test",
+ "fastpq_isi",
  "hex",
  "iroha_config_base",
  "iroha_crypto",
@@ -5656,7 +5657,6 @@ version = "2.0.0-rc.2.0"
 dependencies = [
  "async-trait",
  "blake3",
- "build-support",
  "chrono",
  "expect-test",
  "eyre",
@@ -5742,7 +5742,6 @@ dependencies = [
  "axum",
  "base64 0.22.1",
  "blake3",
- "build-support",
  "ciborium",
  "criterion",
  "dashmap",

@@ -50,7 +50,8 @@ const METADATA_COMMITMENT_PHASE_V1: &[u8] = b"commitment";
 /// Number of canonical Goldilocks limbs carrying the six-lane metadata commitment.
 pub(crate) const METADATA_COMMITMENT_LIMBS: usize = 6;
 /// Default maximum canonical trace columns admitted before prover allocation.
-pub(crate) const DEFAULT_MAX_TRACE_COLUMNS: usize = 512;
+pub(crate) const DEFAULT_MAX_TRACE_COLUMNS: usize =
+    fastpq_isi::resource_limits::FASTPQ_MAX_TRACE_COLUMNS_V1;
 /// Domain tag for hashing DS identifiers.
 const DSID_DOMAIN: &[u8] = b"fastpq:v1:dsid";
 /// Domain tag binding role, permission, and epoch into one permission-tree leaf.

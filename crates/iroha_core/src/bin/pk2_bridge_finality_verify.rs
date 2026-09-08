@@ -237,11 +237,14 @@ fn main() {
 }
 fn run() -> Result<(), String> {
     let cli = parse_args(env::args().skip(1))?;
-    let json = run_cli(cli)?;
+    let json = run_cli(compiled_build_identity()?, cli)?;
     println!("{json}");
     Ok(())
 }
-fn run_cli(cli: Cli) -> Result<String, String> {
+fn run_cli(
+    build_identity: iroha_core::release_identity::BuildIdentity,
+    cli: Cli,
+) -> Result<String, String> {
     let json = match cli {
         Cli::Attested {
             attestation,
@@ -261,6 +264,7 @@ fn run_cli(cli: Cli) -> Result<String, String> {
             let expectations_json =
                 read_bounded_source(&expected_roster, MAX_EXPECTATIONS_BYTES, "expected roster")?;
             let receipt = verify_attested_json_inputs(
+                build_identity,
                 &attestation_json,
                 &signed_genesis,
                 &expectations_json,
@@ -277,7 +281,12 @@ fn run_cli(cli: Cli) -> Result<String, String> {
             let proof_json = read_bounded_source(&proof, MAX_PROOF_BYTES, "proof")?;
             let expectations_json =
                 read_bounded_source(&expected_roster, MAX_EXPECTATIONS_BYTES, "expected roster")?;
-            let receipt = verify_json_inputs(&status_json, &proof_json, &expectations_json)?;
+            let receipt = verify_json_inputs(
+                build_identity,
+                &status_json,
+                &proof_json,
+                &expectations_json,
+            )?;
             norito::json::to_json(&receipt)
         }
     }
@@ -647,6 +656,7 @@ fn read_bounded(path: &Path, max_bytes: u64, label: &str) -> Result<Vec<u8>, Str
     Ok(bytes)
 }
 fn verify_json_inputs(
+    build_identity: iroha_core::release_identity::BuildIdentity,
     status_json: &[u8],
     proof_json: &[u8],
     expectations_json: &[u8],
@@ -664,6 +674,7 @@ fn verify_json_inputs(
     let expectations = norito::json::from_json::<ExpectedRosterDocument>(expectations_text)
         .map_err(|error| format!("invalid expected-roster JSON: {error}"))?;
     verify_decoded(
+        build_identity,
         &status,
         &proof,
         &expectations,
@@ -672,6 +683,7 @@ fn verify_json_inputs(
     )
 }
 fn verify_attested_json_inputs(
+    build_identity: iroha_core::release_identity::BuildIdentity,
     attestation_json: &[u8],
     signed_genesis: &[u8],
     expectations_json: &[u8],
@@ -729,6 +741,7 @@ fn verify_attested_json_inputs(
         &genesis,
     )?;
     let tip = verify_decoded(
+        build_identity,
         &attestation.body.status,
         &attestation.body.finality_proof,
         &legacy_expectations,
@@ -929,6 +942,7 @@ fn verify_genesis_finality_proof(
     reason = "status binding, proof audit, quorum accounting, and cryptographic verification form one ordered fail-closed flow"
 )]
 fn verify_decoded(
+    build_identity: iroha_core::release_identity::BuildIdentity,
     status: &SumeragiV2Status,
     proof: &BridgeFinalityProof,
     expectations: &ExpectedRosterDocument,
@@ -948,7 +962,10 @@ fn verify_decoded(
             status.protocol_version
         ));
     }
-    let expected_build_fingerprint = compiled_build_fingerprint();
+    build_identity
+        .release_source_commit()
+        .map_err(|error| error.to_string())?;
+    let expected_build_fingerprint = build_identity.build_fingerprint();
     if status.build_fingerprint != expected_build_fingerprint {
         return Err(format!(
             "status build_fingerprint {} does not match this current-source verifier build {}",
@@ -1225,17 +1242,23 @@ fn semantic_commit_decision_id(certificate: &QuorumCertificateRef) -> Result<Str
 fn sha256_hex(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
 }
-fn compiled_build_fingerprint() -> Hash {
-    let mut preimage = env!("CARGO_PKG_VERSION").as_bytes().to_vec();
-    preimage.extend_from_slice(
-        option_env!("GIT_COMMIT_HASH")
-            .unwrap_or("unknown")
-            .as_bytes(),
-    );
-    Hash::new(preimage)
+fn compiled_build_identity() -> Result<iroha_core::release_identity::BuildIdentity, String> {
+    iroha_core::compiled_build_identity!().map_err(|error| error.to_string())
 }
 #[cfg(test)]
 mod tests {
+    fn test_build_identity() -> iroha_core::release_identity::BuildIdentity {
+        iroha_core::release_identity::BuildIdentity::from_compiled_parts(
+            "test-executable",
+            Some("1111111111111111111111111111111111111111"),
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("explicit PK2 fixture identity")
+    }
+
     use super::*;
     use iroha_crypto::{Hash, KeyPair, Signature, SignatureOf};
     use iroha_data_model::{
@@ -1359,11 +1382,29 @@ mod tests {
         let genesis_executed_wire_len =
             u64::try_from(signed_genesis.len()).expect("genesis wire length fits u64");
         let genesis_executed_wire_hash = Hash::new(&signed_genesis);
+        let mint_finality_roster =
+            iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochRosterV1 {
+                version: iroha_data_model::isi::kagemusha_v1::KAGEMUSHA_CHAIN_VERSION_V1,
+                network_id,
+                epoch: 0,
+                validators: roster.iter().enumerate().map(|(index, validator)| {
+                    iroha_core::zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
+                        &[0xA0 + u8::try_from(index).expect("four-validator fixture"); 32],
+                        0,
+                        validator.validator.clone(),
+                    ).expect("derive real paired-Pasta fixture authority")
+                }).collect(),
+            };
+        let mint_finality_epoch_id = mint_finality_roster
+            .finality_epoch_id()
+            .expect("canonical fixture mint-finality roster");
         let context = HeightContext {
             network_id,
             protocol_version: PROTOCOL_VERSION,
             height: 1,
             epoch: 0,
+            kagemusha_mint_finality_epoch_id: mint_finality_epoch_id,
+            kagemusha_mint_finality_epoch_roster: mint_finality_roster,
             epoch_end_height: 10,
             next_epoch_snapshot: None,
             mode: ConsensusMode::Npos,
@@ -1446,7 +1487,7 @@ mod tests {
         let status = SumeragiV2Status {
             protocol_version: PROTOCOL_VERSION,
             node_fingerprint: Hash::new(expected_node.encode()),
-            build_fingerprint: compiled_build_fingerprint(),
+            build_fingerprint: test_build_identity().build_fingerprint(),
             config_fingerprint: Hash::new(b"config"),
             restart_required: false,
             height_context_id: context.id(),
@@ -1525,12 +1566,50 @@ mod tests {
             challenge,
         }
     }
+    #[test]
+    fn pk2_verification_rejects_different_and_development_executable_identity() {
+        let fixture = fixture();
+        assert!(verify_fixture(&fixture).is_ok());
+        for (source, expected_error) in [
+            (
+                "3333333333333333333333333333333333333333",
+                "build_fingerprint",
+            ),
+            ("local-fast-build", "release admission"),
+        ] {
+            let identity = iroha_core::release_identity::BuildIdentity::from_compiled_parts(
+                "test-executable",
+                Some(source),
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+            let error = verify_decoded(
+                identity,
+                &fixture.status,
+                &fixture.proof,
+                &fixture.expectations,
+                "status".to_owned(),
+                "proof".to_owned(),
+            )
+            .unwrap_err();
+            assert!(error.contains(expected_error), "{error}");
+        }
+    }
+
     fn verify_fixture(fixture: &Fixture) -> Result<VerificationReceipt, String> {
         let status = norito::json::to_json(&fixture.status).expect("encode status");
         let proof = norito::json::to_json(&fixture.proof).expect("encode proof");
         let expectations =
             norito::json::to_json(&fixture.expectations).expect("encode expectations");
-        verify_json_inputs(status.as_bytes(), proof.as_bytes(), expectations.as_bytes())
+        verify_json_inputs(
+            test_build_identity(),
+            status.as_bytes(),
+            proof.as_bytes(),
+            expectations.as_bytes(),
+        )
     }
     fn attested_expectations(fixture: &Fixture) -> AttestedExpectedRosterDocument {
         AttestedExpectedRosterDocument {
@@ -1555,6 +1634,7 @@ mod tests {
         let expectations =
             norito::json::to_json(expectations).expect("encode attested expectations");
         verify_attested_json_inputs(
+            test_build_identity(),
             attestation.as_bytes(),
             &fixture.signed_genesis,
             expectations.as_bytes(),
@@ -1642,7 +1722,7 @@ mod tests {
         assert_eq!(receipt.block_hash, receipt.genesis_block_hash);
         assert_eq!(
             receipt.build_fingerprint,
-            hex::encode(compiled_build_fingerprint().as_ref())
+            hex::encode(test_build_identity().build_fingerprint().as_ref())
         );
         assert_eq!(
             receipt.config_fingerprint,
@@ -1688,10 +1768,12 @@ mod tests {
                 .contains("attestation network id does not match")
         );
         let mut wrong_genesis_binding = self::fixture();
-        wrong_genesis_binding.attestation.body.network_id = wrong_network.network_id;
-        resign_attestation(&mut wrong_genesis_binding);
-        let mut wrong_genesis_expectations = attested_expectations(&wrong_genesis_binding);
-        wrong_genesis_expectations.network_id = wrong_network.network_id;
+        // Keep the attestation internally valid, then supply another genuinely
+        // signed genesis. A body-only network mutation is rejected earlier by
+        // attestation consistency and cannot exercise this trust-root check.
+        wrong_genesis_binding.signed_genesis = fixture.signed_genesis.clone();
+        wrong_genesis_binding.genesis_public_key = fixture.genesis_public_key.clone();
+        let wrong_genesis_expectations = attested_expectations(&wrong_genesis_binding);
         assert!(
             verify_attested_fixture(
                 &wrong_genesis_binding,
@@ -1865,12 +1947,15 @@ mod tests {
         bound_challenge_file
             .flush()
             .expect("flush bound challenge input");
-        let receipt_json = run_cli(Cli::Attested {
-            attestation: InputSource::InheritedFd(attestation_file.as_raw_fd()),
-            signed_genesis: InputSource::InheritedFd(genesis_file.as_raw_fd()),
-            expected_roster: InputSource::InheritedFd(roster_file.as_raw_fd()),
-            challenge: ChallengeSource::InheritedFd(bound_challenge_file.as_raw_fd()),
-        })
+        let receipt_json = run_cli(
+            test_build_identity(),
+            Cli::Attested {
+                attestation: InputSource::InheritedFd(attestation_file.as_raw_fd()),
+                signed_genesis: InputSource::InheritedFd(genesis_file.as_raw_fd()),
+                expected_roster: InputSource::InheritedFd(roster_file.as_raw_fd()),
+                challenge: ChallengeSource::InheritedFd(bound_challenge_file.as_raw_fd()),
+            },
+        )
         .expect("execute attested verifier over all four inherited descriptors");
         assert!(receipt_json.contains("\"schema_version\":4"));
         assert!(receipt_json.contains("\"status\":\"validated\""));
@@ -2070,9 +2155,14 @@ mod tests {
         let hostile = expectations.strip_suffix('}').expect("object").to_owned()
             + ",\"legacy_fallback\":true}";
         assert!(
-            verify_json_inputs(status.as_bytes(), proof.as_bytes(), hostile.as_bytes())
-                .expect_err("reject unknown expectation")
-                .contains("invalid expected-roster JSON")
+            verify_json_inputs(
+                test_build_identity(),
+                status.as_bytes(),
+                proof.as_bytes(),
+                hostile.as_bytes()
+            )
+            .expect_err("reject unknown expectation")
+            .contains("invalid expected-roster JSON")
         );
     }
     #[test]

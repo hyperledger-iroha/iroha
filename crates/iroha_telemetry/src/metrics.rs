@@ -1061,7 +1061,7 @@ mod serde_tests {
             "stack snapshot should retain budget clamp count"
         );
         metrics.apply_stack_snapshot(&stack_settings_snapshot());
-        let status = metrics.status_snapshot();
+        let status = metrics.status_snapshot(&build_status_fixture());
         assert_eq!(status.stack.scheduler_bytes, snapshot.scheduler_bytes);
         assert_eq!(
             status.stack.gas_to_stack_multiplier,
@@ -1176,24 +1176,6 @@ impl From<StackSettingsSnapshot> for StackStatus {
         }
     }
 }
-fn current_build_status() -> BuildStatus {
-    BuildStatus {
-        version: env!("CARGO_PKG_VERSION").to_owned(),
-        git_commit_sha: option_env!("VERGEN_GIT_SHA")
-            .unwrap_or("unknown")
-            .to_owned(),
-        dpn_validator_release_commit: option_env!("IROHA_DPN_VALIDATOR_RELEASE_COMMIT")
-            .unwrap_or("unknown")
-            .to_owned(),
-        cargo_features: option_env!("VERGEN_CARGO_FEATURES")
-            .unwrap_or("unknown")
-            .to_owned(),
-        target_triple: option_env!("VERGEN_CARGO_TARGET_TRIPLE")
-            .unwrap_or("unknown")
-            .to_owned(),
-    }
-}
-
 /// Number of manifest activation records retained in telemetry snapshots.
 pub const GOVERNANCE_MANIFEST_RECENT_CAP: usize = 8;
 const REJECTION_RECENT_WINDOW_MS: u64 = 5 * 60 * 1_000;
@@ -1442,9 +1424,9 @@ fn collect_da_receipt_cursors(metrics: &Metrics) -> Vec<DaReceiptCursorStatus> {
     metrics.da_receipt_cursor_status()
 }
 impl Metrics {
-    /// Capture the current metrics as the canonical Torii status response.
+    /// Combine live metrics with the owning executable identity for Torii status.
     #[must_use]
-    pub fn status_snapshot(&self) -> Status {
+    pub fn status_snapshot(&self, build: &BuildStatus) -> Status {
         let value = self;
         let now_ms = current_unix_time_ms();
         let last_block_committed_at_ms = value.last_block_committed_at_ms.get();
@@ -1460,7 +1442,7 @@ impl Metrics {
             now_ms.saturating_sub(last_non_empty_block_committed_at_ms)
         };
         Status {
-            build: current_build_status(),
+            build: build.clone(),
             observed_at_ms: now_ms,
             peers: value.connected_peers.get(),
             blocks: value.block_height.get(),
@@ -7484,3 +7466,14 @@ include!("metrics/tail_projection.rs");
 #[cfg(test)]
 #[path = "metrics/test.rs"]
 mod test;
+
+#[cfg(test)]
+fn build_status_fixture() -> BuildStatus {
+    BuildStatus {
+        version: "test-executable".to_owned(),
+        git_commit_sha: "1111111111111111111111111111111111111111".to_owned(),
+        dpn_validator_release_commit: "2222222222222222222222222222222222222222".to_owned(),
+        cargo_features: "test-features".to_owned(),
+        target_triple: "test-target".to_owned(),
+    }
+}

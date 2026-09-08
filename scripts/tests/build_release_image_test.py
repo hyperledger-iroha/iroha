@@ -366,6 +366,8 @@ def test_image_replay_is_byte_identical_and_oci_archive_is_normalized(
     builds = [call for call in calls if call[:2] == ["buildx", "build"]]
     assert len(builds) == 2
     for call in builds:
+        assert f"IROHA_GIT_COMMIT_HASH={manifest['commit']}" in call
+        assert f"VERGEN_GIT_SHA={manifest['commit']}" in call
         assert "--provenance=false" in call
         assert "--sbom=false" in call
         assert "--no-cache" in call
@@ -380,6 +382,46 @@ def test_image_replay_is_byte_identical_and_oci_archive_is_normalized(
             "BINARIES=iroha3d iroha3d_taira sorafs_governance_dag iroha kagami "
             "attachment_sanitizer sorafs_external_software_signer"
         ) in call
+
+
+@pytest.mark.parametrize("dockerfile", ["Dockerfile", "Dockerfile.cross"])
+@pytest.mark.parametrize(
+    "sealed,canonical,accepted",
+    [
+        ("a" * 40, "a" * 40, True),
+        ("a" * 40, "b" * 40, False),
+        ("a" * 40, "", False),
+        ("", "a" * 40, False),
+        ("a" * 39, "a" * 39, False),
+        ("a" * 64, "a" * 64, False),
+        ("A" * 40, "A" * 40, False),
+        ("local-fast-build", "local-fast-build", False),
+    ],
+)
+def test_image_build_rejects_missing_or_substituted_compiled_source(
+    dockerfile: str, sealed: str, canonical: str, accepted: bool
+) -> None:
+    source = (REPO_ROOT / dockerfile).read_text(encoding="utf-8")
+    start = source.index('    test "${#IROHA_GIT_COMMIT_HASH}"')
+    end = source.index("esac;", start) + len("esac;")
+    admission = source[start:end].replace("\\\n", "\n")
+    result = subprocess.run(
+        ["/bin/sh", "-ec", admission],
+        env={"IROHA_GIT_COMMIT_HASH": sealed, "VERGEN_GIT_SHA": canonical},
+        capture_output=True,
+    )
+    assert (result.returncode == 0) is accepted
+
+
+def test_image_producer_rejects_noncanonical_compiled_source_before_build() -> None:
+    result = subprocess.run(
+        [str(SCRIPT), "--source-commit", "a" * 64],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0
+    assert "exact 40-hex compiled release identity" in result.stderr
 
 
 def test_image_refuses_stale_output_without_replacement(tmp_path: Path) -> None:

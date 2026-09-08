@@ -247,7 +247,10 @@ fn build_subscription_harness(status: SubscriptionStatus) -> SubscriptionHarness
         cfg.common.key_pair.clone(),
         OnlinePeersProvider::new(peers_rx),
         None,
-        MaybeTelemetry::disabled(),
+        iroha_torii::ToriiRuntimeDeps::new(
+            build_identity_test_fixture::build_identity(),
+            MaybeTelemetry::disabled(),
+        ),
     )
     .expect("valid Torii subscription fixture");
     SubscriptionHarness {
@@ -511,3 +514,6 @@ async fn subscription_cancel_route_requires_exact_tagged_mode() {
     assert_eq!(harness.queue.queued_len(), 0);
     harness.shutdown().await;
 }
+
+#[path = "../src/build_identity_test_fixture.rs"]
+mod build_identity_test_fixture;

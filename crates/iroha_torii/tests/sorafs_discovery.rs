@@ -1683,7 +1683,10 @@ fn build_torii_harness(cfg: &actual_cfg::Root) -> ToriiHarness {
     let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
     let _ = peers_tx;
     let chain_id_arc = Arc::new(chain_id.clone());
-    let runtime_deps = ToriiRuntimeDeps::new(MaybeTelemetry::disabled());
+    let runtime_deps = ToriiRuntimeDeps::new(
+        build_identity_test_fixture::build_identity(),
+        MaybeTelemetry::disabled(),
+    );
     let runtime_deps = if let Some((proof, repair, reserve, orderbook)) = native_signers {
         let proof: Arc<dyn SoraFsProofOutcomeTransactionSigner> = proof;
         let repair: Arc<dyn SoraFsRepairTransactionSigner> = repair;
@@ -3569,3 +3572,6 @@ async fn sorafs_alias_listing_reports_governance_revocation() {
 }
 include!("sorafs_discovery/storage_path_fixture.rs");
 include!("sorafs_discovery/fixture_key_mismatch_test.rs");
+
+#[path = "../src/build_identity_test_fixture.rs"]
+mod build_identity_test_fixture;

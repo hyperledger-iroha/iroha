@@ -167,8 +167,8 @@ ceiling, depth 16 and a frame-length field ceiling bound decoding.
 `decode_canonical_with_limits` validates schema/header/layout/checksum and exact
 consumption, then compares canonical re-encoding without allocating another
 frame. Exact dimensions and all base/Fp4 coordinates pass typed preflight before
-Fiat-Shamir processing. Allocation charges are not exact RSS. Default 512 KiB
-and explicit diagnostic limits remain distinct caller policies.
+Fiat-Shamir processing. Allocation charges are not exact RSS. Derived replay defaults and explicit
+compact diagnostic limits remain distinct caller policies.
 
 Source tests exercise mutation rejection, shared/legacy transcript and opening
 equivalence, wrong terminal degrees, field/coset arithmetic, canonical framing,

@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
-"""Catch Taira CLI release regressions before expensive cross-compilation.
+"""Catch Taira application, consensus and proof regressions before cross-compilation.
 
-Requires Python 3.11+, the repository Rust toolchain and Cargo on PATH. Compile
-one native CLI test harness through scripts/cargo_fast.sh, then run existing
-fixture-only tests. Reuse the current warm Cargo target and native jobserver.
-No live configuration, runtime credentials, SSH, deployment or signing inputs
-are accepted. No report files are written; Cargo and test fixtures use their
-usual local scratch files. This focused check does not qualify release artifacts.
+Requires Python 3.11+ and the repository Rust toolchain. Compile focused native
+harnesses and run a four-peer network with isolated Cargo and fixture-only inputs.
+The existing sibling .taira-testnet-build-targets/routine lane is the default;
+--target-dir or TAIRA_TESTNET_CARGO_TARGET_DIR may select another development
+lane. Both selectors must agree when supplied. No Cargo lane is created or cleaned.
+Native checks retain incremental compilation unless CARGO_INCREMENTAL=0 is
+explicitly selected. This preference never changes Linux release compilation.
 
-Pass --repo-root to check another Iroha checkout. CARGO_TARGET_DIR may name an existing
-stable native build lane; this script never creates a per-run lane or cleans it.
+Configuration and compiler paths match authenticated preparation, while source
+remains the mutable checkout. These checks never qualify release artifacts and
+accept no live configuration, credentials, SSH, deployment or signing inputs.
 """
 
 from __future__ import annotations
@@ -20,6 +22,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 import time
 
 
@@ -33,7 +36,34 @@ STAGES = (
         "taira_public_reset::inputs::tests::inherited_owner_key_is_bounded_private_and_matches_the_independent_public_key",
         "taira_public_reset::inputs::tests::signing_key_rejects_hardlinks_and_nonregular_descriptors_without_reading_them",
     )),
+    ("explicit operator signing custody", (
+        "taira_public_reset::operator_admission_tests::operator_public_key_is_canonical_ed25519_and_authorization_bound",
+        "taira_public_reset::operator_admission_tests::operator_policy_requires_explicit_enabled_allowlist_and_rejects_inference",
+        "taira_public_reset::executor_model::tests::recovery_args_accept_identical_forward_inputs_without_admitting_unused_paths",
+        "operator_key::tests::loads_one_absolute_owner_only_operator_key",
+        "operator_key::tests::rejects_indirect_or_non_owner_only_operator_key_files",
+        "operator_key::tests::rejects_relative_oversized_and_secret_echoing_operator_key_inputs",
+        "operator_key::tests::loads_borrowed_operator_fd_positionally_without_reopening_its_path",
+        "operator_key::tests::rejects_operator_fd_numbers_outside_the_inherited_range",
+        "operator_key::tests::rejects_non_readonly_nonregular_linked_and_non_owner_only_operator_fds",
+        "operator_key::tests::rejects_empty_oversized_and_noncanonical_operator_fds_without_secret_echo",
+        "operator_key::tests::positional_operator_read_rejects_mutation_before_final_metadata_check",
+        "operator_key::tests::positional_operator_read_handles_short_reads_and_redacts_io_errors",
+        "tests::operator_private_key_file_is_an_explicit_global_runtime_option",
+        "tests::operator_private_key_fd_is_explicit_bounded_and_exclusive",
+        "tests::credential_free_commands_reject_operator_fd_without_reading_it",
+        "tests::inherited_operator_key_load_installs_the_explicit_run_context_signer",
+        "tests::run_context_installs_only_the_explicit_operator_key",
+        "tests::taira_public_reset_local_inputs_require_a_dedicated_operator_key",
+        "tests::taira_public_reset_operator_keygen_has_explicit_private_output",
+        "taira_public_reset::host::tests::validator_operator_key_custody_rejects_wrong_identity_and_mutation",
+        "taira_public_reset::host::tests::candidate_operator_status_child_binds_both_inherited_signers",
+        "taira_public_reset::host::tests::candidate_operator_status_child_rejects_missing_or_replaced_operator_key",
+    )),
     ("native validator config preparation", (
+        "taira_public_reset::config::tests::config_rebase_operator_key_is_canonical_and_changes_only_explicit_operator_fields",
+        "taira_public_reset::config::tests::operator_keygen_publishes_canonical_private_key_and_only_public_report",
+        "taira_public_reset::config::tests::operator_keygen_rejects_repository_existing_symlink_and_unsafe_parent_paths",
         "taira_public_reset::config::tests::config_rebase_changes_only_genesis_file_and_keeps_errors_secret_free",
         "taira_public_reset::config::tests::config_rebase_inherited_fd_publishes_private_file_without_stdout_or_overwrite",
         "taira_public_reset::config::tests::config_rebase_rejects_drift_malformed_input_and_unsafe_descriptors_before_output",
@@ -103,6 +133,61 @@ STAGES = (
     ("read-only host preflight", (
         "taira_public_reset::host::tests::preflight_dispatches_five_read_only_hosts_without_runtime_custody",
     )),
+    ("candidate qualification before edge cutover", (
+        "taira_public_reset::host::tests::public_reset_convergence_waits_for_first_commit_without_accepting_pending_proof",
+        "taira_public_reset::host::tests::public_reset_convergence_waits_for_applied_successor_before_canary",
+        "taira_public_reset::host::tests::public_reset_convergence_rejects_fatal_identity_during_startup",
+        "taira_public_reset::host::tests::public_reset_convergence_deadline_reports_last_public_progress",
+        "taira_public_reset::host::tests::public_reset_convergence_accepts_same_decision_across_certificate_rounds",
+        "taira_public_reset::host::tests::public_reset_convergence_rejects_changed_execution_or_subject_at_same_height",
+        "taira_public_reset::host::tests::public_reset_convergence_rejects_omitted_nullable_status_fields",
+        "taira_public_reset::host::tests::convergence_wave_receipt_rejects_unknown_first_release_fields",
+        "taira_public_reset::executor_model::tests::candidate_qualification_completes_before_public_cutover",
+        "taira_public_reset::executor_model::tests::candidate_failure_never_exposes_the_public_edge",
+        "taira_public_reset::executor_model::tests::candidate_probe_origins_reject_cross_host_or_substituted_sockets",
+        "taira_public_reset::executor_model::tests::public_verification_failure_rolls_back_edge_before_validators",
+        "taira_public_reset::executor_model::tests::every_classifier_reachable_recovery_phase_reopens_with_exact_cursor",
+        "taira::tests::candidate_inrou_qualifies_runtime_before_public_discovery_exists",
+        "taira::tests::candidate_inrou_scope_rejects_remote_or_implicit_probe_destinations",
+        "taira::tests::inrou_check_separates_selected_status_origin_from_public_route_origin",
+        "taira_public_reset::host::tests::candidate_client_fd_preserves_signer_and_expires_with_child_custody",
+        "taira_public_reset::host::tests::candidate_probe_host_key_rejects_another_host_before_mutation",
+        "taira_public_reset::host::tests::prepared_candidate_write_cannot_be_reinterpreted_as_public_evidence",
+        "taira_public_reset::host::tests::typed_write_envelope_producer_reaches_authenticated_host_consumer",
+        "taira::tests::prepared_binding_metadata_matches_objects_before_submission_and_after_commit",
+        "taira::tests::typed_inrou_envelopes_reach_fd_and_exact_predecessor_consumers",
+        "taira::tests::inrou_predecessor_decoder_rejects_unknown_fields_at_every_envelope_layer",
+        "taira_public_reset::host::tests::inrou_restart_evidence_binds_ordered_host_and_exact_guest_transition",
+        "taira_public_reset::host::tests::prepared_inrou_report_rejects_every_missing_or_extra_v1_field",
+        "taira_public_reset::host::tests::readiness_http_server_waits_for_request_bytes_after_accept",
+        "taira_public_reset::host::tests::journaled_restart_waits_for_four_http_backends_before_onboarding",
+        "taira_public_reset::host::tests::journaled_restart_readiness_preserves_its_pre_restart_deadline",
+        "taira_public_reset::host::tests::journaled_restart_readiness_stops_on_expired_authorization_or_ambiguous_restart",
+    )),
+    ("explicit unresolved testnet abandonment", (
+        "taira_public_reset::executor_model::tests::abandonment_admits_original_signed_revision_without_relaxing_current_dispatcher_identity",
+        "taira_public_reset::executor_model::tests::abandonment_cli_requires_explicit_flag_digest_and_original_authority",
+        "taira_public_reset::executor_model::tests::abandonment_preserves_exact_unresolved_evidence_before_rollback_and_after_crash",
+        "taira_public_reset::executor_model::tests::abandonment_rejects_wrong_digest_edge_and_proven_state_without_host_actions",
+        "taira_public_reset::executor_model::tests::abandonment_partial_rollback_resumes_only_remaining_hosts_with_original_digest",
+    )),
+    ("server-prepared transaction confirmation", (
+        "taira::tests::prepared_server_confirmation_polls_queued_then_verifies_exact_applied_wire",
+        "taira::tests::prepared_server_confirmation_preserves_fixed_failure_and_deadline",
+        "taira::tests::prepared_server_confirmation_rejects_malformed_status_without_resubmission",
+    )),
+    ("stopped owner runtime cleanup", (
+        "taira_public_reset::host::stopped_runtime::tests::stopped_owner_cleanup_releases_only_empty_own_workers_and_replays",
+        "taira_public_reset::host::stopped_runtime::tests::stopped_owner_cleanup_rejects_live_nested_forged_and_replaced_workers",
+        "taira_public_reset::host::stopped_runtime::tests::stopped_owner_cleanup_keeps_barriers_when_process_absence_is_unproven",
+        "taira_public_reset::host::stopped_runtime::tests::stopped_owner_cleanup_lock_rejects_replaced_or_shared_custody",
+        "taira_public_reset::host::stopped_runtime::tests::stopped_owner_cleanup_authority_requires_exact_config_slot",
+        "taira_public_reset::host::stopped_runtime::tests::stopped_firewall_accepts_only_exact_crash_cuts",
+        "taira_public_reset::host::stopped_runtime::tests::stopped_firewall_rejects_foreign_references_and_rule_drift",
+        "taira_public_reset::host::stopped_runtime::tests::stopped_firewall_cleanup_is_exact_and_idempotent",
+        "taira_public_reset::host::stopped_runtime::tests::stopped_firewall_stops_after_command_failure_or_snapshot_drift",
+        "taira_public_reset::host::stopped_runtime::tests::stopped_firewall_read_only_never_mutates",
+    )),
 )
 
 if sys.platform == "linux":
@@ -111,17 +196,77 @@ if sys.platform == "linux":
     )),)
 
 
+TORII_STAGES = (("routed onboarding and faucet contracts", (
+    "accounts_faucet::accounts_faucet_accepts_alias_selector_config",
+    "accounts_faucet::accounts_faucet_adds_amount_to_prefunded_accounts",
+    "accounts_faucet::accounts_faucet_allows_repeated_claims_for_same_account",
+    "accounts_faucet::accounts_faucet_puzzle_exposes_current_anchor",
+    "accounts_faucet::accounts_faucet_puzzle_raises_difficulty_after_recent_claim",
+    "accounts_faucet::accounts_faucet_registers_missing_account_before_transfer",
+    "accounts_faucet::accounts_faucet_rejects_missing_pow_when_required",
+    "accounts_faucet::accounts_faucet_transfers_starter_balance_to_empty_account",
+    "accounts_faucet::faucet_account_fixture_uses_checked_ed25519_key_generation",
+    "accounts_faucet::faucet_block_leader_fixture_uses_checked_bls_key_generation",
+    "accounts_faucet::faucet_prepared_envelope_survives_pow_anchor_aging",
+    "accounts_faucet::faucet_submit_rejects_old_and_tampered_shapes_and_deduplicates_exact_replay",
+    "accounts_onboard::expired_onboarding_envelope_only_reconciles_an_already_known_hash",
+    "accounts_onboard::sponsored_onboarding_catalog_contains_plan_prepare_submit_and_readiness",
+    "accounts_onboard::sponsored_onboarding_fresh_receipt_and_submit_work_after_idle_anchor",
+    "accounts_onboard::sponsored_onboarding_prepare_is_non_mutating_and_exact_submit_is_replay_safe",
+    "accounts_onboard::sponsored_onboarding_receipt_binds_exact_network_and_active_signer",
+    "accounts_onboard::sponsored_onboarding_receipt_rejects_genesis_and_retired_network_keys",
+    "accounts_onboard::sponsored_onboarding_rejects_signed_expired_receipt_without_block_progress",
+    "accounts_onboard::sponsored_onboarding_stale_create_receipt_returns_redacted_conflict",
+    "accounts_onboard::sponsored_onboarding_submit_rejects_old_and_tampered_envelopes",
+)),)
+
+CORE_STAGES = (("multi-route ordinary transaction progress", (
+    "sumeragi::v2_lane_work::tests::candidate_provider_admits_ordinary_work_in_multiroute_world_and_excludes_queue_plan_synced",
+    "sumeragi::v2_lane_work::tests::candidate_provider_anchors_pending_autonomous_payload_and_defers_queue_conflict",
+    "fastpq::lane::tests::persisted_proof_encoding_is_canonical_bounded_and_digest_bound",
+)),)
+
+PROOF_STAGES = (("canonical proof resource bounds", (
+    "proof::tests::default_resource_profile_covers_canonical_opening_shapes_and_wire_frames",
+    "proof::tests::raw_fixture_verifier_preserves_explicit_admission_limits",
+    "proof::tests::enforce_verify_limits_allows_values_at_exact_boundaries",
+    "proof::tests::verify_limits_reject_oversized_proof_payload",
+)),)
+
+PROOF_FLOW_STAGES = (("default proof production and verification", (
+    "resource_profile::public_transfer_default_profile_accepts_eight_rows",
+    "resource_profile::public_transfer_default_profile_accepts_sixteen_rows",
+)),)
+
+NETWORK_STAGES = (("four-validator multi-route transaction commit", (
+    "four_peer_multiroute_ordinary_transaction_reaches_applied",
+)),)
+
+HARNESS_TARGETS = {
+    "cli": ("native CLI", "iroha", "bin", ["-p", "iroha_cli", "--bin", "iroha"]),
+    "torii": ("native Torii contracts", "taira_app_contracts", "test", ["-p", "iroha_torii", "--test", "taira_app_contracts"]),
+    "core": ("native Core", "iroha_core", "lib", ["-p", "iroha_core", "--lib"]),
+    "proof": ("native proof bounds", "fastpq_prover", "lib", ["-p", "fastpq_prover", "--lib"]),
+    "proof-flows": ("native proof flows", "fastpq_integration", "test", ["-p", "fastpq_prover", "--test", "fastpq_integration"]),
+    "network": ("native consensus contracts", "taira_consensus_contracts", "test", ["-p", "integration_tests", "--test", "taira_consensus_contracts"]),
+}
+
+
 class CheckError(Exception):
     """A build or selected regression did not pass."""
 
 
-def compile_command(root: Path) -> list[str]:
-    return [str(root / "scripts/cargo_fast.sh"), "--", "test", "--locked",
-            "-p", "iroha_cli", "--bin", "iroha", "--no-run",
+def compile_command(root: Path, env: dict[str, str], *, harness: str = "cli") -> list[str]:
+    if harness not in HARNESS_TARGETS:
+        raise CheckError("invalid native regression harness selection")
+    selection = HARNESS_TARGETS[harness][3]
+    return [env["CARGO"], "--config", str(root / ".cargo/config.toml"), "test",
+            "--manifest-path", str(root / "Cargo.toml"), "--locked", "--offline",
+            *selection, "--no-run",
             "--message-format=json-render-diagnostics"]
 
 
-def test_artifact(line: str) -> str | None:
+def test_artifact(line: str, *, harness: str = "cli") -> str | None:
     try:
         event = json.loads(line)
     except json.JSONDecodeError:
@@ -129,7 +274,8 @@ def test_artifact(line: str) -> str | None:
     if not isinstance(event, dict) or event.get("reason") != "compiler-artifact":
         return None
     target = event.get("target", {})
-    if (target.get("name") == "iroha" and "bin" in target.get("kind", [])
+    _, name, kind, _ = HARNESS_TARGETS[harness]
+    if (target.get("name") == name and kind in target.get("kind", [])
             and event.get("profile", {}).get("test") is True):
         executable = event.get("executable")
         if isinstance(executable, str) and executable:
@@ -153,36 +299,35 @@ def show_build_diagnostic(line: str) -> None:
             sys.stderr.flush()
 
 
-def compile_harness(root: Path, env: dict[str, str], *, frozen: bool = False, lock_fds: tuple[int, ...] = ()) -> str:
-    command = ([env["CARGO"], "--config", str(root / ".cargo/config.toml"), "test",
-                "--manifest-path", str(root / "Cargo.toml"), "--locked", "--offline",
-                "-p", "iroha_cli", "--bin", "iroha", "--no-run",
-                "--message-format=json-render-diagnostics"] if frozen else compile_command(root))
-    print("[taira-check] build native CLI test harness", flush=True)
+def compile_harness(root: Path, env: dict[str, str], *, lock_fds: tuple[int, ...] = (),
+                    harness: str = "cli") -> str:
+    command = compile_command(root, env, harness=harness)
+    label = HARNESS_TARGETS[harness][0]
+    print(f"[taira-check] build {label} test harness", flush=True)
     started = time.monotonic()
     artifacts: set[str] = set()
-    with subprocess.Popen(command, cwd="/" if frozen else root, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+    with subprocess.Popen(command, cwd="/", env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                           text=True, encoding="utf-8", errors="replace", pass_fds=lock_fds) as child:
         assert child.stdout is not None
         for line in child.stdout:
             show_build_diagnostic(line)
-            artifact = test_artifact(line)
+            artifact = test_artifact(line, harness=harness)
             if artifact is not None:
                 artifacts.add(artifact)
         code = child.wait()
     elapsed = time.monotonic() - started
     if code:
-        raise CheckError(f"native CLI build failed (exit {code}, {elapsed:.1f}s)")
+        raise CheckError(f"{label} build failed (exit {code}, {elapsed:.1f}s)")
     if len(artifacts) != 1:
-        raise CheckError(f"native CLI build reported {len(artifacts)} test executables; expected one")
-    print(f"[taira-check] native CLI build passed in {elapsed:.1f}s", flush=True)
+        raise CheckError(f"{label} build reported {len(artifacts)} test executables; expected one")
+    print(f"[taira-check] {label} build passed in {elapsed:.1f}s", flush=True)
     return artifacts.pop()
 
 
-def require_tests(listing: str) -> None:
+def require_tests(listing: str, stages=None) -> None:
     available = {line.removesuffix(": test") for line in listing.splitlines()
                  if line.endswith(": test")}
-    missing = [name for _, names in STAGES for name in names if name not in available]
+    missing = [name for _, names in (STAGES if stages is None else stages) for name in names if name not in available]
     if missing:
         raise CheckError("required regressions missing from native harness: " + ", ".join(missing))
 
@@ -197,26 +342,14 @@ def require_one_pass(name: str, result: subprocess.CompletedProcess[str]) -> Non
         raise CheckError(f"regression did not execute and pass: {name} (exit {result.returncode})")
 
 
-def run_checks(root: Path, *, environment: dict[str, str] | None = None,
-               source_commit: str | None = None, lock_fds: tuple[int, ...] = ()) -> None:
-    if sys.platform not in {"darwin", "linux"}:
-        raise CheckError("the Taira descriptor/stage gate requires macOS or Linux")
-    started = time.monotonic()
-    head = source_commit if source_commit is not None else subprocess.check_output(
-        ["git", "rev-parse", "HEAD"], cwd=root, stdin=subprocess.DEVNULL, text=True).strip()
-    env = dict(os.environ if environment is None else environment)
-    env.pop("CARGO_BUILD_TARGET", None)  # This check executes a host-native harness.
-    env["VERGEN_GIT_SHA"] = head
-    env["IROHA_GIT_COMMIT_HASH"] = head
-    print(f"[taira-check] source {head}; {root}", flush=True)
-    harness = compile_harness(root, env, frozen=source_commit is not None, lock_fds=lock_fds)
-    fixture_root = Path(env["CARGO_TARGET_DIR"]) if source_commit is not None else root
+def run_stages(harness: str, fixture_root: Path, env: dict[str, str], stages,
+               lock_fds: tuple[int, ...]) -> None:
     listing = subprocess.run([harness, "--list", "--format", "terse"], cwd=fixture_root,
                              env=env, stdin=subprocess.DEVNULL, text=True, capture_output=True, check=False, pass_fds=lock_fds)
     if listing.returncode:
         raise CheckError(f"cannot list native harness tests (exit {listing.returncode})")
-    require_tests(listing.stdout)
-    for label, names in STAGES:
+    require_tests(listing.stdout, stages)
+    for label, names in stages:
         stage_start = time.monotonic()
         print(f"[taira-check] start {label} ({len(names)} tests)", flush=True)
         for name in names:
@@ -228,10 +361,98 @@ def run_checks(root: Path, *, environment: dict[str, str] | None = None,
             require_one_pass(name, result)
             print(f"[taira-check] passed {name} ({time.monotonic() - test_start:.1f}s)", flush=True)
         print(f"[taira-check] passed {label} ({time.monotonic() - stage_start:.1f}s)", flush=True)
-    if source_commit is None and subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root,
+
+
+def compile_network_binaries(root: Path, env: dict[str, str], lock_fds: tuple[int, ...]) -> dict[str, str]:
+    """Use real Cargo artifacts so the network harness never starts a fallback build."""
+    command = [env["CARGO"], "--config", str(root / ".cargo/config.toml"), "build",
+               "--manifest-path", str(root / "Cargo.toml"), "--locked", "--offline",
+               "-p", "irohad", "--bin", "iroha3d", "-p", "iroha_cli", "--bin", "iroha",
+               "--message-format=json-render-diagnostics"]
+    print("[taira-check] build native network binaries", flush=True)
+    started = time.monotonic()
+    artifacts: dict[str, str] = {}
+    with subprocess.Popen(command, cwd="/", env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                          text=True, encoding="utf-8", errors="replace", pass_fds=lock_fds) as child:
+        assert child.stdout is not None
+        for line in child.stdout:
+            show_build_diagnostic(line)
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(event, dict) or event.get("reason") != "compiler-artifact":
+                continue
+            target = event.get("target", {})
+            name = target.get("name")
+            executable = event.get("executable")
+            if (name in ("iroha3d", "iroha") and "bin" in target.get("kind", [])
+                    and event.get("profile", {}).get("test") is False
+                    and isinstance(executable, str) and executable):
+                if name in artifacts and artifacts[name] != executable:
+                    raise CheckError("native network binary has conflicting Cargo artifacts")
+                artifacts[name] = executable
+                print("[taira-check] native network artifact " + json.dumps({
+                    "name": name, "executable": executable, "profile": event["profile"],
+                    "manifest_path": event.get("manifest_path"),
+                }, sort_keys=True), flush=True)
+        code = child.wait()
+    if code or set(artifacts) != {"iroha3d", "iroha"}:
+        raise CheckError(f"native network build did not produce both executable artifacts (exit {code})")
+    print(f"[taira-check] network binary build passed in {time.monotonic() - started:.1f}s", flush=True)
+    return artifacts
+
+
+def run_network_checks(root: Path, fixture_root: Path, env: dict[str, str], lock_fds: tuple[int, ...]) -> None:
+    binaries = compile_network_binaries(root, env, lock_fds)
+    harness = compile_harness(root, env, lock_fds=lock_fds, harness="network")
+    # Keep attempt-owned fixtures and logs for diagnosis; they contain no live inputs.
+    directory = Path(tempfile.mkdtemp(prefix="taira-consensus-check-", dir=fixture_root))
+    network_env = env | {
+        "TEST_NETWORK_BIN_IROHAD": binaries["iroha3d"],
+        "TEST_NETWORK_BIN_IROHA": binaries["iroha"],
+        "IROHA_TEST_TARGET_DIR": env["CARGO_TARGET_DIR"],
+        "TEST_NETWORK_TMP_DIR": str(directory),
+        "IROHA_TEST_SKIP_BUILD": "1",
+        "IROHA_FAIL_ON_SANDBOX_SKIP": "1",
+        "IROHA_TEST_REQUIRE_NETWORK": "1",
+        "IROHA_TEST_SERIALIZE_NETWORKS": "1",
+    }
+    print(f"[taira-check] consensus fixture logs: {directory}", flush=True)
+    run_stages(harness, fixture_root, network_env, NETWORK_STAGES, lock_fds)
+
+
+def run_checks(root: Path, *, environment: dict[str, str] | None = None,
+               source_commit: str | None = None, lock_fds: tuple[int, ...] = ()) -> None:
+    if sys.platform not in {"darwin", "linux"}:
+        raise CheckError("the Taira descriptor/stage gate requires macOS or Linux")
+    started = time.monotonic()
+    if environment is None or not all(environment.get(name) for name in ("CARGO", "CARGO_HOME", "CARGO_TARGET_DIR")):
+        raise CheckError("checks require the coordinated isolated Cargo environment; use either check CLI")
+    env = dict(environment)
+    head = source_commit if source_commit is not None else subprocess.check_output(
+        ["git", "--no-replace-objects", "rev-parse", "HEAD"], cwd=root, env=env,
+        stdin=subprocess.DEVNULL, text=True).strip()
+    env.pop("CARGO_BUILD_TARGET", None)  # This check executes a host-native harness.
+    env["VERGEN_GIT_SHA"] = head
+    env["IROHA_GIT_COMMIT_HASH"] = head
+    print(f"[taira-check] source {head}; {root}", flush=True)
+    fixture_root = Path(env["CARGO_TARGET_DIR"]) if source_commit is not None else root
+    # Exercise the composed runtime before the independent contract harnesses:
+    # source staging and consensus defects must not wait behind their full builds.
+    if NETWORK_STAGES:
+        run_network_checks(root, fixture_root, env, lock_fds)
+    harness = compile_harness(root, env, lock_fds=lock_fds)
+    run_stages(harness, fixture_root, env, STAGES, lock_fds)
+    for name, stages in (("core", CORE_STAGES), ("proof", PROOF_STAGES),
+                         ("proof-flows", PROOF_FLOW_STAGES), ("torii", TORII_STAGES)):
+        if stages:
+            selected_harness = compile_harness(root, env, lock_fds=lock_fds, harness=name)
+            run_stages(selected_harness, fixture_root, env, stages, lock_fds)
+    if source_commit is None and subprocess.check_output(["git", "--no-replace-objects", "rev-parse", "HEAD"], cwd=root, env=env,
                                stdin=subprocess.DEVNULL, text=True).strip() != head:
         raise CheckError("HEAD changed during checks; rerun against the intended source")
-    count = sum(len(names) for _, names in STAGES)
+    count = sum(len(names) for _, names in STAGES + CORE_STAGES + PROOF_STAGES + PROOF_FLOW_STAGES + TORII_STAGES + NETWORK_STAGES)
     print(f"[taira-check] PASS: {count} regressions in {time.monotonic() - started:.1f}s", flush=True)
 
 
@@ -239,10 +460,14 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo-root", type=Path, default=Path(__file__).resolve().parents[1],
                         help="repository root (default: this maintained script's parent repository)")
+    parser.add_argument("--target-dir", type=Path, help="existing development Cargo lane (default: sibling routine lane)")
     args = parser.parse_args()
+    # Lazy import keeps the low-level gate loadable from an authenticated source capture.
+    import taira_release as release
     try:
-        run_checks(args.repo_root.resolve(strict=True))
-    except (CheckError, OSError, subprocess.SubprocessError) as error:
+        release.development_check(args.repo_root, args.target_dir, dict(os.environ))
+    except (CheckError, release.PrepareError, release.ReleaseArtifactError,
+            release.gate.CheckError, OSError, ValueError, subprocess.SubprocessError) as error:
         print(f"[taira-check] FAIL: {error}", file=sys.stderr, flush=True)
         return 1
     return 0

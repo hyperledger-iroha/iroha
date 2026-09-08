@@ -11,6 +11,7 @@ pub mod params;
 pub mod poseidon;
 pub mod poseidon_digest384;
 mod poseidon_digest384_prefix;
+pub mod resource_limits;
 pub use params::{
     CANONICAL_PARAMETER_SETS, ExactDyadicBoundV1, FASTPQ_AGGREGATE_TARGETS_V1, FASTPQ_CATALOG_V1,
     FASTPQ_COMPOSITION_DEGREE_EXPANSION_V1, FASTPQ_DIGEST_LANE_BITS_V1, FASTPQ_DIGEST_LANES_V1,

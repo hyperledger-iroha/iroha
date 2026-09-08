@@ -1,9 +1,17 @@
 # FASTPQ production readiness
 
-Updated: 2026-09-08. **Production qualification is unavailable.** The selected
+Updated: 2026-09-09. **Production qualification is unavailable.** The selected
 completion target is succinct verification from bounded authenticated openings.
 A successful local test, feature build, arithmetic calculation, or benchmark
 manifest is not a release qualification decision.
+
+The replay resource defaults now share an opening-shape derivation for the
+unchanged 256-transition, 512-column admission profile: 2,163,774 bytes of
+approximate payload and 2,372,085 bytes for the complete canonical Norito frame.
+The verifier uses the payload bound; Core encoding and the sidecar default use
+the frame bound. The derivation includes the existing 136 queries, 2,048-point
+maximum default LDE, nine binary folds, all authentication paths and framing.
+It changes no cryptographic parameters, qualification gates or compact admission.
 
 ## Current optimizations integration
 
@@ -61,7 +69,7 @@ not release latency or peak-memory guarantees. Fresh end-to-end verification of
 the new public producers is pending at this source checkpoint.
 The four separate CPU measurements of the existing public replay API also pass:
 two and four transition rows produce accepted canonical proofs of 150,028 and
-323,936 bytes; eight and sixteen rows reject at the unchanged 524,288-byte
+323,936 bytes; eight and sixteen rows rejected at that snapshot's 524,288-byte
 approximate proof limit. The rejected size hints are not encoded proof lengths.
 Those tests expose the current admitted capacity limit and do not measure the
 compact candidate or establish a workload SLO.
@@ -266,17 +274,15 @@ qualification remain open.
    Existing proofs/witnesses that bind a nonempty permission table must be
    regenerated. This remains contextual input, not an AIR permission proof, and
    its 32-byte width does not establish aggregate 128-bit post-quantum security.
-6. **Mismatched default prover/verifier capacity:** the 256-transition ceiling
-   and 512 KiB approximate proof ceiling are independent. Even a minimally wide
-   16-row transfer proof exceeds the byte ceiling under the current opening
-   layout. Public proving now enforces the same default envelope as public
-   verification, while raw development diagnostics can use explicit larger
-   limits. Raising query counts without redesigning proof size and measured
-   resource budgets would aggravate this mismatch. The 20,000-row accelerator
-   microbenchmark is not evidence of admitted end-to-end proof capacity.
-   The final public-API diagnostic's 360-column fixtures accepted two and four
-   transition rows (147,685 and 321,406 actual Norito wire bytes), but rejected
-   eight and sixteen at approximate payload sizes 652,958 and 1,366,766 bytes.
+6. **Mismatched default prover/verifier capacity:** the previous independent
+   512 KiB payload ceiling rejected valid eight-row genesis batches, and Core
+   also reused that approximate charge as an encoded-frame ceiling. Resource
+   defaults now derive both charges from the same supported opening geometry;
+   neither proof identity nor cryptographic geometry changes. A maximum-shape
+   test compares the derived limits with the real serializer, while eight- and
+   sixteen-row fully witnessed transfer regressions exercise the public prover,
+   default verifier and bounded sidecar encoding. Larger explicit diagnostic
+   limits still grant no state-transition or production admission authority.
 7. **Rollout evidence:** validation must inspect captured workload shape, actual
    CPU/GPU timings, backend availability, both captured-file hashes, numeric
    finiteness, telemetry and externally trusted manifest signatures. Hardware CI

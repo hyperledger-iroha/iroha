@@ -766,7 +766,6 @@ mod tests {
         };
         let prepared = fixture.prepare(ProofSemantics::AxtTransferClaim);
         let expected = fixture.expected(&prepared);
-        assert!(encoded.len() > VerifyLimits::default().max_proof_bytes);
         assert!(encoded.len() < typed_bytes);
         assert!(encoded.len() <= limits.max_proof_bytes);
         assert!(matches!(
@@ -775,7 +774,10 @@ mod tests {
                 &expected,
                 context(&fixture),
                 &encoded,
-                VerifyLimits::default(),
+                VerifyLimits {
+                    max_proof_bytes: encoded.len() - 1,
+                    ..VerifyLimits::default()
+                },
             ),
             Err(Error::VerifierLimitExceeded {
                 limit: "max_proof_bytes",

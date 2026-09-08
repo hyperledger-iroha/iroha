@@ -247,6 +247,7 @@ fn build_faucet_test_context_with_registration(
     let _ = peers_tx;
     let da_receipt_signer = cfg.common.key_pair.clone();
     let torii = Torii::new(
+        build_identity_test_fixture::build_identity(),
         chain_id.clone(),
         network_id,
         kiso,
@@ -1101,11 +1102,57 @@ async fn accounts_faucet_puzzle_exposes_current_anchor() {
 }
 #[tokio::test]
 async fn accounts_faucet_rejects_missing_pow_when_required() {
-    let FaucetTestContext { app, user_id, .. } = build_faucet_test_context(false);
-    let body = json_object(vec![json_entry("account_id", user_id.to_string())]);
-    let body = norito::json::to_json(&body).expect("serialize faucet request");
-    let resp = prepare_faucet_envelope(&app, body).await;
-    let _resp = expect_status(resp, StatusCode::BAD_REQUEST).await;
+    let FaucetTestContext {
+        app,
+        user_id,
+        queue,
+        ..
+    } = build_faucet_test_context(false);
+    let claim = json_object(vec![
+        json_entry("account_id", user_id.to_string()),
+        json_entry("pow_anchor_height", 1_u64),
+        json_entry("pow_nonce_hex", "00".repeat(32)),
+    ]);
+    let binding = faucet_mutation_binding(&claim);
+    for missing in ["pow_anchor_height", "pow_nonce_hex"] {
+        // Build the typed binding before deliberately breaking the claim so
+        // the actual HTTP extractor, rather than the valid-claim helper, rejects it.
+        let mut incomplete = claim.clone();
+        incomplete
+            .as_object_mut()
+            .expect("claim object")
+            .remove(missing);
+        let body = json_object(vec![
+            json_entry("schema", "iroha.accounts.faucet.prepare.v1"),
+            json_entry("binding", binding.clone()),
+            json_entry(
+                "fee_payment",
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            ),
+            json_entry("claim", incomplete),
+        ]);
+        let mut request = faucet_post_request(
+            "/v1/accounts/faucet/prepare",
+            norito::json::to_json(&body).expect("serialize malformed faucet request"),
+        );
+        request.headers_mut().insert(
+            axum::http::header::ACCEPT,
+            axum::http::HeaderValue::from_static("application/json"),
+        );
+        let resp = app
+            .clone()
+            .oneshot(request)
+            .await
+            .expect("malformed faucet response");
+        let resp = expect_status(resp, StatusCode::BAD_REQUEST).await;
+        let body = to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .expect("malformed faucet response body");
+        let body = String::from_utf8(body.to_vec()).expect("JSON rejection body");
+        assert!(body.contains("request_json_invalid"), "{body}");
+        assert!(body.contains(missing), "{body}");
+    }
+    assert_eq!(queue.active_len(), 0);
     app.shutdown().await;
 }
 #[tokio::test]
@@ -1170,3 +1217,6 @@ async fn accounts_faucet_puzzle_raises_difficulty_after_recent_claim() {
     assert!(queued > 0);
     app.shutdown().await;
 }
+
+#[path = "../src/build_identity_test_fixture.rs"]
+mod build_identity_test_fixture;

@@ -299,22 +299,18 @@ public final class AccountOnboardingJsonParser {
         stringField(root, "signature", "account onboarding receipt.signature"));
   }
 
-  private static TairaPublicResetMutationBindingV1 parseBinding(
+  private static PreparedOperationBindingV1 parseBinding(
       final Map<String, Object> root) {
-    final String path = "public reset mutation binding";
+    final String path = "prepared operation binding";
     exactKeys(
         root,
-        set(
-            "schema", "authorization_sha256", "authorization_nonce", "kind", "phase",
-            "idempotency_key", "execution_expires_at_unix_ms"),
+        set("schema", "semantic_hash_hex", "kind", "request_id", "execution_expires_at_unix_ms"),
         path);
-    return new TairaPublicResetMutationBindingV1(
+    return new PreparedOperationBindingV1(
         stringField(root, "schema", path + ".schema"),
-        stringField(root, "authorization_sha256", path + ".authorization_sha256"),
-        stringField(root, "authorization_nonce", path + ".authorization_nonce"),
+        stringField(root, "semantic_hash_hex", path + ".semantic_hash_hex"),
         stringField(root, "kind", path + ".kind"),
-        stringField(root, "phase", path + ".phase"),
-        stringField(root, "idempotency_key", path + ".idempotency_key"),
+        stringField(root, "request_id", path + ".request_id"),
         longField(root, "execution_expires_at_unix_ms", path + ".execution_expires_at_unix_ms"));
   }
 

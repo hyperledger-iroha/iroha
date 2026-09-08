@@ -26,7 +26,7 @@ import org.hyperledger.iroha.android.alias.AccountOnboardingPrepareResponseV1;
 import org.hyperledger.iroha.android.alias.AccountOnboardingPreparedTransactionV1;
 import org.hyperledger.iroha.android.alias.AccountOnboardingProofRequiredPrepareResponseV1;
 import org.hyperledger.iroha.android.alias.PreparedTransactionSubmitResponseV1;
-import org.hyperledger.iroha.android.alias.TairaPublicResetMutationBindingV1;
+import org.hyperledger.iroha.android.alias.PreparedOperationBindingV1;
 import org.hyperledger.iroha.android.client.ClientResponse;
 import org.hyperledger.iroha.android.client.IrohaClient;
 import org.hyperledger.iroha.android.client.JsonParser;
@@ -990,7 +990,7 @@ public final class NexusAppClientTest {
         prepareSponsoredAccountOnboarding(
             final AccountOnboardingPlanRequestV1 request,
             final AccountOnboardingPlanReceiptV1 receipt,
-            final TairaPublicResetMutationBindingV1 binding,
+            final PreparedOperationBindingV1 binding,
             final FeePaymentIntent feePayment,
             final String onboardingToken,
             final String expectedAuthority,
@@ -1004,7 +1004,7 @@ public final class NexusAppClientTest {
             final AccountOnboardingProofRequiredPrepareResponseV1 proofRequired,
             final AccountOnboardingPlanRequestV1 request,
             final AccountOnboardingPlanReceiptV1 receipt,
-            final TairaPublicResetMutationBindingV1 binding,
+            final PreparedOperationBindingV1 binding,
             final String expectedAuthority,
             final NetworkId expectedNetworkId,
             final ToriiCanonicalRequestAuth canonicalAuth) {
@@ -1027,7 +1027,7 @@ public final class NexusAppClientTest {
     public CompletableFuture<AccountFaucetPreparedTransactionV1>
         prepareAccountFaucetTransaction(
             final AccountFaucetClaimV1 claim,
-            final TairaPublicResetMutationBindingV1 binding,
+            final PreparedOperationBindingV1 binding,
             final FeePaymentIntent feePayment,
             final AccountFaucetPolicyV1 policy,
             final NetworkId expectedNetworkId) {

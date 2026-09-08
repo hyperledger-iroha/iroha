@@ -210,11 +210,13 @@ Refer to [Iroha Special Instructions](https://docs.iroha.tech/blockchain/instruc
 
 ### Sumeragi consensus helpers
 
-Operator reads require an explicit runtime key file whose public key is allowlisted by the node.
-Pass the absolute file path on every invocation; the CLI does not read this credential from the
-environment or client TOML and never substitutes the account key. On Unix the file must be an
-owner-owned, singly linked regular file with exact mode `0600`. Requests are signed for the exact
-`network_id` in `client.toml`.
+Operator reads require an explicit runtime key whose public key is allowlisted by the node.
+Pass either `--operator-private-key-file /absolute/path` or an inherited read-only descriptor with
+`--operator-private-key-fd FD` (3–65535). These options are mutually exclusive. The CLI does not
+read this credential from the environment or client TOML and never substitutes the account key.
+On Unix the key must be in an owner-owned, singly linked regular file with exact mode `0600`.
+Descriptor reads use the inherited file directly, preserve the caller's file offset and never
+reopen a path. Requests are signed for the exact `network_id` in `client.toml`.
 
 Fetch the exact reducer-owned consensus status:
 

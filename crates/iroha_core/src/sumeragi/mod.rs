@@ -7074,6 +7074,8 @@ fn test_sumeragi_handle_with_source_geometry(
 include!("tests/queue_plan_admission_handoff.rs");
 /// Spawn configuration for the authoritative serialized Sumeragi v2 worker.
 pub struct SumeragiStartArgs {
+    /// Immutable build identity supplied by the executable that owns this worker.
+    pub build_identity: crate::release_identity::BuildIdentity,
     /// Canonical frozen Sumeragi-v2 consensus configuration.
     pub config: SumeragiConfig,
     /// Common configuration shared with other subsystems (keys, peers, chain id).
@@ -7178,6 +7180,7 @@ impl SumeragiStartArgs {
     /// Returns an error when the authoritative v2 worker cannot be spawned.
     pub fn start(self, shutdown_signal: ShutdownSignal) -> Result<(SumeragiHandle, Child)> {
         let SumeragiStartArgs {
+            build_identity,
             config,
             common_config,
             events_sender,
@@ -7280,6 +7283,7 @@ impl SumeragiStartArgs {
             Arc::clone(&output_guard),
         );
         let worker = SumeragiWorker {
+            build_identity,
             config,
             common_config,
             events_sender,
@@ -7498,6 +7502,7 @@ impl Drop for V2StartupReplayInventoryGuard {
     }
 }
 struct SumeragiWorker {
+    build_identity: crate::release_identity::BuildIdentity,
     config: SumeragiConfig,
     common_config: CommonConfig,
     events_sender: EventsSender,

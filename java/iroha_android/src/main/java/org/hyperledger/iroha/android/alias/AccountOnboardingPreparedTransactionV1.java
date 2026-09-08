@@ -9,11 +9,11 @@ import org.hyperledger.iroha.android.model.FeePaymentIntent;
 /** Authenticated exact transaction returned by onboarding preparation. */
 public final class AccountOnboardingPreparedTransactionV1 extends AliasJsonValue
     implements AccountOnboardingPrepareResponseV1 {
-  public static final String SCHEMA = "iroha.taira.prepared-transaction.v1";
+  public static final String SCHEMA = "iroha.prepared-transaction.v1";
   public static final String OPERATION = "onboarding";
 
   private final String schema;
-  private final TairaPublicResetMutationBindingV1 binding;
+  private final PreparedOperationBindingV1 binding;
   private final String operation;
   private final AccountOnboardingPlanReceiptV1 receipt;
   private final String semanticHashHex;
@@ -29,7 +29,7 @@ public final class AccountOnboardingPreparedTransactionV1 extends AliasJsonValue
   /** Constructs an exact parsed prepared transaction. */
   public AccountOnboardingPreparedTransactionV1(
       final String schema,
-      final TairaPublicResetMutationBindingV1 binding,
+      final PreparedOperationBindingV1 binding,
       final String operation,
       final AccountOnboardingPlanReceiptV1 receipt,
       final String semanticHashHex,
@@ -44,7 +44,7 @@ public final class AccountOnboardingPreparedTransactionV1 extends AliasJsonValue
     if (!SCHEMA.equals(schema)) throw new IllegalArgumentException("unsupported prepared transaction schema");
     if (!OPERATION.equals(operation)) throw new IllegalArgumentException("prepared onboarding operation must be onboarding");
     this.binding = Objects.requireNonNull(binding, "binding");
-    if (!TairaPublicResetMutationBindingV1.ONBOARDING.equals(binding.kind())) {
+    if (!PreparedOperationBindingV1.ONBOARDING.equals(binding.kind())) {
       throw new IllegalArgumentException("prepared onboarding requires an onboarding binding");
     }
     this.disposition = Objects.requireNonNull(disposition, "disposition");
@@ -57,18 +57,18 @@ public final class AccountOnboardingPreparedTransactionV1 extends AliasJsonValue
     this.schema = schema;
     this.operation = operation;
     this.receipt = Objects.requireNonNull(receipt, "receipt");
-    this.semanticHashHex = TairaPublicResetMutationBindingV1.requireLowerHex32(semanticHashHex, "semanticHashHex");
+    this.semanticHashHex = PreparedOperationBindingV1.requireLowerHex32(semanticHashHex, "semanticHashHex");
     this.accountId = AccountIdLiteral.requireCanonicalI105Address(accountId, "accountId");
     this.alias = alias;
-    this.transactionHashHex = TairaPublicResetMutationBindingV1.requireTransactionHash(transactionHashHex, "transactionHashHex");
-    this.signedTransactionWireHex = TairaPublicResetMutationBindingV1.requireLowerHex(signedTransactionWireHex, "signedTransactionWireHex");
-    this.signedTransactionWireSha256 = TairaPublicResetMutationBindingV1.requireLowerHex32(signedTransactionWireSha256, "signedTransactionWireSha256");
+    this.transactionHashHex = PreparedOperationBindingV1.requireTransactionHash(transactionHashHex, "transactionHashHex");
+    this.signedTransactionWireHex = PreparedOperationBindingV1.requireLowerHex(signedTransactionWireHex, "signedTransactionWireHex");
+    this.signedTransactionWireSha256 = PreparedOperationBindingV1.requireLowerHex32(signedTransactionWireSha256, "signedTransactionWireSha256");
     this.feePayment = Objects.requireNonNull(feePayment, "feePayment");
-    this.serverSignature = TairaPublicResetMutationBindingV1.requireHex(serverSignature, "serverSignature");
+    this.serverSignature = PreparedOperationBindingV1.requireHex(serverSignature, "serverSignature");
   }
 
   public String schema() { return schema; }
-  public TairaPublicResetMutationBindingV1 binding() { return binding; }
+  public PreparedOperationBindingV1 binding() { return binding; }
   public String operation() { return operation; }
   public AccountOnboardingPlanReceiptV1 receipt() { return receipt; }
   public String semanticHashHex() { return semanticHashHex; }

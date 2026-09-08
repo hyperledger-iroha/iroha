@@ -3885,7 +3885,8 @@ pub mod zk {
         /// Maximum queued FASTPQ proof sidecar attachments.
         pub const PROOF_SIDECAR_QUEUE_CAP: NonZeroUsize = nonzero!(1024_usize);
         /// Maximum encoded FASTPQ proof snapshot accepted for sidecar persistence.
-        pub const PROOF_SIDECAR_MAX_BYTES: Bytes = Bytes(1024 * 1024);
+        pub const PROOF_SIDECAR_MAX_BYTES: Bytes =
+            Bytes(fastpq_isi::resource_limits::FASTPQ_DEFAULT_MAX_PROOF_FRAME_BYTES_V1 as u64);
         /// Maximum attempts to merge a FASTPQ proof snapshot into a pending pipeline sidecar.
         pub const PROOF_SIDECAR_MAX_RETRIES: NonZeroUsize = nonzero!(16_usize);
         /// Optional override for the Metal command-buffer cap (None = derive automatically).

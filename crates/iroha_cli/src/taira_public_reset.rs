@@ -95,6 +95,8 @@ enum PublicResetCommand {
     SourceManifest(PublicResetSourceManifest),
     /// Materialize a retained validator config from an inherited descriptor without printing secrets.
     ConfigRebase(config::ConfigRebase),
+    /// Generate a dedicated runtime operator credential without exposing private key bytes.
+    OperatorKeygen(config::OperatorKeygen),
     /// Assemble exact release inputs locally from an explicit inventory draft.
     Assemble(inputs::Assemble),
     /// Sign retained release inputs using an independently trusted owner key.
@@ -103,6 +105,8 @@ enum PublicResetCommand {
     Preflight(PublicResetPreflight),
     /// Execute the admitted reset with pinned SSH and runtime signing inputs.
     Apply(PublicResetApply),
+    /// Abandon an unresolved pre-edge testnet canary, preserve its evidence, and roll back.
+    Abandon(PublicResetAbandon),
     /// Internal fixed-protocol host dispatcher. Requests are read only from stdin.
     #[command(name = "host-dispatch", hide = true)]
     HostDispatch(host::PublicResetHost),
@@ -135,6 +139,19 @@ struct PublicResetPreflight {
 }
 
 #[derive(clap::Args, Debug)]
+struct PublicResetAbandon {
+    /// Original signed reset inputs and pinned SSH custody.
+    #[command(flatten)]
+    inputs: PublicResetPreflight,
+    /// Exact SHA-256 of the original recovery-pending journal, including its newline.
+    #[arg(long, value_name = "SHA256")]
+    expected_journal_sha256: String,
+    /// Explicitly discard the unproven testnet without asserting a transaction outcome.
+    #[arg(long, required = true)]
+    abandon_pending_mutations: bool,
+}
+
+#[derive(clap::Args, Debug)]
 struct PublicResetApply {
     /// Exact V1 executor inventory.
     #[arg(long, value_name = "PATH")]
@@ -151,6 +168,9 @@ struct PublicResetApply {
     /// Runtime-only owner-private pinned OpenSSH known-hosts file.
     #[arg(long, value_name = "PATH")]
     known_hosts: PathBuf,
+    /// Dedicated owner-private operator key for convergence and restart verification.
+    #[arg(long, value_name = "PATH")]
+    validator_operator_key: Option<PathBuf>,
     /// Owner-private signing config for forward work or read-only mutation recovery.
     #[arg(long, value_name = "PATH")]
     runtime_client_config: Option<PathBuf>,
@@ -167,6 +187,18 @@ struct PublicResetApply {
 }
 
 impl PublicResetApply {
+    fn recovery_validator_operator_key(
+        &self,
+        step: executor_model::ExecutionStep,
+    ) -> Result<Option<PathBuf>> {
+        if step == executor_model::ExecutionStep::RestartProof {
+            Ok(Some(self.validator_operator_key.clone().ok_or_else(
+                || eyre!("RestartProof recovery requires --validator-operator-key"),
+            )?))
+        } else {
+            Ok(None)
+        }
+    }
     fn recovery_client_config(&self) -> Result<PathBuf> {
         self.runtime_client_config
             .clone()
@@ -246,6 +278,10 @@ impl PublicResetApply {
         Ok(host::RuntimeCanaryInputs {
             client_config,
             validator_client_configs: self.validator_client_config.clone(),
+            validator_operator_key: self
+                .validator_operator_key
+                .clone()
+                .ok_or_else(|| eyre!("forward execution requires --validator-operator-key"))?,
             onboarding_token,
             inrou_stage_dir,
             fee_args: Self::fee_args(&admitted.inventory)?,
@@ -263,6 +299,10 @@ impl PublicReset {
             }
             PublicResetCommand::ConfigRebase(args) => {
                 config::config_rebase(args)?;
+                return Ok(());
+            }
+            PublicResetCommand::OperatorKeygen(args) => {
+                config::operator_keygen(args, &mut output)?;
                 return Ok(());
             }
             PublicResetCommand::Assemble(args) => {
@@ -364,6 +404,7 @@ impl PublicReset {
                                     journal_dir,
                                     runtime_client_config,
                                     validator_client_configs,
+                                    args.recovery_validator_operator_key(recovery_step)?,
                                 )?;
                                 executor_model::execute_plan(
                                     &admitted.inventory,
@@ -449,6 +490,46 @@ impl PublicReset {
                     "public reset completed with immutable receipts",
                 )
             }
+            PublicResetCommand::Abandon(args) => {
+                if !args.abandon_pending_mutations {
+                    return Err(eyre!("abandonment requires --abandon-pending-mutations"));
+                }
+                let inputs = &args.inputs;
+                let (admitted, _chain_guard) = admit_signed_inputs_for_controller(
+                    &inputs.inventory,
+                    &inputs.authorization,
+                    &inputs.trusted_public_key,
+                    &inputs.ssh_identity,
+                    &inputs.known_hosts,
+                    ControllerAdmission::AbandonOriginalTarget,
+                )?;
+                let journal_dir = Path::new(JOURNAL_ROOT);
+                let executor_model::JournalOpen::Resumable(mut journal) =
+                    executor_model::DurableJournal::classify(journal_dir, &admitted)?
+                else {
+                    return Err(eyre!("abandonment requires an existing unresolved journal"));
+                };
+                let mut transport = host::RollbackSshTransport::new(&admitted, journal_dir)?;
+                let receipt = executor_model::abandon_pending_attempt(
+                    &admitted.inventory,
+                    &mut transport,
+                    &mut journal,
+                    &args.expected_journal_sha256,
+                )?;
+                let mut result = report(
+                    &admitted,
+                    "abandon",
+                    "rolled_back",
+                    "unresolved testnet evidence preserved; all four validators rolled back",
+                );
+                if let Value::Object(fields) = &mut result {
+                    fields.insert(
+                        "abandonment_receipt".into(),
+                        Value::String(receipt.display().to_string()),
+                    );
+                }
+                result
+            }
             PublicResetCommand::HostDispatch(args) => {
                 args.run(std::io::stdin().lock(), &mut output)?;
                 return Ok(());
@@ -529,6 +610,8 @@ struct InventoryV1 {
     revision: RevisionV1,
     validators: Vec<ValidatorV1>,
     validator_clients: Vec<ValidatorClientV1>,
+    /// Dedicated public operator identity accepted by every candidate validator.
+    operator_public_key: String,
     edge: EdgeV1,
     inrou_canary: InrouCanaryV1,
     canary_onboarding_request: AccountOnboardingPlanRequestV1,
@@ -731,6 +814,8 @@ struct ValidatorV1 {
 struct ValidatorClientV1 {
     slug: String,
     torii_origin: String,
+    /// Direct local candidate Torii origin, bound to the admitted validator socket.
+    probe_origin: String,
     account_id: String,
     peer_id: String,
 }
@@ -957,8 +1042,34 @@ fn admit_signed_inputs(
     ssh_identity: &Path,
     known_hosts: &Path,
 ) -> Result<(AdmittedReset, ChainDiscriminantGuard)> {
+    admit_signed_inputs_for_controller(
+        inventory_path,
+        authorization_path,
+        trusted_key_path,
+        ssh_identity,
+        known_hosts,
+        ControllerAdmission::CurrentExecutable,
+    )
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ControllerAdmission {
+    CurrentExecutable,
+    // The new controller can roll back an original signed target only through its
+    // retained dispatcher; the dispatcher still admits its own exact executable.
+    AbandonOriginalTarget,
+}
+
+fn admit_signed_inputs_for_controller(
+    inventory_path: &Path,
+    authorization_path: &Path,
+    trusted_key_path: &Path,
+    ssh_identity: &Path,
+    known_hosts: &Path,
+    admission: ControllerAdmission,
+) -> Result<(AdmittedReset, ChainDiscriminantGuard)> {
     let (inventory, inventory_bytes, chain_guard) = read_inventory(inventory_path, "inventory")?;
-    validate_inventory(&inventory)?;
+    validate_inventory_for_controller(&inventory, admission)?;
     validate_shared_validator_closure(&inventory)?;
     // Reject unsupported placement before opening any deployment credential.
     validate_fixed_executable(Path::new(SSH), "OpenSSH client")?;
@@ -1326,9 +1437,17 @@ fn authorization_message(claims: &AuthorizationClaimsV1) -> Result<Vec<u8>> {
 }
 
 fn validate_inventory(inventory: &InventoryV1) -> Result<()> {
+    validate_inventory_for_controller(inventory, ControllerAdmission::CurrentExecutable)
+}
+
+fn validate_inventory_for_controller(
+    inventory: &InventoryV1,
+    admission: ControllerAdmission,
+) -> Result<()> {
     if inventory.schema != INVENTORY_SCHEMA_V1 {
         return Err(eyre!("inventory schema must be `{INVENTORY_SCHEMA_V1}`"));
     }
+    validator_operator_public_key(&inventory.operator_public_key)?;
     let _chain_guard = enter_inventory_chain_discriminant(inventory)?;
     validate_slug("deployment_id", &inventory.deployment_id)?;
     for (label, value) in [
@@ -1371,7 +1490,7 @@ fn validate_inventory(inventory: &InventoryV1) -> Result<()> {
         ));
     }
     validate_nonce(&inventory.authorization_nonce)?;
-    validate_revision(&inventory.revision)?;
+    validate_revision_for_controller(&inventory.revision, admission)?;
     validate_timeout_policy(inventory)?;
     validate_inrou(&inventory.inrou_canary)?;
     validate_canary_onboarding_request(&inventory.canary_onboarding_request)?;
@@ -1416,9 +1535,16 @@ fn validate_inventory(inventory: &InventoryV1) -> Result<()> {
     }
     let mut client_accounts = BTreeSet::new();
     let mut client_peers = BTreeSet::new();
+    let mut probe_origins = BTreeSet::new();
     let mut client_placement_targets = BTreeSet::new();
     for (client, expected_slug) in inventory.validator_clients.iter().zip(VALIDATOR_SLUGS) {
         let expected_origin = format!("https://{expected_slug}.sora.org/");
+        validate_candidate_probe_origin(&client.probe_origin)?;
+        if !probe_origins.insert(&client.probe_origin) {
+            return Err(eyre!(
+                "candidate Torii origins must bind four distinct sockets"
+            ));
+        }
         if client.slug != expected_slug
             || client.torii_origin != expected_origin
             || client.account_id.is_empty()
@@ -1534,6 +1660,13 @@ fn assembled_inventory_bytes(inventory: &InventoryV1) -> Result<Vec<u8>> {
 }
 
 fn validate_revision(revision: &RevisionV1) -> Result<()> {
+    validate_revision_for_controller(revision, ControllerAdmission::CurrentExecutable)
+}
+
+fn validate_revision_for_controller(
+    revision: &RevisionV1,
+    admission: ControllerAdmission,
+) -> Result<()> {
     if revision.branch != SOURCE_BRANCH {
         return Err(eyre!("revision branch must be exact `{SOURCE_BRANCH}`"));
     }
@@ -1555,16 +1688,20 @@ fn validate_revision(revision: &RevisionV1) -> Result<()> {
         Path::new(&revision.source_manifest_path),
         "source manifest path",
     )?;
-    let compiled_sha = crate::VERGEN_GIT_SHA;
+    let compiled_sha = crate::compiled_build_identity()?.release_source_commit()?;
     validate_lower_hex("compiled CLI Git SHA", compiled_sha, 40)
         .wrap_err("compiled CLI has unknown or dirty source provenance")?;
     if revision.target != BUILD_TARGET
         || revision.profile != BUILD_PROFILE
         || revision.build_id != revision.commit
-        || revision.commit != compiled_sha
     {
         return Err(eyre!(
-            "revision must use target `{BUILD_TARGET}`, evidence profile `{BUILD_PROFILE}`, and commit/build_id equal the compiled CLI SHA"
+            "revision must use target `{BUILD_TARGET}`, evidence profile `{BUILD_PROFILE}`, and identical commit/build_id"
+        ));
+    }
+    if admission == ControllerAdmission::CurrentExecutable && revision.commit != compiled_sha {
+        return Err(eyre!(
+            "revision commit/build_id must equal the compiled CLI SHA"
         ));
     }
     Ok(())
@@ -1647,7 +1784,7 @@ fn validate_git_provenance(root: &Path, revision: &RevisionV1) -> Result<()> {
     let [branch, head, tree] = source::clean_git_identity(root)?;
     if branch != revision.branch
         || head != revision.commit
-        || head != crate::VERGEN_GIT_SHA
+        || head != crate::compiled_build_identity()?.release_source_commit()?
         || tree != revision.tree
     {
         return Err(eyre!(
@@ -1926,6 +2063,37 @@ fn validate_platform(platform: &PlatformV1, require_kvm: bool) -> Result<()> {
     {
         return Err(eyre!(
             "validators require KVM API 12 and the edge must declare KVM API 0"
+        ));
+    }
+    Ok(())
+}
+
+/// Candidate probes stay on the authenticated deployment host and bypass public DNS/edge.
+fn validate_candidate_probe_origin(origin: &str) -> Result<std::net::SocketAddr> {
+    let url = url::Url::parse(origin).wrap_err("candidate Torii origin is invalid")?;
+    let port = url
+        .port()
+        .filter(|port| *port != 0)
+        .ok_or_else(|| eyre!("candidate Torii origin requires an explicit nonzero port"))?;
+    if origin != format!("http://127.0.0.1:{port}/") {
+        return Err(eyre!(
+            "candidate Torii origin must be one exact loopback HTTP origin"
+        ));
+    }
+    Ok(std::net::SocketAddr::from(([127, 0, 0, 1], port)))
+}
+
+fn validate_candidate_probe_bind(
+    origin: &str,
+    bind: &iroha_primitives::addr::SocketAddr,
+) -> Result<()> {
+    let probe = validate_candidate_probe_origin(origin)?;
+    let bind_ip = bind.ip().map(std::net::IpAddr::from);
+    if bind.port() != probe.port()
+        || !(bind_ip == Some(probe.ip()) || bind_ip == Some(std::net::Ipv4Addr::UNSPECIFIED.into()))
+    {
+        return Err(eyre!(
+            "candidate Torii origin differs from its signed validator bind address"
         ));
     }
     Ok(())
@@ -2391,6 +2559,57 @@ fn validate_validator_genesis_config(
     result
 }
 
+/// Require one explicit canonical operator identity in the signed inventory.
+fn validator_operator_public_key(value: &str) -> Result<iroha_crypto::PublicKey> {
+    let key = value
+        .parse::<iroha_crypto::PublicKey>()
+        .map_err(|_| eyre!("validator operator public key must be canonical Ed25519"))?;
+    if key.try_algorithm().ok() != Some(Algorithm::Ed25519) || key.to_string() != value {
+        return Err(eyre!(
+            "validator operator public key must be canonical Ed25519"
+        ));
+    }
+    Ok(key)
+}
+
+/// Check that startup policy accepts the credential used by deployment probes.
+fn validate_validator_operator_config(bytes: &[u8], expected_public_key: &str) -> Result<()> {
+    validator_operator_public_key(expected_public_key)?;
+    let text =
+        std::str::from_utf8(bytes).map_err(|_| eyre!("validator startup config is not UTF-8"))?;
+    let mut table: toml::Table =
+        toml::from_str(text).map_err(|_| eyre!("validator startup config is not TOML"))?;
+    let result = (|| {
+        if table.contains_key("extends") {
+            return Err(eyre!(
+                "validator startup config cannot inherit unbound TOML"
+            ));
+        }
+        let policy = table
+            .get("torii")
+            .and_then(toml::Value::as_table)
+            .and_then(|torii| torii.get("operator_signatures"))
+            .and_then(toml::Value::as_table)
+            .ok_or_else(|| eyre!("validator config requires explicit operator signing policy"))?;
+        if policy.get("enabled").and_then(toml::Value::as_bool) != Some(true)
+            || !policy
+                .get("allowed_public_keys")
+                .and_then(toml::Value::as_array)
+                .is_some_and(|keys| {
+                    keys.iter()
+                        .any(|key| key.as_str() == Some(expected_public_key))
+                })
+        {
+            return Err(eyre!(
+                "validator config does not authorize the signed operator public key"
+            ));
+        }
+        Ok(())
+    })();
+    crate::soracloud::zeroize_taira_toml_table(&mut table);
+    result
+}
+
 fn validate_pinned_validator_genesis_configs(
     inventory: &InventoryV1,
     pinned: &[PinnedArtifact],
@@ -2415,6 +2634,7 @@ fn validate_pinned_validator_genesis_configs(
             Path::new(&artifact(&validator.artifacts, "genesis")?.remote_path),
             &inventory.next_genesis_hash,
         )?;
+        validate_validator_operator_config(&bytes, &inventory.operator_public_key)?;
     }
     Ok(())
 }
@@ -3433,6 +3653,8 @@ mod executor_model {
         }
     }
 
+    include!("taira_public_reset_abandon.rs");
+
     impl JournalStore for DurableJournal {
         fn state(&self) -> &JournalV1 {
             &self.state
@@ -3554,6 +3776,18 @@ mod executor_model {
             .take(actual.touched_validators.len())
             .copied()
             .collect::<Vec<_>>();
+        let edge_stage_index = EXECUTION_STEPS
+            .iter()
+            .position(|step| *step == ExecutionStep::EdgeStage)
+            .expect("the canonical plan contains edge staging");
+        if matches!(actual.status.as_str(), "in_progress" | "recovery_pending")
+            && ((usize::from(actual.next_step) < edge_stage_index && actual.edge_touched)
+                || (usize::from(actual.next_step) > edge_stage_index && !actual.edge_touched))
+        {
+            return Err(eyre!(
+                "journal edge custody differs from the candidate qualification frontier"
+            ));
+        }
         let valid_recovery = if actual.status == "recovery_pending" {
             EXECUTION_STEPS
                 .get(usize::from(actual.next_step))
@@ -4301,11 +4535,11 @@ mod executor_model {
         ExecutionStep::Reset,
         ExecutionStep::Preseed,
         ExecutionStep::Start,
-        ExecutionStep::EdgeStage,
-        ExecutionStep::EdgeCutover,
         ExecutionStep::Convergence,
         ExecutionStep::Canary,
         ExecutionStep::RestartProof,
+        ExecutionStep::EdgeStage,
+        ExecutionStep::EdgeCutover,
         ExecutionStep::EdgeVerify,
         ExecutionStep::Seal,
         ExecutionStep::Cleanup,
@@ -4982,6 +5216,8 @@ mod executor_model {
         use super::*;
         use iroha_crypto::{KeyPair, Signature};
 
+        include!("taira_public_reset_abandon_tests.rs");
+
         #[test]
         fn recovery_args_accept_identical_forward_inputs_without_admitting_unused_paths() {
             let unavailable = PathBuf::from("/unused-public-reset-recovery-input");
@@ -4994,6 +5230,7 @@ mod executor_model {
                 trusted_public_key: unavailable.join("trusted-key.json"),
                 ssh_identity: unavailable.join("identity"),
                 known_hosts: unavailable.join("known-hosts"),
+                validator_operator_key: Some(unavailable.join("operator.key")),
                 runtime_client_config: Some(unavailable.join("runtime.toml")),
                 validator_client_config: validator_configs.clone(),
                 onboarding_token: Some(unavailable.join("onboarding-token")),
@@ -5022,8 +5259,23 @@ mod executor_model {
                     "RestartProof must reject {count} configs"
                 );
             }
+            assert!(
+                args.recovery_validator_operator_key(ExecutionStep::RestartProof)
+                    .unwrap()
+                    .is_some()
+            );
+            args.validator_operator_key = None;
+            assert!(
+                args.recovery_validator_operator_key(ExecutionStep::RestartProof)
+                    .is_err()
+            );
             args.validator_client_config.clear();
             for step in [ExecutionStep::Canary, ExecutionStep::EdgeVerify] {
+                assert!(
+                    args.recovery_validator_operator_key(step)
+                        .unwrap()
+                        .is_none()
+                );
                 assert!(
                     args.recovery_validator_client_configs(step)
                         .expect("unused forward arguments remain optional")
@@ -6323,7 +6575,7 @@ mod executor_model {
                     .iter()
                     .map(|slug| (*slug).to_owned())
                     .collect();
-                state.edge_touched = true;
+                state.edge_touched = step == ExecutionStep::EdgeVerify;
                 journal.replace(state).expect("persist prepared recovery");
                 let mut progress = JournalRecoveryProgress {
                     journal: &mut journal,
@@ -6422,7 +6674,7 @@ mod executor_model {
                 .iter()
                 .map(|slug| (*slug).to_owned())
                 .collect();
-            pending.edge_touched = true;
+            pending.edge_touched = false;
             journal
                 .replace(pending)
                 .expect("persist applied recovery boundary");
@@ -6435,6 +6687,10 @@ mod executor_model {
             assert_eq!(journal.state().status, "in_progress");
             assert_eq!(usize::from(journal.state().next_step), step_index + 1);
             assert_eq!(journal.state().phase, ExecutionStep::RestartProof.label());
+            assert!(
+                !journal.state().edge_touched,
+                "candidate replay cannot establish public edge custody"
+            );
             drop(journal);
 
             let resumed = match DurableJournal::classify(&canonical, &admitted)
@@ -7438,27 +7694,7 @@ mod executor_model {
         }
 
         #[test]
-        fn canonical_plan_establishes_edge_before_public_checks_and_restarts() {
-            assert_eq!(
-                EXECUTION_STEPS,
-                [
-                    ExecutionStep::Preflight,
-                    ExecutionStep::Stage,
-                    ExecutionStep::Stop,
-                    ExecutionStep::Install,
-                    ExecutionStep::Reset,
-                    ExecutionStep::Preseed,
-                    ExecutionStep::Start,
-                    ExecutionStep::EdgeStage,
-                    ExecutionStep::EdgeCutover,
-                    ExecutionStep::Convergence,
-                    ExecutionStep::Canary,
-                    ExecutionStep::RestartProof,
-                    ExecutionStep::EdgeVerify,
-                    ExecutionStep::Seal,
-                    ExecutionStep::Cleanup,
-                ]
-            );
+        fn candidate_qualification_completes_before_public_cutover() {
             let (inventory, mut journal) = journal(vacant_execution_fixture());
             let mut transport = MockTransport::default();
             execute_plan(&inventory, &mut transport, &mut journal).expect("vacant model completes");
@@ -7469,38 +7705,59 @@ mod executor_model {
                     .position(|value| value == event)
                     .expect(event)
             };
-            assert!(at("start:taira-validator-4") < at("edge_stage"));
-            assert!(at("edge_stage") < at("edge_cutover"));
-            assert!(at("edge_cutover") < at("convergence"));
+            assert!(at("start:taira-validator-4") < at("convergence"));
             assert!(at("convergence") < at("canary"));
             assert!(at("canary") < at("restart_proof"));
-            assert!(at("restart_proof") < at("edge_verify"));
+            assert!(at("restart_proof") < at("edge_stage"));
+            assert!(at("edge_stage") < at("edge_cutover"));
+            assert!(at("edge_cutover") < at("edge_verify"));
             assert!(journal.finished);
         }
 
         #[test]
-        fn failed_first_public_check_rolls_back_initial_edge_before_validators() {
+        fn candidate_failure_never_exposes_the_public_edge() {
+            for phase in ["convergence", "canary", "restart_proof"] {
+                let (inventory, mut journal) = journal(vacant_execution_fixture());
+                let mut transport = MockTransport {
+                    fail: Some(phase.to_owned()),
+                    ..MockTransport::default()
+                };
+                execute_plan(&inventory, &mut transport, &mut journal)
+                    .expect_err("candidate fails");
+                assert!(!journal.state.edge_touched, "{phase}");
+                assert!(
+                    !transport
+                        .events
+                        .iter()
+                        .any(|event| event.starts_with("edge_") || event == "rollback:edge"),
+                    "{phase}"
+                );
+                assert_eq!(journal.state.status, "rolled_back", "{phase}");
+            }
+        }
+
+        #[test]
+        fn public_verification_failure_rolls_back_edge_before_validators() {
             let (inventory, mut journal) = journal(vacant_execution_fixture());
             let mut transport = MockTransport {
-                fail: Some("convergence".to_owned()),
+                fail: Some("edge_verify".to_owned()),
                 ..MockTransport::default()
             };
-            let _ = execute_plan(&inventory, &mut transport, &mut journal)
-                .expect_err("failed first public check");
-            let rollback = transport
-                .events
-                .iter()
-                .filter(|event| event.starts_with("rollback:"))
-                .map(String::as_str)
-                .collect::<Vec<_>>();
+            execute_plan(&inventory, &mut transport, &mut journal)
+                .expect_err("public verification fails");
             assert_eq!(
-                rollback,
+                transport
+                    .events
+                    .iter()
+                    .filter(|event| event.starts_with("rollback:"))
+                    .map(String::as_str)
+                    .collect::<Vec<_>>(),
                 [
                     "rollback:edge",
                     "rollback:taira-validator-4",
                     "rollback:taira-validator-3",
                     "rollback:taira-validator-2",
-                    "rollback:taira-validator-1",
+                    "rollback:taira-validator-1"
                 ]
             );
             assert!(journal.state.edge_touched);
@@ -7509,40 +7766,52 @@ mod executor_model {
         }
 
         #[test]
-        fn resumed_convergence_keeps_initial_edge_in_the_rollback_set() {
-            let (inventory, mut journal) = journal(vacant_execution_fixture());
-            journal.state.next_step = u16::try_from(
-                EXECUTION_STEPS
-                    .iter()
-                    .position(|step| *step == ExecutionStep::Convergence)
-                    .expect("convergence index"),
-            )
-            .expect("bounded step index");
-            journal.state.phase = ExecutionStep::Convergence.label().to_owned();
-            journal.state.touched_validators = VALIDATOR_SLUGS
-                .iter()
-                .map(|slug| (*slug).to_owned())
-                .collect();
-            journal.state.edge_touched = true;
-            let mut transport = MockTransport {
-                fail: Some("convergence".to_owned()),
-                ..MockTransport::default()
+        fn candidate_probe_origins_reject_cross_host_or_substituted_sockets() {
+            for origin in [
+                "https://127.0.0.1:8080/",
+                "http://localhost:8080/",
+                "http://192.0.2.1:8080/",
+                "http://127.0.0.1:8080/path",
+                "http://user@127.0.0.1:8080/",
+                "http://127.0.0.1:8080/?redirect=1",
+            ] {
+                assert!(validate_candidate_probe_origin(origin).is_err(), "{origin}");
+            }
+            let origin = "http://127.0.0.1:8080/";
+            validate_candidate_probe_bind(origin, &"127.0.0.1:8080".parse().unwrap())
+                .expect("exact loopback");
+            validate_candidate_probe_bind(origin, &"0.0.0.0:8080".parse().unwrap())
+                .expect("same wildcard socket");
+            assert!(
+                validate_candidate_probe_bind(origin, &"127.0.0.1:8081".parse().unwrap()).is_err()
+            );
+            assert!(
+                validate_candidate_probe_bind(origin, &"192.0.2.1:8080".parse().unwrap()).is_err()
+            );
+            let mut inventory = sample_inventory();
+            inventory.validator_clients[1].probe_origin =
+                inventory.validator_clients[0].probe_origin.clone();
+            assert!(validate_inventory(&inventory).is_err());
+        }
+
+        #[test]
+        fn revision_admission_requires_the_compiled_executable_identity() {
+            let identity = crate::compiled_build_identity().expect("compiled executable identity");
+            let mut revision = sample_inventory().revision;
+            assert_eq!(revision.commit, identity.release_source_commit().unwrap());
+            validate_revision(&revision).expect("the exact compiled revision is admissible");
+            revision.commit = if revision.commit == "ffffffffffffffffffffffffffffffffffffffff" {
+                "0000000000000000000000000000000000000000".to_owned()
+            } else {
+                "ffffffffffffffffffffffffffffffffffffffff".to_owned()
             };
-            let _ = execute_plan(&inventory, &mut transport, &mut journal)
-                .expect_err("resumed first public check");
-            assert_eq!(
-                transport.events.first().map(String::as_str),
-                Some("convergence")
+            revision.build_id.clone_from(&revision.commit);
+            assert!(
+                validate_revision(&revision)
+                    .expect_err("reject another valid source revision")
+                    .to_string()
+                    .contains("compiled CLI SHA")
             );
-            assert_eq!(
-                transport
-                    .events
-                    .iter()
-                    .find(|event| event.starts_with("rollback:"))
-                    .map(String::as_str),
-                Some("rollback:edge")
-            );
-            assert_eq!(journal.state.status, "rolled_back");
         }
 
         #[test]
@@ -7647,6 +7916,7 @@ mod executor_model {
                     ValidatorClientV1 {
                         slug: (*slug).to_owned(),
                         torii_origin: format!("https://taira-validator-{}.sora.org/", index + 1),
+                        probe_origin: format!("http://127.0.0.1:{}/", 8080 + index),
                         account_id: AccountId::new(account_key.public_key().clone()).to_string(),
                         peer_id: PeerId::from(peer_key.public_key().clone()).to_string(),
                     }
@@ -7672,6 +7942,12 @@ mod executor_model {
                 revision: revision.clone(),
                 validators,
                 validator_clients,
+                operator_public_key: iroha_crypto::KeyPair::from_seed(
+                    b"fixture dedicated operator".to_vec(),
+                    Algorithm::Ed25519,
+                )
+                .public_key()
+                .to_string(),
                 edge: EdgeV1 {
                     slug: "taira-edge".to_owned(),
                     endpoint: endpoint(5, edge_root, &revision),
@@ -7845,6 +8121,62 @@ mod executor_model {
 }
 
 #[cfg(test)]
+mod operator_admission_tests {
+    use super::*;
+
+    #[test]
+    fn operator_public_key_is_canonical_ed25519_and_authorization_bound() {
+        let mut inventory = sample_inventory_fixture();
+        validator_operator_public_key(&inventory.operator_public_key).unwrap();
+        let before = canonical_inventory_bytes(&inventory).unwrap();
+        inventory.operator_public_key = iroha_crypto::KeyPair::from_seed(
+            b"distinct deployment operator".to_vec(),
+            Algorithm::Ed25519,
+        )
+        .public_key()
+        .to_string();
+        assert_ne!(before, canonical_inventory_bytes(&inventory).unwrap());
+        for invalid in [
+            String::new(),
+            "invalid".to_owned(),
+            inventory.operator_public_key.to_uppercase(),
+        ] {
+            assert!(validator_operator_public_key(&invalid).is_err());
+        }
+        let other =
+            iroha_crypto::KeyPair::from_seed(b"other algorithm".to_vec(), Algorithm::Secp256k1);
+        assert!(validator_operator_public_key(&other.public_key().to_string()).is_err());
+    }
+
+    #[test]
+    fn operator_policy_requires_explicit_enabled_allowlist_and_rejects_inference() {
+        let key = sample_inventory_fixture().operator_public_key;
+        let policy = format!(
+            "[torii.operator_signatures]\nenabled = true\nallowed_public_keys = [{key:?}]\n"
+        );
+        validate_validator_operator_config(policy.as_bytes(), &key).unwrap();
+        for invalid in [
+            String::new(),
+            policy.replace("true", "false"),
+            policy.replace(&format!("[{key:?}]"), "[]"),
+            "[torii.operator_signatures]\nenabled = true\nallow_node_key = true\n".to_owned(),
+            format!("extends = []\n{policy}"),
+        ] {
+            assert!(validate_validator_operator_config(invalid.as_bytes(), &key).is_err());
+        }
+        let foreign =
+            iroha_crypto::KeyPair::from_seed(b"foreign operator".to_vec(), Algorithm::Ed25519);
+        assert!(
+            validate_validator_operator_config(
+                policy.as_bytes(),
+                &foreign.public_key().to_string()
+            )
+            .is_err()
+        );
+    }
+}
+
+#[cfg(test)]
 mod signed_genesis_startup_tests {
     use super::*;
 
@@ -7932,4 +8264,12 @@ mod signed_genesis_startup_tests {
         let missing = format!("[genesis]\nfile = {:?}\n", path.to_str().unwrap());
         assert!(validate_validator_genesis_config(missing.as_bytes(), &path, &hash).is_err());
     }
+}
+
+#[cfg(test)]
+pub(crate) fn validate_inrou_checks_for_test(
+    report: &norito::json::Value,
+    scope: crate::taira::InrouProbeScope,
+) -> Result<()> {
+    host::validate_inrou_checks_for_test(report, scope)
 }

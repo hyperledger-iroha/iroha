@@ -210,9 +210,12 @@ fn build_app() -> (
         da_receipt_signer,
         iroha_torii::OnlinePeersProvider::new(peers_rx),
         None,
-        iroha_torii::MaybeTelemetry::from_profile(
-            Some(telemetry_handle),
-            iroha_config::parameters::actual::TelemetryProfile::Operator,
+        iroha_torii::ToriiRuntimeDeps::new(
+            build_identity_test_fixture::build_identity(),
+            iroha_torii::MaybeTelemetry::from_profile(
+                Some(telemetry_handle),
+                iroha_config::parameters::actual::TelemetryProfile::Operator,
+            ),
         ),
     )
     .expect("valid Torii Kaigi fixture");
@@ -708,3 +711,6 @@ async fn kaigi_sse_rejects_invalid_relay_filter() {
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     app.shutdown().await;
 }
+
+#[path = "../src/build_identity_test_fixture.rs"]
+mod build_identity_test_fixture;

@@ -6410,6 +6410,11 @@ impl Queue {
             selected_encoded_bytes = next_encoded_bytes;
             selected_gas = next_gas;
         }
+        // Selection owns every state-derived value it needs. Keep the lifecycle and
+        // reservation-transition fences through publication, but release the MVCC
+        // snapshot before journal I/O so slow storage cannot retain an entire World
+        // generation and its configuration snapshots.
+        drop(routing_state_view);
         if selected.is_empty() && conflicting_admissions.is_empty() {
             // An installed journal is still mandatory even when the lane currently has no work;
             // otherwise a misconfigured scheduler could appear healthy until its first payload.
@@ -8515,22 +8520,20 @@ impl Queue {
             {
                 return Err(LaneQueueReservationError::Conflict { hash });
             }
-            // Phase two durably records PlanTombstoned before removing this
-            // member's payload and FIFO identity. A crash before ForgetCommit
-            // therefore legitimately replays only these two exact terminal
-            // markers. Do not resurrect FIFO ownership, or mistake any partial
-            // remaining owner for the fully consumed member.
-            if retrying_commit_barrier
-                && plan_tombstone_marked
-                && !self.fifo_order_by_hash.contains_key(&hash)
-            {
+            // A restarted Commit barrier can have no payload/FIFO owner after
+            // its QueuePlan tombstone, including a crash before PlanTombstoned
+            // is appended. Accept only the exact terminal owner mask here;
+            // journal preflight below must prove an unmarked tombstone before
+            // any cleanup effect. Never resurrect FIFO ownership for this phase.
+            if retrying_commit_barrier && !self.fifo_order_by_hash.contains_key(&hash) {
                 if seen_live {
                     return Err(LaneQueueReservationError::InvalidIdentity(
                         "lane reservation group has a Commit barrier after a live suffix"
                             .to_owned(),
                     ));
                 }
-                let expected_terminal_markers = (1_u32 << 1) | (1_u32 << 2);
+                let expected_terminal_markers =
+                    (1_u32 << 1) | if plan_tombstone_marked { 1_u32 << 2 } else { 0 };
                 if self
                     .canonical_queue_hash_terminal_owner_mask_locked(store, hash, ownership, false)
                     != expected_terminal_markers
@@ -8544,7 +8547,7 @@ impl Queue {
                         key: *key,
                         reservation_phase: LaneQueueReservationOwnerPhaseV1::CommitBarrier,
                         queue_plan_phase: QueuePlanReservationPhaseV1::Tombstoned,
-                        plan_tombstone_marked: true,
+                        plan_tombstone_marked,
                     });
                 // The caller still authenticates this exact phase against both
                 // retained journals before the cleanup transition can mutate.
@@ -8799,7 +8802,12 @@ impl Queue {
     ) -> Result<(), LaneQueueReservationError> {
         let guard = self.plan_journal.lock();
         let Some(journal) = guard.as_ref() else {
-            if !preflight.replica_keys.is_empty() {
+            if !preflight.replica_keys.is_empty()
+                || preflight.active_phases.iter().any(|phase| {
+                    phase.queue_plan_phase == QueuePlanReservationPhaseV1::Tombstoned
+                        && !phase.plan_tombstone_marked
+                })
+            {
                 return Err(LaneQueueReservationError::JournalNotInstalled);
             }
             return Ok(());

@@ -98,7 +98,10 @@ impl NoritoRpcHarness {
             cfg.common.key_pair.clone(),
             OnlinePeersProvider::new(peers_rx),
             None,
-            iroha_torii::MaybeTelemetry::disabled(),
+            iroha_torii::ToriiRuntimeDeps::new(
+                build_identity_test_fixture::build_identity(),
+                iroha_torii::MaybeTelemetry::disabled(),
+            ),
         )
         .expect("valid Torii Norito-RPC fixture");
         Self {
@@ -262,3 +265,6 @@ fn sample_signed_query_roundtrips_as_a_versioned_singular_request() {
     assert_eq!(decoded.authority(), signed.authority());
     assert_eq!(decoded.encode_versioned(), bytes);
 }
+
+#[path = "../../src/build_identity_test_fixture.rs"]
+mod build_identity_test_fixture;

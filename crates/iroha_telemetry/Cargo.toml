@@ -5,7 +5,6 @@ edition.workspace = true
 version.workspace = true
 authors.workspace = true
 
-build = "../build-support/script.rs"
 
 license.workspace = true
 
@@ -82,9 +81,6 @@ reqwest = { version = "0.12.24", default-features = false, features = ["json", "
 blake3 = { workspace = true }
 thiserror = { workspace = true }
 hex = { workspace = true }
-
-[build-dependencies]
-build-support = { path = "../build-support", default-features = false }
 
 [dev-dependencies]
 expect-test = { workspace = true }

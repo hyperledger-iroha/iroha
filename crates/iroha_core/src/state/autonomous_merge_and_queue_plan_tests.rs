@@ -2401,6 +2401,8 @@ include!("autonomous_merge_and_queue_plan_route_count_tests.rs");
     reason = "one adversarial roster test covers missing, malformed, oversized, and bounded members"
 )]
 fn queue_plan_route_accumulator_rejects_positive_undercount_and_overcount_atomically() {
+    // These checks own only QueuePlan markers. Narrow storage overlays avoid
+    // reserving unrelated World snapshots for every corruption phase.
     {
         let (state, validator_keypairs, _, _) = configured_two_lane_merge_state();
         let routing_plan = crate::queue::RoutingPlan::single(crate::queue::RoutingDecision::new(
@@ -2442,7 +2444,7 @@ fn queue_plan_route_accumulator_rejects_positive_undercount_and_overcount_atomic
         seed_exact_queue_plan_admission_state_for_test(&state, &second_certificate);
         assert!(
             State::queue_plan_pending_route_members_from_storage_with_limit(
-                state.world.view().smart_contract_state(),
+                &state.world.smart_contract_state.view(),
                 route,
                 1,
             )
@@ -2456,9 +2458,8 @@ fn queue_plan_route_accumulator_rejects_positive_undercount_and_overcount_atomic
             State::queue_plan_pending_route_member_marker_key(route, second_member)
                 .expect("fixture second exact route-member key");
         let first_member_payload = {
-            let world = state.world.view();
-            world
-                .smart_contract_state()
+            let storage = state.world.smart_contract_state.view();
+            storage
                 .get(&first_member_key)
                 .cloned()
                 .expect("fixture first exact route-member payload")
@@ -2474,9 +2475,9 @@ fn queue_plan_route_accumulator_rejects_positive_undercount_and_overcount_atomic
         )
         .expect("fixture second obligation key");
         {
-            let mut world = state.world.block();
-            world.smart_contract_state.remove(first_member_key.clone());
-            world.commit();
+            let mut storage = state.world.smart_contract_state.block();
+            storage.remove(first_member_key.clone());
+            storage.commit();
         }
         assert!(
             state
@@ -2485,27 +2486,18 @@ fn queue_plan_route_accumulator_rejects_positive_undercount_and_overcount_atomic
             "the exact route roster must not conceal a missing member"
         );
         let (first_before, second_before, second_member_before) = {
-            let world = state.world.view();
+            let storage = state.world.smart_contract_state.view();
             (
-                world
-                    .smart_contract_state()
-                    .get(&first_obligation_key)
-                    .cloned(),
-                world
-                    .smart_contract_state()
-                    .get(&second_obligation_key)
-                    .cloned(),
-                world
-                    .smart_contract_state()
-                    .get(&second_member_key)
-                    .cloned(),
+                storage.get(&first_obligation_key).cloned(),
+                storage.get(&second_obligation_key).cloned(),
+                storage.get(&second_member_key).cloned(),
             )
         };
         {
-            let mut world = state.world.block();
+            let mut storage = state.world.smart_contract_state.block();
             assert!(
                 State::stage_queue_plan_pending_obligation_in_storage(
-                    &mut world.smart_contract_state,
+                    &mut storage,
                     &first_admission,
                 )
                 .is_err(),
@@ -2513,114 +2505,62 @@ fn queue_plan_route_accumulator_rejects_positive_undercount_and_overcount_atomic
             );
             assert!(
                 State::resolve_queue_plan_pending_obligation_in_storage(
-                    &mut world.smart_contract_state,
+                    &mut storage,
                     first_binding.network_id_digest,
                     first_binding.entrypoint_hash.clone(),
                 )
                 .is_err(),
                 "nonterminal resolution must reject a missing exact member"
             );
+            assert_eq!(storage.get(&first_obligation_key).cloned(), first_before);
+            assert_eq!(storage.get(&second_obligation_key).cloned(), second_before);
             assert_eq!(
-                world
-                    .smart_contract_state
-                    .get(&first_obligation_key)
-                    .cloned(),
-                first_before
-            );
-            assert_eq!(
-                world
-                    .smart_contract_state
-                    .get(&second_obligation_key)
-                    .cloned(),
-                second_before
-            );
-            assert_eq!(
-                world.smart_contract_state.get(&second_member_key).cloned(),
+                storage.get(&second_member_key).cloned(),
                 second_member_before,
                 "failed exact-member checks must not mutate another roster member"
             );
-            assert!(world.smart_contract_state.get(&first_member_key).is_none());
+            assert!(storage.get(&first_member_key).is_none());
         }
         {
-            let mut world = state.world.block();
-            world
-                .smart_contract_state
-                .insert(first_member_key.clone(), first_member_payload);
-            world.commit();
+            let mut storage = state.world.smart_contract_state.block();
+            storage.insert(first_member_key.clone(), first_member_payload);
+            storage.commit();
         }
         {
-            let mut world = state.world.block();
-            world
-                .smart_contract_state
-                .insert(first_member_key.clone(), vec![0x00]);
-            world.commit();
+            let mut storage = state.world.smart_contract_state.block();
+            storage.insert(first_member_key.clone(), vec![0x00]);
+            storage.commit();
         }
         let (first_before, second_before, member_before) = {
-            let world = state.world.view();
+            let storage = state.world.smart_contract_state.view();
             (
-                world
-                    .smart_contract_state()
-                    .get(&first_obligation_key)
-                    .cloned(),
-                world
-                    .smart_contract_state()
-                    .get(&second_obligation_key)
-                    .cloned(),
-                world.smart_contract_state().get(&first_member_key).cloned(),
+                storage.get(&first_obligation_key).cloned(),
+                storage.get(&second_obligation_key).cloned(),
+                storage.get(&first_member_key).cloned(),
             )
         };
-        let mut world = state.world.block();
+        let mut storage = state.world.smart_contract_state.block();
         assert!(
-            State::stage_queue_plan_pending_obligation_in_storage(
-                &mut world.smart_contract_state,
-                &first_admission,
-            )
-            .is_err(),
+            State::stage_queue_plan_pending_obligation_in_storage(&mut storage, &first_admission,)
+                .is_err(),
             "idempotent staging must reject a malformed exact member"
         );
-        assert_eq!(
-            world
-                .smart_contract_state
-                .get(&first_obligation_key)
-                .cloned(),
-            first_before
-        );
-        assert_eq!(
-            world
-                .smart_contract_state
-                .get(&second_obligation_key)
-                .cloned(),
-            second_before
-        );
-        assert_eq!(
-            world.smart_contract_state.get(&first_member_key).cloned(),
-            member_before
-        );
+        assert_eq!(storage.get(&first_obligation_key).cloned(), first_before);
+        assert_eq!(storage.get(&second_obligation_key).cloned(), second_before);
+        assert_eq!(storage.get(&first_member_key).cloned(), member_before);
         assert!(
             State::resolve_queue_plan_pending_obligation_in_storage(
-                &mut world.smart_contract_state,
+                &mut storage,
                 first_binding.network_id_digest,
                 first_binding.entrypoint_hash,
             )
             .is_err(),
             "resolution must reject a malformed exact member"
         );
+        assert_eq!(storage.get(&first_obligation_key).cloned(), first_before);
+        assert_eq!(storage.get(&second_obligation_key).cloned(), second_before);
         assert_eq!(
-            world
-                .smart_contract_state
-                .get(&first_obligation_key)
-                .cloned(),
-            first_before
-        );
-        assert_eq!(
-            world
-                .smart_contract_state
-                .get(&second_obligation_key)
-                .cloned(),
-            second_before
-        );
-        assert_eq!(
-            world.smart_contract_state.get(&first_member_key).cloned(),
+            storage.get(&first_member_key).cloned(),
             member_before,
             "failed malformed-member checks must not mutate the exact roster"
         );
@@ -2652,12 +2592,12 @@ fn queue_plan_route_accumulator_rejects_positive_undercount_and_overcount_atomic
         let member_key = State::queue_plan_pending_route_member_marker_key(route, member_identity)
             .expect("fixture oversized route-member key");
         {
-            let mut world = state.world.block();
-            world.smart_contract_state.insert(
+            let mut storage = state.world.smart_contract_state.block();
+            storage.insert(
                 member_key.clone(),
                 vec![0xA5; MAX_QUEUE_PLAN_COMPACT_MARKER_BYTES + 1],
             );
-            world.commit();
+            storage.commit();
         }
         let obligation_key = State::queue_plan_pending_obligation_marker_key(
             binding.network_id_digest,
@@ -2665,44 +2605,32 @@ fn queue_plan_route_accumulator_rejects_positive_undercount_and_overcount_atomic
         )
         .expect("fixture oversized-member obligation key");
         let (obligation_before, member_before) = {
-            let world = state.world.view();
+            let storage = state.world.smart_contract_state.view();
             (
-                world.smart_contract_state().get(&obligation_key).cloned(),
-                world.smart_contract_state().get(&member_key).cloned(),
+                storage.get(&obligation_key).cloned(),
+                storage.get(&member_key).cloned(),
             )
         };
-        let mut world = state.world.block();
+        let mut storage = state.world.smart_contract_state.block();
         assert!(
-            State::stage_queue_plan_pending_obligation_in_storage(
-                &mut world.smart_contract_state,
-                &admission,
-            )
-            .is_err(),
+            State::stage_queue_plan_pending_obligation_in_storage(&mut storage, &admission,)
+                .is_err(),
             "idempotent staging must reject an oversized exact member"
         );
-        assert_eq!(
-            world.smart_contract_state.get(&obligation_key).cloned(),
-            obligation_before
-        );
-        assert_eq!(
-            world.smart_contract_state.get(&member_key).cloned(),
-            member_before
-        );
+        assert_eq!(storage.get(&obligation_key).cloned(), obligation_before);
+        assert_eq!(storage.get(&member_key).cloned(), member_before);
         assert!(
             State::resolve_queue_plan_pending_obligation_in_storage(
-                &mut world.smart_contract_state,
+                &mut storage,
                 binding.network_id_digest,
                 binding.entrypoint_hash,
             )
             .is_err(),
             "resolution must reject an oversized exact member"
         );
+        assert_eq!(storage.get(&obligation_key).cloned(), obligation_before);
         assert_eq!(
-            world.smart_contract_state.get(&obligation_key).cloned(),
-            obligation_before
-        );
-        assert_eq!(
-            world.smart_contract_state.get(&member_key).cloned(),
+            storage.get(&member_key).cloned(),
             member_before,
             "failed oversized-member checks must not mutate the exact roster"
         );

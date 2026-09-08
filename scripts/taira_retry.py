@@ -6,6 +6,10 @@ Native assemble/authorize/apply remain the authentication and execution authorit
 Runtime signing keys and peer configs are passed only to native code. This module
 also retains the locked operator-custody retirement, seed metadata continuity and
 boot publication checks used by the deployed corridor.
+The guest plan explicitly lists retired_public_imports (possibly empty). Each
+closed import names digest-pinned inventory, retirement, binary_manifest and
+source_manifest public records plus the exact completed source.pack path. Only
+superseded public payloads are reclaimed; current inputs and records remain.
 """
 
 from __future__ import annotations
@@ -26,6 +30,7 @@ import re
 import resource
 import secrets
 import shlex
+import shutil
 import stat
 import subprocess
 import sys
@@ -347,8 +352,36 @@ def run_native(argv, directory, *, phase, pass_fds=(), env=None, journal_path=No
     return result
 
 
+def require_candidate_probe_inventory(inventory):
+    """Reject obsolete or ambiguous public drafts before any retirement mutation."""
+    operator_key = inventory.get("operator_public_key")
+    # PublicKey Display uses a lowercase multihash prefix and uppercase payload.
+    # Native admission performs the cryptographic key/config/custody joins.
+    require(isinstance(operator_key, str)
+            and re.fullmatch(r"ed0120[0-9A-F]{64}", operator_key) is not None,
+            "one explicit canonical Ed25519 operator public key is required")
+    clients = inventory.get("validator_clients")
+    require(isinstance(clients, list) and len(clients) == 4,
+            "four explicit validator candidate probe origins are required")
+    origins = set()
+    for index, client in enumerate(clients, 1):
+        require(isinstance(client, dict)
+                and client.get("slug") == f"taira-validator-{index}",
+                "candidate probe clients must use the exact validator order")
+        origin = client.get("probe_origin")
+        match = (re.fullmatch(r"http://127\.0\.0\.1:([1-9][0-9]{0,4})/", origin)
+                 if isinstance(origin, str) else None)
+        # The native Url parser omits HTTP's default port; candidate inventory
+        # requires the port to remain explicit in its canonical URL.
+        require(match is not None and int(match[1]) <= 65535 and int(match[1]) != 80,
+                "candidate probe origin requires an explicit IPv4 loopback socket")
+        require(origin not in origins, "candidate probe sockets must be distinct")
+        origins.add(origin)
+
+
 def fresh_inventory(previous, attempt_id, nonce):
     """Native Assemble owns all derived fields; change only the public operation identity."""
+    require_candidate_probe_inventory(previous)
     require(
         re.fullmatch(r"retry-[0-9]{16,24}-[0-9a-f]{8}", attempt_id) is not None,
         "fresh generated attempt identity required",
@@ -608,14 +641,18 @@ def validate_plan(plan):
         "unit_renderer",
         "local_node",
         "expected_mac",
+        "retired_public_imports",
     }
-    require(set(plan["guest"]) == guest_keys, "unexpected guest runtime plan fields")
+    require(set(plan["guest"]) == guest_keys,
+            "unexpected guest runtime plan fields")
+    validate_retired_public_imports(plan["guest"]["retired_public_imports"])
     for key in guest_keys - {
         "guard_support",
         "unit_renderer",
         "local_node",
         "capacity_plan",
         "expected_mac",
+        "retired_public_imports",
     }:
         value = plan["guest"][key]
         require(
@@ -675,6 +712,8 @@ RETIRE_COMMIT = None
 RETIRE_CLI_SHA = None
 RETIRE_BINS = None
 RETIRE_BINARY_MANIFEST = None
+RETIRE_PUBLIC_IMPORTS = ()
+RETIRE_PROTECTED_INPUTS = ()
 
 
 class _retire_RebindError(Exception):
@@ -1002,10 +1041,19 @@ def _retire_root_identity(path):
     }
 
 
-def _retire_validate_terminal(inventory, value):
+def _retire_validate_terminal(inventory, value, *, expected_commit=None, expected_deployment=None):
+    # Native rollback failures are append-only history. A successful resume
+    # retains them; the terminal state and completed counters prove recovery.
+    history = value.get("rollback_failures")
+    history_valid = isinstance(history, list) and len(history) <= 5 and all(
+        isinstance(entry, str) and re.fullmatch(
+            r"phase=rollback;target=(?:edge|taira-validator-[1-4]);"
+            r"class=operation_failed;sha256=[0-9a-f]{64}", entry
+        ) is not None for entry in history
+    )
     _retire_need(
-        inventory["revision"]["commit"] == RETIRE_COMMIT
-        and inventory["deployment_id"] == RETIRE_RETAINED_DEPLOYMENT
+        inventory["revision"]["commit"] == (RETIRE_COMMIT if expected_commit is None else expected_commit)
+        and inventory["deployment_id"] == (RETIRE_RETAINED_DEPLOYMENT if expected_deployment is None else expected_deployment)
         and value.get("deployment_id") == inventory["deployment_id"]
         and value.get("status") == value.get("phase") == "rolled_back"
         and type(value.get("next_step")) is int
@@ -1015,7 +1063,7 @@ def _retire_validate_terminal(inventory, value):
         and type(value.get("edge_touched")) is bool
         and value.get("edge_rollback_complete") is value["edge_touched"]
         and value.get("rollback_next_validator") == 4
-        and value.get("rollback_failures") == [],
+        and history_valid,
         "requires complete native rollback of all touched validators and edge",
     )
 
@@ -1391,6 +1439,773 @@ def _retire_context_from_retained(g, args):
     return context
 
 
+# Closed-attempt public payload reclamation. These helpers run only while the
+# existing native retirement locks are held, after result.json is published.
+RETIRE_PRUNE_MAX_FILES = 65536
+RETIRE_PRUNE_MAX_RECEIPT_BYTES = 32 * 1024 * 1024
+
+
+def _retire_prune_info(path, *, directory=False):
+    path = direct(path)
+    for parent in path.parents:
+        info = parent.lstat()
+        _retire_need(stat.S_ISDIR(info.st_mode) and info.st_uid in (0, os.geteuid())
+                     and not info.st_mode & 0o022, "prune ancestor custody differs")
+    info = path.lstat()
+    _retire_need(info.st_uid == os.geteuid() and info.st_gid == os.getegid()
+                 and not info.st_mode & 0o022, "prune path custody differs")
+    _retire_need(stat.S_ISDIR(info.st_mode) if directory else
+                 stat.S_ISREG(info.st_mode) and info.st_nlink == 1,
+                 "prune path type or links differ")
+    return info
+
+
+def _retire_prune_marker(g, path, context, slug, kind):
+    value = json.loads(_retire_read_public(g, path / ".public-reset-generated-v1.json"))
+    _retire_need(value.get("schema") == "iroha.taira.public-reset.generated-path.v1"
+                 and value.get("kind") == kind and value.get("host_slug") == slug
+                 and value.get("inventory_sha256") == context["inventory_sha256"]
+                 and value.get("authorization_nonce") == context["nonce"]
+                 and value.get("revision") == context["commit"],
+                 "prune generated scope is not this closed attempt")
+
+
+def _retire_prune_scopes(g, context, inventory):
+    """Derive closed exact file slots and three public manifest chunk scopes."""
+    exact, chunk_dirs, protected, stores = {}, set(), {}, []
+    staged = RETIRE_RUNTIME / "journal-v1/staged-artifacts-v1" / context["inventory_sha256"]
+    runtime_stage = RETIRE_RUNTIME / "journal-v1/runtime-stage-v1" / context["authorization_sha256"]
+    archives = {row["slug"]: Path(row["archive"]) for row in context["uploads"]}
+    physical_hosts = {host["endpoint"]["host_identity_sha256"]
+                      for host in inventory["validators"] + [inventory["edge"]]}
+    _retire_need(len(physical_hosts) == 1
+                 and re.fullmatch("[0-9a-f]{64}", next(iter(physical_hosts)))
+                 and context["coordination_relative"] == str(Path("hosts") / next(iter(physical_hosts))),
+                 "archived host stage coordination differs from the physical host")
+    host_stage = (RETIRE_WORK / "retired-control" / context["coordination_relative"]
+                  / "inrou-stage-v1" / context["nonce"])
+    if os.path.lexists(host_stage):
+        _retire_need(stat.S_IMODE(_retire_prune_info(host_stage, directory=True).st_mode) == 0o700,
+                     "archived host stage must remain owner-private")
+        carrier = next(host for host in inventory["validators"]
+                       if host["endpoint"]["host_identity_sha256"] == next(iter(physical_hosts)))
+        _retire_prune_marker(g, host_stage, context, carrier["slug"], "inrou_stage")
+        marker = host_stage / ".public-reset-generated-v1.json"
+        protected[str(marker)] = list(identity(_retire_prune_info(marker)))
+    names = {"iroha_cli": ("iroha", "iroha"),
+             "iroha3d": ("artifact-iroha3d", "iroha3d_taira"),
+             "sorafs_node": ("artifact-sorafs_node", "sorafs-node")}
+    for host in inventory["validators"] + [inventory["edge"]]:
+        slug = host["slug"]
+        for artifact in host["artifacts"]:
+            if artifact["role"] not in names:
+                continue
+            source = direct(artifact["local_path"])
+            info = _retire_prune_info(source)
+            _retire_need(info.st_size == artifact["size"] > 0,
+                         "canonical public artifact metadata changed")
+            protected[str(source)] = list(identity(info))
+            upload_name, release_name = names[artifact["role"]]
+            mode = 0o500 if artifact["role"] == "iroha_cli" else 0o400
+            exact[staged / slug / context["nonce"] / upload_name] = (artifact["size"], mode)
+            if slug in archives:
+                exact[archives[slug] / upload_name] = (artifact["size"], 0o755)
+            if slug != "taira-edge":
+                release = RETIRE_WORK / "retired-control" / slug / "rollback" / context["nonce"] / "first-release.after"
+                if release.exists():
+                    _retire_prune_marker(g, release, context, slug, "release")
+                    exact[release / "bin" / release_name] = (artifact["size"], 0o755)
+        if slug != "taira-edge":
+            fresh = RETIRE_WORK / "retired-control" / slug / "rollback" / context["nonce"] / "fresh-state.after"
+            if fresh.exists():
+                _retire_prune_marker(g, fresh, context, slug, "fresh_state")
+                store = fresh / "sorafs-data"
+                _retire_prune_marker(g, store, context, slug, "fresh_state_entry")
+                _retire_prune_info(store, directory=True)
+                stores.append(store)
+    for name in ("rootfs.ext4", "vmlinux", "initrd.img"):
+        source = CONTINUITY_PREP / "inrou-stage/payloads/guest/aarch64" / name
+        info = _retire_prune_info(source)
+        _retire_need(info.st_size > 0, "canonical guest image is empty")
+        protected[str(source)] = list(identity(info))
+        exact[runtime_stage / "payloads/guest/aarch64" / name] = (info.st_size, 0o400)
+        if os.path.lexists(host_stage):
+            exact[host_stage / "payloads/guest/aarch64" / name] = (info.st_size, 0o400)
+    for store in stores:
+        for role in ("bundle", "guest", "discovery"):
+            manifest_id = inventory["inrou_canary"][role + "_manifest_digest_hex"]
+            manifest_sha = inventory["inrou_canary"][role + "_manifest_sha256"]
+            _retire_need(re.fullmatch("[0-9a-f]{64}", manifest_id)
+                         and re.fullmatch("[0-9a-f]{64}", manifest_sha),
+                         "public store manifest identity is invalid")
+            manifest = store / "manifests" / manifest_id
+            chunks = manifest / "chunks"
+            if not chunks.exists():
+                continue
+            _retire_prune_info(chunks, directory=True)
+            # The directory's BLAKE3 identity and SHA256-bound small manifest
+            # both come from native public SF1 admission. Never decode private
+            # storage metadata or select other manifests/ingest staging.
+            # SF1 manifests are public records; authority receipts still use
+            # the distinct private-custody reader above.
+            manifest_path = manifest / "manifest.to"
+            manifest_identity = identity(_retire_prune_info(manifest_path))
+            public_record(manifest_path, manifest_sha,
+                          owner=os.geteuid(), limit=1024 * 1024)
+            _retire_need(identity(_retire_prune_info(manifest_path)) == manifest_identity,
+                         "public manifest changed during prune admission")
+            protected[str(manifest_path)] = list(manifest_identity)
+            chunk_dirs.add(chunks)
+    for path in exact:
+        _retire_need(str(path) not in protected and not path.is_relative_to(RETIRE_BINS)
+                     and not path.is_relative_to(CONTINUITY_PREP),
+                     "prune candidate overlaps canonical input")
+    return exact, chunk_dirs, protected, stores
+
+
+def _retire_prune_census(exact, chunk_dirs):
+    paths = set(exact)
+    for directory in sorted(chunk_dirs):
+        with os.scandir(directory) as entries:
+            for entry in entries:
+                _retire_need(len(paths) < RETIRE_PRUNE_MAX_FILES,
+                             "public prune file bound exceeded")
+                _retire_need(re.fullmatch(r"chunk_[0-9]{5,}\.bin", entry.name),
+                             "public chunk scope contains an unexpected entry")
+                paths.add(Path(entry.path))
+    rows = []
+    for path in sorted(paths):
+        if not os.path.lexists(path):
+            continue
+        info = _retire_prune_info(path)
+        _retire_need(info.st_size > 0, "public prune payload is empty")
+        if path in exact:
+            _retire_need((info.st_size, stat.S_IMODE(info.st_mode)) == exact[path],
+                         "public disposable copy size or mode differs")
+        rows.append({"path": str(path), "identity": list(identity(info)),
+                     "allocated_bytes": info.st_blocks * 512})
+    _retire_need(len(rows) <= RETIRE_PRUNE_MAX_FILES
+                 and len({tuple(row["identity"][:2]) for row in rows}) == len(rows),
+                 "public prune candidates are duplicated or exceed bound")
+    return rows
+
+
+def _retire_prune_directories(rows):
+    selected = {Path(row["path"]) for row in rows}
+    directories = []
+    for directory in sorted({path.parent for path in selected}):
+        info = _retire_prune_info(directory, directory=True)
+        retained = []
+        with os.scandir(directory) as entries:
+            for entry in entries:
+                _retire_need(len(retained) < 4096, "retained sibling census exceeds bound")
+                if Path(entry.path) not in selected:
+                    retained.append({"name": entry.name,
+                                     "identity": list(identity(entry.stat(follow_symlinks=False)))})
+        directories.append({"path": str(directory), "identity": list(identity(info)[:5]),
+                            "retained": sorted(retained, key=lambda row: row["name"])})
+    _retire_need(len(directories) <= 128, "public prune directory bound exceeded")
+    return directories
+
+
+def _retire_prune_revalidate(g, context, intent, exact, chunk_dirs, protected):
+    _retire_need(intent.get("schema") == "taira.closed-public-prune-intent.v1"
+                 and intent.get("inventory_sha256") == context["inventory_sha256"]
+                 and intent.get("terminal_sha256") == context["terminal_sha256"]
+                 and intent.get("authorization_sha256") == context["authorization_sha256"]
+                 and intent.get("protected") == protected,
+                 "public prune intent binding changed")
+    rows = intent["files"]
+    _retire_need(isinstance(rows, list) and len(rows) <= RETIRE_PRUNE_MAX_FILES,
+                 "public prune intent file bound exceeded")
+    recorded = {}
+    for row in rows:
+        path = direct(row["path"])
+        _retire_need(path not in recorded and (path in exact or
+                     path.parent in chunk_dirs and re.fullmatch(r"chunk_[0-9]{5,}\.bin", path.name)),
+                     "public prune intent escaped admitted scopes")
+        recorded[path] = row
+    present = _retire_prune_census(exact, chunk_dirs)
+    _retire_need(all(Path(row["path"]) in recorded and
+                     row == recorded[Path(row["path"])] for row in present),
+                 "public prune payload appeared or changed after admission")
+    expected_directories = {path.parent for path in recorded}
+    _retire_need(len(intent["directories"]) <= 128
+                 and {Path(row["path"]) for row in intent["directories"]} == expected_directories,
+                 "public prune parent census differs")
+    for row in intent["directories"]:
+        directory = direct(row["path"])
+        info = _retire_prune_info(directory, directory=True)
+        _retire_need(list(identity(info)[:5]) == row["identity"],
+                     "public prune parent identity changed")
+        retained = {entry["name"]: entry["identity"] for entry in row["retained"]}
+        selected = {path.name for path in recorded if path.parent == directory}
+        names = {entry.name for entry in directory.iterdir()}
+        _retire_need(names - selected == set(retained), "public prune sibling set changed")
+        for name, stamp in retained.items():
+            _retire_need(list(identity((directory / name).lstat())) == stamp,
+                         "public prune retained sibling changed")
+    for path, stamp in protected.items():
+        _retire_need(list(identity(_retire_prune_info(path))) == stamp,
+                     "canonical public input changed during prune")
+    _retire_retained_state(g, context)
+    _retire_need(_retire_live_references(list(expected_directories))["passed"],
+                 "public disposable payload has a live reference")
+    return present
+
+
+def _retire_prune_public(g, context, result):
+    """Finish disposable-copy reclamation after publication, including crash resume."""
+    _retire_need(result.get("published") is True and result.get("control_archived") is True
+                 and result.get("native_rollback_completed") is True
+                 and result.get("inventory_sha256") == context["inventory_sha256"]
+                 and result.get("terminal_sha256") == context["terminal_sha256"]
+                 and result.get("retired_control_path") == str(RETIRE_WORK / "retired-control"),
+                 "public pruning requires this published retirement")
+    inventory_raw = _retire_read_public(g, RETIRE_INVENTORY_PATH, limit=8 * 1024 * 1024)
+    inventory = json.loads(inventory_raw)
+    _retire_need(_retire_digest(inventory_raw) == context["inventory_sha256"],
+                 "public prune inventory binding changed")
+    opened = []
+    try:
+        for slug in RETIRE_SLUGS[:-1]:
+            store = RETIRE_WORK / "retired-control" / slug / "rollback" / context["nonce"] / "fresh-state.after/sorafs-data"
+            if not store.exists():
+                continue
+            lock = store / ".storage.lock"
+            if not lock.exists():
+                _retire_need(not (store / "manifests").exists(), "retired store lacks its lock")
+                continue
+            before = _retire_prune_info(lock)
+            fd = os.open(lock, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+            opened.append(fd)
+            _retire_need(identity(os.fstat(fd)) == identity(before), "retired store lock changed")
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        exact, chunk_dirs, protected, _ = _retire_prune_scopes(g, context, inventory)
+        path = RETIRE_WORK / "public-prune-intent.json"
+        if path.exists():
+            intent = json.loads(_retire_read_public(g, path, limit=RETIRE_PRUNE_MAX_RECEIPT_BYTES))
+        else:
+            rows = _retire_prune_census(exact, chunk_dirs)
+            intent = {"schema": "taira.closed-public-prune-intent.v1",
+                      "inventory_sha256": context["inventory_sha256"],
+                      "terminal_sha256": context["terminal_sha256"],
+                      "authorization_sha256": context["authorization_sha256"],
+                      "files": rows, "directories": _retire_prune_directories(rows),
+                      "protected": protected}
+            data = _retire_canonical(intent)
+            _retire_need(len(data) <= RETIRE_PRUNE_MAX_RECEIPT_BYTES,
+                         "public prune intent byte bound exceeded")
+            _retire_prune_revalidate(g, context, intent, exact, chunk_dirs, protected)
+            g["fresh_write"](path, data, 0o600)
+            g["sync_directory"](RETIRE_WORK)
+        present = _retire_prune_revalidate(g, context, intent, exact, chunk_dirs, protected)
+        for row in present:
+            payload = Path(row["path"])
+            _retire_need(list(identity(_retire_prune_info(payload))) == row["identity"],
+                         "public disposable payload changed before removal")
+            payload.unlink()
+        for directory in intent["directories"]:
+            g["sync_directory"](Path(directory["path"]))
+        _retire_need(not _retire_prune_revalidate(g, context, intent, exact, chunk_dirs, protected),
+                     "public disposable payload remained after pruning")
+        completed = {"schema": "taira.closed-public-prune.v1",
+                     "inventory_sha256": context["inventory_sha256"],
+                     "terminal_sha256": context["terminal_sha256"],
+                     "file_count": len(intent["files"]),
+                     "allocated_bytes_removed": sum(row["allocated_bytes"] for row in intent["files"]),
+                     "directories_inputs_metadata_and_private_state_preserved": True}
+        _retire_event(g, "public-prune-completed", completed)
+        # Flush and trim are repeated on resume because a crash may follow unlink
+        # but precede discard. Directory fsync alone does not settle filesystem
+        # block reclamation before FITRIM, which can otherwise discard zero bytes.
+        # The next guest and backing capacity observations remain decisive.
+        mount = RETIRE_RUNTIME
+        while not os.path.ismount(mount):
+            _retire_need(mount != mount.parent, "retired runtime mountpoint is unavailable")
+            mount = mount.parent
+        flush = subprocess.run(["/usr/bin/sync", "-f", str(mount)],
+                               capture_output=True, timeout=60, check=False)
+        _retire_need(flush.returncode == 0, "retired public payload filesystem flush failed")
+        trim = subprocess.run(["/usr/sbin/fstrim", str(mount)],
+                              capture_output=True, timeout=60, check=False)
+        _retire_need(trim.returncode == 0, "retired public payload trim failed")
+        return completed
+    finally:
+        for fd in reversed(opened):
+            os.close(fd)
+
+
+
+_RETIRE_SOURCE_MAX_ENTRIES = 65536
+_RETIRE_SOURCE_MAX_DEPTH = 64
+
+
+def _retire_source_no_mounts(root):
+    if sys.platform != "linux":
+        return
+    with open("/proc/self/mountinfo", "rb") as stream:
+        raw = stream.read(1024 * 1024 + 1)
+    require(0 < len(raw) <= 1024 * 1024, "source mount census exceeds bound")
+    for line in raw.splitlines():
+        fields = line.split()
+        require(len(fields) >= 10 and b"-" in fields, "source mount census malformed")
+        name = re.sub(rb"\\([0-7]{3})", lambda m: bytes([int(m[1], 8)]), fields[4])
+        mount = Path(os.fsdecode(name))
+        require(mount != root and not mount.is_relative_to(root), "source contains a mount")
+
+
+def _retire_source_walk(root):
+    root = direct(root)
+    for path in (root, *root.parents):
+        info = path.lstat()
+        require(stat.S_ISDIR(info.st_mode) and info.st_uid in (0, os.geteuid())
+                and not info.st_mode & 0o022, "source ancestor custody differs")
+    _retire_source_no_mounts(root)
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+    records = []
+    root_fd = os.open(root, flags)
+    root_info = os.fstat(root_fd)
+
+    def walk(fd, relative, depth):
+        require(depth <= _RETIRE_SOURCE_MAX_DEPTH, "source directory depth exceeds bound")
+        before = os.fstat(fd)
+        add(relative, before)
+        with os.scandir(fd) as entries:
+            for entry in entries:
+                path = str(Path(relative) / entry.name) if relative != "." else entry.name
+                info = os.stat(entry.name, dir_fd=fd, follow_symlinks=False)
+                if stat.S_ISDIR(info.st_mode):
+                    child = os.open(entry.name, flags, dir_fd=fd)
+                    try:
+                        require(identity(info) == identity(os.fstat(child)), "source directory changed")
+                        walk(child, path, depth + 1)
+                        require(identity(info) == identity(os.stat(entry.name, dir_fd=fd,
+                                                                  follow_symlinks=False)),
+                                "source directory replaced during census")
+                    finally:
+                        os.close(child)
+                else:
+                    add(path, info)
+        require(identity(before) == identity(os.fstat(fd)), "source directory changed during census")
+
+    def add(path, info):
+        require(len(records) < _RETIRE_SOURCE_MAX_ENTRIES, "source entry count exceeds bound")
+        kind = ("directory" if stat.S_ISDIR(info.st_mode) else
+                "file" if stat.S_ISREG(info.st_mode) else
+                "symlink" if stat.S_ISLNK(info.st_mode) else None)
+        require(kind is not None and info.st_dev == root_info.st_dev,
+                "source type or filesystem differs")
+        require(info.st_uid == os.geteuid() and info.st_gid == os.getegid()
+                and (kind == "symlink" or not info.st_mode & 0o022)
+                and (kind == "directory" or info.st_nlink == 1), "source entry custody differs")
+        records.append({"path": path, "kind": kind, "identity": list(identity(info)),
+                        "allocated_bytes": info.st_blocks * 512})
+
+    try:
+        require(identity(root_info) == identity(root.lstat()), "source root changed during open")
+        walk(root_fd, ".", 0)
+        require(identity(root_info) == identity(root.lstat()), "source root changed during census")
+        _retire_source_no_mounts(root)
+    finally:
+        os.close(root_fd)
+    return sorted(records, key=lambda row: row["path"])
+
+
+def _retire_source_validate_records(records, tracked_files, *, pack_size):
+    """Bind retained source metadata to the native tracked closure and import layout."""
+    require(isinstance(tracked_files, list) and 0 < len(tracked_files) < _RETIRE_SOURCE_MAX_ENTRIES
+            and type(pack_size) is int and pack_size > 0, "source manifest bounds differ")
+    expected = {".": ("directory", {0o755}, None)}
+    gitlinks = []
+
+    def add(path, kind, modes, size=None):
+        item = (kind, modes, size)
+        require(path not in expected or expected[path] == item, "source manifest path collision")
+        expected[path] = item
+        for parent in Path(path).parents:
+            name = str(parent)
+            require(name not in expected or expected[name] == ("directory", {0o755}, None),
+                    "source manifest parent collision")
+            expected[name] = ("directory", {0o755}, None)
+
+    seen = set()
+    for row in tracked_files:
+        path, mode, size = row["path"], row["mode"], row["size"]
+        require(isinstance(path, str) and path not in seen and path != "."
+                and not Path(path).is_absolute() and str(Path(path)) == path
+                and ".." not in Path(path).parts and "\x00" not in path
+                and len(os.fsencode(path)) <= 4096 and Path(path).parts[0] != ".git"
+                and type(mode) is int and type(size) is int and size >= 0,
+                "source manifest path or mode differs")
+        seen.add(path)
+        if mode in (0o644, 0o755):
+            add(path, "file", {mode}, size)
+        elif mode == 0o120000:
+            add(path, "symlink", {0o777}, size)
+        elif mode == 0o160000:
+            add(path, "directory", {0o755})
+            gitlinks.append(path)
+        else:
+            require(False, "unsupported source manifest mode")
+    require(not any(other.startswith(link + "/") for link in gitlinks for other in seen),
+            "initialized source gitlink is not allowed")
+    for path in ("HEAD", "ORIG_HEAD", "config", "shallow", "refs/heads/optimizations",
+                 "logs/HEAD", "logs/refs/heads/optimizations"):
+        add(".git/" + path, "file", {0o644})
+    add(".git/index", "file", {0o600, 0o644})
+    for path in (".git/objects/info", ".git/objects/pack", ".git/refs/tags"):
+        add(path, "directory", {0o755})
+    packs = [row["path"] for row in records if
+             re.fullmatch(r"\.git/objects/pack/pack-[0-9a-f]{40}\.pack", row["path"])]
+    require(len(packs) == 1, "exactly one source Git pack required")
+    stem = packs[0][:-5]
+    for suffix in (".pack", ".idx", ".rev"):
+        add(stem + suffix, "file", {0o444}, pack_size if suffix == ".pack" else None)
+    require({row["path"] for row in records} == set(expected), "source has missing or extra paths")
+    for row in records:
+        kind, modes, size = expected[row["path"]]
+        info = row["identity"]
+        require(row["kind"] == kind and stat.S_IMODE(info[2]) in modes
+                and (size is None or info[6] == size), "source manifest metadata differs")
+    return records
+
+
+def _retire_source_census(root, tracked_files, *, pack_size):
+    """Admit the entire exact public tree and return durable metadata identities."""
+    return _retire_source_validate_records(_retire_source_walk(root), tracked_files,
+                                           pack_size=pack_size)
+
+
+def _retire_source_revalidate(root, records, *, allow_absent=False):
+    """Allow only deletion progress, including a renamed quarantine root."""
+    require(isinstance(records, list) and 0 < len(records) <= _RETIRE_SOURCE_MAX_ENTRIES,
+            "source intent bounds differ")
+    expected = {row["path"]: row for row in records}
+    require(len(expected) == len(records) and "." in expected, "source intent path set differs")
+    if allow_absent and not os.path.lexists(root):
+        return []
+    remaining = _retire_source_walk(root)
+    for row in remaining:
+        old = expected.get(row["path"])
+        require(old is not None and row["kind"] == old["kind"], "source gained an unadmitted path")
+        count = 5 if row["kind"] == "directory" else 9
+        require(row["identity"][:count] == old["identity"][:count],
+                "source identity changed after admission")
+    return remaining
+
+
+# Superseded public import ownership stays with the coordinator, not validators.
+RETIRE_IMPORT_MAX_COUNT = 4
+RETIRE_IMPORT_MAX_INTENT_BYTES = 16 * 1024 * 1024
+
+
+def validate_retired_public_imports(value):
+    """Require explicitly named closed imports; never discover targets by a glob."""
+    require(isinstance(value, list) and len(value) <= RETIRE_IMPORT_MAX_COUNT,
+            "retired public import count exceeds its bound")
+    seen = set()
+    for row in value:
+        require(isinstance(row, dict) and set(row) == {
+            "inventory", "retirement", "binary_manifest", "source_manifest", "source_pack"},
+            "retired import requires exact inventory/retirement/import references and pack path")
+        for name in ("inventory", "retirement", "binary_manifest", "source_manifest"):
+            ref = row[name]
+            require(isinstance(ref, dict) and set(ref) == {"path", "sha256"}
+                    and isinstance(ref["path"], str) and "\x00" not in ref["path"]
+                    and Path(ref["path"]).is_absolute()
+                    and str(Path(ref["path"])) == ref["path"]
+                    and ".." not in Path(ref["path"]).parts
+                    and isinstance(ref["sha256"], str)
+                    and re.fullmatch("[0-9a-f]{64}", ref["sha256"]) is not None,
+                    "retired import public reference is invalid")
+        pack = row["source_pack"]
+        require(isinstance(pack, str) and "\x00" not in pack and Path(pack).is_absolute()
+                and str(Path(pack)) == pack and ".." not in Path(pack).parts
+                and Path(pack) == Path(row["source_manifest"]["path"]).parent / "source.pack",
+                "transport pack must be the exact completed import's source.pack")
+        key = row["inventory"]["sha256"]
+        require(key not in seen, "retired import inventory is duplicated")
+        seen.add(key)
+    return value
+
+
+def _retire_import_overlaps(path, protected):
+    path = Path(path)
+    return any(path == other or path.is_relative_to(other) or other.is_relative_to(path)
+               for other in map(Path, protected))
+
+
+def _retire_import_admission(g, descriptor, current_inventory):
+    """Join existing native closure authority to completed public transfer receipts."""
+    guards, records = {}, {}
+    for name in ("inventory", "retirement", "binary_manifest", "source_manifest"):
+        ref = descriptor[name]
+        path = direct(ref["path"])
+        require(path.is_relative_to(RETIRE_RUNTIME), "retired public receipt escaped runtime authority")
+        raw = public_record(path, ref["sha256"], owner=os.geteuid(), limit=8 * 1024 * 1024)
+        guards[str(path)] = ref["sha256"]
+        records[name] = decode(raw)
+    inventory, retired = records["inventory"], records["retirement"]
+    revision = inventory["revision"]
+    require(retired.get("schema") == "taira.terminal-custody-retirement.v1"
+            and all(retired.get(k) is True for k in
+                    ("published", "control_archived", "native_rollback_completed"))
+            and retired.get("inventory_sha256") == descriptor["inventory"]["sha256"]
+            and retired.get("retained_commit") == revision["commit"]
+            and retired.get("retained_deployment_id") == inventory["deployment_id"],
+            "superseded inputs require their completed custody retirement")
+    terminal_path = direct(retired["terminal_path"])
+    require(terminal_path.parent == RETIRE_RUNTIME / "journal-v1/rolled-back"
+            and re.fullmatch("[0-9a-f]{64}\\.json", terminal_path.name),
+            "superseded native terminal is outside closed rollback authority")
+    raw = public_record(terminal_path, retired["terminal_sha256"], owner=os.geteuid())
+    terminal = decode(raw)
+    _retire_validate_terminal(inventory, terminal, expected_commit=revision["commit"],
+                             expected_deployment=inventory["deployment_id"])
+    require(terminal.get("inventory_sha256") == descriptor["inventory"]["sha256"]
+            and terminal_path.stem == terminal.get("authorization_sha256")
+            and terminal.get("authorization_nonce") == inventory["authorization_nonce"],
+            "superseded native terminal differs from the imported inventory")
+    deployment = inventory["deployment_id"]
+    require(isinstance(deployment, str) and re.fullmatch(r"[a-zA-Z0-9_.-]{1,128}", deployment)
+            and not os.path.lexists(RETIRE_RUNTIME / "journal-v1" / (deployment + ".journal.json")),
+            "superseded import still has a live native journal")
+    guards[str(terminal_path)] = retired["terminal_sha256"]
+    binary, source = records["binary_manifest"], records["source_manifest"]
+    names = {"iroha", "iroha3d_taira", "sorafs-node", "kagami"}
+    require(binary.get("commit") == source.get("commit") == revision["commit"]
+            and binary.get("all_hashes_verified") is True and binary.get("activated") is False
+            and source.get("tree") == revision["tree"]
+            and source.get("source_root") == revision["source_root"]
+            and all(source.get(k) is True for k in ("clean", "signature_verified", "object_inventory_verified"))
+            and all(source.get(k) is False for k in
+                    ("activated", "runtime_files_transferred", "runtime_files_included", "history_included"))
+            and len(binary.get("artifacts", [])) == 4
+            and {row["name"] for row in binary["artifacts"]} == names,
+            "superseded public import provenance differs")
+    artifacts = {row["name"]: row for row in binary["artifacts"]}
+    for row in [*artifacts.values(), {"size": source.get("size"), "sha256": source.get("sha256")}]:
+        require(type(row["size"]) is int and 0 < row["size"] < 1 << 63
+                and isinstance(row["sha256"], str) and re.fullmatch("[0-9a-f]{64}", row["sha256"]),
+                "superseded public payload size or digest is invalid")
+    bins, source_root = direct(binary["destination"]), direct(source["source_root"])
+    require(bins.is_relative_to(RETIRE_RUNTIME)
+            and Path(descriptor["binary_manifest"]["path"]) == bins.parent / "verified-manifest.json",
+            "superseded binary namespace differs from its completed transfer")
+    roles = {"iroha_cli": "iroha", "iroha3d": "iroha3d_taira", "sorafs_node": "sorafs-node"}
+    admitted_names = set()
+    for host in inventory["validators"] + [inventory["edge"]]:
+        for artifact in host["artifacts"]:
+            if artifact["role"] in roles:
+                name = roles[artifact["role"]]
+                require(artifact["local_path"] == str(bins / name)
+                        and artifact["size"] == artifacts[name]["size"]
+                        and artifact["sha256"] == artifacts[name]["sha256"],
+                        "superseded canonical binary differs from native inventory")
+                admitted_names.add(name)
+    require(admitted_names == set(roles.values()), "superseded inventory omits deployed public binaries")
+    closure_path = direct(revision["source_manifest_path"])
+    require(closure_path.is_relative_to(RETIRE_RUNTIME), "source closure escaped runtime authority")
+    closure_raw = public_record(closure_path, revision["source_manifest_sha256"], owner=os.geteuid())
+    closure = decode(closure_raw)
+    require(closure.get("schema") == "iroha.taira.public-reset.signed-source-closure.v1"
+            and closure.get("branch") == revision["branch"] == "optimizations"
+            and closure.get("head_commit_sha1") == revision["commit"]
+            and closure.get("head_tree_sha1") == revision["tree"]
+            and closure.get("closure_sha256") == revision["source_closure_sha256"]
+            and closure.get("cargo_lock_sha256") == revision["cargo_lock_sha256"]
+            and closure.get("untracked_files") == [], "superseded source closure binding differs")
+    guards[str(closure_path)] = revision["source_manifest_sha256"]
+    protected = {str(RETIRE_RUNTIME / "journal-v1"), str(RETIRE_RUNTIME / "retry-v1"),
+                 str(RETIRE_WORK), str(RETIRE_CONTROL), str(RETIRE_DISPATCHER),
+                 str(CONTINUITY_PREP), str(RETIRE_BINS), *map(str, RETIRE_PROTECTED_INPUTS), *guards,
+                 *(entry[key]["path"] for entry in RETIRE_PUBLIC_IMPORTS
+                   for key in ("inventory", "retirement", "binary_manifest", "source_manifest"))}
+    protected.add(current_inventory["revision"]["source_root"])
+    for host in current_inventory["validators"] + [current_inventory["edge"]]:
+        protected.update(host[k] for k in ("service_root", "state_root", "reset_guard") if k in host)
+        protected.update(artifact["local_path"] for artifact in host["artifacts"])
+    files = [{"path": str(bins / name), "size": row["size"], "mode": 0o755}
+             for name, row in sorted(artifacts.items())]
+    files.append({"path": descriptor["source_pack"], "size": source["size"], "mode": 0o600})
+    files = [row for row in files if not _retire_import_overlaps(row["path"], protected)]
+    tree = None if _retire_import_overlaps(source_root, protected) else str(source_root)
+    require(not tree or not any(_retire_import_overlaps(tree, [row["path"]]) for row in files),
+            "superseded source and public-file scopes overlap")
+    return {"inventory_sha256": descriptor["inventory"]["sha256"],
+            "terminal_sha256": retired["terminal_sha256"], "guards": guards,
+            "files": files, "source_root": tree, "tracked_files": closure["tracked_files"],
+            "pack_size": source["size"], "protected": sorted(protected)}
+
+
+def _retire_import_admissions(g, current):
+    admissions = [_retire_import_admission(g, row, current) for row in
+                  validate_retired_public_imports(list(RETIRE_PUBLIC_IMPORTS))]
+    scopes = []
+    guards = {path for row in admissions for path in row["guards"]}
+    for row in admissions:
+        for path in [item["path"] for item in row["files"]] + ([row["source_root"]] if row["source_root"] else []):
+            require(not _retire_import_overlaps(path, guards)
+                    and not _retire_import_overlaps(path, scopes),
+                    "retired import scopes overlap another payload or retained authority")
+            scopes.append(path)
+    return admissions
+
+
+def _retire_import_file_records(files):
+    records = []
+    for expected in files:
+        path = direct(expected["path"])
+        if not os.path.lexists(path):
+            continue
+        info = _retire_prune_info(path)
+        require(info.st_size == expected["size"] and stat.S_IMODE(info.st_mode) == expected["mode"],
+                "superseded public file metadata differs")
+        records.append({"path": str(path), "identity": list(identity(info)),
+                        "allocated_bytes": info.st_blocks * 512})
+    return records
+
+
+def _retire_import_revalidate(g, context, admission, intent):
+    require(intent.get("schema") == "taira.superseded-public-import-intent.v1"
+            and intent.get("admission") == admission, "superseded import intent binding changed")
+    for path, expected in admission["guards"].items():
+        public_record(path, expected, owner=os.geteuid())
+    tree = admission["source_root"]
+    expected_quarantine = str(Path(tree).with_name(".taira-retired-source-" + admission["inventory_sha256"])) if tree else None
+    require(intent.get("quarantine") == expected_quarantine,
+            "superseded source quarantine escaped its admitted parent")
+    recorded = {row["path"]: row for row in intent["files"]}
+    require(len(recorded) == len(intent["files"])
+            and set(recorded) <= {row["path"] for row in admission["files"]},
+            "superseded public file intent escaped admitted inputs")
+    require({row["path"] for row in intent["directories"]}
+            == {str(Path(path).parent) for path in recorded}
+            and len(intent["directories"]) == len({row["path"] for row in intent["directories"]}),
+            "superseded public parent intent escaped admitted inputs")
+    files = _retire_import_file_records(admission["files"])
+    require(all(row == recorded.get(row["path"]) for row in files),
+            "superseded public file changed or appeared after intent")
+    for row in intent["directories"]:
+        path = direct(row["path"])
+        require(list(identity(_retire_prune_info(path, directory=True))[:5]) == row["identity"],
+                "superseded public parent changed")
+        selected = {Path(name).name for name in recorded if Path(name).parent == path}
+        retained = {entry["name"]: entry["identity"] for entry in row["retained"]}
+        require({entry.name for entry in path.iterdir()} - selected == set(retained),
+                "superseded public siblings changed")
+        for name, stamp in retained.items():
+            require(list(identity((path / name).lstat())) == stamp, "superseded public sibling replaced")
+    quarantine = intent["quarantine"]
+    remaining = []
+    require(tree is not None or intent["source_records"] == [],
+            "protected current source gained a retirement intent")
+    if intent["source_records"]:
+        _retire_source_validate_records(intent["source_records"], admission["tracked_files"],
+                                        pack_size=admission["pack_size"])
+    if tree:
+        require(not (os.path.lexists(tree) and os.path.lexists(quarantine)),
+                "superseded source has two owners")
+        if os.path.lexists(tree):
+            remaining = _retire_source_revalidate(tree, intent["source_records"])
+            require(remaining == intent["source_records"], "source changed before quarantine")
+        elif os.path.lexists(quarantine):
+            remaining = _retire_source_revalidate(quarantine, intent["source_records"])
+    _retire_retained_state(g, context)
+    roots = [row["path"] for row in admission["files"]]
+    roots += [row["path"] for row in intent["directories"]]
+    roots += [tree, quarantine] if tree else []
+    require(_retire_live_references(roots)["passed"], "superseded import has a live process or mount reference")
+    return files, remaining
+
+
+def _retire_completed_public_imports(g, context, result):
+    """Retire explicitly superseded public imports under the existing native locks."""
+    descriptors = validate_retired_public_imports(list(RETIRE_PUBLIC_IMPORTS))
+    if not descriptors:
+        return []
+    require(result.get("published") is True and result.get("control_archived") is True
+            and result.get("native_rollback_completed") is True
+            and result.get("inventory_sha256") == context["inventory_sha256"]
+            and result.get("terminal_sha256") == context["terminal_sha256"],
+            "superseded import cleanup requires this published retirement")
+    current = decode(_retire_read_public(g, RETIRE_INVENTORY_PATH, context["inventory_sha256"],
+                                       limit=8 * 1024 * 1024))
+    admissions = _retire_import_admissions(g, current)
+    output = RETIRE_WORK / "public-import-retirement"
+    output.mkdir(mode=0o700, exist_ok=True)
+    _retire_prune_info(output, directory=True)
+    completed = []
+    for admission in admissions:
+        label = admission["inventory_sha256"]
+        path = output / (label + ".intent.json")
+        if path.exists():
+            intent = decode(public_record(path, owner=os.geteuid(), private=True,
+                                          limit=RETIRE_IMPORT_MAX_INTENT_BYTES))
+        else:
+            tree = admission["source_root"]
+            records = (_retire_source_census(tree, admission["tracked_files"], pack_size=admission["pack_size"])
+                       if tree and os.path.lexists(tree) else [])
+            quarantine = str(Path(tree).with_name(".taira-retired-source-" + label)) if tree else None
+            require(not quarantine or not os.path.lexists(quarantine), "unowned source quarantine exists")
+            files = _retire_import_file_records(admission["files"])
+            intent = {"schema": "taira.superseded-public-import-intent.v1", "admission": admission,
+                      "files": files, "directories": _retire_prune_directories(files),
+                      "source_records": records, "quarantine": quarantine}
+            raw = _retire_canonical(intent)
+            require(len(raw) <= RETIRE_IMPORT_MAX_INTENT_BYTES, "superseded import intent exceeds bound")
+            _retire_import_revalidate(g, context, admission, intent)
+            g["fresh_write"](path, raw, 0o600)
+            g["sync_directory"](output)
+        files, remaining = _retire_import_revalidate(g, context, admission, intent)
+        tree = admission["source_root"]
+        if tree and os.path.lexists(tree):
+            _retire_rename_atomic(Path(tree), Path(intent["quarantine"]))
+            g["sync_directory"](Path(tree).parent)
+        if remaining:
+            _retire_import_revalidate(g, context, admission, intent)
+            require(shutil.rmtree.avoids_symlink_attacks, "descriptor-safe source removal required")
+            shutil.rmtree(intent["quarantine"])
+            g["sync_directory"](Path(tree).parent)
+        files, _ = _retire_import_revalidate(g, context, admission, intent)
+        for row in files:
+            payload = Path(row["path"])
+            require(list(identity(_retire_prune_info(payload))) == row["identity"],
+                    "superseded public file changed before unlink")
+            payload.unlink()
+        for directory in intent["directories"]:
+            g["sync_directory"](Path(directory["path"]))
+        files, remaining = _retire_import_revalidate(g, context, admission, intent)
+        require(not files and not remaining, "superseded public payload remains")
+        record = {"schema": "taira.superseded-public-import-retired.v1", "inventory_sha256": label,
+                  "terminal_sha256": admission["terminal_sha256"],
+                  "allocated_bytes_removed": sum(row["allocated_bytes"] for row in intent["files"] + intent["source_records"]),
+                  "private_inputs_manifests_and_current_artifacts_preserved": True}
+        done = output / (label + ".completed.json")
+        if done.exists():
+            require(decode(public_record(done, owner=os.geteuid(), private=True)) == record,
+                    "superseded import completion changed")
+        else:
+            g["fresh_write"](done, _retire_canonical(record), 0o600)
+            g["sync_directory"](output)
+        completed.append(record)
+    mounts = set()
+    for descriptor in descriptors:
+        for path in (Path(descriptor["source_pack"]).parent,
+                     Path(decode(_retire_read_public(g, Path(descriptor["source_manifest"]["path"])))['source_root']).parent):
+            while not os.path.ismount(path):
+                require(path != path.parent, "superseded import filesystem unavailable")
+                path = path.parent
+            mounts.add(path)
+    for mount in sorted(mounts):
+        flush = subprocess.run(["/usr/bin/sync", "-f", str(mount)], capture_output=True, timeout=60, check=False)
+        require(flush.returncode == 0, "superseded import filesystem flush failed")
+        trim = subprocess.run(["/usr/sbin/fstrim", str(mount)], capture_output=True, timeout=60, check=False)
+        require(trim.returncode == 0, "superseded import filesystem trim failed")
+    return completed
+
+
 def _retire_apply(g, context, check_only=False):
     with _retire_locks(g, context):
         _retire_retained_state(g, context)
@@ -1404,6 +2219,10 @@ def _retire_apply(g, context, check_only=False):
             _retire_no_running_inode((os.fstat(old.fd).st_dev, os.fstat(old.fd).st_ino))
         finally:
             old.close()
+        if RETIRE_PUBLIC_IMPORTS:
+            current = decode(_retire_read_public(g, RETIRE_INVENTORY_PATH, context["inventory_sha256"],
+                                               limit=8 * 1024 * 1024))
+            _retire_import_admissions(g, current)
         if check_only:
             return {
                 "schema": "taira.terminal-custody-retirement-precheck.v1",
@@ -1432,7 +2251,10 @@ def _retire_apply(g, context, check_only=False):
                 g, RETIRE_DISPATCHER, context["new_dispatcher_sha256"]
             )
             current.close()
-            return json.loads(_retire_read_public(g, RETIRE_WORK / "result.json"))
+            result = json.loads(_retire_read_public(g, RETIRE_WORK / "result.json"))
+            _retire_prune_public(g, context, result)
+            _retire_completed_public_imports(g, context, result)
+            return result
         candidate = RETIRE_WORK / "candidate-control"
         staged = RETIRE_WORK / "new-dispatcher"
         old_path = RETIRE_WORK / "old-dispatcher"
@@ -1590,6 +2412,8 @@ def _retire_apply(g, context, check_only=False):
             ],
         }
         _retire_event(g, "result", result)
+        _retire_prune_public(g, context, result)
+        _retire_completed_public_imports(g, context, result)
         return result
 
 
@@ -1988,6 +2812,21 @@ def _continuity_reconcile(args):
     node_class = _continuity_load_public_module(
         Path(args.local_node_module), args.local_node_sha256
     )["LocalNode"]
+    _continuity_need(
+        isinstance(getattr(args, "seed_observation_source", None), str)
+        and len(args.seed_observation_source) <= 350 * 1024
+        and isinstance(getattr(args, "seed_observation_sha256", None), str)
+        and re.fullmatch("[0-9a-f]{64}", args.seed_observation_sha256),
+        "Explicit maintained seed observation helper required",
+    )
+    observation_raw = base64.b64decode(args.seed_observation_source, validate=True)
+    _continuity_need(
+        len(observation_raw) <= 256 * 1024
+        and hashlib.sha256(observation_raw).hexdigest() == args.seed_observation_sha256,
+        "Exact maintained seed observation helper required",
+    )
+    observation = {"__name__": "reviewed_seed_observation"}
+    exec(compile(observation_raw, "<maintained-seed-observation>", "exec"), observation)
     receipt_rows = []
     observations = []
     genesis_block_hash = None
@@ -2011,65 +2850,15 @@ def _continuity_reconcile(args):
             len(fields) >= 20 and int(fields[19]) >= before["earliest_start_ticks"],
             "Running daemon predates continuity capture",
         )
-        node = node_class(row["binding"])
-        node.assert_identity()
-        status = node.get_json("/v1/sumeragi/status")
-        _continuity_need(
-            status["protocol_version"] == 4
-            and status["restart_required"] is False
-            and (status["last_committed_height"] >= 1)
-            and all(
-                (
-                    _continuity_checked_hash_body(status[name]) == row[name]
-                    for name in (
-                        "node_fingerprint",
-                        "build_fingerprint",
-                        "config_fingerprint",
-                    )
-                )
-            ),
-            "Native applied status differs from authenticated assembled identity",
+        node, status, attestation = observation["observe_attested_status"](
+            node_class, row["binding"], row, before["network_id"], args.genesis_hash
         )
-        challenge = secrets.token_bytes(32)
-        attestation = node.get_json(
-            "/v1/bridge/finality/attestation/" + str(status["last_committed_height"]),
-            {"x-iroha-finality-challenge": challenge.hex()},
-        )
-        body = attestation["body"]
-        _continuity_need(
-            body["version"] == 1
-            and body["challenge"] == list(challenge)
-            and (body["network_id"] == before["network_id"])
-            and (body["node_id"] == row["peer_id"]),
-            "Native challenge attestation is not bound to this deployed process/network",
-        )
-        native_hash = body["genesis_block_hash"]
-        _continuity_need(
-            native_hash == before["network_id"]
-            and _continuity_checked_hash_body(native_hash) == args.genesis_hash,
-            "Native authenticated genesis block hash differs",
-        )
+        native_hash = attestation["body"]["genesis_block_hash"]
         if genesis_block_hash is None:
             genesis_block_hash = native_hash
         _continuity_need(
             genesis_block_hash == native_hash,
             "Validators disagree on native genesis identity",
-        )
-        _continuity_need(
-            body["status"]["last_committed_height"] == status["last_committed_height"]
-            and all(
-                (
-                    _continuity_checked_hash_body(body["status"][name]) == row[name]
-                    for name in (
-                        "node_fingerprint",
-                        "build_fingerprint",
-                        "config_fingerprint",
-                    )
-                )
-            )
-            and isinstance(body["genesis_finality_proof"], dict)
-            and isinstance(body["finality_proof"], dict),
-            "Native challenge response lacks the same applied identity and genesis/tip finality evidence",
         )
         node.assert_identity()
         _continuity_need(
@@ -2560,6 +3349,7 @@ def local_arguments(raw):
     shape = (
         ("--runtime-client-config", 1),
         ("--validator-client-config", 4),
+        ("--validator-operator-key", 1),
         ("--onboarding-token", 1),
         ("--inrou-stage-dir", 1),
         ("--validator-unit", 4),
@@ -2842,6 +3632,14 @@ def configure_protocols(
         "RETIRE_INVENTORY_PATH": inventory_path,
         "RETIRE_BINARY_MANIFEST": Path(plan["binary_manifest"]),
         "RETIRE_BINS": Path(binary["destination"]),
+        "RETIRE_PUBLIC_IMPORTS": copy.deepcopy(plan["retired_public_imports"]),
+        "RETIRE_PROTECTED_INPUTS": [str(path) for path in (
+            Path(inventory["revision"]["source_root"]), Path(binary["destination"]),
+            *(Path(plan[key]) for key in ("source_manifest", "binary_manifest", "signing_key",
+                "trusted_public_key", "ssh_identity", "known_hosts")),
+            *(Path(path) for key in ("--runtime-client-config", "--validator-client-config",
+                "--validator-operator-key", "--onboarding-token") for path in arguments[key]),
+        )],
         "CONTINUITY_RUNTIME": runtime,
         "CONTINUITY_PREP": Path(plan["prep_root"]),
         "CONTINUITY_ASSEMBLY": attempt / "assembly",
@@ -3189,8 +3987,66 @@ def measured_capacity_inputs(inventory, stage):
     return inputs, runtime
 
 
+def execution_intent(request):
+    intent = request.get("intent")
+    require(intent in ("retirement", "deployment"), "explicit retry execution intent required")
+    return intent
+
+
+def retirement_capacity_plans(runtime_root, backing_path, binary, retired_import_count=0):
+    """Bound dispatcher/custody records plus each declared import retirement intent."""
+    require(type(retired_import_count) is int and 0 <= retired_import_count <= RETIRE_IMPORT_MAX_COUNT,
+            "retired public import count exceeds capacity bounds")
+    rows = [row for row in binary["artifacts"] if row["name"] == "iroha"]
+    require(len(rows) == 1 and type(rows[0]["size"]) is int and rows[0]["size"] > 0,
+            "actual dispatcher size required for retirement capacity")
+    guest = {
+        "schema": "taira.disk-capacity.plan.v1",
+        "allocations": [
+            {"path": runtime_root, "label": "retirement publication and prune metadata",
+             "bytes": rows[0]["size"] + 64 * 1024**2
+                      + retired_import_count * (RETIRE_IMPORT_MAX_INTENT_BYTES + 1024**2),
+             "inodes": 4096 + 4 * retired_import_count},
+            {"path": runtime_root, "label": "guest filesystem headroom",
+             "bytes": 2 * 1024**3, "inodes": 1024},
+        ],
+    }
+    total = sum(row["bytes"] for row in guest["allocations"])
+    return {
+        "guest_plan": guest,
+        "backing_plan": {
+            "schema": guest["schema"],
+            "allocations": [
+                {"path": backing_path, "label": "retirement guest allocation including reserve",
+                 "bytes": total, "inodes": 1},
+                {"path": backing_path, "label": "Mac physical backing headroom",
+                 "bytes": 2 * 1024**3, "inodes": 1024},
+            ],
+        },
+        "derivation": {"retirement_only": True, "new_apply": False,
+                       "required_bytes": total, "backing_required_bytes": total + 2 * 1024**3},
+    }
+
+
+def validate_execution_capacity(request, capacity, postconditions, resume_id):
+    intent = execution_intent(request)
+    plan = request["plan"]
+    if intent == "retirement":
+        require(not postconditions, "completed native execution cannot be retired")
+        expected = retirement_capacity_plans(plan["runtime_root"], request["backing_path"], request["binary"],
+                                             len(plan["retired_public_imports"]))
+        require(plan["capacity_plan"] == expected["guest_plan"], "exact bounded retirement capacity required")
+    else:
+        validate_retry_capacity(capacity, plan["capacity_plan"], postconditions)
+        if not postconditions:
+            expected = request.get("retirement_attempt_id")
+            require(isinstance(expected, str) and re.fullmatch(r"retry-[0-9]{16,24}-[0-9a-f]{8}", expected)
+                    and resume_id == expected, "deployment must resume its exact retired attempt")
+
+
 def guest_admit(request):
-    """Read-only admission derives known paths and both complete capacity plans."""
+    """Read-only admission selects retirement or deployment capacity explicitly."""
+    intent = execution_intent(request)
     plan = request["plan"]
     require(
         os.geteuid() == 0
@@ -3230,11 +4086,19 @@ def guest_admit(request):
         )
     prior_inventory, terminal, prior_args, resume_id = previous_attempt(plan)
     postconditions = resume_id is not None and terminal.parent.name == "completed"
+    if not postconditions and plan["retired_public_imports"]:
+        configure_protocols(plan, inventory, inventory_path, Path(plan["previous_terminal"]),
+                            Path(plan["attempts_root"]) / (resume_id or "admission"),
+                            request["binary"], arguments)
+        _retire_import_admissions(None, inventory)
     capacity = capacity_module(request["capacity_source"])
     if postconditions:
         result = postcondition_capacity_plans(
             plan["runtime_root"], request["backing_path"]
         )
+    elif intent == "retirement":
+        result = retirement_capacity_plans(plan["runtime_root"], request["backing_path"], request["binary"],
+                                           len(plan["retired_public_imports"]))
     else:
         inputs, runtime = measured_capacity_inputs(
             inventory, arguments["--inrou-stage-dir"][0]
@@ -3268,8 +4132,9 @@ def guest_admit(request):
             backing_path=request["backing_path"],
         )
     plan["capacity_plan"] = result["guest_plan"]
-    validate_retry_capacity(capacity, plan["capacity_plan"], postconditions)
-    observed = check_capacity(capacity, plan["capacity_plan"], "admission")
+    if intent == "deployment" or postconditions:
+        validate_retry_capacity(capacity, plan["capacity_plan"], postconditions)
+    observed = check_capacity(capacity, plan["capacity_plan"], intent + "-admission")
     result.update(
         schema="taira.retry-admission.v1",
         commit=request["commit"],
@@ -3277,6 +4142,8 @@ def guest_admit(request):
         guest_capacity=observed,
         runtime_secret_contents_read=False,
         postconditions_only=postconditions,
+        intent=intent,
+        pending_attempt_id=resume_id,
     )
     print(json.dumps(result, sort_keys=True), flush=True)
     return result
@@ -3366,8 +4233,8 @@ def guest_run(request):
     capacity = capacity_module(request["capacity_source"])
     _, terminal, _, resume_id = previous_attempt(plan)
     postconditions = resume_id is not None and terminal.parent.name == "completed"
-    validate_retry_capacity(capacity, plan["capacity_plan"], postconditions)
-    check_capacity(capacity, plan["capacity_plan"], "retirement")
+    validate_execution_capacity(request, capacity, postconditions, resume_id)
+    check_capacity(capacity, plan["capacity_plan"], execution_intent(request))
     runtime = direct(plan["runtime_root"])
     root = direct(plan["attempts_root"])
     require(
@@ -3413,6 +4280,7 @@ def guest_run(request):
 
 
 def guest_locked(request, capacity, root):
+    intent = execution_intent(request)
     plan = request["plan"]
     binary = decode(
         public_record(
@@ -3430,8 +4298,13 @@ def guest_locked(request, capacity, root):
     )
     inventory_path, terminal_path, args_path, resume_id = previous_attempt(plan)
     if resume_id is not None and terminal_path.parent.name == "completed":
+        require(intent == "deployment", "completed native execution cannot be retired")
         return resume_postconditions(request, root / resume_id, terminal_path)
+    if "retirement_attempt_id" in request:
+        require(intent == "deployment" and resume_id == request["retirement_attempt_id"],
+                "retired attempt changed before deployment lock")
     inventory = decode(public_record(inventory_path, owner=0, private=True))
+    require_candidate_probe_inventory(inventory)
     require_same_inventory_artifacts(inventory, binary, source)
     args, arguments = local_arguments(public_record(args_path, owner=0, private=True))
     require(
@@ -3525,6 +4398,23 @@ def guest_locked(request, capacity, root):
             "same-artifact retry must preserve guard bytes",
         )
         completed.append(phase)
+        if intent == "retirement":
+            result = {
+                "schema": "taira.retry-retirement.v1", "intent": "retirement",
+                "attempt_id": attempt_id, "passed": True, "commit": binary["commit"],
+                "binary_manifest_sha256": request["binary_sha256"],
+                "source_manifest_sha256": request["source_sha256"],
+                "custody_plan_sha256": custody_plan_digest(plan),
+                "native_apply_started": False, "next_step": "deployment-capacity-admission",
+            }
+            ready = attempt / "retirement-ready.json"
+            if ready.exists():
+                require(decode(public_record(ready, owner=0, private=True)) == result,
+                        "retirement resume identity differs")
+            else:
+                write_public(ready, result)
+            print(json.dumps(result, sort_keys=True), flush=True)
+            return result
         phase = "assemble"
         check_capacity(capacity, plan["capacity_plan"], phase, attempt)
         run_native(
@@ -3556,6 +4446,8 @@ def guest_locked(request, capacity, root):
             prestart_sha256=None,
             local_node_module=plan["local_node"]["path"],
             local_node_sha256=plan["local_node"]["sha256"],
+            seed_observation_source=request.get("seed_observation_source"),
+            seed_observation_sha256=request.get("seed_observation_sha256"),
         )
         call_phase(phase, lambda: _continuity_capture(seed_args), attempt)
         seed_args.prestart_sha256 = hashlib.sha256(
@@ -3893,6 +4785,8 @@ def resume_postconditions(request, attempt, terminal_path):
             ).hexdigest(),
             local_node_module=plan["local_node"]["path"],
             local_node_sha256=plan["local_node"]["sha256"],
+            seed_observation_source=request.get("seed_observation_source"),
+            seed_observation_sha256=request.get("seed_observation_sha256"),
         )
         preserve_postcondition_outputs(attempt)
         completed = list(PHASES[: PHASES.index("seed-post")])
@@ -4114,7 +5008,12 @@ def main():
     capacity_source = public_record(
         Path(__file__).resolve().with_name("taira_disk_capacity.py"), limit=1024 * 1024
     )
+    seed_observation_source = public_record(
+        Path(__file__).resolve().with_name("taira_seed_observation.py"), limit=256 * 1024
+    )
     request = {
+        "seed_observation_source": base64.b64encode(seed_observation_source).decode(),
+        "seed_observation_sha256": hashlib.sha256(seed_observation_source).hexdigest(),
         "plan": plan["guest"],
         "commit": commit,
         "build": records["preparation"],
@@ -4125,31 +5024,49 @@ def main():
         "capacity_source": base64.b64encode(capacity_source).decode(),
         "backing_path": plan["backing_path"],
     }
-    admission = remote_command(
-        plan["guest_ssh"]["argv"],
-        remote_payload(source, "guest_admit", request),
-        output / "admission",
-        "admission",
-    )
-    require(
-        admission["schema"] == "taira.retry-admission.v1"
-        and admission["commit"] == commit
-        and all(
-            admission["plan"][key] == value for key, value in plan["guest"].items()
-        ),
-        "derived runtime admission changed explicit owner inputs",
-    )
-    backing_code = remote_payload(
-        capacity_source, "evaluate", admission["backing_plan"], print_result=True
-    )
-    backing = remote_command(
-        plan["backing_ssh"]["argv"],
-        backing_code,
-        output / "backing-capacity",
-        "backing-capacity",
-    )
-    require(backing["passed"] is True, "physical backing capacity is insufficient")
-    request["plan"] = admission["plan"]
+    def admit(intent, label):
+        request["intent"] = intent
+        admission = remote_command(
+            plan["guest_ssh"]["argv"], remote_payload(source, "guest_admit", request),
+            output / label, label,
+        )
+        require(admission["schema"] == "taira.retry-admission.v1"
+                and admission["commit"] == commit and admission["intent"] == intent
+                and all(admission["plan"][key] == value for key, value in plan["guest"].items()),
+                "derived runtime admission changed explicit owner inputs or execution intent")
+        request["plan"] = admission["plan"]
+        return admission
+
+    def check_backing(admission, label):
+        backing_code = remote_payload(capacity_source, "evaluate", admission["backing_plan"], print_result=True)
+        backing = remote_command(plan["backing_ssh"]["argv"], backing_code, output / label, label)
+        require(backing["passed"] is True, "physical backing capacity is insufficient")
+
+    # Retirement allocates only its bounded publication/evidence footprint, then
+    # reclaims the previous failed attempt before charging the next fresh peak.
+    admission = admit("retirement", "retirement-admission")
+    retired = None
+    if not admission["postconditions_only"]:
+        check_backing(admission, "retirement-backing-capacity")
+        retired = remote_command(
+            plan["guest_ssh"]["argv"], remote_payload(source, "guest_run", request),
+            output / "retirement", "retirement",
+        )
+        require(retired["schema"] == "taira.retry-retirement.v1"
+                and retired["intent"] == "retirement" and retired["passed"] is True
+                and retired["commit"] == commit and retired["native_apply_started"] is False
+                and retired["binary_manifest_sha256"] == request["binary_sha256"]
+                and retired["source_manifest_sha256"] == request["source_sha256"]
+                and retired["custody_plan_sha256"] == custody_plan_digest(request["plan"])
+                and re.fullmatch(r"retry-[0-9]{16,24}-[0-9a-f]{8}", retired["attempt_id"]),
+                "retirement did not return its exact non-executing resume identity")
+        request["retirement_attempt_id"] = retired["attempt_id"]
+    admission = admit("deployment", "admission")
+    if retired is not None:
+        require(not admission["postconditions_only"]
+                and admission["pending_attempt_id"] == retired["attempt_id"],
+                "retired attempt changed before fresh deployment admission")
+    check_backing(admission, "backing-capacity")
     payload = remote_payload(source, "guest_run", request)
     result = remote_command(
         plan["guest_ssh"]["argv"], payload, output / "guest", "native-retry"

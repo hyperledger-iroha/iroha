@@ -107,7 +107,10 @@ fn build_status_router() -> iroha_torii::TestApiRouterRuntime {
         cfg.common.key_pair,
         OnlinePeersProvider::new(peers_rx),
         None,
-        telemetry,
+        iroha_torii::ToriiRuntimeDeps::new(
+            build_identity_test_fixture::build_identity(),
+            telemetry,
+        ),
     )
     .expect("valid Torii Sumeragi-status fixture");
     torii
@@ -189,3 +192,6 @@ async fn norito_status_decodes_as_exact_authoritative_v2_type() {
         norito::decode_from_bytes(&body).expect("decode authoritative v2 Norito");
     assert_eq!(decoded, expected);
 }
+
+#[path = "../src/build_identity_test_fixture.rs"]
+mod build_identity_test_fixture;

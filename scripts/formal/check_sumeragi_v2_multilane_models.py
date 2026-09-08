@@ -1844,9 +1844,18 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_BINDINGS = (
         "fn",
         "queue_plan_pending_exact_route_member_state_in_storage",
         (
-            "prevalidate_queue_plan_pending_route_rosters",
-            "obligation.routes.iter().copied()",
-            "queue_plan_pending_exact_route_member_state_after_roster_prevalidation",
+            "for route in &obligation.routes",
+            "queue_plan_pending_route_member_from_obligation(obligation, *route)?",
+            "queue_plan_pending_route_member_marker_key",
+            "storage.get(&key)",
+            "decode_exact_queue_plan_pending_route_member_marker",
+            "marker != expected",
+            "present = present.saturating_add(1)",
+            "present == obligation.routes.len()",
+            "QueuePlanPendingRouteMemberState::AllPresent",
+            "present == 0",
+            "QueuePlanPendingRouteMemberState::AllAbsent",
+            "partial exact route-member set",
         ),
     ),
     (
@@ -1856,16 +1865,8 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_BINDINGS = (
         (
             "for route in &obligation.routes",
             "prevalidated_routes.contains(route)",
-            "queue_plan_pending_route_member_from_obligation(obligation, *route)?",
-            "queue_plan_pending_route_member_marker_key",
-            "decode_exact_queue_plan_pending_route_member_marker",
-            "marker != expected",
-            "present = present.saturating_add(1)",
-            "present == obligation.routes.len()",
-            "QueuePlanPendingRouteMemberState::AllPresent",
-            "present == 0",
-            "QueuePlanPendingRouteMemberState::AllAbsent",
-            "partial exact route-member set",
+            "was not prevalidated",
+            "queue_plan_pending_exact_route_member_state_in_storage(storage, obligation)",
         ),
     ),
     (
@@ -1952,6 +1953,8 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_BINDINGS = (
         "queue_plan_binding_application_state_in_storage",
         (
             "current != expected",
+            "if storage.get(&terminal_key).is_some()",
+            "if outer_committed && storage.get(&terminal_key).is_some()",
             "require_queue_plan_pending_signed_alias_member_marker",
             "queue_plan_pending_exact_route_member_state_in_storage",
             "pending-obligation marker `{key}` survived canonical transaction membership",
@@ -2009,10 +2012,16 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_BINDINGS = (
         "fn",
         "queue_plan_admission_binding_registry_match",
         (
+            "queue_plan_pending_obligation_from_binding(binding)",
+            "queue_plan_admission_registry_value_in_view",
+            "registry_value.binding_hash != expected.binding_hash",
+            "queue_plan_registry_owner_application_state_in_view",
+            "QueuePlanAdmissionRegistryMatch::Absent",
+            "QueuePlanAdmissionRegistryMatch::Conflict",
             "queue_plan_binding_application_state",
             "application_state == QueuePlanAdmissionApplicationState::PendingStale",
             "retired or recreated lane incarnation",
-            "Ok(registry_match)",
+            "Ok(QueuePlanAdmissionRegistryMatch::Exact)",
         ),
     ),
     (
@@ -2134,13 +2143,27 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_BINDINGS = (
         "fn",
         "queue_plan_admission_registry_match_with_application_state_in_view",
         (
-            "QueuePlanAdmissionRegistryKeyV1",
-            "decode_exact_queue_plan_admission_registry_marker",
+            "queue_plan_admission_registry_value_in_view",
             "queue_plan_registry_owner_application_state_in_view",
             "QueuePlanAdmissionRegistryMatch::Absent",
             "QueuePlanAdmissionRegistryMatch::Exact",
             "QueuePlanAdmissionRegistryMatch::Conflict",
             "Some(application_state)",
+        ),
+    ),
+    (
+        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
+        "fn",
+        "queue_plan_admission_registry_value_in_view",
+        (
+            "QueuePlanAdmissionRegistryKeyV1",
+            "queue_plan_admission_network_id_digest",
+            "queue_plan_admission_registry_marker_key",
+            "queue_plan_pending_obligation_marker_key",
+            "QueuePlan pending obligation exists without an immutable registry owner",
+            "Ok(None)",
+            "decode_exact_queue_plan_admission_registry_marker",
+            "Ok(Some(value))",
         ),
     ),
     (
@@ -2152,7 +2175,8 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_BINDINGS = (
             "require_queue_plan_pending_signed_alias_member_marker",
             "queue_plan_terminal_signed_alias_member_from_obligation",
             "queue_plan_signed_alias_terminal_marker_key",
-            "queue_plan_pending_exact_route_member_state_in_storage",
+            "prevalidate_queue_plan_pending_route_rosters",
+            "queue_plan_pending_exact_route_member_state_after_roster_prevalidation",
             "queue_plan_pending_signed_alias_member_from_obligation",
             "queue_plan_pending_signed_alias_members_from_storage",
             "members.len() == MAX_QUEUE_PLAN_PENDING_SIGNED_ALIAS_MEMBERS",
@@ -2425,18 +2449,19 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_ORDERED_SOURCE_CHECKS = (
         (
             "Self::decode_exact_queue_plan_pending_obligation_marker(&key, payload)?;",
             "if current != expected {",
+            "if storage.get(&terminal_key).is_some()",
             "Self::require_queue_plan_pending_signed_alias_member_marker(storage, &current)?;",
             "Self::queue_plan_pending_exact_route_member_state_in_storage(",
             "survived canonical transaction membership",
             "match (route_state, signed_committed) {",
             "Ok(QueuePlanAdmissionApplicationState::Pending)",
             "Ok(QueuePlanAdmissionApplicationState::PendingStale)",
+            "if outer_committed && storage.get(&terminal_key).is_some()",
             "for route in &expected.routes {",
             "Self::queue_plan_pending_signed_alias_member_from_obligation(&expected);",
             "Self::queue_plan_terminal_signed_alias_member_from_obligation(&expected);",
             "Self::decode_exact_queue_plan_pending_signed_alias_member_marker(",
             "Self::decode_exact_queue_plan_signed_alias_terminal_marker(",
-            "directly applied admission `{key}` retains a signed-alias marker",
             "terminal admission `{key}` retains its pending reverse index",
             "stored_terminal_alias.as_ref() == terminal_alias.as_ref()",
             "has no exact application evidence",
@@ -5101,6 +5126,27 @@ def _validate_queue_plan_pending_membership_contract(
                 )
                 break
             cursor = position
+
+    exact_member_item = binding_items.get(
+        (
+            QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
+            "fn",
+            "queue_plan_pending_exact_route_member_state_in_storage",
+        )
+    )
+    if exact_member_item is not None and any(
+        token in exact_member_item
+        for token in (
+            "prevalidate_queue_plan_pending_route_rosters",
+            "queue_plan_pending_route_members_from_storage",
+            "storage.range(",
+            "storage.iter(",
+        )
+    ):
+        errors.append(
+            f"{state_path}: exact QueuePlan membership reads must use only "
+            "the requested obligation's member keys, without scanning route rosters"
+        )
 
     resolution_item = binding_items.get(
         (
