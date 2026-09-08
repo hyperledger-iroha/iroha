@@ -1252,7 +1252,7 @@ class MusubiSdkV1FixtureTest {
 
     private fun assertCanonicalSignature(request: TransportRequest) {
         assertEquals(
-            AccountAddress.parseEncodedIgnoringCurveSupport(accountId, null).canonicalHex(),
+            AccountAddress.parseEncoded(accountId, null).canonicalHex(),
             firstHeader(request, CanonicalRequestSigner.HEADER_ACCOUNT),
         )
         val timestampMs = assertNotNull(

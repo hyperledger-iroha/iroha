@@ -49,6 +49,21 @@ zero ignored**, in 50.83 seconds after a 46.69-second build. Its binary is
 `manifest-canonical-identity-result.json` retain the output and scoped hashes.
 These are local test results, not a release seal or hardware qualification.
 
+The subsequent reference/alias/admission correction passes the rebuilt **908-test
+manifest library**, zero failures/ignored/filtered, in 55.50 seconds. This
+supersedes the 896-test manifest checkpoint for the changed library. Binary
+`target/debug/deps/sorafs_manifest-4aa7c37f2e467399` has SHA-256
+`7fb322ccd5b5f185e6541e9261595349465e9341ad951528e0ef49e72af7787d`;
+`manifest-reference-04-result.json` retains source/binary and output hashes.
+All eight reference regressions, the independent five-admission-preimage
+regression and three alias regressions pass. The default feature set exercises
+compression-tag rejection before allocation. The separately captured existing
+`norito/compression` selection passes **eight regressions**, zero failures/ignored
+and 900 filtered, in 4.80 seconds; genuine compressed frames decode through the
+general codec and are rejected at canonical boundaries. Its result is
+`manifest-reference-05-result.json`, with binary SHA-256
+`c92a8ab0f66576319b0c598c500396f7164a1c503bc407a6a01e65d0f92c3ee7`.
+
 An independent audit extended the canonical-size finding to framed identities
 and signatures: manifest/deal/audit/replication material, finalized retention
 requests, pin-accounting keys, and node reputation, billing and Governance DAG
@@ -87,19 +102,150 @@ Failures include stale fixture identities and approval expectations, shared
 test storage/leases and symlinked temporary roots, allocation-budget assertions,
 and replay/recovery cases that still require review. They remain open. The
 empty-multisig assertion now requires the shared verifier's exact rejection;
-that test correction has not yet been rebuilt.
+that assertion passes in the subsequent Node security selection below.
+
+The retained Node triage separates fixture corrections from production gaps.
+The next source candidate corrects moderation archive-head canonical decoding
+and its invalid 16-byte field budget, requires typed canonical ingest CIDs and
+exact body/record timestamp binding, and canonicalizes assignment decoding.
+PDP and PoTR now use the existing per-directory checkpoint writer guard:
+unrelated roots can proceed concurrently while alias, same-root, hard-link and
+operating-system lock rejection remain covered. The proof-outcome fixed
+allocation allowance is reduced from nine to three 64-KiB quanta against the
+retained maximum-valid witness; its unchanged ratchet must pass on the fresh
+artifact. Startup fixtures use isolated canonical roots, complete signed
+governance prerequisites and the authenticated publication snapshot API.
+Replay fixtures prove stale-replica fencing before reopening. The subsequent
+Node security selection exercises these corrections; full-suite execution of
+the final candidate remains required. The three detailed follow-up records
+are `node-replay-failure-triage.md`, `node-provider-failure-triage.md` and
+`node-other-failure-triage.md` under the durable evidence directory. Three
+reserve restart tests pass on the unchanged captured binary with a canonical
+temporary directory; this scopes their original failures to test path setup
+without relaxing production symlink rejection.
+The exact reputation checkpoint tampering test also passes in isolation on the
+unchanged captured binary (`node-reputation-checkpoint-isolated-result.json`);
+that result does not replace the required concurrent full-suite run. The current
+provider-ingest source-contract selection passes 26 tests in 3.76 seconds
+(`node-security-provider-source-contracts.log`).
+The complete final source-contract selection reports **410 passed and two
+failed** in 149.84 seconds; the failures remain the two active-TODO closure
+guards (`node-security-final-source-contracts-result.json`). The first fresh
+Node security build stops after 302.353 seconds on two test-only import paths;
+both are corrected for the next capture. `node-security-01-result.json` retains
+that failed build and the two unrelated daemon-fixture source changes observed
+during compilation. This attempt provides no native test pass evidence.
+
+The second Node security build passes in 50.816 seconds. Its focused selection
+reports **62 passed, three failed, zero ignored**, with 1,380 filtered, in 5.798
+seconds; every one of the original 48 failing cases now passes. The three new
+ingest authorization regressions reveal the shared checkpoint decoder's ambient
+re-encoding comparison and a malformed-CID fixture that incorrectly assumed
+contiguous raw array bytes. `node-security-02-result.json` retains the unchanged
+source and binary hashes; the binary SHA-256 is
+`674905fd67f4f24521821410a7b00d26bae69708b5d93c87d17bb3561a621d98`.
+The full suite was not run after this focused failure. The next source candidate
+uses one native bounded canonical checkpoint decoder and pairs it with fixed
+canonical writers and identity inputs for ingest, moderation, evidence viewer,
+proof-of-personhood and reserve recovery. It preserves configured limits and
+adds actual caller-layout persistence/recovery and rejection regressions.
+These additional changes still need native qualification. The official Kubo
+0.42.0 artifact has been downloaded to the isolated evidence directory and
+verified against its published SHA-512 for the two genuine local Kubo tests;
+those cases have not yet executed on a passing final Node artifact.
+
+The complete paired checkpoint candidate is now reviewed and frozen in
+`node-security-03-shared-ready.json` (155 source files). Quarantine envelope
+sealing, object IDs, wrapped-key and AEAD contexts, rewrapping and all four
+persisted-envelope readers share canonical framing and bounded decode before
+key-provider calls. The new tests cover all valid caller layouts, actual
+persist/reopen, range reads, key rotation, independently checked signed
+identities and rejection without state or provider side effects. The frozen
+provider/rollout source-contract rerun reports **410 passed, two failed** in
+57.71 seconds with no scoped source drift
+(`node-security-03-source-contracts-result.json`). Both failures remain the
+actual unfinished-source closure guards. The current global source-size guard
+reports 222 findings; the owned PoP parent now meets the 5,000-line limit and
+reviewed evidence-viewer/lib-test reductions are ratcheted down. Existing Node
+`lib.rs` and moderation-orchestrator overages still prevent a global pass.
+The next coordinated build includes the Node library test executable directly;
+no native pass is inferred from these source checks.
+
+The fresh captured Node executable registers 1,457 tests. Its focused direct run
+reports **74 passed, four failed, zero ignored**, with 1,379 filtered, in 9.825
+seconds (`node-security-03-result.json`, SHA-256
+`38d562418f1a255dd030be8a72b2e9ad985366ae8b940ee7bc97237a251d2dd2`).
+Binary SHA-256 `7b4186093560be0943c6aabc7c0b32b55e52d33dc498023348ad8e906cba211a`
+and all 155 scoped source hashes are unchanged. All 48 original failing cases
+still pass; the full suite remains unexecuted after this focused failure.
+Two outbox fixtures wrote mode-0644 files and were rejected before reaching
+canonical/CID validation. The PoP equality fixture incorrectly assumed its
+hybrid encryption was deterministic: the ML-KEM backend deliberately mixes
+OS entropy into its seeded RNG; its AAD is identical and the first difference
+is ciphertext. Reusing one real enrollment preserves exact framing equality
+without weakening production randomness. The quarantine decoder's configured
+four-times-byte cumulative allocation cap rejects a valid exact-sized frame;
+its schema-specific budget needs a measured, finite correction with stricter
+outer bounds and reject-before-key tests preserved. Those corrections remain
+pending native execution.
+
+The coordinated Core build passes, and its direct SoraFS selection reports
+**361 passed, 42 failed, zero ignored**, with 13,148 filtered, in 131.346 seconds.
+Binary `target/cargo-fast/privacy-release-v1/debug/deps/iroha_core-c9c00b230c68c098`
+has SHA-256 `1e37287e937fdf6363450d03b84ae4ebf75378c5bd7b340463dbcd916bfd0ff9`.
+`core-canonical-security-result.json` retains the unchanged scoped source and
+binary hashes; the full log and 42 failed names are retained alongside it.
+This replaces the unavailable historical Core observations for this selection,
+without qualifying the daemon or four-validator network. Read-only triage finds
+missing authenticated header-cache and consensus-hash fixtures, typed error
+assertions and replication lifecycle fixtures, plus a real reputation policy
+rotation defect: a cutover at the timestamp of a retained event can invalidate
+that event's source-time policy on replay. The production rotation fence now requires activation strictly after the
+retained journal tail's recorded timestamp, preserving every retained source
+interval and exact historical replay. The source candidate also fixes the
+permission-token check without allocation under zero decode budgets: only the
+exact permission name and JSON null payload grant authority. Authenticated
+header/cache, consensus-hash, lifecycle and typed-error fixtures are corrected.
+All 42 original failed names remain, with three additional regressions. The
+reviewed 42-file source manifest is
+`core-canonical-security-retry-source-ready.json`; the coordinated rebuild and
+fresh SoraFS execution remain outstanding.
+
+The first coordinated retry of that reviewed Core correction stops at compile
+checks: the permission-token test passed a borrowed account to the owned storage
+remove API, and an unrelated Torii test include was missing. The test now uses
+an owned clone with all authorization and allocation assertions unchanged; its
+previous ready manifests are retained, and the updated 42-file manifest records
+the correction. The next combined Core/Node/Torii build is pending completion.
+
+The next coordinated build still exits 101 on Torii test include paths, but emits
+fresh Core and Node test executables with no source drift. Immutable copies are
+retained under `native-artifacts/core-retry-3/`, with provenance in
+`core-retry-3-scoped-artifacts.json`. Direct execution of the captured Core
+selection now passes **406 tests, zero failures and zero ignored**, with 13,150
+filtered, in 58.198 seconds. All 403 prior names and the three new regressions
+are present, including every one of the 42 earlier failing cases. The result
+`core-security-03-result.json` (SHA-256
+`e8c74dff16a6739a0cc384f6a2da9bce7c31456adad310c19716bd6aff32e0ad`)
+records unchanged binary SHA-256
+`8a0e7536628b7f8797132fec984f28995b1e24baed92e777a3b76a4d34ae4497`
+and all 42 scoped source hashes. It explicitly retains the failed combined
+build status and does not qualify Torii, the daemon or a distributed deployment.
 
 The next bounded Core audit found an orderbook nonce key derived from display
 text instead of canonical account identity, and remaining ambient-framed
 orderbook/reserve/moderation/pin state and reassigned replication order writes.
 These corrections and the SDK reference validators' canonical outer-frame
-admission are being completed before the shared Core/daemon capture. No fallback
+admission are source-ready before the shared Core/daemon capture. The final
+manifest pass also fixes the remaining framed provider-admission signatures,
+alias Merkle leaves, signed orderbook output and bounded PDP/CancelAssetLock
+reference boundaries. No fallback
 lookup or old state decoder is retained. These source changes and the targeted
 node passes do not establish Core or distributed readiness.
 
 The full current provider/rollout source-contract selection passes 410 checks
-and fails two unfinished-source closure checks in 61.73 seconds. Its retained
-log is `canonical-final-source-contracts.log`; the earlier focused audit's
+and fails two unfinished-source closure checks in 62.51 seconds. Its retained
+log is `shared-final-source-contracts.log`; the earlier focused audit's
 pinned-environment context and exact offender inventory remain in
 `canonical-contract-tests/result.json` and `todo-findings.json`.
 The remaining entries concern authenticated MKHE reports,
@@ -109,6 +255,20 @@ dependency pin was relaxed. The global source-budget audit also fails; new
 canonical regression groups are extracted into small cohesive test files rather
 than enlarging their existing parent modules. Neither source inventories nor
 local test counts establish hardware or reference-deployment readiness.
+
+The remaining signer-consumer audit confirms a live software-custody path in
+stream-token issuance: the shipped software signer adapter returns a detached
+signature, and the consumer receives no independently authenticated hardware
+custody/control/completion evidence. The broker's signer binding also lacks an
+expected provider ID; it admits a nonzero provider supplied by an authenticated
+broker caller, although Torii checks the local provider before its own call.
+The next coherent cut requires `StreamToken { provider_id }`, exact provider
+binding at every layer, a canonical hardware operation receipt, and independent
+signed current/completed-state observations with fresh phase-bound challenges.
+Signing must use mutating transport ambiguity semantics; exact read-only recovery
+must never sign again. These are open implementation findings, with the design
+retained under `target/evidence/sorafs-v1/`; simulated tests will not qualify real
+HSM or authoritative deployment providers.
 
 ## 2026-09-06 execution checkpoint
 
@@ -154,8 +314,10 @@ error propagation and worker panics; native execution of the move remains pendin
 not ledger runtime qualification. The exact test exited 101 after its three
 startup attempts: zero passed, one failed, zero ignored, 372.02 seconds.
 
-G01, G02, G03 and G13 are active under the
-[implementation goals](v1_implementation_goals.md).
+G01–G07, G09, G12–G14 are active under the
+[implementation goals](v1_implementation_goals.md). Active marks implementation
+or qualification work begun; dependency and deployment criteria still govern
+closure. No goal is marked complete from these local test runs.
 Source inspection confirms that the dependency expectation already contains
 `blake3==1.0.9`, the four native ledger domains and finalized event queries
 exist, and the SDK reference/DAG validators, quarantine AEAD and integer privacy

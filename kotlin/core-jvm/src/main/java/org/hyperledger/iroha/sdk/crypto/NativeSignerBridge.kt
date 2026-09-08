@@ -18,6 +18,18 @@ class NativeSignerBridge private constructor() {
         @JvmStatic
         fun isNativeAvailable(): Boolean = nativeAvailable
 
+        /** Admit a complete canonical account controller through the ABI-23 Rust owner. */
+        @JvmStatic
+        internal fun validateAccountAddressCanonical(canonical: ByteArray) {
+            require(canonical.size in 1..64 * 1024 * 1024) { "canonical account address exceeds the JNI input bound" }
+            check(nativeAvailable) { "$LIBRARY_NAME is not available in this runtime" }
+            val owned = canonical.copyOf()
+            val admitted = checkNotNull(nativeValidateAccountAddressCanonical(owned)) {
+                "native account validation returned null"
+            }
+            check(admitted.contentEquals(owned)) { "native account validation changed canonical bytes" }
+        }
+
         @JvmStatic
         fun publicKeyFromPrivate(algorithm: SigningAlgorithm, privateKey: ByteArray): ByteArray {
             require(privateKey.isNotEmpty()) { "privateKey must not be empty" }
@@ -183,6 +195,9 @@ class NativeSignerBridge private constructor() {
 
         @JvmStatic
         private external fun nativeSignerContractRevision(): Int
+
+        @JvmStatic
+        private external fun nativeValidateAccountAddressCanonical(canonical: ByteArray): ByteArray?
 
         @JvmStatic
         private external fun nativePublicKeyFromPrivate(

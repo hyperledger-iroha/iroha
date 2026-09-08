@@ -3313,12 +3313,12 @@ def test_production_trace_certificate_authenticates_all_runtime_links() -> None:
     assert operational["model_source_sha256"] == hashlib.sha256(
         (ROOT_DIR / "formal/sumeragi_v2/SumeragiV2InFlightFirstRelease.tla").read_bytes()
     ).hexdigest()
-    assert len(operational["action_mappings"]) == 27
+    assert len(operational["action_mappings"]) == 28
     assert tuple(
         mapping["model_action"] for mapping in operational["action_mappings"]
     ) == module.PRODUCTION_TRACE_EXTRACTION_REQUIRED_MODEL_ACTIONS
     assert {mapping["discriminant"] for mapping in operational["action_mappings"]} == set(
-        range(1, 28)
+        range(1, 29)
     )
     assert all(
         mapping["shared_kernel_occurrences"] == 1
@@ -3375,6 +3375,7 @@ def test_production_trace_certificate_authenticates_all_runtime_links() -> None:
         "startup_reverse_carrier_evidence_repair",
         "state_replay_post_carrier_evidence_repair",
         "recover_reservation_snapshot_parametric_noninterference",
+        "authenticated_replica_queue_disposition_observation",
     }
     assert all(binding["authenticated"] is True for binding in bindings.values())
     assert all(
@@ -3408,9 +3409,9 @@ def test_production_trace_certificate_extracts_every_required_action() -> None:
     assert tuple(mapping[0] for mapping in mappings) == (
         module.PRODUCTION_TRACE_EXTRACTION_REQUIRED_MODEL_ACTIONS
     )
-    assert len({mapping[0] for mapping in mappings}) == 27
-    assert len({mapping[1] for mapping in mappings}) == 27
-    assert {mapping[2] for mapping in mappings} == set(range(1, 28))
+    assert len({mapping[0] for mapping in mappings}) == 28
+    assert len({mapping[1] for mapping in mappings}) == 28
+    assert {mapping[2] for mapping in mappings} == set(range(1, 29))
 
 
 @pytest.mark.parametrize(
@@ -4114,6 +4115,10 @@ def test_production_trace_certificate_rejects_direct_release_stutter_drift(
         (
             "state_replay_post_carrier_evidence_repair",
             "IN_FLIGHT_FIRST_RELEASE_ACTION_REPAIR_POST_CARRIER",
+        ),
+        (
+            "authenticated_replica_queue_disposition_observation",
+            "IN_FLIGHT_FIRST_RELEASE_ACTION_OBSERVE_REPLICA_QUEUE_RELEASE",
         ),
     ),
 )

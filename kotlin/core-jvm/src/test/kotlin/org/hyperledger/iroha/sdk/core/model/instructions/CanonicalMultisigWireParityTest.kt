@@ -2,7 +2,6 @@ package org.hyperledger.iroha.sdk.core.model.instructions
 
 import java.io.File
 import org.hyperledger.iroha.sdk.address.AccountAddress
-import org.hyperledger.iroha.sdk.address.CurveSupportConfig
 import org.hyperledger.iroha.sdk.client.JsonParser
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
@@ -16,25 +15,20 @@ class CanonicalMultisigWireParityTest {
         val fixture = fixture()
         val positives = fixture["positive"] as List<*>
         assertEquals(16, positives.size)
-        AccountAddress.configureCurveSupport(CurveSupportConfig.builder()
-            .allowMlDsa(true).allowBls(true).allowGost(true).allowSm2(true).build())
-        try {
-            for (raw in positives) {
-                val vector = raw as Map<*, *>
-                val literal = vector["i105"] as String
-                val payload = hex(vector["account_id_payload_hex"] as String)
-                assertEquals(2, (vector["layout_flags"] as Number).toInt())
-                assertContentEquals(payload, TransferWirePayloadEncoder.encodeAccountIdPayload(literal), vector["name"] as String)
-                assertEquals(literal, TransferWirePayloadEncoder.decodeAccountIdPayload(payload, 753))
-                assertContentEquals(hex(vector["canonical_address_hex"] as String), AccountAddress.fromI105(literal, 753).canonicalBytes)
-                val join = JoinKaigiInstruction(KaigiInstructionUtils.CallId("wonderland.sora", "complete-policy"), literal)
-                assertEquals(join, KaigiWirePayloadEncoderV1.decode(join.wireName, join.payloadBytes))
-            }
-            val large = positives.map { it as Map<*, *> }.single { it["name"] == "members-256" }
-            assertEquals(256, AccountAddress.fromI105(large["i105"] as String, 753).multisigPolicyPayload()!!.members.size)
-        } finally {
-            AccountAddress.configureCurveSupport(CurveSupportConfig.ed25519Only())
+
+        for (raw in positives) {
+            val vector = raw as Map<*, *>
+            val literal = vector["i105"] as String
+            val payload = hex(vector["account_id_payload_hex"] as String)
+            assertEquals(2, (vector["layout_flags"] as Number).toInt())
+            assertContentEquals(payload, TransferWirePayloadEncoder.encodeAccountIdPayload(literal), vector["name"] as String)
+            assertEquals(literal, TransferWirePayloadEncoder.decodeAccountIdPayload(payload, 753))
+            assertContentEquals(hex(vector["canonical_address_hex"] as String), AccountAddress.fromI105(literal, 753).canonicalBytes)
+            val join = JoinKaigiInstruction(KaigiInstructionUtils.CallId("wonderland.sora", "complete-policy"), literal)
+            assertEquals(join, KaigiWirePayloadEncoderV1.decode(join.wireName, join.payloadBytes))
         }
+        val large = positives.map { it as Map<*, *> }.single { it["name"] == "members-256" }
+        assertEquals(256, AccountAddress.fromI105(large["i105"] as String, 753).multisigPolicyPayload()!!.members.size)
     }
 
     @Test

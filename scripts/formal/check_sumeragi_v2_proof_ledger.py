@@ -54,6 +54,7 @@ PRODUCTION_TRACE_EXTRACTION_REQUIRED_MODEL_ACTIONS = (
     "AdvanceReleasedPrefix", "CompleteReservationRelease",
     "RestoreReleasedFifo", "ForgetReservationRelease",
     "RepairPostCarrierEvidence",
+    "ObserveReplicaQueueRelease",
 )
 
 # These are the concrete authorization seams which must consume the
@@ -57701,6 +57702,364 @@ assert!(
     return errors
 
 
+def _require_root_parse_exact_output_geometry_contract(
+    path: Path,
+    item: RustItem | None,
+    errors: list[str],
+) -> None:
+    """Bind configuration geometry and the collective validation boundary."""
+    if item is None:
+        return
+    _require_rust_item_context(
+        path, item, (("impl", "Root"),), "exact-output Root parser", errors,
+        expected_attributes=("#[allow(clippy::too_many_lines)]",),
+    )
+    for expected, description in (
+        (
+            _PRODUCTION_EXACT_OUTPUT_TOKEN_SEQUENCES["root_parse_exact_output_geometry"],
+            "root configuration must derive the authenticated-source bound from network geometry "
+            "and reject invalid canonical ingress, lifecycle, or exact-output capacity",
+        ),
+        (
+            """
+if let Err(message) =
+    validate_sccp_replay_archive_norito_limit(&self.torii.sccp_replay_archive, &self.norito)
+{
+    emit_torii_config_error(&mut emitter, message);
+}
+let parsed_sorafs = self.sorafs.parse(&mut emitter);
+let (torii, live_query_store) = self.torii.parse(&mut emitter, parsed_sorafs);
+""",
+            "Root parsing must validate SCCP/Norito limits through the collective emitter before consuming Torii",
+        ),
+        (
+            "let telemetry_profile = actual::TelemetryProfile::from(self.telemetry_profile);",
+            "Root parsing must use the sole direct telemetry profile",
+        ),
+        (
+            """
+let sumeragi = self.sumeragi.parse(&mut emitter);
+if let Some(sumeragi) = sumeragi.as_ref() {
+    let lane_profile = network.lane_profile;
+""",
+            "Root parsing must validate geometry for the parsed Sumeragi configuration",
+        ),
+        (
+            "let pipeline = self.pipeline.parse(&mut emitter);",
+            "Root pipeline parsing must report through the collective emitter",
+        ),
+        (
+            "emitter.into_result()?;",
+            "Root parsing must propagate collective validation failure before publication",
+        ),
+        (
+            "root.apply_storage_budget(); Ok(root)",
+            "Root parsing must apply the storage budget before returning the configuration",
+        ),
+    ):
+        _require_rust_token_sequence(path, item, expected, description, errors)
+    tokens = rust_code_tokens(item.source)
+    for retired in ("telemetry_enabled", "telemetry_redaction"):
+        if retired in tokens:
+            errors.append(
+                f"{path}:{item.line}: Root parsing must not restore retired telemetry "
+                f"master/redaction state: {retired}"
+            )
+    ordered = (
+        "let (network, block_sync, transaction_gossiper) = self.network.parse(&mut emitter);",
+        "let reply_source_capacity = network",
+        "let geometry = actual::sumeragi_v2_exact_output_shared_ownership_capacity(",
+        "let pipeline = self.pipeline.parse(&mut emitter);",
+        "emitter.into_result()?;",
+        "let mut root = actual::Root {",
+        "root.apply_storage_budget();",
+        "Ok(root)",
+    )
+    cursor = -1
+    for expected in ordered:
+        positions = _token_sequence_positions(tokens, rust_code_tokens(expected))
+        if len(positions) != 1 or positions[0] <= cursor:
+            errors.append(
+                f"{path}:{item.line}: Root geometry, pipeline and collective validation "
+                "must precede configuration publication in the reviewed order"
+            )
+            break
+        cursor = positions[0]
+
+
+def _require_lane_output_reconciled_source_contracts(
+    lane_path: Path,
+    lane_ack_items: dict[str, RustItem | None],
+    lane_items: dict[str, RustItem | None],
+    errors: list[str],
+) -> None:
+    """Bind exact historical requester admission and strict durable rollover."""
+    constructor = lane_ack_items.get("V2LaneWorkAdapter::new_with_output_guard_and_transport_inner")
+    request = lane_ack_items.get("V2LaneWorkAdapter::accept_certified_merge_sidecar_request")
+    materialize = lane_ack_items.get("V2LaneWorkAdapter::service_next_certified_merge_sidecar_materialization")
+    for item in (constructor, request, materialize, lane_items.get("durable_lane_rollover_authority")):
+        if item is not None:
+            _require_rust_item_context(
+                lane_path, item, (("impl", "V2LaneWorkAdapter"),),
+                "lane-output reconciled production owner", errors,
+                expected_attributes=("#[allow(clippy::too_many_arguments)]",)
+                if item is constructor else (),
+            )
+    for item, expected, description in (
+        (constructor, """
+acknowledged_merge_sidecar_closes: BTreeMap::new(),
+obsolete_merge_sidecar_generation_hints: BTreeMap::new(),
+committed_lane_output_cursor: 0,
+""", "lane construction must initialize empty obsolete generation hints beside exact close ownership"),
+        (constructor, """
+merge_claims: BTreeMap::new(),
+#[cfg(test)]
+merge_candidate_validation_checks: std::cell::Cell::new(0),
+validated_merge_execution_candidate: None,
+""", "lane construction must keep zero validation instrumentation test-only and the production memo empty"),
+        (request, """
+let Some(reply_route) = reply_route else {
+    return Ok(V2LaneIngressOutcome::Rejected);
+};
+if !reply_route.is_active() || reply_route.semantic_target() != &sender {
+    return Ok(V2LaneIngressOutcome::Rejected);
+}
+let sender_is_current = self.frozen_roster_contains(&sender);
+if !sender_is_current {
+    if request.version != CERTIFIED_MERGE_SIDECAR_VERSION_V1
+        || request.requester != sender
+        || request.responder != self.local_peer
+        || request.closed_through >= request.semantic_sequence.get()
+        || request.request_id != request.canonical_request_id()
+        || request.encoded_len == 0
+        || request.encoded_len > u64::try_from(MAX_MERGE_LEDGER_ENTRY_BYTES).unwrap_or(u64::MAX)
+    {
+        return Ok(V2LaneIngressOutcome::Rejected);
+    }
+    let sender_is_predecessor = self
+        .immediate_predecessor_sidecar_requesters()?
+        .is_some_and(|requesters| requesters.contains(&sender));
+    let sender_is_lane_validator = !sender_is_predecessor
+        && self.exact_historical_lane_sidecar_requester(&request, &sender)?;
+    if !sender_is_predecessor && !sender_is_lane_validator {
+        return Ok(V2LaneIngressOutcome::Rejected);
+    }
+""", "sidecar admission must bind the live semantic route and bounded exact historical requester before allocation"),
+        (request, """
+if self.merge_sidecars.would_allocate_current_server_stream(&sender, request.service_generation) {
+    let historical_streams = self.merge_sidecars.server_stream_count_matching(|requester| {
+        !self.context.roster.iter().any(|entry| &entry.validator == requester)
+    });
+    if historical_streams >= wire::MAX_VALIDATORS_PER_HEIGHT {
+        return Ok(V2LaneIngressOutcome::Rejected);
+    }
+}
+""", "historical sidecar admission must preserve the separate complete-committee stream bound"),
+        (materialize, """
+let entry = match self.kura.merge_entry_by_hash(request.entry_hash) {
+    Ok(Some(entry)) => entry,
+    Ok(None) => {
+        self.merge_sidecars.retire_unmaterialized_server_request(&requester, &request)
+            .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
+        return Ok(false);
+    }
+    Err(error) => {
+        return self.consensus_storage_read(Err(error));
+    }
+};
+""", "sidecar materialization must preserve admitted ownership on corrupt local reads and propagate fail-stop"),
+        (materialize, """
+let reference = CertifiedMergeLedgerReference::new(&entry);
+let metadata_matches = request.encoded_len == reference.encoded_len
+    && request.epoch_id == reference.epoch_id
+    && request.reference_digest == certified_merge_reference_digest(&reference);
+if !metadata_matches {
+    self.merge_sidecars.retire_unmaterialized_server_request(&requester, &request)
+        .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
+    return Ok(false);
+}
+let requester_is_lane_validator =
+    self.finalized_merge_active_lane_committee_contains(&entry, &requester);
+let requester_has_corridor = self.frozen_roster_contains(&requester)
+    || requester_is_lane_validator
+    || self.immediate_predecessor_sidecar_requesters()?
+        .is_some_and(|requesters| requesters.contains(&requester));
+let local_is_authenticated_custodian = certified_merge_sidecar_holders(&reference)
+    .is_ok_and(|holders| holders.contains(&self.local_peer))
+    || preferred_merge_sidecar_holder(&self.context, &reference)
+        .is_ok_and(|leader| leader == self.local_peer);
+let local_is_holder = requester_has_corridor
+    && self.authenticates_certified_merge_sidecar_service_for_requester(
+        &entry, &reference, Some(&requester),
+    )?
+    && local_is_authenticated_custodian;
+if !local_is_holder {
+    self.merge_sidecars.retire_unmaterialized_server_request(&requester, &request)
+        .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
+    return Ok(false);
+}
+""", "sidecar bytes require exact metadata, authenticated historical finality, requester membership and local custody"),
+    ):
+        _require_rust_token_sequence(lane_path, item, expected, description, errors)
+    for item, ordered, description in (
+        (constructor, (
+            "let construction = construction_guard",
+            "let adapter = Self {",
+            "construction.complete();",
+            "Ok(adapter)",
+        ), "lane construction must complete its fail-stop operation only after initializing every owner"),
+        (request, (
+            "if !reply_route.is_active() || reply_route.semantic_target() != &sender",
+            "if !sender_is_current {",
+            "self.exact_historical_lane_sidecar_requester(&request, &sender)?",
+            "if historical_streams >= wire::MAX_VALIDATORS_PER_HEIGHT",
+            "self.merge_sidecars.admit_server_request(",
+            "self.merge_sidecars.persist_lifecycle_state()",
+            "self.service_next_certified_merge_sidecar_materialization(now)?",
+        ), "sidecar requester authentication and stream bounds must precede durable admission and fair service"),
+        (materialize, (
+            ".next_server_request_materialization(now)",
+            "self.kura.merge_entry_by_hash(request.entry_hash)",
+            "let metadata_matches =",
+            "let requester_is_lane_validator =",
+            "let local_is_holder =",
+            "if !local_is_holder {",
+            "self.merge_sidecars.enqueue_response(",
+        ), "fair sidecar selection, exact metadata and complete serving authority must precede response bytes"),
+        (lane_items.get("durable_lane_rollover_authority"), (
+            "finality_artifact.validate()",
+            "let block = self.canonical_block_body(height)?",
+            "let mut winning_proposals = BTreeMap::new();",
+            "self.consensus_storage_read(self.kura.read_lane_completion_certificate(",
+            "let autonomous_certificate = require_lane_certificate_execution_role_matches_anchor(",
+            "if durable.proposal != *proposal",
+            "let source = if let Some(payload) = autonomous_payload",
+            "durable_sessions.insert(proposal.proposal_hash, source);",
+            "Ok(Some(DurableLaneRolloverAuthority::new(",
+        ), "strict rollover reads and complete winner validation must precede durable authority publication"),
+    ):
+        if item is None:
+            continue
+        tokens = rust_code_tokens(item.source)
+        cursor = -1
+        for expected in ordered:
+            positions = _token_sequence_positions(tokens, rust_code_tokens(expected))
+            if len(positions) != 1 or positions[0] <= cursor:
+                errors.append(f"{lane_path}:{item.line}: {description}")
+                break
+            cursor = positions[0]
+    _require_rust_token_sequence(
+        lane_path,
+        lane_items.get("durable_lane_rollover_authority"),
+        """
+finality_artifact
+    .validate()
+    .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
+if finality_artifact.height_context != self.context {
+    return Err(V2LaneWorkError::Persistence(
+        "lane rollover finality authority differs from the frozen height context".to_owned(),
+    ));
+}
+if self.has_pending_historical_recovery() {
+    return Ok(None);
+}
+let Some(height) = usize::try_from(finality_artifact.height)
+    .ok()
+    .and_then(NonZeroUsize::new)
+else {
+    return Err(V2LaneWorkError::Persistence(
+        "lane rollover finality authority has an invalid zero height".to_owned(),
+    ));
+};
+let block = self.canonical_block_body(height)?.ok_or_else(|| {
+    V2LaneWorkError::Persistence(
+        "lane rollover finality authority has no canonical block body".to_owned(),
+    )
+})?;
+if block.header().height().get() != finality_artifact.height
+    || block.hash() != finality_artifact.block_hash
+{
+    return Err(V2LaneWorkError::Persistence(
+        "lane rollover finality authority differs from the canonical block body".to_owned(),
+    ));
+}
+let bundle = block.execution_context();
+let ownerships = bundle.map_or(&[][..], |bundle| bundle.lane_payload_ownerships.as_slice());
+let autonomous_envelopes =
+    bundle.map_or(&[][..], |bundle| bundle.autonomous_lane_payloads.as_slice());
+if ownerships.len().saturating_add(autonomous_envelopes.len())
+    > self.limits.session_capacity.get()
+{
+    return Err(V2LaneWorkError::Persistence(
+        "canonical lane payload exceeds the frozen session capacity".to_owned(),
+    ));
+}
+""",
+        "lane authority builder must derive its bounded ordinary and autonomous winner set from the exact canonical block",
+        errors,
+    )
+    _require_rust_token_sequence(
+        lane_path,
+        lane_items.get("durable_lane_rollover_authority"),
+        _PRODUCTION_EXACT_OUTPUT_TOKEN_SEQUENCES[
+            "lane_durable_predecessor_source"
+        ],
+        "lane authority builder must keep the predecessor active until each winning lane has an exact durable certificate and the appropriate ordinary or autonomous application witness",
+        errors,
+    )
+    _require_rust_token_sequence(
+        lane_path,
+        lane_items.get("durable_lane_rollover_authority"),
+        """
+let same_commit_decision = session.commit_qc.body == durable.commit_qc.body
+    && session.commit_qc.validator_set_hash_version
+        == durable.commit_qc.validator_set_hash_version
+    && session.commit_qc.validator_set_hash == durable.commit_qc.validator_set_hash
+    && session.commit_qc.validator_set == durable.commit_qc.validator_set
+    && session.commit_qc.payload_availability_qc
+        == durable.commit_qc.payload_availability_qc;
+if !same_commit_decision {
+    return Err(V2LaneWorkError::Persistence(
+        "retained lane CommitQC differs from the exact durable decision".to_owned(),
+    ));
+}
+""",
+        "retained volatile proof variants must bind the same exact durable lane decision",
+        errors,
+    )
+    _require_rust_token_sequence(
+        lane_path,
+        lane_items.get("durable_lane_rollover_authority"),
+        """
+if durable.proposal != *proposal
+    || descriptor.proposal_height != finality_artifact.height
+    || hint.proposal_height != finality_artifact.height
+    || hint.proposal_block_hash != finality_artifact.block_hash
+    || application_receipt.as_ref().is_some_and(|receipt| {
+        receipt.proposal != *proposal
+            || receipt.application_block_height != finality_artifact.height
+            || receipt.application_block_hash != finality_artifact.block_hash
+    })
+{
+    return Err(V2LaneWorkError::Persistence(
+        "retained lane CommitQC is not bound to the exact applied global artifact".to_owned(),
+    ));
+}
+""",
+        "lane authority builder must bind every winner to the exact applied artifact",
+        errors,
+    )
+    _require_rust_token_sequence(
+        lane_path,
+        lane_items.get("durable_lane_rollover_authority"),
+        _PRODUCTION_EXACT_OUTPUT_TOKEN_SEQUENCES[
+            "lane_complete_durable_rollover_authority"
+        ],
+        "lane authority builder must preserve one exact ordinary or autonomous durable witness per winner in the complete authority",
+        errors,
+    )
+
+
 def _exact_output_production_source_fidelity_errors(
     repo_root: Path = ROOT_DIR,
 ) -> list[str]:
@@ -58099,12 +58458,9 @@ Ok(())
         "the geometry kernel must reject zero, multiplication overflow, and any corridor smaller than source-count times exact classes",
         errors,
     )
-    _require_rust_token_sequence(
+    _require_root_parse_exact_output_geometry_contract(
         config_user_path,
         geometry_items["user::Root::parse"][1],
-        _PRODUCTION_EXACT_OUTPUT_TOKEN_SEQUENCES["root_parse_exact_output_geometry"],
-        "root configuration must derive the authenticated-source bound from network geometry "
-        "and reject invalid canonical ingress, lifecycle, or exact-output capacity",
         errors,
     )
     _require_exact_rust_tokens(
@@ -58364,9 +58720,9 @@ self.finality_completion = Some(FinalityCompletion {
         effects_path,
         effects_source,
         "finality_completion",
-        "the durable Apply completion tombstone field must have exactly its twenty-three reviewed runtime and lifecycle uses and no additional mutation surface",
+        "the durable Apply completion tombstone has 23 original uses and five individually reviewed predecessor, publication, cleanup and test-only reads",
         errors,
-        count=23,
+        count=28,
     )
     for expected, description in (
         (
@@ -58391,7 +58747,7 @@ let finality = self
         ),
         (
             "|| self.finality_completion.is_some()",
-            "runtime, both lifecycle lineages, and terminal Validate readmission must reject a second terminal installation",
+            "runtime, lifecycle, and released Validate publication and cleanup reject an already completed executor",
         ),
         (
             """
@@ -58408,7 +58764,7 @@ self.finality_completion
             expected,
             description,
             errors,
-            count=7 if expected == "|| self.finality_completion.is_some()" else 1,
+            count=9 if expected == "|| self.finality_completion.is_some()" else 1,
         )
     prepare_lifecycle_finality = _require_rust_item(effects_path, effects_source, "prepare_lifecycle_decision_apply_completion", errors)
     commit_lifecycle_finality = _require_rust_item(effects_path, effects_source, "commit_lifecycle_decision_apply_finality", errors)
@@ -58892,19 +59248,10 @@ self.first.physical_admission_ordinal != 0
         "fair-ingress validation must bind lifecycle, productive runtime ownership, semantic origin, canonical bytes, routes, and non-regressing cursors",
         errors,
     )
-    _require_rust_token_sequence(
+    _require_owned_payload_chunk_envelope(
         effects_path,
         ingress_seam_items["effects::accept_payload_chunk_with_ingress_ownership"][1],
-        """
-let message = BlockMessage::V2(wire::ConsensusMessageV2::new(
-    wire::ConsensusMessageV2Payload::PayloadChunk(chunk.clone()),
-));
-if !ingress_ownership.validate_exact()
-    || !ingress_ownership.matches_message(&message)
-    || !ingress_ownership.matches_semantic_origin(authenticated_sender)
-{
-""",
-        "payload chunk effect consumption must reject a changed envelope or semantic origin before mutation",
+        False,
         errors,
     )
     _require_rust_token_sequence(
@@ -60386,7 +60733,9 @@ assert!(observed.iter().all(|request| request == &exact_request));
         "retry_exact_output_and_apply_sidecar_admissions",
         "apply_retired_historical_recovery_requests",
         "apply_retired_merge_sidecar_requests",
+        "apply_obsolete_merge_sidecar_generation_hints",
         "apply_acknowledged_merge_sidecar_closes",
+        "service_historical_recovery_tick",
         "preflight_finalized_lane_rollover", "rollover_finalized_height_outputs", "dispatch_lane_work_effects",
         "dispatch_lane_work_effects_with_progress", "drain_finalized_lane_work_output",
         "retain_active_owned_reply_routes",
@@ -60463,6 +60812,7 @@ assert!(observed.iter().all(|request| request == &exact_request));
             errors,
         )
 
+    errors.extend(_lifecycle_construction_reconciled_owner_errors(repo_root))
     for key, path in (
         ("ordinary_active", lifecycle_runner_path),
         ("pending_active", pending_runner_path),
@@ -60478,7 +60828,7 @@ assert!(observed.iter().all(|request| request == &exact_request));
         lifecycle_runner_path,
         lifecycle_runner_items.get("ordinary_active"),
         """
-let finalization_ready = if ready_to_finish {
+let finalization_ready = if ready_to_finish && !block_sync_server.has_pending_historical_body_serve() {
     activated.ready_for_finalized_rollover(&mut active_runner)?
 } else {
     false
@@ -60498,6 +60848,7 @@ let rollover_ready = if finalization_ready {
             }
             super::preflight_finalized_lane_rollover(
                 executor,
+                services,
                 &mut lane_work,
                 &mut canonical_lane_body_recovered,
             )
@@ -60516,12 +60867,15 @@ if finalization_ready && !rollover_ready {
                 services,
                 &mut lane_work,
                 executor.current_tag().view(),
-                output_guard.as_ref(),
                 kura.as_ref(),
-                &common_config.key_pair,
                 block_sync_server,
                 DecidedLaneRecoveryIngressDrainMode::OpenPreflight,
             )?;
+            let now = Instant::now();
+            if now >= next_lane_retransmit {
+                lane_work.schedule_retransmission()?;
+                next_lane_retransmit = deadline_after(now, retransmit_interval);
+            }
             dispatch_lane_work_effects(&mut lane_work, services, control_queue_capacity)?;
             Ok::<_, V2RunnerError>(drained.is_some())
         },
@@ -65595,14 +65949,58 @@ fn apply_certified_merge_sidecar_closed_prefixes_with(
         "the entire drained batch succeeds",
         errors,
     )
+    _require_exact_rust_tokens(
+        runner_path,
+        runner_ack_items.get("apply_obsolete_merge_sidecar_generation_hints"),
+        """
+pub(in crate::sumeragi) fn apply_obsolete_merge_sidecar_generation_hints(
+    lane_work: &mut V2LaneWorkAdapter,
+    services: &ProductionV2Services,
+) -> Result<usize, V2RunnerError> {
+    let hints = lane_work.drain_obsolete_merge_sidecar_generation_hints();
+    if hints.is_empty() { return Ok(0); }
+    match services.cancel_obsolete_certified_merge_sidecar_generation_hints(&hints) {
+        Ok(cancelled) => Ok(cancelled),
+        Err(error) => {
+            lane_work.requeue_obsolete_merge_sidecar_generation_hints(hints)?;
+            Err(V2RunnerError::Service(error))
+        }
+    }
+}
+""",
+        "runner generation-fence cancellation must retain the entire hint batch on failure and propagate the error",
+        errors,
+    )
+    _require_exact_rust_tokens(
+        runner_path,
+        runner_ack_items.get("service_historical_recovery_tick"),
+        """
+fn service_historical_recovery_tick(
+    lane_work: &mut V2LaneWorkAdapter,
+    services: &ProductionV2Services,
+) -> Result<HistoricalRecoveryServiceOutcome, V2RunnerError> {
+    let current_archive_targets = lane_work
+        .has_pending_historical_recovery()
+        .then(|| services.current_archive_targets())
+        .unwrap_or_default();
+    lane_work
+        .service_next_historical_recovery_with_archive_targets(&current_archive_targets)
+        .map_err(V2RunnerError::from)
+}
+""",
+        "runner historical recovery must refresh archive targets only for pending ownership and preserve service failure",
+        errors,
+    )
     _require_rust_token_sequence(
         runner_path,
         runner_ack_items.get("retry_exact_output_and_apply_sidecar_admissions"),
         """
 let _ = apply_retired_historical_recovery_requests(lane_work, services)?;
 let _ = apply_retired_merge_sidecar_requests(lane_work, services)?;
+let _ = apply_obsolete_merge_sidecar_generation_hints(lane_work, services)?;
 let _ = apply_acknowledged_merge_sidecar_closes(lane_work, services)?;
 apply_certified_merge_sidecar_closed_prefixes(lane_work, services)?;
+apply_certified_merge_sidecar_chunk_admissions(lane_work, services, limit)?;
 let pending = services
     .retry_pending_exact_output()
     .map_err(V2RunnerError::Service)?;
@@ -65616,6 +66014,7 @@ let pending = services
         """
 let _ = apply_retired_historical_recovery_requests(lane_work, services)?;
 let _ = apply_retired_merge_sidecar_requests(lane_work, services)?;
+let _ = apply_obsolete_merge_sidecar_generation_hints(lane_work, services)?;
 let _ = apply_acknowledged_merge_sidecar_closes(lane_work, services)?;
 apply_certified_merge_sidecar_closed_prefixes(lane_work, services)?;
 apply_certified_merge_sidecar_chunk_admissions(lane_work, services, limit)?;
@@ -66380,10 +66779,10 @@ lane_work
         runner_path,
         runner_ack_items.get("retry_exact_output_and_apply_sidecar_admissions"),
         """
+apply_certified_merge_sidecar_chunk_admissions(lane_work, services, limit)?;
 let pending = services
     .retry_pending_exact_output()
     .map_err(V2RunnerError::Service)?;
-apply_certified_merge_sidecar_chunk_admissions(lane_work, services, limit)?;
 Ok(pending)
 """,
         "runner retry must observe writer flushes before applying new sidecar receipts",
@@ -66533,7 +66932,7 @@ Arc::clone(&output_guard),
 Arc::clone(&block_rx),
 Arc::clone(&kura_replica_advert_refresh),
 exact_output_service_owner,
-);
+).with_kagemusha_mint_finality_authority(kagemusha_mint_finality_authority.clone());
 """,
             "lifecycle construction must move the unique service owner into the launch corridor",
             errors,
@@ -66557,19 +66956,15 @@ lifecycle_process_generation.clone(),
 if !executor.ready_to_finish() {
     return Ok(false);
 }
-let (receipt, artifact) = executor
-    .durable_finality()
-    .ok_or_else(|| {
-        V2RunnerError::Service(
-            "ready Sumeragi executor lost its durable finality owner".to_owned(),
-        )
-    })?;
+let (receipt, artifact) = executor.durable_finality().ok_or_else(|| {
+    V2RunnerError::Service("ready Sumeragi executor lost its durable finality owner".to_owned())
+})?;
 if !*canonical_lane_body_recovered {
     let _ = lane_work.recover_decided_canonical_lane_body(receipt, artifact)?;
     *canonical_lane_body_recovered = true;
 }
 let _ = lane_work.persist_anchored_sessions()?;
-let _ = lane_work.service_next_historical_recovery()?;
+let _ = service_historical_recovery_tick(lane_work, services)?;
 if lane_work.has_pending_historical_recovery() {
     return Ok(false);
 }
@@ -66591,7 +66986,7 @@ let _ = retry_exact_output_and_apply_sidecar_admissions(
 )?;
 let _ = lane_work.recover_decided_canonical_lane_body(receipt, artifact)?;
 lane_work.persist_anchored_sessions()?;
-let _ = lane_work.service_next_historical_recovery()?;
+let _ = service_historical_recovery_tick(&mut lane_work, services)?;
 if lane_work.has_pending_historical_recovery() {
     return Err(V2RunnerError::Service(
         "finalized lane output still owns predecessor-height recovery".to_owned(),
@@ -66614,6 +67009,7 @@ lane_work.prepare_canonical_lane_rollover(artifact)?;
         """
 loop {
     let _ = apply_retired_merge_sidecar_requests(lane_work, services)?;
+    let _ = apply_obsolete_merge_sidecar_generation_hints(lane_work, services)?;
     let _ = apply_acknowledged_merge_sidecar_closes(lane_work, services)?;
     apply_certified_merge_sidecar_closed_prefixes(lane_work, services)?;
     apply_certified_merge_sidecar_chunk_admissions(
@@ -68188,7 +68584,7 @@ let expected_hash = self
     .ok_or_else(|| {
         "Sumeragi v2 exact-output target has no expected payload identity".to_owned()
     })?;
-if HashOf::new(&post.data) != *expected_hash {
+if post.data.exact_output_hash() != *expected_hash {
     return Err("Sumeragi v2 network actor changed an exact output payload".to_owned());
 }
 debug_assert!(target.current.is_none());
@@ -68208,7 +68604,7 @@ if fanout.message_hashes.len() != fanout.messages.len()
         .messages
         .iter()
         .zip(&fanout.message_hashes)
-        .any(|(message, expected_hash)| HashOf::new(message) != *expected_hash)
+        .any(|(message, expected_hash)| message.exact_output_hash() != *expected_hash)
 {
     return Err(
         "Sumeragi v2 retained output changed before finality handoff".to_owned(),
@@ -68362,6 +68758,7 @@ pending.drive_bounded_with_ack(
 let Some(fanout) = PendingExactFanout::claimed(messages, peers, rollover_claim)? else {
     return Ok(ExactFanoutOwnership::Owned);
 };
+{
 let mut pending = self.lock_pending_exact_output()?;
 if self.exact_output_handoff_owner.is_sealed() {
     return Err(
@@ -68559,21 +68956,9 @@ if &source.height_context.network_id != source_network_id
         "durable CommitQC response must match its exact Kura finality source",
         errors,
     )
-    _require_rust_token_sequence(
+    _require_prepared_body_rollover_source_contracts(
         worker_path,
         durable_history_items.get("durable_history_source_covers"),
-        """
-let block = kura
-    .get_block(block_height)
-    .ok_or_else(|| "durable body response lost its canonical Kura block".to_owned())?;
-let proposal = block.canonical_resultless_proposal();
-let canonical_wire = proposal.encode_wire().map_err(|error| error.to_string())?;
-if block.hash() != source_subject.block_hash
-    || canonical_wire != response.body
-    || Hash::new(&canonical_wire) != source_subject.payload_hash
-{
-""",
-        "durable body response must match its exact canonical Kura block",
         errors,
     )
     _require_rust_token_sequence(
@@ -68905,115 +69290,8 @@ let durable_source_hash = Hash::new_from_chunks(&[
         "lane durable source must commit finality, certificate, and application receipt",
         errors,
     )
-    _require_rust_token_sequence(
-        lane_path,
-        lane_items.get("durable_lane_rollover_authority"),
-        """
-finality_artifact
-    .validate()
-    .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
-if finality_artifact.height_context != self.context {
-    return Err(V2LaneWorkError::Persistence(
-        "lane rollover finality authority differs from the frozen height context".to_owned(),
-    ));
-}
-if self.has_pending_historical_recovery() {
-    return Ok(None);
-}
-let Some(height) = usize::try_from(finality_artifact.height)
-    .ok()
-    .and_then(NonZeroUsize::new)
-else {
-    return Err(V2LaneWorkError::Persistence(
-        "lane rollover finality authority has an invalid zero height".to_owned(),
-    ));
-};
-let block = self.kura.get_block(height).ok_or_else(|| {
-    V2LaneWorkError::Persistence(
-        "lane rollover finality authority has no canonical block body".to_owned(),
-    )
-})?;
-if block.header().height().get() != finality_artifact.height
-    || block.hash() != finality_artifact.block_hash
-{
-    return Err(V2LaneWorkError::Persistence(
-        "lane rollover finality authority differs from the canonical block body".to_owned(),
-    ));
-}
-let bundle = block.execution_context();
-let ownerships = bundle.map_or(&[][..], |bundle| bundle.lane_payload_ownerships.as_slice());
-let autonomous_envelopes =
-    bundle.map_or(&[][..], |bundle| bundle.autonomous_lane_payloads.as_slice());
-if ownerships.len().saturating_add(autonomous_envelopes.len())
-    > self.limits.session_capacity.get()
-{
-    return Err(V2LaneWorkError::Persistence(
-        "canonical lane payload exceeds the frozen session capacity".to_owned(),
-    ));
-}
-""",
-        "lane authority builder must derive its bounded ordinary and autonomous winner set from the exact canonical block",
-        errors,
-    )
-    _require_rust_token_sequence(
-        lane_path,
-        lane_items.get("durable_lane_rollover_authority"),
-        _PRODUCTION_EXACT_OUTPUT_TOKEN_SEQUENCES[
-            "lane_durable_predecessor_source"
-        ],
-        "lane authority builder must keep the predecessor active until each winning lane has an exact durable certificate and the appropriate ordinary or autonomous application witness",
-        errors,
-    )
-    _require_rust_token_sequence(
-        lane_path,
-        lane_items.get("durable_lane_rollover_authority"),
-        """
-let same_commit_decision = session.commit_qc.body == durable.commit_qc.body
-    && session.commit_qc.validator_set_hash_version
-        == durable.commit_qc.validator_set_hash_version
-    && session.commit_qc.validator_set_hash == durable.commit_qc.validator_set_hash
-    && session.commit_qc.validator_set == durable.commit_qc.validator_set
-    && session.commit_qc.payload_availability_qc
-        == durable.commit_qc.payload_availability_qc;
-if !same_commit_decision {
-    return Err(V2LaneWorkError::Persistence(
-        "retained lane CommitQC differs from the exact durable decision".to_owned(),
-    ));
-}
-""",
-        "retained volatile proof variants must bind the same exact durable lane decision",
-        errors,
-    )
-    _require_rust_token_sequence(
-        lane_path,
-        lane_items.get("durable_lane_rollover_authority"),
-        """
-if durable.proposal != *proposal
-    || descriptor.proposal_height != finality_artifact.height
-    || hint.proposal_height != finality_artifact.height
-    || hint.proposal_block_hash != finality_artifact.block_hash
-    || application_receipt.as_ref().is_some_and(|receipt| {
-        receipt.proposal != *proposal
-            || receipt.application_block_height != finality_artifact.height
-            || receipt.application_block_hash != finality_artifact.block_hash
-    })
-{
-    return Err(V2LaneWorkError::Persistence(
-        "retained lane CommitQC is not bound to the exact applied global artifact".to_owned(),
-    ));
-}
-""",
-        "lane authority builder must bind every winner to the exact applied artifact",
-        errors,
-    )
-    _require_rust_token_sequence(
-        lane_path,
-        lane_items.get("durable_lane_rollover_authority"),
-        _PRODUCTION_EXACT_OUTPUT_TOKEN_SEQUENCES[
-            "lane_complete_durable_rollover_authority"
-        ],
-        "lane authority builder must preserve one exact ordinary or autonomous durable witness per winner in the complete authority",
-        errors,
+    _require_lane_output_reconciled_source_contracts(
+        lane_path, lane_ack_items, lane_items, errors
     )
     _require_rust_token_sequence(
         lane_path,
@@ -69043,6 +69321,10 @@ let certificate = match self.reconstruct_durable_lane_certificate(proposal, send
     )
     errors.extend(_lane_recovery_cache_source_fidelity_errors(repo_root))
     errors.extend(_terminal_lane_source_fidelity_errors(repo_root))
+    errors.extend(_decided_body_serve_source_fidelity_errors(repo_root))
+    errors.extend(_ingress_effects_source_fidelity_errors(repo_root))
+    errors.extend(_worker_ack_reconciled_source_fidelity_errors(repo_root))
+    errors.extend(_worker_ownership_reconciled_source_fidelity_errors(repo_root))
     _require_rust_token_sequence(
         lane_path,
         lane_items.get("serve_durable_lane_certificate"),
@@ -69395,6 +69677,16 @@ let (post_output, retained_merge_sidecars) = finalized.rollover_outputs(
 let cleanup_ready = post_output.retire_lifecycle_stores()?;
 """,
         "pending-Kura lifecycle finality must roll every exact output before retiring lifecycle stores",
+        errors,
+    )
+    _require_rust_token_sequence(
+        runner_path,
+        runner_items.get("drain_blocked_ordinary_lane_local_ingress"),
+        """
+let _ = lane_work.accept_lane_message_with_ingress_ownership(inbound, active_view)?;
+Ok(true)
+""",
+        "blocked ordinary lane-local drain must propagate admission failure before reporting progress",
         errors,
     )
     _require_rust_token_sequence(

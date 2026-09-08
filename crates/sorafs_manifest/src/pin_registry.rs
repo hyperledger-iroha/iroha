@@ -236,7 +236,7 @@ pub enum AliasProofVerificationError {
     CouncilAuthorization(#[source] ProviderAdmissionSignatureError),
 }
 fn alias_binding_leaf_hash(binding: &AliasBindingV1) -> Result<[u8; 32], NoritoError> {
-    let bytes = norito::to_bytes(binding)?;
+    let bytes = norito::encode_canonical(binding)?;
     let mut hasher = Hasher::new();
     hasher.update(ALIAS_LEAF_DOMAIN);
     hasher.update(&bytes);
@@ -604,6 +604,42 @@ mod tests {
             .try_into()
             .expect("ed25519 public key must be 32 bytes");
         ProviderAdmissionCouncilPolicy::new([signer], 1).expect("valid fixture council policy")
+    }
+    #[test]
+    fn alias_leaf_and_signed_merkle_root_ignore_caller_layout() {
+        let (bundle, signer) = signed_alias_proof_bundle();
+        let policy = council_policy_for(&signer);
+        let canonical = norito::encode_canonical(&bundle.binding).expect("canonical binding");
+        let mut hasher = Hasher::new();
+        hasher.update(ALIAS_LEAF_DOMAIN);
+        hasher.update(&canonical);
+        let expected_leaf = *hasher.finalize().as_bytes();
+        let mut substituted = bundle.clone();
+        substituted.binding.bound_at += 1;
+        let mut alternate_count = 0;
+        for flags in 0..=u8::MAX {
+            if norito::core::validate_header_flags(flags).is_err() {
+                continue;
+            }
+            let _caller = norito::core::DecodeFlagsGuard::enter(flags);
+            let before = norito::to_bytes(&bundle.binding).expect("ambient binding");
+            alternate_count += usize::from(before != canonical);
+            assert_eq!(
+                alias_binding_leaf_hash(&bundle.binding).unwrap(),
+                expected_leaf
+            );
+            assert_eq!(
+                alias_merkle_root(&bundle.binding, &bundle.merkle_path).unwrap(),
+                bundle.registry_root
+            );
+            verify_alias_proof_bundle(&bundle, &policy).expect("same signed alias proof");
+            assert!(matches!(
+                verify_alias_proof_bundle(&substituted, &policy),
+                Err(AliasProofVerificationError::MerkleRootMismatch { .. })
+            ));
+            assert_eq!(norito::to_bytes(&bundle.binding).unwrap(), before);
+        }
+        assert!(alternate_count > 0);
     }
     #[test]
     fn alias_proof_bundle_validate() {

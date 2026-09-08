@@ -88,7 +88,7 @@ private func canonicalAliasAccountId(_ raw: String, field: String) throws -> Str
           !raw.contains("$"),
           let chainDiscriminant = try? AccountAddress
             .inspectI105NetworkPrefix(raw).chainDiscriminant,
-          let address = try? AccountAddress.parseEncodedSwiftOnly(
+          let address = try? AccountAddress.parseCanonicalI105(
               raw,
               expectedPrefix: chainDiscriminant
           ),

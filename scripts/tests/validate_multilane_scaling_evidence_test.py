@@ -44,6 +44,8 @@ class EvidenceBundle:
             "offered_load_tps": 20.0,
             "warmup_seconds": 5.0,
             "measurement_seconds": 20.0,
+            "drain_seconds": 2.0,
+            "max_submission_lag_ms": 10.0,
             "min_interval_samples": 20,
             "min_latency_samples": 100,
             "max_offered_load_deviation_fraction": 0.01,
@@ -242,9 +244,11 @@ class EvidenceBundle:
         committed: int,
         latency: float,
         offered: int = 400,
-        accepted: int = 400,
+        accepted: int | None = None,
     ) -> dict[str, Any]:
         intervals = 20
+        if accepted is None:
+            accepted = committed
 
         def distribute(total: int) -> list[int]:
             quotient, remainder = divmod(total, intervals)
@@ -278,6 +282,7 @@ class EvidenceBundle:
         metrics = support_dir / "metrics.prom"
         load_log = support_dir / "tx_load.log"
         nexus_manifest = support_dir / "load_test_manifest.json"
+        trace_path = support_dir / "transaction_trace.json"
         self.write_json(lifecycle, {"active_execution_lanes": lane_ids})
         metrics.write_text(
             f"nexus_lane_configured_total {active_lanes}\n",
@@ -298,6 +303,60 @@ class EvidenceBundle:
                 },
             },
         )
+        transactions = []
+        for cohort, count, start in (("warmup", 100, -7_000_000_000), ("measurement", offered, 0)):
+            for index in range(count):
+                sequence = index + 1
+                scheduled = start + index * 50_000_000
+                offer = scheduled + 100_000
+                is_accepted = cohort == "warmup" or index % 20 < accepted_parts[index // 20]
+                tx_hash = digest_bytes(f"{pair_index}:{variant}:{cohort}:{sequence}".encode())[:-1] + "1"
+                transactions.append({
+                    "cohort": cohort,
+                    "sequence": sequence,
+                    "logical_id": digest_bytes(f"{seed}:{cohort}:{sequence}".encode()),
+                    "hash": tx_hash,
+                    "scheduled_offset_ns": scheduled,
+                    "offer_offset_ns": offer,
+                    "submission_lag_ns": 100_000,
+                    "acknowledgment": {
+                        "offset_ns": offer + 1_000_000,
+                        "hash": tx_hash,
+                        "status": "Accepted" if is_accepted else "Rejected",
+                        "rejection": None if is_accepted else "synthetic explicit admission rejection",
+                    },
+                    "applied": {
+                        "offset_ns": offer + round(latency * 1_000_000),
+                        "hash": tx_hash,
+                        "scope": "global",
+                        "resolved_from": "state",
+                        "status": "Applied",
+                        "block_height": 1 + index // 20,
+                    } if is_accepted else None,
+                })
+        self.write_json(trace_path, {
+            "schema": VALIDATOR.TRACE_SCHEMA,
+            "pair_index": pair_index,
+            "variant": variant,
+            "seed": seed,
+            "clock": "monotonic_nanoseconds_relative_to_measurement_start",
+            "logical_id_derivation": VALIDATOR.LOGICAL_ID_DERIVATION,
+            "transaction_hash_source": "iroha_data_model::transaction::SignedTransaction::hash",
+            "transactions": transactions,
+        })
+        drain_samples = []
+        for index in range(2):
+            sample = copy.deepcopy(samples[-1])
+            sample.update({
+                "sequence": index + 1,
+                "start_offset_seconds": 20.0 + index,
+                "end_offset_seconds": 21.0 + index,
+                "offered_count": 0,
+                "accepted_count": 0,
+                "committed_count": 0,
+                "commit_latencies_ms": [],
+            })
+            drain_samples.append(sample)
         return {
             "schema": VALIDATOR.RUN_SCHEMA,
             "pair_index": pair_index,
@@ -319,11 +378,23 @@ class EvidenceBundle:
                 "disk_bytes_max": 2_019,
             },
             "samples": samples,
+            "warmup": {"offered_count": 100, "accepted_count": 100, "committed_count": 100},
+            "drain": {
+                "summary": {
+                    "offered_count": 0, "accepted_count": 0, "committed_count": 0,
+                    "queue_depth_max": samples[-1]["queue_depth"],
+                    "index_entries_max": samples[-1]["index_entries"],
+                    "memory_bytes_max": samples[-1]["memory_bytes"],
+                    "disk_bytes_max": samples[-1]["disk_bytes"],
+                },
+                "samples": drain_samples,
+            },
             "artifacts": {
                 "nexus_load_test_manifest": self.ref(nexus_manifest),
                 "lifecycle_snapshot": self.ref(lifecycle),
                 "metrics_snapshot": self.ref(metrics),
                 "load_generator_log": self.ref(load_log),
+                "transaction_trace": self.ref(trace_path),
             },
         }
 
@@ -342,6 +413,47 @@ class EvidenceBundle:
                     latency=latency,
                 ),
             )
+
+    def load_trace(self, pair_index: int, variant: str) -> dict[str, Any]:
+        raw = self.load_raw(pair_index, variant)
+        return json.loads((self.root / raw["artifacts"]["transaction_trace"]["path"]).read_text())
+
+    def replace_trace(
+        self, pair_index: int, variant: str, trace: dict[str, Any], *, recount: bool = False,
+    ) -> None:
+        """Refresh independent artifact hashes; optionally rebuild fixture event bins."""
+
+        raw = self.load_raw(pair_index, variant)
+        path = self.root / raw["artifacts"]["transaction_trace"]["path"]
+        self.write_json(path, trace)
+        raw["artifacts"]["transaction_trace"] = self.ref(path)
+        if recount:
+            rows = [row for row in trace["transactions"] if row["cohort"] == "measurement"]
+            for phase in (raw, raw["drain"]):
+                for sample in phase["samples"]:
+                    start = round(sample["start_offset_seconds"] * 1_000_000_000)
+                    end = round(sample["end_offset_seconds"] * 1_000_000_000)
+
+                    def inside(offset: int) -> bool:
+                        return start <= offset < end or (
+                            phase is raw["drain"] and sample is phase["samples"][-1] and offset == end
+                        )
+
+                    sample["offered_count"] = sum(inside(row["offer_offset_ns"]) for row in rows)
+                    sample["accepted_count"] = sum(
+                        row["acknowledgment"]["status"] == "Accepted" and inside(row["acknowledgment"]["offset_ns"])
+                        for row in rows
+                    )
+                    applied = sorted(
+                        (row["applied"]["offset_ns"], row["sequence"],
+                         (row["applied"]["offset_ns"] - row["offer_offset_ns"]) / 1_000_000)
+                        for row in rows if row["applied"] is not None and inside(row["applied"]["offset_ns"])
+                    )
+                    sample["committed_count"] = len(applied)
+                    sample["commit_latencies_ms"] = [event[2] for event in applied]
+                for name in ("offered_count", "accepted_count", "committed_count"):
+                    phase["summary"][name] = sum(sample[name] for sample in phase["samples"])
+        self.replace_raw(pair_index, variant, raw)
 
 
 class MultilaneScalingEvidenceValidatorTest(unittest.TestCase):
@@ -363,6 +475,249 @@ class MultilaneScalingEvidenceValidatorTest(unittest.TestCase):
         self.assertEqual(metrics["one_lane_resource_maxima"]["queue_depth_max"], 12)
         self.assertEqual(metrics["four_lane_resource_maxima"]["disk_bytes_max"], 2_019)
         self.assertEqual(len(metrics["pairs"]), 5)
+
+    def test_complete_trace_preserves_cross_interval_events_and_late_acknowledgments(self) -> None:
+        trace = self.bundle.load_trace(1, "one_lane")
+        measurement = [row for row in trace["transactions"] if row["cohort"] == "measurement"]
+        # State observation can precede the admission response, even across bins.
+        measurement[0]["acknowledgment"]["offset_ns"] = 1_001_000_000
+        last = measurement[-1]
+        last["acknowledgment"].update(status="Accepted", rejection=None, offset_ns=20_200_000_000)
+        last["applied"] = {
+            "offset_ns": 20_100_000_000, "hash": last["hash"], "scope": "global",
+            "resolved_from": "state", "status": "Applied", "block_height": 21,
+        }
+        self.bundle.replace_trace(1, "one_lane", trace, recount=True)
+        raw = self.bundle.load_raw(1, "one_lane")
+        self.assertGreater(raw["samples"][0]["committed_count"], raw["samples"][0]["accepted_count"])
+        self.assertEqual(raw["drain"]["summary"]["accepted_count"], 1)
+        self.assertEqual(raw["summary"]["accepted_count"], 100)
+        metrics = VALIDATOR.validate_evidence(self.bundle.manifest_path)
+        pair = metrics["pairs"][0]
+        self.assertEqual(pair["one_lane_cohort_accepted_count"], 101)
+        self.assertEqual(pair["one_lane_latency_samples"], 101)
+        self.assertEqual(pair["one_lane_drain_committed_count"], 1)
+        self.assertEqual(pair["one_lane_committed_throughput_tps"], 5.0)
+
+    def test_complete_cohort_p95_includes_tail_that_would_fail_only_after_drain(self) -> None:
+        for pair_index in range(1, 6):
+            trace = self.bundle.load_trace(pair_index, "four_lane")
+            tail = [row for row in trace["transactions"] if row["cohort"] == "measurement" and row["applied"] is None][-10:]
+            for row in tail:
+                row["acknowledgment"].update(status="Accepted", rejection=None, offset_ns=20_500_000_000)
+                row["applied"] = {
+                    "offset_ns": 21_000_000_000, "hash": row["hash"], "scope": "global",
+                    "resolved_from": "state", "status": "Applied", "block_height": 21,
+                }
+            self.bundle.replace_trace(pair_index, "four_lane", trace, recount=True)
+        self.assertEqual(self.bundle.load_raw(1, "four_lane")["summary"]["committed_count"], 160)
+        self.assert_invalid("four-lane pooled p95 commit latency gate failed")
+
+    def test_final_drain_deadline_is_inclusive_without_changing_measurement_boundary(self) -> None:
+        trace = self.bundle.load_trace(1, "one_lane")
+        row = trace["transactions"][-1]
+        row["acknowledgment"].update(status="Accepted", rejection=None, offset_ns=22_000_000_000)
+        row["applied"] = {
+            "offset_ns": 22_000_000_000, "hash": row["hash"], "scope": "global",
+            "resolved_from": "state", "status": "Applied", "block_height": 22,
+        }
+        self.bundle.replace_trace(1, "one_lane", trace, recount=True)
+        metrics = VALIDATOR.validate_evidence(self.bundle.manifest_path)
+        self.assertEqual(metrics["pairs"][0]["one_lane_drain_accepted_count"], 1)
+        self.assertEqual(metrics["pairs"][0]["one_lane_committed_count"], 100)
+
+    def test_rehashed_trace_rejects_missing_duplicate_reordered_and_unknown_observations(self) -> None:
+        baseline = self.bundle.load_trace(1, "one_lane")
+        cases = (
+            ("missing request", lambda trace: trace["transactions"].pop(), "missing or extra scheduled requests"),
+            ("extra request", lambda trace: trace["transactions"].append(copy.deepcopy(trace["transactions"][-1])), "missing or extra scheduled requests"),
+            ("reordered", lambda trace: trace["transactions"].reverse(), "reordered scheduled"),
+            ("duplicate hash", lambda trace: trace["transactions"][101].__setitem__("hash", trace["transactions"][100]["hash"]), "duplicates a transaction identity"),
+            ("sequence", lambda trace: trace["transactions"][100].__setitem__("sequence", 2), "reordered scheduled"),
+            ("boolean sequence", lambda trace: trace["transactions"][100].__setitem__("sequence", True), "reordered scheduled"),
+            ("logical provenance", lambda trace: trace["transactions"][100].__setitem__("logical_id", "0" * 64), "pair-seeded request"),
+            ("seed provenance", lambda trace: trace.__setitem__("seed", "0" * 64), "declared provenance"),
+            ("hash provenance", lambda trace: trace.__setitem__("transaction_hash_source", "aggregate_counter"), "declared provenance"),
+            ("clock provenance", lambda trace: trace.__setitem__("clock", "wall_clock"), "declared provenance"),
+            ("unknown ack", lambda trace: trace["transactions"][100]["acknowledgment"].__setitem__("status", "Unknown"), "unknown status"),
+            ("ack hash", lambda trace: trace["transactions"][100]["acknowledgment"].__setitem__("hash", "1" * 64), "mismatched transaction identity"),
+            ("missing accepted outcome", lambda trace: trace["transactions"][100].__setitem__("applied", None), "applied must be an object"),
+            ("cached Applied", lambda trace: trace["transactions"][100]["applied"].__setitem__("resolved_from", "cache"), "authoritative global StateApplied"),
+            ("lane Applied", lambda trace: trace["transactions"][100]["applied"].__setitem__("scope", "lane"), "authoritative global StateApplied"),
+            ("state rejection", lambda trace: trace["transactions"][100]["applied"].__setitem__("status", "Rejected"), "authoritative global StateApplied"),
+            ("state hash", lambda trace: trace["transactions"][100]["applied"].__setitem__("hash", "1" * 64), "authoritative global StateApplied"),
+            ("zero height", lambda trace: trace["transactions"][100]["applied"].__setitem__("block_height", 0), "block_height must be an integer >= 1"),
+            ("unbounded height", lambda trace: trace["transactions"][100]["applied"].__setitem__("block_height", 1 << 64), "authoritative u64 height bound"),
+            ("late ack", lambda trace: trace["transactions"][100]["acknowledgment"].__setitem__("offset_ns", 22_000_000_001), "after the drain deadline"),
+            ("late Applied", lambda trace: trace["transactions"][100]["applied"].__setitem__("offset_ns", 22_000_000_001), "after the drain deadline"),
+            ("ack before offer", lambda trace: trace["transactions"][100]["acknowledgment"].__setitem__("offset_ns", 0), "before offer"),
+            ("Applied before offer", lambda trace: trace["transactions"][100]["applied"].__setitem__("offset_ns", 0), "before offer"),
+            ("accepted rejection", lambda trace: trace["transactions"][100]["acknowledgment"].__setitem__("rejection", "rejected"), "null rejection"),
+            ("missing rejection", lambda trace: trace["transactions"][-1]["acknowledgment"].__setitem__("rejection", None), "single-line string"),
+            ("rejected yet Applied", lambda trace: trace["transactions"][-1].__setitem__("applied", copy.deepcopy(trace["transactions"][100]["applied"])), "cannot also claim StateApplied"),
+        )
+        for name, mutation, expected in cases:
+            with self.subTest(name=name):
+                trace = copy.deepcopy(baseline)
+                mutation(trace)
+                self.bundle.replace_trace(1, "one_lane", trace)
+                self.assert_invalid(expected)
+
+    def test_rehashed_trace_rejects_missed_schedule_rescheduling_and_catchup(self) -> None:
+        baseline = self.bundle.load_trace(1, "one_lane")
+        cases = (
+            ("schedule", {"scheduled_offset_ns": 1}, "reschedules the fixed open-loop offer"),
+            ("lag mismatch", {"submission_lag_ns": 0}, "submission-lag bound"),
+            ("before slot", {"offer_offset_ns": -1, "submission_lag_ns": -1}, "submission-lag bound"),
+            ("late slot", {"offer_offset_ns": 10_000_001, "submission_lag_ns": 10_000_001}, "submission-lag bound"),
+            ("boolean clock", {"offer_offset_ns": True}, "integer nanosecond offset"),
+            ("unbounded clock", {"offer_offset_ns": 1 << 63}, "integer nanosecond offset"),
+        )
+        for name, updates, expected in cases:
+            with self.subTest(name=name):
+                trace = copy.deepcopy(baseline)
+                trace["transactions"][100].update(updates)
+                self.bundle.replace_trace(1, "one_lane", trace)
+                self.assert_invalid(expected)
+        trace = copy.deepcopy(baseline)
+        trace["transactions"][101].update(offer_offset_ns=100_000, submission_lag_ns=-49_900_000)
+        self.bundle.replace_trace(1, "one_lane", trace)
+        self.assert_invalid("submission-lag bound")
+
+    def test_transaction_hash_shape_matches_the_existing_sdk_owner(self) -> None:
+        baseline = self.bundle.load_trace(1, "one_lane")
+        for invalid in ("1" * 63, "1" * 65, "A" * 63 + "1", "1" * 63 + "0", "g" * 63 + "1"):
+            with self.subTest(hash=invalid):
+                trace = copy.deepcopy(baseline)
+                trace["transactions"][100]["hash"] = invalid
+                self.bundle.replace_trace(1, "one_lane", trace)
+                self.assert_invalid("canonical signed transaction hash")
+
+    def test_warmup_must_be_separate_and_fully_drained(self) -> None:
+        baseline = self.bundle.load_trace(1, "one_lane")
+        for event in ("acknowledgment", "applied"):
+            with self.subTest(event=event):
+                trace = copy.deepcopy(baseline)
+                trace["transactions"][0][event]["offset_ns"] = 0
+                self.bundle.replace_trace(1, "one_lane", trace)
+                self.assert_invalid("leaves warmup undrained")
+        self.bundle.replace_trace(1, "one_lane", baseline)
+        self.bundle.mutate_raw(1, "one_lane", lambda raw: raw["warmup"].__setitem__("committed_count", 99))
+        self.assert_invalid("separate fully drained cohort")
+
+    def test_trace_reconciles_counts_and_unclipped_interval_latencies(self) -> None:
+        baseline = self.bundle.load_trace(1, "one_lane")
+        for event, value, expected in (
+            ("acknowledgment", 1_001_000_000, "accepted_count disagrees"),
+            ("applied", 1_001_000_000, "committed_count disagrees"),
+            ("applied", 11_100_000, "complete transaction trace latencies"),
+        ):
+            with self.subTest(event=event, value=value):
+                trace = copy.deepcopy(baseline)
+                trace["transactions"][100][event]["offset_ns"] = value
+                self.bundle.replace_trace(1, "one_lane", trace)
+                self.assert_invalid(expected)
+
+    def test_drain_observations_are_mandatory_bounded_and_budgeted(self) -> None:
+        baseline = self.bundle.load_raw(1, "one_lane")
+        cases = (
+            ("missing drain", lambda raw: raw.pop("drain"), "fields differ from schema"),
+            ("no samples", lambda raw: raw["drain"].__setitem__("samples", []), "complete drain observations"),
+            ("missing last interval", lambda raw: raw["drain"]["samples"].pop(), "exactly cover the bounded drain"),
+            ("gap", lambda raw: raw["drain"]["samples"][1].__setitem__("start_offset_seconds", 21.1), "leaves a drain gap"),
+            ("weak cadence", lambda raw: raw["drain"]["samples"][0].__setitem__("end_offset_seconds", 22), "weakens observation cadence"),
+            ("reordered", lambda raw: raw["drain"]["samples"].reverse(), "sequence is unordered"),
+            ("counter", lambda raw: raw["drain"]["summary"].__setitem__("accepted_count", 1), "inconsistent with raw drain samples"),
+        )
+        for name, mutation, expected in cases:
+            with self.subTest(name=name):
+                raw = copy.deepcopy(baseline)
+                mutation(raw)
+                self.bundle.replace_raw(1, "one_lane", raw)
+                self.assert_invalid(expected)
+        for name in self.bundle.budgets:
+            with self.subTest(resource=name):
+                raw = copy.deepcopy(baseline)
+                raw["drain"]["samples"][0][name.removesuffix("_max")] = self.bundle.budgets[name] + 1
+                self.bundle.replace_raw(1, "one_lane", raw)
+                self.assert_invalid("budget during drain")
+
+    def test_open_loop_bounds_fail_closed_before_trace_processing(self) -> None:
+        baseline = copy.deepcopy(self.bundle.workload)
+        cases = (
+            ("drain_seconds", 0, "greater than zero"),
+            ("drain_seconds", 301, "at most 300"),
+            ("max_submission_lag_ms", 12.500001, "one quarter of an arrival period"),
+            ("measurement_seconds", 0.0000000001, "exact bounded integer nanoseconds"),
+            ("offered_load_tps", 1e12, "one quarter of an arrival period"),
+            ("measurement_seconds", 1_000_000, "transaction trace row bound"),
+            ("offered_load_tps", 1 << 4096, "finite number"),
+        )
+        for field, value, expected in cases:
+            with self.subTest(field=field, value=value):
+                self.bundle.manifest["workload"] = dict(baseline, **{field: value})
+                self.bundle.flush_manifest()
+                self.assert_invalid(expected)
+        workload = dict(baseline, offered_load_tps=3, max_submission_lag_ms=0)
+        period, warmup, measurement, drain, lag = VALIDATOR._schedule(workload)
+        self.assertEqual(period.numerator, 1_000_000_000)
+        self.assertEqual(period.denominator, 3)
+        self.assertEqual((warmup, measurement, drain, lag), (5_000_000_000, 20_000_000_000, 2_000_000_000, 0))
+
+    def test_zero_warmup_has_no_phantom_requests_and_late_rejections_remain_visible(self) -> None:
+        self.bundle.workload["warmup_seconds"] = 0.0
+        for entry in self.bundle.manifest["runs"]:
+            pair, variant = entry["pair_index"], entry["variant"]
+            raw = self.bundle.load_raw(pair, variant)
+            raw["workload"]["warmup_seconds"] = 0.0
+            raw["warmup"] = {"offered_count": 0, "accepted_count": 0, "committed_count": 0}
+            self.bundle.replace_raw(pair, variant, raw)
+            trace = self.bundle.load_trace(pair, variant)
+            trace["transactions"] = [row for row in trace["transactions"] if row["cohort"] == "measurement"]
+            trace["transactions"][-1]["acknowledgment"]["offset_ns"] = 21_000_000_000
+            self.bundle.replace_trace(pair, variant, trace)
+        result = VALIDATOR.validate_evidence(self.bundle.manifest_path)
+        self.assertEqual(result["pairs"][0]["one_lane_drain_rejected_count"], 1)
+        self.assertEqual(result["pairs"][0]["one_lane_cohort_accepted_count"], 100)
+
+    def test_drain_resource_maximum_is_included_in_release_report(self) -> None:
+        raw = self.bundle.load_raw(1, "one_lane")
+        raw["drain"]["samples"][0]["queue_depth"] = 90
+        raw["drain"]["summary"]["queue_depth_max"] = 90
+        self.bundle.replace_raw(1, "one_lane", raw)
+        result = VALIDATOR.validate_evidence(self.bundle.manifest_path)
+        self.assertEqual(result["one_lane_resource_maxima"]["queue_depth_max"], 90)
+
+    def test_trace_artifact_and_strict_first_release_fields_cannot_be_omitted_or_extended(self) -> None:
+        baseline_raw = self.bundle.load_raw(1, "one_lane")
+        raw = copy.deepcopy(baseline_raw)
+        del raw["artifacts"]["transaction_trace"]
+        self.bundle.replace_raw(1, "one_lane", raw)
+        self.assert_invalid("artifacts fields differ from schema")
+        self.bundle.replace_raw(1, "one_lane", baseline_raw)
+        baseline = self.bundle.load_trace(1, "one_lane")
+        for field in ("acknowledgment", "applied", "scheduled_offset_ns", "submission_lag_ns"):
+            with self.subTest(missing=field):
+                trace = copy.deepcopy(baseline)
+                del trace["transactions"][100][field]
+                self.bundle.replace_trace(1, "one_lane", trace)
+                self.assert_invalid("fields differ from schema")
+        trace = copy.deepcopy(baseline)
+        trace["transactions"][100]["aggregate_estimated_latency"] = 10
+        self.bundle.replace_trace(1, "one_lane", trace)
+        self.assert_invalid("fields differ from schema")
+
+    def test_trace_identity_cannot_be_reused_between_warmup_measurement_or_runs(self) -> None:
+        baseline = self.bundle.load_trace(1, "one_lane")
+        duplicate = baseline["transactions"][0]["hash"]
+        for pair, variant, index in ((1, "one_lane", 100), (1, "four_lane", 0)):
+            with self.subTest(pair=pair, variant=variant):
+                trace = self.bundle.load_trace(pair, variant)
+                trace["transactions"][index]["hash"] = duplicate
+                self.bundle.replace_trace(pair, variant, trace)
+                self.assert_invalid("duplicates a transaction identity")
+                if variant == "one_lane":
+                    self.bundle.replace_trace(1, "one_lane", baseline)
 
     def test_release_binding_accepts_exact_source_workspace_and_validator(self) -> None:
         validator_path = (
@@ -701,7 +1056,7 @@ class MultilaneScalingEvidenceValidatorTest(unittest.TestCase):
             committed=160,
             latency=12.0,
             offered=398,
-            accepted=398,
+            accepted=160,
         )
         self.bundle.replace_raw(2, "four_lane", replacement)
         self.assert_invalid("offered load is not matched")
@@ -722,7 +1077,7 @@ class MultilaneScalingEvidenceValidatorTest(unittest.TestCase):
                     committed=committed,
                     latency=latency,
                     offered=398,
-                    accepted=398,
+                    accepted=committed,
                 ),
             )
         self.assert_invalid("offered count drifted across trials")

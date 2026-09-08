@@ -1,3 +1,4 @@
+import { rejectError, rejectRange, rejectType } from "./validationThrow.js";
 import { Buffer } from "buffer";
 
 import { blake2b256 } from "./blake2b.js";
@@ -31,7 +32,7 @@ import {
   requireKagemushaJsonContentTypeV1,
   requireKagemushaSubmissionResponseV1,
 } from "./kagemushaToriiV1.js";
-import { Kagemusha } from "./kagemusha.js";
+import { _encodeRedemptionRequestV1 } from "./kagemusha.js";
 import {
   SUMERAGI_DIAGNOSTICS_TYPED_JSON_MAX_BYTES,
   SUMERAGI_STATUS_TYPED_JSON_MAX_BYTES,
@@ -187,27 +188,25 @@ const LEDGER_READ_OPTION_KEYS = new Set(["signal"]);
 
 function normalizeBaseUrl(baseUrl) {
   if (typeof baseUrl !== "string" && !(baseUrl instanceof URL)) {
-    throw new TypeError("ToriiBrowserClient baseUrl must be a string or URL");
+    rejectType("ToriiBrowserClient baseUrl must be a string or URL");
   }
   const raw = typeof baseUrl === "string" ? baseUrl : baseUrl.toString();
   if (raw.length === 0 || raw.trim() !== raw) {
-    throw new TypeError("ToriiBrowserClient baseUrl must be a non-empty URL");
+    rejectType("ToriiBrowserClient baseUrl must be a non-empty URL");
   }
   const parsed = new URL(raw);
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    throw new TypeError("ToriiBrowserClient baseUrl must use http or https");
+    rejectType("ToriiBrowserClient baseUrl must use http or https");
   }
   if (parsed.username !== "" || parsed.password !== "") {
-    throw new TypeError("ToriiBrowserClient baseUrl must not contain credentials");
+    rejectType("ToriiBrowserClient baseUrl must not contain credentials");
   }
   if (parsed.search !== "" || parsed.hash !== "") {
-    throw new TypeError("ToriiBrowserClient baseUrl must not contain a query or fragment");
+    rejectType("ToriiBrowserClient baseUrl must not contain a query or fragment");
   }
   const pathname = parsed.pathname.replace(/\/+$/u, "");
   if (/\/v1(?:\/explorer)?$/iu.test(pathname)) {
-    throw new TypeError(
-      "ToriiBrowserClient baseUrl must be the Torii root, without /v1 or /v1/explorer",
-    );
+    rejectType("ToriiBrowserClient baseUrl must be the Torii root, without /v1 or /v1/explorer");
   }
   return `${parsed.origin}${pathname}`;
 }
@@ -224,14 +223,14 @@ function appendSearchParams(url, params) {
 function requireObject(value, context) {
   if (value === undefined || value === null) return {};
   if (typeof value !== "object" || Array.isArray(value)) {
-    throw new TypeError(`${context} must be an object`);
+    rejectType(`${context} must be an object`);
   }
   return value;
 }
 
 function requirePlainObject(value, context) {
   if (!isPlainObject(value)) {
-    throw new TypeError(`${context} must be a plain object`);
+    rejectType(`${context} must be a plain object`);
   }
   return value;
 }
@@ -244,10 +243,10 @@ function normalizeDefaultHeaders(value, context) {
   const headers = {};
   for (const [name, headerValue] of Object.entries(source)) {
     if (!/^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/u.test(name)) {
-      throw new TypeError(`${context} contains invalid header name ${name}`);
+      rejectType(`${context} contains invalid header name ${name}`);
     }
     if (typeof headerValue !== "string" || /[\0\r\n]/u.test(headerValue)) {
-      throw new TypeError(`${context}.${name} must be a single-line string`);
+      rejectType(`${context}.${name} must be a single-line string`);
     }
     Object.defineProperty(headers, name, {
       configurable: true,
@@ -275,14 +274,14 @@ function headersContainCredentials(headers) {
 function normalizeTransactionStatusScope(value, context) {
   const scope = value === undefined ? "global" : value;
   if (scope !== "local" && scope !== "global") {
-    throw new TypeError(`${context} must be local or global`);
+    rejectType(`${context} must be local or global`);
   }
   return scope;
 }
 
 function rejectRemovedWaitScope(options, context) {
   if (Object.prototype.hasOwnProperty.call(options, "scope")) {
-    throw new TypeError(`${context}.scope is not supported; finality waits are global`);
+    rejectType(`${context}.scope is not supported; finality waits are global`);
   }
 }
 
@@ -296,11 +295,11 @@ function isPlainObject(value) {
 
 function requireNonEmptyString(value, context) {
   if (typeof value !== "string") {
-    throw new TypeError(`${context} must be a string`);
+    rejectType(`${context} must be a string`);
   }
   const trimmed = value.trim();
   if (!trimmed) {
-    throw new TypeError(`${context} must not be empty`);
+    rejectType(`${context} must not be empty`);
   }
   return trimmed;
 }
@@ -308,9 +307,7 @@ function requireNonEmptyString(value, context) {
 function normalizeBrowserCanonicalRequestAuth(value, networkId) {
   if (value === undefined || value === null) return null;
   if (!isPlainObject(value)) {
-    throw new TypeError(
-      "ToriiBrowserClient options.canonicalRequestAuth must be a plain object",
-    );
+    rejectType("ToriiBrowserClient options.canonicalRequestAuth must be a plain object");
   }
   const keys = Object.keys(value).sort();
   if (
@@ -318,30 +315,24 @@ function normalizeBrowserCanonicalRequestAuth(value, networkId) {
     || keys[0] !== "accountId"
     || keys[1] !== "sign"
   ) {
-    throw new TypeError(
-      "ToriiBrowserClient options.canonicalRequestAuth requires exactly accountId and sign",
-    );
+    rejectType("ToriiBrowserClient options.canonicalRequestAuth requires exactly accountId and sign");
   }
   if (networkId === null) {
-    throw new TypeError(
-      "ToriiBrowserClient options.canonicalRequestAuth requires options.networkId",
-    );
+    rejectType("ToriiBrowserClient options.canonicalRequestAuth requires options.networkId");
   }
   const accountId = requireCanonicalAuthAccount(
     value.accountId,
     "ToriiBrowserClient options.canonicalRequestAuth.accountId",
   );
   if (typeof value.sign !== "function") {
-    throw new TypeError(
-      "ToriiBrowserClient options.canonicalRequestAuth.sign must be a function",
-    );
+    rejectType("ToriiBrowserClient options.canonicalRequestAuth.sign must be a function");
   }
   return Object.freeze({ accountId, sign: value.sign });
 }
 
 function normalizeContractDeploymentStateRequest(value) {
   if (!isPlainObject(value)) {
-    throw new TypeError("contract deployment-state request must be a plain object");
+    rejectType("contract deployment-state request must be a plain object");
   }
   const keys = Object.keys(value).sort();
   if (
@@ -349,9 +340,7 @@ function normalizeContractDeploymentStateRequest(value) {
     keys[0] !== "authority" ||
     keys[1] !== "contract_alias"
   ) {
-    throw new TypeError(
-      "contract deployment-state request requires exactly authority and contract_alias",
-    );
+    rejectType("contract deployment-state request requires exactly authority and contract_alias");
   }
   const authority = requireNonEmptyString(
     value.authority,
@@ -362,7 +351,7 @@ function normalizeContractDeploymentStateRequest(value) {
     "contract deployment-state contract_alias",
   );
   if (authority !== value.authority || contractAlias !== value.contract_alias) {
-    throw new TypeError("contract deployment-state identifiers must be exact strings");
+    rejectType("contract deployment-state identifiers must be exact strings");
   }
   return {
     authority,
@@ -372,17 +361,17 @@ function normalizeContractDeploymentStateRequest(value) {
 
 function requireCanonicalDecimalString(value, context, { positive = false } = {}) {
   if (typeof value !== "string" || !/^(?:0|[1-9]\d*)$/u.test(value)) {
-    throw new TypeError(`${context} must be a canonical decimal string`);
+    rejectType(`${context} must be a canonical decimal string`);
   }
   if (positive && value === "0") {
-    throw new TypeError(`${context} must be positive`);
+    rejectType(`${context} must be positive`);
   }
   return value;
 }
 
 function normalizeContractDeploymentStateResponse(value, request) {
   if (!isPlainObject(value)) {
-    throw new TypeError("contract deployment-state response must be a plain object");
+    rejectType("contract deployment-state response must be a plain object");
   }
   const fields = [
     "authority",
@@ -398,24 +387,20 @@ function normalizeContractDeploymentStateResponse(value, request) {
   ];
   const keys = Object.keys(value).sort();
   if (keys.length !== fields.length || keys.some((key) => !fields.includes(key))) {
-    throw new TypeError(
-      "contract deployment-state response has missing or unsupported fields",
-    );
+    rejectType("contract deployment-state response has missing or unsupported fields");
   }
   if (value.authority !== request.authority) {
-    throw new Error("contract deployment-state response authority mismatch");
+    rejectError("contract deployment-state response authority mismatch");
   }
   if (value.contract_alias !== request.contract_alias) {
-    throw new Error("contract deployment-state response alias mismatch");
+    rejectError("contract deployment-state response alias mismatch");
   }
   const dataspaceAlias = requireNonEmptyString(
     value.dataspace_alias,
     "contract deployment-state response dataspace_alias",
   );
   if (dataspaceAlias !== value.dataspace_alias) {
-    throw new TypeError(
-      "contract deployment-state response dataspace_alias must be exact",
-    );
+    rejectType("contract deployment-state response dataspace_alias must be exact");
   }
   const observedBlockHash = requireNonEmptyString(
     value.observed_block_hash,
@@ -426,9 +411,7 @@ function normalizeContractDeploymentStateResponse(value, request) {
     hashMatch === null ||
     computeHashLiteralCrc("hash", hashMatch[1]) !== hashMatch[2]
   ) {
-    throw new TypeError(
-      "contract deployment-state response observed_block_hash must be canonical",
-    );
+    rejectType("contract deployment-state response observed_block_hash must be canonical");
   }
   const previous = value.previous_contract_address;
   if (previous !== null) {
@@ -437,9 +420,7 @@ function normalizeContractDeploymentStateResponse(value, request) {
       "contract deployment-state response previous_contract_address",
     );
     if (exactPrevious !== previous) {
-      throw new TypeError(
-        "contract deployment-state response previous_contract_address must be exact",
-      );
+      rejectType("contract deployment-state response previous_contract_address must be exact");
     }
   }
   const chainDiscriminant = requireCanonicalDecimalString(
@@ -447,9 +428,7 @@ function normalizeContractDeploymentStateResponse(value, request) {
     "contract deployment-state response chain_discriminant",
   );
   if (BigInt(chainDiscriminant) > 0xffffn) {
-    throw new RangeError(
-      "contract deployment-state response chain_discriminant exceeds u16",
-    );
+    rejectRange("contract deployment-state response chain_discriminant exceeds u16");
   }
   return Object.freeze({
     authority: value.authority,
@@ -480,9 +459,7 @@ function normalizeContractDeploymentStateResponse(value, request) {
 
 function requireExactHashHex(value, context) {
   if (typeof value !== "string" || !/^[0-9a-f]{63}[13579bdf]$/u.test(value)) {
-    throw new TypeError(
-      `${context} must be an exact canonical lowercase 32-byte Iroha hash`,
-    );
+    rejectType(`${context} must be an exact canonical lowercase 32-byte Iroha hash`);
   }
   return value;
 }
@@ -490,10 +467,10 @@ function requireExactHashHex(value, context) {
 function requireMatchingReceiptHashHeader(response, name, expectedHash) {
   const value = response.headers.get(name);
   if (typeof value !== "string" || !/^[0-9a-f]{63}[13579bdf]$/u.test(value)) {
-    throw new Error(`${name} must occur exactly once as a canonical lowercase Iroha hash`);
+    rejectError(`${name} must occur exactly once as a canonical lowercase Iroha hash`);
   }
   if (value !== expectedHash) {
-    throw new Error(`${name} does not match the locally signed transaction`);
+    rejectError(`${name} does not match the locally signed transaction`);
   }
 }
 
@@ -508,47 +485,41 @@ function requireTransactionBytes(value, context) {
   } else if (value instanceof ArrayBuffer) {
     bytes = new Uint8Array(value.slice(0));
   } else {
-    throw new TypeError(`${context} must be transaction bytes`);
+    rejectType(`${context} must be transaction bytes`);
   }
   if (bytes.length < 2 || bytes[0] !== 1) {
-    throw new TypeError(
-      `${context} must be an exact version-1 signed transaction payload`,
-    );
+    rejectType(`${context} must be an exact version-1 signed transaction payload`);
   }
   return bytes;
 }
 
 function normalizePublicPipelineStatusEnvelope(value, context) {
   if (!isPlainObject(value)) {
-    throw new TypeError(`${context} must be a pipeline status object`);
+    rejectType(`${context} must be a pipeline status object`);
   }
   const rootFields = new Set(["hash", "status", "scope", "resolved_from"]);
   const unexpectedRootFields = Object.keys(value).filter(
     (field) => !rootFields.has(field),
   );
   if (unexpectedRootFields.length > 0) {
-    throw new TypeError(
-      `${context} contains retired or unsupported fields: ${unexpectedRootFields.join(", ")}`,
-    );
+    rejectType(`${context} contains retired or unsupported fields: ${unexpectedRootFields.join(", ")}`);
   }
   const hash = requireExactHashHex(value.hash, `${context}.hash`);
   if (!isPlainObject(value.status)) {
-    throw new TypeError(`${context}.status must be an object`);
+    rejectType(`${context}.status must be an object`);
   }
   const statusFields = new Set(["kind", "block_height"]);
   const unexpectedStatusFields = Object.keys(value.status).filter(
     (field) => !statusFields.has(field),
   );
   if (unexpectedStatusFields.length > 0) {
-    throw new TypeError(
-      `${context}.status contains retired or unsupported fields: ${unexpectedStatusFields.join(", ")}`,
-    );
+    rejectType(`${context}.status contains retired or unsupported fields: ${unexpectedStatusFields.join(", ")}`);
   }
   if (
     typeof value.status.kind !== "string" ||
     !PIPELINE_STATUS_VALUES.has(value.status.kind)
   ) {
-    throw new TypeError(`${context}.status.kind is not a current pipeline status`);
+    rejectType(`${context}.status.kind is not a current pipeline status`);
   }
   const status = { kind: value.status.kind };
   if (value.status.block_height !== undefined) {
@@ -556,17 +527,15 @@ function normalizePublicPipelineStatusEnvelope(value, context) {
       !Number.isSafeInteger(value.status.block_height) ||
       value.status.block_height < 1
     ) {
-      throw new TypeError(
-        `${context}.status.block_height must be a positive safe integer`,
-      );
+      rejectType(`${context}.status.block_height must be a positive safe integer`);
     }
     status.block_height = value.status.block_height;
   }
   if (!["local", "global"].includes(value.scope)) {
-    throw new TypeError(`${context}.scope is not a current status scope`);
+    rejectType(`${context}.scope is not a current status scope`);
   }
   if (!PIPELINE_STATUS_RESOLUTION_VALUES.has(value.resolved_from)) {
-    throw new TypeError(`${context}.resolved_from is not a current status source`);
+    rejectType(`${context}.resolved_from is not a current status source`);
   }
   return Object.freeze({
     hash,
@@ -578,31 +547,29 @@ function normalizePublicPipelineStatusEnvelope(value, context) {
 
 function classifyGlobalPipelineStatusEnvelope(value, requestedHash, context) {
   if (!isPlainObject(value)) {
-    throw new TypeError(`${context} must be a pipeline status object`);
+    rejectType(`${context} must be a pipeline status object`);
   }
   const hash = requireExactHashHex(value.hash, `${context}.hash`);
   if (hash !== requestedHash) {
-    throw new Error(`${context}.hash does not match the requested transaction`);
+    rejectError(`${context}.hash does not match the requested transaction`);
   }
   if (value.scope !== "global") {
-    throw new Error(`${context}.scope must be global`);
+    rejectError(`${context}.scope must be global`);
   }
   if (!isPlainObject(value.status) || typeof value.status.kind !== "string") {
-    throw new TypeError(`${context}.status.kind must be a string`);
+    rejectType(`${context}.status.kind must be a string`);
   }
   if (!PIPELINE_STATUS_VALUES.has(value.status.kind)) {
-    throw new Error(`${context}.status.kind is not a current pipeline status`);
+    rejectError(`${context}.status.kind is not a current pipeline status`);
   }
   if (!PIPELINE_STATUS_RESOLUTION_VALUES.has(value.resolved_from)) {
-    throw new Error(`${context}.resolved_from is not a current status source`);
+    rejectError(`${context}.resolved_from is not a current status source`);
   }
   const kind = value.status.kind;
   if (kind === PIPELINE_SUCCESS_STATUS) {
     const blockHeight = value.status.block_height;
     if (!Number.isSafeInteger(blockHeight) || blockHeight < 1) {
-      throw new Error(
-        `${context}.status.block_height must be a positive safe integer`,
-      );
+      rejectError(`${context}.status.block_height must be a positive safe integer`);
     }
   }
   return {
@@ -643,15 +610,13 @@ function delayWithSignal(milliseconds, signal) {
 
 function requireCanonicalQuantity(value, context) {
   if (typeof value !== "string") {
-    throw new TypeError(`${context} must be a canonical Kotodama V1 quantity string`);
+    rejectType(`${context} must be a canonical Kotodama V1 quantity string`);
   }
   try {
     return NumericV1.decodeQuantityJson(value).toString();
   } catch (error) {
     if (!(error instanceof NumericV1Error)) throw error;
-    throw new TypeError(
-      `${context} must be a canonical non-negative Kotodama V1 quantity (${error.code})`,
-    );
+    rejectType(`${context} must be a canonical non-negative Kotodama V1 quantity (${error.code})`);
   }
 }
 
@@ -661,7 +626,7 @@ function normalizeQuantityRecord(value, context, fields, { optional = false } = 
   for (const field of fields) {
     if (normalized[field] === undefined || normalized[field] === null) {
       if (!optional) {
-        throw new TypeError(`${context}.${field} must be a canonical Kotodama V1 quantity string`);
+        rejectType(`${context}.${field} must be a canonical Kotodama V1 quantity string`);
       }
     } else {
       normalized[field] = requireCanonicalQuantity(
@@ -676,7 +641,7 @@ function normalizeQuantityRecord(value, context, fields, { optional = false } = 
 function normalizeQuantityPage(value, context, fields, options) {
   const page = requireObject(value, context);
   if (!Array.isArray(page.items)) {
-    throw new TypeError(`${context}.items must be an array`);
+    rejectType(`${context}.items must be an array`);
   }
   return {
     ...page,
@@ -688,7 +653,7 @@ function normalizeQuantityPage(value, context, fields, options) {
 
 function normalizeExplorerAssetDefinitionRecord(value, context) {
   if (!isPlainObject(value)) {
-    throw new TypeError(`${context} must be an object`);
+    rejectType(`${context} must be an object`);
   }
   const fields = [
     "id",
@@ -704,12 +669,12 @@ function normalizeExplorerAssetDefinitionRecord(value, context) {
   ];
   const keys = Object.keys(value);
   if (keys.length !== fields.length || keys.some((key) => !fields.includes(key))) {
-    throw new TypeError(`${context} has missing or unsupported fields`);
+    rejectType(`${context} has missing or unsupported fields`);
   }
   for (const field of ["id", "mintable", "owned_by"]) {
     const normalized = requireNonEmptyString(value[field], `${context}.${field}`);
     if (normalized !== value[field]) {
-      throw new TypeError(`${context}.${field} must be an exact string`);
+      rejectType(`${context}.${field} must be an exact string`);
     }
   }
   if (value.owning_domain !== null) {
@@ -718,19 +683,19 @@ function normalizeExplorerAssetDefinitionRecord(value, context) {
       `${context}.owning_domain`,
     );
     if (owningDomain !== value.owning_domain) {
-      throw new TypeError(`${context}.owning_domain must be an exact string or null`);
+      rejectType(`${context}.owning_domain must be an exact string or null`);
     }
   }
   for (const field of ["logo", "locked_quantity", "circulating_quantity"]) {
     if (value[field] !== null && typeof value[field] !== "string") {
-      throw new TypeError(`${context}.${field} must be a string or null`);
+      rejectType(`${context}.${field} must be a string or null`);
     }
   }
   if (!Number.isInteger(value.assets) || value.assets < 0 || value.assets > 0xffff_ffff) {
-    throw new TypeError(`${context}.assets must be a uint32`);
+    rejectType(`${context}.assets must be a uint32`);
   }
   if (!isPlainObject(value.metadata)) {
-    throw new TypeError(`${context}.metadata must be an object`);
+    rejectType(`${context}.metadata must be an object`);
   }
   const normalized = normalizeQuantityRecord(value, context, ["total_quantity"]);
   for (const field of ["locked_quantity", "circulating_quantity"]) {
@@ -747,7 +712,7 @@ function normalizeExplorerAssetDefinitionRecord(value, context) {
 function normalizeExplorerCursor(value, context, { nullable = false } = {}) {
   if (value === null && nullable) return null;
   if (typeof value !== "string" || value.length === 0) {
-    throw new TypeError(`${context} must be a non-empty base64url string`);
+    rejectType(`${context} must be a non-empty base64url string`);
   }
   const remainder = value.length % 4;
   const trailingSextet = EXPLORER_CURSOR_ALPHABET.indexOf(value[value.length - 1]);
@@ -760,9 +725,7 @@ function normalizeExplorerCursor(value, context, { nullable = false } = {}) {
     !EXPLORER_CURSOR_PATTERN.test(value) ||
     hasNonCanonicalTrailingBits
   ) {
-    throw new TypeError(
-      `${context} must be canonical base64url without padding and at most ${EXPLORER_CURSOR_MAX_LENGTH} characters`,
-    );
+    rejectType(`${context} must be canonical base64url without padding and at most ${EXPLORER_CURSOR_MAX_LENGTH} characters`);
   }
   return value;
 }
@@ -771,13 +734,13 @@ function requireExactExplorerCursorFields(record, expectedFields, context) {
   const expected = new Set(expectedFields);
   const unknown = Object.keys(record).find((field) => !expected.has(field));
   if (unknown !== undefined) {
-    throw new TypeError(`${context} contains unknown field ${unknown}`);
+    rejectType(`${context} contains unknown field ${unknown}`);
   }
   const missing = expectedFields.find(
     (field) => !Object.prototype.hasOwnProperty.call(record, field),
   );
   if (missing !== undefined) {
-    throw new TypeError(`${context} is missing required field ${missing}`);
+    rejectType(`${context} is missing required field ${missing}`);
   }
   return record;
 }
@@ -787,19 +750,19 @@ function normalizeExplorerCursorMeta(value, context) {
   requireExactExplorerCursorFields(meta, ["limit", "next_cursor", "has_more"], context);
   const limit = normalizePositiveInteger(meta.limit, `${context}.limit`, undefined);
   if (limit === undefined || limit > EXPLORER_CURSOR_MAX_LIMIT) {
-    throw new TypeError(`${context}.limit must be between 1 and ${EXPLORER_CURSOR_MAX_LIMIT}`);
+    rejectType(`${context}.limit must be between 1 and ${EXPLORER_CURSOR_MAX_LIMIT}`);
   }
   if (typeof meta.has_more !== "boolean") {
-    throw new TypeError(`${context}.has_more must be a boolean`);
+    rejectType(`${context}.has_more must be a boolean`);
   }
   if (meta.next_cursor === undefined) {
-    throw new TypeError(`${context}.next_cursor must be a string or null`);
+    rejectType(`${context}.next_cursor must be a string or null`);
   }
   const nextCursor = normalizeExplorerCursor(meta.next_cursor, `${context}.next_cursor`, {
     nullable: true,
   });
   if (meta.has_more !== (nextCursor !== null)) {
-    throw new TypeError(`${context}.has_more must match next_cursor availability`);
+    rejectType(`${context}.has_more must match next_cursor availability`);
   }
   return { limit, next_cursor: nextCursor, has_more: meta.has_more };
 }
@@ -808,11 +771,11 @@ function normalizeExplorerCursorPage(value, context, normalizeItem = (item) => i
   const page = requireObject(value, context);
   requireExactExplorerCursorFields(page, ["pagination", "items"], context);
   if (!Array.isArray(page.items)) {
-    throw new TypeError(`${context}.items must be an array`);
+    rejectType(`${context}.items must be an array`);
   }
   const pagination = normalizeExplorerCursorMeta(page.pagination, `${context}.pagination`);
   if (page.items.length > pagination.limit) {
-    throw new TypeError(`${context}.items must not exceed pagination.limit`);
+    rejectType(`${context}.items must not exceed pagination.limit`);
   }
   return {
     pagination,
@@ -828,31 +791,29 @@ function normalizeExplorerHistoryCursorMeta(value, context) {
     context,
   );
   if (!Number.isSafeInteger(meta.limit) || meta.limit < 1 || meta.limit > EXPLORER_CURSOR_MAX_LIMIT) {
-    throw new TypeError(`${context}.limit must be between 1 and ${EXPLORER_CURSOR_MAX_LIMIT}`);
+    rejectType(`${context}.limit must be between 1 and ${EXPLORER_CURSOR_MAX_LIMIT}`);
   }
   if (!Number.isSafeInteger(meta.snapshot_height) || meta.snapshot_height < 0) {
-    throw new TypeError(`${context}.snapshot_height must be a non-negative safe integer`);
+    rejectType(`${context}.snapshot_height must be a non-negative safe integer`);
   }
   let snapshotHash = null;
   if (meta.snapshot_hash !== null) {
     if (typeof meta.snapshot_hash !== "string" || !/^[0-9a-f]{64}$/u.test(meta.snapshot_hash)) {
-      throw new TypeError(`${context}.snapshot_hash must be exact lowercase 32-byte hex or null`);
+      rejectType(`${context}.snapshot_hash must be exact lowercase 32-byte hex or null`);
     }
     snapshotHash = meta.snapshot_hash;
   }
   if ((meta.snapshot_height === 0) !== (snapshotHash === null)) {
-    throw new TypeError(
-      `${context}.snapshot_hash must be null exactly when snapshot_height is zero`,
-    );
+    rejectType(`${context}.snapshot_hash must be null exactly when snapshot_height is zero`);
   }
   if (typeof meta.has_more !== "boolean") {
-    throw new TypeError(`${context}.has_more must be a boolean`);
+    rejectType(`${context}.has_more must be a boolean`);
   }
   const nextCursor = normalizeExplorerCursor(meta.next_cursor, `${context}.next_cursor`, {
     nullable: true,
   });
   if (meta.has_more !== (nextCursor !== null)) {
-    throw new TypeError(`${context}.has_more must match next_cursor availability`);
+    rejectType(`${context}.has_more must match next_cursor availability`);
   }
   return {
     limit: meta.limit,
@@ -867,14 +828,14 @@ function normalizeExplorerHistoryPage(value, context, normalizeItem = (item) => 
   const page = requireObject(value, context);
   requireExactExplorerCursorFields(page, ["pagination", "items"], context);
   if (!Array.isArray(page.items)) {
-    throw new TypeError(`${context}.items must be an array`);
+    rejectType(`${context}.items must be an array`);
   }
   const pagination = normalizeExplorerHistoryCursorMeta(
     page.pagination,
     `${context}.pagination`,
   );
   if (page.items.length > pagination.limit) {
-    throw new TypeError(`${context}.items must not exceed pagination.limit`);
+    rejectType(`${context}.items must not exceed pagination.limit`);
   }
   return {
     pagination,
@@ -887,7 +848,7 @@ function normalizeExplorerLatestHistoryPage(value, context, normalizeItem = (ite
   requireExactExplorerCursorFields(page, ["sampled_at", "pagination", "items"], context);
   const sampledAt = requireNonEmptyString(page.sampled_at, `${context}.sampled_at`);
   if (sampledAt !== page.sampled_at) {
-    throw new TypeError(`${context}.sampled_at must be an exact non-empty string`);
+    rejectType(`${context}.sampled_at must be an exact non-empty string`);
   }
   const normalized = normalizeExplorerHistoryPage(
     { pagination: page.pagination, items: page.items },
@@ -901,7 +862,7 @@ function normalizePositiveInteger(value, context, fallback) {
   if (value === undefined || value === null) return fallback;
   const numeric = normalizeSafeInteger(value, context);
   if (numeric < 1) {
-    throw new TypeError(`${context} must be a positive safe integer`);
+    rejectType(`${context} must be a positive safe integer`);
   }
   return numeric;
 }
@@ -910,7 +871,7 @@ function normalizeOffset(value, context, fallback = 0) {
   if (value === undefined || value === null) return fallback;
   const numeric = normalizeSafeInteger(value, context);
   if (numeric < 0) {
-    throw new TypeError(`${context} must be a non-negative safe integer`);
+    rejectType(`${context} must be a non-negative safe integer`);
   }
   return numeric;
 }
@@ -930,12 +891,12 @@ function normalizeSafeInteger(value, context) {
       return Number(parsed);
     }
   }
-  throw new TypeError(`${context} must be a safe integer`);
+  rejectType(`${context} must be a safe integer`);
 }
 
 function normalizeBoolean(value, context) {
   if (typeof value !== "boolean") {
-    throw new TypeError(`${context} must be a boolean`);
+    rejectType(`${context} must be a boolean`);
   }
   return value;
 }
@@ -943,9 +904,7 @@ function normalizeBoolean(value, context) {
 function normalizeExplorerCursorPagination(options, context) {
   for (const removed of ["page", "perPage", "per_page", "offset", "pageSize"]) {
     if (Object.prototype.hasOwnProperty.call(options, removed)) {
-      throw new TypeError(
-        `${context}.${removed} is not supported; use cursor and limit`,
-      );
+      rejectType(`${context}.${removed} is not supported; use cursor and limit`);
     }
   }
   const limit = normalizePositiveInteger(
@@ -954,7 +913,7 @@ function normalizeExplorerCursorPagination(options, context) {
     EXPLORER_CURSOR_DEFAULT_LIMIT,
   );
   if (limit > EXPLORER_CURSOR_MAX_LIMIT) {
-    throw new TypeError(`${context}.limit must be between 1 and ${EXPLORER_CURSOR_MAX_LIMIT}`);
+    rejectType(`${context}.limit must be between 1 and ${EXPLORER_CURSOR_MAX_LIMIT}`);
   }
   const params = { limit };
   if (options.cursor !== undefined && options.cursor !== null) {
@@ -967,7 +926,7 @@ function normalizeExplorerHistoryOptionalString(value, context) {
   if (value === undefined || value === null) return undefined;
   const normalized = requireNonEmptyString(value, context);
   if (normalized !== value) {
-    throw new TypeError(`${context} must be an exact non-empty string`);
+    rejectType(`${context} must be an exact non-empty string`);
   }
   return value;
 }
@@ -975,7 +934,7 @@ function normalizeExplorerHistoryOptionalString(value, context) {
 function normalizeExplorerHistoryStatus(value, context) {
   const status = normalizeExplorerHistoryOptionalString(value, context);
   if (status !== undefined && status !== "committed" && status !== "rejected") {
-    throw new TypeError(`${context} must be committed or rejected`);
+    rejectType(`${context} must be committed or rejected`);
   }
   return status;
 }
@@ -1022,7 +981,7 @@ function normalizeTransactionQuerySort(sort) {
       .map((token) => {
         const parts = token.split(":");
         if (parts.length > 2) {
-          throw new TypeError("sort entries must use key or key:asc/key:desc form");
+          rejectType("sort entries must use key or key:asc/key:desc form");
         }
         const [key, order = "asc"] = parts;
         return {
@@ -1040,13 +999,13 @@ function normalizeTransactionQuerySort(sort) {
       };
     });
   }
-  throw new TypeError("sort must be a string or array");
+  rejectType("sort must be a string or array");
 }
 
 function normalizeQueryFieldName(value, context) {
   const field = requireNonEmptyString(value, context);
   if (!/^[A-Za-z_][A-Za-z0-9_.-]*$/.test(field)) {
-    throw new TypeError(`${context} must be an ASCII field name`);
+    rejectType(`${context} must be an ASCII field name`);
   }
   return field;
 }
@@ -1054,7 +1013,7 @@ function normalizeQueryFieldName(value, context) {
 function normalizeSortOrder(value, context) {
   const order = requireNonEmptyString(String(value ?? ""), context).toLowerCase();
   if (order !== "asc" && order !== "desc") {
-    throw new TypeError(`${context} must be asc or desc`);
+    rejectType(`${context} must be asc or desc`);
   }
   return order;
 }
@@ -1065,7 +1024,7 @@ function normalizeCountMode(value, context) {
   }
   const mode = requireNonEmptyString(String(value), context).toLowerCase();
   if (mode !== "bounded" && mode !== "exact") {
-    throw new TypeError(`${context} must be bounded or exact`);
+    rejectType(`${context} must be bounded or exact`);
   }
   return mode;
 }
@@ -1074,7 +1033,7 @@ function requireSupportedOptions(value, context, supportedKeys) {
   const options = requireObject(value, context);
   const unsupported = Object.keys(options).find((key) => !supportedKeys.has(key));
   if (unsupported !== undefined) {
-    throw new TypeError(`${context} contains unsupported option ${unsupported}`);
+    rejectType(`${context} contains unsupported option ${unsupported}`);
   }
   return options;
 }
@@ -1112,9 +1071,7 @@ function normalizeLedgerHeight(value, context) {
   let integer;
   if (typeof value === "number") {
     if (!Number.isSafeInteger(value)) {
-      throw new TypeError(
-        `${context} must be a positive safe integer number or an exact decimal string/bigint`,
-      );
+      rejectType(`${context} must be a positive safe integer number or an exact decimal string/bigint`);
     }
     integer = BigInt(value);
   } else if (typeof value === "bigint") {
@@ -1122,19 +1079,17 @@ function normalizeLedgerHeight(value, context) {
   } else if (typeof value === "string") {
     const trimmed = value.trim();
     if (!/^[0-9]+$/u.test(trimmed)) {
-      throw new TypeError(`${context} must be a positive decimal integer`);
+      rejectType(`${context} must be a positive decimal integer`);
     }
     integer = BigInt(trimmed);
   } else {
-    throw new TypeError(`${context} must be a positive decimal integer`);
+    rejectType(`${context} must be a positive decimal integer`);
   }
   if (integer <= 0n) {
-    throw new TypeError(`${context} must be a positive decimal integer`);
+    rejectType(`${context} must be a positive decimal integer`);
   }
   if (integer > MAX_UINT64_BIGINT) {
-    throw new RangeError(
-      `${context} must not exceed ${MAX_UINT64_BIGINT.toString(10)}`,
-    );
+    rejectRange(`${context} must not exceed ${MAX_UINT64_BIGINT.toString(10)}`);
   }
   return integer.toString(10);
 }
@@ -1143,7 +1098,7 @@ function normalizeLedgerEntryHash(value, context) {
   const literal = requireNonEmptyString(String(value), context);
   const normalized = literal.startsWith("0x") ? literal.slice(2) : literal;
   if (!/^[0-9a-fA-F]{64}$/u.test(normalized)) {
-    throw new TypeError(`${context} must be exactly 32 bytes of hexadecimal`);
+    rejectType(`${context} must be exactly 32 bytes of hexadecimal`);
   }
   return normalized.toLowerCase();
 }
@@ -1151,7 +1106,7 @@ function normalizeLedgerEntryHash(value, context) {
 function normalizeContractEventFilterParams(options, context) {
   const provenance = normalizeOptionalString(options.provenance, `${context}.provenance`);
   if (provenance !== undefined && provenance !== "emitted" && provenance !== "derived") {
-    throw new TypeError(`${context}.provenance must be emitted or derived`);
+    rejectType(`${context}.provenance must be emitted or derived`);
   }
   return {
     authority: normalizeOptionalString(options.authority, `${context}.authority`),
@@ -1193,14 +1148,14 @@ function normalizeSelectEntry(entry, context) {
   if (typeof entry === "string") {
     const fieldPath = entry.trim();
     if (!fieldPath) {
-      throw new TypeError(`${context} must be a non-empty field path`);
+      rejectType(`${context} must be a non-empty field path`);
     }
     return fieldPath;
   }
   if (isPlainObject(entry)) {
     return entry;
   }
-  throw new TypeError(`${context} must be a field-path string or plain object`);
+  rejectType(`${context} must be a field-path string or plain object`);
 }
 
 function transactionFilter(op, field, value) {
@@ -1251,7 +1206,7 @@ function normalizeTransactionQueryEnvelope(options, context) {
   }
   if (opts.select !== undefined && opts.select !== null) {
     if (!Array.isArray(opts.select)) {
-      throw new TypeError("select must be an array");
+      rejectType("select must be an array");
     }
     envelope.select = opts.select.map((entry, index) =>
       normalizeSelectEntry(entry, `select[${index}]`),
@@ -1268,14 +1223,14 @@ function signalOnlyOptions(options, context) {
   const item = requireObject(options, context);
   const unknown = Object.keys(item).filter((key) => key !== "signal");
   if (unknown.length > 0) {
-    throw new TypeError(`${context} contains unsupported option ${unknown[0]}`);
+    rejectType(`${context} contains unsupported option ${unknown[0]}`);
   }
   return item;
 }
 
 function rejectSuccessStatuses(options, context) {
   if (Object.hasOwn(options, "successStatuses")) {
-    throw new TypeError(`${context} contains unsupported option successStatuses`);
+    rejectType(`${context} contains unsupported option successStatuses`);
   }
 }
 
@@ -1283,7 +1238,7 @@ function normalizeMultisigSelectorBody(value, context) {
   const source = requireObject(value, context);
   for (const unsupported of ["headers", "signal", "successStatuses"]) {
     if (Object.hasOwn(source, unsupported)) {
-      throw new TypeError(`${context} contains unsupported field ${unsupported}`);
+      rejectType(`${context} contains unsupported field ${unsupported}`);
     }
   }
   const body = { ...source };
@@ -1291,13 +1246,13 @@ function normalizeMultisigSelectorBody(value, context) {
     source.multisigAccountId !== undefined &&
     body.multisig_account_id !== undefined
   ) {
-    throw new TypeError(`${context} must not duplicate multisigAccountId`);
+    rejectType(`${context} must not duplicate multisigAccountId`);
   }
   if (
     source.multisigAccountAlias !== undefined &&
     body.multisig_account_alias !== undefined
   ) {
-    throw new TypeError(`${context} must not duplicate multisigAccountAlias`);
+    rejectType(`${context} must not duplicate multisigAccountAlias`);
   }
   if (source.multisigAccountId !== undefined && body.multisig_account_id === undefined) {
     body.multisig_account_id = requireNonEmptyString(
@@ -1328,9 +1283,7 @@ function normalizeMultisigSelectorBody(value, context) {
   const hasAccountId = body.multisig_account_id !== undefined;
   const hasAccountAlias = body.multisig_account_alias !== undefined;
   if (hasAccountId === hasAccountAlias) {
-    throw new TypeError(
-      `${context} requires exactly one of multisigAccountId or multisigAccountAlias`,
-    );
+    rejectType(`${context} requires exactly one of multisigAccountId or multisigAccountAlias`);
   }
   return body;
 }
@@ -1340,16 +1293,14 @@ function normalizeMultisigProposalsQueryBody(value, context) {
   const body = normalizeMultisigSelectorBody(source, context);
   if (source.status !== undefined) {
     if (!Array.isArray(source.status)) {
-      throw new TypeError(`${context}.status must be an array`);
+      rejectType(`${context}.status must be an array`);
     }
     body.status = source.status.map((value, index) => {
       const status = requireNonEmptyString(value, `${context}.status[${index}]`).toUpperCase();
       if (!MULTISIG_PROPOSAL_STATUS_VALUES.has(status)) {
-        throw new TypeError(
-          `${context}.status[${index}] must be one of ${[
+        rejectType(`${context}.status[${index}] must be one of ${[
             ...MULTISIG_PROPOSAL_STATUS_VALUES,
-          ].join(", ")}`,
-        );
+          ].join(", ")}`);
       }
       return status;
     });
@@ -1386,9 +1337,7 @@ function normalizeMultisigProposalsResolveBody(value, context) {
   const hasProposalId = body.proposal_id !== undefined;
   const hasInstructionsHash = body.instructions_hash !== undefined;
   if (hasProposalId === hasInstructionsHash) {
-    throw new TypeError(
-      `${context} requires exactly one of proposalId or instructionsHash`,
-    );
+    rejectType(`${context} requires exactly one of proposalId or instructionsHash`);
   }
   return body;
 }
@@ -1449,11 +1398,11 @@ function normalizeSuccessStatuses(value, context) {
     return DEFAULT_SUCCESS_STATUSES;
   }
   if (!Array.isArray(value) || value.length === 0) {
-    throw new TypeError(`${context} must be a non-empty status array`);
+    rejectType(`${context} must be a non-empty status array`);
   }
   return value.map((status, index) => {
     if (!Number.isSafeInteger(status) || status < 100 || status > 599) {
-      throw new TypeError(`${context}[${index}] must be an HTTP status integer`);
+      rejectType(`${context}[${index}] must be an HTTP status integer`);
     }
     return status;
   });
@@ -1473,7 +1422,7 @@ async function fetchToriiResponse(
     cleanupSignal();
   }
   if (init.redirect === "error" && response?.redirected === true) {
-    throw new TypeError("Torii one-shot request must not accept a redirected response");
+    rejectType("Torii one-shot request must not accept a redirected response");
   }
   const status = responseStatus(response);
   if (!successStatuses.includes(status)) {
@@ -1489,14 +1438,14 @@ function requireExactJsonContentType(contentType, context) {
     ? contentType.split(";", 1)[0].trim()
     : "";
   if (mediaType.toLowerCase() !== "application/json") {
-    throw new TypeError(`${context} must use the application/json media type`);
+    rejectType(`${context} must use the application/json media type`);
   }
 }
 
 function requireExactKaigiString(value, context) {
   const normalized = requireNonEmptyString(value, context);
   if (normalized !== value) {
-    throw new TypeError(`${context} must not contain surrounding whitespace`);
+    rejectType(`${context} must not contain surrounding whitespace`);
   }
   return value;
 }
@@ -1505,14 +1454,14 @@ function requireExactKaigiAccountId(value, context) {
   const literal = requireExactKaigiString(value, context);
   const canonical = ensureCanonicalAccountId(literal, context);
   if (canonical !== literal) {
-    throw new TypeError(`${context} must be a canonical I105 account id`);
+    rejectType(`${context} must be a canonical I105 account id`);
   }
   return literal;
 }
 
 function requireExactKaigiObject(value, requiredFields, optionalFields, context) {
   if (!isPlainObject(value)) {
-    throw new TypeError(`${context} must be an object`);
+    rejectType(`${context} must be an object`);
   }
   const allowed = new Set([...requiredFields, ...optionalFields]);
   const missing = requiredFields.filter(
@@ -1520,20 +1469,18 @@ function requireExactKaigiObject(value, requiredFields, optionalFields, context)
   );
   const extra = Object.keys(value).filter((field) => !allowed.has(field));
   if (missing.length !== 0 || extra.length !== 0) {
-    throw new TypeError(
-      `${context} fields are not canonical; missing=[${missing.join(", ")}] extra=[${extra.join(", ")}]`,
-    );
+    rejectType(`${context} fields are not canonical; missing=[${missing.join(", ")}] extra=[${extra.join(", ")}]`);
   }
   return value;
 }
 
 function requireDenseBrowserKaigiArray(value, context) {
   if (!Array.isArray(value)) {
-    throw new TypeError(`${context} must be an array`);
+    rejectType(`${context} must be an array`);
   }
   for (let index = 0; index < value.length; index += 1) {
     if (!Object.prototype.hasOwnProperty.call(value, index)) {
-      throw new TypeError(`${context} must be a dense array`);
+      rejectType(`${context} must be a dense array`);
     }
   }
   return value;
@@ -1550,10 +1497,10 @@ function normalizeBrowserKaigiU64(value, context) {
   } else if (typeof value === "bigint") {
     integer = value;
   } else {
-    throw new TypeError(`${context} must be a canonical unsigned integer`);
+    rejectType(`${context} must be a canonical unsigned integer`);
   }
   if (integer < 0n || integer > MAX_UINT64_BIGINT) {
-    throw new RangeError(`${context} must be between 0 and ${MAX_UINT64_BIGINT}`);
+    rejectRange(`${context} must be between 0 and ${MAX_UINT64_BIGINT}`);
   }
   return integer <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(integer) : integer;
 }
@@ -1561,10 +1508,10 @@ function normalizeBrowserKaigiU64(value, context) {
 function requireBrowserKaigiFingerprint(value, context) {
   const literal = requireExactKaigiString(value, context);
   if (!/^[0-9a-f]{64}$/u.test(literal)) {
-    throw new TypeError(`${context} must be exact lowercase 32-byte hex`);
+    rejectType(`${context} must be exact lowercase 32-byte hex`);
   }
   if ((Number.parseInt(literal.slice(-2), 16) & 1) !== 1) {
-    throw new TypeError(`${context} must set the Iroha Hash marker bit`);
+    rejectType(`${context} must set the Iroha Hash marker bit`);
   }
   return literal;
 }
@@ -1582,19 +1529,19 @@ function normalizeBrowserKaigiRelaySummary(value, context) {
     || record.bandwidth_class < 1
     || record.bandwidth_class > 0xff
   ) {
-    throw new RangeError(`${context}.bandwidth_class must be between 1 and 255`);
+    rejectRange(`${context}.bandwidth_class must be between 1 and 255`);
   }
   const hasStatus = Object.prototype.hasOwnProperty.call(record, "status");
   const hasReportedAt = Object.prototype.hasOwnProperty.call(record, "reported_at_ms");
   if (hasStatus !== hasReportedAt) {
-    throw new TypeError(`${context}.status and reported_at_ms must be present together`);
+    rejectType(`${context}.status and reported_at_ms must be present together`);
   }
   let status = null;
   let reportedAtMs = null;
   if (hasStatus) {
     status = requireExactKaigiString(record.status, `${context}.status`);
     if (!KAIGI_HEALTH_STATUS_VALUES.has(status)) {
-      throw new TypeError(`${context}.status must be exact lowercase healthy, degraded, or unavailable`);
+      rejectType(`${context}.status must be exact lowercase healthy, degraded, or unavailable`);
     }
     reportedAtMs = normalizeBrowserKaigiU64(
       record.reported_at_ms,
@@ -1619,19 +1566,17 @@ function normalizeBrowserKaigiRelayList(value) {
   const record = requireExactKaigiObject(value, ["total", "items"], [], context);
   const rawItems = requireDenseBrowserKaigiArray(record.items, `${context}.items`);
   if (rawItems.length > KAIGI_RELAY_DIAGNOSTIC_MAX_RELAYS) {
-    throw new RangeError(
-      `${context}.items must contain at most ${KAIGI_RELAY_DIAGNOSTIC_MAX_RELAYS} entries`,
-    );
+    rejectRange(`${context}.items must contain at most ${KAIGI_RELAY_DIAGNOSTIC_MAX_RELAYS} entries`);
   }
   const items = rawItems.map((item, index) =>
     normalizeBrowserKaigiRelaySummary(item, `${context}.items[${index}]`),
   );
   const total = normalizeBrowserKaigiU64(record.total, `${context}.total`);
   if (BigInt(total) !== BigInt(items.length)) {
-    throw new RangeError(`${context}.total must equal items.length`);
+    rejectRange(`${context}.total must equal items.length`);
   }
   if (new Set(items.map((item) => item.relay_id)).size !== items.length) {
-    throw new TypeError(`${context}.items must contain unique relay_id values`);
+    rejectType(`${context}.items must contain unique relay_id values`);
   }
   return { total, items };
 }
@@ -1681,19 +1626,19 @@ function normalizeBrowserKaigiRelayDetail(value) {
   );
   const hpkeBytes = Buffer.from(hpkePublicKey, "base64");
   if (hpkeBytes.length === 0 || hpkeBytes.toString("base64") !== hpkePublicKey) {
-    throw new TypeError(`${context}.hpke_public_key_b64 must be exact standard-base64`);
+    rejectType(`${context}.hpke_public_key_b64 must be exact standard-base64`);
   }
   const expectedFingerprint = Buffer.from(blake2b256(hpkeBytes));
   expectedFingerprint[expectedFingerprint.length - 1] |= 1;
   if (relay.hpke_fingerprint_hex !== expectedFingerprint.toString("hex")) {
-    throw new TypeError(`${context}.relay.hpke_fingerprint_hex must match the marked HPKE key`);
+    rejectType(`${context}.relay.hpke_fingerprint_hex must match the marked HPKE key`);
   }
   const hasFeedback = relay.status !== null;
   const hasReportedCall = Object.prototype.hasOwnProperty.call(record, "reported_call");
   const hasReportedBy = Object.prototype.hasOwnProperty.call(record, "reported_by");
   const hasNotes = Object.prototype.hasOwnProperty.call(record, "notes");
   if (hasReportedCall !== hasFeedback || hasReportedBy !== hasFeedback || (hasNotes && !hasFeedback)) {
-    throw new TypeError(`${context} feedback fields must agree with relay feedback`);
+    rejectType(`${context} feedback fields must agree with relay feedback`);
   }
   let reportedCall = null;
   if (hasReportedCall) {
@@ -1712,14 +1657,14 @@ function normalizeBrowserKaigiRelayDetail(value) {
     ? requireExactKaigiAccountId(record.reported_by, `${context}.reported_by`)
     : null;
   if (hasNotes && typeof record.notes !== "string") {
-    throw new TypeError(`${context}.notes must be a string`);
+    rejectType(`${context}.notes must be a string`);
   }
   const notes = hasNotes ? record.notes : null;
   const metrics = Object.prototype.hasOwnProperty.call(record, "metrics")
     ? normalizeBrowserKaigiDomainMetrics(record.metrics, `${context}.metrics`)
     : null;
   if (metrics !== null && metrics.domain !== relay.domain) {
-    throw new TypeError(`${context}.metrics.domain must match relay.domain`);
+    rejectType(`${context}.metrics.domain must match relay.domain`);
   }
   return {
     relay,
@@ -1745,16 +1690,14 @@ function normalizeBrowserKaigiHealth(value) {
   const record = requireExactKaigiObject(value, fields, [], context);
   const rawDomains = requireDenseBrowserKaigiArray(record.domains, `${context}.domains`);
   if (rawDomains.length > KAIGI_RELAY_DIAGNOSTIC_MAX_RELAYS) {
-    throw new RangeError(
-      `${context}.domains must contain at most ${KAIGI_RELAY_DIAGNOSTIC_MAX_RELAYS} entries`,
-    );
+    rejectRange(`${context}.domains must contain at most ${KAIGI_RELAY_DIAGNOSTIC_MAX_RELAYS} entries`);
   }
   const domains = rawDomains.map((domain, index) =>
     normalizeBrowserKaigiDomainMetrics(domain, `${context}.domains[${index}]`),
   );
   for (let index = 1; index < domains.length; index += 1) {
     if (domains[index - 1].domain >= domains[index].domain) {
-      throw new TypeError(`${context}.domains must be sorted with unique domain values`);
+      rejectType(`${context}.domains must be sorted with unique domain values`);
     }
   }
   const snapshot = {
@@ -1778,9 +1721,7 @@ function normalizeBrowserKaigiHealth(value) {
       + BigInt(snapshot.unavailable_total)
     > BigInt(KAIGI_RELAY_DIAGNOSTIC_MAX_RELAYS)
   ) {
-    throw new RangeError(
-      `${context} current status totals must not exceed ${KAIGI_RELAY_DIAGNOSTIC_MAX_RELAYS}`,
-    );
+    rejectRange(`${context} current status totals must not exceed ${KAIGI_RELAY_DIAGNOSTIC_MAX_RELAYS}`);
   }
   for (const [totalField, domainField] of [
     ["reports_total", "health_reports_total"],
@@ -1793,7 +1734,7 @@ function normalizeBrowserKaigiHealth(value) {
       if (expected > MAX_UINT64_BIGINT) expected = MAX_UINT64_BIGINT;
     }
     if (BigInt(snapshot[totalField]) !== expected) {
-      throw new RangeError(`${context}.${totalField} must equal the saturated domain sum`);
+      rejectRange(`${context}.${totalField} must equal the saturated domain sum`);
     }
   }
   return snapshot;
@@ -1801,7 +1742,7 @@ function normalizeBrowserKaigiHealth(value) {
 
 async function readBoundedResponseBytes(response, maximumBodyBytes, context) {
   if (!Number.isSafeInteger(maximumBodyBytes) || maximumBodyBytes < 0) {
-    throw new TypeError(`${context} response byte-size bound is invalid`);
+    rejectType(`${context} response byte-size bound is invalid`);
   }
   const rawContentLength = response?.headers?.get?.("content-length");
   let declaredLength = null;
@@ -1810,24 +1751,18 @@ async function readBoundedResponseBytes(response, maximumBodyBytes, context) {
       typeof rawContentLength !== "string"
       || !/^(?:0|[1-9][0-9]*)$/u.test(rawContentLength)
     ) {
-      throw new TypeError(
-        `${context} Content-Length must be a canonical unsigned decimal integer`,
-      );
+      rejectType(`${context} Content-Length must be a canonical unsigned decimal integer`);
     }
     declaredLength = Number(rawContentLength);
     if (
       !Number.isSafeInteger(declaredLength)
       || declaredLength > maximumBodyBytes
     ) {
-      throw new RangeError(
-        `${context} exceeds its ${maximumBodyBytes}-byte response limit`,
-      );
+      rejectRange(`${context} exceeds its ${maximumBodyBytes}-byte response limit`);
     }
   }
   if (typeof response?.body?.getReader !== "function") {
-    throw new TypeError(
-      `${context} requires a byte-stream response body so its size can be bounded`,
-    );
+    rejectType(`${context} requires a byte-stream response body so its size can be bounded`);
   }
 
   const reader = response.body.getReader();
@@ -1838,22 +1773,20 @@ async function readBoundedResponseBytes(response, maximumBodyBytes, context) {
     while (true) {
       const result = await reader.read();
       if (!result || typeof result.done !== "boolean") {
-        throw new TypeError(`${context} returned an invalid response stream result`);
+        rejectType(`${context} returned an invalid response stream result`);
       }
       if (result.done) {
         complete = true;
         break;
       }
       if (!(result.value instanceof Uint8Array)) {
-        throw new TypeError(`${context} returned a non-byte response stream chunk`);
+        rejectType(`${context} returned a non-byte response stream chunk`);
       }
       if (chunks.length >= BOUNDED_RESPONSE_MAX_STREAM_CHUNKS) {
-        throw new RangeError(`${context} returned too many fragmented response chunks`);
+        rejectRange(`${context} returned too many fragmented response chunks`);
       }
       if (result.value.byteLength > maximumBodyBytes - totalBytes) {
-        throw new RangeError(
-          `${context} exceeds its ${maximumBodyBytes}-byte response limit`,
-        );
+        rejectRange(`${context} exceeds its ${maximumBodyBytes}-byte response limit`);
       }
       totalBytes += result.value.byteLength;
       chunks.push(new Uint8Array(result.value));
@@ -1878,7 +1811,7 @@ async function readBoundedResponseBytes(response, maximumBodyBytes, context) {
     offset += chunk.byteLength;
   }
   if (declaredLength !== null && declaredLength !== totalBytes) {
-    throw new TypeError(`${context} Content-Length does not match the response body`);
+    rejectType(`${context} Content-Length does not match the response body`);
   }
   return bytes;
 }
@@ -1888,7 +1821,7 @@ async function readBoundedResponseText(response, maximumBodyBytes, context) {
   try {
     return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
   } catch (error) {
-    throw new TypeError(`${context} must be valid UTF-8`, { cause: error });
+    rejectType(`${context} must be valid UTF-8`, { cause: error });
   }
 }
 
@@ -2021,7 +1954,7 @@ export class ToriiBrowserClient {
     this.#baseUrl = normalizeBaseUrl(baseUrl);
     this.#fetchImpl = normalizedOptions.fetchImpl ?? globalThis.fetch?.bind(globalThis);
     if (typeof this.#fetchImpl !== "function") {
-      throw new TypeError("ToriiBrowserClient requires a fetch implementation");
+      rejectType("ToriiBrowserClient requires a fetch implementation");
     }
     const defaultHeaders = normalizeDefaultHeaders(
       normalizedOptions.defaultHeaders,
@@ -2031,7 +1964,7 @@ export class ToriiBrowserClient {
     this.#defaultHeaders = Object.freeze(defaultHeaders);
     const allowInsecure = normalizedOptions.allowInsecure ?? false;
     if (typeof allowInsecure !== "boolean") {
-      throw new TypeError("ToriiBrowserClient options.allowInsecure must be a boolean");
+      rejectType("ToriiBrowserClient options.allowInsecure must be a boolean");
     }
     const protocol = new URL(this.#baseUrl).protocol.toLowerCase();
     if (
@@ -2039,9 +1972,7 @@ export class ToriiBrowserClient {
       protocol !== "https:" &&
       !allowInsecure
     ) {
-      throw new Error(
-        "ToriiBrowserClient: credential headers require an https base URL; pass allowInsecure: true for local/dev use only.",
-      );
+      rejectError("ToriiBrowserClient: credential headers require an https base URL; pass allowInsecure: true for local/dev use only.");
     }
     this.#timeoutMs = normalizeOffset(
       normalizedOptions.timeoutMs,
@@ -2113,9 +2044,7 @@ export class ToriiBrowserClient {
   submitKagemushaTopUp(signedTransaction, operationId, options = {}) {
     const opts = signalOnlyOptions(options, "submitKagemushaTopUp options");
     if (typeof operationId === "string") {
-      throw new TypeError(
-        "submitKagemushaTopUp operationId must be exact nonzero 32-byte binary data",
-      );
+      rejectType("submitKagemushaTopUp operationId must be exact nonzero 32-byte binary data");
     }
     const operationIdHex = kagemushaOperationIdHexV1(operationId);
     const body = requireTransactionBytes(
@@ -2138,7 +2067,7 @@ export class ToriiBrowserClient {
     return this._submitKagemushaOperationBodyV1(
       "/v1/kagemusha/redeem",
       "redemption",
-      Kagemusha.encodeRedemptionRequest(request),
+      _encodeRedemptionRequestV1(request),
       kagemushaOperationIdHexV1(request.operationId),
       opts.signal,
     );
@@ -2160,7 +2089,7 @@ export class ToriiBrowserClient {
     }).then((payload) => {
       const status = normalizeUnverifiedKagemushaOperationStatusV1(payload);
       if (kagemushaOperationIdHexV1(status.operationId) !== operationIdHex) {
-        throw new TypeError("KAGEMUSHA operation response ID does not match the requested resource");
+        rejectType("KAGEMUSHA operation response ID does not match the requested resource");
       }
       return status;
     });
@@ -2191,7 +2120,7 @@ export class ToriiBrowserClient {
     }).then((payload) => {
       const status = normalizeUnverifiedKagemushaOperationStatusV1(payload);
       if (kagemushaOperationIdHexV1(status.operationId) !== operationIdHex || status.kind !== kind) {
-        throw new TypeError("KAGEMUSHA operation response does not match the submitted request");
+        rejectType("KAGEMUSHA operation response does not match the submitted request");
       }
       requireKagemushaSubmissionResponseV1({
         ...transportResponse,
@@ -2212,7 +2141,7 @@ export class ToriiBrowserClient {
 
   async _applyDataspaceReadIdentity(url, init) {
     if (init.method !== "GET" || init.body !== undefined) {
-      throw new TypeError("browser dataspace authentication only supports empty-body GETs");
+      rejectType("browser dataspace authentication only supports empty-body GETs");
     }
     rejectPrecomputedCanonicalHeaders(init.headers);
     init.credentials = "omit";
@@ -2273,7 +2202,7 @@ export class ToriiBrowserClient {
     }
     if (normalizedOptions.operatorSigningContext !== undefined) {
       if (method !== "GET" || init.body !== undefined) {
-        throw new TypeError("browser operator authentication only supports empty-body GETs");
+        rejectType("browser operator authentication only supports empty-body GETs");
       }
       await applyOperatorGetHeaders(
         init.headers,
@@ -2295,7 +2224,7 @@ export class ToriiBrowserClient {
     );
     if (normalizedOptions.responseObserver !== undefined) {
       if (typeof normalizedOptions.responseObserver !== "function") {
-        throw new TypeError(`${method} ${path} responseObserver must be a function`);
+        rejectType(`${method} ${path} responseObserver must be a function`);
       }
       normalizedOptions.responseObserver(response);
     }
@@ -2305,7 +2234,7 @@ export class ToriiBrowserClient {
     ) return null;
     const jsonParser = normalizedOptions.jsonParser ?? JSON.parse;
     if (typeof jsonParser !== "function") {
-      throw new TypeError(`${method} ${path} jsonParser must be a function`);
+      rejectType(`${method} ${path} jsonParser must be a function`);
     }
     const text = await readBoundedResponseText(
       response,
@@ -2338,7 +2267,7 @@ export class ToriiBrowserClient {
     );
     const contentType = response.headers?.get?.("content-type") ?? "";
     if (!/^application\/x-norito(?:\s*;|$)/iu.test(contentType)) {
-      throw new TypeError(`${method} ${path} must return application/x-norito`);
+      rejectType(`${method} ${path} must return application/x-norito`);
     }
     return Buffer.from(
       await readBoundedResponseBytes(
@@ -2353,12 +2282,10 @@ export class ToriiBrowserClient {
     const opts = requireObject(options, `${method} ${path} canonical options`);
     rejectSuccessStatuses(opts, `${method} ${path} canonical options`);
     if (typeof opts.sign !== "function") {
-      throw new TypeError(`${method} ${path} options.sign is required`);
+      rejectType(`${method} ${path} options.sign is required`);
     }
     if (this.#networkId === null) {
-      throw new TypeError(
-        `${method} ${path} requires ToriiBrowserClient options.networkId`,
-      );
+      rejectType(`${method} ${path} requires ToriiBrowserClient options.networkId`);
     }
     const signed = await buildCanonicalJsonRequest({
       accountId: requireNonEmptyString(opts.authAccountId, `${method} ${path} options.authAccountId`),
@@ -2385,7 +2312,7 @@ export class ToriiBrowserClient {
     const opts = requireSupportedOptions(options, `${path} query options`, TRANSACTION_QUERY_OPTION_KEYS);
     const accountId = ensureCanonicalAccountId(opts.authAccountId, `${path} query options.authAccountId`);
     if (accountId !== opts.authAccountId) {
-      throw new TypeError(`${path} query authAccountId must be an exact canonical I105 account id`);
+      rejectType(`${path} query authAccountId must be an exact canonical I105 account id`);
     }
     rejectPrecomputedCanonicalHeaders({ ...this.#defaultHeaders, ...(opts.headers ?? {}) });
     return this._canonicalJson("POST", path, body, opts);
@@ -2551,9 +2478,7 @@ export class ToriiBrowserClient {
         "submitTransactionAndWait options.hashHex",
       );
       if (assertedHash !== hashHex) {
-        throw new Error(
-          "submitTransactionAndWait options.hashHex does not match signedTransaction",
-        );
+        rejectError("submitTransactionAndWait options.hashHex does not match signedTransaction");
       }
     }
     await this.submitTransaction(body, {
@@ -2592,12 +2517,10 @@ export class ToriiBrowserClient {
     rejectSuccessStatuses(opts, "getContractDeploymentState options");
     if (opts.sign !== undefined) {
       if (typeof opts.sign !== "function") {
-        throw new TypeError("getContractDeploymentState options.sign must be a function");
+        rejectType("getContractDeploymentState options.sign must be a function");
       }
       if (this.#networkId === null) {
-        throw new TypeError(
-          "getContractDeploymentState requires ToriiBrowserClient options.networkId",
-        );
+        rejectType("getContractDeploymentState requires ToriiBrowserClient options.networkId");
       }
       const signed = await buildCanonicalJsonRequest({
         accountId: requireNonEmptyString(
@@ -2859,7 +2782,7 @@ export class ToriiBrowserClient {
       await client._applyDataspaceReadIdentity(url, init);
       const response = await client.#fetchImpl(url, init);
       if (init.redirect === "error" && response?.redirected === true) {
-        throw new TypeError("Torii one-shot request must not accept a redirected response");
+        rejectType("Torii one-shot request must not accept a redirected response");
       }
       const status = responseStatus(response);
       if (status !== 200) {
@@ -3143,7 +3066,7 @@ export class ToriiBrowserClient {
       },
     );
     if (bytes.byteLength === 0) {
-      throw new TypeError("executed block wire response must not be empty");
+      rejectType("executed block wire response must not be empty");
     }
     return bytes;
   }

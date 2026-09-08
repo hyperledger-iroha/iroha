@@ -25,6 +25,8 @@ public enum AccountAddressError: Error, Equatable {
     case unsupportedAddressFormat
     case multisigMemberOverflow(Int)
     case invalidMultisigPolicy(String)
+    /// Complete account admission requires the ABI-23 Rust address codec.
+    case nativeBridgeUnavailable
 
     /// Stable Norito error code (`ERR_*`) that mirrors the Rust data model.
     public var code: String {
@@ -77,6 +79,8 @@ public enum AccountAddressError: Error, Equatable {
             return "ERR_MULTISIG_MEMBER_OVERFLOW"
         case .invalidMultisigPolicy:
             return "ERR_INVALID_MULTISIG_POLICY"
+        case .nativeBridgeUnavailable:
+            return "ERR_NATIVE_BRIDGE_UNAVAILABLE"
         }
     }
 }
@@ -122,14 +126,21 @@ public struct AccountAddress {
     public static func fromAccount(publicKey: Data, algorithm: String = "ed25519", distid: String? = nil) throws -> AccountAddress {
         let header = try AddressHeader.new(version: 0, classId: .singleKey, normVersion: 1)
         let controller = try ControllerPayload.singleKey(publicKey: publicKey, algorithm: algorithm, distid: distid)
-        return AccountAddress(
-            header: header,
-            controller: controller,
-            rawCanonicalBytes: nil
-        )
+        var canonical = Data([header.encode()])
+        try controller.encode(into: &canonical)
+        return try fromCanonicalBytes(canonical)
     }
 
+    /// Validate the complete controller with the mandatory ABI-23 Rust owner.
     public static func fromCanonicalBytes(_ bytes: Data) throws -> AccountAddress {
+        guard !bytes.isEmpty else { throw AccountAddressError.invalidLength }
+        guard let _ = try NoritoNativeBridge.shared.renderAccountAddress(
+            canonicalBytes: bytes, networkPrefix: AccountId.defaultNetworkPrefix
+        ) else { throw AccountAddressError.nativeBridgeUnavailable }
+        return try decodeNativeValidatedCanonicalBytes(bytes)
+    }
+
+    private static func decodeNativeValidatedCanonicalBytes(_ bytes: Data) throws -> AccountAddress {
         // Public callers may pass a `Data` slice whose indices do not start at zero.
         // Rebase once before the decoder uses wire-format offsets.
         let bytes = Data(bytes)
@@ -159,28 +170,30 @@ public struct AccountAddress {
         )
     }
 
-    static func parseEncodedSwiftOnly(_ input: String, expectedPrefix: UInt16? = nil) throws -> AccountAddress {
+    static func parseCanonicalI105(_ input: String, expectedPrefix: UInt16? = nil) throws -> AccountAddress {
         let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw AccountAddressError.invalidLength }
+        guard trimmed == input else { throw AccountAddressError.unsupportedAddressFormat }
         if trimmed.lowercased().hasPrefix("0x") {
             throw AccountAddressError.unsupportedAddressFormat
         }
-        let (_, canonical) = try decodeI105String(trimmed, expectedDiscriminant: expectedPrefix)
-        let address = try AccountAddress.fromCanonicalBytes(canonical)
+        guard let parsed = try NoritoNativeBridge.shared.parseAccountAddress(
+            literal: trimmed, expectedPrefix: expectedPrefix
+        ) else { throw AccountAddressError.nativeBridgeUnavailable }
+        let address = try decodeNativeValidatedCanonicalBytes(parsed.canonicalBytes)
         try ensureCanonicalI105Literal(trimmed, address: address)
         return address
     }
 
     public static func fromI105(_ encoded: String, expectedPrefix: UInt16? = nil) throws -> AccountAddress {
-        let trimmed = encoded.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { throw AccountAddressError.invalidLength }
-        return try parseEncodedSwiftOnly(trimmed, expectedPrefix: expectedPrefix)
+        return try parseCanonicalI105(encoded, expectedPrefix: expectedPrefix)
     }
 
     public static func inspectI105NetworkPrefix(_ encoded: String,
                                                 expectedPrefix: UInt16? = nil) throws -> AccountAddressNetworkPrefix {
         let trimmed = encoded.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw AccountAddressError.invalidLength }
+        guard trimmed == encoded else { throw AccountAddressError.unsupportedAddressFormat }
         let (discriminant, _) = try decodeI105String(trimmed, expectedDiscriminant: expectedPrefix)
         return AccountAddressNetworkPrefix(
             sentinel: try i105SentinelLiteral(from: trimmed),
@@ -192,6 +205,7 @@ public struct AccountAddress {
     public static func parseEncoded(_ input: String, expectedPrefix: UInt16? = nil) throws -> AccountAddress {
         let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw AccountAddressError.invalidLength }
+        guard trimmed == input else { throw AccountAddressError.unsupportedAddressFormat }
         if trimmed.lowercased().hasPrefix("0x") {
             throw AccountAddressError.unsupportedAddressFormat
         }
@@ -1340,7 +1354,8 @@ extension AccountAddress {
                 controller: controller,
                 rawCanonicalBytes: nil
             )
-            return try address.compactNoritoAccountControllerPayload() == payload
+            let validated = try fromCanonicalBytes(address.canonicalBytes())
+            return try validated.compactNoritoAccountControllerPayload() == payload
         } catch {
             return false
         }
@@ -1788,6 +1803,10 @@ public final class MultisigPolicyBuilder {
         guard UInt64(resolvedThreshold) <= totalWeight else {
             throw MultisigBuilderError.invalidPolicy("threshold exceeds total member weight")
         }
+        var canonical = Data([try AddressHeader.new(version: 0, classId: .multiSig, normVersion: 1).encode()])
+        try ControllerPayload.multiSig(version: version, threshold: resolvedThreshold, members: payloadMembers)
+            .encode(into: &canonical)
+        _ = try AccountAddress.fromCanonicalBytes(canonical)
         let cbor = encodeMultisigPolicyCTAP2(version: version,
                                              threshold: resolvedThreshold,
                                              members: payloadMembers)

@@ -463,3 +463,100 @@ old logs, skipped tests and mutable-tree inventories cannot close a release gate
   in the durable validation directory. Four explicit replica/release positives
   pass at 25, 10, 10 and 11 actions. Current-model Apalache has a separate run;
   Verus and the planned 89 direct-binary Core regressions remain pending.
+
+- The final repaired-model registration selection passes 54 checks in 459.49
+  seconds, including complete production acceptance, semantic custody/release
+  controls, exact runner registration and the existing ledger-count negative.
+  Nine source/doc inputs remain unchanged across the run. All 103 prior test/helper
+  ASTs and the original 22 mutation mappings remain; no existing SHA pin changed.
+- Ordinary ingress now follows its exact historical preimage and authenticated
+  historical-body worker handoff. All 24 copied-source baselines and 24 rehashed
+  negatives pass before the two owner seals are updated; the final independent
+  owner check then reports zero errors. Registration counts are unchanged. All
+  22 combined runtime/model inputs remain identical. The separate decided-lane
+  `commit_certified_serve` contract and configuration seal remain under review.
+  The broader 71-error result predates these corrections and is not a current
+  failure count or a full source pass.
+- The pinned Verus binary and cargo-verus match their expected Darwin arm64
+  digests. Side-by-side Rust 1.95.0 restores the exact version probe without
+  changing repository/default toolchains. Its bounded Cargo proof remains queued.
+  A public consensus documentation draft is retained in the validation directory;
+  application to `iroha-docs` and all 20 translations awaits matching evidence.
+
+- A read-only scaling readiness audit identifies an outstanding implementation
+  outcome: the checked-in G-SCALE runner expects an external trial executable,
+  while `tx_load.py` currently exposes aggregate submission/commit estimates and
+  the CLI ping batch discards per-transaction confirmation results. Implement a
+  real collector using the existing deployment/load paths, with exact transaction
+  identity, offer/admission/commit timing and resource observations, before the
+  five paired measurements. The validator's fixture samples cannot close this
+  gap. Source hashes and the bounded review are retained in
+  `dist/multilane-validation-20260907/scaling-collector-readiness.json`.
+
+- Configuration geometry reconciliation passes the complete current Root owner
+  and 24 independently rehashed semantic/order controls before and after its one
+  reviewed seal update. All 12 existing test registrations and four assertions
+  remain. Decided-body serving passes 72 copied-source baselines and 72 rehashed
+  negatives before adding its 19 reviewed owner seals; both canonical and existing
+  fixture checks then report zero errors. No runtime source changed in either
+  cohort. Raw preimages, diffs, mutants, commands and results are retained under
+  `config-geometry-review/` and `decided-serve-review/` in the durable validation
+  directory. Broader source, Rust and release qualification remain open.
+- The shared Core build captured all 22 combined inputs at
+  `2026-09-07T04:28:27.890002Z` and passed in 564.617 seconds. All 17 Rust inputs
+  matched before/after/current; all 22 matched capture/current. The command was
+  locked but not offline, and unrelated SoraFS Node files changed during the
+  build outside its artifact dependency graph. This is scoped Core evidence,
+  not the prescribed immutable locked/offline final gate.
+- The first source-matched 89-test direct run finished at `04:50:50Z`: **39 pass,
+  50 fail**, no skips, unchanged selected sources and copied binary. The separate
+  real-wrapper regression also fails. The production wrapper minted the former
+  model SHA while its shared authentication kernel required the repaired SHA;
+  pure refinement tests passed while otherwise-valid runtime transitions failed.
+  Correcting all four source-identity words is necessary; no gate is weakened.
+- Four runtime correction files are ready at `05:01:04Z`, bound by
+  `core-runtime-failure-review/runtime-ready-manifest.json`. The existing wrapper
+  test now covers all 25 producer positions across 1/4/7/13-member committees,
+  rejects stale source/post-state witnesses and hashes the actual TLA source.
+  Its 661 prior assertions remain, with three added assertions. Three application
+  fixtures use matching production network context; three Queue initializers use
+  the committed manifest helper, retaining all 218 assertions. Kura's shared
+  fixture now uses four nonzero deterministic BLS seeds and retains 229 assertions.
+  A new shared Core build and all 89 regressions plus the wrapper test are pending.
+- Lifecycle source reconciliation passes 46/46 checks after preserving every
+  original assertion and correcting actual split-owner fixture targets. Four
+  lane-output owners pass all 43 independently rehashed controls before and after
+  exactly four reviewed seal changes; all prior registrations/assertions remain.
+  These results do not close the remaining full source diagnostic.
+- The queued Verus harness finishes naturally at `04:57:42Z`, exit zero, with
+  1,690 and 221 verified/zero errors in 57.461 seconds. Its unchanged evidence
+  driver correctly refuses qualification: the historical second count was 172,
+  and `v2_core/tests.rs` changed during the run within its 48-input validation
+  inventory. The actual proof census/input closure is under review; retain the
+  initial driver and rerun on a fresh stable scope after the shared Cargo slot.
+  Both 18-step Apalache runs remain live; the old model cannot qualify the repair.
+- The second shared build stops after 474.53 seconds on separate SoraFS/Torii
+  compile errors, with no new Core test artifact. The subsequent source audit
+  finds a 28th action already in TLA/shared Rust but absent from the 27-entry
+  trace mapping and the production witness wrapper. The new wrapper and regression
+  preserve every prior assertion. Structural dispatch/proof extraction, all 28
+  mappings, two original full trace baselines and 160 independent rehashed
+  controls pass; Rust/math sources remain frozen for execution.
+- The third shared build finishes at exit 101 after 323.212 seconds. Only the
+  separate Torii library-test target fails on relocated include paths and
+  following type errors. Fresh Core and SDK test artifacts are emitted with
+  zero captured source drift. Review verifies all 26 ready hashes/mtimes and
+  all 21 Rust before/after/current hashes. The exact 91-test Core run is in
+  progress. All 24 SDK status tests pass, including the async global wrapper;
+  source/binary hashes remain unchanged. This does not qualify the combined build.
+- The strict scaling schema requires complete fixed-schedule transaction traces,
+  fully drained warmup and bounded drain-tail accounting. Its combined runner and
+  validator selection passes 69 tests and 95 subcases, retaining all original
+  assertions. The production collector is being implemented privately during
+  the build freeze; actual routing/resource observations and trials remain open.
+- Runner ownership reconciliation passes 27 rehashed semantic negatives with
+  copied positives before ten live seal updates and two new helper pins; all
+  28 focused tests pass afterward. Generation cancellation, receipt flushing,
+  current archive recovery and finalization/error ordering are retained. Ingress
+  effects separately pass 81 copied positives and 81 rehashed negatives. The
+  full source diagnostic and release gates remain open.

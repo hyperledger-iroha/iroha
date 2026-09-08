@@ -456,7 +456,7 @@ fn advertise_required_replicas(kura: &Kura, height: NonZeroUsize) -> (HashOf<Blo
     metadata
 }
 fn sample_merge_entry(epoch: u64) -> MergeLedgerEntry {
-    let mut lane_validators = (0..4)
+    let mut lane_validators = (1_u8..=4)
         .map(|seed| {
             PeerId::new(
                 iroha_crypto::KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)

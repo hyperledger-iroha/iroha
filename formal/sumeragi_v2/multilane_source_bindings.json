@@ -756,7 +756,8 @@
       "CompleteReservationRelease",
       "RestoreReleasedFifo",
       "ForgetReservationRelease",
-      "RepairPostCarrierEvidence"
+      "RepairPostCarrierEvidence",
+      "ObserveReplicaQueueRelease"
     ],
     "required_invariants": [
       "FirstReleaseTypeInvariant",
@@ -883,6 +884,14 @@
       }
     ],
     "production_symbols": [
+      {
+        "path": "crates/iroha_core/src/sumeragi/v2_core.rs",
+        "kind": "fn",
+        "symbol": "check_production_in_flight_first_release_observe_replica_queue_release_transition",
+        "required_tokens": [
+          "witness_derived_first_release_transition(refinement::check_production_in_flight_first_release_observe_replica_queue_release_transition(before, exact_ordinary_fifo_preserved,)?,)"
+        ]
+      },
       {
         "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
         "kind": "fn",

@@ -283,7 +283,8 @@
     "./dist/authenticatedBlockProofs.js": "./dist/authenticatedBlockProofs.browser.js",
     "./dist/crypto.js": "./dist/crypto.browser.js",
     "./dist/cryptoHash.js": "./dist/cryptoHash.browser.js",
-    "./dist/native.js": "./dist/native.browser.js"
+    "./dist/native.js": "./dist/native.browser.js",
+    "./dist/address.js": "./dist/address.browser.js"
   },
   "publishConfig": {
     "access": "public",

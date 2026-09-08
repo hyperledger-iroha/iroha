@@ -91,7 +91,7 @@ class Ed25519PublicKeyAdmissionTest {
                     AccountAddress.fromI105(vector.i105, AccountAddress.DEFAULT_I105_DISCRIMINANT).canonicalBytes,
                     vector.name,
                 )
-                AccountAddress.parseEncodedIgnoringCurveSupport(
+                AccountAddress.parseEncoded(
                     vector.i105,
                     AccountAddress.DEFAULT_I105_DISCRIMINANT,
                 )
@@ -137,7 +137,7 @@ class Ed25519PublicKeyAdmissionTest {
                         AccountAddressErrorCode.INVALID_PUBLIC_KEY
                     },
                 ) {
-                    AccountAddress.parseEncodedIgnoringCurveSupport(
+                    AccountAddress.parseEncoded(
                         vector.i105,
                         AccountAddress.DEFAULT_I105_DISCRIMINANT,
                     )

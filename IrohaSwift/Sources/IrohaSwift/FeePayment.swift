@@ -1041,7 +1041,7 @@ private func canonicalFeeSponsorAddress(_ value: String) throws -> AccountAddres
     }
     do {
         let prefix = try AccountAddress.inspectI105NetworkPrefix(value).chainDiscriminant
-        let address = try AccountAddress.parseEncodedSwiftOnly(value, expectedPrefix: prefix)
+        let address = try AccountAddress.parseCanonicalI105(value, expectedPrefix: prefix)
         guard try address.toI105(networkPrefix: prefix) == value else {
             throw FeePaymentIntentError.invalidSponsorAccount(value)
         }

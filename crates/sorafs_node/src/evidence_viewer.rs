@@ -10,6 +10,7 @@
 //! a qualified immutable archive. Production audit/readback comes from the exact signed receipt
 //! checkpoint and [`EvidenceViewerTransparencyProjectionV1`]; the older `NodeHandle` session/access
 //! registry is intentionally not fed by this service.
+//! Persisted frames and framed signature/digest inputs always use the canonical V1 layout.
 use crate::{
     ModerationEvidenceViewerAccessKind, ModerationEvidenceViewerSessionInput,
     ModerationEvidenceViewerSessionRecord, ModerationQuarantineObjectError,
@@ -3720,8 +3721,8 @@ impl EvidenceViewerServiceV1 {
             head: head.clone(),
             payload,
         };
-        let artifact_bytes =
-            norito::to_bytes(&artifact).map_err(|_| EvidenceViewerErrorV1::InvalidCheckpoint)?;
+        let artifact_bytes = norito::encode_canonical(&artifact)
+            .map_err(|_| EvidenceViewerErrorV1::InvalidCheckpoint)?;
         if artifact_bytes.is_empty()
             || len_u64(artifact_bytes.len()) > compaction_archive_max_bytes(&self.config)
         {
@@ -4463,8 +4464,8 @@ impl EvidenceViewerServiceV1 {
             checkpoint_anchor: checkpoint_anchor.clone(),
         };
         verify_checkpoint_envelope(&self.config, envelope.clone())?;
-        let checkpoint_bytes =
-            norito::to_bytes(&envelope).map_err(|_| EvidenceViewerErrorV1::InvalidCheckpoint)?;
+        let checkpoint_bytes = norito::encode_canonical(&envelope)
+            .map_err(|_| EvidenceViewerErrorV1::InvalidCheckpoint)?;
         if len_u64(checkpoint_bytes.len()) > self.config.checkpoint_max_bytes {
             return Err(EvidenceViewerErrorV1::ResourceExhausted);
         }
@@ -4691,8 +4692,8 @@ fn checkpoint_from_state(state: &EvidenceViewerStateV1) -> EvidenceViewerCheckpo
 fn checkpoint_payload_digest(
     checkpoint: &EvidenceViewerCheckpointV1,
 ) -> Result<[u8; 32], EvidenceViewerErrorV1> {
-    let bytes =
-        norito::to_bytes(checkpoint).map_err(|_| EvidenceViewerErrorV1::InvalidCheckpoint)?;
+    let bytes = norito::encode_canonical(checkpoint)
+        .map_err(|_| EvidenceViewerErrorV1::InvalidCheckpoint)?;
     let mut hasher = blake3::Hasher::new();
     hasher.update(CHECKPOINT_DIGEST_DOMAIN_V1);
     hasher.update(&bytes);
@@ -4773,7 +4774,8 @@ fn checkpoint_store_record_revision(record: &EvidenceViewerCheckpointStoreRecord
 fn compaction_archive_payload_digest(
     payload: &EvidenceViewerCompactionArchivePayloadV1,
 ) -> Result<[u8; 32], EvidenceViewerErrorV1> {
-    let bytes = norito::to_bytes(payload).map_err(|_| EvidenceViewerErrorV1::InvalidCheckpoint)?;
+    let bytes =
+        norito::encode_canonical(payload).map_err(|_| EvidenceViewerErrorV1::InvalidCheckpoint)?;
     let mut hasher = blake3::Hasher::new();
     hasher.update(COMPACTION_ARCHIVE_PAYLOAD_DOMAIN_V1);
     hasher.update(&len_u64(bytes.len()).to_le_bytes());
@@ -4790,7 +4792,7 @@ fn hash_compaction_archive_head_fields(
     hash_optional_checkpoint_digest(hasher, head.predecessor_operation_id);
     hasher.update(&head.source_checkpoint_generation.to_le_bytes());
     hasher.update(&head.source_checkpoint_revision);
-    let anchor_bytes = norito::to_bytes(&head.source_checkpoint_anchor)
+    let anchor_bytes = norito::encode_canonical(&head.source_checkpoint_anchor)
         .map_err(|_| EvidenceViewerErrorV1::InvalidCheckpoint)?;
     hasher.update(&len_u64(anchor_bytes.len()).to_le_bytes());
     hasher.update(&anchor_bytes);
@@ -5274,7 +5276,8 @@ fn write_local_checkpoint_store_record(
     config: &EvidenceViewerConfigV1,
     record: &EvidenceViewerCheckpointStoreRecordV1,
 ) -> Result<(), EvidenceViewerErrorV1> {
-    let bytes = norito::to_bytes(record).map_err(|_| EvidenceViewerErrorV1::InvalidCheckpoint)?;
+    let bytes =
+        norito::encode_canonical(record).map_err(|_| EvidenceViewerErrorV1::InvalidCheckpoint)?;
     if len_u64(bytes.len()) > checkpoint_store_record_max_bytes(config) {
         return Err(EvidenceViewerErrorV1::InvalidCheckpoint);
     }
@@ -6313,7 +6316,8 @@ fn watermark_digest(
 fn receipt_body_digest(
     body: &EvidenceViewerReceiptBodyV1,
 ) -> Result<[u8; 32], EvidenceViewerErrorV1> {
-    let bytes = norito::to_bytes(body).map_err(|_| EvidenceViewerErrorV1::InvalidCheckpoint)?;
+    let bytes =
+        norito::encode_canonical(body).map_err(|_| EvidenceViewerErrorV1::InvalidCheckpoint)?;
     let mut hasher = blake3::Hasher::new();
     hasher.update(RECEIPT_BODY_DOMAIN_V1);
     hasher.update(&bytes);
@@ -6343,7 +6347,7 @@ fn transparency_projection_digest(
     let mut hasher = blake3::Hasher::new();
     hasher.update(TRANSPARENCY_PROJECTION_DOMAIN_V1);
     hasher.update(&EVIDENCE_VIEWER_TRANSPARENCY_PROJECTION_VERSION_V1.to_le_bytes());
-    let checkpoint_anchor_bytes = norito::to_bytes(checkpoint_anchor)
+    let checkpoint_anchor_bytes = norito::encode_canonical(checkpoint_anchor)
         .map_err(|_| EvidenceViewerErrorV1::InvalidCheckpoint)?;
     hasher.update(
         &u64::try_from(checkpoint_anchor_bytes.len())
@@ -6354,8 +6358,8 @@ fn transparency_projection_digest(
     match compaction_archive_head {
         Some(head) => {
             hasher.update(&[1]);
-            let bytes =
-                norito::to_bytes(head).map_err(|_| EvidenceViewerErrorV1::InvalidCheckpoint)?;
+            let bytes = norito::encode_canonical(head)
+                .map_err(|_| EvidenceViewerErrorV1::InvalidCheckpoint)?;
             hasher.update(
                 &u64::try_from(bytes.len())
                     .map_err(|_| EvidenceViewerErrorV1::ResourceExhausted)?
@@ -6375,8 +6379,8 @@ fn transparency_projection_digest(
             .to_le_bytes(),
     );
     for receipt in receipts {
-        let bytes =
-            norito::to_bytes(receipt).map_err(|_| EvidenceViewerErrorV1::InvalidCheckpoint)?;
+        let bytes = norito::encode_canonical(receipt)
+            .map_err(|_| EvidenceViewerErrorV1::InvalidCheckpoint)?;
         hasher.update(
             &u64::try_from(bytes.len())
                 .map_err(|_| EvidenceViewerErrorV1::ResourceExhausted)?
@@ -8962,37 +8966,6 @@ mod tests {
         );
     }
     #[test]
-    fn compaction_archive_decode_rejects_a_maximal_nested_length_prefix() {
-        let mut fixture = EvidenceViewerFixture::new();
-        fixture.config.compaction_max_records = 7;
-        let sequence_limit = compaction_archive_sequence_limit(&fixture.config);
-        assert_eq!(sequence_limit, 7);
-        let framed = norito::core::frame_bare_with_header_flags::<Vec<ChallengeRecordV1>>(
-            &u64::MAX.to_le_bytes(),
-            0,
-        )
-        .expect("frame malicious nested sequence prefix");
-        let maximum_bytes =
-            usize::try_from(compaction_archive_max_bytes(&fixture.config)).expect("byte limit");
-        let limits = norito::DecodeLimits::new(
-            sequence_limit,
-            maximum_bytes,
-            sequence_limit.saturating_mul(2),
-            maximum_bytes.saturating_mul(4),
-            64,
-        );
-        let error =
-            norito::decode_from_bytes_with_limits::<Vec<ChallengeRecordV1>>(&framed, limits)
-                .expect_err("maximal declared record count must fail before allocation");
-        assert!(matches!(
-            error,
-            norito::core::Error::SequenceLengthExceeded {
-                length: u64::MAX,
-                limit: 7
-            }
-        ));
-    }
-    #[test]
     fn archive_policy_drift_during_install_never_prunes_state() {
         let fixture = EvidenceViewerFixture::new();
         let service = fixture.open();
@@ -10687,5 +10660,6 @@ mod tests {
     }
     // Keep provider-policy, redaction, and signed-state tamper regressions in this
     // test module so their libtest paths and private-helper access remain stable.
+    include!("evidence_viewer/canonical_checkpoint_tests.rs");
     include!("evidence_viewer/provider_security_tests.rs");
 }

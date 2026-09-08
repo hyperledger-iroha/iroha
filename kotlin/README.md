@@ -10,6 +10,17 @@ APIs using the JDK 21 toolchain. Run the Norito consumer suite with:
 ./gradlew :core-jvm:test --tests 'org.hyperledger.iroha.sdk.norito.*' --console=plain
 ```
 
+Account and public-key admission requires the ABI-23 `connect_norito_bridge`
+native library, including `nativeValidateAccountAddressCanonical`. Address
+construction and parsing use Rust to validate every key and complete multisig
+policy, then require identical canonical bytes. The V1 identity catalog includes
+all eleven algorithms without a process-global curve selector. Missing native
+admission returns `ERR_NATIVE_BRIDGE_UNAVAILABLE`; account literals must be exact
+I105 strings without surrounding whitespace. For host tests, set
+`IROHA_NATIVE_LIBRARY_PATH` to the absolute directory containing the freshly
+built bridge. Android packages the bridge through the generated native artifact
+pipeline described in `CLAUDE.md`.
+
 ## Artifacts
 
 Not published to Maven Central yet. Build locally and consume via `mavenLocal()`.

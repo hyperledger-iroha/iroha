@@ -33,8 +33,8 @@ use iroha_data_model::ram_lfe::{
 };
 use iroha_data_model::smart_contract::{ContractAddress, ContractLifecycleOwnerV1};
 use std::env;
-mod multisig_accounts;
 mod fastpq_balance_keys;
+mod multisig_accounts;
 /// Well-known public key shared with the Kotlin parity tests.
 const PARITY_PUBLIC_KEY: &str =
     "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03";

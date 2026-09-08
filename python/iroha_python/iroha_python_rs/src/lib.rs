@@ -2,9 +2,9 @@
 #![deny(unsafe_code)]
 #![allow(unsafe_op_in_unsafe_fn)] // PyO3 generates historical wrappers that require this on edition 2024
 mod connect_key_bindings;
-mod identity_codec_v1;
 #[cfg(test)]
 mod crypto_admission_tests;
+mod identity_codec_v1;
 mod privacy_capability_manifest;
 pub mod privacy_native_actions;
 pub mod privacy_wallet_bundle;
@@ -35,10 +35,7 @@ use iroha_crypto::{
 };
 use iroha_data_model::{
     NetworkId,
-    account::{
-        Account,
-        address::{AccountAddress, AccountAddressError},
-    },
+    account::{Account, address::AccountAddress},
     alias_setup::{
         AccountAliasName, AccountAliasRoleV1, AccountProvisionV1, AliasFramedInstructionV1,
         AliasIntentV1, AliasLeaseAcquisitionV1, AliasPlanAnchorV1, AliasPlanDispositionV1,
@@ -460,15 +457,7 @@ fn require_non_blank_unpadded(value: &str, field: &str) -> PyResult<()> {
     Ok(())
 }
 fn parse_account_id(value: &str) -> PyResult<AccountId> {
-    let raw = value.trim();
-    let parsed = match AccountAddress::parse_encoded(raw, None) {
-        Ok(address) => address.to_account_id().map_err(|err| err.to_string()),
-        Err(AccountAddressError::UnsupportedAddressFormat) => {
-            AccountId::parse_encoded(raw).map_err(|err| err.to_string())
-        }
-        Err(err) => Err(err.to_string()),
-    };
-    parsed.map_err(|err| PyValueError::new_err(format!("invalid account id: {err}")))
+    parse_exact_i105_account_id(value, "account_id")
 }
 fn parse_exact_i105_account_id(value: &str, field: &str) -> PyResult<AccountId> {
     require_non_blank_unpadded(value, field)?;
@@ -673,7 +662,6 @@ fn parse_fee_sponsor_program_id(value: &str) -> PyResult<FeeSponsorProgramId> {
             "fee sponsor program id must use its exact canonical encoding",
         ));
     }
-    ensure_ed25519_account(&program_id.sponsor)?;
     Ok(program_id)
 }
 fn parse_fee_payment_intent_json(value: &str) -> PyResult<FeePaymentIntent> {
@@ -8490,7 +8478,6 @@ fn parse_transfer_asset_batch_entries(
                 )));
             }
             let destination = parse_account_id(&json_object_string(&mut fields, "to", &context)?)?;
-            ensure_ed25519_account(&destination)?;
             let amount = parse_typed_quantity(
                 &json_object_string(&mut fields, "amount", &context)?,
                 "payment amount",
@@ -8656,7 +8643,6 @@ fn parse_settlement_leg(
     let from_account = parse_account_id(&from_str).map_err(|err| {
         PyValueError::new_err(format!("invalid {name} `from` account `{from_str}`: {err}"))
     })?;
-    ensure_ed25519_account(&from_account)?;
     let to_obj = dict
         .get_item("to")?
         .ok_or_else(|| PyValueError::new_err(format!("{name} requires `to`")))?;
@@ -8666,7 +8652,6 @@ fn parse_settlement_leg(
     let to_account = parse_account_id(&to_str).map_err(|err| {
         PyValueError::new_err(format!("invalid {name} `to` account `{to_str}`: {err}"))
     })?;
-    ensure_ed25519_account(&to_account)?;
     let metadata = match dict.get_item("metadata")? {
         Some(meta) => py_to_metadata(py, Some(&meta))?,
         None => Metadata::default(),
@@ -8792,7 +8777,7 @@ fn asset_definition_id_to_py(
     from_py_object,
     frozen,
     name = "NetworkId",
-    module = "iroha_python._crypto"
+    module = "iroha_native._crypto"
 )]
 #[derive(Clone, Copy)]
 pub(crate) struct PyNetworkId {
@@ -8875,7 +8860,7 @@ impl PyNetworkId {
         *self
     }
 }
-#[pyclass(from_py_object, name = "DomainId", module = "iroha_python._crypto")]
+#[pyclass(from_py_object, name = "DomainId", module = "iroha_native._crypto")]
 #[derive(Clone)]
 struct PyDomainId {
     inner: DomainId,
@@ -8905,7 +8890,7 @@ impl PyDomainId {
         self.clone()
     }
 }
-#[pyclass(from_py_object, name = "AccountId", module = "iroha_python._crypto")]
+#[pyclass(from_py_object, name = "AccountId", module = "iroha_native._crypto")]
 #[derive(Clone)]
 struct PyAccountId {
     inner: AccountId,
@@ -8914,8 +8899,7 @@ struct PyAccountId {
 impl PyAccountId {
     #[new]
     fn new(value: &str) -> PyResult<Self> {
-        let id = parse_account_id(value)?;
-        ensure_ed25519_account(&id)?;
+        let id = parse_exact_i105_account_id(value, "AccountId")?;
         Ok(Self { inner: id })
     }
     #[getter]
@@ -8925,8 +8909,7 @@ impl PyAccountId {
     #[getter]
     fn public_key_hex(&self) -> PyResult<String> {
         let signatory = require_single_signatory(&self.inner, "AccountId")?;
-        let (algorithm, bytes) = public_key_to_bytes(signatory, "account signatory public key")?;
-        algorithm_guard(algorithm)?;
+        let (_, bytes) = public_key_to_bytes(signatory, "account signatory public key")?;
         Ok(hex::encode(bytes))
     }
     fn __str__(&self) -> String {
@@ -8945,7 +8928,7 @@ impl PyAccountId {
 #[pyclass(
     from_py_object,
     name = "AssetDefinitionId",
-    module = "iroha_python._crypto"
+    module = "iroha_native._crypto"
 )]
 #[derive(Clone)]
 struct PyAssetDefinitionId {
@@ -8992,7 +8975,7 @@ impl PyAssetDefinitionId {
         self.clone()
     }
 }
-#[pyclass(from_py_object, name = "AssetId", module = "iroha_python._crypto")]
+#[pyclass(from_py_object, name = "AssetId", module = "iroha_native._crypto")]
 #[derive(Clone)]
 struct PyAssetId {
     inner: AssetId,
@@ -9050,7 +9033,7 @@ fn numeric_spec_from_optional_scale(scale: Option<u32>) -> PyResult<NumericSpec>
         None => Ok(NumericSpec::unconstrained()),
     }
 }
-#[pyclass(from_py_object, module = "iroha_python._crypto")]
+#[pyclass(from_py_object, module = "iroha_native._crypto")]
 #[derive(Clone)]
 struct Instruction {
     inner: InstructionBox,
@@ -9300,13 +9283,11 @@ impl Instruction {
         let sponsor: AccountId = parse_account_id(sponsor).map_err(|err| {
             PyValueError::new_err(format!("invalid fee sponsor account `{sponsor}`: {err}"))
         })?;
-        ensure_ed25519_account(&sponsor)?;
         let payout_account = parse_account_id(payout_account).map_err(|err| {
             PyValueError::new_err(format!(
                 "invalid fee sponsor payout account `{payout_account}`: {err}"
             ))
         })?;
-        ensure_ed25519_account(&payout_account)?;
         let program_name: Name = program_name.parse().map_err(|err| {
             PyValueError::new_err(format!(
                 "invalid fee sponsor program `{program_name}`: {err}"
@@ -9401,7 +9382,6 @@ impl Instruction {
         beneficiary: &str,
     ) -> PyResult<Self> {
         let beneficiary = parse_account_id(beneficiary)?;
-        ensure_ed25519_account(&beneficiary)?;
         Ok(Instruction::new(
             iroha_data_model::isi::nexus::EnrollFeeSponsorBeneficiary {
                 program_id: parse_fee_sponsor_program_id(program_id)?,
@@ -9418,7 +9398,6 @@ impl Instruction {
         beneficiary: &str,
     ) -> PyResult<Self> {
         let beneficiary = parse_account_id(beneficiary)?;
-        ensure_ed25519_account(&beneficiary)?;
         Ok(Instruction::new(
             iroha_data_model::isi::nexus::UnenrollFeeSponsorBeneficiary {
                 program_id: parse_fee_sponsor_program_id(program_id)?,
@@ -9506,7 +9485,6 @@ impl Instruction {
         metadata: Option<&Bound<'py, PyAny>>,
     ) -> PyResult<Self> {
         let account_id: AccountId = parse_account_id(account_id)?;
-        ensure_ed25519_account(&account_id)?;
         let metadata = py_to_metadata(py, metadata)?;
         let mut new_account = Account::new(account_id);
         new_account.metadata = metadata;
@@ -9641,7 +9619,6 @@ impl Instruction {
     ) -> PyResult<Self> {
         let asset_id = parse_asset_id(asset_id)?;
         let destination: AccountId = parse_account_id(destination)?;
-        ensure_ed25519_account(&destination)?;
         let quantity = parse_asset_quantity(quantity, "asset quantity")?;
         let instruction = Transfer::asset_quantity(asset_id, quantity, destination);
         Ok(Instruction::new(instruction.into()))
@@ -9656,7 +9633,6 @@ impl Instruction {
         mode: &str,
     ) -> PyResult<Self> {
         let source = parse_account_id(source_account)?;
-        ensure_ed25519_account(&source)?;
         let asset_definition: AssetDefinitionId = asset_definition_id.parse().map_err(|error| {
             PyValueError::new_err(format!(
                 "invalid asset definition id `{asset_definition_id}`: {error}"
@@ -9689,7 +9665,6 @@ impl Instruction {
         reason: Option<String>,
     ) -> PyResult<Self> {
         let account_id = parse_account_id(account_id)?;
-        ensure_ed25519_account(&account_id)?;
         let asset_definition_id: AssetDefinitionId =
             asset_definition_id.parse().map_err(|error| {
                 PyValueError::new_err(format!(
@@ -9727,7 +9702,6 @@ impl Instruction {
         blacklisted: bool,
     ) -> PyResult<Self> {
         let account_id = parse_account_id(account_id)?;
-        ensure_ed25519_account(&account_id)?;
         let asset_definition_id: AssetDefinitionId =
             asset_definition_id.parse().map_err(|error| {
                 PyValueError::new_err(format!(
@@ -9746,7 +9720,6 @@ impl Instruction {
         limits: &Bound<'_, PyAny>,
     ) -> PyResult<Self> {
         let account_id = parse_account_id(account_id)?;
-        ensure_ed25519_account(&account_id)?;
         let asset_definition_id: AssetDefinitionId =
             asset_definition_id.parse().map_err(|error| {
                 PyValueError::new_err(format!(
@@ -9770,7 +9743,6 @@ impl Instruction {
         holding_limit: Option<&str>,
     ) -> PyResult<Self> {
         let account_id = parse_account_id(account_id)?;
-        ensure_ed25519_account(&account_id)?;
         let asset_definition_id: AssetDefinitionId =
             asset_definition_id.parse().map_err(|error| {
                 PyValueError::new_err(format!(
@@ -9804,11 +9776,9 @@ impl Instruction {
             ))
         })?;
         let destination = parse_account_id(destination)?;
-        ensure_ed25519_account(&destination)?;
         let release_authority = match release_authority {
             Some(value) => {
                 let account = parse_account_id(value)?;
-                ensure_ed25519_account(&account)?;
                 Some(account)
             }
             None => None,
@@ -9853,7 +9823,6 @@ impl Instruction {
             ))
         })?;
         let beneficiary = parse_account_id(beneficiary)?;
-        ensure_ed25519_account(&beneficiary)?;
         let amount = parse_typed_quantity(amount, "conditional escrow amount")?;
         if amount.is_zero() {
             return Err(PyValueError::new_err(
@@ -9969,7 +9938,6 @@ impl Instruction {
         payload: Option<&Bound<'py, PyAny>>,
     ) -> PyResult<Self> {
         let destination: AccountId = parse_account_id(destination)?;
-        ensure_ed25519_account(&destination)?;
         let permission_name: Ident = name.parse().map_err(|err| {
             PyValueError::new_err(format!("invalid permission name `{name}`: {err}"))
         })?;
@@ -9987,7 +9955,6 @@ impl Instruction {
         payload: Option<&Bound<'py, PyAny>>,
     ) -> PyResult<Self> {
         let destination: AccountId = parse_account_id(destination)?;
-        ensure_ed25519_account(&destination)?;
         let permission_name: Ident = name.parse().map_err(|err| {
             PyValueError::new_err(format!("invalid permission name `{name}`: {err}"))
         })?;
@@ -10005,7 +9972,6 @@ impl Instruction {
         value: Option<&Bound<'py, PyAny>>,
     ) -> PyResult<Self> {
         let account_id = parse_account_id(account_id)?;
-        ensure_ed25519_account(&account_id)?;
         let key: Name = key
             .parse()
             .map_err(|err| PyValueError::new_err(format!("invalid metadata key `{key}`: {err}")))?;
@@ -10020,7 +9986,6 @@ impl Instruction {
         key: &str,
     ) -> PyResult<Self> {
         let account_id = parse_account_id(account_id)?;
-        ensure_ed25519_account(&account_id)?;
         let key: Name = key
             .parse()
             .map_err(|err| PyValueError::new_err(format!("invalid metadata key `{key}`: {err}")))?;
@@ -10057,13 +10022,10 @@ impl Instruction {
             PyValueError::new_err(format!("invalid repo agreement id `{agreement_id}`: {err}"))
         })?;
         let initiator = parse_account_id(initiator)?;
-        ensure_ed25519_account(&initiator)?;
         let counterparty = parse_account_id(counterparty)?;
-        ensure_ed25519_account(&counterparty)?;
         let custodian = match custodian {
             Some(value) => {
                 let account = parse_account_id(value)?;
-                ensure_ed25519_account(&account)?;
                 Some(account)
             }
             None => None,
@@ -10178,9 +10140,7 @@ impl Instruction {
         destination: &str,
     ) -> PyResult<Self> {
         let source = parse_account_id(source)?;
-        ensure_ed25519_account(&source)?;
         let destination = parse_account_id(destination)?;
-        ensure_ed25519_account(&destination)?;
         let domain_id = DomainId::parse_fully_qualified(domain_id).map_err(|err| {
             PyValueError::new_err(format!("invalid domain id `{domain_id}`: {err}"))
         })?;
@@ -10195,9 +10155,7 @@ impl Instruction {
         destination: &str,
     ) -> PyResult<Self> {
         let source = parse_account_id(source)?;
-        ensure_ed25519_account(&source)?;
         let destination = parse_account_id(destination)?;
-        ensure_ed25519_account(&destination)?;
         let definition_id: AssetDefinitionId = definition_id.parse().map_err(|err| {
             PyValueError::new_err(format!(
                 "invalid asset definition id `{definition_id}`: {err}"
@@ -10214,9 +10172,7 @@ impl Instruction {
         destination: &str,
     ) -> PyResult<Self> {
         let source = parse_account_id(source)?;
-        ensure_ed25519_account(&source)?;
         let destination = parse_account_id(destination)?;
-        ensure_ed25519_account(&destination)?;
         let nft_id: NftId = nft_id
             .parse()
             .map_err(|err| PyValueError::new_err(format!("invalid NFT id `{nft_id}`: {err}")))?;
@@ -10232,9 +10188,7 @@ impl Instruction {
         destination: &str,
     ) -> PyResult<Self> {
         let source = parse_account_id(source)?;
-        ensure_ed25519_account(&source)?;
         let destination = parse_account_id(destination)?;
-        ensure_ed25519_account(&destination)?;
         let rwa_id: RwaId = rwa_id
             .parse()
             .map_err(|err| PyValueError::new_err(format!("invalid RWA id `{rwa_id}`: {err}")))?;
@@ -10307,7 +10261,6 @@ impl Instruction {
         destination: &str,
     ) -> PyResult<Self> {
         let destination = parse_account_id(destination)?;
-        ensure_ed25519_account(&destination)?;
         let rwa_id: RwaId = rwa_id
             .parse()
             .map_err(|err| PyValueError::new_err(format!("invalid RWA id `{rwa_id}`: {err}")))?;
@@ -10383,7 +10336,6 @@ impl Instruction {
             PyValueError::new_err(format!("invalid trigger id `{trigger_id}`: {err}"))
         })?;
         let authority = parse_account_id(authority)?;
-        ensure_ed25519_account(&authority)?;
         if start_ms == 0 {
             return Err(PyValueError::new_err("start_ms must be greater than zero"));
         }
@@ -10447,7 +10399,6 @@ impl Instruction {
             PyValueError::new_err(format!("invalid trigger id `{trigger_id}`: {err}"))
         })?;
         let authority = parse_account_id(authority)?;
-        ensure_ed25519_account(&authority)?;
         let repeats = match repeats {
             Some(0) => {
                 return Err(PyValueError::new_err(
@@ -10657,7 +10608,7 @@ fn python_vega_statement_v1(
 ///
 /// Generic privacy proving is intentionally absent: the Rust-owned wallet
 /// worker accepts an owner-only credential path and returns signed public wire.
-#[pyclass(from_py_object, module = "iroha_python._crypto")]
+#[pyclass(from_py_object, module = "iroha_native._crypto")]
 #[derive(Clone)]
 struct TransactionBuilder {
     network_id: NetworkId,
@@ -10873,7 +10824,6 @@ impl TransactionBuilder {
     fn new(network_id: &PyNetworkId, authority: &str, fee_payment_json: &str) -> PyResult<Self> {
         require_non_blank_unpadded(authority, "authority")?;
         let authority = parse_account_id(authority)?;
-        ensure_ed25519_account(&authority)?;
         let fee_payment = parse_fee_payment_intent_json(fee_payment_json)?;
         let creation_time = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -11164,6 +11114,7 @@ impl TransactionBuilder {
     }
     /// Sign the transaction, returning an envelope with Norito payloads and hash.
     fn sign(&mut self, private_key: &[u8]) -> PyResult<SignedTransactionEnvelope> {
+        ensure_ed25519_account(&self.authority)?;
         self.validate_executable()?;
         let private_key = parse_private_key(private_key)?;
         let signed = self
@@ -11278,6 +11229,7 @@ impl TransactionBuilder {
         quoted_fee_payment_json: &str,
         private_key: &[u8],
     ) -> PyResult<SignedTransactionEnvelope> {
+        ensure_ed25519_account(&self.authority)?;
         self.validate_executable()?;
         let mut draft =
             json::from_str::<TransactionPayload>(draft_payload_json).map_err(|err| {
@@ -11313,6 +11265,7 @@ impl TransactionBuilder {
     }
     /// Finalize the transaction using a wallet-provided external signature.
     fn build_with_signature(&mut self, signature: &[u8]) -> PyResult<SignedTransactionEnvelope> {
+        ensure_ed25519_account(&self.authority)?;
         self.validate_executable()?;
         if signature.len() != 64 {
             return Err(PyValueError::new_err(format!(
@@ -11360,7 +11313,7 @@ const ZK_X509_LEDGER_EFFECT_V1: &str = "zk_x509_certificate_nullifier";
 /// Secret-bearing bundle buffers are held in zeroizing storage around their
 /// decoder boundary. The result exposes only the authenticated public
 /// envelope, digests, and byte counts; witness material is never returned.
-#[pyclass(frozen, module = "iroha_python._crypto")]
+#[pyclass(frozen, module = "iroha_native._crypto")]
 struct PrivacyNativeActionBuildResultV1 {
     envelope: Py<SignedTransactionEnvelope>,
     protocol_id: String,
@@ -11427,7 +11380,7 @@ impl PrivacyNativeActionBuildResultV1 {
     }
 }
 /// Signed transaction outputs exposed to Python.
-#[pyclass(module = "iroha_python._crypto")]
+#[pyclass(module = "iroha_native._crypto")]
 struct SignedTransactionEnvelope {
     network_id: NetworkId,
     authority: String,

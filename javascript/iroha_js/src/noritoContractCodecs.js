@@ -1,3 +1,5 @@
+import { createNoritoRecordDecoder } from "./noritoRecordDecoder.js";
+import { rejectError, rejectRange, rejectType } from "./validationThrow.js";
 import { Buffer } from "buffer";
 import {
   BASE64_ENCODING,
@@ -6,95 +8,12 @@ import {
 } from "./commonLiterals.js";
 import { analyzeEntrypointValueTypeV1 } from "./entrypointSchema.js";
 
-/**
- * Bind proof-related codecs to the shared Norito wire primitives without
- * importing the public codec module.
- *
- * @returns {Function[]}
- */
-export function createNoritoProofValueCodecs(
-  BufferReader,
-  LANE_PRIVACY_MERKLE_MAX_DEPTH,
-  decodeHashValue,
-  decodeNoritoVec,
-  decodeOptionValue,
-  decodeTupleFields,
-  decodeU32Value,
-  decodeUnsignedLeb128,
-  encodeCompactLength,
-  encodeFixedBytesValue,
-  encodeHashLiteralBytes,
-  encodeNoritoVec,
-  encodeOptionValue,
-  encodeTupleValue,
-  encodeU32Value,
-  encodeU8Value,
-  isPlainObject,
-  normalizeFlexibleBytes,
+/** Bind Merkle proof codecs independently of confidential memo envelopes. */
+export function createNoritoMerkleProofCodecs(
+  LANE_PRIVACY_MERKLE_MAX_DEPTH, decodeHashValue, decodeNoritoVec,
+  decodeOptionValue, decodeTupleFields, decodeU32Value, encodeHashLiteralBytes,
+  encodeNoritoVec, encodeOptionValue, encodeTupleValue, encodeU32Value,
 ) {
-  const CONFIDENTIAL_MEMO_WIRE_MAGIC_V1 = Buffer.from([
-    0x49, 0x52, 0x48, 0x43, 0x4d, 0x31, 0xa5, 0x5a,
-  ]);
-  const CONFIDENTIAL_MEMO_RECIPIENT_SLOTS_V1 = 8;
-  const CONFIDENTIAL_MEMO_NONCE_BYTES_V1 = 24;
-  const CONFIDENTIAL_MEMO_WRAPPED_KEY_BYTES_V1 = 48;
-  const CONFIDENTIAL_MEMO_TAG_BYTES_V1 = 16;
-  const CONFIDENTIAL_MEMO_MAX_CIPHERTEXT_BYTES_V1 = 64 * 1024;
-  const CONFIDENTIAL_MEMO_SUITES_V1 = Object.freeze({
-    "ml-kem-768-xchacha20-poly1305-v1": Object.freeze({
-      tag: 0,
-      encapsulationBytes: 1088,
-    }),
-    "ml-kem-1024-xchacha20-poly1305-v1": Object.freeze({
-      tag: 1,
-      encapsulationBytes: 1568,
-    }),
-  });
-
-  function assertExactObjectKeys(value, expected, context) {
-    if (!isPlainObject(value)) {
-      throw new TypeError(`${context} must be an object`);
-    }
-    const expectedSet = new Set(expected);
-    for (const key of Object.keys(value)) {
-      if (!expectedSet.has(key)) {
-        throw new TypeError(`${context} contains unknown field ${key}`);
-      }
-    }
-    for (const key of expected) {
-      if (!Object.prototype.hasOwnProperty.call(value, key)) {
-        throw new TypeError(`${context}.${key} is required`);
-      }
-    }
-  }
-
-  function requireNonzero(bytes, context) {
-    if (bytes.every((byte) => byte === 0)) {
-      throw new Error(`${context} must not be all zero`);
-    }
-    return bytes;
-  }
-
-  function confidentialMemoSuite(label, context) {
-    if (typeof label !== JS_TYPE_STRING) {
-      throw new TypeError(`${context} must be a canonical confidential memo suite label`);
-    }
-    const suite = CONFIDENTIAL_MEMO_SUITES_V1[label];
-    if (suite === undefined) {
-      throw new Error(`${context} uses unsupported confidential memo suite ${label}`);
-    }
-    return suite;
-  }
-
-  function confidentialMemoSuiteFromTag(tag, context) {
-    for (const [label, suite] of Object.entries(CONFIDENTIAL_MEMO_SUITES_V1)) {
-      if (suite.tag === tag) {
-        return [label, suite];
-      }
-    }
-    throw new Error(`${context} uses unsupported confidential memo suite tag ${tag}`);
-  }
-
   function encodeMerkleProofValue(value, context) {
     return encodeTupleValue([
       encodeU32Value(value.leaf_index ?? value.leafIndex, `${context}.leaf_index`),
@@ -126,12 +45,81 @@ export function createNoritoProofValueCodecs(
     };
   }
 
+  return [encodeMerkleProofValue, decodeMerkleProofValue];
+}
+
+/** Bind confidential memo codecs independently of instruction proofs. */
+export function createNoritoConfidentialMemoCodecs(
+  BufferReader, decodeUnsignedLeb128, encodeCompactLength, encodeFixedBytesValue,
+  encodeU8Value, isPlainObject, normalizeFlexibleBytes,
+) {
+  const CONFIDENTIAL_MEMO_WIRE_MAGIC_V1 = Buffer.from([
+    0x49, 0x52, 0x48, 0x43, 0x4d, 0x31, 0xa5, 0x5a,
+  ]);
+  const CONFIDENTIAL_MEMO_RECIPIENT_SLOTS_V1 = 8;
+  const CONFIDENTIAL_MEMO_NONCE_BYTES_V1 = 24;
+  const CONFIDENTIAL_MEMO_WRAPPED_KEY_BYTES_V1 = 48;
+  const CONFIDENTIAL_MEMO_TAG_BYTES_V1 = 16;
+  const CONFIDENTIAL_MEMO_MAX_CIPHERTEXT_BYTES_V1 = 64 * 1024;
+  const CONFIDENTIAL_MEMO_SUITES_V1 = Object.freeze({
+    "ml-kem-768-xchacha20-poly1305-v1": Object.freeze({
+      tag: 0,
+      encapsulationBytes: 1088,
+    }),
+    "ml-kem-1024-xchacha20-poly1305-v1": Object.freeze({
+      tag: 1,
+      encapsulationBytes: 1568,
+    }),
+  });
+
+  function assertExactObjectKeys(value, expected, context) {
+    if (!isPlainObject(value)) {
+      rejectType(`${context} must be an object`);
+    }
+    const expectedSet = new Set(expected);
+    for (const key of Object.keys(value)) {
+      if (!expectedSet.has(key)) {
+        rejectType(`${context} contains unknown field ${key}`);
+      }
+    }
+    for (const key of expected) {
+      if (!Object.prototype.hasOwnProperty.call(value, key)) {
+        rejectType(`${context}.${key} is required`);
+      }
+    }
+  }
+
+  function requireNonzero(bytes, context) {
+    if (bytes.every((byte) => byte === 0)) {
+      rejectError(`${context} must not be all zero`);
+    }
+    return bytes;
+  }
+
+  function confidentialMemoSuite(label, context) {
+    if (typeof label !== JS_TYPE_STRING) {
+      rejectType(`${context} must be a canonical confidential memo suite label`);
+    }
+    const suite = CONFIDENTIAL_MEMO_SUITES_V1[label];
+    if (suite === undefined) {
+      rejectError(`${context} uses unsupported confidential memo suite ${label}`);
+    }
+    return suite;
+  }
+
+  function confidentialMemoSuiteFromTag(tag, context) {
+    for (const [label, suite] of Object.entries(CONFIDENTIAL_MEMO_SUITES_V1)) {
+      if (suite.tag === tag) {
+        return [label, suite];
+      }
+    }
+    rejectError(`${context} uses unsupported confidential memo suite tag ${tag}`);
+  }
+
   function encodeConfidentialMemoEnvelopeV1Value(value, context) {
     assertExactObjectKeys(value, ["slots", "payload_nonce", "ciphertext"], context);
     if (!Array.isArray(value.slots) || value.slots.length !== CONFIDENTIAL_MEMO_RECIPIENT_SLOTS_V1) {
-      throw new RangeError(
-        `${context}.slots must contain exactly ${CONFIDENTIAL_MEMO_RECIPIENT_SLOTS_V1} entries`,
-      );
+      rejectRange(`${context}.slots must contain exactly ${CONFIDENTIAL_MEMO_RECIPIENT_SLOTS_V1} entries`);
     }
 
     const encodedSlots = value.slots.map((slot, index) => {
@@ -149,9 +137,7 @@ export function createNoritoProofValueCodecs(
         `${slotContext}.encapsulation`,
       );
       if (encapsulation.length !== suite.encapsulationBytes) {
-        throw new RangeError(
-          `${slotContext}.encapsulation must be exactly ${suite.encapsulationBytes} bytes`,
-        );
+        rejectRange(`${slotContext}.encapsulation must be exactly ${suite.encapsulationBytes} bytes`);
       }
       const wrapNonce = requireNonzero(
         encodeFixedBytesValue(
@@ -180,7 +166,7 @@ export function createNoritoProofValueCodecs(
     for (const [index, slot] of encodedSlots.entries()) {
       const identity = slot.toString(HEX_ENCODING);
       if (seenSlots.has(identity)) {
-        throw new Error(`${context}.slots[${index}] duplicates an earlier slot`);
+        rejectError(`${context}.slots[${index}] duplicates an earlier slot`);
       }
       seenSlots.add(identity);
     }
@@ -200,9 +186,7 @@ export function createNoritoProofValueCodecs(
       ciphertext.length < CONFIDENTIAL_MEMO_TAG_BYTES_V1 ||
       ciphertext.length > CONFIDENTIAL_MEMO_MAX_CIPHERTEXT_BYTES_V1
     ) {
-      throw new RangeError(
-        `${context}.ciphertext must be ${CONFIDENTIAL_MEMO_TAG_BYTES_V1}..${CONFIDENTIAL_MEMO_MAX_CIPHERTEXT_BYTES_V1} bytes`,
-      );
+      rejectRange(`${context}.ciphertext must be ${CONFIDENTIAL_MEMO_TAG_BYTES_V1}..${CONFIDENTIAL_MEMO_MAX_CIPHERTEXT_BYTES_V1} bytes`);
     }
     return Buffer.concat([
       CONFIDENTIAL_MEMO_WIRE_MAGIC_V1,
@@ -220,7 +204,7 @@ export function createNoritoProofValueCodecs(
       "wire_magic",
     );
     if (!magic.equals(CONFIDENTIAL_MEMO_WIRE_MAGIC_V1)) {
-      throw new Error(`${context} has invalid confidential memo V1 wire magic`);
+      rejectError(`${context} has invalid confidential memo V1 wire magic`);
     }
     const slots = [];
     const encodedSlotIdentities = new Set();
@@ -250,7 +234,7 @@ export function createNoritoProofValueCodecs(
         wrappedMemoKey,
       ]).toString(HEX_ENCODING);
       if (encodedSlotIdentities.has(identity)) {
-        throw new Error(`${slotContext} duplicates an earlier slot`);
+        rejectError(`${slotContext} duplicates an earlier slot`);
       }
       encodedSlotIdentities.add(identity);
       slots.push({
@@ -275,9 +259,7 @@ export function createNoritoProofValueCodecs(
       ciphertextLength < CONFIDENTIAL_MEMO_TAG_BYTES_V1 ||
       ciphertextLength > CONFIDENTIAL_MEMO_MAX_CIPHERTEXT_BYTES_V1
     ) {
-      throw new RangeError(
-        `${context}.ciphertext must be ${CONFIDENTIAL_MEMO_TAG_BYTES_V1}..${CONFIDENTIAL_MEMO_MAX_CIPHERTEXT_BYTES_V1} bytes`,
-      );
+      rejectRange(`${context}.ciphertext must be ${CONFIDENTIAL_MEMO_TAG_BYTES_V1}..${CONFIDENTIAL_MEMO_MAX_CIPHERTEXT_BYTES_V1} bytes`);
     }
     reader.offset += lengthBytes;
     const ciphertext = reader.readBytes(ciphertextLength, "ciphertext");
@@ -290,8 +272,6 @@ export function createNoritoProofValueCodecs(
   }
 
   return [
-    encodeMerkleProofValue,
-    decodeMerkleProofValue,
     encodeConfidentialMemoEnvelopeV1Value,
     decodeConfidentialMemoEnvelopeV1Value,
   ];
@@ -346,15 +326,19 @@ export function createNoritoContractCodecs(
   publicKeyLiteralFromParts,
   readNoritoField,
 ) {
+  const decodeRecordFields = /* @__PURE__ */ createNoritoRecordDecoder(
+    decodeStructFields, decodeOptionValue, decodeNoritoVec,
+  );
+
   function assertPlainObjectValue(value, context) {
     if (!isPlainObject(value)) {
-      throw new TypeError(`${context} must be an object`);
+      rejectType(`${context} must be an object`);
     }
   }
 
   function assertArrayValue(value, context) {
     if (!Array.isArray(value)) {
-      throw new TypeError(`${context} must be an array`);
+      rejectType(`${context} must be an array`);
     }
   }
 
@@ -430,77 +414,22 @@ export function createNoritoContractCodecs(
     ]);
   }
 
+  const ContractManifestValueFields = [
+    ["seiyaku_name", decodeStringValue, 1],
+    ["code_hash", decodeHashValue, 1],
+    ["abi_hash", decodeHashValue, 1],
+    ["compiler_fingerprint", decodeStringValue, 1],
+    ["features_bitmap", decodeU64NumberValue, 1],
+    ["access_set_hints", decodeAccessSetHintsValue, 1],
+    ["entrypoints", decodeEntrypointDescriptorsValue, 1],
+    ["states", decodeStateDescriptorsValue, 1],
+    ["error_codes", decodeContractErrorCodeDescriptorsValue, 1],
+    ["kotoba", decodeKotobaTranslationEntriesValue, 1],
+    ["provenance", decodeManifestProvenanceValue, 1],
+  ];
+
   function decodeContractManifestValue(payload, context) {
-    const fields = decodeStructFields(payload, context, [
-      "seiyaku_name",
-      "code_hash",
-      "abi_hash",
-      "compiler_fingerprint",
-      "features_bitmap",
-      "access_set_hints",
-      "entrypoints",
-      "states",
-      "error_codes",
-      "kotoba",
-      "provenance",
-    ]);
-    return {
-      seiyaku_name: decodeOptionValue(
-        fields.seiyaku_name,
-        decodeStringValue,
-        `${context}.seiyaku_name`,
-      ),
-      code_hash: decodeOptionValue(
-        fields.code_hash,
-        decodeHashValue,
-        `${context}.code_hash`,
-      ),
-      abi_hash: decodeOptionValue(
-        fields.abi_hash,
-        decodeHashValue,
-        `${context}.abi_hash`,
-      ),
-      compiler_fingerprint: decodeOptionValue(
-        fields.compiler_fingerprint,
-        decodeStringValue,
-        `${context}.compiler_fingerprint`,
-      ),
-      features_bitmap: decodeOptionValue(
-        fields.features_bitmap,
-        decodeU64NumberValue,
-        `${context}.features_bitmap`,
-      ),
-      access_set_hints: decodeOptionValue(
-        fields.access_set_hints,
-        decodeAccessSetHintsValue,
-        `${context}.access_set_hints`,
-      ),
-      entrypoints: decodeOptionValue(
-        fields.entrypoints,
-        decodeEntrypointDescriptorsValue,
-        `${context}.entrypoints`,
-      ),
-      states: decodeOptionValue(
-        fields.states,
-        decodeStateDescriptorsValue,
-        `${context}.states`,
-      ),
-      error_codes: decodeOptionValue(
-        fields.error_codes,
-        decodeContractErrorCodeDescriptorsValue,
-        `${context}.error_codes`,
-      ),
-      kotoba: decodeOptionValue(
-        fields.kotoba,
-        decodeKotobaTranslationEntriesValue,
-        `${context}.kotoba`,
-      ),
-      provenance: decodeOptionValue(
-        fields.provenance,
-        decodeManifestProvenanceValue,
-        `${context}.provenance`,
-      ),
-    };
+    return decodeRecordFields(payload, context, ContractManifestValueFields);
   }
 
   function encodeAccessSetHintsValue(value, context) {
@@ -527,37 +456,15 @@ export function createNoritoContractCodecs(
     ]);
   }
 
+  const AccessSetHintsValueFields = [
+    ["read_keys", decodeStringValue, 2],
+    ["write_keys", decodeStringValue, 2],
+    ["dynamic_reads", decodeDynamicAccessHintValue, 2],
+    ["dynamic_writes", decodeDynamicAccessHintValue, 2],
+  ];
+
   function decodeAccessSetHintsValue(payload, context) {
-    const fields = decodeStructFields(payload, context, [
-      "read_keys",
-      "write_keys",
-      "dynamic_reads",
-      "dynamic_writes",
-    ]);
-    return {
-      read_keys: decodeNoritoVec(
-        fields.read_keys,
-        (entry, index) => decodeStringValue(entry, `${context}.read_keys[${index}]`),
-        `${context}.read_keys`,
-      ),
-      write_keys: decodeNoritoVec(
-        fields.write_keys,
-        (entry, index) => decodeStringValue(entry, `${context}.write_keys[${index}]`),
-        `${context}.write_keys`,
-      ),
-      dynamic_reads: decodeNoritoVec(
-        fields.dynamic_reads,
-        (entry, index) =>
-          decodeDynamicAccessHintValue(entry, `${context}.dynamic_reads[${index}]`),
-        `${context}.dynamic_reads`,
-      ),
-      dynamic_writes: decodeNoritoVec(
-        fields.dynamic_writes,
-        (entry, index) =>
-          decodeDynamicAccessHintValue(entry, `${context}.dynamic_writes[${index}]`),
-        `${context}.dynamic_writes`,
-      ),
-    };
+    return decodeRecordFields(payload, context, AccessSetHintsValueFields);
   }
 
   function encodeDynamicAccessHintValue(value, context) {
@@ -571,19 +478,15 @@ export function createNoritoContractCodecs(
     ]);
   }
 
+  const DynamicAccessHintValueFields = [
+    ["base_key", decodeStringValue, 0],
+    ["key_type", decodeStringValue, 0],
+    ["bound_kind", decodeStringValue, 0],
+    ["max_keys", decodeU32Value, 0],
+  ];
+
   function decodeDynamicAccessHintValue(payload, context) {
-    const fields = decodeStructFields(payload, context, [
-      "base_key",
-      "key_type",
-      "bound_kind",
-      "max_keys",
-    ]);
-    return {
-      base_key: decodeStringValue(fields.base_key, `${context}.base_key`),
-      key_type: decodeStringValue(fields.key_type, `${context}.key_type`),
-      bound_kind: decodeStringValue(fields.bound_kind, `${context}.bound_kind`),
-      max_keys: decodeU32Value(fields.max_keys, `${context}.max_keys`),
-    };
+    return decodeRecordFields(payload, context, DynamicAccessHintValueFields);
   }
 
   function encodeEntrypointDescriptorsValue(value, context) {
@@ -693,77 +596,23 @@ export function createNoritoContractCodecs(
     ]);
   }
 
+  const EntrypointDescriptorValueFields = [
+    ["name", decodeStringValue, 0],
+    ["kind", decodeEntryPointKindValue, 0],
+    ["params", decodeEntrypointParamDescriptorValue, 2],
+    ["argument_schema", decodeEntrypointArgumentSchemaValue, 1],
+    ["return_type", decodeStringValue, 1],
+    ["return_schema", decodeEntrypointValueTypeValue, 1],
+    ["permission", decodeStringValue, 1],
+    ["read_keys", decodeStringValue, 2],
+    ["write_keys", decodeStringValue, 2],
+    ["access_hints_complete", decodeBoolValue, 1],
+    ["access_hints_skipped", decodeStringValue, 2],
+    ["triggers", decodeManifestTriggerDescriptorValue, 2],
+  ];
+
   function decodeEntrypointDescriptorValue(payload, context) {
-    const fields = decodeStructFields(payload, context, [
-      "name",
-      "kind",
-      "params",
-      "argument_schema",
-      "return_type",
-      "return_schema",
-      "permission",
-      "read_keys",
-      "write_keys",
-      "access_hints_complete",
-      "access_hints_skipped",
-      "triggers",
-    ]);
-    return {
-      name: decodeStringValue(fields.name, `${context}.name`),
-      kind: decodeEntryPointKindValue(fields.kind, `${context}.kind`),
-      params: decodeNoritoVec(
-        fields.params,
-        (entry, index) => decodeEntrypointParamDescriptorValue(entry, `${context}.params[${index}]`),
-        `${context}.params`,
-      ),
-      argument_schema: decodeOptionValue(
-        fields.argument_schema,
-        decodeEntrypointArgumentSchemaValue,
-        `${context}.argument_schema`,
-      ),
-      return_type: decodeOptionValue(
-        fields.return_type,
-        decodeStringValue,
-        `${context}.return_type`,
-      ),
-      return_schema: decodeOptionValue(
-        fields.return_schema,
-        decodeEntrypointValueTypeValue,
-        `${context}.return_schema`,
-      ),
-      permission: decodeOptionValue(
-        fields.permission,
-        decodeStringValue,
-        `${context}.permission`,
-      ),
-      read_keys: decodeNoritoVec(
-        fields.read_keys,
-        (entry, index) => decodeStringValue(entry, `${context}.read_keys[${index}]`),
-        `${context}.read_keys`,
-      ),
-      write_keys: decodeNoritoVec(
-        fields.write_keys,
-        (entry, index) => decodeStringValue(entry, `${context}.write_keys[${index}]`),
-        `${context}.write_keys`,
-      ),
-      access_hints_complete: decodeOptionValue(
-        fields.access_hints_complete,
-        decodeBoolValue,
-        `${context}.access_hints_complete`,
-      ),
-      access_hints_skipped: decodeNoritoVec(
-        fields.access_hints_skipped,
-        (entry, index) =>
-          decodeStringValue(entry, `${context}.access_hints_skipped[${index}]`),
-        `${context}.access_hints_skipped`,
-      ),
-      triggers: decodeNoritoVec(
-        fields.triggers,
-        (entry, index) =>
-          decodeManifestTriggerDescriptorValue(entry, `${context}.triggers[${index}]`),
-        `${context}.triggers`,
-      ),
-    };
+    return decodeRecordFields(payload, context, EntrypointDescriptorValueFields);
   }
 
   function encodeEntryPointKindValue(value, context) {
@@ -779,7 +628,7 @@ export function createNoritoContractCodecs(
       case "kaizen":
         return encodeEnumTagValue(3);
       default:
-        throw new Error(`${context} must be Kotoage, View, Hajimari, or Kaizen`);
+        rejectError(`${context} must be Kotoage, View, Hajimari, or Kaizen`);
     }
   }
 
@@ -797,7 +646,7 @@ export function createNoritoContractCodecs(
       case 3:
         return { kind: "Kaizen", value: null };
       default:
-        throw new Error(`${context} uses unsupported entrypoint kind ${tag}`);
+        rejectError(`${context} uses unsupported entrypoint kind ${tag}`);
     }
   }
 
@@ -810,17 +659,18 @@ export function createNoritoContractCodecs(
     ]);
   }
 
+  const EntrypointParamDescriptorValueFields = [
+    ["name", decodeStringValue, 0],
+    ["type_name", decodeStringValue, 0],
+  ];
+
   function decodeEntrypointParamDescriptorValue(payload, context) {
-    const fields = decodeStructFields(payload, context, ["name", "type_name"]);
-    return {
-      name: decodeStringValue(fields.name, `${context}.name`),
-      type_name: decodeStringValue(fields.type_name, `${context}.type_name`),
-    };
+    return decodeRecordFields(payload, context, EntrypointParamDescriptorValueFields);
   }
 
   function encodeEntrypointArgumentSchemaValue(value, context) {
     if (!isPlainObject(value) || !Array.isArray(value.fields)) {
-      throw new TypeError(`${context} must contain a fields array`);
+      rejectType(`${context} must contain a fields array`);
     }
     assertOnlyObjectKeys(value, ["fields"], context);
     return encodeStructValue([
@@ -832,16 +682,12 @@ export function createNoritoContractCodecs(
     ]);
   }
 
+  const EntrypointArgumentSchemaValueFields = [
+    ["fields", decodeEntrypointArgumentFieldValue, 2],
+  ];
+
   function decodeEntrypointArgumentSchemaValue(payload, context) {
-    const fields = decodeStructFields(payload, context, ["fields"]);
-    return {
-      fields: decodeNoritoVec(
-        fields.fields,
-        (field, index) =>
-          decodeEntrypointArgumentFieldValue(field, `${context}.fields[${index}]`),
-        `${context}.fields`,
-      ),
-    };
+    return decodeRecordFields(payload, context, EntrypointArgumentSchemaValueFields);
   }
 
   function encodeEntrypointArgumentFieldValue(value, context) {
@@ -853,17 +699,18 @@ export function createNoritoContractCodecs(
     ]);
   }
 
+  const EntrypointArgumentFieldValueFields = [
+    ["name", decodeStringValue, 0],
+    ["ty", decodeEntrypointValueTypeValue, 0],
+  ];
+
   function decodeEntrypointArgumentFieldValue(payload, context) {
-    const fields = decodeStructFields(payload, context, ["name", "ty"]);
-    return {
-      name: decodeStringValue(fields.name, `${context}.name`),
-      ty: decodeEntrypointValueTypeValue(fields.ty, `${context}.ty`),
-    };
+    return decodeRecordFields(payload, context, EntrypointArgumentFieldValueFields);
   }
 
   function encodeEntrypointValueTypeValue(value, context) {
     if (!isPlainObject(value) || !Array.isArray(value.nodes)) {
-      throw new TypeError(`${context} must contain a nodes array`);
+      rejectType(`${context} must contain a nodes array`);
     }
     assertOnlyObjectKeys(value, ["nodes"], context);
     analyzeEntrypointValueTypeV1(value, context);
@@ -892,7 +739,7 @@ export function createNoritoContractCodecs(
 
   function taggedEnumParts(value, context) {
     if (!isPlainObject(value)) {
-      throw new TypeError(`${context} must be a tagged object`);
+      rejectType(`${context} must be a tagged object`);
     }
     assertOnlyObjectKeys(value, ["kind", "value"], context);
     return {
@@ -927,7 +774,7 @@ export function createNoritoContractCodecs(
           encodeEntrypointValueKindValue(tagged.value, `${context}.value`),
         );
       default:
-        throw new Error(`${context}.kind uses unsupported value-type node ${tagged.kind}`);
+        rejectError(`${context}.kind uses unsupported value-type node ${tagged.kind}`);
     }
   }
 
@@ -971,7 +818,7 @@ export function createNoritoContractCodecs(
           ),
         };
       default:
-        throw new Error(`${context} uses unsupported value-type node tag ${tag}`);
+        rejectError(`${context} uses unsupported value-type node tag ${tag}`);
     }
   }
 
@@ -983,13 +830,13 @@ export function createNoritoContractCodecs(
 
   function requireNullEnumPayload(value, context) {
     if (value !== null && value !== undefined) {
-      throw new TypeError(`${context}.value must be null for a unit variant`);
+      rejectType(`${context}.value must be null for a unit variant`);
     }
   }
 
   function encodeEntrypointStructTypeNodeValue(value, context) {
     if (!isPlainObject(value) || !Array.isArray(value.fields)) {
-      throw new TypeError(`${context} must contain a fields array`);
+      rejectType(`${context} must contain a fields array`);
     }
     assertOnlyObjectKeys(value, ["name", "fields"], context);
     return encodeStructValue([
@@ -1004,16 +851,13 @@ export function createNoritoContractCodecs(
     ]);
   }
 
+  const EntrypointStructTypeNodeValueFields = [
+    ["name", decodeStringValue, 0],
+    ["fields", decodeStringValue, 2],
+  ];
+
   function decodeEntrypointStructTypeNodeValue(payload, context) {
-    const fields = decodeStructFields(payload, context, ["name", "fields"]);
-    return {
-      name: decodeStringValue(fields.name, `${context}.name`),
-      fields: decodeNoritoVec(
-        fields.fields,
-        (field, index) => decodeStringValue(field, `${context}.fields[${index}]`),
-        `${context}.fields`,
-      ),
-    };
+    return decodeRecordFields(payload, context, EntrypointStructTypeNodeValueFields);
   }
 
   function encodeEntrypointListTypeNodeValue(value, context) {
@@ -1024,11 +868,12 @@ export function createNoritoContractCodecs(
     ]);
   }
 
+  const EntrypointListTypeNodeValueFields = [
+    ["capacity", decodeU8Value, 0],
+  ];
+
   function decodeEntrypointListTypeNodeValue(payload, context) {
-    const fields = decodeStructFields(payload, context, ["capacity"]);
-    return {
-      capacity: decodeU8Value(fields.capacity, `${context}.capacity`),
-    };
+    return decodeRecordFields(payload, context, EntrypointListTypeNodeValueFields);
   }
 
   const ENTRYPOINT_VALUE_KIND_NAMES = Object.freeze([
@@ -1053,7 +898,7 @@ export function createNoritoContractCodecs(
     requireNullEnumPayload(tagged.value, context);
     const tag = ENTRYPOINT_VALUE_KIND_NAMES.indexOf(tagged.kind);
     if (tag < 0) {
-      throw new Error(`${context}.kind uses unsupported value kind ${tagged.kind}`);
+      rejectError(`${context}.kind uses unsupported value kind ${tagged.kind}`);
     }
     return encodeEnumTagValue(tag);
   }
@@ -1064,7 +909,7 @@ export function createNoritoContractCodecs(
     reader.assertEof();
     const kind = ENTRYPOINT_VALUE_KIND_NAMES[tag];
     if (kind === undefined) {
-      throw new Error(`${context} uses unsupported value-kind tag ${tag}`);
+      rejectError(`${context} uses unsupported value-kind tag ${tag}`);
     }
     return { kind, value: null };
   }
@@ -1097,12 +942,13 @@ export function createNoritoContractCodecs(
     ]);
   }
 
+  const StateDescriptorValueFields = [
+    ["name", decodeStringValue, 0],
+    ["type_name", decodeStringValue, 0],
+  ];
+
   function decodeStateDescriptorValue(payload, context) {
-    const fields = decodeStructFields(payload, context, ["name", "type_name"]);
-    return {
-      name: decodeStringValue(fields.name, `${context}.name`),
-      type_name: decodeStringValue(fields.type_name, `${context}.type_name`),
-    };
+    return decodeRecordFields(payload, context, StateDescriptorValueFields);
   }
 
   function encodeContractErrorCodeDescriptorsValue(value, context) {
@@ -1135,13 +981,14 @@ export function createNoritoContractCodecs(
     ]);
   }
 
+  const ContractErrorCodeDescriptorValueFields = [
+    ["namespace", decodeStringValue, 0],
+    ["name", decodeStringValue, 0],
+    ["code", decodeU32Value, 0],
+  ];
+
   function decodeContractErrorCodeDescriptorValue(payload, context) {
-    const fields = decodeStructFields(payload, context, ["namespace", "name", "code"]);
-    return {
-      namespace: decodeStringValue(fields.namespace, `${context}.namespace`),
-      name: decodeStringValue(fields.name, `${context}.name`),
-      code: decodeU32Value(fields.code, `${context}.code`),
-    };
+    return decodeRecordFields(payload, context, ContractErrorCodeDescriptorValueFields);
   }
 
   function encodeKotobaTranslationEntriesValue(value, context) {
@@ -1172,16 +1019,13 @@ export function createNoritoContractCodecs(
     ]);
   }
 
+  const KotobaTranslationEntryValueFields = [
+    ["msg_id", decodeStringValue, 0],
+    ["translations", decodeKotobaTranslationValue, 2],
+  ];
+
   function decodeKotobaTranslationEntryValue(payload, context) {
-    const fields = decodeStructFields(payload, context, ["msg_id", "translations"]);
-    return {
-      msg_id: decodeStringValue(fields.msg_id, `${context}.msg_id`),
-      translations: decodeNoritoVec(
-        fields.translations,
-        (entry, index) => decodeKotobaTranslationValue(entry, `${context}.translations[${index}]`),
-        `${context}.translations`,
-      ),
-    };
+    return decodeRecordFields(payload, context, KotobaTranslationEntryValueFields);
   }
 
   function encodeKotobaTranslationValue(value, context) {
@@ -1193,12 +1037,13 @@ export function createNoritoContractCodecs(
     ]);
   }
 
+  const KotobaTranslationValueFields = [
+    ["lang", decodeStringValue, 0],
+    ["text", decodeStringValue, 0],
+  ];
+
   function decodeKotobaTranslationValue(payload, context) {
-    const fields = decodeStructFields(payload, context, ["lang", "text"]);
-    return {
-      lang: decodeStringValue(fields.lang, `${context}.lang`),
-      text: decodeStringValue(fields.text, `${context}.text`),
-    };
+    return decodeRecordFields(payload, context, KotobaTranslationValueFields);
   }
 
   function encodeManifestProvenanceValue(value, context) {
@@ -1210,7 +1055,7 @@ export function createNoritoContractCodecs(
       signatureLiteral.length % 2 !== 0 ||
       !/^[0-9A-Fa-f]+$/u.test(signatureLiteral)
     ) {
-      throw new Error(`${context}.signature must be an even-length hexadecimal string`);
+      rejectError(`${context}.signature must be an even-length hexadecimal string`);
     }
     const signature = Buffer.from(signatureLiteral, HEX_ENCODING);
     validateManifestSignatureBytes(signature, `${context}.signature`);
@@ -1237,10 +1082,10 @@ export function createNoritoContractCodecs(
 
   function validateManifestSignatureBytes(signature, context) {
     if (signature.length === 0) {
-      throw new Error(`${context} must not be empty`);
+      rejectError(`${context} must not be empty`);
     }
     if (signature.every((byte) => byte === 0)) {
-      throw new Error(`${context} must not be all zero`);
+      rejectError(`${context} must not be all zero`);
     }
   }
 
@@ -1270,27 +1115,17 @@ export function createNoritoContractCodecs(
     ]);
   }
 
+  const ManifestTriggerDescriptorValueFields = [
+    ["id", decodeTriggerIdValue, 0],
+    ["repeats", decodeTriggerRepeatsValue, 0],
+    ["filter", decodeEventFilterBoxFramePayload, 0],
+    ["authority", decodeAccountIdValue, 1],
+    ["metadata", decodeMetadataValue, 0],
+    ["callback", decodeTriggerCallbackValue, 0],
+  ];
+
   function decodeManifestTriggerDescriptorValue(payload, context) {
-    const fields = decodeStructFields(payload, context, [
-      "id",
-      "repeats",
-      "filter",
-      "authority",
-      "metadata",
-      "callback",
-    ]);
-    return {
-      id: decodeTriggerIdValue(fields.id, `${context}.id`),
-      repeats: decodeTriggerRepeatsValue(fields.repeats, `${context}.repeats`),
-      filter: decodeEventFilterBoxFramePayload(fields.filter, `${context}.filter`),
-      authority: decodeOptionValue(
-        fields.authority,
-        decodeAccountIdValue,
-        `${context}.authority`,
-      ),
-      metadata: decodeMetadataValue(fields.metadata, `${context}.metadata`),
-      callback: decodeTriggerCallbackValue(fields.callback, `${context}.callback`),
-    };
+    return decodeRecordFields(payload, context, ManifestTriggerDescriptorValueFields);
   }
 
   function encodeTriggerIdValue(value, context) {
@@ -1306,13 +1141,11 @@ export function createNoritoContractCodecs(
 
   function encodeTriggerRepeatsValue(value, context) {
     if (!isPlainObject(value)) {
-      throw new TypeError(
-        `${context} must be {Indefinitely:null} or {Exactly:<u32>}`,
-      );
+      rejectType(`${context} must be {Indefinitely:null} or {Exactly:<u32>}`);
     }
     const keys = Object.keys(value);
     if (keys.length !== 1) {
-      throw new TypeError(`${context} must contain exactly one repeat variant`);
+      rejectType(`${context} must contain exactly one repeat variant`);
     }
     if (keys[0] === "Indefinitely") {
       requireNullEnumPayload(value.Indefinitely, context);
@@ -1323,7 +1156,7 @@ export function createNoritoContractCodecs(
         encodeU32Value(value.Exactly, `${context}.Exactly`),
       );
     }
-    throw new Error(`${context} uses unsupported repeat variant ${keys[0]}`);
+    rejectError(`${context} uses unsupported repeat variant ${keys[0]}`);
   }
 
   function decodeTriggerRepeatsValue(payload, context) {
@@ -1341,7 +1174,7 @@ export function createNoritoContractCodecs(
         ),
       };
     }
-    throw new Error(`${context} uses unsupported repeat tag ${tag}`);
+    rejectError(`${context} uses unsupported repeat tag ${tag}`);
   }
 
   function encodeTriggerCallbackValue(value, context) {
@@ -1363,16 +1196,13 @@ export function createNoritoContractCodecs(
     ]);
   }
 
+  const TriggerCallbackValueFields = [
+    ["namespace", decodeStringValue, 1],
+    ["entrypoint", decodeStringValue, 0],
+  ];
+
   function decodeTriggerCallbackValue(payload, context) {
-    const fields = decodeStructFields(payload, context, ["namespace", "entrypoint"]);
-    return {
-      namespace: decodeOptionValue(
-        fields.namespace,
-        decodeStringValue,
-        `${context}.namespace`,
-      ),
-      entrypoint: decodeStringValue(fields.entrypoint, `${context}.entrypoint`),
-    };
+    return decodeRecordFields(payload, context, TriggerCallbackValueFields);
   }
 
 

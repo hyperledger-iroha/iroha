@@ -1,13 +1,13 @@
 // Copyright 2026 Hyperledger Iroha Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-package org.hyperledger.iroha.android.privacy;
+package org.hyperledger.iroha.sdk.privacy;
 
-import static org.junit.Assert.assertArrayEquals;
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertThrows;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -21,14 +21,14 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Base64;
 import java.util.List;
-import org.hyperledger.iroha.norito.CRC64;
-import org.hyperledger.iroha.norito.NoritoEncoder;
-import org.hyperledger.iroha.norito.NoritoHeader;
-import org.hyperledger.iroha.norito.SchemaHash;
-import org.junit.Test;
+import org.hyperledger.iroha.sdk.norito.CRC64;
+import org.hyperledger.iroha.sdk.norito.NoritoEncoder;
+import org.hyperledger.iroha.sdk.norito.NoritoHeader;
+import org.hyperledger.iroha.sdk.norito.SchemaHash;
+import org.junit.jupiter.api.Test;
 
-/** Real-fixture and adversarial checks for the native-independent exact-12 codec. */
-public final class PrivacyExact12FixtureCodecV1Tests {
+/** Original Java fixture and adversarial assertions against the canonical Kotlin codec. */
+public final class PrivacyExact12FixtureJavaConsumerTest {
   private static final String FIXTURE_PATH =
       "fixtures/privacy/exact12_typed_fixture_bundle_v1.norito.b64";
 
@@ -43,12 +43,12 @@ public final class PrivacyExact12FixtureCodecV1Tests {
         0, PrivacyProofSystemIdV1.STARK_FRI_POSEIDON_X7_GOLDILOCKS_6X64_V1.ordinal());
     assertEquals(
         "stark-fri-poseidon-x7-goldilocks-6x64-v1",
-        PrivacyProofSystemIdV1.STARK_FRI_POSEIDON_X7_GOLDILOCKS_6X64_V1.canonicalLabel());
+        PrivacyProofSystemIdV1.STARK_FRI_POSEIDON_X7_GOLDILOCKS_6X64_V1.getCanonicalLabel());
     assertEquals(
         0, PrivacyEngineIdV1.NATIVE_GOLDILOCKS_POSEIDON_X7_STARK_FRI_6X64_V1.ordinal());
     assertEquals(
         "native-goldilocks-poseidon-x7-stark-fri-6x64-v1",
-        PrivacyEngineIdV1.NATIVE_GOLDILOCKS_POSEIDON_X7_STARK_FRI_6X64_V1.canonicalLabel());
+        PrivacyEngineIdV1.NATIVE_GOLDILOCKS_POSEIDON_X7_STARK_FRI_6X64_V1.getCanonicalLabel());
   }
 
   @Test
@@ -57,25 +57,25 @@ public final class PrivacyExact12FixtureCodecV1Tests {
     final PrivacyExact12FixtureBundleV1 bundle =
         PrivacyExact12FixtureCodecV1.decodeCanonicalBase64(fixture.base64);
 
-    assertEquals(PrivacyExact12FixtureCodecV1.VERSION, bundle.version());
-    assertEquals(PrivacyExact12FixtureCodecV1.ROW_COUNT, bundle.rows().size());
+    assertEquals(PrivacyExact12FixtureCodecV1.VERSION, bundle.version);
+    assertEquals(PrivacyExact12FixtureCodecV1.ROW_COUNT, bundle.rows.size());
     final PrivacyProtocolIdV1[] protocols =
         PrivacyProtocolIdV1.values();
-    for (int index = 0; index < bundle.rows().size(); index++) {
-      final PrivacyExact12TypedFixtureRowV1 row = bundle.rows().get(index);
-      assertEquals(protocols[index], row.protocolId());
-      assertTrue(row.statementNorito().length > 0);
-      assertTrue(row.envelopeNorito().length > 0);
+    for (int index = 0; index < bundle.rows.size(); index++) {
+      final PrivacyExact12TypedFixtureRowV1 row = bundle.rows.get(index);
+      assertEquals(protocols[index], row.protocolId);
+      assertTrue(row.getStatementNorito().length > 0);
+      assertTrue(row.getEnvelopeNorito().length > 0);
       assertEquals(
-          PrivacyExact12FixtureCodecV1.SUBMIT_PROOF_WIRE_ID, row.submitProofWireId());
-      assertTrue(row.submitProofInstructionNorito().length > 0);
-      assertTrue(row.transactionIntentProjectionNorito().length > 0);
+          PrivacyExact12FixtureCodecV1.SUBMIT_PROOF_WIRE_ID, row.submitProofWireId);
+      assertTrue(row.getSubmitProofInstructionNorito().length > 0);
+      assertTrue(row.getTransactionIntentProjectionNorito().length > 0);
       assertEquals(
-          PrivacyExact12FixtureCodecV1.HASH_BYTES, row.transactionIntentDigest().length);
-      assertTrue(row.unsignedTransactionPayloadNorito().length > 0);
-      assertTrue(row.signedTransactionVersionedNorito().length > 0);
+          PrivacyExact12FixtureCodecV1.HASH_BYTES, row.getTransactionIntentDigest().length);
+      assertTrue(row.getUnsignedTransactionPayloadNorito().length > 0);
+      assertTrue(row.getSignedTransactionVersionedNorito().length > 0);
       assertEquals(
-          PrivacyExact12FixtureCodecV1.HASH_BYTES, row.signedTransactionHash().length);
+          PrivacyExact12FixtureCodecV1.HASH_BYTES, row.getSignedTransactionHash().length);
     }
 
     assertArrayEquals(fixture.archive, PrivacyExact12FixtureCodecV1.encodeCanonical(bundle));
@@ -85,11 +85,11 @@ public final class PrivacyExact12FixtureCodecV1Tests {
         PrivacyExact12FixtureCodecV1.requireCanonicalArchive(
             fixture.archive, fixture.archive));
 
-    final PrivacyExact12TypedFixtureRowV1 first = bundle.rows().get(0);
-    final byte originalFirstByte = first.statementNorito()[0];
-    final byte[] statementCopy = first.statementNorito();
+    final PrivacyExact12TypedFixtureRowV1 first = bundle.rows.get(0);
+    final byte originalFirstByte = first.getStatementNorito()[0];
+    final byte[] statementCopy = first.getStatementNorito();
     statementCopy[0] ^= (byte) 0xFF;
-    assertEquals(originalFirstByte, first.statementNorito()[0]);
+    assertEquals(originalFirstByte, first.getStatementNorito()[0]);
   }
 
   @Test
@@ -122,7 +122,9 @@ public final class PrivacyExact12FixtureCodecV1Tests {
         Math.toIntExact(
             PrivacyExact12FixtureCodecV1.canonicalBase64EncodedLength(
                 PrivacyExact12FixtureCodecV1.MAX_ARCHIVE_BYTES));
-    final String oversizedBase64 = "A".repeat(maximumEncodedLength + 1);
+    final char[] oversizedCharacters = new char[maximumEncodedLength + 1];
+    Arrays.fill(oversizedCharacters, 'A');
+    final String oversizedBase64 = new String(oversizedCharacters);
     assertThrows(
         IllegalArgumentException.class,
         () -> PrivacyExact12FixtureCodecV1.decodeCanonicalBase64(oversizedBase64));
@@ -228,7 +230,7 @@ public final class PrivacyExact12FixtureCodecV1Tests {
             oversizedStatementVector,
             nonMinimalVersionLength)) {
       assertTrue(
-          "hostile test archive unexpectedly allocated a large payload", hostile.length < 512);
+          hostile.length < 512, "hostile test archive unexpectedly allocated a large payload");
       assertThrows(
           IllegalArgumentException.class,
           () -> PrivacyExact12FixtureCodecV1.decodeCanonical(hostile));
@@ -242,7 +244,7 @@ public final class PrivacyExact12FixtureCodecV1Tests {
         PrivacyExact12FixtureCodecV1.decodeCanonical(fixture.archive);
 
     final List<PrivacyExact12TypedFixtureRowV1> swappedRows =
-        new ArrayList<>(bundle.rows());
+        new ArrayList<>(bundle.rows);
     final PrivacyExact12TypedFixtureRowV1 first = swappedRows.get(0);
     swappedRows.set(0, swappedRows.get(1));
     swappedRows.set(1, first);
@@ -258,13 +260,13 @@ public final class PrivacyExact12FixtureCodecV1Tests {
         IllegalArgumentException.class,
         () -> PrivacyExact12FixtureCodecV1.decodeCanonical(reorderedArchive));
 
-    final PrivacyExact12TypedFixtureRowV1 source = bundle.rows().get(0);
-    final PrivacyExact12TypedFixtureRowV1 donor = bundle.rows().get(1);
+    final PrivacyExact12TypedFixtureRowV1 source = bundle.rows.get(0);
+    final PrivacyExact12TypedFixtureRowV1 donor = bundle.rows.get(1);
     for (int field = 0; field < 8; field++) {
       final PrivacyExact12TypedFixtureRowV1 substituted =
           copyRowFieldFrom(source, donor, field);
       final List<PrivacyExact12TypedFixtureRowV1> substitutedRows =
-          new ArrayList<>(bundle.rows());
+          new ArrayList<>(bundle.rows);
       substitutedRows.set(0, substituted);
       assertThrows(
           IllegalArgumentException.class,
@@ -345,7 +347,8 @@ public final class PrivacyExact12FixtureCodecV1Tests {
                 payload.length,
                 CRC64.compute(payload),
                 NoritoHeader.COMPACT_LEN,
-                NoritoHeader.COMPRESSION_NONE)
+                NoritoHeader.COMPRESSION_NONE,
+                NoritoHeader.MINOR_VERSION)
             .encode();
     return concat(header, payload);
   }
@@ -393,7 +396,8 @@ public final class PrivacyExact12FixtureCodecV1Tests {
         new ByteArrayOutputStream(payload.length);
     modifiedPayload.write(payload, 0, version.end);
     modifiedPayload.write(payload, version.end, rowsStart - version.end);
-    modifiedPayload.writeBytes(reorderedRows.toByteArray());
+    final byte[] reordered = reorderedRows.toByteArray();
+    modifiedPayload.write(reordered, 0, reordered.length);
     return frame(modifiedPayload.toByteArray());
   }
 
@@ -481,22 +485,22 @@ public final class PrivacyExact12FixtureCodecV1Tests {
       final PrivacyExact12TypedFixtureRowV1 donor,
       final int field) {
     return new PrivacyExact12TypedFixtureRowV1(
-        row.protocolId(),
-        field == 0 ? donor.statementNorito() : row.statementNorito(),
-        field == 1 ? donor.envelopeNorito() : row.envelopeNorito(),
-        row.submitProofWireId(),
-        field == 2 ? donor.submitProofInstructionNorito() : row.submitProofInstructionNorito(),
+        row.protocolId,
+        field == 0 ? donor.getStatementNorito() : row.getStatementNorito(),
+        field == 1 ? donor.getEnvelopeNorito() : row.getEnvelopeNorito(),
+        row.submitProofWireId,
+        field == 2 ? donor.getSubmitProofInstructionNorito() : row.getSubmitProofInstructionNorito(),
         field == 3
-            ? donor.transactionIntentProjectionNorito()
-            : row.transactionIntentProjectionNorito(),
-        field == 4 ? donor.transactionIntentDigest() : row.transactionIntentDigest(),
+            ? donor.getTransactionIntentProjectionNorito()
+            : row.getTransactionIntentProjectionNorito(),
+        field == 4 ? donor.getTransactionIntentDigest() : row.getTransactionIntentDigest(),
         field == 5
-            ? donor.unsignedTransactionPayloadNorito()
-            : row.unsignedTransactionPayloadNorito(),
+            ? donor.getUnsignedTransactionPayloadNorito()
+            : row.getUnsignedTransactionPayloadNorito(),
         field == 6
-            ? donor.signedTransactionVersionedNorito()
-            : row.signedTransactionVersionedNorito(),
-        field == 7 ? donor.signedTransactionHash() : row.signedTransactionHash());
+            ? donor.getSignedTransactionVersionedNorito()
+            : row.getSignedTransactionVersionedNorito(),
+        field == 7 ? donor.getSignedTransactionHash() : row.getSignedTransactionHash());
   }
 
   private static PrivacyExact12TypedFixtureRowV1 syntheticRow(

@@ -485,11 +485,11 @@ use crate::{
         MODERATION_SCREENING_AUTHORITY_BUNDLE_MAX_BYTES_V1, ModerationEvidenceViewerRuntime,
         ModerationModelRegistry, ModerationQuarantineObjectEnvelopeV1,
         ModerationQuarantineObjectRuntime, ModerationScreeningRuntime,
-        moderation_quarantine_object_relative_path, normalize_moderation_quarantine_object_input,
-        open_moderation_quarantine_object, open_moderation_quarantine_object_range,
-        rewrap_moderation_quarantine_object, seal_moderation_quarantine_object,
-        validate_moderation_quarantine_key_wrapper, validate_quarantine_object_envelope,
-        validate_relative_object_path,
+        decode_moderation_quarantine_object_envelope, moderation_quarantine_object_relative_path,
+        normalize_moderation_quarantine_object_input, open_moderation_quarantine_object,
+        open_moderation_quarantine_object_range, rewrap_moderation_quarantine_object,
+        seal_moderation_quarantine_object, validate_moderation_quarantine_key_wrapper,
+        validate_quarantine_object_envelope, validate_relative_object_path,
     },
     potr::PotrTracker,
     scheduler::{SchedulerAdmissionError, StorageSchedulerConfig, StorageSchedulersRuntime},
@@ -1259,14 +1259,12 @@ where
     let maximum_bytes = usize::try_from(max_bytes)
         .map_err(|_| "checkpoint byte limit does not fit memory address space".to_owned())?;
     let limits = local_checkpoint_decode_limits(bytes.len(), maximum_bytes, max_sequence_elements)?;
-    let checkpoint: T = norito::decode_from_bytes_with_limits(bytes, limits)
-        .map_err(|err| format!("bounded checkpoint decode failed: {err}"))?;
-    let canonical = norito::to_bytes(&checkpoint)
-        .map_err(|err| format!("canonical checkpoint encoding failed: {err}"))?;
-    if canonical != bytes {
-        return Err("checkpoint is not the exact canonical Norito encoding".to_owned());
-    }
-    Ok(checkpoint)
+    norito::decode_canonical_with_limits(bytes, limits).map_err(|err| match err {
+        norito::Error::NonCanonicalEncoding => {
+            "checkpoint is not the exact canonical Norito encoding".to_owned()
+        }
+        err => format!("bounded checkpoint decode failed: {err}"),
+    })
 }
 fn local_checkpoint_decode_limits(
     encoded_len: usize,
@@ -11456,11 +11454,13 @@ impl NodeHandle {
         if replacement_bytes == original_bytes {
             return Ok(record);
         }
-        let replacement_envelope =
-            norito::decode_from_bytes::<ModerationQuarantineObjectEnvelopeV1>(&replacement_bytes)
-                .map_err(|error| ModerationQuarantineObjectError::Codec {
-                message: error.to_string(),
-            })?;
+        let replacement_envelope = decode_moderation_quarantine_object_envelope(
+            &replacement_bytes,
+            self.config.runtime_retention().checkpoint_max_bytes(),
+        )
+        .map_err(|error| ModerationQuarantineObjectError::Codec {
+            message: error.to_string(),
+        })?;
         open_moderation_quarantine_object(
             &replacement_envelope,
             &replacement_record,
@@ -12033,7 +12033,7 @@ impl NodeHandle {
         let Some(path) = self.moderation_model_registry_checkpoint_path.as_ref() else {
             return Ok(());
         };
-        let bytes = norito::to_bytes(snapshot).map_err(|err| {
+        let bytes = norito::encode_canonical(snapshot).map_err(|err| {
             RuntimeCheckpointPersistError::precommit(format!(
                 "encode moderation model registry checkpoint `{}`: {err}",
                 path.display()
@@ -12092,7 +12092,7 @@ impl NodeHandle {
         let Some(path) = self.moderation_screening_checkpoint_path.as_ref() else {
             return Ok(());
         };
-        let bytes = norito::to_bytes(snapshot).map_err(|err| {
+        let bytes = norito::encode_canonical(snapshot).map_err(|err| {
             RuntimeCheckpointPersistError::precommit(format!(
                 "encode moderation screening checkpoint `{}`: {err}",
                 path.display()
@@ -12214,30 +12214,21 @@ impl NodeHandle {
                     "indexed envelope is missing",
                 )
             })?;
-            let envelope = norito::decode_from_bytes::<ModerationQuarantineObjectEnvelopeV1>(
+            let envelope = decode_moderation_quarantine_object_envelope(
                 &bytes,
+                self.config.runtime_retention().checkpoint_max_bytes(),
             )
             .map_err(|err| {
                 NodeInitError::checkpoint(
                     "moderation quarantine object envelope",
                     &envelope_path,
-                    err,
+                    if matches!(err, norito::Error::NonCanonicalEncoding) {
+                        "envelope is not canonically encoded".to_owned()
+                    } else {
+                        err.to_string()
+                    },
                 )
             })?;
-            let canonical = norito::to_bytes(&envelope).map_err(|err| {
-                NodeInitError::checkpoint(
-                    "moderation quarantine object envelope",
-                    &envelope_path,
-                    err,
-                )
-            })?;
-            if canonical != bytes {
-                return Err(NodeInitError::checkpoint(
-                    "moderation quarantine object envelope",
-                    &envelope_path,
-                    "envelope is not canonically encoded",
-                ));
-            }
             let payload = open_moderation_quarantine_object(
                 &envelope,
                 record,
@@ -12324,7 +12315,7 @@ impl NodeHandle {
         let Some(path) = self.moderation_quarantine_object_index_path.as_ref() else {
             return Ok(());
         };
-        let bytes = norito::to_bytes(snapshot).map_err(|err| {
+        let bytes = norito::encode_canonical(snapshot).map_err(|err| {
             RuntimeCheckpointPersistError::precommit(format!(
                 "encode moderation quarantine object index checkpoint `{}`: {err}",
                 path.display()
@@ -12385,7 +12376,7 @@ impl NodeHandle {
         let Some(path) = self.moderation_evidence_viewer_checkpoint_path.as_ref() else {
             return Ok(());
         };
-        let bytes = norito::to_bytes(snapshot).map_err(|err| {
+        let bytes = norito::encode_canonical(snapshot).map_err(|err| {
             RuntimeCheckpointPersistError::precommit(format!(
                 "encode moderation evidence viewer checkpoint `{}`: {err}",
                 path.display()
@@ -12566,7 +12557,7 @@ impl NodeHandle {
                 "export auxiliary runtime checkpoint: {err}"
             ))
         })?;
-        let bytes = norito::to_bytes(&checkpoint).map_err(|err| {
+        let bytes = norito::encode_canonical(&checkpoint).map_err(|err| {
             RuntimeCheckpointPersistError::precommit(format!(
                 "encode auxiliary runtime checkpoint: {err}"
             ))
@@ -13539,21 +13530,20 @@ impl NodeHandle {
         .ok_or_else(|| ModerationQuarantineObjectError::MissingObject {
             quarantine_id_hex: hex::encode(record.quarantine_id),
         })?;
-        let envelope =
-            norito::decode_from_bytes::<ModerationQuarantineObjectEnvelopeV1>(&envelope_bytes)
-                .map_err(|error| ModerationQuarantineObjectError::Codec {
-                    message: error.to_string(),
-                })?;
-        let canonical = norito::to_bytes(&envelope).map_err(|error| {
-            ModerationQuarantineObjectError::Codec {
-                message: error.to_string(),
+        let envelope = decode_moderation_quarantine_object_envelope(
+            &envelope_bytes,
+            self.config.runtime_retention().checkpoint_max_bytes(),
+        )
+        .map_err(|error| match error {
+            norito::Error::NonCanonicalEncoding => {
+                ModerationQuarantineObjectError::AuthenticationFailed {
+                    quarantine_id_hex: hex::encode(record.quarantine_id),
+                }
             }
+            error => ModerationQuarantineObjectError::Codec {
+                message: error.to_string(),
+            },
         })?;
-        if canonical != envelope_bytes {
-            return Err(ModerationQuarantineObjectError::AuthenticationFailed {
-                quarantine_id_hex: hex::encode(record.quarantine_id),
-            });
-        }
         Ok((envelope_path, envelope, envelope_bytes))
     }
     fn recover_unindexed_moderation_quarantine_envelope(
@@ -13573,19 +13563,13 @@ impl NodeHandle {
             path: path.display().to_string(),
             message: "unindexed envelope disappeared during startup audit".to_owned(),
         })?;
-        let envelope =
-            match norito::decode_from_bytes::<ModerationQuarantineObjectEnvelopeV1>(&bytes) {
-                Ok(envelope) => envelope,
-                Err(_) => return Ok(false),
-            };
-        let canonical = norito::to_bytes(&envelope).map_err(|error| {
-            ModerationQuarantineObjectError::Codec {
-                message: error.to_string(),
-            }
-        })?;
-        if canonical != bytes {
-            return Ok(false);
-        }
+        let envelope = match decode_moderation_quarantine_object_envelope(
+            &bytes,
+            self.config.runtime_retention().checkpoint_max_bytes(),
+        ) {
+            Ok(envelope) => envelope,
+            Err(_) => return Ok(false),
+        };
         if validate_quarantine_object_envelope(&envelope).is_err() {
             return Ok(false);
         }

@@ -3104,8 +3104,8 @@ internal object MusubiValidationV1 {
     private fun compareAccountIds(left: String, right: String): Int {
         val leftAddress = canonicalAccountAddress(left)
         val rightAddress = canonicalAccountAddress(right)
-        val leftSingle = leftAddress.singleKeyPayloadIgnoringCurveSupport()
-        val rightSingle = rightAddress.singleKeyPayloadIgnoringCurveSupport()
+        val leftSingle = leftAddress.singleKeyPayload()
+        val rightSingle = rightAddress.singleKeyPayload()
         if (leftSingle != null || rightSingle != null) {
             if (leftSingle == null) return 1
             if (rightSingle == null) return -1
@@ -3115,8 +3115,8 @@ internal object MusubiValidationV1 {
             )
         }
 
-        val leftPolicy = requireNotNull(leftAddress.multisigPolicyPayloadIgnoringCurveSupport())
-        val rightPolicy = requireNotNull(rightAddress.multisigPolicyPayloadIgnoringCurveSupport())
+        val leftPolicy = requireNotNull(leftAddress.multisigPolicyPayload())
+        val rightPolicy = requireNotNull(rightAddress.multisigPolicyPayload())
         leftPolicy.version.compareTo(rightPolicy.version).let { if (it != 0) return it }
         leftPolicy.threshold.compareTo(rightPolicy.threshold).let { if (it != 0) return it }
         for (index in 0 until minOf(leftPolicy.members.size, rightPolicy.members.size)) {
@@ -3133,7 +3133,7 @@ internal object MusubiValidationV1 {
 
     private fun canonicalAccountAddress(value: String): AccountAddress {
         requireCanonicalI105Address(value, "maintainer account")
-        return AccountAddress.parseEncodedIgnoringCurveSupport(value, null)
+        return AccountAddress.parseEncoded(value, null)
     }
 
     fun effectivePageLimit(limit: Long): Int = when {

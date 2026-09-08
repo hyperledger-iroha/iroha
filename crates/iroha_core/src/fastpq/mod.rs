@@ -305,13 +305,20 @@ impl PoseidonDigestBatch {
         ));
     }
     fn try_hash_gpu(&self) -> Option<Vec<Hash>> {
+        self.try_gpu_batch(try_hash_bn254_poseidon_word_batches)
+            .map(|digests| digests.into_iter().map(Hash::prehashed).collect())
+    }
+    fn try_gpu_batch<T>(
+        &self,
+        submit: impl FnOnce(&[u64], &[Bn254PoseidonBatchSlice]) -> Option<T>,
+    ) -> Option<T> {
         if self.slices.len() < DIGEST_FINALIZE_GPU_THRESHOLD
             || !poseidon_digest_acceleration_enabled()
         {
             return None;
         }
-        match try_hash_bn254_poseidon_word_batches(&self.words, &self.slices) {
-            Some(digests) => Some(digests.into_iter().map(Hash::prehashed).collect::<Vec<_>>()),
+        match submit(&self.words, &self.slices) {
+            Some(output) => Some(output),
             None => {
                 set_poseidon_digest_acceleration_enabled(false);
                 None
@@ -322,18 +329,7 @@ impl PoseidonDigestBatch {
         self.try_hash_gpu().unwrap_or_else(|| self.hash_cpu())
     }
     fn try_submit_gpu(&self) -> Option<PendingBn254PoseidonWordBatch> {
-        if self.slices.len() < DIGEST_FINALIZE_GPU_THRESHOLD
-            || !poseidon_digest_acceleration_enabled()
-        {
-            return None;
-        }
-        match try_submit_bn254_poseidon_word_batches(&self.words, &self.slices) {
-            Some(pending) => Some(pending),
-            None => {
-                set_poseidon_digest_acceleration_enabled(false);
-                None
-            }
-        }
+        self.try_gpu_batch(try_submit_bn254_poseidon_word_batches)
     }
     fn hash_cpu(&self) -> Vec<Hash> {
         if self.slices.len() >= DIGEST_FINALIZE_PARALLEL_THRESHOLD {
@@ -1285,7 +1281,6 @@ mod tests {
         assert_eq!(batch.hash_cpu_or_gpu(), batch.hash_cpu());
     }
     #[test]
-    #[cfg(not(feature = "fastpq-gpu"))]
     fn poseidon_digest_batch_failed_gpu_submission_disables_acceleration() {
         let _guard = DigestAccelerationGuard::new();
         set_poseidon_digest_acceleration_enabled(true);
@@ -1295,11 +1290,32 @@ mod tests {
             transcript.batch_hash = Hash::prehashed([idx as u8; Hash::LENGTH]);
             batch.push(&transcript.deltas[0], &transcript.batch_hash);
         }
-        assert_eq!(batch.hash_cpu_or_gpu(), batch.hash_cpu());
+        let attempts = std::cell::Cell::new(0);
+        let accelerated: Option<Vec<Hash>> = batch.try_gpu_batch(|words, slices| {
+            attempts.set(attempts.get() + 1);
+            assert_eq!(words, batch.words);
+            assert_eq!(slices, batch.slices);
+            None
+        });
+        assert_eq!(
+            attempts.get(),
+            1,
+            "the enabled batch must attempt submission"
+        );
+        assert_eq!(
+            accelerated.unwrap_or_else(|| batch.hash_cpu()),
+            batch.hash_cpu()
+        );
         assert!(
             !poseidon_digest_acceleration_enabled(),
             "failed GPU submission should latch the core digest gate off"
         );
+        let retried: Option<Vec<Hash>> = batch.try_gpu_batch(|_, _| {
+            attempts.set(attempts.get() + 1);
+            None
+        });
+        assert!(retried.is_none());
+        assert_eq!(attempts.get(), 1, "the disabled gate must suppress a retry");
     }
     #[test]
     fn digest_acceleration_respects_configured_modes() {
@@ -1537,13 +1553,56 @@ mod tests {
         .unwrap();
         for discriminant in [0, 369, 753, 65_535] {
             let _display = ChainDiscriminantGuard::enter(discriminant);
-            let actual = batch_from_transcripts(
-                FASTPQ_CANONICAL_PARAMETER_SET,
-                sample_public_inputs(),
-                [&transcript],
+            for flags in [0, 1, 2, 3, 4, 5, 6, 7, 0x1b, 0x3f] {
+                let _layout = norito::core::DecodeFlagsGuard::enter(flags);
+                let actual = batch_from_transcripts(
+                    FASTPQ_CANONICAL_PARAMETER_SET,
+                    sample_public_inputs(),
+                    [&transcript],
+                )
+                .unwrap();
+                assert_eq!(actual, expected);
+            }
+        }
+    }
+    #[test]
+    fn balance_key_matches_all_controller_golden_frames() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/fastpq/balance_key_v1.json");
+        let fixture: norito::json::Value =
+            norito::json::from_slice(&std::fs::read(path).expect("balance key fixture"))
+                .expect("canonical fixture JSON");
+        assert_eq!(
+            fixture.get("schema").unwrap().as_str(),
+            Some("iroha.fastpq.balance-key.v1")
+        );
+        assert_eq!(fixture.get("layout_flags").unwrap().as_u64(), Some(2));
+        let uuid: [u8; 16] = hex::decode(fixture.get("asset_uuid_hex").unwrap().as_str().unwrap())
+            .unwrap()
+            .try_into()
+            .unwrap();
+        let asset = AssetDefinitionId::from_uuid_bytes(uuid).unwrap();
+        let cases = fixture.get("positive").unwrap().as_array().unwrap();
+        assert_eq!(
+            cases.len(),
+            16,
+            "all eleven algorithms and five complete policies"
+        );
+        let _display = iroha_data_model::account::address::ChainDiscriminantGuard::enter(0);
+        let _layout = norito::core::DecodeFlagsGuard::enter(0);
+        for case in cases {
+            let account: AccountId = norito::decode_canonical(
+                &hex::decode(case.get("account_id_frame_hex").unwrap().as_str().unwrap()).unwrap(),
             )
             .unwrap();
-            assert_eq!(actual, expected);
+            let expected =
+                hex::decode(case.get("key_frame_hex").unwrap().as_str().unwrap()).unwrap();
+            assert_eq!(
+                balance_key(&asset, &account).unwrap(),
+                expected,
+                "{}",
+                case.get("name").unwrap().as_str().unwrap()
+            );
         }
     }
     #[test]

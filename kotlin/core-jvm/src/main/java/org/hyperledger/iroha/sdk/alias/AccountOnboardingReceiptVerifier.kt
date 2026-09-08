@@ -68,7 +68,7 @@ object AccountOnboardingReceiptVerifier {
     internal fun verifyAuthoritySignature(authority: String, message: ByteArray, signature: ByteArray): Boolean =
         try {
             val address = AccountAddress.fromI105(authority, null)
-            val signatory = address.singleKeyPayloadIgnoringCurveSupport() ?: return false
+            val signatory = address.singleKeyPayload() ?: return false
             when (signatory.curveId) {
                 0x01 -> verifyEd25519(signatory.publicKey, message, signature)
                 else -> verifyNative(signatory.curveId, signatory.publicKey, message, signature)

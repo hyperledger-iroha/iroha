@@ -260,6 +260,7 @@ target-codex-run*/
 tmp/*
 *.tmp
 security_*
+!crates/iroha_torii/src/mcp/catalog_and_policy_tests/security_and_registry.rs
 !circuits/sccp/vendor/golang.org/x/sys/windows/security_windows.go
 _apalache-out*
 .tlacache/

@@ -1,3 +1,6 @@
+import { AccountAddressError, AccountAddressErrorCode } from "./addressErrors.js";
+import { curveIdFromAlgorithm, curveIdToAlgorithm, ensureCurveIdEnabled, normalizeBytes } from "./addressPrimitives.js";
+export { AccountAddressError, AccountAddressErrorCode } from "./addressErrors.js";
 "use strict";
 
 import {
@@ -10,10 +13,9 @@ import {
 } from "./commonLiterals.js";
 import { blake2b256 } from "./blake2b.js";
 import { assertValidEd25519PublicKey } from "./ed25519Strict.js";
+import { defaultNativeRuntime, resolveNativeRuntimeBinding } from "./nativeRuntime.js";
 import {
-  canonicalCurveAlgorithm,
   CurveId,
-  getCurveEntryByAlgorithm,
   getCurveEntryById,
 } from "./curveRegistry.js";
 const DEFAULT_I105_DISCRIMINANT = 0x02f1;
@@ -52,44 +54,9 @@ const IROHA_POEM_KANA_HALFWIDTH = [
 const I105_ALPHABET = [...BASE58_ALPHABET, ...IROHA_POEM_KANA_HALFWIDTH];
 const I105_BASE = I105_ALPHABET.length;
 
-export const AccountAddressErrorCode = Object.freeze({
-  UNSUPPORTED_ALGORITHM: "ERR_UNSUPPORTED_ALGORITHM",
-  KEY_PAYLOAD_TOO_LONG: "ERR_KEY_PAYLOAD_TOO_LONG",
-  INVALID_HEADER_VERSION: "ERR_INVALID_HEADER_VERSION",
-  INVALID_NORM_VERSION: "ERR_INVALID_NORM_VERSION",
-  INVALID_I105_DISCRIMINANT: "ERR_INVALID_I105_DISCRIMINANT",
-  INVALID_LENGTH: "ERR_INVALID_LENGTH",
-  CHECKSUM_MISMATCH: "ERR_CHECKSUM_MISMATCH",
-  UNEXPECTED_NETWORK_PREFIX: "ERR_UNEXPECTED_NETWORK_PREFIX",
-  UNKNOWN_ADDRESS_CLASS: "ERR_UNKNOWN_ADDRESS_CLASS",
-  UNEXPECTED_EXTENSION_FLAG: "ERR_UNEXPECTED_EXTENSION_FLAG",
-  UNKNOWN_CONTROLLER_TAG: "ERR_UNKNOWN_CONTROLLER_TAG",
-  INVALID_PUBLIC_KEY: "ERR_INVALID_PUBLIC_KEY",
-  UNKNOWN_CURVE: "ERR_UNKNOWN_CURVE",
-  UNEXPECTED_TRAILING_BYTES: "ERR_UNEXPECTED_TRAILING_BYTES",
-  MISSING_I105_SENTINEL: "ERR_MISSING_I105_SENTINEL",
-  I105_TOO_SHORT: "ERR_I105_TOO_SHORT",
-  INVALID_I105_CHAR: "ERR_INVALID_I105_CHAR",
-  INVALID_I105_BASE: "ERR_INVALID_I105_BASE",
-  INVALID_I105_DIGIT: "ERR_INVALID_I105_DIGIT",
-  UNSUPPORTED_ADDRESS_FORMAT: "ERR_UNSUPPORTED_ADDRESS_FORMAT",
-  MULTISIG_MEMBER_OVERFLOW: "ERR_MULTISIG_MEMBER_OVERFLOW",
-  INVALID_MULTISIG_POLICY: "ERR_INVALID_MULTISIG_POLICY",
-});
 
-export class AccountAddressError extends Error {
-  constructor(code, message, options = {}) {
-    super(message);
-    this.name = "AccountAddressError";
-    this.code = code;
-    if (options.details !== undefined) {
-      this.details = options.details;
-    }
-    if (options.cause !== undefined) {
-      this.cause = options.cause;
-    }
-  }
-}
+
+
 
 const AddressClass = Object.freeze({
   SINGLE_KEY: 0,
@@ -105,16 +72,7 @@ const HEX_BODY_RE = /^[0-9a-fA-F]+$/;
 const SM2_DEFAULT_DISTINGUISHED_ID = "1234567812345678";
 
 const ED25519_FIELD_MODULUS = BigInt("0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffed");
-const ED25519_SMALL_ORDER_ENCODINGS = [
-  "0100000000000000000000000000000000000000000000000000000000000000",
-  "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a",
-  "0000000000000000000000000000000000000000000000000000000000000080",
-  "26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05",
-  "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
-  "26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc85",
-  "0000000000000000000000000000000000000000000000000000000000000000",
-  "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac03fa",
-].map((hex) => normalizeBytes(hex));
+
 
 function concatBytes(parts) {
   const total = parts.reduce((sum, part) => sum + part.length, 0);
@@ -137,24 +95,9 @@ function compareBytes(left, right) {
   return left.length - right.length;
 }
 
-function hexToBytes(body) {
-  const out = new Uint8Array(body.length / 2);
-  for (let index = 0; index < out.length; index += 1) {
-    out[index] = Number.parseInt(body.slice(index * 2, index * 2 + 2), 16);
-  }
-  return out;
-}
 
-function ensureCurveIdEnabled(curveId, _context) {
-  const entry = getCurveEntryById(curveId);
-  if (!entry) {
-    throw new AccountAddressError(
-      AccountAddressErrorCode.UNKNOWN_CURVE,
-      `unknown curve id: ${curveId}`,
-    );
-  }
-  return entry;
-}
+
+
 
 function bytesEqual(lhs, rhs) {
   if (lhs.length !== rhs.length) {
@@ -189,20 +132,18 @@ function assertEd25519CanonicalEncoding(keyBytes, context) {
   }
 }
 
-function assertEd25519NotSmallOrder(keyBytes, context) {
-  const isSmallOrder = ED25519_SMALL_ORDER_ENCODINGS.some((candidate) =>
-    bytesEqual(candidate, keyBytes),
-  );
-  if (isSmallOrder) {
-    throw new AccountAddressError(
-      AccountAddressErrorCode.INVALID_PUBLIC_KEY,
-      `ed25519 ${context} is small-order (weak); rejected`,
-      { details: { curveId: CurveId.ED25519 } },
-    );
-  }
-}
 
 function validatePublicKeyForCurve(curveId, keyBytes, context = "public key") {
+  validatePublicKeyShapeForCurve(curveId, keyBytes, context);
+  const canonical = curveId === CurveId.SM2 && keyBytes.length === getCurveEntryById(CurveId.SM2).publicKeyLength
+    ? canonicalSm2Payload(keyBytes)
+    : keyBytes;
+  assertNativePublicKey(curveId, canonical);
+}
+
+// Local checks provide precise input errors. Only the Rust codec admits a key
+// or complete controller; these checks never authorize an account on their own.
+function validatePublicKeyShapeForCurve(curveId, keyBytes, context = "public key") {
   const entry = ensureCurveIdEnabled(curveId, context);
   if (entry.id === CurveId.SM2) {
     const rawSm2Length = entry.publicKeyLength;
@@ -239,7 +180,6 @@ function validatePublicKeyForCurve(curveId, keyBytes, context = "public key") {
   }
   if (entry.id === CurveId.ED25519) {
     assertEd25519CanonicalEncoding(keyBytes, context);
-    assertEd25519NotSmallOrder(keyBytes, context);
     try {
       assertValidEd25519PublicKey(keyBytes);
     } catch (error) {
@@ -256,18 +196,7 @@ function validatePublicKeyForCurve(curveId, keyBytes, context = "public key") {
   }
 }
 
-function normalizeControllerPublicKeyForCurve(curveId, keyBytes, context = "public key") {
-  validatePublicKeyForCurve(curveId, keyBytes, context);
-  if (curveId !== CurveId.SM2) {
-    return keyBytes;
-  }
-  const rawSm2Length = ensureCurveIdEnabled(
-    CurveId.SM2,
-    context,
-  ).publicKeyLength;
-  if (keyBytes.length !== rawSm2Length) {
-    return keyBytes;
-  }
+function canonicalSm2Payload(keyBytes) {
   const distidBytes = encoder.encode(SM2_DEFAULT_DISTINGUISHED_ID);
   if (distidBytes.length > 0xffff) {
     throw new AccountAddressError(
@@ -281,6 +210,47 @@ function normalizeControllerPublicKeyForCurve(curveId, keyBytes, context = "publ
   payload.set(distidBytes, 2);
   payload.set(keyBytes, 2 + distidBytes.length);
   return payload;
+}
+
+function callNativeAddress(method, ...args) {
+  const native = resolveNativeRuntimeBinding(defaultNativeRuntime);
+  if (typeof native[method] !== "function") {
+    throw new Error(`Native binding required; ${method} is unavailable`);
+  }
+  try {
+    return native[method](...args);
+  } catch (cause) {
+    const code = /^([A-Z_]+): /u.exec(cause?.message ?? "")?.[1];
+    if (Object.values(AccountAddressErrorCode).includes(code)) {
+      throw new AccountAddressError(code, cause.message, { cause });
+    }
+    throw cause;
+  }
+}
+
+function assertNativeCanonicalAddress(canonical) {
+  const rendered = callNativeAddress("accountAddressRender", canonical, DEFAULT_I105_DISCRIMINANT);
+  if (rendered?.canonicalHex !== `0x${bytesToHex(canonical).toLowerCase()}`) {
+    throw new AccountAddressError(
+      AccountAddressErrorCode.INVALID_PUBLIC_KEY,
+      "native address admission did not preserve the exact canonical bytes",
+    );
+  }
+}
+
+function assertNativePublicKey(curveId, keyBytes) {
+  const length = keyBytes.length;
+  const prefix = length > 0xff
+    ? [0x02, CONTROLLER_TAG_SINGLE_EXTENDED, curveId, length >> 8, length & 0xff]
+    : [0x02, CONTROLLER_TAG_SINGLE, curveId, length];
+  assertNativeCanonicalAddress(concatBytes([Uint8Array.from(prefix), keyBytes]));
+}
+
+function normalizeControllerPublicKeyForCurve(curveId, keyBytes, context = "public key") {
+  validatePublicKeyShapeForCurve(curveId, keyBytes, context);
+  return curveId === CurveId.SM2 && keyBytes.length === getCurveEntryById(CurveId.SM2).publicKeyLength
+    ? canonicalSm2Payload(keyBytes)
+    : keyBytes;
 }
 
 function invalidMultisigPolicy(policyError, message, extraDetails) {
@@ -390,46 +360,7 @@ function validateAndNormalizeMultisigController(controller) {
   };
 }
 
-function normalizeBytes(value) {
-  if (value instanceof Uint8Array) {
-    return new Uint8Array(value);
-  }
-  if (ArrayBuffer.isView(value)) {
-    return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
-  }
-  if (value instanceof ArrayBuffer) {
-    return new Uint8Array(value);
-  }
-  if (Array.isArray(value)) {
-    const out = new Uint8Array(value.length);
-    for (let index = 0; index < value.length; index += 1) {
-      const byte = value[index];
-      if (
-        typeof byte !== JS_TYPE_NUMBER ||
-        !Number.isFinite(byte) ||
-        !Number.isInteger(byte) ||
-        byte < 0 ||
-        byte > 0xff
-      ) {
-        throw new TypeError("byte array entries must be integers between 0 and 255");
-      }
-      out[index] = byte;
-    }
-    return out;
-  }
-  if (typeof value === JS_TYPE_STRING) {
-    const trimmed = value.trim();
-    const body =
-      trimmed.startsWith("0x") || trimmed.startsWith("0X") ? trimmed.slice(2) : trimmed;
-    if (body.length === 0 || body.length % 2 !== 0 || !/^[0-9a-fA-F]+$/.test(body)) {
-      throw new TypeError("hex string inputs must be even-length and contain only hex digits");
-    }
-    return hexToBytes(body);
-  }
-  throw new TypeError(
-    "expected Uint8Array, Buffer, ArrayBuffer, ArrayBufferView, number[], or hex string for byte data",
-  );
-}
+
 
 function blake2b256Personalized(data, personalization, includeZeroKeyBlock = false) {
   const normalized = normalizeBytes(data);
@@ -442,17 +373,7 @@ function blake2b256Personalized(data, personalization, includeZeroKeyBlock = fal
   return blake2b256(normalized, options);
 }
 
-function curveIdFromAlgorithm(algorithm) {
-  const entry = getCurveEntryByAlgorithm(algorithm);
-  if (!entry) {
-    throw new AccountAddressError(
-      AccountAddressErrorCode.UNSUPPORTED_ALGORITHM,
-      `unsupported signing algorithm: ${algorithm}`,
-      { details: { algorithm } },
-    );
-  }
-  return entry.id;
-}
+
 
 function encodeHeader({ version, classId, normVersion, extFlag }) {
   if (version !== HEADER_VERSION_V1) {
@@ -647,7 +568,7 @@ function decodeController(bytes, cursor) {
       throw new AccountAddressError(AccountAddressErrorCode.INVALID_LENGTH, INVALID_ADDRESS_LENGTH_MESSAGE);
     }
     const publicKey = bytes.slice(cursor, end);
-    validatePublicKeyForCurve(curveId, publicKey, "controller public key");
+    validatePublicKeyShapeForCurve(curveId, publicKey, "controller public key");
     return [{ tag: CONTROLLER_TAG_SINGLE, curve: curveId, publicKey }, end];
   }
 
@@ -700,7 +621,7 @@ function decodeController(bytes, cursor) {
       }
       const publicKey = bytes.slice(cursor, end);
       cursor = end;
-      validatePublicKeyForCurve(curve, publicKey, "multisig member public key");
+      validatePublicKeyShapeForCurve(curve, publicKey, "multisig member public key");
       members.push({ curve, weight, publicKey });
     }
     const normalized = validateAndNormalizeMultisigController({
@@ -817,10 +738,7 @@ function cborAppendBytes(parts, bytes) {
   parts.push(...bytes);
 }
 
-function curveIdToAlgorithm(curveId) {
-  const entry = ensureCurveIdEnabled(curveId, `curve id ${curveId}`);
-  return canonicalCurveAlgorithm(entry.id) ?? entry.algorithm;
-}
+
 
 function bytesToHex(bytes) {
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("").toUpperCase();
@@ -830,10 +748,20 @@ function computeMultisigPolicyDigest(bytes) {
   return blake2b256Personalized(bytes, MULTISIG_DIGEST_PERSONALIZATION, true);
 }
 
+const ADDRESS_STATE = new WeakMap();
+
 export class AccountAddress {
   constructor(header, controller) {
-    this._header = header;
-    this._controller = controller;
+    assertHeaderMatchesController(header, controller);
+    const canonical = concatBytes([
+      Uint8Array.of(encodeHeader(header)),
+      encodeController(controller),
+    ]);
+    assertNativeCanonicalAddress(canonical);
+    ADDRESS_STATE.set(this, {
+      header: decodeHeader(canonical[0]),
+      controller: decodeController(canonical, 1)[0],
+    });
   }
 
   static fromAccount(options) {
@@ -882,11 +810,11 @@ export class AccountAddress {
       );
     }
     assertHeaderMatchesController(header, controller);
+    assertNativeCanonicalAddress(data);
     return new AccountAddress(header, controller);
   }
 
   static fromI105(encoded, expectedPrefix) {
-    const literal = typeof encoded === JS_TYPE_STRING ? encoded.trim() : encoded;
     const normalizedExpectedDiscriminant =
       expectedPrefix === undefined
         ? undefined
@@ -899,7 +827,7 @@ export class AccountAddress {
       normalizedExpectedDiscriminant,
     );
     const address = AccountAddress.fromCanonicalBytes(canonical);
-    assertCanonicalI105Literal(literal, address);
+    assertCanonicalI105Literal(encoded, address);
     return address;
   }
 
@@ -914,6 +842,12 @@ export class AccountAddress {
     const trimmed = input.trim();
     if (trimmed.length === 0) {
       throw new AccountAddressError(AccountAddressErrorCode.INVALID_LENGTH, INVALID_ADDRESS_LENGTH_MESSAGE);
+    }
+    if (trimmed !== input) {
+      throw new AccountAddressError(
+        AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT,
+        CANONICAL_I105_REQUIRED_MESSAGE,
+      );
     }
     if (trimmed.includes("@")) {
       throw new AccountAddressError(
@@ -949,10 +883,11 @@ export class AccountAddress {
   }
 
   canonicalBytes() {
-    assertHeaderMatchesController(this._header, this._controller);
-    const headerByte = encodeHeader(this._header);
+    const state = ADDRESS_STATE.get(this);
+    assertHeaderMatchesController(state.header, state.controller);
+    const headerByte = encodeHeader(state.header);
     const header = Uint8Array.of(headerByte);
-    const controller = encodeController(this._controller);
+    const controller = encodeController(state.controller);
     const out = new Uint8Array(header.length + controller.length);
     out.set(header, 0);
     out.set(controller, header.length);
@@ -998,10 +933,10 @@ export class AccountAddress {
   }
 
   multisigPolicyInfo() {
-    if (this._controller.tag !== CONTROLLER_TAG_MULTISIG) {
+    const controller = ADDRESS_STATE.get(this).controller;
+    if (controller.tag !== CONTROLLER_TAG_MULTISIG) {
       return null;
     }
-    const controller = this._controller;
     const ctap2 = encodeMultisigPolicyCbor(controller);
     const digest = computeMultisigPolicyDigest(ctap2);
     const members = controller.members.map((member) => ({
@@ -1058,6 +993,7 @@ export function parseCanonicalI105AccountLiteral(input) {
       CANONICAL_I105_REQUIRED_MESSAGE,
     );
   }
+  assertNativeCanonicalAddress(normalized);
   return {
     canonicalHex: `0x${bytesToHex(normalized).toLowerCase()}`,
     chainDiscriminant,
@@ -1117,7 +1053,7 @@ export function decodeI105AccountAddress(encoded, options = {}) {
     normalizedOptions.expectDiscriminant,
   );
   const address = AccountAddress.fromCanonicalBytes(canonical);
-  assertCanonicalI105Literal(encoded.trim(), address);
+  assertCanonicalI105Literal(encoded, address);
   return canonical;
 }
 
@@ -1156,7 +1092,7 @@ export function inspectAccountId(literal, options = {}) {
 
   const normalizedOptions = normalizeInspectAccountOptions(options);
   const { address, chainDiscriminant: detectedDiscriminant } = AccountAddress.parseEncoded(
-    trimmed,
+    literal,
     normalizedOptions.expectDiscriminant,
   );
   const chainDiscriminant =
@@ -1373,7 +1309,19 @@ function encodeI105String(discriminant, canonical) {
 }
 
 function decodeSupportedI105String(encoded, expectedDiscriminant) {
-  return decodeI105String(encoded, expectedDiscriminant);
+  const [discriminant, canonical] = decodeI105String(encoded, expectedDiscriminant);
+  const parsed = callNativeAddress("accountAddressParseEncoded", encoded, expectedDiscriminant);
+  if (
+    !(parsed?.canonicalBytes instanceof Uint8Array) ||
+    !bytesEqual(parsed.canonicalBytes, canonical) ||
+    parsed.networkPrefix !== discriminant
+  ) {
+    throw new AccountAddressError(
+      AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT,
+      "native address admission did not preserve the exact I105 identity",
+    );
+  }
+  return [discriminant, canonical];
 }
 
 function lookupI105Digit(symbol) {

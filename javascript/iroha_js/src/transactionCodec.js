@@ -2967,7 +2967,7 @@ export function finalizeBrowserExecutableBatchTransaction(
  * @param {ArrayBufferView | ArrayBuffer | Buffer} signedTransaction
  * @returns {string}
  */
-export function browserSignedTransactionHashHex(signedTransaction) {
+function signedTransactionPayload(signedTransaction) {
   const versioned = bytes(signedTransaction, "signedTransaction", {
     maxBytes: MAX_SIGNED_TRANSACTION_BYTES,
   });
@@ -3004,6 +3004,19 @@ export function browserSignedTransactionHashHex(signedTransaction) {
       "signedTransaction is not a supported single-signature external transaction",
     );
   }
+  return payload;
+}
+
+/** @internal Exact Transfer::Asset hash for the transfer-only Nexus contract. */
+export function _browserSignedTransferTransactionHashHex(signedTransaction) {
+  const payload = signedTransactionPayload(signedTransaction);
+  validateTransactionPayload(payload, null);
+  return transactionHashFromPayload(payload).toString(HEX_ENCODING);
+}
+
+/** Compute the pipeline hash after validating the complete supported transaction. */
+export function browserSignedTransactionHashHex(signedTransaction) {
+  const payload = signedTransactionPayload(signedTransaction);
   let transferError;
   try {
     validateTransactionPayload(payload, null);
@@ -3030,7 +3043,7 @@ export function browserSignedTransactionHashHex(signedTransaction) {
 }
 
 /** Browser-safe codec implementing the Nexus transaction-codec contract. */
-export const browserTransactionCodec = Object.freeze({
+export const browserTransactionCodec = /* @__PURE__ */ Object.freeze({
   buildTransferPayload: buildBrowserTransferPayload,
   buildInstructionPayload: buildBrowserInstructionTransactionPayload,
   buildExecutableBatchPayload: buildBrowserExecutableBatchPayload,

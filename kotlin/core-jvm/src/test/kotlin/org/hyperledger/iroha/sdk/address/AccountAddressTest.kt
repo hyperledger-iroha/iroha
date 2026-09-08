@@ -136,21 +136,17 @@ class AccountAddressTest {
         assertEquals("bls_normal", algorithmForCurveId(0x03))
         assertEquals("bls_small", algorithmForCurveId(0x05))
 
-        val secpKey = ByteArray(33) { 0x02 }
+        val secpKey = NativeAccountFixtures.singleKey("secp256k1")
         val secpAddress = AccountAddress.fromAccount(secpKey, "secp256k1")
         assertEquals(0x04, secpAddress.singleKeyPayload()?.curveId)
 
-        val blsKey = ByteArray(48) { 0x03 }
+        val blsKey = NativeAccountFixtures.singleKey("bls_normal")
         assertFailsWith<AccountAddressException> {
-            AccountAddress.fromAccount(blsKey, "bls_normal")
+            AccountAddress.fromAccount(ByteArray(48) { 0xff.toByte() }, "bls_normal")
         }
-        try {
-            AccountAddress.configureCurveSupport(CurveSupportConfig.builder().allowBls(true).build())
-            val blsAddress = AccountAddress.fromAccount(blsKey, "bls-normal")
-            assertEquals(0x03, blsAddress.singleKeyPayload()?.curveId)
-        } finally {
-            AccountAddress.configureCurveSupport(CurveSupportConfig.ed25519Only())
-        }
+
+        val blsAddress = AccountAddress.fromAccount(blsKey, "bls-normal")
+        assertEquals(0x03, blsAddress.singleKeyPayload()?.curveId)
 
         val encoded = encodePublicKeyMultihash(0x04, secpKey)
         val decoded = assertNotNull(decodePublicKeyLiteral(encoded))
@@ -167,44 +163,40 @@ class AccountAddressTest {
     @Test
     fun protocolMlDsa65AliasesAreExactAndCaseInsensitive() {
         val key = ByteArray(MlDsaPublicKeyAdmission.PUBLIC_KEY_LENGTH) { 0x02 }
-        try {
-            AccountAddress.configureCurveSupport(CurveSupportConfig.builder().allowMlDsa(true).build())
-            for (algorithm in listOf(
-                "ml-dsa",
-                "mldsa",
-                "ml_dsa",
-                "mldsa65",
-                "MLDSA65",
-                "ml-dsa-65",
-                "ML-DSA-65",
-                "ml_dsa_65",
-                "ML_DSA_65",
-                "ml_dsa-65",
-                "ML_DSA-65",
-            )) {
-                val address = AccountAddress.fromAccount(key, algorithm)
-                assertEquals(0x02, address.singleKeyPayload()?.curveId)
-            }
 
-            for (algorithm in listOf(
-                "mldsa44",
-                "ml-dsa-44",
-                "ml_dsa_44",
-                "ml_dsa-44",
-                "mldsa87",
-                "ml-dsa-87",
-                "ml_dsa_87",
-                "ml_dsa-87",
-                "ml-dsa-\uFF16\uFF15",
-                "ml\uFF0Ddsa-65",
-            )) {
-                val error = assertFailsWith<AccountAddressException> {
-                    AccountAddress.fromAccount(key, algorithm)
-                }
-                assertEquals(AccountAddressErrorCode.UNSUPPORTED_ALGORITHM, error.code)
+        for (algorithm in listOf(
+            "ml-dsa",
+            "mldsa",
+            "ml_dsa",
+            "mldsa65",
+            "MLDSA65",
+            "ml-dsa-65",
+            "ML-DSA-65",
+            "ml_dsa_65",
+            "ML_DSA_65",
+            "ml_dsa-65",
+            "ML_DSA-65",
+        )) {
+            val address = AccountAddress.fromAccount(key, algorithm)
+            assertEquals(0x02, address.singleKeyPayload()?.curveId)
+        }
+
+        for (algorithm in listOf(
+            "mldsa44",
+            "ml-dsa-44",
+            "ml_dsa_44",
+            "ml_dsa-44",
+            "mldsa87",
+            "ml-dsa-87",
+            "ml_dsa_87",
+            "ml_dsa-87",
+            "ml-dsa-\uFF16\uFF15",
+            "ml\uFF0Ddsa-65",
+        )) {
+            val error = assertFailsWith<AccountAddressException> {
+                AccountAddress.fromAccount(key, algorithm)
             }
-        } finally {
-            AccountAddress.configureCurveSupport(CurveSupportConfig.ed25519Only())
+            assertEquals(AccountAddressErrorCode.UNSUPPORTED_ALGORITHM, error.code)
         }
     }
 
@@ -247,14 +239,10 @@ class AccountAddressTest {
     }
 
     @Test
-    fun longGostLabelsAreAcceptedWhenGostSupportIsEnabled() {
-        val key = ByteArray(64) { 0x0A }
-        try {
-            AccountAddress.configureCurveSupport(CurveSupportConfig.builder().allowGost(true).build())
-            val address = AccountAddress.fromAccount(key, "gost3410-2012-256-paramset-a")
-            assertEquals(0x0A, address.singleKeyPayload()?.curveId)
-        } finally {
-            AccountAddress.configureCurveSupport(CurveSupportConfig.ed25519Only())
-        }
+    fun longGostLabelsAreAcceptedByTheFixedV1Catalog() {
+        val key = NativeAccountFixtures.singleKey("gost3410-2012-256-paramset-a")
+
+        val address = AccountAddress.fromAccount(key, "gost3410-2012-256-paramset-a")
+        assertEquals(0x0A, address.singleKeyPayload()?.curveId)
     }
 }

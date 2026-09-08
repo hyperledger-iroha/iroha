@@ -1,0 +1,17 @@
+[build-system]
+requires = ["maturin>=1.5,<2"]
+build-backend = "maturin"
+
+[project]
+name = "iroha-native"
+version = "0.0.1"
+description = "Canonical Rust cryptographic and identity owner for Iroha Python SDKs."
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "Apache-2.0"}
+
+[tool.maturin]
+python-source = "src"
+manifest-path = "../iroha_python/iroha_python_rs/Cargo.toml"
+module-name = "iroha_native._crypto"
+exclude = ["src/**/*.so", "src/**/*.dylib", "src/**/*.pyd", "src/**/__pycache__/**", "src/**/*.pyc", "src/**/*.pyo"]

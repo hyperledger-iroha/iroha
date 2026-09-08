@@ -1673,7 +1673,9 @@ fn test_source_authorization(
         [0x99; 32],
         [0x88; 32],
         [0x66; 32],
-        vec![0x55; 36],
+        iroha_data_model::sorafs::pin_registry::ManifestRootCid::from_blake3_digest([0x55; 32])
+            .as_bytes()
+            .to_vec(),
         "sorafs.sf1@1.0.0".to_owned(),
         [0x44; 32],
         [0x33; 32],

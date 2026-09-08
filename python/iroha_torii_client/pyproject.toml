@@ -28,6 +28,9 @@ classifiers = [
   "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 
+[project.optional-dependencies]
+native = ["iroha-native==0.0.1"]
+
 [project.urls]
 Homepage = "https://github.com/hyperledger/iroha"
 Repository = "https://github.com/hyperledger/iroha"

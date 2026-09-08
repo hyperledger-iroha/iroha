@@ -125,6 +125,20 @@ def validate_release_api(classes: dict[str, object]) -> None:
         if SDK_PACKAGE + "core/model/instructions/" + retired in classes:
             raise AuditError(f"retired instruction class: {retired}")
     signer = classes[signer_name]
+    account_validation = [method for method in signer.methods
+                          if method.name == "nativeValidateAccountAddressCanonical"]
+    if (len(account_validation) != 1
+            or account_validation[0].descriptor != "([B)[B"
+            or not account_validation[0].native
+            or not account_validation[0].static):
+        raise AuditError("complete account admission requires the canonical static native byte-array boundary")
+    for owner, class_file in classes.items():
+        if owner in (SDK_PACKAGE + "address/AccountAddress", SDK_PACKAGE + "address/AccountAddress$Companion"):
+            if any(method.name == "configureCurveSupport" or method.name.endswith("IgnoringCurveSupport")
+                   for method in class_file.methods):
+                raise AuditError("account identity must use the fixed V1 algorithm catalog")
+    if SDK_PACKAGE + "address/CurveSupportConfig" in classes:
+        raise AuditError("retired global account curve configuration is present")
     public = [method for owner, class_file in classes.items()
               if owner in (signer_name, signer_name + "$Companion")
               for method in class_file.methods

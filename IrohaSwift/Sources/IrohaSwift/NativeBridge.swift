@@ -2445,7 +2445,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         }
         do {
             let prefix = try AccountAddress.inspectI105NetworkPrefix(authority, expectedPrefix: nil).chainDiscriminant
-            let address = try AccountAddress.parseEncodedSwiftOnly(authority, expectedPrefix: prefix)
+            let address = try AccountAddress.parseCanonicalI105(authority, expectedPrefix: prefix)
             guard try address.toI105(networkPrefix: prefix) == authority else {
                 throw NativeBridgeError.authority
             }

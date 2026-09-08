@@ -17,6 +17,9 @@ import norito as norito
 from .address import (
     AccountAddress,
     AccountAddressError,
+    CurveId,
+    MultisigMember,
+    MultisigControllerPayload,
 )
 from .kagemusha import Kagemusha
 from .numeric_v1 import (
@@ -536,6 +539,9 @@ from .dataspaces import (
 _BASE_EXPORTS = [
     "AccountAddress",
     "AccountAddressError",
+    "CurveId",
+    "MultisigMember",
+    "MultisigControllerPayload",
     "Kagemusha",
     "CREATE_KAIGI_WIRE_ID_V1",
     "END_KAIGI_WIRE_ID_V1",

@@ -86,7 +86,7 @@ v2_apply_test!(
     }
 );
 v2_apply_test!(merge_publication_emits_once_across_exact_retry, {
-    let fixture = ApplyFixture::new();
+    let fixture = ApplyFixture::new_for_production_recovered_decision_apply();
     let mut store = fixture.reopen_body_store();
     fixture.execute(&mut store).expect("commit carrier parent");
     let mut entry = pending_merge_entry(&fixture.context, 0, b"v2 apply live publication fixture");
@@ -1173,7 +1173,8 @@ v2_apply_test!(
 v2_apply_test!(
     startup_reconciliation_consumes_replayed_committed_merge_reservation,
     {
-        let fixture = ApplyFixture::new_with_lane_lifecycle();
+        let fixture =
+            ApplyFixture::new_for_production_recovered_decision_apply_with_lane_lifecycle();
         let reservation_lane = install_recreatable_reservation_lane(&fixture);
         let transaction = fixture
             .body
@@ -1184,7 +1185,7 @@ v2_apply_test!(
         let (events_sender, _events_receiver) = tokio::sync::broadcast::channel(8);
         let journal_dir = tempfile::tempdir().expect("reservation journal directory");
         let journal_path = journal_dir.path().join("lane-reservations.norito");
-        let first_queue = Queue::from_config(QueueConfig::default(), events_sender.clone());
+        let first_queue = fixture_queue(fixture.state.as_ref(), events_sender.clone());
         first_queue
             .install_plan_journal(
                 journal_dir.path().join("queue-plans.norito"),
@@ -1221,7 +1222,7 @@ v2_apply_test!(
         let stale_journal_dir = tempfile::tempdir().expect("stale reservation journal directory");
         let stale_plan_path = stale_journal_dir.path().join("queue-plans.norito");
         let stale_reservation_path = stale_journal_dir.path().join("lane-reservations.norito");
-        let stale_first_queue = Queue::from_config(QueueConfig::default(), stale_events.clone());
+        let stale_first_queue = fixture_queue(fixture.state.as_ref(), stale_events.clone());
         stale_first_queue
             .install_plan_journal(&stale_plan_path, 1024 * 1024, true)
             .expect("install stale-owner QueuePlan journal");
@@ -1791,10 +1792,10 @@ v2_apply_test!(
     }
 );
 v2_apply_test!(replayed_mixed_commit_barrier_group_reopens_startup_gate, {
-    let fixture = ApplyFixture::new_with_lane_lifecycle();
+    let fixture = ApplyFixture::new_for_production_recovered_decision_apply_with_lane_lifecycle();
     let reservation_lane = install_recreatable_reservation_lane(&fixture);
     let (events_sender, _events_receiver) = tokio::sync::broadcast::channel(8);
-    let queue = Queue::from_config(QueueConfig::default(), events_sender.clone());
+    let queue = fixture_queue(fixture.state.as_ref(), events_sender.clone());
     let journal_dir = tempfile::tempdir().expect("replayed commit barrier journal directory");
     let plan_path = journal_dir.path().join("queue-plans.norito");
     let reservation_path = journal_dir.path().join("lane-reservations.norito");

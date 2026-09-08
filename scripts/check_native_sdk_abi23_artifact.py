@@ -726,7 +726,7 @@ if path.suffix == ".py":
     name = "_iroha_native_abi23_fixture"
     loader = importlib.machinery.SourceFileLoader(name, str(path))
 else:
-    name = "iroha_python._crypto"
+    name = "iroha_native._crypto"
     loader = importlib.machinery.ExtensionFileLoader(name, str(path))
 spec = importlib.util.spec_from_loader(name, loader)
 if spec is None:

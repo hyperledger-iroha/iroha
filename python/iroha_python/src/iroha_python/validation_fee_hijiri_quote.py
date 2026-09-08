@@ -6,7 +6,7 @@ import json
 from dataclasses import dataclass
 from typing import Any, Mapping
 
-from ._native import load_crypto_extension
+from iroha_native import load_crypto_extension
 
 VALIDATION_FEE_HIJIRI_QUOTE_PATH = "/v1/validation-fee/hijiri/quote"
 VALIDATION_FEE_HIJIRI_QUOTE_SCHEMA = "iroha.torii.v1.validation_fee.hijiri_quote.response"
@@ -168,7 +168,7 @@ def _native_binding() -> Any:
         or not callable(getattr(native, "validation_fee_verify_hijiri_quote_response_v1", None))
     ):
         raise RuntimeError(
-            "iroha_python._crypto lacks the ABI 23 Hijiri validation-fee quote codec"
+            "iroha_native._crypto lacks the ABI 23 Hijiri validation-fee quote codec"
         )
     return native
 

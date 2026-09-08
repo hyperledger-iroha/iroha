@@ -280,6 +280,9 @@ impl ProviderIngestCompletedMusubiSignedCaptureLedgerV1 for CaptureCoordinatorPr
     }
 }
 fn capture_coordinator_test_handle(root: &std::path::Path) -> NodeHandle {
+    let root = root
+        .canonicalize()
+        .expect("canonical coordinator test root");
     NodeHandle::try_new(
         StorageConfig::builder()
             .enabled(true)
@@ -357,9 +360,7 @@ fn completed_musubi_capture_coordinator_tenure_is_take_once_and_reader_stable() 
     let never_read = Arc::new(CaptureCoordinatorProbeLedgerV1::new(true, 0xC3));
     assert!(matches!(
         failed_handle.take_provider_ingest_completed_musubi_capture_coordinator(
-            NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
-                Hash::prehashed([0; 32]),
-            )),
+            unmarked_test_network_id(),
             1,
             never_read.clone(),
         ),
@@ -890,9 +891,7 @@ fn completed_musubi_capture_scanner_enforces_identity_and_page_bounds() {
         8,
         CaptureScannerLedgerFaultV1::None,
     ));
-    let unmarked_network_id = NetworkId::from_genesis_hash(
-        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0; 32])),
-    );
+    let unmarked_network_id = unmarked_test_network_id();
     for (provider_id, network_id, max_page_rows, expected) in [
         ([0; 32], test_network_id(), 1, "provider"),
         (LOCAL_PROVIDER, foreign_test_network_id(), 1, "binding"),

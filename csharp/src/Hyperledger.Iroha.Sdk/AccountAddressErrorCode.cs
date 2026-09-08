@@ -19,4 +19,7 @@ public enum AccountAddressErrorCode
     UnknownControllerTag,
     UnknownCurve,
     UnsupportedAddressFormat,
+    InvalidMultisigPolicy,
+    NativeBridgeUnavailable,
+    DecodeResourceLimit,
 }

@@ -15,9 +15,10 @@ This file focuses on getting a .NET application connected safely.
 - The exact genesis-derived `NetworkId` for authenticated requests
 - A canonical, domainless I105 account ID and its 32-byte Ed25519 seed for signing
 
-The managed HTTP, address, transaction, query, and Norito surfaces do not require a
-native library. Privacy and native SoraFS validation features use the packaged native
-bridge for the current runtime identifier.
+Account construction, parsing, and every operation that admits account identities
+require the packaged ABI-23 Rust bridge for the current runtime identifier. Privacy
+and native SoraFS validation use the same bridge. Transport-only anonymous reads do
+not construct account identities.
 
 Exact12 capability admission requires authenticated HTTPS Torii reads, the configured
 `NetworkId`, and native validation of the complete signed qualification. The SDK
@@ -256,7 +257,13 @@ matching the Kotlin Kaigi encoder's fail-closed scope until the Rust pinned
 NFC/UTS-46 owner is shared. Display text supports UTF-8. Account instruction
 encoding covers all eleven published controller curve IDs and complete canonical
 multisig policies with a u16 member count. Address decoding checks key envelopes;
-cryptographic group membership and signatures require the verifier.
+every public address constructor and parser additionally requires the ABI-23
+Rust address owner for complete key and policy admission. Missing native
+validation raises `NativeBridgeUnavailable`; structural checks cannot admit an
+account by themselves. Canonical I105 parsing rejects surrounding Unicode
+whitespace. SCCP preserves extended single-key envelopes and full multisig
+AccountId bytes within its 65,535-byte principal limit. Signature verification
+remains a separate operation.
 The C# SDK does not yet generate Kaigi proofs or expose a native Kaigi prover.
 
 The five transparent instructions and complex private-create bytes are pinned

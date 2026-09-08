@@ -29,8 +29,9 @@ fn balance_key_is_independent_of_chain_display_and_ambient_layout() {
         displays.insert(account.to_string());
         for flags in [0, 1, 2, 3, 4, 5, 6, 7, 0x1b, 0x3f] {
             let _layout = norito::core::DecodeFlagsGuard::enter(flags);
+            let effective_flags = norito::core::get_decode_flags();
             assert_eq!(transfer_balance_key(&asset, &account).unwrap(), expected);
-            assert_eq!(norito::core::get_decode_flags(), flags);
+            assert_eq!(norito::core::get_decode_flags(), effective_flags);
         }
     }
     assert_eq!(
@@ -63,7 +64,12 @@ fn balance_key_binds_asset_and_every_multisig_policy_field() {
         base,
         transfer_balance_key(&asset(3), &policy(2, 1, true)).unwrap()
     );
-    for changed in [policy(3, 1, false), policy(2, 2, false), first, second] {
+    for changed in [
+        policy(3, 1, false),
+        policy(2, 2, false),
+        first.clone(),
+        second.clone(),
+    ] {
         assert_ne!(base, transfer_balance_key(&asset(3), &changed).unwrap());
     }
     assert_ne!(

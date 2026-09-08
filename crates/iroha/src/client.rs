@@ -14560,6 +14560,7 @@ mod evidence_http_tests {
         Default,
         Local,
         Global,
+        AsyncGlobal,
     }
     fn typed_status_response_snapshot(
         seed: u8,
@@ -14595,6 +14596,13 @@ mod evidence_http_tests {
                     }
                     StatusResponseRequest::Global => {
                         client.get_transaction_status_response_global(hash)
+                    }
+                    StatusResponseRequest::AsyncGlobal => {
+                        tokio::runtime::Builder::new_current_thread()
+                            .enable_all()
+                            .build()
+                            .expect("status runtime")
+                            .block_on(client.fetch_transaction_status_response_global(hash))
                     }
                 }
             });
@@ -14655,6 +14663,19 @@ mod evidence_http_tests {
             StatusResponseRequest::Global,
         );
         assert_status_scope(&snapshot, "global");
+    }
+    #[test]
+    fn fetch_transaction_status_response_global_uses_exact_bounded_global_decoder() {
+        let snapshot = typed_status_response_snapshot(
+            0x47,
+            "Applied",
+            Some(8),
+            "global",
+            "state",
+            StatusResponseRequest::AsyncGlobal,
+        );
+        assert_status_scope(&snapshot, "global");
+        assert_eq!(snapshot.url.path(), "/v1/pipeline/transactions/status");
     }
     #[test]
     fn get_account_read_signs_request_and_decodes_typed_payload() {
@@ -17248,6 +17269,21 @@ impl Client {
         hash: HashOf<SignedTransaction>,
     ) -> Result<Option<PipelineTransactionStatusResponse>> {
         self.get_transaction_status_response_with_scope(hash, Some("global"))
+    }
+
+    /// Fetch exact typed global transaction status with the asynchronous transport.
+    ///
+    /// The canonical bounded decoder validates the requested signed hash and global
+    /// scope. Callers must still distinguish state-resolved `Applied` from cached
+    /// or nonterminal observations; this lookup does not submit or retry a transaction.
+    ///
+    /// # Errors
+    /// Returns transport, content-type, bounded-decoding, hash, or scope errors.
+    pub async fn fetch_transaction_status_response_global(
+        &self,
+        hash: HashOf<SignedTransaction>,
+    ) -> Result<Option<PipelineTransactionStatusResponse>> {
+        self.get_global_transaction_status_response(hash).await
     }
 
     async fn get_global_transaction_status_response(

@@ -124,6 +124,7 @@ public sealed class AccountAddress : IEquatable<AccountAddress>
         }
 
         var canonicalBytes = payload.ToArray();
+        AccountAddressNative.ValidateCanonical(canonicalBytes);
         return classBits switch
         {
             (byte)AddressClass.SingleKey => ParseSingleKey(canonicalBytes, headerVersion, normalizationVersion),
@@ -172,6 +173,8 @@ public sealed class AccountAddress : IEquatable<AccountAddress>
         var canonicalBytes = new byte[1 + controllerBytes.Length];
         canonicalBytes[0] = EncodeHeader(AddressClass.SingleKey);
         controllerBytes.CopyTo(canonicalBytes.AsSpan(1));
+
+        AccountAddressNative.ValidateCanonical(canonicalBytes);
 
         return new AccountAddress(
             DefaultHeaderVersion,

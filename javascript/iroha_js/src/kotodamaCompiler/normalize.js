@@ -1,3 +1,4 @@
+import { crc64Xz as noritoCrc64 } from "../crc64Xz.js";
 import { blake2b256 } from "../blake2b.js";
 import {
   KOTODAMA_V1_DYNAMIC_ACCESS_MAX_KEYS,
@@ -71,23 +72,11 @@ const TYPED_ARRAY_BYTE_LENGTH_GETTER = Object.getOwnPropertyDescriptor(
 // schema padding rather than the looser unknown-schema 64-byte fallback.
 const NORITO_EMBEDDED_INTERFACE_PADDING_BYTES = 0;
 const NORITO_COMPACT_LENGTHS_FLAG = 0x02;
-const NORITO_CRC64_MASK = 0xffff_ffff_ffff_ffffn;
-const NORITO_CRC64_POLYNOMIAL = 0xc96c5795d7870f42n;
 const EMBEDDED_INTERFACE_SCHEMA_HASH = Uint8Array.from([
   0x42, 0x78, 0xc4, 0x14, 0x19, 0x7d, 0x68, 0xd9,
   0xcb, 0xb2, 0xda, 0xde, 0xa7, 0x40, 0x23, 0x87,
 ]);
-const NORITO_CRC64_TABLE = Object.freeze(
-  Array.from({ length: 256 }, (_, index) => {
-    let crc = BigInt(index);
-    for (let bit = 0; bit < 8; bit += 1) {
-      crc = (crc & 1n) === 0n
-        ? crc >> 1n
-        : (crc >> 1n) ^ NORITO_CRC64_POLYNOMIAL;
-    }
-    return crc;
-  }),
-);
+
 
 // Keep the fail-closed boundary's exact diagnostics while avoiding 145
 // repeated `throw new TypeError(...)` constructor sequences in the minified
@@ -461,13 +450,7 @@ function readU64Le(bytes, offset, label) {
   return value;
 }
 
-function noritoCrc64(bytes) {
-  let crc = NORITO_CRC64_MASK;
-  for (const byte of bytes) {
-    crc = NORITO_CRC64_TABLE[Number((crc ^ BigInt(byte)) & 0xffn)] ^ (crc >> 8n);
-  }
-  return BigInt.asUintN(64, crc ^ NORITO_CRC64_MASK);
-}
+
 
 function equalBytes(left, right) {
   return left.length === right.length && left.every((byte, index) => byte === right[index]);

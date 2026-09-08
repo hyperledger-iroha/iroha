@@ -3269,6 +3269,65 @@ impl Drop for ModerationQuarantinePlaintext {
         let _ = std::hint::black_box(&self.0);
     }
 }
+/// Decode one fixed V1 envelope before any key-provider operation.
+///
+/// The configured byte ceiling and byte-derived allocation, element and depth
+/// budgets compose with stricter caller limits. The sequence ceiling admits one
+/// complete ciphertext chunk; semantic validation separately checks the 512-chunk
+/// envelope, immutable metadata, wrapped key and exact ciphertext lengths.
+///
+/// # Errors
+///
+/// Rejects malformed, compressed, noncanonical or oversized envelopes, including
+/// any input exceeding the stricter active caller resource budget.
+pub(crate) fn decode_moderation_quarantine_object_envelope(
+    bytes: &[u8],
+    max_bytes: u64,
+) -> Result<ModerationQuarantineObjectEnvelopeV1, norito::Error> {
+    let maximum_bytes = usize::try_from(max_bytes).map_err(|_| {
+        norito::Error::Message(
+            "quarantine envelope byte limit does not fit memory address space".to_owned(),
+        )
+    })?;
+    let max_sequence_elements = usize::try_from(MODERATION_QUARANTINE_OBJECT_CHUNK_BYTES_V1)
+        .map_err(|_| norito::Error::LengthMismatch)?
+        .checked_add(MODERATION_QUARANTINE_OBJECT_AEAD_TAG_BYTES_V1)
+        .ok_or(norito::Error::LengthMismatch)?
+        .max(MODERATION_QUARANTINE_OBJECT_MAX_WRAPPED_DEK_BYTES_V1)
+        .max(MODERATION_QUARANTINE_OBJECT_MAX_CHUNKS_V1);
+    let limits =
+        crate::local_checkpoint_decode_limits(bytes.len(), maximum_bytes, max_sequence_elements)
+            .map_err(norito::Error::Message)?;
+    // Cumulative decoder charges follow this schema's nested field path: one
+    // possible root alignment copy, then a length charge and possible alignment
+    // copy at each of envelope field, chunk element and ciphertext field, then
+    // byte-sequence count and owned storage. Each layer totals at most the wire
+    // length: 1 + 2 + 2 + 2 + 2 = 9. Optional strings have a shallower path.
+    // Chunk count, span planning and the owned chunk vector are separate. The
+    // final canonical comparison streams; it does not allocate another frame.
+    let chunk_metadata = MODERATION_QUARANTINE_OBJECT_MAX_CHUNKS_V1
+        .checked_mul(
+            size_of::<ModerationQuarantineCiphertextChunkV1>()
+                + size_of::<norito::core::SequenceSpan>()
+                + 1,
+        )
+        .ok_or(norito::Error::LengthMismatch)?;
+    let allocation_limit = bytes
+        .len()
+        .checked_mul(9)
+        .and_then(|layers| layers.checked_add(chunk_metadata))
+        .ok_or(norito::Error::LengthMismatch)?
+        .min(norito::canonical_decode_limits(bytes.len()).max_total_allocated_bytes());
+    let limits = norito::DecodeLimits::new(
+        limits.max_sequence_elements(),
+        limits.max_field_bytes(),
+        limits.max_total_elements(),
+        allocation_limit,
+        limits.max_nesting_depth(),
+    );
+    norito::decode_canonical_with_limits(bytes, limits)
+}
+
 pub(crate) fn seal_moderation_quarantine_object(
     input: ModerationQuarantineObjectInput,
     key_provider_binding: &ModerationQuarantineKeyProviderBindingV1,
@@ -3404,10 +3463,11 @@ pub(crate) fn seal_moderation_quarantine_object(
     let envelope_path =
         moderation_quarantine_object_relative_path(envelope.quarantine_id, envelope.object_id);
     let record = moderation_quarantine_object_record_from_envelope(&envelope, envelope_path)?;
-    let bytes =
-        norito::to_bytes(&envelope).map_err(|err| ModerationQuarantineObjectError::Codec {
+    let bytes = norito::encode_canonical(&envelope).map_err(|err| {
+        ModerationQuarantineObjectError::Codec {
             message: err.to_string(),
-        })?;
+        }
+    })?;
     Ok((record, bytes))
 }
 pub(crate) fn open_moderation_quarantine_object(
@@ -3614,10 +3674,11 @@ pub(crate) fn rewrap_moderation_quarantine_object(
         &replacement,
         record.envelope_path.clone(),
     )?;
-    let bytes =
-        norito::to_bytes(&replacement).map_err(|error| ModerationQuarantineObjectError::Codec {
+    let bytes = norito::encode_canonical(&replacement).map_err(|error| {
+        ModerationQuarantineObjectError::Codec {
             message: error.to_string(),
-        })?;
+        }
+    })?;
     Ok((replacement_record, bytes))
 }
 fn authenticate_moderation_quarantine_ciphertext(
@@ -4129,10 +4190,11 @@ fn quarantine_aad_header_from_envelope(
 fn moderation_quarantine_object_id(
     metadata: &ModerationQuarantineImmutableMetadataV1,
 ) -> Result<[u8; 16], ModerationQuarantineObjectError> {
-    let encoded =
-        norito::to_bytes(metadata).map_err(|error| ModerationQuarantineObjectError::Codec {
+    let encoded = norito::encode_canonical(metadata).map_err(|error| {
+        ModerationQuarantineObjectError::Codec {
             message: error.to_string(),
-        })?;
+        }
+    })?;
     let mut hasher = blake3::Hasher::new();
     hasher.update(MODERATION_QUARANTINE_OBJECT_ID_DOMAIN_V1);
     hasher.update(&encoded);
@@ -4144,10 +4206,11 @@ fn moderation_quarantine_object_id(
 fn moderation_quarantine_aad_header_digest(
     header: &ModerationQuarantineAadHeaderV1,
 ) -> Result<[u8; 32], ModerationQuarantineObjectError> {
-    let encoded =
-        norito::to_bytes(header).map_err(|error| ModerationQuarantineObjectError::Codec {
+    let encoded = norito::encode_canonical(header).map_err(|error| {
+        ModerationQuarantineObjectError::Codec {
             message: error.to_string(),
-        })?;
+        }
+    })?;
     let mut hasher = blake3::Hasher::new();
     hasher.update(MODERATION_QUARANTINE_OBJECT_AAD_DOMAIN_V1);
     hasher.update(&encoded);
@@ -4168,7 +4231,7 @@ fn moderation_quarantine_chunk_aad(
     plaintext_offset: u64,
     plaintext_len: u32,
 ) -> Result<Vec<u8>, ModerationQuarantineObjectError> {
-    norito::to_bytes(&ModerationQuarantineChunkAadV1 {
+    norito::encode_canonical(&ModerationQuarantineChunkAadV1 {
         header_digest,
         index,
         plaintext_offset,

@@ -167,6 +167,18 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--warmup-seconds", required=True, type=nonnegative_float)
     parser.add_argument("--measurement-seconds", required=True, type=positive_float)
     parser.add_argument(
+        "--drain-seconds",
+        required=True,
+        type=positive_float,
+        help="Bounded drain after warmup and measurement; at most 300 seconds.",
+    )
+    parser.add_argument(
+        "--max-submission-lag-ms",
+        required=True,
+        type=nonnegative_float,
+        help="Maximum fixed-schedule submission lag; at most a quarter arrival period.",
+    )
+    parser.add_argument(
         "--min-interval-samples",
         type=positive_int,
         default=MIN_INTERVAL_SAMPLES,
@@ -198,6 +210,10 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="Python interpreter used for the evidence validator.",
     )
     args = parser.parse_args(argv)
+    if args.drain_seconds > 300:
+        parser.error("--drain-seconds cannot exceed 300")
+    if args.max_submission_lag_ms > 250.0 / args.offered_load_tps:
+        parser.error("--max-submission-lag-ms cannot exceed a quarter arrival period")
     if args.min_interval_samples < MIN_INTERVAL_SAMPLES:
         parser.error(f"--min-interval-samples cannot be below {MIN_INTERVAL_SAMPLES}")
     if args.min_latency_samples < MIN_LATENCY_SAMPLES:
@@ -275,6 +291,8 @@ def _base_manifest(
             "offered_load_tps": args.offered_load_tps,
             "warmup_seconds": args.warmup_seconds,
             "measurement_seconds": args.measurement_seconds,
+            "drain_seconds": args.drain_seconds,
+            "max_submission_lag_ms": args.max_submission_lag_ms,
             "min_interval_samples": args.min_interval_samples,
             "min_latency_samples": args.min_latency_samples,
             "max_offered_load_deviation_fraction": MAX_OFFERED_LOAD_DEVIATION_FRACTION,
@@ -334,6 +352,8 @@ def _trial_environment(
         "IROHA_GSCALE_OFFERED_LOAD_TPS": manifest["workload"]["offered_load_tps"],
         "IROHA_GSCALE_WARMUP_SECONDS": manifest["workload"]["warmup_seconds"],
         "IROHA_GSCALE_MEASUREMENT_SECONDS": manifest["workload"]["measurement_seconds"],
+        "IROHA_GSCALE_DRAIN_SECONDS": manifest["workload"]["drain_seconds"],
+        "IROHA_GSCALE_MAX_SUBMISSION_LAG_MS": manifest["workload"]["max_submission_lag_ms"],
         "IROHA_GSCALE_MIN_INTERVAL_SAMPLES": manifest["workload"]["min_interval_samples"],
         "IROHA_GSCALE_MIN_LATENCY_SAMPLES": manifest["workload"]["min_latency_samples"],
         "IROHA_GSCALE_MAX_QUEUE_DEPTH": manifest["budgets"]["queue_depth_max"],

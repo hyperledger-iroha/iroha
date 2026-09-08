@@ -326,7 +326,7 @@ class NexusAppClient @JvmOverloads constructor(
             )
         }
         val address = try {
-            AccountAddress.parseEncodedIgnoringCurveSupport(
+            AccountAddress.parseEncoded(
                 value,
                 config.chainDiscriminant,
             )
@@ -361,7 +361,7 @@ class NexusAppClient @JvmOverloads constructor(
         vararg sources: Pair<String, ByteArray?>,
     ): ByteArray {
         val address = try {
-            AccountAddress.parseEncodedIgnoringCurveSupport(
+            AccountAddress.parseEncoded(
                 requireCanonicalAccountId(accountId, context),
                 config.chainDiscriminant,
             )
@@ -375,7 +375,7 @@ class NexusAppClient @JvmOverloads constructor(
             )
         }
         val controller = try {
-            address.singleKeyPayloadIgnoringCurveSupport()
+            address.singleKeyPayload()
         } catch (error: Exception) {
             throw NexusAppError(
                 "missing_signing_public_key",

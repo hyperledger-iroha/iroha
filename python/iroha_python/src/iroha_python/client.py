@@ -13487,7 +13487,7 @@ def _require_crypto() -> ModuleType:
         from . import crypto as _crypto
     except RuntimeError as exc:  # pragma: no cover - optional runtime dependency
         raise RuntimeError(
-            "iroha_python._crypto extension module is required for transaction helpers. "
+            "iroha_native._crypto extension module is required for transaction helpers. "
             "Run `maturin develop --release` inside `python/iroha_python` (or install the wheel) "
             "before using these APIs."
         ) from exc

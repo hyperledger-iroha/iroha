@@ -153,6 +153,64 @@ fn deps_with_checkpoint_store(
     runtime_deps.checkpoint_store = checkpoint_store;
     runtime_deps
 }
+fn assert_initialized_checkpoint(
+    store: &MockCheckpointStore,
+    orchestrator: &ModerationOrchestratorV1,
+) -> ModerationCheckpointStoreRecordV1 {
+    let record = store.latest();
+    let state = orchestrator.state.lock().expect("initialized state");
+    assert_eq!(record.checkpoint_generation, 1);
+    assert_eq!(state.generation, record.checkpoint_generation);
+    assert_eq!(state.panel_notification_archive_signer_epochs.len(), 1);
+    let epoch = &state.panel_notification_archive_signer_epochs[0];
+    assert_eq!(epoch.epoch, 1);
+    assert_eq!(epoch.activated_at_generation, 1);
+    assert_eq!(
+        epoch.archive_public_key,
+        orchestrator
+            .config
+            .panel_notification_archive_bootstrap_public_key
+    );
+    assert_eq!(
+        record.checkpoint_bytes,
+        norito::encode_canonical(&*state).expect("sealed bootstrap bytes")
+    );
+    assert!(record.has_valid_provider_envelope(
+        CHECKPOINT_STORE_HANDLE,
+        CHECKPOINT_STORE_QUALIFICATION,
+        orchestrator.config.checkpoint_max_bytes
+    ));
+    assert_eq!(
+        *orchestrator
+            .checkpoint_record
+            .lock()
+            .expect("local authority record"),
+        record
+    );
+    record
+}
+fn assert_checkpoint_successor(
+    previous: &ModerationCheckpointStoreRecordV1,
+    next: &ModerationCheckpointStoreRecordV1,
+) {
+    assert_eq!(
+        next.checkpoint_generation,
+        previous.checkpoint_generation + 1
+    );
+    assert_eq!(next.predecessor_revision, Some(previous.revision));
+    assert_eq!(
+        next.predecessor_checkpoint_digest,
+        Some(previous.checkpoint_digest)
+    );
+    assert_eq!(next.revision, checkpoint_store::record_revision(next));
+    assert_eq!(
+        next.checkpoint_digest,
+        domain_hash(
+            b"sorafs.moderation.checkpoint-bytes.v1",
+            &[&next.checkpoint_bytes]
+        )
+    );
+}
 #[test]
 fn checkpoint_store_startup_rejects_substituted_stale_and_test_marked_providers() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -195,11 +253,20 @@ fn ambiguous_checkpoint_commit_is_resolved_only_by_exact_authoritative_readback(
         deps_with_checkpoint_store(reader, submitter, store.clone()),
     )
     .expect("open");
+    let initialized = assert_initialized_checkpoint(&store, &orchestrator);
     store.fail_next_cas(2);
     orchestrator
         .reconcile()
         .expect("exact authoritative readback resolves ambiguity");
-    assert_eq!(store.latest().checkpoint_generation, 1);
+    let committed = store.latest();
+    assert_checkpoint_successor(&initialized, &committed);
+    assert_eq!(
+        *orchestrator
+            .checkpoint_record
+            .lock()
+            .expect("resolved authority record"),
+        committed
+    );
 }
 #[test]
 fn ambiguous_checkpoint_commit_without_exact_readback_fences_the_replica() {
@@ -212,6 +279,7 @@ fn ambiguous_checkpoint_commit_without_exact_readback_fences_the_replica() {
         deps_with_checkpoint_store(reader, submitter, store.clone()),
     )
     .expect("open");
+    let initialized = assert_initialized_checkpoint(&store, &orchestrator);
     store.fail_next_cas(3);
     assert_eq!(
         orchestrator.reconcile(),
@@ -221,7 +289,7 @@ fn ambiguous_checkpoint_commit_without_exact_readback_fences_the_replica() {
         orchestrator.reconcile(),
         Err(ModerationOrchestratorError::DurabilityFaulted)
     );
-    assert_eq!(store.latest().checkpoint_generation, 0);
+    assert_eq!(store.latest(), initialized);
 }
 #[test]
 fn competing_replica_is_fenced_before_overwriting_a_committed_successor() {
@@ -237,6 +305,7 @@ fn competing_replica_is_fenced_before_overwriting_a_committed_successor() {
         ),
     )
     .expect("first replica");
+    let initialized = assert_initialized_checkpoint(&store, &first);
     let second = ModerationOrchestratorV1::open(
         config(&temp, "checkpoint-second-cache.norito"),
         deps_with_checkpoint_store(
@@ -246,7 +315,10 @@ fn competing_replica_is_fenced_before_overwriting_a_committed_successor() {
         ),
     )
     .expect("second replica");
+    assert_eq!(store.latest(), initialized);
     first.reconcile().expect("first successor");
+    let committed = store.latest();
+    assert_checkpoint_successor(&initialized, &committed);
     assert_eq!(
         second.reconcile(),
         Err(ModerationOrchestratorError::CheckpointStoreFenced)
@@ -255,7 +327,7 @@ fn competing_replica_is_fenced_before_overwriting_a_committed_successor() {
         second.reconcile(),
         Err(ModerationOrchestratorError::DurabilityFaulted)
     );
-    assert_eq!(store.latest().checkpoint_generation, 1);
+    assert_eq!(store.latest(), committed);
 }
 #[test]
 fn sealed_record_replay_and_equivocation_fail_startup_closed() {
@@ -318,11 +390,16 @@ fn authoritative_store_rollback_behind_local_cache_fails_startup_closed() {
         deps_with_checkpoint_store(reader.clone(), submitter.clone(), store.clone()),
     )
     .expect("open");
-    let genesis = store.latest();
+    let initialized = assert_initialized_checkpoint(&store, &orchestrator);
     orchestrator.reconcile().expect("commit successor");
-    assert_eq!(store.latest().checkpoint_generation, 1);
+    let committed = store.latest();
+    assert_checkpoint_successor(&initialized, &committed);
+    assert_eq!(
+        std::fs::read(&checkpoint.checkpoint_path).expect("newer durable cache"),
+        committed.checkpoint_bytes
+    );
     drop(orchestrator);
-    store.replace_latest(genesis);
+    store.replace_latest(initialized);
     assert_eq!(
         ModerationOrchestratorV1::open(
             checkpoint,

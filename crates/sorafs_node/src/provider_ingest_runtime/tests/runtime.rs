@@ -362,9 +362,7 @@ fn runtime_requires_marked_network_identity_and_preserves_it_exactly() {
             0,
             ProviderIngestIngressDispositionV1::Submitted,
             false,
-            NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
-                Hash::prehashed([0; 32]),
-            )),
+            unmarked_test_network_id(),
         ),
         Err(ProviderIngestRuntimeErrorV1::InvalidNetworkId)
     ));
@@ -467,6 +465,7 @@ fn finalized_cursor_and_order_lifecycle_fail_closed_on_substitution() {
 fn finalized_claim_factory_and_runtime_reject_musubi_binding_substitution() {
     let factory = ProviderIngestFinalizedClaimFactoryV1::new(test_network_id(), LOCAL_PROVIDER);
     let mut row = fixture_row(0x32);
+    configure_musubi_replication_fixture(&mut row);
     let binding = musubi_binding_for_row(&row, 0x81);
     let mut substituted_pin = row.pin.manifest.clone();
     substituted_pin.content_length = substituted_pin.content_length.saturating_add(1);

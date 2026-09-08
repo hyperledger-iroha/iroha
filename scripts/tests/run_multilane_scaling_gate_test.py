@@ -19,6 +19,8 @@ SHELL_CONTRACT = REPO_ROOT / "scripts" / "tests" / "multilane_scaling_gate_contr
 RUNBOOK = REPO_ROOT / "specs" / "sumeragi_v2_multilane_scaling_gate.md"
 
 FAKE_TRIAL = r'''#!/usr/bin/env python3
+import hashlib
+import math
 import json
 import os
 import pathlib
@@ -50,14 +52,16 @@ workload = {
     "offered_load_tps": float(os.environ["IROHA_GSCALE_OFFERED_LOAD_TPS"]),
     "warmup_seconds": float(os.environ["IROHA_GSCALE_WARMUP_SECONDS"]),
     "measurement_seconds": float(os.environ["IROHA_GSCALE_MEASUREMENT_SECONDS"]),
+    "drain_seconds": float(os.environ["IROHA_GSCALE_DRAIN_SECONDS"]),
+    "max_submission_lag_ms": float(os.environ["IROHA_GSCALE_MAX_SUBMISSION_LAG_MS"]),
     "min_interval_samples": int(os.environ["IROHA_GSCALE_MIN_INTERVAL_SAMPLES"]),
     "min_latency_samples": int(os.environ["IROHA_GSCALE_MIN_LATENCY_SAMPLES"]),
     "max_offered_load_deviation_fraction": 0.01,
 }
 intervals = 20
 offered = 400
-accepted = 400
 committed = 100 if variant == "one_lane" else 160
+accepted = committed
 latency = 10.0 if variant == "one_lane" else 12.0
 
 def distribute(total):
@@ -126,6 +130,74 @@ def artifact_ref(path):
         "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
     }
 
+
+seed = os.environ["IROHA_GSCALE_SEED"]
+warmup_count = math.ceil(workload["offered_load_tps"] * workload["warmup_seconds"])
+warmup_start = -round((workload["warmup_seconds"] + workload["drain_seconds"]) * 1_000_000_000)
+lag_ns = min(100_000, round(workload["max_submission_lag_ms"] * 1_000_000))
+transactions = []
+for cohort, count, start in (("warmup", warmup_count, warmup_start), ("measurement", offered, 0)):
+    for index in range(count):
+        sequence_in_cohort = index + 1
+        scheduled = start + round(index * 1_000_000_000 / workload["offered_load_tps"])
+        offer = scheduled + lag_ns
+        is_accepted = cohort == "warmup" or index % 20 < accepted_parts[index // 20]
+        tx_hash = hashlib.sha256(f"{pair_index}:{variant}:{cohort}:{sequence_in_cohort}".encode()).hexdigest()[:-1] + "1"
+        transactions.append({
+            "cohort": cohort,
+            "sequence": sequence_in_cohort,
+            "logical_id": hashlib.sha256(f"{seed}:{cohort}:{sequence_in_cohort}".encode()).hexdigest(),
+            "hash": tx_hash,
+            "scheduled_offset_ns": scheduled,
+            "offer_offset_ns": offer,
+            "submission_lag_ns": lag_ns,
+            "acknowledgment": {
+                "offset_ns": offer + 1_000_000,
+                "hash": tx_hash,
+                "status": "Accepted" if is_accepted else "Rejected",
+                "rejection": None if is_accepted else "synthetic explicit admission rejection",
+            },
+            "applied": {
+                "offset_ns": offer + round(latency * 1_000_000),
+                "hash": tx_hash,
+                "scope": "global",
+                "resolved_from": "state",
+                "status": "Applied",
+                "block_height": 1 + index // 20,
+            } if is_accepted else None,
+        })
+defect = os.environ.get("GSCALE_TEST_TRACE_DEFECT")
+accepted_row = next(row for row in transactions if row["cohort"] == "measurement" and row["applied"])
+if defect == "missing_offer":
+    transactions.remove(accepted_row)
+elif defect == "cached_status":
+    accepted_row["applied"]["resolved_from"] = "cache"
+elif defect == "undrained":
+    accepted_row["applied"] = None
+trace_path = support_dir / "transaction_trace.json"
+trace_path.write_text(json.dumps({
+    "schema": "iroha.sumeragi_v2.multilane_scaling.trace.v1",
+    "pair_index": pair_index,
+    "variant": variant,
+    "seed": seed,
+    "clock": "monotonic_nanoseconds_relative_to_measurement_start",
+    "logical_id_derivation": "sha256(seed + ':' + cohort + ':' + decimal_sequence)",
+    "transaction_hash_source": "iroha_data_model::transaction::SignedTransaction::hash",
+    "transactions": transactions,
+}, sort_keys=True) + "\n", encoding="utf-8")
+drain_samples = []
+for index in range(math.ceil(workload["drain_seconds"])):
+    drain_samples.append({
+        "sequence": index + 1,
+        "start_offset_seconds": workload["measurement_seconds"] + index,
+        "end_offset_seconds": workload["measurement_seconds"] + min(index + 1, workload["drain_seconds"]),
+        "offered_count": 0, "accepted_count": 0, "committed_count": 0,
+        "commit_latencies_ms": [], "queue_depth": 12, "index_entries": 24,
+        "memory_bytes": 1019, "disk_bytes": 2019,
+    })
+if defect == "missing_drain":
+    drain_samples.pop()
+
 payload = {
     "schema": os.environ["IROHA_GSCALE_RUN_SCHEMA"],
     "pair_index": pair_index,
@@ -147,7 +219,17 @@ payload = {
         "disk_bytes_max": 2019,
     },
     "samples": samples,
+    "warmup": {"offered_count": warmup_count, "accepted_count": warmup_count, "committed_count": warmup_count},
+    "drain": {
+        "summary": {
+            "offered_count": 0, "accepted_count": 0, "committed_count": 0,
+            "queue_depth_max": 12, "index_entries_max": 24,
+            "memory_bytes_max": 1019, "disk_bytes_max": 2019,
+        },
+        "samples": drain_samples,
+    },
     "artifacts": {
+        "transaction_trace": artifact_ref(trace_path),
         "nexus_load_test_manifest": artifact_ref(nexus_manifest),
         "lifecycle_snapshot": artifact_ref(lifecycle),
         "metrics_snapshot": artifact_ref(metrics),
@@ -222,6 +304,10 @@ class RunnerFixture:
             "5",
             "--measurement-seconds",
             "20",
+            "--drain-seconds",
+            "2",
+            "--max-submission-lag-ms",
+            "10",
             "--max-queue-depth",
             "100",
             "--max-index-entries",
@@ -320,7 +406,17 @@ class MultilaneScalingGateRunnerTest(unittest.TestCase):
             (self.fixture.bundle / "scaling_evidence.json").read_text(encoding="utf-8")
         )
         self.assertEqual(len(manifest["runs"]), 10)
+        self.assertEqual(manifest["workload"]["drain_seconds"], 2.0)
+        self.assertEqual(manifest["workload"]["max_submission_lag_ms"], 10.0)
         self.assertTrue(all(entry["status"] == "passed" for entry in manifest["runs"]))
+        for entry in manifest["runs"]:
+            raw_path = self.fixture.bundle / entry["raw_samples"]["path"]
+            raw = json.loads(raw_path.read_text(encoding="utf-8"))
+            self.assertEqual(raw["workload"]["drain_seconds"], 2.0)
+            self.assertEqual(raw["workload"]["max_submission_lag_ms"], 10.0)
+            trace_ref = raw["artifacts"]["transaction_trace"]
+            trace_path = self.fixture.bundle / trace_ref["path"]
+            self.assertEqual(digest(trace_path), trace_ref["sha256"])
         for offset in range(0, 10, 2):
             self.assertEqual(manifest["runs"][offset]["seed"], manifest["runs"][offset + 1]["seed"])
         report = json.loads(
@@ -399,6 +495,44 @@ class MultilaneScalingGateRunnerTest(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertIn("cannot be below 20", result.stderr)
         self.assertFalse(self.fixture.bundle.exists())
+
+    def test_runner_rejects_invalid_drain_and_submission_bounds_before_trials(self) -> None:
+        for option, value, message in (
+            ("--drain-seconds", "0", "finite number > 0"),
+            ("--drain-seconds", "301", "cannot exceed 300"),
+            ("--drain-seconds", "nan", "finite number >= 0"),
+            ("--max-submission-lag-ms", "-1", "finite number >= 0"),
+            ("--max-submission-lag-ms", "12.5001", "quarter arrival period"),
+        ):
+            with self.subTest(option=option, value=value):
+                result = self.run_runner(extra=(option, value))
+                self.assertEqual(result.returncode, 2)
+                self.assertIn(message, result.stderr)
+                self.assertFalse(self.fixture.bundle.exists())
+
+    def test_runner_rejects_rehashed_incomplete_or_non_authoritative_traces(self) -> None:
+        for defect, message in (
+            ("missing_offer", "missing or extra scheduled requests"),
+            ("cached_status", "exact authoritative global StateApplied"),
+            ("undrained", ".applied must be an object"),
+            ("missing_drain", "exactly cover the bounded drain window"),
+        ):
+            with self.subTest(defect=defect), tempfile.TemporaryDirectory() as directory:
+                fixture = RunnerFixture(Path(directory))
+                result = subprocess.run(
+                    fixture.command(),
+                    cwd=REPO_ROOT,
+                    env={**os.environ, "GSCALE_TEST_TRACE_DEFECT": defect},
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 1, result.stderr)
+                report = json.loads(
+                    (fixture.bundle / "validation_report.json").read_text(encoding="utf-8")
+                )
+                self.assertEqual(report["result"], "fail")
+                self.assertIn(message, "\n".join(report["errors"]))
 
     def test_runner_refuses_to_overwrite_existing_artifact_directory(self) -> None:
         self.fixture.bundle.mkdir()

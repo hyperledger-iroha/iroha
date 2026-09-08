@@ -1069,18 +1069,21 @@ mod tests {
         let expected_roots = transcript_roots(&baseline);
         for discriminant in [0, 369, 753, 65_535] {
             let _display = ChainDiscriminantGuard::enter(discriminant);
-            let mut transcript = baseline.clone();
-            let roots =
-                attach_transfer_smt_witnesses(std::slice::from_mut(&mut transcript)).unwrap();
-            assert_eq!(
-                transcript_balance_keys(std::slice::from_ref(&transcript)).unwrap(),
-                expected_keys
-            );
-            assert_eq!(roots, expected_roots);
-            assert_eq!(transcript.deltas, baseline.deltas);
-            let rows = sample_transitions(&transcript);
-            verify_transcripts(&rows, std::slice::from_ref(&transcript)).unwrap();
-            transcripts_to_witnesses(&[transcript], &roots.0, &roots.1).unwrap();
+            for flags in [0, 1, 2, 3, 4, 5, 6, 7, 0x1b, 0x3f] {
+                let _layout = norito::core::DecodeFlagsGuard::enter(flags);
+                let mut transcript = baseline.clone();
+                let roots =
+                    attach_transfer_smt_witnesses(std::slice::from_mut(&mut transcript)).unwrap();
+                assert_eq!(
+                    transcript_balance_keys(std::slice::from_ref(&transcript)).unwrap(),
+                    expected_keys
+                );
+                assert_eq!(roots, expected_roots);
+                assert_eq!(transcript.deltas, baseline.deltas);
+                let rows = sample_transitions(&transcript);
+                verify_transcripts(&rows, std::slice::from_ref(&transcript)).unwrap();
+                transcripts_to_witnesses(&[transcript], &roots.0, &roots.1).unwrap();
+            }
         }
     }
     #[test]

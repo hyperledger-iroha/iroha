@@ -16,25 +16,36 @@ counts, plans, dates, and former policies do not attest the current candidate.
 
 ## Current implementation and local evidence
 
-Kaigi's final scalar/identity/retained-participation model passes 33 tests, and
-the authorization/usage circuit library passes 20 tests with real proofs and
-every public-row mutation. Retired circuit/seed/artifact-hint interfaces are
-removed. A fresh strict account-decoder run passes 42 cases across all ten
-Norito layouts. Kotlin/Java pass 40 scoped tests including the shared 16-positive,
-seven-negative full-controller fixture. Earlier Python wire results predate its
-new native identity adapter; installed-wheel verification is pending. Mandatory host authorization,
-leave/rejoin, usage and storage reservations await the shared Core verification
-build; final SDK artifacts, relay transport and deployment remain unqualified.
+Kaigi's final model passes 33 tests, its proof circuits pass 20, and the fresh
+JS-host native proof suite passes 21, including every 31/25-row mutation. All
+three real Core Kaigi integration tests pass; its unit selection passes 96/97,
+with a typed capacity-error assertion corrected for the next capture. Strict
+Rust account decoding passes 42 cases across all ten Norito layouts. Updated
+Kotlin/Java sources compile with JDK 8 API enforcement; three decoder/absence
+tests pass. Earlier managed full-controller passes predate mandatory native
+key admission. Python's separate native-owner test-target check passes, but
+installed SDK wheels/addon/JNI/XCFramework execution remains pending. Fresh
+Metal digest/Merkle/runtime tests pass 68 cases; complete GPU proofs, relay
+transport and four-validator deployment remain unqualified.
 See the [current privacy evidence](specs/privacy_first_release_closure.md).
 
 Production multilane work has [six implementation milestones under an active goal](specs/sumeragi_v2_multilane_completion_goals.md).
 No milestone or release gate is closed. The current source adds authenticated
 terminal replay, bounded atomic cache retirement, a real second autonomous
 application fixture and mandatory move-only authority for shipping Queue release.
-G-UNIT registers 531 tests; production registers 881 across 43 modules. Those
-runtime changes await the coordinated Core build; all original affected fixture
-assertions remain. The combined source manifest covers 17 Rust files and five
-model/configuration files under ignored `dist/multilane-validation-20260907/`.
+G-UNIT registers 531 tests; production registers 881 across 43 modules. The
+shared Core build passed with all 22 captured multilane inputs unchanged.
+Its first 89 direct runtime tests finished with 39 passes and 50 failures. The
+production witness still minted an old model identity and rejected otherwise
+valid transitions. That constant is corrected; the real wrapper test now covers
+25 producer/committee combinations and rejects altered witnesses. Nonzero BLS
+fixture seeds, matching network context and manifest-backed Queue initialization
+also repair distinct setup failures. All original assertions remain. Four changed
+files were captured for a second build, which failed on unrelated SoraFS/Torii
+compile errors before producing a Core executable. No post-fix runtime pass is
+claimed. The production trace audit also found an unwrapped 28th replica-release
+action; its witness wrapper and exhaustive registration are being repaired for
+the next batch. Evidence is under ignored `dist/multilane-validation-20260907/`.
 
 A fresh formal audit reproduced direct FIFO release with active Kura custody,
 then lane Commit and WSV application, in the former model and shared predicate.
@@ -43,17 +54,34 @@ activation and excludes Commit/application from every release disposition.
 Exhaustive TLC passes all 20 configured invariants over 280,818 distinct states;
 all 25 exact mutation controls produce their named counterexamples, including
 the new 4/19/4-action failures. Four explicit replica/application and release
-paths also pass. Current-model Apalache, Verus and Rust execution remain open.
-The running 18-step check uses the earlier frozen model and cannot qualify this
-repair. These model results do not establish live-network exploitability.
+paths also pass. Verus reports zero proof errors (1,690 and 221 verified), but
+its evidence driver rejects a changed input and the stale expected proof count.
+The scope audit and clean rerun remain open, as does current-model Apalache.
+The current model has its own 18-step Apalache run; the separate earlier-model
+run cannot qualify this repair. These results do not establish a live exploit.
 
 Fresh source evidence passes 69 terminal controls, 21 merge-cache semantic
 negatives with copied positives, all eight cache owners, and the complete
 QueuePlan contract with 14 release-authority negatives. The terminal baseline
-also passes after the custody correction. The broader source diagnostic still
-fails with 71 errors; ingress, lifecycle completion, worker ownership and
-finalization contracts remain under review. Four inputs changed during that
-run, so it is development evidence. Four retired-codec guards pass.
+also passes after the custody correction. The repaired model/source registration
+selection passes all 54 checks, including full production acceptance. Ordinary
+ingress passes 24 copied-source baselines, 24 rehashed negatives and its complete
+owner contract. Configuration geometry passes 24 rehashed controls; decided-body
+serving passes 72 copied baselines and 72 rehashed controls across 19 owners.
+Lifecycle certified serving passes all 46 selected checks; the four lane-output
+owners pass 43 rehashed controls before and after their seal updates. Ingress
+effects and tombstones pass 81 copied positives and 81 rehashed negatives. The last
+broader diagnostic reported 71 errors before these corrections; remaining worker
+ownership and finalization contracts are under review.
+Four inputs changed during that run, so it is development evidence. Four
+retired-codec guards pass.
+
+The strict scaling evidence contract now requires fixed-schedule transaction
+identities, authoritative Applied results, drained warmup and complete-cohort
+latency including the drain tail. Validator checks pass 56 tests/86 subcases;
+runner integration passes 13 tests/nine subcases, preserving all old assertions.
+The production collector, exact routing/resource observations and real paired
+trials remain open.
 
 The host restart deleted temporary raw artifacts and unfinished Core/Apple
 builds. Earlier SDK/formal/source observations are recorded in the linked goals
@@ -111,24 +139,30 @@ have passed together against one immutable source tree.
 ## Build and architecture qualification
 
 SoraFS goal execution is tracked in the [V1 implementation goals](specs/sorafs/v1_implementation_goals.md).
-The post-reboot manifest library passes **896 tests**, zero failures or ignored
+The post-reboot manifest library now passes **908 tests**, zero failures or ignored
 tests, including canonical identities/signatures under alternate caller layouts.
 The new local result and binary/source hashes are retained in ignored
-`target/evidence/sorafs-v1/manifest-canonical-identity-result.json`.
+`target/evidence/sorafs-v1/manifest-reference-04-result.json`.
 The retention-request model selection also passes three tests. Provider/rollout
 source contracts pass 410 checks, with two unfinished-source closure failures.
 The review corrects canonical manifest/deal/audit/replication identities, retention
 request digests, pin-accounting keys, and node billing/reputation/governance
-checkpoint and publication framing. The fresh node retry passes **19 of 19**
-regressions after correcting the two-slot encoder and fixtures; compression is
-rejected before allocation. The full node suite reports **1,378 passed, 48 failed
-and two Kubo cases ignored**; retained failure diagnostics are under review.
-Canonical Core state/nonce keys and SDK reference frame admission are being
-completed before the shared Core capture; broader qualification remains pending.
+checkpoint and publication framing. The earlier full Node suite reports
+**1,378 passed, 48 failed and two Kubo cases ignored**. The next rebuilt security
+selection now reports **74 passed and four failed**, with zero ignored; all 48
+original failures still pass. The remaining failures identify two unsafe fixture
+file modes, a fixture assumption about intentionally hedged encryption randomness,
+and insufficient cumulative quarantine decode budget at its exact byte limit.
+Bounded corrections and the next full-suite execution remain pending.
+The rebuilt Core SoraFS selection now passes **406 tests**, zero failures or
+ignored, in 58.198 seconds with unchanged scoped source/binary hashes. It covers
+all 42 earlier failures, the reputation policy cutover fence, exact permission
+tokens under zero allocation, and authenticated snapshot timing. The combined
+build still fails on Torii test include paths; this pass qualifies only the
+captured Core selection. Node focused/full validation remains in progress.
 The host reboot cleared previous `/tmp` SoraFS logs and interrupted native
 captures; those older observations cannot serve as retained current evidence.
-The former Core run exposed 113 failures, and its fixture/security corrections
-still require the coordinated rebuild. Matched daemon/harness four-validator
+Matched daemon/harness four-validator
 execution, full workspace/SDK validation, source/bootstrap seals, genuine HSM
 custody and all deployment evidence remain open. See the
 [current closure checkpoint](specs/sorafs/v1_closure_ledger.md#2026-09-07-post-reboot-checkpoint).

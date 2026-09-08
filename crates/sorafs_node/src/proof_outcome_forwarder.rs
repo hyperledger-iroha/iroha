@@ -48,9 +48,9 @@ const CHECKPOINT_LOCK_FILE_NAME: &str = "proof-outcome-forwarder-state.lock";
 const OPERATION_ID_DOMAIN_V1: &[u8] = b"sorafs.proof-outcome.forwarder.operation.v1\0";
 const CHECKPOINT_ELEMENT_AMPLIFICATION_LIMIT: usize = 4;
 const CHECKPOINT_ALLOCATION_AMPLIFICATION_LIMIT: usize = 16;
-// Maximum-valid PDP/PoTR state requires 463,560 bytes beyond 16x wire.
-// Round up to eight 64 KiB quanta and retain one further quantum as margin.
-const CHECKPOINT_ALLOCATION_FIXED_OVERHEAD_BYTES: usize = 9 * 64 * 1024;
+// Maximum-valid PDP/PoTR state requires 93,187 bytes beyond 16x wire.
+// Round up to two 64 KiB quanta and retain one further quantum as margin.
+const CHECKPOINT_ALLOCATION_FIXED_OVERHEAD_BYTES: usize = 3 * 64 * 1024;
 const CHECKPOINT_MAX_NESTING_DEPTH: usize = 128;
 const PDP_ARCHIVE_DECODE_LIMITS: norito::DecodeLimits = norito::DecodeLimits::new(
     128 * 1024,
@@ -1400,6 +1400,24 @@ mod tests {
     }
     #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
     struct NestedSourceDepthBomb(Option<Box<NestedSourceDepthBomb>>);
+    fn external_nested_source_frame(levels: usize) -> Vec<u8> {
+        fn field(bytes: &[u8]) -> Vec<u8> {
+            let mut encoded = u64::try_from(bytes.len()).unwrap().to_le_bytes().to_vec();
+            encoded.extend_from_slice(bytes);
+            encoded
+        }
+        // Explicit flag-zero wire: tuple field, Some tag/field, then boxed field.
+        // Frame external bytes without asking the encoder to bypass its depth limit.
+        let mut payload = field(&[0]);
+        for _ in 0..levels {
+            let boxed = field(&payload);
+            let mut some = vec![1];
+            some.extend_from_slice(&field(&boxed));
+            payload = field(&some);
+        }
+        norito::core::frame_bare_with_header_flags::<NestedSourceDepthBomb>(&payload, 0)
+            .expect("frame externally supplied nested payload")
+    }
     fn write_private_checkpoint(path: &Path, bytes: &[u8]) {
         let mut options = fs::OpenOptions::new();
         options.write(true).create_new(true);
@@ -1895,24 +1913,36 @@ mod tests {
             ProofOutcomeOutbox::open(allocation_dir.path(), policy()),
             Err(ProofOutcomeOutboxError::InvalidCheckpoint)
         ));
+        let mut shallow = NestedSourceDepthBomb(None);
+        for depth in 0..4 {
+            let _flags = norito::core::DecodeFlagsGuard::enter(0);
+            let bytes = external_nested_source_frame(depth);
+            assert_eq!(bytes, norito::to_bytes(&shallow).unwrap());
+            norito::decode_from_bytes::<NestedSourceDepthBomb>(&bytes)
+                .expect("independent shallow wire must really decode");
+            shallow = NestedSourceDepthBomb(Some(Box::new(shallow)));
+        }
         let mut depth_bomb = NestedSourceDepthBomb(None);
         for _ in 0..64 {
             depth_bomb = NestedSourceDepthBomb(Some(Box::new(depth_bomb)));
         }
-        let mut depth_bytes = norito::to_bytes(&depth_bomb).unwrap();
-        let depth_limits = norito::DecodeLimits::new(
-            depth_bytes.len(),
-            depth_bytes.len(),
-            depth_bytes.len().saturating_mul(4),
-            depth_bytes.len().saturating_mul(16),
-            POTR_RECEIPT_DECODE_LIMITS.max_nesting_depth(),
-        );
+        assert!(matches!(
+            norito::to_bytes(&depth_bomb),
+            Err(norito::Error::NestingDepthExceeded { limit, .. })
+                if limit == norito::core::MAX_VALUE_NESTING_DEPTH
+        ));
+        let mut depth_bytes = external_nested_source_frame(64);
+        // Use every production ceiling so an artificial lower allocation cap
+        // cannot mask the intended depth rejection.
+        let depth_limits = POTR_RECEIPT_DECODE_LIMITS;
         assert!(
-            norito::decode_from_bytes_with_limits::<NestedSourceDepthBomb>(
-                &depth_bytes,
-                depth_limits,
-            )
-            .is_err(),
+            matches!(
+                norito::decode_from_bytes_with_limits::<NestedSourceDepthBomb>(
+                    &depth_bytes,
+                    depth_limits,
+                ),
+                Err(norito::Error::NestingDepthExceeded { .. })
+            ),
             "the constructed nested source must exceed the production depth ceiling"
         );
         replace_norito_schema::<PotrReceiptV1>(&mut depth_bytes);

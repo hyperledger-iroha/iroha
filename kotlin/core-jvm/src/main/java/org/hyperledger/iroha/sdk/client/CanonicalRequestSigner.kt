@@ -223,7 +223,7 @@ object CanonicalRequestSigner {
 
     private fun canonicalAccountHeaderValue(accountId: String): String {
         try {
-            return AccountAddress.parseEncodedIgnoringCurveSupport(accountId, null)
+            return AccountAddress.parseEncoded(accountId, null)
                 .canonicalHex()
         } catch (_: AccountAddressException) {
             require(accountId.all { it.code in 0x21..0x7e }) {
@@ -253,7 +253,7 @@ object CanonicalRequestSigner {
     private fun requireCanonicalAuthAccount(accountId: String): String {
         requireExactNonBlank(accountId, "accountId")
         try {
-            AccountAddress.parseEncodedIgnoringCurveSupport(accountId, null)
+            AccountAddress.parseEncoded(accountId, null)
             return accountId
         } catch (_: AccountAddressException) {
             require(isCanonicalAsciiAccountAlias(accountId)) {
