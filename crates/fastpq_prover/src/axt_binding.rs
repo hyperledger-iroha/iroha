@@ -1415,10 +1415,9 @@ fn canonical_remote_account(value: &str, field: &str) -> Result<AccountId> {
     Ok(parsed)
 }
 
-/// Exact public metadata byte fields accepted by the compact prototype.
+/// Exact public metadata byte fields accepted by the offline compact relation.
 ///
 /// The type cannot carry the legacy batch seal or private transcript metadata.
-#[cfg(test)]
 #[derive(Clone, Copy)]
 pub(crate) struct AxtPublicMetadataBytes<'a> {
     /// Concrete execution parameter, exact-compared to the canonical binding.
@@ -1436,7 +1435,6 @@ pub(crate) struct AxtPublicMetadataBytes<'a> {
 }
 
 /// Pre-proof outer metadata mirrors; completed-proof commitments are excluded.
-#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize)]
 #[norito(schema_name = "fastpq_prover::compact_prototype::AxtProofContextMirrorsV1")]
 pub(crate) struct AxtProofContextMirrors {
@@ -1456,7 +1454,6 @@ pub(crate) struct AxtProofContextMirrors {
 ///
 /// The caller must first apply its public resource bounds. This validates the
 /// public relation, not source finality, permissions, or handle signatures.
-#[cfg(test)]
 pub(crate) fn validate_axt_public_transfer_facts<V>(
     binding: &AxtFastpqBinding,
     metadata: AxtPublicMetadataBytes<'_>,
@@ -1506,7 +1503,6 @@ pub(crate) fn validate_axt_public_transfer_facts<V>(
 }
 
 /// Parse the exact legacy public encodings and compare their outer mirrors.
-#[cfg(test)]
 pub(crate) fn validate_axt_public_metadata(
     binding: &AxtFastpqBinding,
     metadata: AxtPublicMetadataBytes<'_>,

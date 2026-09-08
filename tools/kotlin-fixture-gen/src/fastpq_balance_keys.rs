@@ -3,7 +3,7 @@
 use iroha_data_model::{
     account::AccountId, asset::id::AssetDefinitionId, fastpq::transfer_balance_key,
 };
-use norito::json::{Value, json};
+use norito::{json, json::Value};
 
 pub(crate) fn emit() {
     let source: Value = norito::json::from_str(include_str!(
@@ -23,9 +23,9 @@ pub(crate) fn emit() {
         let decoded: iroha_data_model::fastpq::FastpqBalanceKeyV1 = norito::decode_canonical(&key).unwrap();
         assert_eq!(decoded.asset_definition, asset);
         assert_eq!(decoded.account, account);
-        json!({"name":name, "account_id_frame_hex":account_hex, "key_frame_hex":hex::encode(key)})
+        json!({"name":name, "account_id_frame_hex":account_hex, "key_frame_hex":(hex::encode(key))})
     }).collect::<Vec<_>>();
-    let fixture = json!({"schema":"iroha.fastpq.balance-key.v1", "asset_uuid_hex":hex::encode(uuid),
+    let fixture = json!({"schema":"iroha.fastpq.balance-key.v1", "asset_uuid_hex":(hex::encode(uuid)),
         "layout_flags":2u64, "positive":positive});
     println!("{}", norito::json::to_json(&fixture).unwrap());
 }

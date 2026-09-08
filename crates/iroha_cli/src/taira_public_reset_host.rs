@@ -2931,7 +2931,7 @@ struct UnitRestartEvidence {
 impl UnitRestartEvidence {
     fn is_terminal_active(&self) -> bool {
         self.active_state == "active"
-            && !matches!(self.sub_state.as_str(), "start" | "stop" | "running")
+            && self.sub_state == "running"
             && matches!(self.job.as_str(), "" | "0")
     }
 }
@@ -7928,6 +7928,18 @@ fn classify_manager_operation_evidence(
     if values["LoadState"] == "not-found" {
         return Ok(ManagerOperationEvidence::Absent);
     }
+    // `systemctl show` exposes the numeric waitid(2) CLD_* code here.
+    // The human-readable `code=exited` belongs to the separate ExecStart
+    // rendering; it is not the ExecMainCode property representation.
+    let main_code = values["ExecMainCode"];
+    if !matches!(main_code, "0" | "1" | "2" | "3" | "4" | "5" | "6") {
+        return Err(eyre!("manager ExecMainCode is not a canonical CLD code"));
+    }
+    let main_status = values["ExecMainStatus"]
+        .parse::<u8>()
+        .ok()
+        .filter(|status| status.to_string() == values["ExecMainStatus"])
+        .ok_or_else(|| eyre!("manager ExecMainStatus is not a canonical exit or signal status"))?;
     let job = values["Job"];
     if !matches!(job, "" | "0")
         || matches!(
@@ -7958,14 +7970,16 @@ fn classify_manager_operation_evidence(
     if values["ActiveState"] == "active"
         && values["SubState"] == "exited"
         && values["Result"] == "success"
-        && values["ExecMainCode"] == "exited"
-        && values["ExecMainStatus"] == "0"
+        && main_code == "1"
+        && main_status == 0
     {
         return Ok(ManagerOperationEvidence::Applied);
     }
     if values["ActiveState"] == "failed"
         || values["Result"] != "success"
-        || values["ExecMainStatus"] != "0"
+        || main_status != 0
+        || matches!(main_code, "2" | "3" | "4" | "5" | "6")
+        || (values["ActiveState"] == "active" && values["SubState"] == "exited")
     {
         return Ok(ManagerOperationEvidence::Rejected);
     }
@@ -20976,7 +20990,7 @@ time.sleep(30)
 
     fn manager_evidence(active: &str, sub: &str, result: &str, status: &str, job: &str) -> Vec<u8> {
         format!(
-            "LoadState=loaded\nActiveState={active}\nSubState={sub}\nResult={result}\nExecMainCode=exited\nExecMainStatus={status}\nInvocationID=0123456789abcdef0123456789abcdef\nExecStart={{ path=/usr/bin/systemctl ; argv[]=/usr/bin/systemctl restart taira-validator-1.service ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }}\nJob={job}\n"
+            "LoadState=loaded\nActiveState={active}\nSubState={sub}\nResult={result}\nExecMainCode=1\nExecMainStatus={status}\nInvocationID=0123456789abcdef0123456789abcdef\nExecStart={{ path=/usr/bin/systemctl ; argv[]=/usr/bin/systemctl restart taira-validator-1.service ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }}\nJob={job}\n"
         )
         .into_bytes()
     }
@@ -21008,6 +21022,128 @@ time.sleep(30)
             .expect("rejected evidence"),
             ManagerOperationEvidence::Rejected
         );
+    }
+
+    #[test]
+    fn manager_evidence_accepts_captured_systemd_numeric_exit_after_deadline() {
+        let mut intent = manager_intent_fixture();
+        intent.verb = "stop".to_owned();
+        intent.target_unit = "iroha3d-taira-validator-1.service".to_owned();
+        // Actual systemctl show properties from a completed retained oneshot.
+        // ExecMainCode is numeric even though ExecStart renders code=exited.
+        let captured = b"ActiveState=active\nExecMainCode=1\nExecMainStatus=0\nExecStart={ path=/usr/bin/systemctl ; argv[]=/usr/bin/systemctl stop iroha3d-taira-validator-1.service ; ignore_errors=no ; start_time=[Mon 2026-09-07 23:57:26 UTC] ; stop_time=[Mon 2026-09-07 23:57:26 UTC] ; pid=25862 ; code=exited ; status=0 }\nInvocationID=b706c56d582b49e5b9e580fdd5d4ee14\nJob=\nLoadState=loaded\nResult=success\nSubState=exited\n";
+        assert_eq!(
+            classify_manager_operation_at(captured, &intent, intent.action_deadline_unix_ms + 1,)
+                .expect("retained successful stop remains observable after its mutation deadline"),
+            ManagerOperationEvidence::Applied
+        );
+    }
+
+    #[test]
+    fn manager_evidence_requires_exact_numeric_exit_code_and_status() {
+        let intent = manager_intent_fixture();
+        let completed = String::from_utf8(manager_evidence("active", "exited", "success", "0", ""))
+            .expect("UTF-8 fixture");
+        for code in ["0", "2", "3", "4", "5", "6"] {
+            let evidence = completed.replace("ExecMainCode=1\n", &format!("ExecMainCode={code}\n"));
+            assert_eq!(
+                classify_manager_operation_evidence(evidence.as_bytes(), &intent)
+                    .expect("canonical numeric non-exit code"),
+                ManagerOperationEvidence::Rejected,
+                "active/exited cannot prove success with CLD code {code}"
+            );
+        }
+        for code in [
+            "",
+            "exited",
+            "01",
+            "+1",
+            "-1",
+            "1 ",
+            " 1",
+            "7",
+            "2147483648",
+        ] {
+            let evidence = completed.replace("ExecMainCode=1\n", &format!("ExecMainCode={code}\n"));
+            assert!(
+                classify_manager_operation_evidence(evidence.as_bytes(), &intent).is_err(),
+                "malformed ExecMainCode {code:?} must not be accepted"
+            );
+        }
+        for status in ["", "00", "+0", "-1", "0 ", " 0", "256", "success"] {
+            let evidence =
+                completed.replace("ExecMainStatus=0\n", &format!("ExecMainStatus={status}\n"));
+            assert!(
+                classify_manager_operation_evidence(evidence.as_bytes(), &intent).is_err(),
+                "malformed ExecMainStatus {status:?} must not be accepted"
+            );
+        }
+        for status in ["1", "15", "255"] {
+            assert_eq!(
+                classify_manager_operation_evidence(
+                    &manager_evidence("failed", "failed", "exit-code", status, ""),
+                    &intent,
+                )
+                .expect("canonical nonzero status"),
+                ManagerOperationEvidence::Rejected
+            );
+        }
+    }
+
+    #[test]
+    fn manager_evidence_keeps_unexecuted_and_running_operations_pending() {
+        let intent = manager_intent_fixture();
+        let unexecuted =
+            String::from_utf8(manager_evidence("inactive", "dead", "success", "0", ""))
+                .expect("UTF-8 fixture")
+                .replace("ExecMainCode=1\n", "ExecMainCode=0\n");
+        assert_eq!(
+            classify_manager_operation_evidence(unexecuted.as_bytes(), &intent)
+                .expect("no process has exited yet"),
+            ManagerOperationEvidence::Pending
+        );
+        for (active, sub, job) in [
+            ("activating", "start", "123"),
+            ("active", "running", ""),
+            ("active", "exited", "123"),
+        ] {
+            assert_eq!(
+                classify_manager_operation_evidence(
+                    &manager_evidence(active, sub, "success", "0", job),
+                    &intent,
+                )
+                .expect("outstanding manager work"),
+                ManagerOperationEvidence::Pending
+            );
+        }
+    }
+
+    #[test]
+    fn validator_restart_evidence_requires_running_service_and_settled_job() {
+        let mut evidence = UnitRestartEvidence {
+            invocation: "0123456789abcdef0123456789abcdef".to_owned(),
+            active_enter_monotonic_ms: 1,
+            boot_id: "01234567-89ab-cdef-0123-456789abcdef".to_owned(),
+            active_state: "active".to_owned(),
+            sub_state: "running".to_owned(),
+            job: String::new(),
+        };
+        assert!(evidence.is_terminal_active());
+        evidence.job = "0".to_owned();
+        assert!(evidence.is_terminal_active());
+        for (active, sub, job) in [
+            ("active", "exited", ""),
+            ("active", "start", ""),
+            ("active", "stop", ""),
+            ("active", "running", "123"),
+            ("activating", "running", ""),
+            ("failed", "failed", ""),
+        ] {
+            evidence.active_state = active.to_owned();
+            evidence.sub_state = sub.to_owned();
+            evidence.job = job.to_owned();
+            assert!(!evidence.is_terminal_active(), "{active}/{sub} job={job}");
+        }
     }
 
     #[test]

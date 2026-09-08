@@ -13,11 +13,14 @@
 use iroha_crypto::Hash;
 use iroha_data_model::{account::AccountId, asset::id::AssetDefinitionId};
 use iroha_primitives::numeric::Quantity;
-use norito::{NoritoSerialize, SerializePayload, codec::Encode};
+use norito::{NoritoSerialize, codec::Encode};
 
+#[cfg(test)]
+use super::compact_protocol::PreparedAir;
 use super::compact_value_domain::CompactTransferValue;
+#[cfg(test)]
 use super::{
-    compact_protocol::{FixedAir, FixedAirSchema, PreparedAir},
+    compact_protocol::{FixedAir, FixedAirSchema},
     compact_transfer_air::CompactTransferAir,
 };
 use crate::{
@@ -83,11 +86,13 @@ struct BoundQuantityContext {
 }
 
 /// Complete public arithmetic/identity/occurrence binding plus the private SMT AIR.
+#[cfg(test)]
 pub(super) struct PublicTransferAir {
     identity: &'static str,
     inner: CompactTransferAir,
 }
 
+#[cfg(test)]
 impl PublicTransferAir {
     /// Derive one-delta SMT ports from validated claims and bind exact caller context.
     ///
@@ -208,6 +213,7 @@ pub(super) fn encode_context<V: CompactTransferValue>(
     }
 }
 
+#[cfg(test)]
 impl FixedAir for PublicTransferAir {
     fn schema(&self) -> FixedAirSchema {
         FixedAirSchema {
@@ -224,6 +230,7 @@ impl FixedAir for PublicTransferAir {
         self.inner.evaluate(point, current, next)
     }
 
+    #[cfg(test)]
     fn prepare_prover(&self) -> Result<Box<dyn PreparedAir + '_>> {
         self.inner.prepare_prover()
     }
@@ -679,7 +686,7 @@ mod tests {
         assert_eq!(work.air_evaluations, 136);
         assert_eq!(work.row_leaves, 272);
         assert_eq!(work.fri_queries, 136);
-        assert_eq!(work.proof_bytes, 2_865_251);
+        assert_eq!(work.proof_bytes, 2_826_491);
         let shared_conversion_started = std::time::Instant::now();
         let shared = super::super::compact_protocol::shared_openings::from_compact(
             &verifier, &proof, limits,

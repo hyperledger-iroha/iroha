@@ -44,6 +44,7 @@ pub(super) const LOCAL_SLOTS: usize = 597;
 /// Stable adjacent-row slots; excluded edges contribute exact zero polynomials.
 pub(super) const TRANSITION_SLOTS: usize = 83;
 const INPUT_CELLS: usize = 2 * hash::COLUMN_COUNT;
+#[cfg(test)]
 const MAX_PROVER_MASK_CYCLE: usize = 4096;
 
 /// Canonical base or extension values accepted by this ledger's opening boundary.
@@ -102,6 +103,7 @@ pub(super) struct HashNumerators<F> {
 /// previous witness values never enter the next result. The workspace holds no
 /// masks or domain parameters, and its immutable graph identity is checked before
 /// use. It neither grows with the trace nor retains witness data in global state.
+#[cfg(test)]
 pub(super) struct EvaluationScratch<F> {
     compiled: &'static CompiledLedger,
     values: Box<[F]>,
@@ -109,6 +111,7 @@ pub(super) struct EvaluationScratch<F> {
 
 /// Exact graph costs and conservative polynomial degrees for the chosen domain.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg(test)]
 pub(super) struct LedgerMetrics {
     /// Shared DAG nodes, including canonical constants and the 620 input cells.
     pub(super) nodes: usize,
@@ -135,10 +138,14 @@ pub(super) struct LedgerMetrics {
 /// Validated periodic selector geometry and one immutable compiled hash ledger.
 pub(super) struct CompactHashQuotient {
     selectors: PeriodicSelectors,
+    #[cfg(test)]
     trace_rows: usize,
     compiled: &'static CompiledLedger,
+    #[cfg(test)]
     lde_domain: FriDomain,
+    #[cfg(test)]
     lde_rows: usize,
+    #[cfg(test)]
     mask_cycle_rows: usize,
 }
 
@@ -149,7 +156,7 @@ impl CompactHashQuotient {
         // Selector construction already checked these exact domain sizes.
         let blowup = params.fri.blowup_factor as usize;
         let lde_rows = trace_rows * blowup;
-        let lde_domain = FriDomain::from_lde_parameters(
+        let _lde_domain = FriDomain::from_lde_parameters(
             params.lde_root,
             params.lde_log_size,
             lde_rows,
@@ -158,10 +165,14 @@ impl CompactHashQuotient {
         static COMPILED: OnceLock<CompiledLedger> = OnceLock::new();
         Ok(Self {
             selectors,
+            #[cfg(test)]
             trace_rows,
             compiled: COMPILED.get_or_init(CompiledLedger::compile),
-            lde_domain,
+            #[cfg(test)]
+            lde_domain: _lde_domain,
+            #[cfg(test)]
             lde_rows,
+            #[cfg(test)]
             mask_cycle_rows: PERIOD * blowup,
         })
     }
@@ -184,6 +195,7 @@ impl CompactHashQuotient {
     }
 
     /// Allocate fixed-size arithmetic storage for reuse within one proof operation.
+    #[cfg(test)]
     pub(super) fn evaluation_scratch<F: LedgerField>(&self) -> EvaluationScratch<F> {
         EvaluationScratch {
             compiled: self.compiled,
@@ -197,6 +209,7 @@ impl CompactHashQuotient {
     /// independently of N. This optional prover-only preparation refuses larger
     /// cycles instead of allocating a full/custom LDE-sized table. The borrowed
     /// view retains its exact owner and cannot be relabelled to another domain.
+    #[cfg(test)]
     pub(super) fn prepare_prover_masks(&self) -> Result<ProverMaskCycle<'_>> {
         if self.mask_cycle_rows > MAX_PROVER_MASK_CYCLE {
             return Err(Error::VerifierLimitExceeded {
@@ -222,6 +235,7 @@ impl CompactHashQuotient {
     /// numerator degree at most 3N-N/512-2, hence a quotient below 2N when every
     /// required subgroup relation vanishes. Degree metadata does not establish
     /// vanishing or replace column/quotient degree proofs.
+    #[cfg(test)]
     pub(super) fn metrics(&self) -> LedgerMetrics {
         let relation_degree = self.compiled.max_degree;
         let selector_degree = self.trace_rows - self.trace_rows / PERIOD;
@@ -252,11 +266,13 @@ impl CompactHashQuotient {
 }
 
 /// Prover-only mask cycle tied by borrow to one exact ledger and LDE geometry.
+#[cfg(test)]
 pub(super) struct ProverMaskCycle<'a> {
     ledger: &'a CompactHashQuotient,
     values: Box<[u64]>,
 }
 
+#[cfg(test)]
 impl ProverMaskCycle<'_> {
     /// Evaluate shared arithmetic at one bounded LDE index with cached fixed masks.
     pub(super) fn evaluate<F: LedgerField>(
@@ -352,6 +368,7 @@ enum Node {
 }
 
 impl Node {
+    #[cfg(test)]
     fn is_arithmetic(self) -> bool {
         matches!(self, Self::Add(..) | Self::Sub(..) | Self::Mul(..))
     }
@@ -531,7 +548,9 @@ struct CompiledLedger {
     masks: Vec<PhaseMask>,
     local: [Vec<Term>; LOCAL_SLOTS],
     transitions: [Vec<Term>; TRANSITION_SLOTS],
+    #[cfg(test)]
     max_degree: usize,
+    #[cfg(test)]
     reference_residues: usize,
 }
 
@@ -552,7 +571,7 @@ impl CompiledLedger {
             core::array::from_fn(|_| BTreeMap::new());
         let mut maximum_local = 0;
         let mut maximum_transition = 0;
-        let mut reference_residues = 0;
+        let mut _reference_residues = 0;
         for phase in 0..PERIOD {
             let residues = if let Some(index) = hash::RowIndex::new(phase) {
                 hash::local_residues(Expression::ONE, index, &current)
@@ -560,14 +579,14 @@ impl CompiledLedger {
                 hash_row_cells(&current).to_vec()
             };
             maximum_local = maximum_local.max(residues.len());
-            reference_residues += residues.len();
+            _reference_residues += residues.len();
             group_phase(&arena, phase, &residues, &mut local);
             if let Some(index) = hash::RowIndex::new(phase) {
                 if let Some(residues) =
                     hash::transition_residues(Expression::ONE, index, &current, &next)
                 {
                     maximum_transition = maximum_transition.max(residues.len());
-                    reference_residues += residues.len();
+                    _reference_residues += residues.len();
                     group_phase(&arena, phase, &residues, &mut transitions);
                 }
             }
@@ -608,8 +627,10 @@ impl CompiledLedger {
             masks,
             local,
             transitions,
+            #[cfg(test)]
             max_degree,
-            reference_residues,
+            #[cfg(test)]
+            reference_residues: _reference_residues,
         }
     }
 

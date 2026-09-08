@@ -12,12 +12,14 @@
 //! before production admission. This module leaves the existing profile intact.
 
 use iroha_data_model::nexus::{AxtFastpqBinding, AxtRemoteSpendClaimV1};
-use norito::{NoritoSerialize, SerializePayload, codec::Encode};
+use norito::{NoritoSerialize, codec::Encode};
 
+#[cfg(test)]
+use super::compact_protocol::PreparedAir;
 use super::compact_value_domain::CompactTransferValue;
 use super::{
     compact_axt_context::preflight_context,
-    compact_protocol::{FixedAir, FixedAirSchema, PreparedAir},
+    compact_protocol::{FixedAir, FixedAirSchema},
     compact_public_api::AxtVerificationContext,
     compact_public_batch::{BatchContextLimits, preflight_prepared},
     compact_public_transfer::encode_context,
@@ -34,6 +36,7 @@ use crate::{
     proof::PublicIO,
 };
 
+#[cfg(test)]
 const IDENTITY: &str = <u64 as CompactTransferValue>::AXT_BATCH_IDENTITY;
 
 #[derive(NoritoSerialize)]
@@ -64,6 +67,7 @@ struct BoundAxtSegmentContext {
 /// source authority is implied by constructing this public statement object.
 pub(super) struct AxtTransferBatch {
     identity: &'static str,
+    #[cfg(test)]
     public_io: PublicIO,
     context: Vec<u8>,
     statements: Vec<PublicStatement>,
@@ -128,6 +132,7 @@ impl AxtTransferBatch {
         check_total(checked_product(count, bytes)?, limits)?;
         let mut batch = Self {
             identity: V::AXT_BATCH_IDENTITY,
+            #[cfg(test)]
             public_io: *expected,
             context: bound.encode(),
             statements,
@@ -148,18 +153,22 @@ impl AxtTransferBatch {
     }
 
     /// Number of actual chronological public delta occurrences.
+    #[cfg(test)]
     pub(super) fn segment_count(&self) -> usize {
         self.statements.len()
     }
     /// Exact independently expected overall inputs checked by this constructor.
+    #[cfg(test)]
     pub(super) const fn public_io(&self) -> PublicIO {
         self.public_io
     }
     /// Complete common public transfer and AXT context bound by every segment.
+    #[cfg(test)]
     pub(super) fn context_bytes(&self) -> &[u8] {
         &self.context
     }
     /// Public ports derived using the whole batch's scale and key allocation.
+    #[cfg(test)]
     pub(super) fn statements(&self) -> &[PublicStatement] {
         &self.statements
     }
@@ -226,6 +235,7 @@ impl FixedAir for AxtTransferSegmentAir {
     fn evaluate(&self, point: u64, current: &[u64], next: &[u64]) -> Result<Vec<u64>> {
         self.inner.evaluate(point, current, next)
     }
+    #[cfg(test)]
     fn prepare_prover(&self) -> Result<Box<dyn PreparedAir + '_>> {
         self.inner.prepare_prover()
     }

@@ -17,6 +17,9 @@ P=2**64-2**32+1
 L=524288
 PASSING=360447
 TARGETS=54
+# Chosen honest-abort envelope; this does not authorize production bundle limits.
+MAX_BUNDLE_SEGMENTS=128
+HONEST_ATTEMPTS=TARGETS*MAX_BUNDLE_SEGMENTS
 ADVERSARY=2**32
 TARGET=F(1,2**128)
 FIELD_COUNTS=[1368,3692,8]+[4]*17
@@ -70,7 +73,7 @@ def query_abort(q,candidates):
 def tapes(q):
     candidates=q
     fa=field_abort()
-    while TARGETS*(fa+query_abort(q,candidates))>=TARGET:
+    while HONEST_ATTEMPTS*(fa+query_abort(q,candidates))>=TARGET:
         candidates+=1
     sizes=[384,64*1374,64*3698,64*14]+[640]*17+[8*((19*candidates+7)//8)]
     assert len(sizes)==22
@@ -128,6 +131,8 @@ def aggregate_parts(q):
         "query_abort_below_2_to_minus":certified_bits(qa),
         "whole_abort_below_2_to_minus":certified_bits(fa+qa),
         "targets54_abort_below_2_to_minus":certified_bits(TARGETS*(fa+qa)),
+        "max_bundle_honest_attempts":HONEST_ATTEMPTS,
+        "max_bundle_abort_below_2_to_minus":certified_bits(HONEST_ATTEMPTS*(fa+qa)),
         "SHAKE256_output_blocks_only":sum((bits//8+135)//136 for bits in sizes),
     }
 
@@ -143,6 +148,11 @@ def sequence(count,size):
 def wire_size(q,loose=False):
     # Exact size formula for the current compact-length canonical SharedProof
     # fields, projected to another query count, not measured new proof bytes.
+    return _wire_size(q,loose,fp4_bytes=32)
+
+def _wire_size(q,loose,*,fp4_bytes):
+    # The explicit width also supports the retained predecessor's 37-byte
+    # carrier; only wire_control uses that historical encoding.
     ds=list(range(18,1,-1))
     groups=[min(q,2**d) for d in ds]
     sibling=lambda d,m:m*d if loose else parents(d,m)-m+1
@@ -150,13 +160,13 @@ def wire_size(q,loose=False):
     scalar_siblings=sibling(19,q)
     fri_siblings=[sibling(d,m) for d,m in zip(ds,groups)]
     row_size=field(4)+field(sequence(342,8))
-    query_size=field(4)+2*field(37)
-    group_size=field(4)+field(2*field(37))
+    query_size=field(4)+2*field(fp4_bytes)
+    group_size=field(4)+field(2*field(fp4_bytes))
     rounds=8+sum(field(field(sequence(m,group_size))+field(sequence(s,48)))
                  for m,s in zip(groups,fri_siblings))
     sizes=[48,48,48,sequence(18,48),sequence(2*q,row_size),sequence(q,query_size),
            sequence(row_siblings,48),sequence(scalar_siblings,48),
-           sequence(scalar_siblings,48),rounds,sequence(4,37)]
+           sequence(scalar_siblings,48),rounds,sequence(4,fp4_bytes)]
     return {"frame_bytes":40+sum(map(field,sizes)),
             "row_sibling_digests":row_siblings,
             "mixed_sibling_digests":scalar_siblings,
@@ -172,7 +182,7 @@ def framed_tree_monotonicity_controls():
         previous=0
         for leaves in range(1,min(512,2**depth)+1):
             sibling_count=parents(depth,leaves)-leaves+1
-            combined=field(sequence(leaves,82))+field(sequence(sibling_count,48))
+            combined=field(sequence(leaves,72))+field(sequence(sibling_count,48))
             assert combined>previous
             previous=combined;cases+=1
     previous=0
@@ -204,11 +214,15 @@ def parse_fields(data):
 
 def wire_control(path):
     expected="72838ce11648e25f4c8b3e7496651d2e4eb63efdab08154d8cc5fd8ef0a574e7"
-    # The prior independent Rust loose-shape control is always checked.
-    assert wire_size(136,True)["frame_bytes"]==2534462
+    # Independent Rust loose-shape controls for the current canonical carrier
+    # and the retained predecessor are distinct encoding checks.
+    assert wire_size(375,True)["frame_bytes"]==6713525
+    assert _wire_size(136,True,fp4_bytes=37)["frame_bytes"]==2534462
+    controls={"current_fp4_bytes":32,"current_Rust_loose_shape_bytes":6713525,
+              "retained_fp4_bytes":37,"prior_Rust_loose_shape_bytes":2534462}
     if not path.exists():
         return {"retained_proof_present":False,"expected_public_artifact_sha256":expected,
-                "prior_Rust_loose_shape_bytes":2534462}
+                **controls}
     with path.open("rb") as stream:
         data=stream.read(1608632)
     assert len(data)==1608631, "retained 136-query proof has an unexpected byte length"
@@ -228,10 +242,8 @@ def wire_control(path):
         assert len(rf)==2
         assert all(len(g)==82 for g in parse_fields(rf[0][8:]))
     assert all(len(x)==37 for x in parse_fields(fs[10][8:]))
-    # Independent prior Rust canonical encoding output for loose largest shape.
-    assert wire_size(136,True)["frame_bytes"]==2534462
     return {"retained_proof_present":True,"public_artifact_sha256":sha256(data).hexdigest(),
-            "measured_frame_bytes":len(data),"prior_Rust_loose_shape_bytes":2534462}
+            "measured_frame_bytes":len(data),**controls}
 
 def parent_controls():
     # Enumerate all leaf subsets in small binary trees, independently count
@@ -265,6 +277,7 @@ SOURCE_PATHS = [
     "crates/fastpq_prover/src/backend/compact_protocol/shared_openings/codec.rs",
     "crates/fastpq_prover/src/backend/compact_transfer_air.rs",
     "crates/fastpq_prover/src/field.rs",
+    "crates/fastpq_prover/src/backend/compact_shake_candidate.rs",
     "crates/iroha_data_model/src/privacy.rs",
     "crates/norito/src/core.rs",
     "crates/norito/src/lib.rs",
@@ -296,6 +309,8 @@ def check_source_contracts():
     assert "use iroha_data_model::privacy::GoldilocksDigest384V1 as WireDigest;" in protocol
     field_source=(ROOT/"crates/fastpq_prover/src/field.rs").read_text()
     assert re.search(r"struct GoldilocksFp4V1\s*\{\s*coefficients: \[u64; 4\],\s*\}",field_source)
+    assert re.search(r"impl GoldilocksFp4V1\s*\{\s*///[^\n]*\n\s*pub const BYTES: usize = 32;",field_source)
+    assert re.search(r"impl SerializePayload for GoldilocksFp4V1\s*\{\s*fn serialize\([^\n]*\) -> Result<\(\), norito::Error>\s*\{\s*writer.write_all\(&self.to_le_bytes\(\)\)\?;\s*Ok\(\(\)\)\s*\}",field_source)
     assert "GOLDILOCKS_MODULUS_V1: u64 = 0xffff_ffff_0000_0001" in field_source
     digest=(ROOT/"crates/fastpq_isi/src/poseidon_digest384.rs").read_text()
     assert "GOLDILOCKS_DIGEST384_LANES_V1: usize = 6;" in digest
@@ -305,9 +320,15 @@ def check_source_contracts():
     assert "pub const SIZE: usize = 4 + 1 + 1 + 16 + 1 + 8 + 8 + 1;" in codec
     air=(ROOT/"crates/fastpq_prover/src/backend/compact_transfer_air.rs").read_text()
     assert "COLUMN_COUNT != 342" in air and "CONSTRAINT_COUNT != 923" in air
+    sampler=(ROOT/"crates/fastpq_prover/src/backend/compact_shake_candidate.rs").read_text()
+    assert 'h16:g375:c401:342cols' in sampler
+    assert re.search(r"const QUERY_COUNT: usize = 375;", sampler)
+    assert re.search(r"const QUERY_CANDIDATES: usize = 401;", sampler)
+    assert re.search(r"const QUERY_LABEL_BITS: usize = 19;", sampler)
+    assert '(QUERY_CANDIDATES * QUERY_LABEL_BITS).div_ceil(8)' in sampler
     return {"kind":"explicit structural and geometry guards, not semantic source equivalence",
             "shared_schema":"fastpq_prover::compact_prototype::SharedProofV1",
-            "digest_bytes":48,"row_columns":342,"AIR_constraints":923,
+            "digest_bytes":48,"fp4_bytes":32,"row_columns":342,"AIR_constraints":923,
             "canonical_header_bytes":40,"canonical_layout":"COMPACT_LEN"}
 
 
@@ -326,15 +347,24 @@ def main():
     lower374=TARGETS*6*(2*ADVERSARY)**2*errors(374)[-1]
     assert lower374>TARGET
     candidate=results[3]
-    assert candidate["query_raw_candidates"]==400
+    assert candidate["query_raw_candidates"]==401
     assert TARGETS*(field_abort()+query_abort(375,399))>=TARGET
+    # Retain the prior 54-single-attempt control; the selected envelope is larger.
+    assert TARGETS*(field_abort()+query_abort(375,400))<TARGET
+    assert HONEST_ATTEMPTS*(field_abort()+query_abort(375,400))>=TARGET
+    assert HONEST_ATTEMPTS*(field_abort()+query_abort(375,401))<TARGET
+    assert all(HONEST_ATTEMPTS*(field_abort()+query_abort(375,c))>=TARGET for c in range(375,401))
     assert candidate["group_query_budget"]==8590023760
     assert candidate["work"]["H_calls"]==44562
-    assert candidate["total_G_output_bytes"]==43046
-    assert candidate["SHAKE256_output_blocks_only"]==325
+    assert candidate["total_G_output_bytes"]==43049
+    assert candidate["SHAKE256_output_blocks_only"]==326
     report={
         "scope":"conditional ideal theorem arithmetic; no production profile approval",
         "status":"pass","targets":TARGETS,"binary_adversary_queries":ADVERSARY,
+        "honest_abort_max_bundle_segments":MAX_BUNDLE_SEGMENTS,
+        "honest_attempts_envelope":HONEST_ATTEMPTS,
+        "query_candidate_count_for_chosen_envelope":401,
+        "candidate400_passes_single_attempt_union_but_fails_max_bundle_envelope":True,
         "goal_bound":"strictly below 2^-128 after union over 54 targets",
         "smallest_certified_initial_position_count":375,
         "all_counts_at_most_374_fail_the_displayed_bound":True,

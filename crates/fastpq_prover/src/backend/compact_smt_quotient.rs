@@ -169,10 +169,12 @@ impl CompactSmtFixedColumns {
     }
 
     /// Exact ordered subgroup positions for optional prover-side fixed-column FFTs.
+    #[cfg(test)]
     pub(super) fn positions(&self) -> &[usize] {
         &self.positions
     }
     /// All 49 canonical fixed values per position; omitted subgroup rows are zero.
+    #[cfg(test)]
     pub(super) fn rows(&self) -> &[Vec<u64>] {
         &self.rows
     }

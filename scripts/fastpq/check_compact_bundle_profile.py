@@ -15,11 +15,11 @@ import check_compact_typed_profile as profile
 
 def calculate(segments: int) -> dict:
     """Charge every segment under one adaptive-context family and query budget."""
-    if type(segments) is not int or not 1 <= segments <= 128:
+    if type(segments) is not int or not 1 <= segments <= profile.MAX_BUNDLE_SEGMENTS:
         raise ValueError("segments must be an integer in 1..=128")
     work = profile.counters(375)
     candidates, tapes, field_abort, query_abort = profile.tapes(375)
-    assert candidates == 400
+    assert candidates == 401
     total_queries = 2 * (profile.ADVERSARY + segments * work["verifier_calls"])
     delta = max(
         [Fraction(3 * (total_queries - 1), profile.P**6)]
@@ -52,6 +52,8 @@ def calculate(segments: int) -> dict:
             lower.numerator * 1024 // lower.denominator,
             (upper.numerator * 1024 + upper.denominator - 1) // upper.denominator,
         ],
+        "query_candidates": candidates,
+        "query_tape_bytes": tapes[-1] // 8,
         "total_honest_attempts": profile.TARGETS * segments,
         "honest_abort_below_2_to_minus": profile.certified_bits(abort),
         "honest_abort_below_2_to_minus_128": abort < profile.TARGET,
@@ -71,12 +73,16 @@ def controls() -> None:
     assert pair["H_calls"] == 89124 and pair["G_calls"] == 44
     assert pair["group_query_budget"] == 8590112928
     assert pair["passes_conditional_54_target_acceptance_bound"]
-    assert pair["honest_abort_below_2_to_minus"] == 129
+    assert pair["honest_abort_below_2_to_minus"] == 136
     largest = calculate(128)
     assert largest["passes_conditional_54_target_acceptance_bound"]
     assert largest["scaled_acceptance_interval_over_1024"] == [745, 746]
-    assert largest["honest_abort_below_2_to_minus"] == 123
-    assert not largest["honest_abort_below_2_to_minus_128"]
+    assert largest["honest_abort_below_2_to_minus"] == 130
+    assert largest["honest_abort_below_2_to_minus_128"]
+    for segments in range(1, profile.MAX_BUNDLE_SEGMENTS + 1):
+        result = calculate(segments)
+        assert result["honest_abort_below_2_to_minus_128"]
+        assert result["passes_conditional_54_target_acceptance_bound"]
     for invalid in [0, -1, 129, True, 1.5]:
         try:
             calculate(invalid)
@@ -108,6 +114,9 @@ def main() -> None:
     report = {
         "status": "pass",
         "qualification": False,
+        "honest_attempt_envelope": profile.HONEST_ATTEMPTS,
+        "query_candidates": 401,
+        "query_tape_bytes": 953,
         "assumptions": [
             "fixed ideal SHAKE candidate profile and adaptive-context family extraction",
             "a false accepted bundle contains a false child in the admissible family",
@@ -121,7 +130,10 @@ def main() -> None:
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2) + "\n")
-    print(json.dumps({"status": "pass", "qualification": False, "reports": report["reports"], "output": str(args.output)}, indent=2))
+    print(json.dumps({"status": "pass", "qualification": False,
+        "honest_attempt_envelope": profile.HONEST_ATTEMPTS,
+        "query_candidates": 401,
+        "query_tape_bytes": 953, "reports": report["reports"], "output": str(args.output)}, indent=2))
 
 
 if __name__ == "__main__":

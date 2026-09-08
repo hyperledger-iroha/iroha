@@ -13,11 +13,13 @@
 //! proof/decoder budgets, authenticated caller and aggregate soundness argument.
 //! The 136-query profile and production replay/default limits are unchanged.
 
-use norito::{NoritoSerialize, SerializePayload, codec::Encode};
+use norito::{NoritoSerialize, codec::Encode};
 
+#[cfg(test)]
+use super::compact_protocol::PreparedAir;
 use super::compact_value_domain::CompactTransferValue;
 use super::{
-    compact_protocol::{FixedAir, FixedAirSchema, PreparedAir},
+    compact_protocol::{FixedAir, FixedAirSchema},
     compact_public_transfer::encode_context,
     compact_transfer_air::CompactTransferAir,
 };
@@ -30,6 +32,7 @@ use crate::{
     proof::PublicIO,
 };
 
+#[cfg(test)]
 const IDENTITY: &str = <u64 as CompactTransferValue>::BATCH_IDENTITY;
 
 /// Explicit context-only ceilings, independent of proof and decoder budgets.
@@ -76,6 +79,7 @@ struct BoundSegmentContext {
 /// aggregate statement length before decoding or hashing any child proof.
 pub(super) struct PublicTransferBatch {
     identity: &'static str,
+    #[cfg(test)]
     public_io: PublicIO,
     context: Vec<u8>,
     statements: Vec<PublicStatement>,
@@ -124,6 +128,7 @@ impl PublicTransferBatch {
         let context = bound.encode();
         let mut batch = Self {
             identity: V::BATCH_IDENTITY,
+            #[cfg(test)]
             public_io: *expected,
             context,
             statements,
@@ -147,21 +152,25 @@ impl PublicTransferBatch {
     }
 
     /// Exact positive number of chronological segment statements.
+    #[cfg(test)]
     pub(super) fn segment_count(&self) -> usize {
         self.statements.len()
     }
 
     /// Exact caller inputs checked before the context was constructed.
+    #[cfg(test)]
     pub(super) const fn public_io(&self) -> PublicIO {
         self.public_io
     }
 
     /// Complete canonical common context, including all roots and public facts.
+    #[cfg(test)]
     pub(super) fn context_bytes(&self) -> &[u8] {
         &self.context
     }
 
     /// Exact ports derived from the complete preparation in chronological order.
+    #[cfg(test)]
     pub(super) fn statements(&self) -> &[PublicStatement] {
         &self.statements
     }
@@ -231,6 +240,7 @@ impl FixedAir for PublicTransferSegmentAir {
     fn evaluate(&self, point: u64, current: &[u64], next: &[u64]) -> Result<Vec<u64>> {
         self.inner.evaluate(point, current, next)
     }
+    #[cfg(test)]
     fn prepare_prover(&self) -> Result<Box<dyn PreparedAir + '_>> {
         self.inner.prepare_prover()
     }

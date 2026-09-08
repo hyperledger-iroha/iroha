@@ -10,6 +10,7 @@ use crate::backend::{compact_shake_candidate as shake, merkle_multiproof::Multip
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Protocol {
     /// Existing diagnostic profile retained for exact regression comparison.
+    #[cfg(test)]
     Prototype,
     /// Fixed 375-query SHAKE candidate with complete context and whole tapes.
     ShakeCandidate,
@@ -17,9 +18,10 @@ pub(super) enum Protocol {
 
 impl Protocol {
     /// Exact initial position count under this fixed descriptor.
-    pub(super) fn query_count(self, domain: usize) -> usize {
+    pub(super) fn query_count(self, _domain: usize) -> usize {
         match self {
-            Self::Prototype => (FASTPQ_FINAL_V1.fri.queries as usize).min(domain),
+            #[cfg(test)]
+            Self::Prototype => (FASTPQ_FINAL_V1.fri.queries as usize).min(_domain),
             Self::ShakeCandidate => 375,
         }
     }
@@ -83,37 +85,39 @@ impl Binding {
             ));
         }
         geometry.protocol.check_geometry(geometry)?;
-        let shake = if geometry.protocol == Protocol::ShakeCandidate {
-            check_limit(
-                "max_shake_public_bytes",
-                relation.statement_bytes().len(),
-                256 * 1024,
-            )?;
-            let context = StatementContext {
-                relation: geometry.schema.identity.to_owned(),
-                trace_rows: geometry.schema.trace_rows as u32,
-                lde_rows: geometry.lde_rows as u32,
-                width: geometry.schema.width as u32,
-                constraints: geometry.schema.constraints as u32,
-                base_modulus: GOLDILOCKS_MODULUS,
-                extension_nonresidue: 7,
-                lde_root: FASTPQ_FINAL_V1.lde_root,
-                lde_log_size: FASTPQ_FINAL_V1.lde_log_size,
-                coset_offset: FASTPQ_FINAL_V1.omega_coset,
-                blowup: 8,
-                arity: 2,
-                folds: 17,
-                terminal_values: 4,
-                terminal_degree: 1,
-                queries: 375,
-                statement: relation.statement_bytes().to_vec(),
-            };
-            Some(
-                shake::Context::new(&norito::encode_canonical(&context)?)
-                    .map_err(candidate_error)?,
-            )
-        } else {
-            None
+        let shake = match geometry.protocol {
+            Protocol::ShakeCandidate => {
+                check_limit(
+                    "max_shake_public_bytes",
+                    relation.statement_bytes().len(),
+                    256 * 1024,
+                )?;
+                let context = StatementContext {
+                    relation: geometry.schema.identity.to_owned(),
+                    trace_rows: geometry.schema.trace_rows as u32,
+                    lde_rows: geometry.lde_rows as u32,
+                    width: geometry.schema.width as u32,
+                    constraints: geometry.schema.constraints as u32,
+                    base_modulus: GOLDILOCKS_MODULUS,
+                    extension_nonresidue: 7,
+                    lde_root: FASTPQ_FINAL_V1.lde_root,
+                    lde_log_size: FASTPQ_FINAL_V1.lde_log_size,
+                    coset_offset: FASTPQ_FINAL_V1.omega_coset,
+                    blowup: 8,
+                    arity: 2,
+                    folds: 17,
+                    terminal_values: 4,
+                    terminal_degree: 1,
+                    queries: 375,
+                    statement: relation.statement_bytes().to_vec(),
+                };
+                Some(
+                    shake::Context::new(&norito::encode_canonical(&context)?)
+                        .map_err(candidate_error)?,
+                )
+            }
+            #[cfg(test)]
+            Protocol::Prototype => None,
         };
         Ok(Self {
             protocol: geometry.protocol,
@@ -124,7 +128,10 @@ impl Binding {
     /// Hash a complete canonical row in its context and exact position.
     pub(super) fn row(&self, index: usize, values: &[u64]) -> Result<Digest> {
         match &self.shake {
+            #[cfg(test)]
             None => hash_air_trace_row(index, values),
+            #[cfg(not(test))]
+            None => Err(shape("candidate binding is missing its fixed context")),
             Some(context) => {
                 let bytes: Vec<_> = values.iter().flat_map(|v| v.to_le_bytes()).collect();
                 context
@@ -137,7 +144,10 @@ impl Binding {
     /// Hash one mixed-oracle extension value under its distinct role.
     pub(super) fn mixed(&self, index: usize, value: GoldilocksFp4V1) -> Result<Digest> {
         match &self.shake {
+            #[cfg(test)]
             None => hash_lde_chunk_fp4(index, &[value]),
+            #[cfg(not(test))]
+            None => Err(shape("candidate binding is missing its fixed context")),
             Some(context) => context
                 .hash_leaf(
                     shake::Oracle::Mixed,
@@ -151,7 +161,10 @@ impl Binding {
     /// Hash one quotient-oracle extension value under its distinct role.
     pub(super) fn quotient(&self, index: usize, value: GoldilocksFp4V1) -> Result<Digest> {
         match &self.shake {
+            #[cfg(test)]
             None => hash_air_composition_leaf(index, value),
+            #[cfg(not(test))]
+            None => Err(shape("candidate binding is missing its fixed context")),
             Some(context) => context
                 .hash_leaf(
                     shake::Oracle::Quotient,
@@ -170,7 +183,10 @@ impl Binding {
         values: &[GoldilocksFp4V1],
     ) -> Result<Digest> {
         match &self.shake {
+            #[cfg(test)]
             None => crate::backend::hash_fri_chunk(round, index, values),
+            #[cfg(not(test))]
+            None => Err(shape("candidate binding is missing its fixed context")),
             Some(context) => {
                 let bytes: Vec<_> = values.iter().flat_map(|v| v.to_le_bytes()).collect();
                 context
@@ -190,7 +206,10 @@ impl Binding {
         right: Digest,
     ) -> Result<Digest> {
         match &self.shake {
+            #[cfg(test)]
             None => crate::backend::merkle_node_hash(role, level, index, left, right),
+            #[cfg(not(test))]
+            None => Err(shape("candidate binding is missing its fixed context")),
             Some(context) => context
                 .hash_parent(
                     oracle(role)?,
@@ -212,16 +231,17 @@ impl Binding {
         leaves: &[Digest],
         siblings: &[Digest],
     ) -> Result<crate::backend::merkle_multiproof::MultiproofWork> {
+        #[cfg(test)]
         if self.shake.is_none() {
-            plan.verify(role, root, leaves, siblings)
-        } else {
-            plan.verify_with(root, leaves, siblings, |level, index, left, right| {
-                self.parent(role, level, index, left, right)
-            })
+            return plan.verify(role, root, leaves, siblings);
         }
+        plan.verify_with(root, leaves, siblings, |level, index, left, right| {
+            self.parent(role, level, index, left, right)
+        })
     }
 
     /// Build a prover-owned tree with exact candidate geometry and ordered parents.
+    #[cfg(test)]
     pub(super) fn tree(&self, leaves: &[Digest], role: MerkleTreeRoleV1) -> Result<CommittedTree> {
         if self.shake.is_none() {
             return CommittedTree::from_leaves(leaves, role);
@@ -260,14 +280,17 @@ impl Binding {
     /// Start the matching fixed transcript and bind its first committed root.
     pub(super) fn transcript(
         &self,
-        relation: &impl FixedAir,
+        _relation: &impl FixedAir,
         geometry: &Geometry,
         row_root: Digest,
     ) -> Result<ProtocolTranscript> {
         let state = match &self.shake {
+            #[cfg(test)]
             None => {
-                TranscriptState::Prototype(initialise_transcript(relation, geometry, row_root)?)
+                TranscriptState::Prototype(initialise_transcript(_relation, geometry, row_root)?)
             }
+            #[cfg(not(test))]
+            None => return Err(shape("candidate binding is missing its fixed context")),
             Some(context) => {
                 let mut transcript = shake::Transcript::new(context.clone());
                 if transcript.challenge().map_err(candidate_error)? != shake::Message::Dummy {
@@ -319,6 +342,7 @@ fn candidate_error(error: shake::CandidateError) -> Error {
 }
 
 enum TranscriptState {
+    #[cfg(test)]
     Prototype(Transcript),
     Shake(shake::Transcript),
 }
@@ -352,6 +376,7 @@ impl ProtocolTranscript {
     pub(super) fn columns(&mut self) -> Result<Vec<GoldilocksFp4V1>> {
         self.expect(2)?;
         let values = match &mut self.state {
+            #[cfg(test)]
             TranscriptState::Prototype(t) => challenges(t, "compact:column-mix", self.schema.width),
             TranscriptState::Shake(t) => Self::fields(t, self.schema.width)?,
         };
@@ -363,6 +388,7 @@ impl ProtocolTranscript {
     pub(super) fn alphas(&mut self, mixed_root: Digest) -> Result<Vec<GoldilocksFp4V1>> {
         self.expect(3)?;
         let values = match &mut self.state {
+            #[cfg(test)]
             TranscriptState::Prototype(t) => {
                 t.append_message("compact:mixed-root", &mixed_root.to_le_bytes());
                 challenges(t, "compact:constraint-alpha", self.schema.constraints)
@@ -380,6 +406,7 @@ impl ProtocolTranscript {
     pub(super) fn joint(&mut self, quotient_root: Digest) -> Result<JointFriBatch> {
         self.expect(4)?;
         let joint = match &mut self.state {
+            #[cfg(test)]
             TranscriptState::Prototype(t) => {
                 t.append_message("compact:quotient-root", &quotient_root.to_le_bytes());
                 JointFriBatch::from_transcript(&FASTPQ_FINAL_V1, self.domain, t)?
@@ -401,6 +428,7 @@ impl ProtocolTranscript {
         }
         self.expect(5 + round)?;
         let beta = match &mut self.state {
+            #[cfg(test)]
             TranscriptState::Prototype(t) => {
                 t.append_fri_layer(round, root);
                 t.challenge_beta(round)
@@ -417,7 +445,8 @@ impl ProtocolTranscript {
     /// Bind the terminal root and finish with the exact fixed query set.
     pub(super) fn queries(&mut self, terminal_root: Digest) -> Result<Vec<usize>> {
         self.expect(5 + self.folds)?;
-        let indices = match &mut self.state {
+        let indices: Vec<usize> = match &mut self.state {
+            #[cfg(test)]
             TranscriptState::Prototype(t) => {
                 t.append_fri_final(terminal_root);
                 sample_queries(self.domain, FASTPQ_FINAL_V1.fri.queries as usize, t)?
@@ -826,7 +855,7 @@ mod tests {
     fn structured_context_roots_match_independent_norito_shake_vectors() {
         // Independent Python encodes all seventeen StatementContext fields,
         // the complete Norito prefix/body frames and hashlib SHAKE256. These
-        // vectors bind its 225-byte context frame and 377-byte prefix, including
+        // vectors bind its 225-byte context frame and 382-byte prefix, including
         // schema names, String/Vec lengths, field order, domain and CRCs.
         let air = relation(Protocol::ShakeCandidate);
         let geometry = Geometry::for_protocol(&air, Protocol::ShakeCandidate).unwrap();
@@ -835,27 +864,27 @@ mod tests {
             (
                 "row",
                 binding.row(0, &[0; 342]).unwrap(),
-                "9ad58fdc2cb76a3721ce39268c47edbcf2686e96e00a4d644e535c52d37e66239a4660942686b4b82b5b2a7ed0c902e2",
+                "b46a0302a2054203efc8e8e4efc034d0d41df4e289af4799c76e63d73072364cfdea264a713b93294634c85f8246a31b",
             ),
             (
                 "mixed",
                 binding.mixed(0, GoldilocksFp4V1::ZERO).unwrap(),
-                "fd0d82076991bbc83ca90f2c1c9633915e797e5ec5bc254f46123f32e92d4ab83ec065e3a0070f2bff2d1ea10c106b5c",
+                "74ce1c1f2a26bc6b49b5cf91a98f9ba951006c06f153abbcf4fe943742e8e9536ec0278da7e1896d09ba5aec5ffb728e",
             ),
             (
                 "quotient",
                 binding.quotient(0, GoldilocksFp4V1::ZERO).unwrap(),
-                "2e14eaeed8ccef024799bd89d5d9794c03bdc3357eb8db1a40646b01f2f35abc770d05e8af55df830996d205b9fd455d",
+                "5b1429cce353590adbfb099dfbaeac29c3365addf2781a39d4b1bcbbd4817cf8cdebb8a4b5a13fd754823161d80da41e",
             ),
             (
                 "fri0",
                 binding.fri(0, 0, &[GoldilocksFp4V1::ZERO; 2]).unwrap(),
-                "9c86c4026ab348e7c27db2bbab8340bae1a00befbd5ca0562d35d718f93422ba9f02b9970898633a08be1df247d1548f",
+                "490044daca5b1017f7a1191b8d2a3718db199cf388337c09cd6cc863e21d6e1a738f405d46fff73b5f7250cfe10d456a",
             ),
             (
                 "terminal",
                 binding.fri(17, 0, &[GoldilocksFp4V1::ZERO; 4]).unwrap(),
-                "b55e7b1b435626a444618ffb0b9b8a32e7d04876dc2827438028b004efa4ca2d51dc16edf60a0d9136215e9abb12a17c",
+                "0a812fa9936286dc4beb14e3cc646cfbdac68d554607867ace2fcea5233d0bb87be416416609b1d3e3375e4212ecfb0a",
             ),
         ] {
             assert_eq!(hex::encode(actual.to_le_bytes()), expected, "{role}");

@@ -1,15 +1,16 @@
-//! Bounded model-to-prepared transfer bridge for the compact prototype.
+//! Bounded model-to-prepared transfer bridge for the offline compact relation.
 //!
 //! Only public rows are copied; transcript occurrences are borrowed unchanged.
 //! All seven advertised inputs are compared to independently supplied expectations,
 //! and ordering is recomputed before the callback can construct or verify a relation.
 //! This creates no proof result and grants no ledger-state or spend authority.
-//! The candidate artifact adapter remains test-only and requires independent caller inputs.
+//! The offline candidate artifact adapter requires independent caller inputs.
 //! TODO: Connect this bridge to a qualified artifact route and authenticated caller.
 
-use iroha_data_model::fastpq::{
-    FastpqOperationKind, FastpqPublicTransferStatementV1, FastpqQuantityUnits,
-};
+use iroha_data_model::fastpq::{FastpqOperationKind, FastpqPublicTransferStatementV1};
+
+#[cfg(test)]
+use iroha_data_model::fastpq::FastpqQuantityUnits;
 
 use super::compact_value_domain::CompactTransferValue;
 use crate::{
@@ -24,6 +25,7 @@ use crate::{
 /// The callback cannot retain references to the temporary row table. It must still
 /// validate route-specific AXT context and every child proof before returning a
 /// verified result. This bridge never decodes a private legacy batch or metadata.
+#[cfg(test)]
 pub(super) fn with_prepared_statement<T>(
     statement: &FastpqPublicTransferStatementV1,
     expected: &PublicIO,
@@ -38,6 +40,7 @@ pub(super) fn with_prepared_statement<T>(
 ///
 /// This typed route never infers a value format from statement bytes or metadata.
 /// It grants no authority and leaves the legacy narrow bridge's decoder unchanged.
+#[cfg(test)]
 pub(super) fn with_prepared_quantity_statement<T>(
     statement: &FastpqPublicTransferStatementV1,
     expected: &PublicIO,
