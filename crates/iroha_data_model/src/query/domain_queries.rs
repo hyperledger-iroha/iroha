@@ -89,12 +89,18 @@ pub mod account {
     // Bring required IDs into scope for queries! items
     use crate::prelude::AssetDefinitionId;
     /// API-facing record describing one alias bound to an account.
-    #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, iroha_schema::IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        Decode,
+        Encode,
+        iroha_schema::IntoSchema,
+        crate :: DeriveJsonSerialize,
+        crate :: DeriveJsonDeserialize,
     )]
-    #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+    #[norito(no_fast_from_json)]
     #[derive(norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::query::account::AccountAliasBindingRecord")]
     pub struct AccountAliasBindingRecord {
@@ -935,12 +941,10 @@ pub mod runtime {
         norito::codec::Decode,
         norito::codec::Encode,
         iroha_schema::IntoSchema,
+        crate :: DeriveJsonSerialize,
+        crate :: DeriveJsonDeserialize,
+        norito::NoritoSchema,
     )]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
-    #[derive(norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::query::runtime::AbiVersion")]
     pub struct AbiVersion {
         /// The ABI version currently active on the node.

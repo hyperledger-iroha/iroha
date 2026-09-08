@@ -180,3 +180,8 @@ required-features = ["bls"]
 [[test]]
 name = "iroha_crypto_group_01"
 path = "tests/grouped/group_01.rs"
+
+# Scalar identity fixtures qualify minimal and optional crypto features independently.
+[[test]]
+name = "manual_scalar_identity"
+path = "tests/manual_scalar_identity.rs"

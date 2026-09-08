@@ -11,7 +11,7 @@ use crate::bigint::BigInt;
 use core::{cmp::Ordering, str::FromStr};
 pub use iroha_primitives_derive::numeric;
 use norito::{
-    Archived, Error, NoritoDeserialize, NoritoSerialize, SerializePayload,
+    Archived, DeserializePayload, Error, NoritoDeserialize, NoritoSerialize, SerializePayload,
     json::{self, FastJsonWrite, JsonDeserialize, JsonSerialize},
 };
 use num_bigint::{BigInt as UnboundedBigInt, Sign as UnboundedSign};
@@ -155,13 +155,14 @@ impl<'a> norito::core::DecodeFromSlice<'a> for Numeric {
         Ok((value, used))
     }
 }
-impl<'a> NoritoDeserialize<'a> for NumericSpec {
+impl NoritoDeserialize<'_> for NumericSpec {}
+impl<'a> DeserializePayload<'a> for NumericSpec {
     fn deserialize(archived: &'a Archived<NumericSpec>) -> Self {
         Self::try_deserialize(archived).expect("invalid numeric specification")
     }
     fn try_deserialize(archived: &'a Archived<NumericSpec>) -> Result<Self, Error> {
         let scale_arch: &Archived<Option<u32>> = archived.cast();
-        let scale = <Option<u32> as NoritoDeserialize>::deserialize(scale_arch);
+        let scale = <Option<u32> as DeserializePayload>::deserialize(scale_arch);
         Self::try_from_scale(scale)
             .map_err(|error| Error::Message(format!("invalid numeric specification: {error}")))
     }
@@ -1860,7 +1861,8 @@ impl SerializePayload for Quantity {
         self.0.encoded_len_exact()
     }
 }
-impl<'a> NoritoDeserialize<'a> for Quantity {
+impl NoritoDeserialize<'_> for Quantity {}
+impl<'a> DeserializePayload<'a> for Quantity {
     fn deserialize(archived: &'a Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("invalid canonical quantity")
     }
@@ -2171,7 +2173,8 @@ impl SerializePayload for XorQuantity {
         self.0.encoded_len_exact()
     }
 }
-impl<'a> NoritoDeserialize<'a> for XorQuantity {
+impl NoritoDeserialize<'_> for XorQuantity {}
+impl<'a> DeserializePayload<'a> for XorQuantity {
     fn deserialize(archived: &'a Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("invalid canonical XOR quantity")
     }
@@ -2621,7 +2624,8 @@ impl SerializePayload for Numeric {
         .encoded_len_exact()
     }
 }
-impl<'a> NoritoDeserialize<'a> for Numeric {
+impl NoritoDeserialize<'_> for Numeric {}
+impl<'a> DeserializePayload<'a> for Numeric {
     fn deserialize(archived: &'a Archived<Numeric>) -> Self {
         Self::try_deserialize(archived).expect("invalid numeric")
     }

@@ -3201,3 +3201,46 @@ fn recovered_current_timeout_then_historical_commit_keeps_intrinsic_vote_round()
     assert_eq!(commit_owner.prepare_certificate(), Some(&locked_prepare));
 }
 include!("v2_adapter_04_wal_recovery_decision_classifier_cases.rs");
+
+impl SumeragiV2Adapter {
+    /// Reopen the exact certified-body regression WAL through the real startup owner factory.
+    pub(in crate::sumeragi) fn reopen_cancelled_body_owner_for_test(
+        wal_path: &std::path::Path,
+        storage_root: &std::path::Path,
+        verified: VerifiedHeightContext,
+        local_validator: wire::ValidatorIndex,
+        local_signer: &KeyPair,
+        fingerprints: AdapterFingerprints,
+        consensus_key_hash: [u8; 32],
+    ) -> ProductionLifecycleOwnerV1 {
+        let startup = Self::open_recovered_startup_with_aggregator(
+            wal_path,
+            verified,
+            Some(local_validator),
+            reducer::Generation::INITIAL,
+            consensus_key_hash,
+            fingerprints,
+            Box::<BlsNormalSignatureAggregator>::default(),
+            DeferredAdmissionOrdinalSource::new(0),
+        )
+        .expect("reopen the exact real-signature safety WAL without publishing status");
+        let authenticated = startup
+            .authenticate_final_wal_startup_authority()
+            .unwrap_or_else(|(error, _)| {
+                panic!("authenticate the post-cancellation WAL frontier: {error}")
+            });
+        authenticated
+            .open_production_lifecycle_owner_v1_from_roots_for_test(
+                &lifecycle_owner_config(),
+                4,
+                &storage_root.join("ledger"),
+                &storage_root.join("serve"),
+                &storage_root.join("body"),
+                super::super::v2_body_store::BlockSignaturePolicy::RotatingLeader,
+                local_signer,
+            )
+            .unwrap_or_else(|error| {
+                panic!("recover exact cancelled and current body rows: {error}")
+            })
+    }
+}

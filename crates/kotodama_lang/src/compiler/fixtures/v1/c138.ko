@@ -5,10 +5,10 @@ seiyaku ExpressionHintMatch {
   fn identity(int value) -> int { value }
 
   view fn scan(Option<int> maybe) -> int {
-    return identity(match maybe {
+    return identity(value: match maybe {
       Option::some(seed) => {
         var int total = seed;
-        for (key, value) in Entries.range(1, 3) {
+        for (key, value) in Entries.page(after: Option::none, limit: 2).items {
           total = total + key + value;
         }
         total

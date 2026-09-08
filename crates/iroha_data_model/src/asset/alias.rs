@@ -168,10 +168,18 @@ impl AsRef<str> for AssetDefinitionAlias {
 ///
 /// Exact permission scopes use this resolved form so neither a textual dataspace remap nor an
 /// alias rebind can silently transfer an old capability to a different asset definition.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
 #[norito(decode_from_slice)]
 pub struct ResolvedAssetDefinitionAliasV1 {
@@ -242,7 +250,7 @@ impl fmt::Display for ResolvedAssetDefinitionAliasV1 {
         self.canonical_name.fmt(f)
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::FastJsonWrite for AssetDefinitionAlias {
     fn write_json(&self, out: &mut String) {
         norito::json::JsonSerialize::json_serialize(self.as_ref(), out);
@@ -254,7 +262,7 @@ impl norito::json::FastJsonWrite for AssetDefinitionAlias {
         norito::json::write_json_string_to(self.as_ref(), out)
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonDeserialize for AssetDefinitionAlias {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -262,7 +270,7 @@ impl norito::json::JsonDeserialize for AssetDefinitionAlias {
         let value = parser.parse_string()?;
         value
             .parse()
-            .map_err(|err: ParseError| norito::json::Error::Message(err.reason.into()))
+            .map_err(|err: ParseError| norito::json::Error::Message(err.reason().into()))
     }
 }
 #[cfg(test)]

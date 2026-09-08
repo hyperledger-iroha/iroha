@@ -26,7 +26,7 @@ if _INSTALLED_PACKAGE_MODE not in {None, "1"}:
     raise RuntimeError("IROHA_PYTHON_TEST_INSTALLED_PACKAGE must be unset or 1")
 
 if _INSTALLED_PACKAGE_MODE == "1":
-    for module_name in ("iroha_python", "iroha_python._crypto"):
+    for module_name in ("iroha_python", "iroha_native", "iroha_native._crypto"):
         if module_name in sys.modules:
             raise RuntimeError(
                 f"installed-package tests reject pre-seeded module {module_name}"
@@ -67,90 +67,59 @@ if _INSTALLED_PACKAGE_MODE == "1":
             )
         return canonical
 
-    package_spec = importlib.machinery.PathFinder.find_spec("iroha_python")
-    if (
-        package_spec is None
-        or package_spec.loader_state is not None
-        or package_spec.submodule_search_locations is None
-    ):
-        raise RuntimeError("iroha_python must resolve as one installed regular package")
-    package_origin = _trusted_origin(
-        package_spec, "iroha_python", importlib.machinery.SourceFileLoader
-    )
-    package_roots = {
-        Path(path).resolve(strict=True)
-        for path in package_spec.submodule_search_locations
-    }
-    if package_roots != {package_origin.parent}:
-        raise RuntimeError("iroha_python package search path must match its trusted origin")
-    if (
-        package_spec.loader.name != "iroha_python"
-        or Path(package_spec.loader.path) != package_origin
-    ):
-        raise RuntimeError("iroha_python source loader must match its trusted origin")
+    def _package_spec(name: str):
+        spec = importlib.machinery.PathFinder.find_spec(name)
+        if spec is None or spec.loader_state is not None or spec.submodule_search_locations is None:
+            raise RuntimeError(f"{name} must resolve as one installed regular package")
+        origin = _trusted_origin(spec, name, importlib.machinery.SourceFileLoader)
+        roots = {Path(path).resolve(strict=True) for path in spec.submodule_search_locations}
+        if roots != {origin.parent}:
+            raise RuntimeError(f"{name} package search path must match its trusted origin")
+        if spec.loader.name != name or Path(spec.loader.path) != origin:
+            raise RuntimeError(f"{name} source loader must match its trusted origin")
+        return spec, origin
 
+    package_spec, package_origin = _package_spec("iroha_python")
+    owner_spec, owner_origin = _package_spec("iroha_native")
     native_spec = importlib.machinery.PathFinder.find_spec(
-        "iroha_python._crypto", [str(package_origin.parent)]
+        "iroha_native._crypto", [str(owner_origin.parent)]
     )
     if native_spec is None or native_spec.loader_state is not None:
-        raise RuntimeError("iroha_python._crypto must have an unmodified extension spec")
-    native_origin = _trusted_origin(
-        native_spec,
-        "iroha_python._crypto",
-        importlib.machinery.ExtensionFileLoader,
-    )
-    if not any(
-        native_origin.name == f"_crypto{suffix}"
-        for suffix in importlib.machinery.EXTENSION_SUFFIXES
-    ):
-        raise RuntimeError("iroha_python._crypto origin has the wrong platform suffix")
-    if (
-        native_spec.loader.name != "iroha_python._crypto"
-        or Path(native_spec.loader.path) != native_origin
-    ):
-        raise RuntimeError("iroha_python._crypto loader must match its trusted origin")
+        raise RuntimeError("iroha_native._crypto must have an unmodified extension spec")
+    native_origin = _trusted_origin(native_spec, "iroha_native._crypto", importlib.machinery.ExtensionFileLoader)
+    if not any(native_origin.name == f"_crypto{suffix}" for suffix in importlib.machinery.EXTENSION_SUFFIXES):
+        raise RuntimeError("iroha_native._crypto origin has the wrong platform suffix")
+    if native_origin.parent != owner_origin.parent or native_spec.submodule_search_locations is not None:
+        raise RuntimeError("native extension must belong to the authenticated iroha_native package")
+    if native_spec.loader.name != "iroha_native._crypto" or Path(native_spec.loader.path) != native_origin:
+        raise RuntimeError("iroha_native._crypto loader must match its trusted origin")
 
+    owner = importlib.util.module_from_spec(owner_spec)
+    sys.modules["iroha_native"] = owner
+    owner_spec.loader.exec_module(owner)
+    native = owner.load_crypto_extension()
     package = importlib.util.module_from_spec(package_spec)
     sys.modules["iroha_python"] = package
-    native = importlib.util.module_from_spec(native_spec)
-    sys.modules["iroha_python._crypto"] = native
-    native_spec.loader.exec_module(native)
     package_spec.loader.exec_module(package)
 
-    loaded_package_spec = package.__spec__
-    if (
-        sys.modules.get("iroha_python") is not package
-        or loaded_package_spec is None
-        or loaded_package_spec.loader_state is not None
-        or package.__loader__ is not loaded_package_spec.loader
-        or not isinstance(getattr(package, "__file__", None), str)
-        or Path(package.__file__) != package_origin
-        or _trusted_origin(
-            loaded_package_spec,
-            "loaded iroha_python",
-            importlib.machinery.SourceFileLoader,
-        )
-        != package_origin
-    ):
-        raise RuntimeError("loaded iroha_python spec changed from its trusted origin")
+    def _assert_loaded(module, name: str, origin: Path, loader_type: type) -> None:
+        spec = module.__spec__
+        if (
+            sys.modules.get(name) is not module
+            or spec is None
+            or spec.loader_state is not None
+            or module.__loader__ is not spec.loader
+            or not isinstance(getattr(module, "__file__", None), str)
+            or Path(module.__file__) != origin
+            or _trusted_origin(spec, f"loaded {name}", loader_type) != origin
+            or spec.loader.name != name
+            or Path(spec.loader.path) != origin
+        ):
+            raise RuntimeError(f"loaded {name} spec changed from its trusted origin")
 
-    loaded_native_spec = native.__spec__
-    if (
-        sys.modules.get("iroha_python._crypto") is not native
-        or loaded_native_spec is None
-        or loaded_native_spec.loader_state is not None
-        or native.__loader__ is not loaded_native_spec.loader
-        or not isinstance(getattr(native, "__file__", None), str)
-        or Path(native.__file__) != native_origin
-        or _trusted_origin(
-            loaded_native_spec,
-            "loaded iroha_python._crypto",
-            importlib.machinery.ExtensionFileLoader,
-        )
-        != native_origin
-    ):
-        raise RuntimeError(
-            "loaded iroha_python._crypto spec changed from its trusted extension origin"
-        )
+    _assert_loaded(owner, "iroha_native", owner_origin, importlib.machinery.SourceFileLoader)
+    _assert_loaded(package, "iroha_python", package_origin, importlib.machinery.SourceFileLoader)
+    _assert_loaded(native, "iroha_native._crypto", native_origin, importlib.machinery.ExtensionFileLoader)
 else:
     _add_path(_ROOT / "iroha_python" / "src")
+    _add_path(_ROOT / "iroha_native" / "src")

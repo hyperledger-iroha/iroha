@@ -1885,7 +1885,7 @@ expect_failure \
 prepare_python_guard_root() {
   local root="$1"
   local relative
-  mkdir -p "${root}/.cargo" "${root}/python/iroha_python/src/iroha_python"
+  mkdir -p "${root}/.cargo" "${root}/python/iroha_python/src/iroha_python" "${root}/python/iroha_native/src/iroha_native"
   install_tracked_test_root_lock "${root}"
   cp "${SOURCE_ROOT}/python/iroha_python/requirements-ci.lock" "${root}/python/iroha_python/requirements-ci.lock"
   cp "${SOURCE_ROOT}/.cargo/config.toml" "${root}/.cargo/config.toml"
@@ -2099,22 +2099,26 @@ printf '%s\n' \
   '  exit 0' \
   'fi' \
   'if [[ "${1:-}" == "-I" && "${2:-}" == "-B" && "${3:-}" == */verify_privacy_python_wheel.py ]]; then' \
-  '  [[ -f "${5:-}" ]] || { echo "fresh wheel is unavailable to verifier" >&2; exit 99; }' \
-  '  [[ -n "${6:-}" && "${6}" == "${IROHA_PRIVACY_AUTHENTICATED_WHEEL_SEAL:-}" ]] || { echo "verifier did not receive the authenticated wheel seal" >&2; exit 112; }' \
-  '  [[ "${6}" =~ ^[0-9a-f]{64}:[0-9]+:[0-9]+:[0-9]+:[0-9]+:[0-9]+:0o[0-7]+$ ]] || { echo "verifier received a malformed wheel seal" >&2; exit 113; }' \
   '  if [[ "${4:-}" == "--preflight" ]]; then' \
-  '    [[ "$#" -eq 6 ]] || { echo "preflight verifier received extra dependency roots" >&2; exit 114; }' \
-  '    if [[ "${FAKE_WHEEL_MUTATE_PHASE:-}" == "preflight" ]]; then printf "%s\\n" "preflight mutation" >>"${5}"; fi' \
-  '    printf "%s\\n" "${5}"' \
+  '    [[ "$#" -eq 7 ]] || { echo "preflight verifier received extra dependency roots" >&2; exit 114; }' \
+  '    case "${5}" in native) expected_seal="${IROHA_PRIVACY_AUTHENTICATED_WHEEL_SEAL:-}" ;; sdk) expected_seal="${IROHA_PRIVACY_AUTHENTICATED_SDK_WHEEL_SEAL:-}" ;; *) exit 114 ;; esac' \
+  '    [[ -f "${6}" ]] || { echo "fresh wheel is unavailable to verifier" >&2; exit 99; }' \
+  '    [[ "${7}" == "${expected_seal}" && "${7}" =~ ^[0-9a-f]{64}:[0-9]+:[0-9]+:[0-9]+:[0-9]+:[0-9]+:0o[0-7]+$ ]] || { echo "verifier did not receive the authenticated wheel seal" >&2; exit 112; }' \
+  '    if [[ "${FAKE_WHEEL_MUTATE_PHASE:-}" == "preflight" && "${5}" == "native" ]]; then printf "%s\n" "preflight mutation" >>"${6}"; fi' \
+  '    if [[ "${FAKE_SDK_WHEEL_MUTATE_PHASE:-}" == "preflight" && "${5}" == "sdk" ]]; then printf "%s\n" "SDK preflight mutation" >>"${6}"; fi' \
+  '    printf "%s\n" "${6}"' \
   '    exit 0' \
   '  fi' \
-  '  [[ "$#" -eq 8 ]] || { echo "installed verifier did not receive exactly two dependency roots" >&2; exit 115; }' \
+  '  [[ "$#" -eq 10 ]] || { echo "installed verifier did not receive both owners and exactly two dependency roots" >&2; exit 115; }' \
+  '  [[ -f "${5}" && -f "${9}" ]] || { echo "fresh wheel owner is unavailable to verifier" >&2; exit 99; }' \
+  '  [[ "${6}" == "${IROHA_PRIVACY_AUTHENTICATED_WHEEL_SEAL:-}" && "${10}" == "${IROHA_PRIVACY_AUTHENTICATED_SDK_WHEEL_SEAL:-}" ]] || { echo "verifier did not receive both authenticated seals" >&2; exit 112; }' \
   '  [[ "${7}" == "${PRIVACY_PYTHON_SDK_ROOT}/python/norito_py/src" ]] || { echo "installed verifier received the wrong Norito root" >&2; exit 116; }' \
   '  [[ "${8}" == "${PRIVACY_PYTHON_SDK_ROOT}/python/iroha_torii_client" ]] || { echo "installed verifier received the wrong Torii root" >&2; exit 117; }' \
-  '  native="${4}/lib/python3.12/site-packages/iroha_python/_crypto.abi3.so"' \
-  '  [[ -f "${native}" ]] || { echo "installed native module is unavailable" >&2; exit 100; }' \
-  '  if [[ "${FAKE_WHEEL_MUTATE_PHASE:-}" == "verify" ]]; then printf "%s\\n" "verifier mutation" >>"${5}"; fi' \
-  '  printf "%s\\n" "${native}"' \
+  '  native="${4}/lib/python3.12/site-packages/iroha_native/_crypto.abi3.so"' \
+  '  [[ -f "${native}" && -f "${4}/lib/python3.12/site-packages/iroha_python/__init__.py" ]] || { echo "installed wheel owner is unavailable" >&2; exit 100; }' \
+  '  if [[ "${FAKE_WHEEL_MUTATE_PHASE:-}" == "verify" ]]; then printf "%s\n" "verifier mutation" >>"${5}"; fi' \
+  '  if [[ "${FAKE_SDK_WHEEL_MUTATE_PHASE:-}" == "verify" ]]; then printf "%s\n" "SDK verifier mutation" >>"${9}"; fi' \
+  '  printf "%s\n" "${native}"' \
   '  exit 0' \
   'fi' \
   'if [[ "${1:-}" == "-I" && "${2:-}" == "-S" && "${3:-}" == */check_native_sdk_abi23_artifact.py ]]; then' \
@@ -2144,13 +2148,27 @@ printf '%s\n' \
   '    done < <(compgen -e || true)' \
   '    case " $* " in' \
   '      *" -m pip --isolated --disable-pip-version-check --no-input --no-cache-dir install --require-hashes --only-binary=:all: --force-reinstall -r "*) ;;' \
+  '      *" -m pip --isolated --disable-pip-version-check --no-input --no-cache-dir wheel --no-deps --no-index --no-build-isolation --wheel-dir "*)' \
+  '        [[ "${isolated_bytecode_disabled}" == "1" ]] || { echo "pure SDK wheel build must disable bytecode" >&2; exit 119; }' \
+  '        previous=""' \
+  '        for argument in "$@"; do' \
+  '          if [[ "${previous}" == "--wheel-dir" ]]; then sdk_output="${argument}"; fi' \
+  '          previous="${argument}"' \
+  '        done' \
+  '        [[ -n "${sdk_output:-}" && -d "${sdk_output}" ]] || exit 105' \
+  '        printf "%s\n" "fake fresh pure SDK wheel" >"${sdk_output}/iroha_python-0.0.0-py3-none-any.whl"' \
+  '        ;;' \
   '      *" -m pip --isolated --disable-pip-version-check --no-input --no-cache-dir install --no-compile --no-deps --no-index --force-reinstall "*)' \
   '        [[ "${isolated_bytecode_disabled}" == "1" ]] || { echo "private wheel pip install must disable bytecode" >&2; exit 119; }' \
-  '        wheel="${!#}"' \
+  '        sdk_wheel="${!#}"' \
+  '        native_index=$(($# - 1))' \
+  '        wheel="${!native_index}"' \
+  '        [[ -f "${sdk_wheel}" && "${sdk_wheel}" == */iroha_python-0.0.0-py3-none-any.whl ]] || { echo "pip did not receive the pure SDK owner" >&2; exit 106; }' \
   '        case "${wheel}" in *.whl) ;; *) echo "pip did not receive one wheel" >&2; exit 106 ;; esac' \
   '        [[ -f "${wheel}" ]] || { echo "pip wheel path is unavailable" >&2; exit 101; }' \
-  '        package_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)/lib/python3.12/site-packages/iroha_python"' \
-  '        mkdir -p "${package_dir}"' \
+  '        package_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)/lib/python3.12/site-packages/iroha_native"' \
+  '        mkdir -p "${package_dir}" "${package_dir%/*}/iroha_python"' \
+  '        printf "%s\n" "fake installed pure SDK package" >"${package_dir%/*}/iroha_python/__init__.py"' \
   '        printf "%s\\n" "fake installed package" >"${package_dir}/__init__.py"' \
   '        printf "%s\\n" "fake installed native module" >"${package_dir}/_crypto.abi3.so"' \
   '        ;;' \
@@ -2159,6 +2177,7 @@ printf '%s\n' \
   '    ;;' \
   '  pytest)' \
   '    [[ "${IROHA_PYTHON_TEST_INSTALLED_PACKAGE:-}" == "1" ]] || exit 102' \
+  '    if [[ "${FAKE_SDK_WHEEL_MUTATE_PHASE:-}" == "pytest" ]]; then printf "%s\n" "SDK pytest mutation" >>"${IROHA_PRIVACY_AUTHENTICATED_SDK_WHEEL_PATH}"; fi' \
   '    [[ "${isolated_bytecode_disabled}" == "1" ]] || { echo "pytest must use isolated no-bytecode mode" >&2; exit 118; }' \
   '    [[ "${PYTEST_DISABLE_PLUGIN_AUTOLOAD:-}" == "1" ]] || exit 108' \
   '    [[ -z "${PYTEST_ADDOPTS:-}" && -z "${PYTEST_PLUGINS:-}" ]] || exit 109' \
@@ -2226,7 +2245,7 @@ printf '%s\n' \
   '      *) exit 117 ;;' \
   '    esac' \
   '    printf -v encoded_rustflags "%b" "-C\\037link-arg=-undefined\\037-C\\037link-arg=dynamic_lookup"' \
-  '    rustc_link_arg="link-args=-Wl,-install_name,@rpath/iroha_python._crypto.abi3.so"' \
+  '    rustc_link_arg="link-args=-Wl,-install_name,@rpath/iroha_native._crypto.abi3.so"' \
   '    python_sys_executable="${PYO3_PYTHON}"' \
   '    pyo3_extension_module="1"' \
   '    pyo3_environment_signature="cpython-3.12-64bit"' \
@@ -2276,7 +2295,7 @@ printf '%s\n' \
   '      symlink) ln -s "_crypto.abi3.so" "${FAKE_MATURIN_ARTIFACT_DIR}/_crypto.symlink.so" ;;' \
   '      *) exit 110 ;;' \
   '    esac' \
-  '    printf "%s\\n" "fake fresh wheel" >"${wheel_directory}/iroha_python-0.0.0-cp312-abi3-test.whl"' \
+  '    printf "%s\\n" "fake fresh wheel" >"${wheel_directory}/iroha_native-0.0.0-cp312-abi3-test.whl"' \
   '    ;;' \
   '  *) echo "unexpected fake Python module: ${2:-}" >&2; exit 93 ;;' \
   'esac' \
@@ -2312,6 +2331,7 @@ import types
 import warnings
 import zipfile
 from pathlib import Path
+from dataclasses import replace
 
 verifier_path = Path(sys.argv[1])
 fixture_root = Path(sys.argv[2])
@@ -2326,19 +2346,23 @@ spec.loader.exec_module(verifier)
 
 environment_root = fixture_root / "venv"
 site_root = environment_root / "lib/python3.12/site-packages"
-package_root = site_root / "iroha_python"
+package_root = site_root / "iroha_native"
 package_root.mkdir(parents=True)
 package_path = package_root / "__init__.py"
 package_sibling_path = package_root / "sibling.py"
 native_path = package_root / "_crypto.abi3.so"
-dist_info_root = site_root / "iroha_python-0.0.0.dist-info"
+dist_info_root = site_root / "iroha_native-0.0.0.dist-info"
+owner_loader_bytes = (
+    b"def load_crypto_extension():\n"
+    b"    import privacy_wheel_verifier_under_test as fixture\n"
+    b"    return fixture._fixture_native_module()\n"
+)
 package_bytes = (
     b"from importlib import metadata\n"
-    b"import norito\n"
-    b"import iroha_torii_client\n"
     b"from . import sibling\n"
-    b"__version__ = metadata.version('iroha-python')\n"
+    b"__version__ = metadata.version('iroha-native')\n"
 )
+package_bytes += owner_loader_bytes
 sibling_bytes = b"VALUE = 'authenticated sibling bytes'\n"
 native_bytes = b"fresh inert native bytes\n"
 package_path.write_bytes(package_bytes)
@@ -2405,8 +2429,7 @@ def record_hash(payload):
     return f"sha256={encoded}"
 
 
-def with_record(entries):
-    record_name = "iroha_python-0.0.0.dist-info/RECORD"
+def with_record(entries, record_name="iroha_native-0.0.0.dist-info/RECORD"):
     rows = [
         f"{info.filename},{record_hash(payload)},{len(payload)}"
         for info, payload in entries
@@ -2422,15 +2445,15 @@ def valid_entries(
     sibling_payload=sibling_bytes,
 ):
     return with_record([
-        member("iroha_python/__init__.py", package_payload),
-        member("iroha_python/sibling.py", sibling_payload),
-        member("iroha_python/_crypto.abi3.so", native_bytes),
+        member("iroha_native/__init__.py", package_payload),
+        member("iroha_native/sibling.py", sibling_payload),
+        member("iroha_native/_crypto.abi3.so", native_bytes),
         member(
-            "iroha_python-0.0.0.dist-info/METADATA",
-            b"Metadata-Version: 2.3\nName: iroha-python\nVersion: 0.0.0\n",
+            "iroha_native-0.0.0.dist-info/METADATA",
+            b"Metadata-Version: 2.3\nName: iroha-native\nVersion: 0.0.0\n",
         ),
         member(
-            "iroha_python-0.0.0.dist-info/WHEEL",
+            "iroha_native-0.0.0.dist-info/WHEEL",
             b"Wheel-Version: 1.0\nRoot-Is-Purelib: false\n"
             b"Tag: cp312-abi3-any\n",
         ),
@@ -2453,14 +2476,14 @@ def write_installed_record():
         payload = path.read_bytes()
         relative = path.relative_to(site_root).as_posix()
         rows.append(f"{relative},{record_hash(payload)},{len(payload)}")
-    rows.append("iroha_python-0.0.0.dist-info/RECORD,,")
+    rows.append("iroha_native-0.0.0.dist-info/RECORD,,")
     record_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
 
 
 def install_dist_info(wheel):
     dist_info_root.mkdir(exist_ok=True)
     (dist_info_root / "METADATA").write_bytes(
-        b"Metadata-Version: 2.3\nName: iroha-python\nVersion: 0.0.0\n"
+        b"Metadata-Version: 2.3\nName: iroha-native\nVersion: 0.0.0\n"
     )
     (dist_info_root / "WHEEL").write_bytes(
         b"Wheel-Version: 1.0\nRoot-Is-Purelib: false\n"
@@ -2520,10 +2543,10 @@ expect_failure(
         torii_root=torii_root,
     ),
 )
-shadow_root = norito_root / "iroha_python"
+shadow_root = norito_root / "iroha_native"
 shadow_root.mkdir()
 expect_failure(
-    "contains an iroha_python shadow",
+    "contains an iroha_native shadow",
     lambda: verifier.authenticate_dependency_roots(
         environment_root=environment_root,
         norito_root=norito_root,
@@ -2577,9 +2600,9 @@ def preflight(path):
 wheel_path = write_wheel(fixture_root / "fresh.whl", valid_entries())
 wheel = preflight(wheel_path)
 install_dist_info(wheel)
-if wheel.package_member != "iroha_python/__init__.py":
+if wheel.package_member != "iroha_native/__init__.py":
     raise AssertionError("wheel preflight selected the wrong package initializer")
-if wheel.native_member != "iroha_python/_crypto.abi3.so":
+if wheel.native_member != "iroha_native/_crypto.abi3.so":
     raise AssertionError("wheel preflight selected the wrong native extension")
 streamed_wheel_path = write_streamed_wheel(
     fixture_root / "streamed-data-descriptors.whl",
@@ -2599,6 +2622,47 @@ if (
     or installed_files.native.path != native_path
 ):
     raise AssertionError("installed file verifier returned untrusted paths")
+
+# The SDK is a separately sealed pure owner. No installed extension can satisfy
+# a missing SDK wheel, and no pure SDK wheel can replace the native owner.
+sdk_dist = "iroha_python-0.0.0.dist-info"
+sdk_bytes = b"from importlib.metadata import version\n__version__ = version('iroha-python')\nimport iroha_native\nimport norito\nimport iroha_torii_client\n"
+sdk_entries = with_record([
+    member("iroha_python/__init__.py", sdk_bytes),
+    member("iroha_python-0.0.0.dist-info/METADATA", b"Metadata-Version: 2.3\nName: iroha-python\nVersion: 0.0.0\nRequires-Dist: iroha-native==0.0.0\n"),
+    member("iroha_python-0.0.0.dist-info/WHEEL", b"Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n"),
+], f"{sdk_dist}/RECORD")
+sdk_path = write_wheel(fixture_root / "sdk.whl", sdk_entries)
+sdk_wheel = verifier.preflight_wheel(sdk_path, seal(sdk_path), owner=verifier.SDK_OWNER)
+for info, payload in sdk_entries:
+    destination = site_root / info.filename
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_bytes(payload)
+(site_root / sdk_dist / "INSTALLER").write_bytes(b"pip\n")
+(site_root / sdk_dist / "REQUESTED").write_bytes(b"")
+(site_root / sdk_dist / "direct_url.json").write_text(json.dumps({"archive_info": {"hashes": {"sha256": sdk_wheel.seal.sha256}}, "url": sdk_path.as_uri()}))
+def write_sdk_record():
+    paths = sorted([*(site_root / "iroha_python").rglob("*"), *(site_root / sdk_dist).rglob("*")])
+    rows = [f"{path.relative_to(site_root).as_posix()},{record_hash(path.read_bytes())},{path.stat().st_size}" for path in paths if path.is_file() and path.name != "RECORD"]
+    rows.append(f"{sdk_dist}/RECORD,,")
+    (site_root / sdk_dist / "RECORD").write_text("\n".join(rows) + "\n")
+write_sdk_record()
+sdk_layout = verifier.derive_installed_layout(environment_root=environment_root, site_roots={site_root}, wheel=sdk_wheel)
+sdk_before = verifier.verify_installed_files(sdk_wheel, sdk_layout)
+sdk_spec = verifier.trusted_package_spec(sdk_layout)
+expect_failure("exactly one package initializer", lambda: preflight(sdk_path))
+expect_failure("exactly one package initializer", lambda: verifier.preflight_wheel(wheel_path, seal(wheel_path), owner=verifier.SDK_OWNER))
+# Exercise actual missing install and byte substitution independently of RECORD.
+sdk_init = site_root / "iroha_python/__init__.py"
+sdk_init.rename(sdk_init.with_name("absent.py"))
+expect_failure("does not exactly match", lambda: verifier.derive_installed_layout(environment_root=environment_root, site_roots={site_root}, wheel=sdk_wheel))
+sdk_init.with_name("absent.py").rename(sdk_init)
+sdk_init.write_bytes(sdk_bytes + b"TAMPERED = True\n")
+write_sdk_record()
+expect_failure("does not match the fresh wheel", lambda: verifier.verify_installed_files(sdk_wheel, sdk_layout))
+sdk_init.write_bytes(sdk_bytes)
+write_sdk_record()
+
 package_spec, native_spec = verifier.trusted_import_specs(layout)
 if type(package_spec.loader) is not importlib.machinery.SourceFileLoader:
     raise AssertionError("package spec did not use SourceFileLoader")
@@ -2617,31 +2681,39 @@ class InertExtensionLoader(importlib.machinery.ExtensionFileLoader):
 
 
 inert_loader = InertExtensionLoader(
-    "iroha_python._crypto",
+    "iroha_native._crypto",
     str(native_path),
 )
 inert_native_spec = importlib.util.spec_from_file_location(
-    "iroha_python._crypto",
+    "iroha_native._crypto",
     native_path,
     loader=inert_loader,
 )
 if inert_native_spec is None:
     raise AssertionError("unable to construct inert extension-loader spec")
+def fixture_native_module():
+    native = importlib.util.module_from_spec(inert_native_spec)
+    sys.modules["iroha_native._crypto"] = native
+    inert_native_spec.loader.exec_module(native)
+    return native
+
+verifier._fixture_native_module = fixture_native_module
 loaded_package, loaded_native = verifier.load_from_trusted_specs(
     wheel=wheel,
     layout=layout,
     package_spec=package_spec,
     native_spec=inert_native_spec,
     dependencies=dependencies,
+    sdk_wheel=sdk_wheel, sdk_layout=sdk_layout, sdk_spec=sdk_spec,
 )
 if not loaded_native.INERT_EXTENSION_LOADED:
     raise AssertionError("authenticated inert extension loader did not run")
 if loaded_package.sibling.VALUE != "authenticated sibling bytes":
     raise AssertionError("package initializer did not use authenticated sibling bytes")
-if loaded_package.norito.SOURCE != "authenticated norito root":
+if sys.modules["iroha_python"].norito.SOURCE != "authenticated norito root":
     raise AssertionError("package initializer did not use authenticated Norito")
 if (
-    loaded_package.iroha_torii_client.SOURCE
+    sys.modules["iroha_python"].iroha_torii_client.SOURCE
     != "authenticated torii root"
 ):
     raise AssertionError("package initializer did not use authenticated Torii client")
@@ -2652,6 +2724,8 @@ for loaded_name in tuple(sys.modules):
     if (
         loaded_name == "iroha_python"
         or loaded_name.startswith("iroha_python.")
+        or loaded_name == "iroha_native"
+        or loaded_name.startswith("iroha_native.")
         or loaded_name == "norito"
         or loaded_name.startswith("norito.")
         or loaded_name == "iroha_torii_client"
@@ -2688,6 +2762,7 @@ try:
         package_spec=package_spec,
         native_spec=inert_native_spec,
         dependencies=dependencies,
+        sdk_wheel=sdk_wheel, sdk_layout=sdk_layout, sdk_spec=sdk_spec,
     )
     if cache_safe_package.sibling.VALUE != "authenticated sibling bytes":
         raise AssertionError("trusted source finder did not load sealed sibling")
@@ -2700,7 +2775,9 @@ finally:
     for loaded_name in tuple(sys.modules):
         if (
             loaded_name == "iroha_python"
-            or loaded_name.startswith("iroha_python.")
+        or loaded_name.startswith("iroha_python.")
+        or loaded_name == "iroha_native"
+            or loaded_name.startswith("iroha_native.")
             or loaded_name == "norito"
             or loaded_name.startswith("norito.")
             or loaded_name == "iroha_torii_client"
@@ -2717,6 +2794,7 @@ expect_failure(
         package_spec=package_spec,
         native_spec=inert_native_spec,
         dependencies=dependencies,
+        sdk_wheel=sdk_wheel, sdk_layout=sdk_layout, sdk_spec=sdk_spec,
     ),
 )
 package_path.write_bytes(package_bytes)
@@ -2728,7 +2806,7 @@ mutation_dependencies = verifier.authenticate_dependency_roots(
     norito_root=norito_root,
     torii_root=torii_root,
 )
-package_path.write_text(
+sdk_init.write_text(
     "from importlib import metadata\n"
     "import norito\n"
     "import iroha_torii_client\n"
@@ -2746,9 +2824,10 @@ expect_failure(
         package_spec=package_spec,
         native_spec=inert_native_spec,
         dependencies=mutation_dependencies,
+        sdk_wheel=sdk_wheel, sdk_layout=sdk_layout, sdk_spec=sdk_spec,
     ),
 )
-package_path.write_bytes(package_bytes)
+sdk_init.write_bytes(sdk_bytes)
 mutable_dependency_source.unlink()
 
 package_sibling_path.write_bytes(b"VALUE = 'tampered installed sibling'\n")
@@ -2761,7 +2840,7 @@ package_sibling_path.write_bytes(sibling_bytes)
 metadata_path = dist_info_root / "METADATA"
 metadata_bytes = metadata_path.read_bytes()
 metadata_path.write_bytes(
-    b"Metadata-Version: 2.3\nName: iroha-python\nVersion: 9.9-TAMPERED\n"
+    b"Metadata-Version: 2.3\nName: iroha-native\nVersion: 9.9-TAMPERED\n"
 )
 write_installed_record()
 expect_failure(
@@ -2821,10 +2900,10 @@ expect_failure(
 )
 dist_info_extra.unlink()
 
-duplicate_dist_info = site_root / "iroha_python-9.9.dist-info"
+duplicate_dist_info = site_root / "iroha_native-9.9.dist-info"
 duplicate_dist_info.mkdir()
 expect_failure(
-    "exactly one matching iroha-python distribution origin",
+    "exactly one matching iroha-native distribution origin",
     lambda: verifier.derive_installed_layout(
         environment_root=environment_root,
         site_roots={site_root},
@@ -2833,14 +2912,14 @@ expect_failure(
 )
 duplicate_dist_info.rmdir()
 for alias_name in (
-    "iroha-python-9.9.dist-info",
-    "iroha.python-9.9.dist-info",
-    "IROHA_PYTHON-9.9.DIST-INFO",
+    "iroha-native-9.9.dist-info",
+    "iroha.native-9.9.dist-info",
+    "IROHA_NATIVE-9.9.DIST-INFO",
 ):
     alias_dist_info = site_root / alias_name
     alias_dist_info.mkdir()
     expect_failure(
-        "exactly one matching iroha-python distribution origin",
+        "exactly one matching iroha-native distribution origin",
         lambda: verifier.derive_installed_layout(
             environment_root=environment_root,
             site_roots={site_root},
@@ -2865,7 +2944,7 @@ direct_url_path.write_bytes(direct_url_bytes)
 
 record_path = dist_info_root / "RECORD"
 record_bytes = record_path.read_bytes()
-record_path.write_bytes(record_bytes + b"iroha_python/injected.py,,\n")
+record_path.write_bytes(record_bytes + b"iroha_native/injected.py,,\n")
 expect_failure(
     "unexpected member row",
     lambda: verifier.verify_installed_files(wheel, layout),
@@ -2874,14 +2953,13 @@ record_path.write_bytes(record_bytes)
 
 mutating_package_bytes = (
     b"from importlib import metadata\n"
-    b"import norito\n"
-    b"import iroha_torii_client\n"
     b"from pathlib import Path\n"
     b"from . import sibling\n"
     b"Path(sibling.__file__).write_text("
     b"\"VALUE = 'mutated during import'\\n\", encoding='utf-8')\n"
-    b"__version__ = metadata.version('iroha-python')\n"
+    b"__version__ = metadata.version('iroha-native')\n"
 )
+mutating_package_bytes += owner_loader_bytes
 mutating_wheel_path = write_wheel(
     fixture_root / "mutating-sibling.whl",
     valid_entries(package_payload=mutating_package_bytes),
@@ -2908,6 +2986,7 @@ def import_mutating_package_and_reverify():
         package_spec=mutating_package_spec,
         native_spec=inert_native_spec,
         dependencies=dependencies,
+        sdk_wheel=sdk_wheel, sdk_layout=sdk_layout, sdk_spec=sdk_spec,
     )
     verifier.verify_installed_files(mutating_wheel, mutating_layout)
 
@@ -2920,6 +2999,8 @@ for loaded_name in tuple(sys.modules):
     if (
         loaded_name == "iroha_python"
         or loaded_name.startswith("iroha_python.")
+        or loaded_name == "iroha_native"
+        or loaded_name.startswith("iroha_native.")
         or loaded_name == "norito"
         or loaded_name.startswith("norito.")
         or loaded_name == "iroha_torii_client"
@@ -2994,11 +3075,11 @@ layout = verifier.derive_installed_layout(
 path_cases = (
     ("traversal", "../escape.py", "dot or empty path alias"),
     ("absolute", "/absolute.py", "relative POSIX path"),
-    ("backslash", r"iroha_python\escape.py", "POSIX path"),
-    ("dot", "iroha_python/./escape.py", "dot or empty path alias"),
-    ("empty", "iroha_python//escape.py", "dot or empty path alias"),
+    ("backslash", r"iroha_native\escape.py", "POSIX path"),
+    ("dot", "iroha_native/./escape.py", "dot or empty path alias"),
+    ("empty", "iroha_native//escape.py", "dot or empty path alias"),
     ("drive", "C:/escape.py", "drive path"),
-    ("trailing-dot", "iroha_python/escape.", "platform path alias"),
+    ("trailing-dot", "iroha_native/escape.", "platform path alias"),
 )
 for label, unsafe_name, fragment in path_cases:
     candidate = write_wheel(
@@ -3009,25 +3090,25 @@ for label, unsafe_name, fragment in path_cases:
 
 duplicate = write_wheel(
     fixture_root / "duplicate.whl",
-    valid_entries() + [member("iroha_python/__init__.py", package_bytes)],
+    valid_entries() + [member("iroha_native/__init__.py", package_bytes)],
 )
 expect_failure("not unique", lambda: preflight(duplicate))
 case_alias = write_wheel(
     fixture_root / "case-alias.whl",
     valid_entries()
-    + [member("iroha_python/Name.py"), member("iroha_python/name.py")],
+    + [member("iroha_native/Name.py"), member("iroha_native/name.py")],
 )
 expect_failure("not unique", lambda: preflight(case_alias))
 symlink_member = write_wheel(
     fixture_root / "symlink.whl",
     valid_entries()
-    + [member("iroha_python/link.py", b"target", stat.S_IFLNK | 0o777)],
+    + [member("iroha_native/link.py", b"target", stat.S_IFLNK | 0o777)],
 )
 expect_failure("special-file mode", lambda: preflight(symlink_member))
 fifo_member = write_wheel(
     fixture_root / "fifo.whl",
     valid_entries()
-    + [member("iroha_python/fifo", b"", stat.S_IFIFO | 0o600)],
+    + [member("iroha_native/fifo", b"", stat.S_IFIFO | 0o600)],
 )
 expect_failure("special-file mode", lambda: preflight(fifo_member))
 missing_initializer = write_wheel(
@@ -3035,7 +3116,7 @@ missing_initializer = write_wheel(
     [
         entry
         for entry in valid_entries()
-        if entry[0].filename != "iroha_python/__init__.py"
+        if entry[0].filename != "iroha_native/__init__.py"
     ],
 )
 expect_failure("exactly one package initializer", lambda: preflight(missing_initializer))
@@ -3043,8 +3124,8 @@ wrong_platform = write_wheel(
     fixture_root / "wrong-platform.whl",
     [
         (
-            member("iroha_python/_crypto.cpython-39-darwin.so", native_bytes)
-            if entry[0].filename == "iroha_python/_crypto.abi3.so"
+            member("iroha_native/_crypto.cpython-39-darwin.so", native_bytes)
+            if entry[0].filename == "iroha_native/_crypto.abi3.so"
             else entry
         )
         for entry in valid_entries()
@@ -3053,10 +3134,10 @@ wrong_platform = write_wheel(
 expect_failure("current-platform native module", lambda: preflight(wrong_platform))
 for label, extra_name in (
     ("loose", "_crypto.abi3.so"),
-    ("nested", "iroha_python/sub/_crypto.abi3.so"),
-    ("stale", "iroha_python/_crypto.cpython-39-darwin.so"),
-    ("foreign", "iroha_python/helper.so"),
-    ("foreign-case", "iroha_python/helper.SO"),
+    ("nested", "iroha_native/sub/_crypto.abi3.so"),
+    ("stale", "iroha_native/_crypto.cpython-39-darwin.so"),
+    ("foreign", "iroha_native/helper.so"),
+    ("foreign-case", "iroha_native/helper.SO"),
 ):
     candidate = write_wheel(
         fixture_root / f"{label}-native.whl",
@@ -3067,7 +3148,7 @@ for label, extra_name in (
         lambda candidate=candidate: preflight(candidate),
     )
 for label, extra_name in (
-    ("script-root", "iroha_python-0.0.0.data/scripts/python"),
+    ("script-root", "iroha_native-0.0.0.data/scripts/python"),
     ("other-package", "other_package/__init__.py"),
 ):
     candidate = write_wheel(
@@ -3133,12 +3214,12 @@ verifier.verify_installed_files(wheel, layout)
 verifier.reject_preseeded_modules({})
 expect_failure(
     "preseeded package modules",
-    lambda: verifier.reject_preseeded_modules({"iroha_python": object()}),
+    lambda: verifier.reject_preseeded_modules({"iroha_native": object()}),
 )
 expect_failure(
     "preseeded package modules",
     lambda: verifier.reject_preseeded_modules(
-        {"iroha_python.injected": object()}
+        {"iroha_native.injected": object()}
     ),
 )
 
@@ -3156,9 +3237,9 @@ class SpoofedNativeFinder:
         if type(self).calls == 1:
             return package_spec
         return importlib.machinery.ModuleSpec(
-            "iroha_python._crypto",
+            "iroha_native._crypto",
             importlib.machinery.SourceFileLoader(
-                "iroha_python._crypto", str(native_path)
+                "iroha_native._crypto", str(native_path)
             ),
             origin=str(native_path),
         )
@@ -3199,8 +3280,8 @@ finally:
     verifier.importlib.machinery.FileFinder = saved_file_finder
 
 spoofed_spec = importlib.machinery.ModuleSpec(
-    "iroha_python._crypto",
-    importlib.machinery.SourceFileLoader("iroha_python._crypto", str(native_path)),
+    "iroha_native._crypto",
+    importlib.machinery.SourceFileLoader("iroha_native._crypto", str(native_path)),
     origin=str(native_path),
 )
 expect_failure(
@@ -3211,6 +3292,7 @@ expect_failure(
         package_spec=package_spec,
         native_spec=spoofed_spec,
         dependencies=dependencies,
+        sdk_wheel=sdk_wheel, sdk_layout=sdk_layout, sdk_spec=sdk_spec,
     ),
 )
 
@@ -3229,6 +3311,40 @@ expect_failure(
 verifier.assert_no_python_runtime_dependency(
     f"{native_path}:\n\t/usr/lib/libSystem.B.dylib\n"
 )
+expect_failure("preseeded package modules", lambda: verifier.reject_preseeded_modules({"iroha_python": object()}))
+for owner, foreign in ((verifier.SDK_OWNER, "iroha_native"), (verifier.NATIVE_OWNER, "iroha_python")):
+    shadow = norito_root / foreign
+    shadow.mkdir()
+    expect_failure("shadow", lambda: verifier.authenticate_dependency_roots(environment_root=environment_root, norito_root=norito_root, torii_root=torii_root))
+    shadow.rmdir()
+for mutation, fragment in ((member("iroha_python/foreign.so", b"inert"), "pure SDK wheel must not contain a native module"), (member("iroha_python/_native.py", b"# retired forwarder\n"), "retired native forwarder")):
+    bad_sdk_entries = with_record([entry for entry in sdk_entries if not entry[0].filename.endswith("/RECORD")] + [mutation], f"{sdk_dist}/RECORD")
+    bad_sdk = write_wheel(fixture_root / "bad-sdk.whl", bad_sdk_entries)
+    expect_failure(fragment, lambda: verifier.preflight_wheel(bad_sdk, seal(bad_sdk), owner=verifier.SDK_OWNER))
+expect_failure("both fixed wheel owners", lambda: verifier.load_from_trusted_specs(
+    wheel=sdk_wheel, layout=sdk_layout, package_spec=sdk_spec, native_spec=inert_native_spec,
+    dependencies=dependencies, sdk_wheel=wheel, sdk_layout=layout, sdk_spec=package_spec,
+))
+expect_failure("versions must match", lambda: verifier.load_from_trusted_specs(
+    wheel=wheel, layout=layout, package_spec=package_spec, native_spec=inert_native_spec,
+    dependencies=dependencies, sdk_wheel=replace(sdk_wheel, metadata_version="9.9"),
+    sdk_layout=sdk_layout, sdk_spec=sdk_spec,
+))
+for bad_requirement in (b"iroha-native>=0.0.0", b"iroha-native==0.0.0; extra == 'optional'", b"iroha-python==0.0.0"):
+    bad_entries = [(info, payload.replace(b"iroha-native==0.0.0", bad_requirement)) for info, payload in sdk_entries if not info.filename.endswith("/RECORD")]
+    bad_path = write_wheel(fixture_root / "wrong-native-dependency.whl", with_record(bad_entries, f"{sdk_dist}/RECORD"))
+    expect_failure("exactly its matching native owner", lambda: verifier.preflight_wheel(bad_path, seal(bad_path), owner=verifier.SDK_OWNER))
+for owner, entries, dist in ((verifier.NATIVE_OWNER, valid_entries(), "iroha_native-0.0.0.dist-info"), (verifier.SDK_OWNER, sdk_entries, sdk_dist)):
+    for reserved in ("_crypto.py", "_crypto/__init__.py", "_native.py", "_native/__init__.py"):
+        mutated = with_record([entry for entry in entries if not entry[0].filename.endswith("/RECORD")] + [member(f"{owner.package}/{reserved}", b"# rejected forwarder\n")], f"{dist}/RECORD")
+        candidate = write_wheel(fixture_root / "reserved-native-path.whl", mutated)
+        expect_failure("reserved native Python source path", lambda: verifier.preflight_wheel(candidate, seal(candidate), owner=owner))
+for dependency in ("iroha-python", "iroha-torii-client", "arbitrary-dependency"):
+    entries = [(info, payload + f"Requires-Dist: {dependency}\n".encode() if info.filename.endswith("/METADATA") else payload) for info, payload in valid_entries() if not info.filename.endswith("/RECORD")]
+    candidate = write_wheel(fixture_root / "cyclic-native-owner.whl", with_record(entries))
+    expect_failure("native owner must not declare", lambda: preflight(candidate))
+print("two-wheel bounded archive, installed-origin, loader, missing-owner and tamper checks passed")
+
 PY
 
 run_ambient_build_environment_negative_control() {
@@ -3606,7 +3722,7 @@ expected_arguments = (
         lock_path,
         "--",
         "-C",
-        "link-args=-Wl,-install_name,@rpath/iroha_python._crypto.abi3.so",
+        "link-args=-Wl,-install_name,@rpath/iroha_native._crypto.abi3.so",
     ],
 )
 expected = [
@@ -3665,6 +3781,8 @@ expected_kinds = [
     "module:pip",
     "probe:maturin-version",
     "module:maturin",
+    "module:pip",
+    "verifier",
     "verifier",
     "module:pip",
     "verifier",
@@ -3754,7 +3872,7 @@ def checked_maturin_layout(
         raise SystemExit("Maturin target directory is not one private target")
     if (
         not wheel_path.is_absolute()
-        or wheel_path.name != "wheels"
+        or wheel_path.name != "native-wheels"
         or target_path.parent != wheel_path.parent
     ):
         raise SystemExit(
@@ -3778,7 +3896,7 @@ for label, near_miss_arguments, near_miss_targets in (
     ),
     (
         "wheel output parent mismatch",
-        maturin[:12] + [str(target.parent / "other" / "wheels")],
+        maturin[:12] + [str(target.parent / "other" / "native-wheels")],
         cargo_targets,
     ),
 ):
@@ -3789,24 +3907,37 @@ for label, near_miss_arguments, near_miss_targets in (
     else:
         raise SystemExit(f"{label} negative control was accepted")
 
-preflight = arguments(5)
-if len(preflight) != 6 or preflight[:4] != [
+preflight = arguments(6)
+if len(preflight) != 7 or preflight[:5] != [
     "-I",
     "-B",
     str(verifier),
     "--preflight",
+    "native",
 ]:
     raise SystemExit(f"wheel preflight transcript drifted: {preflight!r}")
-wheel = Path(preflight[4])
-seal = preflight[5]
+wheel = Path(preflight[5])
+seal = preflight[6]
 if wheel.parent != wheel_directory or not re.fullmatch(
-    r"iroha_python-0\.0\.0-cp312-abi3-test\.whl", wheel.name
+    r"iroha_native-0\.0\.0-cp312-abi3-test\.whl", wheel.name
 ):
     raise SystemExit("wheel preflight did not receive the fresh private wheel")
 if not re.fullmatch(r"[0-9a-f]{64}(?::[0-9]+){5}:0o[0-7]+", seal):
     raise SystemExit("wheel preflight did not receive an authenticated seal")
 
-if arguments(6) != [
+sdk_build = arguments(5)
+sdk_directory = target.parent / "sdk-wheels"
+if sdk_build != ["-I", "-B", "-m", "pip", "--isolated", "--disable-pip-version-check", "--no-input", "--no-cache-dir", "wheel", "--no-deps", "--no-index", "--no-build-isolation", "--wheel-dir", str(sdk_directory), "."]:
+    raise SystemExit("pure SDK offline wheel build transcript drifted")
+sdk_preflight = arguments(7)
+sdk_wheel = sdk_directory / "iroha_python-0.0.0-py3-none-any.whl"
+if len(sdk_preflight) != 7 or sdk_preflight[:6] != ["-I", "-B", str(verifier), "--preflight", "sdk", str(sdk_wheel)]:
+    raise SystemExit("pure SDK preflight transcript drifted")
+sdk_seal = sdk_preflight[6]
+if not re.fullmatch(r"[0-9a-f]{64}(?::[0-9]+){5}:0o[0-7]+", sdk_seal):
+    raise SystemExit("pure SDK preflight did not receive an authenticated seal")
+
+if arguments(8) != [
     "-I",
     "-B",
     "-m",
@@ -3821,10 +3952,11 @@ if arguments(6) != [
     "--no-index",
     "--force-reinstall",
     str(wheel),
+    str(sdk_wheel),
 ]:
     raise SystemExit("private wheel installation transcript drifted")
 
-if arguments(7) != [
+if arguments(9) != [
     "-I",
     "-B",
     str(verifier),
@@ -3833,13 +3965,15 @@ if arguments(7) != [
     seal,
     str(root / "python/norito_py/src"),
     str(root / "python/iroha_torii_client"),
+    str(sdk_wheel),
+    sdk_seal,
 ]:
     raise SystemExit("installed wheel verification transcript drifted")
 
 checker = root / "scripts/check_native_sdk_abi23_artifact.py"
-record = arguments(8)
-first_verify = arguments(9)
-final_verify = arguments(11)
+record = arguments(10)
+first_verify = arguments(11)
+final_verify = arguments(13)
 if record[:4] != ["-I", "-S", str(checker), "record"]:
     raise SystemExit(f"ABI23 record transcript drifted: {record!r}")
 if "--manifest" not in record or "--artifact" not in record:
@@ -3863,7 +3997,7 @@ expected_verify = [
 if first_verify != expected_verify or final_verify != expected_verify:
     raise SystemExit("ABI23 verification transcript drifted")
 
-if arguments(10) != [
+if arguments(12) != [
     "-I",
     "-B",
     "-m",
@@ -4224,16 +4358,23 @@ done
 
 run_wheel_mutation_negative_control() {
   local phase="$1"
-  local wheel_root="${TEST_ROOT}/wheel-${phase}-repository"
-  local wheel_selected="${TEST_ROOT}/wheel-${phase}-private/Cargo.lock"
+  local owner="${2:-native}"
+  local variable="FAKE_WHEEL_MUTATE_PHASE"
+  local expected="fresh private wheel changed"
+  if [[ "${owner}" == "sdk" ]]; then
+    variable="FAKE_SDK_WHEEL_MUTATE_PHASE"
+    expected="fresh private SDK wheel changed"
+  fi
+  local wheel_root="${TEST_ROOT}/wheel-${owner}-${phase}-repository"
+  local wheel_selected="${TEST_ROOT}/wheel-${owner}-${phase}-private/Cargo.lock"
   prepare_python_guard_root "${wheel_root}"
   mkdir -p "$(dirname "${wheel_selected}")"
   install -m 600 "${PROVISION_RELEASE_FIXTURE}" "${wheel_selected}"
   expect_failure \
-    "fresh private wheel changed" \
+    "${expected}" \
     run_python_guard_for_root "${wheel_root}" \
     env \
-    FAKE_WHEEL_MUTATE_PHASE="${phase}" \
+    "${variable}=${phase}" \
     INTEGRATION_CARGO_LOG="${INTEGRATION_CARGO_LOG}" \
     IROHA_PRIVACY_CARGO_LOCKFILE_PATH="${wheel_selected}" \
     PRIVACY_PYTHON_SDK_ROOT="${wheel_root}" \
@@ -4246,6 +4387,9 @@ run_wheel_mutation_negative_control() {
 run_wheel_mutation_negative_control preflight
 run_wheel_mutation_negative_control verify
 run_wheel_mutation_negative_control pytest
+run_wheel_mutation_negative_control preflight sdk
+run_wheel_mutation_negative_control verify sdk
+run_wheel_mutation_negative_control pytest sdk
 
 run_mutation_negative_control() {
   local target_kind="$1"
@@ -4331,7 +4475,7 @@ run_artifact_set_negative_control symlink
 
 # JavaScript's native builder consumes the distinct authenticated cd9e release
 # lock directly while preserving the tracked d5b8 root as source authority.
-grep -Fq 'TRACKED_ROOT_CARGO_LOCK_SHA256="d5b8bf5efbdc3ce2a8b1c0d2d75e1c5d1a343a072f836cfb76205bc6ea4cf15f"' "${SCRIPT_DIR}/check_privacy_js_sdk.sh"
+grep -Fq 'TRACKED_ROOT_CARGO_LOCK_SHA256="051423addf3830895e208c6276429a0e8f46c61954159b0ef913e8cfed33d3aa"' "${SCRIPT_DIR}/check_privacy_js_sdk.sh"
 grep -Fq 'FROZEN_CARGO_LOCK_SHA256="cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79"' "${SCRIPT_DIR}/check_privacy_js_sdk.sh"
 grep -Fq 'export IROHA_JS_CARGO_LOCKFILE_PATH="${PRIVACY_RELEASE_CARGO_LOCK}"' "${SCRIPT_DIR}/check_privacy_js_sdk.sh"
 ! grep -Fq 'external-lock requalification' "${SCRIPT_DIR}/check_privacy_js_sdk.sh"
@@ -4347,7 +4491,7 @@ PYTHON_GUARD_PATH="${SOURCE_ROOT}/ci/check_privacy_python_sdk.sh"
 PYTHON_WHEEL_VERIFIER_PATH="${SOURCE_ROOT}/ci/verify_privacy_python_wheel.py"
 PYTHON_CONFTEST_PATH="${SOURCE_ROOT}/python/iroha_python/tests/conftest.py"
 PYTHON_IMPORT_FALLBACK_PATH="${SOURCE_ROOT}/python/iroha_python/tests/package_import_fallback_test.py"
-PYTHON_PYPROJECT_PATH="${SOURCE_ROOT}/python/iroha_python/pyproject.toml"
+PYTHON_PYPROJECT_PATH="${SOURCE_ROOT}/python/iroha_native/pyproject.toml"
 [[ "$(grep -Fc 'ci/privacy_sdk_cargo_lockfile.sh provision-ci \' "${WORKFLOW_PATH}")" -eq 4 ]]
 [[ "$(grep -Fc 'ci/privacy_sdk_cargo_lockfile.sh verify-ci "${GITHUB_WORKSPACE}"' "${WORKFLOW_PATH}")" -eq 8 ]]
 [[ "$(grep -Fc 'python-version: "3.12"' "${WORKFLOW_PATH}")" -eq 6 ]]
@@ -4529,7 +4673,7 @@ grep -Fq '[str(otool), "-L", str(native_path)]' "${PYTHON_WHEEL_VERIFIER_PATH}"
 grep -Fq 'IROHA_PYTHON_TEST_INSTALLED_PACKAGE=1' "${PYTHON_GUARD_PATH}"
 grep -Fq 'site.getsitepackages()' "${PYTHON_CONFTEST_PATH}"
 grep -Fq 'sysconfig.get_paths()' "${PYTHON_CONFTEST_PATH}"
-grep -Fq 'iroha_python._crypto' "${PYTHON_CONFTEST_PATH}"
+grep -Fq 'iroha_native._crypto' "${PYTHON_CONFTEST_PATH}"
 grep -Fq 'PathFinder.find_spec' "${PYTHON_CONFTEST_PATH}"
 grep -Fq 'ExtensionFileLoader' "${PYTHON_CONFTEST_PATH}"
 grep -Fq 'loader_state' "${PYTHON_CONFTEST_PATH}"
@@ -4605,6 +4749,12 @@ for workflow_path in \
   'crates/sorafs_orchestrator/**' \
   ci/verify_privacy_python_wheel.py scripts/check_native_sdk_abi23_artifact.py scripts/tests/check_privacy_csharp_native_contract_test.py \
   python/iroha_python/pyproject.toml \
+  python/iroha_native/pyproject.toml \
+  'python/iroha_native/src/**' \
+  'python/iroha_native/src/**/*.py' \
+  'python/iroha_native/src/**/*.so' \
+  'python/iroha_native/src/**/*.dylib' \
+  'python/iroha_native/src/**/*.pyd' \
   python/iroha_python/iroha_python_rs/build.rs \
   'python/iroha_python/iroha_python_rs/src/**' \
   python/iroha_python/requirements-ci.lock \
@@ -4767,6 +4917,6 @@ PY
 [[ "$(grep -Ec 'install -m 600 .*Cargo\.lock.*Cargo\.lock' "${WORKFLOW_PATH}")" -eq 0 ]] && grep -Fxq '**/Cargo.lock' "${SOURCE_ROOT}/.gitignore" && grep -Fxq '!/Cargo.lock' "${SOURCE_ROOT}/.gitignore"
 ROOT_LOCK_INDEX_ENTRY="$(git -C "${SOURCE_ROOT}" ls-files --stage -- Cargo.lock)"; ROOT_LOCK_HEAD_ENTRY="$(git -C "${SOURCE_ROOT}" ls-tree HEAD -- Cargo.lock)"
 [[ "${ROOT_LOCK_INDEX_ENTRY}" =~ ^100644\ ([0-9a-f]{40})\ 0$'\t'Cargo\.lock$ ]]; ROOT_LOCK_INDEX_OID="${BASH_REMATCH[1]}"
-[[ "${ROOT_LOCK_HEAD_ENTRY}" =~ ^100644\ blob\ ([0-9a-f]{40})$'\t'Cargo\.lock$ ]]; ROOT_LOCK_HEAD_OID="${BASH_REMATCH[1]}"; [[ "${ROOT_LOCK_INDEX_OID}" == "${ROOT_LOCK_HEAD_OID}" && "$(git -C "${SOURCE_ROOT}" hash-object --no-filters -- Cargo.lock)" == "${ROOT_LOCK_INDEX_OID}" && "$(python3 -I -S -c 'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "${SOURCE_ROOT}/Cargo.lock")" == "d5b8bf5efbdc3ce2a8b1c0d2d75e1c5d1a343a072f836cfb76205bc6ea4cf15f" ]]
+[[ "${ROOT_LOCK_HEAD_ENTRY}" =~ ^100644\ blob\ ([0-9a-f]{40})$'\t'Cargo\.lock$ ]]; ROOT_LOCK_HEAD_OID="${BASH_REMATCH[1]}"; [[ "${ROOT_LOCK_INDEX_OID}" == "${ROOT_LOCK_HEAD_OID}" && "$(git -C "${SOURCE_ROOT}" hash-object --no-filters -- Cargo.lock)" == "${ROOT_LOCK_INDEX_OID}" && "$(python3 -I -S -c 'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "${SOURCE_ROOT}/Cargo.lock")" == "051423addf3830895e208c6276429a0e8f46c61954159b0ef913e8cfed33d3aa" ]]
 grep -Fq 'PRIVACY_SDK_FROZEN_RELEASE_CARGO_LOCK_SHA256=' "${SCRIPT_DIR}/privacy_sdk_cargo_lockfile.sh" && grep -Fq 'PRIVACY_SDK_TRACKED_ROOT_CARGO_LOCK_SHA256=' "${SCRIPT_DIR}/privacy_sdk_cargo_lockfile.sh"
 printf '%s\n' "privacy SDK authenticated Cargo.lock guard tests passed"

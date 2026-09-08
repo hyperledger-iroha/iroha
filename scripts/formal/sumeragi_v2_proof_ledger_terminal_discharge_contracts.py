@@ -1222,28 +1222,28 @@ def _atomic_timeout_completion_source_fidelity_errors(
 
 _SAME_ROUND_SEMANTIC_KERNEL_SOURCE_SHA256 = {
     "crates/iroha_core/src/sumeragi/v2_core/refinement.rs": (
-        "c2eedbdee34ea24b4d2b1b2f2d6342fa5f6a5978d2eff8ebe38b1b2582f41cd3"
+        "83161f81675d089e2b28cba6128bbf8e6fef548fd7e97d38fdebc9eb08dee906"
     ),
     "crates/iroha_core/src/sumeragi/v2_core/reducer.rs": (
-        "e403277e97e88ea95368d469483c79a72e53b40cb3e99245b50634746b980d65"
+        "f077c29f8afc253591c338b0cbc856375d8a047e9ddfde2184c3622f63b623a1"
     ),
     "crates/iroha_core/src/sumeragi/v2_core/types.rs": (
-        "cf15be44f6b90ccf4ac3d6dd7987423458d31fcdea252a6f9bb6762eb9e9bdbe"
+        "b9ff5c25a8930da156cf35eefd3720ffe8b449933814b58c8aa7504bc7b26575"
     ),
     "crates/iroha_core/src/sumeragi/v2_core/wal.rs": (
-        "d85114cae202b81eb8b99395256a8f6802c22a3a9d3fa5173132d847a4456d0a"
+        "16e787a069b85d1193229e9b4918e9fd668c2e19ec516160b4f05e4709b8b8cd"
     ),
     "crates/iroha_core/src/sumeragi/v2_effects.rs": (
-        "3d62ed6c781ffdf54e7fb1a125140b328a018a635bfe98986a9c4606c23dd9d3"
+        "058b49650096605d7668b62f29b2c022c8ca610898123c953faea3591f3c312d"
     ),
     "crates/iroha_core/src/sumeragi/v2_runner.rs": (
-        "d6b9fab4eeb9547faff0238641586bd64c82f6de88c24653a6f65cf6894abb30"
+        "2e118a46e725665c39318b6c0b8bf8e88b6667921546d3b43e0231e1c01c5d2d"
     ),
     "crates/iroha_core/src/sumeragi/v2_worker.rs": (
-        "7e6a3c35d2a23e349db8b4c6c7ffe75ecbd52bcbbf47a4b456c328dd3b646cd1"
+        "85b97dcf983d1db155de14538def53442b33332e3e1ab9ade71d6ab612ad62fb"
     ),
     "crates/iroha_sumeragi_core/src/verus_proofs.rs": (
-        "8304a861a601e8cf230f6473031648a68ae2d0d1418a6d952b7ce6658a5fba16"
+        "4c4f6aeb379a00d8cafa774e0011cdb4558117115ebde2c4b0742565478e8d42"
     ),
 }
 _INSTALLED_TC_SELECTOR_PROOF_SHA256 = (
@@ -1705,11 +1705,8 @@ if certificate.round().view() < self.durable.current_view()
             ),
             (
                 """
-if self
-    .durable
-    .is_strict_same_round_timeout_upgrade(certificate)
-{
-    self.generation.next()
+if durable.is_strict_same_round_timeout_upgrade(certificate) {
+    generation.next()
 } else {
     Some(Generation::INITIAL)
 }
@@ -1719,9 +1716,10 @@ if self
             (
                 """
 let next_generation = match pending.entry.record() {
-    WalRecord::InstallTimeout(certificate) => self
-        .generation_after_timeout_install(certificate)
-        .ok_or(ReducerError::GenerationOverflow)?,
+    WalRecord::InstallTimeout(certificate) => {
+        Self::generation_after_timeout_install(&self.durable, self.generation, certificate)
+            .ok_or(ReducerError::GenerationOverflow)?
+    }
     _ => self.generation,
 };
 """,

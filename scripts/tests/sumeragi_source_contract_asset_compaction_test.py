@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[2]
 ASSET_PATH = ROOT / "crates/iroha_core/src/sumeragi/source_contracts_v1.txt"
 SUPPORT_PATH = ROOT / "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator_support.rs"
 SUMERAGI_PATH = ROOT / "crates/iroha_core/src/sumeragi"
-EXPECTED_CASE_COUNT = 54
+EXPECTED_CASE_COUNT = 55
 MINIMUM_NET_REDUCTION = 2_161
 # The 54th case inspects eight sources outside the historical migration and
 # adds exactly 31 hash-pinned runner lines to resolve them. Count that broader
@@ -32,10 +32,14 @@ WAL_CONSUMER_SOURCE_COVERAGE_GROWTH_RUST_LINES = 3
 # for the complete adapter source projection plus bounded fixture runner.
 # Account for that independent coverage equally in both compared forms.
 OWNER_FIX_COVERAGE_GROWTH_RUST_LINES = 42
+# The 55th retirement case adds three source mappings, two include expansions,
+# and one macro test (20 lines), independently of the owner-fix coverage.
+SUPERSEDED_BODY_RETIREMENT_COVERAGE_GROWTH_RUST_LINES = 20
 CURRENT_SOURCE_COVERAGE_GROWTH_RUST_LINES = (
     MIGRATED_SOURCE_COVERAGE_GROWTH_RUST_LINES
     + WAL_CONSUMER_SOURCE_COVERAGE_GROWTH_RUST_LINES
     + OWNER_FIX_COVERAGE_GROWTH_RUST_LINES
+    + SUPERSEDED_BODY_RETIREMENT_COVERAGE_GROWTH_RUST_LINES
 )
 BASELINE_RUST_LINES = (
     ORIGINAL_PREIMAGE_RUST_LINES + CURRENT_SOURCE_COVERAGE_GROWTH_RUST_LINES
@@ -43,9 +47,9 @@ BASELINE_RUST_LINES = (
 MAX_POSTIMAGE_RUST_LINES = (
     ORIGINAL_POSTIMAGE_RUST_LINES + CURRENT_SOURCE_COVERAGE_GROWTH_RUST_LINES
 )
-EXPECTED_ASSET_LENGTH = 629_411
-EXPECTED_ASSET_SHA256 = "423628c7691416f6d027f20a3f9d531d23f02f0c59ebf4ecdaf2655b0c241db1"
-EXPECTED_CASE_IDS_SHA256 = "77db5140892b9c541a0e4e08b0b70648210765ebce8a828514ca1cc006427284"
+EXPECTED_ASSET_LENGTH = 648_178
+EXPECTED_ASSET_SHA256 = "85178fa4a6ea7fdbbc8d611f814500f1c01bfa7845bad16bd3adc562bd24db18"
+EXPECTED_CASE_IDS_SHA256 = "56f95aaddfabd9dd1c08286c64f0e8fe2814c308ad86046342622ff42d85a2df"
 
 HOST_PREIMAGE_SHA256 = {
     "crates/iroha_core/src/sumeragi/tests/v2_adapter_05_direct_lifecycle_recovered_wal_seal_case.rs": "fe0afaffcbabfeb1d2fdae88d871e380ca1484c80cc2cd0d3a8ce492c6949446",
@@ -59,14 +63,14 @@ COMPACTED_HOST_POSTIMAGE_SHA256 = {
     "crates/iroha_core/src/sumeragi/tests/v2_lifecycle_replay_authority_cases.rs": "d380501e4efd09374acdfc2b7729bd095c7499a4d0dfdde355ef2296fa8de23d",
     "crates/iroha_core/src/sumeragi/tests/v2_lifecycle_work_registry_exact_registry_cases.rs": "d83e903bd0d2307896a2cc53ffb8c36aaf01cce3cb9178f88221009f44fe284c",
     "crates/iroha_core/src/sumeragi/tests/v2_lifecycle_work_registry_replay_evidence_cases.rs": "c6427c6b098be208556e08222f31507d024f5c63524fb43a5e5c7822b65711e7",
-    "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator_support.rs": "c2f419913582f0b15a2f3209f8f0b45e90cbe84d608764a7dd6bcfd7299cef06",
+    "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator_support.rs": "41b23f0be77e4bcf5dda8374b27013a7daee201edccf043504ce7217a4fdab45",
 }
 
 # Preserve the original compacted host hashes as historical evidence. Pin the
 # current source provider, bounded runner and inline-storage regression separately.
 HOST_POSTIMAGE_SHA256 = {
     **COMPACTED_HOST_POSTIMAGE_SHA256,
-    "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator_support.rs": "ca34500a6a77acaf9e8eae975af97a59f342941f047e3be99a47cf4fee15c860",
+    "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator_support.rs": "a99c34af832a7407a1e704fff6f9302550988685ad5c166727bf29dba73c5f2e",
     "crates/iroha_core/src/sumeragi/tests/v2_lifecycle_work_registry_exact_registry_cases.rs": "0b1e3fae6fcf6a915b75013b880f952aba8034d3d938585d24c2952431fd8fcc",
 }
 
@@ -91,7 +95,14 @@ MIGRATED_TESTS = {
     ),
 }
 
+# The merged remote-Proposal guards retain exact adapter context/owner and runtime
+# publication checks together with the current durable CommitIntent consumer.
+# The FIFO case retains the authenticated physical ordering checks from both
+# branches. Pin the combined cases; the 55th case still owns body retirement.
 NEW_CASE_CONTRACT_COUNTS = {
+    "remote_proposal_replay_pre_admission_is_closed_exact_and_live": 174,
+    "registry_remains_inert_and_scheduler_free": 89,
+    "superseded_certified_body_retirement_is_exact_and_durably_sealed": 90,
     "recovered_wal_vote_sign_seal_is_move_only_exact_and_owner_wired": 338,
     "stored_replay_store_coalescing_and_cleanup_are_owner_closed": 306,
     "ready_validate_execution_surface_is_closed_borrow_bound_and_scheduler_owned": 196,
@@ -99,11 +110,14 @@ NEW_CASE_CONTRACT_COUNTS = {
     "nonqueue_replica_release_is_fifo_proved_move_only_and_restart_closed": 92,
 }
 MIGRATED_CASE_SHA256 = {
+    "remote_proposal_replay_pre_admission_is_closed_exact_and_live": "f68343bea21598a841c338813841e7f43b578a6593b3920f66a74767a212b7ce",
+    "registry_remains_inert_and_scheduler_free": "941a48e2f28cc22d3167c86a9a9cd58a9e96e4a1d956537a28aa5527109183fe",
+    "superseded_certified_body_retirement_is_exact_and_durably_sealed": "bca10f8cce321aba00188cfa24e3b78dd5aebb7fed15d6124bcd51bc6b144d3f",
     "recovered_wal_vote_sign_seal_is_move_only_exact_and_owner_wired": "7e61f7612fa106e3a3649ba8720b172f5d1ec4e901f35c4cf310038b46ba521e",
     "stored_replay_store_coalescing_and_cleanup_are_owner_closed": "e0db04d44cf4862461ae89234c7d82361bb1b25491017f0a7869dec1a287c872",
     "ready_validate_execution_surface_is_closed_borrow_bound_and_scheduler_owned": "03b7d7a3a9843536bca8c686937561c0c12eea4281e9850de7ee7c841cf6ac48",
     "certified_pipeline_replay_evidence_is_retained_by_every_closed_carrier": "dc5a58896a12211ec735952b05a411112a8fda45ed60923b1b5f114913a14a12",
-    "nonqueue_replica_release_is_fifo_proved_move_only_and_restart_closed": "3ea2517742f7aba7784c565472645a2ba05964f209b88ce1b4c23ae82414a8b8",
+    "nonqueue_replica_release_is_fifo_proved_move_only_and_restart_closed": "b6afba431c1205460d1601e0dd68f6688a9ca93bce808b88d9ab30733cb81f13",
 }
 
 
@@ -159,6 +173,7 @@ BOUNDARY_CASE_REGIONS = {
         "leader_wire_replay_lock_authority",
         "actual_consumer_factory",
         "actual_consumer_publication",
+        "leader_wire_live_runtime_cut",
         "leader_wire_live_lock_authority",
         "leader_wire_exact_entered_view",
     ),
@@ -174,6 +189,7 @@ BOUNDARY_CASE_REGIONS = {
 }
 BOUNDARY_SOURCE_PATHS = {
     "adapter": "crates/iroha_core/src/sumeragi/v2.rs",
+    "effects": "crates/iroha_core/src/sumeragi/v2_effects.rs",
     "leader_wire_consumer": "crates/iroha_core/src/sumeragi/v2_leader_wire_consumer.rs",
     "worker": "crates/iroha_core/src/sumeragi/v2_worker/effect_services_impl.rs",
     "registry": "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_validate_recovery_census_impl.rs",
@@ -389,7 +405,14 @@ class SumeragiSourceContractAssetCompactionTest(unittest.TestCase):
         support = SUPPORT_PATH.read_text(encoding="utf-8")
         self.assertIn(f"cases.len() != {EXPECTED_CASE_COUNT}", support)
         self.assertIn(f"assert_eq!(ids.len(), {EXPECTED_CASE_COUNT}", support)
-        for source_id in ("ReplayAuthorityBase", "ReplayAuthorityCertifiedBody", "LeaderWireConsumer"):
+        for source_id in (
+            "ReplayAuthorityBase",
+            "ReplayAuthorityCertifiedBody",
+            "BodyRetirement",
+            "EffectsBodyRetirement",
+            "RegistryBodyRetirement",
+            "LeaderWireConsumer",
+        ):
             self.assertIn(source_id, support)
         self.assertIn('"leader_wire_consumer" => Self::LeaderWireConsumer', support)
         self.assertIn(

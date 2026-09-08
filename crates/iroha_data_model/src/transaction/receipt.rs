@@ -25,10 +25,16 @@ fn verify_signature_for_signer(
 /// Domain tag for transaction submission receipt signatures.
 pub const TX_SUBMISSION_RECEIPT_DOMAIN: &str = "iroha.tx.submission.receipt@v1";
 /// Canonical payload signed by a Torii node when accepting a transaction submission.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
@@ -63,10 +69,16 @@ impl TransactionSubmissionReceiptPayload {
     }
 }
 /// Signed receipt acknowledging transaction submission.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
@@ -185,7 +197,6 @@ mod tests {
         assert_eq!(decoded, payload);
     }
 
-    #[cfg(feature = "json")]
     #[test]
     fn submission_receipt_json_requires_nullable_hash_and_closed_signed_objects() {
         let key_pair = checked_random_keypair();

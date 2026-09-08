@@ -16,7 +16,10 @@ use iroha_p2p::{
     UpdateTrustedPeers, UpdateValidatorTopology,
 };
 use iroha_primitives::{addr::SocketAddr, unique_vec::UniqueVec};
-use norito::{NoritoDeserialize, NoritoSerialize, SerializePayload, codec::Encode, core as ncore};
+use norito::{
+    DeserializePayload, NoritoDeserialize, NoritoSerialize, SerializePayload, codec::Encode,
+    core as ncore,
+};
 #[allow(clippy::disallowed_types)]
 use std::{
     collections::{BTreeMap, BTreeSet, HashSet},
@@ -1165,7 +1168,8 @@ impl SerializePayload for PeersGossip {
         wire.serialize(writer)
     }
 }
-impl<'a> NoritoDeserialize<'a> for PeersGossip {
+impl NoritoDeserialize<'_> for PeersGossip {}
+impl<'a> DeserializePayload<'a> for PeersGossip {
     fn deserialize(archived: &'a ncore::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("PeersGossip decode")
     }

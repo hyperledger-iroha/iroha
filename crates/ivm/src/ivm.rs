@@ -216,11 +216,12 @@ const SYSCALL_ARGS_2: &[usize] = &[10, 11];
 const SYSCALL_ARGS_3: &[usize] = &[10, 11, 12];
 const SYSCALL_ARGS_4: &[usize] = &[10, 11, 12, 13];
 const SYSCALL_ARGS_5: &[usize] = &[10, 11, 12, 13, 14];
+const SYSCALL_ARGS_6: &[usize] = &[10, 11, 12, 13, 14, 15];
 #[derive(Clone, Copy, Debug, Default)]
 struct SavedSyscallOutputRegisters {
-    registers: [usize; 5],
-    values: [u64; 5],
-    private: [bool; 5],
+    registers: [usize; 6],
+    values: [u64; 6],
+    private: [bool; 6],
     len: usize,
 }
 struct HostRegisterLogIsolation {
@@ -1385,7 +1386,7 @@ pub struct IVM {
     cycles: u64,
     halted: bool,
     constraint_failed: bool,
-    contract_abort_code: Option<u64>,
+    contract_abort_error: Option<VMError>,
     constraints: zk::ConstraintLog,
     mem_log: MemLog,
     reg_log: zk::SharedRegLog,
@@ -1485,7 +1486,7 @@ impl Clone for IVM {
             cycles: self.cycles,
             halted: self.halted,
             constraint_failed: self.constraint_failed,
-            contract_abort_code: self.contract_abort_code,
+            contract_abort_error: self.contract_abort_error.clone(),
             constraints: self.constraints.clone(),
             mem_log: self.mem_log.clone(),
             reg_log: Arc::new(parking_lot::Mutex::new(self.reg_log.lock().clone())),
@@ -1799,7 +1800,7 @@ impl IVM {
             cycles: 0,
             halted: false,
             constraint_failed: false,
-            contract_abort_code: None,
+            contract_abort_error: None,
             constraints: zk::ConstraintLog::default(),
             mem_log: MemLog::default(),
             reg_log: Arc::new(parking_lot::Mutex::new(zk::RegLog::default())),
@@ -1994,7 +1995,7 @@ impl IVM {
         self.pc_alignment = 0;
         self.halted = false;
         self.constraint_failed = false;
-        self.contract_abort_code = None;
+        self.contract_abort_error = None;
         self.clear_zk_trace_logs();
         self.pc_trace.clear();
         self.delta_trace = zk::DeltaTraceLog::default();
@@ -2151,7 +2152,7 @@ impl IVM {
         self.pc_alignment = self.pc & 0b11;
         self.halted = false;
         self.constraint_failed = false;
-        self.contract_abort_code = None;
+        self.contract_abort_error = None;
         self.constraints = zk::ConstraintLog::default();
         self.mem_log = MemLog::default();
         self.reg_log.lock().scrub();
@@ -3356,7 +3357,7 @@ impl IVM {
         self.cycles = 0;
         self.halted = false;
         self.constraint_failed = false;
-        self.contract_abort_code = None;
+        self.contract_abort_error = None;
         self.constraints = zk::ConstraintLog::default();
         self.mem_log = MemLog::default();
         self.reg_log.lock().scrub();
@@ -3506,13 +3507,26 @@ impl IVM {
     pub fn request_abort(&mut self) {
         self.halted = true;
         self.constraint_failed = true;
-        self.contract_abort_code = None;
+        self.contract_abort_error = None;
     }
     /// Request an application-level abort with a declared contract error code.
-    pub fn request_contract_abort(&mut self, code: u64) {
+    pub fn request_contract_abort(
+        &mut self,
+        contract: String,
+        name: String,
+        error_type: String,
+        schema_hash: [u8; 32],
+        code: u32,
+    ) {
         self.halted = true;
         self.constraint_failed = true;
-        self.contract_abort_code = Some(code);
+        self.contract_abort_error = Some(VMError::ContractAbort {
+            contract,
+            name,
+            error_type,
+            schema_hash,
+            code,
+        });
     }
     /// Get a copy of a vector register (128-bit value as four 32-bit lanes).
     pub fn vector_register(&self, idx: usize) -> [u32; 4] {
@@ -4410,7 +4424,7 @@ impl IVM {
         self.last_diagnostic = None;
         self.halted = false;
         self.constraint_failed = false;
-        self.contract_abort_code = None;
+        self.contract_abort_error = None;
         self.cycles = 0;
         // A run is one invocation. Never retain protected return state after a
         // prior trap or across a pooled-runtime reuse boundary.
@@ -6443,8 +6457,8 @@ impl IVM {
                 self.flush_cycle_logs(&mut last_logged_cycle);
             }
             self.commit_memory_after_run_if_needed();
-            if let Some(code) = self.contract_abort_code {
-                Err(VMError::ContractAbort { code })
+            if let Some(error) = self.contract_abort_error.clone() {
+                Err(error)
             } else if self.constraint_failed {
                 Err(VMError::AssertionFailed)
             } else {
@@ -6834,7 +6848,6 @@ mod tests {
             crate::syscalls::SYSCALL_STATE_GET,
             crate::syscalls::SYSCALL_STATE_SET,
             crate::syscalls::SYSCALL_STATE_DEL,
-            crate::syscalls::SYSCALL_STATE_KEYS,
             crate::syscalls::SYSCALL_STATE_HAS,
             crate::syscalls::SYSCALL_STATE_LEN,
             crate::syscalls::SYSCALL_STATE_COUNT,
@@ -6900,7 +6913,6 @@ mod tests {
             crate::syscalls::SYSCALL_STATE_GET,
             crate::syscalls::SYSCALL_STATE_SET,
             crate::syscalls::SYSCALL_STATE_DEL,
-            crate::syscalls::SYSCALL_STATE_KEYS,
             crate::syscalls::SYSCALL_STATE_HAS,
             crate::syscalls::SYSCALL_STATE_LEN,
             crate::syscalls::SYSCALL_STATE_COUNT,
@@ -7035,6 +7047,7 @@ mod tests {
                 3 => SYSCALL_ARGS_3,
                 4 => SYSCALL_ARGS_4,
                 5 => SYSCALL_ARGS_5,
+                6 => SYSCALL_ARGS_6,
                 _ => panic!("unsupported ABI argument count {documented}"),
             };
             assert_eq!(
@@ -7068,7 +7081,7 @@ mod tests {
             vm.registers.set_tag(register, true);
         }
         assert_eq!(
-            vm.finalize_syscall_output_privacy(crate::syscalls::SYSCALL_STATE_KEYS),
+            vm.finalize_syscall_output_privacy(crate::syscalls::SYSCALL_STATE_SCAN),
             Err(VMError::PrivacyViolation)
         );
         for register in 10..=12 {
@@ -7354,8 +7367,10 @@ mod tests {
                 kind: iroha_data_model::smart_contract::manifest::EntryPointKind::View,
                 params: Vec::new(),
                 argument_schema: None,
-                return_type: None,
-                return_schema: None,
+                return_type: Some("()".to_owned()),
+                return_schema: Some(ivm_abi::entrypoint::EntrypointValueTypeV1 {
+                    nodes: vec![ivm_abi::entrypoint::EntrypointValueTypeNodeV1::Unit],
+                }),
                 permission: None,
                 read_keys: Vec::new(),
                 write_keys: Vec::new(),
@@ -7364,7 +7379,7 @@ mod tests {
                 triggers: Vec::new(),
                 entry_pc: 0,
             }],
-            error_codes: Vec::new(),
+            error_types: Vec::new(),
             states: Vec::new(),
         };
         let prefix = (1..=32)
@@ -7862,7 +7877,13 @@ mod tests {
         assert!(reused.zk_mode_enabled());
         reused.pc_alignment = 3;
         reused.cycles = 9;
-        reused.request_contract_abort(17);
+        reused.request_contract_abort(
+            "Test".to_owned(),
+            "Rejected".to_owned(),
+            "test::Error".to_owned(),
+            [0; 32],
+            17,
+        );
         let mut raw = Vec::new();
         raw.extend_from_slice(
             &crate::encoding::wide::encode_rr(instruction::wide::crypto::SETVL, 0, 0, 8)
@@ -7879,7 +7900,7 @@ mod tests {
         assert_eq!(reused.cycles, 0);
         assert!(!reused.halted);
         assert!(!reused.constraint_failed);
-        assert_eq!(reused.contract_abort_code, None);
+        assert_eq!(reused.contract_abort_error, None);
         let reused_result = reused.run();
         let mut fresh = IVM::new(u64::MAX);
         fresh.load_code(&raw).expect("raw code loads in fresh VM");
@@ -8565,8 +8586,23 @@ seiyaku Demo {
         let mut vm = quiet_vm(u64::MAX);
         vm.set_register(10, 18);
         vm.request_abort();
-        assert_eq!(vm.contract_abort_code, None);
-        vm.request_contract_abort(18);
-        assert_eq!(vm.contract_abort_code, Some(18));
+        assert_eq!(vm.contract_abort_error, None);
+        vm.request_contract_abort(
+            "Test".to_owned(),
+            "Rejected".to_owned(),
+            "test::Error".to_owned(),
+            [0; 32],
+            18,
+        );
+        assert_eq!(
+            vm.contract_abort_error,
+            Some(VMError::ContractAbort {
+                contract: "Test".to_owned(),
+                name: "Rejected".to_owned(),
+                error_type: "test::Error".to_owned(),
+                schema_hash: [0; 32],
+                code: 18
+            })
+        );
     }
 }

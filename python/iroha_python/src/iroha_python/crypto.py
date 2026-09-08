@@ -20,7 +20,7 @@ from typing import (
     cast,
 )
 
-from ._native import load_crypto_extension
+from iroha_native import load_crypto_extension
 from ._validation import _normalize_mapping_payload, _optional_uint
 from .address import AccountAddress
 
@@ -288,7 +288,7 @@ def _native_instruction_builder(name: str) -> Any:
     builder = getattr(_crypto.Instruction, name, None)
     if builder is None:
         raise RuntimeError(
-            f"iroha_python._crypto is missing Instruction.{name}(); rebuild the extension"
+            f"iroha_native._crypto is missing Instruction.{name}(); rebuild the extension"
         )
     return builder
 
@@ -690,7 +690,7 @@ def inspect_transaction_submission_v1(
         )
     except AttributeError as exc:
         raise RuntimeError(
-            "iroha_python._crypto is missing inspect_transaction_submission_v1; "
+            "iroha_native._crypto is missing inspect_transaction_submission_v1; "
             "rebuild the extension"
         ) from exc
     except Exception:
@@ -726,7 +726,7 @@ def verify_transaction_submission_receipt_v1(
         )
     except AttributeError as exc:
         raise RuntimeError(
-            "iroha_python._crypto is missing verify_transaction_submission_receipt_v1; "
+            "iroha_native._crypto is missing verify_transaction_submission_receipt_v1; "
             "rebuild the extension"
         ) from exc
     except Exception:
@@ -1922,7 +1922,7 @@ def compute_confidential_root_v2(
 
     if not hasattr(_crypto, "compute_confidential_root_v2"):
         raise RuntimeError(
-            "iroha_python._crypto is missing confidential root v2 support; rebuild the extension"
+            "iroha_native._crypto is missing confidential root v2 support; rebuild the extension"
         )
     result = _crypto.compute_confidential_root_v2(list(tree_commitments))
     root = bytes(result)
@@ -1942,7 +1942,7 @@ def derive_confidential_next_zero_path_v2(
 
     if not hasattr(_crypto, "derive_confidential_next_zero_path_v2"):
         raise RuntimeError(
-            "iroha_python._crypto is missing confidential next-zero path support; rebuild the extension"
+            "iroha_native._crypto is missing confidential next-zero path support; rebuild the extension"
         )
     if isinstance(previous_leaf_index, bool) or not isinstance(previous_leaf_index, int):
         raise TypeError("previous_leaf_index must be a non-negative integer")
@@ -1964,7 +1964,7 @@ def derive_confidential_diversifier_v2(
 
     if not hasattr(_crypto, "derive_confidential_diversifier_v2"):
         raise RuntimeError(
-            "iroha_python._crypto is missing confidential diversifier v2 support; rebuild the extension"
+            "iroha_native._crypto is missing confidential diversifier v2 support; rebuild the extension"
         )
     result = _crypto.derive_confidential_diversifier_v2(seed)
     diversifier = bytes(result)
@@ -1981,7 +1981,7 @@ def derive_confidential_owner_tag_v2(
 
     if not hasattr(_crypto, "derive_confidential_owner_tag_v2"):
         raise RuntimeError(
-            "iroha_python._crypto is missing confidential owner tag v2 support; rebuild the extension"
+            "iroha_native._crypto is missing confidential owner tag v2 support; rebuild the extension"
         )
     result = _crypto.derive_confidential_owner_tag_v2(spend_key, diversifier)
     owner_tag = bytes(result)
@@ -2000,7 +2000,7 @@ def derive_confidential_note_v2(
 
     if not hasattr(_crypto, "derive_confidential_note_v2"):
         raise RuntimeError(
-            "iroha_python._crypto is missing confidential note v2 support; rebuild the extension"
+            "iroha_native._crypto is missing confidential note v2 support; rebuild the extension"
         )
     result = _crypto.derive_confidential_note_v2(
         asset_definition_id,
@@ -2029,7 +2029,7 @@ def build_confidential_transfer_proof_v2(
 
     if not hasattr(_crypto, "build_confidential_transfer_proof_v2"):
         raise RuntimeError(
-            "iroha_python._crypto is missing confidential transfer v2 prover support; rebuild the extension"
+            "iroha_native._crypto is missing confidential transfer v2 prover support; rebuild the extension"
         )
     vk_backend, vk_circuit_id, vk_bytes = _confidential_verifying_key_parts(
         verifying_key,
@@ -2065,7 +2065,7 @@ def build_confidential_transfer_proof_v2_with_paths(
 
     if not hasattr(_crypto, "build_confidential_transfer_proof_v2_with_paths"):
         raise RuntimeError(
-            "iroha_python._crypto is missing confidential transfer v2 path prover support; rebuild the extension"
+            "iroha_native._crypto is missing confidential transfer v2 path prover support; rebuild the extension"
         )
     vk_backend, vk_circuit_id, vk_bytes = _confidential_verifying_key_parts(
         verifying_key,
@@ -2102,7 +2102,7 @@ def build_confidential_unshield_proof_v3(
 
     if not hasattr(_crypto, "build_confidential_unshield_proof_v3"):
         raise RuntimeError(
-            "iroha_python._crypto is missing confidential unshield v3 prover support; rebuild the extension"
+            "iroha_native._crypto is missing confidential unshield v3 prover support; rebuild the extension"
         )
     vk_backend, vk_circuit_id, vk_bytes = _confidential_verifying_key_parts(
         verifying_key,
@@ -2140,7 +2140,7 @@ def build_confidential_unshield_proof_v3_with_paths(
 
     if not hasattr(_crypto, "build_confidential_unshield_proof_v3_with_paths"):
         raise RuntimeError(
-            "iroha_python._crypto is missing confidential unshield v3 path prover support; rebuild the extension"
+            "iroha_native._crypto is missing confidential unshield v3 path prover support; rebuild the extension"
         )
     vk_backend, vk_circuit_id, vk_bytes = _confidential_verifying_key_parts(
         verifying_key,
@@ -2168,7 +2168,7 @@ def confidential_transfer_v2_verifying_key_registration_payload_v1() -> Dict[str
     method = "confidential_transfer_v2_verifying_key_registration_payload_v1"
     if not hasattr(_crypto, method):
         raise RuntimeError(
-            "iroha_python._crypto is missing confidential transfer v2 verifier-key support; "
+            "iroha_native._crypto is missing confidential transfer v2 verifier-key support; "
             "rebuild the extension"
         )
     payload = getattr(_crypto, method)()
@@ -2185,7 +2185,7 @@ def confidential_unshield_v3_verifying_key_registration_payload_v1() -> Dict[str
     method = "confidential_unshield_v3_verifying_key_registration_payload_v1"
     if not hasattr(_crypto, method):
         raise RuntimeError(
-            "iroha_python._crypto is missing confidential unshield v3 verifier-key support; "
+            "iroha_native._crypto is missing confidential unshield v3 verifier-key support; "
             "rebuild the extension"
         )
     payload = getattr(_crypto, method)()
@@ -2309,7 +2309,7 @@ def _privacy_compiled_profile_catalog_validator(module: object):
     )
     if not callable(method):
         raise RuntimeError(
-            "iroha_python._crypto is missing "
+            "iroha_native._crypto is missing "
             "privacy_validate_compiled_profile_catalog_v1; "
             "rebuild the extension"
         )
@@ -2346,7 +2346,7 @@ def _privacy_compiled_profile_catalog_method(module: object):
     method = getattr(module, _PRIVACY_COMPILED_PROFILE_CATALOG_METHOD, None)
     if not callable(method):
         raise RuntimeError(
-            "iroha_python._crypto is missing privacy_compiled_profile_catalog_v1; "
+            "iroha_native._crypto is missing privacy_compiled_profile_catalog_v1; "
             "rebuild the extension"
         )
     return method
@@ -2439,7 +2439,7 @@ def privacy_validate_exact12_capability_manifest_v1(
     )
     if not callable(validator):
         raise RuntimeError(
-            "iroha_python._crypto is missing "
+            "iroha_native._crypto is missing "
             "privacy_validate_exact12_capability_manifest_v1; rebuild the extension"
         )
     try:
@@ -2465,7 +2465,7 @@ def privacy_exact12_capability_manifest_v1(
 
     The native object retains and re-exposes the byte-identical canonical
     archive. Admission requires a fresh authenticated fetch through the
-    configured ``ToriiClient.privacy_capabilities_v1`` transport owner.
+    configured authenticated Torii manifest transport owner.
     """
 
     canonical = _privacy_exact12_capability_manifest_archive(archive)
@@ -2478,7 +2478,7 @@ def privacy_exact12_capability_manifest_v1(
     decoder = getattr(_crypto, _PRIVACY_EXACT12_CAPABILITY_MANIFEST_METHOD, None)
     if not callable(decoder):
         raise RuntimeError(
-            "iroha_python._crypto is missing privacy_exact12_capability_manifest_v1; "
+            "iroha_native._crypto is missing privacy_exact12_capability_manifest_v1; "
             "rebuild the extension"
         )
     try:
@@ -2519,7 +2519,7 @@ def canonical_genesis_header_hash_v1(
         result = _crypto.canonical_genesis_header_hash_v1(bytes(framed_signed_genesis))
     except AttributeError as exc:
         raise RuntimeError(
-            "iroha_python._crypto is missing canonical_genesis_header_hash_v1; "
+            "iroha_native._crypto is missing canonical_genesis_header_hash_v1; "
             "rebuild the extension"
         ) from exc
     except Exception:
@@ -2543,7 +2543,7 @@ def canonical_signed_transaction_hash_v1(
         result = _crypto.canonical_signed_transaction_hash_v1(bytes(signed_transaction_versioned))
     except AttributeError as exc:
         raise RuntimeError(
-            "iroha_python._crypto is missing canonical_signed_transaction_hash_v1; "
+            "iroha_native._crypto is missing canonical_signed_transaction_hash_v1; "
             "rebuild the extension"
         ) from exc
     except Exception:
@@ -2572,7 +2572,7 @@ def signed_transaction_envelope_from_versioned_v1(
         )
     except AttributeError as exc:
         raise RuntimeError(
-            "iroha_python._crypto is missing "
+            "iroha_native._crypto is missing "
             "signed_transaction_envelope_from_versioned_v1; rebuild the extension"
         ) from exc
     except Exception:
@@ -2620,7 +2620,7 @@ def verify_prepared_transaction_context_v1(
         )
     except AttributeError as exc:
         raise RuntimeError(
-            "iroha_python._crypto is missing verify_prepared_transaction_context_v1; "
+            "iroha_native._crypto is missing verify_prepared_transaction_context_v1; "
             "rebuild the extension"
         ) from exc
     except Exception:
@@ -2654,7 +2654,7 @@ def verify_account_onboarding_receipt_v1(
         )
     except AttributeError as exc:
         raise RuntimeError(
-            "iroha_python._crypto is missing verify_account_onboarding_receipt_v1; "
+            "iroha_native._crypto is missing verify_account_onboarding_receipt_v1; "
             "rebuild the extension"
         ) from exc
     except Exception:
@@ -2721,7 +2721,7 @@ def inspect_privacy_exact12_action_driver_transaction_context_v1(
         )
     except AttributeError as exc:
         raise RuntimeError(
-            "iroha_python._crypto is missing the Exact12 action-driver context inspector; "
+            "iroha_native._crypto is missing the Exact12 action-driver context inspector; "
             "rebuild the extension"
         ) from exc
     except Exception:
@@ -2787,7 +2787,7 @@ def privacy_vega_device_authentication_digest_v1(
         )
     except AttributeError as exc:
         raise RuntimeError(
-            "iroha_python._crypto is missing "
+            "iroha_native._crypto is missing "
             "privacy_vega_device_authentication_digest_v1; rebuild the extension"
         ) from exc
     except RuntimeError:
@@ -2817,7 +2817,7 @@ def inspect_signed_privacy_zk_ace_transfer_action_v1(
         )
     except AttributeError as exc:
         raise RuntimeError(
-            "iroha_python._crypto is missing "
+            "iroha_native._crypto is missing "
             "inspect_signed_privacy_zk_ace_transfer_action_v1; rebuild the extension"
         ) from exc
     except Exception:
@@ -2841,7 +2841,7 @@ def inspect_signed_privacy_jindo_action_v1(
         result = _crypto.inspect_signed_privacy_jindo_action_v1(bytes(signed_transaction_versioned))
     except AttributeError as exc:
         raise RuntimeError(
-            "iroha_python._crypto is missing "
+            "iroha_native._crypto is missing "
             "inspect_signed_privacy_jindo_action_v1; rebuild the extension"
         ) from exc
     except Exception:
@@ -2867,7 +2867,7 @@ def inspect_signed_privacy_verange_action_v1(
         )
     except AttributeError as exc:
         raise RuntimeError(
-            "iroha_python._crypto is missing "
+            "iroha_native._crypto is missing "
             "inspect_signed_privacy_verange_action_v1; rebuild the extension"
         ) from exc
     except Exception:
@@ -2891,7 +2891,7 @@ def inspect_signed_privacy_vega_action_v1(
         result = _crypto.inspect_signed_privacy_vega_action_v1(bytes(signed_transaction_versioned))
     except AttributeError as exc:
         raise RuntimeError(
-            "iroha_python._crypto is missing "
+            "iroha_native._crypto is missing "
             "inspect_signed_privacy_vega_action_v1; rebuild the extension"
         ) from exc
     except Exception:
@@ -2917,7 +2917,7 @@ def inspect_signed_privacy_zk_ams_batch_admission_action_v1(
         )
     except AttributeError as exc:
         raise RuntimeError(
-            "iroha_python._crypto is missing "
+            "iroha_native._crypto is missing "
             "inspect_signed_privacy_zk_ams_batch_admission_action_v1; "
             "rebuild the extension"
         ) from exc
@@ -2944,7 +2944,7 @@ def inspect_signed_privacy_zk_ams_provision_account_action_v1(
         )
     except AttributeError as exc:
         raise RuntimeError(
-            "iroha_python._crypto is missing "
+            "iroha_native._crypto is missing "
             "inspect_signed_privacy_zk_ams_provision_account_action_v1; "
             "rebuild the extension"
         ) from exc
@@ -2973,7 +2973,7 @@ def inspect_signed_privacy_bootle_lantern_presentation_action_v1(
         )
     except AttributeError as exc:
         raise RuntimeError(
-            "iroha_python._crypto is missing "
+            "iroha_native._crypto is missing "
             "inspect_signed_privacy_bootle_lantern_presentation_action_v1; "
             "rebuild the extension"
         ) from exc
@@ -3001,7 +3001,7 @@ def _inspect_signed_privacy_native_action_v1(
         inspector = getattr(_crypto, entrypoint)
     except AttributeError as exc:
         raise RuntimeError(
-            f"iroha_python._crypto is missing {entrypoint}; rebuild the extension"
+            f"iroha_native._crypto is missing {entrypoint}; rebuild the extension"
         ) from exc
     try:
         result = inspector(bytes(signed_transaction_versioned))
@@ -3089,7 +3089,7 @@ def inspect_signed_privacy_zk_x509_identity_presentation_action_v1(
         inspector = getattr(_crypto, entrypoint)
     except AttributeError as exc:
         raise RuntimeError(
-            f"iroha_python._crypto is missing {entrypoint}; rebuild the extension"
+            f"iroha_native._crypto is missing {entrypoint}; rebuild the extension"
         ) from exc
     try:
         result = inspector(

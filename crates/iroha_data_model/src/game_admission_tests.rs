@@ -83,7 +83,7 @@ fn compact_admission_rejects_aliases_colliding_nfts_roles_and_unbounded_data() {
     }
 }
 #[test]
-#[cfg(feature = "json")]
+
 fn compact_admission_json_rejects_omitted_authorization_vectors_and_mutable_record_fields() {
     let value = norito::json::to_value(&body()).unwrap();
     for field in ["version", "participants", "wagers", "resources"] {

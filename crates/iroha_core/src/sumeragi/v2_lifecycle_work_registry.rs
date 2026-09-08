@@ -276,6 +276,72 @@ pub(in crate::sumeragi) enum ClaimedCertifiedServeDispatchErrorV1 {
     InvalidCarrier,
 }
 impl ConcreteLifecycleWorkRegistry {
+    /// Check the complete Ready census before retaining a fresh Serve payload.
+    ///
+    /// A request may enter the Serve-only scheduler when no work is Ready, or
+    /// when its exact incumbent is the sole Ready row. Every other Ready row
+    /// must run first. Deferring here leaves ingress and durable storage intact;
+    /// publishing the Serve first would make the later full-census claim fail.
+    pub(super) fn certified_serve_ingress_has_competing_ready_work(
+        &self,
+        verified: &VerifiedHeightContext,
+        coordinator: &LifecycleCoordinator,
+        ledger: &super::ledger::LifecycleLedgerV1,
+        authenticated: &AuthenticatedCertifiedBodyRequest,
+    ) -> Result<bool, ReadyCertifiedServeAttestationErrorV1> {
+        if coordinator.fault.is_some() || coordinator.active_lease.is_some() {
+            return Err(ReadyCertifiedServeAttestationErrorV1::CoordinatorUnavailable);
+        }
+        if !super::ledger::LifecycleLedgerV1::from_coordinator(coordinator)
+            .is_ok_and(|current| &current == ledger)
+        {
+            return Err(ReadyCertifiedServeAttestationErrorV1::LedgerMismatch);
+        }
+        let ready = coordinator
+            .records
+            .iter()
+            .filter_map(|(&ordinal, record)| {
+                (record.state == super::LifecycleState::Ready).then_some(ordinal)
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+        if ready != coordinator.ready_index
+            || !self.exactly_covers_all_live_work(verified, coordinator)
+        {
+            return Err(ReadyCertifiedServeAttestationErrorV1::InvalidCarrier);
+        }
+        if ready.is_empty() {
+            return Ok(false);
+        }
+        if ready.len() == 1 {
+            let ordinal = *ready.first().expect("one Ready row exists");
+            let record = &coordinator.records[&ordinal];
+            if record.work_class == LifecycleWorkClass::CertifiedServe
+                && coordinator
+                    .durable_records
+                    .get(&ordinal)
+                    .is_some_and(|metadata| {
+                        metadata
+                            .replay_authority
+                            .exactly_matches_certified_serve_request(authenticated)
+                    })
+            {
+                // This census only validates readiness; dispatch mints and consumes
+                // its own attestation after admission under the held queue cut.
+                drop(self.attest_ready_certified_serve_request(
+                    coordinator,
+                    ledger,
+                    authenticated,
+                )?);
+                return Ok(false);
+            }
+        }
+        // Preserve the ProducerTurn's adjacent Serve/debt check when it is the
+        // oldest Ready row; the ordinary runtime owns all other Ready classes.
+        self.attest_ready_producer_turn_census(verified, coordinator, ledger)
+            .map_err(|_| ReadyCertifiedServeAttestationErrorV1::InvalidCarrier)?;
+        Ok(true)
+    }
+
     /// Seal one exact Ready Serve, current LedgerV1 frame, installed durable
     /// carrier, and authenticated request without accepting raw coordinates.
     pub(super) fn attest_ready_certified_serve_request(
@@ -5026,6 +5092,7 @@ include!("v2_lifecycle_work_registry_recovered_wal.rs");
 include!("v2_lifecycle_work_registry_validate_recovery.rs");
 include!("v2_lifecycle_work_registry_validate_execution.rs");
 include!("v2_lifecycle_work_registry_validate_sidecar.rs");
+include!("v2_lifecycle_work_registry_body_retirement.rs");
 #[cfg(test)]
 mod tests {
     include!("tests/v2_lifecycle_work_registry_00.rs");

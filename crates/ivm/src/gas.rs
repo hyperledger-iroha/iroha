@@ -833,8 +833,8 @@ fn canonical_gas_parameters() -> Vec<GasParameter> {
             crate::memory::Memory::OUTPUT_SIZE,
         ),
         (
-            "state_keys_max_items",
-            crate::syscalls::STATE_KEYS_MAX_ITEMS,
+            "state_scan_max_items_v1",
+            crate::syscalls::STATE_SCAN_MAX_ITEMS_V1,
         ),
         (
             "state_max_path_bytes",
@@ -928,13 +928,13 @@ fn formula_tag(formula: crate::host::HostSyscallGasFormula) -> u8 {
         Formula::StateGet => 6,
         Formula::StatePath => 7,
         Formula::StateValue => 8,
-        Formula::StateKeys => 9,
         Formula::StateCount => 10,
         Formula::ReserveAvailable => 11,
         Formula::ConservativeEnvelope => 12,
         Formula::ZkVerifyV1 => 14,
         Formula::LedgerQueryV1 => 15,
         Formula::VrfVerifyV1 => 16,
+        Formula::StateScan => 17,
     }
 }
 fn parameters_tag(parameters: crate::host::HostSyscallGasParameters) -> u8 {

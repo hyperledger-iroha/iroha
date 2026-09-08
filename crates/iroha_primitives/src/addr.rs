@@ -53,7 +53,9 @@ ffi::ffi_item! {
     #[display("{}.{}.{}.{}", self.0[0], self.0[1], self.0[2], self.0[3])]
     #[debug("{}.{}.{}.{}", self.0[0], self.0[1], self.0[2], self.0[3])]
     #[repr(transparent)]
-pub struct Ipv4Addr([u8; 4]);
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_primitives::addr::Ipv4Addr")]
+    pub struct Ipv4Addr([u8; 4]);
     // SAFETY: `Ipv4Addr` has no trap representation in [u8; 4]
     ffi_type(unsafe {robust})
 }
@@ -141,7 +143,9 @@ ffi::ffi_item! {
         IntoSchema,
     )]
     #[repr(transparent)]
-pub struct Ipv6Addr([u16; 8]);
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_primitives::addr::Ipv6Addr")]
+    pub struct Ipv6Addr([u16; 8]);
     // SAFETY: `Ipv6Addr` has no trap representation in [u16; 8]
     ffi_type(unsafe {robust})
 }
@@ -313,6 +317,8 @@ ffi::ffi_item! {
         Hash,
     )]
     #[allow(variant_size_differences)] // Boxing 16 bytes probably doesn't make sense
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_primitives::addr::IpAddr")]
     pub enum IpAddr {
         /// Ipv4 variant
         V4(Ipv4Addr),
@@ -378,7 +384,9 @@ ffi::ffi_item! {
     )]
     #[display("{}:{}", self.ip, self.port)]
     #[debug("{}:{}", self.ip, self.port)]
-pub struct SocketAddrV4 {
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_primitives::addr::SocketAddrV4")]
+    pub struct SocketAddrV4 {
         /// The Ipv4 address.
         pub ip: Ipv4Addr,
         /// The port number.
@@ -459,7 +467,9 @@ ffi::ffi_item! {
     )]
     #[display("[{}]:{}", self.ip, self.port)]
     #[debug("[{}]:{}", self.ip, self.port)]
-pub struct SocketAddrV6 {
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_primitives::addr::SocketAddrV6")]
+    pub struct SocketAddrV6 {
         /// The Ipv6 address.
         pub ip: Ipv6Addr,
         /// The port number.
@@ -542,7 +552,9 @@ ffi::ffi_item! {
         Decode,
         IntoSchema,
     )]
-pub struct SocketAddrHost {
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_primitives::addr::SocketAddrHost")]
+    pub struct SocketAddrHost {
         /// The hostname
         pub host: ConstString,
         /// The port number
@@ -608,7 +620,9 @@ ffi::ffi_item! {
         IntoSchema,
         FromVariant,
     )]
-pub enum SocketAddr {
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_primitives::addr::SocketAddr")]
+    pub enum SocketAddr {
         /// An Ipv4 socket address.
         Ipv4(SocketAddrV4),
         /// An Ipv6 socket address.
@@ -1108,6 +1122,7 @@ mod test {
         );
     }
     // Parsing into the enum variant should cover IPv4, IPv6 and hostname forms.
+    #[cfg(feature = "json")]
     #[test]
     fn full_socket() {
         let v4 = SocketAddr::Ipv4(SocketAddrV4 {
@@ -1139,6 +1154,7 @@ mod test {
         );
     }
     // Serialising and deserialising addresses should round-trip without loss.
+    #[cfg(feature = "json")]
     #[test]
     fn json_roundtrip() {
         let v4 = SocketAddr::Ipv4(SocketAddrV4 {

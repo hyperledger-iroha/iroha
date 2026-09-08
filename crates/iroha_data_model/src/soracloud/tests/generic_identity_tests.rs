@@ -1,6 +1,5 @@
 // Immutable identities for the borrowed FHE signing-preimage owner.
 
-#[cfg(feature = "json")]
 #[test]
 fn fhe_provenance_identity_frames_match_capture() {
     use crate::generic_identity_tests::encoded_record;

@@ -7,7 +7,7 @@ use crate::{
     },
     provider_admission::ProviderAdmissionCouncilPolicy,
 };
-use norito::{DecodeLimits, decode_from_bytes_with_limits, to_bytes};
+use norito::{DecodeLimits, decode_canonical_with_limits};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 /// Alias cache policy describing TTL boundaries for alias proofs.
@@ -234,7 +234,7 @@ fn decode_alias_proof_canonical(bytes: &[u8]) -> Result<AliasProofBundleV1, Alia
             maximum: MAX_ALIAS_PROOF_ENCODED_BYTES,
         });
     }
-    let bundle: AliasProofBundleV1 = decode_from_bytes_with_limits(
+    decode_canonical_with_limits(
         bytes,
         DecodeLimits::new(
             128,
@@ -243,11 +243,11 @@ fn decode_alias_proof_canonical(bytes: &[u8]) -> Result<AliasProofBundleV1, Alia
             MAX_ALIAS_PROOF_ENCODED_BYTES * 4,
             32,
         ),
-    )?;
-    if to_bytes(&bundle)? != bytes {
-        return Err(AliasProofError::NonCanonical);
-    }
-    Ok(bundle)
+    )
+    .map_err(|error| match error {
+        norito::Error::NonCanonicalEncoding => AliasProofError::NonCanonical,
+        error => AliasProofError::Decode(error),
+    })
 }
 /// Returns the current UNIX timestamp (seconds).
 #[must_use]
@@ -265,6 +265,7 @@ mod tests {
         pin_registry::{AliasBindingV1, alias_merkle_root, alias_proof_signature_digest},
     };
     use iroha_crypto::{Algorithm, KeyPair, PrivateKey, Signature};
+    use norito::to_bytes;
     fn sample_bundle(generated: u64, expires: u64) -> AliasProofBundleV1 {
         AliasProofBundleV1 {
             binding: AliasBindingV1 {
@@ -307,6 +308,62 @@ mod tests {
         let policy =
             ProviderAdmissionCouncilPolicy::new([signer], 1).expect("valid alias council policy");
         (to_bytes(&bundle).expect("encode alias proof"), policy)
+    }
+    #[test]
+    fn trusted_alias_frame_is_canonical_under_every_caller_layout() {
+        let (canonical, policy) = signed_bundle_and_policy();
+        let bundle = decode_alias_proof(&canonical, &policy).expect("trusted canonical proof");
+        let mut alternate_count = 0;
+        for flags in 0..=u8::MAX {
+            if norito::core::validate_header_flags(flags).is_err() {
+                continue;
+            }
+            let _caller = norito::core::DecodeFlagsGuard::enter(flags);
+            assert_eq!(
+                decode_alias_proof(&canonical, &policy).expect("same authenticated proof"),
+                bundle
+            );
+            let alternate = to_bytes(&bundle).expect("advertised alternate proof");
+            if alternate != canonical {
+                alternate_count += 1;
+                assert!(matches!(
+                    decode_alias_proof(&alternate, &policy),
+                    Err(AliasProofError::NonCanonical)
+                ));
+            }
+            assert_eq!(norito::core::get_decode_flags(), flags);
+        }
+        assert!(alternate_count > 0);
+    }
+    #[test]
+    fn alias_proof_rejects_compression_before_decode_allocation() {
+        let (canonical, policy) = signed_bundle_and_policy();
+        let header = norito::core::Header::read(canonical.as_slice()).expect("canonical header");
+        let compression_offset = header.magic.len() + 2 + header.schema.len();
+        let length_offset = compression_offset + 1;
+        let mut forbidden = canonical.clone();
+        forbidden[compression_offset] = norito::Compression::Zstd as u8;
+        forbidden[length_offset..length_offset + 8].copy_from_slice(&u64::MAX.to_le_bytes());
+        let advertised =
+            norito::core::Header::read(forbidden.as_slice()).expect("advertised header");
+        assert_eq!(advertised.compression, norito::Compression::Zstd);
+        assert_eq!(advertised.length, u64::MAX);
+        let zero = DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 128);
+        for bytes in [
+            forbidden.as_slice(),
+            &forbidden[..norito::core::Header::SIZE],
+        ] {
+            let (result, usage) = norito::core::with_decode_limits_measured(zero, || {
+                decode_alias_proof(bytes, &policy)
+            });
+            assert!(matches!(result, Err(AliasProofError::NonCanonical)));
+            assert_eq!(usage.total_allocated_bytes(), 0);
+        }
+        assert!(matches!(
+            norito::with_decode_limits_scope(zero, || decode_alias_proof(&canonical, &policy)),
+            Err(AliasProofError::Decode(error)) if error.is_decode_resource_limit()
+        ));
+        decode_alias_proof(&canonical, &policy).expect("valid proof still verifies");
     }
     #[test]
     fn trusted_alias_proof_decode_requires_configured_signer() {

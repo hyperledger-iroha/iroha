@@ -323,7 +323,7 @@ fn persist_da_pin_intent_writes_file() {
     let bytes = fs::read(&path).expect("read pin intent");
     let archived = from_bytes::<DaPinIntent>(&bytes).expect("decode pin intent");
     let decoded: DaPinIntent =
-        NoritoDeserialize::try_deserialize(archived).expect("deserialize pin intent");
+        DeserializePayload::try_deserialize(archived).expect("deserialize pin intent");
     assert_eq!(decoded, intent);
     assert_eq!(decoded.alias, Some("sora/docs".to_owned()));
     assert_eq!(decoded.authorization.owner, *ALICE_ID);

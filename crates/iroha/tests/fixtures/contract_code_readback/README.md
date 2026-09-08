@@ -1,19 +1,20 @@
 # Contract code readback fixture
 
 `code_readback.ko` is a public, read-only test contract returning the integer 7.
-`code_readback.to` is its complete 461-byte IVM artifact, including the execution
+`code_readback.to` is its complete 793-byte IVM artifact, including the execution
 header and embedded interface. It contains no keys, account identities or live
 state. It is a test input, not deployment authority or an accepted release.
 
-The fixture was produced by the retained development `koto` executable whose
-SHA-256 is recorded in `provenance.json`. Source and compiler hashes remained
-unchanged through compilation and `--verify`. The compiler's source revision is
-not authenticated by that binary hash; the applying owner must run the current
-native reproduction/admission regression and may intentionally regenerate it.
-`--verify` compares published compiler outputs; it alone is not artifact admission.
-A separate standalone probe using the pinned retained SDK reproduced the exact
-bytes and passed `ivm::verify_contract_artifact`, ABI 1 and native identity checks.
-That is development component evidence, not current native release qualification.
+The fixture was regenerated for the sole final V1 ABI using the retained
+`koto` executable identified in `provenance.json`. Its hash matches a successful
+Cargo build capture, and its compiler source assets match the current source.
+Three ABI source files differ through the merged Norito trait split and shared
+contract-code-hash helper move. A retained native CLI admitted these exact bytes
+and reproduced the compiler manifest byte-for-byte. The compiler's `--verify`
+check also passed. The current-source IVM `contract_artifact` suite passed all 58
+tests, including exact source reproduction, native admission and the shared native
+identity check for this fixture. The native SDK route suite has not been run;
+these component results do not establish release qualification.
 
 The SDK uses `include_bytes!` with a repository-relative path and pins the native
 contract hash. Its tests require neither the compiler nor an ignored output tree.

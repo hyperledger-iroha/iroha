@@ -31,6 +31,18 @@ impl DetachedDurableValidateExecution {
         if outcome.durable_body() != &self.durable_receipt {
             return Err((V2BodyStoreError::ReceiptMismatch, self));
         }
+        // Keep the validator's diagnosis before a later CommitQC/rejection
+        // contradiction closes the reducer. The durable marker contains only
+        // the closed rejection identity, so its detailed reason cannot be
+        // recovered from that marker after the process exits.
+        if let Some(reason) = outcome.rejection_reason() {
+            iroha_logger::warn!(
+                round = ?self.round,
+                subject = ?self.subject,
+                %reason,
+                "durable candidate validation rejected its exact body"
+            );
+        }
         Ok(ExecutedDurableValidateExecution {
             request: self,
             outcome,

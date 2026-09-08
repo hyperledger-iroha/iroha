@@ -16,17 +16,8 @@ workspace = true
 default = ["application-model"]
 dev-tools = []
 # Public application model; node-only additions are requested by node crates.
-application-model = ["governance", "json", "pqc", "bls", "gost", "sm"]
+application-model = ["governance", "pqc", "bls", "gost", "sm"]
 bridge = []
-# Enable JSON-related functionality
-json = [
-    "iroha_version/json",
-    "iroha_primitives/json",
-    "iroha_crypto/json",
-    "norito/json",
-    "norito_derive",
-    "mv",
-]
 # Expose deterministic fixture constructors to non-shipping release tooling.
 test-fixtures = ["iroha_crypto/rand"]
 # Expose only the deterministic exact-12 privacy conformance generator and
@@ -55,13 +46,14 @@ governance = []
 pqc = ["iroha_crypto/pqc", "sorafs_manifest/pqc"]
 
 [dependencies]
+# Protocol JSON is mandatory: custom parameters and retained ledger metadata use it.
 iroha_data_model_derive = { path = "../iroha_data_model_derive" }
 
-iroha_primitives = { workspace = true }
-iroha_crypto = { workspace = true, default-features = false, features = ["consensus"] }
+iroha_primitives = { workspace = true, features = ["json"] }
+iroha_crypto = { workspace = true, default-features = false, features = ["consensus", "json"] }
 iroha_macro = { workspace = true }
 error-stack = { workspace = true }
-iroha_version = { workspace = true, features = ["derive"] }
+iroha_version = { workspace = true, features = ["derive", "json"] }
 iroha_schema = { workspace = true }
 iroha_ffi = { workspace = true, optional = true }
 iroha_zkp_halo2 = { path = "../iroha_zkp_halo2", default-features = false, features = ["model-primitives"] }
@@ -70,8 +62,8 @@ sha2 = { version = "0.10.9", default-features = false, features = ["std"] }
 
 derive_more = { workspace = true, features = ["as_ref", "display", "debug", "constructor", "from_str", "from", "into", "try_into", "deref"] }
 norito = { workspace = true, default-features = false, features = ["base-codec"] }
-norito_derive = { workspace = true, optional = true }
-mv = { path = "../mv", optional = true }
+norito_derive = { workspace = true }
+mv = { path = "../mv" }
 p256 = { version = "0.13.2", default-features = false, features = ["std", "ecdsa"] }
 sorafs_manifest = { path = "../sorafs_manifest", default-features = false }
 thiserror = { workspace = true }
@@ -98,7 +90,7 @@ trybuild = { workspace = true, optional = true }
 criterion = { workspace = true }
 iroha_crypto = { workspace = true, default-features = false, features = ["consensus", "gost", "sm"] }
 hex-literal = { workspace = true }
-ivm = { path = "../ivm" }
+ivm_abi = { path = "../ivm_abi" }
 
 tempfile = { workspace = true }
 
@@ -137,12 +129,12 @@ required-features = ["dev-tools"]
 [[bin]]
 name = "cancel_asset_lock_fixtures"
 path = "src/bin/cancel_asset_lock_fixtures.rs"
-required-features = ["dev-tools", "test-fixtures", "json"]
+required-features = ["dev-tools", "test-fixtures"]
 
 [[bin]]
 name = "musubi_fixtures"
 path = "src/bin/musubi_fixtures.rs"
-required-features = ["dev-tools", "test-fixtures", "json", "transparent_api"]
+required-features = ["dev-tools", "test-fixtures", "transparent_api"]
 
 [[bin]]
 name = "privacy_exact12_fixtures"
@@ -174,4 +166,8 @@ path = "tests/metadata_serialization_allocations.rs"
 [[test]]
 name = "json_object_key_contract"
 path = "tests/json_object_key_contract.rs"
-required-features = ["json"]
+
+# Public manual frame contracts compile separately from the large internal unit suite.
+[[test]]
+name = "manual_frame_identity"
+path = "tests/manual_frame_identity.rs"

@@ -171,6 +171,14 @@ pub fn json_value_schema_is_supported(schema: &StateValueSchemaV1) -> bool {
                     pending.push((&element.nodes, child_depth));
                     break;
                 }
+                StateValueNodeV1::Unit
+                | StateValueNodeV1::Error(_)
+                | StateValueNodeV1::StateCursor(_) => {
+                    if index != nodes.len() {
+                        return false;
+                    }
+                    break;
+                }
                 StateValueNodeV1::Leaf(kind) => {
                     if index != nodes.len() || !supported_leaf(*kind) {
                         return false;

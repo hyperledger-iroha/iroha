@@ -179,7 +179,7 @@ assert_authenticated_maturin_darwin_rustc_policy() {
       "${expected_encoded}" || \
     "${CARGO_ENCODED_RUSTFLAGS:-}" != "${expected_encoded}" || \
     "${IROHA_PRIVACY_AUTHENTICATED_MATURIN_RUSTC_LINK_ARG:-}" != \
-      "link-args=-Wl,-install_name,@rpath/iroha_python._crypto.abi3.so" || \
+      "link-args=-Wl,-install_name,@rpath/iroha_native._crypto.abi3.so" || \
     -z "${IROHA_PRIVACY_AUTHENTICATED_PYO3_PYTHON:-}" || \
     "${PYO3_PYTHON:-}" != \
       "${IROHA_PRIVACY_AUTHENTICATED_PYO3_PYTHON}" ]]; then

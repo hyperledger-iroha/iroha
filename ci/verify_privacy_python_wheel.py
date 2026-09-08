@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Verify that the privacy SDK imports one authenticated private wheel.
+"""Verify that the privacy SDK imports two authenticated private wheels.
 
 The wheel is read, sealed, and structurally validated before any
-``iroha_python`` module is imported.  Installed destinations are derived from
+``iroha_native`` or ``iroha_native`` module is imported.  Installed destinations are derived from
 the validated wheel members and the private environment's site-packages
 directories; module-controlled ``__file__`` attributes are never used to
 discover trusted files.
@@ -27,19 +27,33 @@ import subprocess
 import sys
 import sysconfig
 import unicodedata
-import zipimport
 import zipfile
+import zipimport
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Iterable, NoReturn, Sequence
 
-PACKAGE_NAME = "iroha_python"
-PACKAGE_DISTRIBUTION_NAME = "iroha-python"
-NATIVE_MODULE_NAME = "iroha_python._crypto"
-PACKAGE_INITIALIZER_MEMBER = "iroha_python/__init__.py"
+
+@dataclass(frozen=True)
+class WheelOwner:
+    """One fixed first-release distribution and its permitted extension owner."""
+
+    package: str
+    distribution: str
+    native: bool
+
+    @property
+    def initializer(self) -> str:
+        """Return the only permitted top-level package initializer."""
+        return f"{self.package}/__init__.py"
+
+
+NATIVE_OWNER = WheelOwner("iroha_native", "iroha-native", True)
+SDK_OWNER = WheelOwner("iroha_python", "iroha-python", False)
+PACKAGE_NAME = NATIVE_OWNER.package
+NATIVE_MODULE_NAME = "iroha_native._crypto"
 NATIVE_STEM = "_crypto"
 NATIVE_FILE_ENDINGS = (".so", ".dylib", ".pyd")
-DIST_INFO_PREFIX = "iroha_python-"
 DIST_INFO_SUFFIX = ".dist-info"
 DIST_INFO_REQUIRED_FILES = ("METADATA", "WHEEL", "RECORD")
 PIP_GENERATED_DIST_INFO_FILES = ("INSTALLER", "REQUESTED", "direct_url.json")
@@ -146,8 +160,9 @@ class WheelPreflight:
 
     path: Path
     seal: FileSeal
+    owner: WheelOwner
     package_member: str
-    native_member: str
+    native_member: str | None
     dist_info_root: str
     metadata_version: str
     package_members: tuple[WheelMember, ...]
@@ -163,8 +178,9 @@ class InstalledLayout:
     site_root: Path
     package_root: Path
     package_path: Path
-    native_path: Path
+    native_path: Path | None
     dist_info_root: Path
+    owner: WheelOwner
 
 
 @dataclass(frozen=True)
@@ -181,7 +197,7 @@ class InstalledFileSet:
 
     files: tuple[StableFile, ...]
     package: StableFile
-    native: StableFile
+    native: StableFile | None
 
 
 @dataclass(frozen=True)
@@ -276,8 +292,7 @@ def _read_stable_regular_file(
     if (
         _stable_stat_tuple(before) != _stable_stat_tuple(after)
         or observed != before.st_size
-        or (path_state.st_dev, path_state.st_ino)
-        != (before.st_dev, before.st_ino)
+        or (path_state.st_dev, path_state.st_ino) != (before.st_dev, before.st_ino)
     ):
         _fail(f"{label} changed while it was sealed")
 
@@ -334,8 +349,7 @@ def _canonical_zip_member_name(info: zipfile.ZipInfo) -> str:
     if any(component in ("", ".", "..") for component in components):
         _fail(f"wheel member contains a dot or empty path alias: {name!r}")
     if any(
-        ":" in component or component.endswith((".", " "))
-        for component in components
+        ":" in component or component.endswith((".", " ")) for component in components
     ):
         _fail(f"wheel member contains a platform path alias: {name!r}")
 
@@ -370,9 +384,7 @@ def _member_is_native_like(name: str) -> bool:
     return basename.casefold().endswith(NATIVE_FILE_ENDINGS)
 
 
-def _stream_member_digest(
-    wheel: zipfile.ZipFile, info: zipfile.ZipInfo
-) -> str:
+def _stream_member_digest(wheel: zipfile.ZipFile, info: zipfile.ZipInfo) -> str:
     digest = hashlib.sha256()
     observed = 0
     with wheel.open(info, "r") as source:
@@ -449,7 +461,7 @@ def _assert_record_payload(
         _fail(f"{label} does not cover every installed file exactly once")
 
 
-def _metadata_identity(payload: bytes) -> tuple[str, str]:
+def _metadata_identity(payload: bytes, owner: WheelOwner) -> tuple[str, str]:
     """Extract one exact distribution name/version pair from METADATA."""
 
     try:
@@ -473,7 +485,7 @@ def _metadata_identity(payload: bytes) -> tuple[str, str]:
     if len(names) != 1 or len(versions) != 1:
         _fail("wheel METADATA must contain exactly one Name and Version")
     normalized_name = re.sub(r"[-_.]+", "-", names[0]).casefold()
-    if normalized_name != PACKAGE_DISTRIBUTION_NAME:
+    if normalized_name != owner.distribution:
         _fail("wheel METADATA names a different distribution")
     version = versions[0]
     if (
@@ -642,9 +654,12 @@ def preflight_wheel(
     expected_wheel_seal: str | FileSeal,
     *,
     extension_suffixes: Sequence[str] | None = None,
+    owner: WheelOwner = NATIVE_OWNER,
 ) -> WheelPreflight:
     """Authenticate and structurally validate a wheel without importing it."""
 
+    if owner not in (NATIVE_OWNER, SDK_OWNER):
+        _fail("wheel owner must be the fixed native or SDK distribution")
     expected = (
         FileSeal.parse(expected_wheel_seal)
         if isinstance(expected_wheel_seal, str)
@@ -664,19 +679,16 @@ def preflight_wheel(
         if extension_suffixes is None
         else extension_suffixes
     )
-    if (
-        not suffixes
-        or any(
-            not suffix
-            or "/" in suffix
-            or "\\" in suffix
-            or not suffix.endswith((".so", ".pyd"))
-            for suffix in suffixes
-        )
+    if not suffixes or any(
+        not suffix
+        or "/" in suffix
+        or "\\" in suffix
+        or not suffix.endswith((".so", ".pyd"))
+        for suffix in suffixes
     ):
         _fail("current interpreter reported invalid extension suffixes")
     expected_native_names = {
-        f"iroha_python/{NATIVE_STEM}{suffix}" for suffix in suffixes
+        f"{owner.package}/{NATIVE_STEM}{suffix}" for suffix in suffixes
     }
 
     try:
@@ -721,16 +733,11 @@ def preflight_wheel(
                     or info.compress_size > MAX_WHEEL_BYTES
                 ):
                     _fail(f"wheel member violates an archive size bound: {name!r}")
-                if (
-                    info.file_size > 0
-                    and info.compress_size == 0
-                    and not info.is_dir()
-                ):
+                if info.file_size > 0 and info.compress_size == 0 and not info.is_dir():
                     _fail(f"wheel member has an invalid zero compressed size: {name!r}")
                 if (
                     info.compress_size > 0
-                    and info.file_size
-                    > info.compress_size * MAX_COMPRESSION_RATIO
+                    and info.file_size > info.compress_size * MAX_COMPRESSION_RATIO
                 ):
                     _fail(f"wheel member exceeds the compression-ratio bound: {name!r}")
                 total_uncompressed += info.file_size
@@ -747,13 +754,24 @@ def preflight_wheel(
             package_infos = [
                 info
                 for name, info in infos_by_name.items()
-                if name == PACKAGE_INITIALIZER_MEMBER
+                if name == owner.initializer
             ]
             package_tree_infos = [
                 info
                 for name, info in infos_by_name.items()
-                if name.startswith(f"{PACKAGE_NAME}/")
+                if name.startswith(f"{owner.package}/")
             ]
+            reserved_sources = {
+                name
+                for name in infos_by_name
+                if name.startswith(f"{owner.package}/")
+                and PurePosixPath(name).parts[1].casefold()
+                in {"_native", "_native.py", "_crypto", "_crypto.py"}
+            }
+            if reserved_sources:
+                _fail(
+                    "wheel must not contain a retired native forwarder or reserved native Python source path"
+                )
             current_native_infos = [
                 info
                 for name, info in infos_by_name.items()
@@ -764,56 +782,57 @@ def preflight_wheel(
             }
             if len(package_infos) != 1:
                 _fail("fresh wheel must contain exactly one package initializer")
-            if len(current_native_infos) != 1:
-                _fail(
-                    "fresh wheel must contain exactly one "
-                    "current-platform native module"
-                )
-            selected_native_name = current_native_infos[0].filename
-            if native_like_names != {selected_native_name}:
-                _fail(
-                    "fresh wheel contains a loose, nested, or non-current native module"
-                )
+            if owner.native:
+                if len(current_native_infos) != 1:
+                    _fail(
+                        "fresh wheel must contain exactly one "
+                        "current-platform native module"
+                    )
+                selected_native_name = current_native_infos[0].filename
+                if native_like_names != {selected_native_name}:
+                    _fail(
+                        "fresh wheel contains a loose, nested, or non-current native module"
+                    )
+            else:
+                selected_native_name = None
+                if native_like_names:
+                    _fail("pure SDK wheel must not contain a native module")
             top_level_roots = {
-                PurePosixPath(name.rstrip("/")).parts[0]
-                for name in infos_by_name
+                PurePosixPath(name.rstrip("/")).parts[0] for name in infos_by_name
             }
             dist_info_roots = {
                 root
                 for root in top_level_roots
-                if root.startswith(DIST_INFO_PREFIX)
+                if root.startswith(f"{owner.package}-")
                 and root.endswith(DIST_INFO_SUFFIX)
             }
             if len(dist_info_roots) != 1:
-                _fail("fresh wheel must contain exactly one iroha_python dist-info root")
+                _fail(
+                    "fresh wheel must contain exactly one iroha_native dist-info root"
+                )
             dist_info_root = next(iter(dist_info_roots))
-            if top_level_roots != {PACKAGE_NAME, dist_info_root}:
+            if top_level_roots != {owner.package, dist_info_root}:
                 _fail(
                     "fresh wheel must not contain scripts, data roots, or other packages"
                 )
             required_dist_info_members = {
-                f"{dist_info_root}/{filename}"
-                for filename in DIST_INFO_REQUIRED_FILES
+                f"{dist_info_root}/{filename}" for filename in DIST_INFO_REQUIRED_FILES
             }
             if not required_dist_info_members.issubset(infos_by_name):
-                _fail(
-                    "fresh wheel dist-info must contain METADATA, WHEEL, and RECORD"
-                )
+                _fail("fresh wheel dist-info must contain METADATA, WHEEL, and RECORD")
             generated_dist_info_members = {
                 f"{dist_info_root}/{filename}"
                 for filename in PIP_GENERATED_DIST_INFO_FILES
             }
             if generated_dist_info_members.intersection(infos_by_name):
-                _fail(
-                    "fresh wheel must not preseed pip-generated dist-info files"
-                )
+                _fail("fresh wheel must not preseed pip-generated dist-info files")
             forbidden_package_members = {
                 info.filename
                 for info in package_tree_infos
                 if not info.is_dir()
-                and PurePosixPath(info.filename).name.casefold().endswith(
-                    (".pyc", ".pyo")
-                )
+                and PurePosixPath(info.filename)
+                .name.casefold()
+                .endswith((".pyc", ".pyo"))
             }
             if forbidden_package_members:
                 _fail("fresh wheel package must not contain bytecode")
@@ -821,9 +840,7 @@ def preflight_wheel(
             member_digests: dict[str, str] = {}
             for info in infos:
                 if not info.is_dir():
-                    member_digests[info.filename] = _stream_member_digest(
-                        wheel, info
-                    )
+                    member_digests[info.filename] = _stream_member_digest(wheel, info)
             metadata_name = f"{dist_info_root}/METADATA"
             record_name = f"{dist_info_root}/RECORD"
             metadata_payload = _read_member_bytes(
@@ -832,8 +849,56 @@ def preflight_wheel(
                 label="wheel METADATA",
             )
             _metadata_distribution_name, metadata_version = _metadata_identity(
-                metadata_payload
+                metadata_payload, owner
             )
+            metadata_headers = metadata_payload.decode(
+                "utf-8", errors="strict"
+            ).splitlines()
+            if "" in metadata_headers:
+                metadata_headers = metadata_headers[: metadata_headers.index("")]
+            if owner.native and any(
+                line.casefold().startswith("requires-dist:")
+                for line in metadata_headers
+            ):
+                _fail("native owner must not declare Python distribution dependencies")
+            if not owner.native:
+                wheel_metadata = _read_member_bytes(
+                    wheel,
+                    infos_by_name[f"{dist_info_root}/WHEEL"],
+                    label="wheel WHEEL",
+                ).decode("utf-8", errors="strict")
+                headers = wheel_metadata.splitlines()
+                if [
+                    line
+                    for line in headers
+                    if line.lower().startswith("root-is-purelib:")
+                ] != ["Root-Is-Purelib: true"]:
+                    _fail("pure SDK wheel must declare Root-Is-Purelib: true")
+                tags = [
+                    line.removeprefix("Tag: ")
+                    for line in headers
+                    if line.startswith("Tag: ")
+                ]
+                if not tags or any(not tag.endswith("-none-any") for tag in tags):
+                    _fail(
+                        "pure SDK wheel must advertise platform-independent Python tags"
+                    )
+                requirements = [
+                    line.removeprefix("Requires-Dist: ").strip()
+                    for line in metadata_headers
+                    if line.startswith("Requires-Dist: ")
+                ]
+                native_requirements = [
+                    re.sub(r"\s+", "", requirement)
+                    for requirement in requirements
+                    if re.match(
+                        r"iroha[-_.]native(?:\s|[=;(]|$)", requirement, re.IGNORECASE
+                    )
+                ]
+                if native_requirements != [f"iroha-native=={metadata_version}"]:
+                    _fail(
+                        "pure SDK wheel must require exactly its matching native owner version"
+                    )
             wheel_record_payload = _read_member_bytes(
                 wheel,
                 infos_by_name[record_name],
@@ -853,6 +918,7 @@ def preflight_wheel(
         raise
     except (
         EOFError,
+        UnicodeError,
         NotImplementedError,
         RuntimeError,
         zipfile.BadZipFile,
@@ -863,7 +929,8 @@ def preflight_wheel(
     return WheelPreflight(
         path=wheel_path,
         seal=observed_seal,
-        package_member=PACKAGE_INITIALIZER_MEMBER,
+        owner=owner,
+        package_member=owner.initializer,
         native_member=selected_native_name,
         dist_info_root=dist_info_root,
         metadata_version=metadata_version,
@@ -897,8 +964,7 @@ def preflight_wheel(
                 infos,
                 key=lambda candidate: candidate.filename,
             )
-            if not info.is_dir()
-            and info.filename.startswith(f"{dist_info_root}/")
+            if not info.is_dir() and info.filename.startswith(f"{dist_info_root}/")
         ),
         dist_info_directories=tuple(
             info.filename
@@ -906,8 +972,7 @@ def preflight_wheel(
                 infos,
                 key=lambda candidate: candidate.filename,
             )
-            if info.is_dir()
-            and info.filename.startswith(f"{dist_info_root}/")
+            if info.is_dir() and info.filename.startswith(f"{dist_info_root}/")
         ),
     )
 
@@ -951,8 +1016,7 @@ def _tree_expectations(
         files.add(relative)
         parts = PurePosixPath(relative).parts
         directories.update(
-            PurePosixPath(*parts[:index]).as_posix()
-            for index in range(1, len(parts))
+            PurePosixPath(*parts[:index]).as_posix() for index in range(1, len(parts))
         )
     for name in explicit_directories:
         if not name.startswith(prefix):
@@ -1027,12 +1091,14 @@ def _inspect_exact_installed_tree(
     return observed_files
 
 
-def _is_matching_distribution_entry(name: str) -> bool:
+def _is_matching_distribution_entry(
+    name: str, owner: WheelOwner = NATIVE_OWNER
+) -> bool:
     folded = name.casefold()
     distribution_aliases = (
-        PACKAGE_NAME,
-        PACKAGE_DISTRIBUTION_NAME,
-        PACKAGE_DISTRIBUTION_NAME.replace("-", "."),
+        owner.package,
+        owner.distribution,
+        owner.distribution.replace("-", "."),
     )
     return any(
         folded == f"{alias}{suffix}"
@@ -1048,7 +1114,7 @@ def _assert_installed_layout(
     layout: InstalledLayout,
 ) -> tuple[dict[str, Path], dict[str, Path]]:
     package_files, package_directories = _tree_expectations(
-        root_name=PACKAGE_NAME,
+        root_name=wheel.owner.package,
         members=wheel.package_members,
         explicit_directories=wheel.package_directories,
     )
@@ -1056,7 +1122,7 @@ def _assert_installed_layout(
         layout.package_root,
         expected_files=package_files,
         expected_directories=package_directories,
-        label="installed iroha_python package",
+        label="installed iroha_native package",
     )
 
     dist_info_files, dist_info_directories = _tree_expectations(
@@ -1069,7 +1135,7 @@ def _assert_installed_layout(
         layout.dist_info_root,
         expected_files=dist_info_files,
         expected_directories=dist_info_directories,
-        label="installed iroha_python dist-info",
+        label="installed iroha_native dist-info",
     )
     return installed_package_files, installed_dist_info_files
 
@@ -1084,7 +1150,9 @@ def derive_installed_layout(
 
     roots = canonical_site_roots(environment_root, site_roots)
     package_parts = PurePosixPath(wheel.package_member).parts
-    native_parts = PurePosixPath(wheel.native_member).parts
+    native_parts = (
+        PurePosixPath(wheel.native_member).parts if wheel.native_member else None
+    )
     matches: list[InstalledLayout] = []
     matching_distribution_entries: list[Path] = []
     for root in roots:
@@ -1095,16 +1163,17 @@ def derive_installed_layout(
         matching_distribution_entries.extend(
             entry
             for entry in top_level_entries
-            if _is_matching_distribution_entry(entry.name)
+            if _is_matching_distribution_entry(entry.name, wheel.owner)
         )
-        package_root = root / PACKAGE_NAME
+        package_root = root / wheel.owner.package
         if _path_lexists(package_root):
             matches.append(
                 InstalledLayout(
                     site_root=root,
                     package_root=package_root,
                     package_path=root.joinpath(*package_parts),
-                    native_path=root.joinpath(*native_parts),
+                    native_path=root.joinpath(*native_parts) if native_parts else None,
+                    owner=wheel.owner,
                     dist_info_root=root / wheel.dist_info_root,
                 )
             )
@@ -1114,14 +1183,14 @@ def derive_installed_layout(
             "private site-packages"
         )
     layout = matches[0]
-    _canonical_directory(layout.package_root, "installed iroha_python package")
+    _canonical_directory(layout.package_root, "installed iroha_native package")
     _canonical_directory(
         layout.dist_info_root,
-        "installed iroha_python dist-info",
+        "installed iroha_native dist-info",
     )
     if matching_distribution_entries != [layout.dist_info_root]:
         _fail(
-            "private venv must contain exactly one matching iroha-python "
+            "private venv must contain exactly one matching iroha-native "
             "distribution origin"
         )
     _assert_installed_layout(wheel, layout)
@@ -1172,10 +1241,7 @@ def _assert_direct_url(payload: bytes, wheel: WheelPreflight) -> None:
         _fail("installed direct_url.json has an unexpected archive policy")
     if archive_info["hashes"] != {"sha256": wheel.seal.sha256}:
         _fail("installed direct_url.json has the wrong wheel digest")
-    if (
-        "hash" in archive_info
-        and archive_info["hash"] != f"sha256={wheel.seal.sha256}"
-    ):
+    if "hash" in archive_info and archive_info["hash"] != f"sha256={wheel.seal.sha256}":
         _fail("installed direct_url.json has the wrong legacy wheel digest")
 
 
@@ -1188,7 +1254,7 @@ def verify_installed_files(
     package_paths, dist_info_paths = _assert_installed_layout(wheel, layout)
     stable_by_name: dict[str, StableFile] = {}
     for member in wheel.package_members:
-        relative = member.name.removeprefix(f"{PACKAGE_NAME}/")
+        relative = member.name.removeprefix(f"{wheel.owner.package}/")
         stable_by_name[member.name] = _read_installed_file(
             package_paths[relative],
             label=f"installed {member.name}",
@@ -1231,9 +1297,7 @@ def verify_installed_files(
             seal=_seal,
         )
 
-    direct_url_relative = direct_url_name.removeprefix(
-        f"{wheel.dist_info_root}/"
-    )
+    direct_url_relative = direct_url_name.removeprefix(f"{wheel.dist_info_root}/")
     direct_url_payload, direct_url_seal = _read_stable_regular_file(
         dist_info_paths[direct_url_relative],
         label=f"installed {direct_url_name}",
@@ -1268,11 +1332,9 @@ def verify_installed_files(
     )
 
     package = stable_by_name[wheel.package_member]
-    native = stable_by_name[wheel.native_member]
+    native = stable_by_name[wheel.native_member] if wheel.native_member else None
     return InstalledFileSet(
-        files=tuple(
-            stable_by_name[name] for name in sorted(stable_by_name)
-        ),
+        files=tuple(stable_by_name[name] for name in sorted(stable_by_name)),
         package=package,
         native=native,
     )
@@ -1285,7 +1347,10 @@ def reject_preseeded_modules(modules: dict[str, object] | None = None) -> None:
     seeded = sorted(
         name
         for name in module_table
-        if name == PACKAGE_NAME or name.startswith(f"{PACKAGE_NAME}.")
+        if any(
+            name == owner.package or name.startswith(f"{owner.package}.")
+            for owner in (NATIVE_OWNER, SDK_OWNER)
+        )
     )
     if seeded:
         _fail(
@@ -1330,18 +1395,14 @@ def _capture_dependency_tree(package_root: Path, module_name: str) -> tuple[str,
                 relative = entry.relative_to(package_root).as_posix()
                 metadata = entry.lstat()
             except OSError as error:
-                _fail(
-                    f"unable to stat authenticated {module_name} source: {error}"
-                )
+                _fail(f"unable to stat authenticated {module_name} source: {error}")
             if entry.is_symlink():
                 _fail(
                     f"authenticated {module_name} source tree contains a symbolic link"
                 )
             if stat.S_ISDIR(metadata.st_mode):
                 if entry.name.casefold() == "__pycache__":
-                    _fail(
-                        f"authenticated {module_name} source tree contains bytecode"
-                    )
+                    _fail(f"authenticated {module_name} source tree contains bytecode")
                 try:
                     if entry.resolve(strict=True) != entry:
                         _fail(
@@ -1365,9 +1426,7 @@ def _capture_dependency_tree(package_root: Path, module_name: str) -> tuple[str,
                     "a special or multiply linked file"
                 )
             folded_name = entry.name.casefold()
-            if folded_name.endswith(
-                (".pyc", ".pyo", *NATIVE_FILE_ENDINGS)
-            ):
+            if folded_name.endswith((".pyc", ".pyo", *NATIVE_FILE_ENDINGS)):
                 _fail(
                     f"authenticated {module_name} source tree contains "
                     "a bytecode or native loader alias"
@@ -1408,7 +1467,9 @@ def authenticate_dependency_roots(
         or canonical_torii.name != "iroha_torii_client"
         or canonical_norito.parent.parent != canonical_torii.parent
     ):
-        _fail("authenticated dependency roots do not have the expected repository layout")
+        _fail(
+            "authenticated dependency roots do not have the expected repository layout"
+        )
     if canonical_norito == canonical_torii:
         _fail("authenticated dependency roots must be distinct")
     for root in (canonical_norito, canonical_torii):
@@ -1424,13 +1485,18 @@ def authenticate_dependency_roots(
             _fail("authenticated dependency root exceeds the entry-count bound")
         for entry in entries:
             normalized = unicodedata.normalize("NFC", entry.name).casefold()
-            if normalized in {"iroha_python", "iroha_python.py"}:
+            if normalized in {
+                owner.package + suffix
+                for owner in (NATIVE_OWNER, SDK_OWNER)
+                for suffix in ("", ".py")
+            }:
+                _fail("authenticated dependency root contains an iroha_native shadow")
+            if any(
+                _is_matching_distribution_entry(entry.name, owner)
+                for owner in (NATIVE_OWNER, SDK_OWNER)
+            ):
                 _fail(
-                    "authenticated dependency root contains an iroha_python shadow"
-                )
-            if _is_matching_distribution_entry(entry.name):
-                _fail(
-                    "authenticated dependency root contains an iroha-python "
+                    "authenticated dependency root contains an iroha-native "
                     "distribution shadow"
                 )
 
@@ -1483,8 +1549,7 @@ def _trusted_dependency_spec(
         or spec.submodule_search_locations is None
         or tuple(spec.submodule_search_locations)
         != (str(dependency.initializer_path.parent),)
-        or _spec_origin(spec, dependency.module_name)
-        != dependency.initializer_path
+        or _spec_origin(spec, dependency.module_name) != dependency.initializer_path
     ):
         _fail(
             f"authenticated dependency {dependency.module_name} "
@@ -1501,9 +1566,9 @@ def _trusted_dependency_spec(
     return spec
 
 
-def trusted_import_specs(
+def trusted_package_spec(
     layout: InstalledLayout,
-) -> tuple[importlib.machinery.ModuleSpec, importlib.machinery.ModuleSpec]:
+) -> importlib.machinery.ModuleSpec:
     """Resolve specs with fixed file finders and authenticate their origins."""
 
     package_finder = importlib.machinery.FileFinder(
@@ -1513,26 +1578,37 @@ def trusted_import_specs(
             importlib.machinery.SOURCE_SUFFIXES,
         ),
     )
-    package_spec = package_finder.find_spec(PACKAGE_NAME)
+    package_spec = package_finder.find_spec(layout.owner.package)
     if package_spec is None:
-        _fail("trusted FileFinder could not resolve installed iroha_python")
+        _fail("trusted FileFinder could not resolve installed iroha_native")
     if type(package_spec.loader) is not importlib.machinery.SourceFileLoader:
-        _fail("iroha_python must use SourceFileLoader")
+        _fail("iroha_native must use SourceFileLoader")
     if package_spec.loader_state is not None:
-        _fail("iroha_python import spec has unexpected loader_state")
-    if _spec_origin(package_spec, PACKAGE_NAME) != layout.package_path:
-        _fail("iroha_python import spec resolved outside the validated wheel path")
+        _fail("iroha_native import spec has unexpected loader_state")
+    if _spec_origin(package_spec, layout.owner.package) != layout.package_path:
+        _fail("iroha_native import spec resolved outside the validated wheel path")
     package_locations = package_spec.submodule_search_locations
     if package_locations is None or tuple(package_locations) != (
         str(layout.package_root),
     ):
-        _fail("iroha_python import spec has an unexpected package search path")
+        _fail("iroha_native import spec has an unexpected package search path")
     if (
-        package_spec.loader.name != PACKAGE_NAME
+        package_spec.loader.name != layout.owner.package
         or Path(package_spec.loader.path) != layout.package_path
     ):
-        _fail("iroha_python source loader does not match the trusted origin")
+        _fail("iroha_native source loader does not match the trusted origin")
 
+    return package_spec
+
+
+def trusted_import_specs(
+    layout: InstalledLayout,
+) -> tuple[importlib.machinery.ModuleSpec, importlib.machinery.ModuleSpec]:
+    """Authenticate the sole native owner using standard fixed file finders."""
+
+    if layout.owner != NATIVE_OWNER or layout.native_path is None:
+        _fail("native import requires the authenticated native wheel owner")
+    package_spec = trusted_package_spec(layout)
     native_finder = importlib.machinery.FileFinder(
         str(layout.package_root),
         (
@@ -1542,22 +1618,22 @@ def trusted_import_specs(
     )
     native_spec = native_finder.find_spec(NATIVE_MODULE_NAME)
     if native_spec is None:
-        _fail("trusted FileFinder could not resolve installed iroha_python._crypto")
+        _fail("trusted FileFinder could not resolve installed iroha_native._crypto")
     if type(native_spec.loader) is not importlib.machinery.ExtensionFileLoader:
-        _fail("iroha_python._crypto must use ExtensionFileLoader")
+        _fail("iroha_native._crypto must use ExtensionFileLoader")
     if native_spec.loader_state is not None:
-        _fail("iroha_python._crypto import spec has unexpected loader_state")
+        _fail("iroha_native._crypto import spec has unexpected loader_state")
     if _spec_origin(native_spec, NATIVE_MODULE_NAME) != layout.native_path:
         _fail(
-            "iroha_python._crypto import spec resolved outside the validated wheel path"
+            "iroha_native._crypto import spec resolved outside the validated wheel path"
         )
     if native_spec.submodule_search_locations is not None:
-        _fail("iroha_python._crypto import spec must not describe a package")
+        _fail("iroha_native._crypto import spec must not describe a package")
     if (
         native_spec.loader.name != NATIVE_MODULE_NAME
         or Path(native_spec.loader.path) != layout.native_path
     ):
-        _fail("iroha_python._crypto loader does not match the trusted origin")
+        _fail("iroha_native._crypto loader does not match the trusted origin")
     return package_spec, native_spec
 
 
@@ -1569,26 +1645,24 @@ def _assert_unique_distribution_origin(
 
     try:
         distributions = tuple(
-            importlib.metadata.distributions(name=PACKAGE_DISTRIBUTION_NAME)
+            importlib.metadata.distributions(name=wheel.owner.distribution)
         )
     except (OSError, ValueError) as error:
         _fail(f"unable to resolve authenticated distribution metadata: {error}")
     if len(distributions) != 1:
-        _fail(
-            "package import must resolve exactly one iroha-python distribution"
-        )
+        _fail("package import must resolve exactly one iroha-native distribution")
     distribution = distributions[0]
     if type(distribution) is not importlib.metadata.PathDistribution:
-        _fail("iroha-python distribution must use the standard path loader")
+        _fail("iroha-native distribution must use the standard path loader")
     distribution_path = getattr(distribution, "_path", None)
     if not isinstance(distribution_path, Path):
-        _fail("iroha-python distribution has no concrete metadata path")
+        _fail("iroha-native distribution has no concrete metadata path")
     try:
         canonical_path = distribution_path.resolve(strict=True)
     except OSError as error:
-        _fail(f"iroha-python distribution origin is unavailable: {error}")
+        _fail(f"iroha-native distribution origin is unavailable: {error}")
     if canonical_path != layout.dist_info_root:
-        _fail("iroha-python distribution resolved outside authenticated dist-info")
+        _fail("iroha-native distribution resolved outside authenticated dist-info")
     try:
         names = distribution.metadata.get_all("Name")
         version = distribution.version
@@ -1597,11 +1671,10 @@ def _assert_unique_distribution_origin(
     if (
         names is None
         or len(names) != 1
-        or re.sub(r"[-_.]+", "-", names[0]).casefold()
-        != PACKAGE_DISTRIBUTION_NAME
+        or re.sub(r"[-_.]+", "-", names[0]).casefold() != wheel.owner.distribution
         or version != wheel.metadata_version
     ):
-        _fail("iroha-python distribution identity does not match the fresh wheel")
+        _fail("iroha-native distribution identity does not match the fresh wheel")
 
 
 def _assert_loaded_module(
@@ -1643,7 +1716,7 @@ def _authenticated_source_directories(
     """Enumerate roots that must use source-only path importers."""
 
     _package_files, package_directories = _tree_expectations(
-        root_name=PACKAGE_NAME,
+        root_name=wheel.owner.package,
         members=wheel.package_members,
         explicit_directories=wheel.package_directories,
     )
@@ -1662,17 +1735,13 @@ def _authenticated_source_directories(
             try:
                 entries = tuple(directory.iterdir())
             except OSError as error:
-                _fail(
-                    "unable to enumerate authenticated source directories: "
-                    f"{error}"
-                )
+                _fail(f"unable to enumerate authenticated source directories: {error}")
             for entry in entries:
                 try:
                     metadata = entry.lstat()
                 except OSError as error:
                     _fail(
-                        "unable to stat authenticated source directory entry: "
-                        f"{error}"
+                        f"unable to stat authenticated source directory entry: {error}"
                     )
                 if stat.S_ISDIR(metadata.st_mode) and not entry.is_symlink():
                     pending.append(entry)
@@ -1688,10 +1757,27 @@ def load_from_trusted_specs(
     package_spec: importlib.machinery.ModuleSpec,
     native_spec: importlib.machinery.ModuleSpec,
     dependencies: Sequence[AuthenticatedDependencyRoot],
+    sdk_wheel: WheelPreflight,
+    sdk_layout: InstalledLayout,
+    sdk_spec: importlib.machinery.ModuleSpec,
 ) -> tuple[object, object]:
     """Load fixed dependencies, extension, and package without meta-path hooks."""
 
     reject_preseeded_modules()
+    if (
+        wheel.owner != NATIVE_OWNER
+        or layout.owner != NATIVE_OWNER
+        or sdk_wheel.owner != SDK_OWNER
+        or sdk_layout.owner != SDK_OWNER
+        or layout.site_root != sdk_layout.site_root
+    ):
+        _fail(
+            "import requires both fixed wheel owners in the same private site-packages"
+        )
+    if wheel.metadata_version != sdk_wheel.metadata_version:
+        _fail("native and SDK wheel versions must match")
+    if type(sdk_spec.loader) is not importlib.machinery.SourceFileLoader:
+        _fail("trusted SDK spec lost SourceFileLoader")
     if len(dependencies) != 2 or tuple(
         dependency.module_name for dependency in dependencies
     ) != ("norito", "iroha_torii_client"):
@@ -1762,16 +1848,17 @@ def load_from_trusted_specs(
             importlib.machinery.FileFinder.path_hook(*general_loader_details),
         ]
         sys.path_importer_cache.clear()
-        sys.path_importer_cache[str(layout.site_root)] = (
-            importlib.machinery.FileFinder(
-                str(layout.site_root),
-                *general_loader_details,
-            )
+        sys.path_importer_cache[str(layout.site_root)] = importlib.machinery.FileFinder(
+            str(layout.site_root),
+            *general_loader_details,
         )
-        for source_directory in _authenticated_source_directories(
-            wheel,
-            layout,
-            dependencies,
+        for source_directory in (
+            *_authenticated_source_directories(
+                wheel,
+                layout,
+                dependencies,
+            ),
+            *_authenticated_source_directories(sdk_wheel, sdk_layout, ()),
         ):
             sys.path_importer_cache[str(source_directory)] = (
                 importlib.machinery.FileFinder(
@@ -1780,13 +1867,44 @@ def load_from_trusted_specs(
                 )
             )
         _assert_unique_distribution_origin(wheel, layout)
+        _assert_unique_distribution_origin(sdk_wheel, sdk_layout)
+        package = importlib.util.module_from_spec(package_spec)
+        sys.modules[PACKAGE_NAME] = package
+        package_loader.exec_module(package)
+        load_native = getattr(package, "load_crypto_extension", None)
+        if not callable(load_native):
+            _fail("authenticated native owner must provide load_crypto_extension")
+        native = load_native()
+        owned_native_spec = getattr(native, "__spec__", None)
+        if not isinstance(owned_native_spec, importlib.machinery.ModuleSpec):
+            _fail("owned native module must retain its authenticated import spec")
+        if (
+            type(owned_native_spec.loader) is not type(native_loader)
+            or not isinstance(
+                owned_native_spec.loader, importlib.machinery.ExtensionFileLoader
+            )
+            or owned_native_spec.name != native_spec.name
+            or owned_native_spec.loader.name != native_loader.name
+            or not isinstance(owned_native_spec.loader.path, str)
+            or Path(owned_native_spec.loader.path) != Path(native_loader.path)
+            or owned_native_spec.loader_state is not None
+            or owned_native_spec.submodule_search_locations is not None
+            or _spec_origin(owned_native_spec, NATIVE_MODULE_NAME) != layout.native_path
+        ):
+            _fail(
+                "owned native module does not match the authenticated extension descriptor"
+            )
+        _assert_loaded_module(
+            module=native,
+            spec=owned_native_spec,
+            expected_name=NATIVE_MODULE_NAME,
+            expected_path=layout.native_path,
+        )
         for dependency, dependency_spec in zip(
             dependencies, dependency_specs, strict=True
         ):
             dependency_loader = dependency_spec.loader
-            if not isinstance(
-                dependency_loader, importlib.machinery.SourceFileLoader
-            ):
+            if not isinstance(dependency_loader, importlib.machinery.SourceFileLoader):
                 _fail("authenticated dependency spec lost SourceFileLoader")
             module = importlib.util.module_from_spec(dependency_spec)
             sys.modules[dependency.module_name] = module
@@ -1798,14 +1916,18 @@ def load_from_trusted_specs(
                 expected_path=dependency.initializer_path,
             )
 
-        package = importlib.util.module_from_spec(package_spec)
-        sys.modules[PACKAGE_NAME] = package
-
-        native = importlib.util.module_from_spec(native_spec)
-        sys.modules[NATIVE_MODULE_NAME] = native
-        native_loader.exec_module(native)
-        package_loader.exec_module(package)
-
+        sdk = importlib.util.module_from_spec(sdk_spec)
+        sys.modules[SDK_OWNER.package] = sdk
+        sdk_spec.loader.exec_module(sdk)
+        _assert_loaded_module(
+            module=sdk,
+            spec=sdk_spec,
+            expected_name=SDK_OWNER.package,
+            expected_path=sdk_layout.package_path,
+        )
+        if getattr(sdk, "__version__", None) != sdk_wheel.metadata_version:
+            _fail("iroha_python observed a version outside authenticated METADATA")
+        _assert_unique_distribution_origin(sdk_wheel, sdk_layout)
         _assert_loaded_module(
             module=package,
             spec=package_spec,
@@ -1814,14 +1936,12 @@ def load_from_trusted_specs(
         )
         _assert_loaded_module(
             module=native,
-            spec=native_spec,
+            spec=owned_native_spec,
             expected_name=NATIVE_MODULE_NAME,
             expected_path=layout.native_path,
         )
         if getattr(package, "__version__", None) != wheel.metadata_version:
-            _fail(
-                "iroha_python observed a version outside authenticated METADATA"
-            )
+            _fail("iroha_native observed a version outside authenticated METADATA")
         _assert_unique_distribution_origin(wheel, layout)
         for dependency in dependencies:
             assert_expected_file_seal(
@@ -1844,14 +1964,13 @@ def load_from_trusted_specs(
         return package, native
     except BaseException:
         for name in tuple(sys.modules):
-            if (
-                name == PACKAGE_NAME
-                or name.startswith(f"{PACKAGE_NAME}.")
-                or any(
-                    name == dependency.module_name
-                    or name.startswith(f"{dependency.module_name}.")
-                    for dependency in dependencies
-                )
+            if any(
+                name == owner.package or name.startswith(f"{owner.package}.")
+                for owner in (NATIVE_OWNER, SDK_OWNER)
+            ) or any(
+                name == dependency.module_name
+                or name.startswith(f"{dependency.module_name}.")
+                for dependency in dependencies
             ):
                 sys.modules.pop(name, None)
         raise
@@ -1894,6 +2013,8 @@ def verify_current_environment(
     expected_wheel_seal: str | FileSeal,
     norito_root: Path,
     torii_root: Path,
+    sdk_wheel_path: Path,
+    expected_sdk_wheel_seal: str | FileSeal,
     *,
     site_roots: Iterable[Path] | None = None,
     platform_name: str | None = None,
@@ -1918,6 +2039,9 @@ def verify_current_environment(
         expected_wheel_seal,
         extension_suffixes=extension_suffixes,
     )
+    sdk_wheel = preflight_wheel(
+        sdk_wheel_path, expected_sdk_wheel_seal, owner=SDK_OWNER
+    )
     discovered_site_roots = (
         {
             Path(path)
@@ -1935,6 +2059,12 @@ def verify_current_environment(
         site_roots=discovered_site_roots,
         wheel=wheel,
     )
+    sdk_layout = derive_installed_layout(
+        environment_root=environment_root,
+        site_roots=discovered_site_roots,
+        wheel=sdk_wheel,
+    )
+    sdk_before = verify_installed_files(sdk_wheel, sdk_layout)
     installed_before = verify_installed_files(wheel, layout)
     package_spec, native_spec = trusted_import_specs(layout)
     load_from_trusted_specs(
@@ -1943,11 +2073,19 @@ def verify_current_environment(
         package_spec=package_spec,
         native_spec=native_spec,
         dependencies=dependencies,
+        sdk_wheel=sdk_wheel,
+        sdk_layout=sdk_layout,
+        sdk_spec=trusted_package_spec(sdk_layout),
     )
+    sdk_after = verify_installed_files(sdk_wheel, sdk_layout)
+    if sdk_after.files != sdk_before.files:
+        _fail("iroha_python package or dist-info changed while it was imported")
     installed_after = verify_installed_files(wheel, layout)
     if installed_after.files != installed_before.files:
-        _fail("iroha_python package or dist-info changed while it was imported")
+        _fail("iroha_native package or dist-info changed while it was imported")
 
+    if layout.native_path is None or installed_after.native is None:
+        _fail("native owner has no installed extension")
     selected_platform = sys.platform if platform_name is None else platform_name
     if selected_platform == "darwin":
         output = (
@@ -1970,6 +2108,14 @@ def verify_current_environment(
         label="fresh private wheel",
         max_bytes=MAX_WHEEL_BYTES,
     )
+    assert_expected_file_seal(
+        sdk_wheel.path,
+        sdk_wheel.seal,
+        label="fresh private SDK wheel",
+        max_bytes=MAX_WHEEL_BYTES,
+    )
+    if layout.native_path is None:
+        _fail("native owner has no installed extension")
     return layout.native_path
 
 
@@ -1982,19 +2128,22 @@ def main() -> int:
             return 1
         print(seal.render())
         return 0
-    if len(sys.argv) == 4 and sys.argv[1] == "--preflight":
+    if len(sys.argv) == 5 and sys.argv[1] == "--preflight":
         try:
-            wheel = preflight_wheel(Path(sys.argv[2]), sys.argv[3])
+            owner = {"native": NATIVE_OWNER, "sdk": SDK_OWNER}.get(sys.argv[2])
+            if owner is None:
+                _fail("preflight requires an explicit native or sdk owner")
+            wheel = preflight_wheel(Path(sys.argv[3]), sys.argv[4], owner=owner)
         except (OSError, VerificationError) as error:
             print(f"error: {error}", file=sys.stderr)
             return 1
         print(wheel.path)
         return 0
-    if len(sys.argv) != 6:
+    if len(sys.argv) != 8:
         raise SystemExit(
             "usage: verify_privacy_python_wheel.py "
-            "[--seal|--preflight] PRIVATE_VENV_OR_WHEEL PRIVATE_WHEEL_OR_SEAL "
-            "EXPECTED_WHEEL_SEAL [NORITO_ROOT TORII_ROOT]"
+            "--seal WHEEL | --preflight native|sdk WHEEL SEAL | "
+            "VENV NATIVE_WHEEL NATIVE_SEAL NORITO_ROOT TORII_ROOT SDK_WHEEL SDK_SEAL"
         )
     try:
         native_path = verify_current_environment(
@@ -2003,6 +2152,8 @@ def main() -> int:
             sys.argv[3],
             Path(sys.argv[4]),
             Path(sys.argv[5]),
+            Path(sys.argv[6]),
+            sys.argv[7],
         )
     except (OSError, VerificationError) as error:
         print(f"error: {error}", file=sys.stderr)

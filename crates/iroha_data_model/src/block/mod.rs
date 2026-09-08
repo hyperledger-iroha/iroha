@@ -74,13 +74,23 @@ pub use payload::{BlockPayload as Payload, BlockPayload, BlockResult};
 mod model {
     use super::*;
     /// Block collecting signatures from validators.
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, IntoSchema, Decode)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Encode,
+        IntoSchema,
+        Decode,
+        crate :: DeriveJsonSerialize,
+        crate :: DeriveJsonDeserialize,
     )]
     #[norito(decode_from_slice)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::block::model::SignedBlock")]
     pub struct SignedBlock {
         /// Signatures of validators who approved this block.
         pub(super) signatures: BTreeSet<BlockSignature>,
@@ -1047,20 +1057,29 @@ pub mod stream {
         use super::*;
         use std::num::NonZeroU64;
         /// Request sent to subscribe to blocks stream starting from the given height.
-        #[derive(Debug, Clone, Copy, Decode, Encode, IntoSchema)]
-        #[cfg_attr(
-            feature = "json",
-            derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+        #[derive(
+            Debug,
+            Clone,
+            Copy,
+            Decode,
+            Encode,
+            IntoSchema,
+            crate :: DeriveJsonSerialize,
+            crate :: DeriveJsonDeserialize,
         )]
         #[repr(transparent)]
         #[derive(norito::NoritoSchema)]
         #[norito_schema(name = "iroha_data_model::block::stream::model::BlockSubscriptionRequest")]
         pub struct BlockSubscriptionRequest(pub NonZeroU64);
         /// Message sent by the stream producer containing block.
-        #[derive(Debug, Clone, Decode, Encode, IntoSchema)]
-        #[cfg_attr(
-            feature = "json",
-            derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+        #[derive(
+            Debug,
+            Clone,
+            Decode,
+            Encode,
+            IntoSchema,
+            crate :: DeriveJsonSerialize,
+            crate :: DeriveJsonDeserialize,
         )]
         #[repr(transparent)]
         #[derive(norito::NoritoSchema)]
@@ -1181,7 +1200,7 @@ pub mod error {
             SccpCommitmentRootMismatch,
         }
     }
-    #[cfg(feature = "json")]
+
     impl BlockRejectionReason {
         fn json_label(self) -> &'static str {
             match self {
@@ -1212,7 +1231,7 @@ pub mod error {
             }
         }
     }
-    #[cfg(feature = "json")]
+
     impl norito::json::FastJsonWrite for BlockRejectionReason {
         fn write_json(&self, out: &mut String) {
             norito::json::write_json_string(self.json_label(), out);
@@ -1224,7 +1243,7 @@ pub mod error {
             norito::json::write_json_string_to(self.json_label(), out)
         }
     }
-    #[cfg(feature = "json")]
+
     impl norito::json::JsonDeserialize for BlockRejectionReason {
         fn json_deserialize(
             parser: &mut norito::json::Parser<'_>,
@@ -1816,7 +1835,7 @@ mod tests {
         alternate.extend_from_slice(&encode_default_norito_fields(&block));
         alternate
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn block_rejection_reason_json_has_closed_output_bound() {
         let reason = error::BlockRejectionReason::SccpCommitmentRootMismatch;

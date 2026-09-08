@@ -2510,58 +2510,146 @@ PRODUCTION_TRACE_EXTRACTION_BINDINGS = (
                                    'required_tokens': ('check_production_in_flight_first_release_transition',
                                                        'ProductionInFlightFirstReleaseTransitionProjection'),
                                    'ordered_tokens': ('check_production_in_flight_first_release_transition',
-                                                      'ProductionInFlightFirstReleaseTransitionProjection '
-                                                      '{',
-                                                      'action,',
-                                                      'actor,',
-                                                      'target,',
-                                                      'before,',
-                                                      'after,'),
+                                                      'ProductionInFlightFirstReleaseTransitionProjection { '
+                                                      'action, actor, target, before, after, }'),
                                    'transition_projection_count': 2},
-     'supporting_sources': ({'path': 'crates/iroha_core/src/sumeragi/v2_core.rs',
+     'supporting_sources': ({'role': 'production source witness wrapper',
+                             'path': 'crates/iroha_core/src/sumeragi/v2_core.rs',
                              'impl': None,
                              'symbol': 'check_production_in_flight_first_release_observe_replica_queue_release_transition',
                              'required_tokens': ('witness_derived_first_release_transition(refinement::check_production_in_flight_first_release_observe_replica_queue_release_transition(before, '
-                                                 'exact_ordinary_fifo_preserved,)?,)',
-                                                 'before: '
-                                                 'ProductionInFlightFirstReleaseStateProjection',
-                                                 'exact_ordinary_fifo_preserved: bool'),
-                             'ordered_tokens': (),
-                             'role': 'source-bound production observation wrapper'},
-                            {'path': 'crates/iroha_core/src/sumeragi/v2_core.rs',
+                                                 'exact_ordinary_fifo_preserved,)?,)',),
+                             'ordered_tokens': ()},
+                            {'role': 'derived projection source witness attachment',
+                             'path': 'crates/iroha_core/src/sumeragi/v2_core.rs',
                              'impl': None,
                              'symbol': 'witness_derived_first_release_transition',
                              'required_tokens': ('check_production_in_flight_first_release_transition(checked.into_projection())',),
-                             'ordered_tokens': (),
-                             'role': 'production witness handoff'},
-                            {'path': 'crates/iroha_core/src/kura/autonomous_merge_bundle_support.rs',
+                             'ordered_tokens': ()},
+                            {'role': 'exact retired full-pending replica projection',
+                             'path': 'crates/iroha_core/src/kura/autonomous_merge_bundle_support.rs',
                              'impl': 'AutonomousLaneReleaseProjectionContext',
                              'symbol': 'observe_replica_queue_release_transition',
                              'required_tokens': ('canonical_lane_queue_reservation_group_identity_projection(self.reservation_group)',
                                                  'self.state(binding_a, '
                                                  'IN_FLIGHT_FIRST_RELEASE_RESERVATION_LIVE, true, '
-                                                 'self.reservation_group.reservation_count, 0,)',
+                                                 'self.reservation_group.reservation_count, 0,) ',
                                                  'check_production_in_flight_first_release_observe_replica_queue_release_transition(before, '
                                                  'exact_ordinary_fifo_preserved,)'),
-                             'ordered_tokens': (),
-                             'role': 'signed replica claim-prefix projection'},
-                            {'path': 'crates/iroha_core/src/queue.rs',
+                             'ordered_tokens': ()},
+                            {'role': 'move-only exact signed-cursor and ordered-group Queue fence',
+                             'path': 'crates/iroha_core/src/queue.rs',
                              'impl': "<'queue> AutonomousLaneReplicaQueueDispositionAuthorization<'queue>",
                              'symbol': 'consume_for_kura',
-                             'required_tokens': ('let expected_cursor = expected_cursor_read.cursor()?',
-                                                 'LaneReservationSnapshotLifecycleProjectionV1::from_authenticated_cursor',
-                                                 'self.cursor != *expected_cursor',
-                                                 'self.reservation_group != '
-                                                 'expected_lifecycle.reservation_group',
-                                                 'self.ordered_keys != expected_lifecycle.ordered_keys',
-                                                 'expected_lifecycle.local_actor == '
-                                                 'expected_lifecycle.producer',
+                             'required_tokens': ('self,',
+                                                 'expected_cursor_read.cursor()?',
+                                                 'expected_cursor.before_projection().ok()?',
+                                                 'LaneReservationSnapshotLifecycleProjectionV1::from_authenticated_cursor(expected_cursor, '
+                                                 'expected_ordered_keys.to_vec(), expected_before,)',
+                                                 'self.cursor != *expected_cursor || self.reservation_group != '
+                                                 'expected_lifecycle.reservation_group || self.ordered_keys != '
+                                                 'expected_lifecycle.ordered_keys || '
+                                                 'expected_lifecycle.local_actor == expected_lifecycle.producer',
                                                  '_reservation_transition: self.reservation_transition',
                                                  'AutonomousLaneReplicaQueueDisposition::ExactOrdinaryFifo(fence)',
                                                  'AutonomousLaneReplicaQueueDisposition::StrictQueueAbsent(fence)'),
-                             'ordered_tokens': (),
-                             'role': 'move-only exact cursor and ordered-group Queue fence'},
-                            {'path': 'crates/iroha_sumeragi_core/src/verus_proofs/in_flight_first_release_proofs.rs',
+                             'ordered_tokens': ()},
+                            {'role': 'live Queue authorization entry',
+                             'path': 'crates/iroha_core/src/queue.rs',
+                             'impl': 'Queue',
+                             'symbol': 'authorize_autonomous_lane_replica_queue_disposition',
+                             'required_tokens': ('self.authorize_autonomous_lane_replica_queue_disposition_with_gate(cursor_read, '
+                                                 'ordered_keys, '
+                                                 'AutonomousLaneReplicaQueueDispositionStartupGate::Live,)',),
+                             'ordered_tokens': ()},
+                            {'role': 'startup exact replay receipt Queue authorization entry',
+                             'path': 'crates/iroha_core/src/queue.rs',
+                             'impl': 'Queue',
+                             'symbol': 'authorize_autonomous_lane_replica_queue_disposition_during_startup',
+                             'required_tokens': ('self.authorize_autonomous_lane_replica_queue_disposition_with_gate(cursor_read, '
+                                                 'ordered_keys, '
+                                                 'AutonomousLaneReplicaQueueDispositionStartupGate::Startup { '
+                                                 'receipt, expected_snapshot, },)',),
+                             'ordered_tokens': ()},
+                            {'role': 'exhaustive twenty-index strict Queue absence',
+                             'path': 'crates/iroha_core/src/queue.rs',
+                             'impl': 'Queue',
+                             'symbol': 'canonical_queue_hash_terminal_owner_mask_locked',
+                             'required_tokens': ('record(0, store.live_by_entrypoint.contains_key(&hash))',
+                                                 'store.commit_barriers.iter().any(|committed| '
+                                                 'committed.entrypoint_hash == hash)',
+                                                 'store.plan_tombstoned.iter().any(|marked| '
+                                                 'marked.entrypoint_hash == hash)',
+                                                 'store.release_barriers.iter().any',
+                                                 'store.completed_releases.iter().any',
+                                                 'record(5, self.txs.contains_key(&hash))',
+                                                 'record(6, self.routing_plans.contains_key(&hash))',
+                                                 'record(7, self.durable_plan_claims.contains_key(&hash))',
+                                                 'record(8, self.fifo_order_by_hash.contains_key(&hash))',
+                                                 'record(9, '
+                                                 'ownership.global_selection_owners.contains_key(&hash))',
+                                                 '!allow_active_durability_transition && '
+                                                 'ownership.active_durability_transitions.contains(&hash)',
+                                                 'record(11, self.removed_hashes.contains_key(&hash))',
+                                                 'record(12, self.tx_encoded_len.contains_key(&hash))',
+                                                 'record(13, self.tx_gas_cost.contains_key(&hash))',
+                                                 'record(14, self.tx_enqueued_at_ms.contains_key(&hash))',
+                                                 'record(15, self.queued_tx_enqueued_at_ms.contains_key(&hash))',
+                                                 'record(16, self.expiry_ring_members.contains_key(&hash))',
+                                                 'ownership.fee_admission_reservations.live_by_entrypoint.contains_key(&hash)',
+                                                 'record(18, has_teu_index)',
+                                                 'record(19, ownership.fifo_hashes.contains(&hash))'),
+                             'ordered_tokens': ()},
+                            {'role': 'exact ordinary FIFO owner preflight',
+                             'path': 'crates/iroha_core/src/queue.rs',
+                             'impl': 'Queue',
+                             'symbol': 'preflight_committed_replica_owner_locked',
+                             'required_tokens': ('store.durable_owned_hashes().any(|owned| owned == hash)',
+                                                 '!allow_global_selection_overlay && '
+                                                 'ownership.global_selection_owners.contains_key(&hash)',
+                                                 '!ownership.fifo_hashes.contains(&hash)',
+                                                 'self.removed_hashes.contains_key(&hash)',
+                                                 'allow_active_durability_transition && '
+                                                 '!ownership.active_durability_transitions.contains(&hash)',
+                                                 'fifo_ordinal_owners.get(&fifo_order.ordinal) != Some(&hash)',
+                                                 'binding.validate_for_lane_reservation_commit(key)',
+                                                 'claim.signed_transaction_hash != '
+                                                 'crate::tx::exact_signed_transaction_hash(accepted.entrypoint())',
+                                                 'plan.digest() != key.routing_plan_digest',
+                                                 'plan.coordinator_leg() != key.coordinator_leg',
+                                                 'claim.routing_plan != plan',
+                                                 'enqueued_at != Some(claim.enqueue_timestamp_ms)',
+                                                 'queued_at != enqueued_at',
+                                                 'encoded_len != Some(Self::compute_tx_encoded_len(accepted))',
+                                                 'gas_cost != Self::compute_proposal_gas_cost(accepted).ok()',
+                                                 '!self.expiry_ring_members.contains_key(&hash)'),
+                             'ordered_tokens': ()},
+                            {'role': 'whole ordered FIFO group byte identity',
+                             'path': 'crates/iroha_core/src/queue.rs',
+                             'impl': 'Queue',
+                             'symbol': 'replica_group_has_byte_exact_ordinary_fifo_ownership_locked',
+                             'required_tokens': ('previous_global_fifo_ordinal.is_some_and(|previous| previous '
+                                                 '>= order.ordinal)',
+                                                 'positions.insert(hash, position).is_some()',
+                                                 'accepted.hash_as_entrypoint() != key.entrypoint_hash',
+                                                 'plan.digest() != key.routing_plan_digest',
+                                                 'plan.coordinator_leg() != key.coordinator_leg',
+                                                 'plan.coordinator_route() != expected_route',
+                                                 'claim.signed_transaction_hash != '
+                                                 'crate::tx::exact_signed_transaction_hash(accepted.entrypoint())',
+                                                 'binding.validate_for_lane_reservation_commit(key)',
+                                                 'previous_position.is_some_and(|previous| previous >= '
+                                                 'position)'),
+                             'ordered_tokens': ()},
+                            {'role': 'durable QueuePlan replica versus absent journal cut',
+                             'path': 'crates/iroha_core/src/queue.rs',
+                             'impl': 'Queue',
+                             'symbol': 'preflight_lane_reservation_plan_journal',
+                             'required_tokens': ('journal.observe_startup_replay_receipt_with_terminal_cuts(&preflight.active_phases, '
+                                                 '&preflight.finalized_keys, &preflight.replica_keys,)',),
+                             'ordered_tokens': ()},
+                            {'role': 'exact replica Queue observation theorem',
+                             'path': 'crates/iroha_sumeragi_core/src/verus_proofs/in_flight_first_release_proofs.rs',
                              'impl': None,
                              'symbol': 'production_in_flight_first_release_replica_queue_observation_is_exact',
                              'required_tokens': ('projection.action == '
@@ -2585,81 +2673,108 @@ PRODUCTION_TRACE_EXTRACTION_BINDINGS = (
                                                  'projection.after.release.fifo_restored == '
                                                  'projection.before.release.fifo_restored',
                                                  'reveal(production_in_flight_first_release_transition_kernel)'),
-                             'ordered_tokens': (),
-                             'role': 'exact replica Queue observation theorem'}),
+                             'ordered_tokens': ()}),
      'authorization_source': {'path': 'crates/iroha_core/src/queue.rs',
                               'impl': 'Queue',
                               'symbol': 'authorize_autonomous_lane_replica_queue_disposition_with_gate',
-                              'required_tokens': ('LaneReservationSnapshotLifecycleProjectionV1::from_authenticated_cursor',
+                              'required_tokens': ('self.transaction_selection_durability_faulted()',
+                                                  'AutonomousLaneReplicaQueueDispositionStartupGate::Live',
+                                                  'self.lane_reservation_startup_reconciliation_pending()',
+                                                  'self.lane_reservation_journal.lock().is_none() || '
+                                                  'self.plan_journal.lock().is_none()',
+                                                  'cursor_read.cursor()',
+                                                  'cursor.before_projection()',
+                                                  'LaneReservationSnapshotLifecycleProjectionV1::from_authenticated_cursor(cursor, '
+                                                  'ordered_keys.to_vec(), cursor_before,)',
                                                   'lifecycle.local_actor == lifecycle.producer',
                                                   'self.lane_reservation_transition_lock.lock()',
                                                   'self.wait_for_durability_transitions(&transition_hashes)',
-                                                  'self.push_remove_lock.lock()',
-                                                  'begin_durability_transition_locked(transition_hashes)',
+                                                  'self.revalidate_lane_reservation_startup_reconciliation_receipt_locked(receipt, '
+                                                  'expected_snapshot,)',
+                                                  'self.begin_durability_transition_locked(transition_hashes)',
+                                                  'fifo_hashes.len() != fifo_snapshot.len()',
                                                   'store.ensure_no_conflict(key)?',
                                                   'store.ensure_not_release_prepared(key)?',
-                                                  'preflight_committed_replica_owner_locked',
-                                                  'canonical_queue_hash_terminal_owner_mask_locked',
+                                                  '!active_durability_transitions.contains(&hash)',
+                                                  'self.preflight_committed_replica_owner_locked(&store, key, '
+                                                  '&ownership, &fifo_ordinal_owners, true, true,)',
+                                                  'self.canonical_queue_hash_terminal_owner_mask_locked(&store, '
+                                                  'hash, &ownership, true,)',
                                                   'if owner_mask != 0',
-                                                  'disposition.is_some_and(|existing| existing != '
-                                                  'observed)',
-                                                  'replica_group_has_byte_exact_ordinary_fifo_ownership_locked(ordered_keys)',
-                                                  'preflight_lane_reservation_plan_journal(&journal_preflight)?',
-                                                  'Ok(AutonomousLaneReplicaQueueDispositionAuthorization '
-                                                  '{ cursor: cursor.clone(), reservation_group, '
-                                                  'ordered_keys: ordered_keys.to_vec(), disposition, '
-                                                  'reservation_transition, })'),
-                              'ordered_tokens': ('let reservation_group = lifecycle.reservation_group',
+                                                  'disposition.is_some_and(|existing| existing != observed)',
+                                                  'disposition.ok_or_else',
+                                                  '!self.replica_group_has_byte_exact_ordinary_fifo_ownership_locked(ordered_keys)',
+                                                  'self.revalidate_queue_plan_startup_replay_receipt(&receipt.plan_replay_receipt, '
+                                                  'expected_snapshot,)',
+                                                  'self.preflight_lane_reservation_plan_journal(&journal_preflight)?',
+                                                  'Ok(AutonomousLaneReplicaQueueDispositionAuthorization { '
+                                                  'cursor: cursor.clone(), reservation_group, ordered_keys: '
+                                                  'ordered_keys.to_vec(), disposition, reservation_transition, '
+                                                  '})'),
+                              'ordered_tokens': ('let cursor = cursor_read.cursor()',
+                                                 'LaneReservationSnapshotLifecycleProjectionV1::from_authenticated_cursor',
                                                  'self.lane_reservation_transition_lock.lock()',
-                                                 'let mut queue_guard = self.push_remove_lock.lock()',
-                                                 'begin_durability_transition_locked(transition_hashes)',
+                                                 'self.wait_for_durability_transitions(&transition_hashes); let '
+                                                 'mut queue_guard = self.push_remove_lock.lock()',
+                                                 'self.begin_durability_transition_locked',
                                                  'for key in ordered_keys',
-                                                 'if disposition == '
-                                                 'AutonomousLaneReplicaQueueDispositionKind::ExactOrdinaryFifo',
-                                                 'drop(store); drop(queue_guard);',
-                                                 'self.preflight_lane_reservation_plan_journal(&journal_preflight)?',
-                                                 'Ok(AutonomousLaneReplicaQueueDispositionAuthorization '
-                                                 '{')},
+                                                 'self.preflight_committed_replica_owner_locked',
+                                                 'self.canonical_queue_hash_terminal_owner_mask_locked',
+                                                 'disposition.is_some_and',
+                                                 'replica_group_has_byte_exact_ordinary_fifo_ownership_locked',
+                                                 'self.preflight_lane_reservation_plan_journal',
+                                                 'Ok(AutonomousLaneReplicaQueueDispositionAuthorization')},
      'checked_transition_consumer': {'path': 'crates/iroha_core/src/kura/autonomous_release_authority.rs',
                                      'impl': 'Kura',
                                      'symbol': 'retire_autonomous_lane_slot_with_replica_queue_disposition',
-                                     'required_tokens': ('authorization.consume_for_kura(&cursor_read, '
+                                     'required_tokens': ('authorization: '
+                                                         'AutonomousLaneReplicaQueueDispositionAuthorization',
+                                                         'local_actor == '
+                                                         'expected_cursor.binding().producer_actor_projection()',
+                                                         'authorization.consume_for_kura(&cursor_read, '
                                                          '&barrier.ordered_keys)',
                                                          'let (exact_ordinary_fifo_preserved, '
-                                                         'source_disposition, _queue_fence) = match '
-                                                         'disposition',
-                                                         'if durable_cursor != expected_cursor',
-                                                         'context.actor != durable_local_actor',
-                                                         'context.reservation_group != '
+                                                         'source_disposition, _queue_fence) = match disposition',
+                                                         '!retirement.matches_payload(payload) || '
+                                                         'payload.reservation_keys.as_slice() != '
+                                                         'barrier.ordered_keys.as_slice()',
+                                                         'durable_cursor != expected_cursor',
+                                                         'durable_local_actor != local_actor || '
+                                                         'durable_local_actor == '
+                                                         'durable_cursor.binding().producer_actor_projection()',
+                                                         'context.actor != durable_local_actor || context.actor '
+                                                         '== context.producer || context.reservation_group != '
                                                          'durable_cursor.binding().reservation_group_binding()',
-                                                         'if pending_prefix != selected_count || '
-                                                         'released_prefix > pending_prefix',
-                                                         'if exact_attempt_is_current && '
-                                                         'released_prefix == 0',
-                                                         'observe_replica_queue_release_transition(exact_ordinary_fifo_preserved)',
+                                                         'self.persist_autonomous_lane_slot_retirement_for_replica_locked',
+                                                         'self.prepare_autonomous_lane_entrypoint_claim_release_for_replica_locked',
+                                                         'if pending_prefix != selected_count || released_prefix '
+                                                         '> pending_prefix',
+                                                         'if exact_attempt_is_current && released_prefix == 0',
+                                                         'context.observe_replica_queue_release_transition(exact_ordinary_fifo_preserved)',
+                                                         'into_projection()',
                                                          'if observed.after.queue.reservation_state != '
                                                          'expected_reservation_state',
                                                          'context.replica_queue_release_state(exact_ordinary_fifo_preserved, '
                                                          'released_prefix)',
                                                          '!production_in_flight_first_release_state_kernel(recovered)',
-                                                         'recovered.release.released_prefix != '
-                                                         'released_prefix'),
-                                     'ordered_tokens': ('authorization.consume_for_kura(&cursor_read, '
-                                                        '&barrier.ordered_keys)',
-                                                        'let (exact_ordinary_fifo_preserved, '
-                                                        'source_disposition, _queue_fence) = match '
-                                                        'disposition',
-                                                        'let _prune_guard = self.prune_lock.lock()',
-                                                        'if durable_cursor != expected_cursor',
-                                                        'persist_autonomous_lane_slot_retirement_for_replica_locked',
-                                                        'prepare_autonomous_lane_entrypoint_claim_release_for_replica_locked',
-                                                        'if exact_attempt_is_current && '
-                                                        'released_prefix == 0',
-                                                        'observe_replica_queue_release_transition(exact_ordinary_fifo_preserved)',
+                                                         'self.finalize_autonomous_lane_entrypoint_claim_release_for_replica_locked',
+                                                         'recovered.release.released_prefix != released_prefix'),
+                                     'ordered_tokens': ('authorization.consume_for_kura',
+                                                        'let (exact_ordinary_fifo_preserved, source_disposition, '
+                                                        '_queue_fence)',
+                                                        'self.prune_lock.lock()',
+                                                        'retirement.matches_payload(payload)',
+                                                        'durable_cursor != expected_cursor',
+                                                        'context.actor != durable_local_actor',
+                                                        'self.persist_autonomous_lane_slot_retirement_for_replica_locked',
+                                                        'self.prepare_autonomous_lane_entrypoint_claim_release_for_replica_locked',
+                                                        'pending_prefix != selected_count',
+                                                        'if exact_attempt_is_current && released_prefix == 0',
+                                                        'context.observe_replica_queue_release_transition',
                                                         'into_projection()',
-                                                        'if observed.after.queue.reservation_state != '
+                                                        'observed.after.queue.reservation_state != '
                                                         'expected_reservation_state',
-                                                        'finalize_autonomous_lane_entrypoint_claim_release_for_replica_locked')},
+                                                        'self.finalize_autonomous_lane_entrypoint_claim_release_for_replica_locked')},
      'commit_sink': {'path': 'crates/iroha_core/src/kura/autonomous_release_authority.rs',
                      'impl': 'Kura',
                      'symbol': 'retire_autonomous_lane_slot_with_replica_queue_disposition',

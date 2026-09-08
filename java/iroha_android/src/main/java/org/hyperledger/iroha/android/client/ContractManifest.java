@@ -42,7 +42,10 @@ public final class ContractManifest {
     OPTION,
     RESULT,
     LIST,
-    LEAF
+    LEAF,
+    UNIT,
+    ERROR,
+    STATE_CURSOR
   }
 
   /** Named product metadata for a flat preorder schema node. */
@@ -84,18 +87,21 @@ public final class ContractManifest {
     private final Integer tupleArity;
     private final ListTypeNodeV1 listValue;
     private final ValueKindV1 leafKind;
+    private final ErrorTypeDescriptor errorType;
 
     ValueTypeNodeV1(
         final ValueTypeNodeKindV1 kind,
         final StructTypeNodeV1 structValue,
         final Integer tupleArity,
         final ListTypeNodeV1 listValue,
-        final ValueKindV1 leafKind) {
+        final ValueKindV1 leafKind,
+        final ErrorTypeDescriptor errorType) {
       this.kind = kind;
       this.structValue = structValue;
       this.tupleArity = tupleArity;
       this.listValue = listValue;
       this.leafKind = leafKind;
+      this.errorType = errorType;
     }
 
     public ValueTypeNodeKindV1 kind() {
@@ -116,6 +122,10 @@ public final class ContractManifest {
 
     public ValueKindV1 leafKind() {
       return leafKind;
+    }
+
+    public ErrorTypeDescriptor errorType() {
+      return errorType;
     }
   }
 
@@ -474,29 +484,28 @@ public final class ContractManifest {
     }
   }
 
-  /** One stable application error code. */
-  public static final class ErrorCodeDescriptor {
-    private final String namespace;
+  /** One stable nonzero enum-local variant. */
+  public static final class ErrorVariantDescriptor {
     private final String name;
     private final long code;
-
-    ErrorCodeDescriptor(final String namespace, final String name, final long code) {
-      this.namespace = namespace;
+    ErrorVariantDescriptor(final String name, final long code) {
       this.name = name;
       this.code = code;
     }
+    public String name() { return name; }
+    public long code() { return code; }
+  }
 
-    public String namespace() {
-      return namespace;
+  /** Stable nominal package/unit/enum identity and exact ordered variants. */
+  public static final class ErrorTypeDescriptor {
+    private final String identity;
+    private final List<ErrorVariantDescriptor> variants;
+    ErrorTypeDescriptor(final String identity, final List<ErrorVariantDescriptor> variants) {
+      this.identity = identity;
+      this.variants = immutableList(variants);
     }
-
-    public String name() {
-      return name;
-    }
-
-    public long code() {
-      return code;
-    }
+    public String identity() { return identity; }
+    public List<ErrorVariantDescriptor> variants() { return variants; }
   }
 
   /** One localized text in a `kotoba` table. */
@@ -565,7 +574,7 @@ public final class ContractManifest {
   private final AccessSetHints accessSetHints;
   private final List<EntrypointDescriptor> entrypoints;
   private final List<StateDescriptor> states;
-  private final List<ErrorCodeDescriptor> errorCodes;
+  private final List<ErrorTypeDescriptor> errorTypes;
   private final List<KotobaTranslationEntry> kotoba;
   private final Provenance provenance;
 
@@ -578,7 +587,7 @@ public final class ContractManifest {
       final AccessSetHints accessSetHints,
       final List<EntrypointDescriptor> entrypoints,
       final List<StateDescriptor> states,
-      final List<ErrorCodeDescriptor> errorCodes,
+      final List<ErrorTypeDescriptor> errorTypes,
       final List<KotobaTranslationEntry> kotoba,
       final Provenance provenance) {
     this.seiyakuName = seiyakuName;
@@ -589,7 +598,7 @@ public final class ContractManifest {
     this.accessSetHints = accessSetHints;
     this.entrypoints = immutableNullableList(entrypoints);
     this.states = immutableNullableList(states);
-    this.errorCodes = immutableNullableList(errorCodes);
+    this.errorTypes = immutableNullableList(errorTypes);
     this.kotoba = immutableNullableList(kotoba);
     this.provenance = provenance;
   }
@@ -626,8 +635,8 @@ public final class ContractManifest {
     return states;
   }
 
-  public List<ErrorCodeDescriptor> errorCodes() {
-    return errorCodes;
+  public List<ErrorTypeDescriptor> errorTypes() {
+    return errorTypes;
   }
 
   public List<KotobaTranslationEntry> kotoba() {

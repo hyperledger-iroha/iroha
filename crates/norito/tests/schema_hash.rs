@@ -1,6 +1,6 @@
 //! Sanity checks for schema hash helpers.
 use norito::{
-    NoritoDeserialize, NoritoSerialize,
+    DeserializePayload, NoritoDeserialize, NoritoSerialize,
     derive::{
         NoritoDeserialize as DeriveNoritoDeserialize, NoritoSerialize as DeriveNoritoSerialize,
     },
@@ -117,4 +117,106 @@ fn structural_schema_hash_matches_reference() {
     let from_bytes = norito::core::schema_hash_structural_from_json_bytes(json.as_bytes())
         .expect("hash from bytes");
     assert_eq!(from_bytes, expected);
+}
+
+// No explicit schema_name: this exercises the selected default hashing rule.
+#[derive(
+    Debug, PartialEq, Eq, iroha_schema::IntoSchema, DeriveNoritoSerialize, DeriveNoritoDeserialize,
+)]
+#[norito(decode_from_slice)]
+enum DefaultSchemaEnum {
+    Unit,
+    Value(u8),
+}
+
+#[test]
+fn derived_enum_schema_agrees_across_all_frame_readers() {
+    #[cfg(feature = "schema-structural")]
+    let expected = norito::core::schema_hash_structural::<DefaultSchemaEnum>();
+    #[cfg(not(feature = "schema-structural"))]
+    let expected = norito::core::type_name_schema_hash::<DefaultSchemaEnum>();
+    assert_eq!(
+        <DefaultSchemaEnum as NoritoSerialize>::schema_hash(),
+        expected
+    );
+    assert_eq!(
+        <DefaultSchemaEnum as NoritoDeserialize<'static>>::schema_hash(),
+        expected,
+        "both directions must use the same selected frame identity"
+    );
+    for value in [DefaultSchemaEnum::Unit, DefaultSchemaEnum::Value(9)] {
+        let frame = norito::to_bytes(&value).expect("encode enum frame");
+        assert_eq!(&frame[6..22], expected.as_slice());
+        assert_eq!(
+            norito::decode_from_bytes::<DefaultSchemaEnum>(&frame).expect("high-level decode"),
+            value
+        );
+        assert_eq!(
+            norito::deserialize_stream::<_, DefaultSchemaEnum>(frame.as_slice())
+                .expect("stream decode"),
+            value
+        );
+        assert_eq!(
+            norito::core::decode_from_bytes::<DefaultSchemaEnum>(&frame)
+                .expect("core slice decode"),
+            value
+        );
+        let view = norito::core::from_bytes_view(&frame).expect("read archive view");
+        assert_eq!(
+            view.decode::<DefaultSchemaEnum>().expect("view decode"),
+            value
+        );
+        assert_eq!(
+            view.decode_exact::<DefaultSchemaEnum>()
+                .expect("exact view decode"),
+            value
+        );
+        let archived = norito::core::from_bytes::<DefaultSchemaEnum>(&frame)
+            .expect("validate archived enum frame");
+        assert_eq!(
+            DefaultSchemaEnum::try_deserialize(archived).expect("archived enum decode"),
+            value
+        );
+
+        let mut wrong_frame = frame.clone();
+        #[cfg(feature = "schema-structural")]
+        let wrong_schema = norito::core::type_name_schema_hash::<DefaultSchemaEnum>();
+        #[cfg(not(feature = "schema-structural"))]
+        let wrong_schema = {
+            let mut changed = expected;
+            changed[0] ^= 1;
+            changed
+        };
+        assert_ne!(
+            wrong_schema, expected,
+            "negative control changes the schema"
+        );
+        wrong_frame[6..22].copy_from_slice(&wrong_schema);
+        assert!(matches!(
+            norito::decode_from_bytes::<DefaultSchemaEnum>(&wrong_frame),
+            Err(norito::Error::SchemaMismatch)
+        ));
+        assert!(matches!(
+            norito::deserialize_stream::<_, DefaultSchemaEnum>(wrong_frame.as_slice()),
+            Err(norito::Error::SchemaMismatch)
+        ));
+        assert!(matches!(
+            norito::core::decode_from_bytes::<DefaultSchemaEnum>(&wrong_frame),
+            Err(norito::Error::SchemaMismatch)
+        ));
+        assert!(matches!(
+            norito::core::from_bytes::<DefaultSchemaEnum>(&wrong_frame),
+            Err(norito::Error::SchemaMismatch)
+        ));
+        let wrong_view = norito::core::from_bytes_view(&wrong_frame)
+            .expect("a view validates bytes before choosing a typed decoder");
+        assert!(matches!(
+            wrong_view.decode::<DefaultSchemaEnum>(),
+            Err(norito::Error::SchemaMismatch)
+        ));
+        assert!(matches!(
+            wrong_view.decode_exact::<DefaultSchemaEnum>(),
+            Err(norito::Error::SchemaMismatch)
+        ));
+    }
 }

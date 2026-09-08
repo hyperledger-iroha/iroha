@@ -14,7 +14,7 @@ use getset::{CopyGetters, Getters};
 use iroha_data_model_derive::model;
 use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
-#[cfg(feature = "json")]
+
 use mv::json::JsonKeyCodec;
 use norito::{
     codec::{Decode, Encode},
@@ -52,8 +52,20 @@ mod model {
 pub use self::model::RepoAgreementId;
 string_id!(RepoAgreementId);
 /// Cash leg definition used by repo instructions.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Getters,
+    Decode,
+    Encode,
+    IntoSchema,
+    JsonSerialize,
+    JsonDeserialize,
+)]
 #[getset(get = "pub")]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::repo::RepoCashLeg")]
@@ -73,8 +85,20 @@ impl RepoCashLeg {
     }
 }
 /// Collateral leg definition used by repo instructions.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Getters,
+    Decode,
+    Encode,
+    IntoSchema,
+    JsonSerialize,
+    JsonDeserialize,
+)]
 #[getset(get = "pub")]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::repo::RepoCollateralLeg")]
@@ -98,9 +122,20 @@ impl RepoCollateralLeg {
 }
 /// Governance knobs captured with each agreement.
 #[derive(
-    Copy, Debug, Clone, PartialEq, Eq, PartialOrd, Ord, CopyGetters, Decode, Encode, IntoSchema,
+    Copy,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    CopyGetters,
+    Decode,
+    Encode,
+    IntoSchema,
+    JsonSerialize,
+    JsonDeserialize,
 )]
-#[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[getset(get_copy = "pub")]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::repo::RepoGovernance")]
@@ -124,8 +159,20 @@ impl RepoGovernance {
     }
 }
 /// End-to-end repo agreement envelope recorded on-chain.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Getters,
+    Decode,
+    Encode,
+    IntoSchema,
+    JsonSerialize,
+    JsonDeserialize,
+)]
 #[getset(get = "pub")]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::repo::RepoAgreement")]
@@ -262,7 +309,7 @@ pub mod prelude {
         RepoAgreement, RepoAgreementId, RepoCashLeg, RepoCollateralLeg, RepoGovernance,
     };
 }
-#[cfg(feature = "json")]
+
 impl JsonKeyCodec for RepoAgreementId {
     fn encode_json_key(&self, out: &mut String) {
         norito::json::write_json_string(&self.to_string(), out);

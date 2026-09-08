@@ -5,7 +5,7 @@ use derive_more::Constructor;
 use iroha_crypto::PublicKey;
 use iroha_data_model_derive::model;
 use iroha_primitives::addr::SocketAddr;
-#[cfg(feature = "json")]
+
 use norito::json::{self, FastJsonWrite, JsonDeserialize};
 use norito::literal;
 use std::str::FromStr;
@@ -99,29 +99,27 @@ impl FromStr for Peer {
         let (public_key_candidate, address_candidate) = match s.rsplit_once('@') {
             None => (s, None),
             Some(("", _)) => {
-                return Err(ParseError {
-                    reason: "Empty `public_key` part in `public_key@address`",
-                });
+                return Err(ParseError::new(
+                    "Empty `public_key` part in `public_key@address`",
+                ));
             }
             Some((_, "")) => {
-                return Err(ParseError {
-                    reason: "Empty `address` part in `public_key@address`",
-                });
+                return Err(ParseError::new(
+                    "Empty `address` part in `public_key@address`",
+                ));
             }
             Some((public, addr)) => (public, Some(addr)),
         };
-        let public_key: PublicKey = public_key_candidate.parse().map_err(|_| ParseError {
-            reason: r#"Failed to parse `public_key` part in `public_key@address`. `public_key` should have multihash format e.g. "ed0120...""#,
-        })?;
+        let public_key: PublicKey = public_key_candidate.parse().map_err(|_| ParseError::new(r#"Failed to parse `public_key` part in `public_key@address`. `public_key` should have multihash format e.g. "ed0120...""#))?;
         let address = if let Some(address_candidate) = address_candidate {
             if let Ok(address) = address_candidate.parse() {
                 address
             } else {
-                let body = literal::parse("addr", address_candidate).map_err(|_| ParseError {
-                    reason: "Failed to parse `address` part in `public_key@address`",
+                let body = literal::parse("addr", address_candidate).map_err(|_| {
+                    ParseError::new("Failed to parse `address` part in `public_key@address`")
                 })?;
-                body.parse().map_err(|_| ParseError {
-                    reason: "Failed to parse `address` part in `public_key@address`",
+                body.parse().map_err(|_| {
+                    ParseError::new("Failed to parse `address` part in `public_key@address`")
                 })?
             }
         } else {
@@ -168,7 +166,7 @@ impl Registered for Peer {
 pub mod prelude {
     pub use super::{Peer, PeerId};
 }
-#[cfg(feature = "json")]
+
 impl FastJsonWrite for PeerId {
     fn write_json(&self, out: &mut String) {
         json::write_json_string(&self.public_key.to_string(), out);
@@ -180,7 +178,7 @@ impl FastJsonWrite for PeerId {
         norito::json::JsonSerialize::json_serialize_to(&self.public_key, out)
     }
 }
-#[cfg(feature = "json")]
+
 impl JsonDeserialize for PeerId {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         let value = parser.parse_string()?;
@@ -194,7 +192,7 @@ impl JsonDeserialize for PeerId {
         peer_id_from_json_str(value)
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonObjectKey for Peer {
     fn visit_json_key_text<E>(
         &self,
@@ -213,14 +211,13 @@ impl norito::json::JsonObjectKey for Peer {
         json::visit_json_display_text(self.address(), visitor)
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonObjectKeyOwned for Peer {
     fn from_json_key_text(key: &str) -> Result<Self, json::Error> {
         peer_from_json_str(key)
     }
 }
 
-#[cfg(feature = "json")]
 impl norito::json::JsonObjectKey for PeerId {
     fn visit_json_key_text<E>(&self, visitor: impl FnMut(&str) -> Result<(), E>) -> Result<(), E> {
         norito::json::JsonObjectKey::visit_json_key_text(&self.public_key, visitor)
@@ -232,14 +229,13 @@ impl norito::json::JsonObjectKey for PeerId {
         norito::json::JsonObjectKey::visit_json_key_text_checked(&self.public_key, visitor)
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonObjectKeyOwned for PeerId {
     fn from_json_key_text(key: &str) -> Result<Self, json::Error> {
         peer_id_from_json_str(key)
     }
 }
 
-#[cfg(feature = "json")]
 fn peer_id_from_json_str(value: &str) -> Result<PeerId, json::Error> {
     PublicKey::from_canonical_str_for_decode(value)
         .map(PeerId::new)
@@ -252,14 +248,13 @@ fn peer_id_from_json_str(value: &str) -> Result<PeerId, json::Error> {
         })
 }
 
-#[cfg(feature = "json")]
 fn invalid_peer_id_json() -> json::Error {
     json::Error::InvalidField {
         field: "peer_id".into(),
         message: "invalid public key".to_owned(),
     }
 }
-#[cfg(feature = "json")]
+
 impl FastJsonWrite for Peer {
     fn write_json(&self, out: &mut String) {
         json::write_json_string(&self.to_string(), out);
@@ -271,7 +266,7 @@ impl FastJsonWrite for Peer {
         json::write_json_display_to(self, out)
     }
 }
-#[cfg(feature = "json")]
+
 impl JsonDeserialize for Peer {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         let value = parser.parse_string()?;
@@ -286,7 +281,6 @@ impl JsonDeserialize for Peer {
     }
 }
 
-#[cfg(feature = "json")]
 fn peer_from_json_str(value: &str) -> Result<Peer, json::Error> {
     let (public_key, address) = match value.rsplit_once('@') {
         None => (value, None),
@@ -324,14 +318,13 @@ fn peer_from_json_str(value: &str) -> Result<Peer, json::Error> {
     Ok(Peer::new(address, public_key))
 }
 
-#[cfg(feature = "json")]
 fn invalid_peer_json() -> json::Error {
     json::Error::InvalidField {
         field: "peer".into(),
         message: "failed to parse peer public key or address".to_owned(),
     }
 }
-#[cfg(all(test, feature = "json"))]
+#[cfg(test)]
 mod tests {
     use super::*;
     use iroha_primitives::addr::SocketAddr;

@@ -235,12 +235,6 @@ impl IterativeResolvedGuard {
     fn get(&self) -> &crate::resolved::ResolvedProgram {
         self.program.as_ref().expect("resolved guard is populated")
     }
-    fn take_program(mut self) -> Program {
-        self.program
-            .take()
-            .expect("resolved guard is populated")
-            .into_program()
-    }
 }
 impl Drop for IterativeResolvedGuard {
     fn drop(&mut self) {
@@ -379,8 +373,7 @@ impl CompilerSession {
     }
     fn check_inner(&self, request: CompileRequest<'_>) -> Result<(), DiagnosticBundle> {
         let _chain_discriminant = self.enter_chain_discriminant();
-        let program = self.checked_program(request)?;
-        crate::ast::drop_program_iterative(program);
+        let _program = self.checked_program(request)?;
         Ok(())
     }
     /// Run the canonical check pipeline and return non-fatal lint findings.
@@ -399,10 +392,13 @@ impl CompilerSession {
         request: CompileRequest<'_>,
     ) -> Result<Vec<crate::lint::LintWarning>, DiagnosticBundle> {
         let _chain_discriminant = self.enter_chain_discriminant();
-        let program = self.checked_program(request)?;
-        let warnings = crate::lint::lint_program(&program);
-        crate::ast::drop_program_iterative(program);
-        Ok(warnings)
+        let unit = self.checked_program(request)?;
+        let program = unit.program.get();
+        Ok(crate::lint::lint_with_sources(
+            program.program(),
+            program.lint_facts(),
+            &unit.source,
+        ))
     }
     /// Parse one source through the canonical, budgeted lossless frontend.
     pub(crate) fn parse_compilation_unit(
@@ -475,7 +471,10 @@ impl CompilerSession {
         enforce_argument_register_window(&typed, &resolved.source, resolved.program.get())?;
         Ok(typed)
     }
-    fn checked_program(&self, request: CompileRequest<'_>) -> Result<Program, DiagnosticBundle> {
+    fn checked_program(
+        &self,
+        request: CompileRequest<'_>,
+    ) -> Result<ResolvedCompilationUnit, DiagnosticBundle> {
         let parsed = self.parse_compilation_unit(request)?;
         let resolved = self.resolve_compilation_unit(parsed)?;
         let typed = self.type_effect_compilation_unit_ref(&resolved)?;
@@ -504,7 +503,7 @@ impl CompilerSession {
                     .collect(),
             )
         })?;
-        Ok(resolved.program.take_program())
+        Ok(resolved)
     }
     /// Compile one named source unit into a deployable artifact and sidecar report.
     pub fn build(&self, request: CompileRequest<'_>) -> Result<CompileOutput, DiagnosticBundle> {
@@ -673,11 +672,11 @@ impl CompilerSession {
         )
         .map_err(|error| semantic_error_diagnostic(error, Some(&target.source_name)))?;
         let mut suite_typed = target_typed;
-        let mut error_codes = suite_typed
-            .error_codes
+        let mut error_types = suite_typed
+            .error_types
             .iter()
-            .map(|error| error.code)
-            .collect::<BTreeSet<_>>();
+            .map(|error| (error.identity.clone(), error.clone()))
+            .collect::<BTreeMap<_, _>>();
         for (index, resolved) in resolved_modules.iter().enumerate() {
             let file = &files[index + 1];
             let semantic =
@@ -692,22 +691,29 @@ impl CompilerSession {
                         Some(resolved),
                     )
                 })?;
-            for error in &typed.error_codes {
-                if !error_codes.insert(error.code) {
-                    return Err(DiagnosticBundle::single(Diagnostic::error(
-                        "E_DUPLICATE_ERROR_CODE",
-                        DiagnosticPhase::Resolve,
-                        format!(
-                            "test graph assigns duplicate seiyaku error code {}",
-                            error.code
-                        ),
-                        source_start_span(Some(file.name())),
-                    )));
+            for error in &typed.error_types {
+                if let Some(previous) = error_types.get(&error.identity) {
+                    if previous != error {
+                        return Err(DiagnosticBundle::single(
+                            Diagnostic::error(
+                                "E_CONFLICTING_ERROR_TYPE",
+                                DiagnosticPhase::Resolve,
+                                format!(
+                                    "test graph assigns conflicting schemas to error type `{}`",
+                                    error.identity
+                                ),
+                                source_start_span(Some(file.name())),
+                            )
+                            .with_source(file),
+                        ));
+                    }
+                } else {
+                    error_types.insert(error.identity.clone(), error.clone());
                 }
             }
             merge_source_files(&mut suite_typed, &mut typed, file.name())?;
             suite_typed.items.append(&mut typed.items);
-            suite_typed.error_codes.append(&mut typed.error_codes);
+            suite_typed.error_types = error_types.values().cloned().collect();
             suite_typed
                 .message_entries
                 .append(&mut typed.message_entries);
@@ -1457,7 +1463,7 @@ mod tests {
                         ""
                     };
                     let source = format!(
-                        "seiyaku StackMargin {{ fn wrap(int value) -> int {{ return value; }} hajimari() {{ {setup} let value = {expression}; }} }}"
+                        "seiyaku StackMargin {{ fn wrap(int _ value) -> int {{ return value; }} hajimari() {{ {setup} let value = {expression}; }} }}"
                     );
                     let output = session
                         .build_inner(CompileRequest {
@@ -1876,17 +1882,13 @@ mod tests {
         let mixed =
             "seiyaku C { fn target(int first, int second) {} fn f() { target(1, second: 2); } }";
         let mixed_error = reject(mixed);
-        let mixed_diagnostic = diagnostic(&mixed_error, "E_MIXED_CALL_ARGUMENTS");
-        assert_eq!(primary_text(mixed, mixed_diagnostic), "1");
-        assert_eq!(fix_text(mixed, mixed_diagnostic), ("1", "first: 1"));
-        let unresolved_mixed = "seiyaku C { fn f() { target(1, second: 2); } }";
-        let unresolved_error = reject(unresolved_mixed);
-        let unresolved_diagnostic = diagnostic(&unresolved_error, "E_MIXED_CALL_ARGUMENTS");
-        assert_eq!(
-            primary_text(unresolved_mixed, unresolved_diagnostic),
-            "second"
-        );
-        assert!(unresolved_diagnostic.fix.is_none());
+        let mixed_diagnostic = diagnostic(&mixed_error, "E_NAMED_ARGUMENTS_REQUIRED");
+        assert!(mixed_diagnostic.primary_span.is_some());
+        let reversed = "seiyaku C { fn f() { target(first: 1, 2); } }";
+        let reversed_error = reject(reversed);
+        let reversed_diagnostic = diagnostic(&reversed_error, "E_POSITIONAL_ARGUMENT_ORDER");
+        assert_eq!(primary_text(reversed, reversed_diagnostic), "2");
+        assert!(reversed_diagnostic.fix.is_none());
         let unsafe_read =
             "seiyaku C { fn read(List<int, 2> values) -> Option<int> { return values[0]; } }";
         let read_error = reject(unsafe_read);
@@ -1914,7 +1916,7 @@ mod tests {
         );
         assert_eq!(
             fix_text(unsafe_write, write_diagnostic),
-            ("values[0] = 2;", "values.try_set(index: 0, value: 2);",)
+            ("values[0] = 2;", "values.set(index: 0, value: 2);",)
         );
         for unsafe_without_recipe in [
             "seiyaku C { fn write() { let List<int, 2> values = [1]; values[0] = 2; } }",
@@ -2345,14 +2347,23 @@ mod tests {
             parsed_suite.contract_interface.is_none(),
             "local test images must keep the exact interface beside the generic artifact"
         );
-        assert!(
-            outputs
-                .suite
-                .contract_interface
-                .entrypoints
-                .iter()
-                .any(|entrypoint| entrypoint.name == crate::metadata::KOTO_TEST_RETURN_ENTRYPOINT)
+        let return_sentinel = outputs
+            .suite
+            .contract_interface
+            .entrypoints
+            .iter()
+            .find(|entrypoint| entrypoint.name == crate::metadata::KOTO_TEST_RETURN_ENTRYPOINT)
+            .expect("authenticated local return target");
+        assert_eq!(return_sentinel.return_type.as_deref(), Some("()"));
+        let schema = return_sentinel
+            .return_schema
+            .as_ref()
+            .expect("explicit Unit return schema");
+        assert_eq!(
+            schema.nodes,
+            vec![ivm_abi::entrypoint::EntrypointValueTypeNodeV1::Unit]
         );
+        assert_eq!(schema.word_count(), Some(1));
         assert!(
             outputs
                 .suite
@@ -2655,12 +2666,10 @@ mod tests {
         assert_eq!(interface.return_type.as_deref(), Some("Option<int>"));
     }
     #[test]
-    fn session_rejects_unit_values_degenerate_tuple_types_and_uninitialized_vars() {
+    fn session_rejects_singleton_tuple_types_and_uninitialized_vars() {
         let session = CompilerSession::default();
         for (source, expected_span) in [
-            ("seiyaku Invalid { fn run() { let value = (); } }", "()"),
             ("seiyaku Invalid { fn run((int) value) {} }", "(int)"),
-            ("seiyaku Invalid { fn run() -> () { return; } }", "()"),
             ("seiyaku Invalid { fn run() { var int value; } }", ";"),
         ] {
             let diagnostics = session
@@ -2668,7 +2677,7 @@ mod tests {
                     source,
                     source_name: Some("invalid-unit.ko"),
                 })
-                .expect_err("non-V1 Unit/tuple/binding surface must fail");
+                .expect_err("singleton tuple types and uninitialized bindings must fail");
             let diagnostic = diagnostics.diagnostics.first().expect("parse diagnostic");
             assert_eq!(diagnostic.code, "K1001", "{diagnostics:?}");
             assert_eq!(diagnostic.phase, DiagnosticPhase::Parse);

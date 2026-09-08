@@ -333,20 +333,22 @@ pub fn map_vm_error_with_context_to_validation(
     vm: &ivm::IVM,
     err: &ivm::VMError,
 ) -> ValidationFail {
-    if let ivm::VMError::ContractAbort { code } = err.as_unmetered()
-        && let Ok(code) = u32::try_from(*code)
-        && code != 0
-        && let Some(interface) = vm.contract_interface()
-        && let Some(descriptor) = interface
-            .error_codes
-            .iter()
-            .find(|descriptor| descriptor.code == code)
+    if let ivm::VMError::ContractAbort {
+        contract,
+        name,
+        error_type,
+        schema_hash,
+        code,
+    } = err.as_unmetered()
     {
+        // The host authenticated these fields against the originating signed CNTR. Carrying
+        // them in the error preserves callee identity through arbitrarily nested calls.
         return ValidationFail::ContractRejected(ContractRejection {
-            contract: interface.seiyaku_name.clone(),
-            namespace: descriptor.namespace.clone(),
-            name: descriptor.name.clone(),
-            code,
+            contract: contract.clone(),
+            error_type: error_type.clone(),
+            schema_hash: *schema_hash,
+            name: name.clone(),
+            code: *code,
         });
     }
     if let Some(diag) = vm.last_diagnostic() {
@@ -378,7 +380,7 @@ mod tests {
             entrypoints: None,
             states: None,
             kotoba: None,
-            error_codes: None,
+            error_types: None,
             provenance: None,
         }
     }
@@ -689,15 +691,33 @@ mod tests {
             .find(|entrypoint| entrypoint.name == "reject")
             .expect("reject entrypoint")
             .entry_pc;
-        vm.set_program_counter(entry_pc)
+        let prefix = ivm::ProgramMetadata::parse(&artifact).unwrap().prefix_len() as u64;
+        vm.set_program_counter(prefix + entry_pc)
             .expect("select reject entrypoint");
         let error = vm.run().expect_err("declared require must abort");
-        assert_eq!(error, ivm::VMError::ContractAbort { code: 18 });
+        let descriptor = vm
+            .contract_interface()
+            .expect("interface")
+            .error_types
+            .iter()
+            .find(|descriptor| descriptor.variant(18).is_some())
+            .expect("declared error");
+        assert_eq!(
+            error,
+            ivm::VMError::ContractAbort {
+                contract: "LiquidityPolicy".to_owned(),
+                name: "BelowMinimum".to_owned(),
+                error_type: descriptor.identity.clone(),
+                schema_hash: descriptor.schema_hash(),
+                code: 18
+            }
+        );
         assert_eq!(
             map_vm_error_with_context_to_validation(&vm, &error),
             ValidationFail::ContractRejected(ContractRejection {
                 contract: "LiquidityPolicy".to_owned(),
-                namespace: "LiquidityError".to_owned(),
+                error_type: descriptor.identity.clone(),
+                schema_hash: descriptor.schema_hash(),
                 name: "BelowMinimum".to_owned(),
                 code: 18,
             })

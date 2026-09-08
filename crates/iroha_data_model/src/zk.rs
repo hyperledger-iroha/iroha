@@ -164,7 +164,7 @@ pub fn verifier_backend_registry_tag_v1(label: &str) -> Option<BackendTag> {
 pub fn is_verifier_backend_registry_label_v1(label: &str) -> bool {
     verifier_backend_registry_tag_v1(label).is_some()
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonSerialize for BackendTag {
     fn json_serialize(&self, out: &mut String) {
         norito::json::write_json_string(self.canonical_label(), out);
@@ -176,7 +176,7 @@ impl norito::json::JsonSerialize for BackendTag {
         norito::json::write_json_string_to(self.canonical_label(), out)
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonDeserialize for BackendTag {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -320,11 +320,7 @@ impl std::error::Error for OpenVerifyEnvelopeValidationError {}
 /// `&NoritoBytes` pointer-ABI types passed to IVM verify syscalls or host vendor bridges.
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[norito(decode_from_slice)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-#[derive(norito::NoritoSchema)]
+#[derive(crate :: DeriveJsonSerialize, crate :: DeriveJsonDeserialize, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::zk::OpenVerifyEnvelope")]
 pub struct OpenVerifyEnvelope {
     /// Backend tag string (e.g., `halo2-ipa-pasta`).
@@ -336,7 +332,7 @@ pub struct OpenVerifyEnvelope {
     /// Generic codecs may still represent an unavailable key binding as all
     /// zeros, but chain admission for registered proof attachments requires an
     /// exact match with the active verifier-key commitment.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub vk_hash: [u8; 32],
     /// Public-input metadata bytes (opaque; backend-specific canonical encoding).
     ///
@@ -528,12 +524,18 @@ pub fn open_verify_circuit_id_uses_reserved_privacy_protocol_namespace_v1(
 ///
 /// Higher-level flows (governance voting, `Executable::IvmProved`, etc.) interpret the public
 /// inputs according to the circuit/policy definitions and must validate their semantics.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
+    norito::NoritoSchema,
 )]
-#[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::zk::StarkFriOpenProofV1")]
 pub struct StarkFriOpenProofV1 {
     /// Version tag for format evolution.
@@ -551,11 +553,7 @@ pub struct StarkFriOpenProofV1 {
 /// trusted-context construction fails closed before proof verification.
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[norito(schema_name = "iroha.privacy.zk-ace.public-inputs.v1")]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-#[derive(norito::NoritoSchema)]
+#[derive(crate :: DeriveJsonSerialize, crate :: DeriveJsonDeserialize, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_data_model::zk::ZkAcePrivacyPublicInputsV1",
     frame = "iroha.privacy.zk-ace.public-inputs.v1"
@@ -566,16 +564,22 @@ pub struct ZkAcePrivacyPublicInputsV1 {
     /// Exact typed consensus statement being authorized.
     pub statement: ZkAcePqAuthorizationStatementV1,
     /// Trusted genesis-block digest.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub genesis_hash: [u8; 32],
 }
 /// Canonical byte packing used by ZK-ACE dense-MDS Poseidon `x^7` hashing.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
+    norito::NoritoSchema,
 )]
-#[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::zk::ZkAcePackedBytesV1")]
 pub struct ZkAcePackedBytesV1 {
     /// Original byte length before padding.
@@ -898,7 +902,7 @@ mod tests {
             );
         }
     }
-    #[cfg(feature = "json")]
+
     fn assert_json_roundtrip<T>(value: &T)
     where
         T: PartialEq
@@ -1325,7 +1329,7 @@ mod tests {
             assert_eq!(err, expected, "{name}");
         }
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn backend_tag_json_accepts_only_exact_canonical_labels() {
         for backend in BackendTag::ALL {
@@ -1488,7 +1492,7 @@ mod tests {
             "independently parameterized lanes must not collapse on the KAT input"
         );
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn zk_ace_json_roundtrips_generic_stark_wrapper_and_packing() {
         let packed = zk_ace_pack_bytes_to_field_limbs(b"ABCDEFGH");

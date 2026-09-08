@@ -1290,6 +1290,7 @@ fn autonomous_view_state_latest_read_only_selects_crash_temp_without_mutation() 
         norito::encode_canonical(&advanced_state).expect("encode crash-temp view state");
     fs::write(&view_state_temp, &temp_bytes).expect("stage higher-view crash temp");
     let main_before = fs::read(&view_state_path).expect("read stable main view state");
+    let probe = AutonomousArtifactValidationProbe::start();
     let record = {
         let _prune_guard = kura.prune_lock.lock();
         let _canonical_chain_guard = kura.canonical_chain_lock.lock();
@@ -1301,6 +1302,12 @@ fn autonomous_view_state_latest_read_only_selects_crash_temp_without_mutation() 
         .expect("read logical view-state winner")
         .expect("read retained autonomous attempt")
     };
+    assert_eq!(
+        probe.count(),
+        2,
+        "both main and temporary candidates require independent validation"
+    );
+    drop(probe);
     let current =
         Kura::validate_autonomous_lane_block_artifact(&record.artifact, network_id, epoch)
             .expect("validate read-only logical winner");
@@ -3144,6 +3151,433 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
         Kura::open_test_kura_with_configured_lane_config(&pending_config, &lane_config).is_err(),
         "startup must reject even a signed first cursor until the State/Queue adapter authenticates its exact payload",
     );
+}
+
+/// Count only canonical immutable-attempt frame decodes on this test thread.
+struct AutonomousAttemptDecodeProbe;
+impl AutonomousAttemptDecodeProbe {
+    fn start() -> Self {
+        AUTONOMOUS_ATTEMPT_FRAME_DECODES.with(|count| {
+            assert_eq!(count.replace(Some(0)), None, "decode probe cannot nest");
+        });
+        Self
+    }
+    fn count(&self) -> usize {
+        AUTONOMOUS_ATTEMPT_FRAME_DECODES.with(|count| count.get().expect("active decode probe"))
+    }
+}
+impl Drop for AutonomousAttemptDecodeProbe {
+    fn drop(&mut self) {
+        AUTONOMOUS_ATTEMPT_FRAME_DECODES.with(|count| count.set(None));
+    }
+}
+
+#[test]
+fn autonomous_attempt_same_locked_read_decodes_canonical_frame_once() {
+    let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+    let fixture = retired_autonomous_lane_attempt_fixture(&signer);
+    let descriptor = &fixture.payload.origin_proposal.descriptor;
+    let probe = AutonomousAttemptDecodeProbe::start();
+    let exact = fixture
+        .kura
+        .read_autonomous_lane_retired_attempt(
+            descriptor.lane_id,
+            descriptor.lane_block_height,
+            descriptor.proposal_height,
+            fixture.payload.network_id,
+            fixture.payload.epoch,
+        )
+        .expect("strict exact attempt read")
+        .expect("retained retired attempt");
+    assert_eq!(exact.artifact.executable_payload, fixture.payload);
+    assert_eq!(exact.current_proposal.descriptor.lane_block_view, 1);
+    assert_eq!(
+        exact.retirement,
+        AutonomousLaneSlotRetirementV1::from_payload(&fixture.payload)
+    );
+    assert_eq!(
+        probe.count(),
+        1,
+        "one stable immutable frame must need one canonical decode"
+    );
+}
+/// Prepare the first read using the same bounded canonical decoder as production.
+fn decoded_autonomous_attempt_for_reuse_test(
+    kura: &Kura,
+    path: &Path,
+) -> DecodedAutonomousLaneAttemptRead {
+    let read = kura
+        .read_regular_sidecar_snapshot(
+            path,
+            path.parent().unwrap(),
+            MAX_MERGE_EXECUTION_AUTONOMOUS_SOURCE_BYTES,
+        )
+        .expect("stable initial read")
+        .expect("fixture attempt exists");
+    let artifact = Kura::decode_autonomous_lane_attempt_frame(
+        &read.bytes,
+        path,
+        "test initial canonical frame",
+    )
+    .expect("canonical initial frame");
+    DecodedAutonomousLaneAttemptRead { read, artifact }
+}
+
+#[test]
+fn autonomous_attempt_decoded_reuse_rechecks_changed_bytes_and_file_identity() {
+    let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+    let fixture = unretired_autonomous_lane_attempt_fixture(&signer);
+    let kura = &fixture.kura;
+    let payload = &fixture.payload;
+    let d = &payload.origin_proposal.descriptor;
+    let _prune = kura.prune_lock.lock();
+    let _canonical = kura.canonical_chain_lock.lock();
+    let _geometry = kura.lane_geometry_lock.lock();
+    let entry = kura.lane_storage_entry(d.lane_id).unwrap();
+    let _sidecar = kura.sidecar_lock.lock();
+    let path = Kura::autonomous_lane_block_attempt_path_for_entry(
+        &entry,
+        &kura.store_root,
+        d.lane_block_height,
+        d.proposal_height,
+    );
+    let pointer = AutonomousLaneBlockLatestAttemptV1::from_payload(payload);
+    let original = fs::read(&path).unwrap();
+    {
+        let probe = AutonomousAttemptDecodeProbe::start();
+        let decoded = decoded_autonomous_attempt_for_reuse_test(kura, &path);
+        let replacement = path.with_extension("same-bytes-replacement");
+        fs::write(&replacement, &original).unwrap();
+        fs::rename(&replacement, &path).unwrap();
+        let observed = kura
+            .read_autonomous_lane_block_attempt_artifact_with_decoded_read_locked(
+                &entry,
+                &pointer,
+                payload.network_id,
+                payload.epoch,
+                AutonomousLaneBlockViewStateReadMode::MainOnly,
+                Some(decoded),
+            )
+            .expect("replacement must be freshly decoded and fully validated");
+        assert_eq!(observed.artifact.executable_payload, *payload);
+        assert!(observed.retirement.is_none());
+        assert_eq!(
+            probe.count(),
+            2,
+            "new file identity cannot reuse the previous decode"
+        );
+    }
+    {
+        let probe = AutonomousAttemptDecodeProbe::start();
+        let decoded = decoded_autonomous_attempt_for_reuse_test(kura, &path);
+        fs::write(&path, [0xFF, 0, 0xAA]).unwrap();
+        assert!(
+            kura.read_autonomous_lane_block_attempt_artifact_with_decoded_read_locked(
+                &entry,
+                &pointer,
+                payload.network_id,
+                payload.epoch,
+                AutonomousLaneBlockViewStateReadMode::MainOnly,
+                Some(decoded),
+            )
+            .is_err(),
+            "changed malformed bytes cannot borrow a prior canonical decode"
+        );
+        assert_eq!(probe.count(), 2);
+        assert_eq!(
+            fs::read(&path).unwrap(),
+            [0xFF, 0, 0xAA],
+            "read must not repair corrupt input"
+        );
+    }
+}
+
+#[test]
+fn autonomous_attempt_decoded_reuse_preserves_exact_pointer_and_context_rejection() {
+    let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+    let fixture = unretired_autonomous_lane_attempt_fixture(&signer);
+    let kura = &fixture.kura;
+    let payload = &fixture.payload;
+    let d = &payload.origin_proposal.descriptor;
+    let _prune = kura.prune_lock.lock();
+    let _canonical = kura.canonical_chain_lock.lock();
+    let _geometry = kura.lane_geometry_lock.lock();
+    let entry = kura.lane_storage_entry(d.lane_id).unwrap();
+    let _sidecar = kura.sidecar_lock.lock();
+    let path = Kura::autonomous_lane_block_attempt_path_for_entry(
+        &entry,
+        &kura.store_root,
+        d.lane_block_height,
+        d.proposal_height,
+    );
+    let original = fs::read(&path).unwrap();
+    for mismatch in ["proposal", "network", "epoch", "missing_path"] {
+        let probe = AutonomousAttemptDecodeProbe::start();
+        let decoded = decoded_autonomous_attempt_for_reuse_test(kura, &path);
+        let mut pointer = AutonomousLaneBlockLatestAttemptV1::from_payload(payload);
+        let mut expected_network = payload.network_id;
+        let mut expected_epoch = payload.epoch;
+        match mismatch {
+            "proposal" => pointer.origin_proposal_hash = Hash::new(b"wrong proposal"),
+            "network" => {
+                expected_network = iroha_data_model::NetworkId::from_genesis_hash(
+                    HashOf::from_untyped_unchecked(Hash::new(b"wrong network")),
+                )
+            }
+            "epoch" => expected_epoch += 1,
+            "missing_path" => pointer.proposal_height += 1,
+            _ => unreachable!(),
+        }
+        let error = kura
+            .read_autonomous_lane_block_attempt_artifact_with_decoded_read_locked(
+                &entry,
+                &pointer,
+                expected_network,
+                expected_epoch,
+                AutonomousLaneBlockViewStateReadMode::MainOnly,
+                Some(decoded),
+            )
+            .err()
+            .expect("cached decoding cannot authorize a foreign pointer or context");
+        let message = error.to_string();
+        assert!(
+            message.contains(match mismatch {
+                "proposal" => "conflicts with its latest pointer",
+                "network" | "epoch" => "wrong network context",
+                "missing_path" => "missing payload",
+                _ => unreachable!(),
+            }),
+            "{mismatch}: {message}"
+        );
+        assert_eq!(
+            probe.count(),
+            1,
+            "rejection cannot require a redundant canonical decode"
+        );
+        assert_eq!(fs::read(&path).unwrap(), original);
+    }
+}
+
+/// Count complete autonomous artifact validations on only this test thread.
+struct AutonomousArtifactValidationProbe;
+impl AutonomousArtifactValidationProbe {
+    fn start() -> Self {
+        AUTONOMOUS_ARTIFACT_VALIDATIONS.with(|count| {
+            assert_eq!(count.replace(Some(0)), None, "validation probe cannot nest");
+        });
+        Self
+    }
+    fn count(&self) -> usize {
+        AUTONOMOUS_ARTIFACT_VALIDATIONS.with(|count| count.get().expect("active validation probe"))
+    }
+}
+impl Drop for AutonomousArtifactValidationProbe {
+    fn drop(&mut self) {
+        AUTONOMOUS_ARTIFACT_VALIDATIONS.with(|count| count.set(None));
+    }
+}
+
+#[test]
+fn autonomous_completion_selected_view_validates_artifact_once() {
+    let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+    let fixture = unretired_autonomous_lane_attempt_fixture(&signer);
+    let payload = &fixture.payload;
+    let probe = AutonomousArtifactValidationProbe::start();
+    let artifact = fixture
+        .kura
+        .read_lane_completion_autonomous_artifact(
+            &payload.origin_proposal,
+            payload.network_id,
+            payload.epoch,
+        )
+        .expect("strict current completion read")
+        .expect("active autonomous attempt");
+    assert_eq!(artifact.executable_payload, *payload);
+    assert_eq!(artifact.new_view_certificates.len(), 1);
+    assert_eq!(
+        artifact.new_view_certificates[0].certificate,
+        fixture.new_view_certificate
+    );
+    assert_eq!(
+        probe.count(),
+        1,
+        "the selected merged artifact is validated once"
+    );
+}
+
+#[test]
+fn autonomous_retired_attempt_reuses_validated_current_cursor() {
+    let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+    let fixture = retired_autonomous_lane_attempt_fixture(&signer);
+    let payload = &fixture.payload;
+    let descriptor = &payload.origin_proposal.descriptor;
+    let probe = AutonomousArtifactValidationProbe::start();
+    let retired = fixture
+        .kura
+        .read_autonomous_lane_retired_attempt(
+            descriptor.lane_id,
+            descriptor.lane_block_height,
+            descriptor.proposal_height,
+            payload.network_id,
+            payload.epoch,
+        )
+        .expect("strict exact retired read")
+        .expect("retired exact attempt");
+    assert_eq!(retired.artifact.executable_payload, *payload);
+    assert_eq!(
+        retired.retirement,
+        AutonomousLaneSlotRetirementV1::from_payload(payload)
+    );
+    assert_eq!(retired.current_proposal.descriptor.lane_block_view, 1);
+    assert_eq!(
+        retired.current_proposal,
+        crate::lane_consensus::retarget_lane_block_proposal_view(&payload.origin_proposal, 1)
+            .expect("exact authenticated next cursor"),
+    );
+    assert_eq!(
+        probe.count(),
+        1,
+        "cursor extraction must not repeat artifact validation"
+    );
+}
+
+#[test]
+fn autonomous_completion_missing_view_state_keeps_full_payload_validation() {
+    let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+    let fixture = unretired_autonomous_lane_attempt_fixture(&signer);
+    let kura = &fixture.kura;
+    let payload = &fixture.payload;
+    let descriptor = &payload.origin_proposal.descriptor;
+    let entry = kura
+        .lane_storage_entry(descriptor.lane_id)
+        .expect("active lane");
+    let view_path = Kura::autonomous_lane_block_attempt_view_state_path_for_entry(
+        &entry,
+        &kura.store_root,
+        descriptor.lane_block_height,
+        descriptor.proposal_height,
+    );
+    let attempt_path = Kura::autonomous_lane_block_attempt_path_for_entry(
+        &entry,
+        &kura.store_root,
+        descriptor.lane_block_height,
+        descriptor.proposal_height,
+    );
+    fs::remove_file(&view_path)
+        .expect("exercise original immutable artifact without a view suffix");
+    let original = fs::read(&attempt_path).expect("read immutable attempt");
+    {
+        let probe = AutonomousArtifactValidationProbe::start();
+        let artifact = kura
+            .read_lane_completion_autonomous_artifact(
+                &payload.origin_proposal,
+                payload.network_id,
+                payload.epoch,
+            )
+            .expect("validate the original artifact")
+            .expect("present original artifact");
+        assert_eq!(artifact.executable_payload, *payload);
+        assert!(artifact.new_view_certificates.is_empty());
+        assert_eq!(probe.count(), 1);
+        assert_eq!(fs::read(&attempt_path).unwrap(), original);
+        assert!(!view_path.exists());
+    }
+    let mut malformed: AutonomousLaneBlockArtifact =
+        norito::decode_canonical(&original).expect("canonical original frame");
+    malformed.executable_payload.producer_signature[0] ^= 1;
+    let malformed_bytes =
+        norito::encode_canonical(&malformed).expect("canonical bad signature frame");
+    fs::write(&attempt_path, &malformed_bytes).expect("replace fixture bytes");
+    let probe = AutonomousArtifactValidationProbe::start();
+    let error = kura
+        .read_lane_completion_autonomous_artifact(
+            &payload.origin_proposal,
+            payload.network_id,
+            payload.epoch,
+        )
+        .expect_err("absence of a view suffix cannot skip payload authentication");
+    assert!(
+        error
+            .to_string()
+            .contains("invalid autonomous executable payload"),
+        "{error}"
+    );
+    assert_eq!(probe.count(), 1);
+    assert_eq!(fs::read(&attempt_path).unwrap(), malformed_bytes);
+    assert!(!view_path.exists());
+}
+
+#[test]
+fn autonomous_completion_selected_view_rejects_corruption_and_foreign_suffix() {
+    let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+    let fixture = unretired_autonomous_lane_attempt_fixture(&signer);
+    let kura = &fixture.kura;
+    let payload = &fixture.payload;
+    let descriptor = &payload.origin_proposal.descriptor;
+    let entry = kura
+        .lane_storage_entry(descriptor.lane_id)
+        .expect("active lane");
+    let view_path = Kura::autonomous_lane_block_attempt_view_state_path_for_entry(
+        &entry,
+        &kura.store_root,
+        descriptor.lane_block_height,
+        descriptor.proposal_height,
+    );
+    let original: AutonomousLaneBlockViewState =
+        norito::decode_canonical(&fs::read(&view_path).unwrap()).expect("canonical view state");
+    for kind in ["malformed", "payload", "retirement", "target_view"] {
+        let mut state = original.clone();
+        let (bytes, reason, validation_count) = match kind {
+            "malformed" => (vec![0xFF, 0, 0xAA], None, 0),
+            "payload" => {
+                state.executable_payload_hash = Hash::new(b"another immutable payload");
+                (
+                    norito::encode_canonical(&state).unwrap(),
+                    Some("does not match its immutable payload"),
+                    0,
+                )
+            }
+            "retirement" => {
+                let mut retirement = AutonomousLaneSlotRetirementV1::from_payload(payload);
+                retirement.origin_proposal_hash = Hash::new(b"another retired proposal");
+                state.retirement = Some(retirement);
+                (
+                    norito::encode_canonical(&state).unwrap(),
+                    Some("retirement conflicts with its immutable payload"),
+                    0,
+                )
+            }
+            "target_view" => {
+                state.certificates[0].certificate.body.target_view += 1;
+                (
+                    norito::encode_canonical(&state).unwrap(),
+                    Some("autonomous lane NewView target is not contiguous"),
+                    1,
+                )
+            }
+            _ => unreachable!(),
+        };
+        fs::write(&view_path, &bytes).expect("stage malformed or foreign fixture suffix");
+        let probe = AutonomousArtifactValidationProbe::start();
+        let error = kura
+            .read_lane_completion_autonomous_artifact(
+                &payload.origin_proposal,
+                payload.network_id,
+                payload.epoch,
+            )
+            .expect_err("selected suffix must retain every validation boundary");
+        if let Some(reason) = reason {
+            assert!(error.to_string().contains(reason), "{kind}: {error}");
+        } else {
+            assert!(matches!(&error, Error::NoritoFrame(_)), "{kind}: {error}");
+        }
+        assert_eq!(probe.count(), validation_count, "{kind}");
+        assert_eq!(
+            fs::read(&view_path).unwrap(),
+            bytes,
+            "{kind}: read cannot repair input"
+        );
+    }
 }
 
 #[test]

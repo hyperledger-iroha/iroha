@@ -88,7 +88,7 @@ mod tests {
             "retired payload-encoding tag 1 must fail closed"
         );
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn payload_encoding_json_rejects_retired_plain_variant() {
         let canonical = norito::json::to_value(&PayloadEncoding::ReedSolomon16)
@@ -424,7 +424,7 @@ mod tests {
             Err(ValidationError::InvalidNativeAmxApplicationManifestLeaf)
         );
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn genesis_context_json_uses_explicit_policy_hash_names_only() {
         let parameters = SumeragiV2GenesisContextParameters::recommended();

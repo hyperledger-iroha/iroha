@@ -139,11 +139,12 @@ impl Round {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Generation(u64);
 impl Generation {
-    /// Initial generation for a fresh process/view ownership episode.
+    /// Initial seed before WAL recovery or an ordinary view advance.
     ///
     /// The view in [`EventTag`] separates ordinary timeout-certificate view
-    /// changes.  Only a strict lock upgrade for the already-installed timeout
-    /// round increments this local counter.
+    /// changes. Only a strict lock upgrade for the already-installed timeout
+    /// round increments this local counter. Recovery reconstructs those exact
+    /// increments from the ordered WAL instead of resetting a recovered view.
     pub(crate) const INITIAL: Self = Self(0);
     /// Constructs a generation.
     #[must_use]

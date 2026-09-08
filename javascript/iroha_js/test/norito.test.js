@@ -1198,7 +1198,7 @@ baseTest("contract manifest codec preserves the canonical seiyaku name", () => {
         access_set_hints: null,
         entrypoints: null,
         states: null,
-        error_codes: null,
+        error_types: null,
         kotoba: null,
         provenance: null,
       },
@@ -1317,7 +1317,7 @@ baseTest("contract manifest codec roundtrips every V1 descriptor field", () => {
       },
     ],
     states: [{ name: "Balances", type_name: "StateMap<AccountId, quantity>" }],
-    error_codes: [{ namespace: "LedgerError", name: "Denied", code: 7 }],
+    error_types: [{ identity: "LedgerError", variants: [{ name: "Denied", code: 7 }] }],
     kotoba: [
       {
         msg_id: "ledger.denied",
@@ -1549,7 +1549,7 @@ baseTest("contract manifest codec rejects malformed and forged flat schema tapes
     fs.readFileSync(path.join(__dirname, "fixtures", "contract_manifest_v1.json"), "utf8"),
   );
   const leaf = (kind) => ({ kind: "Leaf", value: { kind, value: null } });
-  const encodeNodes = (nodes) =>
+  const encodeNodes = (nodes, returnType = "schema-under-test") =>
     withMissingNativeBinding(() =>
       pureNoritoEncodeInstruction({
         RegisterSmartContractCode: {
@@ -1560,7 +1560,7 @@ baseTest("contract manifest codec rejects malformed and forged flat schema tapes
                 ...fixture.manifest.entrypoints[0],
                 name: "read",
                 kind: { kind: "View", value: null },
-                return_type: "schema-under-test",
+                return_type: returnType,
                 return_schema: { nodes },
                 permission: null,
                 triggers: [],
@@ -1642,10 +1642,10 @@ baseTest("contract manifest codec rejects malformed and forged flat schema tapes
   }
 
   const validCapacity = Buffer.from(
-    encodeNodes([{ kind: "List", value: { capacity: 63 } }, leaf("Int")]),
+    encodeNodes([{ kind: "List", value: { capacity: 63 } }, leaf("Int")], "List<int, 63>"),
   );
   const comparisonCapacity = Buffer.from(
-    encodeNodes([{ kind: "List", value: { capacity: 62 } }, leaf("Int")]),
+    encodeNodes([{ kind: "List", value: { capacity: 62 } }, leaf("Int")], "List<int, 62>"),
   );
   const capacityOffsets = Array.from(validCapacity.keys()).filter(
     (index) => validCapacity[index] === 63 && comparisonCapacity[index] === 62,
@@ -1669,11 +1669,13 @@ baseTest("contract manifest codec rejects malformed and forged flat schema tapes
       },
       leaf("Bool"),
       leaf("Json"),
-    ]),
+    ], "struct AccountViex"),
   );
   const forgedName = Buffer.from("AccountViex", "utf8");
-  const nameOffset = forgedViewWire.indexOf(forgedName);
+  // The canonical return type also names the struct; forge only its schema node.
+  const nameOffset = forgedViewWire.lastIndexOf(forgedName);
   assert.notEqual(nameOffset, -1);
+  assert.notEqual(nameOffset, forgedViewWire.indexOf(forgedName));
   forgedViewWire[nameOffset + forgedName.length - 1] = "w".charCodeAt(0);
   rewriteNestedInstructionFrameCrcs(forgedViewWire);
   assert.throws(

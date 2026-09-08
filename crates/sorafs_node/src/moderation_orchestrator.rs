@@ -10206,15 +10206,12 @@ pub fn validate_moderation_panel_notification_archive_head_for_broker_v1(
     if canonical_head.is_empty() || canonical_head.len() > max_bytes {
         return Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid);
     }
-    let head = decode_from_bytes_with_limits::<ModerationPanelNotificationArchiveHeadV1>(
+    let head = norito::decode_canonical_with_limits::<ModerationPanelNotificationArchiveHeadV1>(
         canonical_head,
-        DecodeLimits::new(max_bytes, 16, max_bytes, max_bytes, 32),
+        DecodeLimits::new(max_bytes, canonical_head.len(), max_bytes, max_bytes, 32),
     )
     .map_err(|_| ModerationOrchestratorError::PanelNotificationArchiveInvalid)?;
-    if norito::to_bytes(&head)
-        .map_err(|_| ModerationOrchestratorError::PanelNotificationArchiveInvalid)?
-        != canonical_head
-        || head.network_id != *expected.network_id
+    if head.network_id != *expected.network_id
         || head.source_checkpoint_namespace_digest
             != checkpoint_store::checkpoint_namespace(expected.network_id)
         || head.source_attestor_handle != expected.checkpoint_handle
@@ -11206,4 +11203,5 @@ mod tests {
     include!("moderation_orchestrator/network_domain_tests.rs");
     include!("moderation_orchestrator/operation_tests.rs");
     include!("moderation_orchestrator/panel_notification_tests.rs");
+    include!("moderation_orchestrator/archive_head_boundary_tests.rs");
 }

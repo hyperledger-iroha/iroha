@@ -4,22 +4,30 @@
 //! This application model is separate from generic execution envelopes. Its compiled proof
 //! profile and native equipment admission are not registered yet.
 
-#[cfg(feature = "json")]
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 
 /// Closed upgraded spec-class catalog; every participant uses the same selected class.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonDeserialize, DeriveJsonSerialize))]
-#[cfg_attr(
-    feature = "json",
-    norito(
-        tag = "kind",
-        content = "value",
-        rename_all = "snake_case",
-        deny_unknown_fields
-    )
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonDeserialize,
+    DeriveJsonSerialize,
+)]
+#[norito(
+    tag = "kind",
+    content = "value",
+    rename_all = "snake_case",
+    deny_unknown_fields
 )]
 pub enum ClassedRaceClassV1 {
     /// Touring S1: 10% higher acceleration and normal/boost speed limits than stock.
@@ -27,16 +35,25 @@ pub enum ClassedRaceClassV1 {
 }
 
 /// Versioned track catalog for this computation, independent of RaceV1's Rust implementation.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonDeserialize, DeriveJsonSerialize))]
-#[cfg_attr(
-    feature = "json",
-    norito(
-        tag = "kind",
-        content = "value",
-        rename_all = "snake_case",
-        deny_unknown_fields
-    )
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonDeserialize,
+    DeriveJsonSerialize,
+)]
+#[norito(
+    tag = "kind",
+    content = "value",
+    rename_all = "snake_case",
+    deny_unknown_fields
 )]
 pub enum ClassedRaceTrackV1 {
     /// Two-kilometre city circuit.
@@ -48,9 +65,20 @@ pub enum ClassedRaceTrackV1 {
 }
 
 /// All participants' six-bit controls at one consecutive simulation tick.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonDeserialize, DeriveJsonSerialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonDeserialize,
+    DeriveJsonSerialize,
+)]
+#[norito(deny_unknown_fields)]
 pub struct ClassedRaceInputFrameV1 {
     /// Zero-based tick without gaps or repetitions.
     pub tick: u32,
@@ -59,9 +87,20 @@ pub struct ClassedRaceInputFrameV1 {
 }
 
 /// One consensus-authorized removal set applied before its exact simulation tick.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonDeserialize, DeriveJsonSerialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonDeserialize,
+    DeriveJsonSerialize,
+)]
+#[norito(deny_unknown_fields)]
 pub struct ClassedRaceDnfEventV1 {
     /// Number of ticks completed before removal.
     pub tick: u32,
@@ -70,9 +109,20 @@ pub struct ClassedRaceDnfEventV1 {
 }
 
 /// Public complete or prefix replay; NFT authorization belongs to native admission.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonDeserialize, DeriveJsonSerialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonDeserialize,
+    DeriveJsonSerialize,
+)]
+#[norito(deny_unknown_fields)]
 pub struct ClassedRaceReplayV1 {
     /// Wire/rules generation, exactly one.
     pub version: u16,
@@ -89,9 +139,21 @@ pub struct ClassedRaceReplayV1 {
 }
 
 /// State of one car. There is no cosmetic, NFT or caller-supplied performance multiplier.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonDeserialize, DeriveJsonSerialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonDeserialize,
+    DeriveJsonSerialize,
+)]
+#[norito(deny_unknown_fields)]
 pub struct ClassedRaceCarStateV1 {
     /// Unwrapped longitudinal progress, including negative starting-grid offsets.
     pub progress_mm: i64,
@@ -110,9 +172,20 @@ pub struct ClassedRaceCarStateV1 {
 }
 
 /// Exact bounded state at a tick boundary for one fixed class and track.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonDeserialize, DeriveJsonSerialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonDeserialize,
+    DeriveJsonSerialize,
+)]
+#[norito(deny_unknown_fields)]
 pub struct ClassedRaceStateV1 {
     /// Number of completed simulation ticks.
     pub tick: u32,
@@ -125,9 +198,21 @@ pub struct ClassedRaceStateV1 {
 }
 
 /// One display-ranked entry; slot breaks display ties only.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonDeserialize, DeriveJsonSerialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonDeserialize,
+    DeriveJsonSerialize,
+)]
+#[norito(deny_unknown_fields)]
 pub struct ClassedRaceStandingV1 {
     /// Original permanent participant slot.
     pub slot: u8,
@@ -140,9 +225,20 @@ pub struct ClassedRaceStandingV1 {
 }
 
 /// Native result; a nonterminal prefix is explicitly distinguished from a settleable outcome.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonDeserialize, DeriveJsonSerialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonDeserialize,
+    DeriveJsonSerialize,
+)]
+#[norito(deny_unknown_fields)]
 pub struct ClassedRaceResultV1 {
     /// Exact class interpreted by this result.
     pub class_id: ClassedRaceClassV1,

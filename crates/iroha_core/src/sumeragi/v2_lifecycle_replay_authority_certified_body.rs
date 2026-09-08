@@ -38,24 +38,24 @@ pub(in crate::sumeragi) struct AuthenticatedGenesisStoredReplayEvidenceV1 {
 ///
 /// Both subtypes carry a complete authenticated QC, but neither represents a
 /// certified Fetch response. Genesis bytes come from the opaque launch cut;
-/// protected-lock bytes were already made durable by an earlier Proposal
+/// protected body bytes were already made durable by an earlier Proposal
 /// pipeline whose live replay owner has since retired.
 #[derive(Clone, Debug)]
 enum AuthenticatedCertifiedLocalValidateFamilyV1 {
     Genesis(CertifiedBodyPipelineReplayFamilyV1),
-    ProtectedLock(CertifiedBodyPipelineReplayFamilyV1),
+    ProtectedBody(CertifiedBodyPipelineReplayFamilyV1),
 }
 
 impl AuthenticatedCertifiedLocalValidateFamilyV1 {
     const fn family(&self) -> &CertifiedBodyPipelineReplayFamilyV1 {
         match self {
-            Self::Genesis(family) | Self::ProtectedLock(family) => family,
+            Self::Genesis(family) | Self::ProtectedBody(family) => family,
         }
     }
 
     fn family_mut(&mut self) -> &mut CertifiedBodyPipelineReplayFamilyV1 {
         match self {
-            Self::Genesis(family) | Self::ProtectedLock(family) => family,
+            Self::Genesis(family) | Self::ProtectedBody(family) => family,
         }
     }
 
@@ -64,7 +64,7 @@ impl AuthenticatedCertifiedLocalValidateFamilyV1 {
             Self::Genesis(family) => {
                 authenticated_genesis_standalone_source(verified, &family.source)
             }
-            Self::ProtectedLock(family) => {
+            Self::ProtectedBody(family) => {
                 authenticated_refined_proposal_standalone_source(verified, &family.source)
             }
         }
@@ -471,13 +471,13 @@ impl LocalValidateReplayFamilyV1 {
 }
 
 impl LocalValidateReplayEvidenceV1 {
-    /// Reseal one historical protected-lock body whose original Proposal replay
-    /// owner retired before this exact Validate turn.
+    /// Reseal a protected durable body after its original Proposal replay retires.
     ///
-    /// The runtime binding must already carry the same Prepare statement. The
-    /// complete QC is retained in the certified replay source and is verified
-    /// again at lifecycle admission (and again by cold standalone recovery).
-    pub(in crate::sumeragi) fn from_exact_protected_lock_validate(
+    /// The runtime binding must carry the same Prepare or Commit statement.
+    /// The QC and body retain the same proposal round in a later active view.
+    /// Lifecycle admission and cold recovery reauthenticate the
+    /// complete QC against the frozen height before executing validation.
+    pub(in crate::sumeragi) fn from_exact_protected_body_validate(
         effect: &AdapterEffect,
         manifest: &wire::PayloadManifest,
         receipt: &DurableBodyReceipt,
@@ -494,8 +494,8 @@ impl LocalValidateReplayEvidenceV1 {
         };
         let statement = pending.candidate_statement()?;
         if !pending.exactly_binds_adapter_effect(effect)
-            || certificate.phase != wire::GlobalPhase::Prepare
             || certificate.round != *round
+            || certificate.proposal_round != *round
             || certificate.proposal_round != manifest.round
             || certificate.subject != *subject
             || manifest.round != *round
@@ -504,7 +504,7 @@ impl LocalValidateReplayEvidenceV1 {
             || statement.round() != certificate.round
             || statement.proposal_round() != certificate.proposal_round
             || statement.subject() != Some(certificate.subject)
-            || statement.phase() != Some(wire::GlobalPhase::Prepare)
+            || statement.phase() != Some(certificate.phase)
             || statement.execution_commitment() != Some(certificate.execution_commitment)
         {
             return None;
@@ -523,7 +523,7 @@ impl LocalValidateReplayEvidenceV1 {
         }
         let evidence = Self {
             family: LocalValidateReplayFamilyV1::AuthenticatedCertified(
-                AuthenticatedCertifiedLocalValidateFamilyV1::ProtectedLock(family),
+                AuthenticatedCertifiedLocalValidateFamilyV1::ProtectedBody(family),
             ),
             validate_pending: Arc::new(pending),
         };
@@ -2128,8 +2128,7 @@ fn body_stage_matches_record_shape(
         && shape.key.execution_commitment()
             == statement.execution_commitment().map(execution_commitment)
         && tag.height() == active_context.height()
-        && source.tag
-            == ReplayEventTagV1::new(tag.height(), tag.view(), tag.generation().get())
+        && source.tag == ReplayEventTagV1::new(tag.height(), tag.view(), tag.generation().get())
         && digest_from_hash(pending.causal_lifecycle_key()) == record.owner.causal_root().digest()
         && record.key == shape.key
         && record.work_class == work_class

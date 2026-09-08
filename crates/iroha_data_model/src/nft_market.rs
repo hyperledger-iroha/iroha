@@ -9,25 +9,31 @@ macro_rules! record {
     ($(#[$meta:meta])* pub struct $name:ident { $($(#[$field_meta:meta])* pub $field:ident: $ty:ty,)* }) => {
         $(#[$meta])*
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-        #[cfg_attr(feature = "json", derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize))]
-        #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+        #[derive (crate :: DeriveJsonSerialize , crate :: DeriveJsonDeserialize)]
+        #[norito (deny_unknown_fields)]
         pub struct $name { $($(#[$field_meta])* pub $field: $ty,)* }
     };
 }
 /// Closed native custody namespaces, with independent account derivation domains.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
-#[cfg_attr(
-    feature = "json",
-    norito(
-        tag = "kind",
-        content = "value",
-        rename_all = "snake_case",
-        deny_unknown_fields
-    )
+#[norito(
+    tag = "kind",
+    content = "value",
+    rename_all = "snake_case",
+    deny_unknown_fields
 )]
 pub enum NftCustodyPurposeV1 {
     /// Exact-price sale offer.
@@ -87,15 +93,20 @@ record! {
     }
 }
 /// Terminal offer decisions remain in consensus state to reject all replay.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "kind", content = "value", rename_all = "snake_case")
-)]
+#[norito(tag = "kind", content = "value", rename_all = "snake_case")]
 pub enum NftSaleStatusV1 {
     /// NFT reserved for these immutable sale terms.
     Open,

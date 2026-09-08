@@ -18,7 +18,7 @@ PYTHON_ROOT = SDK_ROOT.parent
 REPO_ROOT = PYTHON_ROOT.parent
 INPUT_PATH = SDK_ROOT / "requirements-ci.in"
 LOCK_PATH = SDK_ROOT / "requirements-ci.lock"
-LOCAL_PROJECT_NAMES = {"iroha-norito", "iroha-python", "iroha-torii-client"}
+LOCAL_PROJECT_NAMES = {"iroha-native", "iroha-norito", "iroha-python", "iroha-torii-client"}
 HASH_PATTERN = re.compile(r"--hash=sha256:[0-9a-f]{64}(?:\s|$)")
 
 
@@ -56,6 +56,7 @@ def _pyproject(path: Path) -> dict[str, Any]:
 def _expected_direct_requirements() -> list[Requirement]:
     pyprojects = [
         _pyproject(SDK_ROOT / "pyproject.toml"),
+        _pyproject(PYTHON_ROOT / "iroha_native" / "pyproject.toml"),
         _pyproject(PYTHON_ROOT / "iroha_torii_client" / "pyproject.toml"),
         _pyproject(PYTHON_ROOT / "norito_py" / "pyproject.toml"),
     ]
@@ -73,7 +74,9 @@ def _expected_direct_requirements() -> list[Requirement]:
         if _canonical_name(Requirement(specification).name) == "pytest"
     )
     requirements.extend(
-        Requirement(specification) for specification in pyprojects[0]["build-system"]["requires"]
+        Requirement(specification)
+        for pyproject in pyprojects[:2]
+        for specification in pyproject["build-system"]["requires"]
     )
     return requirements
 
@@ -139,9 +142,7 @@ def test_numeric_workflow_enforces_the_ci_lock() -> None:
 
 
 def test_native_amx_installed_package_path_is_dependency_only() -> None:
-    harness = (
-        REPO_ROOT / "ci/run_native_amx_v2_grouped_sdk_parity.sh"
-    ).read_text(encoding="utf-8")
+    harness = (REPO_ROOT / "ci/run_native_amx_v2_grouped_sdk_parity.sh").read_text(encoding="utf-8")
     installed_paths = re.findall(
         r'if \[\[ "\$\{IROHA_PYTHON_TEST_INSTALLED_PACKAGE:-\}" == "1" \]\]; then\n'
         r'\s+readonly python_parity_path="([^"]*)"\n'
@@ -149,9 +150,7 @@ def test_native_amx_installed_package_path_is_dependency_only() -> None:
         harness,
     )
 
-    assert installed_paths == [
-        "${repo_root}/python/norito_py/src:${repo_root}/python"
-    ]
+    assert installed_paths == ["${repo_root}/python/norito_py/src:${repo_root}/python"]
 
 
 def test_privacy_gate_enforces_the_ci_lock_and_native_build_policy() -> None:
@@ -159,27 +158,21 @@ def test_privacy_gate_enforces_the_ci_lock_and_native_build_policy() -> None:
         encoding="utf-8"
     )
     gate = (REPO_ROOT / "ci/check_privacy_python_sdk.sh").read_text(encoding="utf-8")
-    cargo_wrapper = (
-        REPO_ROOT / "ci/privacy_sdk_cargo_wrapper.sh"
-    ).read_text(encoding="utf-8")
-    cargo_lock_helper = (
-        REPO_ROOT / "ci/privacy_sdk_cargo_lockfile.sh"
-    ).read_text(encoding="utf-8")
-    wheel_verifier = (
-        REPO_ROOT / "ci/verify_privacy_python_wheel.py"
-    ).read_text(encoding="utf-8")
+    cargo_wrapper = (REPO_ROOT / "ci/privacy_sdk_cargo_wrapper.sh").read_text(encoding="utf-8")
+    cargo_lock_helper = (REPO_ROOT / "ci/privacy_sdk_cargo_lockfile.sh").read_text(encoding="utf-8")
+    wheel_verifier = (REPO_ROOT / "ci/verify_privacy_python_wheel.py").read_text(encoding="utf-8")
     conftest = (SDK_ROOT / "tests/conftest.py").read_text(encoding="utf-8")
-    import_fallback_test = (
-        SDK_ROOT / "tests/package_import_fallback_test.py"
-    ).read_text(encoding="utf-8")
-    pyproject_source = (SDK_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    import_fallback_test = (SDK_ROOT / "tests/package_import_fallback_test.py").read_text(
+        encoding="utf-8"
+    )
+    pyproject_source = (SDK_ROOT.parent / "iroha_native/pyproject.toml").read_text(encoding="utf-8")
+    sdk_pyproject_source = (SDK_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    assert 'build-backend = "setuptools.build_meta"' in sdk_pyproject_source
+    assert '"iroha-native==0.0.1"' in sdk_pyproject_source
 
     cargo_jobs = {
         "privacy_native_bridge_tests": {
-            "consumer": (
-                "cargo test -p connect_norito_bridge privacy_ --lib "
-                "-- --test-threads=1"
-            ),
+            "consumer": ("cargo test -p connect_norito_bridge privacy_ --lib -- --test-threads=1"),
             "fetch_name": "Prime privacy native Cargo dependencies",
             "install_name": "Install host-qualified privacy SDK Rust toolchain",
             "provision_name": "Provision private privacy SDK Cargo lock",
@@ -198,8 +191,7 @@ def test_privacy_gate_enforces_the_ci_lock_and_native_build_policy() -> None:
         },
         "privacy_python_sdk_tests": {
             "consumer": (
-                "run: env -u PKG_CONFIG_PATH -u LD_LIBRARY_PATH "
-                "ci/check_privacy_python_sdk.sh"
+                "run: env -u PKG_CONFIG_PATH -u LD_LIBRARY_PATH ci/check_privacy_python_sdk.sh"
             ),
             "fetch_name": "Prime privacy Python SDK Cargo dependencies",
             "install_name": "Install host-qualified privacy SDK Rust toolchain",
@@ -210,8 +202,7 @@ def test_privacy_gate_enforces_the_ci_lock_and_native_build_policy() -> None:
         },
         "privacy-sdk-guard": {
             "consumer": (
-                "run: env -u PKG_CONFIG_PATH -u LD_LIBRARY_PATH "
-                "ci/check_privacy_sdk_guard.sh"
+                "run: env -u PKG_CONFIG_PATH -u LD_LIBRARY_PATH ci/check_privacy_sdk_guard.sh"
             ),
             "fetch_name": "Prime privacy Python SDK Cargo dependencies",
             "install_name": "Install host-qualified privacy SDK Rust toolchain",
@@ -234,9 +225,7 @@ def test_privacy_gate_enforces_the_ci_lock_and_native_build_policy() -> None:
         "privacy-js-python": 2,
         "privacy-python": 8,
     }.items():
-        assert workflow.count(
-            f"${{{{ steps.{setup_id}.outputs.python-path }}}}"
-        ) == expected_count
+        assert workflow.count(f"${{{{ steps.{setup_id}.outputs.python-path }}}}") == expected_count
     assert workflow.count('python-version: "3.12"') == 6
     assert workflow.count("update-environment: false") == 6
     assert "cache: pip" not in workflow
@@ -318,6 +307,12 @@ def test_privacy_gate_enforces_the_ci_lock_and_native_build_policy() -> None:
         "crates/sorafs_orchestrator/**",
         "ci/verify_privacy_python_wheel.py",
         "python/iroha_python/pyproject.toml",
+        "python/iroha_native/pyproject.toml",
+        "python/iroha_native/src/**",
+        "python/iroha_native/src/**/*.py",
+        "python/iroha_native/src/**/*.so",
+        "python/iroha_native/src/**/*.dylib",
+        "python/iroha_native/src/**/*.pyd",
         "python/iroha_python/iroha_python_rs/build.rs",
         "python/iroha_python/iroha_python_rs/src/**",
         "python/iroha_python/requirements-ci.lock",
@@ -426,8 +421,10 @@ def test_privacy_gate_enforces_the_ci_lock_and_native_build_policy() -> None:
     ):
         assert marker in cargo_wrapper
     for marker in (
-        "iroha_python/__init__.py",
-        "iroha_python._crypto",
+        'WheelOwner("iroha_native", "iroha-native", True)',
+        'WheelOwner("iroha_python", "iroha-python", False)',
+        "pure SDK wheel must not contain a native module",
+        "iroha_native._crypto",
         "preflight_wheel",
         'sys.argv[1] == "--preflight"',
         "expected_wheel_seal",
@@ -491,7 +488,7 @@ def test_privacy_gate_enforces_the_ci_lock_and_native_build_policy() -> None:
     assert "IROHA_PYTHON_TEST_INSTALLED_PACKAGE" in conftest
     assert "site.getsitepackages()" in conftest
     assert "sysconfig.get_paths()" in conftest
-    assert "iroha_python._crypto" in conftest
+    assert "iroha_native._crypto" in conftest
     assert "PathFinder.find_spec" in conftest
     assert "ExtensionFileLoader" in conftest
     assert "loader_state" in conftest

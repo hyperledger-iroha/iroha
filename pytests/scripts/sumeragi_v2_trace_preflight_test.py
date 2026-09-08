@@ -115,7 +115,7 @@ class TracePreflightTest(unittest.TestCase):
         self.assertTrue(binding["authenticated"])
         for key in ("checked_transition_source", "authorization_source", "checked_transition_consumer", "canonical_commit_sink"):
             self.assertIsNotNone(binding[key], key)
-        self.assertEqual(len(binding["supporting_sources"]), 5)
+        self.assertEqual(len(binding["supporting_sources"]), 11)
 
     def test_dispatch_separates_payload_custody_from_actual_activation(self):
         arms = self.module._production_trace_first_release_dispatch_arms(self.dispatch)

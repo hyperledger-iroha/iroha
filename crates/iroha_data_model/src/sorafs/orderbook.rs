@@ -3,7 +3,7 @@
 //! Signed order, cancellation, and settlement payload schemas remain in
 //! `sorafs_manifest::orderbook`. These records bind those canonical payloads to
 //! a governance-controlled policy and to deterministic ledger admission state.
-#[cfg(feature = "json")]
+
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{
     account::AccountId, asset::AssetDefinitionId, escrow::EscrowId,
@@ -109,9 +109,20 @@ pub fn is_reserved_orderbook_escrow_id_v1(escrow_id: &EscrowId) -> bool {
     is_orderbook_order_escrow_id_v1(escrow_id) || is_orderbook_settlement_escrow_id_v1(escrow_id)
 }
 /// Governance-controlled order admission and receipt-retention policy.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::orderbook::OrderbookAdmissionPolicyV1")]
 pub struct OrderbookAdmissionPolicyV1 {
     /// Schema version; must equal [`ORDERBOOK_ADMISSION_POLICY_VERSION_V1`].
@@ -119,13 +130,10 @@ pub struct OrderbookAdmissionPolicyV1 {
     /// Monotonic policy revision, beginning at one.
     pub revision: u64,
     /// Digest of the immediately preceding policy, absent only for revision one.
-    #[cfg_attr(
-        feature = "json",
-        norito(json = "crate::json_helpers::fixed_bytes::option")
-    )]
+    #[norito(json = "crate::json_helpers::fixed_bytes::option")]
     pub predecessor_policy_digest: Option<[u8; 32]>,
     /// Non-zero governance market identifier, immutable after first activation.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub market_id: [u8; 32],
     /// Exact account authorized to execute bounded matching and maintenance.
     ///
@@ -321,15 +329,24 @@ pub enum OrderbookPolicyValidationError {
     },
 }
 /// Activated governance policy together with ledger admission provenance.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::orderbook::OrderbookAdmissionPolicyRecord")]
 pub struct OrderbookAdmissionPolicyRecord {
     /// Policy body.
     pub policy: OrderbookAdmissionPolicyV1,
     /// Canonical digest of `policy`.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub policy_digest: [u8; 32],
     /// Block timestamp at which the policy was activated.
     pub activated_at_unix: u64,
@@ -337,12 +354,21 @@ pub struct OrderbookAdmissionPolicyRecord {
     pub activated_by: AccountId,
 }
 /// Authoritative lifecycle of an admitted order.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "status", content = "value", rename_all = "snake_case")
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
 )]
+#[norito(tag = "status", content = "value", rename_all = "snake_case")]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::sorafs::orderbook::OrderbookOrderStatusV1")]
 pub enum OrderbookOrderStatusV1 {
@@ -360,9 +386,18 @@ pub enum OrderbookOrderStatusV1 {
     ProviderRevoked,
 }
 /// Native custody created atomically with one admitted bid.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::orderbook::OrderbookBidEscrowBindingV1")]
 pub struct OrderbookBidEscrowBindingV1 {
     /// Deterministic order-scoped native lock identifier.
@@ -373,21 +408,30 @@ pub struct OrderbookBidEscrowBindingV1 {
     pub initial_xor_locked: XorQuantity,
 }
 /// Canonical signed order and its authoritative ledger status.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::orderbook::OrderbookOrderRecord")]
 pub struct OrderbookOrderRecord {
     /// Canonical order identifier.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub order_id: [u8; 32],
     /// Canonical owner account.
     pub owner: AccountId,
     /// Exact canonical `sorafs_manifest::orderbook::OrderRequestV1` bytes.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
+    #[norito(json = "crate::json_helpers::base64_vec")]
     pub canonical_order: Vec<u8>,
     /// Policy digest against which the order was admitted.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub admitted_policy_digest: [u8; 32],
     /// Block timestamp assigned at admission.
     pub admitted_at_unix: u64,
@@ -404,44 +448,56 @@ pub struct OrderbookOrderRecord {
     /// Block timestamp of the latest lifecycle mutation.
     pub updated_at_unix: u64,
     /// Exact canonical cancellation payload, present only after cancellation.
-    #[cfg_attr(
-        feature = "json",
-        norito(json = "crate::json_helpers::base64_vec::option")
-    )]
+    #[norito(json = "crate::json_helpers::base64_vec::option")]
     pub canonical_cancel: Option<Vec<u8>>,
     /// Block timestamp assigned when cancellation was committed.
     pub cancelled_at_unix: Option<u64>,
     /// Active policy digest against which cancellation was admitted.
-    #[cfg_attr(
-        feature = "json",
-        norito(json = "crate::json_helpers::fixed_bytes::option")
-    )]
+    #[norito(json = "crate::json_helpers::fixed_bytes::option")]
     pub cancelled_policy_digest: Option<[u8; 32]>,
 }
 /// Typed cancellation view returned by authoritative read queries.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::orderbook::OrderbookCancellationRecord")]
 pub struct OrderbookCancellationRecord {
     /// Cancelled order identifier.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub order_id: [u8; 32],
     /// Canonical owner of the cancelled order.
     pub owner: AccountId,
     /// Exact canonical signed cancellation payload.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
+    #[norito(json = "crate::json_helpers::base64_vec")]
     pub canonical_cancel: Vec<u8>,
     /// Block timestamp assigned to cancellation admission.
     pub cancelled_at_unix: u64,
     /// Policy digest active at cancellation admission.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub cancelled_policy_digest: [u8; 32],
 }
 /// Highest committed orderbook operation nonce for one ledger account.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::orderbook::OrderbookOwnerNonceRecord")]
 pub struct OrderbookOwnerNonceRecord {
     /// Canonical account whose nonce namespace is tracked.
@@ -450,25 +506,34 @@ pub struct OrderbookOwnerNonceRecord {
     pub highest_nonce: u64,
 }
 /// Immutable accepted settlement receipt and ledger provenance.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::orderbook::OrderbookSettlementReceiptRecord")]
 pub struct OrderbookSettlementReceiptRecord {
     /// Canonical receipt identifier.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub receipt_id: [u8; 32],
     /// Settlement channel identifier.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub channel_id: [u8; 32],
     /// Trade identifier carried by the receipt.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub trade_id: [u8; 32],
     /// Exact canonical `sorafs_manifest::orderbook::SettlementReceiptV1` bytes.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
+    #[norito(json = "crate::json_helpers::base64_vec")]
     pub canonical_receipt: Vec<u8>,
     /// Active policy digest against which the receipt was admitted.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub admitted_policy_digest: [u8; 32],
     /// Block timestamp assigned at admission.
     pub admitted_at_unix: u64,
@@ -479,27 +544,36 @@ pub struct OrderbookSettlementReceiptRecord {
     pub recorded_by: AccountId,
 }
 /// Immutable authoritative trade produced by deterministic matching.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::orderbook::OrderbookTradeRecord")]
 pub struct OrderbookTradeRecord {
     /// Canonical trade identifier.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub trade_id: [u8; 32],
     /// Maker order identifier.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub maker_order_id: [u8; 32],
     /// Taker order identifier.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub taker_order_id: [u8; 32],
     /// Deterministic sequence in the authoritative trade log.
     pub trade_sequence: u64,
     /// Exact canonical `sorafs_manifest::orderbook::TradeEventV1` bytes.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
+    #[norito(json = "crate::json_helpers::base64_vec")]
     pub canonical_trade: Vec<u8>,
     /// Settlement channel derived from this trade.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub channel_id: [u8; 32],
     /// Book revision committed by the matching transition.
     pub book_revision: u64,
@@ -507,12 +581,21 @@ pub struct OrderbookTradeRecord {
     pub recorded_at_unix: u64,
 }
 /// Authoritative settlement-channel lifecycle.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "status", content = "value", rename_all = "snake_case")
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
 )]
+#[norito(tag = "status", content = "value", rename_all = "snake_case")]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::sorafs::orderbook::OrderbookSettlementChannelStatusV1")]
 pub enum OrderbookSettlementChannelStatusV1 {
@@ -524,16 +607,25 @@ pub enum OrderbookSettlementChannelStatusV1 {
     Expired,
 }
 /// Authoritative settlement-channel state bound to native custody.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::orderbook::OrderbookSettlementChannelRecord")]
 pub struct OrderbookSettlementChannelRecord {
     /// Settlement channel identifier.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub channel_id: [u8; 32],
     /// Trade funded by this channel.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub trade_id: [u8; 32],
     /// Buyer whose admitted bid funded custody.
     pub buyer: AccountId,
@@ -565,13 +657,23 @@ pub struct OrderbookSettlementChannelRecord {
     pub updated_at_unix: u64,
 }
 /// One receipt range retained in a channel replay index.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::orderbook::OrderbookSettlementRangeRecord")]
 pub struct OrderbookSettlementRangeRecord {
     /// Receipt identifier.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub receipt_id: [u8; 32],
     /// Inclusive byte-range start.
     pub start: u64,
@@ -581,24 +683,43 @@ pub struct OrderbookSettlementRangeRecord {
     pub issued_at_unix: u64,
 }
 /// Bounded, strictly range-ordered receipt replay index for one channel.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::orderbook::OrderbookSettlementIndexRecord")]
 pub struct OrderbookSettlementIndexRecord {
     /// Settlement channel identifier.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub channel_id: [u8; 32],
     /// Trade identifier shared by every indexed receipt.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub trade_id: [u8; 32],
     /// Non-overlapping ranges sorted by `(start, end, receipt_id)`.
     pub ranges: Vec<OrderbookSettlementRangeRecord>,
 }
 /// Constant-time authoritative orderbook ledger counters.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::orderbook::OrderbookLedgerStatusV1")]
 pub struct OrderbookLedgerStatusV1 {
     /// Number of unfilled open orders.
@@ -638,21 +759,42 @@ pub struct OrderbookLedgerStatusV1 {
     pub updated_at_unix: u64,
 }
 /// Finalized block anchor for one coherent orderbook query result.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::orderbook::OrderbookFinalizedCursorV1")]
 pub struct OrderbookFinalizedCursorV1 {
     /// Finalized block height observed by the immutable state view.
     pub height: u64,
     /// Finalized block hash resolved from that same state view.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub block_hash: [u8; 32],
 }
 /// Cursor-bounded authoritative order page.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::orderbook::OrderbookOrderPageV1")]
 pub struct OrderbookOrderPageV1 {
     /// Finalized state anchor shared by every order in the page.
@@ -662,16 +804,22 @@ pub struct OrderbookOrderPageV1 {
     /// Whether at least one further matching record exists.
     pub has_more: bool,
     /// Exclusive cursor for the next page, present only when `has_more` is true.
-    #[cfg_attr(
-        feature = "json",
-        norito(json = "crate::json_helpers::fixed_bytes::option")
-    )]
+    #[norito(json = "crate::json_helpers::fixed_bytes::option")]
     pub next_after_order_id: Option<[u8; 32]>,
 }
 /// Cursor-bounded authoritative settlement-receipt page.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::orderbook::OrderbookSettlementReceiptPageV1")]
 pub struct OrderbookSettlementReceiptPageV1 {
     /// Finalized state anchor shared by every receipt in the page.
@@ -681,16 +829,22 @@ pub struct OrderbookSettlementReceiptPageV1 {
     /// Whether at least one further matching record exists.
     pub has_more: bool,
     /// Exclusive cursor for the next page, present only when `has_more` is true.
-    #[cfg_attr(
-        feature = "json",
-        norito(json = "crate::json_helpers::fixed_bytes::option")
-    )]
+    #[norito(json = "crate::json_helpers::fixed_bytes::option")]
     pub next_after_receipt_id: Option<[u8; 32]>,
 }
 /// Cursor-bounded authoritative trade page.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::orderbook::OrderbookTradePageV1")]
 pub struct OrderbookTradePageV1 {
     /// Finalized state anchor shared by every trade in the page.
@@ -700,16 +854,22 @@ pub struct OrderbookTradePageV1 {
     /// Whether at least one further trade exists at this anchor.
     pub has_more: bool,
     /// Exclusive cursor for the next page, present only when `has_more` is true.
-    #[cfg_attr(
-        feature = "json",
-        norito(json = "crate::json_helpers::fixed_bytes::option")
-    )]
+    #[norito(json = "crate::json_helpers::fixed_bytes::option")]
     pub next_after_trade_id: Option<[u8; 32]>,
 }
 /// Cursor-bounded authoritative settlement-channel page.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::orderbook::OrderbookSettlementChannelPageV1")]
 pub struct OrderbookSettlementChannelPageV1 {
     /// Finalized state anchor shared by every channel in the page.
@@ -719,16 +879,25 @@ pub struct OrderbookSettlementChannelPageV1 {
     /// Whether at least one further matching channel exists at this anchor.
     pub has_more: bool,
     /// Exclusive cursor for the next page, present only when `has_more` is true.
-    #[cfg_attr(
-        feature = "json",
-        norito(json = "crate::json_helpers::fixed_bytes::option")
-    )]
+    #[norito(json = "crate::json_helpers::fixed_bytes::option")]
     pub next_after_channel_id: Option<[u8; 32]>,
 }
 /// Exclusive cursor for one committed orderbook event.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::orderbook::OrderbookFinalizedEventCursorV1")]
 pub struct OrderbookFinalizedEventCursorV1 {
     /// Monotonic orderbook-event sequence beginning at one.
@@ -736,15 +905,24 @@ pub struct OrderbookFinalizedEventCursorV1 {
     /// Finalized block height containing the event.
     pub block_height: u64,
     /// Finalized block hash resolved only after the block commits.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub block_hash: [u8; 32],
     /// Orderbook-event index within the committing block.
     pub event_index: u32,
 }
 /// Typed orderbook event with an unambiguous finalized-chain cursor.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::orderbook::OrderbookFinalizedEventV1")]
 pub struct OrderbookFinalizedEventV1 {
     /// Monotonic orderbook-event sequence beginning at one.
@@ -752,7 +930,7 @@ pub struct OrderbookFinalizedEventV1 {
     /// Committing block height.
     pub block_height: u64,
     /// Committing block hash resolved from finalized state.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub block_hash: [u8; 32],
     /// Orderbook-event index within the committing block.
     pub event_index: u32,
@@ -772,9 +950,18 @@ impl OrderbookFinalizedEventV1 {
     }
 }
 /// Cursor-bounded page of typed committed orderbook events.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::orderbook::OrderbookFinalizedEventPageV1")]
 pub struct OrderbookFinalizedEventPageV1 {
     /// Finalized state anchor shared by every event in the page.
@@ -1053,7 +1240,7 @@ mod tests {
         assert_canonical_norito_round_trip(&receipt_page);
         assert_canonical_norito_round_trip(&trade_page);
         assert_canonical_norito_round_trip(&channel_page);
-        #[cfg(feature = "json")]
+
         {
             let encoded =
                 norito::json::to_vec(&event_page).expect("encode finalized event page JSON");

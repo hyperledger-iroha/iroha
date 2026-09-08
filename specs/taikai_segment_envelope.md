@@ -111,7 +111,7 @@ continues to track absolute magnitudes for latency bucketing.
 ## Encoding Rules
 
 - Norito encoding is mandatory (`application/norito+v1`). JSON helpers are
-  provided for SDKs via the `json` feature flag but must not be used for on-wire
+  provided for SDKs as part of the mandatory aggregate protocol model but must not be used for on-wire
   payloads.
 - Persisted and on-wire envelopes use the canonical `norito::to_bytes` framing,
   including the Norito header that advertises decode flags. Bare

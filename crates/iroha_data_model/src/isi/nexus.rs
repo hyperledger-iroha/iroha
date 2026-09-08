@@ -250,11 +250,8 @@ iroha_data_model_derive::model_single! {
     #[derive(getset::Getters)]
     #[derive(Decode, Encode)]
     #[derive(iroha_schema::IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
-    #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+    #[derive (crate :: DeriveJsonSerialize , crate :: DeriveJsonDeserialize)]
+    #[norito (deny_unknown_fields)]
     #[getset(get = "pub")]
     /// Withdraw assets from a paused or closing program vault allocation.
     #[derive(norito::NoritoSchema)]
@@ -484,7 +481,7 @@ impl_decode_fields!(WithdrawFeeSponsorProgram {
 });
 #[cfg(test)]
 mod tests {
-    #[cfg(feature = "json")]
+
     mod generated_identity;
 
     use super::*;
@@ -702,7 +699,7 @@ mod tests {
             amount: Quantity::from(1_u32),
         });
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn withdrawal_json_rejects_caller_selected_destination() {
         let program = sample_fee_sponsor_program();

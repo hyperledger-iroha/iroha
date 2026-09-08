@@ -875,12 +875,14 @@ impl norito::core::SerializePayload for InstructionBox {
         encoded_instruction_pair_len(self)
     }
 }
-impl<'a> norito::core::NoritoDeserialize<'a> for InstructionBox {
+impl norito::core::NoritoDeserialize<'_> for InstructionBox {
     fn schema_hash() -> [u8; 16] {
         // Must match the schema used by `NoritoSerialize` for `InstructionBox`
         // which serializes as a `(String, Vec<u8>)` pair.
         norito::core::type_name_schema_hash::<(String, Vec<u8>)>()
     }
+}
+impl<'a> norito::core::DeserializePayload<'a> for InstructionBox {
     fn deserialize(archived: &'a norito::core::Archived<InstructionBox>) -> Self {
         const MAX_MESSAGE_LEN: usize = 256;
         let truncate_message = |mut message: String| {
@@ -921,7 +923,7 @@ impl<'a> norito::core::NoritoDeserialize<'a> for InstructionBox {
             }
         }
         let pair: Result<(String, Vec<u8>), norito::core::Error> =
-            norito::core::NoritoDeserialize::try_deserialize(archived.cast());
+            norito::core::DeserializePayload::try_deserialize(archived.cast());
         match pair {
             Ok((name, bytes)) => match decode_instruction_from_pair(&name, &bytes) {
                 Ok(inst) => inst,
@@ -955,7 +957,7 @@ impl<'a> norito::core::NoritoDeserialize<'a> for InstructionBox {
             }
         }
         let (name, bytes): (String, Vec<u8>) =
-            norito::core::NoritoDeserialize::try_deserialize(archived.cast())?;
+            norito::core::DeserializePayload::try_deserialize(archived.cast())?;
         decode_instruction_from_pair(&name, &bytes)
     }
 }
@@ -986,7 +988,7 @@ impl norito::json::FastJsonWrite for InstructionBox {
         norito::json::write_canonical_base64_json_to(self, out)
     }
 }
-#[cfg(feature = "json")]
+
 fn instruction_box_from_base64_literal(
     encoded: &str,
 ) -> Result<InstructionBox, norito::json::Error> {
@@ -996,20 +998,20 @@ fn instruction_box_from_base64_literal(
     norito::decode_canonical::<InstructionBox>(&bytes)
         .map_err(|err| norito::json::Error::Message(err.to_string()))
 }
-#[cfg(feature = "json")]
+
 fn json_required_string(map: &norito::json::Map, key: &str) -> Result<String, norito::json::Error> {
     map.get(key)
         .and_then(norito::json::Value::as_str)
         .map(str::to_owned)
         .ok_or_else(|| norito::json::Error::Message(format!("instruction `{key}` is required")))
 }
-#[cfg(feature = "json")]
+
 fn json_required_bool(map: &norito::json::Map, key: &str) -> Result<bool, norito::json::Error> {
     map.get(key)
         .and_then(norito::json::Value::as_bool)
         .ok_or_else(|| norito::json::Error::Message(format!("instruction `{key}` must be a bool")))
 }
-#[cfg(feature = "json")]
+
 fn json_required_u64(map: &norito::json::Map, key: &str) -> Result<u64, norito::json::Error> {
     map.get(key)
         .and_then(norito::json::Value::as_u64)
@@ -1017,7 +1019,7 @@ fn json_required_u64(map: &norito::json::Map, key: &str) -> Result<u64, norito::
             norito::json::Error::Message(format!("instruction `{key}` must be an unsigned integer"))
         })
 }
-#[cfg(feature = "json")]
+
 fn json_required_asset_transfer_availability(
     map: &norito::json::Map,
     key: &str,
@@ -1030,7 +1032,7 @@ fn json_required_asset_transfer_availability(
         ))),
     }
 }
-#[cfg(feature = "json")]
+
 fn json_optional_exact_nonblank_string(
     map: &norito::json::Map,
     key: &str,
@@ -1047,7 +1049,7 @@ fn json_optional_exact_nonblank_string(
         ))),
     }
 }
-#[cfg(feature = "json")]
+
 fn json_quantity_opt(
     value: Option<&norito::json::Value>,
     field: &str,
@@ -1081,7 +1083,7 @@ fn json_quantity_opt(
         "asset transfer {field} must be a string, number, or null"
     )))
 }
-#[cfg(feature = "json")]
+
 fn json_asset_transfer_target(
     params: &norito::json::Map,
 ) -> Result<(crate::account::AccountId, crate::asset::AssetDefinitionId), norito::json::Error> {
@@ -1096,7 +1098,7 @@ fn json_asset_transfer_target(
     .map_err(|err| norito::json::Error::Message(err.to_string()))?;
     Ok((account_id, asset_definition_id))
 }
-#[cfg(feature = "json")]
+
 fn instruction_box_from_object(
     map: &norito::json::Map,
 ) -> Result<InstructionBox, norito::json::Error> {
@@ -1589,7 +1591,7 @@ pub(crate) fn decode_aos_canonical_field<T>(
     flags: u8,
 ) -> Result<T, norito::core::Error>
 where
-    T: for<'de> norito::core::NoritoDeserialize<'de> + norito::core::NoritoSerialize,
+    T: for<'de> norito::core::NoritoDeserialize<'de> + norito::core::SerializePayload,
 {
     let _guard = norito::core::DecodeFlagsGuard::enter(flags);
     let (value, used) = norito::core::decode_field_canonical::<T>(field)?;
@@ -1613,7 +1615,7 @@ pub(crate) fn decode_packed_instruction_payload<T>(
     bytes: &[u8],
 ) -> Result<(T, usize), norito::core::Error>
 where
-    T: norito::codec::Decode + norito::core::NoritoSerialize,
+    T: norito::codec::Decode,
 {
     // The headerless `Decode` entry point resets layout flags to the V1 defaults. Packed
     // instruction payloads must instead retain the flags advertised by their enclosing frame.
@@ -1798,7 +1800,7 @@ macro_rules! enum_type {
                 }
             }
         }
-        #[cfg(feature = "json")]
+
         impl norito::json::FastJsonWrite for $name {
             fn write_json(&self, out: &mut String) {
                 out.push('"');
@@ -1816,7 +1818,7 @@ macro_rules! enum_type {
                 }, out)
             }
         }
-        #[cfg(feature = "json")]
+
         impl norito::json::JsonDeserialize for $name {
             fn json_deserialize(
                 parser: &mut norito::json::Parser<'_>,
@@ -2130,12 +2132,10 @@ pub mod error {
             Decode,
             Encode,
             IntoSchema,
+            crate :: DeriveJsonSerialize,
+            crate :: DeriveJsonDeserialize,
         )]
-        #[cfg_attr(
-            feature = "json",
-            derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-        )]
-        #[cfg_attr(feature = "json", norito(tag = "kind", content = "content"))]
+        #[norito(tag = "kind", content = "content")]
         #[ignore_extra_doc_attributes]
         #[derive(thiserror::Error)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -2180,12 +2180,10 @@ pub mod error {
             Decode,
             Encode,
             IntoSchema,
+            crate :: DeriveJsonSerialize,
+            crate :: DeriveJsonDeserialize,
         )]
-        #[cfg_attr(
-            feature = "json",
-            derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-        )]
-        #[cfg_attr(feature = "json", norito(tag = "kind", content = "content"))]
+        #[norito(tag = "kind", content = "content")]
         #[derive(thiserror::Error)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         pub enum AssetTransferAdmissionError {
@@ -2215,12 +2213,10 @@ pub mod error {
             Decode,
             Encode,
             IntoSchema,
+            crate :: DeriveJsonSerialize,
+            crate :: DeriveJsonDeserialize,
         )]
-        #[cfg_attr(
-            feature = "json",
-            derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-        )]
-        #[cfg_attr(feature = "json", norito(tag = "kind", content = "content"))]
+        #[norito(tag = "kind", content = "content")]
         #[derive(thiserror::Error)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         pub enum AccountAdmissionQuotaScope {
@@ -2241,12 +2237,10 @@ pub mod error {
             Decode,
             Encode,
             IntoSchema,
+            crate :: DeriveJsonSerialize,
+            crate :: DeriveJsonDeserialize,
         )]
-        #[cfg_attr(
-            feature = "json",
-            derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-        )]
-        #[cfg_attr(feature = "json", norito(tag = "kind", content = "content"))]
+        #[norito(tag = "kind", content = "content")]
         #[ignore_extra_doc_attributes]
         #[derive(thiserror::Error)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -2280,10 +2274,8 @@ pub mod error {
             Decode,
             Encode,
             IntoSchema,
-        )]
-        #[cfg_attr(
-            feature = "json",
-            derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+            crate :: DeriveJsonSerialize,
+            crate :: DeriveJsonDeserialize,
         )]
         #[ignore_extra_doc_attributes]
         #[derive(thiserror::Error)]
@@ -2304,10 +2296,8 @@ pub mod error {
             Decode,
             Encode,
             IntoSchema,
-        )]
-        #[cfg_attr(
-            feature = "json",
-            derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+            crate :: DeriveJsonSerialize,
+            crate :: DeriveJsonDeserialize,
         )]
         #[ignore_extra_doc_attributes]
         #[derive(thiserror::Error)]
@@ -2330,10 +2320,8 @@ pub mod error {
             Decode,
             Encode,
             IntoSchema,
-        )]
-        #[cfg_attr(
-            feature = "json",
-            derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+            crate :: DeriveJsonSerialize,
+            crate :: DeriveJsonDeserialize,
         )]
         #[ignore_extra_doc_attributes]
         #[derive(thiserror::Error)]
@@ -2358,10 +2346,8 @@ pub mod error {
             Decode,
             Encode,
             IntoSchema,
-        )]
-        #[cfg_attr(
-            feature = "json",
-            derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+            crate :: DeriveJsonSerialize,
+            crate :: DeriveJsonDeserialize,
         )]
         #[ignore_extra_doc_attributes]
         #[derive(thiserror::Error)]
@@ -2386,10 +2372,8 @@ pub mod error {
             Decode,
             Encode,
             IntoSchema,
-        )]
-        #[cfg_attr(
-            feature = "json",
-            derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+            crate :: DeriveJsonSerialize,
+            crate :: DeriveJsonDeserialize,
         )]
         #[ignore_extra_doc_attributes]
         #[derive(thiserror::Error)]
@@ -2415,12 +2399,10 @@ pub mod error {
             Decode,
             Encode,
             IntoSchema,
+            crate :: DeriveJsonSerialize,
+            crate :: DeriveJsonDeserialize,
         )]
-        #[cfg_attr(
-            feature = "json",
-            derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-        )]
-        #[cfg_attr(feature = "json", norito(tag = "kind", content = "content"))]
+        #[norito(tag = "kind", content = "content")]
         #[derive(thiserror::Error)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         pub enum InstructionEvaluationError {
@@ -2458,7 +2440,7 @@ pub mod error {
             /// The value that caused the error
             pub actual: T,
         }
-        #[cfg(feature = "json")]
+
         impl<T> norito::json::JsonSerialize for Mismatch<T>
         where
             T: norito::json::JsonSerialize + Debug,
@@ -2488,7 +2470,7 @@ pub mod error {
                 Ok(())
             }
         }
-        #[cfg(feature = "json")]
+
         impl<T> norito::json::JsonDeserialize for Mismatch<T>
         where
             T: norito::json::JsonDeserialize + Debug,
@@ -2540,12 +2522,10 @@ pub mod error {
             Decode,
             Encode,
             IntoSchema,
+            crate :: DeriveJsonSerialize,
+            crate :: DeriveJsonDeserialize,
         )]
-        #[cfg_attr(
-            feature = "json",
-            derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-        )]
-        #[cfg_attr(feature = "json", norito(tag = "kind", content = "content"))]
+        #[norito(tag = "kind", content = "content")]
         #[derive(thiserror::Error)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         pub enum TypeError {
@@ -2565,12 +2545,10 @@ pub mod error {
             Decode,
             Encode,
             IntoSchema,
+            crate :: DeriveJsonSerialize,
+            crate :: DeriveJsonDeserialize,
         )]
-        #[cfg_attr(
-            feature = "json",
-            derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-        )]
-        #[cfg_attr(feature = "json", norito(tag = "kind", content = "content"))]
+        #[norito(tag = "kind", content = "content")]
         #[ignore_extra_doc_attributes]
         #[derive(thiserror::Error)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -2605,12 +2583,10 @@ pub mod error {
             Decode,
             Encode,
             IntoSchema,
+            crate :: DeriveJsonSerialize,
+            crate :: DeriveJsonDeserialize,
         )]
-        #[cfg_attr(
-            feature = "json",
-            derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-        )]
-        #[cfg_attr(feature = "json", norito(tag = "kind", content = "content"))]
+        #[norito(tag = "kind", content = "content")]
         #[derive(thiserror::Error)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         #[repr(u8)]
@@ -2634,12 +2610,10 @@ pub mod error {
             Decode,
             Encode,
             IntoSchema,
+            crate :: DeriveJsonSerialize,
+            crate :: DeriveJsonDeserialize,
         )]
-        #[cfg_attr(
-            feature = "json",
-            derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-        )]
-        #[cfg_attr(feature = "json", norito(tag = "kind", content = "content"))]
+        #[norito(tag = "kind", content = "content")]
         #[ignore_extra_doc_attributes]
         #[derive(thiserror::Error)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
@@ -2663,12 +2637,10 @@ pub mod error {
             Decode,
             Encode,
             IntoSchema,
+            crate :: DeriveJsonSerialize,
+            crate :: DeriveJsonDeserialize,
+            thiserror::Error,
         )]
-        #[cfg_attr(
-            feature = "json",
-            derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-        )]
-        #[derive(thiserror::Error)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         pub struct RepetitionError {
             /// Instruction type
@@ -2852,11 +2824,11 @@ mod framing_tests;
 #[cfg(test)]
 mod generated_argument_identity_tests;
 
-#[cfg(all(test, feature = "json"))]
+#[cfg(test)]
 mod generated_enum_identity_tests;
 
-#[cfg(all(test, feature = "json"))]
+#[cfg(test)]
 mod generated_box_identity_tests;
 
-#[cfg(all(test, feature = "json"))]
+#[cfg(test)]
 pub(crate) mod generated_record_identity_tests;

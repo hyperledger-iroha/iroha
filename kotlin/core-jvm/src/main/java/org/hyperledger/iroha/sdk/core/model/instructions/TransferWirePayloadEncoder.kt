@@ -256,7 +256,7 @@ object TransferWirePayloadEncoder {
             fun parse(accountIdStr: String): AccountId {
                 val address: AccountAddress
                 try {
-                    address = AccountAddress.parseEncodedIgnoringCurveSupport(accountIdStr, null)
+                    address = AccountAddress.parseEncoded(accountIdStr, null)
                 } catch (e: AccountAddressException) {
                     throw IllegalArgumentException(
                         "AssetId.account must use canonical I105 form",
@@ -265,12 +265,12 @@ object TransferWirePayloadEncoder {
                 }
 
                 try {
-                    val singleKey = address.singleKeyPayloadIgnoringCurveSupport()
+                    val singleKey = address.singleKeyPayload()
                     if (singleKey != null) {
                         val publicKeyPayload = compactPublicKeyPayload(singleKey.curveId, singleKey.publicKey)
                         return AccountId(AccountController.single(publicKeyPayload))
                     }
-                    val multisig = address.multisigPolicyPayloadIgnoringCurveSupport()
+                    val multisig = address.multisigPolicyPayload()
                     if (multisig != null) {
                         return AccountId(AccountController.multisig(multisig))
                     }

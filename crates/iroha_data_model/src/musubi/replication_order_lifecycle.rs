@@ -3,9 +3,20 @@
 /// This binding is installed atomically with the replication order, before any provider
 /// completion or bundle-verification attestation exists. Providers can therefore authenticate the
 /// exact archive commitment without trusting a publisher-supplied location request.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiReplicationOrderArchiveBindingV1")]
 pub struct MusubiReplicationOrderArchiveBindingV1 {
@@ -57,9 +68,20 @@ impl MusubiReplicationOrderArchiveBindingV1 {
     }
 }
 /// Historical location facts retained when a replication order is permanently consumed.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiRetiredReplicationOrderLocationV1")]
 pub struct MusubiRetiredReplicationOrderLocationV1 {
@@ -105,12 +127,20 @@ impl MusubiRetiredReplicationOrderLocationV1 {
     }
 }
 /// Lifecycle of one immutable replication-order/archive binding.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "kind", content = "value", deny_unknown_fields)
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
 )]
+#[norito(tag = "kind", content = "value", deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiReplicationOrderLocationLifecycleV1")]
 pub enum MusubiReplicationOrderLocationLifecycleV1 {
@@ -122,9 +152,20 @@ pub enum MusubiReplicationOrderLocationLifecycleV1 {
     Retired(MusubiRetiredReplicationOrderLocationV1),
 }
 /// Canonical consensus projection of a replication-order/archive binding and location lifecycle.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiReplicationOrderLocationReferenceV1")]
 pub struct MusubiReplicationOrderLocationReferenceV1 {

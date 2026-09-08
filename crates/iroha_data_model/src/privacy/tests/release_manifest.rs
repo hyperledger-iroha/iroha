@@ -521,7 +521,7 @@ fn exact12_qualification_links_full_manifests_and_all_twelve_activations() {
 }
 
 /// Reuse the complete signed test evidence for the generated instruction fixture.
-#[cfg(feature = "json")]
+
 pub(crate) fn generated_instruction_qualification() -> PrivacyExact12QualificationRecordV1 {
     let release_manifest = synthetic_valid_release_manifest();
     let deployment_qualification = synthetic_valid_deployment(release_manifest.manifest_digest);
@@ -714,7 +714,6 @@ fn deployment_rejects_chain_rollout_quorum_and_signature_mutations() {
     );
 }
 
-#[cfg(feature = "json")]
 #[test]
 fn release_and_deployment_json_roundtrip_and_reject_unknown_fields() {
     let release = synthetic_valid_release_manifest();

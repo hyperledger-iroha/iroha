@@ -94,6 +94,7 @@ impl NoritoContainerAttrs {
         let mut decode_from_slice = false;
         let mut deny_unknown_fields = false;
         let mut schema_name = false;
+        let mut validate = false;
         for attr in attrs {
             if !attr.path().is_ident("norito") {
                 continue;
@@ -155,6 +156,12 @@ impl NoritoContainerAttrs {
                         return Err(meta.error("duplicate deny_unknown_fields attribute"));
                     }
                     deny_unknown_fields = true;
+                } else if meta.path.is_ident("validate") {
+                    parse_helper_path(&meta)?;
+                    if validate {
+                        return Err(meta.error("duplicate `validate` attribute"));
+                    }
+                    validate = true;
                 } else if meta.path.is_ident("schema_name") {
                     let lit: syn::LitStr = meta.value()?.parse()?;
                     if lit.value().is_empty() {
@@ -173,6 +180,12 @@ impl NoritoContainerAttrs {
         }
         Ok(parsed)
     }
+}
+fn parse_helper_path(meta: &syn::meta::ParseNestedMeta<'_>) -> syn::Result<()> {
+    let lit: syn::LitStr = meta.value()?.parse()?;
+    syn::parse_str::<syn::Path>(&lit.value())
+        .map(|_| ())
+        .map_err(|err| meta.error(format!("invalid path `{}`: {err}", lit.value())))
 }
 // NOTE: this will fail on unknown attributes.. This is not ideal
 #[derive(Debug, Clone, FromAttributes)]
@@ -298,7 +311,7 @@ impl NoritoFieldAttrParser {
             }
             self.seen.push(NoritoFieldFlag::Default);
             if !meta.input.is_empty() {
-                Self::parse_path(meta)?;
+                parse_helper_path(meta)?;
             }
         } else if meta.path.is_ident("skip_serializing_if") {
             self.parse_unique_path(
@@ -319,7 +332,7 @@ impl NoritoFieldAttrParser {
             {
                 return Err(meta.error("`json` cannot be combined with `with` or `bounded_with`"));
             }
-            Self::parse_path(meta)?;
+            parse_helper_path(meta)?;
             self.seen.push(NoritoFieldFlag::Json);
         } else if meta.path.is_ident("flatten") {
             self.parse_bare_flag(meta, NoritoFieldFlag::Flatten, "flatten")?;
@@ -351,18 +364,12 @@ impl NoritoFieldAttrParser {
         flag: NoritoFieldFlag,
         name: &str,
     ) -> syn::Result<()> {
-        Self::parse_path(meta)?;
+        parse_helper_path(meta)?;
         if self.has_seen(flag) {
             return Err(meta.error(format!("duplicate `{name}` attribute")));
         }
         self.seen.push(flag);
         Ok(())
-    }
-    fn parse_path(meta: &syn::meta::ParseNestedMeta<'_>) -> syn::Result<()> {
-        let lit: syn::LitStr = meta.value()?.parse()?;
-        syn::parse_str::<syn::Path>(&lit.value())
-            .map(|_| ())
-            .map_err(|err| meta.error(format!("invalid path `{}`: {err}", lit.value())))
     }
     fn reject_json_helper_conflict(
         &self,
@@ -893,9 +900,36 @@ mod tests {
     #[test]
     fn shared_container_flags_are_accepted() {
         let attrs = vec![parse_quote!(
-            #[norito(no_fast_from_json, reuse_archived, decode_from_slice)]
+            #[norito(no_fast_from_json, reuse_archived, decode_from_slice, validate = "Self::checked")]
         )];
         NoritoContainerAttrs::from_attributes(&attrs).expect("known shared flags should parse");
+    }
+    #[test]
+    fn binary_validation_paths_are_checked_without_changing_schema_attributes() {
+        let valid = vec![parse_quote!(#[norito(validate = "Self::checked")])];
+        let attrs = NoritoContainerAttrs::from_attributes(&valid).unwrap();
+        assert!(attrs.rename_all.is_none());
+        assert!(attrs.tag.is_none());
+        assert!(attrs.content.is_none());
+        for (attr, expected) in [
+            (
+                parse_quote!(#[norito(validate = "Self::first", validate = "Self::second")]),
+                "duplicate `validate` attribute",
+            ),
+            (parse_quote!(#[norito(validate)]), "expected `=`"),
+            (
+                parse_quote!(#[norito(validate = 1)]),
+                "expected string literal",
+            ),
+            (parse_quote!(#[norito(validate = "")]), "invalid path ``"),
+            (
+                parse_quote!(#[norito(validate = "Self::checked()")]),
+                "invalid path `Self::checked()`",
+            ),
+        ] {
+            let error = NoritoContainerAttrs::from_attributes(&[attr]).unwrap_err();
+            assert!(error.to_string().contains(expected), "{error}");
+        }
     }
     #[test]
     fn unknown_container_meta_is_rejected() {

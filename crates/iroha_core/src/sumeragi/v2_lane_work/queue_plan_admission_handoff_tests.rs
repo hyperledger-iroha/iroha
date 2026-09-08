@@ -466,6 +466,268 @@ fn queue_plan_handoff_cursor_rotates_under_effect_pressure() {
 }
 
 #[test]
+fn queue_plan_handoff_preserves_fresh_admission_before_height_adapter_rollover() {
+    let (mut adapter, keys) = fixture_with_durable_parent(wire::ConsensusMode::Permissioned);
+    prepare_queue_plan_test(&mut adapter, &keys);
+    let queue = Arc::new(Queue::test(
+        iroha_config::parameters::actual::Queue::default(),
+        &iroha_primitives::time::TimeSource::new_system(),
+    ));
+    adapter
+        .install_lane_drain_queue(queue)
+        .expect("install exact queue owner for pending admission reconciliation");
+    let sender = adapter.local_peer.clone();
+    let successor_parent = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+        b"post-WSV predecessor before process-height rollover",
+    ));
+    {
+        let mut hashes = adapter.state.block_hashes.block();
+        hashes.push_for_tests(successor_parent);
+        hashes.commit_for_tests();
+    }
+    let (_, certificate) = queue_plan_test_certificate_at_height(
+        &adapter,
+        &keys,
+        0x4A,
+        adapter.context.height,
+        Some(successor_parent),
+    );
+    {
+        let hashes = adapter.state.block_hashes.block_and_revert();
+        hashes.commit_for_tests();
+    }
+    assert_eq!(
+        queue_plan_relay(&mut adapter, &sender, certificate.clone(), 0),
+        V2LaneIngressOutcome::Inserted,
+        "authenticate and durably retain the future certificate before WSV publication"
+    );
+    assert_queue_plan_kura_source(&adapter, &certificate);
+    {
+        let mut hashes = adapter.state.block_hashes.block();
+        hashes.push_for_tests(successor_parent);
+        hashes.commit_for_tests();
+    }
+    let current_carrier_height = adapter.context.height.checked_add(1).unwrap();
+    assert!(matches!(
+        adapter
+            .state
+            .classify_pending_queue_plan_admission(&certificate, current_carrier_height)
+            .expect("classify using the current State frontier")
+            .1,
+        PendingQueuePlanAdmissionDisposition::EligibleAbsent
+    ));
+
+    // WSV can publish before the asynchronous Apply owner completes process-height rollover.
+    // An old adapter cannot terminalize the next height's authenticated admission.
+    assert!(
+        adapter
+            .reconcile_pending_queue_plan_admissions(0)
+            .expect("old adapter must defer a current-State admission")
+            .is_empty()
+    );
+    assert_queue_plan_kura_source(&adapter, &certificate);
+
+    adapter.context.height = current_carrier_height;
+    let current_view = queue_plan_remote_leader_view(&adapter);
+    let current_leader = adapter.context.roster
+        [usize::try_from(adapter.context.leader(current_view)).unwrap()]
+    .validator
+    .clone();
+    assert!(
+        adapter
+            .reconcile_pending_queue_plan_admissions(current_view)
+            .expect("handoff from the current height adapter")
+            .is_empty()
+    );
+    assert!(adapter.drain_effects(usize::MAX).into_iter().any(|effect| {
+        matches!(effect, V2LaneWorkEffect::PostQueuePlanAdmissionCertificate {
+            peer, view, certificate: observed,
+        } if peer == current_leader && view == current_view && observed.as_slice() == certificate)
+    }));
+    assert_queue_plan_kura_source(&adapter, &certificate);
+}
+
+fn queue_plan_materialized_certificate_for_binding(
+    binding: &crate::torii_proxy::QueuePlanAdmissionBindingV1,
+    keys: &[KeyPair],
+) -> Vec<u8> {
+    let coordinator = &binding.admission_context.route_incarnations[0];
+    assert_eq!(coordinator.validator_set.len(), 4);
+    assert_eq!(coordinator.durability_threshold, 2);
+    let attestations = (0..coordinator.durability_threshold)
+        .map(|validator_index| {
+            let validator = &coordinator.validator_set[usize::from(validator_index)];
+            let key = keys
+                .iter()
+                .find(|key| key.public_key() == validator.public_key())
+                .expect("exact frozen authority key");
+            let preimage = crate::torii_proxy::queue_plan_admission_attestation_signing_bytes_v1(
+                binding.canonical_hash(),
+                validator_index,
+            )
+            .unwrap();
+            crate::torii_proxy::QueuePlanAdmissionAttestationV1 {
+                version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_ATTESTATION_VERSION_V1,
+                validator_index,
+                signature: Signature::try_new(key.private_key(), &preimage).unwrap(),
+            }
+        })
+        .collect();
+    norito::encode_canonical(&crate::torii_proxy::QueuePlanAdmissionCertificateV1 {
+        version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_CERTIFICATE_VERSION_V1,
+        binding: binding.clone(),
+        attestations,
+    })
+    .unwrap()
+}
+
+#[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one exact admission is traced through durable Queue ownership and both height adapters"
+)]
+fn queue_plan_handoff_preserves_materialized_fifo_before_height_adapter_rollover() {
+    let (mut adapter, keys) = fixture_with_durable_parent(wire::ConsensusMode::Permissioned);
+    prepare_queue_plan_test(&mut adapter, &keys);
+    let journal_dir = tempfile::tempdir().unwrap();
+    let journal_path = journal_dir.path().join("post-wsv-reservations.norito");
+    let plan_path = journal_path.with_extension("plans.norito");
+    let queue = install_autonomous_test_queue(
+        &mut adapter,
+        LaneId::SINGLE,
+        DataSpaceId::UNIVERSAL,
+        &journal_path,
+    );
+    let successor_parent = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+        b"materialized-post-WSV-parent-before-process-height-rollover",
+    ));
+    {
+        let mut hashes = adapter.state.block_hashes.block();
+        hashes.push_for_tests(successor_parent);
+        hashes.commit_for_tests();
+    }
+    let key = KeyPair::try_from_seed(vec![0xB8; 32], Algorithm::Ed25519).unwrap();
+    let authority = AccountId::new(key.public_key().clone());
+    {
+        let mut world = adapter.state.world.block();
+        world.accounts.insert(
+            authority.clone(),
+            AccountValue::new(AccountDetails::default()),
+        );
+        world.commit();
+    }
+    let transaction = TransactionBuilder::new(
+        adapter.context.network_id,
+        authority,
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_admission_intent(
+        iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced,
+    )
+    .with_instructions([Log::new(
+        Level::INFO,
+        "post-wsv-exact-queued-owner".to_owned(),
+    )])
+    .sign(key.private_key());
+    let accepted =
+        crate::tx::AcceptedTransaction::new_unchecked(std::borrow::Cow::Owned(transaction));
+    let routing_plan = queue
+        .route_plan_with_state(&accepted, &adapter.state)
+        .unwrap();
+    let context = queue
+        .plan_admission_context_with_state(&adapter.state, &routing_plan)
+        .unwrap();
+    assert_eq!(context.authority_height, adapter.context.height);
+    let current_height = context.proposal_height;
+    let binding = crate::torii_proxy::QueuePlanAdmissionBindingV1::new(
+        adapter.state.network_id_ref(),
+        accepted.entrypoint(),
+        &routing_plan,
+        context,
+        queue.queue_plan_admission_timestamp_ms_for(&accepted),
+    )
+    .unwrap();
+    let exact_claim = queue
+        .push_with_lane_with_state_and_routing_plan_strict_global_admission_claim(
+            accepted.clone(),
+            &adapter.state,
+            routing_plan,
+            &binding,
+        )
+        .expect("materialize the exact current-State transaction and fsync its journal claim");
+    let certificate = queue_plan_materialized_certificate_for_binding(&binding, &keys);
+    crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v1(
+        adapter.state.network_id_ref(),
+        &certificate,
+    )
+    .expect("fixture retains real exact-roster quorum authentication");
+    adapter
+        .kura
+        .persist_pending_queue_plan_admission_certificate(&certificate)
+        .expect("durably retain the exact authenticated handoff source");
+    let before_journal = std::fs::read(&plan_path).unwrap();
+    let before_fifo = queue.fifo_snapshot_for_test();
+    assert_eq!(before_fifo, vec![binding.entrypoint_hash]);
+    assert_eq!((queue.active_len(), queue.queued_len()), (1, 1));
+    assert!(
+        adapter
+            .reconcile_pending_queue_plan_admissions(0)
+            .expect("the old adapter defers a valid current-State admission")
+            .is_empty()
+    );
+    assert_queue_plan_kura_source(&adapter, &certificate);
+    assert_eq!(std::fs::read(&plan_path).unwrap(), before_journal);
+    assert_eq!(queue.fifo_snapshot_for_test(), before_fifo);
+    assert_eq!((queue.active_len(), queue.queued_len()), (1, 1));
+    assert_eq!(
+        queue
+            .durable_plan_admission_claim_with_state(&accepted, &adapter.state)
+            .unwrap(),
+        Some(exact_claim.clone())
+    );
+
+    adapter.context.height = current_height;
+    let view = queue_plan_remote_leader_view(&adapter);
+    let leader = adapter.context.roster[usize::try_from(adapter.context.leader(view)).unwrap()]
+        .validator
+        .clone();
+    assert!(
+        adapter
+            .reconcile_pending_queue_plan_admissions(view)
+            .unwrap()
+            .is_empty()
+    );
+    assert!(adapter.drain_effects(usize::MAX).into_iter().any(|effect| {
+        matches!(effect, V2LaneWorkEffect::PostQueuePlanAdmissionCertificate {
+            peer, view: observed_view, certificate: observed,
+        } if peer == leader && observed_view == view && observed.as_slice() == certificate)
+    }));
+    assert_queue_plan_kura_source(&adapter, &certificate);
+    assert_eq!(std::fs::read(&plan_path).unwrap(), before_journal);
+    assert_eq!(queue.fifo_snapshot_for_test(), before_fifo);
+    assert_eq!((queue.active_len(), queue.queued_len()), (1, 1));
+    assert_eq!(
+        queue
+            .durable_plan_admission_claim_with_state(&accepted, &adapter.state)
+            .unwrap(),
+        Some(exact_claim)
+    );
+    let local_index = adapter.local_validator_index().unwrap();
+    let local_view = (0..u64::try_from(adapter.context.roster.len()).unwrap() * 2)
+        .find(|view| adapter.context.leader(*view) == local_index)
+        .expect("the current-height leader schedule eventually selects this validator");
+    assert_eq!(
+        adapter
+            .reconcile_pending_queue_plan_admissions(local_view)
+            .unwrap(),
+        vec![certificate.clone()],
+        "the current leader selects the exact retained admission for its next carrier"
+    );
+    assert_queue_plan_kura_source(&adapter, &certificate);
+    assert_eq!(queue.fifo_snapshot_for_test(), before_fifo);
+}
+
+#[test]
 fn queue_plan_handoff_retains_new_admission_while_worker_height_is_obsolete() {
     let (mut adapter, keys) = fixture_with_durable_parent(wire::ConsensusMode::Permissioned);
     prepare_queue_plan_test(&mut adapter, &keys);

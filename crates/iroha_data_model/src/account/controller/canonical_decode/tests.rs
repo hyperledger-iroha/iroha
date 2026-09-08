@@ -145,7 +145,6 @@ fn multisig_invalid_policies_reject_in_policy_controller_account_and_slice_decod
     assert!(MultisigMember::decode_from_slice(&raw).is_err());
 }
 
-#[cfg(feature = "json")]
 #[test]
 fn multisig_json_rejects_invalid_policies_members_and_unknown_fields() {
     let valid = policy();
@@ -187,4 +186,58 @@ fn multisig_json_rejects_invalid_policies_members_and_unknown_fields() {
         norito::json::from_str::<MultisigMember>(&norito::json::to_json(&invalid_member).unwrap())
             .is_err()
     );
+}
+
+#[test]
+fn multisig_direct_decode_validation_preserves_errors_and_recovers_across_layouts() {
+    let valid = policy();
+    let mut invalid = valid.clone();
+    invalid.members.reverse();
+    let expected = MultisigPolicyError::NonCanonicalMemberOrder.to_string();
+    let mut invalid_member = valid.members[0].clone();
+    invalid_member.weight = 0;
+    let member_error = MultisigPolicyError::MemberWeightZero.to_string();
+    for flags in [0, 1, 2, 3, 4, 5, 6, 7, 0x1b, 0x3f] {
+        let _flags = norito::core::DecodeFlagsGuard::enter(flags);
+        let (payload, actual_flags) = norito::codec::encode_with_header_flags(&valid);
+        let canonical =
+            norito::core::frame_bare_with_header_flags::<MultisigPolicy>(&payload, actual_flags)
+                .unwrap();
+        {
+            let header = norito::core::Header::read(canonical.as_slice()).unwrap();
+            let _actual = norito::core::DecodeFlagsGuard::enter(header.flags);
+            assert_eq!(
+                norito::decode_from_bytes::<MultisigPolicy>(&canonical).unwrap(),
+                valid
+            );
+        }
+        let (payload, actual_flags) = norito::codec::encode_with_header_flags(&invalid);
+        let bad_policy =
+            norito::core::frame_bare_with_header_flags::<MultisigPolicy>(&payload, actual_flags)
+                .unwrap();
+        let (payload, actual_flags) = norito::codec::encode_with_header_flags(&invalid_member);
+        let bad_member =
+            norito::core::frame_bare_with_header_flags::<MultisigMember>(&payload, actual_flags)
+                .unwrap();
+        // Decode complete frames under their actual advertised flags, which can
+        // omit requested layout features unused by the individual record.
+        {
+            let header = norito::core::Header::read(bad_policy.as_slice()).unwrap();
+            let _actual = norito::core::DecodeFlagsGuard::enter(header.flags);
+            let error = norito::decode_from_bytes::<MultisigPolicy>(&bad_policy).unwrap_err();
+            assert!(matches!(error, norito::Error::Message(message) if message == expected));
+        }
+        {
+            let header = norito::core::Header::read(bad_member.as_slice()).unwrap();
+            let _actual = norito::core::DecodeFlagsGuard::enter(header.flags);
+            let error = norito::decode_from_bytes::<MultisigMember>(&bad_member).unwrap_err();
+            assert!(matches!(error, norito::Error::Message(message) if message == member_error));
+        }
+        let header = norito::core::Header::read(canonical.as_slice()).unwrap();
+        let _actual = norito::core::DecodeFlagsGuard::enter(header.flags);
+        assert_eq!(
+            norito::decode_from_bytes::<MultisigPolicy>(&canonical).unwrap(),
+            valid
+        );
+    }
 }

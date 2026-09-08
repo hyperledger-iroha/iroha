@@ -3,7 +3,7 @@
 use eyre::{Result, WrapErr, ensure};
 use iroha_data_model::block::consensus::LaneBlockCommitment;
 use iroha_primitives::numeric::{Numeric, Quantity};
-use norito::{core::NoritoDeserialize as _, json};
+use norito::{core::DeserializePayload as _, json};
 use std::{fs, path::PathBuf};
 struct CommitmentFixture {
     name: String,

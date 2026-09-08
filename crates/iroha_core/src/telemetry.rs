@@ -10508,12 +10508,13 @@ mod tests {
             .with_instructions(instructions)
             .sign(self.account_keypair.private_key());
             let crypto_cfg = self.state.crypto();
-            AcceptedTransaction::accept(
+            AcceptedTransaction::accept_with_time_source(
                 tx,
                 &self.network_id,
                 max_clock_drift,
                 tx_limits,
                 crypto_cfg.as_ref(),
+                &self.time_source,
             )
             .unwrap()
         }

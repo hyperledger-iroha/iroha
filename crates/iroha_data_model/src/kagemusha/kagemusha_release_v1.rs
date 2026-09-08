@@ -4,7 +4,7 @@ use super::{
     KAGEMUSHA_COMPLETE_EXCHANGE_MAX_BYTES_V1, KAGEMUSHA_COMPLETE_TEXT_EXCHANGE_MAX_BYTES_V1,
     KAGEMUSHA_PAIRED_PROOF_MAX_BYTES_V1, KAGEMUSHA_WIRE_VERSION_V1,
 };
-#[cfg(feature = "json")]
+
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use iroha_crypto::{PublicKey, SignatureOf};
 use iroha_schema::IntoSchema;
@@ -93,8 +93,20 @@ const RELEASE_ATTESTATION_DIGEST_DOMAIN: &[u8] = b"iroha:kagemusha:v1:release-at
 const RELEASE_PROFILE_DIGEST_DOMAIN: &[u8] = b"iroha:kagemusha:v1:release-profile";
 
 /// Canonical role of one preinstalled transparent Halo2 artifact.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(tag = "role", content = "value", rename_all = "snake_case")]
 #[norito(deny_unknown_fields)]
 #[repr(u8)]
@@ -329,8 +341,20 @@ impl KagemushaArtifactRoleV1 {
 }
 
 /// Digest and byte length of one authenticated artifact.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
@@ -340,7 +364,7 @@ pub struct KagemushaArtifactBindingV1 {
     /// Artifact role.
     pub role: KagemushaArtifactRoleV1,
     /// SHA-256 of the exact file bytes.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub sha256: [u8; 32],
     /// Exact file length.
     pub byte_len: u64,
@@ -353,8 +377,20 @@ pub struct KagemushaArtifactBindingV1 {
 /// complete file, verify its length and SHA-256, validate its typed contents,
 /// and only then construct and sign a receipt. Runtime code authenticates that
 /// signed projection; it cannot demonstrate the external file's semantics.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
@@ -362,15 +398,25 @@ pub struct KagemushaArtifactBindingV1 {
 )]
 pub struct KagemushaEvidenceFileV1 {
     /// SHA-256 of the exact evidence-file bytes.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub sha256: [u8; 32],
     /// Exact file length.
     pub byte_len: u64,
 }
 
 /// One hardware profile enabled by a release manifest.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
@@ -380,16 +426,16 @@ pub struct KagemushaEnabledProfileV1 {
     /// Complete governed non-forking hardware-service profile.
     pub hardware_profile: super::KagemushaHardwareProfileV1,
     /// Digest-derived [`super::KagemushaHardwareProfileV1`] identity.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub hardware_profile_id: [u8; 32],
     /// Exact proof suite admitted for credentials under this profile.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub suite_id: [u8; 32],
     /// Digest of every authenticated verifier artifact plus state and helper protocol identities.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub vk_digest: [u8; 32],
     /// Digest of this profile's exact typed qualification matrix.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub qualification_digest: [u8; 32],
     /// Exact governed policy epoch.
     pub policy_epoch: u64,
@@ -401,16 +447,26 @@ pub struct KagemushaEnabledProfileV1 {
 ///
 /// This record never contains the provider secret. The receipt authorizes its
 /// SHA-256 commitment, while the credential circuit proves possession.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(schema_name = "iroha.kagemusha.v1.provider-policy-entry")]
 #[norito(deny_unknown_fields)]
 pub struct KagemushaProviderPolicyEntryV1 {
     /// Exact enabled hardware profile; entries are strictly ordered by this ID.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub hardware_profile_id: [u8; 32],
     /// SHA-256 commitment under the provider-proof-authority domain.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub provider_authority_commitment: [u8; 32],
     /// Unique leaf position in the fixed-depth 16 provider registry.
     pub provider_profile_index: u16,
@@ -457,8 +513,20 @@ pub fn kagemusha_provider_policy_signing_bytes_v1(
 }
 
 /// Recursive relation qualified for each enabled hardware profile.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(tag = "relation", content = "value", rename_all = "snake_case")]
 #[norito(deny_unknown_fields)]
 #[repr(u8)]
@@ -486,8 +554,20 @@ pub enum KagemushaQualifiedRelationV1 {
 }
 
 /// Helper circuit qualified alongside the eight release relations.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(tag = "helper", content = "value", rename_all = "snake_case")]
 #[norito(deny_unknown_fields)]
 #[repr(u8)]
@@ -562,8 +642,18 @@ impl KagemushaQualifiedHelperCircuitV1 {
 }
 
 /// Release-bound compiled protocol identity for one helper circuit.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
@@ -573,10 +663,10 @@ pub struct KagemushaHelperProtocolV1 {
     /// Helper circuit whose compiled protocols are identified.
     pub helper: KagemushaQualifiedHelperCircuitV1,
     /// Compiled Eq/Fp protocol digest.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub eq_protocol_digest: [u8; 32],
     /// Compiled Ep/Fq protocol digest.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub ep_protocol_digest: [u8; 32],
     /// Exact raw Eq/Fp proof bytes for an internal-only helper.
     ///
@@ -592,8 +682,18 @@ pub struct KagemushaHelperProtocolV1 {
 }
 
 /// Real-circuit qualification for one non-state helper circuit.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
@@ -603,10 +703,10 @@ pub struct KagemushaHelperQualificationV1 {
     /// Helper circuit measured by this record.
     pub helper: KagemushaQualifiedHelperCircuitV1,
     /// Compiled Eq/Fp protocol digest exercised by the measurement.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub eq_protocol_digest: [u8; 32],
     /// Compiled Ep/Fq protocol digest exercised by the measurement.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub ep_protocol_digest: [u8; 32],
     /// Exact Eq/Fp verifier artifact exercised by the measurement.
     pub eq_verifying_key: KagemushaArtifactBindingV1,
@@ -696,8 +796,18 @@ impl KagemushaQualifiedRelationV1 {
 }
 
 /// Per-relation real-circuit measurements for one enabled hardware profile.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
@@ -707,10 +817,10 @@ pub struct KagemushaRelationQualificationV1 {
     /// Relation measured by this record.
     pub relation: KagemushaQualifiedRelationV1,
     /// Compiled Eq/Fp protocol digest exercised by this relation.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub eq_protocol_digest: [u8; 32],
     /// Compiled Ep/Fq protocol digest exercised by this relation.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub ep_protocol_digest: [u8; 32],
     /// Exact Eq/Fp verifier artifact exercised by the measurement.
     pub eq_verifying_key: KagemushaArtifactBindingV1,
@@ -735,8 +845,18 @@ pub struct KagemushaRelationQualificationV1 {
 }
 
 /// One real recursive-depth qualification run.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
@@ -758,8 +878,18 @@ pub struct KagemushaRecursiveDepthQualificationV1 {
 }
 
 /// Quantitative aggregate-balance qualification for one profile.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
@@ -777,8 +907,18 @@ pub struct KagemushaAggregateBalanceQualificationV1 {
 }
 
 /// Sustained thermally throttled receive-fold qualification for one profile.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
@@ -798,8 +938,18 @@ pub struct KagemushaThermalQualificationV1 {
 }
 
 /// Complete three-message exchange-size and handoff measurement for one profile.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
@@ -817,8 +967,17 @@ pub struct KagemushaEnvelopeQualificationV1 {
 }
 
 /// Complete real-circuit and physical-device evidence for one enabled profile.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
@@ -844,8 +1003,20 @@ pub struct KagemushaProfileQualificationV1 {
 }
 
 /// Closed release-acceptance case set. Every case is mandatory.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(tag = "case", content = "value", rename_all = "snake_case")]
 #[norito(deny_unknown_fields)]
 #[repr(u8)]
@@ -1171,8 +1342,18 @@ impl KagemushaAcceptanceCaseV1 {
     ];
 }
 /// Evidence binding for one mandatory closed acceptance case.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
@@ -1188,8 +1369,18 @@ pub struct KagemushaAcceptanceCaseEvidenceV1 {
 }
 
 /// One independent byte-for-byte reproducible artifact build.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
@@ -1197,10 +1388,10 @@ pub struct KagemushaAcceptanceCaseEvidenceV1 {
 )]
 pub struct KagemushaReproducibleBuildV1 {
     /// Stable identity of the independent builder/environment.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub builder_id: [u8; 32],
     /// Artifact inventory digest reproduced by this build.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub artifact_set_digest: [u8; 32],
     /// Exact reproducibility report.
     pub report: KagemushaEvidenceFileV1,
@@ -1214,8 +1405,18 @@ pub struct KagemushaReproducibleBuildV1 {
 /// every typed report. Candidate-selected executables are never part of this
 /// corridor. The receipt digest, and therefore every release-authority
 /// signature, authenticates this complete projection.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
@@ -1227,10 +1428,10 @@ pub struct KagemushaEvidenceClosureV1 {
     /// Exact separately selected trusted observer/verifier policy.
     pub observer_policy: KagemushaEvidenceFileV1,
     /// Domain-separated SHA-256 of the canonical ordered signed-observation projection.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub verification_records_digest: [u8; 32],
     /// Domain-separated identity of the source, lockfile, artifacts, protocols, profiles, and observer policy.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub candidate_context_digest: [u8; 32],
     /// Number of distinct signed observations represented by the digest.
     pub verification_record_count: u32,
@@ -1251,8 +1452,17 @@ pub struct KagemushaEvidenceClosureV1 {
 /// Every report hash/length below is only a provenance binding. The release
 /// tool must verify each referenced file and the semantics projected into this
 /// bounded typed receipt before asking authorities to sign it.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
@@ -1262,32 +1472,32 @@ pub struct KagemushaInternalValidationReceiptV1 {
     /// Receipt version.
     pub version: u16,
     /// SHA-256 identity of the reviewed source tree and commit metadata.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub source_tree_digest: [u8; 32],
     /// SHA-256 of the unchanged root `Cargo.lock`.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub cargo_lock_digest: [u8; 32],
     /// Exact state/helper circuit-profile digest.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub profile_digest: [u8; 32],
     /// Exact tagged native circuit-layout digest checked before artifact decoding.
     /// This is distinct from the report-derived evidence `profile_digest`.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub native_profile_digest: [u8; 32],
     /// Canonical little-endian Fp Poseidon digest of the compiled Eq protocol exercised by qualification.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub eq_protocol_digest: [u8; 32],
     /// Canonical little-endian Fq Poseidon digest of the compiled Ep protocol exercised by qualification.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub ep_protocol_digest: [u8; 32],
     /// Digest of the canonically ordered artifact inventory.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub artifact_set_digest: [u8; 32],
     /// Digest of the exact enabled-profile list, distinct from the provider Merkle root.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub hardware_policy_digest: [u8; 32],
     /// Independently derived SHA-256 provider registry root admitted by this receipt.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub provider_policy_root: [u8; 32],
     /// Exactly one public provider proof-authority binding per enabled profile.
     pub provider_policy: Vec<KagemushaProviderPolicyEntryV1>,
@@ -1314,8 +1524,17 @@ pub struct KagemushaInternalValidationReceiptV1 {
 }
 
 /// Canonical release manifest accepted by kagemusha runtime code.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
@@ -1325,28 +1544,28 @@ pub struct KagemushaReleaseManifestV1 {
     /// Manifest version.
     pub version: u16,
     /// Digest-derived release identifier.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub release_id: [u8; 32],
     /// SHA-256 identity of the reviewed source tree and commit metadata.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub source_tree_digest: [u8; 32],
     /// SHA-256 of the unchanged root `Cargo.lock`.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub cargo_lock_digest: [u8; 32],
     /// Exact state/helper circuit-profile digest.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub profile_digest: [u8; 32],
     /// Canonical little-endian Fp Poseidon digest of the compiled Eq protocol.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub eq_protocol_digest: [u8; 32],
     /// Canonical little-endian Fq Poseidon digest of the compiled Ep protocol.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub ep_protocol_digest: [u8; 32],
     /// Digest of the exact enabled-profile list, distinct from the provider Merkle root.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub hardware_policy_digest: [u8; 32],
     /// SHA-256 of the canonical internal-validation receipt.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub validation_receipt_digest: [u8; 32],
     /// Fixed Halo2 domain exponent.
     pub halo2_k: u32,
@@ -1363,8 +1582,17 @@ pub struct KagemushaReleaseManifestV1 {
 /// This policy is deployment configuration, not evidence supplied by an
 /// untrusted release bundle. Callers must select the trusted policy before
 /// authenticating any manifest or attestation.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
@@ -1374,7 +1602,7 @@ pub struct KagemushaReleaseAuthorityPolicyV1 {
     /// Policy format version.
     pub version: u16,
     /// Deployment-selected identity for this authority set.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub authority_set_id: [u8; 32],
     /// Minimum number of distinct authorized approvals.
     pub threshold: u16,
@@ -1383,8 +1611,18 @@ pub struct KagemushaReleaseAuthorityPolicyV1 {
 }
 
 /// Immutable release subject approved by every KAGEMUSHA V1 authority.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
@@ -1394,25 +1632,34 @@ pub struct KagemushaReleaseAttestationSubjectV1 {
     /// Subject format version.
     pub version: u16,
     /// Digest of the locally selected authority policy.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub authority_policy_digest: [u8; 32],
     /// Digest-derived release identifier.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub release_id: [u8; 32],
     /// Digest of the complete canonical release manifest.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub manifest_digest: [u8; 32],
     /// Digest of the exact internal-validation receipt.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub validation_receipt_digest: [u8; 32],
     /// Digest of the ordered complete artifact inventory.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub artifact_set_digest: [u8; 32],
 }
 
 /// Domain-separated payload signed by one KAGEMUSHA V1 release authority.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
@@ -1426,8 +1673,17 @@ pub struct KagemushaReleaseApprovalPayloadV1 {
 }
 
 /// One authority signature in an KAGEMUSHA V1 release attestation.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
@@ -1441,8 +1697,17 @@ pub struct KagemushaReleaseApprovalV1 {
 }
 
 /// Threshold-signed KAGEMUSHA V1 release attestation.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
@@ -3128,7 +3393,6 @@ mod inner_mint_artifact_tests {
         assert!(validate_artifacts(&decoded).is_ok());
     }
 
-    #[cfg(feature = "json")]
     #[test]
     fn mint_hash_roles_roundtrip_json_with_distinct_canonical_names() {
         let names = [
@@ -3152,7 +3416,6 @@ mod inner_mint_artifact_tests {
         }
     }
 
-    #[cfg(feature = "json")]
     #[test]
     fn inner_mint_roles_roundtrip_json_with_distinct_canonical_names() {
         let names = [

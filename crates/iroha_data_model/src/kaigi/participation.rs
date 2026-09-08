@@ -481,7 +481,6 @@ mod tests {
             Err(KaigiPrivateParticipationErrorV1::AlreadyActive)
         );
 
-        #[cfg(feature = "json")]
         {
             let json = norito::json::to_json(&ledger).unwrap();
             assert_eq!(

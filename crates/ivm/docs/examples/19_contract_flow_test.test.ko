@@ -9,6 +9,7 @@ module ContractFlowTests {
             AccountId::parse("sorauﾛ1QEnRヰ7Dﾑzmg1ﾊｻ4ﾈAcckｻsafiｳヱufｴｻｻPﾆｴﾖﾁﾉDR1Y5PX", ),
             "0x0909090909090909090909090909090909090909090909090909090909090909",
         );
+        grant_permission("issuer", "Entry");
     }
 
     #[test(fixture = "actors")]
@@ -18,7 +19,7 @@ module ContractFlowTests {
             acct == AccountId::parse("sorauﾛ1QEnRヰ7Dﾑzmg1ﾊｻ4ﾈAcckｻsafiｳヱufｴｻｻPﾆｴﾖﾁﾉDR1Y5PX", ),
         );
         test::actor_public_key("issuer");
-        test::actor_sign("issuer", b"native-flow");
+        test::actor_sign(actor: "issuer", payload: b"native-flow");
     }
 
     #[test(fixture = "actors")]
@@ -50,6 +51,7 @@ module ContractFlowTests {
             actor: "issuer",
             kotoage: "reject_me",
             arguments: Json::parse("{}"),
+            expected: ExampleError::Rejected,
         );
     }
 }

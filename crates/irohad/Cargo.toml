@@ -35,7 +35,6 @@ daemon = [
     "iroha_torii/node-api",
     "iroha_crypto/consensus",
     "iroha_crypto/pqc",
-    "iroha_data_model/json",
     "norito/node-codec",
 ]
 # Build the standalone external signer only in release lanes that request it.

@@ -5,7 +5,7 @@
 //! authorization material hidden behind commitments.
 
 use crate::asset::AssetDefinitionId;
-#[cfg(feature = "json")]
+
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
@@ -18,9 +18,21 @@ pub const SORAFS_CITIZEN_BOND_SNAPSHOT_MIN_V1: u64 = 1_024;
 /// Domain for citizen-bond snapshot commitments.
 pub const SORAFS_CITIZEN_BOND_SNAPSHOT_DOMAIN_V1: &[u8] = b"sorafs.citizen-bond.snapshot.v1";
 /// Delayed-exit payload for a commitment-only citizen bond.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::sorafs::anonymity::SorafsCitizenBondExitPendingV1")]
 pub struct SorafsCitizenBondExitPendingV1 {
@@ -31,16 +43,25 @@ pub struct SorafsCitizenBondExitPendingV1 {
 }
 
 /// Lifecycle of one commitment-only citizen bond.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(
-    feature = "json",
-    norito(
-        tag = "state",
-        content = "value",
-        rename_all = "snake_case",
-        deny_unknown_fields
-    )
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(
+    tag = "state",
+    content = "value",
+    rename_all = "snake_case",
+    deny_unknown_fields
 )]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::sorafs::anonymity::SorafsCitizenBondStateV1")]
@@ -57,31 +78,42 @@ pub enum SorafsCitizenBondStateV1 {
 /// handle is present. The serial commitment is immutable for the bond's whole
 /// lifetime. Authorization can rotate by compare-and-set while its revision
 /// increases, and the policy root is frozen at admission.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::sorafs::anonymity::SorafsCitizenBondV1")]
 pub struct SorafsCitizenBondV1 {
     /// Schema version; must be [`SORAFS_CITIZEN_BOND_VERSION_V1`].
     pub version: u16,
     /// Immutable hidden bond serial commitment.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub serial_commitment: [u8; 32],
     /// Rotatable hidden authorization-key commitment.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub authorization_commitment: [u8; 32],
     /// Monotonic authorization revision, beginning at one.
     pub authorization_revision: u64,
     /// Immutable commitment to the locked economic value.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub locked_value_commitment: [u8; 32],
     /// Asset in which the bond is locked.
     pub bond_asset: AssetDefinitionId,
     /// Public economic cost in the bond asset's atomic units.
     pub bond_atomic_units: u128,
     /// Governance policy root frozen for this bond until exit.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub frozen_policy_root: [u8; 32],
     /// Finalized height at which the bond entered the membership tree.
     pub bonded_at_height: u64,
@@ -243,17 +275,29 @@ pub enum SorafsCitizenBondErrorV1 {
 }
 
 /// Frozen public membership snapshot used by anonymous candidacy proofs.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::sorafs::anonymity::SorafsCitizenBondSnapshotV1")]
 pub struct SorafsCitizenBondSnapshotV1 {
     /// Frozen governance policy root.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub frozen_policy_root: [u8; 32],
     /// Root of active citizen-bond serial commitments.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub active_membership_root: [u8; 32],
     /// Finalized height at which this root was fixed.
     pub finalized_height: u64,

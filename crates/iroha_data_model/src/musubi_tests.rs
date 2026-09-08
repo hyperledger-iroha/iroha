@@ -43,7 +43,7 @@ enum UncheckedAccountControllerWire {
     Single(PublicKey),
     Multisig(UncheckedMultisigPolicyWire),
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn every_named_musubi_json_model_rejects_unknown_fields() {
     for (path, source) in [
@@ -539,7 +539,7 @@ fn resolver_row(version: &str) -> MusubiResolverReleaseRowV1 {
         index_revision: 3,
     }
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn resolver_json_counting_preserves_exact_wire_without_output_scratch() {
     let member_a = KeyPair::try_from_seed(vec![0x21; 32], Algorithm::Ed25519)

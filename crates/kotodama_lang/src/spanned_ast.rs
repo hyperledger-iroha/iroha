@@ -187,6 +187,8 @@ pub(crate) struct CallFact {
     pub(crate) owner: Option<NodeId>,
     pub(crate) name: String,
     pub(crate) implicit_receiver: bool,
+    /// Source-order argument labels; positional arguments have no name node.
+    pub(crate) argument_name_nodes: Vec<Option<NodeId>>,
 }
 /// Lexical binding role recorded directly by the parser.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]

@@ -1,3 +1,5 @@
+import { normalizeContractErrorTypeV1, normalizeContractErrorTypesV1, validateManifestErrorTypeBindingsV1 } from "./contractErrorTypes.js";
+import { rejectError, rejectRange, rejectType } from "./validationThrow.js";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { chacha20orig } from "@noble/ciphers/chacha";
 import { KAIGI_MAX_PARTICIPANTS_V1 } from "./commonLiterals.js";
@@ -496,28 +498,23 @@ function decodeTransactionReceiptPayload(payload, nativeRuntime) {
   try {
     native = resolveNativeBinding(nativeRuntime);
   } catch (cause) {
-    throw new Error(
-      "cannot decode a non-empty Norito transaction receipt: the native decoder is unavailable",
-      { cause },
-    );
+    rejectError("cannot decode a non-empty Norito transaction receipt: the native decoder is unavailable", { cause });
   }
   if (typeof native.decodeTransactionReceiptJson !== "function") {
-    throw new Error(
-      "cannot decode a non-empty Norito transaction receipt: the native binding does not expose decodeTransactionReceiptJson",
-    );
+    rejectError("cannot decode a non-empty Norito transaction receipt: the native binding does not expose decodeTransactionReceiptJson");
   }
   let json;
   try {
     json = native.decodeTransactionReceiptJson(payload);
   } catch (cause) {
-    throw new Error("failed to decode the non-empty Norito transaction receipt", {
+    rejectError("failed to decode the non-empty Norito transaction receipt", {
       cause,
     });
   }
   try {
     return JSON.parse(json);
   } catch (cause) {
-    throw new Error("native transaction receipt decoder returned invalid JSON", {
+    rejectError("native transaction receipt decoder returned invalid JSON", {
       cause,
     });
   }
@@ -669,7 +666,7 @@ function callIntrinsicOrOwnMethod(target, intrinsic, name, ...args) {
   }
   const own = ownDataMethod(target, name);
   if (own === null) {
-    throw new TypeError(`${name} is unavailable`);
+    rejectType(`${name} is unavailable`);
   }
   return Reflect.apply(own, target, args);
 }
@@ -724,12 +721,12 @@ function responseStatusWithoutUserGetter(response) {
   if (status === undefined) {
     const descriptor = Object.getOwnPropertyDescriptor(response, "status");
     if (!descriptor || !("value" in descriptor)) {
-      throw new TypeError("Torii response status must be an own data property");
+      rejectType("Torii response status must be an own data property");
     }
     status = descriptor.value;
   }
   if (!Number.isInteger(status) || status < 0 || status > 999) {
-    throw new TypeError("Torii response status must be an integer HTTP status");
+    rejectType("Torii response status must be an integer HTTP status");
   }
   return status;
 }
@@ -760,12 +757,12 @@ function responseUrlWithoutUserGetter(response) {
   if (url === undefined) {
     const descriptor = Object.getOwnPropertyDescriptor(response, "url");
     if (!descriptor || !("value" in descriptor)) {
-      throw new TypeError("Torii response URL must be an own data property");
+      rejectType("Torii response URL must be an own data property");
     }
     url = descriptor.value;
   }
   if (typeof url !== "string" || url.length === 0) {
-    throw new TypeError("Torii response URL must be a non-empty string");
+    rejectType("Torii response URL must be a non-empty string");
   }
   return url;
 }
@@ -782,12 +779,12 @@ function responseRedirectedWithoutUserGetter(response) {
   if (redirected === undefined) {
     const descriptor = Object.getOwnPropertyDescriptor(response, "redirected");
     if (!descriptor || !("value" in descriptor)) {
-      throw new TypeError("Torii response redirected flag must be an own data property");
+      rejectType("Torii response redirected flag must be an own data property");
     }
     redirected = descriptor.value;
   }
   if (typeof redirected !== "boolean") {
-    throw new TypeError("Torii response redirected flag must be a boolean");
+    rejectType("Torii response redirected flag must be a boolean");
   }
   return redirected;
 }
@@ -892,7 +889,7 @@ function signalIsAborted(signal) {
   }
   const descriptor = Object.getOwnPropertyDescriptor(signal, "aborted");
   if (!descriptor || !("value" in descriptor) || typeof descriptor.value !== "boolean") {
-    throw new TypeError("signal.aborted must be an own boolean data property");
+    rejectType("signal.aborted must be an own boolean data property");
   }
   return descriptor.value;
 }
@@ -915,7 +912,7 @@ function addSignalAbortListener(signal, listener) {
     return;
   }
   const add = ownDataMethod(signal, "addEventListener");
-  if (add === null) throw new TypeError("signal.addEventListener is unavailable");
+  if (add === null) rejectType("signal.addEventListener is unavailable");
   Reflect.apply(add, signal, ["abort", listener, { once: true }]);
 }
 
@@ -991,21 +988,15 @@ function encodeCanonicalVersionedSignedTransactionV1(payload, nativeRuntime) {
     !native ||
     typeof native.encodeSignedTransactionVersioned !== "function"
   ) {
-    throw new Error(
-      "Canonical VersionedSignedTransaction V1 validation requires native encodeSignedTransactionVersioned.",
-    );
+    rejectError("Canonical VersionedSignedTransaction V1 validation requires native encodeSignedTransactionVersioned.");
   }
   const input = Buffer.from(payload);
   const encoded = Buffer.from(native.encodeSignedTransactionVersioned(input));
   if (encoded.length === 0 || encoded[0] !== 1) {
-    throw new Error(
-      "Native signed transaction encoder did not return VersionedSignedTransaction V1 bytes.",
-    );
+    rejectError("Native signed transaction encoder did not return VersionedSignedTransaction V1 bytes.");
   }
   if (!encoded.equals(input)) {
-    throw new Error(
-      "Signed transaction input was not the exact canonical VersionedSignedTransaction V1 encoding.",
-    );
+    rejectError("Signed transaction input was not the exact canonical VersionedSignedTransaction V1 encoding.");
   }
   return encoded;
 }
@@ -1022,7 +1013,7 @@ async function encodeTransactionPayloadBatch(payloads, nativeRuntime) {
       ),
     );
     if (encoded.length === 0) {
-      throw new Error("Native transaction batch encoder returned an empty payload.");
+      rejectError("Native transaction batch encoder returned an empty payload.");
     }
     return encoded;
   }
@@ -1423,13 +1414,13 @@ export function decodePdpCommitmentHeader(headers) {
   }
   const value = String(raw).trim();
   if (!value) {
-    throw new Error("Failed to decode Sora-PDP-Commitment header: payload is empty");
+    rejectError("Failed to decode Sora-PDP-Commitment header: payload is empty");
   }
   try {
     return strictDecodeBase64(value);
   } catch (err) {
     const message = err && typeof err.message === "string" ? err.message : String(err);
-    throw new Error(`Failed to decode Sora-PDP-Commitment header: ${message}`);
+    rejectError(`Failed to decode Sora-PDP-Commitment header: ${message}`);
   }
 }
 
@@ -1504,7 +1495,7 @@ export class LocalSigningContext {
     networkIdBytes(networkId, "LocalSigningContext.networkId");
     if (!Number.isInteger(chainDiscriminant)
       || chainDiscriminant < 0 || chainDiscriminant > 0xffff) {
-      throw new TypeError("LocalSigningContext.chainDiscriminant must fit in u16");
+      rejectType("LocalSigningContext.chainDiscriminant must fit in u16");
     }
     this.#networkId = networkId; this.#chainDiscriminant = chainDiscriminant;
     Object.freeze(this);
@@ -1567,7 +1558,7 @@ export class ToriiClient {
  */
   constructor(baseUrl, options = {}) {
     if (!baseUrl) {
-      throw new Error("baseUrl is required");
+      rejectError("baseUrl is required");
     }
     const opts =
       options === undefined || options === null
@@ -1621,7 +1612,7 @@ export class ToriiClient {
     const normalizedBaseUrl = baseUrl.endsWith("/") ? baseUrl.slice(0, -1) : baseUrl;
     const fetchImpl = opts.fetchImpl ?? globalThis.fetch;
     if (typeof fetchImpl !== "function") {
-      throw new Error("fetch implementation is required");
+      rejectError("fetch implementation is required");
     }
     Object.defineProperties(this, { _baseUrl: { value: normalizedBaseUrl }, _fetch: { value: fetchImpl } });
     registerPrivacyExact12CapabilityManifestTransportV1(
@@ -1762,9 +1753,7 @@ export class ToriiClient {
       Boolean(this.#config.authToken || this.#config.apiToken) ||
       headersContainCredentials(this.#config.defaultHeaders);
     if (hasCredentials && !this.#allowInsecure && !isSecureProtocol(this.#baseProtocol)) {
-      throw new Error(
-        "ToriiClient: auth/api tokens require an https base URL; pass allowInsecure: true for local/dev use only.",
-      );
+      rejectError("ToriiClient: auth/api tokens require an https base URL; pass allowInsecure: true for local/dev use only.");
     }
   }
 
@@ -1821,9 +1810,7 @@ export class ToriiClient {
     );
     assertSupportedOptionKeys(rest, new Set([]), "submitKagemushaTopUp options");
     if (typeof operationId === "string") {
-      throw new TypeError(
-        "submitKagemushaTopUp operationId must be exact nonzero 32-byte binary data",
-      );
+      rejectType("submitKagemushaTopUp operationId must be exact nonzero 32-byte binary data");
     }
     const optional = await loadToriiOptionalModule();
     const operationIdHex = optional.kagemushaOperationIdHexV1(operationId);
@@ -1831,9 +1818,7 @@ export class ToriiClient {
       !ArrayBuffer.isView(signedTransaction) &&
       !(signedTransaction instanceof ArrayBuffer)
     ) {
-      throw new TypeError(
-        "submitKagemushaTopUp signedTransaction must be exact binary data",
-      );
+      rejectType("submitKagemushaTopUp signedTransaction must be exact binary data");
     }
     const body = encodeCanonicalVersionedSignedTransactionV1(
       toBuffer(signedTransaction),
@@ -1860,7 +1845,7 @@ export class ToriiClient {
     return this._submitKagemushaOperationBodyV1(
       "/v1/kagemusha/redeem",
       "redemption",
-      optional.Kagemusha.encodeRedemptionRequest(request),
+      optional._encodeRedemptionRequestV1(request),
       optional.kagemushaOperationIdHexV1(request.operationId),
       signal,
       optional,
@@ -1888,7 +1873,7 @@ export class ToriiClient {
     );
     const status = optional.normalizeUnverifiedKagemushaOperationStatusV1(payload);
     if (optional.kagemushaOperationIdHexV1(status.operationId) !== operationIdHex) {
-      throw new TypeError("KAGEMUSHA operation response ID does not match the requested resource");
+      rejectType("KAGEMUSHA operation response ID does not match the requested resource");
     }
     return status;
   }
@@ -1922,7 +1907,7 @@ export class ToriiClient {
     );
     const status = optional.normalizeUnverifiedKagemushaOperationStatusV1(payload);
     if (optional.kagemushaOperationIdHexV1(status.operationId) !== operationIdHex || status.kind !== kind) {
-      throw new TypeError("KAGEMUSHA operation response does not match the submitted request");
+      rejectType("KAGEMUSHA operation response does not match the submitted request");
     }
     optional.requireKagemushaSubmissionResponseV1({
       statusCode: responseStatusWithoutUserGetter(response),
@@ -2207,7 +2192,7 @@ export class ToriiClient {
     await this._expectStatus(response, [200]);
     const payload = await this._maybeJson(response);
     if (!payload) {
-      throw new Error("explorer nfts endpoint returned no payload");
+      rejectError("explorer nfts endpoint returned no payload");
     }
     return normalizeExplorerNftPage(payload);
   }
@@ -2254,7 +2239,7 @@ export class ToriiClient {
         }
         cursor = pagination.nextCursor;
         if (seenCursors.has(cursor)) {
-          throw new Error("explorer nfts endpoint repeated a cursor");
+          rejectError("explorer nfts endpoint repeated a cursor");
         }
         seenCursors.add(cursor);
       }
@@ -2370,7 +2355,7 @@ export class ToriiClient {
     await this._expectStatus(response, [200]);
     const payload = await this._maybeJson(response);
     if (!payload) {
-      throw new Error("explorer rwas endpoint returned no payload");
+      rejectError("explorer rwas endpoint returned no payload");
     }
     return normalizeExplorerRwaPage(payload);
   }
@@ -2396,7 +2381,7 @@ export class ToriiClient {
     await this._expectStatus(response, [200]);
     const payload = await this._maybeJson(response);
     if (!payload) {
-      throw new Error("explorer rwa detail endpoint returned no payload");
+      rejectError("explorer rwa detail endpoint returned no payload");
     }
     return normalizeExplorerRwaRecord(payload, "explorer rwa detail response");
   }
@@ -2443,7 +2428,7 @@ export class ToriiClient {
         }
         cursor = pagination.nextCursor;
         if (seenCursors.has(cursor)) {
-          throw new Error("explorer rwas endpoint repeated a cursor");
+          rejectError("explorer rwas endpoint repeated a cursor");
         }
         seenCursors.add(cursor);
       }
@@ -3132,12 +3117,12 @@ export class ToriiClient {
       return null;
     }
     if (response.status === 503) {
-      throw new Error("ISO bridge runtime is disabled on the target node");
+      rejectError("ISO bridge runtime is disabled on the target node");
     }
     await this._expectStatus(response, [200]);
     const body = await this._maybeJson(response);
     if (!body) {
-      throw new Error("alias resolve endpoint returned no payload");
+      rejectError("alias resolve endpoint returned no payload");
     }
     return normalizeAliasResolutionResponse(body, "alias resolve response");
   }
@@ -3173,12 +3158,12 @@ export class ToriiClient {
       return null;
     }
     if (response.status === 503) {
-      throw new Error("ISO bridge runtime is disabled on the target node");
+      rejectError("ISO bridge runtime is disabled on the target node");
     }
     await this._expectStatus(response, [200]);
     const body = await this._maybeJson(response);
     if (!body) {
-      throw new Error("alias resolve_index endpoint returned no payload");
+      rejectError("alias resolve_index endpoint returned no payload");
     }
     return normalizeAliasResolutionResponse(body, "alias resolve_index response");
   }
@@ -3226,7 +3211,7 @@ export class ToriiClient {
     await this._expectStatus(response, [200]);
     const body = await this._maybeJson(response);
     if (!body) {
-      throw new Error("alias by-account endpoint returned no payload");
+      rejectError("alias by-account endpoint returned no payload");
     }
     return normalizeAliasLookupByAccountResponse(body, "alias by-account response");
   }
@@ -3261,16 +3246,14 @@ export class ToriiClient {
     await this._expectStatus(response, [200]);
     const body = await this._maybeJson(response);
     if (!body) {
-      throw new Error("retail recipient route endpoint returned no payload");
+      rejectError("retail recipient route endpoint returned no payload");
     }
     const route = normalizeRetailRecipientRouteResponse(
       body,
       "retail recipient route response",
     );
     if (route.account_id !== normalizedAccountId) {
-      throw new TypeError(
-        "retail recipient route response.account_id does not match the requested account",
-      );
+      rejectType("retail recipient route response.account_id does not match the requested account");
     }
     return route;
   }
@@ -3319,9 +3302,7 @@ export class ToriiClient {
       ) ||
       program.id.name !== normalizedProgramId.name
     ) {
-      throw new TypeError(
-        "fee sponsor program response.id does not match the requested exact program id",
-      );
+      rejectType("fee sponsor program response.id does not match the requested exact program id");
     }
     return program;
   }
@@ -3344,9 +3325,7 @@ export class ToriiClient {
       !canonicalAuth.accountId.includes("@")
       && !feeQuoteAccountIdsHaveSameIdentity(canonicalAuth.accountId, draft.authority)
     ) {
-      throw new TypeError(
-        "quoteFees canonicalAuth.accountId must identify the payload authority",
-      );
+      rejectType("quoteFees canonicalAuth.accountId must identify the payload authority");
     }
     const response = await this._request("POST", "/v1/fees/quote", {
       headers: JSON_REQUEST_HEADERS,
@@ -3393,9 +3372,7 @@ export class ToriiClient {
       "quoteValidationFeeHijiri",
     );
     if (new URL(this._baseUrl).protocol.toLowerCase() !== "https:") {
-      throw new Error(
-        "Hijiri validation-fee quote requests require an HTTPS Torii base URL",
-      );
+      rejectError("Hijiri validation-fee quote requests require an HTTPS Torii base URL");
     }
     const requestNorito = encodeValidationFeeHijiriQuoteRequestV1(
       accountId,
@@ -3501,9 +3478,7 @@ export class ToriiClient {
     );
     const responseNorito = Buffer.from(responseBytes);
     if (responseStatus !== 200) {
-      throw new Error(
-        `Hijiri validation-fee quote returned unexpected status ${responseStatus}; expected 200`,
-      );
+      rejectError(`Hijiri validation-fee quote returned unexpected status ${responseStatus}; expected 200`);
     }
     return verifyValidationFeeHijiriQuoteResponseV1(
       responseNorito,
@@ -3624,9 +3599,7 @@ export class ToriiClient {
             { allowZero: false },
           );
     if (maxPages > 4096) {
-      throw new TypeError(
-        "catchUpValidationFeeCurrentPolicyProof.maxPages must not exceed 4096",
-      );
+      rejectType("catchUpValidationFeeCurrentPolicyProof.maxPages must not exceed 4096");
     }
     for (let pagesVerified = 1; pagesVerified <= maxPages; pagesVerified += 1) {
       const page = await this.getValidationFeeCurrentPolicyProofPage(
@@ -3639,7 +3612,7 @@ export class ToriiClient {
         (page.projection.more_available &&
           page.projection.evaluated_block_height === checkpoint.height)
       ) {
-        throw new Error("validation-fee checkpoint promotion did not advance");
+        rejectError("validation-fee checkpoint promotion did not advance");
       }
       checkpoint = page.promotedCheckpoint;
       if (!page.projection.more_available) {
@@ -3650,9 +3623,7 @@ export class ToriiClient {
         });
       }
     }
-    throw new Error(
-      `validation-fee checkpoint promotion exceeded ${maxPages} pages`,
-    );
+    rejectError(`validation-fee checkpoint promotion exceeded ${maxPages} pages`);
   }
 
   /**
@@ -3673,18 +3644,14 @@ export class ToriiClient {
       Object.prototype.hasOwnProperty.call(requestRecord, "account_id") &&
       requestRecord.accountId !== requestRecord.account_id
     ) {
-      throw new TypeError(
-        "lookupRetailRecipient request accountId and account_id must match when both are supplied",
-      );
+      rejectType("lookupRetailRecipient request accountId and account_id must match when both are supplied");
     }
     if (
       Object.prototype.hasOwnProperty.call(requestRecord, "aliasFqn") &&
       Object.prototype.hasOwnProperty.call(requestRecord, "alias_fqn") &&
       requestRecord.aliasFqn !== requestRecord.alias_fqn
     ) {
-      throw new TypeError(
-        "lookupRetailRecipient request aliasFqn and alias_fqn must match when both are supplied",
-      );
+      rejectType("lookupRetailRecipient request aliasFqn and alias_fqn must match when both are supplied");
     }
     const accountId = ToriiClient._requireAccountId(
       requestRecord.accountId ?? requestRecord.account_id,
@@ -3699,7 +3666,7 @@ export class ToriiClient {
       "lookupRetailRecipient.aliasFqn",
     );
     if (aliasFqn !== requestedAliasFqn) {
-      throw new TypeError("lookupRetailRecipient.aliasFqn must be canonical");
+      rejectType("lookupRetailRecipient.aliasFqn must be canonical");
     }
     const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(
       options,
@@ -3723,16 +3690,14 @@ export class ToriiClient {
     await this._expectStatus(response, [200]);
     const body = await this._maybeJson(response);
     if (!body) {
-      throw new Error("retail recipient lookup endpoint returned no payload");
+      rejectError("retail recipient lookup endpoint returned no payload");
     }
     const result = normalizeRetailRecipientLookupResponse(
       body,
       "retail recipient lookup response",
     );
     if (result.account_id !== accountId || result.alias_fqn !== aliasFqn) {
-      throw new TypeError(
-        "retail recipient lookup response does not match the requested account and alias",
-      );
+      rejectType("retail recipient lookup response does not match the requested account and alias");
     }
     return result;
   }
@@ -3755,7 +3720,7 @@ export class ToriiClient {
     await this._expectStatus(response, [200]);
     const payload = await this._maybeJson(response);
     if (!payload) {
-      throw new Error("identifier policy list endpoint returned no payload");
+      rejectError("identifier policy list endpoint returned no payload");
     }
     return normalizeIdentifierPolicyListResponse(payload, "identifier policy list response");
   }
@@ -3778,7 +3743,7 @@ export class ToriiClient {
     await this._expectStatus(response, [200]);
     const payload = await this._maybeJson(response);
     if (!payload) {
-      throw new Error("ram-lfe program policy list endpoint returned no payload");
+      rejectError("ram-lfe program policy list endpoint returned no payload");
     }
     return normalizeRamLfeProgramPolicyListResponse(
       payload,
@@ -3805,15 +3770,15 @@ export class ToriiClient {
       return null;
     }
     if (response.status === 409) {
-      throw new Error("Identifier policy is inactive or the target binding is unavailable");
+      rejectError("Identifier policy is inactive or the target binding is unavailable");
     }
     if (response.status === 503) {
-      throw new Error("Identifier resolver runtime is disabled on the target node");
+      rejectError("Identifier resolver runtime is disabled on the target node");
     }
     await this._expectStatus(response, [200]);
     const body = await this._maybeJson(response);
     if (!body) {
-      throw new Error("identifier resolve endpoint returned no payload");
+      rejectError("identifier resolve endpoint returned no payload");
     }
     return normalizeIdentifierResolveResponse(body, "identifier resolve response");
   }
@@ -3847,15 +3812,15 @@ export class ToriiClient {
       return null;
     }
     if (response.status === 409) {
-      throw new Error("RAM-LFE program policy is inactive");
+      rejectError("RAM-LFE program policy is inactive");
     }
     if (response.status === 503) {
-      throw new Error("RAM-LFE runtime is disabled on the target node");
+      rejectError("RAM-LFE runtime is disabled on the target node");
     }
     await this._expectStatus(response, [200]);
     const body = await this._maybeJson(response);
     if (!body) {
-      throw new Error("ram-lfe execute endpoint returned no payload");
+      rejectError("ram-lfe execute endpoint returned no payload");
     }
     return normalizeRamLfeExecuteResponse(body, "ram-lfe execute response");
   }
@@ -3895,7 +3860,7 @@ export class ToriiClient {
     await this._expectStatus(response, [200]);
     const body = await this._maybeJson(response);
     if (!body) {
-      throw new Error("identifier receipt lookup endpoint returned no payload");
+      rejectError("identifier receipt lookup endpoint returned no payload");
     }
     return normalizeIdentifierClaimLookupResponse(
       body,
@@ -3928,15 +3893,15 @@ export class ToriiClient {
       return null;
     }
     if (response.status === 409) {
-      throw new Error("Identifier claim receipt cannot be issued for this account or policy");
+      rejectError("Identifier claim receipt cannot be issued for this account or policy");
     }
     if (response.status === 503) {
-      throw new Error("Identifier resolver runtime is disabled on the target node");
+      rejectError("Identifier resolver runtime is disabled on the target node");
     }
     await this._expectStatus(response, [200]);
     const body = await this._maybeJson(response);
     if (!body) {
-      throw new Error("identifier claim-receipt endpoint returned no payload");
+      rejectError("identifier claim-receipt endpoint returned no payload");
     }
     return normalizeIdentifierResolveResponse(body, "identifier claim receipt response");
   }
@@ -3959,7 +3924,7 @@ export class ToriiClient {
     await this._expectStatus(response, [200]);
     const body = await this._maybeJson(response);
     if (!body) {
-      throw new Error("ram-lfe receipt verify endpoint returned no payload");
+      rejectError("ram-lfe receipt verify endpoint returned no payload");
     }
     return normalizeRamLfeReceiptVerifyResponse(
       body,
@@ -3987,7 +3952,7 @@ export class ToriiClient {
     await this._expectStatus(response, [200]);
     const payload = await this._maybeJson(response);
     if (!payload) {
-      throw new Error("sorafs alias list endpoint returned no payload");
+      rejectError("sorafs alias list endpoint returned no payload");
     }
     return normalizeSorafsAliasListResponse(payload);
   }
@@ -4026,7 +3991,7 @@ export class ToriiClient {
     await this._expectStatus(response, [200]);
     const payload = await this._maybeJson(response);
     if (!payload) {
-      throw new Error("sorafs pin list endpoint returned no payload");
+      rejectError("sorafs pin list endpoint returned no payload");
     }
     return normalizeSorafsPinListResponse(payload, params);
   }
@@ -4107,7 +4072,7 @@ export class ToriiClient {
 
         const nextAfterDigestHex = exactJsonBytesToLowerHex(page.next_after_digest);
         if (nextAfterDigestHex === afterDigestHex) {
-          throw new Error("sorafs pin list endpoint repeated its exclusive cursor");
+          rejectError("sorafs pin list endpoint repeated its exclusive cursor");
         }
         afterDigestHex = nextAfterDigestHex;
       }
@@ -4134,7 +4099,7 @@ export class ToriiClient {
     await this._expectStatus(response, [200]);
     const payload = await this._maybeJson(response);
     if (!payload) {
-      throw new Error("sorafs replication list endpoint returned no payload");
+      rejectError("sorafs replication list endpoint returned no payload");
     }
     return normalizeSorafsReplicationListResponse(payload);
   }
@@ -4227,7 +4192,7 @@ export class ToriiClient {
     await this._expectStatus(response, [200]);
     const payload = await this._maybeJson(response);
     if (!payload) {
-      throw new Error("sorafs orderbook book endpoint returned no payload");
+      rejectError("sorafs orderbook book endpoint returned no payload");
     }
     return normalizeSorafsOrderbookBookResponse(payload);
   }
@@ -4255,7 +4220,7 @@ export class ToriiClient {
     await this._expectStatus(response, [200]);
     const payload = await this._maybeJson(response);
     if (!payload) {
-      throw new Error("sorafs orderbook trades endpoint returned no payload");
+      rejectError("sorafs orderbook trades endpoint returned no payload");
     }
     return normalizeSorafsOrderbookPageResponse(
       payload,
@@ -4288,7 +4253,7 @@ export class ToriiClient {
     await this._expectStatus(response, [200]);
     const payload = await this._maybeJson(response);
     if (!payload) {
-      throw new Error("sorafs orderbook channels endpoint returned no payload");
+      rejectError("sorafs orderbook channels endpoint returned no payload");
     }
     return normalizeSorafsOrderbookPageResponse(
       payload,
@@ -4321,7 +4286,7 @@ export class ToriiClient {
     await this._expectStatus(response, [200]);
     const payload = await this._maybeJson(response);
     if (!payload) {
-      throw new Error("sorafs orderbook receipts endpoint returned no payload");
+      rejectError("sorafs orderbook receipts endpoint returned no payload");
     }
     return normalizeSorafsOrderbookPageResponse(
       payload,
@@ -4360,7 +4325,7 @@ export class ToriiClient {
     }
     const payload = await this._maybeJson(response);
     if (!payload) {
-      throw new Error("sorafs orderbook events endpoint returned no payload");
+      rejectError("sorafs orderbook events endpoint returned no payload");
     }
     return normalizeSorafsOrderbookEventsResponse(payload);
   }
@@ -4761,7 +4726,7 @@ export class ToriiClient {
         response,
         `${context} rejected a transformed response body`,
       );
-      throw new TypeError(`${context} Content-Encoding must be identity`);
+      rejectType(`${context} Content-Encoding must be identity`);
     }
   }
 
@@ -4918,9 +4883,7 @@ export class ToriiClient {
         response,
         `${context} rejected a non-Norito response body`,
       );
-      throw new TypeError(
-        `${context} must use the application/x-norito media type`,
-      );
+      rejectType(`${context} must use the application/x-norito media type`);
     }
     const { bytes } = await this._readBoundedResponseBytes(
       response,
@@ -5117,7 +5080,7 @@ export class ToriiClient {
   async getSorafsPinManifestTyped(digestHex, options = {}) {
     const payload = await this.getSorafsPinManifest(digestHex, options);
     if (!payload) {
-      throw new Error("sorafs pin manifest endpoint returned 404");
+      rejectError("sorafs pin manifest endpoint returned 404");
     }
     return normalizeSorafsPinManifestResponse(payload);
   }
@@ -5138,9 +5101,7 @@ export class ToriiClient {
       !ArrayBuffer.isView(signedTransaction) &&
       !(signedTransaction instanceof ArrayBuffer)
     ) {
-      throw new TypeError(
-        "signedTransaction must be a Buffer, ArrayBuffer, or ArrayBuffer view",
-      );
+      rejectType("signedTransaction must be a Buffer, ArrayBuffer, or ArrayBuffer view");
     }
     const rawTransaction = toBuffer(signedTransaction, "signedTransaction");
     throwIfAborted(signal);
@@ -5163,7 +5124,7 @@ export class ToriiClient {
     await this._expectStatus(response, [202]);
     const payload = await this._maybeJson(response);
     if (!payload) {
-      throw new Error("sorafs pin register endpoint returned no payload");
+      rejectError("sorafs pin register endpoint returned no payload");
     }
     return payload;
   }
@@ -5194,9 +5155,7 @@ export class ToriiClient {
       "getSorafsStorageState operatorSigningContext",
     );
     if (operatorSigningContext === null) {
-      throw new TypeError(
-        "getSorafsStorageState requires ToriiClient options.operatorSigningContext",
-      );
+      rejectType("getSorafsStorageState requires ToriiClient options.operatorSigningContext");
     }
     const response = await this._request("GET", "/v1/sorafs/storage/state", {
       headers: JSON_ACCEPT_HEADERS,
@@ -5206,7 +5165,7 @@ export class ToriiClient {
     await this._expectStatus(response, [200]);
     const payload = await this._maybeJson(response);
     if (!payload) {
-      throw new Error("sorafs storage state endpoint returned no payload");
+      rejectError("sorafs storage state endpoint returned no payload");
     }
     return normalizeSorafsStorageStateResponse(payload);
   }
@@ -5231,7 +5190,7 @@ export class ToriiClient {
     await this._expectStatus(response, [200]);
     const payload = await this._maybeJson(response);
     if (!payload) {
-      throw new Error("sorafs manifest endpoint returned no payload");
+      rejectError("sorafs manifest endpoint returned no payload");
     }
     return normalizeSorafsManifestResponse(payload);
   }
@@ -5260,7 +5219,7 @@ export class ToriiClient {
     await this._expectStatus(response, [200]);
     const payload = await this._maybeJson(response);
     if (!payload) {
-      throw new Error("da manifest endpoint returned no payload");
+      rejectError("da manifest endpoint returned no payload");
     }
     return normalizeDaManifestFetchResponse(payload);
   }
@@ -5337,7 +5296,7 @@ export class ToriiClient {
     await this._expectStatus(response, [202]);
     const payload = await this._maybeJson(response);
     if (!payload) {
-      throw new Error("da ingest endpoint returned no payload");
+      rejectError("da ingest endpoint returned no payload");
     }
     const normalized = normalizeDaIngestResponse(payload);
     const pdpHeader =
@@ -5426,9 +5385,7 @@ export class ToriiClient {
         "fetchDaPayloadViaGateway.manifestBundle.blob_hash_hex",
       );
       if (planObject.payload_digest_blake3_hex !== expectedPayloadDigest) {
-        throw new TypeError(
-          "fetchDaPayloadViaGateway.chunkPlan payload digest must match manifestBundle.blob_hash_hex",
-        );
+        rejectType("fetchDaPayloadViaGateway.chunkPlan payload digest must match manifestBundle.blob_hash_hex");
       }
     }
 
@@ -5460,15 +5417,11 @@ export class ToriiClient {
         "fetchDaPayloadViaGateway.proofSummary",
       );
       if (!manifestBytes) {
-        throw new Error(
-          "fetchDaPayloadViaGateway.proofSummary requires manifestBundle.manifest_bytes or manifestBundle.manifest_b64",
-        );
+        rejectError("fetchDaPayloadViaGateway.proofSummary requires manifestBundle.manifest_bytes or manifestBundle.manifest_b64");
       }
       const payloadBuffer = gatewayResult?.payload;
       if (!Buffer.isBuffer(payloadBuffer)) {
-        throw new Error(
-          "fetchDaPayloadViaGateway.proofSummary requires the gateway payload buffer; ensure sorafsGatewayFetch returned binary payloads",
-        );
+        rejectError("fetchDaPayloadViaGateway.proofSummary requires the gateway payload buffer; ensure sorafsGatewayFetch returned binary payloads");
       }
       proofSummary = await this._generateDaProofSummary(
         manifestBytes,
@@ -5594,9 +5547,7 @@ export class ToriiClient {
     let proofSummaryArtifact = null;
     if (proofSummaryRequest !== false) {
       if (session.proofSummary === null) {
-        throw new Error(
-          "proveDaAvailabilityToDir requested a proof summary but none was generated",
-        );
+        rejectError("proveDaAvailabilityToDir requested a proof summary but none was generated");
       }
       proofSummaryPath = pathModule.join(
         outputDir,
@@ -5658,7 +5609,7 @@ export class ToriiClient {
     await this._expectStatus(response, [200]);
     const json = await this._maybeJson(response);
     if (!json) {
-      throw new Error("sorafs capacity por-proof endpoint returned no payload");
+      rejectError("sorafs capacity por-proof endpoint returned no payload");
     }
     return normalizeSorafsPorSubmissionResponse(json, "sorafs por proof response");
   }
@@ -5697,7 +5648,7 @@ export class ToriiClient {
     await this._expectStatus(response, [200]);
     const json = await this._maybeJson(response);
     if (!json) {
-      throw new Error("sorafs capacity por-verdict endpoint returned no payload");
+      rejectError("sorafs capacity por-verdict endpoint returned no payload");
     }
     return normalizeSorafsPorVerdictResponse(json);
   }
@@ -5801,7 +5752,7 @@ export class ToriiClient {
     await this._expectStatus(response, [200]);
     const payload = await this._maybeJson(response);
     if (!payload) {
-      throw new Error("uaid portfolio endpoint returned no payload");
+      rejectError("uaid portfolio endpoint returned no payload");
     }
     return normalizeUaidPortfolioResponse(payload, canonicalUaid);
   }
@@ -5826,7 +5777,7 @@ export class ToriiClient {
     await this._expectStatus(response, [200]);
     const payload = await this._maybeJson(response);
     if (!payload) {
-      throw new Error("uaid bindings endpoint returned no payload");
+      rejectError("uaid bindings endpoint returned no payload");
     }
     return normalizeUaidBindingsResponse(payload, canonicalUaid);
   }
@@ -5896,7 +5847,7 @@ export class ToriiClient {
     await this._expectStatus(response, [200]);
     const payload = await this._maybeJson(response);
     if (!payload) {
-      throw new Error("uaid manifests endpoint returned no payload");
+      rejectError("uaid manifests endpoint returned no payload");
     }
     return normalizeUaidManifestsResponse(payload, canonicalUaid);
   }
@@ -6044,10 +5995,10 @@ export class ToriiClient {
   async submitTransactionBatch(payloads, options = {}) {
     const { signal } = normalizeSignalOnlyOption(options, "submitTransactionBatch");
     if (!Array.isArray(payloads)) {
-      throw new TypeError("submitTransactionBatch payloads must be an array");
+      rejectType("submitTransactionBatch payloads must be an array");
     }
     if (payloads.length === 0) {
-      throw new TypeError("submitTransactionBatch requires at least one payload");
+      rejectType("submitTransactionBatch requires at least one payload");
     }
     const versionedPayloads = payloads.map((payload) =>
       encodeCanonicalVersionedSignedTransactionV1(
@@ -6092,9 +6043,7 @@ export class ToriiClient {
     let acceptedCount = null;
     try {
       if (!/^(?:0|[1-9][0-9]*)$/u.test(acceptedText)) {
-        throw new TypeError(
-          "submitTransactionBatch.acceptedCount must be a canonical non-negative decimal integer",
-        );
+        rejectType("submitTransactionBatch.acceptedCount must be a canonical non-negative decimal integer");
       }
       acceptedCount = ToriiClient._normalizeUnsignedInteger(
         acceptedText,
@@ -6428,7 +6377,7 @@ export class ToriiClient {
       { signal },
     );
     if (!payload) {
-      throw new Error("pipeline recovery endpoint returned no payload");
+      rejectError("pipeline recovery endpoint returned no payload");
     }
     return payload;
   }
@@ -6470,7 +6419,7 @@ export class ToriiClient {
       { signal },
     );
     if (!payload) {
-      throw new Error("pipeline preflight endpoint returned no payload");
+      rejectError("pipeline preflight endpoint returned no payload");
     }
     return normalizePipelinePreflight(payload);
   }
@@ -6512,7 +6461,7 @@ export class ToriiClient {
       { signal },
     );
     if (!payload) {
-      throw new Error("pipeline recovery FASTPQ proofs endpoint returned no payload");
+      rejectError("pipeline recovery FASTPQ proofs endpoint returned no payload");
     }
     return payload;
   }
@@ -6757,7 +6706,7 @@ export class ToriiClient {
     );
     const origin = new URL(this._baseUrl);
     if (origin.protocol !== "https:" || origin.username || origin.password) {
-      throw new TypeError("Exact12 capability admission requires an HTTPS Torii origin without URL credentials");
+      rejectType("Exact12 capability admission requires an HTTPS Torii origin without URL credentials");
     }
     const expectedNetworkId = networkIdBytes(
       this._localSigningContext?.networkId,
@@ -6783,7 +6732,7 @@ export class ToriiClient {
     }
     if (responseRedirected || responseUrl !== expectedUrl) {
       cancelResponseBodyBestEffort(response, `${context} rejected redirected or other-origin bytes`);
-      throw new TypeError(`${context} must come from the exact authenticated URL without redirects`);
+      rejectType(`${context} must come from the exact authenticated URL without redirects`);
     }
     await this.#expectStatus(response, [200], { signal });
     let contentType;
@@ -6798,7 +6747,7 @@ export class ToriiClient {
     }
     if (contentType !== APPLICATION_NORITO) {
       cancelResponseBodyBestEffort(response, `${context} rejected non-Norito bytes`);
-      throw new TypeError(`${context} must use exactly ${APPLICATION_NORITO}`);
+      rejectType(`${context} must use exactly ${APPLICATION_NORITO}`);
     }
     const { bytes } = await this.#readBoundedResponseBytes(
       response,
@@ -7001,35 +6950,31 @@ export class ToriiClient {
         key !== "from" && key !== "after_index" && key !== "limit" && key !== "signal",
     );
     if (unknown !== undefined) {
-      throw new TypeError(`getSccpRecentMessages.options contains unknown field \`${unknown}\``);
+      rejectType(`getSccpRecentMessages.options contains unknown field \`${unknown}\``);
     }
     const params = {};
     if (record.from !== undefined) {
       if (!Number.isSafeInteger(record.from) || record.from < 1) {
-        throw new TypeError(
-          "getSccpRecentMessages.options.from must be a positive safe integer",
-        );
+        rejectType("getSccpRecentMessages.options.from must be a positive safe integer");
       }
       params.from = String(record.from);
     }
     if (record.after_index !== undefined) {
       if (record.from === undefined) {
-        throw new TypeError("getSccpRecentMessages.options.after_index requires from");
+        rejectType("getSccpRecentMessages.options.after_index requires from");
       }
       if (
         !Number.isSafeInteger(record.after_index) ||
         record.after_index < 0 ||
         record.after_index > 511
       ) {
-        throw new TypeError(
-          "getSccpRecentMessages.options.after_index must be an integer in 0..511",
-        );
+        rejectType("getSccpRecentMessages.options.after_index must be an integer in 0..511");
       }
       params.after_index = String(record.after_index);
     }
     if (record.limit !== undefined) {
       if (!Number.isSafeInteger(record.limit) || record.limit < 1 || record.limit > 50) {
-        throw new TypeError("getSccpRecentMessages.options.limit must be an integer in 1..50");
+        rejectType("getSccpRecentMessages.options.limit must be an integer in 1..50");
       }
       params.limit = String(record.limit);
     }
@@ -7235,7 +7180,7 @@ export class ToriiClient {
     await this._expectStatus(response, [200]);
     const payload = await this._maybeJson(response);
     if (!payload) {
-      throw new Error("telemetry peers endpoint returned no payload");
+      rejectError("telemetry peers endpoint returned no payload");
     }
     return normalizeTelemetryPeersInfoList(payload);
   }
@@ -7259,7 +7204,7 @@ export class ToriiClient {
     await this._expectStatus(response, [200]);
     const payload = await this._maybeJson(response);
     if (!payload) {
-      throw new Error("explorer metrics endpoint returned no payload");
+      rejectError("explorer metrics endpoint returned no payload");
     }
     return normalizeExplorerMetricsResponse(payload);
   }
@@ -7285,7 +7230,7 @@ export class ToriiClient {
     await this._expectStatus(response, [200]);
     const payload = await this._maybeJson(response);
     if (!payload) {
-      throw new Error("explorer account QR endpoint returned no payload");
+      rejectError("explorer account QR endpoint returned no payload");
     }
     return normalizeExplorerAccountQrResponse(payload, "explorer account qr response");
   }
@@ -7293,7 +7238,7 @@ export class ToriiClient {
   async _vpnRequest(method, path, options = {}) {
     const protocol = new URL(this._baseUrl).protocol.toLowerCase();
     if (protocol !== "https:") {
-      throw new Error("Sora VPN requests require an HTTPS Torii base URL");
+      rejectError("Sora VPN requests require an HTTPS Torii base URL");
     }
     return this._request(method, path, { ...options, redirect: "error" });
   }
@@ -7316,7 +7261,7 @@ export class ToriiClient {
     await this._expectStatus(response, [200]);
     const payload = await this._maybeJson(response);
     if (!payload) {
-      throw new Error("vpn profile endpoint returned no payload");
+      rejectError("vpn profile endpoint returned no payload");
     }
     return normalizeVpnProfileResponse(payload);
   }
@@ -7344,7 +7289,7 @@ export class ToriiClient {
     await this._expectStatus(response, [201]);
     const payload = await this._maybeJson(response);
     if (!payload) {
-      throw new Error("vpn quote endpoint returned no payload");
+      rejectError("vpn quote endpoint returned no payload");
     }
     return normalizeVpnQuoteResponse(payload);
   }
@@ -7370,7 +7315,7 @@ export class ToriiClient {
     await this._expectStatus(response, [201]);
     const payload = await this._maybeJson(response);
     if (!payload) {
-      throw new Error("vpn session endpoint returned no payload");
+      rejectError("vpn session endpoint returned no payload");
     }
     return normalizeVpnSessionResponse(payload);
   }
@@ -7403,7 +7348,7 @@ export class ToriiClient {
     await this._expectStatus(response, [200]);
     const payload = await this._maybeJson(response);
     if (!payload) {
-      throw new Error("vpn session status endpoint returned no payload");
+      rejectError("vpn session status endpoint returned no payload");
     }
     return normalizeVpnSessionResponse(payload, "vpn session status response");
   }
@@ -7429,7 +7374,7 @@ export class ToriiClient {
     await this._expectStatus(response, [201]);
     const payload = await this._maybeJson(response);
     if (!payload) {
-      throw new Error("vpn receipt submit endpoint returned no payload");
+      rejectError("vpn receipt submit endpoint returned no payload");
     }
     return normalizeVpnReceiptResponse(payload, "vpn receipt submit response");
   }
@@ -7452,7 +7397,7 @@ export class ToriiClient {
     await this._expectStatus(response, [200]);
     const payload = await this._maybeJson(response);
     if (!payload) {
-      throw new Error("vpn receipts endpoint returned no payload");
+      rejectError("vpn receipts endpoint returned no payload");
     }
     return normalizeVpnReceiptListResponse(payload);
   }
@@ -7480,7 +7425,7 @@ export class ToriiClient {
     await this._expectStatus(response, [200]);
     const payload = await this._maybeJson(response);
     if (!payload) {
-      throw new Error("sns policy endpoint returned no payload");
+      rejectError("sns policy endpoint returned no payload");
     }
     return normalizeSnsSuffixPolicy(payload);
   }
@@ -7521,7 +7466,7 @@ export class ToriiClient {
     await this._expectStatus(response, [200]);
     const payload = await this._maybeJson(response);
     if (!payload) {
-      throw new Error("sns registration endpoint returned no payload");
+      rejectError("sns registration endpoint returned no payload");
     }
     return normalizeSnsNameRecord(payload, "sns registration response");
   }
@@ -7548,7 +7493,7 @@ export class ToriiClient {
     }
     const payload = await this._maybeJson(response);
     if (!payload) {
-      throw new Error("governance proposal endpoint returned no payload");
+      rejectError("governance proposal endpoint returned no payload");
     }
     return payload;
   }
@@ -7588,7 +7533,7 @@ export class ToriiClient {
     await this._expectStatus(response, [200]);
     const payload = await this._maybeJson(response);
     if (!payload) {
-      throw new Error("governance referendum endpoint returned no payload");
+      rejectError("governance referendum endpoint returned no payload");
     }
     return payload;
   }
@@ -7628,7 +7573,7 @@ export class ToriiClient {
     }
     const payload = await this._maybeJson(response);
     if (!payload) {
-      throw new Error("governance tally endpoint returned no payload");
+      rejectError("governance tally endpoint returned no payload");
     }
     return payload;
   }
@@ -7670,7 +7615,7 @@ export class ToriiClient {
     }
     const payload = await this._maybeJson(response);
     if (!payload) {
-      throw new Error("governance locks endpoint returned no payload");
+      rejectError("governance locks endpoint returned no payload");
     }
     return payload;
   }
@@ -7702,7 +7647,7 @@ export class ToriiClient {
     await this._expectStatus(response, [200]);
     const payload = await this._maybeJson(response);
     if (!payload) {
-      throw new Error("governance unlock stats endpoint returned no payload");
+      rejectError("governance unlock stats endpoint returned no payload");
     }
     return payload;
   }
@@ -7714,7 +7659,7 @@ export class ToriiClient {
   async getGovernanceUnlockStatsTyped(options) {
     const payload = await this.getGovernanceUnlockStats(options);
     if (!payload) {
-      throw new Error("governance unlock stats endpoint returned no payload");
+      rejectError("governance unlock stats endpoint returned no payload");
     }
     return parseGovernanceUnlockStats(payload);
   }
@@ -7864,11 +7809,11 @@ export class ToriiClient {
     }
     if (contentType !== APPLICATION_NORITO) {
       cancelResponseBodyBestEffort(response, `${context} rejected non-Norito bytes`);
-      throw new TypeError(`${context} must use exactly ${APPLICATION_NORITO}`);
+      rejectType(`${context} must use exactly ${APPLICATION_NORITO}`);
     }
     if (contentEncoding !== null && contentEncoding.toLowerCase() !== "identity") {
       cancelResponseBodyBestEffort(response, `${context} rejected transformed bytes`);
-      throw new TypeError(`${context} Content-Encoding must be identity`);
+      rejectType(`${context} Content-Encoding must be identity`);
     }
     const { bytes } = await this._readBoundedResponseBytes(
       response,
@@ -8002,7 +7947,7 @@ export class ToriiClient {
   async draftMinistryAgendaProposal(payload, options) {
     const normalized = normalizeMinistryAgendaProposalDraftRequest(payload);
     const { signal, canonicalAuth } = normalizeVpnSessionOptions(options, "draftMinistryAgendaProposal");
-    if (canonicalAuth.accountId !== normalized.authority) throw new TypeError("draftMinistryAgendaProposal canonicalAuth.accountId must equal payload.authority");
+    if (canonicalAuth.accountId !== normalized.authority) rejectType("draftMinistryAgendaProposal canonicalAuth.accountId must equal payload.authority");
     const body = stringifyStrictLosslessIntegerJson(
       normalized,
       "draftMinistryAgendaProposal request",
@@ -8066,9 +8011,7 @@ export class ToriiClient {
     );
     const normalized = normalizeGovernanceDeployContractProposalPayload(payload);
     if (canonicalAuth.accountId !== normalized.proposal_operator) {
-      throw new TypeError(
-        "governanceProposeDeployContract canonicalAuth.accountId must equal the exact proposalOperator",
-      );
+      rejectType("governanceProposeDeployContract canonicalAuth.accountId must equal the exact proposalOperator");
     }
     const body = stringifyStrictLosslessIntegerJson(
       normalized,
@@ -8082,7 +8025,7 @@ export class ToriiClient {
     await this._expectStatus(response, [200]);
     const draft = await this._maybeJson(response);
     if (!draft) {
-      throw new Error("governance deploy-contract endpoint returned no payload");
+      rejectError("governance deploy-contract endpoint returned no payload");
     }
     return normalizeGovernanceProposalDraftResponseV1(
       draft,
@@ -8114,7 +8057,7 @@ export class ToriiClient {
     await this._expectStatus(response, [200]);
     const draft = await this._maybeJson(response);
     if (!draft) {
-      throw new Error("governance plain ballot endpoint returned no payload");
+      rejectError("governance plain ballot endpoint returned no payload");
     }
     return normalizeGovernanceBallotResponse(draft, "governance plain ballot response");
   }
@@ -8142,7 +8085,7 @@ export class ToriiClient {
     await this._expectStatus(response, [200]);
     const draft = await this._maybeJson(response);
     if (!draft) {
-      throw new Error("governance zk ballot v1 endpoint returned no payload");
+      rejectError("governance zk ballot v1 endpoint returned no payload");
     }
     return normalizeGovernanceBallotResponse(draft, "governance zk ballot v1 response");
   }
@@ -8170,7 +8113,7 @@ export class ToriiClient {
     await this._expectStatus(response, [200]);
     const draft = await this._maybeJson(response);
     if (!draft) {
-      throw new Error("governance zk ballot proof endpoint returned no payload");
+      rejectError("governance zk ballot proof endpoint returned no payload");
     }
     return normalizeGovernanceBallotResponse(
       draft,
@@ -8195,7 +8138,7 @@ export class ToriiClient {
     await this._expectStatus(response, [200]);
     const payload = await this._maybeJson(response);
     if (!payload) {
-      throw new Error("protected namespaces apply endpoint returned no payload");
+      rejectError("protected namespaces apply endpoint returned no payload");
     }
     return normalizeProtectedNamespacesApplyResponse(payload);
   }
@@ -8214,7 +8157,7 @@ export class ToriiClient {
     await this._expectStatus(response, [200]);
     const payload = await this._maybeJson(response);
     if (!payload) {
-      throw new Error("protected namespaces endpoint returned no payload");
+      rejectError("protected namespaces endpoint returned no payload");
     }
     return normalizeProtectedNamespacesGetResponse(payload);
   }
@@ -8361,7 +8304,7 @@ export class ToriiClient {
     await this._expectStatus(response, [200]);
     const payload = await this._maybeJson(response);
     if (!payload) {
-      throw new Error("sumeragi BLS keys endpoint returned no payload");
+      rejectError("sumeragi BLS keys endpoint returned no payload");
     }
     return normalizeSumeragiBlsKeysMap(payload);
   }
@@ -8384,7 +8327,7 @@ export class ToriiClient {
     await this._expectStatus(response, [200]);
     const payload = await this._maybeJson(response);
     if (!payload) {
-      throw new Error("sumeragi leader endpoint returned no payload");
+      rejectError("sumeragi leader endpoint returned no payload");
     }
     return normalizeSumeragiLeaderSnapshot(payload);
   }
@@ -8410,7 +8353,7 @@ export class ToriiClient {
     await this._expectStatus(response, [200]);
     const payload = await this._maybeJson(response);
     if (!payload) {
-      throw new Error("sumeragi params endpoint returned no payload");
+      rejectError("sumeragi params endpoint returned no payload");
     }
    return normalizeSumeragiParamsSnapshot(payload);
   }
@@ -8437,7 +8380,7 @@ export class ToriiClient {
         allowZero: false,
       });
       if (limit > 1000) {
-        throw new RangeError("limit must be <= 1000");
+        rejectRange("limit must be <= 1000");
       }
       params.limit = limit;
     }
@@ -8446,14 +8389,14 @@ export class ToriiClient {
         allowZero: true,
       });
       if (offset > 10000) {
-        throw new RangeError("offset must be <= 10000");
+        rejectRange("offset must be <= 10000");
       }
       params.offset = offset;
     }
     if (resolvedOptions.kind !== undefined && resolvedOptions.kind !== null) {
       const kind = requireExactNonEmptyString(resolvedOptions.kind, "kind");
       if (kind !== EVIDENCE_KIND) {
-        throw new RangeError(`kind must be ${EVIDENCE_KIND}`);
+        rejectRange(`kind must be ${EVIDENCE_KIND}`);
       }
       params.kind = kind;
     }
@@ -8592,7 +8535,7 @@ export class ToriiClient {
         response,
         `${context} rejected a non-Norito response body`,
       );
-      throw new TypeError(`${context} must use the application/x-norito media type`);
+      rejectType(`${context} must use the application/x-norito media type`);
     }
     const declaredLength = this._getHeader(response, "content-length");
     const { bytes } = await this._readBoundedResponseBytes(
@@ -8602,10 +8545,10 @@ export class ToriiClient {
       { signal },
     );
     if (declaredLength !== null && Number(declaredLength) !== bytes.byteLength) {
-      throw new TypeError(`${context} Content-Length does not match the response body`);
+      rejectType(`${context} Content-Length does not match the response body`);
     }
     if (bytes.byteLength === 0) {
-      throw new TypeError(`${context} must not be empty`);
+      rejectType(`${context} must not be empty`);
     }
     return Buffer.from(bytes);
   }
@@ -8630,7 +8573,7 @@ export class ToriiClient {
     await this._expectStatus(response, [200]);
     const payload = await this._maybeJson(response);
     if (!payload) {
-      throw new Error("explorer block endpoint returned no payload");
+      rejectError("explorer block endpoint returned no payload");
     }
     return normalizeExplorerBlockRecord(payload, "explorer block response");
   }
@@ -8653,7 +8596,7 @@ export class ToriiClient {
     await this._expectStatus(response, [200]);
     const payload = await this._maybeJson(response);
     if (!payload) {
-      throw new Error("explorer blocks endpoint returned no payload");
+      rejectError("explorer blocks endpoint returned no payload");
     }
     return normalizeExplorerBlocksPage(payload);
   }
@@ -9064,7 +9007,7 @@ export class ToriiClient {
     await this._expectStatus(response, [200]);
     const payload = await this._maybeJson(response);
     if (!payload) {
-      throw new Error("connect status response missing JSON body");
+      rejectError("connect status response missing JSON body");
     }
     return normalizeConnectStatusSnapshot(payload, "connect status response");
   }
@@ -9085,7 +9028,7 @@ export class ToriiClient {
     const appPublicKey = normalizeBytes(input.appPublicKey);
     const nonce = normalizeBytes(input.nonce);
     if (appPublicKey.length !== 32 || nonce.length !== 16) {
-      throw new TypeError("Connect appPublicKey and nonce must be exactly 32 and 16 bytes");
+      rejectType("Connect appPublicKey and nonce must be exactly 32 and 16 bytes");
     }
     networkIdBytes(input.networkId, "networkId");
     const sid = normalizeConnectSid(input.sid, "sid");
@@ -9095,7 +9038,7 @@ export class ToriiClient {
       nonce,
     }).sidBase64Url;
     if (sid !== expectedSid) {
-      throw new TypeError("Connect sid must bind the exact networkId, appPublicKey, and nonce");
+      rejectType("Connect sid must bind the exact networkId, appPublicKey, and nonce");
     }
     const payload = {
       sid,
@@ -9113,7 +9056,7 @@ export class ToriiClient {
     await this._expectStatus(response, [200]);
     const body = await this._maybeJson(response);
     if (!body) {
-      throw new Error("connect session response missing JSON body");
+      rejectError("connect session response missing JSON body");
     }
     const session = normalizeConnectSessionResponse(body, "connect session response");
     validateConnectSessionResponseIdentity(session, {
@@ -9455,15 +9398,11 @@ export class ToriiClient {
       payload.contract_address !== undefined
       && payload.contract_address !== draftIntent.contractAddress
     ) {
-      throw new TypeError(
-        "prepareContractCall draftIntent.contractAddress must match the requested address",
-      );
+      rejectType("prepareContractCall draftIntent.contractAddress must match the requested address");
     }
     const requestPayloadDigest = contractPayloadDigestHex(payload.payload);
     if (draftIntent.payloadDigestHex !== requestPayloadDigest) {
-      throw new TypeError(
-        "prepareContractCall draftIntent.payloadDigestHex must match the exact request payload",
-      );
+      rejectType("prepareContractCall draftIntent.payloadDigestHex must match the exact request payload");
     }
     requireLocalDraftSigningContext(
       this._localSigningContext,
@@ -9477,7 +9416,7 @@ export class ToriiClient {
     await this._expectStatus(response, [200]);
     const body = await this._maybeJson(response);
     if (!body) {
-      throw new Error("contract call endpoint returned no payload");
+      rejectError("contract call endpoint returned no payload");
     }
     return normalizeContractCallDraftResponse(
       body,
@@ -9510,7 +9449,7 @@ export class ToriiClient {
       { signal },
     );
     if (!body) {
-      throw new Error("contract call simulation endpoint returned no payload");
+      rejectError("contract call simulation endpoint returned no payload");
     }
     return normalizeContractCallSimulateResponse(body);
   }
@@ -9533,7 +9472,7 @@ export class ToriiClient {
       "IVM derive request",
     );
     const { signal, canonicalAuth } = normalizeVpnSessionOptions(options, "deriveIvmProved");
-    if (canonicalAuth.accountId !== payload.authority) throw new TypeError("deriveIvmProved canonicalAuth.accountId must equal the exact payload authority");
+    if (canonicalAuth.accountId !== payload.authority) rejectType("deriveIvmProved canonicalAuth.accountId must equal the exact payload authority");
     const response = await this._request("POST", "/v1/zk/ivm/derive", {
       headers: JSON_REQUEST_HEADERS,
       body: requestBody,
@@ -9548,7 +9487,7 @@ export class ToriiClient {
       { signal },
     );
     if (!body) {
-      throw new Error("IVM derive endpoint returned no payload");
+      rejectError("IVM derive endpoint returned no payload");
     }
     return normalizeZkIvmDeriveResponse(body);
   }
@@ -9575,9 +9514,7 @@ export class ToriiClient {
       "IVM prove request",
     );
     if (canonicalAuth.accountId !== payload.authority) {
-      throw new TypeError(
-        "startIvmProve canonicalAuth.accountId must equal the exact payload authority",
-      );
+      rejectType("startIvmProve canonicalAuth.accountId must equal the exact payload authority");
     }
     const response = await this._request("POST", "/v1/zk/ivm/prove", {
       headers: JSON_REQUEST_HEADERS,
@@ -9593,7 +9530,7 @@ export class ToriiClient {
       { signal },
     );
     if (!body) {
-      throw new Error("IVM prove endpoint returned no payload");
+      rejectError("IVM prove endpoint returned no payload");
     }
     return normalizeZkIvmProveJobCreatedResponse(body);
   }
@@ -9627,11 +9564,11 @@ export class ToriiClient {
       { signal },
     );
     if (!body) {
-      throw new Error("IVM prove job endpoint returned no payload");
+      rejectError("IVM prove job endpoint returned no payload");
     }
     const job = normalizeZkIvmProveJobResponse(body);
     if (job.job_id !== normalizedJobId) {
-      throw new Error("IVM prove job status returned a different job id");
+      rejectError("IVM prove job status returned a different job id");
     }
     return job;
   }
@@ -9662,11 +9599,11 @@ export class ToriiClient {
       { signal },
     );
     if (!body) {
-      throw new Error("IVM prove job cancellation endpoint returned no payload");
+      rejectError("IVM prove job cancellation endpoint returned no payload");
     }
     const cancelled = normalizeZkIvmProveJobCreatedResponse(body);
     if (cancelled.job_id !== normalizedJobId) {
-      throw new Error("IVM prove job cancellation returned a different job id");
+      rejectError("IVM prove job cancellation returned a different job id");
     }
     return cancelled;
   }
@@ -9725,17 +9662,15 @@ export class ToriiClient {
       });
       if (job.status === "done") {
         if (!job.proved || !job.attachment) {
-          throw new Error(`IVM prove job ${normalizedJobId} completed without proved payload and attachment`);
+          rejectError(`IVM prove job ${normalizedJobId} completed without proved payload and attachment`);
         }
         return job;
       }
       if (job.status === "error") {
-        throw new Error(
-          `IVM prove job ${normalizedJobId} failed: ${job.error ?? "unknown prover error"}`,
-        );
+        rejectError(`IVM prove job ${normalizedJobId} failed: ${job.error ?? "unknown prover error"}`);
       }
       if (Date.now() >= deadline) {
-        throw new Error(`timed out waiting for IVM prove job ${normalizedJobId}`);
+        rejectError(`timed out waiting for IVM prove job ${normalizedJobId}`);
       }
       if (intervalMs > 0) {
         await delay(intervalMs, signal);
@@ -9792,9 +9727,7 @@ export class ToriiClient {
     });
     const expectedProved = normalizedRequest.proved ?? null;
     if (canonicalAuth.accountId !== normalizedRequest.authority) {
-      throw new TypeError(
-        "proveIvmAndWait canonicalAuth.accountId must equal the exact payload authority",
-      );
+      rejectType("proveIvmAndWait canonicalAuth.accountId must equal the exact payload authority");
     }
     const { proved: _omittedProved, ...requestWithoutProved } = normalizedRequest;
     const created = await this.startIvmProve(requestWithoutProved, {
@@ -9812,9 +9745,7 @@ export class ToriiClient {
         expectedProved !== null &&
         JSON.stringify(completed.proved) !== JSON.stringify(expectedProved)
       ) {
-        throw new Error(
-          "IVM proof job returned a proved payload that differs from the locally derived payload",
-        );
+        rejectError("IVM proof job returned a proved payload that differs from the locally derived payload");
       }
       return completed;
     } catch (error) {
@@ -9862,7 +9793,7 @@ export class ToriiClient {
     await this._expectStatus(response, [200, 202]);
     const body = await this._maybeJson(response);
     if (!body) {
-      throw new Error("multisig propose endpoint returned no payload");
+      rejectError("multisig propose endpoint returned no payload");
     }
     return validateMultisigResponseRequestBinding(
       normalizeMultisigContractCallResponse(body, "multisig propose response"),
@@ -9901,7 +9832,7 @@ export class ToriiClient {
     await this._expectStatus(response, [200, 202]);
     const body = await this._maybeJson(response);
     if (!body) {
-      throw new Error("multisig contract propose endpoint returned no payload");
+      rejectError("multisig contract propose endpoint returned no payload");
     }
     return validateMultisigResponseRequestBinding(
       normalizeMultisigContractCallResponse(
@@ -9943,7 +9874,7 @@ export class ToriiClient {
     await this._expectStatus(response, [200, 202]);
     const body = await this._maybeJson(response);
     if (!body) {
-      throw new Error("multisig contract approve endpoint returned no payload");
+      rejectError("multisig contract approve endpoint returned no payload");
     }
     return validateMultisigResponseRequestBinding(
       normalizeMultisigContractCallResponse(
@@ -9976,7 +9907,7 @@ export class ToriiClient {
     await this._expectStatus(response, [200], { signal });
     const body = await this._maybeJson(response);
     if (!body) {
-      throw new Error("multisig spec endpoint returned no payload");
+      rejectError("multisig spec endpoint returned no payload");
     }
     return normalizeMultisigSpecResponse(body);
   }
@@ -10003,7 +9934,7 @@ export class ToriiClient {
     await this._expectStatus(response, [200]);
     const body = await this._maybeJson(response);
     if (!body) {
-      throw new Error("multisig proposals query endpoint returned no payload");
+      rejectError("multisig proposals query endpoint returned no payload");
     }
     return normalizeMultisigProposalsQueryResponse(body);
   }
@@ -10027,7 +9958,7 @@ export class ToriiClient {
     await this._expectStatus(response, [200]);
     const body = await this._maybeJson(response);
     if (!body) {
-      throw new Error("multisig proposal resolve endpoint returned no payload");
+      rejectError("multisig proposal resolve endpoint returned no payload");
     }
     return normalizeMultisigProposalResolveResponse(body);
   }
@@ -10525,7 +10456,7 @@ export class ToriiClient {
   async _submitSubscriptionMutation(path, payload, options, context, expectedStatus) {
     const { signal, canonicalAuth } = normalizeVpnSessionOptions(options, context);
     if (canonicalAuth.accountId !== payload.authority) {
-      throw new TypeError(`${context} canonicalAuth.accountId must equal payload.authority`);
+      rejectType(`${context} canonicalAuth.accountId must equal payload.authority`);
     }
     const response = await this._request("POST", path, {
       headers: JSON_REQUEST_HEADERS,
@@ -10535,7 +10466,7 @@ export class ToriiClient {
     });
     await this._expectStatus(response, expectedStatus);
     const body = await this._maybeJson(response);
-    if (!body) throw new Error(`${context} endpoint returned no payload`);
+    if (!body) rejectError(`${context} endpoint returned no payload`);
     return body;
   }
 
@@ -10556,7 +10487,7 @@ export class ToriiClient {
     await this._expectStatus(response, [200]);
     const payload = await this._maybeJson(response);
     if (!payload) {
-      throw new Error("prover report response missing JSON body");
+      rejectError("prover report response missing JSON body");
     }
     return normalizeProverReportRecord(payload, "prover report response");
   }
@@ -10803,7 +10734,7 @@ export class ToriiClient {
     const submission = await this.submitIsoPacs008(message, submitOptions);
     const messageId = submission?.message_id;
     if (!messageId) {
-      throw new Error("ISO pacs.008 submission did not return a message_id");
+      rejectError("ISO pacs.008 submission did not return a message_id");
     }
     return this.waitForIsoMessageStatus(messageId, normalizedWait);
   }
@@ -10841,7 +10772,7 @@ export class ToriiClient {
     const submission = await this.submitIsoPacs009(message, submitOptions);
     const messageId = submission?.message_id;
     if (!messageId) {
-      throw new Error("ISO pacs.009 submission did not return a message_id");
+      rejectError("ISO pacs.009 submission did not return a message_id");
     }
     return this.waitForIsoMessageStatus(messageId, normalizedWait);
   }
@@ -10942,7 +10873,7 @@ export class ToriiClient {
     await this._expectStatus(response, [200]);
     const payload = await this._maybeJson(response);
     if (!payload || typeof payload.count === "undefined") {
-      throw new Error("invalid prover count payload");
+      rejectError("invalid prover count payload");
     }
     return ToriiClient._normalizeUnsignedInteger(payload.count, "prover count", {
       allowZero: true,
@@ -10981,26 +10912,20 @@ export class ToriiClient {
     let signingNetworkId = null;
     if (hasCanonicalAuth) {
       if (!(this._localSigningContext instanceof LocalSigningContext)) {
-        throw new TypeError(
-          "ToriiClient: canonicalAuth requires an immutable LocalSigningContext",
-        );
+        rejectType("ToriiClient: canonicalAuth requires an immutable LocalSigningContext");
       }
       signingNetworkId = this._localSigningContext.networkId;
     }
     if (exactNetworkId !== null) {
       const exactBytes = Buffer.from(networkIdBytes(exactNetworkId, "exactNetworkId"));
       if (!hasCanonicalAuth) {
-        throw new TypeError(
-          "ToriiClient: exactNetworkId requires canonicalAuth for a signed request",
-        );
+        rejectType("ToriiClient: exactNetworkId requires canonicalAuth for a signed request");
       }
       const configuredBytes = Buffer.from(
         networkIdBytes(signingNetworkId, "localSigningContext.networkId"),
       );
       if (!exactBytes.equals(configuredBytes)) {
-        throw new TypeError(
-          "ToriiClient: exactNetworkId must equal localSigningContext.networkId",
-        );
+        rejectType("ToriiClient: exactNetworkId must equal localSigningContext.networkId");
       }
     }
     const hasCanonicalNonce = hasHeader(initHeaders, "x-iroha-nonce");
@@ -11012,24 +10937,16 @@ export class ToriiClient {
     const methodUpper = String(method).toUpperCase();
     if (hasSensitiveTransport) {
       if (protocol !== this.#baseProtocol) {
-        throw new Error(
-          `ToriiClient: refusing to send sensitive request material over mismatched scheme ${url.protocol}; use ${this.#baseProtocol.replace(":", "")} URLs derived from the client base URL.`,
-        );
+        rejectError(`ToriiClient: refusing to send sensitive request material over mismatched scheme ${url.protocol}; use ${this.#baseProtocol.replace(":", "")} URLs derived from the client base URL.`);
       }
       if (pathIsAbsolute && url.host !== this.#baseHost) {
-        throw new Error(
-          `ToriiClient: refusing to send sensitive request material to mismatched host ${url.host} (expected ${this.#baseHost}); use relative paths on the configured base URL.`,
-        );
+        rejectError(`ToriiClient: refusing to send sensitive request material to mismatched host ${url.host} (expected ${this.#baseHost}); use relative paths on the configured base URL.`);
       }
       if (!this.#allowInsecure && !isSecureProtocol(protocol)) {
-        throw new Error(
-          `ToriiClient: refusing to send sensitive request material over insecure protocol ${url.protocol}; use https or allowInsecure: true.`,
-        );
+        rejectError(`ToriiClient: refusing to send sensitive request material over insecure protocol ${url.protocol}; use https or allowInsecure: true.`);
       }
     } else if (pathIsAbsolute && !originMatches && !allowAbsoluteUrl) {
-      throw new Error(
-        "ToriiClient: absolute URLs are blocked when no credentials are attached; pass allowAbsoluteUrl: true to override.",
-      );
+      rejectError("ToriiClient: absolute URLs are blocked when no credentials are attached; pass allowAbsoluteUrl: true to override.");
     }
     if (hasSensitiveTransport && this.#allowInsecure && !isSecureProtocol(protocol)) {
       this._emitInsecureTransportTelemetry({
@@ -11318,14 +11235,10 @@ export class ToriiClient {
     }
 
     if (policy.refresh_window_secs > policy.positive_ttl_secs) {
-      throw new Error(
-        "sorafsAliasPolicy.refreshWindowSecs must not exceed positiveTtlSecs",
-      );
+      rejectError("sorafsAliasPolicy.refreshWindowSecs must not exceed positiveTtlSecs");
     }
     if (policy.hard_expiry_secs < policy.positive_ttl_secs) {
-      throw new Error(
-        "sorafsAliasPolicy.hardExpirySecs must be greater than or equal to positiveTtlSecs",
-      );
+      rejectError("sorafsAliasPolicy.hardExpirySecs must be greater than or equal to positiveTtlSecs");
     }
 
     this.#sorafsResolvedPolicy = policy;
@@ -11349,7 +11262,7 @@ export class ToriiClient {
     } catch (error) {
       const message =
         error && typeof error.message === "string" ? error.message : String(error);
-      throw new Error(`failed to validate SoraFS alias proof: ${message}`);
+      rejectError(`failed to validate SoraFS alias proof: ${message}`);
     }
 
     if (!evaluation || evaluation.servable !== true) {
@@ -11364,9 +11277,7 @@ export class ToriiClient {
         evaluation && typeof evaluation.age_seconds === "number"
           ? evaluation.age_seconds
           : NaN;
-      throw new Error(
-        `alias proof for '${aliasLabel}' rejected: state ${statusLabel}${statusHint} (age ${ageSeconds} seconds)`,
-      );
+      rejectError(`alias proof for '${aliasLabel}' rejected: state ${statusLabel}${statusHint} (age ${ageSeconds} seconds)`);
     }
 
     if (
@@ -11596,16 +11507,10 @@ export class ToriiClient {
           error instanceof RangeError ||
           /Content-Length exceeds the safe integer range/u.test(error?.message ?? "")
         ) {
-          throw new TypeError(
-            `${context} response exceeds its ${maxBytes}-byte size bound`,
-            { cause: error },
-          );
+          rejectType(`${context} response exceeds its ${maxBytes}-byte size bound`, { cause: error });
         }
         if (/Content-Length header/u.test(error?.message ?? "")) {
-          throw new TypeError(
-            `${context} response Content-Length must be a canonical unsigned decimal integer`,
-            { cause: error },
-          );
+          rejectType(`${context} response Content-Length must be a canonical unsigned decimal integer`, { cause: error });
         }
         throw error;
       }
@@ -11616,7 +11521,7 @@ export class ToriiClient {
       text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
     } catch (error) {
       if (maximumBodyBytes !== undefined) {
-        throw new TypeError(`${context} response body must be strict UTF-8`, {
+        rejectType(`${context} response body must be strict UTF-8`, {
           cause: error,
         });
       }
@@ -11837,7 +11742,7 @@ export class ToriiClient {
   async _submitSorafsOrderbookTransaction(path, route, signedTransaction, options, context) {
     const normalized = requirePlainObjectOption(options, `${context} options`); assertSupportedOptionKeys(normalized, new Set(["signal", "expectedReceiptSigner"]), `${context} options`);
     const { signal } = normalizeSignalOption(normalized, context); if (!(this._localSigningContext instanceof LocalSigningContext)) {
-      throw new TypeError(`${context} requires ToriiClient options.localSigningContext`);
+      rejectType(`${context} requires ToriiClient options.localSigningContext`);
     }
     const request = this._request.bind(this); const validateDataModel = this._ensureDataModelValidation.bind(this);
     validateSorafsOrderbookSubmissionTransport(this._baseUrl, this.#allowInsecure, path, (event) => this._emitInsecureTransportTelemetry(event), context);
@@ -11857,7 +11762,7 @@ export class ToriiClient {
       throwIfAborted(operation.signal);
       assertSorafsOrderbookFixedHeaders(this.#config.defaultHeaders, `${context} defaultHeaders`);
       if (sorafsOrderbookHeaderFingerprint(this._createHeaders(fixedHeaders)) !== headerFingerprint) {
-        throw new TypeError(`${context} effective request headers changed during preflight`);
+        rejectType(`${context} effective request headers changed during preflight`);
       }
       let response;
       try {
@@ -11865,7 +11770,7 @@ export class ToriiClient {
           headers: requestHeaders,
           body: prepared.body, disableRetries: true, redirect: "error", signal: operation.signal,
         }), operation.signal, context);
-        if (responseStatusWithoutUserGetter(response) !== 202) throw new Error(`${context} expected HTTP status 202`);
+        if (responseStatusWithoutUserGetter(response) !== 202) rejectError(`${context} expected HTTP status 202`);
         validateSorafsOrderbookSubmissionHeaders({
           contentType: this._getHeader(response, "content-type"), contentEncoding: this._getHeader(response, "content-encoding"),
           entrypointHash: this._getHeader(response, "x-iroha-entrypoint-hash"),
@@ -12100,7 +12005,7 @@ export class ToriiClient {
         response,
         `${context} rejected a non-JSON response body`,
       );
-      throw new TypeError(`${context} must use the application/json media type`);
+      rejectType(`${context} must use the application/json media type`);
     }
     const { bytes, body } = await this._readBoundedResponseBytes(
       response,
@@ -12113,7 +12018,7 @@ export class ToriiClient {
       text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
     } catch (error) {
       cancelReadableBodyBestEffort(body, `${context} rejected invalid UTF-8`);
-      throw new TypeError(`${context} must be valid UTF-8`, { cause: error });
+      rejectType(`${context} must be valid UTF-8`, { cause: error });
     }
     try {
       const parsed = parseStrictLosslessIntegerJson(text, context);
@@ -12202,10 +12107,7 @@ export class ToriiClient {
         body,
         `${context} could not acquire a bounded body reader`,
       );
-      throw new TypeError(
-        `${context} requires a byte-stream response body so its size can be bounded`,
-        { cause: error },
-      );
+      rejectType(`${context} requires a byte-stream response body so its size can be bounded`, { cause: error });
     }
 
     const configuredTimeoutMs = Number(this.#config?.timeoutMs);
@@ -12252,15 +12154,11 @@ export class ToriiClient {
           `${context} body stream read result`,
         );
         if (typeof readResult.done !== "boolean") {
-          throw new TypeError(
-            `${context} body stream read result.done must be a boolean`,
-          );
+          rejectType(`${context} body stream read result.done must be a boolean`);
         }
         if (readResult.done) {
           if (readResult.value !== undefined) {
-            throw new TypeError(
-              `${context} completed body stream read must not return a value`,
-            );
+            rejectType(`${context} completed body stream read must not return a value`);
           }
           break;
         }
@@ -12270,13 +12168,13 @@ export class ToriiClient {
         let chunkByteLength;
         try {
           if (typedArrayTagGetter.call(value) !== "Uint8Array") {
-            throw new TypeError("not Uint8Array");
+            rejectType("not Uint8Array");
           }
           buffer = typedArrayBufferGetter.call(value);
           byteOffset = typedArrayByteOffsetGetter.call(value);
           chunkByteLength = typedArrayByteLengthGetter.call(value);
         } catch {
-          throw new TypeError(`${context} body stream returned a non-byte chunk`);
+          rejectType(`${context} body stream returned a non-byte chunk`);
         }
         let isShared = false;
         if (sharedArrayBufferByteLengthGetter !== null) {
@@ -12288,23 +12186,17 @@ export class ToriiClient {
           }
         }
         if (isShared) {
-          throw new TypeError(
-            `${context} body stream must not use SharedArrayBuffer-backed chunks`,
-          );
+          rejectType(`${context} body stream must not use SharedArrayBuffer-backed chunks`);
         }
         if (chunkByteLength === 0) {
-          throw new TypeError(
-            `${context} body stream returned an empty non-progress chunk`,
-          );
+          rejectType(`${context} body stream returned an empty non-progress chunk`);
         }
         if (chunks.length >= BOUNDED_JSON_MAX_STREAM_CHUNKS) {
-          throw new RangeError(
-            `${context} body stream returned too many fragmented chunks`,
-          );
+          rejectRange(`${context} body stream returned too many fragmented chunks`);
         }
         byteLength += chunkByteLength;
         if (byteLength > maxBytes) {
-          throw new RangeError(`${context} exceeds the ${maxBytes}-byte response limit`);
+          rejectRange(`${context} exceeds the ${maxBytes}-byte response limit`);
         }
         // Snapshot immediately: custom readers may reuse or mutate their views.
         chunks.push(copyArrayBufferBytes(buffer, byteOffset, chunkByteLength));
@@ -12616,7 +12508,7 @@ export class ToriiClient {
         normalizedItemKeys.length === 0
           ? ""
           : ` (expected: ${normalizedItemKeys.join(", ")})`;
-      throw new Error(`offset iterator response is missing iterable items${expectedLabel}`);
+      rejectError(`offset iterator response is missing iterable items${expectedLabel}`);
     }
 
     function normalizeItemKeyList(rawKeys, contextLabel) {
@@ -12626,21 +12518,21 @@ export class ToriiClient {
       if (typeof rawKeys === "string") {
         const trimmed = rawKeys.trim();
         if (!trimmed) {
-          throw new Error(`${contextLabel} item key must be a non-empty string`);
+          rejectError(`${contextLabel} item key must be a non-empty string`);
         }
         return [trimmed];
       }
       if (!Array.isArray(rawKeys)) {
-        throw new Error(`${contextLabel} item keys must be a string or array of strings`);
+        rejectError(`${contextLabel} item keys must be a string or array of strings`);
       }
       const keys = [];
       for (const entry of rawKeys) {
         if (typeof entry !== "string") {
-          throw new Error(`${contextLabel} item keys must be strings`);
+          rejectError(`${contextLabel} item keys must be strings`);
         }
         const trimmed = entry.trim();
         if (!trimmed) {
-          throw new Error(`${contextLabel} item keys must be non-empty strings`);
+          rejectError(`${contextLabel} item keys must be non-empty strings`);
         }
         if (!keys.includes(trimmed)) {
           keys.push(trimmed);
@@ -12811,7 +12703,7 @@ export class ToriiClient {
 
   static _validateIterablePayload(payload) {
     if (!payload || typeof payload !== "object" || !Array.isArray(payload.items)) {
-      throw new Error("iterable endpoint returned unexpected payload");
+      rejectError("iterable endpoint returned unexpected payload");
     }
     const hasTotal = payload.total !== undefined && payload.total !== null;
     if (
@@ -12819,7 +12711,7 @@ export class ToriiClient {
       payload.has_more !== null &&
       typeof payload.has_more !== "boolean"
     ) {
-      throw new Error("iterable endpoint returned invalid has_more flag");
+      rejectError("iterable endpoint returned invalid has_more flag");
     }
     const hasMore =
       payload.has_more === undefined || payload.has_more === null
@@ -12838,7 +12730,7 @@ export class ToriiClient {
       totalValue !== null &&
       (!Number.isFinite(totalValue) || totalValue < 0 || !Number.isInteger(totalValue))
     ) {
-      throw new Error("iterable endpoint returned invalid total count");
+      rejectError("iterable endpoint returned invalid total count");
     }
     const result = {
       items: payload.items,
@@ -14380,7 +14272,7 @@ function normalizeIsoSubmissionResponse(payload, context, options = {}) {
   const record = ToriiClient._requirePlainObject(payload, context);
   const rawMessageId = record.message_id;
   if (typeof rawMessageId !== "string" || rawMessageId.trim().length === 0) {
-    throw new Error(`${context} did not return a message_id`);
+    rejectError(`${context} did not return a message_id`);
   }
   const messageId = rawMessageId.trim();
   const status = normalizeIsoStatus(record.status, `${context}.status`);
@@ -14583,7 +14475,7 @@ function normalizeIsoStatusHistory(value, context) {
     return [];
   }
   if (!Array.isArray(value)) {
-    throw new TypeError(`${context} must be an array`);
+    rejectType(`${context} must be an array`);
   }
   return value.map((entry, index) => {
     const record = ToriiClient._requirePlainObject(entry, `${context}[${index}]`);
@@ -14763,7 +14655,7 @@ function normalizeIsoPayload(message, context) {
 
 function normalizeHealthSnapshot(payload, context) {
   if (payload === null || payload === undefined) {
-    throw new TypeError(`${context} must not be empty`);
+    rejectType(`${context} must not be empty`);
   }
   if (typeof payload === "string") {
     return { status: requireNonEmptyString(payload, context) };
@@ -14782,7 +14674,7 @@ function normalizeHealthSnapshot(payload, context) {
 
 function normalizeStatusSnapshot(payload, state) {
   if (!isPlainObject(payload)) {
-    throw new TypeError("status response must be a JSON object");
+    rejectType("status response must be a JSON object");
   }
   const statusPayload = parseStatusPayload(payload);
   const metrics =
@@ -14829,7 +14721,7 @@ function normalizeTimeStatusResponse(payload) {
   );
   const rawSamples = record.samples === undefined ? [] : record.samples;
   if (!Array.isArray(rawSamples)) {
-    throw new TypeError("time status response.samples must be an array");
+    rejectType("time status response.samples must be an array");
   }
   const samples = rawSamples.map((entry, index) => {
     const sample = ensureRecord(entry, `time status response.samples[${index}]`);
@@ -14854,7 +14746,7 @@ function normalizeTimeStatusResponse(payload) {
   const rawBuckets =
     rttRecord.buckets === undefined ? [] : rttRecord.buckets;
   if (!Array.isArray(rawBuckets)) {
-    throw new TypeError("time status response.rtt.buckets must be an array");
+    rejectType("time status response.rtt.buckets must be an array");
   }
   const buckets = rawBuckets.map((entry, index) => {
     const bucket = ensureRecord(entry, `time status response.rtt.buckets[${index}]`);
@@ -15045,15 +14937,11 @@ function parseGovernanceActivations(payload) {
     return [];
   }
   if (!Array.isArray(payload)) {
-    throw new TypeError(
-      "governance.recent_manifest_activations must be an array",
-    );
+    rejectType("governance.recent_manifest_activations must be an array");
   }
   return payload.map((entry, index) => {
     if (!isPlainObject(entry)) {
-      throw new TypeError(
-        `governance.recent_manifest_activations[${index}] must be an object`,
-      );
+      rejectType(`governance.recent_manifest_activations[${index}] must be an object`);
     }
     const contractAddress =
       entry.contract_address === undefined || entry.contract_address === null
@@ -15094,7 +14982,7 @@ function parseLaneCommitments(payload) {
     return [];
   }
   if (!Array.isArray(payload)) {
-    throw new TypeError("status.lane_commitments must be an array");
+    rejectType("status.lane_commitments must be an array");
   }
   return payload.map((entry, index) => {
     const record = ensureRecord(entry, `status.lane_commitments[${index}]`);
@@ -15130,7 +15018,7 @@ function parseDataspaceCommitments(payload) {
     return [];
   }
   if (!Array.isArray(payload)) {
-    throw new TypeError("status.dataspace_commitments must be an array");
+    rejectType("status.dataspace_commitments must be an array");
   }
   return payload.map((entry, index) => {
     const record = ensureRecord(entry, `status.dataspace_commitments[${index}]`);
@@ -15171,7 +15059,7 @@ function parseDataspaceCatalog(payload) {
     return [];
   }
   if (!Array.isArray(payload)) {
-    throw new TypeError("status.dataspace_catalog must be an array");
+    rejectType("status.dataspace_catalog must be an array");
   }
   return payload.map((entry, index) => {
     const record = ensureRecord(entry, `status.dataspace_catalog[${index}]`);
@@ -15229,7 +15117,7 @@ function parseLanePrivacyCommitments(payload, context) {
     return [];
   }
   if (!Array.isArray(payload)) {
-    throw new TypeError(`${context} must be an array`);
+    rejectType(`${context} must be an array`);
   }
   return payload.map((entry, index) =>
     parseLanePrivacyCommitment(entry, `${context}[${index}]`),
@@ -15242,7 +15130,7 @@ function parseLanePrivacyCommitment(entry, context) {
   const scheme =
     record.scheme === undefined || record.scheme === null ? "" : String(record.scheme);
   if (scheme !== "merkle") {
-    throw new TypeError(`${context}.scheme must be "merkle"`);
+    rejectType(`${context}.scheme must be "merkle"`);
   }
   const merkleRecord = ensureRecord(record.merkle, `${context}.merkle`);
   const merkle = {
@@ -15260,7 +15148,7 @@ function parseLaneGovernance(payload) {
     return [];
   }
   if (!Array.isArray(payload)) {
-    throw new TypeError("status.lane_governance must be an array");
+    rejectType("status.lane_governance must be an array");
   }
   return payload.map((entry, index) => {
     const record = ensureRecord(entry, `status.lane_governance[${index}]`);
@@ -15346,7 +15234,7 @@ function parseLaneGovernance(payload) {
 
 function normalizeStringArray(payload, context) {
   if (!Array.isArray(payload)) {
-    throw new TypeError(`${context} must be an array`);
+    rejectType(`${context} must be an array`);
   }
   return payload.map((value, index) =>
     requireNonEmptyString(value, `${context}[${index}]`),
@@ -15425,7 +15313,7 @@ const GOVERNANCE_PROPOSAL_STATUSES = new Set([
 async function parseGovernanceProposalResult(payload) {
   const record = ensureRecord(payload, "governance proposal payload");
   if (typeof record.found !== "boolean") {
-    throw new TypeError("governance proposal payload missing bool `found` field");
+    rejectType("governance proposal payload missing bool `found` field");
   }
   if (record.proposal == null) {
     return { found: record.found, proposal: null };
@@ -15453,9 +15341,7 @@ async function parseGovernanceProposalRecord(payload) {
   );
   const statusValue = record.status;
   if (typeof statusValue !== "string" || !GOVERNANCE_PROPOSAL_STATUSES.has(statusValue)) {
-    throw new TypeError(
-      "governance proposal status must be one of Proposed, Rejected, Enacted, Superseded, ExecutionFailed",
-    );
+    rejectType("governance proposal status must be one of Proposed, Rejected, Enacted, Superseded, ExecutionFailed");
   }
   const kindPayload = ensureRecord(record.kind, "governance.proposal.kind");
   const kind = await parseGovernanceProposalKind(
@@ -15475,7 +15361,7 @@ async function parseGovernanceProposalRecord(payload) {
     proposalOperator = kind.validation_fee_payout_lifecycle.proposal_operator;
   }
   if (proposalOperator !== null && proposalOperator !== proposer) {
-    throw new TypeError("governance proposal operator must match the retained proposer");
+    rejectType("governance proposal operator must match the retained proposer");
   }
   return {
     proposer,
@@ -15578,7 +15464,7 @@ async function parseGovernanceProposalKind(payload, context) {
       };
     }
     default:
-      throw new TypeError(`${context}.kind contains unsupported proposal variant: ${variant}`);
+      rejectType(`${context}.kind contains unsupported proposal variant: ${variant}`);
   }
 }
 
@@ -15596,7 +15482,7 @@ function parseGovernanceDeployContract(payload, context) {
     context,
   );
   if (record.abi_version !== 1) {
-    throw new TypeError(`${context}.abi_version must be the number 1`);
+    rejectType(`${context}.abi_version must be the number 1`);
   }
   const contractAddress = requireExactNonEmptyString(
     record.contract_address,
@@ -15659,7 +15545,7 @@ function parseGovernanceRuntimeUpgrade(payload, context) {
     manifestContext,
   );
   if (manifest.abi_version !== 1) {
-    throw new TypeError(`${manifestContext}.abi_version must be the number 1`);
+    rejectType(`${manifestContext}.abi_version must be the number 1`);
   }
   const addedSyscalls = parseGovernanceUint16Array(
     manifest.added_syscalls,
@@ -15670,7 +15556,7 @@ function parseGovernanceRuntimeUpgrade(payload, context) {
     `${manifestContext}.added_pointer_types`,
   );
   if (addedSyscalls.length !== 0 || addedPointerTypes.length !== 0) {
-    throw new TypeError(`${manifestContext} ABI delta lists must be empty in V1`);
+    rejectType(`${manifestContext} ABI delta lists must be empty in V1`);
   }
   const startHeight = requireExactJsonUnsignedInteger(
     manifest.start_height,
@@ -15681,7 +15567,7 @@ function parseGovernanceRuntimeUpgrade(payload, context) {
     `${manifestContext}.end_height`,
   );
   if (endHeight <= startHeight) {
-    throw new TypeError(`${manifestContext}.end_height must be greater than start_height`);
+    rejectType(`${manifestContext}.end_height must be greater than start_height`);
   }
   return {
     proposal_operator: requireCanonicalGovernanceAccountId(
@@ -15776,9 +15662,7 @@ function parseGovernanceValidationFeePolicy(payload, context) {
       { nonZero: true },
     );
   if ((policy.treasury_payout_binding === null) !== (lifecycleId === null)) {
-    throw new TypeError(
-      `${context}.payout_lifecycle_proposal_id must be present exactly when the policy has a payout binding`,
-    );
+    rejectType(`${context}.payout_lifecycle_proposal_id must be present exactly when the policy has a payout binding`);
   }
   return {
     proposal_operator: requireCanonicalGovernanceAccountId(
@@ -15811,10 +15695,10 @@ function parseGovernanceValidationFeePolicyV1(payload, context) {
     context,
   );
   if (record.schema_version !== 1) {
-    throw new TypeError(`${context}.schema_version must be the number 1`);
+    rejectType(`${context}.schema_version must be the number 1`);
   }
   if (record.ds_scale !== 2) {
-    throw new TypeError(`${context}.ds_scale must be the number 2`);
+    rejectType(`${context}.ds_scale must be the number 2`);
   }
   const networkId = requireExactNonEmptyString(record.network_id, `${context}.network_id`);
   NetworkId.parse(networkId);
@@ -15831,7 +15715,7 @@ function parseGovernanceValidationFeePolicyV1(payload, context) {
       `${context}.previous_policy_hash`,
     );
   if ((policyVersion === "1") !== (previousPolicyHash === null)) {
-    throw new TypeError(`${context}.previous_policy_hash does not match policy_version`);
+    rejectType(`${context}.previous_policy_hash does not match policy_version`);
   }
   const chargingMode = parseGovernanceValidationFeeChargingMode(
     record.charging_mode,
@@ -15849,7 +15733,7 @@ function parseGovernanceValidationFeePolicyV1(payload, context) {
     exemptions.some((item) => item !== "TREASURY_PAYOUT") ||
     new Set(exemptions).size !== exemptions.length
   ) {
-    throw new TypeError(`${context}.exemption_classes contains an unsupported or duplicate class`);
+    rejectType(`${context}.exemption_classes contains an unsupported or duplicate class`);
   }
   const payoutBinding = record.treasury_payout_binding === null
     ? null
@@ -15858,14 +15742,14 @@ function parseGovernanceValidationFeePolicyV1(payload, context) {
       `${context}.treasury_payout_binding`,
     );
   if ((payoutBinding === null) !== !exemptions.includes("TREASURY_PAYOUT")) {
-    throw new TypeError(`${context}.treasury_payout_binding does not match exemption_classes`);
+    rejectType(`${context}.treasury_payout_binding does not match exemption_classes`);
   }
   if (chargingMode.charging_mode === "DISABLED") {
     if (fee !== "0" || exemptions.length !== 0 || payoutBinding !== null) {
-      throw new TypeError(`${context} disabled charging mode requires zero fee and no exemptions`);
+      rejectType(`${context} disabled charging mode requires zero fee and no exemptions`);
     }
   } else if (fee !== "0.1") {
-    throw new TypeError(`${context}.fee must be exactly 0.1 for enabled V1 charging`);
+    rejectType(`${context}.fee must be exactly 0.1 for enabled V1 charging`);
   }
   const effectiveHeight = requireExactGovernanceUint64String(
     record.effective_from_height,
@@ -15878,7 +15762,7 @@ function parseGovernanceValidationFeePolicyV1(payload, context) {
       `${context}.expires_after_height`,
     );
   if (expiresHeight !== null && BigInt(expiresHeight) <= BigInt(effectiveHeight)) {
-    throw new TypeError(`${context}.expires_after_height must exceed effective_from_height`);
+    rejectType(`${context}.expires_after_height must exceed effective_from_height`);
   }
   return {
     schema_version: 1,
@@ -15913,10 +15797,10 @@ function parseGovernanceValidationFeeChargingMode(payload, context) {
     record.charging_mode !== "DISABLED" &&
     record.charging_mode !== "PER_QUALIFYING_TRANSFER_INSTRUCTION"
   ) {
-    throw new TypeError(`${context}.charging_mode contains an unsupported variant`);
+    rejectType(`${context}.charging_mode contains an unsupported variant`);
   }
   if (record.value !== null) {
-    throw new TypeError(`${context}.value must be null`);
+    rejectType(`${context}.value must be null`);
   }
   return { charging_mode: record.charging_mode, value: null };
 }
@@ -15963,7 +15847,7 @@ function parseGovernanceValidationFeePayoutBinding(payload, context) {
   );
   parseCanonicalContractAddress(contractAddress, `${context}.contract_address`);
   if (record.entrypoint !== "autonomous_validation_fee_tick") {
-    throw new TypeError(`${context}.entrypoint must be autonomous_validation_fee_tick`);
+    rejectType(`${context}.entrypoint must be autonomous_validation_fee_tick`);
   }
   const treasury = requireCanonicalGovernanceAccountId(
     record.treasury_account_id,
@@ -15974,7 +15858,7 @@ function parseGovernanceValidationFeePayoutBinding(payload, context) {
     `${context}.pool_vault_account_id`,
   );
   if (treasury === vault) {
-    throw new TypeError(`${context} treasury and pool vault accounts must differ`);
+    rejectType(`${context} treasury and pool vault accounts must differ`);
   }
   const dsAsset = requireCanonicalGovernanceAssetDefinitionId(
     record.ds_asset_id,
@@ -15985,14 +15869,14 @@ function parseGovernanceValidationFeePayoutBinding(payload, context) {
     `${context}.xor_asset_id`,
   );
   if (dsAsset === xorAsset) {
-    throw new TypeError(`${context} DS and XOR assets must differ`);
+    rejectType(`${context} DS and XOR assets must differ`);
   }
   if (
     requireExactCanonicalGovernanceQuantity(record.batch_ds, `${context}.batch_ds`) !== "10" ||
     requireExactCanonicalGovernanceQuantity(record.min_xor_out, `${context}.min_xor_out`) !== "4" ||
     requireExactCanonicalGovernanceQuantity(record.max_xor_out, `${context}.max_xor_out`) !== "100"
   ) {
-    throw new TypeError(`${context} must use the exact V1 payout quantities`);
+    rejectType(`${context} must use the exact V1 payout quantities`);
   }
   const recipients = requireGovernanceArray(record.recipients, `${context}.recipients`)
     .map((item, index) => {
@@ -16010,7 +15894,7 @@ function parseGovernanceValidationFeePayoutBinding(payload, context) {
         recipient.share,
         `${itemContext}.share`,
       ) !== "0.25") {
-        throw new TypeError(`${itemContext}.share must be exactly 0.25`);
+        rejectType(`${itemContext}.share must be exactly 0.25`);
       }
       return { account_id: accountId, share: "0.25" };
     });
@@ -16021,7 +15905,7 @@ function parseGovernanceValidationFeePayoutBinding(payload, context) {
     recipientIds.includes(treasury) ||
     recipientIds.includes(vault)
   ) {
-    throw new TypeError(`${context}.recipients must contain four unique non-pool accounts`);
+    rejectType(`${context}.recipients must contain four unique non-pool accounts`);
   }
   return {
     contract_address: contractAddress,
@@ -16060,7 +15944,7 @@ function parseGovernanceMusubiAction(payload, context) {
         ),
       );
       if (owners.length === 0 || owners.length > 64 || new Set(owners).size !== owners.length) {
-        throw new TypeError(`${valueContext}.owners must contain 1-64 unique accounts`);
+        rejectType(`${valueContext}.owners must contain 1-64 unique accounts`);
       }
       return {
         kind: "RecoverPackageOwners",
@@ -16136,7 +16020,7 @@ function parseGovernanceMusubiAction(payload, context) {
         `${valueContext}.policy`,
       );
       if (policy.revision !== expectedRevision + 1) {
-        throw new TypeError(`${valueContext}.policy.revision must follow expected_revision`);
+        rejectType(`${valueContext}.policy.revision must follow expected_revision`);
       }
       return {
         kind: "SetRegistryPolicy",
@@ -16144,7 +16028,7 @@ function parseGovernanceMusubiAction(payload, context) {
       };
     }
     default:
-      throw new TypeError(`${context}.kind contains an unsupported Musubi action`);
+      rejectType(`${context}.kind contains an unsupported Musubi action`);
   }
 }
 
@@ -16168,7 +16052,7 @@ function parseGovernanceMusubiPackage(payload, context) {
       value: requireCanonicalGovernanceName(scope.value, `${context}.scope.value`),
     };
   } else {
-    throw new TypeError(`${context}.scope contains an unsupported package scope`);
+    rejectType(`${context}.scope contains an unsupported package scope`);
   }
   return {
     home_dataspace: requireExactJsonUnsignedInteger(
@@ -16215,10 +16099,10 @@ function parseGovernanceMusubiRelease(payload, context) {
     ) {
       return { kind: "AlphaNumeric", value: identifier.value };
     }
-    throw new TypeError(`${itemContext} contains an unsupported prerelease identifier`);
+    rejectType(`${itemContext} contains an unsupported prerelease identifier`);
   });
   if (prerelease.length > 16) {
-    throw new TypeError(`${context}.version.prerelease exceeds the V1 bound`);
+    rejectType(`${context}.version.prerelease exceeds the V1 bound`);
   }
   return {
     package: parseGovernanceMusubiPackage(record.package, `${context}.package`),
@@ -16238,7 +16122,7 @@ function parseGovernanceMusubiRegistryPolicy(payload, context) {
     context,
   );
   if (record.version !== 1) {
-    throw new TypeError(`${context}.version must be the number 1`);
+    rejectType(`${context}.version must be the number 1`);
   }
   const mode = requireExactGovernanceProposalRecord(
     record.mode,
@@ -16246,7 +16130,7 @@ function parseGovernanceMusubiRegistryPolicy(payload, context) {
     `${context}.mode`,
   );
   if (!["Closed", "Allowlisted", "Open"].includes(mode.kind) || mode.value !== null) {
-    throw new TypeError(`${context}.mode contains an unsupported registry mode`);
+    rejectType(`${context}.mode contains an unsupported registry mode`);
   }
   const allowlistedDataspaces = requireGovernanceArray(
     record.allowlisted_dataspaces,
@@ -16259,10 +16143,10 @@ function parseGovernanceMusubiRegistryPolicy(payload, context) {
     new Set(allowlistedDataspaces).size !== allowlistedDataspaces.length ||
     allowlistedDataspaces.some((value, index) => index > 0 && allowlistedDataspaces[index - 1] >= value)
   ) {
-    throw new TypeError(`${context}.allowlisted_dataspaces must be sorted and unique`);
+    rejectType(`${context}.allowlisted_dataspaces must be sorted and unique`);
   }
   if (mode.kind !== "Allowlisted" && allowlistedDataspaces.length > 0) {
-    throw new TypeError(`${context}.allowlisted_dataspaces does not match mode`);
+    rejectType(`${context}.allowlisted_dataspaces does not match mode`);
   }
   const pricing = requireExactGovernanceProposalRecord(
     record.alias_pricing,
@@ -16348,7 +16232,7 @@ function parseGovernanceSorafsProvider(payload, context) {
       `${valueContext}.next_owner`,
     );
     if (expectedOwner === nextOwner) {
-      throw new TypeError(`${valueContext}.next_owner must differ from expected_owner`);
+      rejectType(`${valueContext}.next_owner must differ from expected_owner`);
     }
     return {
       action: {
@@ -16386,12 +16270,12 @@ function parseGovernanceSorafsProvider(payload, context) {
       },
     };
   }
-  throw new TypeError(`${actionContext}.action contains an unsupported provider action`);
+  rejectType(`${actionContext}.action contains an unsupported provider action`);
 }
 
 function requireGovernanceArray(value, context) {
   if (!Array.isArray(value)) {
-    throw new TypeError(`${context} must be an array`);
+    rejectType(`${context} must be an array`);
   }
   return value;
 }
@@ -16402,10 +16286,10 @@ function requireExactGovernanceByteArray(value, length, context, options = {}) {
     bytes.length !== length ||
     bytes.some((byte) => !Number.isInteger(byte) || byte < 0 || byte > 255)
   ) {
-    throw new TypeError(`${context} must contain exactly ${length} JSON byte values`);
+    rejectType(`${context} must contain exactly ${length} JSON byte values`);
   }
   if (options.nonZero === true && bytes.every((byte) => byte === 0)) {
-    throw new TypeError(`${context} must not be all zero`);
+    rejectType(`${context} must not be all zero`);
   }
   return [...bytes];
 }
@@ -16413,7 +16297,7 @@ function requireExactGovernanceByteArray(value, length, context, options = {}) {
 function requireExactGovernanceProviderId(value, context) {
   const tuple = requireGovernanceArray(value, context);
   if (tuple.length !== 1) {
-    throw new TypeError(`${context} must be the exact one-field ProviderId tuple`);
+    rejectType(`${context} must be the exact one-field ProviderId tuple`);
   }
   return requireExactGovernanceByteArray(tuple[0], 32, `${context}[0]`, {
     nonZero: true,
@@ -16422,7 +16306,7 @@ function requireExactGovernanceProviderId(value, context) {
 
 function requireExactGovernanceStringTuple(value, context) {
   if (!Array.isArray(value) || value.length !== 1 || typeof value[0] !== "string") {
-    throw new TypeError(`${context} must be the exact one-field string tuple`);
+    rejectType(`${context} must be the exact one-field string tuple`);
   }
   return value[0];
 }
@@ -16431,7 +16315,7 @@ function parseGovernanceUint16Array(value, context) {
   return requireGovernanceArray(value, context).map((item, index) => {
     const parsed = requireExactJsonUnsignedInteger(item, `${context}[${index}]`);
     if (parsed > 0xffff) {
-      throw new TypeError(`${context}[${index}] must fit in an unsigned 16-bit integer`);
+      rejectType(`${context}[${index}] must fit in an unsigned 16-bit integer`);
     }
     return parsed;
   });
@@ -16439,11 +16323,11 @@ function parseGovernanceUint16Array(value, context) {
 
 function requireExactGovernanceUint64String(value, context, options = {}) {
   if (typeof value !== "string" || !/^(?:0|[1-9][0-9]*)$/u.test(value)) {
-    throw new TypeError(`${context} must be a canonical unsigned 64-bit decimal string`);
+    rejectType(`${context} must be a canonical unsigned 64-bit decimal string`);
   }
   const parsed = BigInt(value);
   if (parsed > MAX_UINT64_BIGINT || (options.allowZero === false && parsed === 0n)) {
-    throw new TypeError(`${context} is outside the supported unsigned 64-bit range`);
+    rejectType(`${context} is outside the supported unsigned 64-bit range`);
   }
   return value;
 }
@@ -16452,7 +16336,7 @@ function requireCanonicalGovernanceAccountId(value, context) {
   const literal = requireExactNonEmptyString(value, context);
   const canonical = ensureCanonicalAccountId(literal, context);
   if (canonical !== literal) {
-    throw new TypeError(`${context} must use the canonical account literal`);
+    rejectType(`${context} must use the canonical account literal`);
   }
   return literal;
 }
@@ -16461,23 +16345,23 @@ function requireCanonicalGovernanceAssetDefinitionId(value, context) {
   const literal = requireExactNonEmptyString(value, context);
   const canonical = normalizeAssetDefinitionId(literal, context);
   if (canonical !== literal) {
-    throw new TypeError(`${context} must use the canonical asset-definition literal`);
+    rejectType(`${context} must use the canonical asset-definition literal`);
   }
   return literal;
 }
 
 function requireCanonicalGovernanceBase64(value, context) {
   if (typeof value !== "string") {
-    throw new TypeError(`${context} must be a canonical base64 string`);
+    rejectType(`${context} must be a canonical base64 string`);
   }
   if (value === "") return value;
   if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(value)) {
-    throw new TypeError(`${context} must be canonical padded base64`);
+    rejectType(`${context} must be canonical padded base64`);
   }
   try {
     strictDecodeBase64(value);
   } catch {
-    throw new TypeError(`${context} must be canonical padded base64`);
+    rejectType(`${context} must be canonical padded base64`);
   }
   return value;
 }
@@ -16485,14 +16369,14 @@ function requireCanonicalGovernanceBase64(value, context) {
 function requireExactCanonicalGovernanceQuantity(value, context) {
   const normalized = requireCanonicalQuantity(value, context);
   if (normalized !== value) {
-    throw new TypeError(`${context} must use the canonical quantity spelling`);
+    rejectType(`${context} must use the canonical quantity spelling`);
   }
   return normalized;
 }
 
 function requireExactString(value, context) {
   if (typeof value !== "string") {
-    throw new TypeError(`${context} must be a string`);
+    rejectType(`${context} must be a string`);
   }
   return value;
 }
@@ -16503,7 +16387,7 @@ function requireGovernanceAsciiKebab(value, context, maxBytes) {
     Buffer.byteLength(literal, "utf8") > maxBytes ||
     !/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(literal)
   ) {
-    throw new TypeError(`${context} must be canonical lowercase ASCII kebab text`);
+    rejectType(`${context} must be canonical lowercase ASCII kebab text`);
   }
   return literal;
 }
@@ -16515,7 +16399,7 @@ function requireCanonicalGovernanceName(value, context) {
     literal.normalize("NFC") !== literal ||
     /[\s@#$\p{Cc}\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u.test(literal)
   ) {
-    throw new TypeError(`${context} must be a canonical Iroha Name`);
+    rejectType(`${context} must be a canonical Iroha Name`);
   }
   return literal;
 }
@@ -16527,7 +16411,7 @@ function requireGovernanceBoundedReason(value, context) {
     Buffer.byteLength(literal, "utf8") > 1024 ||
     /[\u0000-\u001f\u007f]/u.test(literal)
   ) {
-    throw new TypeError(`${context} must be bounded canonical public text`);
+    rejectType(`${context} must be bounded canonical public text`);
   }
   return literal;
 }
@@ -16537,17 +16421,13 @@ function requireExactGovernanceProposalRecord(payload, fields, context) {
   const expected = new Set(fields);
   const unknown = Object.keys(record).filter((field) => !expected.has(field));
   if (unknown.length !== 0) {
-    throw new TypeError(
-      `${context} contains unsupported fields: ${unknown.sort().join(", ")}`,
-    );
+    rejectType(`${context} contains unsupported fields: ${unknown.sort().join(", ")}`);
   }
   const missing = fields.filter(
     (field) => !Object.prototype.hasOwnProperty.call(record, field),
   );
   if (missing.length !== 0) {
-    throw new TypeError(
-      `${context} is missing required fields: ${missing.join(", ")}`,
-    );
+    rejectType(`${context} is missing required fields: ${missing.join(", ")}`);
   }
   return record;
 }
@@ -16555,12 +16435,12 @@ function requireExactGovernanceProposalRecord(payload, fields, context) {
 function parseGovernanceReferendumResult(payload) {
   const record = ensureRecord(payload, "governance referendum payload");
   if (typeof record.found !== "boolean") {
-    throw new TypeError("governance referendum payload missing bool `found` field");
+    rejectType("governance referendum payload missing bool `found` field");
   }
   let referendum = null;
   if (record.referendum != null) {
     if (!isPlainObject(record.referendum)) {
-      throw new TypeError("governance referendum payload `referendum` must be an object");
+      rejectType("governance referendum payload `referendum` must be an object");
     }
     referendum = { ...record.referendum };
   }
@@ -16606,7 +16486,7 @@ function createEmptyGovernanceLocksResult(referendumId) {
 function parseGovernanceLocksResult(payload) {
   const record = ensureRecord(payload, "governance locks payload");
   if (typeof record.found !== "boolean") {
-    throw new TypeError("governance locks payload missing bool `found` field");
+    rejectType("governance locks payload missing bool `found` field");
   }
   const referendumId = requireNonEmptyString(
     record.referendum_id,
@@ -16614,12 +16494,12 @@ function parseGovernanceLocksResult(payload) {
   );
   const locksPayload = record.locks ?? {};
   if (!isPlainObject(locksPayload)) {
-    throw new TypeError("governance locks payload `locks` must be an object");
+    rejectType("governance locks payload `locks` must be an object");
   }
   const locks = {};
   for (const [accountId, entry] of Object.entries(locksPayload)) {
     if (typeof accountId !== "string" || !accountId) {
-      throw new TypeError("governance locks keys must be non-empty account identifiers");
+      rejectType("governance locks keys must be non-empty account identifiers");
     }
     locks[accountId] = parseGovernanceLockRecord(
       ensureRecord(entry, `governance.locks["${accountId}"]`),
@@ -16640,7 +16520,7 @@ function parseGovernanceLockRecord(payload, context) {
   const expiryHeight = coerceInteger(payload.expiry_height, `${context}.expiry_height`);
   const direction = coerceInteger(payload.direction, `${context}.direction`);
   if (direction < 0 || direction > 255) {
-    throw new RangeError(`${context}.direction must be within 0-255`);
+    rejectRange(`${context}.direction must be within 0-255`);
   }
   const durationBlocks = coerceInteger(payload.duration_blocks ?? 0, `${context}.duration_blocks`);
   const custody = parseGovernanceLockCustody(payload.custody, `${context}.custody`);
@@ -16670,7 +16550,7 @@ function parseGovernanceLockCustody(payload, context) {
     context,
   );
   if (typeof custody.escrowed !== "boolean") {
-    throw new TypeError(`${context}.escrowed must be a boolean`);
+    rejectType(`${context}.escrowed must be a boolean`);
   }
   return {
     escrowed: custody.escrowed,
@@ -16714,11 +16594,11 @@ function normalizeErrorPath(context) {
 
 function normalizeProtectedNamespaceList(input) {
   if (input === undefined || input === null) {
-    throw new TypeError("protected namespaces input is required");
+    rejectType("protected namespaces input is required");
   }
   const values = Array.isArray(input) ? input : [input];
   if (values.length === 0) {
-    throw new TypeError("protected namespaces list must not be empty");
+    rejectType("protected namespaces list must not be empty");
   }
   return values.map((entry, index) =>
     requireExactAsciiTokenString(entry, `namespaces[${index}]`),
@@ -17577,7 +17457,7 @@ function normalizeVpnReceiptListResponse(payload) {
     "vpn receipts response",
   );
   if (!Array.isArray(record.items)) {
-    throw new TypeError("vpn receipts response.items must be an array");
+    rejectType("vpn receipts response.items must be an array");
   }
   if (record.items.length > 24) {
     throw createValidationError(
@@ -17647,7 +17527,7 @@ function normalizeSnsSuffixPolicy(payload) {
   const steward = ToriiClient._normalizeAccountId(record.steward, "sns suffix policy.steward");
   const statusRaw = requireNonEmptyString(record.status, "sns suffix policy.status");
   if (!SNS_SUFFIX_STATUS_VALUES.has(statusRaw)) {
-    throw new TypeError(`sns suffix policy.status must be one of ${Array.from(SNS_SUFFIX_STATUS_VALUES).join(", ")}`);
+    rejectType(`sns suffix policy.status must be one of ${Array.from(SNS_SUFFIX_STATUS_VALUES).join(", ")}`);
   }
   const minTermYears = ToriiClient._normalizeUnsignedInteger(record.min_term_years, "sns suffix policy.min_term_years");
   const maxTermYears = ToriiClient._normalizeUnsignedInteger(record.max_term_years, "sns suffix policy.max_term_years");
@@ -17736,7 +17616,7 @@ function normalizeSnsPricingTier(payload, context) {
   const basePrice = normalizeSnsTokenValue(record.base_price, `${context}.base_price`);
   const auctionKindRaw = requireNonEmptyString(record.auction_kind, `${context}.auction_kind`);
   if (!SNS_AUCTION_KIND_VALUES.has(auctionKindRaw)) {
-    throw new TypeError(`${context}.auction_kind must be one of ${Array.from(SNS_AUCTION_KIND_VALUES).join(", ")}`);
+    rejectType(`${context}.auction_kind must be one of ${Array.from(SNS_AUCTION_KIND_VALUES).join(", ")}`);
   }
   const dutchFloor =
     record.dutch_floor === undefined || record.dutch_floor === null
@@ -17798,7 +17678,7 @@ function normalizeSnsControllers(value, context) {
     return [];
   }
   if (!Array.isArray(value)) {
-    throw new TypeError(`${context} must be an array of controllers`);
+    rejectType(`${context} must be an array of controllers`);
   }
   return value.map((entry, index) => normalizeSnsController(entry, `${context}[${index}]`));
 }
@@ -17807,7 +17687,7 @@ function normalizeSnsController(payload, context) {
   const record = ensureRecord(payload ?? {}, context);
   const kind = requireNonEmptyString(record.controller_type, `${context}.controller_type`);
   if (!SNS_CONTROLLER_TYPES.has(kind)) {
-    throw new TypeError(`${context}.controller_type must be one of ${Array.from(SNS_CONTROLLER_TYPES).join(", ")}`);
+    rejectType(`${context}.controller_type must be one of ${Array.from(SNS_CONTROLLER_TYPES).join(", ")}`);
   }
   const accountAddress =
     record.account_address === undefined || record.account_address === null
@@ -17879,7 +17759,7 @@ function normalizeSnsAuction(payload, context) {
   const record = ensureRecord(payload ?? {}, context);
   const kindRaw = requireNonEmptyString(record.kind, `${context}.kind`);
   if (!SNS_AUCTION_KIND_VALUES.has(kindRaw)) {
-    throw new TypeError(`${context}.kind must be one of ${Array.from(SNS_AUCTION_KIND_VALUES).join(", ")}`);
+    rejectType(`${context}.kind must be one of ${Array.from(SNS_AUCTION_KIND_VALUES).join(", ")}`);
   }
   const openedAtMs = ToriiClient._normalizeUnsignedInteger(record.opened_at_ms, `${context}.opened_at_ms`, {
     allowZero: true,
@@ -17909,14 +17789,14 @@ function normalizeSnsAuction(payload, context) {
 function normalizeSnsNameStatus(payload, context) {
   if (typeof payload === "string") {
     if (!SNS_NAME_STATUS_VALUES.has(payload)) {
-      throw new TypeError(`${context} must be one of ${Array.from(SNS_NAME_STATUS_VALUES).join(", ")}`);
+      rejectType(`${context} must be one of ${Array.from(SNS_NAME_STATUS_VALUES).join(", ")}`);
     }
     return { status: payload };
   }
   const record = ensureRecord(payload ?? {}, context);
   const status = requireNonEmptyString(record.status ?? "", `${context}.status`);
   if (!SNS_NAME_STATUS_VALUES.has(status)) {
-    throw new TypeError(`${context}.status must be one of ${Array.from(SNS_NAME_STATUS_VALUES).join(", ")}`);
+    rejectType(`${context}.status must be one of ${Array.from(SNS_NAME_STATUS_VALUES).join(", ")}`);
   }
   if (status === "Frozen") {
     const frozen = ensureRecord(record.detail ?? record, `${context}.frozen`);
@@ -17968,14 +17848,14 @@ function normalizeExplorerNftPage(payload) {
   );
   const items = record.items;
   if (!Array.isArray(items)) {
-    throw new TypeError("explorer nfts response.items must be an array");
+    rejectType("explorer nfts response.items must be an array");
   }
   const pagination = normalizeExplorerCursorMeta(
     record.pagination,
     "explorer nfts response.pagination",
   );
   if (items.length > pagination.limit) {
-    throw new TypeError("explorer nfts response.items must not exceed pagination.limit");
+    rejectType("explorer nfts response.items must not exceed pagination.limit");
   }
   return {
     pagination,
@@ -17999,7 +17879,7 @@ function normalizeExplorerRwaRecord(payload, context) {
     `${context}.primary_reference`,
   );
   if (typeof record.is_frozen !== "boolean") {
-    throw new TypeError(`${context}.is_frozen must be a boolean`);
+    rejectType(`${context}.is_frozen must be a boolean`);
   }
   let status = null;
   if (record.status !== undefined && record.status !== null) {
@@ -18031,14 +17911,14 @@ function normalizeExplorerRwaPage(payload) {
   );
   const items = record.items;
   if (!Array.isArray(items)) {
-    throw new TypeError("explorer rwas response.items must be an array");
+    rejectType("explorer rwas response.items must be an array");
   }
   const pagination = normalizeExplorerCursorMeta(
     record.pagination,
     "explorer rwas response.pagination",
   );
   if (items.length > pagination.limit) {
-    throw new TypeError("explorer rwas response.items must not exceed pagination.limit");
+    rejectType("explorer rwas response.items must not exceed pagination.limit");
   }
   return {
     pagination,
@@ -18057,14 +17937,14 @@ function normalizeExplorerBlocksPage(payload) {
   );
   const items = record.items;
   if (!Array.isArray(items)) {
-    throw new TypeError("explorer blocks response.items must be an array");
+    rejectType("explorer blocks response.items must be an array");
   }
   const pagination = normalizeExplorerHistoryCursorMeta(
     record.pagination,
     "explorer blocks response.pagination",
   );
   if (items.length > pagination.limit) {
-    throw new TypeError("explorer blocks response.items must not exceed pagination.limit");
+    rejectType("explorer blocks response.items must not exceed pagination.limit");
   }
   return {
     pagination,
@@ -18145,13 +18025,13 @@ function requireExactExplorerCursorFields(record, expectedFields, context) {
   const expected = new Set(expectedFields);
   const unknown = Object.keys(record).find((field) => !expected.has(field));
   if (unknown !== undefined) {
-    throw new TypeError(`${context} contains unknown field ${unknown}`);
+    rejectType(`${context} contains unknown field ${unknown}`);
   }
   const missing = expectedFields.find(
     (field) => !Object.prototype.hasOwnProperty.call(record, field),
   );
   if (missing !== undefined) {
-    throw new TypeError(`${context} is missing required field ${missing}`);
+    rejectType(`${context} is missing required field ${missing}`);
   }
   return record;
 }
@@ -18164,10 +18044,10 @@ function normalizeExplorerCursorMeta(payload, context) {
     max: EXPLORER_CURSOR_MAX_LIMIT,
   });
   if (typeof record.has_more !== "boolean") {
-    throw new TypeError(`${context}.has_more must be a boolean`);
+    rejectType(`${context}.has_more must be a boolean`);
   }
   if (record.next_cursor === undefined) {
-    throw new TypeError(`${context}.next_cursor must be a string or null`);
+    rejectType(`${context}.next_cursor must be a string or null`);
   }
   const nextCursor = normalizeExplorerCursorValue(
     record.next_cursor,
@@ -18175,7 +18055,7 @@ function normalizeExplorerCursorMeta(payload, context) {
     { nullable: true },
   );
   if (record.has_more !== (nextCursor !== null)) {
-    throw new TypeError(`${context}.has_more must match next_cursor availability`);
+    rejectType(`${context}.has_more must match next_cursor availability`);
   }
   return {
     limit,
@@ -18195,7 +18075,7 @@ function normalizeExplorerHistoryCursorMeta(payload, context) {
     allowZero: false,
   });
   if (limit > EXPLORER_CURSOR_MAX_LIMIT) {
-    throw new TypeError(`${context}.limit must be between 1 and ${EXPLORER_CURSOR_MAX_LIMIT}`);
+    rejectType(`${context}.limit must be between 1 and ${EXPLORER_CURSOR_MAX_LIMIT}`);
   }
   const snapshotHeight = requireExactJsonUnsignedInteger(
     record.snapshot_height,
@@ -18206,12 +18086,10 @@ function normalizeExplorerHistoryCursorMeta(payload, context) {
     `${context}.snapshot_hash`,
   );
   if ((snapshotHeight === 0) !== (snapshotHash === null)) {
-    throw new TypeError(
-      `${context}.snapshot_hash must be null exactly when snapshot_height is zero`,
-    );
+    rejectType(`${context}.snapshot_hash must be null exactly when snapshot_height is zero`);
   }
   if (typeof record.has_more !== "boolean") {
-    throw new TypeError(`${context}.has_more must be a boolean`);
+    rejectType(`${context}.has_more must be a boolean`);
   }
   const nextCursor = normalizeExplorerCursorValue(
     record.next_cursor,
@@ -18219,7 +18097,7 @@ function normalizeExplorerHistoryCursorMeta(payload, context) {
     { nullable: true },
   );
   if (record.has_more !== (nextCursor !== null)) {
-    throw new TypeError(`${context}.has_more must match next_cursor availability`);
+    rejectType(`${context}.has_more must match next_cursor availability`);
   }
   return {
     limit,
@@ -18268,7 +18146,7 @@ function normalizeRuntimeUpgradesListResponse(payload) {
   const record = ensureRecord(payload, "runtime upgrades list response");
   const items = record.items ?? [];
   if (!Array.isArray(items)) {
-    throw new TypeError("runtime upgrades list response.items must be an array");
+    rejectType("runtime upgrades list response.items must be an array");
   }
   return items.map((item, index) =>
     normalizeRuntimeUpgradeListItem(item, index, "runtime upgrades list response.items"),
@@ -18347,7 +18225,7 @@ function normalizeRuntimeUpgradeStatus(value, context) {
   const record = ensureRecord(value, context);
   const keys = Object.keys(record);
   if (keys.length !== 1) {
-    throw new TypeError(`${context} must contain exactly one status key`);
+    rejectType(`${context} must contain exactly one status key`);
   }
   const kind = keys[0];
   const payload = record[kind];
@@ -18362,7 +18240,7 @@ function normalizeRuntimeUpgradeStatus(value, context) {
     );
     return { kind: "ActivatedAt", activatedHeight: height };
   }
-  throw new TypeError(`${context} contains unsupported variant ${kind}`);
+  rejectType(`${context} contains unsupported variant ${kind}`);
 }
 
 function normalizeRuntimeUpgradeManifestPayload(value, context) {
@@ -18373,10 +18251,10 @@ function normalizeRuntimeUpgradeManifestPayload(value, context) {
   const startValue = record.start_height ?? record.startHeight;
   const endValue = record.end_height ?? record.endHeight;
   if (abiVersion === undefined || abiVersion === null) {
-    throw new TypeError(`${context}.abi_version is required`);
+    rejectType(`${context}.abi_version is required`);
   }
   if (abiHashValue === undefined || abiHashValue === null) {
-    throw new TypeError(`${context}.abi_hash is required`);
+    rejectType(`${context}.abi_hash is required`);
   }
   const startHeight = ToriiClient._normalizeUnsignedInteger(
     startValue,
@@ -18389,7 +18267,7 @@ function normalizeRuntimeUpgradeManifestPayload(value, context) {
     { allowZero: true },
   );
   if (endHeight <= startHeight) {
-    throw new TypeError(`${context}.end_height must be greater than start_height`);
+    rejectType(`${context}.end_height must be greater than start_height`);
   }
   const normalizedAbiVersion = ToriiClient._normalizeUnsignedInteger(
     abiVersion,
@@ -18432,13 +18310,13 @@ function assertFirstReleaseRuntimeUpgradeManifest({
   context,
 }) {
   if (abiVersion !== 1) {
-    throw new TypeError(`${context}.abi_version must be 1 in the first release`);
+    rejectType(`${context}.abi_version must be 1 in the first release`);
   }
   if (addedSyscalls.length > 0) {
-    throw new TypeError(`${context}.added_syscalls must be empty in the first release`);
+    rejectType(`${context}.added_syscalls must be empty in the first release`);
   }
   if (addedPointerTypes.length > 0) {
-    throw new TypeError(`${context}.added_pointer_types must be empty in the first release`);
+    rejectType(`${context}.added_pointer_types must be empty in the first release`);
   }
 }
 
@@ -18455,12 +18333,12 @@ function parseIntegerArray(value, context) {
     return [];
   }
   if (!Array.isArray(value)) {
-    throw new TypeError(`${context} must be an array`);
+    rejectType(`${context} must be an array`);
   }
   return value.map((entry, index) => {
     const numeric = coerceIntegerLike(entry, `${context}[${index}]`);
     if (numeric < 0) {
-      throw new RangeError(`${context}[${index}] must be non-negative`);
+      rejectRange(`${context}[${index}] must be non-negative`);
     }
     return numeric;
   });
@@ -18472,14 +18350,14 @@ function coerceStatusInt(value, context) {
   }
   const numeric = coerceIntegerLike(value, context);
   if (numeric < 0) {
-    throw new RangeError(`${context} must be non-negative`);
+    rejectRange(`${context} must be non-negative`);
   }
   return numeric;
 }
 
 function coerceNestedInt(mapping, key, context) {
   if (!isPlainObject(mapping)) {
-    throw new TypeError(`${context} must be an object`);
+    rejectType(`${context} must be an object`);
   }
   const value = mapping[key];
   if (value === undefined || value === null) {
@@ -18487,14 +18365,14 @@ function coerceNestedInt(mapping, key, context) {
   }
   const numeric = coerceIntegerLike(value, `${context}.${key}`);
   if (numeric < 0) {
-    throw new RangeError(`${context}.${key} must be non-negative`);
+    rejectRange(`${context}.${key} must be non-negative`);
   }
   return numeric;
 }
 
 function ensureRecord(value, context) {
   if (!isPlainObject(value)) {
-    throw new TypeError(`${context} must be an object`);
+    rejectType(`${context} must be an object`);
   }
   return value;
 }
@@ -18504,14 +18382,14 @@ function normalizeOptionalMetadata(value, context) {
     return {};
   }
   if (!isPlainObject(value)) {
-    throw new TypeError(`${context} must be a plain object when provided`);
+    rejectType(`${context} must be a plain object when provided`);
   }
   return { ...value };
 }
 
 function coerceInteger(value, context) {
   if (value === undefined || value === null || value === "") {
-    throw new TypeError(`${context} must be numeric`);
+    rejectType(`${context} must be numeric`);
   }
   return coerceIntegerLike(value, context);
 }
@@ -18538,12 +18416,12 @@ function coerceBoolean(value, context) {
       return false;
     }
   }
-  throw new TypeError(`${context} must be boolean`);
+  rejectType(`${context} must be boolean`);
 }
 
 function requireBooleanLike(value, context) {
   if (value === undefined || value === null || value === "") {
-    throw new TypeError(`${context} must be boolean`);
+    rejectType(`${context} must be boolean`);
   }
   return coerceBoolean(value, context);
 }
@@ -18560,11 +18438,11 @@ function parseStringArray(value, context) {
     return [];
   }
   if (!Array.isArray(value)) {
-    throw new TypeError(`${context} must be an array of strings`);
+    rejectType(`${context} must be an array of strings`);
   }
   return value.map((entry, index) => {
     if (entry === undefined || entry === null || typeof entry !== "string") {
-      throw new TypeError(`${context}[${index}] must be a string`);
+      rejectType(`${context}[${index}] must be a string`);
     }
     return entry;
   });
@@ -18585,7 +18463,7 @@ function optionalString(value, context) {
   if (typeof value === "string") {
     return value;
   }
-  throw new TypeError(`${context} must be a string when present`);
+  rejectType(`${context} must be a string when present`);
 }
 
 function optionalBoolean(value, context) {
@@ -18601,7 +18479,7 @@ function optionalNumber(value, context, { allowNegative = false } = {}) {
   }
   const numeric = coerceIntegerLike(value, context);
   if (!allowNegative && numeric < 0) {
-    throw new RangeError(`${context} must be non-negative`);
+    rejectRange(`${context} must be non-negative`);
   }
   return numeric;
 }
@@ -18611,7 +18489,7 @@ function optionalRecord(value, context) {
     return null;
   }
   if (!isPlainObject(value)) {
-    throw new TypeError(`${context} must be an object when present`);
+    rejectType(`${context} must be an object when present`);
   }
   return value;
 }
@@ -18621,11 +18499,11 @@ function optionalStringArray(value, context) {
     return null;
   }
   if (!Array.isArray(value)) {
-    throw new TypeError(`${context} must be an array when present`);
+    rejectType(`${context} must be an array when present`);
   }
   return value.map((entry, index) => {
     if (typeof entry !== "string") {
-      throw new TypeError(`${context}[${index}] must be a string`);
+      rejectType(`${context}[${index}] must be a string`);
     }
     return entry;
   });
@@ -18633,11 +18511,11 @@ function optionalStringArray(value, context) {
 
 function requireStringArray(value, context) {
   if (!Array.isArray(value)) {
-    throw new TypeError(`${context} must be an array`);
+    rejectType(`${context} must be an array`);
   }
   return value.map((entry, index) => {
     if (typeof entry !== "string") {
-      throw new TypeError(`${context}[${index}] must be a string`);
+      rejectType(`${context}[${index}] must be a string`);
     }
     return entry;
   });
@@ -18646,12 +18524,10 @@ function requireStringArray(value, context) {
 function normalizeUaidLiteral(value, context = "uaid") {
   const literal = requireExactNonEmptyString(value, context);
   if (!/^uaid:[0-9a-f]{64}$/u.test(literal)) {
-    throw new TypeError(
-      `${context} must be an exact canonical uaid:<64 lowercase hex> literal`,
-    );
+    rejectType(`${context} must be an exact canonical uaid:<64 lowercase hex> literal`);
   }
   if (!/[13579bdf]$/u.test(literal)) {
-    throw new TypeError(`${context} must have least significant bit set to 1`);
+    rejectType(`${context} must have least significant bit set to 1`);
   }
   return literal;
 }
@@ -18691,9 +18567,7 @@ function requireExactUaidRecord(
     if (unexpected.length > 0) {
       details.push(`unexpected ${unexpected.map(String).sort().join(", ")}`);
     }
-    throw new TypeError(
-      `${context} must use the exact server fields (${details.join("; ")})`,
-    );
+    rejectType(`${context} must use the exact server fields (${details.join("; ")})`);
   }
   return record;
 }
@@ -18701,9 +18575,7 @@ function requireExactUaidRecord(
 function requireExactEnumString(value, allowed, context) {
   const literal = requireExactNonEmptyString(value, context);
   if (!allowed.has(literal)) {
-    throw new TypeError(
-      `${context} must be one of ${Array.from(allowed).join(", ")}`,
-    );
+    rejectType(`${context} must be one of ${Array.from(allowed).join(", ")}`);
   }
   return literal;
 }
@@ -18711,7 +18583,7 @@ function requireExactEnumString(value, allowed, context) {
 function requireJsonNullableString(value, context) {
   if (value === null) return null;
   if (typeof value !== "string") {
-    throw new TypeError(`${context} must be a string or null`);
+    rejectType(`${context} must be a string or null`);
   }
   return value;
 }
@@ -18726,13 +18598,13 @@ function requireExactAssetHoldingId(value, context) {
   const literal = requireExactNonEmptyString(value, context);
   const canonical = normalizeAssetHoldingId(literal, context);
   if (canonical !== literal) {
-    throw new TypeError(`${context} must be an exact canonical asset holding id`);
+    rejectType(`${context} must be an exact canonical asset holding id`);
   }
   const parts = literal.split("#");
   if (parts.length === 3) {
     const match = /^dataspace:(0|[1-9][0-9]*)$/u.exec(parts[2]);
     if (match === null) {
-      throw new TypeError(`${context} must use a canonical dataspace scope`);
+      rejectType(`${context} must use a canonical dataspace scope`);
     }
   }
   return literal;
@@ -18742,7 +18614,7 @@ function requireExactAssetDefinitionId(value, context) {
   const literal = requireExactNonEmptyString(value, context);
   const canonical = normalizeAssetDefinitionId(literal, context);
   if (canonical !== literal) {
-    throw new TypeError(`${context} must be an exact canonical asset definition id`);
+    rejectType(`${context} must be an exact canonical asset definition id`);
   }
   return literal;
 }
@@ -18755,7 +18627,7 @@ function requireCanonicalUaidManifestName(value, context) {
     /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u.test(name) ||
     name.normalize("NFC") !== name
   ) {
-    throw new TypeError(`${context} must be a canonical Iroha Name`);
+    rejectType(`${context} must be a canonical Iroha Name`);
   }
   return name;
 }
@@ -18775,7 +18647,7 @@ function normalizeUaidPortfolioResponse(payload, expectedUaid) {
   );
   const uaid = normalizeUaidLiteral(record.uaid, "uaid portfolio response.uaid");
   if (expectedUaid !== undefined && uaid !== expectedUaid) {
-    throw new TypeError("uaid portfolio response.uaid does not match the requested UAID");
+    rejectType("uaid portfolio response.uaid does not match the requested UAID");
   }
   const totalsRecord = requireExactUaidRecord(
     record.totals,
@@ -18814,12 +18686,10 @@ function normalizeUaidPortfolioResponse(payload, expectedUaid) {
     }
   }
   if (accounts.size > 1) {
-    throw new TypeError(
-      "uaid portfolio response must contain at most one universal account",
-    );
+    rejectType("uaid portfolio response must contain at most one universal account");
   }
   if (totals.accounts !== accounts.size || totals.positions !== positions) {
-    throw new TypeError("uaid portfolio response.totals do not match the portfolio tree");
+    rejectType("uaid portfolio response.totals do not match the portfolio tree");
   }
   return { uaid, totals, dataspaces };
 }
@@ -18890,12 +18760,12 @@ function normalizeUaidPortfolioAsset(value, accountId, dataspaceId, context) {
   );
   const [holdingDefinitionId, holdingAccountId, scope] = assetId.split("#");
   if (holdingDefinitionId !== assetDefinitionId || holdingAccountId !== accountId) {
-    throw new TypeError(`${context}.asset_id does not match its account and definition`);
+    rejectType(`${context}.asset_id does not match its account and definition`);
   }
   if (scope !== undefined) {
     const scopeId = BigInt(scope.slice("dataspace:".length));
     if (scopeId !== BigInt(dataspaceId)) {
-      throw new TypeError(`${context}.asset_id dataspace scope does not match its row`);
+      rejectType(`${context}.asset_id dataspace scope does not match its row`);
     }
   }
   return {
@@ -18914,7 +18784,7 @@ function normalizeUaidBindingsResponse(payload, expectedUaid) {
   );
   const uaid = normalizeUaidLiteral(record.uaid, "uaid bindings response.uaid");
   if (expectedUaid !== undefined && uaid !== expectedUaid) {
-    throw new TypeError("uaid bindings response.uaid does not match the requested UAID");
+    rejectType("uaid bindings response.uaid does not match the requested UAID");
   }
   const dataspacesValue = requireDenseArray(
     record.dataspaces,
@@ -18928,9 +18798,7 @@ function normalizeUaidBindingsResponse(payload, expectedUaid) {
   );
   const uniqueAccounts = new Set(dataspaces.flatMap((entry) => entry.accounts));
   if (uniqueAccounts.size > 1) {
-    throw new TypeError(
-      "uaid bindings response must contain at most one universal account",
-    );
+    rejectType("uaid bindings response must contain at most one universal account");
   }
   return { uaid, dataspaces };
 }
@@ -18944,7 +18812,7 @@ function normalizeUaidBindingsDataspace(value, context) {
   );
   const accounts = requireExactAccountArray(record.accounts, `${context}.accounts`);
   if (accounts.length > 1) {
-    throw new TypeError(`${context}.accounts must contain at most one universal account`);
+    rejectType(`${context}.accounts must contain at most one universal account`);
   }
   return {
     dataspace_id: requireExactJsonUnsignedInteger(
@@ -18969,7 +18837,7 @@ function normalizeUaidManifestsResponse(payload, expectedUaid) {
   );
   const uaid = normalizeUaidLiteral(record.uaid, "uaid manifests response.uaid");
   if (expectedUaid !== undefined && uaid !== expectedUaid) {
-    throw new TypeError("uaid manifests response.uaid does not match the requested UAID");
+    rejectType("uaid manifests response.uaid does not match the requested UAID");
   }
   const total = requireExactJsonUnsignedInteger(
     record.total,
@@ -18977,7 +18845,7 @@ function normalizeUaidManifestsResponse(payload, expectedUaid) {
     { allowZero: true },
   );
   if (typeof record.has_more !== "boolean") {
-    throw new TypeError("uaid manifests response.has_more must be a boolean");
+    rejectType("uaid manifests response.has_more must be a boolean");
   }
   const countMode = requireExactEnumString(
     record.count_mode,
@@ -18996,7 +18864,7 @@ function normalizeUaidManifestsResponse(payload, expectedUaid) {
     ),
   );
   if (total < manifests.length) {
-    throw new TypeError("uaid manifests response.total cannot be smaller than the page");
+    rejectType("uaid manifests response.total cannot be smaller than the page");
   }
   return {
     uaid,
@@ -19044,15 +18912,15 @@ function normalizeUaidManifestRecord(value, expectedUaid, context) {
         ? "Active"
         : "Pending";
   if (status !== derivedStatus) {
-    throw new TypeError(`${context}.status does not match its lifecycle`);
+    rejectType(`${context}.status does not match its lifecycle`);
   }
   const accounts = requireExactAccountArray(record.accounts, `${context}.accounts`);
   if (accounts.length > 1) {
-    throw new TypeError(`${context}.accounts must contain at most one universal account`);
+    rejectType(`${context}.accounts must contain at most one universal account`);
   }
   const manifest = normalizeUaidManifest(record.manifest, `${context}.manifest`);
   if (manifest.uaid !== expectedUaid || manifest.dataspace !== dataspaceId) {
-    throw new TypeError(`${context}.manifest identity does not match its row`);
+    rejectType(`${context}.manifest identity does not match its row`);
   }
   return {
     dataspace_id: dataspaceId,
@@ -19122,7 +18990,7 @@ function normalizeUaidManifest(value, context) {
     context,
   );
   if (record.version !== 1) {
-    throw new TypeError(`${context}.version must be the unsigned integer 1`);
+    rejectType(`${context}.version must be the unsigned integer 1`);
   }
   const normalized = {
     version: 1,
@@ -19148,7 +19016,7 @@ function normalizeUaidManifest(value, context) {
   };
   if (Object.prototype.hasOwnProperty.call(record, "expiry_epoch")) {
     if (record.expiry_epoch === null) {
-      throw new TypeError(`${context}.expiry_epoch must be omitted instead of null`);
+      rejectType(`${context}.expiry_epoch must be omitted instead of null`);
     }
     normalized.expiry_epoch = requireExactJsonUnsignedInteger(
       record.expiry_epoch,
@@ -19172,10 +19040,10 @@ function normalizeUaidManifestEntry(value, context) {
   };
   if (Object.prototype.hasOwnProperty.call(record, "notes")) {
     if (record.notes === null) {
-      throw new TypeError(`${context}.notes must be omitted instead of null`);
+      rejectType(`${context}.notes must be omitted instead of null`);
     }
     if (typeof record.notes !== "string") {
-      throw new TypeError(`${context}.notes must be a string`);
+      rejectType(`${context}.notes must be a string`);
     }
     normalized.notes = record.notes;
   }
@@ -19194,7 +19062,7 @@ function normalizeUaidManifestScope(value, context) {
     if (!Object.prototype.hasOwnProperty.call(record, field)) continue;
     const fieldContext = `${context}.${field}`;
     if (record[field] === null) {
-      throw new TypeError(`${fieldContext} must be omitted instead of null`);
+      rejectType(`${fieldContext} must be omitted instead of null`);
     }
     if (field === "dataspace") {
       normalized[field] = requireExactJsonUnsignedInteger(record[field], fieldContext, {
@@ -19219,7 +19087,7 @@ function normalizeUaidManifestEffect(value, context) {
   const record = requireExactUaidRecord(value, [], ["Allow", "Deny"], context);
   const decisions = Object.keys(record);
   if (decisions.length !== 1) {
-    throw new TypeError(`${context} must contain exactly one Allow or Deny decision`);
+    rejectType(`${context} must contain exactly one Allow or Deny decision`);
   }
   if (decisions[0] === "Allow") {
     const allowance = requireExactUaidRecord(
@@ -19237,7 +19105,7 @@ function normalizeUaidManifestEffect(value, context) {
     };
     if (Object.prototype.hasOwnProperty.call(allowance, "max_amount")) {
       if (allowance.max_amount === null) {
-        throw new TypeError(`${context}.Allow.max_amount must be omitted instead of null`);
+        rejectType(`${context}.Allow.max_amount must be omitted instead of null`);
       }
       normalized.max_amount = requireCanonicalQuantity(
         allowance.max_amount,
@@ -19255,10 +19123,10 @@ function normalizeUaidManifestEffect(value, context) {
   const normalized = {};
   if (Object.prototype.hasOwnProperty.call(denial, "reason")) {
     if (denial.reason === null) {
-      throw new TypeError(`${context}.Deny.reason must be omitted instead of null`);
+      rejectType(`${context}.Deny.reason must be omitted instead of null`);
     }
     if (typeof denial.reason !== "string") {
-      throw new TypeError(`${context}.Deny.reason must be a string`);
+      rejectType(`${context}.Deny.reason must be a string`);
     }
     normalized.reason = denial.reason;
   }
@@ -19286,16 +19154,16 @@ function normalizeProverFilterBoolean(value, name) {
       return false;
     }
   }
-  throw new TypeError(`${name} must be a boolean`);
+  rejectType(`${name} must be a boolean`);
 }
 
 function normalizeProverFilterString(value, name) {
   if (typeof value !== "string") {
-    throw new TypeError(`${name} must be a string`);
+    rejectType(`${name} must be a string`);
   }
   const trimmed = value.trim();
   if (!trimmed) {
-    throw new TypeError(`${name} must be a non-empty string`);
+    rejectType(`${name} must be a non-empty string`);
   }
   return trimmed;
 }
@@ -19303,7 +19171,7 @@ function normalizeProverFilterString(value, name) {
 function normalizeProverFilterEnum(value, name, allowed) {
   const normalized = normalizeProverFilterString(value, name).toLowerCase();
   if (!allowed.includes(normalized)) {
-    throw new TypeError(`${name} must be one of: ${allowed.join(", ")}`);
+    rejectType(`${name} must be one of: ${allowed.join(", ")}`);
   }
   return normalized;
 }
@@ -19470,7 +19338,7 @@ async function* readBodyChunks(body) {
     }
     return;
   }
-  throw new Error("SSE response body is not async iterable");
+  rejectError("SSE response body is not async iterable");
 }
 
 function flushSseBuffer(buffer) {
@@ -19508,7 +19376,7 @@ function toBuffer(value) {
     }
     return normalizeByteArray(value, "payload");
   }
-  throw new TypeError("payload must be a Buffer or ArrayBuffer view");
+  rejectType("payload must be a Buffer or ArrayBuffer view");
 }
 
 function normalizeByteArray(value, context) {
@@ -19528,7 +19396,7 @@ function normalizeByteArray(value, context) {
 function toXmlBuffer(value, name) {
   if (typeof value === "string") {
     if (!value.trim()) {
-      throw new TypeError(`${name} must be a non-empty string or binary payload`);
+      rejectType(`${name} must be a non-empty string or binary payload`);
     }
     return Buffer.from(value, "utf8");
   }
@@ -19825,7 +19693,7 @@ function decodeBase64UrlBody(body) {
   let padded = body.replace(/-/g, "+").replace(/_/g, "/");
   const remainder = padded.length % 4;
   if (remainder === 1) {
-    throw new TypeError("invalid base64url length");
+    rejectType("invalid base64url length");
   }
   if (remainder === 2) {
     padded += "==";
@@ -20100,7 +19968,7 @@ function normalizeStorageTicketHex(value, name) {
     ? normalized.slice(2)
     : normalized;
   if (hex.length !== 64) {
-    throw new TypeError(`${name} must contain 64 hex characters`);
+    rejectType(`${name} must contain 64 hex characters`);
   }
   return hex.toLowerCase();
 }
@@ -20108,38 +19976,38 @@ function normalizeStorageTicketHex(value, name) {
 function coerceIntegerLike(value, context) {
   if (typeof value === "number") {
     if (!Number.isFinite(value) || !Number.isSafeInteger(value)) {
-      throw new RangeError(`${context} must be a safe integer`);
+      rejectRange(`${context} must be a safe integer`);
     }
     return value;
   }
   if (typeof value === "bigint") {
     const numeric = Number(value);
     if (!Number.isSafeInteger(numeric)) {
-      throw new RangeError(`${context} must be a safe integer`);
+      rejectRange(`${context} must be a safe integer`);
     }
     return numeric;
   }
   if (typeof value === "string") {
     const trimmed = value.trim();
     if (!trimmed) {
-      throw new TypeError(`${context} must be an integer`);
+      rejectType(`${context} must be an integer`);
     }
     const numeric = Number(trimmed);
     if (!Number.isFinite(numeric) || !Number.isSafeInteger(numeric)) {
-      throw new RangeError(`${context} must be a safe integer`);
+      rejectRange(`${context} must be a safe integer`);
     }
     return numeric;
   }
-  throw new TypeError(`${context} must be an integer`);
+  rejectType(`${context} must be an integer`);
 }
 
 function requireNonNegativeIntegerLike(value, context) {
   if (value === undefined || value === null) {
-    throw new TypeError(`${context} is required`);
+    rejectType(`${context} is required`);
   }
   const numeric = coerceIntegerLike(value, context);
   if (numeric < 0) {
-    throw new RangeError(`${context} must be >= 0`);
+    rejectRange(`${context} must be >= 0`);
   }
   return numeric;
 }
@@ -20152,9 +20020,7 @@ function requireSorafsNativeBinding(nativeRuntime) {
     typeof binding.sorafsAliasPolicyDefaults !== "function" ||
     typeof binding.sorafsDecodeReplicationOrder !== "function"
   ) {
-    throw new Error(
-      "SoraFS helpers require the native iroha_js_host module. Run `npm run build:native` before using alias validation or replication order decoding.",
-    );
+    rejectError("SoraFS helpers require the native iroha_js_host module. Run `npm run build:native` before using alias validation or replication order decoding.");
   }
   return binding;
 }
@@ -20279,7 +20145,7 @@ function resolveAuthorityPrivateKey(record, context) {
   if (bytesInput !== undefined && bytesInput !== null) {
     return formatAuthorityPrivateKeyBytes(bytesInput, record, context);
   }
-  throw new TypeError(`${context}.privateKey is required`);
+  rejectType(`${context}.privateKey is required`);
 }
 
 function formatAuthorityPrivateKeyBytes(value, record, context) {
@@ -20301,7 +20167,7 @@ function formatAuthorityPrivateKeyHex(value, record, context, label) {
 function requireCanonicalKotodamaIdentifier(value, context, options) {
   const identifier = requireExactNonEmptyString(value, context);
   if (!isCanonicalKotodamaIdentifier(identifier, options)) {
-    throw new TypeError(`${context} must be a canonical Kotodama V1 identifier`);
+    rejectType(`${context} must be a canonical Kotodama V1 identifier`);
   }
   return identifier;
 }
@@ -20309,9 +20175,7 @@ function requireCanonicalKotodamaIdentifier(value, context, options) {
 function requireCanonicalKotodamaEntrypoint(value, context) {
   const name = requireExactNonEmptyString(value, context);
   if (!isCanonicalKotodamaEntrypoint(name)) {
-    throw new TypeError(
-      `${context} must be a canonical Kotodama V1 identifier or branded lifecycle selector`,
-    );
+    rejectType(`${context} must be a canonical Kotodama V1 identifier or branded lifecycle selector`);
   }
   return name;
 }
@@ -20323,12 +20187,10 @@ function exactManifestResponseRecord(value, allowedFields, context) {
     (field) => typeof field !== "string" || !allowed.has(field),
   );
   if (unknownFields.length !== 0) {
-    throw new TypeError(
-      `${context} contains unsupported fields: ${unknownFields
+    rejectType(`${context} contains unsupported fields: ${unknownFields
         .map((field) => String(field))
         .sort()
-        .join(", ")}`,
-    );
+        .join(", ")}`);
   }
   return record;
 }
@@ -20374,7 +20236,7 @@ function assertExactManifestResponseShape(value, context) {
       "access_set_hints",
       "entrypoints",
       "states",
-      "error_codes",
+      "error_types",
       "kotoba",
       "provenance",
     ],
@@ -20497,15 +20359,7 @@ function assertExactManifestResponseShape(value, context) {
       );
     });
   }
-  if (Array.isArray(manifest.error_codes)) {
-    manifest.error_codes.forEach((errorCode, index) => {
-      exactManifestResponseRecord(
-        errorCode,
-        ["namespace", "name", "code"],
-        `${context}.error_codes[${index}]`,
-      );
-    });
-  }
+  normalizeContractErrorTypesV1(manifest.error_types, `${context}.error_types`);
   if (Array.isArray(manifest.kotoba)) {
     manifest.kotoba.forEach((entry, index) => {
       const entryContext = `${context}.kotoba[${index}]`;
@@ -20537,7 +20391,7 @@ function assertExactManifestResponseShape(value, context) {
 
 function normalizeManifestPayload(manifest, context) {
   if (!isPlainObject(manifest)) {
-    throw new TypeError(`${context} must be an object`);
+    rejectType(`${context} must be an object`);
   }
   const allowedFields = new Set([
     "seiyaku_name",
@@ -20555,16 +20409,14 @@ function normalizeManifestPayload(manifest, context) {
     "entrypoints",
     "entryPoints",
     "states",
-    "error_codes",
-    "errorCodes",
+    "error_types",
+    "errorTypes",
     "kotoba",
     "provenance",
   ]);
   const unknownFields = Object.keys(manifest).filter((field) => !allowedFields.has(field));
   if (unknownFields.length !== 0) {
-    throw new TypeError(
-      `${context} contains unsupported fields: ${unknownFields.sort().join(", ")}`,
-    );
+    rejectType(`${context} contains unsupported fields: ${unknownFields.sort().join(", ")}`);
   }
   const hasField = (...keys) =>
     keys.some((key) => Object.prototype.hasOwnProperty.call(manifest, key));
@@ -20573,7 +20425,7 @@ function normalizeManifestPayload(manifest, context) {
       Object.prototype.hasOwnProperty.call(manifest, key),
     );
     if (present.length > 1) {
-      throw new TypeError(`${context} contains conflicting aliases: ${present.join(", ")}`);
+      rejectType(`${context} contains conflicting aliases: ${present.join(", ")}`);
     }
     return present.length === 0 ? undefined : manifest[present[0]];
   };
@@ -20586,7 +20438,7 @@ function normalizeManifestPayload(manifest, context) {
     access_set_hints: null,
     entrypoints: null,
     states: null,
-    error_codes: null,
+    error_types: null,
     kotoba: null,
     provenance: null,
   };
@@ -20631,9 +20483,7 @@ function normalizeManifestPayload(manifest, context) {
         { allowZero: true },
       );
       if (bitmap > 3) {
-        throw new TypeError(
-          `${context}.features_bitmap contains unsupported Kotodama V1 feature bits`,
-        );
+        rejectType(`${context}.features_bitmap contains unsupported Kotodama V1 feature bits`);
       }
       normalized.features_bitmap = bitmap;
     }
@@ -20650,7 +20500,7 @@ function normalizeManifestPayload(manifest, context) {
     if (entries === null) {
       normalized.entrypoints = null;
     } else if (!Array.isArray(entries)) {
-      throw new TypeError(`${context}.entrypoints must be an array`);
+      rejectType(`${context}.entrypoints must be an array`);
     } else {
       normalized.entrypoints = entries.map((entry, index) => {
         return normalizeManifestEntrypointPayload(
@@ -20665,12 +20515,12 @@ function normalizeManifestPayload(manifest, context) {
     normalized.states =
       states === null ? null : normalizeManifestStatesPayload(states, `${context}.states`);
   }
-  if (hasField("error_codes", "errorCodes")) {
-    const errorCodes = getField("error_codes", "errorCodes");
-    normalized.error_codes =
-      errorCodes === null
+  if (hasField("error_types", "errorTypes")) {
+    const errorTypes = getField("error_types", "errorTypes");
+    normalized.error_types =
+      errorTypes === null
         ? null
-        : normalizeManifestErrorCodesPayload(errorCodes, `${context}.error_codes`);
+        : normalizeManifestErrorTypesPayload(errorTypes, `${context}.error_types`);
   }
   if (hasField("kotoba")) {
     const kotoba = getField("kotoba");
@@ -20695,21 +20545,19 @@ function validateNormalizedManifestPayload(manifest, context) {
   const triggerIds = new Set();
   for (const [index, entrypoint] of (manifest.entrypoints ?? []).entries()) {
     if (entrypointNames.has(entrypoint.name)) {
-      throw new TypeError(`${context}.entrypoints contains duplicate name ${entrypoint.name}`);
+      rejectType(`${context}.entrypoints contains duplicate name ${entrypoint.name}`);
     }
     entrypointNames.add(entrypoint.name);
     entrypointKinds.set(entrypoint.name, entrypoint.kind.kind);
     if (entrypoint.kind.kind === "Hajimari" || entrypoint.kind.kind === "Kaizen") {
       if (lifecycleKinds.has(entrypoint.kind.kind)) {
-        throw new TypeError(
-          `${context}.entrypoints contains duplicate ${entrypoint.kind.kind} declarations`,
-        );
+        rejectType(`${context}.entrypoints contains duplicate ${entrypoint.kind.kind} declarations`);
       }
       lifecycleKinds.add(entrypoint.kind.kind);
     }
     for (const trigger of entrypoint.triggers) {
       if (triggerIds.has(trigger.id)) {
-        throw new TypeError(`${context}.entrypoints contains duplicate trigger ${trigger.id}`);
+        rejectType(`${context}.entrypoints contains duplicate trigger ${trigger.id}`);
       }
       triggerIds.add(trigger.id);
     }
@@ -20717,17 +20565,13 @@ function validateNormalizedManifestPayload(manifest, context) {
       entrypoint.access_hints_complete === true &&
       entrypoint.access_hints_skipped.length !== 0
     ) {
-      throw new TypeError(
-        `${context}.entrypoints[${index}] marks access hints complete but records skipped reasons`,
-      );
+      rejectType(`${context}.entrypoints[${index}] marks access hints complete but records skipped reasons`);
     }
     if (
       entrypoint.access_hints_complete === false &&
       entrypoint.access_hints_skipped.length === 0
     ) {
-      throw new TypeError(
-        `${context}.entrypoints[${index}] marks access hints incomplete without a reason`,
-      );
+      rejectType(`${context}.entrypoints[${index}] marks access hints incomplete without a reason`);
     }
   }
   for (const [entrypointIndex, entrypoint] of (manifest.entrypoints ?? []).entries()) {
@@ -20735,14 +20579,10 @@ function validateNormalizedManifestPayload(manifest, context) {
       if (trigger.callback.namespace === null) {
         const targetKind = entrypointKinds.get(trigger.callback.entrypoint);
         if (targetKind === undefined) {
-          throw new TypeError(
-            `${context}.entrypoints[${entrypointIndex}].triggers[${triggerIndex}] targets an undeclared local entrypoint`,
-          );
+          rejectType(`${context}.entrypoints[${entrypointIndex}].triggers[${triggerIndex}] targets an undeclared local entrypoint`);
         }
         if (targetKind !== "Kotoage") {
-          throw new TypeError(
-            `${context}.entrypoints[${entrypointIndex}].triggers[${triggerIndex}] local callback must target kotoage/言挙げ`,
-          );
+          rejectType(`${context}.entrypoints[${entrypointIndex}].triggers[${triggerIndex}] local callback must target kotoage/言挙げ`);
         }
       }
     }
@@ -20751,7 +20591,7 @@ function validateNormalizedManifestPayload(manifest, context) {
   const stateNames = new Set();
   for (const state of manifest.states ?? []) {
     if (stateNames.has(state.name)) {
-      throw new TypeError(`${context}.states contains duplicate name ${state.name}`);
+      rejectType(`${context}.states contains duplicate name ${state.name}`);
     }
     stateNames.add(state.name);
   }
@@ -20761,29 +20601,18 @@ function validateNormalizedManifestPayload(manifest, context) {
     `${context}.access_set_hints`,
   );
 
-  const errorPaths = new Set();
-  const errorNumbers = new Set();
-  for (const errorCode of manifest.error_codes ?? []) {
-    const path = `${errorCode.namespace}::${errorCode.name}`;
-    if (errorPaths.has(path) || errorNumbers.has(errorCode.code)) {
-      throw new TypeError(`${context}.error_codes contains a duplicate path or numeric code`);
-    }
-    errorPaths.add(path);
-    errorNumbers.add(errorCode.code);
-  }
+  validateManifestErrorTypeBindingsV1(manifest, context);
 
   const messageIds = new Set();
   for (const [entryIndex, entry] of (manifest.kotoba ?? []).entries()) {
     if (messageIds.has(entry.msg_id)) {
-      throw new TypeError(`${context}.kotoba contains duplicate msg_id ${entry.msg_id}`);
+      rejectType(`${context}.kotoba contains duplicate msg_id ${entry.msg_id}`);
     }
     messageIds.add(entry.msg_id);
     const languages = new Set();
     for (const translation of entry.translations) {
       if (languages.has(translation.lang)) {
-        throw new TypeError(
-          `${context}.kotoba[${entryIndex}] contains duplicate language ${translation.lang}`,
-        );
+        rejectType(`${context}.kotoba[${entryIndex}] contains duplicate language ${translation.lang}`);
       }
       languages.add(translation.lang);
     }
@@ -20812,20 +20641,16 @@ function validateManifestDynamicAccessHintStateMaps(accessSetHints, states, cont
         hint.max_keys,
       ]);
       if (seen.has(identity)) {
-        throw new TypeError(`${context}.${field} contains a duplicate dynamic access hint`);
+        rejectType(`${context}.${field} contains a duplicate dynamic access hint`);
       }
       seen.add(identity);
       const stateName = hint.base_key.slice("state:".length);
       const expectedKeyType = stateMaps.get(stateName);
       if (expectedKeyType === undefined) {
-        throw new TypeError(
-          `${hintContext}.base_key must reference a declared top-level StateMap`,
-        );
+        rejectType(`${hintContext}.base_key must reference a declared top-level StateMap`);
       }
       if (hint.key_type !== expectedKeyType) {
-        throw new TypeError(
-          `${hintContext}.key_type ${hint.key_type} does not match declared StateMap key type ${expectedKeyType}`,
-        );
+        rejectType(`${hintContext}.key_type ${hint.key_type} does not match declared StateMap key type ${expectedKeyType}`);
       }
     });
   }
@@ -20833,7 +20658,7 @@ function validateManifestDynamicAccessHintStateMaps(accessSetHints, states, cont
 
 function normalizeManifestKotobaPayload(value, context) {
   if (!Array.isArray(value)) {
-    throw new TypeError(`${context} must be an array`);
+    rejectType(`${context} must be an array`);
   }
   return value.map((entry, index) => {
     const record = ensureRecord(entry, `${context}[${index}]`);
@@ -20852,7 +20677,7 @@ function normalizeManifestKotobaPayload(value, context) {
 
 function normalizeManifestKotobaTranslationsPayload(value, context) {
   if (!Array.isArray(value)) {
-    throw new TypeError(`${context} must be an array`);
+    rejectType(`${context} must be an array`);
   }
   return value.map((translation, index) => {
     const record = ensureRecord(translation, `${context}[${index}]`);
@@ -20862,7 +20687,7 @@ function normalizeManifestKotobaTranslationsPayload(value, context) {
         typeof record.text === "string"
           ? record.text
           : (() => {
-              throw new TypeError(`${context}[${index}].text must be a string`);
+              rejectType(`${context}[${index}].text must be a string`);
             })(),
     };
   });
@@ -20883,20 +20708,18 @@ function normalizeManifestPublicKeyPayload(value, context) {
   const digestLength = decodeVarintBuffer(bytes, functionCode.nextIndex, context);
   const payload = bytes.subarray(digestLength.nextIndex);
   if (payload.length !== digestLength.value) {
-    throw new Error(`${context} multihash payload length does not match its digest header`);
+    rejectError(`${context} multihash payload length does not match its digest header`);
   }
   const entry = getCurveEntryByPublicKeyMulticodec(functionCode.value);
   if (!entry) {
-    throw new Error(
-      `${context} uses unsupported multihash code 0x${functionCode.value.toString(16)}`,
-    );
+    rejectError(`${context} uses unsupported multihash code 0x${functionCode.value.toString(16)}`);
   }
   if (
     prefixedAlgorithm &&
     prefixedAlgorithm !== entry.algorithm &&
     !(prefixedAlgorithm === "mldsa" && entry.algorithm === "ml-dsa")
   ) {
-    throw new Error(`${context} algorithm prefix does not match the multihash payload`);
+    rejectError(`${context} algorithm prefix does not match the multihash payload`);
   }
   validatePublicKeyForCurve(entry.id, payload, context);
   const fnHex = bytes.subarray(0, functionCode.nextIndex).toString("hex");
@@ -20919,11 +20742,11 @@ function normalizeManifestSignaturePayload(value, context) {
         : literal;
   }
   if (body.length === 0 || body.length % 2 !== 0 || !/^[0-9A-Fa-f]+$/u.test(body)) {
-    throw new TypeError(`${context} must be an even-length hexadecimal string`);
+    rejectType(`${context} must be an even-length hexadecimal string`);
   }
   const canonical = body.toUpperCase();
   if (/^0+$/u.test(canonical)) {
-    throw new TypeError(`${context} must not be all zero`);
+    rejectType(`${context} must not be all zero`);
   }
   return canonical;
 }
@@ -20943,7 +20766,7 @@ function normalizeAccessSetHintsPayload(payload, context) {
       return [];
     }
     if (!Array.isArray(value)) {
-      throw new TypeError(`${name} must be an array of strings`);
+      rejectType(`${name} must be an array of strings`);
     }
     return value.map((entry, index) =>
       requireNonEmptyString(entry, `${name}[${index}]`),
@@ -20954,7 +20777,7 @@ function normalizeAccessSetHintsPayload(payload, context) {
       return [];
     }
     if (!Array.isArray(value)) {
-      throw new TypeError(`${name} must be an array of dynamic access hints`);
+      rejectType(`${name} must be an array of dynamic access hints`);
     }
     return value.map((entry, index) => {
       const hint = ensureRecord(entry, `${name}[${index}]`);
@@ -20979,9 +20802,7 @@ function normalizeAccessSetHintsPayload(payload, context) {
         `${hintContext}.key_type`,
       );
       if (!isKotodamaV1StateMapKeyTypeName(keyType)) {
-        throw new TypeError(
-          `${hintContext}.key_type must be an exact Kotodama V1 StateMap key scalar`,
-        );
+        rejectType(`${hintContext}.key_type must be an exact Kotodama V1 StateMap key scalar`);
       }
       const baseKey = requireExactNonEmptyString(
         selectEqualManifestAlias(
@@ -20993,9 +20814,7 @@ function normalizeAccessSetHintsPayload(payload, context) {
         `${hintContext}.base_key`,
       );
       if (!isCanonicalKotodamaDynamicAccessBaseKey(baseKey)) {
-        throw new TypeError(
-          `${hintContext}.base_key must be state: plus one canonical state declaration identifier`,
-        );
+        rejectType(`${hintContext}.base_key must be state: plus one canonical state declaration identifier`);
       }
       const boundKind = requireExactNonEmptyString(
         selectEqualManifestAlias(
@@ -21007,9 +20826,7 @@ function normalizeAccessSetHintsPayload(payload, context) {
         `${hintContext}.bound_kind`,
       );
       if (!isKotodamaV1DynamicAccessBoundKind(boundKind)) {
-        throw new TypeError(
-          `${hintContext}.bound_kind must be exactly take or range`,
-        );
+        rejectType(`${hintContext}.bound_kind must be exactly take or page`);
       }
       return {
         base_key: baseKey,
@@ -21047,9 +20864,7 @@ function selectEqualManifestAlias(record, snakeCase, camelCase, context) {
     hasCamelCase &&
     !Object.is(record[snakeCase], record[camelCase])
   ) {
-    throw new TypeError(
-      `${context} contains conflicting ${snakeCase}/${camelCase} aliases`,
-    );
+    rejectType(`${context} contains conflicting ${snakeCase}/${camelCase} aliases`);
   }
   if (hasSnakeCase) {
     return record[snakeCase];
@@ -21071,19 +20886,17 @@ function normalizeManifestEntrypointPayload(value, context) {
     (lifecycleKind !== null && kind.kind !== lifecycleKind) ||
     (lifecycleKind === null && (kind.kind === "Hajimari" || kind.kind === "Kaizen"))
   ) {
-    throw new TypeError(`${context}.kind does not match its branded lifecycle selector`);
+    rejectType(`${context}.kind does not match its branded lifecycle selector`);
   }
   const permission = normalizeOptionalManifestString(
     record.permission,
     `${context}.permission`,
   );
   if (kind.kind === "Kotoage" && permission === null) {
-    throw new TypeError(`${context}.permission is required for kotoage/言挙げ`);
+    rejectType(`${context}.permission is required for kotoage/言挙げ`);
   }
   if ((kind.kind === "Hajimari" || kind.kind === "Kaizen") && permission !== null) {
-    throw new TypeError(
-      `${context}.permission must be null for hajimari/始まり and kaizen/改善`,
-    );
+    rejectType(`${context}.permission must be null for hajimari/始まり and kaizen/改善`);
   }
   const params = normalizeManifestEntrypointParams(record.params, `${context}.params`);
   const argumentSchema = normalizeManifestArgumentSchema(
@@ -21091,10 +20904,10 @@ function normalizeManifestEntrypointPayload(value, context) {
     `${context}.argument_schema`,
   );
   if (params.length === 0 && argumentSchema !== null) {
-    throw new TypeError(`${context} has an argument schema but no parameters`);
+    rejectType(`${context} has an argument schema but no parameters`);
   }
   if (params.length !== 0 && argumentSchema === null) {
-    throw new TypeError(`${context} has parameters but no exact argument schema`);
+    rejectType(`${context} has parameters but no exact argument schema`);
   }
   if (
     argumentSchema !== null &&
@@ -21106,7 +20919,7 @@ function normalizeManifestEntrypointPayload(value, context) {
             .canonicalName !== params[index].type_name,
       ))
   ) {
-    throw new TypeError(`${context}.argument_schema does not exactly match its parameters`);
+    rejectType(`${context}.argument_schema does not exactly match its parameters`);
   }
   const returnType = normalizeOptionalManifestString(
     record.return_type ?? record.returnType,
@@ -21116,18 +20929,18 @@ function normalizeManifestEntrypointPayload(value, context) {
     record.return_schema ?? record.returnSchema,
     `${context}.return_schema`,
   );
-  if ((returnType === null) !== (returnSchema === null)) {
-    throw new TypeError(`${context} must declare return_type and return_schema together`);
+  if (returnType === null || returnSchema === null) {
+    rejectType(`${context} must declare return_type and return_schema together`);
   }
   if (
     returnSchema !== null
   ) {
     const analysis = analyzeManifestValueType(returnSchema, `${context}.return_schema`);
     if (analysis.canonicalName !== returnType) {
-      throw new TypeError(`${context}.return_schema does not match return_type`);
+      rejectType(`${context}.return_schema does not match return_type`);
     }
     if (analysis.wordCount > 13) {
-      throw new TypeError(`${context}.return_schema exceeds the V1 13-word return window`);
+      rejectType(`${context}.return_schema exceeds the V1 13-word return window`);
     }
   }
   return {
@@ -21163,10 +20976,10 @@ function normalizeManifestEntrypointParams(value, context) {
     return [];
   }
   if (!Array.isArray(value)) {
-    throw new TypeError(`${context} must be an array`);
+    rejectType(`${context} must be an array`);
   }
   if (value.length > 13) {
-    throw new TypeError(`${context} exceeds the V1 13-parameter limit`);
+    rejectType(`${context} exceeds the V1 13-parameter limit`);
   }
   const names = new Set();
   return value.map((param, index) => {
@@ -21176,7 +20989,7 @@ function normalizeManifestEntrypointParams(value, context) {
       `${context}[${index}].name`,
     );
     if (names.has(name)) {
-      throw new TypeError(`${context} contains duplicate parameter ${name}`);
+      rejectType(`${context} contains duplicate parameter ${name}`);
     }
     names.add(name);
     return {
@@ -21200,10 +21013,10 @@ function normalizeManifestArgumentSchema(value, context) {
   }
   const record = ensureRecord(value, context);
   if (!Array.isArray(record.fields)) {
-    throw new TypeError(`${context}.fields must be an array`);
+    rejectType(`${context}.fields must be an array`);
   }
   if (record.fields.length === 0 || record.fields.length > 13) {
-    throw new TypeError(`${context}.fields must contain 1..13 entries`);
+    rejectType(`${context}.fields must contain 1..13 entries`);
   }
   const names = new Set();
   let wordCount = 0;
@@ -21214,7 +21027,7 @@ function normalizeManifestArgumentSchema(value, context) {
         `${context}.fields[${index}].name`,
       );
       if (names.has(name)) {
-        throw new TypeError(`${context}.fields contains duplicate name ${name}`);
+        rejectType(`${context}.fields contains duplicate name ${name}`);
       }
       names.add(name);
       const ty = normalizeRequiredManifestValueType(
@@ -21225,7 +21038,7 @@ function normalizeManifestArgumentSchema(value, context) {
       return { name, ty };
     });
   if (wordCount > 13) {
-    throw new TypeError(`${context} exceeds the V1 13-word argument window`);
+    rejectType(`${context} exceeds the V1 13-word argument window`);
   }
   return { fields };
 }
@@ -21240,7 +21053,7 @@ function normalizeManifestValueType(value, context) {
 function normalizeRequiredManifestValueType(value, context) {
   const record = ensureRecord(value, context);
   if (!Array.isArray(record.nodes)) {
-    throw new TypeError(`${context}.nodes must be an array`);
+    rejectType(`${context}.nodes must be an array`);
   }
   const normalized = {
     nodes: record.nodes.map((node, index) =>
@@ -21275,10 +21088,11 @@ function normalizeManifestValueTypeNode(value, context) {
         { allowZero: true },
       );
       if (arity > 0xffff) {
-        throw new TypeError(`${context}.value must fit in u16`);
+        rejectType(`${context}.value must fit in u16`);
       }
       return { kind, value: arity };
     }
+    case "Unit":
     case "Option":
     case "Result":
       requireManifestNull(record.value, `${context}.value`);
@@ -21287,9 +21101,7 @@ function normalizeManifestValueTypeNode(value, context) {
       const list = ensureRecord(record.value, `${context}.value`);
       const fields = Object.keys(list);
       if (fields.length !== 1 || fields[0] !== "capacity") {
-        throw new TypeError(
-          `${context}.value must contain exactly capacity; the element subtree follows in the nodes tape`,
-        );
+        rejectType(`${context}.value must contain exactly capacity; the element subtree follows in the nodes tape`);
       }
       const capacity = ToriiClient._normalizeUnsignedInteger(
         list.capacity,
@@ -21297,20 +21109,22 @@ function normalizeManifestValueTypeNode(value, context) {
         { allowZero: true },
       );
       if (capacity < 1 || capacity > 64) {
-        throw new TypeError(`${context}.value.capacity must be in the V1 range 1..64`);
+        rejectType(`${context}.value.capacity must be in the V1 range 1..64`);
       }
       return {
         kind,
         value: { capacity },
       };
     }
+    case "Error":
+      return { kind, value: normalizeContractErrorTypeV1(record.value, `${context}.value`) };
     case "Leaf":
       return {
         kind,
         value: normalizeManifestValueKind(record.value, `${context}.value`),
       };
     default:
-      throw new TypeError(`${context}.kind is not a V1 entrypoint value-type node`);
+      rejectType(`${context}.kind is not a V1 entrypoint value-type node`);
   }
 }
 
@@ -21334,7 +21148,7 @@ function normalizeManifestValueKind(value, context) {
     "Blob",
   ]);
   if (!allowed.has(kind)) {
-    throw new TypeError(`${context}.kind is not a V1 entrypoint value kind`);
+    rejectType(`${context}.kind is not a V1 entrypoint value kind`);
   }
   requireManifestNull(record.value, `${context}.value`);
   return { kind, value: null };
@@ -21354,7 +21168,7 @@ function normalizeOptionalManifestBoolean(value, context) {
     return null;
   }
   if (typeof value !== "boolean") {
-    throw new TypeError(`${context} must be a boolean`);
+    rejectType(`${context} must be a boolean`);
   }
   return value;
 }
@@ -21364,7 +21178,7 @@ function normalizeManifestStringArray(value, context) {
     return [];
   }
   if (!Array.isArray(value)) {
-    throw new TypeError(`${context} must be an array`);
+    rejectType(`${context} must be an array`);
   }
   return value.map((entry, index) =>
     requireExactNonEmptyString(entry, `${context}[${index}]`),
@@ -21373,13 +21187,13 @@ function normalizeManifestStringArray(value, context) {
 
 function requireManifestNull(value, context) {
   if (value !== undefined && value !== null) {
-    throw new TypeError(`${context} must be null`);
+    rejectType(`${context} must be null`);
   }
 }
 
 function normalizeManifestStatesPayload(value, context) {
   if (!Array.isArray(value)) {
-    throw new TypeError(`${context} must be an array`);
+    rejectType(`${context} must be an array`);
   }
   return value.map((state, index) => {
     const record = ensureRecord(state, `${context}[${index}]`);
@@ -21393,9 +21207,7 @@ function normalizeManifestStatesPayload(value, context) {
       `${context}[${index}].type_name`,
     );
     if (!isCanonicalKotodamaStateTypeName(typeName)) {
-      throw new TypeError(
-        `${context}[${index}].type_name must be a canonical Kotodama V1 state type`,
-      );
+      rejectType(`${context}[${index}].type_name must be a canonical Kotodama V1 state type`);
     }
     return {
       name: requireCanonicalKotodamaIdentifier(
@@ -21408,36 +21220,8 @@ function normalizeManifestStatesPayload(value, context) {
   });
 }
 
-function normalizeManifestErrorCodesPayload(value, context) {
-  if (!Array.isArray(value)) {
-    throw new TypeError(`${context} must be an array`);
-  }
-  return value.map((errorCode, index) => {
-    const record = ensureRecord(errorCode, `${context}[${index}]`);
-    const code = ToriiClient._normalizeUnsignedInteger(
-      record.code,
-      `${context}[${index}].code`,
-      { allowZero: true },
-    );
-    if (code > 0xffff_ffff) {
-      throw new TypeError(`${context}[${index}].code must fit in u32`);
-    }
-    if (code === 0) {
-      throw new TypeError(`${context}[${index}].code must be non-zero`);
-    }
-    return {
-      namespace: requireCanonicalKotodamaIdentifier(
-        record.namespace,
-        `${context}[${index}].namespace`,
-        { typeDeclaration: true },
-      ),
-      name: requireCanonicalKotodamaIdentifier(
-        record.name,
-        `${context}[${index}].name`,
-      ),
-      code,
-    };
-  });
+function normalizeManifestErrorTypesPayload(value, context) {
+  return normalizeContractErrorTypesV1(value, context);
 }
 
 function normalizeManifestTriggersPayload(value, context) {
@@ -21445,7 +21229,7 @@ function normalizeManifestTriggersPayload(value, context) {
     return [];
   }
   if (!Array.isArray(value)) {
-    throw new TypeError(`${context} must be an array`);
+    rejectType(`${context} must be an array`);
   }
   return value.map((trigger, index) => {
     const record = ensureRecord(trigger, `${context}[${index}]`);
@@ -21494,7 +21278,7 @@ function normalizeManifestRepeatsPayload(value, context) {
   const record = ensureRecord(value, context);
   const keys = Object.keys(record);
   if (keys.length !== 1) {
-    throw new TypeError(`${context} must contain exactly one repeat variant`);
+    rejectType(`${context} must contain exactly one repeat variant`);
   }
   if (keys[0] === "Indefinitely") {
     requireManifestNull(record.Indefinitely, `${context}.Indefinitely`);
@@ -21507,11 +21291,11 @@ function normalizeManifestRepeatsPayload(value, context) {
       { allowZero: true },
     );
     if (count > 0xffff_ffff) {
-      throw new TypeError(`${context}.Exactly must fit in u32`);
+      rejectType(`${context}.Exactly must fit in u32`);
     }
     return { Exactly: count };
   }
-  throw new TypeError(`${context} must be Indefinitely or Exactly`);
+  rejectType(`${context} must be Indefinitely or Exactly`);
 }
 
 function normalizeOptionalExactBase64Payload(value, name) {
@@ -21566,7 +21350,7 @@ function normalizeRequiredExactBase64Payload(value, name) {
       const decoded = strictDecodeBase64(value);
       const canonical = Buffer.from(decoded).toString("base64");
       if (canonical !== value) {
-        throw new Error("noncanonical base64 payload");
+        rejectError("noncanonical base64 payload");
       }
       return canonical;
     } catch (error) {
@@ -21602,7 +21386,7 @@ function normalizeOptionalHex32(value, name) {
 function normalizeIrohaHashHex32(value, name) {
   const hex = normalizeHex32String(value, name);
   if ((Number.parseInt(hex.slice(-2), 16) & 1) !== 1) {
-    throw new TypeError(`${name} must set the Iroha Hash marker bit`);
+    rejectType(`${name} must set the Iroha Hash marker bit`);
   }
   return hex;
 }
@@ -21755,18 +21539,16 @@ function normalizeNonZeroHexBytesString(value, name, expectedByteLength) {
 function parseHashLiteralToHex(literal, name) {
   const match = /^hash:([0-9A-Fa-f]{64})#([0-9A-Fa-f]{4})$/.exec(literal);
   if (!match) {
-    throw new TypeError(
-      `${name} must be a canonical "hash:<HEX>#<CRC>" literal or hex string`,
-    );
+    rejectType(`${name} must be a canonical "hash:<HEX>#<CRC>" literal or hex string`);
   }
   const [, body, checksum] = match;
   const expected = computeHashLiteralCrc("hash", body.toUpperCase());
   if (expected !== checksum.toUpperCase()) {
-    throw new TypeError(`${name} has invalid checksum; expected ${expected}`);
+    rejectType(`${name} has invalid checksum; expected ${expected}`);
   }
   const hex = body.toLowerCase();
   if ((Number.parseInt(hex.slice(-2), 16) & 1) !== 1) {
-    throw new TypeError(`${name} must set the Iroha Hash marker bit`);
+    rejectType(`${name} must set the Iroha Hash marker bit`);
   }
   return hex;
 }
@@ -21782,14 +21564,10 @@ function cloneJsonValue(value, path, { nullPrototype = false } = {}) {
 function cloneJsonValueInternal(value, path, state, depth) {
   state.nodes += 1;
   if (state.nodes > JSON_CLONE_MAX_NODES) {
-    throw new RangeError(
-      `${path} exceeds the ${JSON_CLONE_MAX_NODES}-node JSON value limit`,
-    );
+    rejectRange(`${path} exceeds the ${JSON_CLONE_MAX_NODES}-node JSON value limit`);
   }
   if (depth > JSON_CLONE_MAX_DEPTH) {
-    throw new RangeError(
-      `${path} exceeds the ${JSON_CLONE_MAX_DEPTH}-level JSON nesting limit`,
-    );
+    rejectRange(`${path} exceeds the ${JSON_CLONE_MAX_DEPTH}-level JSON nesting limit`);
   }
   if (
     value === null ||
@@ -21800,7 +21578,7 @@ function cloneJsonValueInternal(value, path, state, depth) {
   }
   if (typeof value === "number") {
     if (!Number.isFinite(value)) {
-      throw new TypeError(`${path} must not contain non-finite numbers`);
+      rejectType(`${path} must not contain non-finite numbers`);
     }
     return value;
   }
@@ -21808,10 +21586,10 @@ function cloneJsonValueInternal(value, path, state, depth) {
     return value.toString(10);
   }
   if (typeof value !== "object") {
-    throw new TypeError(`${path} contains unsupported value type: ${typeof value}`);
+    rejectType(`${path} contains unsupported value type: ${typeof value}`);
   }
   if (state.ancestors.has(value)) {
-    throw new TypeError(`${path} must not contain cyclic references`);
+    rejectType(`${path} must not contain cyclic references`);
   }
   state.ancestors.add(value);
   try {
@@ -21819,12 +21597,10 @@ function cloneJsonValueInternal(value, path, state, depth) {
       const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length");
       const length = lengthDescriptor?.value;
       if (!Number.isSafeInteger(length) || length < 0) {
-        throw new TypeError(`${path} must be an exact JSON array`);
+        rejectType(`${path} must be an exact JSON array`);
       }
       if (length > JSON_CLONE_MAX_NODES) {
-        throw new RangeError(
-          `${path} exceeds the ${JSON_CLONE_MAX_NODES}-node JSON value limit`,
-        );
+        rejectRange(`${path} exceeds the ${JSON_CLONE_MAX_NODES}-node JSON value limit`);
       }
       const ownKeys = Reflect.ownKeys(value);
       if (
@@ -21835,13 +21611,13 @@ function cloneJsonValueInternal(value, path, state, depth) {
             (index === length && key !== "length"),
         )
       ) {
-        throw new TypeError(`${path} must be a dense exact JSON array`);
+        rejectType(`${path} must be a dense exact JSON array`);
       }
       const result = new Array(length);
       for (let index = 0; index < length; index += 1) {
         const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
         if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) {
-          throw new TypeError(`${path}[${index}] must be an enumerable data property`);
+          rejectType(`${path}[${index}] must be an enumerable data property`);
         }
         result[index] = cloneJsonValueInternal(
           descriptor.value,
@@ -21855,11 +21631,11 @@ function cloneJsonValueInternal(value, path, state, depth) {
     const result = state.nullPrototype ? Object.create(null) : {};
     for (const key of Reflect.ownKeys(value)) {
       if (typeof key !== "string") {
-        throw new TypeError(`${path} keys must be strings without symbols`);
+        rejectType(`${path} keys must be strings without symbols`);
       }
       const descriptor = Object.getOwnPropertyDescriptor(value, key);
       if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) {
-        throw new TypeError(`${path}.${key} must be an enumerable data property`);
+        rejectType(`${path}.${key} must be an enumerable data property`);
       }
       Object.defineProperty(result, key, {
         value: cloneJsonValueInternal(
@@ -21927,12 +21703,10 @@ function normalizePublishSpaceDirectoryManifestRequest(input) {
   };
   if (Object.prototype.hasOwnProperty.call(record, "reason")) {
     if (record.reason === null) {
-      throw new TypeError(
-        "publishSpaceDirectoryManifest.reason must be omitted instead of null",
-      );
+      rejectType("publishSpaceDirectoryManifest.reason must be omitted instead of null");
     }
     if (typeof record.reason !== "string") {
-      throw new TypeError("publishSpaceDirectoryManifest.reason must be a string");
+      rejectType("publishSpaceDirectoryManifest.reason must be a string");
     }
     payload.reason = record.reason;
   }
@@ -21973,12 +21747,10 @@ function normalizeRevokeSpaceDirectoryManifestRequest(input) {
   };
   if (Object.prototype.hasOwnProperty.call(record, "reason")) {
     if (record.reason === null) {
-      throw new TypeError(
-        "revokeSpaceDirectoryManifest.reason must be omitted instead of null",
-      );
+      rejectType("revokeSpaceDirectoryManifest.reason must be omitted instead of null");
     }
     if (typeof record.reason !== "string") {
-      throw new TypeError("revokeSpaceDirectoryManifest.reason must be a string");
+      rejectType("revokeSpaceDirectoryManifest.reason must be a string");
     }
     payload.reason = record.reason;
   }
@@ -22165,7 +21937,7 @@ function normalizeArbitraryHex(value, name) {
 function contractAliasDataspaceSegment(value, context) {
   const literal = requireExactNonEmptyString(value, context);
   if (/[@#$\s]/u.test(literal)) {
-    throw new TypeError(`${context} must use canonical contract-alias syntax`);
+    rejectType(`${context} must use canonical contract-alias syntax`);
   }
   const separator = literal.indexOf("::");
   if (
@@ -22173,9 +21945,7 @@ function contractAliasDataspaceSegment(value, context) {
     || separator !== literal.lastIndexOf("::")
     || separator + 2 >= literal.length
   ) {
-    throw new TypeError(
-      `${context} must use <name>::<dataspace> or <name>::<domain>.<dataspace>`,
-    );
+    rejectType(`${context} must use <name>::<dataspace> or <name>::<domain>.<dataspace>`);
   }
   const name = literal.slice(0, separator);
   const scopeParts = literal.slice(separator + 2).split(".");
@@ -22186,7 +21956,7 @@ function contractAliasDataspaceSegment(value, context) {
       (segment) => segment.length === 0 || segment.includes(":"),
     )
   ) {
-    throw new TypeError(`${context} contains an invalid alias segment`);
+    rejectType(`${context} contains an invalid alias segment`);
   }
   return scopeParts[scopeParts.length - 1];
 }
@@ -22234,9 +22004,7 @@ function normalizeLocalTransactionDraftIntent(input, context, required) {
   const raw = pickOverride(record, "draft_intent", "draftIntent");
   if (raw === undefined || raw === null) {
     if (required) {
-      throw new TypeError(
-        `${context} requires a caller-trusted draftIntent for unsigned preparation`,
-      );
+      rejectType(`${context} requires a caller-trusted draftIntent for unsigned preparation`);
     }
     return null;
   }
@@ -22264,9 +22032,7 @@ function normalizeContractCallDraftIntent(input, context) {
   const record = ensureRecord(input, `${context} request`);
   const raw = pickOverride(record, "draft_intent", "draftIntent");
   if (raw === undefined || raw === null) {
-    throw new TypeError(
-      `${context} requires a caller-trusted draftIntent for unsigned preparation`,
-    );
+    rejectType(`${context} requires a caller-trusted draftIntent for unsigned preparation`);
   }
   const intent = ensureRecord(raw, `${context}.draftIntent`);
   assertSupportedOptionKeys(
@@ -22313,9 +22079,7 @@ function normalizeContractCallDraftIntent(input, context) {
 
 function requireLocalDraftSigningContext(localSigningContext, context) {
   if (!(localSigningContext instanceof LocalSigningContext)) {
-    throw new TypeError(
-      `${context} requires ToriiClient options.localSigningContext`,
-    );
+    rejectType(`${context} requires ToriiClient options.localSigningContext`);
   }
   return localSigningContext;
 }
@@ -22543,14 +22307,14 @@ async function normalizeContractCallDraftResponse(
   const response = normalizeContractCallResponse(payload);
   const receipt = response.operation_receipt;
   if (!response.ok || response.submitted) {
-    throw new TypeError("contractCall draft must be successful and not submitted");
+    rejectType("contractCall draft must be successful and not submitted");
   }
   if (
     response.tx_hash_hex !== null ||
     response.entrypoint_hash_hex !== null ||
     response.pipeline_status != null
   ) {
-    throw new TypeError("contractCall draft must not contain submission state");
+    rejectType("contractCall draft must not contain submission state");
   }
   normalizeAppApiTransactionDraft(
     {
@@ -22568,38 +22332,34 @@ async function normalizeContractCallDraftResponse(
     receipt.tx_hash_hex !== null ||
     receipt.entrypoint_hash_hex !== null
   ) {
-    throw new TypeError("contractCall draft is not bound to the requested entrypoint");
+    rejectType("contractCall draft is not bound to the requested entrypoint");
   }
   if (
     receipt.transport !== "torii"
     || receipt.dataspace !== response.dataspace
     || receipt.gas_used !== null
   ) {
-    throw new TypeError(
-      "contractCall operation_receipt does not match the exact pending draft context",
-    );
+    rejectType("contractCall operation_receipt does not match the exact pending draft context");
   }
   const expectedResponseTtl = request.transaction_ttl_ms ?? null;
   if (response.transaction_ttl_ms !== expectedResponseTtl) {
-    throw new TypeError("contractCall draft transaction_ttl_ms is not bound to the request");
+    rejectType("contractCall draft transaction_ttl_ms is not bound to the request");
   }
   if (
     request.creation_time_ms !== undefined
     && response.creation_time_ms !== request.creation_time_ms
   ) {
-    throw new TypeError("contractCall draft creation_time_ms is not bound to the request");
+    rejectType("contractCall draft creation_time_ms is not bound to the request");
   }
   if (
     response.contract_address !== draftIntent.contractAddress
     || receipt.contract_address !== draftIntent.contractAddress
   ) {
-    throw new TypeError(
-      "contractCall draft resolved address changed the caller-trusted draftIntent",
-    );
+    rejectType("contractCall draft resolved address changed the caller-trusted draftIntent");
   }
   const expectedAlias = request.contract_alias ?? null;
   if (receipt.contract_alias !== expectedAlias) {
-    throw new TypeError("contractCall draft is not bound to the requested alias");
+    rejectType("contractCall draft is not bound to the requested alias");
   }
   if (
     expectedAlias !== null
@@ -22608,41 +22368,29 @@ async function normalizeContractCallDraftResponse(
       "contractCall request.contract_alias",
     )
   ) {
-    throw new TypeError(
-      "contractCall draft dataspace does not match the requested alias",
-    );
+    rejectType("contractCall draft dataspace does not match the requested alias");
   }
   if (
     response.contract_address !== receipt.contract_address
     || response.code_hash_hex !== receipt.code_hash_hex
     || response.abi_hash_hex !== receipt.abi_hash_hex
   ) {
-    throw new TypeError(
-      "contractCall draft receipt does not match the resolved contract binding",
-    );
+    rejectType("contractCall draft receipt does not match the resolved contract binding");
   }
   if (response.code_hash_hex !== draftIntent.codeHashHex) {
-    throw new TypeError(
-      "contractCall draft code hash changed the caller-trusted draftIntent",
-    );
+    rejectType("contractCall draft code hash changed the caller-trusted draftIntent");
   }
   if (
     receipt.fee_payment === null
     || !feeQuoteSelectionsMatch(receipt.fee_payment, request.fee_payment)
   ) {
-    throw new TypeError(
-      "contractCall draft fee_payment changed the requested payer, sponsor revision, or gas bound",
-    );
+    rejectType("contractCall draft fee_payment changed the requested payer, sponsor revision, or gas bound");
   }
   if (receipt.gas_limit !== receipt.fee_payment.value.gas_limit) {
-    throw new TypeError(
-      "contractCall operation_receipt gas_limit does not match its fee_payment",
-    );
+    rejectType("contractCall operation_receipt gas_limit does not match its fee_payment");
   }
   if (receipt.payload_digest_hex !== draftIntent.payloadDigestHex) {
-    throw new TypeError(
-      "contractCall operation_receipt payload digest changed the caller-trusted draftIntent",
-    );
+    rejectType("contractCall operation_receipt payload digest changed the caller-trusted draftIntent");
   }
   await validateUnsignedResponsePayloadBinding(
     response,
@@ -22691,9 +22439,7 @@ function normalizeContractCallSimulateRequest(input) {
 function normalizeContractCallSimulateResponse(payload) {
   const record = ensureRecord(payload, "contractCall simulation response");
   if (typeof record.ok !== "boolean") {
-    throw new TypeError(
-      "contractCall simulation response.ok must be a boolean",
-    );
+    rejectType("contractCall simulation response.ok must be a boolean");
   }
   const error =
     record.error === undefined || record.error === null
@@ -22703,14 +22449,10 @@ function normalizeContractCallSimulateResponse(payload) {
           "contractCall simulation response.error",
         );
   if (record.ok && error !== null) {
-    throw new TypeError(
-      "successful contractCall simulation response must not contain an error",
-    );
+    rejectType("successful contractCall simulation response must not contain an error");
   }
   if (!record.ok && error === null) {
-    throw new TypeError(
-      "failed contractCall simulation response must contain a non-empty error",
-    );
+    rejectType("failed contractCall simulation response must contain a non-empty error");
   }
   const normalized = {
     ok: record.ok,
@@ -22762,9 +22504,7 @@ function normalizeContractCallSimulateResponse(payload) {
           ),
         )
       : (() => {
-          throw new TypeError(
-            "contractCall simulation response.queued_instructions must be an array",
-          );
+          rejectType("contractCall simulation response.queued_instructions must be an array");
         })(),
     result:
       record.result === undefined || record.result === null
@@ -22813,9 +22553,7 @@ async function normalizeZkIvmExecutionRequest(input, { context, includeProved })
         `${context}.proved`,
       );
       if (normalized.proved.bytecode !== bytecode) {
-        throw new TypeError(
-          `${context}.proved.bytecode must exactly match ${context}.bytecode`,
-        );
+        rejectType(`${context}.proved.bytecode must exactly match ${context}.bytecode`);
       }
     }
   }
@@ -22825,7 +22563,7 @@ async function normalizeZkIvmExecutionRequest(input, { context, includeProved })
 function stringifyBoundedJsonRequest(payload, maxBytes, context) {
   const body = JSON.stringify(payload);
   if (Buffer.byteLength(body, "utf8") > maxBytes) {
-    throw new RangeError(`${context} exceeds the ${maxBytes}-byte request limit`);
+    rejectRange(`${context} exceeds the ${maxBytes}-byte request limit`);
   }
   return body;
 }
@@ -22855,7 +22593,7 @@ function normalizeZkIvmProvedPayload(value, context) {
     `${context}.bytecode`,
   );
   if (!Array.isArray(record.overlay)) {
-    throw new TypeError(`${context}.overlay must be an array`);
+    rejectType(`${context}.overlay must be an array`);
   }
   const overlay = cloneJsonValue(record.overlay, `${context}.overlay`, {
     nullPrototype: true,
@@ -22882,15 +22620,13 @@ function exactEnumerableDataRecord(value, expectedKeys, context) {
     ownKeys.length !== expectedKeys.length ||
     ownKeys.some((key) => typeof key !== "string" || !expected.has(key))
   ) {
-    throw new TypeError(
-      `${context} must contain exactly: ${expectedKeys.join(", ")}`,
-    );
+    rejectType(`${context} must contain exactly: ${expectedKeys.join(", ")}`);
   }
   const snapshot = {};
   for (const key of expectedKeys) {
     const descriptor = Object.getOwnPropertyDescriptor(record, key);
     if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) {
-      throw new TypeError(`${context}.${key} must be an enumerable data property`);
+      rejectType(`${context}.${key} must be an enumerable data property`);
     }
     snapshot[key] = descriptor.value;
   }
@@ -22906,7 +22642,7 @@ function normalizePortableVerifyingKeyIdField(value, context) {
       (separator) => field.includes(separator),
     )
   ) {
-    throw new TypeError(`${context} must use portable registry syntax`);
+    rejectType(`${context} must use portable registry syntax`);
   }
   return field;
 }
@@ -22921,9 +22657,7 @@ function normalizeZkIvmProofAttachment(value, context) {
     requiredKeys.some((key) => !ownKeys.includes(key)) ||
     ownKeys.some((key) => typeof key !== "string" || !allowed.has(key))
   ) {
-    throw new TypeError(
-      `${context} must contain backend, proof, vk_ref, and only supported optional fields`,
-    );
+    rejectType(`${context} must contain backend, proof, vk_ref, and only supported optional fields`);
   }
   const presentOptionalKeys = optionalKeys.filter((key) => ownKeys.includes(key));
   const record = exactEnumerableDataRecord(
@@ -22949,9 +22683,7 @@ function normalizeZkIvmProofAttachment(value, context) {
         !new Set(["backend", "bytes_b64", "bytes"]).has(key),
     )
   ) {
-    throw new TypeError(
-      `${context}.proof must contain exactly backend and one of bytes_b64 or bytes`,
-    );
+    rejectType(`${context}.proof must contain exactly backend and one of bytes_b64 or bytes`);
   }
   const proof = exactEnumerableDataRecord(
     proofCandidate,
@@ -22963,7 +22695,7 @@ function normalizeZkIvmProofAttachment(value, context) {
     `${context}.proof.backend`,
   );
   if (proofBackend !== backend) {
-    throw new TypeError(`${context}.proof.backend must match ${context}.backend`);
+    rejectType(`${context}.proof.backend must match ${context}.backend`);
   }
   const vkRefRecord = exactEnumerableDataRecord(
     record.vk_ref,
@@ -22975,7 +22707,7 @@ function normalizeZkIvmProofAttachment(value, context) {
     `${context}.vk_ref.backend`,
   );
   if (vkBackend !== backend) {
-    throw new TypeError(`${context}.vk_ref.backend must match ${context}.backend`);
+    rejectType(`${context}.vk_ref.backend must match ${context}.backend`);
   }
   const vkName = normalizePortableVerifyingKeyIdField(
     vkRefRecord.name,
@@ -23015,7 +22747,7 @@ function normalizeZkIvmProofAttachment(value, context) {
       if (bytes[index] !== 0) nonZero = true;
     }
     if (!nonZero) {
-      throw new TypeError(`${context}.${key} must be non-zero`);
+      rejectType(`${context}.${key} must be non-zero`);
     }
     normalized[key] = Array.from(bytes);
   }
@@ -23038,7 +22770,7 @@ function validateNormalizedProofAttachmentEnvelope(attachment, context) {
   expected[typedArrayByteLengthGetter.call(expected) - 1] |= 1;
   for (let index = 0; index < 32; index += 1) {
     if (attachment.envelope_hash[index] !== expected[index]) {
-      throw new TypeError(`${context}.envelope_hash must match proof bytes`);
+      rejectType(`${context}.envelope_hash must match proof bytes`);
     }
   }
   return attachment;
@@ -23050,33 +22782,33 @@ function normalizeExactJsonByteArray(
   { exactLength = null, maxLength = null } = {},
 ) {
   if (!Array.isArray(value)) {
-    throw new TypeError(`${context} must be an exact byte array`);
+    rejectType(`${context} must be an exact byte array`);
   }
   const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length");
   if (!lengthDescriptor || !("value" in lengthDescriptor)) {
-    throw new TypeError(`${context} must be an exact byte array`);
+    rejectType(`${context} must be an exact byte array`);
   }
   const length = lengthDescriptor.value;
   if (exactLength !== null && length !== exactLength) {
-    throw new TypeError(`${context} must be an exact ${exactLength}-byte array`);
+    rejectType(`${context} must be an exact ${exactLength}-byte array`);
   }
   if (maxLength !== null && length > maxLength) {
-    throw new RangeError(`${context} exceeds the ${maxLength}-byte proof limit`);
+    rejectRange(`${context} exceeds the ${maxLength}-byte proof limit`);
   }
   if (length === 0) {
-    throw new TypeError(`${context} must not be empty`);
+    rejectType(`${context} must not be empty`);
   }
   if (Object.getOwnPropertySymbols(value).length !== 0) {
-    throw new TypeError(`${context} must be an exact byte array`);
+    rejectType(`${context} must be an exact byte array`);
   }
   const bytes = new Uint8ArrayIntrinsic(length);
   let enumerableKeys = 0;
   for (const key in value) {
     if (!Object.prototype.hasOwnProperty.call(value, key)) {
-      throw new TypeError(`${context} must not inherit enumerable fields`);
+      rejectType(`${context} must not inherit enumerable fields`);
     }
     if (key !== String(enumerableKeys) || enumerableKeys >= length) {
-      throw new TypeError(`${context} must be a dense exact byte array`);
+      rejectType(`${context} must be a dense exact byte array`);
     }
     const descriptor = Object.getOwnPropertyDescriptor(value, key);
     const byte = descriptor && "value" in descriptor ? descriptor.value : null;
@@ -23087,13 +22819,13 @@ function normalizeExactJsonByteArray(
       byte < 0 ||
       byte > 0xff
     ) {
-      throw new TypeError(`${context}[${key}] must be an unsigned byte`);
+      rejectType(`${context}[${key}] must be an unsigned byte`);
     }
     bytes[enumerableKeys] = byte;
     enumerableKeys += 1;
   }
   if (enumerableKeys !== length) {
-    throw new TypeError(`${context} must be a dense exact byte array`);
+    rejectType(`${context} must be a dense exact byte array`);
   }
   return bytes;
 }
@@ -23101,7 +22833,7 @@ function normalizeExactJsonByteArray(
 function normalizeIvmProveJobId(value, context) {
   const normalized = requireNonEmptyString(value, context);
   if (!/^[0-9a-fA-F]{32}$/u.test(normalized)) {
-    throw new TypeError(`${context} must be a 16-byte hexadecimal IVM prove job id`);
+    rejectType(`${context} must be a 16-byte hexadecimal IVM prove job id`);
   }
   return normalized.toLowerCase();
 }
@@ -23109,9 +22841,7 @@ function normalizeIvmProveJobId(value, context) {
 function normalizeIvmProveResponseJobId(value, context) {
   const normalized = requireExactNonEmptyString(value, context);
   if (!/^[0-9a-f]{32}$/u.test(normalized)) {
-    throw new TypeError(
-      `${context} must be an exact lowercase 16-byte hexadecimal IVM prove job id`,
-    );
+    rejectType(`${context} must be an exact lowercase 16-byte hexadecimal IVM prove job id`);
   }
   return normalized;
 }
@@ -23138,18 +22868,14 @@ function normalizeZkIvmProveJobResponse(payload) {
     !("value" in statusDescriptor) ||
     !statusDescriptor.enumerable
   ) {
-    throw new TypeError(
-      "IVM prove job status response.status must be an enumerable data property",
-    );
+    rejectType("IVM prove job status response.status must be an enumerable data property");
   }
   const status = requireExactNonEmptyString(
     statusDescriptor.value,
     "IVM prove job status response.status",
   );
   if (!new Set(["pending", "running", "done", "error"]).has(status)) {
-    throw new TypeError(
-      "IVM prove job status response.status must be pending, running, done, or error",
-    );
+    rejectType("IVM prove job status response.status must be pending, running, done, or error");
   }
   const expectedKeys =
     status === "done"
@@ -23249,9 +22975,7 @@ function normalizeMultisigSelectorOnlyRequest(input, context) {
 function normalizeMultisigProposalStatus(value, context) {
   const status = requireNonEmptyString(value, context).trim().toUpperCase();
   if (!MULTISIG_PROPOSAL_STATUS_VALUES.has(status)) {
-    throw new TypeError(
-      `${context} must be one of ${[...MULTISIG_PROPOSAL_STATUS_VALUES].join(", ")}`,
-    );
+    rejectType(`${context} must be one of ${[...MULTISIG_PROPOSAL_STATUS_VALUES].join(", ")}`);
   }
   return status;
 }
@@ -23261,7 +22985,7 @@ function normalizeMultisigProposalsQueryRequest(input, context) {
   const payload = normalizeMultisigAccountSelector(record, context);
   if (record.status !== undefined) {
     if (!Array.isArray(record.status)) {
-      throw new TypeError(`${context}.status must be an array`);
+      rejectType(`${context}.status must be an array`);
     }
     payload.status = record.status.map((status, index) =>
       normalizeMultisigProposalStatus(status, `${context}.status[${index}]`),
@@ -23651,9 +23375,7 @@ function normalizeMultisigContractCallResponse(
     && normalized.instructions_hash !== null
     && normalized.proposal_id !== normalized.instructions_hash
   ) {
-    throw new TypeError(
-      `${context}.proposal_id and instructions_hash must identify the same proposal`,
-    );
+    rejectType(`${context}.proposal_id and instructions_hash must identify the same proposal`);
   }
   if (normalized.submitted) {
     if (
@@ -23661,15 +23383,11 @@ function normalizeMultisigContractCallResponse(
       normalized.transaction_payload_b64 !== null ||
       normalized.signing_message_b64 !== null
     ) {
-      throw new TypeError(
-        `${context} submitted response must contain only the final transaction hash`,
-      );
+      rejectType(`${context} submitted response must contain only the final transaction hash`);
     }
   } else {
     if (normalized.tx_hash_hex !== null) {
-      throw new TypeError(
-        `${context} unsigned response must contain exactly one payload and signing-message pair`,
-      );
+      rejectType(`${context} unsigned response must contain exactly one payload and signing-message pair`);
     }
     normalizeAppApiTransactionDraft(
       {
@@ -23697,7 +23415,7 @@ async function validateUnsignedResponsePayloadBinding(
   context,
 ) {
   if (draftIntent === null) {
-    throw new TypeError(`${context} requires a caller-trusted draftIntent`);
+    rejectType(`${context} requires a caller-trusted draftIntent`);
   }
   requireLocalDraftSigningContext(localSigningContext, context);
   const {
@@ -23711,16 +23429,13 @@ async function validateUnsignedResponsePayloadBinding(
       authority,
     );
   } catch (error) {
-    throw new TypeError(
-      `${context}.transaction_payload_b64 must contain one canonical transaction payload bound to the requested signer`,
-      { cause: error },
-    );
+    rejectType(`${context}.transaction_payload_b64 must contain one canonical transaction payload bound to the requested signer`, { cause: error });
   }
   const expectedNetworkId = Buffer.from(
     networkIdBytes(localSigningContext.networkId, `${context}.networkId`),
   );
   if (!exactArchiveEquals(expectedNetworkId, bindings.networkId)) {
-    throw new TypeError(`${context} transaction payload changed caller-trusted networkId`);
+    rejectType(`${context} transaction payload changed caller-trusted networkId`);
   }
   const encodedResponseFee = Buffer.from(
     noritoEncodeFeePaymentIntentArchive(feePayment),
@@ -23731,21 +23446,17 @@ async function validateUnsignedResponsePayloadBinding(
     ["metadata", draftIntent.metadataArchive, bindings.metadataArchive],
   ]) {
     if (!exactArchiveEquals(expected, actual)) {
-      throw new TypeError(
-        `${context} transaction payload changed caller-trusted ${field}`,
-      );
+      rejectType(`${context} transaction payload changed caller-trusted ${field}`);
     }
   }
   if (
     response.creation_time_ms === null
     || BigInt(response.creation_time_ms) !== bindings.creationTimeMs
   ) {
-    throw new TypeError(
-      `${context}.creation_time_ms does not match the exact transaction payload`,
-    );
+    rejectType(`${context}.creation_time_ms does not match the exact transaction payload`);
   }
   if (BigInt(expectedTtlMs) !== bindings.ttlMs) {
-    throw new TypeError(`${context} transaction payload changed caller-trusted ttlMs`);
+    rejectType(`${context} transaction payload changed caller-trusted ttlMs`);
   }
 }
 
@@ -23757,17 +23468,13 @@ async function validateMultisigResponseRequestBinding(
   localSigningContext,
 ) {
   if (!feeQuoteSelectionsMatch(response.fee_payment, request.fee_payment)) {
-    throw new TypeError(
-      `${context}.fee_payment changed the requested payer, sponsor revision, or gas bound`,
-    );
+    rejectType(`${context}.fee_payment changed the requested payer, sponsor revision, or gas bound`);
   }
   if (
     request.creation_time_ms !== undefined
     && response.creation_time_ms !== request.creation_time_ms
   ) {
-    throw new TypeError(
-      `${context}.creation_time_ms is not bound to the request`,
-    );
+    rejectType(`${context}.creation_time_ms is not bound to the request`);
   }
   if (!response.submitted) {
     await validateUnsignedResponsePayloadBinding(
@@ -23830,7 +23537,7 @@ function normalizeMultisigProposalsQueryResponse(
   const record = ensureRecord(payload, context);
   const proposalsValue = record.proposals;
   if (!Array.isArray(proposalsValue)) {
-    throw new TypeError(`${context}.proposals must be an array`);
+    rejectType(`${context}.proposals must be an array`);
   }
   return {
     resolved_multisig_account_id: requireExactAccountId(
@@ -23921,14 +23628,10 @@ function normalizeContractManifestResponse(payload) {
   const codeHash = normalizeOptionalHex32(record.code_hash, "contractManifest.code_hash") ?? null;
   const abiHash = normalizeOptionalHex32(record.abi_hash, "contractManifest.abi_hash") ?? null;
   if (codeHash !== manifest.code_hash) {
-    throw new TypeError(
-      "contractManifest.code_hash does not match manifest.code_hash",
-    );
+    rejectType("contractManifest.code_hash does not match manifest.code_hash");
   }
   if (abiHash !== manifest.abi_hash) {
-    throw new TypeError(
-      "contractManifest.abi_hash does not match manifest.abi_hash",
-    );
+    rejectType("contractManifest.abi_hash does not match manifest.abi_hash");
   }
   return {
     manifest,
@@ -23943,7 +23646,7 @@ function normalizeCanonicalManifestHash(value, name) {
   }
   const literal = requireExactNonEmptyString(value, name);
   if (!/^hash:[0-9A-F]{64}#[0-9A-F]{4}$/u.test(literal)) {
-    throw new TypeError(`${name} must be a canonical uppercase Norito Hash literal`);
+    rejectType(`${name} must be a canonical uppercase Norito Hash literal`);
   }
   return parseHashLiteralToHex(literal, name);
 }
@@ -23952,15 +23655,11 @@ function normalizeContractCodeBytesResponse(payload) {
   const record = ensureRecord(payload, "contract code bytes response");
   const ownKeys = Reflect.ownKeys(record);
   if (ownKeys.length !== 1 || ownKeys[0] !== "code_b64") {
-    throw new TypeError(
-      "contract code bytes response must contain exactly the code_b64 field",
-    );
+    rejectType("contract code bytes response must contain exactly the code_b64 field");
   }
   const descriptor = Object.getOwnPropertyDescriptor(record, "code_b64");
   if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) {
-    throw new TypeError(
-      "contract code bytes response code_b64 must be an enumerable data property",
-    );
+    rejectType("contract code bytes response code_b64 must be an enumerable data property");
   }
   return {
     code_b64: normalizeIvmArtifactBase64String(
@@ -23994,18 +23693,14 @@ function normalizeBoundedCanonicalBase64String(
   }
   const maxEncodedLength = Math.ceil(maxBytes / 3) * 4;
   if (value.length > maxEncodedLength) {
-    throw new RangeError(
-      `${name} exceeds the ${maxBytes}-byte ${limitLabel} limit`,
-    );
+    rejectRange(`${name} exceeds the ${maxBytes}-byte ${limitLabel} limit`);
   }
   const padding = value.endsWith("==") ? 2 : value.endsWith("=") ? 1 : 0;
   if (
     value.length % 4 === 0 &&
     (value.length / 4) * 3 - padding > maxBytes
   ) {
-    throw new RangeError(
-      `${name} exceeds the ${maxBytes}-byte ${limitLabel} limit`,
-    );
+    rejectRange(`${name} exceeds the ${maxBytes}-byte ${limitLabel} limit`);
   }
   if (!hasExactStandardBase64Shape(value)) {
     throw createValidationError(
@@ -24032,7 +23727,7 @@ function normalizeIvmArtifactBytecodeInput(value, name) {
     return normalizeIvmArtifactBase64String(value, name);
   }
   if (isGenuineSharedArrayBuffer(value)) {
-    throw new TypeError(`${name} must not use SharedArrayBuffer`);
+    rejectType(`${name} must not use SharedArrayBuffer`);
   }
 
   let buffer;
@@ -24054,22 +23749,18 @@ function normalizeIvmArtifactBytecodeInput(value, name) {
         byteOffset = dataViewByteOffsetGetter.call(value);
         byteLength = dataViewByteLengthGetter.call(value);
       } catch {
-        throw new TypeError(
-          `${name} must be canonical base64 or an ArrayBuffer view`,
-        );
+        rejectType(`${name} must be canonical base64 or an ArrayBuffer view`);
       }
     }
   }
   if (isGenuineSharedArrayBuffer(buffer)) {
-    throw new TypeError(`${name} must not use SharedArrayBuffer`);
+    rejectType(`${name} must not use SharedArrayBuffer`);
   }
   if (byteLength > IVM_ARTIFACT_MAX_BYTES) {
-    throw new RangeError(
-      `${name} exceeds the ${IVM_ARTIFACT_MAX_BYTES}-byte artifact limit`,
-    );
+    rejectRange(`${name} exceeds the ${IVM_ARTIFACT_MAX_BYTES}-byte artifact limit`);
   }
   if (byteLength === 0) {
-    throw new TypeError(`${name} must not be empty`);
+    rejectType(`${name} must not be empty`);
   }
   return Buffer.from(
     copyArrayBufferBytes(buffer, byteOffset, byteLength),
@@ -24105,7 +23796,7 @@ function standardBase64Sextet(code) {
 
 function normalizeManifestEntrypointKind(value, name) {
   if (value === undefined || value === null) {
-    throw new TypeError(`${name} is required`);
+    rejectType(`${name} is required`);
   }
   if (typeof value === "string") {
     const canonical = requireExactNonEmptyString(value, name);
@@ -24117,7 +23808,7 @@ function normalizeManifestEntrypointKind(value, name) {
     `${name}.kind`,
   );
   if (record.value !== undefined && record.value !== null) {
-    throw new TypeError(`${name}.value must be null`);
+    rejectType(`${name}.value must be null`);
   }
   return { kind, value: null };
 }
@@ -24133,9 +23824,7 @@ function canonicalManifestEntrypointKind(value, name) {
     case "Kaizen":
       return "Kaizen";
     default:
-      throw new TypeError(
-        `${name} must be Kotoage, View, Hajimari, or Kaizen`,
-      );
+      rejectType(`${name} must be Kotoage, View, Hajimari, or Kaizen`);
   }
 }
 
@@ -24239,19 +23928,13 @@ function normalizeGovernanceContractResponse(payload) {
   if (found) {
     if (result.active) {
       if (result.lifecycle.active_code_hash_hex !== result.code_hash_hex) {
-        throw new TypeError(
-          `${context}.lifecycle.active_code_hash_hex must match code_hash_hex`,
-        );
+        rejectType(`${context}.lifecycle.active_code_hash_hex must match code_hash_hex`);
       }
     } else if (result.lifecycle.active_code_hash_hex !== null) {
-      throw new TypeError(
-        `${context}.lifecycle.active_code_hash_hex must be null for an inactive contract`,
-      );
+      rejectType(`${context}.lifecycle.active_code_hash_hex must be null for an inactive contract`);
     }
     if (result.emergency_hold_active && result.lifecycle.emergency_hold === null) {
-      throw new TypeError(
-        `${context}.emergency_hold_active requires a retained emergency hold`,
-      );
+      rejectType(`${context}.emergency_hold_active requires a retained emergency hold`);
     }
   }
   return result;
@@ -24276,11 +23959,11 @@ function normalizeGovernanceContractLifecycle(value, context) {
     context,
   );
   if (record.version !== 1) {
-    throw new TypeError(`${context}.version must be the number 1`);
+    rejectType(`${context}.version must be the number 1`);
   }
   const origin = requireExactNonEmptyString(record.origin, `${context}.origin`);
   if (origin !== "direct" && origin !== "parliament") {
-    throw new TypeError(`${context}.origin must be direct or parliament`);
+    rejectType(`${context}.origin must be direct or parliament`);
   }
   const lifecycle = {
     version: 1,
@@ -24336,10 +24019,10 @@ function normalizeGovernanceContractLifecycle(value, context) {
   const hasProposalContentId = lifecycle.origin_proposal_content_id_hex !== null;
   const hasAttemptId = lifecycle.origin_governance_attempt_id_hex !== null;
   if (origin === "direct" && (hasProposalContentId || hasAttemptId)) {
-    throw new TypeError(`${context} direct origin must not carry Parliament identifiers`);
+    rejectType(`${context} direct origin must not carry Parliament identifiers`);
   }
   if (origin === "parliament" && (!hasProposalContentId || !hasAttemptId)) {
-    throw new TypeError(`${context} Parliament origin requires both governance identifiers`);
+    rejectType(`${context} Parliament origin requires both governance identifiers`);
   }
   return lifecycle;
 }
@@ -24368,7 +24051,7 @@ function normalizeGovernanceContractEmergencyHold(value, context) {
     { allowZero: false },
   );
   if (expiresAtHeight <= imposedAtHeight) {
-    throw new TypeError(`${context}.expires_at_height must follow imposed_at_height`);
+    rejectType(`${context}.expires_at_height must follow imposed_at_height`);
   }
   return {
     incident_digest_hex: requireExactLowerHex32String(
@@ -24400,16 +24083,16 @@ function normalizeGovernancePublicEntrypoints(value, context) {
   const entries = requireStringArray(value, context).map((entry, index) => {
     const literal = requireExactNonEmptyString(entry, `${context}[${index}]`);
     if (!/^[a-z][a-z0-9_]{0,127}$/u.test(literal)) {
-      throw new TypeError(`${context}[${index}] must be a canonical public entrypoint name`);
+      rejectType(`${context}[${index}] must be a canonical public entrypoint name`);
     }
     return literal;
   });
   if (entries.length === 0) {
-    throw new TypeError(`${context} must not be empty`);
+    rejectType(`${context} must not be empty`);
   }
   for (let index = 1; index < entries.length; index += 1) {
     if (entries[index - 1] >= entries[index]) {
-      throw new TypeError(`${context} must be sorted and contain no duplicates`);
+      rejectType(`${context} must be sorted and contain no duplicates`);
     }
   }
   return entries;
@@ -24490,7 +24173,7 @@ function normalizeAliasLookupByAccountResponse(
         : requireNonEmptyString(rawDomain, `${context}.items[${index}].domain`);
     const rawIsPrimary = aliasRecord.is_primary ?? aliasRecord.isPrimary;
     if (typeof rawIsPrimary !== "boolean") {
-      throw new TypeError(`${context}.items[${index}].is_primary must be a boolean`);
+      rejectType(`${context}.items[${index}].is_primary must be a boolean`);
     }
     return {
       alias,
@@ -24519,7 +24202,7 @@ function normalizeRetailRecipientLookupResponse(
   const record = ensureRecord(payload ?? {}, context);
   assertSupportedOptionKeys(record, RETAIL_RECIPIENT_LOOKUP_RESPONSE_KEYS, context);
   if (typeof record.resolved !== "boolean") {
-    throw new TypeError(`${context}.resolved must be a boolean`);
+    rejectType(`${context}.resolved must be a boolean`);
   }
   const accountId = ToriiClient._requireAccountId(
     record.account_id,
@@ -24527,14 +24210,14 @@ function normalizeRetailRecipientLookupResponse(
   );
   const aliasFqn = normalizeAccountAliasFqn(record.alias_fqn, `${context}.alias_fqn`);
   if (aliasFqn !== record.alias_fqn) {
-    throw new TypeError(`${context}.alias_fqn must be canonical`);
+    rejectType(`${context}.alias_fqn must be canonical`);
   }
   const fiId = requireNonEmptyString(record.fi_id, `${context}.fi_id`);
   if (fiId !== "hbl.sbp" && fiId !== "ubl.sbp") {
-    throw new TypeError(`${context}.fi_id must be hbl.sbp or ubl.sbp`);
+    rejectType(`${context}.fi_id must be hbl.sbp or ubl.sbp`);
   }
   if (aliasFqn.slice(aliasFqn.indexOf("@") + 1) !== fiId) {
-    throw new TypeError(`${context}.alias_fqn must use the returned FI domain`);
+    rejectType(`${context}.alias_fqn must use the returned FI domain`);
   }
   const result = {
     resolved: record.resolved,
@@ -24546,7 +24229,7 @@ function normalizeRetailRecipientLookupResponse(
     result.full_name = requireNonEmptyString(record.full_name, `${context}.full_name`);
   }
   if (record.resolved && result.full_name === undefined) {
-    throw new TypeError(`${context}.full_name is required when resolved is true`);
+    rejectType(`${context}.full_name is required when resolved is true`);
   }
   return result;
 }
@@ -24563,14 +24246,14 @@ function normalizeRetailRecipientRouteResponse(
   );
   const aliasFqn = normalizeAccountAliasFqn(record.alias_fqn, `${context}.alias_fqn`);
   if (aliasFqn !== record.alias_fqn) {
-    throw new TypeError(`${context}.alias_fqn must be canonical`);
+    rejectType(`${context}.alias_fqn must be canonical`);
   }
   const fiId = requireNonEmptyString(record.fi_id, `${context}.fi_id`);
   if (fiId !== "hbl.sbp" && fiId !== "ubl.sbp") {
-    throw new TypeError(`${context}.fi_id must be hbl.sbp or ubl.sbp`);
+    rejectType(`${context}.fi_id must be hbl.sbp or ubl.sbp`);
   }
   if (aliasFqn.slice(aliasFqn.indexOf("@") + 1) !== fiId) {
-    throw new TypeError(`${context}.alias_fqn must use the returned FI domain`);
+    rejectType(`${context}.alias_fqn must use the returned FI domain`);
   }
   return {
     account_id: accountId,
@@ -24583,12 +24266,12 @@ function normalizeFeeSponsorProgramId(value, context) {
   const literal = requireExactNonEmptyString(value, context);
   const separator = literal.lastIndexOf("/");
   if (separator <= 0 || separator === literal.length - 1) {
-    throw new TypeError(`${context} must be an exact sponsor/program literal`);
+    rejectType(`${context} must be an exact sponsor/program literal`);
   }
   const sponsorLiteral = literal.slice(0, separator);
   const sponsor = ToriiClient._requireAccountId(sponsorLiteral, `${context}.sponsor`);
   if (sponsor !== sponsorLiteral) {
-    throw new TypeError(`${context}.sponsor must be a canonical I105 account id`);
+    rejectType(`${context}.sponsor must be a canonical I105 account id`);
   }
   const name = requireCanonicalIrohaName(literal.slice(separator + 1), `${context}.name`);
   return { literal, sponsor, name };
@@ -24599,7 +24282,7 @@ function normalizeTaggedUnit(value, tag, allowed, context) {
   assertSupportedOptionKeys(record, new Set([tag, "value"]), context);
   const kind = requireExactNonEmptyString(record[tag], `${context}.${tag}`);
   if (!allowed.has(kind) || record.value !== null) {
-    throw new TypeError(`${context} must contain a supported tagged unit value`);
+    rejectType(`${context} must contain a supported tagged unit value`);
   }
   return kind;
 }
@@ -24614,7 +24297,7 @@ function normalizeFeeSponsorProgramResponse(
   assertSupportedOptionKeys(id, new Set(["sponsor", "name"]), `${context}.id`);
   const sponsor = ToriiClient._requireAccountId(id.sponsor, `${context}.id.sponsor`);
   if (sponsor !== id.sponsor) {
-    throw new TypeError(`${context}.id.sponsor must be a canonical I105 account id`);
+    rejectType(`${context}.id.sponsor must be a canonical I105 account id`);
   }
   requireCanonicalIrohaName(id.name, `${context}.id.name`);
   const payoutAccount = ToriiClient._requireAccountId(
@@ -24622,7 +24305,7 @@ function normalizeFeeSponsorProgramResponse(
     `${context}.payout_account`,
   );
   if (payoutAccount !== record.payout_account) {
-    throw new TypeError(`${context}.payout_account must be a canonical I105 account id`);
+    rejectType(`${context}.payout_account must be a canonical I105 account id`);
   }
   const lifecycle = normalizeTaggedUnit(
     record.lifecycle,
@@ -24638,7 +24321,7 @@ function normalizeFeeSponsorProgramResponse(
   for (const field of ["active_revision", "staged_revision"]) {
     if (Object.prototype.hasOwnProperty.call(record, field)) {
       if (record[field] === null || record[field] === undefined) {
-        throw new TypeError(`${context}.${field} must be omitted or a positive integer`);
+        rejectType(`${context}.${field} must be omitted or a positive integer`);
       }
       normalized[field] = normalizeFeeSponsorPositiveU64(
         record[field],
@@ -24648,9 +24331,7 @@ function normalizeFeeSponsorProgramResponse(
   }
   if (Object.prototype.hasOwnProperty.call(record, "scheduled_activation")) {
     if (record.scheduled_activation === null || record.scheduled_activation === undefined) {
-      throw new TypeError(
-        `${context}.scheduled_activation must be omitted or an exact object`,
-      );
+      rejectType(`${context}.scheduled_activation must be omitted or an exact object`);
     }
     const activation = ensureRecord(
       record.scheduled_activation,
@@ -24680,7 +24361,7 @@ function normalizeFeeSponsorProgramResponse(
 function normalizeFeeSponsorPositiveU64(value, context) {
   const normalized = normalizeKaigiU64(value, context);
   if (BigInt(normalized) === 0n) {
-    throw new TypeError(`${context} must be a positive unsigned integer`);
+    rejectType(`${context} must be a positive unsigned integer`);
   }
   return normalized;
 }
@@ -24718,9 +24399,7 @@ function requireExactFeeQuoteObject(value, expectedFields, context) {
     (field) => !Object.prototype.hasOwnProperty.call(record, field),
   );
   if (missing.length !== 0) {
-    throw new TypeError(
-      `${context} is missing required fields: ${missing.join(", ")}`,
-    );
+    rejectType(`${context} is missing required fields: ${missing.join(", ")}`);
   }
   return record;
 }
@@ -24737,7 +24416,7 @@ function normalizeFeePaymentIntentValue(
   );
   const payer = requireExactNonEmptyString(record.payer, `${context}.payer`);
   if (payer !== "authority" && payer !== "sponsor") {
-    throw new TypeError(`${context}.payer must be authority or sponsor`);
+    rejectType(`${context}.payer must be authority or sponsor`);
   }
   const valueFields = new Set(["charge_limits", "gas_limit"]);
   if (payer === "sponsor") {
@@ -24761,9 +24440,7 @@ function normalizeFeePaymentIntentValue(
       `${context}.value.program_id.sponsor`,
     );
     if (sponsor !== programId.sponsor) {
-      throw new TypeError(
-        `${context}.value.program_id.sponsor must be a canonical I105 account id`,
-      );
+      rejectType(`${context}.value.program_id.sponsor must be a canonical I105 account id`);
     }
     const name = requireCanonicalIrohaName(
       programId.name,
@@ -24800,9 +24477,7 @@ function normalizeFeePaymentIntentValue(
     );
     const kindIndex = kind === "nexus" ? 0 : 1;
     if (kindIndex <= previousKind) {
-      throw new TypeError(
-        `${context}.value.charge_limits must be unique and ordered nexus before pipeline_gas`,
-      );
+      rejectType(`${context}.value.charge_limits must be unique and ordered nexus before pipeline_gas`);
     }
     previousKind = kindIndex;
     const assetDefinitionId = normalizeAssetDefinitionId(
@@ -24810,16 +24485,14 @@ function normalizeFeePaymentIntentValue(
       `${limitContext}.asset_definition_id`,
     );
     if (assetDefinitionId !== item.asset_definition_id) {
-      throw new TypeError(
-        `${limitContext}.asset_definition_id must be an exact canonical asset definition id`,
-      );
+      rejectType(`${limitContext}.asset_definition_id must be an exact canonical asset definition id`);
     }
     const maxAmount = requireCanonicalQuantity(
       item.max_amount,
       `${limitContext}.max_amount`,
     );
     if (NumericV1.decodeQuantityJson(maxAmount).mantissa === 0n) {
-      throw new TypeError(`${limitContext}.max_amount must be greater than zero`);
+      rejectType(`${limitContext}.max_amount must be greater than zero`);
     }
     return {
       kind: { kind, value: null },
@@ -24857,7 +24530,7 @@ function normalizeFeeQuoteDraft(payload, context) {
     `${context}.authority`,
   );
   if (record.authority !== authority) {
-    throw new TypeError(`${context}.authority must be an exact canonical I105 account id`);
+    rejectType(`${context}.authority must be an exact canonical I105 account id`);
   }
   return {
     authority,
@@ -24911,7 +24584,7 @@ function addFeeQuoteQuantities(left, right, context) {
     return new KotodamaQuantity(leftMantissa + rightMantissa, scale);
   } catch (error) {
     if (!(error instanceof NumericV1Error)) throw error;
-    throw new TypeError(`${context} is outside the exact Quantity domain (${error.code})`);
+    rejectType(`${context} is outside the exact Quantity domain (${error.code})`);
   }
 }
 
@@ -24944,16 +24617,14 @@ function normalizeFeeQuoteComponent(value, context) {
     `${context}.asset_definition_id`,
   );
   if (assetDefinitionId !== item.asset_definition_id) {
-    throw new TypeError(
-      `${context}.asset_definition_id must be an exact canonical asset definition id`,
-    );
+    rejectType(`${context}.asset_definition_id must be an exact canonical asset definition id`);
   }
   const maxAmount = requireCanonicalQuantity(
     item.max_amount,
     `${context}.max_amount`,
   );
   if (NumericV1.decodeQuantityJson(maxAmount).mantissa === 0n) {
-    throw new TypeError(`${context}.max_amount must be greater than zero`);
+    rejectType(`${context}.max_amount must be greater than zero`);
   }
   return { kind, assetDefinitionId, maxAmount };
 }
@@ -24976,9 +24647,7 @@ function normalizeFeeQuoteCapacity(value, context) {
     `${context}.asset_definition_id`,
   );
   if (assetDefinitionId !== item.asset_definition_id) {
-    throw new TypeError(
-      `${context}.asset_definition_id must be an exact canonical asset definition id`,
-    );
+    rejectType(`${context}.asset_definition_id must be an exact canonical asset definition id`);
   }
   return {
     assetDefinitionId,
@@ -25003,7 +24672,7 @@ function normalizeFeeQuoteDecision(value, context) {
     context,
   );
   if (decision.status !== "accepted") {
-    throw new TypeError(`${context}.status must be accepted`);
+    rejectType(`${context}.status must be accepted`);
   }
   const decisionValue = requireExactFeeQuoteObject(
     decision.value,
@@ -25020,7 +24689,7 @@ function normalizeFeeQuoteDecision(value, context) {
     `${context}.value.debit_source.kind`,
   );
   if (kind !== "account" && kind !== "sponsor_program") {
-    throw new TypeError(`${context}.value.debit_source.kind is unsupported`);
+    rejectType(`${context}.value.debit_source.kind is unsupported`);
   }
   return {
     kind,
@@ -25031,9 +24700,7 @@ function normalizeFeeQuoteDecision(value, context) {
 
 function validateSponsorFeeQuoteCapacities(components, capacities, context) {
   if ((components.length === 0) !== (capacities.length === 0)) {
-    throw new TypeError(
-      `${context}.capacities must be empty exactly when sponsored components are empty`,
-    );
+    rejectType(`${context}.capacities must be empty exactly when sponsored components are empty`);
   }
   const aggregateByAsset = new Map();
   for (const component of components) {
@@ -25056,16 +24723,12 @@ function validateSponsorFeeQuoteCapacities(components, capacities, context) {
     left < right ? -1 : left > right ? 1 : 0,
   );
   if (capacities.length !== assetDefinitionIds.length) {
-    throw new TypeError(
-      `${context}.capacities must contain exactly one entry per component asset`,
-    );
+    rejectType(`${context}.capacities must contain exactly one entry per component asset`);
   }
   capacities.forEach((capacity, index) => {
     const assetDefinitionId = assetDefinitionIds[index];
     if (capacity.assetDefinitionId !== assetDefinitionId) {
-      throw new TypeError(
-        `${context}.capacities are duplicated, unrelated, or not in canonical asset order`,
-      );
+      rejectType(`${context}.capacities are duplicated, unrelated, or not in canonical asset order`);
     }
     const aggregate = aggregateByAsset.get(assetDefinitionId);
     const requiredVaultBalance = addFeeQuoteQuantities(
@@ -25074,9 +24737,7 @@ function validateSponsorFeeQuoteCapacities(components, capacities, context) {
       `${context}.capacities[${index}] required vault balance`,
     );
     if (compareFeeQuoteQuantities(capacity.vaultBalance, requiredVaultBalance) < 0) {
-      throw new TypeError(
-        `${context}.capacities[${index}].vault_balance does not cover reserve_floor plus the aggregate charge`,
-      );
+      rejectType(`${context}.capacities[${index}].vault_balance does not cover reserve_floor plus the aggregate charge`);
     }
     for (const [field, remaining] of [
       ["block_remaining", capacity.blockRemaining],
@@ -25084,9 +24745,7 @@ function validateSponsorFeeQuoteCapacities(components, capacities, context) {
       ["beneficiary_epoch_remaining", capacity.beneficiaryEpochRemaining],
     ]) {
       if (compareFeeQuoteQuantities(remaining, aggregate) < 0) {
-        throw new TypeError(
-          `${context}.capacities[${index}].${field} does not cover the aggregate charge`,
-        );
+        rejectType(`${context}.capacities[${index}].${field} does not cover the aggregate charge`);
       }
     }
   });
@@ -25109,9 +24768,7 @@ function validateFeeQuoteForDraft(
     `${context}.intent`,
   );
   if (!feeQuoteSelectionsMatch(intent, draft.intent)) {
-    throw new TypeError(
-      `${context}.intent changed the draft payer, sponsor revision, or gas bound`,
-    );
+    rejectType(`${context}.intent changed the draft payer, sponsor revision, or gas bound`);
   }
   const observation = requireExactFeeQuoteObject(
     record.observation,
@@ -25140,7 +24797,7 @@ function validateFeeQuoteForDraft(
     normalizeFeeQuoteComponent(component, `${context}.components[${index}]`),
   );
   if (components.length !== intent.value.charge_limits.length) {
-    throw new TypeError(`${context}.components differ from the quoted intent`);
+    rejectType(`${context}.components differ from the quoted intent`);
   }
   components.forEach((component, index) => {
     const limit = intent.value.charge_limits[index];
@@ -25149,7 +24806,7 @@ function validateFeeQuoteForDraft(
       || component.assetDefinitionId !== limit.asset_definition_id
       || component.maxAmount !== limit.max_amount
     ) {
-      throw new TypeError(`${context}.components differ from the quoted intent`);
+      rejectType(`${context}.components differ from the quoted intent`);
     }
   });
   const capacities = requireDenseArray(
@@ -25161,7 +24818,7 @@ function validateFeeQuoteForDraft(
   const decision = normalizeFeeQuoteDecision(record.decision, `${context}.decision`);
   if (intent.payer === "authority") {
     if (decision.kind !== "account" || decision.programRevision !== null) {
-      throw new TypeError(`${context}.decision is inconsistent with authority payment`);
+      rejectType(`${context}.decision is inconsistent with authority payment`);
     }
     const account = ensureCanonicalAccountId(
       decision.value,
@@ -25171,15 +24828,15 @@ function validateFeeQuoteForDraft(
       decision.value !== account
       || !feeQuoteAccountIdsHaveSameIdentity(account, draft.authority)
     ) {
-      throw new TypeError(`${context}.decision is inconsistent with authority payment`);
+      rejectType(`${context}.decision is inconsistent with authority payment`);
     }
     if (capacities.length !== 0) {
-      throw new TypeError(`${context}.capacities must be empty for authority payment`);
+      rejectType(`${context}.capacities must be empty for authority payment`);
     }
     return record;
   }
   if (decision.kind !== "sponsor_program") {
-    throw new TypeError(`${context}.decision is inconsistent with sponsor payment`);
+    rejectType(`${context}.decision is inconsistent with sponsor payment`);
   }
   const decisionProgramId = requireExactFeeQuoteObject(
     decision.value,
@@ -25208,7 +24865,7 @@ function validateFeeQuoteForDraft(
     || decisionName !== intent.value.program_id.name
     || decisionRevision !== intent.value.program_revision
   ) {
-    throw new TypeError(`${context}.decision is inconsistent with sponsor payment`);
+    rejectType(`${context}.decision is inconsistent with sponsor payment`);
   }
   validateSponsorFeeQuoteCapacities(components, capacities, context);
   return record;
@@ -25216,11 +24873,11 @@ function validateFeeQuoteForDraft(
 
 function requireDenseArray(value, context) {
   if (!Array.isArray(value)) {
-    throw new TypeError(`${context} must be an array`);
+    rejectType(`${context} must be an array`);
   }
   for (let index = 0; index < value.length; index += 1) {
     if (!Object.prototype.hasOwnProperty.call(value, index)) {
-      throw new TypeError(`${context} must be a dense array`);
+      rejectType(`${context} must be a dense array`);
     }
   }
   return value;
@@ -25258,7 +24915,7 @@ function requireCanonicalIrohaName(value, context) {
     || hasBidiControl
     || name.normalize("NFC") !== name
   ) {
-    throw new TypeError(`${context} must be a canonical Iroha Name`);
+    rejectType(`${context} must be a canonical Iroha Name`);
   }
   return name;
 }
@@ -25604,7 +25261,7 @@ function normalizeIdentifierBfvUint(value, name, options = {}) {
 
 function normalizeIdentifierBfvUintArray(value, context) {
   if (!Array.isArray(value)) {
-    throw new TypeError(`${context} must be an array`);
+    rejectType(`${context} must be an array`);
   }
   return value.map((entry, index) =>
     normalizeIdentifierBfvUint(entry, `${context}[${index}]`, { allowZero: true }),
@@ -25706,15 +25363,11 @@ function normalizeIdentifierBfvEncryptionInputs(policySummary, input, options = 
     "encryptIdentifierInputForPolicy.policy",
   );
   if (normalizedPolicy.input_encryption !== "bfv-v1") {
-    throw new Error(
-      `encryptIdentifierInputForPolicy: policy ${normalizedPolicy.policy_id} does not publish BFV encrypted-input support`,
-    );
+    rejectError(`encryptIdentifierInputForPolicy: policy ${normalizedPolicy.policy_id} does not publish BFV encrypted-input support`);
   }
   const publicParameters = getIdentifierBfvPublicParameters(normalizedPolicy);
   if (!publicParameters) {
-    throw new Error(
-      `encryptIdentifierInputForPolicy: policy ${normalizedPolicy.policy_id} is missing decoded BFV public parameters`,
-    );
+    rejectError(`encryptIdentifierInputForPolicy: policy ${normalizedPolicy.policy_id} is missing decoded BFV public parameters`);
   }
   const inputBytes = identifierBfvInputBytes(
     input,
@@ -26049,7 +25702,7 @@ function normalizeIdentifierPolicyListResponse(
   const record = ensureRecord(payload ?? {}, context);
   const itemsValue = record.items;
   if (!Array.isArray(itemsValue)) {
-    throw new Error(`${context}.items must be an array`);
+    rejectError(`${context}.items must be an array`);
   }
   return {
     total: ToriiClient._normalizeUnsignedInteger(record.total ?? itemsValue.length, `${context}.total`, {
@@ -26070,7 +25723,7 @@ function normalizeRamLfeProgramPolicyListResponse(
   const record = ensureRecord(payload ?? {}, context);
   const itemsValue = record.items;
   if (!Array.isArray(itemsValue)) {
-    throw new Error(`${context}.items must be an array`);
+    rejectError(`${context}.items must be an array`);
   }
   return {
     total: ToriiClient._normalizeUnsignedInteger(record.total ?? itemsValue.length, `${context}.total`, {
@@ -27543,7 +27196,7 @@ function normalizeSorafsOrderbookLedgerStatus(payload, context) {
 
 function normalizeSorafsOrderbookRecordArray(value, context) {
   if (!Array.isArray(value)) {
-    throw new TypeError(`${context} must be an array`);
+    rejectType(`${context} must be an array`);
   }
   return value.map((entry, index) => ({
     ...ensureRecord(entry, `${context}[${index}]`),
@@ -27558,7 +27211,7 @@ function normalizeSorafsOrderbookPage(
 ) {
   const record = ensureRecord(payload ?? {}, context);
   if (typeof record.has_more !== "boolean") {
-    throw new TypeError(`${context}.has_more must be a boolean`);
+    rejectType(`${context}.has_more must be a boolean`);
   }
   const next =
     record[nextField] === undefined || record[nextField] === null
@@ -27689,10 +27342,10 @@ function normalizeSorafsOrderbookEventsResponse(
   const record = ensureRecord(payload ?? {}, context);
   const page = ensureRecord(record.events, `${context}.events`);
   if (!Array.isArray(page.events)) {
-    throw new TypeError(`${context}.events.events must be an array`);
+    rejectType(`${context}.events.events must be an array`);
   }
   if (typeof page.has_more !== "boolean") {
-    throw new TypeError(`${context}.events.has_more must be a boolean`);
+    rejectType(`${context}.events.has_more must be a boolean`);
   }
   const nextAfter =
     page.next_after === undefined || page.next_after === null
@@ -27888,18 +27541,16 @@ function requireSorafsReputationExactObject(value, expectedFields, context) {
   );
   const extra = actualFields.filter((field) => !expectedFields.has(field));
   if (missing.length !== 0 || extra.length !== 0) {
-    throw new TypeError(
-      `${context} fields are not canonical; missing=[${missing.join(
+    rejectType(`${context} fields are not canonical; missing=[${missing.join(
         ", ",
-      )}] extra=[${extra.join(", ")}]`,
-    );
+      )}] extra=[${extra.join(", ")}]`);
   }
   return record;
 }
 
 function requireSorafsReputationArray(value, context) {
   if (!Array.isArray(value)) {
-    throw new TypeError(`${context} must be an array`);
+    rejectType(`${context} must be an array`);
   }
   return value;
 }
@@ -27919,14 +27570,12 @@ function parseSorafsReputationU64(
   } else if (typeof value === "bigint") {
     integer = value;
   } else {
-    throw new TypeError(`${context} must be a canonical unsigned integer`);
+    rejectType(`${context} must be a canonical unsigned integer`);
   }
   if (integer < minimum || integer > maximum) {
-    throw new RangeError(
-      `${context} must be between ${minimum.toString(10)} and ${maximum.toString(
+    rejectRange(`${context} must be between ${minimum.toString(10)} and ${maximum.toString(
         10,
-      )}`,
-    );
+      )}`);
   }
   return integer <= MAX_SAFE_INTEGER_BIGINT ? Number(integer) : integer;
 }
@@ -27948,7 +27597,7 @@ function parseSorafsReputationExactInteger(value, context, expected) {
     expected,
   );
   if (parsed !== expected) {
-    throw new RangeError(`${context} must equal ${expected}`);
+    rejectRange(`${context} must equal ${expected}`);
   }
   return parsed;
 }
@@ -27963,9 +27612,7 @@ function parseSorafsReputationOptionalSnapshotId(value, context) {
 
 function parseSorafsReputationDigest(value, context) {
   if (typeof value !== "string" || !/^[0-9a-f]{64}$/u.test(value)) {
-    throw new TypeError(
-      `${context} must be exactly 64 lowercase hexadecimal characters`,
-    );
+    rejectType(`${context} must be exactly 64 lowercase hexadecimal characters`);
   }
   return value;
 }
@@ -28034,9 +27681,7 @@ function parseSorafsReputationWeights(value, context) {
     parsed.token_violation_bps +
     parsed.repair_breach_bps;
   if (total !== 10_000) {
-    throw new RangeError(
-      `${context} basis-point fields must sum to exactly 10000`,
-    );
+    rejectRange(`${context} basis-point fields must sum to exactly 10000`);
   }
   return parsed;
 }
@@ -28109,9 +27754,7 @@ function parseSorafsReputationProvider(value, context) {
     `${context}.degradation_flags`,
   );
   if (flags.length > 5) {
-    throw new RangeError(
-      `${context}.degradation_flags must contain at most five entries`,
-    );
+    rejectRange(`${context}.degradation_flags must contain at most five entries`);
   }
   let previousFlagIndex = -1;
   const parsedFlags = flags.map((value, index) => {
@@ -28122,19 +27765,17 @@ function parseSorafsReputationProvider(value, context) {
       flagContext,
     );
     if (flag.value !== null) {
-      throw new TypeError(`${flagContext}.value must be null`);
+      rejectType(`${flagContext}.value must be null`);
     }
     if (typeof flag.flag !== "string") {
-      throw new TypeError(`${flagContext}.flag must be a string`);
+      rejectType(`${flagContext}.flag must be a string`);
     }
     const flagIndex = SORAFS_REPUTATION_DEGRADATION_FLAG_INDEX.get(flag.flag);
     if (flagIndex === undefined) {
-      throw new TypeError(`${flagContext}.flag is unsupported`);
+      rejectType(`${flagContext}.flag is unsupported`);
     }
     if (flagIndex <= previousFlagIndex) {
-      throw new TypeError(
-        `${context}.degradation_flags must use canonical enum order without duplicates`,
-      );
+      rejectType(`${context}.degradation_flags must use canonical enum order without duplicates`);
     }
     previousFlagIndex = flagIndex;
     return { flag: flag.flag, value: null };
@@ -28191,7 +27832,7 @@ function parseSorafsReputationProof(value, context) {
     65_536,
   );
   if (leafIndex >= leafCount) {
-    throw new RangeError(`${context}.leaf_index must be less than leaf_count`);
+    rejectRange(`${context}.leaf_index must be less than leaf_count`);
   }
   const siblings = requireSorafsReputationArray(
     proof.siblings_hex,
@@ -28203,9 +27844,7 @@ function parseSorafsReputationProof(value, context) {
     ),
   );
   if (siblings.length !== sorafsReputationMerkleDepth(leafCount)) {
-    throw new RangeError(
-      `${context}.siblings_hex must have the exact Merkle depth for leaf_count`,
-    );
+    rejectRange(`${context}.siblings_hex must have the exact Merkle depth for leaf_count`);
   }
   return {
     provider_id: normalizeSorafsReputationProviderId(
@@ -28233,9 +27872,7 @@ function parseSorafsReputationEvent(value, context) {
     `${context}.previous_snapshot_id_hex`,
   );
   if (previousSnapshotId === snapshotId) {
-    throw new TypeError(
-      `${context}.previous_snapshot_id_hex must differ from snapshot_id_hex`,
-    );
+    rejectType(`${context}.previous_snapshot_id_hex must differ from snapshot_id_hex`);
   }
   return {
     version: parseSorafsReputationExactInteger(
@@ -28280,16 +27917,14 @@ function parseSorafsReputationSnapshot(value, context, options = {}) {
     options.expectedSnapshotId !== undefined &&
     snapshotId !== options.expectedSnapshotId
   ) {
-    throw new TypeError(`${context} does not match the requested snapshot`);
+    rejectType(`${context} does not match the requested snapshot`);
   }
   const previousSnapshotId = parseSorafsReputationOptionalSnapshotId(
     snapshot.previous_snapshot_id_hex,
     `${context}.previous_snapshot_id_hex`,
   );
   if (previousSnapshotId === snapshotId) {
-    throw new TypeError(
-      `${context}.previous_snapshot_id_hex must differ from snapshot_id_hex`,
-    );
+    rejectType(`${context}.previous_snapshot_id_hex must differ from snapshot_id_hex`);
   }
   const providerCount = parseSorafsReputationBoundedInteger(
     snapshot.provider_count,
@@ -28319,32 +27954,24 @@ function parseSorafsReputationSnapshot(value, context, options = {}) {
     ),
   );
   if (providers.length !== returnedProviderCount) {
-    throw new RangeError(
-      `${context}.returned_provider_count must equal providers.length`,
-    );
+    rejectRange(`${context}.returned_provider_count must equal providers.length`);
   }
   if (returnedProviderCount !== Math.min(providerCount, limit)) {
-    throw new RangeError(
-      `${context}.returned_provider_count must equal min(provider_count, limit)`,
-    );
+    rejectRange(`${context}.returned_provider_count must equal min(provider_count, limit)`);
   }
   for (let index = 1; index < providers.length; index += 1) {
     if (providers[index - 1].provider_id >= providers[index].provider_id) {
-      throw new TypeError(
-        `${context}.providers must be strictly ordered by provider_id`,
-      );
+      rejectType(`${context}.providers must be strictly ordered by provider_id`);
     }
   }
   if (typeof snapshot.truncated_providers !== "boolean") {
-    throw new TypeError(`${context}.truncated_providers must be a boolean`);
+    rejectType(`${context}.truncated_providers must be a boolean`);
   }
   if (
     snapshot.truncated_providers !==
     (providerCount > returnedProviderCount)
   ) {
-    throw new TypeError(
-      `${context}.truncated_providers is inconsistent with provider counts`,
-    );
+    rejectType(`${context}.truncated_providers is inconsistent with provider counts`);
   }
   return {
     snapshot_id_hex: snapshotId,
@@ -28399,10 +28026,10 @@ function parseSorafsReputationProviderResponse(
     `${context}.proof`,
   );
   if (provider.provider_id !== proof.provider_id) {
-    throw new TypeError(`${context}.proof must reference the returned provider`);
+    rejectType(`${context}.proof must reference the returned provider`);
   }
   if (provider.provider_id !== expectedProviderId) {
-    throw new TypeError(`${context} does not match the requested provider`);
+    rejectType(`${context} does not match the requested provider`);
   }
   return {
     snapshot_id_hex: parseSorafsReputationSnapshotId(
@@ -28484,7 +28111,7 @@ function parseSorafsReputationEventPage(value, context, options = {}) {
     (since === null) !== (expectedSince === null) ||
     (since !== null && sorafsReputationU64BigInt(since) !== expectedSince)
   ) {
-    throw new TypeError(`${context}.since does not match the requested cursor`);
+    rejectType(`${context}.since does not match the requested cursor`);
   }
   const limit = parseSorafsReputationBoundedInteger(
     page.limit,
@@ -28496,7 +28123,7 @@ function parseSorafsReputationEventPage(value, context, options = {}) {
     options.expectedLimit !== undefined &&
     limit !== options.expectedLimit
   ) {
-    throw new TypeError(`${context}.limit does not match the requested limit`);
+    rejectType(`${context}.limit does not match the requested limit`);
   }
   const count = parseSorafsReputationBoundedInteger(
     page.count,
@@ -28511,10 +28138,10 @@ function parseSorafsReputationEventPage(value, context, options = {}) {
     parseSorafsReputationEvent(event, `${context}.events[${index}]`),
   );
   if (count !== events.length) {
-    throw new RangeError(`${context}.count must equal events.length`);
+    rejectRange(`${context}.count must equal events.length`);
   }
   if (count > limit) {
-    throw new RangeError(`${context}.count must not exceed limit`);
+    rejectRange(`${context}.count must not exceed limit`);
   }
   const nextSince = parseSorafsReputationOptionalU64(
     page.next_since,
@@ -28528,9 +28155,7 @@ function parseSorafsReputationEventPage(value, context, options = {}) {
         sorafsReputationU64BigInt(nextSince) !==
           sorafsReputationU64BigInt(events.at(-1).sequence)))
   ) {
-    throw new TypeError(
-      `${context}.next_since must equal the last event sequence`,
-    );
+    rejectType(`${context}.next_since must equal the last event sequence`);
   }
   let previousSequence = since === null ? 0n : sorafsReputationU64BigInt(since);
   for (let index = 0; index < events.length; index += 1) {
@@ -28539,9 +28164,7 @@ function parseSorafsReputationEventPage(value, context, options = {}) {
       (index === 0 && sequence <= previousSequence) ||
       (index > 0 && sequence !== previousSequence + 1n)
     ) {
-      throw new RangeError(
-        `${context} sequences must increase after since and be contiguous within the page`,
-      );
+      rejectRange(`${context} sequences must increase after since and be contiguous within the page`);
     }
     previousSequence = sequence;
   }
@@ -28549,17 +28172,13 @@ function parseSorafsReputationEventPage(value, context, options = {}) {
     const previous = events[index - 1];
     const current = events[index];
     if (current.previous_snapshot_id_hex !== previous.snapshot_id_hex) {
-      throw new TypeError(
-        `${context} previous_snapshot_id_hex must link adjacent events`,
-      );
+      rejectType(`${context} previous_snapshot_id_hex must link adjacent events`);
     }
     if (
       sorafsReputationU64BigInt(current.generated_at_unix) <=
       sorafsReputationU64BigInt(previous.generated_at_unix)
     ) {
-      throw new RangeError(
-        `${context} generated_at_unix must strictly increase`,
-      );
+      rejectRange(`${context} generated_at_unix must strictly increase`);
     }
   }
   return { since, limit, count, next_since: nextSince, events };
@@ -28570,7 +28189,7 @@ function parseSorafsReputationSseU64(raw, context) {
     typeof raw !== "string" ||
     !/^[1-9][0-9]{0,19}$/u.test(raw)
   ) {
-    throw new TypeError(`${context} must be a positive canonical u64`);
+    rejectType(`${context} must be a positive canonical u64`);
   }
   const parsed = parseStrictLosslessIntegerJson(raw, context);
   return parseSorafsReputationU64(parsed, context, { minimum: 1n });
@@ -28581,7 +28200,7 @@ async function* validateSorafsReputationSseStream(events, requestedSince) {
   for await (const event of events) {
     const context = "sorafs reputation SSE event";
     if (event.retry !== null) {
-      throw new TypeError(`${context} must not carry a retry field`);
+      rejectType(`${context} must not carry a retry field`);
     }
     if (event.event === "reputation_snapshot") {
       if (
@@ -28589,7 +28208,7 @@ async function* validateSorafsReputationSseStream(events, requestedSince) {
         event.raw.length === 0 ||
         /\s/u.test(event.raw)
       ) {
-        throw new TypeError(`${context}.data must be exact compact JSON`);
+        rejectType(`${context}.data must be exact compact JSON`);
       }
       const data = parseSorafsReputationEvent(
         parseStrictLosslessIntegerJson(event.raw, `${context}.data`),
@@ -28601,19 +28220,17 @@ async function* validateSorafsReputationSseStream(events, requestedSince) {
       );
       const sequence = sorafsReputationU64BigInt(data.sequence);
       if (sorafsReputationU64BigInt(eventId) !== sequence) {
-        throw new TypeError(`${context}.id must equal data.sequence`);
+        rejectType(`${context}.id must equal data.sequence`);
       }
       if (sequence <= since) {
-        throw new RangeError(
-          `${context}.data.sequence must be greater than the requested since cursor`,
-        );
+        rejectRange(`${context}.data.sequence must be greater than the requested since cursor`);
       }
       yield { ...event, data };
       continue;
     }
     if (event.event === "lagged") {
       if (event.id !== null) {
-        throw new TypeError(`${context} lagged frames must not carry an id`);
+        rejectType(`${context} lagged frames must not carry an id`);
       }
       const data = parseSorafsReputationSseU64(
         event.raw,
@@ -28622,7 +28239,7 @@ async function* validateSorafsReputationSseStream(events, requestedSince) {
       yield { ...event, data };
       continue;
     }
-    throw new TypeError(`${context} type ${String(event.event)} is unsupported`);
+    rejectType(`${context} type ${String(event.event)} is unsupported`);
   }
 }
 
@@ -28708,9 +28325,7 @@ function buildSorafsPorExportParams(options = {}) {
   const startEpoch = record.start_epoch ?? record.startEpoch;
   const endEpoch = record.end_epoch ?? record.endEpoch;
   if ((startEpoch == null) !== (endEpoch == null)) {
-    throw new TypeError(
-      "sorafsPorExport.startEpoch and sorafsPorExport.endEpoch must be supplied together",
-    );
+    rejectType("sorafsPorExport.startEpoch and sorafsPorExport.endEpoch must be supplied together");
   }
   if (startEpoch != null) {
     params.start_epoch = ToriiClient._normalizeUnsignedInteger(
@@ -28750,9 +28365,7 @@ function normalizeSorafsPorCursor(value, context) {
     value.length % 4 === 1 ||
     !EXPLORER_CURSOR_PATTERN.test(value)
   ) {
-    throw new TypeError(
-      `${context} must be canonical base64url without padding and at most ${SORAFS_POR_CURSOR_MAX_LENGTH} characters`,
-    );
+    rejectType(`${context} must be canonical base64url without padding and at most ${SORAFS_POR_CURSOR_MAX_LENGTH} characters`);
   }
   const trailingSextet = EXPLORER_CURSOR_ALPHABET.indexOf(value[value.length - 1]);
   const remainder = value.length % 4;
@@ -28760,7 +28373,7 @@ function normalizeSorafsPorCursor(value, context) {
     (remainder === 2 && (trailingSextet & 0x0f) !== 0) ||
     (remainder === 3 && (trailingSextet & 0x03) !== 0)
   ) {
-    throw new TypeError(`${context} must use canonical base64url trailing bits`);
+    rejectType(`${context} must use canonical base64url trailing bits`);
   }
   return value;
 }
@@ -28785,23 +28398,21 @@ function normalizeSorafsPinListResponse(
     `${context}.charged_usage`,
   );
   if (!Array.isArray(record.manifests)) {
-    throw new TypeError(`${context}.manifests must be an array`);
+    rejectType(`${context}.manifests must be an array`);
   }
   if (record.manifests.length > SORAFS_PIN_LIST_MAX_ITEMS) {
-    throw new RangeError(
-      `${context}.manifests exceeds the ${SORAFS_PIN_LIST_MAX_ITEMS}-item limit`,
-    );
+    rejectRange(`${context}.manifests exceeds the ${SORAFS_PIN_LIST_MAX_ITEMS}-item limit`);
   }
   const manifests = record.manifests.map((entry, index) =>
     normalizeSorafsPinManifestSummary(entry, `${context}.manifests[${index}]`),
   );
   for (let index = 1; index < manifests.length; index += 1) {
     if (compareExactJsonBytes(manifests[index - 1].digest, manifests[index].digest) >= 0) {
-      throw new TypeError(`${context}.manifests must be strictly digest-ordered`);
+      rejectType(`${context}.manifests must be strictly digest-ordered`);
     }
   }
   if (typeof record.has_more !== "boolean") {
-    throw new TypeError(`${context}.has_more must be a boolean`);
+    rejectType(`${context}.has_more must be a boolean`);
   }
   const nextAfterDigest =
     record.next_after_digest === undefined || record.next_after_digest === null
@@ -28812,19 +28423,15 @@ function normalizeSorafsPinListResponse(
           { exactLength: 32 },
         );
   if (record.has_more !== (nextAfterDigest !== null)) {
-    throw new TypeError(
-      `${context}.has_more must agree with ${context}.next_after_digest`,
-    );
+    rejectType(`${context}.has_more must agree with ${context}.next_after_digest`);
   }
   if (record.has_more) {
     if (manifests.length === 0) {
-      throw new TypeError(`${context}.has_more cannot be true for an empty page`);
+      rejectType(`${context}.has_more cannot be true for an empty page`);
     }
     const lastDigest = manifests[manifests.length - 1].digest;
     if (compareExactJsonBytes(lastDigest, nextAfterDigest) !== 0) {
-      throw new TypeError(
-        `${context}.next_after_digest must equal the last returned digest`,
-      );
+      rejectType(`${context}.next_after_digest must equal the last returned digest`);
     }
   }
 
@@ -28833,19 +28440,17 @@ function normalizeSorafsPinListResponse(
       requestParams.expected_finalized_height !== undefined &&
       finalizedCursor.height !== requestParams.expected_finalized_height
     ) {
-      throw new TypeError(`${context}.finalized_cursor.height does not match the request anchor`);
+      rejectType(`${context}.finalized_cursor.height does not match the request anchor`);
     }
     if (
       requestParams.expected_finalized_block_hash_hex !== undefined &&
       exactJsonBytesToLowerHex(finalizedCursor.block_hash) !==
         requestParams.expected_finalized_block_hash_hex
     ) {
-      throw new TypeError(
-        `${context}.finalized_cursor.block_hash does not match the request anchor`,
-      );
+      rejectType(`${context}.finalized_cursor.block_hash does not match the request anchor`);
     }
     if (requestParams.limit !== undefined && manifests.length > requestParams.limit) {
-      throw new TypeError(`${context}.manifests exceeds the requested limit`);
+      rejectType(`${context}.manifests exceeds the requested limit`);
     }
     if (requestParams.status !== undefined) {
       const expectedStatus = sorafsPinStatusWireTag(requestParams.status);
@@ -28853,15 +28458,13 @@ function normalizeSorafsPinListResponse(
         (manifest) => manifest.status.status !== expectedStatus,
       );
       if (mismatched !== undefined) {
-        throw new TypeError(`${context}.manifests violates the requested status filter`);
+        rejectType(`${context}.manifests violates the requested status filter`);
       }
     }
     if (requestParams.after_digest_hex !== undefined && manifests.length > 0) {
       const firstDigestHex = exactJsonBytesToLowerHex(manifests[0].digest);
       if (firstDigestHex <= requestParams.after_digest_hex) {
-        throw new TypeError(
-          `${context}.manifests does not advance the exclusive digest cursor`,
-        );
+        rejectType(`${context}.manifests does not advance the exclusive digest cursor`);
       }
     }
   }
@@ -28884,13 +28487,13 @@ function requireExactSorafsPinObjectFields(
   const allowed = new Set([...requiredFields, ...optionalFields]);
   const unknown = Object.keys(record).find((field) => !allowed.has(field));
   if (unknown !== undefined) {
-    throw new TypeError(`${context} contains unknown field ${unknown}`);
+    rejectType(`${context} contains unknown field ${unknown}`);
   }
   const missing = requiredFields.find(
     (field) => !Object.prototype.hasOwnProperty.call(record, field),
   );
   if (missing !== undefined) {
-    throw new TypeError(`${context} is missing required field ${missing}`);
+    rejectType(`${context} is missing required field ${missing}`);
   }
   return record;
 }
@@ -28906,7 +28509,7 @@ function normalizeSorafsPinFinalizedCursor(payload, context) {
     exactLength: 32,
   });
   if (exactJsonBytesAreZero(blockHash)) {
-    throw new TypeError(`${context}.block_hash must be non-zero`);
+    rejectType(`${context}.block_hash must be non-zero`);
   }
   return {
     height: ToriiClient._normalizeUnsignedInteger(record.height, `${context}.height`, {
@@ -28992,11 +28595,11 @@ function normalizeSorafsPinNativeStatus(payload, context) {
     context,
   );
   if (!new Set(["Pending", "Approved", "Retired"]).has(record.status)) {
-    throw new TypeError(`${context}.status must be Pending, Approved, or Retired`);
+    rejectType(`${context}.status must be Pending, Approved, or Retired`);
   }
   if (record.status === "Pending") {
     if (record.value !== null) {
-      throw new TypeError(`${context}.value must be null for Pending`);
+      rejectType(`${context}.value must be null for Pending`);
     }
     return { status: "Pending", value: null };
   }
@@ -29037,11 +28640,11 @@ function normalizeSorafsPinManifestResponse(
   const record = ensureRecord(payload ?? {}, context);
   const aliasesValue = record.aliases;
   if (!Array.isArray(aliasesValue)) {
-    throw new TypeError(`${context}.aliases must be an array`);
+    rejectType(`${context}.aliases must be an array`);
   }
   const ordersValue = record.replication_orders;
   if (!Array.isArray(ordersValue)) {
-    throw new TypeError(`${context}.replication_orders must be an array`);
+    rejectType(`${context}.replication_orders must be an array`);
   }
   return {
     attestation: optionalRecord(record.attestation, `${context}.attestation`),
@@ -29129,7 +28732,7 @@ function normalizeSorafsManifestStatus(payload, context) {
   const rawState = requireNonEmptyString(record.state, `${context}.state`);
   const state = rawState.toLowerCase();
   if (!SORAFS_PIN_STATUS_VALUES.has(state)) {
-    throw new TypeError(`${context}.state must be pending, approved, or retired`);
+    rejectType(`${context}.state must be pending, approved, or retired`);
   }
   return {
     state,
@@ -29173,7 +28776,7 @@ function normalizeSorafsGovernanceReference(payload, context) {
 function normalizeSorafsLineage(payload, context) {
   const record = ensureRecord(payload ?? {}, context);
   if (record.is_head === undefined || typeof record.is_head !== "boolean") {
-    throw new TypeError(`${context}.is_head must be a boolean`);
+    rejectType(`${context}.is_head must be a boolean`);
   }
   return {
     successor_of_hex:
@@ -29225,7 +28828,7 @@ function normalizeSorafsAliasListResponse(
   const record = ensureRecord(payload ?? {}, context);
   const aliasesValue = record.aliases;
   if (!Array.isArray(aliasesValue)) {
-    throw new TypeError(`${context}.aliases must be an array`);
+    rejectType(`${context}.aliases must be an array`);
   }
   return {
     attestation: optionalRecord(record.attestation, `${context}.attestation`),
@@ -29330,7 +28933,7 @@ function normalizeSorafsReplicationListResponse(
   const record = ensureRecord(payload ?? {}, context);
   const ordersValue = record.replication_orders;
   if (!Array.isArray(ordersValue)) {
-    throw new TypeError(`${context}.replication_orders must be an array`);
+    rejectType(`${context}.replication_orders must be an array`);
   }
   return {
     attestation: optionalRecord(record.attestation, `${context}.attestation`),
@@ -29360,7 +28963,7 @@ function normalizeSorafsReplicationOrderRecord(payload, context) {
   const record = ensureRecord(payload ?? {}, context);
   const receiptsValue = record.receipts ?? [];
   if (!Array.isArray(receiptsValue)) {
-    throw new TypeError(`${context}.receipts must be an array`);
+    rejectType(`${context}.receipts must be an array`);
   }
   return {
     order_id_hex: normalizeHex32String(record.order_id_hex, `${context}.order_id_hex`),
@@ -29434,7 +29037,7 @@ function normalizeSorafsPinRegisterResponse(
     context,
   );
   if (record.status !== "submitted") {
-    throw new TypeError(`${context}.status must be submitted`);
+    rejectType(`${context}.status must be submitted`);
   }
   return {
     status: "submitted",
@@ -29603,7 +29206,7 @@ function requirePipelinePreflightUnsigned(
   const record = ensureRecord(mapping, context);
   const numeric = requireNonNegativeIntegerLike(record[key], `${context}.${key}`);
   if (positive && numeric === 0) {
-    throw new RangeError(`${context}.${key} must be positive`);
+    rejectRange(`${context}.${key} must be positive`);
   }
   return numeric;
 }
@@ -29628,9 +29231,7 @@ function normalizePipelinePreflight(payload, context = "pipeline preflight respo
     (field) => !allowedPipelineFields.has(field),
   );
   if (unknownPipelineField !== undefined) {
-    throw new TypeError(
-      `${context}.pipeline contains unknown field ${unknownPipelineField}`,
-    );
+    rejectType(`${context}.pipeline contains unknown field ${unknownPipelineField}`);
   }
   const queue = ensureRecord(record.queue, `${context}.queue`);
   const fees = ensureRecord(record.fees, `${context}.fees`);
@@ -29797,7 +29398,7 @@ function normalizePipelineRecoverySidecar(payload, context = "pipeline recovery 
   const dag = normalizePipelineDagSnapshot(record.dag, `${context}.dag`);
   const rawTxs = record.txs ?? [];
   if (!Array.isArray(rawTxs)) {
-    throw new TypeError(`${context}.txs must be an array`);
+    rejectType(`${context}.txs must be an array`);
   }
   return {
     format,
@@ -29816,7 +29417,7 @@ function normalizePipelineRecoveryFastpqProofs(
   const record = ensureRecord(payload ?? {}, context);
   const rawProofs = record.proofs ?? [];
   if (!Array.isArray(rawProofs)) {
-    throw new TypeError(`${context}.proofs must be an array`);
+    rejectType(`${context}.proofs must be an array`);
   }
   return {
     height: ToriiClient._normalizeUnsignedInteger(record.height, `${context}.height`, {
@@ -30024,13 +29625,13 @@ function normalizeDaManifestFetchResponse(payload, context = "da manifest respon
 
 async function persistDaManifestBundle(manifestBundle, outputDir, labelInput) {
   if (!manifestBundle) {
-    throw new Error("manifestBundle is required");
+    rejectError("manifestBundle is required");
   }
   if (
     !manifestBundle.manifest_bytes ||
     !Buffer.isBuffer(manifestBundle.manifest_bytes)
   ) {
-    throw new Error("manifestBundle.manifest_bytes must be a Buffer");
+    rejectError("manifestBundle.manifest_bytes must be a Buffer");
   }
   const pathModule = await getPathModule();
   const fs = await getFsModule();
@@ -30155,27 +29756,25 @@ const CHUNK_FETCH_PLAN_V1_FIELDS = new Set([
 
 function normalizeChunkFetchPlanV1(plan, context) {
   if (!isPlainObject(plan)) {
-    throw new TypeError(`${context} must be a canonical chunk fetch plan object`);
+    rejectType(`${context} must be a canonical chunk fetch plan object`);
   }
   for (const field of Object.keys(plan)) {
     if (!CHUNK_FETCH_PLAN_V1_FIELDS.has(field)) {
-      throw new TypeError(`${context} contains unsupported field ${field}`);
+      rejectType(`${context} contains unsupported field ${field}`);
     }
   }
   if (plan.schema !== CHUNK_FETCH_PLAN_SCHEMA_V1) {
-    throw new TypeError(`${context}.schema must be ${CHUNK_FETCH_PLAN_SCHEMA_V1}`);
+    rejectType(`${context}.schema must be ${CHUNK_FETCH_PLAN_SCHEMA_V1}`);
   }
   if (
     typeof plan.payload_digest_blake3_hex !== "string" ||
     !/^[0-9a-f]{64}$/.test(plan.payload_digest_blake3_hex) ||
     /^0{64}$/.test(plan.payload_digest_blake3_hex)
   ) {
-    throw new TypeError(
-      `${context}.payload_digest_blake3_hex must be a non-zero canonical lowercase 32-byte hex digest`,
-    );
+    rejectType(`${context}.payload_digest_blake3_hex must be a non-zero canonical lowercase 32-byte hex digest`);
   }
   if (!Array.isArray(plan.chunk_fetch_specs)) {
-    throw new TypeError(`${context}.chunk_fetch_specs must be an array`);
+    rejectType(`${context}.chunk_fetch_specs must be an array`);
   }
   return plan;
 }
@@ -30187,7 +29786,7 @@ function normalizeChunkPlanForPersistence(plan, expectedPayloadDigestHex = null)
     try {
       parsed = JSON.parse(plan);
     } catch {
-      throw new TypeError("DA manifest chunk_plan string must contain valid JSON");
+      rejectType("DA manifest chunk_plan string must contain valid JSON");
     }
     normalized = normalizeChunkFetchPlanV1(parsed, "DA manifest chunk_plan");
   } else {
@@ -30199,9 +29798,7 @@ function normalizeChunkPlanForPersistence(plan, expectedPayloadDigestHex = null)
       "DA manifest blob_hash_hex",
     );
     if (normalized.payload_digest_blake3_hex !== expected) {
-      throw new TypeError(
-        "DA manifest chunk_plan.payload_digest_blake3_hex must match blob_hash_hex",
-      );
+      rejectType("DA manifest chunk_plan.payload_digest_blake3_hex must match blob_hash_hex");
     }
   }
   return normalized;
@@ -30213,12 +29810,10 @@ function sanitizeTicketLabel(value, context = "ticket label") {
     .replace(/^0x/i, "")
     .toLowerCase();
   if (!normalized) {
-    throw new TypeError(`${context} must not be empty`);
+    rejectType(`${context} must not be empty`);
   }
   if (!/^[a-z0-9_-]+$/.test(normalized)) {
-    throw new TypeError(
-      `${context} may only contain ASCII letters, numbers, underscores, or dashes`,
-    );
+    rejectType(`${context} may only contain ASCII letters, numbers, underscores, or dashes`);
   }
   return normalized;
 }
@@ -30229,7 +29824,7 @@ function normalizeOptionalPathInput(value, context) {
   }
   const trimmed = String(value).trim();
   if (!trimmed) {
-    throw new TypeError(`${context} must not be an empty string`);
+    rejectType(`${context} must not be an empty string`);
   }
   return trimmed;
 }
@@ -30241,18 +29836,18 @@ async function makeDefaultScoreboardPath(outputDir) {
 
 function normaliseChunkPlanPayload(plan, context) {
   if (plan === undefined || plan === null) {
-    throw new TypeError(`${context} must be provided`);
+    rejectType(`${context} must be provided`);
   }
   if (typeof plan === "string") {
     const trimmed = plan.trim();
     if (!trimmed) {
-      throw new TypeError(`${context} must not be an empty string`);
+      rejectType(`${context} must not be an empty string`);
     }
     let parsed;
     try {
       parsed = JSON.parse(trimmed);
     } catch (error) {
-      throw new TypeError(`${context} string must contain valid JSON`);
+      rejectType(`${context} string must contain valid JSON`);
     }
     const planObject = normalizeChunkFetchPlanV1(parsed, context);
     return { planJson: JSON.stringify(planObject), planObject };
@@ -30263,11 +29858,11 @@ function normaliseChunkPlanPayload(plan, context) {
     try {
       rendered = JSON.stringify(planObject);
     } catch (error) {
-      throw new TypeError(`${context} could not be serialised to JSON: ${error?.message ?? error}`);
+      rejectType(`${context} could not be serialised to JSON: ${error?.message ?? error}`);
     }
     return { planJson: rendered, planObject };
   }
-  throw new TypeError(`${context} must be a canonical chunk fetch plan JSON string or object`);
+  rejectType(`${context} must be a canonical chunk fetch plan JSON string or object`);
 }
 
 function normaliseChunkerHandle(
@@ -30279,7 +29874,7 @@ function normaliseChunkerHandle(
   if (explicitHandle !== undefined && explicitHandle !== null) {
     const handle = requireNonEmptyString(explicitHandle, "fetchDaPayloadViaGateway.chunkerHandle").trim();
     if (!handle) {
-      throw new TypeError("fetchDaPayloadViaGateway.chunkerHandle must not be empty");
+      rejectType("fetchDaPayloadViaGateway.chunkerHandle must not be empty");
     }
     return handle;
   }
@@ -30310,15 +29905,10 @@ function normaliseChunkerHandle(
 	    try {
 	      return deriveChunkerHandle(manifestBytes);
 	    } catch (error) {
-	      throw new TypeError(
-	        `${context}.chunkerHandle could not be derived from manifest bytes`,
-	        { cause: error },
-	      );
+	      rejectType(`${context}.chunkerHandle could not be derived from manifest bytes`, { cause: error });
 	    }
 	  }
-  throw new TypeError(
-    `${context}.chunkerHandle is required when the manifest bundle does not expose chunker metadata or manifest bytes`,
-  );
+  rejectType(`${context}.chunkerHandle is required when the manifest bundle does not expose chunker metadata or manifest bytes`);
 }
 
 function normalizeProofSummaryOption(value, context) {
@@ -30344,7 +29934,7 @@ function normalizeProofSummaryOption(value, context) {
   }
   if (leafIndexes !== undefined) {
     if (!Array.isArray(leafIndexes)) {
-      throw new TypeError(`${context}.leafIndexes must be an array`);
+      rejectType(`${context}.leafIndexes must be an array`);
     }
     normalized.leafIndexes = leafIndexes.slice();
   }
@@ -30353,7 +29943,7 @@ function normalizeProofSummaryOption(value, context) {
 
 function extractManifestBytesForProof(bundle, context) {
   if (!bundle || typeof bundle !== "object") {
-    throw new TypeError(`${context} requires a manifest bundle object`);
+    rejectType(`${context} requires a manifest bundle object`);
   }
   const direct =
     tryBufferFrom(bundle.manifest_bytes) ?? tryBufferFrom(bundle.manifestBytes);
@@ -30450,7 +30040,7 @@ function inferChunkerHandleFromManifest(manifestJson) {
 
 function normalizeDaGatewayProviders(value, context) {
   if (!Array.isArray(value) || value.length === 0) {
-    throw new TypeError(`${context} must be a non-empty array`);
+    rejectType(`${context} must be a non-empty array`);
   }
   return value.map((entry, index) => {
     const record = ensureRecord(entry, `${context}[${index}]`);
@@ -30542,7 +30132,7 @@ function normalizeDaIngestReceipt(payload, context = "da ingest receipt") {
   );
   const stripeLayoutRecord = record.stripe_layout;
   if (stripeLayoutRecord === null || stripeLayoutRecord === undefined) {
-    throw new TypeError(`${context}.stripe_layout is required`);
+    rejectType(`${context}.stripe_layout is required`);
   }
   const stripeLayout = (() => {
     const layout = ensureRecord(stripeLayoutRecord, `${context}.stripe_layout`);
@@ -30573,14 +30163,14 @@ function normalizeDaIngestReceipt(payload, context = "da ingest receipt") {
     };
   })();
   if (!Object.prototype.hasOwnProperty.call(record, "pdp_commitment")) {
-    throw new TypeError(`${context}.pdp_commitment is required and must be null or a base64 string`);
+    rejectType(`${context}.pdp_commitment is required and must be null or a base64 string`);
   }
   const pdpCommitment = record.pdp_commitment;
   let pdpCommitmentBytes = null;
   let pdpCommitmentB64 = null;
   if (pdpCommitment !== null && pdpCommitment !== undefined) {
     if (typeof pdpCommitment !== "string") {
-      throw new TypeError(`${context}.pdp_commitment must be a base64 string when present`);
+      rejectType(`${context}.pdp_commitment must be a base64 string when present`);
     }
     const trimmed = pdpCommitment.trim();
     try {
@@ -30588,11 +30178,11 @@ function normalizeDaIngestReceipt(payload, context = "da ingest receipt") {
       pdpCommitmentBytes = Buffer.from(decoded);
       pdpCommitmentB64 = Buffer.from(decoded).toString("base64");
     } catch {
-      throw new TypeError(`${context}.pdp_commitment must be a valid base64 string`);
+      rejectType(`${context}.pdp_commitment must be a valid base64 string`);
     }
   }
   if (record.rent_quote === null || record.rent_quote === undefined) {
-    throw new TypeError(`${context}.rent_quote is required`);
+    rejectType(`${context}.rent_quote is required`);
   }
   const rentQuote = normalizeDaRentQuote(
     record.rent_quote,
@@ -30682,15 +30272,15 @@ function normalizeDaRentQuote(payload, context = "da rent quote") {
 
 function decodeDaDigestTuple(value, expectedLength, name) {
   if (!Array.isArray(value) || value.length === 0) {
-    throw new TypeError(`${name} must be an array`);
+    rejectType(`${name} must be an array`);
   }
   const bytes = Array.isArray(value[0]) ? value[0] : value;
   if (bytes.length !== expectedLength) {
-    throw new TypeError(`${name} must contain ${expectedLength} entries`);
+    rejectType(`${name} must contain ${expectedLength} entries`);
   }
   const buffer = normalizeByteArray(bytes, name);
   if (buffer.length !== expectedLength) {
-    throw new TypeError(`${name} must decode to ${expectedLength} bytes`);
+    rejectType(`${name} must decode to ${expectedLength} bytes`);
   }
   return buffer;
 }
@@ -30702,10 +30292,10 @@ function bufferToUpperHex(buffer) {
 function normalizeUpperHex(value, name) {
   const trimmed = requireNonEmptyString(String(value ?? ""), name).replace(/^0x/i, "");
   if (trimmed.length === 0 || trimmed.length % 2 !== 0) {
-    throw new TypeError(`${name} must be an even-length hex string`);
+    rejectType(`${name} must be an even-length hex string`);
   }
   if (!/^([0-9A-Fa-f]{2})+$/.test(trimmed)) {
-    throw new TypeError(`${name} must be a hex string`);
+    rejectType(`${name} must be a hex string`);
   }
   return trimmed.toUpperCase();
 }
@@ -30729,7 +30319,7 @@ function normalizeSorafsPorVerdictResponse(
 
 function normalizePeerListResponse(payload, context = "peer list response") {
   if (!Array.isArray(payload)) {
-    throw new TypeError(`${context} must be an array`);
+    rejectType(`${context} must be an array`);
   }
   return payload.map((entry, index) => {
     const record = ensureRecord(entry, `${context}[${index}]`);
@@ -30754,7 +30344,7 @@ function normalizePeerListResponse(payload, context = "peer list response") {
 
 function normalizeTelemetryPeersInfoList(payload) {
   if (!Array.isArray(payload)) {
-    throw new TypeError("telemetry peers response must be an array");
+    rejectType("telemetry peers response must be an array");
   }
   return payload.map((entry, index) =>
     normalizeTelemetryPeerInfo(entry, `telemetry peers response[${index}]`),
@@ -30784,7 +30374,7 @@ function normalizeTelemetryPeerInfo(value, context) {
   }
   if (record.connected_peers !== undefined && record.connected_peers !== null) {
     if (!Array.isArray(record.connected_peers)) {
-      throw new TypeError(`${context}.connected_peers must be an array`);
+      rejectType(`${context}.connected_peers must be an array`);
     }
     result.connectedPeers = record.connected_peers.map((entry, idx) =>
       requireNonEmptyString(entry, `${context}.connected_peers[${idx}]`),
@@ -30864,7 +30454,7 @@ function normalizeExplorerDurationMs(value, context) {
 
 function requireFiniteNumber(value, context) {
   if (typeof value !== "number" || Number.isNaN(value) || !Number.isFinite(value)) {
-    throw new TypeError(`${context} must be a finite number`);
+    rejectType(`${context} must be a finite number`);
   }
   return value;
 }
@@ -30881,9 +30471,7 @@ function requireKaigiResponseObject(
   );
   const extra = Object.keys(record).filter((field) => !allowedFields.has(field));
   if (missing.length !== 0 || extra.length !== 0) {
-    throw new TypeError(
-      `${context} fields are not canonical; missing=[${missing.join(", ")}] extra=[${extra.join(", ")}]`,
-    );
+    rejectType(`${context} fields are not canonical; missing=[${missing.join(", ")}] extra=[${extra.join(", ")}]`);
   }
   return record;
 }
@@ -30899,10 +30487,10 @@ function normalizeKaigiU64(value, context) {
   } else if (typeof value === "bigint") {
     integer = value;
   } else {
-    throw new TypeError(`${context} must be a canonical unsigned integer`);
+    rejectType(`${context} must be a canonical unsigned integer`);
   }
   if (integer < 0n || integer > MAX_UINT64_BIGINT) {
-    throw new RangeError(`${context} must be between 0 and ${MAX_UINT64_BIGINT}`);
+    rejectRange(`${context} must be between 0 and ${MAX_UINT64_BIGINT}`);
   }
   return integer <= MAX_SAFE_INTEGER_BIGINT ? Number(integer) : integer;
 }
@@ -30910,7 +30498,7 @@ function normalizeKaigiU64(value, context) {
 function normalizeKaigiBoundedUnsignedInteger(value, context, maximum) {
   const normalized = normalizeKaigiU64(value, context);
   if (BigInt(normalized) > BigInt(maximum)) {
-    throw new RangeError(`${context} must be between 0 and ${maximum}`);
+    rejectRange(`${context} must be between 0 and ${maximum}`);
   }
   return Number(normalized);
 }
@@ -30918,14 +30506,14 @@ function normalizeKaigiBoundedUnsignedInteger(value, context, maximum) {
 function requireKaigiMarkedHash(value, context) {
   const literal = requireExactLowerHex32String(value, context);
   if ((Number.parseInt(literal.slice(-2), 16) & 1) !== 1) {
-    throw new TypeError(`${context} must set the Iroha Hash marker bit`);
+    rejectType(`${context} must set the Iroha Hash marker bit`);
   }
   return literal;
 }
 
 function parseKaigiSseEventPayload(event, context) {
   if (typeof event?.raw !== "string" || event.raw.length === 0) {
-    throw new TypeError(`${context}.data must be a JSON object`);
+    rejectType(`${context}.data must be a JSON object`);
   }
   return parseStrictLosslessIntegerJson(event.raw, `${context}.data`);
 }
@@ -30943,20 +30531,18 @@ function normalizeKaigiRelaySummaryList(payload) {
     `${context}.items`,
   );
   if (rawItems.length > KAIGI_RELAY_DIAGNOSTIC_MAX_RELAYS) {
-    throw new RangeError(
-      `kaigi relay summary response.items must not exceed ${KAIGI_RELAY_DIAGNOSTIC_MAX_RELAYS} entries`,
-    );
+    rejectRange(`kaigi relay summary response.items must not exceed ${KAIGI_RELAY_DIAGNOSTIC_MAX_RELAYS} entries`);
   }
   const items = rawItems.map((entry, index) =>
     normalizeKaigiRelaySummary(entry, `${context}.items[${index}]`),
   );
   const total = normalizeKaigiU64(record.total, `${context}.total`);
   if (BigInt(total) !== BigInt(items.length)) {
-    throw new RangeError(`${context}.total must equal items.length`);
+    rejectRange(`${context}.total must equal items.length`);
   }
   const relayIds = new Set(items.map((item) => item.relay_id));
   if (relayIds.size !== items.length) {
-    throw new TypeError(`${context}.items must contain unique relay_id values`);
+    rejectType(`${context}.items must contain unique relay_id values`);
   }
   return {
     total,
@@ -30985,13 +30571,13 @@ function normalizeKaigiRelaySummary(payload, context) {
   const hasStatus = Object.prototype.hasOwnProperty.call(record, "status");
   const hasReportedAt = Object.prototype.hasOwnProperty.call(record, "reported_at_ms");
   if (hasStatus !== hasReportedAt) {
-    throw new TypeError(`${context}.status and reported_at_ms must be present together`);
+    rejectType(`${context}.status and reported_at_ms must be present together`);
   }
   let status = null;
   if (hasStatus) {
     const value = requireExactNonEmptyString(record.status, `${context}.status`);
     if (!KAIGI_HEALTH_STATUS_VALUES.has(value)) {
-      throw new TypeError(`${context}.status must be exact lowercase healthy, degraded, or unavailable`);
+      rejectType(`${context}.status must be exact lowercase healthy, degraded, or unavailable`);
     }
     status = value;
   }
@@ -31015,7 +30601,7 @@ function normalizeKaigiRelaySummary(payload, context) {
 function normalizeKaigiBandwidthClass(value, context) {
   const normalized = normalizeKaigiBoundedUnsignedInteger(value, context, 0xff);
   if (normalized === 0) {
-    throw new RangeError(`${context} must be between 1 and 255`);
+    rejectRange(`${context} must be between 1 and 255`);
   }
   return normalized;
 }
@@ -31038,9 +30624,7 @@ function normalizeKaigiRelayDetail(payload) {
   const expectedFingerprint = Buffer.from(blake2b256(hpkePublicKeyBytes));
   expectedFingerprint[expectedFingerprint.length - 1] |= 1;
   if (relaySummary.hpke_fingerprint_hex !== expectedFingerprint.toString("hex")) {
-    throw new TypeError(
-      "kaigi relay detail.relay.hpke_fingerprint_hex must match the marked HPKE public-key fingerprint",
-    );
+    rejectType("kaigi relay detail.relay.hpke_fingerprint_hex must match the marked HPKE public-key fingerprint");
   }
   const hasReportedCall = Object.prototype.hasOwnProperty.call(record, "reported_call");
   const hasReportedBy = Object.prototype.hasOwnProperty.call(record, "reported_by");
@@ -31051,9 +30635,7 @@ function normalizeKaigiRelayDetail(payload) {
     || hasReportedBy !== hasFeedback
     || (hasNotes && !hasFeedback)
   ) {
-    throw new TypeError(
-      "kaigi relay detail feedback fields must agree with relay status and reported_at_ms",
-    );
+    rejectType("kaigi relay detail feedback fields must agree with relay status and reported_at_ms");
   }
   let reportedCall = null;
   if (hasReportedCall) {
@@ -31085,7 +30667,7 @@ function normalizeKaigiRelayDetail(payload) {
   let notes = null;
   if (hasNotes) {
     if (typeof record.notes !== "string") {
-      throw new TypeError("kaigi relay detail.notes must be a string");
+      rejectType("kaigi relay detail.notes must be a string");
     }
     notes = record.notes;
   }
@@ -31093,7 +30675,7 @@ function normalizeKaigiRelayDetail(payload) {
   if (Object.prototype.hasOwnProperty.call(record, "metrics")) {
     metrics = normalizeKaigiRelayDomainMetrics(record.metrics, "kaigi relay detail.metrics");
     if (metrics.domain !== relaySummary.domain) {
-      throw new TypeError("kaigi relay detail.metrics.domain must match relay.domain");
+      rejectType("kaigi relay detail.metrics.domain must match relay.domain");
     }
   }
   return {
@@ -31150,16 +30732,14 @@ function normalizeKaigiRelayHealthSnapshot(payload) {
     "kaigi relay health snapshot.domains",
   );
   if (rawDomains.length > KAIGI_RELAY_DIAGNOSTIC_MAX_RELAYS) {
-    throw new RangeError(
-      `kaigi relay health snapshot.domains must not exceed ${KAIGI_RELAY_DIAGNOSTIC_MAX_RELAYS} entries`,
-    );
+    rejectRange(`kaigi relay health snapshot.domains must not exceed ${KAIGI_RELAY_DIAGNOSTIC_MAX_RELAYS} entries`);
   }
   const domains = rawDomains.map((entry, index) =>
     normalizeKaigiRelayDomainMetrics(entry, `kaigi relay health snapshot.domains[${index}]`),
   );
   for (let index = 1; index < domains.length; index += 1) {
     if (domains[index - 1].domain >= domains[index].domain) {
-      throw new TypeError(`${context}.domains must be sorted with unique domain values`);
+      rejectType(`${context}.domains must be sorted with unique domain values`);
     }
   }
   const snapshot = {
@@ -31195,9 +30775,7 @@ function normalizeKaigiRelayHealthSnapshot(payload) {
       + BigInt(snapshot.unavailable_total)
     > BigInt(KAIGI_RELAY_DIAGNOSTIC_MAX_RELAYS)
   ) {
-    throw new RangeError(
-      `${context} current status totals must not exceed ${KAIGI_RELAY_DIAGNOSTIC_MAX_RELAYS}`,
-    );
+    rejectRange(`${context} current status totals must not exceed ${KAIGI_RELAY_DIAGNOSTIC_MAX_RELAYS}`);
   }
   const aggregateFields = [
     ["reports_total", "health_reports_total"],
@@ -31211,7 +30789,7 @@ function normalizeKaigiRelayHealthSnapshot(payload) {
       if (expected > MAX_UINT64_BIGINT) expected = MAX_UINT64_BIGINT;
     }
     if (BigInt(snapshot[totalField]) !== expected) {
-      throw new RangeError(`${context}.${totalField} must equal the saturated domain sum`);
+      rejectRange(`${context}.${totalField} must equal the saturated domain sum`);
     }
   }
   return snapshot;
@@ -31220,7 +30798,7 @@ function normalizeKaigiRelayHealthSnapshot(payload) {
 function requireKaigiEnum(value, allowedValues, context) {
   const literal = requireExactNonEmptyString(value, context);
   if (!allowedValues.has(literal)) {
-    throw new TypeError(`${context} is not a supported exact lowercase value`);
+    rejectType(`${context} is not a supported exact lowercase value`);
   }
   return literal;
 }
@@ -31230,10 +30808,10 @@ function normalizeKaigiCallIdentityFields(record, context, expectedCallId) {
   const domain = requireExactNonEmptyString(record.domain, `${context}.domain`);
   const callName = requireExactNonEmptyString(record.call_name, `${context}.call_name`);
   if (callId !== `${domain}:${callName}`) {
-    throw new TypeError(`${context}.call_id must match domain and call_name`);
+    rejectType(`${context}.call_id must match domain and call_name`);
   }
   if (expectedCallId !== undefined && callId !== expectedCallId) {
-    throw new TypeError(`${context}.call_id must match the requested call id`);
+    rejectType(`${context}.call_id must match the requested call id`);
   }
   return { call_id: callId, domain, call_name: callName };
 }
@@ -31280,13 +30858,11 @@ function normalizeKaigiCallView(payload, expectedCallId) {
     (privacyMode === "transparent" && (!hasHost || !hasParticipantCount))
     || (privacyMode === "private" && (hasHost || hasBilling || hasParticipantCount))
   ) {
-    throw new TypeError(
-      `${context} authority and participant fields must agree with privacy_mode`,
-    );
+    rejectType(`${context} authority and participant fields must agree with privacy_mode`);
   }
   const hasEndedAt = Object.prototype.hasOwnProperty.call(record, "ended_at_ms");
   if (hasEndedAt !== (status === "ended")) {
-    throw new TypeError(`${context}.ended_at_ms must be present exactly when status is ended`);
+    rejectType(`${context}.ended_at_ms must be present exactly when status is ended`);
   }
   const maxParticipants = Object.prototype.hasOwnProperty.call(record, "max_participants")
     ? normalizeKaigiBoundedUnsignedInteger(
@@ -31296,9 +30872,7 @@ function normalizeKaigiCallView(payload, expectedCallId) {
         )
     : undefined;
   if (maxParticipants === 0 || maxParticipants > KAIGI_MAX_PARTICIPANTS_V1) {
-    throw new RangeError(
-      `${context}.max_participants must be between 1 and ${KAIGI_MAX_PARTICIPANTS_V1}`,
-    );
+    rejectRange(`${context}.max_participants must be between 1 and ${KAIGI_MAX_PARTICIPANTS_V1}`);
   }
   const createdAtMs = normalizeKaigiU64(
     record.created_at_ms,
@@ -31311,7 +30885,7 @@ function normalizeKaigiCallView(payload, expectedCallId) {
         )
     : undefined;
   if (endedAtMs !== undefined && BigInt(endedAtMs) < BigInt(createdAtMs)) {
-    throw new RangeError(`${context}.ended_at_ms must not precede created_at_ms`);
+    rejectRange(`${context}.ended_at_ms must not precede created_at_ms`);
   }
   return {
     ...identity,
@@ -31399,31 +30973,29 @@ function normalizeKaigiCallSignal(payload, context, expectedCallId) {
   );
   const callId = requireExactNonEmptyString(record.call_id, `${context}.call_id`);
   if (callId !== expectedCallId) {
-    throw new TypeError(`${context}.call_id must match the requested call id`);
+    rejectType(`${context}.call_id must match the requested call id`);
   }
   if (typeof record.signal_kind !== "string") {
-    throw new TypeError(`${context}.signal_kind must be a string`);
+    rejectType(`${context}.signal_kind must be a string`);
   }
   const signalKind = record.signal_kind;
   if (signalKind.length === 0) {
-    throw new TypeError(`${context}.signal_kind must not be empty`);
+    rejectType(`${context}.signal_kind must not be empty`);
   }
   if (/^\p{White_Space}|\p{White_Space}$/u.test(signalKind)) {
-    throw new TypeError(`${context}.signal_kind must not contain surrounding Unicode whitespace`);
+    rejectType(`${context}.signal_kind must not contain surrounding Unicode whitespace`);
   }
   if (/[A-Z]/u.test(signalKind)) {
-    throw new TypeError(`${context}.signal_kind must not contain uppercase ASCII characters`);
+    rejectType(`${context}.signal_kind must not contain uppercase ASCII characters`);
   }
   const timestampMs = normalizeKaigiU64(record.timestamp_ms, `${context}.timestamp_ms`);
   const createdAtMs = normalizeKaigiU64(record.created_at_ms, `${context}.created_at_ms`);
   if (BigInt(createdAtMs) > BigInt(timestampMs)) {
-    throw new RangeError(`${context}.created_at_ms must not exceed timestamp_ms`);
+    rejectRange(`${context}.created_at_ms must not exceed timestamp_ms`);
   }
   const metadata = ensureRecord(record.metadata, `${context}.metadata`);
   if (metadata.schema !== KAIGI_SIGNAL_SCHEMA_V1) {
-    throw new TypeError(
-      `${context}.metadata.schema must be ${KAIGI_SIGNAL_SCHEMA_V1}`,
-    );
+    rejectType(`${context}.metadata.schema must be ${KAIGI_SIGNAL_SCHEMA_V1}`);
   }
   return {
     entrypoint_hash: requireKaigiMarkedHash(
@@ -31465,24 +31037,20 @@ function normalizeKaigiCallSignalsList(payload, expectedCallId) {
   );
   const rawItems = requireDenseArray(record.items, `${context}.items`);
   if (rawItems.length > KAIGI_RELAY_DIAGNOSTIC_MAX_RELAYS) {
-    throw new RangeError(
-      `${context}.items must not exceed ${KAIGI_RELAY_DIAGNOSTIC_MAX_RELAYS} entries`,
-    );
+    rejectRange(`${context}.items must not exceed ${KAIGI_RELAY_DIAGNOSTIC_MAX_RELAYS} entries`);
   }
   const items = rawItems.map((entry, index) =>
     normalizeKaigiCallSignal(entry, `${context}.items[${index}]`, expectedCallId),
   );
   if (new Set(items.map((item) => item.entrypoint_hash)).size !== items.length) {
-    throw new TypeError(`${context}.items must contain unique entrypoint_hash values`);
+    rejectType(`${context}.items must contain unique entrypoint_hash values`);
   }
   if (typeof record.has_more !== "boolean") {
-    throw new TypeError(`${context}.has_more must be a boolean`);
+    rejectType(`${context}.has_more must be a boolean`);
   }
   const hasCursor = Object.prototype.hasOwnProperty.call(record, "next_cursor");
   if (record.has_more !== hasCursor) {
-    throw new TypeError(
-      `${context}.next_cursor must be present exactly when has_more is true`,
-    );
+    rejectType(`${context}.next_cursor must be present exactly when has_more is true`);
   }
   const nextCursor = hasCursor
     ? normalizeKaigiCallSignalsCursor(
@@ -31504,7 +31072,7 @@ function normalizeKaigiCallSignalsCursor(value, context) {
     || cursor.length % 4 === 1
     || !/^[A-Za-z0-9_-]+$/u.test(cursor)
   ) {
-    throw new TypeError(`${context} must be a canonical bounded base64url value`);
+    rejectType(`${context} must be a canonical bounded base64url value`);
   }
   return cursor;
 }
@@ -31514,7 +31082,7 @@ function normalizeKaigiCallEventData(payload, expectedCallId) {
   const baseRecord = ensureRecord(payload, context);
   const kind = requireExactNonEmptyString(baseRecord.kind, `${context}.kind`);
   if (!KAIGI_CALL_EVENT_KIND_VALUES.has(kind)) {
-    throw new TypeError("kaigi call event.kind must be roster_updated or ended");
+    rejectType("kaigi call event.kind must be roster_updated or ended");
   }
   const requiredFields = kind === "ended"
     ? new Set(["kind", "call", "status", "ended_at_ms"])
@@ -31535,7 +31103,7 @@ function normalizeKaigiCallEventData(payload, expectedCallId) {
   );
   if (kind === "ended") {
     if (record.status !== "ended") {
-      throw new TypeError(`${context}.status must be ended`);
+      rejectType(`${context}.status must be ended`);
     }
     return {
       kind,
@@ -31558,7 +31126,7 @@ function normalizeKaigiCallEventData(payload, expectedCallId) {
     (privacyMode === "transparent" && (!hasParticipantCount || hasRosterRoot))
     || (privacyMode === "private" && (hasParticipantCount || !hasRosterRoot))
   ) {
-    throw new TypeError(`${context} roster fields must agree with privacy_mode`);
+    rejectType(`${context} roster fields must agree with privacy_mode`);
   }
   return {
     kind,
@@ -31595,9 +31163,7 @@ function normalizeKaigiRelayEventData(payload) {
   const baseRecord = ensureRecord(payload, context);
   const kind = requireExactNonEmptyString(baseRecord.kind, `${context}.kind`);
   if (!KAIGI_EVENT_KIND_VALUES.has(kind)) {
-    throw new TypeError(
-      "kaigi relay event.kind must be exact lowercase registration, unregistration, or health",
-    );
+    rejectType("kaigi relay event.kind must be exact lowercase registration, unregistration, or health");
   }
   const fields = kind === "registration"
     ? new Set(["kind", "domain", "relay_id", "bandwidth_class", "hpke_fingerprint_hex"])
@@ -31640,9 +31206,7 @@ function normalizeKaigiRelayEventData(payload) {
     "kaigi relay event.status",
   );
   if (!KAIGI_HEALTH_STATUS_VALUES.has(statusValue)) {
-    throw new TypeError(
-      "kaigi relay event.status must be exact lowercase healthy, degraded, or unavailable",
-    );
+    rejectType("kaigi relay event.status must be exact lowercase healthy, degraded, or unavailable");
   }
   const callRecord = requireKaigiResponseObject(
     record.call,
@@ -31659,7 +31223,7 @@ function normalizeKaigiRelayEventData(payload) {
     "kaigi relay event.call.name",
   );
   if (callDomain !== domain) {
-    throw new TypeError("kaigi relay event.call.domain must match event.domain");
+    rejectType("kaigi relay event.call.domain must match event.domain");
   }
   return {
     kind,
@@ -31705,9 +31269,7 @@ function buildKaigiRelayEventParams(options = {}) {
     for (const entry of values) {
       const token = requireNonEmptyString(entry, "kaigiRelayEvents.kind").toLowerCase();
       if (!KAIGI_EVENT_KIND_VALUES.has(token)) {
-        throw new TypeError(
-          "kaigiRelayEvents.kind must be registration, unregistration, or health",
-        );
+        rejectType("kaigiRelayEvents.kind must be registration, unregistration, or health");
       }
       normalized.push(token);
     }
@@ -31792,7 +31354,7 @@ function buildKaigiCallEventParams(options = {}) {
     for (const entry of values) {
       const token = requireNonEmptyString(entry, "kaigiCallEvents.kind").toLowerCase();
       if (!KAIGI_CALL_EVENT_KIND_VALUES.has(token)) {
-        throw new TypeError("kaigiCallEvents.kind must be roster_updated or ended");
+        rejectType("kaigiCallEvents.kind must be roster_updated or ended");
       }
       normalized.push(token);
     }
@@ -31876,9 +31438,7 @@ function buildSubscriptionPlanListQuery(options = {}) {
 function normalizeSubscriptionStatusFilter(value, context) {
   const normalized = requireNonEmptyString(value, context).toLowerCase();
   if (!SUBSCRIPTION_STATUS_VALUES.has(normalized)) {
-    throw new TypeError(
-      `${context} must be one of ${Array.from(SUBSCRIPTION_STATUS_VALUES).join(", ")}`,
-    );
+    rejectType(`${context} must be one of ${Array.from(SUBSCRIPTION_STATUS_VALUES).join(", ")}`);
   }
   return normalized;
 }
@@ -31994,7 +31554,7 @@ function normalizeSignalOnlyOption(options, context) {
 
 function normalizeSccpMessageIdPath(value, context) {
   if (typeof value !== "string" || !/^[0-9a-f]{64}$/u.test(value) || /^0+$/u.test(value)) {
-    throw new TypeError(`${context} must be canonical lowercase nonzero 32-byte hex`);
+    rejectType(`${context} must be canonical lowercase nonzero 32-byte hex`);
   }
   return value;
 }
@@ -32014,19 +31574,19 @@ function normalizeSccpSoraOutboundMaterialRoute(value, context) {
   const expectedFields = ["sourceProfile", "routeId", "assetKey", "revision"];
   const unknown = Object.keys(record).find((field) => !expectedFields.includes(field));
   if (unknown !== undefined) {
-    throw new TypeError(`${context} contains unknown field \`${unknown}\``);
+    rejectType(`${context} contains unknown field \`${unknown}\``);
   }
   for (const field of expectedFields) {
     if (!Object.prototype.hasOwnProperty.call(record, field)) {
-      throw new TypeError(`${context} is missing required field \`${field}\``);
+      rejectType(`${context} is missing required field \`${field}\``);
     }
   }
   if (!SCCP_EXTERNAL_ROUTE_PROFILES.has(record.sourceProfile)) {
-    throw new TypeError(`${context}.sourceProfile is not one exact external SCCP profile`);
+    rejectType(`${context}.sourceProfile is not one exact external SCCP profile`);
   }
   for (const field of ["routeId", "assetKey"]) {
     if (typeof record[field] !== "string" || !SCCP_ROUTE_KEY_SEGMENT.test(record[field])) {
-      throw new TypeError(`${context}.${field} must be canonical lowercase route text`);
+      rejectType(`${context}.${field} must be canonical lowercase route text`);
     }
   }
   if (
@@ -32034,7 +31594,7 @@ function normalizeSccpSoraOutboundMaterialRoute(value, context) {
     record.revision < 1 ||
     record.revision > 0xffff_ffff
   ) {
-    throw new TypeError(`${context}.revision must be a nonzero uint32`);
+    rejectType(`${context}.revision must be a nonzero uint32`);
   }
   return Object.freeze({
     sourceProfile: record.sourceProfile,
@@ -32050,11 +31610,11 @@ function normalizeSccpTypedReadOptions(options, context) {
   });
   const unknown = Object.keys(record).find((key) => key !== "format" && key !== "signal");
   if (unknown !== undefined) {
-    throw new TypeError(`${context}.options contains unknown field \`${unknown}\``);
+    rejectType(`${context}.options contains unknown field \`${unknown}\``);
   }
   const format = record.format ?? "json";
   if (format !== "json" && format !== "norito") {
-    throw new TypeError(`${context}.options.format must be exactly \`json\` or \`norito\``);
+    rejectType(`${context}.options.format must be exactly \`json\` or \`norito\``);
   }
   return { format, signal: record.signal };
 }
@@ -32095,7 +31655,7 @@ async function readSccpNoritoResponse(
     ? [expectedTypeNames]
     : expectedTypeNames;
   if (!Array.isArray(closedTypeNames) || closedTypeNames.length === 0) {
-    throw new TypeError(`${label} response must declare a closed Norito type set`);
+    rejectType(`${label} response must declare a closed Norito type set`);
   }
   const { validateNoritoFrame } = await loadToriiOptionalModule();
   let matchedClosedType = false;
@@ -32119,14 +31679,14 @@ async function readSccpNoritoResponse(
       expectedPaddingLength: 0,
       requireNonEmptyPayload: true,
     });
-    throw new Error(`${label} response schema hash did not match the closed type set`);
+    rejectError(`${label} response schema hash did not match the closed type set`);
   }
   return body;
 }
 
 async function readBoundedSccpResponseBytes(response, maximumBodyBytes, label) {
   if (!Number.isSafeInteger(maximumBodyBytes) || maximumBodyBytes < 0) {
-    throw new TypeError(`${label} response byte-size bound is invalid`);
+    rejectType(`${label} response byte-size bound is invalid`);
   }
 
   const rawContentLength = response.headers?.get?.("content-length");
@@ -32173,13 +31733,13 @@ async function readBoundedSccpResponseBytes(response, maximumBodyBytes, label) {
     while (true) {
       const result = await reader.read();
       if (!result || typeof result.done !== "boolean") {
-        throw new TypeError(`${label} response body returned an invalid stream result`);
+        rejectType(`${label} response body returned an invalid stream result`);
       }
       if (result.done) {
         break;
       }
       if (!(result.value instanceof Uint8Array)) {
-        throw new TypeError(`${label} response body returned a non-byte chunk`);
+        rejectType(`${label} response body returned a non-byte chunk`);
       }
       if (result.value.byteLength > maximumBodyBytes - totalBytes) {
         const error = new TypeError(
@@ -32237,7 +31797,7 @@ function decodeSccpUtf8(bytes, label) {
   try {
     return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
   } catch (error) {
-    throw new TypeError(`${label} response body must be strict UTF-8`, { cause: error });
+    rejectType(`${label} response body must be strict UTF-8`, { cause: error });
   }
 }
 
@@ -32419,7 +31979,7 @@ function normalizeEventStreamOptions(
   let lastEventId;
   if (normalized.lastEventId !== undefined) {
     if (normalized.lastEventId === null) {
-      throw new TypeError(`${context}.lastEventId must be a non-empty string`);
+      rejectType(`${context}.lastEventId must be a non-empty string`);
     }
     lastEventId = requireNonEmptyString(
       normalized.lastEventId,
@@ -32631,9 +32191,7 @@ function normalizeRepoAgreement(entry, context) {
   const status = requireNonEmptyString(record.status, `${context}.status`);
   const expectedStatus = settlementTimestampMs === null ? "active" : "settled";
   if (status !== expectedStatus) {
-    throw new TypeError(
-      `${context}.status must agree with settlement_timestamp_ms (expected ${expectedStatus})`,
-    );
+    rejectType(`${context}.status must agree with settlement_timestamp_ms (expected ${expectedStatus})`);
   }
   return {
     id,
@@ -32683,7 +32241,7 @@ function normalizeRepoGovernance(value, context) {
 
 function normalizeAttachmentMetadataList(payload, context = "attachment list response") {
   if (!Array.isArray(payload)) {
-    throw new TypeError(`${context} must be an array`);
+    rejectType(`${context} must be an array`);
   }
   return payload.map((entry, index) =>
     normalizeAttachmentMetadataRecord(entry, `${context}[${index}]`),
@@ -32702,7 +32260,7 @@ function normalizeAttachmentUploadPayload(value, context) {
   ) {
     return toBuffer(value);
   }
-  throw new TypeError(`${context} must be a string or binary payload`);
+  rejectType(`${context} must be a string or binary payload`);
 }
 
 function normalizeAttachmentMetadataRecord(value, context) {
@@ -32754,7 +32312,7 @@ function loadVerifyingKeyClient() {
   return (verifyingKeyClientPromise ??= import(VERIFYING_KEY_CLIENT_URL).then(
       (module) => {
         if (typeof module.createVerifyingKeyClient !== "function") {
-          throw new TypeError("invalid verifying-key module");
+          rejectType("invalid verifying-key module");
         }
         const client = module.createVerifyingKeyClient(
           VERIFYING_KEY_LIST_OPTION_KEYS,
@@ -32776,9 +32334,7 @@ function loadVerifyingKeyClient() {
           Object.keys(client).join(",") !==
             "backend,detail,draft,id,list,listQuery,name,register,signingContext,update"
         ) {
-          throw new TypeError(
-            "invalid verifying-key setup: expected frozen helper keys",
-          );
+          rejectType("invalid verifying-key setup: expected frozen helper keys");
         }
         return client;
       },
@@ -32852,9 +32408,7 @@ function decodeVerifyingKeyDraftBase64(
     maxBytes !== null &&
     value.length > 4 * Math.ceil(maxBytes / 3)
   ) {
-    throw new RangeError(
-      `${context} exceeds the ${maxBytes}-byte ${limitLabel} limit`,
-    );
+    rejectRange(`${context} exceeds the ${maxBytes}-byte ${limitLabel} limit`);
   }
   if (
     exactBytes !== null &&
@@ -32876,9 +32430,7 @@ function decodeVerifyingKeyDraftBase64(
   const padding = value.endsWith("==") ? 2 : value.endsWith("=") ? 1 : 0;
   const decodedLength = (value.length / 4) * 3 - padding;
   if (maxBytes !== null && decodedLength > maxBytes) {
-    throw new RangeError(
-      `${context} exceeds the ${maxBytes}-byte ${limitLabel} limit`,
-    );
+    rejectRange(`${context} exceeds the ${maxBytes}-byte ${limitLabel} limit`);
   }
   if (exactBytes !== null && decodedLength !== exactBytes) {
     throw createValidationError(
@@ -32906,7 +32458,7 @@ function normalizeProverReportList(payload, filters, context) {
     return { kind: "reports", reports: [] };
   }
   if (!Array.isArray(payload)) {
-    throw new TypeError(`${context} must be an array`);
+    rejectType(`${context} must be an array`);
   }
   if (payload.length === 0) {
     return { kind: "reports", reports: [] };
@@ -32916,9 +32468,7 @@ function normalizeProverReportList(payload, filters, context) {
   const first = payload[0];
   if (typeof first === "string") {
     if (!idsOnlyRequested) {
-      throw new Error(
-        "Torii returned id-only prover report projection; pass { ids_only: true } to listProverReports to consume this payload",
-      );
+      rejectError("Torii returned id-only prover report projection; pass { ids_only: true } to listProverReports to consume this payload");
     }
     payload.forEach((value, index) =>
       requireNonEmptyString(value, `${context}[${index}]`),
@@ -32930,9 +32480,7 @@ function normalizeProverReportList(payload, filters, context) {
     Object.keys(first).every((key) => key === "id" || key === "error")
   ) {
     if (!messagesOnlyRequested) {
-      throw new Error(
-        "Torii returned message-only prover report projection; pass { messages_only: true } to listProverReports to consume this payload",
-      );
+      rejectError("Torii returned message-only prover report projection; pass { messages_only: true } to listProverReports to consume this payload");
     }
     const messages = payload.map((entry, index) => {
       const record = ensureRecord(entry, `${context}[${index}]`);
@@ -33010,15 +32558,13 @@ function normalizeSumeragiEvidenceListResponse(payload, limit, offset) {
   ]);
   const rawItems = record.items;
   if (!Array.isArray(rawItems)) {
-    throw new TypeError("sumeragi evidence response.items must be an array");
+    rejectType("sumeragi evidence response.items must be an array");
   }
   const items = rawItems.map((item, index) =>
     normalizeSumeragiEvidenceRecord(item, `sumeragi evidence response.items[${index}]`),
   );
   if (items.length > limit) {
-    throw new RangeError(
-      `sumeragi evidence response.items must contain at most ${limit} records`,
-    );
+    rejectRange(`sumeragi evidence response.items must contain at most ${limit} records`);
   }
   const total = requireSumeragiEvidenceUnsigned(
     record.total,
@@ -33026,17 +32572,13 @@ function normalizeSumeragiEvidenceListResponse(payload, limit, offset) {
   );
   const totalInteger = BigInt(total);
   if (totalInteger < BigInt(items.length)) {
-    throw new RangeError(
-      "sumeragi evidence response.total must cover the returned items",
-    );
+    rejectRange("sumeragi evidence response.total must cover the returned items");
   }
   if (
     items.length > 0
     && totalInteger < BigInt(offset) + BigInt(items.length)
   ) {
-    throw new RangeError(
-      "sumeragi evidence response.total must cover offset plus returned items",
-    );
+    rejectRange("sumeragi evidence response.total must cover offset plus returned items");
   }
   return { total, items };
 }
@@ -33051,7 +32593,7 @@ function assertExactSumeragiEvidenceFields(record, context, fields) {
     const details = [];
     if (missing.length > 0) details.push(`missing ${missing.join(", ")}`);
     if (unexpected.length > 0) details.push(`unexpected ${unexpected.join(", ")}`);
-    throw new TypeError(`${context} must use the exact server fields (${details.join("; ")})`);
+    rejectType(`${context} must use the exact server fields (${details.join("; ")})`);
   }
 }
 
@@ -33067,11 +32609,11 @@ function requireSumeragiEvidenceUnsigned(value, context, maximum = MAX_UINT64_BI
   } else if (typeof value === "bigint" && value >= 0n) {
     integer = value;
   } else {
-    throw new TypeError(`${context} must be an unsigned JSON integer`);
+    rejectType(`${context} must be an unsigned JSON integer`);
   }
   const maximumInteger = typeof maximum === "bigint" ? maximum : BigInt(maximum);
   if (integer > maximumInteger) {
-    throw new RangeError(`${context} must be at most ${maximumInteger}`);
+    rejectRange(`${context} must be at most ${maximumInteger}`);
   }
   return integer <= MAX_SAFE_INTEGER_BIGINT ? Number(integer) : integer;
 }
@@ -33086,12 +32628,12 @@ function normalizeSumeragiEvidencePenaltyStatus(value, context) {
   const status = requireExactNonEmptyString(record.status, `${context}.status`);
   if (status === "pending") {
     if (record.details !== null) {
-      throw new TypeError(`${context}.details must be null when status is pending`);
+      rejectType(`${context}.details must be null when status is pending`);
     }
     return { status, details: null };
   }
   if (status !== "applied" && status !== "cancelled") {
-    throw new RangeError(`${context}.status must be pending, applied, or cancelled`);
+    rejectRange(`${context}.status must be pending, applied, or cancelled`);
   }
   const details = ensureRecord(record.details, `${context}.details`);
   assertExactSumeragiEvidenceFields(details, `${context}.details`, ["height"]);
@@ -33111,13 +32653,11 @@ function normalizeSumeragiEvidenceRecord(value, context) {
   assertExactSumeragiEvidenceFields(record, context, EVIDENCE_RECORD_FIELDS);
   const kind = requireExactNonEmptyString(record.kind, `${context}.kind`);
   if (kind !== EVIDENCE_KIND) {
-    throw new RangeError(`${context}.kind must be ${EVIDENCE_KIND}`);
+    rejectRange(`${context}.kind must be ${EVIDENCE_KIND}`);
   }
   const evidenceClass = requireExactNonEmptyString(record.class, `${context}.class`);
   if (!EVIDENCE_EQUIVOCATION_CLASS_VALUES.has(evidenceClass)) {
-    throw new RangeError(
-      `${context}.class must be one of ${Array.from(EVIDENCE_EQUIVOCATION_CLASS_VALUES).join(", ")}`,
-    );
+    rejectRange(`${context}.class must be one of ${Array.from(EVIDENCE_EQUIVOCATION_CLASS_VALUES).join(", ")}`);
   }
   const artifactHash1 = requireSumeragiEvidenceHash(
     record.artifact_hash_1,
@@ -33128,7 +32668,7 @@ function normalizeSumeragiEvidenceRecord(value, context) {
     `${context}.artifact_hash_2`,
   );
   if (artifactHash1 === artifactHash2) {
-    throw new RangeError(`${context} artifact hashes must identify distinct artifacts`);
+    rejectRange(`${context} artifact hashes must identify distinct artifacts`);
   }
   return {
     kind,
@@ -33203,9 +32743,7 @@ function normalizeAssetDefinitionListItem(value, context) {
 
 function rejectAliasField(record, context, aliasKey, canonicalKey) {
   if (Object.prototype.hasOwnProperty.call(record, aliasKey)) {
-    throw new TypeError(
-      `${context}.${aliasKey} is not supported; use ${canonicalKey}`,
-    );
+    rejectType(`${context}.${aliasKey} is not supported; use ${canonicalKey}`);
   }
 }
 
@@ -33519,27 +33057,23 @@ function normalizeTriggerUpsertPayload(input) {
     record.triggerDefinition ??
     payload.action;
   if (actionValue === undefined || actionValue === null) {
-    throw new TypeError("registerTrigger.action is required");
+    rejectType("registerTrigger.action is required");
   }
   if (typeof actionValue === "string") {
     const trimmed = actionValue.trim();
     if (trimmed.length === 0) {
-      throw new TypeError(
-        "registerTrigger.action must be a non-empty string when provided as base64",
-      );
+      rejectType("registerTrigger.action must be a non-empty string when provided as base64");
     }
     try {
       const decoded = strictDecodeBase64(trimmed);
       payload.action = Buffer.from(decoded).toString("base64");
     } catch {
-      throw new TypeError("registerTrigger.action must be a valid base64 string");
+      rejectType("registerTrigger.action must be a valid base64 string");
     }
   } else if (!Array.isArray(actionValue) && typeof actionValue === "object") {
     payload.action = cloneJsonValue(actionValue, "registerTrigger.action");
   } else {
-    throw new TypeError(
-      "registerTrigger.action must be an object or base64 string produced by Norito serialization",
-    );
+    rejectType("registerTrigger.action must be an object or base64 string produced by Norito serialization");
   }
   delete payload.payload;
   delete payload.definition;
@@ -33552,7 +33086,7 @@ function normalizeTriggerUpsertPayload(input) {
     typeof payload.metadata !== "object" ||
     Array.isArray(payload.metadata)
   ) {
-    throw new TypeError("registerTrigger.metadata must be an object when provided");
+    rejectType("registerTrigger.metadata must be an object when provided");
   }
   return payload;
 }
@@ -33562,14 +33096,14 @@ function normalizeSubscriptionPlanCreateRequest(input) {
   const credentials = normalizeSecretFreeAuthority(record, "createSubscriptionPlan");
   const planId = pickOverride(record, "plan_id", "planId");
   if (planId === undefined || planId === null) {
-    throw new TypeError("createSubscriptionPlan.planId is required");
+    rejectType("createSubscriptionPlan.planId is required");
   }
   const planValue = record.plan;
   if (planValue === undefined || planValue === null) {
-    throw new TypeError("createSubscriptionPlan.plan is required");
+    rejectType("createSubscriptionPlan.plan is required");
   }
   if (!isPlainObject(planValue)) {
-    throw new TypeError("createSubscriptionPlan.plan must be an object");
+    rejectType("createSubscriptionPlan.plan must be an object");
   }
   return {
     ...credentials,
@@ -33583,11 +33117,11 @@ function normalizeSubscriptionCreateRequest(input) {
   const credentials = normalizeSecretFreeAuthority(record, "createSubscription");
   const subscriptionId = pickOverride(record, "subscription_id", "subscriptionId");
   if (subscriptionId === undefined || subscriptionId === null) {
-    throw new TypeError("createSubscription.subscriptionId is required");
+    rejectType("createSubscription.subscriptionId is required");
   }
   const planId = pickOverride(record, "plan_id", "planId");
   if (planId === undefined || planId === null) {
-    throw new TypeError("createSubscription.planId is required");
+    rejectType("createSubscription.planId is required");
   }
   const payload = {
     ...credentials,
@@ -33635,7 +33169,7 @@ function normalizeSubscriptionActionRequest(input, context) {
   const chargeAt = pickOverride(record, "charge_at_ms", "chargeAtMs");
   if (chargeAt !== undefined && chargeAt !== null) {
     if (context !== "resumeSubscription" && context !== "chargeSubscriptionNow") {
-      throw new TypeError(`${context}.chargeAtMs is not accepted`);
+      rejectType(`${context}.chargeAtMs is not accepted`);
     }
     payload.charge_at_ms = ToriiClient._normalizeUnsignedInteger(
       chargeAt,
@@ -33646,15 +33180,15 @@ function normalizeSubscriptionActionRequest(input, context) {
   const cancelMode = pickOverride(record, "cancel_mode", "cancelMode");
   if (cancelMode !== undefined && cancelMode !== null) {
     if (context !== "cancelSubscription") {
-      throw new TypeError(`${context}.cancelMode is not accepted`);
+      rejectType(`${context}.cancelMode is not accepted`);
     }
     const normalized = requireNonEmptyString(cancelMode, `${context}.cancelMode`).toLowerCase();
     if (normalized !== "immediate" && normalized !== "period_end") {
-      throw new TypeError(`${context}.cancelMode must be immediate or period_end`);
+      rejectType(`${context}.cancelMode must be immediate or period_end`);
     }
     payload.cancel_mode = { mode: normalized, value: null };
   } else if (context === "cancelSubscription") {
-    throw new TypeError("cancelSubscription.cancelMode is required");
+    rejectType("cancelSubscription.cancelMode is required");
   }
   return payload;
 }
@@ -33664,11 +33198,11 @@ function normalizeSubscriptionUsageRequest(input, context) {
   const credentials = normalizeSecretFreeAuthority(record, context);
   const unitKey = pickOverride(record, "unit_key", "unitKey");
   if (unitKey === undefined || unitKey === null) {
-    throw new TypeError(`${context}.unitKey is required`);
+    rejectType(`${context}.unitKey is required`);
   }
   const delta = record.delta;
   if (delta === undefined || delta === null) {
-    throw new TypeError(`${context}.delta is required`);
+    rejectType(`${context}.delta is required`);
   }
   const payload = {
     ...credentials,
@@ -33705,7 +33239,7 @@ function normalizeTriggerListResponse(payload, context) {
   const record = ensureRecord(payload ?? {}, context);
   const rawItems = record.items ?? [];
   if (!Array.isArray(rawItems)) {
-    throw new TypeError(`${context}.items must be an array`);
+    rejectType(`${context}.items must be an array`);
   }
   const items = rawItems.map((entry, index) =>
     normalizeTriggerRecord(entry, `${context}.items[${index}]`),
@@ -33745,20 +33279,16 @@ function normalizeSubscriptionPlanListResponse(payload) {
   const record = ensureRecord(payload ?? {}, "subscription plan list response");
   const rawItems = record.items ?? [];
   if (!Array.isArray(rawItems)) {
-    throw new TypeError("subscription plan list response.items must be an array");
+    rejectType("subscription plan list response.items must be an array");
   }
   const items = rawItems.map((entry, index) => {
     const item = ensureRecord(entry, `subscription plan list response.items[${index}]`);
     const planValue = item.plan;
     if (planValue === undefined || planValue === null) {
-      throw new TypeError(
-        `subscription plan list response.items[${index}].plan is required`,
-      );
+      rejectType(`subscription plan list response.items[${index}].plan is required`);
     }
     if (!isPlainObject(planValue)) {
-      throw new TypeError(
-        `subscription plan list response.items[${index}].plan must be an object`,
-      );
+      rejectType(`subscription plan list response.items[${index}].plan must be an object`);
     }
     return {
       plan_id: requireNonEmptyString(
@@ -33789,7 +33319,7 @@ function normalizeSubscriptionListResponse(payload) {
   const record = ensureRecord(payload ?? {}, "subscription list response");
   const rawItems = record.items ?? [];
   if (!Array.isArray(rawItems)) {
-    throw new TypeError("subscription list response.items must be an array");
+    rejectType("subscription list response.items must be an array");
   }
   const items = rawItems.map((entry, index) =>
     normalizeSubscriptionListItem(entry, `subscription list response.items[${index}]`),
@@ -33812,18 +33342,18 @@ function normalizeSubscriptionListItem(value, context) {
   const record = ensureRecord(value, context);
   const subscriptionValue = record.subscription;
   if (subscriptionValue === undefined || subscriptionValue === null) {
-    throw new TypeError(`${context}.subscription is required`);
+    rejectType(`${context}.subscription is required`);
   }
   if (!isPlainObject(subscriptionValue)) {
-    throw new TypeError(`${context}.subscription must be an object`);
+    rejectType(`${context}.subscription must be an object`);
   }
   let invoiceValue = record.invoice;
   if (invoiceValue !== undefined && invoiceValue !== null && !isPlainObject(invoiceValue)) {
-    throw new TypeError(`${context}.invoice must be an object`);
+    rejectType(`${context}.invoice must be an object`);
   }
   let planValue = record.plan;
   if (planValue !== undefined && planValue !== null && !isPlainObject(planValue)) {
-    throw new TypeError(`${context}.plan must be an object`);
+    rejectType(`${context}.plan must be an object`);
   }
   const normalized = {
     subscription_id: requireNonEmptyString(
@@ -33857,10 +33387,10 @@ function normalizeConnectSessionResponse(payload, context) {
   const appPk = requireNonEmptyString(record.app_pk, `${context}.app_pk`);
   const nonce = requireNonEmptyString(record.nonce, `${context}.nonce`);
   if (Buffer.from(appPk, "base64url").length !== 32 || Buffer.from(appPk, "base64url").toString("base64url") !== appPk) {
-    throw new Error(`${context}.app_pk must be canonical base64url for 32 bytes`);
+    rejectError(`${context}.app_pk must be canonical base64url for 32 bytes`);
   }
   if (Buffer.from(nonce, "base64url").length !== 16 || Buffer.from(nonce, "base64url").toString("base64url") !== nonce) {
-    throw new Error(`${context}.nonce must be canonical base64url for 16 bytes`);
+    rejectError(`${context}.nonce must be canonical base64url for 16 bytes`);
   }
   const walletUri = requireNonEmptyString(
     record.wallet_uri,
@@ -33975,7 +33505,7 @@ function normalizeConnectAppRegistryPage(payload) {
   const record = ensureRecord(payload ?? {}, "connect app registry response");
   const rawItems = record.items ?? [];
   if (!Array.isArray(rawItems)) {
-    throw new TypeError("connect app registry response.items must be an array");
+    rejectType("connect app registry response.items must be an array");
   }
   const items = rawItems.map((entry, index) =>
     normalizeConnectAppRecord(entry, `connect app registry response.items[${index}]`),
@@ -34150,7 +33680,7 @@ function normalizeConnectAdmissionManifest(payload, context) {
   const manifestRecord = isPlainObject(record.manifest) ? record.manifest : record;
   const rawEntries = manifestRecord.entries ?? [];
   if (!Array.isArray(rawEntries)) {
-    throw new TypeError(`${context}.entries must be an array`);
+    rejectType(`${context}.entries must be an array`);
   }
   const entries = rawEntries.map((entry, index) =>
     normalizeConnectAdmissionManifestEntry(entry, `${context}.entries[${index}]`),
@@ -34603,7 +34133,7 @@ function addWebSocketListener(socket, eventName, listener, context) {
       }
     };
   }
-  throw new Error(`${context}: WebSocket implementation must support addEventListener or on`);
+  rejectError(`${context}: WebSocket implementation must support addEventListener or on`);
 }
 
 function extractWebSocketMessageData(args) {
@@ -34632,7 +34162,7 @@ async function decodeWebSocketMessageText(data, context) {
   if (data && typeof data.text === "function") {
     return data.text();
   }
-  throw new TypeError(`${context}: WebSocket message must be text or bytes`);
+  rejectType(`${context}: WebSocket message must be text or bytes`);
 }
 
 function parseWebSocketJsonEventFrame(text, context) {
@@ -34640,7 +34170,7 @@ function parseWebSocketJsonEventFrame(text, context) {
   try {
     payload = JSON.parse(text);
   } catch (error) {
-    throw new Error(`${context}: WebSocket frame is not valid JSON: ${error.message}`);
+    rejectError(`${context}: WebSocket frame is not valid JSON: ${error.message}`);
   }
   const record = ensureRecord(payload, `${context} frame`);
   const event =
@@ -34719,9 +34249,7 @@ function buildConnectWebSocketDescriptor(baseUrl, options, context) {
     false;
   requireExactBoolean(allowInsecure, `${context}.allowInsecure`);
   if (!allowInsecure && !isSecureProtocol(endpoint.protocol)) {
-    throw new Error(
-      `${context}: refusing insecure WebSocket protocol ${endpoint.protocol}; pass allowInsecure: true for local/dev use only.`,
-    );
+    rejectError(`${context}: refusing insecure WebSocket protocol ${endpoint.protocol}; pass allowInsecure: true for local/dev use only.`);
   }
   if (hadQueryToken) {
     throw createValidationError(
@@ -34837,7 +34365,7 @@ function normalizeConnectRole(value, name) {
   if (normalized === "app" || normalized === "wallet") {
     return normalized;
   }
-  throw new TypeError(`${name} must be either "app" or "wallet"`);
+  rejectType(`${name} must be either "app" or "wallet"`);
 }
 
 function mapHttpProtocolToWebSocket(protocol, context) {
@@ -34850,7 +34378,7 @@ function mapHttpProtocolToWebSocket(protocol, context) {
     case "wss:":
       return protocol;
     default:
-      throw new Error(`${context}: unsupported protocol "${protocol}" for Connect WebSocket`);
+      rejectError(`${context}: unsupported protocol "${protocol}" for Connect WebSocket`);
   }
 }
 
@@ -34886,7 +34414,7 @@ function encodeBase64Url(value) {
 function resolveWebSocketImplementation(candidate, context) {
   const impl = candidate ?? globalThis.WebSocket;
   if (typeof impl !== "function") {
-    throw new Error(`${context}: WebSocket implementation is required`);
+    rejectError(`${context}: WebSocket implementation is required`);
   }
   return impl;
 }
@@ -34914,16 +34442,16 @@ function decodeVarintBuffer(buffer, startIndex, context) {
     index += 1;
     if ((byte & 0x80n) === 0n) {
       if (value > BigInt(Number.MAX_SAFE_INTEGER)) {
-        throw new Error(`${context} contains an oversized multihash varint`);
+        rejectError(`${context} contains an oversized multihash varint`);
       }
       return { value: Number(value), nextIndex: index };
     }
     shift += 7n;
     if (shift > 63n) {
-      throw new Error(`${context} contains an invalid multihash varint`);
+      rejectError(`${context} contains an invalid multihash varint`);
     }
   }
-  throw new Error(`${context} contains a truncated multihash varint`);
+  rejectError(`${context} contains a truncated multihash varint`);
 }
 
 function decodeIdentifierReceiptPublicKey(value, context) {
@@ -34941,13 +34469,11 @@ function decodeIdentifierReceiptPublicKey(value, context) {
   const digestLength = decodeVarintBuffer(bytes, functionCode.nextIndex, context);
   const payload = bytes.subarray(digestLength.nextIndex);
   if (payload.length !== digestLength.value) {
-    throw new Error(`${context} multihash payload length does not match its digest header`);
+    rejectError(`${context} multihash payload length does not match its digest header`);
   }
   const entry = getCurveEntryByPublicKeyMulticodec(functionCode.value);
   if (!entry) {
-    throw new Error(
-      `${context} uses unsupported multihash code 0x${functionCode.value.toString(16)}`,
-    );
+    rejectError(`${context} uses unsupported multihash code 0x${functionCode.value.toString(16)}`);
   }
   const algorithm = entry.algorithm;
   if (
@@ -34955,7 +34481,7 @@ function decodeIdentifierReceiptPublicKey(value, context) {
     prefixedAlgorithm !== algorithm &&
     !(prefixedAlgorithm === "mldsa" && algorithm === "ml-dsa")
   ) {
-    throw new Error(`${context} algorithm prefix does not match the multihash payload`);
+    rejectError(`${context} algorithm prefix does not match the multihash payload`);
   }
   return { algorithm, publicKey: payload };
 }
@@ -35093,7 +34619,7 @@ function identifierProgramIdPayload(raw, field) {
 function identifierBackendTag(raw) {
   const tag = requireExactNonEmptyString(raw, "payload.execution.backend");
   if (tag !== tag.toLowerCase()) {
-    throw new Error("payload.execution.backend must be an exact lowercase RAM-LFE backend tag");
+    rejectError("payload.execution.backend must be an exact lowercase RAM-LFE backend tag");
   }
   switch (tag) {
     case "hkdf-sha3-512-prf-v1":
@@ -35103,14 +34629,14 @@ function identifierBackendTag(raw) {
     case "bfv-programmed-sha3-256-v1":
       return 2;
     default:
-      throw new Error(`unsupported RAM-LFE backend: ${raw}`);
+      rejectError(`unsupported RAM-LFE backend: ${raw}`);
   }
 }
 
 function identifierVerificationModeTag(raw) {
   const tag = requireExactNonEmptyString(raw, "payload.execution.verification_mode");
   if (tag !== tag.toLowerCase()) {
-    throw new Error("payload.execution.verification_mode must be an exact lowercase RAM-LFE verification mode");
+    rejectError("payload.execution.verification_mode must be an exact lowercase RAM-LFE verification mode");
   }
   switch (tag) {
     case "signed":
@@ -35118,7 +34644,7 @@ function identifierVerificationModeTag(raw) {
     case "proof":
       return 1;
     default:
-      throw new Error(`unsupported RAM-LFE verification mode: ${raw}`);
+      rejectError(`unsupported RAM-LFE verification mode: ${raw}`);
   }
 }
 
@@ -35182,7 +34708,7 @@ function identifierAlgorithmTagForCurveId(curve, context) {
     case "sm2":
       return 10;
     default:
-      throw new Error(`${context} uses unsupported public-key curve ${curve}`);
+      rejectError(`${context} uses unsupported public-key curve ${curve}`);
   }
 }
 
@@ -35240,7 +34766,7 @@ function identifierNoritoVec(values, encode, context) {
 
 function identifierMultisigPolicyPayload(policy, context) {
   if (!Array.isArray(policy.members) || policy.members.length === 0) {
-    throw new Error(`${context} multisig policy must contain at least one member`);
+    rejectError(`${context} multisig policy must contain at least one member`);
   }
   return Buffer.concat([
     identifierCanonicalSizedField(identifierCanonicalU8(policy.version, `${context}.version`)),
@@ -35272,7 +34798,7 @@ function identifierAccountIdPayload(accountId, context) {
   const address = AccountAddress.fromI105(literal);
   const controller = address._controller;
   if (!controller || typeof controller.tag !== "number") {
-    throw new Error(`${context} could not resolve account controller information`);
+    rejectError(`${context} could not resolve account controller information`);
   }
   switch (controller.tag) {
     case 0:
@@ -35286,7 +34812,7 @@ function identifierAccountIdPayload(accountId, context) {
         identifierCanonicalSizedField(identifierMultisigPolicyPayload(controller, context)),
       ]);
     default:
-      throw new Error(`${context} uses unsupported account controller tag ${controller.tag}`);
+      rejectError(`${context} uses unsupported account controller tag ${controller.tag}`);
   }
 }
 
@@ -35509,9 +35035,7 @@ export function buildIdentifierRequestForPolicy(policySummary, options = {}) {
     };
   }
   if (normalizedPolicy.input_encryption !== "bfv-v1") {
-    throw new Error(
-      `buildIdentifierRequestForPolicy: policy ${normalizedPolicy.policy_id} does not publish BFV encrypted-input support`,
-    );
+    rejectError(`buildIdentifierRequestForPolicy: policy ${normalizedPolicy.policy_id} does not publish BFV encrypted-input support`);
   }
   return {
     policyId: normalizedPolicy.policy_id,
@@ -35536,12 +35060,10 @@ export function verifyIdentifierResolutionReceipt(receipt, policySummary) {
     "verifyIdentifierResolutionReceipt.policy",
   );
   if (normalizedReceipt.payload.policy_id !== normalizedPolicy.policy_id) {
-    throw new Error(
-      `verifyIdentifierResolutionReceipt: receipt policy ${normalizedReceipt.payload.policy_id} does not match policy ${normalizedPolicy.policy_id}`,
-    );
+    rejectError(`verifyIdentifierResolutionReceipt: receipt policy ${normalizedReceipt.payload.policy_id} does not match policy ${normalizedPolicy.policy_id}`);
   }
   if (normalizedReceipt.attestation.kind !== "signed") {
-    throw new Error("verifyIdentifierResolutionReceipt: proof attestations require an external verifier");
+    rejectError("verifyIdentifierResolutionReceipt: proof attestations require an external verifier");
   }
   const signedPayload = identifierReceiptPayload(normalizedReceipt.payload);
   const prehash = irohaPrehash(signedPayload);
@@ -35562,13 +35084,9 @@ export function verifyIdentifierResolutionReceipt(receipt, policySummary) {
       );
     case "secp256k1":
     case "ml-dsa":
-      throw new Error(
-        `verifyIdentifierResolutionReceipt: ${verifyingKey.algorithm} verification is not available in the JS SDK without additional native support`,
-      );
+      rejectError(`verifyIdentifierResolutionReceipt: ${verifyingKey.algorithm} verification is not available in the JS SDK without additional native support`);
     default:
-      throw new Error(
-        `verifyIdentifierResolutionReceipt: unsupported algorithm ${verifyingKey.algorithm}`,
-      );
+      rejectError(`verifyIdentifierResolutionReceipt: unsupported algorithm ${verifyingKey.algorithm}`);
   }
 }
 

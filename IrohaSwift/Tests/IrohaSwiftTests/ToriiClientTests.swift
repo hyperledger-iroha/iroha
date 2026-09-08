@@ -17165,7 +17165,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             XCTAssertEqual(request.url?.path, "/v1/contracts/code/\(codeHash)")
             let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
             let body = """
-            {"manifest":{"seiyaku_name":null,"code_hash":"hash:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB#ABA2","abi_hash":"hash:DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD#F071","compiler_fingerprint":"rustc","features_bitmap":1,"access_set_hints":{"read_keys":["account:alice#wonderland"],"write_keys":[]},"entrypoints":null,"states":null,"error_codes":null},"code_hash":"\(codeHash)","abi_hash":"\(abiHash)"}
+            {"manifest":{"seiyaku_name":null,"code_hash":"hash:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB#ABA2","abi_hash":"hash:DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD#F071","compiler_fingerprint":"rustc","features_bitmap":1,"access_set_hints":{"read_keys":["account:alice#wonderland"],"write_keys":[]},"entrypoints":null,"states":null,"error_types":null},"code_hash":"\(codeHash)","abi_hash":"\(abiHash)"}
             """.data(using: .utf8)!
             return (response, body)
         }
@@ -17275,10 +17275,9 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             }]
           }],
           "states":[{"name":"Balances","type_name":"StateMap<AccountId, quantity>"}],
-          "error_codes":[{
-            "namespace":"TransferError",
-            "name":"InsufficientFunds",
-            "code":1001
+          "error_types":[{
+            "identity":"Ledger::TransferError",
+            "variants":[{"name":"InsufficientFunds","code":1001}]
           }],
           "kotoba":[{
             "msg_id":"transfer.denied",
@@ -17312,7 +17311,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         XCTAssertEqual(entrypoint.triggers.first?.callback.entrypoint, "transfer")
         XCTAssertEqual(entrypoint.triggers.first?.metadata["round"], .number(7))
         XCTAssertEqual(manifest.states?.first?.typeName, "StateMap<AccountId, quantity>")
-        XCTAssertEqual(manifest.errorCodes?.first?.code, 1001)
+        XCTAssertEqual(manifest.errorTypes?.first?.variants.first?.code, 1001)
         XCTAssertEqual(manifest.kotoba?.first?.translations.last?.language, "ja")
         XCTAssertEqual(manifest.provenance?.signer, "ed25519:fixture")
 
@@ -17334,7 +17333,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         XCTAssertNotNil(entrypoints[0]["return_schema"])
         XCTAssertEqual((entrypoints[0]["triggers"] as? [Any])?.count, 1)
         XCTAssertEqual((object["states"] as? [Any])?.count, 1)
-        XCTAssertEqual((object["error_codes"] as? [Any])?.count, 1)
+        XCTAssertEqual((object["error_types"] as? [Any])?.count, 1)
         XCTAssertEqual((object["kotoba"] as? [Any])?.count, 1)
         XCTAssertNotNil(object["provenance"] as? [String: Any])
     }
@@ -17594,18 +17593,18 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             #"{"code_hash":"hash:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB#aba2"}"#,
             #"{"code_hash":"hash:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA#0E5B"}"#,
             #"{"provenance":"not-an-object"}"#,
-            #"{"entrypoints":[{"name":"run","kind":{"kind":"Public","value":null},"params":[],"argument_schema":null,"return_type":null,"return_schema":null,"permission":null,"read_keys":[],"write_keys":[],"access_hints_complete":true,"access_hints_skipped":[],"triggers":[]}]}"#,
-            #"{"entrypoints":[{"name":"Amount","kind":{"kind":"View","value":null},"params":[],"argument_schema":null,"return_type":null,"return_schema":null,"permission":null,"read_keys":[],"write_keys":[],"access_hints_complete":true,"access_hints_skipped":[],"triggers":[]}]}"#,
-            #"{"entrypoints":[{"name":"run","kind":{"kind":"View","value":null},"params":[{"name":"Amount","type_name":"bool"}],"argument_schema":{"fields":[{"name":"Amount","ty":{"nodes":[{"kind":"Leaf","value":{"kind":"Bool","value":null}}]}}]},"return_type":null,"return_schema":null,"permission":null,"read_keys":[],"write_keys":[],"access_hints_complete":true,"access_hints_skipped":[],"triggers":[]}]}"#,
-            #"{"entrypoints":[{"name":"run","kind":{"kind":"Kotoage","value":"Kotoage"},"params":[],"argument_schema":null,"return_type":null,"return_schema":null,"permission":null,"read_keys":[],"write_keys":[],"access_hints_complete":true,"access_hints_skipped":[],"triggers":[]}]}"#,
-            "{\"entrypoints\":[{\"name\":\"run\",\"kind\":{\"kind\":\"Kotoage\",\"value\":null},\"params\":[{\"name\":\"flag\",\"type_name\":\"bool\"}],\"argument_schema\":{\"fields\":[{\"name\":\"flag\",\"ty\":{\"nodes\":[{\"kind\":\"Tuple\",\"value\":1},\(validLeaf)]}}]},\"return_type\":null,\"return_schema\":null,\"permission\":null,\"read_keys\":[],\"write_keys\":[],\"access_hints_complete\":true,\"access_hints_skipped\":[],\"triggers\":[]}]}",
+            #"{"entrypoints":[{"name":"run","kind":{"kind":"Public","value":null},"params":[],"argument_schema":null,"return_type":"()","return_schema":{"nodes":[{"kind":"Unit","value":null}]},"permission":null,"read_keys":[],"write_keys":[],"access_hints_complete":true,"access_hints_skipped":[],"triggers":[]}]}"#,
+            #"{"entrypoints":[{"name":"Amount","kind":{"kind":"View","value":null},"params":[],"argument_schema":null,"return_type":"()","return_schema":{"nodes":[{"kind":"Unit","value":null}]},"permission":null,"read_keys":[],"write_keys":[],"access_hints_complete":true,"access_hints_skipped":[],"triggers":[]}]}"#,
+            #"{"entrypoints":[{"name":"run","kind":{"kind":"View","value":null},"params":[{"name":"Amount","type_name":"bool"}],"argument_schema":{"fields":[{"name":"Amount","ty":{"nodes":[{"kind":"Leaf","value":{"kind":"Bool","value":null}}]}}]},"return_type":"()","return_schema":{"nodes":[{"kind":"Unit","value":null}]},"permission":null,"read_keys":[],"write_keys":[],"access_hints_complete":true,"access_hints_skipped":[],"triggers":[]}]}"#,
+            #"{"entrypoints":[{"name":"run","kind":{"kind":"Kotoage","value":"Kotoage"},"params":[],"argument_schema":null,"return_type":"()","return_schema":{"nodes":[{"kind":"Unit","value":null}]},"permission":null,"read_keys":[],"write_keys":[],"access_hints_complete":true,"access_hints_skipped":[],"triggers":[]}]}"#,
+            "{\"entrypoints\":[{\"name\":\"run\",\"kind\":{\"kind\":\"Kotoage\",\"value\":null},\"params\":[{\"name\":\"flag\",\"type_name\":\"bool\"}],\"argument_schema\":{\"fields\":[{\"name\":\"flag\",\"ty\":{\"nodes\":[{\"kind\":\"Tuple\",\"value\":1},\(validLeaf)]}}]},\"return_type\":\"()\",\"return_schema\":{\"nodes\":[{\"kind\":\"Unit\",\"value\":null}]},\"permission\":null,\"read_keys\":[],\"write_keys\":[],\"access_hints_complete\":true,\"access_hints_skipped\":[],\"triggers\":[]}]}",
             #"{"entrypoints":[{"name":"run","kind":{"kind":"Kotoage","value":null},"params":[],"argument_schema":null,"return_type":"bool","return_schema":{"nodes":[{"kind":"Leaf","value":{"kind":"Bool","value":null}},{"kind":"Leaf","value":{"kind":"Bool","value":null}}]},"permission":null,"read_keys":[],"write_keys":[],"access_hints_complete":true,"access_hints_skipped":[],"triggers":[]}]}"#,
-            #"{"entrypoints":[{"name":"run","kind":{"kind":"Kotoage","value":null},"params":[],"argument_schema":null,"return_type":null,"return_schema":null,"permission":null,"read_keys":[],"write_keys":[],"access_hints_complete":true,"access_hints_skipped":[],"triggers":["not-an-object"]}]}"#,
-            #"{"error_codes":[{"namespace":"Failure","name":"Denied","code":0}]}"#,
-            #"{"error_codes":[{"namespace":"Failure","name":"Amount","code":1}]}"#,
+            #"{"entrypoints":[{"name":"run","kind":{"kind":"Kotoage","value":null},"params":[],"argument_schema":null,"return_type":"()","return_schema":{"nodes":[{"kind":"Unit","value":null}]},"permission":null,"read_keys":[],"write_keys":[],"access_hints_complete":true,"access_hints_skipped":[],"triggers":["not-an-object"]}]}"#,
+            #"{"error_types":[{"identity":"Ledger::Failure","variants":[{"name":"Denied","code":0}]}]}"#,
+            #"{"error_types":[{"identity":"Ledger::Failure","variants":[{"name":"Amount","code":1}]}]}"#,
             #"{"entrypoints":[{"name":"run","kind":{"kind":"Kotoage","value":null},"params":[],"argument_schema":null,"return_type":null,"return_schema":{"nodes":[{"kind":"Leaf","value":{"kind":"Bool","value":null}}]},"permission":null,"read_keys":[],"write_keys":[],"access_hints_complete":true,"access_hints_skipped":[],"triggers":[]}]}"#,
-            #"{"entrypoints":[{"name":"run","kind":{"kind":"Kotoage","value":null},"params":[{"name":"flag","type_name":"bool"}],"argument_schema":{"fields":[{"name":"different","ty":{"nodes":[{"kind":"Leaf","value":{"kind":"Bool","value":null}}]}}]},"return_type":null,"return_schema":null,"permission":null,"read_keys":[],"write_keys":[],"access_hints_complete":true,"access_hints_skipped":[],"triggers":[]}]}"#,
-            #"{"entrypoints":[{"name":"run","kind":{"kind":"Kotoage","value":null},"params":[{"name":"tags","type_name":"List<Name, 64>"}],"argument_schema":{"fields":[{"name":"tags","ty":{"nodes":[{"kind":"List","value":{"capacity":65}},{"kind":"Leaf","value":{"kind":"Name","value":null}}]}}]},"return_type":null,"return_schema":null,"permission":null,"read_keys":[],"write_keys":[],"access_hints_complete":true,"access_hints_skipped":[],"triggers":[]}]}"#,
+            #"{"entrypoints":[{"name":"run","kind":{"kind":"Kotoage","value":null},"params":[{"name":"flag","type_name":"bool"}],"argument_schema":{"fields":[{"name":"different","ty":{"nodes":[{"kind":"Leaf","value":{"kind":"Bool","value":null}}]}}]},"return_type":"()","return_schema":{"nodes":[{"kind":"Unit","value":null}]},"permission":null,"read_keys":[],"write_keys":[],"access_hints_complete":true,"access_hints_skipped":[],"triggers":[]}]}"#,
+            #"{"entrypoints":[{"name":"run","kind":{"kind":"Kotoage","value":null},"params":[{"name":"tags","type_name":"List<Name, 64>"}],"argument_schema":{"fields":[{"name":"tags","ty":{"nodes":[{"kind":"List","value":{"capacity":65}},{"kind":"Leaf","value":{"kind":"Name","value":null}}]}}]},"return_type":"()","return_schema":{"nodes":[{"kind":"Unit","value":null}]},"permission":null,"read_keys":[],"write_keys":[],"access_hints_complete":true,"access_hints_skipped":[],"triggers":[]}]}"#,
         ]
         let wideLeaves = Array(repeating: validLeaf, count: 14).joined(separator: ",")
         cases.append(
@@ -17821,13 +17820,13 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
                     ToriiContractDynamicAccessHint(
                         baseKey: "state:Balances",
                         keyType: keyType,
-                        boundKind: "range",
+                        boundKind: "page",
                         maxKeys: 64
                     )
                 )
             )
         }
-        for boundKind in ["range", "take"] {
+        for boundKind in ["page", "take"] {
             XCTAssertEqual(try decode(boundKind: boundKind).boundKind, boundKind)
         }
         for baseKey in ["state:Balances", "state:amount"] {
@@ -18028,7 +18027,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         let amount = ToriiContractDynamicAccessHint(
             baseKey: "state:amount",
             keyType: "AccountId",
-            boundKind: "range",
+            boundKind: "page",
             maxKeys: 64
         )
         let accepted = manifest(
@@ -18044,33 +18043,87 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         XCTAssertNoThrow(try JSONEncoder().encode(accepted))
     }
 
-    func testContractManifestRejectsRetiredErrorNamespaces() throws {
-        for retired in ["Amount", "amount"] {
-            let errorPayload =
-                #"{"error_codes":[{"namespace":""#
-                + retired
-                + #"","name":"Denied","code":7}]}"#
-            XCTAssertThrowsError(
-                try JSONDecoder().decode(
-                    ToriiContractManifest.self,
-                    from: Data(errorPayload.utf8)
-                )
-            ) { error in
-                XCTAssertTrue(
-                    String(describing: error).contains("namespace"),
-                    "missing error namespace diagnostic: \(error)"
-                )
+    func testContractManifestRejectsMalformedErrorIdentities() throws {
+        for identity in ["Error<Injected>", "Invalid Error"] {
+            let descriptor = ToriiContractErrorTypeDescriptor(identity: identity, variants: [.init(name: "Denied", code: 7)])
+            XCTAssertThrowsError(try JSONEncoder().encode(descriptor))
+            let payload = #"{"error_types":[{"identity":""# + identity + #"","variants":[{"name":"Denied","code":7}]}]}"#
+            XCTAssertThrowsError(try JSONDecoder().decode(ToriiContractManifest.self, from: Data(payload.utf8)))
+        }
+    }
+
+    func testExportedStructIdentitySurvivesPublicAndDurableSchemas() throws {
+        struct NameVectors: Decodable { let valid: [String]; let invalid: [String] }
+        var directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        while directory.path != "/" && !FileManager.default.fileExists(
+            atPath: directory.appendingPathComponent("fixtures/kotodama/exported_structs_v1.json").path
+        ) { directory.deleteLastPathComponent() }
+        let fixtures = directory.appendingPathComponent("fixtures/kotodama")
+        let payload = try String(contentsOf: fixtures.appendingPathComponent("exported_structs_v1.json"), encoding: .utf8)
+        let vectors = try JSONDecoder().decode(NameVectors.self, from: Data(contentsOf: fixtures.appendingPathComponent("exported_struct_names_v1.json")))
+        let identity = "std/math@1.0.0::Math::Receipt"
+        for name in vectors.valid {
+            let bytes = Data(payload.replacingOccurrences(of: identity, with: name).utf8)
+            let record = try JSONDecoder().decode(ToriiContractManifestRecord.self, from: bytes)
+            let entrypoint = try XCTUnwrap(record.manifest.entrypoints?.first)
+            XCTAssertEqual(entrypoint.returnSchema?.canonicalTypeName, "struct \(name)")
+            XCTAssertEqual(entrypoint.argumentSchema?.fields.first?.type.canonicalTypeName, "struct \(name)")
+            XCTAssertTrue(try XCTUnwrap(record.manifest.states?.first?.typeName).contains("\(name){"))
+            let encoded = try JSONEncoder().encode(record.manifest)
+            XCTAssertEqual(try JSONDecoder().decode(ToriiContractManifest.self, from: encoded), record.manifest)
+        }
+        for name in vectors.invalid {
+            let bytes = Data(payload.replacingOccurrences(of: identity, with: name).utf8)
+            let root = try XCTUnwrap(JSONSerialization.jsonObject(with: bytes) as? [String: Any])
+            let manifest = try XCTUnwrap(root["manifest"] as? [String: Any])
+            for removed in ["states", "entrypoints"] {
+                var isolated = manifest
+                isolated.removeValue(forKey: removed)
+                let invalid = try JSONSerialization.data(withJSONObject: isolated)
+                XCTAssertThrowsError(try JSONDecoder().decode(ToriiContractManifest.self, from: invalid), "invalid \(removed)-independent identity: \(name)")
             }
-            XCTAssertThrowsError(
-                try JSONEncoder().encode(
-                    ToriiContractErrorCodeDescriptor(
-                        namespace: retired,
-                        name: "Denied",
-                        code: 7
-                    )
-                ),
-                "encoded retired error namespace \(retired)"
-            )
+        }
+    }
+
+    func testNominalErrorSharedFixturePreservesJapaneseIdentityAndUnit() throws {
+        var root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        var fixture: URL?
+        while root.path != "/" {
+            let candidate = root.appendingPathComponent("fixtures/kotodama/nominal_errors_v1.json")
+            if FileManager.default.fileExists(atPath: candidate.path) { fixture = candidate; break }
+            root.deleteLastPathComponent()
+        }
+        let bytes = try Data(contentsOf: XCTUnwrap(fixture))
+        let record = try JSONDecoder().decode(ToriiContractManifestRecord.self, from: bytes)
+        let schema = try XCTUnwrap(record.manifest.entrypoints?.first?.returnSchema)
+        XCTAssertEqual(schema.canonicalTypeName, "Result<(), example/vault@1.0.0::金庫::拒否>")
+        XCTAssertEqual(schema.nodes[1], .unit)
+        XCTAssertEqual(schema.wordCount, 1)
+        XCTAssertEqual(record.manifest.errorTypes?.first?.variants.first?.name, "不足")
+        XCTAssertEqual(record.manifest.errorTypes?.count, 2)
+        let cursor = try XCTUnwrap(record.manifest.entrypoints?[1].returnSchema)
+        XCTAssertEqual(cursor.canonicalTypeName, "Option<StateCursor<int>>")
+        XCTAssertEqual(cursor.nodes[1], .stateCursor(.int))
+        XCTAssertEqual(cursor.wordCount, 1)
+        XCTAssertEqual(record.manifest.entrypoints?[2].returnSchema?.canonicalTypeName, "StatePage<int, bool, 8>")
+        XCTAssertEqual(record.manifest.entrypoints?[2].returnSchema?.wordCount, 2)
+        let encoded = try JSONEncoder().encode(record.manifest)
+        XCTAssertEqual(try JSONDecoder().decode(ToriiContractManifest.self, from: encoded), record.manifest)
+        let changed = String(decoding: bytes, as: UTF8.self).replacingOccurrences(of: "CapacityExceeded", with: "DifferentMeaning", range: String(decoding: bytes, as: UTF8.self).range(of: "CapacityExceeded"))
+        XCTAssertThrowsError(try JSONDecoder().decode(ToriiContractManifestRecord.self, from: Data(changed.utf8)))
+        var stateOnly = record.manifest
+        stateOnly.entrypoints = []
+        XCTAssertNoThrow(try JSONEncoder().encode(stateOnly))
+        stateOnly.errorTypes = []
+        XCTAssertThrowsError(try JSONEncoder().encode(stateOnly))
+        let unknownState = String(decoding: bytes, as: UTF8.self).replacingOccurrences(
+            of: "\"type_name\": \"Result<(), example/vault@1.0.0::金庫::拒否>\"",
+            with: "\"type_name\": \"Result<(), missing/vault@1.0.0::金庫::拒否>\"")
+        XCTAssertThrowsError(try JSONDecoder().decode(ToriiContractManifestRecord.self, from: Data(unknownState.utf8)))
+        for forged in ["StatePage{anything: int}", "StatePage{items: List<(int, bool), 8>, next: Option<StateCursor<bool>>}"] {
+            let changedState = String(decoding: bytes, as: UTF8.self).replacingOccurrences(
+                of: "StatePage{items: List<(int, bool), 8>, next: Option<StateCursor<int>>}", with: forged)
+            XCTAssertThrowsError(try JSONDecoder().decode(ToriiContractManifestRecord.self, from: Data(changedState.utf8)))
         }
     }
 
@@ -18112,8 +18165,8 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
                         kind: String = "Kotoage",
                         params: String = "[]",
                         argumentSchema: String = "null",
-                        returnType: String = "null",
-                        returnSchema: String = "null",
+                        returnType: String = "\"()\"",
+                        returnSchema: String = #"{"nodes":[{"kind":"Unit","value":null}]}"#,
                         permission: String = "\"Run\"",
                         complete: String = "true",
                         skipped: String = "[]",
@@ -18140,7 +18193,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             #"{"seiyaku_name":"__kotodama_link_private"}"#,
             #"{"seiyaku_name":"state_map_get"}"#,
             #"{"states":[{"name":"Option","type_name":"bool"}]}"#,
-            #"{"error_codes":[{"namespace":"Option","name":"Denied","code":1}]}"#,
+            #"{"error_types":[{"identity":"Error<Injected>","variants":[{"name":"Denied","code":1}]}]}"#,
             #"{"provenance":{"signer":"fixture","signature":"sig","unknown":true}}"#,
             manifest([descriptor(permission: "null")]),
             manifest([descriptor(name: "start", kind: "Hajimari", permission: "null")]),
@@ -18181,6 +18234,36 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         }
     }
 
+    func testEveryPublicEntrypointRequiresAnExplicitReturnSchema() throws {
+        func payload(_ returns: String) -> Data {
+            Data("""
+            {"name":"done","kind":{"kind":"View","value":null},"params":[]\(returns)}
+            """.utf8)
+        }
+        for returns in [
+            "",
+            #","return_type":null,"return_schema":null"#,
+            #","return_type":"()""#,
+            #","return_schema":{"nodes":[{"kind":"Unit","value":null}]}"#,
+        ] {
+            XCTAssertThrowsError(try JSONDecoder().decode(
+                ToriiContractEntrypointDescriptor.self, from: payload(returns)))
+        }
+        let unit = try JSONDecoder().decode(ToriiContractEntrypointDescriptor.self, from: payload(
+            #","return_type":"()","return_schema":{"nodes":[{"kind":"Unit","value":null}]}"#))
+        XCTAssertEqual(unit.returnType, "()")
+        XCTAssertEqual(unit.returnSchema?.wordCount, 1)
+        XCTAssertNoThrow(try JSONEncoder().encode(unit))
+        for missingType in [false, true] {
+            for missingSchema in [false, true] where missingType || missingSchema {
+                var invalid = unit
+                if missingType { invalid.returnType = nil }
+                if missingSchema { invalid.returnSchema = nil }
+                XCTAssertThrowsError(try JSONEncoder().encode(invalid))
+            }
+        }
+    }
+
     func testContractManifestAcceptsRomanizedAndJapaneseLifecycleSelectors() throws {
         let selectors = [
             ("hajimari", "Hajimari"),
@@ -18190,7 +18273,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         ]
         for (name, kind) in selectors {
             let payload = """
-            {"entrypoints":[{"name":"\(name)","kind":{"kind":"\(kind)","value":null},"params":[],"argument_schema":null,"return_type":null,"return_schema":null,"permission":null,"read_keys":[],"write_keys":[],"access_hints_complete":true,"access_hints_skipped":[],"triggers":[]}]}
+            {"entrypoints":[{"name":"\(name)","kind":{"kind":"\(kind)","value":null},"params":[],"argument_schema":null,"return_type":"()","return_schema":{"nodes":[{"kind":"Unit","value":null}]},"permission":null,"read_keys":[],"write_keys":[],"access_hints_complete":true,"access_hints_skipped":[],"triggers":[]}]}
             """
             let manifest = try JSONDecoder().decode(
                 ToriiContractManifest.self,

@@ -11,7 +11,7 @@ use super::{
     KAGEMUSHA_ASSET_SCALE_MAX_V1, KAGEMUSHA_WIRE_VERSION_V1, KagemushaAuthenticatedReleaseV1,
     KagemushaHardwareCredentialV1, KagemushaHardwareProfileV1,
 };
-#[cfg(feature = "json")]
+
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{
     NetworkId,
@@ -36,8 +36,17 @@ const APPROVAL_DOMAIN: &str = "iroha:kagemusha:v1:retail-enrollment-approval";
 ///
 /// These fields are not inferred from an authenticated hardware/proof release. Names are
 /// exact canonical deployment namespaces, not user aliases or presentation labels.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(schema_name = "iroha.kagemusha.v1.retail-enrollment-runtime")]
 #[norito(deny_unknown_fields)]
 pub struct KagemushaRetailEnrollmentRuntimeV1 {
@@ -61,8 +70,17 @@ pub struct KagemushaRetailEnrollmentRuntimeV1 {
 ///
 /// Credential/key/profile, epoch, release, issuer key/policy, validity and challenge
 /// revisions are deliberately absent. Computing this identity supplies no authority.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(schema_name = "iroha.kagemusha.v1.retail-enrollment-owner")]
 #[norito(deny_unknown_fields)]
 pub struct KagemushaRetailEnrollmentOwnerV1 {
@@ -75,8 +93,17 @@ pub struct KagemushaRetailEnrollmentOwnerV1 {
 }
 
 /// Exact issuance bindings. They are never compared with a host-supplied numerical floor.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(schema_name = "iroha.kagemusha.v1.retail-enrollment-issuance")]
 #[norito(deny_unknown_fields)]
 pub struct KagemushaRetailEnrollmentIssuanceV1 {
@@ -91,8 +118,17 @@ pub struct KagemushaRetailEnrollmentIssuanceV1 {
 }
 
 /// Complete issuer assertion; a shape-valid subject is not a verified enrollment.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(schema_name = "iroha.kagemusha.v1.retail-enrollment-subject")]
 #[norito(deny_unknown_fields)]
 pub struct KagemushaRetailEnrollmentSubjectV1 {
@@ -118,8 +154,17 @@ pub struct KagemushaRetailEnrollmentSubjectV1 {
 }
 
 /// Domain-separated typed payload signed by the authorized enrollment issuer.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(schema_name = "iroha.kagemusha.v1.retail-enrollment-approval")]
 #[norito(deny_unknown_fields)]
 pub struct KagemushaRetailEnrollmentApprovalV1 {
@@ -130,8 +175,17 @@ pub struct KagemushaRetailEnrollmentApprovalV1 {
 }
 
 /// Canonical signed certificate. Decoding alone never constructs verified evidence.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(schema_name = "iroha.kagemusha.v1.retail-enrollment-certificate")]
 #[norito(deny_unknown_fields)]
 pub struct KagemushaRetailEnrollmentCertificateV1 {
@@ -146,8 +200,17 @@ pub struct KagemushaRetailEnrollmentCertificateV1 {
 /// Deployment/native code must authenticate this configuration independently. Loading
 /// these bytes from the certificate, a JWT, UI state or a host path does not establish trust.
 /// The hardware profile issuer and release approvers do not implicitly delegate this role.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(schema_name = "iroha.kagemusha.v1.retail-enrollment-issuer-policy")]
 #[norito(deny_unknown_fields)]
 pub struct KagemushaRetailEnrollmentIssuerPolicyV1 {
@@ -1016,7 +1079,6 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "json")]
     #[test]
     fn json_rejects_unknown_fields_at_every_signed_and_policy_boundary() {
         let fixture = Fixture::new(1);

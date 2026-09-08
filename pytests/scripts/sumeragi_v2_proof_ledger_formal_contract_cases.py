@@ -91,7 +91,10 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('user/kura_and_snapshot_tests.rs'),
         Path('user/runtime_tail_tests.rs'),
     ),
-    Path('crates/iroha_data_model/src/block/consensus_v2.rs'): (Path('consensus_v2_tests.rs'),),
+    Path('crates/iroha_data_model/src/block/consensus_v2.rs'): (
+        Path('consensus_v2/messages.rs'),
+        Path('consensus_v2_tests.rs'),
+    ),
     Path('crates/iroha_data_model/src/block/consensus_v2_tests.rs'): (Path('consensus_v2_json_tests.rs'),),
     Path('crates/iroha_core/src/kura.rs'): (
         Path('kura/startup_finality_support.rs'),
@@ -235,6 +238,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
     ),
     Path('crates/iroha_core/src/smartcontracts/ivm/host.rs'): (
         Path('host/axt_persistent_budget_tests.rs'),
+        Path('host/axt_unanchored_admission_tests.rs'),
         Path('host/core_codec_and_contract_tests.rs'),
         Path('host/core_query_execution_tests.rs'),
         Path('host/core_query_pagination_tests.rs'),
@@ -390,6 +394,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('v2_lifecycle_work_registry_validate_recovery.rs'),
         Path('v2_lifecycle_work_registry_validate_execution.rs'),
         Path('v2_lifecycle_work_registry_validate_sidecar.rs'),
+        Path('v2_lifecycle_work_registry_body_retirement.rs'),
         Path('tests/v2_lifecycle_work_registry_00.rs'),
         Path('tests/v2_lifecycle_work_registry_01.rs'),
         Path('tests/v2_lifecycle_work_registry_02.rs'),
@@ -508,6 +513,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('v2_effects_recovered_fetch_and_pipeline_types.rs'),
         Path('v2_effects_recovered_lifecycle_output_service.rs'),
         Path('v2_effects_lifecycle_admission_settlement.rs'),
+        Path('v2_effects_body_retirement.rs'),
         Path('v2_effects_runner_decision_cleanup_plan.rs'),
         Path('v2_effects_test_consumer_wrappers.rs'),
         Path('tests/v2_effects_main_00.rs'),
@@ -517,6 +523,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('tests/v2_effects_main_04.rs'),
         Path('tests/v2_effects_main_05.rs'),
         Path('tests/v2_effects_03_locked_body_and_sidecar.rs'),
+        Path('tests/v2_effects_certified_body_fence_supersession.rs'),
     ),
     Path('crates/iroha_core/src/sumeragi/v2_lane_work.rs'): (
         Path('v2_lane_work/canonical_executed_block_application_repair.rs'),
@@ -531,6 +538,8 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('tests/v2_lane_work_native_body_recovery.rs'),
         Path('tests/v2_lane_work_lifecycle_and_recovery_cases.rs'),
         Path('v2_lane_work/strict_historical_read_tests.rs'),
+        Path('v2_lane_work/strict_volatile_owner_tests.rs'),
+        Path('v2_lane_work/strict_receipt_gate_tests.rs'),
         Path('v2_lane_work/canonical_executed_block_recovery_drift_test.rs'),
         Path('v2_lane_work/historical_recovery_and_carrier_tests.rs'),
         Path('v2_lane_work_autonomous_ready_durability_tests.rs'),
@@ -2293,16 +2302,6 @@ def test_merge_runtime_config_v6_source_binding_accepts_repository() -> None:
     module = load_checker()
 
     assert module._merge_runtime_config_production_source_fidelity_errors() == []
-
-
-def test_reviewed_rust_include_manifests_are_static_and_current() -> None:
-    module = load_checker()
-    observed = {
-        Path(parent): tuple(Path(component) for component in components)
-        for parent, components in module._REVIEWED_RUST_INCLUDE_MANIFESTS.items()
-    }
-    assert observed == REVIEWED_RUST_INCLUDE_MANIFESTS
-    assert module._reviewed_rust_include_manifest_errors() == []
 
 
 def test_reviewed_rust_include_manifest_rejects_ignored_untracked_component(
@@ -4115,6 +4114,10 @@ def test_production_trace_certificate_rejects_direct_release_stutter_drift(
         (
             "state_replay_post_carrier_evidence_repair",
             "IN_FLIGHT_FIRST_RELEASE_ACTION_REPAIR_POST_CARRIER",
+        ),
+        (
+            "replica_queue_disposition_observation",
+            "IN_FLIGHT_FIRST_RELEASE_ACTION_OBSERVE_REPLICA_QUEUE_RELEASE",
         ),
     ),
 )

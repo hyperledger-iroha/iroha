@@ -29,7 +29,7 @@ use iroha::{
     },
 };
 use norito::{
-    NoritoSerialize, SerializePayload,
+    NoritoSerialize,
     json::{self, JsonSerialize, Map, Value},
 };
 use rand::{

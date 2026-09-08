@@ -58,10 +58,10 @@ pub mod schema;
 pub use schema::identity::NoritoSchema;
 pub mod streaming;
 pub use core::{
-    Archived, ArchivedBox, Compression, CompressionConfig, DecodeLimits, Encoder, Error,
-    NoritoDeserialize, NoritoSerialize, SerializePayload, crc64_fallback, default_encode_flags,
-    from_bytes, from_compressed_bytes, hardware_crc64, to_bytes, to_bytes_auto, to_bytes_in,
-    to_compressed_bytes, with_decode_limits, with_decode_limits_scope,
+    Archived, ArchivedBox, Compression, CompressionConfig, DecodeLimits, DeserializePayload,
+    Encoder, Error, NoritoDeserialize, NoritoSerialize, SerializePayload, crc64_fallback,
+    default_encode_flags, from_bytes, from_compressed_bytes, hardware_crc64, to_bytes,
+    to_bytes_auto, to_bytes_in, to_compressed_bytes, with_decode_limits, with_decode_limits_scope,
 };
 #[doc(hidden)]
 pub use core::{BinarySequenceLayout, SequencePlan, SequenceSpan, plan_binary_sequence};
@@ -162,15 +162,15 @@ pub use self::json::FastJsonWrite;
 pub mod yaml;
 pub mod derive {
     pub use norito_derive::{
-        Decode, Encode, FastJson, FastJsonWrite, JsonDeserialize, JsonSerialize, NoritoDeserialize,
-        NoritoSchema, NoritoSerialize, SerializePayload,
+        Decode, DeserializePayload, Encode, FastJson, FastJsonWrite, JsonDeserialize,
+        JsonSerialize, NoritoDeserialize, NoritoSchema, NoritoSerialize, SerializePayload,
     };
 }
 pub use derive::*;
 /// Bare Norito `Encode` and `Decode` traits used for compact payloads without a Norito header.
 pub mod codec {
     pub use super::Error;
-    use super::{NoritoDeserialize, NoritoSerialize, SerializePayload, core};
+    use super::{DeserializePayload, SerializePayload, core};
     pub use crate::derive::{Decode, Encode};
     use std::io::{Read, Write};
     struct CountingWriter<'a, W: Write> {
@@ -221,7 +221,7 @@ pub mod codec {
     pub trait Input: Read {}
     impl<T: Read> Input for T {}
     /// Decode values from a byte stream produced by [`Encode`].
-    pub trait Decode: for<'de> NoritoDeserialize<'de> + NoritoSerialize + Sized {
+    pub trait Decode: for<'de> DeserializePayload<'de> + SerializePayload + Sized {
         /// Attempt to decode `Self` from the given input.
         fn decode<I: Input>(input: &mut I) -> Result<Self, Error> {
             // Ensure a clean thread-local decode state for headerless payloads.
@@ -231,7 +231,7 @@ pub mod codec {
             decode_adaptive::<Self>(&buf)
         }
     }
-    impl<T> Decode for T where T: for<'de> NoritoDeserialize<'de> + NoritoSerialize + Sized {}
+    impl<T> Decode for T where T: for<'de> DeserializePayload<'de> + SerializePayload + Sized {}
     /// Bare encode using the fixed v1 layout flags.
     pub fn encode_adaptive<T: SerializePayload>(value: &T) -> Vec<u8> {
         encode_adaptive_with_flags(value, core::default_encode_flags())
@@ -283,7 +283,7 @@ pub mod codec {
     #[allow(clippy::items_after_test_module)]
     mod encode_tests {
         use super::Encode;
-        use crate::{NoritoDeserialize, NoritoSerialize, SerializePayload};
+        use crate::{NoritoSerialize, SerializePayload};
         use std::sync::atomic::{AtomicUsize, Ordering};
         static HINT_CALLS: AtomicUsize = AtomicUsize::new(0);
         static EXACT_CALLS: AtomicUsize = AtomicUsize::new(0);
@@ -347,7 +347,8 @@ pub mod codec {
                 ))
             }
         }
-        #[derive(Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+        #[derive(Debug, PartialEq, Eq, NoritoSerialize, crate::NoritoDeserialize)]
+        #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
         struct AdaptiveFixedFields {
             tag: u8,
             digest: [u8; 32],
@@ -442,7 +443,7 @@ pub mod codec {
     /// Bare decode using the fixed v1 layout flags.
     pub fn decode_adaptive<T>(bytes: &[u8]) -> Result<T, Error>
     where
-        T: for<'de> NoritoDeserialize<'de> + NoritoSerialize,
+        T: for<'de> DeserializePayload<'de> + SerializePayload,
     {
         core::reset_decode_state();
         let flags = core::default_encode_flags();
@@ -468,7 +469,7 @@ pub mod codec {
     /// cannot request more elements or allocation than the complete input can justify.
     pub fn decode_exact_from_slice<T>(bytes: &[u8]) -> Result<T, Error>
     where
-        T: for<'de> NoritoDeserialize<'de> + for<'de> core::DecodeFromSlice<'de>,
+        T: for<'de> DeserializePayload<'de> + for<'de> core::DecodeFromSlice<'de>,
     {
         core::reset_decode_state();
         let _reset = DecodeResetGuard;
@@ -486,7 +487,7 @@ pub mod codec {
         limits: crate::DecodeLimits,
     ) -> Result<T, Error>
     where
-        T: for<'de> NoritoDeserialize<'de> + for<'de> core::DecodeFromSlice<'de>,
+        T: for<'de> DeserializePayload<'de> + for<'de> core::DecodeFromSlice<'de>,
     {
         core::reset_decode_state();
         let _reset = DecodeResetGuard;
@@ -498,7 +499,7 @@ pub mod codec {
     }
     fn decode_exact_from_slice_under_active_limits<T>(bytes: &[u8]) -> Result<T, Error>
     where
-        T: for<'de> NoritoDeserialize<'de> + for<'de> core::DecodeFromSlice<'de>,
+        T: for<'de> DeserializePayload<'de> + for<'de> core::DecodeFromSlice<'de>,
     {
         let (value, used) = core::decode_field_canonical_from_slice::<T>(bytes)?;
         if used != bytes.len() {
@@ -8840,8 +8841,8 @@ where
 /// allocation-free canonical byte comparison inside `decode_field_canonical`.
 fn decode_payload_exact<T>(payload: &[u8]) -> Result<T, Error>
 where
-    T: NoritoSerialize,
-    for<'de> T: NoritoDeserialize<'de>,
+    T: SerializePayload,
+    for<'de> T: DeserializePayload<'de>,
 {
     let (value, used) = core::decode_field_canonical::<T>(payload)?;
     if used != payload.len() {
@@ -8852,7 +8853,7 @@ where
 /// Prelude with commonly used items.
 pub mod prelude {
     pub use super::{
-        Compression, Error, NoritoDeserialize, NoritoSerialize,
+        Compression, DeserializePayload, Error, NoritoDeserialize, NoritoSerialize,
         derive::{Decode, Encode},
         deserialize_from, serialize_into,
     };

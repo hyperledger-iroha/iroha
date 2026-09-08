@@ -64,7 +64,7 @@ fn nonzero_u16_roundtrip() {
     let value = NonZeroU16::new(5u16).unwrap();
     let bytes = to_bytes(&value).unwrap();
     let archived = from_bytes::<NonZeroU16>(&bytes).unwrap();
-    let decoded = <NonZeroU16 as NoritoDeserialize>::deserialize(archived);
+    let decoded = <NonZeroU16 as DeserializePayload>::deserialize(archived);
     assert_eq!(value, decoded);
 }
 #[test]
@@ -103,7 +103,8 @@ impl SerializePayload for A {
 }
 #[repr(C)]
 struct B(u64);
-impl<'a> NoritoDeserialize<'a> for B {
+impl NoritoDeserialize<'_> for B {}
+impl<'a> DeserializePayload<'a> for B {
     fn deserialize(archived: &'a Archived<B>) -> Self {
         Self::try_deserialize(archived).expect("decode B")
     }
@@ -232,7 +233,7 @@ fn triple_roundtrip() {
     let value = (1u8, false, String::from("tri"));
     let bytes = to_bytes(&value).unwrap();
     let archived = from_bytes::<(u8, bool, String)>(&bytes).unwrap();
-    let decoded = <(u8, bool, String) as NoritoDeserialize>::deserialize(archived);
+    let decoded = <(u8, bool, String) as DeserializePayload>::deserialize(archived);
     assert_eq!(value, decoded);
 }
 #[derive(IntoSchema, NoritoSerialize, NoritoDeserialize, PartialEq, Debug)]
@@ -274,12 +275,12 @@ fn rc_arc_roundtrip() {
     let rc = Rc::new(String::from("rc"));
     let bytes = to_bytes(&rc).unwrap();
     let archived = from_bytes::<Rc<String>>(&bytes).unwrap();
-    let decoded = <Rc<String> as NoritoDeserialize>::deserialize(archived);
+    let decoded = <Rc<String> as DeserializePayload>::deserialize(archived);
     assert_eq!(rc, decoded);
     let arc = Arc::new(99u64);
     let bytes = to_bytes(&arc).unwrap();
     let archived = from_bytes::<Arc<u64>>(&bytes).unwrap();
-    let decoded = <Arc<u64> as NoritoDeserialize>::deserialize(archived);
+    let decoded = <Arc<u64> as DeserializePayload>::deserialize(archived);
     assert_eq!(arc, decoded);
 }
 #[test]
@@ -288,12 +289,12 @@ fn cell_refcell_roundtrip() {
     let cell = Cell::new(5u32);
     let bytes = to_bytes(&cell).unwrap();
     let archived = from_bytes::<Cell<u32>>(&bytes).unwrap();
-    let decoded = <Cell<u32> as NoritoDeserialize>::deserialize(archived);
+    let decoded = <Cell<u32> as DeserializePayload>::deserialize(archived);
     assert_eq!(cell.get(), decoded.get());
     let refcell = RefCell::new(String::from("inner"));
     let bytes = to_bytes(&refcell).unwrap();
     let archived = from_bytes::<RefCell<String>>(&bytes).unwrap();
-    let decoded = <RefCell<String> as NoritoDeserialize>::deserialize(archived);
+    let decoded = <RefCell<String> as DeserializePayload>::deserialize(archived);
     assert_eq!(*refcell.borrow(), *decoded.borrow());
 }
 #[test]
@@ -302,6 +303,6 @@ fn phantomdata_roundtrip() {
     let phantom: PhantomData<u32> = PhantomData;
     let bytes = to_bytes(&phantom).unwrap();
     let archived = from_bytes::<PhantomData<u32>>(&bytes).unwrap();
-    let decoded = <PhantomData<u32> as NoritoDeserialize>::deserialize(archived);
+    let decoded = <PhantomData<u32> as DeserializePayload>::deserialize(archived);
     assert_eq!(phantom, decoded);
 }

@@ -160,11 +160,12 @@ impl norito::core::SerializePayload for GovernanceStatus {
         norito::core::SerializePayload::serialize(&payload, writer)
     }
 }
-impl<'a> norito::core::NoritoDeserialize<'a> for GovernanceStatus {
+impl norito::core::NoritoDeserialize<'_> for GovernanceStatus {
     fn schema_hash() -> [u8; 16] {
         norito::core::schema_hash_for_name("iroha_telemetry::metrics::GovernanceStatus")
     }
-
+}
+impl<'a> norito::core::DeserializePayload<'a> for GovernanceStatus {
     fn deserialize(archived: &'a norito::core::Archived<GovernanceStatus>) -> Self {
         let (
             proposals,
@@ -184,7 +185,7 @@ impl<'a> norito::core::NoritoDeserialize<'a> for GovernanceStatus {
             u32,
             Vec<String>,
             u64,
-        ) = norito::core::NoritoDeserialize::deserialize(archived.cast());
+        ) = norito::core::DeserializePayload::deserialize(archived.cast());
         Self {
             proposals,
             protected_namespace,
@@ -253,14 +254,15 @@ impl norito::core::SerializePayload for GovernanceProposalCounters {
         norito::core::SerializePayload::serialize(&payload, writer)
     }
 }
-impl<'a> norito::core::NoritoDeserialize<'a> for GovernanceProposalCounters {
+impl norito::core::NoritoDeserialize<'_> for GovernanceProposalCounters {
     fn schema_hash() -> [u8; 16] {
         norito::core::schema_hash_for_name("iroha_telemetry::metrics::GovernanceProposalCounters")
     }
-
+}
+impl<'a> norito::core::DeserializePayload<'a> for GovernanceProposalCounters {
     fn deserialize(archived: &'a norito::core::Archived<GovernanceProposalCounters>) -> Self {
         let (proposed, rejected, enacted, superseded, execution_failed): (u64, u64, u64, u64, u64) =
-            norito::core::NoritoDeserialize::deserialize(archived.cast());
+            norito::core::DeserializePayload::deserialize(archived.cast());
         Self {
             proposed,
             rejected,
@@ -299,18 +301,19 @@ impl norito::core::SerializePayload for GovernanceProtectedNamespaceCounters {
         norito::core::SerializePayload::serialize(&payload, writer)
     }
 }
-impl<'a> norito::core::NoritoDeserialize<'a> for GovernanceProtectedNamespaceCounters {
+impl norito::core::NoritoDeserialize<'_> for GovernanceProtectedNamespaceCounters {
     fn schema_hash() -> [u8; 16] {
         norito::core::schema_hash_for_name(
             "iroha_telemetry::metrics::GovernanceProtectedNamespaceCounters",
         )
     }
-
+}
+impl<'a> norito::core::DeserializePayload<'a> for GovernanceProtectedNamespaceCounters {
     fn deserialize(
         archived: &'a norito::core::Archived<GovernanceProtectedNamespaceCounters>,
     ) -> Self {
         let (total_checks, allowed, rejected): (u64, u64, u64) =
-            norito::core::NoritoDeserialize::deserialize(archived.cast());
+            norito::core::DeserializePayload::deserialize(archived.cast());
         Self {
             total_checks,
             allowed,
@@ -373,16 +376,17 @@ impl norito::core::SerializePayload for GovernanceManifestQuorumCounters {
         norito::core::SerializePayload::serialize(&payload, writer)
     }
 }
-impl<'a> norito::core::NoritoDeserialize<'a> for GovernanceManifestQuorumCounters {
+impl norito::core::NoritoDeserialize<'_> for GovernanceManifestQuorumCounters {
     fn schema_hash() -> [u8; 16] {
         norito::core::schema_hash_for_name(
             "iroha_telemetry::metrics::GovernanceManifestQuorumCounters",
         )
     }
-
+}
+impl<'a> norito::core::DeserializePayload<'a> for GovernanceManifestQuorumCounters {
     fn deserialize(archived: &'a norito::core::Archived<GovernanceManifestQuorumCounters>) -> Self {
         let (total_checks, satisfied, rejected): (u64, u64, u64) =
-            norito::core::NoritoDeserialize::deserialize(archived.cast());
+            norito::core::DeserializePayload::deserialize(archived.cast());
         Self {
             total_checks,
             satisfied,
@@ -421,11 +425,12 @@ impl norito::core::SerializePayload for GovernanceManifestActivation {
         norito::core::SerializePayload::serialize(&payload, writer)
     }
 }
-impl<'a> norito::core::NoritoDeserialize<'a> for GovernanceManifestActivation {
+impl norito::core::NoritoDeserialize<'_> for GovernanceManifestActivation {
     fn schema_hash() -> [u8; 16] {
         norito::core::schema_hash_for_name("iroha_telemetry::metrics::GovernanceManifestActivation")
     }
-
+}
+impl<'a> norito::core::DeserializePayload<'a> for GovernanceManifestActivation {
     fn deserialize(archived: &'a norito::core::Archived<GovernanceManifestActivation>) -> Self {
         let (contract_address, code_hash_hex, abi_hash_hex, height, activated_at_ms): (
             String,
@@ -433,7 +438,7 @@ impl<'a> norito::core::NoritoDeserialize<'a> for GovernanceManifestActivation {
             Option<String>,
             u64,
             u64,
-        ) = norito::core::NoritoDeserialize::deserialize(archived.cast());
+        ) = norito::core::DeserializePayload::deserialize(archived.cast());
         Self {
             contract_address,
             code_hash_hex,

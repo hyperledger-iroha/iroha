@@ -27,7 +27,8 @@ impl norito::SerializePayload for AccessTrackedByte {
     }
 }
 
-impl<'a> norito::NoritoDeserialize<'a> for AccessTrackedByte {
+impl norito::NoritoDeserialize<'_> for AccessTrackedByte {}
+impl<'a> norito::DeserializePayload<'a> for AccessTrackedByte {
     fn deserialize(archived: &'a norito::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("valid tracked byte")
     }
@@ -52,7 +53,8 @@ impl norito::SerializePayload for PartiallyReadPair {
     }
 }
 
-impl<'a> norito::NoritoDeserialize<'a> for PartiallyReadPair {
+impl norito::NoritoDeserialize<'_> for PartiallyReadPair {}
+impl<'a> norito::DeserializePayload<'a> for PartiallyReadPair {
     fn deserialize(archived: &'a norito::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("valid partially read pair")
     }

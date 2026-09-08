@@ -83,6 +83,7 @@ Exported under Prometheus metrics:
 - Lifecycle: Sampler shutdown immediately invalidates retained offsets and RTT state; a later start begins from an empty service rather than reusing stale samples. Any effective configured-peer identity change creates a new membership generation and atomically invalidates prior samples and in-flight probes before that generation contributes. Sampler ownership and admission policy are claimed together, so a failed second startup cannot replace the active policy. Dropping an unpolled or running daemon-supervision future signals shutdown and aborts its Tokio children, releasing the NTS singleton instead of detaching it.
 - Slewing: New measurements and contributing-sample expiries advance smoothing at their actual monotonic event times. API read frequency cannot change the applied offset.
 - Torii rejects NTS-unhealthy admission with `x-iroha-reject-code: PRTRY:NTS_UNHEALTHY`.
+- Future-dated envelope rejection retains the signature-bound creation time, the exact admission-snapshot time, and the configured maximum drift in Unix milliseconds. These diagnostic values do not change the rejection threshold or consult a second clock. Consensus block validation retains its deterministic rejection category.
 
 ### Notes
 

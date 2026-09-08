@@ -34,15 +34,16 @@ impl Kura {
         let _geometry_guard = self.lane_geometry_lock.lock();
         let entry = self.lane_storage_entry(lane_id)?;
         let _sidecar_guard = self.sidecar_lock.lock();
-        let Some(record) = self.read_autonomous_lane_block_attempt_record_locked(
-            &entry,
-            lane_id,
-            lane_block_height,
-            proposal_height,
-            expected_network_id,
-            expected_epoch,
-            None,
-        )?
+        let Some((record, current_proposal)) = self
+            .read_autonomous_lane_block_attempt_record_with_current_locked(
+                &entry,
+                lane_id,
+                lane_block_height,
+                proposal_height,
+                expected_network_id,
+                expected_epoch,
+                None,
+            )?
         else {
             return Ok(None);
         };
@@ -61,12 +62,6 @@ impl Kura {
                 "autonomous lane retirement does not match its exact durable attempt",
             ));
         }
-        let current_proposal = Self::validate_autonomous_lane_block_artifact(
-            &artifact,
-            expected_network_id,
-            expected_epoch,
-        )
-        .map_err(|message| Self::invalid_lane_artifact_error(view_state_path, message))?;
         Ok(Some(AutonomousLaneRetiredAttempt {
             artifact,
             current_proposal,

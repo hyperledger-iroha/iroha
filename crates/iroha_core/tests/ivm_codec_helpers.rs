@@ -46,8 +46,10 @@ fn load_state_map_metadata(vm: &mut IVM, name: &str, key: EmbeddedStateType) {
             kind: iroha_data_model::smart_contract::manifest::EntryPointKind::View,
             params: Vec::new(),
             argument_schema: None,
-            return_type: None,
-            return_schema: None,
+            return_type: Some("()".to_owned()),
+            return_schema: Some(iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeV1 {
+                nodes: vec![iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeNodeV1::Unit],
+            }),
             permission: None,
             read_keys: Vec::new(),
             write_keys: Vec::new(),
@@ -63,7 +65,7 @@ fn load_state_map_metadata(vm: &mut IVM, name: &str, key: EmbeddedStateType) {
                 value: Box::new(EmbeddedStateType::Bytes),
             },
         }],
-        error_codes: Vec::new(),
+        error_types: Vec::new(),
     };
     let mut artifact = ProgramMetadata::default().encode();
     artifact.extend_from_slice(&interface.encode_section());

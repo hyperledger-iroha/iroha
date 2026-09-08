@@ -5,7 +5,7 @@
 //! frequent changes. The cryptographic proof plumbing (commitments, nullifier checks, Halo2
 //! verification) lives in the host runtime and the `iroha_zkp_halo2` crate.
 use super::Digest32;
-#[cfg(feature = "json")]
+
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{account::AccountId, metadata::Metadata};
 use iroha_crypto::{PrivateKey, PublicKey, Signature, SignatureOf};
@@ -47,9 +47,21 @@ pub enum TicketSignatureError {
     Signature(#[from] iroha_crypto::Error),
 }
 /// Ticket capability scope.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(tag = "scope", content = "value"))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(tag = "scope", content = "value")]
 #[cfg_attr(
     all(feature = "ffi_export", not(feature = "ffi_import")),
     derive(iroha_ffi::FfiType)
@@ -68,8 +80,19 @@ pub enum TicketScopeV1 {
     Admin,
 }
 /// Canonical ticket payload describing the blinded CID and policy window.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[cfg_attr(
     all(feature = "ffi_export", not(feature = "ffi_import")),
     derive(iroha_ffi::FfiType)
@@ -80,7 +103,7 @@ pub enum TicketScopeV1 {
 )]
 pub struct TicketBodyV1 {
     /// Blinded content identifier protected by the `SoraNet` salt schedule.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub blinded_cid: Digest32,
     /// Capability scope granted to the holder.
     pub scope: TicketScopeV1,
@@ -108,8 +131,19 @@ impl TicketBodyV1 {
     }
 }
 /// Ticket envelope bundling the body, cryptographic commitment, proof, and signature.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[cfg_attr(
     all(feature = "ffi_export", not(feature = "ffi_import")),
     derive(iroha_ffi::FfiType)
@@ -122,15 +156,15 @@ pub struct TicketEnvelopeV1 {
     /// Canonical ticket body.
     pub body: TicketBodyV1,
     /// Commitment over ticket fields (exact hash computed in host runtime).
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub commitment: Digest32,
     /// Halo2 proof bytes verifying the commitment/nullifier constraints.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
+    #[norito(json = "crate::json_helpers::base64_vec")]
     pub zk_proof: Vec<u8>,
     /// Issuer signature sealing the ticket body + commitment.
     pub signature: Signature,
     /// Nullifier used to detect replay; actual validation occurs host-side.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub nullifier: Digest32,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Encode, norito::NoritoSchema)]

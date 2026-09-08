@@ -22,16 +22,16 @@ use crate::{
     transaction::signed::TransactionEntrypoint,
     trigger::TriggerId,
 };
-#[cfg(feature = "json")]
+
 use base64::engine::general_purpose::STANDARD;
 use derive_more::Constructor;
 use iroha_crypto::HashOf;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
-#[cfg(feature = "json")]
+
 use norito::json::{self, JsonDeserialize, JsonSerialize};
 use std::{string::String, vec::Vec};
-#[cfg(feature = "json")]
+
 macro_rules! impl_state_json_via_norito_bytes {
     ($($ty:path),+ $(,)?) => {
         $(
@@ -341,7 +341,7 @@ pub struct StateAccessSetAdvisory {
     /// Canonical keys that may be written (and therefore read) during execution.
     pub writes: Vec<CanonicalStateKey>,
 }
-#[cfg(feature = "json")]
+
 impl_state_json_via_norito_bytes!(
     DomainMetadataKey,
     AccountMetadataKey,
@@ -384,7 +384,7 @@ mod tests {
         let keypair = KeyPair::try_random().expect("generate checked state fixture keypair");
         AccountId::new(keypair.public_key().clone())
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn state_key_json_is_canonical_and_ambient_independent() {
         let key = CanonicalStateKey::Domain(

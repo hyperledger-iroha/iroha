@@ -7,9 +7,11 @@ if (($#)); then
 fi
 
 SCRIPT_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
-PROJECT_ROOT="$(cd -P "${SCRIPT_DIR}/../.." && pwd -P)"
+PROJECT_ROOT="$(cd -P "${SCRIPT_DIR}/../../.." && pwd -P)"
 PYTHON_DIR="${PROJECT_ROOT}/python/iroha_python"
 DIST_DIR="${PYTHON_DIR}/dist"
+NATIVE_DIR="${PROJECT_ROOT}/python/iroha_native"
+NATIVE_DIST_DIR="${NATIVE_DIR}/dist"
 KEEP_DIST="${PYTHON_RELEASE_SMOKE_KEEP_DIST:-}"
 DIST_CLEANUP_ENABLED=0
 
@@ -17,12 +19,13 @@ SMOKE_TMP_DIR="$(mktemp -d)"
 cleanup() {
     rm -rf "${SMOKE_TMP_DIR}"
     if [[ -z "${KEEP_DIST}" && "${DIST_CLEANUP_ENABLED}" == "1" ]]; then
-        rm -rf "${DIST_DIR}"
+        rm -rf "${DIST_DIR}" "${NATIVE_DIST_DIR}"
     fi
 }
 trap cleanup EXIT
 
-python -I -B - "${PYTHON_DIR}" "${DIST_DIR}" <<'PY'
+for OWNER_DIR in "${NATIVE_DIR}" "${PYTHON_DIR}"; do
+python -I -B - "${OWNER_DIR}" "${OWNER_DIR}/dist" <<'PY'
 import os
 import sys
 from pathlib import Path
@@ -37,18 +40,21 @@ if os.path.lexists(dist):
     if next(dist.iterdir(), None) is not None:
         raise SystemExit("release smoke requires an empty pre-existing dist directory")
 PY
+done
 DIST_CLEANUP_ENABLED=1
 
-pushd "${PYTHON_DIR}" >/dev/null
-
 python -m pip install --upgrade pip setuptools wheel build twine >/dev/null
-python -m build >/dev/null
-popd >/dev/null
+for OWNER_DIR in "${NATIVE_DIR}" "${PYTHON_DIR}"; do
+    pushd "${OWNER_DIR}" >/dev/null
+    python -m build --wheel >/dev/null
+    popd >/dev/null
+done
 
 python -m venv "${SMOKE_TMP_DIR}/venv"
 source "${SMOKE_TMP_DIR}/venv/bin/activate"
 pip install --upgrade pip >/dev/null
-WHEEL="$(python -I -B - "${DIST_DIR}" <<'PY'
+select_wheel() {
+python -I -B - "$1" <<'PY'
 import sys
 from pathlib import Path
 
@@ -66,21 +72,35 @@ if wheel.is_symlink() or wheel.resolve(strict=True) != wheel:
     raise SystemExit("release smoke wheel candidate must be canonical and non-symlinked")
 print(wheel)
 PY
-)"
+}
+WHEEL="$(select_wheel "${NATIVE_DIST_DIR}")"
+SDK_WHEEL="$(select_wheel "${DIST_DIR}")"
 WHEEL_SEAL="$(
     python -I -B "${PROJECT_ROOT}/ci/verify_privacy_python_wheel.py" \
         --seal "${WHEEL}"
 )"
 PREFLIGHT_WHEEL="$(
     python -I -B "${PROJECT_ROOT}/ci/verify_privacy_python_wheel.py" \
-        --preflight "${WHEEL}" "${WHEEL_SEAL}"
+        --preflight native "${WHEEL}" "${WHEEL_SEAL}"
 )"
 if [[ "${PREFLIGHT_WHEEL}" != "${WHEEL}" ]]; then
     printf 'Wheel preflight returned an unexpected path: %s\n' \
         "${PREFLIGHT_WHEEL}" >&2
     exit 1
 fi
-pip install "${WHEEL}" --no-compile >/dev/null
+SDK_WHEEL_SEAL="$(
+    python -I -B "${PROJECT_ROOT}/ci/verify_privacy_python_wheel.py" \
+        --seal "${SDK_WHEEL}"
+)"
+PREFLIGHT_SDK_WHEEL="$(
+    python -I -B "${PROJECT_ROOT}/ci/verify_privacy_python_wheel.py" \
+        --preflight sdk "${SDK_WHEEL}" "${SDK_WHEEL_SEAL}"
+)"
+if [[ "${PREFLIGHT_SDK_WHEEL}" != "${SDK_WHEEL}" ]]; then
+    printf 'SDK wheel preflight returned an unexpected path: %s\n' "${PREFLIGHT_SDK_WHEEL}" >&2
+    exit 1
+fi
+pip install "${WHEEL}" "${SDK_WHEEL}" --no-compile >/dev/null
 pip install pytest >/dev/null
 
 INSTALLED_NATIVE_PATH="$(
@@ -89,7 +109,8 @@ INSTALLED_NATIVE_PATH="$(
         "${WHEEL}" \
         "${WHEEL_SEAL}" \
         "${PROJECT_ROOT}/python/norito_py/src" \
-        "${PROJECT_ROOT}/python/iroha_torii_client"
+        "${PROJECT_ROOT}/python/iroha_torii_client" \
+        "${SDK_WHEEL}" "${SDK_WHEEL_SEAL}"
 )"
 case "${INSTALLED_NATIVE_PATH}" in
     "${SMOKE_TMP_DIR}/venv/"*) ;;
@@ -127,12 +148,12 @@ PYTHON_BIN="${SMOKE_TMP_DIR}/venv/bin/python"
 
 # Verify metadata and perform a dry-run upload with twine. Dummy credentials allow the upload
 # pipeline to execute without talking to PyPI.
-python -m twine check "${DIST_DIR}"/* >/dev/null
+python -m twine check "${DIST_DIR}"/* "${NATIVE_DIST_DIR}"/* >/dev/null
 TWINE_USERNAME="__token__" TWINE_PASSWORD="pypi-dry-run-token" \
-    python -m twine upload --repository-url https://upload.pypi.org/legacy/ --dry-run "${DIST_DIR}"/* >/dev/null
+    python -m twine upload --repository-url https://upload.pypi.org/legacy/ --dry-run "${DIST_DIR}"/* "${NATIVE_DIST_DIR}"/* >/dev/null
 
 # This harness deliberately performs no signing. Stage reviewed release
 # candidates through scripts/release_manifest_signing.py and the protected
 # external software Ed25519 workflow after this smoke test passes.
 
-printf '%s\n' "${WHEEL}"
+printf '%s\n' "${WHEEL}" "${SDK_WHEEL}"

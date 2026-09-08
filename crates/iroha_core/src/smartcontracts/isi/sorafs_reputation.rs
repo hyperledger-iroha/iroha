@@ -1739,7 +1739,7 @@ impl Execute for SetSorafsReputationJournalAuthorityPolicy {
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), InstructionExecutionError> {
         require_permission(state_transaction, authority, CAN_MANAGE_POLICY)?;
-        validate_journal_head(state_transaction.world())?;
+        let journal_head = validate_journal_head(state_transaction.world())?;
         self.policy.validate().map_err(|error| {
             invalid_parameter(format!("invalid reputation recorder policy: {error}"))
         })?;
@@ -1820,6 +1820,19 @@ impl Execute for SetSorafsReputationJournalAuthorityPolicy {
             }
         }
         validate_policy_predecessor(state_transaction.world(), &candidate)?;
+        if let Some(head) = journal_head {
+            let terminal =
+                read_event(state_transaction.world(), head.last_sequence)?.ok_or_else(|| {
+                    corrupt_state("reputation journal head points to a missing event")
+                })?;
+            // Validated event times never decrease, and every source time is at most its
+            // record time. This one terminal bound protects all retained policy intervals.
+            if now <= terminal.recorded_at_unix_ms {
+                return Err(invalid_parameter(
+                    "reputation policy activation must follow every retained event commit time",
+                ));
+            }
+        }
         let encoded = encode_state(&candidate, "reputation recorder-policy activation")?;
         state_transaction
             .world
@@ -2774,12 +2787,43 @@ mod tests {
             .try_build_with_signature(0, block_signer.private_key())
             .expect("build executed reputation Kura fixture block");
         let block_hash = signed_block.hash();
+        let committed_header = signed_block.header().clone();
         state
             .kura()
             .store_block(Arc::new(signed_block))
             .expect("store reputation Kura fixture block");
         state.push_block_hash_for_testing(block_hash);
+        state.update_latest_block_header_cache_for_tests(committed_header);
+        let view = state.view();
+        assert_eq!(view.latest_block_hash(), Some(block_hash));
+        assert_eq!(
+            view.authenticated_query_ledger_time_ms(),
+            Some(timestamp_ms)
+        );
         Ok(())
+    }
+    // Corrupt only the query overlay: retain its independently captured finalized time,
+    // so exact-cursor admission cannot mask the event/index mutation being exercised.
+    fn finalized_query_fixture_block(
+        state: &State,
+        cursor: ReputationJournalFinalizedCursorV1,
+    ) -> crate::state::StateBlock<'_> {
+        let header = BlockHeader::new(
+            (cursor.height + 1)
+                .try_into()
+                .expect("nonzero next fixture height"),
+            state.view().latest_block_hash(),
+            None,
+            None,
+            cursor.finalized_at_unix_ms,
+            0,
+        );
+        let block = state.block(header);
+        assert_eq!(
+            finalized_cursor(&block).expect("exact fixture cursor before mutation"),
+            cursor
+        );
+        block
     }
     fn state_with_finalized_por_events(
         unique_values: &[u8],
@@ -3099,15 +3143,7 @@ mod tests {
     #[test]
     fn source_query_rejects_a_corrupt_source_index() {
         let (state, entry, finalized_cursor) = state_with_finalized_por_event();
-        let header = BlockHeader::new(
-            3_u64.try_into().expect("nonzero height"),
-            None,
-            None,
-            None,
-            TEST_NOW_MS + 2_000,
-            0,
-        );
-        let mut block = state.block(header);
+        let mut block = finalized_query_fixture_block(&state, finalized_cursor);
         let mut transaction = block.transaction();
         let forged_source_head = ReputationJournalSourceHeadV1 {
             source_kind: entry.source_kind(),
@@ -3165,15 +3201,7 @@ mod tests {
     #[test]
     fn source_query_validates_the_global_head_before_reporting_absence() {
         let (state, entry, finalized_cursor) = state_with_finalized_por_event();
-        let header = BlockHeader::new(
-            3_u64.try_into().expect("nonzero height"),
-            None,
-            None,
-            None,
-            TEST_NOW_MS + 2_000,
-            0,
-        );
-        let mut block = state.block(header);
+        let mut block = finalized_query_fixture_block(&state, finalized_cursor);
         let mut transaction = block.transaction();
         transaction
             .world
@@ -3193,15 +3221,7 @@ mod tests {
     #[test]
     fn source_query_rejects_a_missing_event_id_index() {
         let (state, entry, finalized_cursor) = state_with_finalized_por_event();
-        let header = BlockHeader::new(
-            3_u64.try_into().expect("nonzero height"),
-            None,
-            None,
-            None,
-            TEST_NOW_MS + 2_000,
-            0,
-        );
-        let mut block = state.block(header);
+        let mut block = finalized_query_fixture_block(&state, finalized_cursor);
         let mut transaction = block.transaction();
         transaction
             .world
@@ -3222,15 +3242,7 @@ mod tests {
     #[test]
     fn source_query_rejects_an_event_recorded_after_finality() {
         let (state, entry, finalized_cursor) = state_with_finalized_por_event();
-        let header = BlockHeader::new(
-            3_u64.try_into().expect("nonzero height"),
-            None,
-            None,
-            None,
-            TEST_NOW_MS + 2_000,
-            0,
-        );
-        let mut block = state.block(header);
+        let mut block = finalized_query_fixture_block(&state, finalized_cursor);
         let mut transaction = block.transaction();
         let mut record = read_event(transaction.world(), 1)
             .expect("read selected event")
@@ -3269,17 +3281,7 @@ mod tests {
         let (state, entries, finalized_cursor) =
             state_with_finalized_por_events(&[0x91, 0x92, 0x93, 0x94, 0x95]);
         let selected = &entries[1];
-        let header = BlockHeader::new(
-            (finalized_cursor.height + 1)
-                .try_into()
-                .expect("nonzero height"),
-            None,
-            None,
-            None,
-            finalized_cursor.finalized_at_unix_ms + 1_000,
-            0,
-        );
-        let mut block = state.block(header);
+        let mut block = finalized_query_fixture_block(&state, finalized_cursor);
         let mut transaction = block.transaction();
         let mut successor = read_event(transaction.world(), 3)
             .expect("read selected-event successor")
@@ -3307,17 +3309,7 @@ mod tests {
         let (state, entries, finalized_cursor) =
             state_with_finalized_por_events(&[0x91, 0x92, 0x93, 0x94, 0x95]);
         let selected = &entries[1];
-        let header = BlockHeader::new(
-            (finalized_cursor.height + 1)
-                .try_into()
-                .expect("nonzero height"),
-            None,
-            None,
-            None,
-            finalized_cursor.finalized_at_unix_ms + 1_000,
-            0,
-        );
-        let mut block = state.block(header);
+        let mut block = finalized_query_fixture_block(&state, finalized_cursor);
         let mut transaction = block.transaction();
         let mut successor = read_event(transaction.world(), 3)
             .expect("read selected-event successor")
@@ -3345,15 +3337,7 @@ mod tests {
         let (state, entries, finalized_cursor) =
             state_with_finalized_por_events(&[0x91, 0x92, 0x93]);
         let selected = &entries[1];
-        let header = BlockHeader::new(
-            5_u64.try_into().expect("nonzero height"),
-            None,
-            None,
-            None,
-            TEST_NOW_MS + 4_000,
-            0,
-        );
-        let mut block = state.block(header);
+        let mut block = finalized_query_fixture_block(&state, finalized_cursor);
         let mut transaction = block.transaction();
         let mut record = read_event(transaction.world(), 2)
             .expect("read selected event")
@@ -3379,15 +3363,7 @@ mod tests {
     fn source_query_rejects_a_global_terminal_beyond_finality() {
         let (state, entries, finalized_cursor) = state_with_finalized_por_events(&[0x91, 0x92]);
         let selected = &entries[0];
-        let header = BlockHeader::new(
-            4_u64.try_into().expect("nonzero height"),
-            None,
-            None,
-            None,
-            TEST_NOW_MS + 3_000,
-            0,
-        );
-        let mut block = state.block(header);
+        let mut block = finalized_query_fixture_block(&state, finalized_cursor);
         let mut transaction = block.transaction();
         let mut terminal = read_event(transaction.world(), 2)
             .expect("read terminal event")
@@ -3422,15 +3398,7 @@ mod tests {
     #[test]
     fn absent_source_query_rejects_a_global_terminal_beyond_finality() {
         let (state, _entries, finalized_cursor) = state_with_finalized_por_events(&[0x91, 0x92]);
-        let header = BlockHeader::new(
-            4_u64.try_into().expect("nonzero height"),
-            None,
-            None,
-            None,
-            TEST_NOW_MS + 3_000,
-            0,
-        );
-        let mut block = state.block(header);
+        let mut block = finalized_query_fixture_block(&state, finalized_cursor);
         let mut transaction = block.transaction();
         let mut terminal = read_event(transaction.world(), 2)
             .expect("read terminal event")
@@ -3466,17 +3434,7 @@ mod tests {
     fn early_event_page_rejects_a_global_terminal_beyond_finality() {
         let (state, _entries, finalized_cursor) =
             state_with_finalized_por_events(&[0x91, 0x92, 0x93]);
-        let header = BlockHeader::new(
-            (finalized_cursor.height + 1)
-                .try_into()
-                .expect("nonzero height"),
-            None,
-            None,
-            None,
-            finalized_cursor.finalized_at_unix_ms + 1_000,
-            0,
-        );
-        let mut block = state.block(header);
+        let mut block = finalized_query_fixture_block(&state, finalized_cursor);
         let mut transaction = block.transaction();
         let mut terminal = read_event(transaction.world(), 3)
             .expect("read global terminal")
@@ -3508,17 +3466,7 @@ mod tests {
     fn early_event_page_rejects_a_global_terminal_after_finalized_time() {
         let (state, _entries, finalized_cursor) =
             state_with_finalized_por_events(&[0x91, 0x92, 0x93]);
-        let header = BlockHeader::new(
-            (finalized_cursor.height + 1)
-                .try_into()
-                .expect("nonzero height"),
-            None,
-            None,
-            None,
-            finalized_cursor.finalized_at_unix_ms + 1_000,
-            0,
-        );
-        let mut block = state.block(header);
+        let mut block = finalized_query_fixture_block(&state, finalized_cursor);
         let mut transaction = block.transaction();
         let mut terminal = read_event(transaction.world(), 3)
             .expect("read global terminal")
@@ -3559,15 +3507,7 @@ mod tests {
     fn source_query_rejects_a_nonadjacent_future_dispute_predecessor() {
         let (state, resolved, finalized_cursor) =
             state_with_finalized_interleaved_resolved_dispute();
-        let header = BlockHeader::new(
-            4_u64.try_into().expect("nonzero height"),
-            None,
-            None,
-            None,
-            TEST_NOW_MS + 3_000,
-            0,
-        );
-        let mut block = state.block(header);
+        let mut block = finalized_query_fixture_block(&state, finalized_cursor);
         let mut transaction = block.transaction();
         let mut opened = read_event(transaction.world(), 1)
             .expect("read interleaved opened dispute")
@@ -3595,15 +3535,7 @@ mod tests {
     #[test]
     fn source_query_rejects_a_resolved_dispute_with_missing_predecessor() {
         let (state, _opened, resolved, finalized_cursor) = state_with_finalized_resolved_dispute();
-        let header = BlockHeader::new(
-            3_u64.try_into().expect("nonzero height"),
-            None,
-            None,
-            None,
-            TEST_NOW_MS + 2_000,
-            0,
-        );
-        let mut block = state.block(header);
+        let mut block = finalized_query_fixture_block(&state, finalized_cursor);
         let mut transaction = block.transaction();
         let missing_predecessor = ReputationJournalEventIdV1([0xD1; 32]);
         let forged_entry = ReputationJournalEntryV1::try_new(
@@ -3634,15 +3566,7 @@ mod tests {
     #[test]
     fn source_query_rejects_substituted_dispute_revision_material() {
         let (state, opened, resolved, finalized_cursor) = state_with_finalized_resolved_dispute();
-        let header = BlockHeader::new(
-            3_u64.try_into().expect("nonzero height"),
-            None,
-            None,
-            None,
-            TEST_NOW_MS + 2_000,
-            0,
-        );
-        let mut block = state.block(header);
+        let mut block = finalized_query_fixture_block(&state, finalized_cursor);
         let mut transaction = block.transaction();
         let mut substituted_payload = resolved.payload.clone();
         let ReputationJournalPayloadV1::ProviderDispute(dispute) = &mut substituted_payload else {
@@ -3895,9 +3819,12 @@ mod tests {
                 .execute(&authority, transaction)
                 .expect_err("the successor activation boundary belongs to the successor");
             assert!(
-                error
-                    .to_string()
-                    .contains("outside its recorder-policy activation interval")
+                matches!(&error,
+                    InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(message)
+                    ) if message.contains("outside its recorder-policy activation interval")
+                ),
+                "{error:?}"
             );
             AppendSorafsPorReputationJournalEntry::new(current).execute(&authority, transaction)?;
             assert_eq!(
@@ -3986,164 +3913,7 @@ mod tests {
         next_block.event_index = 0;
         assert!(validate_event_successor(Some(&first), &next_block).is_ok());
     }
-    #[test]
-    fn governed_token_appends_are_contiguous_and_exact_replays_are_idempotent() {
-        let (state, authority, other, provider_id) = state_with_reputation_accounts();
-        let header = BlockHeader::new(
-            1_u64.try_into().expect("nonzero height"),
-            None,
-            None,
-            None,
-            TEST_NOW_MS,
-            0,
-        );
-        let mut block = state.block(header);
-        let mut transaction = block.transaction();
-        let initial_policy = policy(&authority);
-        let policy_digest = initial_policy.canonical_digest().expect("policy digest");
-        SetSorafsReputationJournalAuthorityPolicy::new(initial_policy)
-            .execute(&authority, &mut transaction)
-            .expect("activate policy");
-        let first = token_entry(&authority, provider_id, policy_digest, 0x41);
-        AppendSorafsStreamTokenReputationJournalEntry::new(first.clone())
-            .execute(&authority, &mut transaction)
-            .expect("append first token event");
-        AppendSorafsStreamTokenReputationJournalEntry::new(first.clone())
-            .execute(&authority, &mut transaction)
-            .expect("exact replay is idempotent");
-        assert_eq!(
-            read_journal_head(transaction.world())
-                .expect("read journal head")
-                .expect("journal head")
-                .last_sequence,
-            1
-        );
-        let replay_error = AppendSorafsStreamTokenReputationJournalEntry::new(first.clone())
-            .execute(&other, &mut transaction)
-            .expect_err("another authority cannot replay the event");
-        assert!(
-            matches!(&replay_error, InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(message)) if message.contains("replay authority"))
-        );
-        let second = token_entry(&authority, provider_id, policy_digest, 0x51);
-        AppendSorafsStreamTokenReputationJournalEntry::new(second)
-            .execute(&authority, &mut transaction)
-            .expect("append second token event");
-        let head = read_journal_head(transaction.world())
-            .expect("read journal head")
-            .expect("journal head");
-        assert_eq!(head.last_sequence, 2);
-        assert_eq!(head.last_event_index, 1);
-        let first_record = read_event(transaction.world(), 1)
-            .expect("read first event")
-            .expect("first event");
-        let second_record = read_event(transaction.world(), 2)
-            .expect("read second event")
-            .expect("second event");
-        validate_event_successor(Some(&first_record), &second_record)
-            .expect("events are globally contiguous");
-        transaction
-            .world
-            .smart_contract_state
-            .remove(event_key(first_record.sequence));
-        assert!(
-            validate_journal_head(transaction.world()).is_err(),
-            "a journal with no global sequence one must fail closed"
-        );
-        transaction.world.smart_contract_state.insert(
-            event_key(first_record.sequence),
-            encode_state(&first_record, "restored first reputation event")
-                .expect("encode restored first event"),
-        );
-        let forged_tail_key = event_key(3);
-        transaction
-            .world
-            .smart_contract_state
-            .insert(forged_tail_key.clone(), vec![0xFF]);
-        assert!(
-            validate_journal_head(transaction.world()).is_err(),
-            "an event-prefixed key beyond the journal head must fail closed"
-        );
-        transaction
-            .world
-            .smart_contract_state
-            .remove(forged_tail_key);
-        let wrong_policy_entry = token_entry(&authority, provider_id, [0x99; 32], 0x61);
-        AppendSorafsStreamTokenReputationJournalEntry::new(wrong_policy_entry)
-            .execute(&authority, &mut transaction)
-            .expect_err("stale policy digest must fail");
-        let wrong_source_family = token_entry(&authority, provider_id, policy_digest, 0x71);
-        AppendSorafsPorReputationJournalEntry::new(wrong_source_family)
-            .execute(&authority, &mut transaction)
-            .expect_err("PoR append must reject a stream-token source");
-        assert_eq!(
-            read_journal_head(transaction.world())
-                .expect("read journal head")
-                .expect("journal head")
-                .last_sequence,
-            2
-        );
-        let mut rotated_policy = policy(&authority);
-        rotated_policy.revision = 2;
-        rotated_policy.predecessor_policy_digest = Some(policy_digest);
-        SetSorafsReputationJournalAuthorityPolicy::new(rotated_policy)
-            .execute(&authority, &mut transaction)
-            .expect("rotate recorder policy");
-        AppendSorafsStreamTokenReputationJournalEntry::new(first)
-            .execute(&authority, &mut transaction)
-            .expect("exact historical entry replay remains idempotent after rotation");
-        let stale_historical_entry = token_entry(&authority, provider_id, policy_digest, 0x72);
-        AppendSorafsStreamTokenReputationJournalEntry::new(stale_historical_entry)
-            .execute(&authority, &mut transaction)
-            .expect_err("new entries cannot use a superseded recorder policy");
-        assert_eq!(
-            read_journal_head(transaction.world())
-                .expect("read journal after policy rotation")
-                .expect("journal head")
-                .last_sequence,
-            2
-        );
-        let forged_cross_source_head = ReputationJournalSourceHeadV1 {
-            source_kind: ReputationJournalSourceKindV1::StreamToken,
-            source_revision: 2,
-            event_id: second_record.entry.event_id,
-            sequence: second_record.sequence,
-        };
-        transaction.world.smart_contract_state.insert(
-            source_head_key(first_record.entry.source_id),
-            encode_state(&forged_cross_source_head, "forged reputation source head")
-                .expect("encode forged source head"),
-        );
-        assert!(
-            validate_event_indexes(transaction.world(), &first_record).is_err(),
-            "a source head must not recurse through an event from another source"
-        );
-        let restored_first_source_head = ReputationJournalSourceHeadV1 {
-            source_kind: ReputationJournalSourceKindV1::StreamToken,
-            source_revision: 1,
-            event_id: first_record.entry.event_id,
-            sequence: first_record.sequence,
-        };
-        transaction.world.smart_contract_state.insert(
-            source_head_key(first_record.entry.source_id),
-            encode_state(
-                &restored_first_source_head,
-                "restored reputation source head",
-            )
-            .expect("encode restored source head"),
-        );
-        transaction
-            .world
-            .smart_contract_state
-            .remove(journal_head_key().clone());
-        let orphan_replay = token_entry(&authority, provider_id, policy_digest, 0x41);
-        let corruption = AppendSorafsStreamTokenReputationJournalEntry::new(orphan_replay)
-            .execute(&authority, &mut transaction)
-            .expect_err("an orphaned journal index must fail closed on exact replay");
-        assert!(matches!(
-            corruption,
-            InstructionExecutionError::InvariantViolation(_)
-        ));
-    }
+    include!("sorafs_reputation/policy_rotation_tests.rs");
     #[test]
     fn asynchronous_source_time_is_bound_while_commit_time_is_authoritative() {
         let (mut state, authority, _other, provider_id) = state_with_reputation_accounts();
@@ -4201,9 +3971,12 @@ mod tests {
                 .execute(&authority, transaction)
                 .expect_err("future source observation must fail closed");
             assert!(
-                error
-                    .to_string()
-                    .contains("after authoritative commit time")
+                matches!(&error,
+                    InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(message)
+                    ) if message.contains("after authoritative commit time")
+                ),
+                "{error:?}"
             );
             Ok(())
         })
@@ -4213,7 +3986,14 @@ mod tests {
             let error = AppendSorafsStreamTokenReputationJournalEntry::new(stale)
                 .execute(&authority, transaction)
                 .expect_err("stale source observation must fail closed");
-            assert!(error.to_string().contains("exceeds 1500ms"));
+            assert!(
+                matches!(&error,
+                    InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(message)
+                    ) if message.contains("exceeds 1500ms")
+                ),
+                "{error:?}"
+            );
             Ok(())
         })
         .expect("commit block after rejecting stale source observation");

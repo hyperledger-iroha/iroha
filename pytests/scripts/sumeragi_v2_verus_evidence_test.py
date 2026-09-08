@@ -97,6 +97,44 @@ def test_canonical_verus_evidence_is_accepted(monkeypatch, tmp_path: Path) -> No
     assert module.validate_evidence(evidence, root=tmp_path) == ()
 
 
+@pytest.mark.parametrize(("count", "errors"), ((172, 0), (220, 0), (222, 0), (221, 1)))
+def test_reviewed_root_census_rejects_rehashed_wrong_results(monkeypatch, tmp_path, count, errors):
+    """Historical, partial, additional and erroneous roots cannot qualify."""
+    module = load_module()
+    evidence, _, log = configure_fixture(module, monkeypatch, tmp_path)
+    assert module.EXPECTED_ROOT_VERIFIED == 221
+    text = log.read_text().replace(
+        "verification results:: 221 verified, 0 errors",
+        f"verification results:: {count} verified, {errors} errors",
+    )
+    log.write_text(text)
+    evidence["log_sha256"] = sha256(log)
+    evidence["results"]["root_verified"] = count
+    evidence["results"]["errors"] = errors
+    failures = module.validate_evidence(evidence, root=tmp_path)
+    assert any("independently pinned" in failure for failure in failures)
+
+
+def test_replica_observation_authority_inventory_and_verification_flags_are_explicit():
+    """The new trace bridge is source-bound under the unchanged strict proof command."""
+    module = load_module()
+    assert module.EXPECTED_ROOT_VERIFIED == 114 + 40 + 63 + 4 == 221
+    assert module.EXPECTED_DEPENDENCY_VERIFIED == 1690
+    assert module.EXPECTED_INVOCATION[-7:] == (
+        "--fwd-verus-args-to", "roots", "--", "--rlimit", "60", "--expand-errors", "--no-cheating",
+    )
+    assert "--locked" in module.EXPECTED_INVOCATION
+    assert "--offline" in module.EXPECTED_INVOCATION
+    assert set(module.REQUIRED_SOURCE_PATHS) >= {
+        "crates/iroha_core/src/sumeragi/v2_core.rs",
+        "crates/iroha_core/src/sumeragi/v2_core/refinement/post_carrier_transition.rs",
+        "crates/iroha_sumeragi_core/src/verus_proofs/in_flight_first_release_proofs.rs",
+        "crates/iroha_core/src/queue.rs",
+        "crates/iroha_core/src/kura/autonomous_release_authority.rs",
+        "crates/iroha_core/src/kura/autonomous_merge_bundle_support.rs",
+    }
+
+
 @pytest.mark.parametrize(
     ("mutation", "expected"),
     (

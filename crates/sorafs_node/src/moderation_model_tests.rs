@@ -1,4 +1,5 @@
 use super::*;
+include!("moderation_canonical_quarantine_tests.rs");
 use iroha_crypto::{Algorithm, KeyPair, SignatureOf};
 use iroha_data_model::sorafs::moderation::{
     MODERATION_MODEL_WORKING_MEMORY_BYTES_V1, MODERATION_REPRO_MANIFEST_VERSION_V1,

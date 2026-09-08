@@ -21,7 +21,7 @@ retired-struct-field-order	seiyaku RetiredStructFieldOrder {\nstruct Pair { valu
 retired-local-order	seiyaku RetiredLocalOrder {\nfn run() { let value: int = 1; }\n}	Parse	E_RETIRED_DECLARATION_ORDER	typed locals are type-first: write `let int value = ...;`	2
 immutable-assignment	seiyaku ImmutableAssignment {\nfn run() { let value = 1; value = 2; }\n}	Semantic	E_IMMUTABLE_ASSIGNMENT	cannot assign to immutable binding `value`	2
 unbounded-loop	seiyaku UnboundedLoop {\nfn run() { while true {} }\n}	Parse	K1001	`while` is not supported in Kotodama V1	2
-dynamic-range-loop	seiyaku DynamicRangeLoop {\nfn run(int limit) { for index in range(limit) {} }\n}	Parse	E_UNBOUNDED_LOOP	numeric range bounds must be non-negative integer literals	2
+dynamic-range-loop	seiyaku DynamicRangeLoop {\nfn run(int limit) { for index in range(limit) {} }\n}	Semantic	E_UNBOUNDED_LOOP	range bound must be a non-negative compile-time integer expression	2
 recursion	seiyaku Recursion {\nfn recurse() { recurse(); }\n}	Semantic	K2006	recursive function calls are not supported	2
 non-ascii-identifier	seiyaku Café {\nfn run() {}\n}	Lex	K0100	non-ASCII identifier outside the branded Japanese keyword set	1
 english-declaration-keyword	contract Alias {\nfn run() {}\n}	Parse	K1001	exactly one `seiyaku Name	1
@@ -33,15 +33,15 @@ raw-blob-constructor	seiyaku RawBlob {\nfn run() { let payload = blob("opaque");
 opaque-instruction-submission	seiyaku OpaqueInstruction {\nkotoage fn run(bytes payload) authorize("Run") { execute_instruction(payload); }\n}	Resolve	K2002	unknown function or builtin `execute_instruction`	2
 cyclic-value-type	seiyaku CyclicValueType {\nstruct Node { Node next; }\n}	Semantic	K2006	cyclic value struct definition: Node -> Node	2
 retired-positional-struct	seiyaku PositionalStruct {\nstruct Pair { int left, int right }\nfn run() { let pair = Pair(1, 2); }\n}	Semantic	E_POSITIONAL_STRUCT	positional construction `Pair(...)` is retired	3
-mixed-call-style	seiyaku MixedCall {\nfn target(int first, int second) {}\nfn run() { target(1, second: 2); }\n}	Parse	E_MIXED_CALL_ARGUMENTS	calls must use either all positional or all named source arguments	3
+positional-after-named	seiyaku MixedCall {\nfn target(int first, int second) {}\nfn run() { target(first: 1, 2); }\n}	Parse	E_POSITIONAL_ARGUMENT_ORDER	positional arguments must precede named arguments	3
 unsafe-list-read	seiyaku UnsafeListRead {\nfn read(List<int, 2> values) -> Option<int> { return values[0]; }\n}	Semantic	E_LIST_UNSAFE_INDEX	unchecked List indexing is not part of Kotodama V1	2
-unsafe-list-write	seiyaku UnsafeListWrite {\nfn write() { var List<int, 2> values = [1]; values[0] = 2; }\n}	Semantic	E_LIST_UNSAFE_INDEX	unchecked List writes are not part of Kotodama V1	2
+unsafe-list-write	seiyaku UnsafeListWrite {\nfn write() { var List<int, 2> values = [1]; values[0] = 2; }\n}	Semantic	E_LIST_UNSAFE_INDEX	indexed List assignment is unsupported	2
 legacy-option-placeholder	seiyaku LegacyOption {\nfn read() -> Option<int> { option::none(0) }\n}	Parse	E_LEGACY_SUM_CONSTRUCTOR	`option::none` is retired	2
-named-only-repeated-types	seiyaku NamedOnly {\nfn target(int left, int right) {} fn run() { target(1, 2); }\n}	Semantic	E_NAMED_ARGUMENTS_REQUIRED	requires named arguments because repeated parameter types	2
+declared-call-label	seiyaku NamedOnly {\nfn target(int left, int right) {} fn run() { target(1, 2); }\n}	Semantic	E_NAMED_ARGUMENTS_REQUIRED	requires its declared name	2
 contextless-option-none	seiyaku ContextlessNone {\nfn run() { let value = Option::none; }\n}	Semantic	E_SUM_MISSING_CONTEXT	`Option::none` requires an exact `Option<T>` context	2
 option-propagation-context	seiyaku PropagationContext {\nfn read(Option<int> value) -> int { value? }\n}	Semantic	E_PROPAGATE_CONTEXT	postfix `?` on Option requires an Option-returning function	2
-non-exhaustive-option-match	seiyaku NonExhaustive {\nfn read(Option<int> value) -> int { match value { Option::some(item) => { item }, } }\n}	Semantic	E_MATCH_NON_EXHAUSTIVE	match must cover both namespaced variants	2
-non-exhaustive-result-match	seiyaku NonExhaustiveResult {\nfn read(Result<int, bool> value) -> int { match value { Result::ok(item) => { item }, } }\n}	Semantic	E_MATCH_NON_EXHAUSTIVE	match must cover both namespaced variants	2
+non-exhaustive-option-match	seiyaku NonExhaustive {\nfn read(Option<int> value) -> int { match value { Option::some(item) => { item }, } }\n}	Semantic	E_MATCH_NON_EXHAUSTIVE	match must cover every namespaced variant	2
+non-exhaustive-result-match	seiyaku NonExhaustiveResult {\nfn read(Result<int, bool> value) -> int { match value { Result::ok(item) => { item }, } }\n}	Semantic	E_MATCH_NON_EXHAUSTIVE	match must cover every namespaced variant	2
 list-comprehension-capacity	seiyaku ComprehensionCapacity {\nfn copy() { let List<int, 8> source = [1]; let List<int, 4> result = [item for item in source if false]; }\n}	Semantic	E_LIST_COMPREHENSION_CAPACITY	filters do not reduce the proven maximum	2
 duplicate-native-json-key	seiyaku DuplicateJsonKey {\nfn build() -> Json { json { owner: 1, "owner": 2 } }\n}	Semantic	E_JSON_DUPLICATE_KEY	native JSON object key `owner` is supplied more than once	2
 dynamic-json-parse	seiyaku DynamicJsonParse {\nfn decode(string raw) -> Json { Json::parse(raw) }\n}	Semantic	E_JSON_LITERAL_REQUIRED	Json::parse requires a direct string literal so native JSON is validated at compile time	2

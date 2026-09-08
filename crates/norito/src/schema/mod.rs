@@ -12,7 +12,7 @@ use norito_derive::{NoritoDeserialize, NoritoSerialize};
 /// use std::convert::TryInto;
 ///
 /// use norito::{
-///     NoritoDeserialize, NoritoSerialize,
+///     DeserializePayload, NoritoSerialize,
 ///     core::{Compression, Header, MAGIC, VERSION_MAJOR, VERSION_MINOR, header_flags},
 ///     crc64_fallback, from_bytes,
 ///     schema::SamplePayload,
@@ -53,7 +53,7 @@ use norito_derive::{NoritoDeserialize, NoritoSerialize};
 /// assert_eq!(body, EXPECTED_BODY);
 ///
 /// let archived = from_bytes::<SamplePayload>(&encoded).expect("decode sample payload");
-/// let decoded = <SamplePayload as NoritoDeserialize>::deserialize(archived);
+/// let decoded = <SamplePayload as DeserializePayload>::deserialize(archived);
 /// assert_eq!(decoded, payload);
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]

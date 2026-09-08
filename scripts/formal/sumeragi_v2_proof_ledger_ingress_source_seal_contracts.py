@@ -467,38 +467,61 @@ leader_wire_recovery_authority,
     .map_err(V2RunnerError::Service)?;
 """,
     "lane_durable_predecessor_source": """
-let durable = self.kura.read_certified_lane_block_artifact(
-    descriptor.lane_id,
-    descriptor.lane_block_height,
-);
-let Some(durable) = durable else {
-    return Ok(None);
-};
 let autonomous_anchor = self.canonical_autonomous_anchor_matches_kura(proposal);
+let private_durable =
+    self.consensus_storage_read(self.kura.read_lane_completion_certificate(
+        descriptor.lane_id,
+        descriptor.lane_block_height,
+    ))?;
+let (durable, autonomous_payload) = if autonomous_anchor {
+    let private_payload = self.consensus_storage_read(
+        self.kura.read_lane_completion_autonomous_artifact(
+            proposal,
+            network_id,
+            self.context.epoch,
+        ),
+    )?;
+    match (private_durable, private_payload) {
+        (Some(durable), Some(artifact)) => (durable, Some(artifact.executable_payload)),
+        (None, None) => {
+            let replica = self
+                .kura
+                .durable_canonical_autonomous_lane_replica(
+                    descriptor.lane_id,
+                    descriptor.lane_block_height,
+                    network_id,
+                    self.context.epoch,
+                )
+                .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
+            let Some(replica) = replica else {
+                return Ok(None);
+            };
+            let payload = replica.bundle.executable_payload().clone();
+            (replica.bundle.certified, Some(payload))
+        }
+        (Some(_), None) | (None, Some(_)) => return Ok(None),
+    }
+} else {
+    let Some(durable) = private_durable else {
+        return Ok(None);
+    };
+    (durable, None)
+};
 let autonomous_certificate = require_lane_certificate_execution_role_matches_anchor(
     &durable.prepare_qc,
     autonomous_anchor,
 )?;
-let autonomous_payload = autonomous_certificate
-    .then(|| {
-        self.kura.read_autonomous_lane_block_artifact(
-            descriptor.lane_id,
-            descriptor.lane_block_height,
-            network_id,
-            self.context.epoch,
-        )
-    })
-    .flatten()
-    .map(|artifact| artifact.executable_payload);
+if autonomous_certificate != autonomous_payload.is_some() {
+    return Err(V2LaneWorkError::Persistence(
+        "autonomous rollover source differs from its certified execution role"
+            .to_owned(),
+    ));
+}
 let application_receipt = if autonomous_payload.is_some() {
     None
 } else {
     Some(
-        self.kura
-            .read_lane_block_application_receipt(
-                descriptor.lane_id,
-                descriptor.lane_block_height,
-            )
+        self.consensus_storage_read(self.kura.read_lane_completion_receipt(proposal))?
             .ok_or_else(|| {
                 V2LaneWorkError::Persistence(
                     "retained lane CommitQC has no durable application receipt"
@@ -651,24 +674,8 @@ if let Err(error) = geometry {
 """,
     "pending_lifecycle_rollover_wait": """
 let finalization_ready = activated.ready_for_finalized_rollover(&mut active_runner)?;
-let rollover_ready = if finalization_ready {
-    activated.with_runner_runtime(
-        &mut active_runner,
-        |executor, _services, lane_work| {
-            super::preflight_finalized_lane_rollover(
-                executor,
-                lane_work,
-                &mut canonical_lane_body_recovered,
-            )
-        },
-    )?
-} else {
-    false
-};
-if !rollover_ready {
-    let _ = wake_rx.recv_timeout(IDLE_POLL);
-    continue;
-}
+let rollover_ready = if finalization_ready { let rollover_ready = activated.with_runner_runtime(&mut active_runner, |executor, services, lane_work| { super::preflight_finalized_lane_rollover(executor, services, lane_work, &mut canonical_lane_body_recovered,) },)?; let _ = reconcile_pending_kura_terminal_lane_output_handoffs(&mut activated, &mut active_runner, control_queue_capacity,)?; rollover_ready } else { false };
+if !rollover_ready { let _ = wake_rx.recv_timeout(IDLE_POLL); continue; }
 """,
     "finalized_output_rollover": """
 let _ = retry_exact_output_and_apply_sidecar_admissions(
@@ -678,7 +685,7 @@ let _ = retry_exact_output_and_apply_sidecar_admissions(
 )?;
 let _ = lane_work.recover_decided_canonical_lane_body(receipt, artifact)?;
 lane_work.persist_anchored_sessions()?;
-let _ = lane_work.service_next_historical_recovery()?;
+let _ = service_historical_recovery_tick(&mut lane_work, services)?;
 if lane_work.has_pending_historical_recovery() {
     return Err(V2RunnerError::Service(
         "finalized lane output still owns predecessor-height recovery".to_owned(),

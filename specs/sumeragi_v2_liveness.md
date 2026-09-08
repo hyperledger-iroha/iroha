@@ -1050,11 +1050,13 @@ refresh.
 
 A QueuePlan admission may become durable after State commits height H while the
 consensus adapter for H still owns its last scheduled reconciliation. Classification
-uses one coherent State view and reports `DeferredCarrier` for an absent registry
-entry when that adapter's requested carrier is already committed. The old worker
-retains the certificate and queue claim without staging or forwarding it; its obsolete
-height cannot authorize a stale-claim tombstone. The successor reclassifies the exact
-bytes, including canonical predecessor, incarnation and authority checks.
+uses one coherent State view to authenticate the certificate and validate its
+canonical predecessor, incarnation and authority against the current frontier.
+For a valid absent registry entry, it reports `DeferredCarrier` when the adapter's
+requested carrier is already committed. The old worker retains that certificate
+and queue claim without staging or forwarding it; its obsolete height cannot
+authorize a stale-claim tombstone. Malformed certificates and stale State bindings
+still reject at that boundary. The successor reclassifies the same exact bytes.
 
 A WAL-recovered Decision fetch retains its original signed request, quorum
 certificate, height context, and response verifier, but reconstructs delivery

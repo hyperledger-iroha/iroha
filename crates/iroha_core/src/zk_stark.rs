@@ -377,15 +377,17 @@ impl norito::SerializePayload for GoldilocksFp4V1 {
         Some(Self::BYTES)
     }
 }
-impl<'de> norito::NoritoDeserialize<'de> for GoldilocksFp4V1 {
+impl norito::NoritoDeserialize<'_> for GoldilocksFp4V1 {}
+impl<'de> norito::DeserializePayload<'de> for GoldilocksFp4V1 {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("canonical GoldilocksFp4V1 decode")
     }
 
     fn try_deserialize(archived: &'de norito::core::Archived<Self>) -> Result<Self, norito::Error> {
-        let value = <fastpq_prover::GoldilocksFp4V1 as norito::NoritoDeserialize>::try_deserialize(
-            archived.cast(),
-        )?;
+        let value =
+            <fastpq_prover::GoldilocksFp4V1 as norito::DeserializePayload>::try_deserialize(
+                archived.cast(),
+            )?;
         let [c0, c1, c2, c3] = value.coefficients();
         Ok(Self { c0, c1, c2, c3 })
     }
@@ -1129,11 +1131,12 @@ pub fn validate_stark_fri_canonical_verifying_key_payload(
             payload.n_log2, STARK_FRI_CONSENSUS_MIN_N_LOG2
         ));
     }
-    if stark_air_circuit_id_uses_generic_binding(&payload.circuit_id)
+    if (stark_air_circuit_id_uses_generic_binding(&payload.circuit_id)
+        || stark_air_circuit_id_targets_ivm_execution(&payload.circuit_id))
         && payload.n_log2 > MAX_BINDING_AIR_DOMAIN_LOG2
     {
         return Err(format!(
-            "{label} generic Binding AIR n_log2 {} exceeds exact trace-root reconstruction limit {}",
+            "{label} Binding AIR n_log2 {} exceeds exact trace-root reconstruction limit {}",
             payload.n_log2, MAX_BINDING_AIR_DOMAIN_LOG2
         ));
     }
@@ -2022,6 +2025,9 @@ struct StarkAirExplicitVerificationContext<'a> {
 #[derive(Clone, Copy)]
 enum StarkAirVerificationContext<'a> {
     Binding,
+    IvmExecutionBinding {
+        public_digest: &'a GoldilocksDigest384V1,
+    },
     BfvFullBootstrapPublicPadding {
         statement_hash: &'a iroha_crypto::Hash,
         trace_material_digest: &'a iroha_crypto::Hash,
@@ -2036,7 +2042,7 @@ impl StarkAirVerificationContext<'_> {
     }
     fn trace_width(self) -> usize {
         match self {
-            Self::Binding => stark_air_trace_width(),
+            Self::Binding | Self::IvmExecutionBinding { .. } => stark_air_trace_width(),
             Self::BfvFullBootstrapPublicPadding { .. } => {
                 usize::from(iroha_crypto::BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_ROW_WIDTH_V1)
             }
@@ -2155,7 +2161,8 @@ fn stark_air_composition_value_for_context(
     next_row: &[u64],
 ) -> Option<Fq> {
     match context {
-        StarkAirVerificationContext::Binding => {
+        StarkAirVerificationContext::Binding
+        | StarkAirVerificationContext::IvmExecutionBinding { .. } => {
             stark_air_composition_value(index, domain_size, public_digest, row, next_row)
         }
         StarkAirVerificationContext::BfvFullBootstrapPublicPadding {
@@ -2211,6 +2218,17 @@ fn stark_air_composition_value_for_context(
         }
     }
 }
+fn stark_binding_air_commitments_match_statement(
+    params: &StarkFriParamsV1,
+    air: &StarkAirProofV1,
+    total_domain: usize,
+) -> bool {
+    params.n_log2 <= MAX_BINDING_AIR_DOMAIN_LOG2
+        && stark_binding_air_trace_root(params, &air.public_digest, total_domain)
+            == Some(air.trace_root)
+        && stark_constant_field_merkle_root_v1(params, Fq::zero(), total_domain)
+            == Some(air.composition_root)
+}
 fn stark_air_context_matches_statement(
     params: &StarkFriParamsV1,
     air: &StarkAirProofV1,
@@ -2220,11 +2238,17 @@ fn stark_air_context_matches_statement(
     match context {
         StarkAirVerificationContext::Binding => {
             stark_air_circuit_id_uses_generic_binding(&air.circuit_id)
-                && params.n_log2 <= MAX_BINDING_AIR_DOMAIN_LOG2
-                && stark_binding_air_trace_root(params, &air.public_digest, total_domain)
-                    == Some(air.trace_root)
-                && stark_constant_field_merkle_root_v1(params, Fq::zero(), total_domain)
-                    == Some(air.composition_root)
+                && stark_binding_air_commitments_match_statement(params, air, total_domain)
+        }
+        StarkAirVerificationContext::IvmExecutionBinding { public_digest } => {
+            air.circuit_id
+                == format!(
+                    "{}:{}",
+                    crate::zk::ZK_BACKEND_STARK_FRI_V1,
+                    crate::zk::IVM_EXECUTION_V1_CIRCUIT_ID
+                )
+                && air.public_digest == *public_digest
+                && stark_binding_air_commitments_match_statement(params, air, total_domain)
         }
         StarkAirVerificationContext::BfvFullBootstrapPublicPadding {
             statement_hash,
@@ -3621,6 +3645,23 @@ fn verify_stark_air_opening(
 /// Verify a STARK FRI envelope under `zk-stark` with caller-provided limits.
 pub fn verify_stark_fri_envelope_with_limits(bytes: &[u8], limits: &StarkVerifierLimits) -> bool {
     verify_stark_fri_envelope_with_context(bytes, limits, StarkAirVerificationContext::Binding)
+}
+/// Verify the canonical IVM binding AIR against the digest reconstructed from
+/// its authenticated outer envelope and public inputs.
+///
+/// The dedicated context retains exact trace/composition commitment checks and
+/// rejects auxiliary composition. Generic AIR verification cannot admit this
+/// reserved circuit. Execution correctness still requires deterministic IVM replay.
+pub(crate) fn verify_stark_fri_ivm_execution_air_envelope_with_limits(
+    bytes: &[u8],
+    limits: &StarkVerifierLimits,
+    public_digest: &GoldilocksDigest384V1,
+) -> bool {
+    verify_stark_fri_envelope_with_context(
+        bytes,
+        limits,
+        StarkAirVerificationContext::IvmExecutionBinding { public_digest },
+    )
 }
 /// Verify a STARK FRI AIR envelope against caller-provided trace rows and composition values.
 #[cfg(test)]

@@ -29,7 +29,7 @@ FOUNDATIONAL_DEPENDENCIES = frozenset(
 )
 
 # These aggregates are the stable ownership boundary for shipping builds. The
-# implementation features remain available for focused tests and compatibility
+# implementation features remain available for focused tests
 # while callers depend on the smaller vocabulary below.
 EXPECTED_FEATURES: dict[str, dict[str, tuple[str, ...]]] = {
     "norito": {
@@ -105,22 +105,12 @@ EXPECTED_FEATURES: dict[str, dict[str, tuple[str, ...]]] = {
     },
     "iroha_data_model": {
         "default": ("application-model",),
-        "application-model": ("governance", "json", "pqc", "bls", "gost", "sm"),
+        "application-model": ("governance", "pqc", "bls", "gost", "sm"),
         "bls": ("iroha_crypto/bls",),
         "bridge": (),
         "gost": ("iroha_crypto/gost",),
         "governance": (),
         "http": (),
-        "json": (
-            "iroha_version/json",
-            "iroha_primitives/json",
-            "iroha_crypto/json",
-            "norito/json",
-            "norito_derive",
-            "mv",
-        ),
-        "mv": ("dep:mv",),
-        "norito_derive": ("dep:norito_derive",),
         "pqc": ("iroha_crypto/pqc", "sorafs_manifest/pqc"),
         "privacy-exact12-conformance": (),
         "sm": ("iroha_crypto/sm",),
@@ -154,7 +144,6 @@ EXPECTED_FEATURES: dict[str, dict[str, tuple[str, ...]]] = {
             "iroha_data_model/gost",
         ),
         "json": (
-            "iroha_data_model/json",
             "iroha_crypto/json",
             "iroha_primitives/json",
         ),
@@ -244,7 +233,6 @@ EXPECTED_FEATURES: dict[str, dict[str, tuple[str, ...]]] = {
             "iroha_torii/node-api",
             "iroha_crypto/consensus",
             "iroha_crypto/pqc",
-            "iroha_data_model/json",
             "norito/node-codec",
         ),
         "telemetry": (
@@ -281,7 +269,6 @@ EXPECTED_FEATURES: dict[str, dict[str, tuple[str, ...]]] = {
             "offline-visual-codecs",
             "iroha_core/node",
             "iroha_crypto/consensus",
-            "iroha_data_model/json",
             "norito/node-codec",
         ),
         "bridge": (),
@@ -771,6 +758,48 @@ def _non_dev_explicit_opt_in_dependency_selections(
     return tuple(selections)
 
 
+# These are protocol owners even when all optional model features are disabled.
+MANDATORY_MODEL_JSON_DEPENDENCIES: dict[str, tuple[str, ...]] = {
+    "iroha_crypto": ("json",),
+    "iroha_primitives": ("json",),
+    "iroha_version": ("json",),
+    "mv": (),
+    "norito": ("base-codec",),
+    "norito_derive": (),
+}
+
+
+def _check_mandatory_model_json_dependencies(
+    document: dict[str, Any], manifest_path: Path
+) -> list[str]:
+    """Require aggregate protocol JSON without an optional feature switch."""
+
+    dependencies = document.get("dependencies", {})
+    errors: list[str] = []
+    for name, required_features in MANDATORY_MODEL_JSON_DEPENDENCIES.items():
+        specification = dependencies.get(name) if isinstance(dependencies, dict) else None
+        if (
+            not isinstance(specification, dict)
+            or specification.get("optional", False) is not False
+        ):
+            errors.append(
+                f"{manifest_path}: mandatory model JSON dependency `{name}` must be "
+                "a non-optional normal dependency"
+            )
+            continue
+        selected = specification.get("features", [])
+        if (
+            not isinstance(selected, list)
+            or not all(isinstance(feature, str) for feature in selected)
+            or not set(required_features).issubset(selected)
+        ):
+            errors.append(
+                f"{manifest_path}: mandatory model JSON dependency `{name}` must "
+                f"select {list(required_features)!r} unconditionally"
+            )
+    return errors
+
+
 def _check_expected_features(
     document: dict[str, Any], manifest_path: Path
 ) -> list[str]:
@@ -781,6 +810,8 @@ def _check_expected_features(
         return []
 
     errors: list[str] = []
+    if package_name == "iroha_data_model":
+        errors.extend(_check_mandatory_model_json_dependencies(document, manifest_path))
     try:
         actual_features = cargo_visible_features(document)
     except ValueError as error:

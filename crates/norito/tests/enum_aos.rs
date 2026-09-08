@@ -1,7 +1,7 @@
 //! Targeted AoS enum roundtrip tests for Norito derives.
 #![allow(clippy::size_of_ref)]
 use iroha_schema::IntoSchema;
-use norito::{NoritoDeserialize, from_bytes, to_bytes};
+use norito::{DeserializePayload, from_bytes, to_bytes};
 #[derive(
     IntoSchema, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize, Debug, PartialEq,
 )]
@@ -57,7 +57,7 @@ fn aos_enum_roundtrip_unit() {
     let v = AoSEnum::Unit;
     let bytes = to_bytes(&v).unwrap();
     let arch = from_bytes::<AoSEnum>(&bytes).unwrap();
-    let back = <AoSEnum as NoritoDeserialize>::deserialize(arch);
+    let back = <AoSEnum as DeserializePayload>::deserialize(arch);
     assert_eq!(v, back);
 }
 #[test]
@@ -68,7 +68,7 @@ fn aos_enum_roundtrip_tuple() {
     });
     let bytes = to_bytes(&v).unwrap();
     let arch = from_bytes::<AoSEnum>(&bytes).unwrap();
-    let back = <AoSEnum as NoritoDeserialize>::deserialize(arch);
+    let back = <AoSEnum as DeserializePayload>::deserialize(arch);
     assert_eq!(v, back);
 }
 #[test]
@@ -80,7 +80,7 @@ fn aos_enum_roundtrip_struct() {
     });
     let bytes = to_bytes(&v).unwrap();
     let arch = from_bytes::<AoSEnum>(&bytes).unwrap();
-    let back = <AoSEnum as NoritoDeserialize>::deserialize(arch);
+    let back = <AoSEnum as DeserializePayload>::deserialize(arch);
     assert_eq!(v, back);
 }
 #[test]
@@ -101,7 +101,7 @@ fn aos_enum_roundtrip_u8_array_unpacked() {
     let v = AoSU8ArrayEnum::Bytes([0xAB; 12]);
     let bytes = to_bytes(&v).unwrap();
     let arch = from_bytes::<AoSU8ArrayEnum>(&bytes).unwrap();
-    let back = <AoSU8ArrayEnum as NoritoDeserialize>::deserialize(arch);
+    let back = <AoSU8ArrayEnum as DeserializePayload>::deserialize(arch);
     assert_eq!(v, back);
 }
 #[test]

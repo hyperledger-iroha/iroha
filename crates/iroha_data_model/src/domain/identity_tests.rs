@@ -232,7 +232,6 @@ fn domain_binary_decoder_reserves_a_label_work_before_allocating() {
     }
 }
 
-#[cfg(feature = "json")]
 #[test]
 fn domain_keys_roundtrip_after_binary_decoding_without_identity_collisions() {
     use std::collections::BTreeMap;

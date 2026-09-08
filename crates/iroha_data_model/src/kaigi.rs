@@ -143,7 +143,7 @@ impl KaigiId {
     all(feature = "ffi_export", not(feature = "ffi_import")),
     ffi_type(opaque)
 )]
-#[cfg_attr(feature = "json", norito(tag = "mode", content = "state"))]
+#[norito(tag = "mode", content = "state")]
 #[norito(reuse_archived)]
 pub enum KaigiPrivacyMode {
     /// Participants are stored explicitly.
@@ -175,7 +175,7 @@ pub enum KaigiPrivacyMode {
     all(feature = "ffi_export", not(feature = "ffi_import")),
     ffi_type(opaque)
 )]
-#[cfg_attr(feature = "json", norito(tag = "policy", content = "state"))]
+#[norito(tag = "policy", content = "state")]
 #[norito(reuse_archived)]
 pub enum KaigiRoomPolicy {
     /// Viewers may join without presenting authentication tokens.
@@ -270,7 +270,7 @@ pub struct KaigiRelayHop {
     /// Account offering relay services.
     pub relay_id: AccountId,
     /// HPKE public key bytes advertised by the relay.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
+    #[norito(json = "crate::json_helpers::base64_vec")]
     pub hpke_public_key: Vec<u8>,
     /// Relative weight for load-balancing decisions.
     pub weight: u8,
@@ -336,7 +336,7 @@ pub struct KaigiRelayRegistration {
     /// select the relay governance domain.
     pub relay_id: AccountId,
     /// HPKE public key bytes advertised by the relay.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
+    #[norito(json = "crate::json_helpers::base64_vec")]
     pub hpke_public_key: Vec<u8>,
     /// Bandwidth class signalled by the relay (larger value == higher capacity).
     pub bandwidth_class: u8,
@@ -364,7 +364,7 @@ pub struct KaigiRelayRegistration {
     all(feature = "ffi_export", not(feature = "ffi_import")),
     ffi_type(opaque)
 )]
-#[cfg_attr(feature = "json", norito(tag = "status", content = "state"))]
+#[norito(tag = "status", content = "state")]
 #[norito(reuse_archived)]
 pub enum KaigiRelayHealthStatus {
     /// Relay is operating as expected.
@@ -580,7 +580,7 @@ impl NewKaigi {
     all(feature = "ffi_export", not(feature = "ffi_import")),
     ffi_type(opaque)
 )]
-#[cfg_attr(feature = "json", norito(tag = "status", content = "state"))]
+#[norito(tag = "status", content = "state")]
 #[norito(reuse_archived)]
 pub enum KaigiStatus {
     /// Call has been created but not yet ended.
@@ -663,10 +663,7 @@ pub struct KaigiRecord {
     /// Participants currently associated with the call; the host is always implicit and absent.
     pub participants: Vec<AccountId>,
     /// Additional participant metadata (keyed by participant id) for future expansion.
-    #[cfg_attr(
-        feature = "json",
-        norito(json = "crate::json_helpers::account_metadata_map")
-    )]
+    #[norito(json = "crate::json_helpers::account_metadata_map")]
     pub participant_metadata: BTreeMap<AccountId, Metadata>,
 }
 impl KaigiRecord {
@@ -889,7 +886,7 @@ mod tests {
         record
             .participant_metadata
             .insert(record.host.clone(), Metadata::default());
-        #[cfg(feature = "json")]
+
         {
             let ordinary = norito::json::to_json(&record).expect("serialize call record JSON");
             assert_eq!(
@@ -994,7 +991,7 @@ mod tests {
         let decoded: NewKaigi = decode_adaptive(&bytes).expect("decode create kaigi payload");
         assert_eq!(decoded, call);
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn kaigi_json_requires_explicit_room_policy() {
         let domain = DomainId::try_new("kaigi", "universal").expect("domain");
@@ -1161,5 +1158,5 @@ mod tests {
     }
 }
 
-#[cfg(all(test, feature = "json"))]
+#[cfg(test)]
 mod final_wire_tests;

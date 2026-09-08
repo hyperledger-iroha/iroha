@@ -1,7 +1,7 @@
 
             struct Pair { int first, int second }
 
-            fn set(int index) -> bool {
+            fn set(int index) -> Result<(), ListError> {
                 var List<Pair, 1> values = [Pair { first: 1, second: 2 }];
                 let Pair replacement = Pair { first: 3, second: 4 };
                 values.try_set(
@@ -10,7 +10,7 @@
                 )
             }
 
-            fn push() -> bool {
+            fn push() -> Result<(), ListError> {
                 var List<Pair, 1> values = [Pair { first: 1, second: 2 }];
                 let Pair replacement = Pair { first: 3, second: 4 };
                 values.try_push(replacement)

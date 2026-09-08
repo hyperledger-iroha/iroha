@@ -24,16 +24,24 @@ pub enum PrivacyActivationStatementLimitsError {
     },
 }
 /// Validated raw proof payload for a protocol-specific proof variant.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
+    norito::NoritoSchema,
 )]
-#[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::PrivacyProofBytesV1")]
 pub struct PrivacyProofBytesV1 {
     /// Exact native proof encoding.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
+    #[norito(json = "crate::json_helpers::base64_vec")]
     pub bytes: Vec<u8>,
 }
 impl PrivacyProofBytesV1 {
@@ -78,15 +86,20 @@ impl PrivacyProofBytesV1 {
     }
 }
 /// Action-typed native ZK-AMS proof.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "action", content = "proof", deny_unknown_fields)
-)]
+#[norito(tag = "action", content = "proof", deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::IrohaZkAmsProofV1")]
 pub enum IrohaZkAmsProofV1 {
@@ -130,16 +143,13 @@ impl IrohaZkAmsProofV1 {
 /// Protocol-typed native proof payload.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[norito(schema_name = "iroha.privacy.proof.v1")]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "protocol", content = "proof", deny_unknown_fields)
-)]
+#[derive(crate :: DeriveJsonSerialize, crate :: DeriveJsonDeserialize)]
+#[norito(tag = "protocol", content = "proof", deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::privacy::PrivacyProofV1", frame = "iroha.privacy.proof.v1")]
+#[norito_schema(
+    name = "iroha_data_model::privacy::PrivacyProofV1",
+    frame = "iroha.privacy.proof.v1"
+)]
 pub enum PrivacyProofV1 {
     /// ZK-ACE post-quantum authorization proof.
     ZkAcePqAuthorizationV1(PrivacyProofBytesV1),
@@ -969,13 +979,13 @@ pub enum PrivacyProofValidationError {
 /// Complete protocol-bound privacy proof admission envelope.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[norito(schema_name = "iroha.privacy.proof-envelope.v1")]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(crate :: DeriveJsonSerialize, crate :: DeriveJsonDeserialize)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::privacy::PrivacyProofEnvelopeV1", frame = "iroha.privacy.proof-envelope.v1")]
+#[norito_schema(
+    name = "iroha_data_model::privacy::PrivacyProofEnvelopeV1",
+    frame = "iroha.privacy.proof-envelope.v1"
+)]
 pub struct PrivacyProofEnvelopeV1 {
     /// Mandatory first-release wire marker; invalid markers fail decoding.
     pub wire_magic: PrivacyProofWireMagicV1,

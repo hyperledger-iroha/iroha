@@ -2,7 +2,7 @@
 
 This ledger records the implementation and qualification work for the final V1
 privacy stack. It is not an audit certificate or permission to activate an
-unqualified protocol. Source observations below were checked on 2026-09-06 in a
+unqualified protocol. Source observations below were checked on 2026-09-06–07 in a
 shared working tree; they do not identify a sealed release candidate.
 
 ## Final interface contracts
@@ -202,13 +202,15 @@ those bridge link attributes preserves dependency ownership and passes complete-
 archive consumer linking on ARM macOS, ARM iOS and x86-64 macOS in an isolated
 control reproducer; the ARM host SHA3 known-answer test passes. The unchanged
 control reproduces the duplicate-symbol failure on all three targets. The actual
-bridge source is corrected. A fresh complete five-target build is running from
+bridge source is corrected. A subsequent complete five-target build started from
 immutable overlay manifest `c1e13661ade2148661fa620425a66846cd18af41ec31a53b7ab2043df5c37983`.
 It precedes the subsequent Swift request-cache change and Python dependency
 owner correction; it cannot qualify the later moving checkout. Its first iOS
 target finished in 64m49s; after the prior process stopped, the same frozen
-build resumed using its existing target cache. No complete XCFramework or
-Swift native runtime pass is recorded yet.
+build resumed using its existing target cache. The later host restart deleted
+that temporary snapshot and build cache. It produced no complete XCFramework or
+Swift native runtime pass. A new durable shared source capture and official
+five-target build are required.
 
 The previous complete optimized proof-crate run finished with 1,294 passes,
 four failures and 13 explicitly ignored resource/generator tests. All four
@@ -246,15 +248,16 @@ bytes. The test binary SHA256 is
 Its log, owned-source hashes and result are retained under the ignored
 `target/privacy-release-evidence/2026-09-07-recovery/` directory.
 
-The earlier captured Core backend passes three tests in 988.65s, including both
-authorization routes and all 62 row mutations; that capture predates the final
-circuit cleanup and lifecycle cutover. Current source connects mandatory host
-authorization, on-chain leave/rejoin, final usage, storage reservations and
-retained original-account dependencies. The registered combined Core unit and
-integration targets await a coherent source capture; there is no final
-lifecycle pass yet. The machine restarted before the preceding combined build
-produced an executable, and cleared its temporary logs and frozen Apple build.
-Those temporary artifacts cannot qualify the current candidate.
+The fresh combined build completed successfully in 564.62s. All three actual
+Kaigi integration tests pass, exercising the final native authorization/usage
+backend and lifecycle. The scoped Core unit selection passes 96 of 97 tests;
+the remaining test used generic error display instead of asserting the typed
+registry-capacity error. Its assertion is corrected, with update, rejection,
+rollback and above-cap retirement checks retained; verification awaits the
+next combined capture. This build records 23 unrelated SoraFS-node source
+changes and does not claim an immutable whole-workspace candidate. The earlier
+host restart cleared temporary logs and the frozen Apple build; those lost
+artifacts cannot qualify this candidate.
 
 The final wire previously passed 15 exact Rust/Python/Kotlin vectors and three
 modulus-negative archives. Fresh post-restart account decoding passes 42 tests
@@ -262,20 +265,58 @@ in 0.65s, including every declared Norito layout. The shared Rust-owned fixture
 contains 16 complete controller positives (all eleven algorithms, full weighted
 and mixed policies, and 256 members) and seven malformed policy negatives. Its
 SHA256 is `054f16109e6525d06565ef55d26a39b9291fad6831a39bcdd7d18cb1e232ffa6`.
-Kotlin/Java now pass 40 scoped tests, including actual Rust transfer and account
-fixture parity. Full-controller C# and Swift managed diagnostic suites pass
-5,689 and 79 cases; their final fixture/native package runs are still pending.
-Python now calls the required canonical Rust identity validators instead of
-restricting Kaigi to ASCII and Ed25519; its earlier 51 tests precede this change,
-and fresh installed-wheel validation is required.
+Kotlin/Java previously passed 40 scoped wire tests; C# and Swift managed
+diagnostics passed 5,690 and 80 cases. These predate the malformed-key correction:
+C# accepted 11 of 12 malformed vectors, Swift/JavaScript/Kotlin accepted nine,
+and both Python address implementations accepted seven. Public address and key
+admission now requires the Rust cryptographic owner. Kotlin removes global
+curve switches and duplicate parser APIs; its updated Kotlin/Java sources
+compile with JDK 8 API enforcement. Three boundary tests pass, including a
+fresh JVM checking eight missing-native failures and a signed-u64 multihash
+length regression. Current native positives and package qualification remain
+pending. Python's transport-independent `iroha-native` wheel owns the extension;
+the pure full SDK depends on it and Torii account operations require it. Its
+Rust test-target check passes in 2m44s, but actual two-wheel installation and
+native fixture execution remain required. Signing restrictions remain at
+actual signing operations instead of rejecting generic account identities.
 
 Node authorization and usage generators use the final 31/25-row circuits,
 retain only public proving material between calls, and self-verify generated
 canonical envelopes through Core. Supplied mutable blinding views are cleared
-on success and failure. Source/type/browser/publication checks pass; actual
-new native proofs and a frozen official addon build remain pending. The prior
-native authorization run predates these final generator changes. None of these
+on success and failure. The actual Rust JS-host suite passes 21 tests in 772.99s,
+including both real proofs, all 31/25 row mutations, context and wipe controls.
+Its unchanged executable SHA256 is
+`7f1341545c01be00b72df7adb1a7f25d1694d1b4b0059c12b0d6b230e93d2ce0`.
+The frozen official addon and package tests remain pending. None of these
 results attests deployment, relay transport or release readiness.
+
+The FASTPQ balance-key migration passes 181 focused model/prover tests, including
+four account display discriminants crossed with all ten Norito layouts. The
+sole `FastpqBalanceKeyV1` canonical frame replaces display-text key material;
+it binds the full asset identity and account controller. All 11 Core integration
+tests pass. The regenerated raw64 proof independently replays successfully;
+its 1,138,854 bytes have SHA256
+`46f4011476733460bf772e25fc11d0c8edfbc889aabf2647e503f8ca88b5e5b9`.
+It exceeds the production 512-KiB cap and qualifies only its diagnostic budget.
+The coupled JSON CLI, Torii recovery batch producer and Core persisted-proof
+writer now use the sole canonical public model frames and bounded encoders;
+these subsequent corrections await the next capture.
+
+A fresh independent Python/Metal diagnostic compiles the unchanged production
+six-lane kernel and passes all 204 output words across 23 canonical frames,
+four arithmetic boundary frames and seven invalid descriptors on the M1 Ultra.
+Twelve extra dispatched threads preserve the 96-byte output guard. Source
+hashes remain unchanged throughout the run; input, shader, compiler, executable,
+output and log hashes are retained under
+`target/privacy-release-evidence/2026-09-07-recovery/metal-current/`.
+The evidence manifest SHA256 is
+`f74b0b8ad86200efbcfb5047dea269069325530c12938b86aa1f7750f099769f`.
+Separately, the captured Metal-enabled Rust prover passes 68 device/runtime
+tests: ten digest tests, two native Merkle tests and 56 Metal runtime tests,
+including staging, allocation, cleanup and injected failures. The executable
+SHA256 is `dd5b547358846978f03ea350afd9105173a5ce80abf2942f6a70ac1678490b2c`.
+Neither selection qualifies a complete GPU proof, CUDA hardware or the release
+qualification workflow.
 
 The captured four-validator harness compiles, but its first runtime attempt
 stopped before peer startup on a stale X509 status expectation: the current

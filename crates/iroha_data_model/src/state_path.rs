@@ -72,7 +72,7 @@ impl StatePath {
     }
 
     /// Parse one canonical JSON object-key spelling with bounded decode accounting.
-    #[cfg(feature = "json")]
+
     pub(crate) fn parse_json_object_key(candidate: &str) -> Result<Self, norito::json::Error> {
         Self::validate_str(candidate)
             .map_err(|error| norito::json::Error::Message(error.reason().into()))?;
@@ -96,7 +96,8 @@ impl StatePath {
             .ok_or(NoritoError::LengthMismatch)?;
         let value = core::str::from_utf8(raw).map_err(|_| NoritoError::InvalidUtf8)?;
         norito::core::reserve_decode_allocation(len)?;
-        let path = Self::parse(value).map_err(|error| NoritoError::Message(error.reason.into()))?;
+        let path =
+            Self::parse(value).map_err(|error| NoritoError::Message(error.reason().into()))?;
         norito::core::note_payload_access(bytes, end);
         Ok((path, end))
     }
@@ -113,7 +114,8 @@ impl norito::core::SerializePayload for StatePath {
         <&str as norito::core::SerializePayload>::encoded_len_exact(&self.as_ref())
     }
 }
-impl<'a> norito::core::NoritoDeserialize<'a> for StatePath {
+impl norito::core::NoritoDeserialize<'_> for StatePath {}
+impl<'a> norito::core::DeserializePayload<'a> for StatePath {
     fn deserialize(archived: &'a norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived)
             .expect("StatePath deserialization must succeed for valid archives")
@@ -125,9 +127,9 @@ impl<'a> norito::core::NoritoDeserialize<'a> for StatePath {
         if let Ok(payload) = norito::core::payload_slice_from_ptr(ptr) {
             return Self::decode_wire(payload).map(|(path, _)| path);
         }
-        let string = norito::core::NoritoDeserialize::deserialize(archived.cast::<String>());
+        let string = norito::core::DeserializePayload::deserialize(archived.cast::<String>());
         Self::from_str(string.as_str())
-            .map_err(|error| norito::core::Error::Message(error.reason.into()))
+            .map_err(|error| norito::core::Error::Message(error.reason().into()))
     }
 }
 impl AsRef<str> for StatePath {
@@ -167,7 +169,7 @@ impl<'a> DecodeFromSlice<'a> for StatePath {
         Self::decode_wire(bytes)
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::FastJsonWrite for StatePath {
     fn write_json(&self, out: &mut String) {
         norito::json::JsonSerialize::json_serialize(self.as_ref(), out);
@@ -179,13 +181,13 @@ impl norito::json::FastJsonWrite for StatePath {
         norito::json::write_json_string_to(self.as_ref(), out)
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonDeserialize for StatePath {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
     ) -> Result<Self, norito::json::Error> {
         let value = parser.parse_string()?;
-        Self::from_str(&value).map_err(|error| norito::json::Error::Message(error.reason.into()))
+        Self::from_str(&value).map_err(|error| norito::json::Error::Message(error.reason().into()))
     }
 }
 /// Prelude exports for durable state paths.
@@ -307,7 +309,7 @@ mod tests {
             .expect_err("oversized declaration must fail before reading a missing body");
         assert!(error.to_string().contains("16384-byte"));
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn json_roundtrip_and_decoder_enforce_validation() {
         let path =
@@ -324,7 +326,7 @@ mod tests {
             assert!(norito::json::from_str::<StatePath>(&invalid).is_err());
         }
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn storage_json_requires_exact_nfc_keys() {
         type StateStorage = mv::storage::Storage<StatePath, Vec<u8>>;

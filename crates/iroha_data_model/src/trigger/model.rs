@@ -3,9 +3,9 @@
 // It mirrors structures from this file.
 pub use self::model::*;
 use crate::{Identifiable, Name, Registered, metadata::Metadata, transaction::Executable};
-#[cfg(feature = "json")]
+
 use base64::Engine as _;
-#[cfg(feature = "json")]
+
 use base64::engine::general_purpose::STANDARD;
 use derive_more::{Constructor, Display, FromStr};
 use getset::Getters;
@@ -13,7 +13,7 @@ use iroha_data_model_derive::{IdEqOrdHash, model};
 use iroha_macro::ffi_impl_opaque;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
-#[cfg(feature = "json")]
+
 use norito::json::{self, JsonDeserialize, JsonSerialize};
 use std::{
     cmp, format,
@@ -133,10 +133,12 @@ mod candidate {
             }
         }
     }
-    impl<'de> norito::core::NoritoDeserialize<'de> for Trigger {
+    impl norito::core::NoritoDeserialize<'_> for Trigger {}
+    impl<'de> norito::core::DeserializePayload<'de> for Trigger {
         fn deserialize(archived: &'de norito::core::Archived<Trigger>) -> Self {
-            let candidate =
-                <TriggerCandidate as norito::core::NoritoDeserialize>::deserialize(archived.cast());
+            let candidate = <TriggerCandidate as norito::core::DeserializePayload>::deserialize(
+                archived.cast(),
+            );
             candidate.into_trigger()
         }
     }
@@ -200,7 +202,7 @@ mod candidate {
                 Some(owned_bytes.len())
             );
         }
-        #[cfg(feature = "json")]
+
         #[test]
         fn manual_trigger_json_families_have_closed_bounds() {
             fn assert_bounded<T: json::JsonSerialize>(value: &T) {
@@ -226,7 +228,7 @@ mod candidate {
         }
     }
 }
-#[cfg(feature = "json")]
+
 impl JsonSerialize for Trigger {
     fn json_serialize(&self, out: &mut String) {
         json::write_canonical_base64_json(self, out);
@@ -238,7 +240,7 @@ impl JsonSerialize for Trigger {
         json::write_canonical_base64_json_to(self, out)
     }
 }
-#[cfg(feature = "json")]
+
 impl JsonDeserialize for Trigger {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         let encoded = parser.parse_string()?;
@@ -598,7 +600,7 @@ pub mod action {
             .expect("scheduled time triggers accept retry policies");
             let bytes = norito::to_bytes(&action).expect("serialize action");
             let decoded = norito::from_bytes::<Action>(&bytes).expect("decode action bytes");
-            let restored = norito::core::NoritoDeserialize::try_deserialize(decoded)
+            let restored = norito::core::DeserializePayload::try_deserialize(decoded)
                 .expect("deserialize action");
             assert_eq!(restored, action);
         }
@@ -615,7 +617,7 @@ pub mod action {
             };
             let bytes = norito::to_bytes(&invalid_action).expect("serialize invalid action wire");
             let archived = norito::from_bytes::<Action>(&bytes).expect("decode action bytes");
-            let err = norito::core::NoritoDeserialize::try_deserialize(archived)
+            let err = norito::core::DeserializePayload::try_deserialize(archived)
                 .expect_err("invalid action must be rejected");
             assert!(
                 err.to_string()
@@ -639,7 +641,7 @@ pub mod action {
             };
             let bytes = norito::to_bytes(&invalid_action).expect("serialize invalid action wire");
             let archived = norito::from_bytes::<Action>(&bytes).expect("decode action bytes");
-            let err = norito::core::NoritoDeserialize::try_deserialize(archived)
+            let err = norito::core::DeserializePayload::try_deserialize(archived)
                 .expect_err("mismatched action authority must be rejected");
             assert!(
                 err.to_string()
@@ -667,7 +669,7 @@ pub mod action {
             };
             let bytes = norito::to_bytes(&invalid_action).expect("serialize invalid action wire");
             let archived = norito::from_bytes::<Action>(&bytes).expect("decode action bytes");
-            let err = norito::core::NoritoDeserialize::try_deserialize(archived)
+            let err = norito::core::DeserializePayload::try_deserialize(archived)
                 .expect_err("retry policy on non-scheduled action must be rejected");
             assert!(
                 err.to_string()
@@ -675,7 +677,7 @@ pub mod action {
                 "unexpected error: {err}"
             );
         }
-        #[cfg(feature = "json")]
+
         #[test]
         fn action_with_retry_policy_json_roundtrip() {
             let authority = account_in("wonderland");
@@ -715,7 +717,7 @@ pub mod action {
             norito::json::from_json::<Action>(&alternate_json)
                 .expect_err("alternate-layout action JSON must be rejected");
         }
-        #[cfg(feature = "json")]
+
         #[test]
         fn action_json_deserialize_rejects_invalid_filter_without_panicking() {
             let authority = account_in("wonderland");
@@ -736,7 +738,7 @@ pub mod action {
                 "unexpected error: {err}"
             );
         }
-        #[cfg(feature = "json")]
+
         #[test]
         fn action_json_deserialize_rejects_non_base64_payload_without_panicking() {
             let err = norito::json::from_json::<Action>(r#""not valid base64!!!""#)
@@ -746,7 +748,7 @@ pub mod action {
                 "unexpected error: {err}"
             );
         }
-        #[cfg(feature = "json")]
+
         #[test]
         fn action_json_deserialize_rejects_invalid_norito_payload_without_panicking() {
             let err = norito::json::from_json::<Action>(r#""AQIDBA==""#)
@@ -756,7 +758,7 @@ pub mod action {
                 "decode failure should produce a diagnostic"
             );
         }
-        #[cfg(feature = "json")]
+
         #[test]
         fn action_json_deserialize_rejects_non_string_payload_without_panicking() {
             let err = norito::json::from_json::<Action>(r#"{"not":"an action"}"#)
@@ -766,7 +768,7 @@ pub mod action {
                 "wrong JSON shape should produce a diagnostic"
             );
         }
-        #[cfg(feature = "json")]
+
         #[test]
         fn action_json_deserialize_rejects_mismatched_execute_authority_without_panicking() {
             let authority = account_in("wonderland");
@@ -790,7 +792,7 @@ pub mod action {
                 "unexpected error: {err}"
             );
         }
-        #[cfg(feature = "json")]
+
         #[test]
         fn action_json_deserialize_rejects_non_scheduled_retry_policy_without_panicking() {
             let authority = account_in("wonderland");
@@ -858,7 +860,7 @@ pub mod action {
             matches!(self, Repeats::Exactly(0))
         }
     }
-    #[cfg(feature = "json")]
+
     impl JsonSerialize for Repeats {
         fn json_serialize(&self, out: &mut String) {
             out.push('{');
@@ -893,7 +895,7 @@ pub mod action {
             Ok(())
         }
     }
-    #[cfg(feature = "json")]
+
     impl JsonDeserialize for Repeats {
         fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
             parser.skip_ws();
@@ -918,7 +920,7 @@ pub mod action {
             Ok(result)
         }
     }
-    #[cfg(feature = "json")]
+
     impl JsonSerialize for Action {
         fn json_serialize(&self, out: &mut String) {
             json::write_canonical_base64_json(self, out);
@@ -930,7 +932,7 @@ pub mod action {
             json::write_canonical_base64_json_to(self, out)
         }
     }
-    #[cfg(feature = "json")]
+
     impl JsonDeserialize for Action {
         fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
             let encoded = parser.parse_string()?;
@@ -941,7 +943,7 @@ pub mod action {
                 .map_err(|err| json::Error::Message(err.to_string()))
         }
     }
-    #[cfg(feature = "json")]
+
     impl JsonSerialize for TimeTriggerRetryPolicy {
         fn json_serialize(&self, out: &mut String) {
             json::write_canonical_base64_json(self, out);
@@ -953,7 +955,7 @@ pub mod action {
             json::write_canonical_base64_json_to(self, out)
         }
     }
-    #[cfg(feature = "json")]
+
     impl JsonDeserialize for TimeTriggerRetryPolicy {
         fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
             let encoded = parser.parse_string()?;
@@ -1034,7 +1036,8 @@ pub mod action {
                 })
             }
         }
-        impl<'de> norito::core::NoritoDeserialize<'de> for Action {
+        impl norito::core::NoritoDeserialize<'_> for Action {}
+        impl<'de> norito::core::DeserializePayload<'de> for Action {
             fn deserialize(archived: &'de norito::core::Archived<Action>) -> Self {
                 Self::try_deserialize(archived).expect("invalid Action")
             }
@@ -1042,7 +1045,7 @@ pub mod action {
                 archived: &'de norito::core::Archived<Action>,
             ) -> Result<Self, norito::core::Error> {
                 let candidate =
-                    <ActionCandidate as norito::core::NoritoDeserialize>::try_deserialize(
+                    <ActionCandidate as norito::core::DeserializePayload>::try_deserialize(
                         archived.cast(),
                     )?;
                 candidate
@@ -1156,7 +1159,7 @@ mod tests {
         assert!(!Repeats::Exactly(1).is_depleted());
         assert!(Repeats::Exactly(0).is_depleted());
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn repeats_json_roundtrip() {
         let exact = Repeats::Exactly(3);

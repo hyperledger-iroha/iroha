@@ -5,7 +5,6 @@
 //! complete Guard certificates. Canonical decoding and shape validation never grant monetary
 //! authority; Core and a qualified non-forking hardware provider must perform that work.
 
-#[cfg(feature = "json")]
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
@@ -32,8 +31,17 @@ pub const KAGEMUSHA_DEVICE_MINT_STAGE_DISPOSITION_EXACT_DUPLICATE_V1: u8 = 1;
 ///
 /// The nested values remain canonical independent archives so hardware can validate their exact
 /// byte identities before it mutates its rollback-resistant inbox.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
@@ -43,10 +51,10 @@ pub struct KagemushaDeviceMintStageCommandV1 {
     /// Secure-device lifecycle version.
     pub version: u16,
     /// Exact canonical pre-debit authorization bytes.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
+    #[norito(json = "crate::json_helpers::base64_vec")]
     pub canonical_authorization: Vec<u8>,
     /// Exact canonical finalized mint-credit bytes.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
+    #[norito(json = "crate::json_helpers::base64_vec")]
     pub canonical_mint_credit: Vec<u8>,
 }
 
@@ -55,8 +63,18 @@ pub struct KagemushaDeviceMintStageCommandV1 {
 /// The complete hardware Guard certificate remains in native authenticated storage. The bounded
 /// lifecycle response authenticator separately binds this result and must be verified by the
 /// qualified platform adapter.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
@@ -68,7 +86,7 @@ pub struct KagemushaDeviceMintStageResultV1 {
     /// Zero for a new stage, one for an exact pending/consumed duplicate.
     pub disposition: u8,
     /// Nonzero identity of the supplied finalized credit.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub credit_id: [u8; 32],
 }
 

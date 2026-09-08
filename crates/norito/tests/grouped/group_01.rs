@@ -62,3 +62,5 @@ mod combo_u32_delta_prop;
 mod compact_len_collections;
 #[path = "../compact_stream.rs"]
 mod compact_stream;
+#[path = "../decode_validation.rs"]
+mod decode_validation;

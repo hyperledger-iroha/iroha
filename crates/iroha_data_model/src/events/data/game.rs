@@ -3,11 +3,21 @@ use iroha_crypto::Hash;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 /// A native game session revision; query the session for its complete bounded record.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_data_model::events::data::game::GameSessionEventV1")]
 pub struct GameSessionEventV1 {
     /// Exact session identifier.
     pub session_id: Hash,

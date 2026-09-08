@@ -1,7 +1,7 @@
 //! Tests covering payload framing helpers tied to the decode context.
 use iroha_schema::IntoSchema;
 use norito::{
-    NoritoDeserialize, NoritoSerialize,
+    DeserializePayload, NoritoDeserialize, NoritoSerialize,
     core::{
         Error as CoreError, PayloadCtxGuard, frame_current_payload_with_default_header,
         reset_decode_state,
@@ -29,7 +29,7 @@ fn frame_current_payload_roundtrips_bytes() {
     };
     let bytes = to_bytes(&sample).expect("encode sample");
     let archived = from_bytes::<FrameSample>(&bytes).expect("decode view");
-    let decoded = <FrameSample as NoritoDeserialize>::deserialize(archived);
+    let decoded = <FrameSample as DeserializePayload>::deserialize(archived);
     assert_eq!(decoded, sample);
     let reframed = frame_current_payload_with_default_header::<FrameSample>()
         .expect("reframe payload using context");

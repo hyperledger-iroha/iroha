@@ -394,7 +394,7 @@ fn active_policy_allows_balance_neutral_permissionless_contract_deployment_steps
                 entrypoints: None,
                 states: None,
                 kotoba: None,
-                error_codes: None,
+                error_types: None,
                 provenance: None,
             },
         }

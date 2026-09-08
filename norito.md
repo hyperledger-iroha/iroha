@@ -14,6 +14,40 @@ implement or derive `SerializePayload` without acquiring a root-frame identity;
 generic frame writers require `NoritoSerialize` explicitly. This separation
 does not change the V1 header, payload layout, checksum or signed bytes.
 
+`DeserializePayload<'a>` owns `deserialize` and `try_deserialize` within the
+active bounded payload context. `NoritoDeserialize<'a>` adds the typed frame
+contract and currently retains its independent `schema_hash`; it has no second
+reconstruction implementation. `NoritoDeserialize`/`Decode` derives emit both
+contracts. `#[derive(DeserializePayload)]` emits only payload reconstruction and
+rejects frame-schema attributes. The planned `NoritoSchema` cutover remains
+separate: it will bind both typed directions to the declared identity and remove
+their independent hash methods together.
+
+Bare `Decode` requires `for<'de> DeserializePayload<'de> + SerializePayload`.
+Canonical field/container decoders use those payload contracts for
+reconstruction and byte comparison; exact slice helpers use `DeserializePayload`
+with `DecodeFromSlice`. They do not require a frame identity. Typed frame callers
+explicitly require the appropriate `NoritoSerialize`/`NoritoDeserialize`
+contracts. Option fields use the same
+canonical child decoder as other owned fields, preserving advertised layout
+flags and field, allocation and nesting limits. Option, tuple and result slice
+decoders reject unread bytes inside a declared child field with a typed length
+error in every build profile; bytes after the complete outer value remain
+available to a prefix-decoding caller.
+
+`Decode`/`NoritoDeserialize` and `DeserializePayload` derives accept
+`#[norito(validate = "path")]` for fallible owner validation. The function
+consumes the reconstructed value and returns `Result<Self, norito::Error>`;
+typed errors propagate unchanged. Each successful reconstruction invokes the
+hook once, including generated slice decoders and unit records. Serializers
+and JSON decoders do not invoke this binary hook. Validation must preserve
+canonical fields rather than normalize external input.
+
+`MultisigPolicy` and `MultisigMember` use this hook to call their existing
+checked constructors directly. Their private field carriers serve strict JSON
+decoding only; binary decoding retains the public owners' declared identities
+and does not cast archived values to a second wire type.
+
 ## Header
 
 The Norito header is always present on wire and on disk. It frames the payload
@@ -199,6 +233,12 @@ admission, or buffer reservation. This prevents a recursive or incorrect
 length oracle from exhausting the stack, forcing a payload-sized speculative
 allocation, or understating the bytes accepted by the output pass.
 
+Unit-record size hints use the same zero-field layout calculation as other
+structures. An offset-table packed unit contains one zero `u64` offset (eight
+bytes); its sequential and field-bitset layouts contain no field bytes. Both
+length diagnostics reflect those existing serialized bytes. Canonical framing
+continues to measure actual serialization rather than trust either hint.
+
 Use `canonical_frame_len` to count the exact uncompressed V1 frame emitted by
 `encode_canonical`, including for resource admission and length-prefixed hashes.
 Both ignore ambient layout guards and restore the caller's guard on return.
@@ -236,11 +276,18 @@ Resource-limit and allocation errors are terminal. The V1 decoder never retries
 the same bytes through an alternate layout after a budget has rejected them;
 the header flags select the only layout used for that frame.
 
-Derived packed structures validate the complete boundary after their declared
-fields, for both offset tables and field-bitset layouts. A valid checksum does
-not make trailing bytes part of a structure. Explicit prefix-field decoding
-reports only the bytes belonging to that field so the enclosing decoder can
-read its following fields.
+Both `Ok` and `Err` branches of the result slice decoder enter the shared
+nesting guard before decoding their bounded child. The guard restores the
+previous depth on success, child error or consumed-length rejection, including
+when another decode follows inside the same active limit scope.
+
+Canonical field/frame decoding of derived packed structures validates the
+complete boundary for both offset tables and field-bitset layouts. A valid
+checksum does not make trailing bytes part of a structure. Unit records retain
+the existing canonical byte comparator for their layout metadata: zero fields
+do not imply a zero-byte payload. Their validation hook does not assert a zero
+consumed offset. Explicit prefix-field decoding reports only the bytes belonging
+to that field so the enclosing decoder can read its following fields.
 
 Nested decode scopes may tighten but never relax an outer budget. Binary value
 decoding is sequential in V1, so its budget counters stay in the calling decode

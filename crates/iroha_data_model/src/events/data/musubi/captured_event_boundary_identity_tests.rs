@@ -1,0 +1,72 @@
+//! Source-bound compiler identities for this event capability's existing owners.
+
+use crate::events::captured_event_boundary_identity_tests::check;
+
+#[test]
+fn captured_event_codec_schema_identities() {
+    check::<super::MusubiEvent>(
+        "iroha_data_model::events::data::musubi::model::MusubiEvent",
+        "c9e2d60f6fd22455e23e7cdb81ff1ac0",
+        "c9e2d60f6fd22455e23e7cdb81ff1ac0",
+    );
+    check::<super::MusubiPackageClaimedEventV1>(
+        "iroha_data_model::events::data::musubi::model::MusubiPackageClaimedEventV1",
+        "bfde8e7b6f9431fa42c441f1ed55a20e",
+        "bfde8e7b6f9431fa42c441f1ed55a20e",
+    );
+    check::<super::MusubiReleasePublishedEventV1>(
+        "iroha_data_model::events::data::musubi::model::MusubiReleasePublishedEventV1",
+        "1f5d43590294b8049ab67d09d00ffb2a",
+        "1f5d43590294b8049ab67d09d00ffb2a",
+    );
+    check::<super::MusubiReleaseYankEventV1>(
+        "iroha_data_model::events::data::musubi::model::MusubiReleaseYankEventV1",
+        "f1727c4668cca8e5b1b7dce3a1c719e9",
+        "f1727c4668cca8e5b1b7dce3a1c719e9",
+    );
+    check::<super::MusubiPackageMemberRemovedEventV1>(
+        "iroha_data_model::events::data::musubi::model::MusubiPackageMemberRemovedEventV1",
+        "3c3ea8e0d76b251798576cd481406fd2",
+        "3c3ea8e0d76b251798576cd481406fd2",
+    );
+    check::<super::MusubiMaintainerInvitationLifecycleEventV1>(
+        "iroha_data_model::events::data::musubi::model::MusubiMaintainerInvitationLifecycleEventV1",
+        "b211b907accb6d7f46edcc642b4c304f",
+        "b211b907accb6d7f46edcc642b4c304f",
+    );
+    check::<super::MusubiPackageRecoveredEventV1>(
+        "iroha_data_model::events::data::musubi::model::MusubiPackageRecoveredEventV1",
+        "734aafdf1296e420910e46d274856836",
+        "734aafdf1296e420910e46d274856836",
+    );
+    check::<super::MusubiArchiveRegisteredEventV1>(
+        "iroha_data_model::events::data::musubi::model::MusubiArchiveRegisteredEventV1",
+        "0912080ea9955160bc68f7f24a10ecdf",
+        "0912080ea9955160bc68f7f24a10ecdf",
+    );
+    check::<super::MusubiProviderBundleAttestationRegisteredEventV1>(
+        "iroha_data_model::events::data::musubi::model::MusubiProviderBundleAttestationRegisteredEventV1",
+        "17d9816751536e5c7394d8eefbe9d1a6",
+        "17d9816751536e5c7394d8eefbe9d1a6",
+    );
+    check::<super::MusubiArchiveLocationTransitionV1>(
+        "iroha_data_model::events::data::musubi::model::MusubiArchiveLocationTransitionV1",
+        "b1f7dc3881562a8bbdb2bab160c8c6da",
+        "b1f7dc3881562a8bbdb2bab160c8c6da",
+    );
+    check::<super::MusubiArchiveLocationEventV1>(
+        "iroha_data_model::events::data::musubi::model::MusubiArchiveLocationEventV1",
+        "c2e909ac30896b58d4f09eff3e9d9910",
+        "c2e909ac30896b58d4f09eff3e9d9910",
+    );
+    check::<super::MusubiArtifactTakedownEventV1>(
+        "iroha_data_model::events::data::musubi::model::MusubiArtifactTakedownEventV1",
+        "05d3b133741385806efa1de6c4f1c4af",
+        "05d3b133741385806efa1de6c4f1c4af",
+    );
+    check::<super::MusubiRegistryPolicyEventV1>(
+        "iroha_data_model::events::data::musubi::model::MusubiRegistryPolicyEventV1",
+        "4961668dd2d37e27e58d54ec58c0da1d",
+        "4961668dd2d37e27e58d54ec58c0da1d",
+    );
+}

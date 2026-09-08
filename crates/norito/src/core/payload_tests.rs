@@ -22,7 +22,8 @@ struct PayloadRecord<T> {
 }
 
 #[derive(crate::NoritoSerialize, crate::NoritoDeserialize, Debug, PartialEq)]
-struct FramedRecord<T> {
+#[cfg_attr(feature = "schema-structural", derive(iroha_schema::IntoSchema))]
+struct FramedRecord<T: iroha_schema::IntoSchema> {
     value: T,
     items: Vec<Option<T>>,
 }
@@ -35,10 +36,53 @@ enum PayloadVariant<T> {
 }
 
 #[derive(crate::NoritoSerialize)]
-enum FramedVariant<T> {
+#[cfg_attr(feature = "schema-structural", derive(iroha_schema::TypeId))]
+enum FramedVariant<T: iroha_schema::IntoSchema> {
     Empty,
     Item(T),
     Named { value: T },
+}
+
+// Schema metadata for the named payload; this is not another codec owner.
+#[cfg(feature = "schema-structural")]
+#[derive(iroha_schema::IntoSchema)]
+#[allow(dead_code)]
+struct FramedVariantNamedFields<T: iroha_schema::IntoSchema> {
+    value: T,
+}
+
+#[cfg(feature = "schema-structural")]
+impl<T: iroha_schema::IntoSchema> iroha_schema::IntoSchema for FramedVariant<T> {
+    fn type_name() -> String {
+        format!("FramedVariant<{}>", T::type_name())
+    }
+
+    fn update_schema_map(map: &mut iroha_schema::MetaMap) {
+        if map.contains_key::<Self>() {
+            return;
+        }
+        map.insert::<Self>(iroha_schema::Metadata::Enum(iroha_schema::EnumMeta {
+            variants: vec![
+                iroha_schema::EnumVariant {
+                    tag: "Empty".to_owned(),
+                    discriminant: 0,
+                    ty: None,
+                },
+                iroha_schema::EnumVariant {
+                    tag: "Item".to_owned(),
+                    discriminant: 1,
+                    ty: Some(std::any::TypeId::of::<T>()),
+                },
+                iroha_schema::EnumVariant {
+                    tag: "Named".to_owned(),
+                    discriminant: 2,
+                    ty: Some(std::any::TypeId::of::<FramedVariantNamedFields<T>>()),
+                },
+            ],
+        }));
+        T::update_schema_map(map);
+        FramedVariantNamedFields::<T>::update_schema_map(map);
+    }
 }
 
 fn layouts() -> [u8; 4] {

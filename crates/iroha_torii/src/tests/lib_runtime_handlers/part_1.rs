@@ -31,9 +31,9 @@ use iroha_data_model::{
     block::{
         BlockHeader, BlockSignature, SignedBlock,
         consensus_v2::{
-            BlockSubject, ConsensusMode, ConsensusRound, DualQuorum,
-            ExecutionCommitment, GlobalPhase, HeightContext, PROTOCOL_VERSION,
-            QuorumCertificate, ValidatorPower, finality::V2FinalityArtifact,
+            BlockSubject, ConsensusMode, ConsensusRound, DualQuorum, ExecutionCommitment,
+            GlobalPhase, HeightContext, PROTOCOL_VERSION, QuorumCertificate, ValidatorPower,
+            finality::V2FinalityArtifact,
         },
     },
     consensus::{
@@ -2110,7 +2110,7 @@ fn mk_app_state_for_tests_with_world_and_options_and_network_id(
         vpn_state_lock: Arc::new(std::sync::Mutex::new(vpn::VpnRuntimeState::default())),
         soracloud_runtime: None,
         #[cfg(feature = "connect")]
-        torii_proxy_pending: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
+        torii_proxy_pending: Arc::new(parking_lot::Mutex::new(BTreeMap::new())),
         #[cfg(feature = "connect")]
         torii_proxy_completed: Arc::new(tokio::sync::Mutex::new(
             CompletedToriiProxyRequests::default(),

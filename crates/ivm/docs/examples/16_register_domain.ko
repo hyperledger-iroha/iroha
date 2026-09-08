@@ -1,6 +1,6 @@
 // Register a domain using the DomainId constructor.
 seiyaku RegisterDomain {
     hajimari() {
-        ledger::domain::register(DomainId::parse("wonderland.universal"));
+        ledger::domain::register(domain: DomainId::parse("wonderland.universal"));
     }
 }

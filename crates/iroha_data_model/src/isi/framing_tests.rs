@@ -4,9 +4,9 @@ use std::{cell::Cell, sync::Arc};
 
 use iroha_primitives::const_vec::ConstVec;
 use norito::core::{
-    Archived, DecodeFlagsGuard, Encoder, Error, Header, NoritoDeserialize, NoritoSerialize,
-    SerializePayload, encoded_payload_len, from_bytes, serialize_to_buffer, supported_header_flags,
-    to_bytes, validate_header_flags,
+    Archived, DecodeFlagsGuard, DeserializePayload, Encoder, Error, Header, NoritoDeserialize,
+    NoritoSerialize, SerializePayload, encoded_payload_len, from_bytes, serialize_to_buffer,
+    supported_header_flags, to_bytes, validate_header_flags,
 };
 
 use super::{INSTRUCTION_REGISTRY_OVERRIDE, InstructionBox, InstructionRegistry};
@@ -38,11 +38,12 @@ impl SerializePayload for CountedInstruction {
     }
 }
 
-impl<'a> NoritoDeserialize<'a> for CountedInstruction {
+impl NoritoDeserialize<'_> for CountedInstruction {
     fn schema_hash() -> [u8; 16] {
         <u8 as NoritoSerialize>::schema_hash()
     }
-
+}
+impl<'a> DeserializePayload<'a> for CountedInstruction {
     fn deserialize(archived: &'a Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("decode counted instruction")
     }

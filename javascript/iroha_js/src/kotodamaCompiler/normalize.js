@@ -1,3 +1,5 @@
+import { normalizeContractErrorTypesV1, validateManifestErrorTypeBindingsV1 } from "../contractErrorTypes.js";
+import { crc64Xz as noritoCrc64 } from "../crc64Xz.js";
 import { blake2b256 } from "../blake2b.js";
 import {
   KOTODAMA_V1_DYNAMIC_ACCESS_MAX_KEYS,
@@ -71,23 +73,11 @@ const TYPED_ARRAY_BYTE_LENGTH_GETTER = Object.getOwnPropertyDescriptor(
 // schema padding rather than the looser unknown-schema 64-byte fallback.
 const NORITO_EMBEDDED_INTERFACE_PADDING_BYTES = 0;
 const NORITO_COMPACT_LENGTHS_FLAG = 0x02;
-const NORITO_CRC64_MASK = 0xffff_ffff_ffff_ffffn;
-const NORITO_CRC64_POLYNOMIAL = 0xc96c5795d7870f42n;
 const EMBEDDED_INTERFACE_SCHEMA_HASH = Uint8Array.from([
   0x42, 0x78, 0xc4, 0x14, 0x19, 0x7d, 0x68, 0xd9,
   0xcb, 0xb2, 0xda, 0xde, 0xa7, 0x40, 0x23, 0x87,
 ]);
-const NORITO_CRC64_TABLE = Object.freeze(
-  Array.from({ length: 256 }, (_, index) => {
-    let crc = BigInt(index);
-    for (let bit = 0; bit < 8; bit += 1) {
-      crc = (crc & 1n) === 0n
-        ? crc >> 1n
-        : (crc >> 1n) ^ NORITO_CRC64_POLYNOMIAL;
-    }
-    return crc;
-  }),
-);
+
 
 // Keep the fail-closed boundary's exact diagnostics while avoiding 145
 // repeated `throw new TypeError(...)` constructor sequences in the minified
@@ -461,13 +451,7 @@ function readU64Le(bytes, offset, label) {
   return value;
 }
 
-function noritoCrc64(bytes) {
-  let crc = NORITO_CRC64_MASK;
-  for (const byte of bytes) {
-    crc = NORITO_CRC64_TABLE[Number((crc ^ BigInt(byte)) & 0xffn)] ^ (crc >> 8n);
-  }
-  return BigInt.asUintN(64, crc ^ NORITO_CRC64_MASK);
-}
+
 
 function equalBytes(left, right) {
   return left.length === right.length && left.every((byte, index) => byte === right[index]);
@@ -625,7 +609,7 @@ function validateEmbeddedInterfaceFrame(frame, manifest, headerMode, abiHashHex)
     [5, manifest.kotoba ?? [], "kotoba"],
     [6, manifest.entrypoints, "entrypoints"],
     [7, manifest.states, "states"],
-    [8, manifest.error_codes ?? [], "error_codes"],
+    [8, manifest.error_types ?? [], "error_types"],
   ]) {
     if (vectorCount(fields[fieldIndex], `${label}.${fieldLabel}`) !== manifestValue.length) {
       rejectType(
@@ -1048,7 +1032,7 @@ function validateDynamicAccessHints(value, label) {
     }
     requireString(hint.bound_kind, `${hintLabel}.bound_kind`);
     if (!isKotodamaV1DynamicAccessBoundKind(hint.bound_kind)) {
-      rejectType(`${hintLabel}.bound_kind must be exactly take or range`);
+      rejectType(`${hintLabel}.bound_kind must be exactly take or page`);
     }
     requireUnsignedInteger(
       hint.max_keys,
@@ -1247,7 +1231,7 @@ function validateCompilerEntrypoint(entry, index, names, lifecycleKinds) {
     }
     validateArgumentSchema(entry.argument_schema, entry.params, `${label}.argument_schema`);
   }
-  if ((entry.return_type === null) !== (entry.return_schema === null)) {
+  if (entry.return_type === null || entry.return_schema === null) {
     rejectType(`${label} return_type and return_schema must be present together`);
   }
   if (entry.return_schema !== null) {
@@ -1285,30 +1269,8 @@ function validateCompilerManifestStates(states) {
   });
 }
 
-function validateCompilerManifestErrorCodes(errorCodes) {
-  if (errorCodes === null) return;
-  requireDenseArray(errorCodes, "Kotodama manifest error_codes");
-  const paths = new Set();
-  const codes = new Set();
-  errorCodes.forEach((errorCode, index) => {
-    const label = `Kotodama manifest error code ${index}`;
-    requireExactKeys(errorCode, ["namespace", "name", "code"], label);
-    if (
-      !isCanonicalIdentifier(errorCode.namespace, { typeDeclaration: true }) ||
-      !isCanonicalIdentifier(errorCode.name)
-    ) {
-      rejectType(`${label} must use canonical namespace and variant identifiers`);
-    }
-    if (!Number.isSafeInteger(errorCode.code) || errorCode.code <= 0 || errorCode.code > U32_MAX) {
-      rejectType(`${label}.code must be a non-zero u32`);
-    }
-    const path = `${errorCode.namespace}::${errorCode.name}`;
-    if (paths.has(path) || codes.has(errorCode.code)) {
-      rejectType(`Kotodama manifest contains a duplicate error path or code at ${path}`);
-    }
-    paths.add(path);
-    codes.add(errorCode.code);
-  });
+function validateCompilerManifestErrorTypes(value) {
+  normalizeContractErrorTypesV1(value, "Kotodama manifest error_types");
 }
 
 function validateKotoba(value) {
@@ -1368,7 +1330,7 @@ function validateCompilerManifest(manifest) {
       "access_set_hints",
       "entrypoints",
       "states",
-      "error_codes",
+      "error_types",
       "kotoba",
       "provenance",
     ],
@@ -1397,7 +1359,8 @@ function validateCompilerManifest(manifest) {
     manifest.states,
     "Kotodama manifest access_set_hints",
   );
-  validateCompilerManifestErrorCodes(manifest.error_codes);
+  validateCompilerManifestErrorTypes(manifest.error_types);
+  validateManifestErrorTypeBindingsV1(manifest, "Kotodama manifest");
   validateKotoba(manifest.kotoba);
   validateProvenance(manifest.provenance);
 }

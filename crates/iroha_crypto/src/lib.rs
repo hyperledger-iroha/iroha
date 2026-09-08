@@ -1949,7 +1949,8 @@ impl norito::core::SerializePayload for PublicKeyCompact {
         )
     }
 }
-impl<'de> norito::core::NoritoDeserialize<'de> for PublicKeyCompact {
+impl norito::core::NoritoDeserialize<'_> for PublicKeyCompact {}
+impl<'de> norito::core::DeserializePayload<'de> for PublicKeyCompact {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("PublicKeyCompact decode")
     }
@@ -2548,7 +2549,8 @@ impl norito::core::SerializePayload for PublicKey {
         norito::core::SerializePayload::encoded_len_exact(&self.0)
     }
 }
-impl<'de> norito::core::NoritoDeserialize<'de> for PublicKey {
+impl norito::core::NoritoDeserialize<'_> for PublicKey {}
+impl<'de> norito::core::DeserializePayload<'de> for PublicKey {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("PublicKey decode")
     }
@@ -3146,7 +3148,8 @@ impl norito::core::SerializePayload for ExposedPrivateKey {
         norito::core::SerializePayload::serialize(&normalized, writer)
     }
 }
-impl<'de> norito::core::NoritoDeserialize<'de> for ExposedPrivateKey {
+impl norito::core::NoritoDeserialize<'_> for ExposedPrivateKey {}
+impl<'de> norito::core::DeserializePayload<'de> for ExposedPrivateKey {
     fn deserialize(archived: &'de norito::core::Archived<ExposedPrivateKey>) -> Self {
         Self::try_deserialize(archived).expect("ExposedPrivateKey normalization")
     }
@@ -3154,7 +3157,7 @@ impl<'de> norito::core::NoritoDeserialize<'de> for ExposedPrivateKey {
         archived: &'de norito::core::Archived<ExposedPrivateKey>,
     ) -> Result<Self, norito::core::Error> {
         let archived_str: &norito::core::Archived<String> = archived.cast();
-        let raw = <String as norito::core::NoritoDeserialize>::try_deserialize(archived_str)?;
+        let raw = <String as norito::core::DeserializePayload>::try_deserialize(archived_str)?;
         raw.parse::<ExposedPrivateKey>()
             .map_err(|err| norito::core::Error::Message(err.to_string()))
     }

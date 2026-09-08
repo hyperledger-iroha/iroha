@@ -8,7 +8,7 @@ use crate::conststr::ConstString;
 use core::fmt;
 use iroha_schema::{IntoSchema, TypeId};
 use norito::{
-    NoritoDeserialize, NoritoSerialize, SerializePayload, core as ncore,
+    DeserializePayload, NoritoDeserialize, NoritoSerialize, SerializePayload, core as ncore,
     json::{self, FastJsonWrite, JsonDeserialize, JsonSerialize},
 };
 pub use small_string::SmallStr;
@@ -83,14 +83,15 @@ mod small_string {
             <&str as SerializePayload>::serialize(&self.as_str(), writer)
         }
     }
-    impl<'a> NoritoDeserialize<'a> for SmallStr {
+    impl NoritoDeserialize<'_> for SmallStr {}
+    impl<'a> DeserializePayload<'a> for SmallStr {
         fn deserialize(archived: &'a ncore::Archived<Self>) -> Self {
             let archived_str: &ncore::Archived<String> = archived.cast();
-            let string = <String as NoritoDeserialize>::deserialize(archived_str);
+            let string = <String as DeserializePayload>::deserialize(archived_str);
             Self::from_string(string)
         }
         fn try_deserialize(archived: &'a ncore::Archived<Self>) -> Result<Self, ncore::Error> {
-            let string = <String as NoritoDeserialize>::try_deserialize(archived.cast())?;
+            let string = <String as DeserializePayload>::try_deserialize(archived.cast())?;
             // The String decoder has already admitted an exact owned allocation.
             // Transfer it instead of retaining a second, unaccounted copy.
             Ok(Self::from_string(string))
@@ -114,7 +115,7 @@ mod small_string {
 mod tests {
     use super::*;
     use norito::{
-        NoritoDeserialize, NoritoSerialize, SerializePayload,
+        DeserializePayload, NoritoDeserialize, NoritoSerialize, SerializePayload,
         codec::{Decode, Encode},
         core as ncore, decode_from_bytes, json, to_bytes,
     };
@@ -452,7 +453,7 @@ mod tests {
             let _payload = ncore::PayloadCtxGuard::enter(archived.bytes());
             let (decoded, usage) =
                 ncore::with_decode_limits_measured(smallstr_decode_limits(sample.len()), || {
-                    <SmallStr as NoritoDeserialize>::try_deserialize(archived.archived())
+                    <SmallStr as DeserializePayload>::try_deserialize(archived.archived())
                 });
             assert_eq!(
                 decoded.expect("exact retained-byte budget").as_ref(),
@@ -461,7 +462,7 @@ mod tests {
             assert_eq!(usage.total_allocated_bytes(), sample.len());
             let rejected = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 ncore::with_decode_limits(smallstr_decode_limits(sample.len() - 1), || {
-                    <SmallStr as NoritoDeserialize>::try_deserialize(archived.archived())
+                    <SmallStr as DeserializePayload>::try_deserialize(archived.archived())
                 })
             }));
             assert!(matches!(
@@ -675,7 +676,7 @@ mod tests {
         let archived = norito::core::from_bytes::<SmallVec<[u32; 4]>>(&bytes).expect("archive");
         let _payload_ctx = ncore::PayloadCtxGuard::enter_with_len(&[], 0);
         let decoded =
-            <SmallVec<[u32; 4]> as NoritoDeserialize>::try_deserialize(archived).expect("decode");
+            <SmallVec<[u32; 4]> as DeserializePayload>::try_deserialize(archived).expect("decode");
         assert!(decoded.is_empty());
     }
     #[test]
@@ -691,7 +692,8 @@ mod tests {
                 Ok(())
             }
         }
-        impl<'a> NoritoDeserialize<'a> for Zst {
+        impl NoritoDeserialize<'_> for Zst {}
+        impl<'a> DeserializePayload<'a> for Zst {
             fn deserialize(_: &'a ncore::Archived<Self>) -> Self {
                 Self
             }
@@ -933,9 +935,13 @@ mod small_vector {
             Ok(())
         }
     }
-    impl<'a, A: Array> NoritoDeserialize<'a> for SmallVec<A>
+    impl<'a, A: Array> NoritoDeserialize<'a> for SmallVec<A> where
+        A::Item: NoritoDeserialize<'a> + for<'slice> ncore::DecodeFromSlice<'slice>
+    {
+    }
+    impl<'a, A: Array> DeserializePayload<'a> for SmallVec<A>
     where
-        A::Item: NoritoDeserialize<'a> + for<'slice> ncore::DecodeFromSlice<'slice>,
+        A::Item: DeserializePayload<'a> + for<'slice> ncore::DecodeFromSlice<'slice>,
     {
         fn deserialize(archived: &'a ncore::Archived<Self>) -> Self {
             Self::try_deserialize(archived).unwrap_or_else(|err| {

@@ -1,3 +1,4 @@
+import { rejectRange, rejectType } from "./validationThrow.js";
 import { Buffer } from "buffer";
 import { sha256 } from "@noble/hashes/sha2";
 
@@ -73,7 +74,7 @@ function parseSumeragiNexusFeeReceipt(value, context) {
   );
   const version = parseSumeragiUnsigned(record.version, `${context}.version`, { max: 0xffff });
   if (version !== 1) {
-    throw new RangeError(`${context}.version must equal 1`);
+    rejectRange(`${context}.version must equal 1`);
   }
   return Object.freeze({
     version,
@@ -193,7 +194,7 @@ function parseSumeragiNativeAmxBody(value, context) {
     (participantPreviousHeight === 0) !== (participantPreviousDescriptorHash === null) ||
     minQuorum !== expectedQuorum
   ) {
-    throw new RangeError(`${context} contains inconsistent round or quorum fields`);
+    rejectRange(`${context} contains inconsistent round or quorum fields`);
   }
   return Object.freeze({
     round,
@@ -323,14 +324,14 @@ const SUMERAGI_NATIVE_SETTLEMENT_HASH_DOMAIN = Buffer.from(
 
 function parseSumeragiBlsNormalPeerId(value, context) {
   if (typeof value !== "string") {
-    throw new TypeError(`${context} must be a canonical BLS-Normal PeerId string`);
+    rejectType(`${context} must be a canonical BLS-Normal PeerId string`);
   }
   if (value.trim() !== value) {
-    throw new TypeError(`${context} must not contain surrounding whitespace`);
+    rejectType(`${context} must not contain surrounding whitespace`);
   }
   const matched = SUMERAGI_BLS_NORMAL_PEER_ID_PATTERN.exec(value);
   if (matched === null) {
-    throw new TypeError(`${context} must be a canonical BLS-Normal PeerId`);
+    rejectType(`${context} must be a canonical BLS-Normal PeerId`);
   }
   const publicKeyHex = matched[1].slice(6);
   const compressed = Buffer.from(publicKeyHex, "hex");
@@ -348,7 +349,7 @@ function parseSumeragiBlsNormalPeerId(value, context) {
       validatedSumeragiBlsNormalPublicKeys.add(publicKeyHex);
     }
   } catch (error) {
-    throw new TypeError(`${context} contains an invalid BLS-Normal public key`, {
+    rejectType(`${context} contains an invalid BLS-Normal public key`, {
       cause: error,
     });
   }
@@ -369,9 +370,7 @@ function parseSumeragiBlsNormalValidatorSet(value, context) {
         Buffer.compare(parsed[index - 1].orderingKey, validator.orderingKey) >= 0,
     )
   ) {
-    throw new TypeError(
-      `${context} must be strictly ordered by canonical validator id`,
-    );
+    rejectType(`${context} must be strictly ordered by canonical validator id`);
   }
   return Object.freeze(parsed.map((validator) => validator.literal));
 }
@@ -623,7 +622,7 @@ function parseSumeragiNativeAmxQc(value, context) {
     { max: 0xffff },
   );
   if (version !== 1) {
-    throw new RangeError(`${context}.validator_set_hash_version must equal 1`);
+    rejectRange(`${context}.validator_set_hash_version must equal 1`);
   }
   const validators = parseSumeragiBlsNormalValidatorSet(
     assertSumeragiArrayBound(
@@ -647,7 +646,7 @@ function parseSumeragiNativeAmxQc(value, context) {
     body.participant_validator_set_hash !== validatorSetHash ||
     validatorSetHash !== computedValidatorSetHash
   ) {
-    throw new TypeError(`${context} committee fields differ from its signed body`);
+    rejectType(`${context} committee fields differ from its signed body`);
   }
   const pops = Object.freeze(
     assertSumeragiArrayBound(
@@ -660,7 +659,7 @@ function parseSumeragiNativeAmxQc(value, context) {
     ),
   );
   if (pops.some((pop) => pop.every((byte) => byte === 0))) {
-    throw new TypeError(`${context}.validator_set_pops contains an all-zero proof`);
+    rejectType(`${context}.validator_set_pops contains an all-zero proof`);
   }
   const bitmapLength = Math.ceil(validators.length / 8);
   const bitmap = parseSumeragiByteVector(
@@ -670,10 +669,10 @@ function parseSumeragiNativeAmxQc(value, context) {
   );
   const trailingBits = validators.length % 8;
   if (trailingBits !== 0 && (bitmap[bitmap.length - 1] & ~((1 << trailingBits) - 1)) !== 0) {
-    throw new TypeError(`${context}.signers_bitmap addresses an unknown validator`);
+    rejectType(`${context}.signers_bitmap addresses an unknown validator`);
   }
   if (countSumeragiBitmapSigners(bitmap) !== expectedQuorum) {
-    throw new RangeError(`${context}.signers_bitmap does not carry the exact quorum`);
+    rejectRange(`${context}.signers_bitmap does not carry the exact quorum`);
   }
   const signature = parseSumeragiByteVector(
     record.bls_aggregate_signature,
@@ -681,7 +680,7 @@ function parseSumeragiNativeAmxQc(value, context) {
     `${context}.bls_aggregate_signature`,
   );
   if (signature.every((byte) => byte === 0)) {
-    throw new TypeError(`${context}.bls_aggregate_signature must not be all zeroes`);
+    rejectType(`${context}.bls_aggregate_signature must not be all zeroes`);
   }
   return Object.freeze({
     body,
@@ -701,7 +700,7 @@ function parseSumeragiNativeAmxParticipantProposal(value, context) {
     context,
   );
   if (proposal.payload_block_hint !== null) {
-    throw new TypeError(`${context}.payload_block_hint must be null`);
+    rejectType(`${context}.payload_block_hint must be null`);
   }
   const descriptorContext = `${context}.descriptor`;
   const descriptor = ensureRecord(proposal.descriptor, descriptorContext);
@@ -732,12 +731,12 @@ function parseSumeragiNativeAmxParticipantProposal(value, context) {
   ]);
   for (const field of requiredFields) {
     if (!Object.prototype.hasOwnProperty.call(descriptor, field)) {
-      throw new TypeError(`${descriptorContext} is missing required field ${field}`);
+      rejectType(`${descriptorContext} is missing required field ${field}`);
     }
   }
   for (const field of Object.keys(descriptor)) {
     if (!allowedFields.has(field)) {
-      throw new TypeError(`${descriptorContext} contains unknown field ${field}`);
+      rejectType(`${descriptorContext} contains unknown field ${field}`);
     }
   }
 
@@ -748,11 +747,11 @@ function parseSumeragiNativeAmxParticipantProposal(value, context) {
   let previousDescriptorHash = null;
   if (previousHeight === 0) {
     if (Object.prototype.hasOwnProperty.call(descriptor, "previous_lane_block_descriptor_hash")) {
-      throw new TypeError(`${descriptorContext} must omit the genesis predecessor hash`);
+      rejectType(`${descriptorContext} must omit the genesis predecessor hash`);
     }
   } else {
     if (!Object.prototype.hasOwnProperty.call(descriptor, "previous_lane_block_descriptor_hash")) {
-      throw new TypeError(`${descriptorContext} must carry a predecessor descriptor hash`);
+      rejectType(`${descriptorContext} must carry a predecessor descriptor hash`);
     }
     previousDescriptorHash = parseSumeragiNonzeroHash(
       descriptor.previous_lane_block_descriptor_hash,
@@ -765,7 +764,7 @@ function parseSumeragiNativeAmxParticipantProposal(value, context) {
     { positive: true },
   );
   if (!sumeragiUnsignedSuccessorOf(laneBlockHeight, previousHeight)) {
-    throw new RangeError(`${descriptorContext} lane-block heights must be contiguous`);
+    rejectRange(`${descriptorContext} lane-block heights must be contiguous`);
   }
 
   const acceptedCandidateIndices = Object.freeze(
@@ -799,7 +798,7 @@ function parseSumeragiNativeAmxParticipantProposal(value, context) {
     new Set(acceptedCandidateIndices).size !== acceptedCandidateIndices.length ||
     new Set(acceptedTransactionHashes).size !== acceptedTransactionHashes.length
   ) {
-    throw new TypeError(`${descriptorContext} accepted work is inconsistent`);
+    rejectType(`${descriptorContext} accepted work is inconsistent`);
   }
 
   const validators = parseSumeragiBlsNormalValidatorSet(
@@ -832,7 +831,7 @@ function parseSumeragiNativeAmxParticipantProposal(value, context) {
     validatorCount !== validators.length ||
     minQuorum !== expectedQuorum
   ) {
-    throw new TypeError(`${descriptorContext} committee fields are inconsistent`);
+    rejectType(`${descriptorContext} committee fields are inconsistent`);
   }
 
   const normalizedDescriptor = {
@@ -896,26 +895,20 @@ function parseSumeragiNativeAmxParticipantProposal(value, context) {
     normalizedDescriptor.validator_set_hash !==
     computeSumeragiNativeValidatorSetHash(validators)
   ) {
-    throw new TypeError(
-      `${descriptorContext}.validator_set_hash does not match the canonical committee`,
-    );
+    rejectType(`${descriptorContext}.validator_set_hash does not match the canonical committee`);
   }
   if (
     normalizedDescriptor.descriptor_hash !==
     computeSumeragiNativeDescriptorHash(normalizedDescriptor)
   ) {
-    throw new TypeError(
-      `${descriptorContext}.descriptor_hash does not match its canonical preimage`,
-    );
+    rejectType(`${descriptorContext}.descriptor_hash does not match its canonical preimage`);
   }
   const proposalHash = parseSumeragiNonzeroHash(
     proposal.proposal_hash,
     `${context}.proposal_hash`,
   );
   if (proposalHash !== computeSumeragiNativeProposalHash(normalizedDescriptor)) {
-    throw new TypeError(
-      `${context}.proposal_hash does not match its canonical preimage`,
-    );
+    rejectType(`${context}.proposal_hash does not match its canonical preimage`);
   }
   return Object.freeze({
     descriptor: Object.freeze(normalizedDescriptor),
@@ -998,20 +991,18 @@ function parseSumeragiNativeAmxLeg(value, context) {
     participantSettlementHash !==
     computeSumeragiNativeParticipantSettlementHash(participantSettlement)
   ) {
-    throw new TypeError(
-      `${context}.participant_settlement_hash does not match its canonical commitment`,
-    );
+    rejectType(`${context}.participant_settlement_hash does not match its canonical commitment`);
   }
   const prepareQc = parseSumeragiNativeAmxQc(record.prepare_qc, `${context}.prepare_qc`);
   const commitQc = parseSumeragiNativeAmxQc(record.commit_qc, `${context}.commit_qc`);
   if (prepareQc.body.phase.phase !== "prepare") {
-    throw new TypeError(`${context}.prepare_qc carries the wrong phase`);
+    rejectType(`${context}.prepare_qc carries the wrong phase`);
   }
   if (commitQc.body.phase.phase !== "commit") {
-    throw new TypeError(`${context}.commit_qc carries the wrong phase`);
+    rejectType(`${context}.commit_qc carries the wrong phase`);
   }
   if (!sumeragiNativeAmxBodyIdentityEqual(prepareQc.body, commitQc.body)) {
-    throw new TypeError(`${context} prepare and commit identities differ`);
+    rejectType(`${context} prepare and commit identities differ`);
   }
   for (const field of [
     "validator_set_hash_version",
@@ -1020,7 +1011,7 @@ function parseSumeragiNativeAmxLeg(value, context) {
     "validator_set_pops",
   ]) {
     if (JSON.stringify(prepareQc[field]) !== JSON.stringify(commitQc[field])) {
-      throw new TypeError(`${context} prepare and commit committees differ`);
+      rejectType(`${context} prepare and commit committees differ`);
     }
   }
   const body = prepareQc.body;
@@ -1044,15 +1035,13 @@ function parseSumeragiNativeAmxLeg(value, context) {
     descriptor.validator_count !== body.participant_validator_count ||
     descriptor.min_quorum !== body.participant_min_quorum
   ) {
-    throw new TypeError(`${context} participant proposal differs from its signed body`);
+    rejectType(`${context} participant proposal differs from its signed body`);
   }
   const receiptSources = participantSettlement.source_ids;
   const matchingEntrypointPositions = descriptor.accepted_transaction_hashes
     .flatMap((hash, index) => (hash === body.tx_entrypoint_hash ? [index] : []));
   if (matchingEntrypointPositions.length > 1) {
-    throw new TypeError(
-      `${context} participant descriptor repeats the current transaction entrypoint`,
-    );
+    rejectType(`${context} participant descriptor repeats the current transaction entrypoint`);
   }
   const requiresMixedRoleAnchorValidation = matchingEntrypointPositions.length === 0;
   if (
@@ -1063,9 +1052,7 @@ function parseSumeragiNativeAmxLeg(value, context) {
       receiptSources[matchingEntrypointPositions[0]] !== body.source_id
     )
   ) {
-    throw new TypeError(
-      `${context} participant descriptor and grouped settlement are not aligned`,
-    );
+    rejectType(`${context} participant descriptor and grouped settlement are not aligned`);
   }
   if (
     participantSettlementHash !== body.participant_settlement_commitment ||
@@ -1076,7 +1063,7 @@ function parseSumeragiNativeAmxLeg(value, context) {
     participantSettlement.authority_context_height !== body.authority_context_height ||
     receiptSources.filter((sourceId) => sourceId === body.source_id).length !== 1
   ) {
-    throw new TypeError(`${context} participant settlement differs from its signed body`);
+    rejectType(`${context} participant settlement differs from its signed body`);
   }
   return Object.freeze({
     lane_id: laneId,
@@ -1111,7 +1098,7 @@ function parseSumeragiNativeAmxReceipt(value, context) {
   );
   const version = parseSumeragiUnsigned(record.version, `${context}.version`, { max: 0xffff });
   if (version !== 2) {
-    throw new RangeError(`${context}.version must equal 2`);
+    rejectRange(`${context}.version must equal 2`);
   }
   const sourceId = parseSumeragiByte32(record.source_id, `${context}.source_id`);
   const networkId = parseSumeragiHash(record.network_id, `${context}.network_id`);
@@ -1149,7 +1136,7 @@ function parseSumeragiNativeAmxReceipt(value, context) {
   );
   const routes = new Set(legs.map((leg) => `${leg.lane_id}:${leg.dataspace_id}`));
   if (routes.size !== legs.length) {
-    throw new TypeError(`${context}.legs contains duplicate participant routes`);
+    rejectType(`${context}.legs contains duplicate participant routes`);
   }
   const firstBody = legs[0].prepare_qc.body;
   for (const leg of legs) {
@@ -1179,7 +1166,7 @@ function parseSumeragiNativeAmxReceipt(value, context) {
           leg.participant_proposal.proposal_hash !== proposalHash
         ))
     ) {
-      throw new TypeError(`${context}.legs contain mismatched signed identities`);
+      rejectType(`${context}.legs contain mismatched signed identities`);
     }
   }
   return Object.freeze({
@@ -1272,9 +1259,7 @@ function parseLaneSettlementCommitments(payload) {
     }
     const receiptsRecord = record.receipts;
     if (!Array.isArray(receiptsRecord)) {
-      throw new TypeError(
-        `status.lane_settlement_commitments[${index}].receipts must be an array`,
-      );
+      rejectType(`status.lane_settlement_commitments[${index}].receipts must be an array`);
     }
     const receipts = receiptsRecord.map((receipt, receiptIndex) =>
       parseSumeragiLaneSettlementReceipt(receipt, `${context}.receipts[${receiptIndex}]`),
@@ -1313,10 +1298,10 @@ function parseLaneSettlementCommitments(payload) {
     );
     const dataspaceId = parseSumeragiUnsigned(record.dataspace_id, `${context}.dataspace_id`);
     if (new Set(nexusFeeReceipts.map((receipt) => receipt.source_id)).size !== nexusFeeReceipts.length) {
-      throw new TypeError(`${context} contains duplicate Nexus fee receipt sources`);
+      rejectType(`${context} contains duplicate Nexus fee receipt sources`);
     }
     if (new Set(nativeAmxReceipts.map((receipt) => receipt.source_id)).size !== nativeAmxReceipts.length) {
-      throw new TypeError(`${context} contains duplicate native AMX receipt sources`);
+      rejectType(`${context} contains duplicate native AMX receipt sources`);
     }
     const nativeAmxSources = nativeAmxReceipts.map((receipt) => receipt.source_id);
     if (
@@ -1327,7 +1312,7 @@ function parseLaneSettlementCommitments(payload) {
           receipt.block_height !== blockHeight,
       )
     ) {
-      throw new TypeError(`${context} Nexus fee receipt coordinates do not match`);
+      rejectType(`${context} Nexus fee receipt coordinates do not match`);
     }
     if (
       nativeAmxReceipts.some(
@@ -1338,7 +1323,7 @@ function parseLaneSettlementCommitments(payload) {
           receipt.lane_block_height !== blockHeight,
       )
     ) {
-      throw new TypeError(`${context} native AMX receipt coordinates do not match`);
+      rejectType(`${context} native AMX receipt coordinates do not match`);
     }
     if (
       nativeAmxReceipts.some((receipt) =>
@@ -1348,9 +1333,7 @@ function parseLaneSettlementCommitments(payload) {
         ),
       )
     ) {
-      throw new TypeError(
-        `${context} native AMX receipts do not bind the exact ordered source group`,
-      );
+      rejectType(`${context} native AMX receipts do not bind the exact ordered source group`);
     }
     return {
       block_height: blockHeight,
@@ -1397,7 +1380,7 @@ function parseLaneRelayEnvelopes(payload) {
       record.settlement_commitment,
     ]);
     if (settlementCommitments.length !== 1) {
-      throw new TypeError(`${context}.settlement_commitment must be an object`);
+      rejectType(`${context}.settlement_commitment must be an object`);
     }
     const laneId = parseSumeragiUnsigned(record.lane_id, `${context}.lane_id`, {
       max: 0xffffffff,
@@ -1437,7 +1420,7 @@ function parseLaneRelayEnvelopes(payload) {
       settlement.dataspace_id !== dataspaceId ||
       settlement.block_height !== blockHeight
     ) {
-      throw new TypeError(`${context}.settlement_commitment identity must match its relay`);
+      rejectType(`${context}.settlement_commitment identity must match its relay`);
     }
     return {
       lane_id: laneId,
@@ -1496,7 +1479,7 @@ function parseSumeragiStatusPayload(payload) {
   ]);
   const unknownField = Object.keys(record).find((field) => !allowedFields.has(field));
   if (unknownField !== undefined) {
-    throw new TypeError(`sumeragi status payload contains unknown field ${unknownField}`);
+    rejectType(`sumeragi status payload contains unknown field ${unknownField}`);
   }
   const protocolVersion = parseSumeragiUnsigned(
     record.protocol_version,
@@ -1504,7 +1487,7 @@ function parseSumeragiStatusPayload(payload) {
     { max: 0xffff },
   );
   if (protocolVersion !== 4) {
-    throw new RangeError("sumeragi.protocol_version must equal 4");
+    rejectRange("sumeragi.protocol_version must equal 4");
   }
   const height = parseSumeragiUnsigned(record.height, "sumeragi.height");
   const view = parseSumeragiUnsigned(record.view, "sumeragi.view");
@@ -1524,10 +1507,10 @@ function parseSumeragiStatusPayload(payload) {
     "sumeragi.height_context",
   );
   if (heightContext.epoch_end_height < height) {
-    throw new RangeError("sumeragi.height_context.epoch_end_height must cover height");
+    rejectRange("sumeragi.height_context.epoch_end_height must cover height");
   }
   if (leader >= heightContext.validator_count) {
-    throw new RangeError("sumeragi.leader must index the frozen validator roster");
+    rejectRange("sumeragi.leader must index the frozen validator roster");
   }
   const liveness = parseSumeragiLivenessStatus(record.liveness, "sumeragi.liveness", {
     height,
@@ -1541,7 +1524,7 @@ function parseSumeragiStatusPayload(payload) {
     "sumeragi.last_committed_height",
   );
   if (lastCommittedHeight > height) {
-    throw new RangeError("sumeragi.last_committed_height must not exceed height");
+    rejectRange("sumeragi.last_committed_height must not exceed height");
   }
   const lastCommittedSubject =
     record.last_committed_subject == null
@@ -1556,22 +1539,18 @@ function parseSumeragiStatusPayload(payload) {
       : parseSumeragiCommitQcStatus(record.last_commit_qc, "sumeragi.last_commit_qc");
   if (lastCommittedHeight === 0) {
     if (lastCommittedSubject !== null || lastCommitQc !== null) {
-      throw new TypeError(
-        "sumeragi last committed subject and QC must be absent at height zero",
-      );
+      rejectType("sumeragi last committed subject and QC must be absent at height zero");
     }
   } else {
     if ((lastCommittedSubject === null) !== (lastCommitQc === null)) {
-      throw new TypeError(
-        "sumeragi last committed subject and QC are required together when either is present after height zero",
-      );
+      rejectType("sumeragi last committed subject and QC are required together when either is present after height zero");
     }
     if (lastCommittedSubject !== null && (
       lastCommitQc.certificate.phase.phase !== "commit" ||
       lastCommitQc.certificate.round.height !== lastCommittedHeight ||
       !sumeragiSubjectsEqual(lastCommitQc.certificate.subject, lastCommittedSubject)
     )) {
-      throw new TypeError("sumeragi.last_commit_qc does not certify the committed subject");
+      rejectType("sumeragi.last_commit_qc does not certify the committed subject");
     }
   }
 
@@ -1699,13 +1678,13 @@ function parseSumeragiDiagnosticsPayload(payload) {
   const allowedFields = new Set([...requiredFields, "npos"]);
   const unknown = Object.keys(record).find((field) => !allowedFields.has(field));
   if (unknown !== undefined) {
-    throw new TypeError(`${context} contains unknown field ${unknown}`);
+    rejectType(`${context} contains unknown field ${unknown}`);
   }
   const missing = requiredFields.find(
     (field) => !Object.prototype.hasOwnProperty.call(record, field),
   );
   if (missing !== undefined) {
-    throw new TypeError(`${context} is missing required field ${missing}`);
+    rejectType(`${context} is missing required field ${missing}`);
   }
 
   const pipelineRecord = assertExactSumeragiRecord(
@@ -1740,10 +1719,10 @@ function parseSumeragiDiagnosticsPayload(payload) {
     `${context}.tx_queue_max_retained_bytes`,
   );
   if (txQueueDepth > txQueueCapacity) {
-    throw new RangeError(`${context} transaction queue depth exceeds capacity`);
+    rejectRange(`${context} transaction queue depth exceeds capacity`);
   }
   if (txQueueRetainedBytes > txQueueMaxRetainedBytes) {
-    throw new RangeError(`${context} retained queue bytes exceed the byte budget`);
+    rejectRange(`${context} retained queue bytes exceed the byte budget`);
   }
   const saturatedByCount = parseSumeragiBoolean(
     record.tx_queue_saturated_by_count,
@@ -1762,7 +1741,7 @@ function parseSumeragiDiagnosticsPayload(payload) {
     `${context}.tx_queue_saturated`,
   );
   if (saturated !== (saturatedByCount || saturatedByBytes || saturatedByAge)) {
-    throw new TypeError(`${context}.tx_queue_saturated disagrees with its causes`);
+    rejectType(`${context}.tx_queue_saturated disagrees with its causes`);
   }
 
   const sealedAliases = Object.freeze(
@@ -1783,9 +1762,7 @@ function parseSumeragiDiagnosticsPayload(payload) {
     { max: 0xffffffff },
   );
   if (sealedTotal !== sealedAliases.length || new Set(sealedAliases).size !== sealedAliases.length) {
-    throw new TypeError(
-      `${context} sealed lane aliases must be unique and match the sealed total`,
-    );
+    rejectType(`${context} sealed lane aliases must be unique and match the sealed total`);
   }
 
   return Object.freeze({
@@ -1851,7 +1828,7 @@ function parseSumeragiNposDiagnostics(value) {
     `${context}.epoch_seed`,
   );
   if (!epochSeed.some((byte) => byte !== 0)) {
-    throw new TypeError(`${context}.epoch_seed must not be zero`);
+    rejectType(`${context}.epoch_seed must not be zero`);
   }
   return Object.freeze({
     epoch_length_blocks: epochLength,
@@ -1971,10 +1948,10 @@ function parseSumeragiDiagnosticLaneGovernance(value) {
         `${itemContext}.protected_namespaces`,
       );
       if (new Set(validatorIds).size !== validatorIds.length) {
-        throw new TypeError(`${itemContext}.validator_ids contains duplicates`);
+        rejectType(`${itemContext}.validator_ids contains duplicates`);
       }
       if (new Set(namespaces).size !== namespaces.length) {
-        throw new TypeError(`${itemContext}.protected_namespaces contains duplicates`);
+        rejectType(`${itemContext}.protected_namespaces contains duplicates`);
       }
       const quorum = record.quorum == null
         ? null
@@ -1983,7 +1960,7 @@ function parseSumeragiDiagnosticLaneGovernance(value) {
           max: 0xffffffff,
         });
       if (quorum !== null && quorum > validatorIds.length) {
-        throw new RangeError(`${itemContext}.quorum exceeds the validator roster`);
+        rejectRange(`${itemContext}.quorum exceeds the validator roster`);
       }
       return Object.freeze({
         lane_id: parseSumeragiUnsigned(record.lane_id, `${itemContext}.lane_id`, {
@@ -2032,7 +2009,7 @@ function parseSumeragiDiagnosticRuntimeUpgrade(value, context) {
     `${context}.allowed_ids`,
   );
   if (new Set(allowedIds).size !== allowedIds.length) {
-    throw new TypeError(`${context}.allowed_ids contains duplicates`);
+    rejectType(`${context}.allowed_ids contains duplicates`);
   }
   return Object.freeze({
     allow: parseSumeragiBoolean(record.allow, `${context}.allow`),
@@ -2086,11 +2063,9 @@ function parseSumeragiNativeParticipantApplications(value) {
         (field) => !Object.prototype.hasOwnProperty.call(record, field),
       );
       if (unknown !== undefined || missing !== undefined) {
-        throw new TypeError(
-          unknown !== undefined
+        rejectType(unknown !== undefined
             ? `${itemContext} contains unknown field ${unknown}`
-            : `${itemContext} is missing required field ${missing}`,
-        );
+            : `${itemContext} is missing required field ${missing}`);
       }
       const laneId = parseSumeragiUnsigned(record.lane_id, `${itemContext}.lane_id`, {
         max: 0xffffffff,
@@ -2105,9 +2080,7 @@ function parseSumeragiNativeParticipantApplications(value) {
       );
       const key = [laneId, dataspaceId, laneIncarnation];
       if (previousKey !== null && compareSumeragiDiagnosticRouteKeys(previousKey, key) >= 0) {
-        throw new TypeError(
-          `${context} must be strictly ordered by route and incarnation`,
-        );
+        rejectType(`${context} must be strictly ordered by route and incarnation`);
       }
       previousKey = key;
       const participantHeight = parseSumeragiUnsigned(
@@ -2129,7 +2102,7 @@ function parseSumeragiNativeParticipantApplications(value) {
         !sumeragiUnsignedSuccessorOf(participantHeight, predecessorHeight) ||
         (predecessorHeight === 0) !== (predecessorHash === null)
       ) {
-        throw new TypeError(`${itemContext} contains inconsistent predecessor geometry`);
+        rejectType(`${itemContext} contains inconsistent predecessor geometry`);
       }
       const applicationHeight = record.application_block_height == null
         ? null
@@ -2145,9 +2118,7 @@ function parseSumeragiNativeParticipantApplications(value) {
           `${itemContext}.application_block_hash`,
         );
       if ((applicationHeight === null) !== (applicationHash === null)) {
-        throw new TypeError(
-          `${itemContext} application block height and hash must appear together`,
-        );
+        rejectType(`${itemContext} application block height and hash must appear together`);
       }
       const state = requireExactNonEmptyString(record.state, `${itemContext}.state`);
       const states = new Set([
@@ -2157,14 +2128,12 @@ function parseSumeragiNativeParticipantApplications(value) {
         "conflict",
       ]);
       if (!states.has(state)) {
-        throw new TypeError(`${itemContext}.state has an unknown variant`);
+        rejectType(`${itemContext}.state has an unknown variant`);
       }
       const requiresApplicationBlock = state === "committed_evidence_pending"
         || state === "durably_applied";
       if ((applicationHeight !== null) !== requiresApplicationBlock) {
-        throw new TypeError(
-          `${itemContext} state and application block identity disagree`,
-        );
+        rejectType(`${itemContext} state and application block identity disagree`);
       }
       return Object.freeze({
         lane_id: laneId,
@@ -2240,7 +2209,7 @@ function parseSumeragiAutonomousLaneExecutions(value) {
       (field) => !Object.prototype.hasOwnProperty.call(record, field),
     );
     if (unknown !== undefined || missing !== undefined) {
-      throw new TypeError(unknown !== undefined
+      rejectType(unknown !== undefined
         ? `${itemContext} contains unknown field ${unknown}`
         : `${itemContext} is missing required field ${missing}`);
     }
@@ -2270,14 +2239,14 @@ function parseSumeragiAutonomousLaneExecutions(value) {
       proposalHeight, proposalIdentityHash,
     ];
     if (previousKey !== null && compareSumeragiDiagnosticKeys(previousKey, key) >= 0) {
-      throw new TypeError(`${context} must be strictly ordered by exact identity`);
+      rejectType(`${context} must be strictly ordered by exact identity`);
     }
     previousKey = key;
     const applicationHeight = record.application_block_height == null
       ? null : u64("application_block_height", { positive: true });
     const applicationHash = hash("application_block_hash");
     if ((applicationHeight === null) !== (applicationHash === null)) {
-      throw new TypeError(`${itemContext} application block height and hash must appear together`);
+      rejectType(`${itemContext} application block height and hash must appear together`);
     }
     const reservationCount = u64("reservation_count", { max: 4096 });
     const transactionCount = u64("transaction_count", { positive: true, max: 4096 });
@@ -2285,13 +2254,13 @@ function parseSumeragiAutonomousLaneExecutions(value) {
       record.highest_durable_stage, `${itemContext}.highest_durable_stage`,
     );
     if (!stages.has(stage)) {
-      throw new TypeError(`${itemContext}.highest_durable_stage has an unknown variant`);
+      rejectType(`${itemContext}.highest_durable_stage has an unknown variant`);
     }
     const reason = record.stuck_reason == null ? null : requireExactNonEmptyString(
       record.stuck_reason, `${itemContext}.stuck_reason`,
     );
     if (reason !== null && !reasons.has(reason)) {
-      throw new TypeError(`${itemContext}.stuck_reason has an unknown variant`);
+      rejectType(`${itemContext}.stuck_reason has an unknown variant`);
     }
     const expectedReasons = {
       reservations_durable: "awaiting_executable_payload",
@@ -2306,22 +2275,20 @@ function parseSumeragiAutonomousLaneExecutions(value) {
       conflict: "evidence_conflict",
     };
     if (reason !== expectedReasons[stage]) {
-      throw new TypeError(`${itemContext} stage and stuck reason disagree`);
+      rejectType(`${itemContext} stage and stuck reason disagree`);
     }
     if (stage !== "conflict" && reservationCount !== transactionCount) {
-      throw new TypeError(`${itemContext} reservation and transaction counts disagree`);
+      rejectType(`${itemContext} reservation and transaction counts disagree`);
     }
     if ((proposalHash === null) !== (descriptorHash === null)) {
-      throw new TypeError(
-        `${itemContext} proposal and descriptor hashes must appear together`,
-      );
+      rejectType(`${itemContext} proposal and descriptor hashes must appear together`);
     }
     if (stage !== "conflict"
       && ((stage === "reservations_durable") !== (proposalHash === null))) {
-      throw new TypeError(`${itemContext} finalized identity disagrees with durable stage`);
+      rejectType(`${itemContext} finalized identity disagrees with durable stage`);
     }
     if (stage === "reservations_durable" && proposalView !== null) {
-      throw new TypeError(`${itemContext} proposal view disagrees with durable stage`);
+      rejectType(`${itemContext} proposal view disagrees with durable stage`);
     }
     const payloadHash = hash("executable_payload_hash");
     const bundleHash = hash("source_bundle_hash");
@@ -2343,7 +2310,7 @@ function parseSumeragiAutonomousLaneExecutions(value) {
         applicationHeight !== null,
       ];
       if (observed.some((present, offset) => present !== geometries[stage][offset])) {
-        throw new TypeError(`${itemContext} evidence does not match durable stage`);
+        rejectType(`${itemContext} evidence does not match durable stage`);
       }
     }
     return Object.freeze({
@@ -2400,12 +2367,12 @@ function parseSumeragiLivenessStatus(value, context, active) {
   ]);
   const unknown = Object.keys(record).find((field) => !fields.has(field));
   if (unknown !== undefined) {
-    throw new TypeError(`${context} contains unknown field ${unknown}`);
+    rejectType(`${context} contains unknown field ${unknown}`);
   }
   for (const field of fields) {
     if (field !== "last_progress" && field !== "blocker" &&
         !Object.prototype.hasOwnProperty.call(record, field)) {
-      throw new TypeError(`${context} is missing required field ${field}`);
+      rejectType(`${context} is missing required field ${field}`);
     }
   }
 
@@ -2416,14 +2383,14 @@ function parseSumeragiLivenessStatus(value, context, active) {
       round.context_id[0] !== active.contextId[0] ||
       round.height !== active.height
     ) {
-      throw new TypeError(`${roundContext} must match the active height context`);
+      rejectType(`${roundContext} must match the active height context`);
     }
     return round;
   };
   const checkedRound = (raw, roundContext) => {
     const round = boundRound(raw, roundContext);
     if (round.view > active.view) {
-      throw new RangeError(`${roundContext}.view must not exceed the active view`);
+      rejectRange(`${roundContext}.view must not exceed the active view`);
     }
     return round;
   };
@@ -2476,7 +2443,7 @@ function parseSumeragiLivenessStatus(value, context, active) {
       totalPower !== active.heightContext.quorum.total_power ||
       signedPower !== signerCount
     ) {
-      throw new RangeError(`${itemContext} disagrees with the frozen dual quorum`);
+      rejectRange(`${itemContext} disagrees with the frozen dual quorum`);
     }
     const round = checkedRound(item.round, `${itemContext}.round`);
     if (timeout) {
@@ -2488,7 +2455,7 @@ function parseSumeragiLivenessStatus(value, context, active) {
         certificateFormed &&
         (signerCount < minSigners || BigInt(signedPower) * 3n <= BigInt(totalPower) * 2n)
       ) {
-        throw new RangeError(`${itemContext} does not form its advertised dual quorum`);
+        rejectRange(`${itemContext} does not form its advertised dual quorum`);
       }
       return Object.freeze({
         round,
@@ -2567,11 +2534,11 @@ function parseSumeragiLivenessStatus(value, context, active) {
       ]);
       const unknownField = Object.keys(item).find((field) => !allowedFields.has(field));
       if (unknownField !== undefined) {
-        throw new TypeError(`${itemContext} contains unknown field ${unknownField}`);
+        rejectType(`${itemContext} contains unknown field ${unknownField}`);
       }
       for (const field of ["kind", "round", "stage"]) {
         if (!Object.prototype.hasOwnProperty.call(item, field)) {
-          throw new TypeError(`${itemContext} is missing required field ${field}`);
+          rejectType(`${itemContext} is missing required field ${field}`);
         }
       }
       const kind = parseSumeragiTaggedUnit(
@@ -2605,7 +2572,7 @@ function parseSumeragiLivenessStatus(value, context, active) {
           );
       const carriesProposalRound = subjectKinds.has(kind.kind);
       if (carriesProposalRound !== (item.proposal_round != null)) {
-        throw new TypeError(`${itemContext} has inconsistent proposal_round for ${kind.kind}`);
+        rejectType(`${itemContext} has inconsistent proposal_round for ${kind.kind}`);
       }
       const shapeIsValid =
         (kind.kind === "proposal" && subject !== null && executionCommitment === null) ||
@@ -2613,11 +2580,11 @@ function parseSumeragiLivenessStatus(value, context, active) {
           subject !== null && executionCommitment !== null) ||
         (!subjectKinds.has(kind.kind) && subject === null && executionCommitment === null);
       if (!shapeIsValid) {
-        throw new TypeError(`${itemContext} has inconsistent proposal fields`);
+        rejectType(`${itemContext} has inconsistent proposal fields`);
       }
       const round = boundRound(item.round, `${itemContext}.round`);
       if (kind.kind !== "commit_qc" && round.view > active.view) {
-        throw new RangeError(`${itemContext}.round.view must not exceed the active view`);
+        rejectRange(`${itemContext}.round.view must not exceed the active view`);
       }
       const proposalRound = item.proposal_round == null
         ? null
@@ -2667,11 +2634,11 @@ function parseSumeragiLivenessStatus(value, context, active) {
       ]);
       const unknownField = Object.keys(item).find((field) => !allowedFields.has(field));
       if (unknownField !== undefined) {
-        throw new TypeError(`${itemContext} contains unknown field ${unknownField}`);
+        rejectType(`${itemContext} contains unknown field ${unknownField}`);
       }
       for (const field of ["queue", "depth", "capacity", "service_debt"]) {
         if (!Object.prototype.hasOwnProperty.call(item, field)) {
-          throw new TypeError(`${itemContext} is missing required field ${field}`);
+          rejectType(`${itemContext} is missing required field ${field}`);
         }
       }
       const queue = parseSumeragiTaggedUnit(
@@ -2692,7 +2659,7 @@ function parseSumeragiLivenessStatus(value, context, active) {
         `${itemContext}.queue`,
       );
       if (queueNames.has(queue.queue)) {
-        throw new TypeError(`${itemContext}.queue is duplicated`);
+        rejectType(`${itemContext}.queue is duplicated`);
       }
       queueNames.add(queue.queue);
       const depth = parseSumeragiUnsigned(item.depth, `${itemContext}.depth`, {
@@ -2706,7 +2673,7 @@ function parseSumeragiLivenessStatus(value, context, active) {
         ? null
         : parseSumeragiUnsigned(item.oldest_age_ms, `${itemContext}.oldest_age_ms`);
       if (depth > capacity || ((depth === 0) !== (oldestAge === null))) {
-        throw new RangeError(`${itemContext} has inconsistent occupancy and age`);
+        rejectRange(`${itemContext} has inconsistent occupancy and age`);
       }
       return Object.freeze({
         queue,
@@ -2733,7 +2700,7 @@ function parseSumeragiLivenessStatus(value, context, active) {
       `${context}.last_progress.generation`,
     );
     if (progressGeneration > generation) {
-      throw new RangeError(`${context}.last_progress.generation is from the future`);
+      rejectRange(`${context}.last_progress.generation is from the future`);
     }
     lastProgress = Object.freeze({
       generation: progressGeneration,
@@ -2808,7 +2775,7 @@ function parseSumeragiLivenessStatus(value, context, active) {
           `${itemContext}.reason`,
         );
         if (ignoreReasons.has(reason.reason)) {
-          throw new TypeError(`${itemContext}.reason is duplicated`);
+          rejectType(`${itemContext}.reason is duplicated`);
         }
         ignoreReasons.add(reason.reason);
         return Object.freeze({
@@ -2848,23 +2815,23 @@ function parseSumeragiUnsigned(value, context, options = {}) {
     ) &&
     typeof value !== "bigint"
   ) {
-    throw new TypeError(`${context} must be an unsigned integer`);
+    rejectType(`${context} must be an unsigned integer`);
   }
   if (value < 0) {
-    throw new RangeError(`${context} must be >= 0`);
+    rejectRange(`${context} must be >= 0`);
   }
   const integer = BigInt(value);
   if (options.positive === true && integer === 0n) {
-    throw new RangeError(`${context} must be positive`);
+    rejectRange(`${context} must be positive`);
   }
   const maximum =
     options.max === undefined ? SUMERAGI_U64_MAX : BigInt(options.max);
   if (integer > maximum) {
-    throw new RangeError(`${context} exceeds its protocol bound`);
+    rejectRange(`${context} exceeds its protocol bound`);
   }
   if (options.max !== undefined) {
     if (maximum > BigInt(Number.MAX_SAFE_INTEGER)) {
-      throw new TypeError(`${context} has an invalid narrow protocol bound`);
+      rejectType(`${context} has an invalid narrow protocol bound`);
     }
     return Number(integer);
   }
@@ -2886,7 +2853,7 @@ function sumeragiRoundsEqual(left, right) {
 
 function parseSumeragiExactUnsigned(value, context, options = {}) {
   if (typeof value !== "number" || !Number.isSafeInteger(value)) {
-    throw new TypeError(`${context} must be an unsigned integer`);
+    rejectType(`${context} must be an unsigned integer`);
   }
   return parseSumeragiUnsigned(value, context, options);
 }
@@ -2897,18 +2864,18 @@ function parseSumeragiQuantity(value, context) {
 
 function parseSumeragiBoolean(value, context) {
   if (typeof value !== "boolean") {
-    throw new TypeError(`${context} must be a boolean`);
+    rejectType(`${context} must be a boolean`);
   }
   return value;
 }
 
 function parseSumeragiHash(value, context) {
   if (typeof value !== "string" || !/^hash:[0-9A-F]{64}#[0-9A-F]{4}$/u.test(value)) {
-    throw new TypeError(`${context} must be a canonical Iroha hash literal`);
+    rejectType(`${context} must be a canonical Iroha hash literal`);
   }
   const body = parseHashLiteralToHex(value, context);
   if ((Number.parseInt(body.slice(-2), 16) & 1) === 0) {
-    throw new TypeError(`${context} has an invalid Iroha hash marker bit`);
+    rejectType(`${context} has an invalid Iroha hash marker bit`);
   }
   return value;
 }
@@ -2922,19 +2889,19 @@ function parseSumeragiOptionalByte32(value, context) {
 
 function parseSumeragiByte32(value, context) {
   if (typeof value !== "string" || !/^[0-9A-F]{64}$/u.test(value)) {
-    throw new TypeError(`${context} must be canonical uppercase 32-byte hex`);
+    rejectType(`${context} must be canonical uppercase 32-byte hex`);
   }
   return value;
 }
 
 function parseSumeragiByteVector(value, length, context) {
   if (!Array.isArray(value) || value.length !== length) {
-    throw new TypeError(`${context} must contain exactly ${length} byte values`);
+    rejectType(`${context} must contain exactly ${length} byte values`);
   }
   return Object.freeze(
     value.map((byte, index) => {
       if (!Number.isInteger(byte) || byte < 0 || byte > 0xff) {
-        throw new TypeError(`${context}[${index}] must be an integer byte`);
+        rejectType(`${context}[${index}] must be an integer byte`);
       }
       return byte;
     }),
@@ -2943,13 +2910,13 @@ function parseSumeragiByteVector(value, length, context) {
 
 function assertSumeragiArrayBound(value, maximum, context, minimum = 0) {
   if (!Array.isArray(value)) {
-    throw new TypeError(`${context} must be an array`);
+    rejectType(`${context} must be an array`);
   }
   if (value.length < minimum) {
-    throw new RangeError(`${context} contains fewer than ${minimum} items`);
+    rejectRange(`${context} contains fewer than ${minimum} items`);
   }
   if (value.length > maximum) {
-    throw new RangeError(`${context} exceeds its protocol item bound`);
+    rejectRange(`${context} exceeds its protocol item bound`);
   }
   return value;
 }
@@ -2959,12 +2926,12 @@ function assertExactSumeragiRecord(value, fields, context) {
   const expected = new Set(fields);
   for (const field of Object.keys(record)) {
     if (!expected.has(field)) {
-      throw new TypeError(`${context} contains unknown field ${field}`);
+      rejectType(`${context} contains unknown field ${field}`);
     }
   }
   for (const field of fields) {
     if (!Object.prototype.hasOwnProperty.call(record, field)) {
-      throw new TypeError(`${context} is missing required field ${field}`);
+      rejectType(`${context} is missing required field ${field}`);
     }
   }
   return record;
@@ -2972,7 +2939,7 @@ function assertExactSumeragiRecord(value, fields, context) {
 
 function parseSumeragiContextId(value, context) {
   if (!Array.isArray(value) || value.length !== 1) {
-    throw new TypeError(`${context} must be a one-element hash tuple`);
+    rejectType(`${context} must be a one-element hash tuple`);
   }
   return Object.freeze([parseSumeragiHash(value[0], `${context}[0]`)]);
 }
@@ -2990,14 +2957,14 @@ function parseSumeragiTaggedUnit(value, tag, allowed, context) {
 function parseSumeragiTaggedUnitWithContent(value, tag, content, allowed, context) {
   const record = ensureRecord(value, context);
   if (Object.keys(record).some((field) => field !== tag && field !== content)) {
-    throw new TypeError(`${context} contains an unknown tagged-enum field`);
+    rejectType(`${context} contains an unknown tagged-enum field`);
   }
   const variant = requireNonEmptyString(record[tag], `${context}.${tag}`);
   if (!allowed.includes(variant)) {
-    throw new TypeError(`${context}.${tag} is not a supported v2 variant`);
+    rejectType(`${context}.${tag} is not a supported v2 variant`);
   }
   if (!Object.prototype.hasOwnProperty.call(record, content) || record[content] !== null) {
-    throw new TypeError(`${context}.${content} must be explicitly null`);
+    rejectType(`${context}.${content} must be explicitly null`);
   }
   return Object.freeze({ [tag]: variant, [content]: null });
 }
@@ -3016,10 +2983,10 @@ function validateSumeragiProposalRound(proposalRound, round, context) {
     proposalRound.context_id[0] !== round.context_id[0] ||
     proposalRound.height !== round.height
   ) {
-    throw new TypeError(`${context}.proposal_round must match round context and height`);
+    rejectType(`${context}.proposal_round must match round context and height`);
   }
   if (proposalRound.view !== round.view) {
-    throw new TypeError(`${context}.proposal_round must equal round`);
+    rejectType(`${context}.proposal_round must equal round`);
   }
 }
 
@@ -3064,7 +3031,7 @@ function parseSumeragiExecutionCommitment(value, context) {
   ]);
   const unknown = Object.keys(record).find((field) => !allowedFields.has(field));
   if (unknown !== undefined) {
-    throw new TypeError(`${context} contains unknown field ${unknown}`);
+    rejectType(`${context} contains unknown field ${unknown}`);
   }
   for (const field of [
     "kagemusha_top_up_root",
@@ -3072,7 +3039,7 @@ function parseSumeragiExecutionCommitment(value, context) {
     "merge_carrier",
   ]) {
     if (!Object.prototype.hasOwnProperty.call(record, field)) {
-      throw new TypeError(`${context}.${field} is required`);
+      rejectType(`${context}.${field} is required`);
     }
   }
   const kagemushaTopUpCount = parseSumeragiUnsigned(
@@ -3088,9 +3055,7 @@ function parseSumeragiExecutionCommitment(value, context) {
           `${context}.kagemusha_top_up_root`,
         );
   if ((kagemushaTopUpCount === 0) !== (kagemushaTopUpRoot === null)) {
-    throw new TypeError(
-      `${context}.kagemusha_top_up_root must be present exactly when kagemusha_top_up_count is positive`,
-    );
+    rejectType(`${context}.kagemusha_top_up_root must be present exactly when kagemusha_top_up_count is positive`);
   }
   const nativeManifestVersion = parseSumeragiUnsigned(
     record.native_amx_application_manifest_version,
@@ -3098,9 +3063,7 @@ function parseSumeragiExecutionCommitment(value, context) {
     { max: 0xffff },
   );
   if (nativeManifestVersion !== SUMERAGI_NATIVE_AMX_APPLICATION_MANIFEST_VERSION) {
-    throw new RangeError(
-      `${context}.native_amx_application_manifest_version must equal ${SUMERAGI_NATIVE_AMX_APPLICATION_MANIFEST_VERSION}`,
-    );
+    rejectRange(`${context}.native_amx_application_manifest_version must equal ${SUMERAGI_NATIVE_AMX_APPLICATION_MANIFEST_VERSION}`);
   }
   const nativeManifestRoot = parseSumeragiHash(
     record.native_amx_application_manifest_root,
@@ -3115,9 +3078,7 @@ function parseSumeragiExecutionCommitment(value, context) {
     (nativeManifestCount === 0) !==
     (nativeManifestRoot === SUMERAGI_NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT)
   ) {
-    throw new RangeError(
-      `${context}.native_amx_application_manifest_count must be zero exactly for the canonical empty root`,
-    );
+    rejectRange(`${context}.native_amx_application_manifest_count must be zero exactly for the canonical empty root`);
   }
   let laneFinalityManifest = null;
   if (record.lane_finality_manifest !== null) {
@@ -3128,13 +3089,13 @@ function parseSumeragiExecutionCommitment(value, context) {
       (field) => !Object.prototype.hasOwnProperty.call(laneRecord, field),
     );
     if (missingLaneField !== undefined) {
-      throw new TypeError(`${laneContext}.${missingLaneField} is required`);
+      rejectType(`${laneContext}.${missingLaneField} is required`);
     }
     const unknownLaneField = Object.keys(laneRecord).find(
       (field) => !laneFields.has(field),
     );
     if (unknownLaneField !== undefined) {
-      throw new TypeError(`${laneContext} contains unknown field ${unknownLaneField}`);
+      rejectType(`${laneContext} contains unknown field ${unknownLaneField}`);
     }
     laneFinalityManifest = Object.freeze({
       root: parseSumeragiHash(laneRecord.root, `${laneContext}.root`),
@@ -3154,13 +3115,13 @@ function parseSumeragiExecutionCommitment(value, context) {
       (field) => !Object.prototype.hasOwnProperty.call(mergeRecord, field),
     );
     if (missingMergeField !== undefined) {
-      throw new TypeError(`${mergeContext}.${missingMergeField} is required`);
+      rejectType(`${mergeContext}.${missingMergeField} is required`);
     }
     const unknownMergeField = Object.keys(mergeRecord).find(
       (field) => !mergeFields.has(field),
     );
     if (unknownMergeField !== undefined) {
-      throw new TypeError(`${mergeContext} contains unknown field ${unknownMergeField}`);
+      rejectType(`${mergeContext} contains unknown field ${unknownMergeField}`);
     }
     const mergeVersion = parseSumeragiUnsigned(
       mergeRecord.version,
@@ -3168,9 +3129,7 @@ function parseSumeragiExecutionCommitment(value, context) {
       { max: 0xffff },
     );
     if (mergeVersion !== SUMERAGI_MERGE_CARRIER_COMMITMENT_VERSION) {
-      throw new RangeError(
-        `${mergeContext}.version must equal ${SUMERAGI_MERGE_CARRIER_COMMITMENT_VERSION}`,
-      );
+      rejectRange(`${mergeContext}.version must equal ${SUMERAGI_MERGE_CARRIER_COMMITMENT_VERSION}`);
     }
     mergeCarrier = Object.freeze({
       version: mergeVersion,
@@ -3248,13 +3207,13 @@ export function parseSumeragiV2QcResponse(payload) {
   const allowedFields = new Set(["highest_prepare_qc", "locked_prepare_qc"]);
   const unknownField = Object.keys(record).find((field) => !allowedFields.has(field));
   if (unknownField !== undefined) {
-    throw new TypeError(`${context} contains unknown field ${unknownField}`);
+    rejectType(`${context} contains unknown field ${unknownField}`);
   }
   const missingField = [...allowedFields].find(
     (field) => !Object.prototype.hasOwnProperty.call(record, field),
   );
   if (missingField !== undefined) {
-    throw new TypeError(`${context}.${missingField} is required`);
+    rejectType(`${context}.${missingField} is required`);
   }
 
   const prepareQc = (field) => {
@@ -3266,7 +3225,7 @@ export function parseSumeragiV2QcResponse(payload) {
       `${context}.${field}`,
     );
     if (certificate.phase.phase !== "prepare") {
-      throw new TypeError(`${context}.${field} must reference a PrepareQC`);
+      rejectType(`${context}.${field} must reference a PrepareQC`);
     }
     return certificate;
   };
@@ -3322,7 +3281,7 @@ function parseSumeragiHeightContext(value, context) {
     quorum.min_signers !== expectedMinSigners ||
     quorum.total_power !== validatorCount
   ) {
-    throw new RangeError(`${context}.quorum is not canonical for validator_count`);
+    rejectRange(`${context}.quorum is not canonical for validator_count`);
   }
   const mode = parseSumeragiTaggedUnit(
     record.mode,
@@ -3380,7 +3339,7 @@ function parseSumeragiCommitQcStatus(value, context) {
     signerCount !== minSigners ||
     BigInt(signedPower) * 3n <= BigInt(totalPower) * 2n
   ) {
-    throw new RangeError(`${context} does not satisfy its exact frozen certificate quorum`);
+    rejectRange(`${context} does not satisfy its exact frozen certificate quorum`);
   }
   return Object.freeze({
     certificate: parseSumeragiQcReference(record.certificate, `${context}.certificate`),
@@ -3428,27 +3387,27 @@ function parseSumeragiLanePayloadOwnerships(value) {
       { positive: true },
     );
     if (!Array.isArray(record.accepted_candidate_indices)) {
-      throw new TypeError(`${itemContext}.accepted_candidate_indices must be an array`);
+      rejectType(`${itemContext}.accepted_candidate_indices must be an array`);
     }
     const acceptedCandidateIndices = record.accepted_candidate_indices.map((candidate, offset) =>
       parseSumeragiUnsigned(candidate, `${itemContext}.accepted_candidate_indices[${offset}]`),
     );
     if (acceptedCandidateIndices.length === 0) {
-      throw new TypeError(`${itemContext}.accepted_candidate_indices must not be empty`);
+      rejectType(`${itemContext}.accepted_candidate_indices must not be empty`);
     }
     for (let offset = 1; offset < acceptedCandidateIndices.length; offset += 1) {
       if (acceptedCandidateIndices[offset - 1] >= acceptedCandidateIndices[offset]) {
-        throw new TypeError(`${itemContext}.accepted_candidate_indices must be strictly ordered`);
+        rejectType(`${itemContext}.accepted_candidate_indices must be strictly ordered`);
       }
     }
     if (!Array.isArray(record.accepted_transaction_hashes)) {
-      throw new TypeError(`${itemContext}.accepted_transaction_hashes must be an array`);
+      rejectType(`${itemContext}.accepted_transaction_hashes must be an array`);
     }
     const acceptedTransactionHashes = record.accepted_transaction_hashes.map((hash, offset) =>
       parseSumeragiHash(hash, `${itemContext}.accepted_transaction_hashes[${offset}]`),
     );
     if (acceptedTransactionHashes.length !== acceptedCandidateIndices.length) {
-      throw new TypeError(`${itemContext} candidate/hash counts must match`);
+      rejectType(`${itemContext} candidate/hash counts must match`);
     }
     const validators = assertSumeragiArrayBound(
       record.lane_block_descriptor_validator_set,
@@ -3465,9 +3424,7 @@ function parseSumeragiLanePayloadOwnerships(value) {
       new Set(validators).size !== validators.length ||
       validators.some((validator, offset) => offset > 0 && validators[offset - 1] >= validator)
     ) {
-      throw new TypeError(
-        `${itemContext}.lane_block_descriptor_validator_set must be canonical and unique`,
-      );
+      rejectType(`${itemContext}.lane_block_descriptor_validator_set must be canonical and unique`);
     }
     const validatorCount = parseSumeragiUnsigned(
       record.lane_block_descriptor_validator_count,
@@ -3480,14 +3437,14 @@ function parseSumeragiLanePayloadOwnerships(value) {
       { positive: true, max: 128 },
     );
     if (validatorCount !== validators.length || minQuorum > validatorCount) {
-      throw new RangeError(`${itemContext} descriptor quorum does not match its validator set`);
+      rejectRange(`${itemContext} descriptor quorum does not match its validator set`);
     }
     const previousHeight = parseSumeragiUnsigned(
       record.previous_lane_block_height,
       `${itemContext}.previous_lane_block_height`,
     );
     if (!sumeragiUnsignedSuccessorOf(laneBlockHeight, previousHeight)) {
-      throw new RangeError(`${itemContext}.previous_lane_block_height must precede lane_block_height`);
+      rejectRange(`${itemContext}.previous_lane_block_height must precede lane_block_height`);
     }
     const previousDescriptor =
       record.previous_lane_block_descriptor_hash == null
@@ -3497,10 +3454,10 @@ function parseSumeragiLanePayloadOwnerships(value) {
             `${itemContext}.previous_lane_block_descriptor_hash`,
           );
     if (previousHeight === 0 && previousDescriptor !== null) {
-      throw new TypeError(`${itemContext} genesis lane block must not name a predecessor descriptor`);
+      rejectType(`${itemContext} genesis lane block must not name a predecessor descriptor`);
     }
     if (record.lane_block_descriptor_hash == null) {
-      throw new TypeError(`${itemContext}.lane_block_descriptor_hash is required`);
+      rejectType(`${itemContext}.lane_block_descriptor_hash is required`);
     }
     return Object.freeze({
       proposal_height: parseSumeragiUnsigned(record.proposal_height, `${itemContext}.proposal_height`),
@@ -3607,16 +3564,14 @@ function parseSumeragiCommittedLaneBlocks(value) {
       (!unavailableStatuses.has(executionStatus) && !availableStatuses.has(executionStatus)) ||
       (availableStatuses.has(executionStatus) !== executablePayloadAvailable)
     ) {
-      throw new TypeError(
-        `${itemContext}.execution_status disagrees with executable_payload_available`,
-      );
+      rejectType(`${itemContext}.execution_status disagrees with executable_payload_available`);
     }
     if (
       minQuorum > validatorCount ||
       prepareSigners !== minQuorum ||
       commitSigners !== minQuorum
     ) {
-      throw new RangeError(`${itemContext} carries an impossible certified quorum`);
+      rejectRange(`${itemContext} carries an impossible certified quorum`);
     }
     return Object.freeze({
       lane_id: parseSumeragiUnsigned(record.lane_id, `${itemContext}.lane_id`, { max: 0xffffffff }),
@@ -3689,7 +3644,7 @@ function parseSumeragiLaneBlockSessions(value) {
     );
     if (validatorCount === 0) {
       if (minQuorum !== 0 || prepareVotes !== 0 || commitVotes !== 0) {
-        throw new RangeError(`${itemContext} carries impossible session quorum counts`);
+        rejectRange(`${itemContext} carries impossible session quorum counts`);
       }
     } else if (
       minQuorum === 0 ||
@@ -3697,7 +3652,7 @@ function parseSumeragiLaneBlockSessions(value) {
       prepareVotes > validatorCount ||
       commitVotes > validatorCount
     ) {
-      throw new RangeError(`${itemContext} carries impossible session quorum counts`);
+      rejectRange(`${itemContext} carries impossible session quorum counts`);
     }
     return Object.freeze({
       lane_id: parseSumeragiUnsigned(record.lane_id, `${itemContext}.lane_id`, { max: 0xffffffff }),
@@ -3732,7 +3687,7 @@ function parseSumeragiLaneBlockSessions(value) {
 function parseSumeragiNonzeroHash(value, context) {
   const hash = parseSumeragiHash(value, context);
   if (/^0{64}$/u.test(hash.slice(5, 69))) {
-    throw new TypeError(`${context} must not be the zero hash`);
+    rejectType(`${context} must not be the zero hash`);
   }
   return hash;
 }
@@ -3747,7 +3702,7 @@ function sumeragiSubjectsEqual(left, right) {
 
 function ensureRecord(value, context) {
   if (!isPlainObject(value)) {
-    throw new TypeError(`${context} must be an object`);
+    rejectType(`${context} must be an object`);
   }
   return value;
 }
@@ -3834,18 +3789,16 @@ function requireCanonicalNumeric(value, name) {
 function parseHashLiteralToHex(literal, name) {
   const match = /^hash:([0-9A-Fa-f]{64})#([0-9A-Fa-f]{4})$/.exec(literal);
   if (!match) {
-    throw new TypeError(
-      `${name} must be a canonical "hash:<HEX>#<CRC>" literal or hex string`,
-    );
+    rejectType(`${name} must be a canonical "hash:<HEX>#<CRC>" literal or hex string`);
   }
   const [, body, checksum] = match;
   const expected = computeHashLiteralCrc("hash", body.toUpperCase());
   if (expected !== checksum.toUpperCase()) {
-    throw new TypeError(`${name} has invalid checksum; expected ${expected}`);
+    rejectType(`${name} has invalid checksum; expected ${expected}`);
   }
   const hex = body.toLowerCase();
   if ((Number.parseInt(hex.slice(-2), 16) & 1) !== 1) {
-    throw new TypeError(`${name} must set the Iroha Hash marker bit`);
+    rejectType(`${name} must set the Iroha Hash marker bit`);
   }
   return hex;
 }

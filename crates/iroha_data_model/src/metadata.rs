@@ -74,10 +74,11 @@ impl ncore::SerializePayload for MetadataEntryRef<'_> {
     }
 }
 
-impl<'de> ncore::NoritoDeserialize<'de> for Metadata {
+impl ncore::NoritoDeserialize<'_> for Metadata {}
+impl<'de> ncore::DeserializePayload<'de> for Metadata {
     fn deserialize(archived: &'de ncore::Archived<Self>) -> Self {
         let entries: Vec<(Name, Json)> =
-            <Vec<(Name, Json)> as ncore::NoritoDeserialize>::deserialize(archived.cast());
+            <Vec<(Name, Json)> as ncore::DeserializePayload>::deserialize(archived.cast());
         let mut map = BTreeMap::new();
         for (name, json) in entries {
             map.insert(name, json);
@@ -86,7 +87,7 @@ impl<'de> ncore::NoritoDeserialize<'de> for Metadata {
     }
     fn try_deserialize(archived: &'de ncore::Archived<Self>) -> Result<Self, ncore::Error> {
         let entries =
-            <Vec<(Name, Json)> as ncore::NoritoDeserialize>::try_deserialize(archived.cast())?;
+            <Vec<(Name, Json)> as ncore::DeserializePayload>::try_deserialize(archived.cast())?;
         let mut map = BTreeMap::new();
         for (name, json) in entries {
             if map.insert(name, json).is_some() {
@@ -205,7 +206,7 @@ mod tests {
         }
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::FastJsonWrite for Metadata {
     fn write_json(&self, out: &mut String) {
         out.push('{');
@@ -241,7 +242,7 @@ impl norito::json::FastJsonWrite for Metadata {
         Ok(())
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonDeserialize for Metadata {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -260,7 +261,7 @@ impl norito::json::JsonDeserialize for Metadata {
         for (key, val) in map {
             let name = Name::from_str(&key).map_err(|err| norito::json::Error::InvalidField {
                 field: key.clone(),
-                message: err.reason.into(),
+                message: err.reason().into(),
             })?;
             let json = Json::from_norito_value_ref(&val)
                 .map_err(|e| norito::json::Error::Message(e.to_string()))?;

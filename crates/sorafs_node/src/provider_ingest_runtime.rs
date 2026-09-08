@@ -39,10 +39,12 @@ use iroha_data_model::{
     },
     transaction::{SignedTransaction, TransactionPayload},
 };
+#[cfg(test)]
+use norito::decode_from_bytes_with_limits;
 use norito::{
     codec::Encode as _,
     core::DecodeLimits,
-    decode_from_bytes_with_limits,
+    decode_canonical_with_limits,
     derive::{NoritoDeserialize, NoritoSerialize},
 };
 use sorafs_car::{
@@ -872,15 +874,7 @@ impl ProviderIngestFinalizedClaimFactoryV1 {
             .map_err(|_| ProviderIngestFinalizedLedgerErrorV1::Rejected)?;
         let commitment = &binding.commitment;
         let provider_id = ProviderId::new(self.provider_id);
-        let canonical_order = decode_from_bytes_with_limits::<ReplicationOrderV1>(
-            &expected_order.canonical_order,
-            REPLICATION_ORDER_DECODE_LIMITS_V1,
-        )
-        .map_err(|_| ProviderIngestFinalizedLedgerErrorV1::Rejected)?;
-        canonical_order
-            .validate()
-            .map_err(|_| ProviderIngestFinalizedLedgerErrorV1::Rejected)?;
-        let canonical_bytes = norito::to_bytes(&canonical_order)
+        let canonical_order = decode_bound_replication_order(expected_order)
             .map_err(|_| ProviderIngestFinalizedLedgerErrorV1::Rejected)?;
         let mut provider_completions = expected_order
             .provider_completions
@@ -894,7 +888,6 @@ impl ProviderIngestFinalizedClaimFactoryV1 {
             || observed_finalized_cursor.height == 0
             || observed_finalized_cursor.block_hash == [0; 32]
             || provider_id != expected_provider_id
-            || canonical_bytes != expected_order.canonical_order
             || canonical_order.order_id != *expected_order.order_id.as_bytes()
             || canonical_order.manifest_digest != *expected_order.manifest_digest.as_bytes()
             || canonical_order.manifest_cid.as_slice()
@@ -1789,9 +1782,13 @@ impl ProviderIngestVerifiedMusubiBundleReceiptV1 {
             && commitment.content_length == authorization.content_length()
             && !self.semantic_release_manifest_digest.is_zero()
             && !self.verification_lock_digest.is_zero()
-            && norito::to_bytes(&self.to_stored()).is_ok_and(|encoded| {
-                encoded.len() <= PROVIDER_INGEST_VERIFIED_MUSUBI_RECEIPT_MAX_CANONICAL_BYTES_V1
+            && self.canonical_stored_len().is_ok_and(|length| {
+                length <= PROVIDER_INGEST_VERIFIED_MUSUBI_RECEIPT_MAX_CANONICAL_BYTES_V1
             })
+    }
+    /// Measure the actual canonical receipt frame without allocating another encoded copy.
+    fn canonical_stored_len(&self) -> Result<usize, norito::Error> {
+        norito::canonical_frame_len(&self.to_stored())
     }
     /// Domain-separated semantic release-manifest digest parsed from the bundle.
     #[must_use]
@@ -3887,6 +3884,33 @@ fn validate_assignment(
         policy.max_source_providers,
     )
 }
+/// Decode the single canonical order and bind every duplicated immutable record field.
+fn decode_bound_replication_order(
+    record: &ReplicationOrderRecord,
+) -> Result<ReplicationOrderV1, ProviderIngestRuntimeErrorV1> {
+    if record.canonical_order.is_empty()
+        || record.canonical_order.len() > REPLICATION_ORDER_MAX_CANONICAL_BYTES_V1
+    {
+        return Err(ProviderIngestRuntimeErrorV1::InvalidFinalizedBinding);
+    }
+    let order = decode_canonical_with_limits::<ReplicationOrderV1>(
+        &record.canonical_order,
+        REPLICATION_ORDER_DECODE_LIMITS_V1,
+    )
+    .map_err(|_| ProviderIngestRuntimeErrorV1::InvalidFinalizedBinding)?;
+    order
+        .validate()
+        .map_err(|_| ProviderIngestRuntimeErrorV1::InvalidFinalizedBinding)?;
+    if order.order_id != *record.order_id.as_bytes()
+        || order.manifest_digest != *record.manifest_digest.as_bytes()
+        || order.manifest_cid.as_slice() != record.manifest_root_cid.as_bytes()
+        || order.issued_at != record.issued_epoch
+        || order.deadline_at != record.deadline_epoch
+    {
+        return Err(ProviderIngestRuntimeErrorV1::InvalidFinalizedBinding);
+    }
+    Ok(order)
+}
 fn validate_assignment_with_source_bound(
     row: &ProviderIngestFinalizedAssignmentV1,
     cursor: ProviderIngestFinalizedCursorV1,
@@ -3910,21 +3934,8 @@ fn validate_assignment_with_source_bound(
     {
         return Err(ProviderIngestRuntimeErrorV1::InvalidFinalizedBinding);
     }
-    let order = decode_from_bytes_with_limits::<ReplicationOrderV1>(
-        &row.order.canonical_order,
-        REPLICATION_ORDER_DECODE_LIMITS_V1,
-    )
-    .map_err(|_| ProviderIngestRuntimeErrorV1::InvalidFinalizedBinding)?;
-    order
-        .validate()
-        .map_err(|_| ProviderIngestRuntimeErrorV1::InvalidFinalizedBinding)?;
-    let canonical = norito::to_bytes(&order)
-        .map_err(|_| ProviderIngestRuntimeErrorV1::InvalidFinalizedBinding)?;
-    if canonical != row.order.canonical_order
-        || order.order_id != *row.order.order_id.as_bytes()
-        || order.manifest_digest != *row.order.manifest_digest.as_bytes()
-        || order.manifest_cid.as_slice() != row.order.manifest_root_cid.as_bytes()
-        || row.pin.manifest.digest != row.order.manifest_digest
+    let order = decode_bound_replication_order(&row.order)?;
+    if row.pin.manifest.digest != row.order.manifest_digest
         || row.pin.manifest.root_cid != row.order.manifest_root_cid
         || row.pin.manifest.chunker.to_handle() != order.chunking_profile
     {
@@ -4128,11 +4139,7 @@ fn authorization_from_status_and_row(
     row: &ProviderIngestFinalizedAssignmentV1,
     cursor: ProviderIngestFinalizedCursorV1,
 ) -> Result<FinalizedProviderIngestAuthorizationV1, ProviderIngestRuntimeErrorV1> {
-    let order = decode_from_bytes_with_limits::<ReplicationOrderV1>(
-        &row.order.canonical_order,
-        REPLICATION_ORDER_DECODE_LIMITS_V1,
-    )
-    .map_err(|_| ProviderIngestRuntimeErrorV1::InvalidFinalizedBinding)?;
+    let order = decode_bound_replication_order(&row.order)?;
     let authorization = if let Some(claim) = row.musubi_archive.as_ref() {
         FinalizedProviderIngestAuthorizationV1::from_finalized_musubi_state(
             cursor.height,
@@ -4218,4 +4225,5 @@ mod tests {
     include!("provider_ingest_runtime/tests/support.rs");
     include!("provider_ingest_runtime/tests/capture_source.rs");
     include!("provider_ingest_runtime/tests/runtime.rs");
+    include!("provider_ingest_runtime/tests/canonical_order.rs");
 }

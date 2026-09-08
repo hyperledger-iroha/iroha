@@ -16,7 +16,7 @@ use iroha_data_model::{
     role::RoleId,
 };
 use iroha_primitives::json::Json;
-use norito::core::{NoritoSerialize, SerializePayload};
+use norito::core::SerializePayload;
 use std::{
     alloc::{GlobalAlloc, Layout, System},
     cell::Cell,

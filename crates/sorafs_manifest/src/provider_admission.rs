@@ -582,7 +582,7 @@ fn validate_jurisdiction_code(code: &str) -> Result<(), ProviderAdmissionValidat
 pub fn compute_proposal_digest(
     proposal: &ProviderAdmissionProposalV1,
 ) -> Result<[u8; 32], NoritoError> {
-    let bytes = norito::to_bytes(proposal)?;
+    let bytes = norito::encode_canonical(proposal)?;
     let mut hasher = Hasher::new();
     hasher.update(PROPOSAL_DIGEST_DOMAIN);
     hasher.update(&bytes);
@@ -592,7 +592,7 @@ pub fn compute_proposal_digest(
 pub fn compute_advert_body_digest(
     advert_body: &ProviderAdvertBodyV1,
 ) -> Result<[u8; 32], NoritoError> {
-    let bytes = norito::to_bytes(advert_body)?;
+    let bytes = norito::encode_canonical(advert_body)?;
     let mut hasher = Hasher::new();
     hasher.update(ADVERT_BODY_DIGEST_DOMAIN);
     hasher.update(&bytes);
@@ -609,7 +609,7 @@ pub fn compute_envelope_authorization_digest(
 ) -> Result<[u8; 32], NoritoError> {
     let mut unsigned_envelope = envelope.clone();
     unsigned_envelope.council_signatures.clear();
-    let bytes = norito::to_bytes(&unsigned_envelope)?;
+    let bytes = norito::encode_canonical(&unsigned_envelope)?;
     let mut hasher = Hasher::new();
     hasher.update(ENVELOPE_AUTHORIZATION_DIGEST_DOMAIN);
     hasher.update(&bytes);
@@ -619,7 +619,7 @@ pub fn compute_envelope_authorization_digest(
 pub fn compute_envelope_digest(
     envelope: &ProviderAdmissionEnvelopeV1,
 ) -> Result<[u8; 32], NoritoError> {
-    let bytes = norito::to_bytes(envelope)?;
+    let bytes = norito::encode_canonical(envelope)?;
     let mut hasher = Hasher::new();
     hasher.update(ENVELOPE_DIGEST_DOMAIN);
     hasher.update(&bytes);
@@ -1341,7 +1341,7 @@ impl ProviderAdmissionRevocationV1 {
             reason: self.reason.as_str(),
             notes: self.notes.as_deref(),
         };
-        let bytes = norito::to_bytes(&body)?;
+        let bytes = norito::encode_canonical(&body)?;
         let mut hasher = Hasher::new();
         hasher.update(REVOCATION_DIGEST_DOMAIN);
         hasher.update(&bytes);
@@ -2489,4 +2489,5 @@ mod tests {
             ProviderAdmissionRevocationError::EnvelopeDigestMismatch { .. }
         ));
     }
+    include!("provider_admission/tests/canonical_preimages.rs");
 }

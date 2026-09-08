@@ -849,7 +849,8 @@ impl norito::core::SerializePayload for BoundedCanonicalRequestSignatureV1 {
     }
 }
 
-impl<'de> norito::core::NoritoDeserialize<'de> for BoundedCanonicalRequestSignatureV1 {
+impl norito::core::NoritoDeserialize<'_> for BoundedCanonicalRequestSignatureV1 {}
+impl<'de> norito::core::DeserializePayload<'de> for BoundedCanonicalRequestSignatureV1 {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("bounded canonical request signature decode")
     }
@@ -912,7 +913,8 @@ impl norito::core::SerializePayload for BoundedCanonicalRequestWitnessSignatures
     }
 }
 
-impl<'de> norito::core::NoritoDeserialize<'de> for BoundedCanonicalRequestWitnessSignaturesV1 {
+impl norito::core::NoritoDeserialize<'_> for BoundedCanonicalRequestWitnessSignaturesV1 {}
+impl<'de> norito::core::DeserializePayload<'de> for BoundedCanonicalRequestWitnessSignaturesV1 {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("bounded canonical request witness decode")
     }
@@ -984,7 +986,8 @@ mod bounded_nonce_wire {
         fn schema_hash() -> [u8; 16] {
             <std::string::String as norito::core::NoritoDeserialize<'de>>::schema_hash()
         }
-
+    }
+    impl<'de> norito::core::DeserializePayload<'de> for String {
         fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
             Self::try_deserialize(archived).expect("bounded canonical request nonce decode")
         }
@@ -1067,7 +1070,8 @@ impl<'de> norito::core::NoritoDeserialize<'de> for BoundedCanonicalRequestWitnes
     fn schema_hash() -> [u8; 16] {
         <CanonicalRequestWitnessV1 as norito::core::NoritoDeserialize<'de>>::schema_hash()
     }
-
+}
+impl<'de> norito::core::DeserializePayload<'de> for BoundedCanonicalRequestWitnessV1 {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("bounded canonical request witness decode")
     }
@@ -1075,7 +1079,7 @@ impl<'de> norito::core::NoritoDeserialize<'de> for BoundedCanonicalRequestWitnes
     fn try_deserialize(
         archived: &'de norito::core::Archived<Self>,
     ) -> Result<Self, norito::core::Error> {
-        <BoundedCanonicalRequestWitnessWireV1 as norito::core::NoritoDeserialize<'de>>::try_deserialize(
+        <BoundedCanonicalRequestWitnessWireV1 as norito::core::DeserializePayload<'de>>::try_deserialize(
             archived.cast::<BoundedCanonicalRequestWitnessWireV1>(),
         )
         .map(Self)

@@ -25,7 +25,7 @@ use ivm::{
     sum::SumLayoutV1,
 };
 use norito::{
-    codec::{Decode, Encode},
+    codec::Encode,
     json::{self, Map, Value},
 };
 use std::str;
@@ -246,7 +246,7 @@ fn decode_canonical<T>(
     kind: &'static str,
 ) -> Result<T, EntrypointReturnDecodeError>
 where
-    T: Decode + Encode,
+    T: for<'__frame> norito::NoritoDeserialize<'__frame> + norito::NoritoSerialize,
 {
     decode_canonical_norito(payload).map_err(|error| EntrypointReturnDecodeError::InvalidValue {
         register,
@@ -417,7 +417,10 @@ fn return_node_child_count(node: &EntrypointValueTypeNodeV1) -> usize {
         EntrypointValueTypeNodeV1::Tuple(arity) => usize::from(*arity),
         EntrypointValueTypeNodeV1::Option | EntrypointValueTypeNodeV1::List(_) => 1,
         EntrypointValueTypeNodeV1::Result => 2,
-        EntrypointValueTypeNodeV1::Leaf(_) => 0,
+        EntrypointValueTypeNodeV1::Leaf(_)
+        | EntrypointValueTypeNodeV1::Unit
+        | EntrypointValueTypeNodeV1::Error(_)
+        | EntrypointValueTypeNodeV1::StateCursor(_) => 0,
     }
 }
 /// Take exactly one checked preorder subtree and advance the shared cursor.
@@ -488,13 +491,65 @@ fn return_node_word_count(
             EntrypointValueTypeNodeV1::Option
             | EntrypointValueTypeNodeV1::Result
             | EntrypointValueTypeNodeV1::List(_)
-            | EntrypointValueTypeNodeV1::Leaf(_) => 1,
+            | EntrypointValueTypeNodeV1::Leaf(_)
+            | EntrypointValueTypeNodeV1::Unit
+            | EntrypointValueTypeNodeV1::Error(_)
+            | EntrypointValueTypeNodeV1::StateCursor(_) => 1,
         };
         rendered.push(words);
     }
     (rendered.len() == 1)
         .then(|| rendered[0])
         .ok_or(EntrypointReturnDecodeError::InvalidSchema)
+}
+fn nominal_scalar_atom(
+    node: &EntrypointValueTypeNodeV1,
+    word: u64,
+) -> Result<EntrypointValueAtomV1, EntrypointReturnDecodeError> {
+    match node {
+        EntrypointValueTypeNodeV1::Unit if word == 0 => Ok(EntrypointValueAtomV1::Unit),
+        EntrypointValueTypeNodeV1::Error(error) => {
+            let code =
+                u32::try_from(word).map_err(|_| EntrypointReturnDecodeError::InvalidSchema)?;
+            error
+                .variant(code)
+                .ok_or(EntrypointReturnDecodeError::InvalidSchema)?;
+            Ok(EntrypointValueAtomV1::ErrorCode(code))
+        }
+        _ => Err(EntrypointReturnDecodeError::InvalidSchema),
+    }
+}
+fn collect_cursor_pointer(
+    vm: &IVM,
+    pointer: u64,
+    register: usize,
+    key: EntrypointValueKindV1,
+    atoms: &mut Vec<EntrypointValueAtomV1>,
+    budget: &mut ReturnRecordBudget,
+) -> Result<(), EntrypointReturnDecodeError> {
+    let tlv = vm
+        .validate_tlv(pointer)
+        .map_err(|error| handle_decode_error(register, "StateCursor", error))?;
+    if tlv.type_id != PointerType::NoritoBytes {
+        return Err(EntrypointReturnDecodeError::PointerType {
+            register,
+            expected: PointerType::NoritoBytes,
+            actual: tlv.type_id,
+        });
+    }
+    // Reserve the entire owned envelope before cloning attacker-controlled bytes.
+    let bytes = budget.reserve_pointer(tlv.payload.len())?;
+    let envelope = vm
+        .memory
+        .load_region(
+            pointer,
+            u64::try_from(bytes).map_err(|_| EntrypointReturnDecodeError::InvalidSchema)?,
+        )
+        .map_err(|error| handle_decode_error(register, "StateCursor", error))?;
+    ivm::state_cursor::validate_cursor_envelope(key, envelope)
+        .map_err(|error| handle_decode_error(register, "StateCursor", error))?;
+    atoms.push(EntrypointValueAtomV1::Pointer(envelope.to_vec()));
+    Ok(())
 }
 fn collect_leaf_from_words(
     vm: &IVM,
@@ -931,6 +986,35 @@ fn collect_node_from_words(
                         remaining: raw_items.into_iter(),
                     });
                 }
+                EntrypointValueTypeNodeV1::StateCursor(key) => {
+                    let pointer =
+                        next_word(&mut inputs, input, register, "cursor is missing its handle")?;
+                    collect_cursor_pointer(vm, pointer, register, *key, atoms, budget)?;
+                }
+                node @ (EntrypointValueTypeNodeV1::Unit | EntrypointValueTypeNodeV1::Error(_)) => {
+                    let current = inputs
+                        .get(input)
+                        .ok_or(EntrypointReturnDecodeError::InvalidSchema)?
+                        .position();
+                    let word = match inputs
+                        .get(input)
+                        .ok_or(EntrypointReturnDecodeError::InvalidSchema)?
+                    {
+                        WordInput::Borrowed { words, .. } => words.get(current),
+                        WordInput::Owned { words, .. } => words.get(current),
+                    }
+                    .copied()
+                    .ok_or(EntrypointReturnDecodeError::InvalidSchema)?;
+                    push_atom(atoms, budget, nominal_scalar_atom(node, word)?)?;
+                    match inputs
+                        .get_mut(input)
+                        .ok_or(EntrypointReturnDecodeError::InvalidSchema)?
+                    {
+                        WordInput::Borrowed { index, .. } | WordInput::Owned { index, .. } => {
+                            *index = current + 1
+                        }
+                    }
+                }
                 EntrypointValueTypeNodeV1::Leaf(kind) => {
                     let words = match inputs
                         .get(input)
@@ -1155,6 +1239,14 @@ fn collect_node(
                     atoms,
                     cursor.budget,
                 )?;
+            }
+            EntrypointValueTypeNodeV1::StateCursor(key) => {
+                let (register, pointer) = cursor.public_scalar()?;
+                collect_cursor_pointer(cursor.vm, pointer, register, *key, atoms, cursor.budget)?;
+            }
+            node @ (EntrypointValueTypeNodeV1::Unit | EntrypointValueTypeNodeV1::Error(_)) => {
+                let (_, word) = cursor.public_scalar()?;
+                push_atom(atoms, cursor.budget, nominal_scalar_atom(node, word)?)?;
             }
             EntrypointValueTypeNodeV1::Leaf(kind) => collect_leaf(cursor, *kind, atoms)?,
         }
@@ -1588,6 +1680,41 @@ fn render_node(
                         atom_start: first_item_atom,
                     });
                 }
+                EntrypointValueTypeNodeV1::StateCursor(key) => {
+                    let Some(EntrypointValueAtomV1::Pointer(envelope)) =
+                        atoms.get(visit.atom_start)
+                    else {
+                        return Err(EntrypointReturnDecodeError::InvalidSchema);
+                    };
+                    let register = FIRST_RETURN_REGISTER.saturating_add(visit.atom_start);
+                    ivm::state_cursor::validate_cursor_envelope(*key, envelope)
+                        .map_err(|error| handle_decode_error(register, "StateCursor", error))?;
+                    let tlv = ivm::pointer_abi::validate_tlv_bytes(envelope)
+                        .map_err(|error| handle_decode_error(register, "StateCursor", error))?;
+                    completed = Some((
+                        Value::String(format!("0x{}", hex::encode(tlv.payload))),
+                        visit.atom_start + 1,
+                    ));
+                }
+                EntrypointValueTypeNodeV1::Unit => {
+                    if !matches!(
+                        atoms.get(visit.atom_start),
+                        Some(EntrypointValueAtomV1::Unit)
+                    ) {
+                        return Err(EntrypointReturnDecodeError::InvalidSchema);
+                    }
+                    completed = Some((Value::Null, visit.atom_start + 1));
+                }
+                EntrypointValueTypeNodeV1::Error(error) => {
+                    let Some(EntrypointValueAtomV1::ErrorCode(code)) = atoms.get(visit.atom_start)
+                    else {
+                        return Err(EntrypointReturnDecodeError::InvalidSchema);
+                    };
+                    let variant = error
+                        .variant(*code)
+                        .ok_or(EntrypointReturnDecodeError::InvalidSchema)?;
+                    completed = Some((Value::String(variant.name.clone()), visit.atom_start + 1));
+                }
                 EntrypointValueTypeNodeV1::Leaf(kind) => {
                     let mut next_atom = visit.atom_start;
                     let value = render_leaf(atoms, &mut next_atom, *kind)?;
@@ -1749,7 +1876,7 @@ pub fn decode_entrypoint_return_record(
     let _ = render_entrypoint_return_record_validated(schema, &record)?;
     Ok(record)
 }
-/// Decode a non-unit return value from `r10..r22` for Torii/CLI JSON output.
+/// Decode a schema-bound return value from `r10..r22` for Torii/CLI JSON output.
 ///
 /// Only the active `Option`/`Result` branch is read. Runtime-to-runtime calls should use
 /// [`encode_entrypoint_return_record`] and keep the wire representation typed.
@@ -1910,15 +2037,15 @@ mod tests {
             .expect("encode record canonically under ambient layout");
         assert_eq!(encoded_under_ambient, canonical_record);
         assert_eq!(Hash::new(&encoded_under_ambient), canonical_record_hash);
-        assert!(
-            length_probe_record.encoded_len() > canonical_length_probe.len(),
-            "alternate bare length must exceed the canonical framed limit for this probe"
-        );
         assert_eq!(
             exact_record_bytes(&length_probe_record, canonical_length_probe.len())
                 .expect("canonical length admission must ignore ambient layout"),
             canonical_length_probe
         );
+        assert!(matches!(
+            exact_record_bytes(&length_probe_record, canonical_length_probe.len() - 1),
+            Err(EntrypointReturnDecodeError::RecordTooLarge { .. })
+        ));
         assert_eq!(
             decode_entrypoint_return_record(&schema, &canonical_record)
                 .expect("decode canonical record under ambient layout"),
@@ -2125,6 +2252,153 @@ mod tests {
                 "label": "言挙げ",
             })
         );
+    }
+    #[test]
+    fn unit_and_nominal_errors_roundtrip_in_registers_and_nested_values() {
+        let error = ivm::error_types::list_error_type();
+        let schema = EntrypointValueTypeV1 {
+            nodes: vec![
+                EntrypointValueTypeNodeV1::Tuple(3),
+                EntrypointValueTypeNodeV1::Unit,
+                EntrypointValueTypeNodeV1::Error(error.clone()),
+                EntrypointValueTypeNodeV1::List(EntrypointListTypeNodeV1 { capacity: 2 }),
+                EntrypointValueTypeNodeV1::Result,
+                EntrypointValueTypeNodeV1::Unit,
+                EntrypointValueTypeNodeV1::Error(error),
+            ],
+        };
+        let mut vm = IVM::new(100_000);
+        let layout = SumLayoutV1::try_new(1, 1).unwrap();
+        let ok = ivm::sum::allocate_words(&mut vm, layout, 1, &[0]).unwrap();
+        let err = ivm::sum::allocate_words(&mut vm, layout, 0, &[2]).unwrap();
+        let items = ivm::list::allocate_words(
+            &mut vm,
+            ListLayoutV1::try_new(2, 1).unwrap(),
+            &[vec![ok], vec![err]],
+        )
+        .unwrap();
+        for (offset, word) in [0, 1, items].into_iter().enumerate() {
+            vm.set_register(FIRST_RETURN_REGISTER + offset, word);
+        }
+        let expected = norito::json!([
+            null,
+            "IndexOutOfBounds",
+            [{ "ok": null }, { "err": "CapacityExceeded" }]
+        ]);
+        assert_eq!(decode_entrypoint_return(&vm, &schema).unwrap(), expected);
+        let encoded = encode_entrypoint_return_record_bytes(&vm, &schema).unwrap();
+        let record = decode_entrypoint_return_record(&schema, &encoded).unwrap();
+        assert_eq!(
+            render_entrypoint_return_record(&schema, &record).unwrap(),
+            expected
+        );
+
+        let mut wrong_identity = schema.clone();
+        let EntrypointValueTypeNodeV1::Error(error) = &mut wrong_identity.nodes[2] else {
+            unreachable!();
+        };
+        error.identity = "different-package@1.0.0::unit::ListError".to_owned();
+        assert!(decode_entrypoint_return_record(&wrong_identity, &encoded).is_err());
+        let mut wrong_schema = schema.clone();
+        let EntrypointValueTypeNodeV1::Error(error) = &mut wrong_schema.nodes[2] else {
+            unreachable!();
+        };
+        error.variants[0].name = "DifferentVariant".to_owned();
+        assert!(decode_entrypoint_return_record(&wrong_schema, &encoded).is_err());
+        let mut wrong_code = record;
+        wrong_code.atoms[1] = EntrypointValueAtomV1::ErrorCode(3);
+        assert!(render_entrypoint_return_record(&schema, &wrong_code).is_err());
+
+        vm.set_register(FIRST_RETURN_REGISTER, 1);
+        assert!(
+            decode_entrypoint_return(&vm, &schema).is_err(),
+            "Unit is exactly zero"
+        );
+        vm.set_register(FIRST_RETURN_REGISTER, 0);
+        vm.set_register(FIRST_RETURN_REGISTER + 1, u64::from(u32::MAX) + 1);
+        assert!(
+            decode_entrypoint_return(&vm, &schema).is_err(),
+            "codes cannot truncate"
+        );
+        vm.set_register(FIRST_RETURN_REGISTER + 1, 1);
+        let bad_ok = ivm::sum::allocate_words(&mut vm, layout, 1, &[1]).unwrap();
+        let bad_items = ivm::list::allocate_words(
+            &mut vm,
+            ListLayoutV1::try_new(2, 1).unwrap(),
+            &[vec![bad_ok]],
+        )
+        .unwrap();
+        vm.set_register(FIRST_RETURN_REGISTER + 2, bad_items);
+        assert!(
+            decode_entrypoint_return(&vm, &schema).is_err(),
+            "nested Unit is exactly zero"
+        );
+    }
+    #[test]
+    fn opaque_cursors_roundtrip_directly_and_inside_lists_and_options() {
+        let cursor = iroha_data_model::smart_contract::state_cursor::StateCursorV1 {
+            instance: "local::counter".to_owned(),
+            map: "balances".parse().unwrap(),
+            schema_hash: [7; 32],
+            key_type: EntrypointValueKindV1::Int,
+            last_key: "balances/01".parse().unwrap(),
+        };
+        let payload = cursor.encode_frame().expect("canonical cursor frame");
+        let scalar = EntrypointValueTypeV1 {
+            nodes: vec![EntrypointValueTypeNodeV1::StateCursor(
+                EntrypointValueKindV1::Int,
+            )],
+        };
+        let mut vm = IVM::new(10_000);
+        let pointer = input_tlv(&mut vm, PointerType::NoritoBytes, &payload);
+        vm.set_register(FIRST_RETURN_REGISTER, pointer);
+        let expected = Value::String(format!("0x{}", hex::encode(&payload)));
+        assert_eq!(decode_entrypoint_return(&vm, &scalar).unwrap(), expected);
+        let record = encode_entrypoint_return_record_bytes(&vm, &scalar).unwrap();
+        let decoded = decode_entrypoint_return_record(&scalar, &record).unwrap();
+        assert_eq!(
+            render_entrypoint_return_record(&scalar, &decoded).unwrap(),
+            expected
+        );
+        assert!(matches!(
+            collect_entrypoint_return_record(&vm, &scalar, 64),
+            Err(EntrypointReturnDecodeError::RecordTooLarge { .. })
+        ));
+        let wrong_key = EntrypointValueTypeV1 {
+            nodes: vec![EntrypointValueTypeNodeV1::StateCursor(
+                EntrypointValueKindV1::Name,
+            )],
+        };
+        assert!(decode_entrypoint_return(&vm, &wrong_key).is_err());
+        let optional = EntrypointValueTypeV1 {
+            nodes: vec![EntrypointValueTypeNodeV1::Option, scalar.nodes[0].clone()],
+        };
+        let schema = list(2, optional);
+        let some =
+            ivm::sum::allocate_words(&mut vm, SumLayoutV1::option(1).unwrap(), 1, &[pointer])
+                .unwrap();
+        let none =
+            ivm::sum::allocate_words(&mut vm, SumLayoutV1::option(1).unwrap(), 0, &[]).unwrap();
+        let handle = ivm::list::allocate_words(
+            &mut vm,
+            ListLayoutV1::try_new(2, 1).unwrap(),
+            &[vec![some], vec![none]],
+        )
+        .unwrap();
+        vm.set_register(FIRST_RETURN_REGISTER, handle);
+        assert_eq!(
+            decode_entrypoint_return(&vm, &schema).unwrap(),
+            norito::json!([{ "some": expected }, { "none": true }])
+        );
+        let malformed = input_tlv(&mut vm, PointerType::NoritoBytes, b"not a cursor frame");
+        vm.set_register(FIRST_RETURN_REGISTER, malformed);
+        assert!(decode_entrypoint_return(&vm, &scalar).is_err());
+        let wrong_pointer = input_tlv(&mut vm, PointerType::Blob, &payload);
+        vm.set_register(FIRST_RETURN_REGISTER, wrong_pointer);
+        assert!(matches!(
+            decode_entrypoint_return(&vm, &scalar),
+            Err(EntrypointReturnDecodeError::PointerType { .. })
+        ));
     }
     #[test]
     fn typed_return_record_roundtrips_and_binds_the_exact_schema() {

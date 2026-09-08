@@ -1,5 +1,5 @@
 //! Independent native check of browser NFT sale bytes and canonical content/offer commitments.
-#![cfg(feature = "json")]
+
 use iroha_crypto::Hash;
 use iroha_data_model::{
     isi::{InstructionBox, nft_market::*},

@@ -6,8 +6,9 @@ Kotodama support in `github-linguist/linguist` so `.ko` files can render as
 language.
 
 Included assets:
-- `grammar-repo/`: a standalone TextMate grammar repo scaffold that can be
-  pushed as its own repository and referenced from `script/add-grammar`.
+- `grammar-repo/`: the installable Kotodama VS Code language client and its
+  standalone TextMate grammar, also usable by `script/add-grammar`. See its
+  README for `npm test` and `npm run package`.
 - `linguist/kotodama-language-entry.yml`: the proposed `languages.yml` entry.
 - `linguist/PR_CHECKLIST.md`: the exact upstream steps and commands.
 - `linguist/PR_BODY.md`: a ready-to-fill pull request body.

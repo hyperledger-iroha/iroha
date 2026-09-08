@@ -24,6 +24,8 @@ mod model {
     #[event_set(
         schema_name = "iroha_data_model::events::data::sorafs::model::SorafsGatewayEventSet"
     )]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::events::data::sorafs::model::SorafsGatewayEvent")]
     pub enum SorafsGatewayEvent {
         /// The gateway rejected a request due to a GAR policy violation.
         GarViolation(SorafsGarViolation),
@@ -45,6 +47,8 @@ mod model {
         Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
     )]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::events::data::sorafs::model::SorafsGarPolicy")]
     pub enum SorafsGarPolicy {
         /// Manifest envelope requirements.
         ManifestEnvelope,
@@ -64,6 +68,8 @@ mod model {
         Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
     )]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::events::data::sorafs::model::SorafsGarPolicyDetail")]
     pub enum SorafsGarPolicyDetail {
         /// Manifest envelope was required but not supplied.
         ManifestEnvelopeMissing,
@@ -94,8 +100,18 @@ mod model {
     }
     /// Payload describing a GAR policy violation.
     #[derive(
-        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        iroha_schema::IntoSchema,
+        norito::NoritoSchema,
     )]
+    #[norito_schema(name = "iroha_data_model::events::data::sorafs::model::SorafsGarViolation")]
     pub struct SorafsGarViolation {
         /// Policy that triggered the violation.
         pub policy: SorafsGarPolicy,
@@ -133,8 +149,18 @@ mod model {
     }
     /// Payload describing a PDP/PoTR proof failure alert emitted by the runtime.
     #[derive(
-        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        iroha_schema::IntoSchema,
+        norito::NoritoSchema,
     )]
+    #[norito_schema(name = "iroha_data_model::events::data::sorafs::model::SorafsProofHealthAlert")]
     pub struct SorafsProofHealthAlert {
         /// Provider identifier.
         pub provider_id: crate::sorafs::prelude::ProviderId,
@@ -171,13 +197,24 @@ mod model {
     }
     /// Stable chain-authoritative repair transition category.
     #[derive(
-        Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
-    )]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        iroha_schema::IntoSchema,
+        crate :: DeriveJsonSerialize,
+        crate :: DeriveJsonDeserialize,
     )]
     #[norito(tag = "kind", content = "detail", rename_all = "snake_case")]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(
+        name = "iroha_data_model::events::data::sorafs::model::SorafsRepairLedgerEventKind"
+    )]
     pub enum SorafsRepairLedgerEventKind {
         /// A source-identity-bound repair report was admitted.
         TaskSubmitted,
@@ -206,19 +243,21 @@ mod model {
         Decode,
         Encode,
         iroha_schema::IntoSchema,
-    )]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+        crate :: DeriveJsonSerialize,
+        crate :: DeriveJsonDeserialize,
     )]
     #[getset(get = "pub")]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(
+        name = "iroha_data_model::events::data::sorafs::model::SorafsRepairLedgerEvent"
+    )]
     pub struct SorafsRepairLedgerEvent {
         /// Transition category.
         pub kind: SorafsRepairLedgerEventKind,
         /// Canonical ticket identifier.
         pub ticket_id: String,
         /// Immutable task identity.
-        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+        #[norito(json = "crate::json_helpers::fixed_bytes")]
         pub task_id: [u8; 32],
         /// Affected provider.
         pub provider_id: crate::sorafs::capacity::ProviderId,
@@ -233,13 +272,24 @@ mod model {
     }
     /// Stable chain-authoritative moderation transition category.
     #[derive(
-        Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
-    )]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        iroha_schema::IntoSchema,
+        crate :: DeriveJsonSerialize,
+        crate :: DeriveJsonDeserialize,
     )]
     #[norito(tag = "kind", content = "detail", rename_all = "snake_case")]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(
+        name = "iroha_data_model::events::data::sorafs::model::SorafsModerationLedgerEventKind"
+    )]
     pub enum SorafsModerationLedgerEventKind {
         /// A policy revision was activated.
         PolicyActivated,
@@ -280,12 +330,14 @@ mod model {
         Decode,
         Encode,
         iroha_schema::IntoSchema,
-    )]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+        crate :: DeriveJsonSerialize,
+        crate :: DeriveJsonDeserialize,
     )]
     #[getset(get = "pub")]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(
+        name = "iroha_data_model::events::data::sorafs::model::SorafsModerationLedgerEvent"
+    )]
     pub struct SorafsModerationLedgerEvent {
         /// Transition category.
         pub kind: SorafsModerationLedgerEventKind,
@@ -300,13 +352,24 @@ mod model {
     }
     /// Stable chain-authoritative orderbook transition category.
     #[derive(
-        Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
-    )]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        iroha_schema::IntoSchema,
+        crate :: DeriveJsonSerialize,
+        crate :: DeriveJsonDeserialize,
     )]
     #[norito(tag = "kind", content = "detail", rename_all = "snake_case")]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(
+        name = "iroha_data_model::events::data::sorafs::model::SorafsOrderbookLedgerEventKind"
+    )]
     pub enum SorafsOrderbookLedgerEventKind {
         /// A policy revision was activated.
         PolicyActivated,
@@ -337,38 +400,28 @@ mod model {
         Decode,
         Encode,
         iroha_schema::IntoSchema,
-    )]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+        crate :: DeriveJsonSerialize,
+        crate :: DeriveJsonDeserialize,
     )]
     #[getset(get = "pub")]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(
+        name = "iroha_data_model::events::data::sorafs::model::SorafsOrderbookLedgerEvent"
+    )]
     pub struct SorafsOrderbookLedgerEvent {
         /// Transition category.
         pub kind: SorafsOrderbookLedgerEventKind,
         /// Affected order, when the transition is order-specific.
-        #[cfg_attr(
-            feature = "json",
-            norito(json = "crate::json_helpers::fixed_bytes::option")
-        )]
+        #[norito(json = "crate::json_helpers::fixed_bytes::option")]
         pub order_id: Option<[u8; 32]>,
         /// Affected trade, when present.
-        #[cfg_attr(
-            feature = "json",
-            norito(json = "crate::json_helpers::fixed_bytes::option")
-        )]
+        #[norito(json = "crate::json_helpers::fixed_bytes::option")]
         pub trade_id: Option<[u8; 32]>,
         /// Affected settlement channel, when present.
-        #[cfg_attr(
-            feature = "json",
-            norito(json = "crate::json_helpers::fixed_bytes::option")
-        )]
+        #[norito(json = "crate::json_helpers::fixed_bytes::option")]
         pub channel_id: Option<[u8; 32]>,
         /// Affected settlement receipt, when present.
-        #[cfg_attr(
-            feature = "json",
-            norito(json = "crate::json_helpers::fixed_bytes::option")
-        )]
+        #[norito(json = "crate::json_helpers::fixed_bytes::option")]
         pub receipt_id: Option<[u8; 32]>,
         /// Affected provider, when known.
         pub provider_id: Option<crate::sorafs::capacity::ProviderId>,
@@ -381,13 +434,24 @@ mod model {
     }
     /// Stable chain-authoritative reserve transition category.
     #[derive(
-        Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
-    )]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        iroha_schema::IntoSchema,
+        crate :: DeriveJsonSerialize,
+        crate :: DeriveJsonDeserialize,
     )]
     #[norito(tag = "kind", content = "detail", rename_all = "snake_case")]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(
+        name = "iroha_data_model::events::data::sorafs::model::SorafsReserveLedgerEventKind"
+    )]
     pub enum SorafsReserveLedgerEventKind {
         /// A policy revision was activated.
         PolicyActivated,
@@ -426,25 +490,24 @@ mod model {
         Decode,
         Encode,
         iroha_schema::IntoSchema,
-    )]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+        crate :: DeriveJsonSerialize,
+        crate :: DeriveJsonDeserialize,
     )]
     #[getset(get = "pub")]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(
+        name = "iroha_data_model::events::data::sorafs::model::SorafsReserveLedgerEvent"
+    )]
     pub struct SorafsReserveLedgerEvent {
         /// Transition category.
         pub kind: SorafsReserveLedgerEventKind,
         /// Provider affected by the transition, absent for policy activation.
         pub provider_id: Option<crate::sorafs::capacity::ProviderId>,
         /// Movement or appeal identifier, when the transition has one.
-        #[cfg_attr(
-            feature = "json",
-            norito(json = "crate::json_helpers::fixed_bytes::option")
-        )]
+        #[norito(json = "crate::json_helpers::fixed_bytes::option")]
         pub operation_id: Option<[u8; 32]>,
         /// Active policy digest used by the transition.
-        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+        #[norito(json = "crate::json_helpers::fixed_bytes")]
         pub policy_digest: [u8; 32],
         /// Resulting provider revision, or zero for policy activation.
         pub provider_revision: u64,
@@ -457,13 +520,23 @@ mod model {
     }
     /// Typed chain-authoritative reputation-journal transition.
     #[derive(
-        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
-    )]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        iroha_schema::IntoSchema,
+        crate :: DeriveJsonSerialize,
+        crate :: DeriveJsonDeserialize,
     )]
     #[norito(tag = "kind", content = "detail", rename_all = "snake_case")]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(
+        name = "iroha_data_model::events::data::sorafs::model::SorafsReputationJournalEvent"
+    )]
     pub enum SorafsReputationJournalEvent {
         /// Governance activated one strict predecessor-linked recorder policy.
         PolicyActivated(SorafsReputationJournalPolicyActivatedV1),
@@ -482,15 +555,17 @@ mod model {
         Decode,
         Encode,
         iroha_schema::IntoSchema,
-    )]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+        crate :: DeriveJsonSerialize,
+        crate :: DeriveJsonDeserialize,
     )]
     #[getset(get = "pub")]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(
+        name = "iroha_data_model::events::data::sorafs::model::SorafsReputationJournalPolicyActivatedV1"
+    )]
     pub struct SorafsReputationJournalPolicyActivatedV1 {
         /// Canonical active policy digest.
-        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+        #[norito(json = "crate::json_helpers::fixed_bytes")]
         pub policy_digest: [u8; 32],
         /// Activated policy revision.
         pub revision: u64,
@@ -511,12 +586,14 @@ mod model {
         Decode,
         Encode,
         iroha_schema::IntoSchema,
-    )]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+        crate :: DeriveJsonSerialize,
+        crate :: DeriveJsonDeserialize,
     )]
     #[getset(get = "pub")]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(
+        name = "iroha_data_model::events::data::sorafs::model::SorafsReputationJournalEntryCommittedV1"
+    )]
     pub struct SorafsReputationJournalEntryCommittedV1 {
         /// One-based global journal sequence.
         pub sequence: u64,
@@ -531,7 +608,7 @@ mod model {
         /// Provider whose deterministic counters consume the entry.
         pub provider_id: crate::sorafs::capacity::ProviderId,
         /// Active recorder-policy digest bound into the entry.
-        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+        #[norito(json = "crate::json_helpers::fixed_bytes")]
         pub policy_digest: [u8; 32],
         /// Exact governed recorder authority.
         pub authority: crate::account::AccountId,
@@ -596,7 +673,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for SorafsGatewayEvent {
         Ok((value, consumed))
     }
 }
-#[cfg(feature = "json")]
+
 mod json_support {
     use super::{SorafsGarViolation, SorafsGatewayEvent};
     use base64::Engine as _;
@@ -702,3 +779,6 @@ pub mod prelude {
         SorafsReserveLedgerEventKind,
     };
 }
+
+#[cfg(test)]
+mod captured_event_boundary_identity_tests;

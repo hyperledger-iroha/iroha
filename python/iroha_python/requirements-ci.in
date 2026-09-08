@@ -2,11 +2,11 @@
 #
 # `iroha-norito` and `iroha-torii-client` are imported from their sibling
 # source trees in tests/conftest.py, so they intentionally do not appear here.
-# Keep these ranges aligned with the three local pyproject.toml files.
+# Keep these ranges aligned with the local native, SDK, Norito, and Torii pyprojects.
 #
 # Regenerate from the repository root with Python 3.12 and pip-tools 7.6.0:
 #   python3.12 -m piptools compile --generate-hashes --resolver=backtracking \
-#     --strip-extras --output-file python/iroha_python/requirements-ci.lock \
+#     --strip-extras --allow-unsafe --output-file python/iroha_python/requirements-ci.lock \
 #     python/iroha_python/requirements-ci.in
 
 blake3==1.0.9
@@ -14,3 +14,7 @@ cryptography==50.0.1
 maturin==1.14.1
 pytest==8.4.2
 requests==2.32.5
+
+# Canonical pure SDK wheel backend (no unpinned isolated build environment).
+setuptools==84.0.0
+wheel==0.48.0

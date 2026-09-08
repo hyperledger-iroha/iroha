@@ -59,6 +59,7 @@ pub mod error {
     // Map Norito JSON errors into the crate's generic JSON error variant.
     // This allows `?` on `norito::json` helpers inside derive-generated code
     // to convert into `iroha_version::error::Error` seamlessly.
+    #[cfg(feature = "json")]
     impl From<norito::json::Error> for Error {
         fn from(_: norito::json::Error) -> Self {
             Self::Json
@@ -126,7 +127,17 @@ pub trait Version {
     }
 }
 /// Structure describing a container content which version is not supported.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error, norito::Encode, norito::Decode)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    thiserror::Error,
+    norito::Encode,
+    norito::Decode,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_version::UnsupportedVersion")]
 #[allow(unexpected_cfgs)]
 #[error(
     "Unsupported version. Expected: {}, got: {version}",
@@ -151,29 +162,21 @@ impl UnsupportedVersion {
     }
 }
 /// Raw versioned content, serialized.
-#[derive(Debug, Clone, PartialEq, Eq, norito::codec::Encode, norito::codec::Decode)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, norito::codec::Encode, norito::codec::Decode, norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_version::RawVersioned")]
 pub enum RawVersioned {
     /// In JSON format.
+    #[codec(index = 0)]
     Json(String),
     /// In Norito format.
+    #[codec(index = 1)]
     NoritoBytes(Vec<u8>),
 }
 impl<'a> norito::core::DecodeFromSlice<'a> for RawVersioned {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-        use norito::core::{DecodeFromSlice, Error};
-        let tag = *bytes.first().ok_or(Error::LengthMismatch)?;
-        let rest = &bytes[1..];
-        match tag {
-            0 => {
-                let (value, used) = <String as DecodeFromSlice>::decode_from_slice(rest)?;
-                Ok((RawVersioned::Json(value), 1 + used))
-            }
-            1 => {
-                let (value, used) = <Vec<u8> as DecodeFromSlice>::decode_from_slice(rest)?;
-                Ok((RawVersioned::NoritoBytes(value), 1 + used))
-            }
-            other => Err(Error::invalid_tag("decoding RawVersioned tag", other)),
-        }
+        norito::core::decode_field_canonical::<Self>(bytes)
     }
 }
 /// Norito related versioned (de)serialization traits.

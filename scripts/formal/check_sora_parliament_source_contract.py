@@ -138,6 +138,71 @@ def public_field_names(text: str) -> tuple[str, ...]:
     return tuple(re.findall(r"\bpub\s+([A-Za-z_][A-Za-z0-9_]*)\s*:", text))
 
 
+def require_opaque_release_authorizations(tle_release: str) -> None:
+    """Keep constructor-authenticated release owners outside payload and frame codecs."""
+    tle_release_path = "crates/iroha_core/src/tle_release.rs"
+    authorized_context = section(
+        tle_release,
+        "/// Constructor-authenticated authorization for one committed TLE release share.",
+        "/// Authorize a TLE release from one point-in-time committed state view.",
+        tle_release_path,
+    )
+    for forbidden in (
+        "NoritoSerialize", "SerializePayload", "DeserializePayload",
+        "JsonSerialize", "Encode", "pub identity:",
+    ):
+        if forbidden in authorized_context:
+            raise RuntimeError(
+                f"{tle_release_path}: opaque release authorization exposes {forbidden!r}"
+            )
+    validated_projection = section(
+        tle_release,
+        "/// Revalidated public statement admitted by an authenticated runtime broker.",
+        "/// Closed failures while validating a public authenticated-broker projection.",
+        tle_release_path,
+    )
+    for forbidden in (
+        "NoritoSerialize", "NoritoDeserialize", "SerializePayload", "DeserializePayload",
+        "JsonSerialize", "JsonDeserialize",
+    ):
+        if forbidden in validated_projection:
+            raise RuntimeError(
+                f"{tle_release_path}: validated broker projection exposes {forbidden!r}"
+            )
+    if re.search(
+        r"impl\s+(?:Try)?From<[^>]*ValidatedTleReleaseProjectionV1[^>]*>\s+for\s+AuthorizedTleReleaseContextV1",
+        tle_release,
+    ):
+        raise RuntimeError(
+            f"{tle_release_path}: public broker projection can mint opaque Core authorization"
+        )
+
+def require_opaque_casting_authorization(casting: str) -> None:
+    """Keep the replay-validated casting context outside payload and frame codecs."""
+    casting_path = "crates/iroha_core/src/tle_release/casting.rs"
+    authorized_casting = section(
+        casting,
+        "/// Constructor-authenticated, replay-validated timed-OVN casting context.",
+        "/// Authorize and replay-validate one public timed-OVN casting context.",
+        casting_path,
+    )
+    for forbidden in (
+        "NoritoSerialize",
+        "NoritoDeserialize",
+        "SerializePayload",
+        "DeserializePayload",
+        "JsonSerialize",
+        "JsonDeserialize",
+        "ballot_records:",
+        "dropout_participant_hashes:",
+        "partial_release:",
+        "opening_root:",
+    ):
+        if forbidden in authorized_casting:
+            raise RuntimeError(
+                f"{casting_path}: opaque casting authorization exposes {forbidden!r}"
+            )
+
 def main() -> int:
     ivm_executable_path = "crates/iroha_data_model/src/transaction/executable.rs"
     ivm_executable = read(ivm_executable_path)
@@ -2344,35 +2409,7 @@ def main() -> int:
             "pub use custody::{RuntimeTleReleaseShareCustodyV1",
         ),
     )
-    authorized_context = section(
-        tle_release,
-        "pub struct AuthorizedTleReleaseContextV1 {",
-        "/// Authorize a TLE release from one point-in-time committed state view.",
-        tle_release_path,
-    )
-    for forbidden in ("NoritoSerialize", "JsonSerialize", "Encode", "pub identity:"):
-        if forbidden in authorized_context:
-            raise RuntimeError(
-                f"{tle_release_path}: opaque release authorization exposes {forbidden!r}"
-            )
-    validated_projection = section(
-        tle_release,
-        "pub struct ValidatedTleReleaseProjectionV1 {",
-        "/// Closed failures while validating a public authenticated-broker projection.",
-        tle_release_path,
-    )
-    for forbidden in ("NoritoSerialize", "NoritoDeserialize", "JsonSerialize", "JsonDeserialize"):
-        if forbidden in validated_projection:
-            raise RuntimeError(
-                f"{tle_release_path}: validated broker projection exposes {forbidden!r}"
-            )
-    if re.search(
-        r"impl\s+(?:Try)?From<[^>]*ValidatedTleReleaseProjectionV1[^>]*>\s+for\s+AuthorizedTleReleaseContextV1",
-        tle_release,
-    ):
-        raise RuntimeError(
-            f"{tle_release_path}: public broker projection can mint opaque Core authorization"
-        )
+    require_opaque_release_authorizations(tle_release)
 
     release_runtime_path = "crates/iroha_core/src/tle_release/runtime.rs"
     release_runtime = read(release_runtime_path)
@@ -2539,26 +2576,7 @@ def main() -> int:
         raise RuntimeError(
             f"{casting_path}: exact phase window must be checked before proof-heavy lifecycle replay"
         )
-    authorized_casting = section(
-        casting,
-        "/// Constructor-authenticated, replay-validated timed-OVN casting context.",
-        "/// Authorize and replay-validate one public timed-OVN casting context.",
-        casting_path,
-    )
-    for forbidden in (
-        "NoritoSerialize",
-        "NoritoDeserialize",
-        "JsonSerialize",
-        "JsonDeserialize",
-        "ballot_records:",
-        "dropout_participant_hashes:",
-        "partial_release:",
-        "opening_root:",
-    ):
-        if forbidden in authorized_casting:
-            raise RuntimeError(
-                f"{casting_path}: opaque casting authorization exposes {forbidden!r}"
-            )
+    require_opaque_casting_authorization(casting)
     casting_archive = section(
         casting,
         "/// Canonical public-only archive for restarting a timed-OVN wallet operation.",

@@ -56,6 +56,24 @@ impl State {
                 && marker.lane_block_height >= descriptor.lane_block_height
         }))
     }
+    /// Classify exact autonomous application or its predecessor at one published State frontier.
+    ///
+    /// The two predicates overlap across publication: before a merge the predecessor is applied;
+    /// afterwards the proposal itself is applied. Reading them through separate raw world views
+    /// can observe neither while a State publication advances between the reads. Hold the same
+    /// fence as publication through both checks and their authenticated receipt reads. This does
+    /// not turn missing, conflicting or malformed application evidence into authority.
+    pub(crate) fn certified_autonomous_lane_block_or_predecessor_is_globally_applied(
+        &self,
+        proposal: &iroha_data_model::block::consensus::LaneBlockProposalV1,
+    ) -> Result<bool, MergeLedgerCommitError> {
+        let _state_commit = self.state_commit_lock.lock();
+        Ok(
+            self.certified_autonomous_lane_block_is_globally_applied(proposal)?
+                || self
+                    .certified_autonomous_lane_block_predecessor_is_globally_applied(proposal)?,
+        )
+    }
     /// Require canonical economic application of an autonomous proposal.
     ///
     /// A lane ownership artifact proves payload routing, not WSV application.

@@ -142,7 +142,7 @@ impl JsonKeyCodec for crate::name::Name {
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         encoded
             .parse::<crate::name::Name>()
-            .map_err(|err| json::Error::Message(err.reason.into()))
+            .map_err(|err| json::Error::Message(err.reason().into()))
     }
 }
 impl JsonKeyCodec for crate::state_path::StatePath {
@@ -152,7 +152,7 @@ impl JsonKeyCodec for crate::state_path::StatePath {
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         encoded
             .parse::<crate::state_path::StatePath>()
-            .map_err(|err| json::Error::Message(err.reason.into()))
+            .map_err(|err| json::Error::Message(err.reason().into()))
     }
 }
 impl JsonKeyCodec for crate::proof::VerifyingKeyId {
@@ -200,7 +200,7 @@ impl JsonKeyCodec for crate::smart_contract::ContractAlias {
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         encoded
             .parse()
-            .map_err(|err: crate::ParseError| json::Error::Message(err.reason.into()))
+            .map_err(|err: crate::ParseError| json::Error::Message(err.reason().into()))
     }
 }
 impl JsonKeyCodec for crate::smart_contract::ContractAddress {

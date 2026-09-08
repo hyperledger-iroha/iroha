@@ -127,7 +127,7 @@ fn vrf_verify_batch_rejects_empty_entrypoint_bytes() {
     let source = r#"
 seiyaku VrfBatchEntrypointBytes {
   view fn run(bytes batch) -> bytes {
-    return crypto::vrf::verify_batch(batch);
+    return crypto::vrf::verify_batch(request: batch);
   }
 }
 "#;

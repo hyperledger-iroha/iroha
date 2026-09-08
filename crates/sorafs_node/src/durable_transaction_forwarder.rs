@@ -453,7 +453,7 @@ fn state_directory_identity_from_metadata(
 ) -> Result<StateDirectoryIdentity, CheckpointStoreError> {
     Err(CheckpointStoreError::Io)
 }
-/// Guard used by focused alias/hard-link persistence tests.
+/// Single-writer guard shared by durable forwarders, PDP, and PoTR stores.
 pub(crate) struct CheckpointWriterGuard {
     _process_guard: CheckpointProcessGuard,
     _file: File,
@@ -930,10 +930,14 @@ mod tests {
         drop(CheckpointWriterGuard::acquire(&lock_path).expect("create lock file"));
         let alias = directory.path().join("checkpoint-lock-alias");
         fs::hard_link(&lock_path, &alias).expect("lock hard link");
-        assert!(matches!(
-            CheckpointWriterGuard::acquire(&lock_path),
-            Err(CheckpointStoreError::Io)
-        ));
+        for path in [&lock_path, &alias] {
+            assert!(matches!(
+                CheckpointWriterGuard::acquire(path),
+                Err(CheckpointStoreError::Io)
+            ));
+        }
+        fs::remove_file(alias).expect("remove hardlink alias");
+        drop(CheckpointWriterGuard::acquire(&lock_path).expect("failed claims release ownership"));
     }
     fn assert_root_path_substitution_is_rejected() {
         let outer = TempDir::new().expect("temporary directory");
@@ -971,6 +975,46 @@ mod tests {
         ));
         drop(lock_file);
         drop(CheckpointWriterGuard::acquire(&lock_path).expect("lock becomes available"));
+    }
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn checkpoint_writer_ownership_is_scoped_and_released_across_threads() {
+        let first_root = TempDir::new().expect("first state root");
+        let second_root = TempDir::new().expect("second state root");
+        private_directory(first_root.path());
+        private_directory(second_root.path());
+        let first_path = first_root.path().join("checkpoint.lock");
+        let second_path = second_root.path().join("checkpoint.lock");
+        let alias = first_root.path().join(".").join("checkpoint.lock");
+        let first = CheckpointWriterGuard::acquire(&first_path).expect("first writer");
+        let reopened = File::open(&first_path).expect("reopen owned lock file");
+        let cloned = first._file.try_clone().expect("clone owned lock handle");
+        for handle in [&reopened, &cloned] {
+            assert!(same_file_identity(
+                &first._file.metadata().unwrap(),
+                &handle.metadata().unwrap(),
+            ));
+        }
+        std::thread::scope(|scope| {
+            scope
+                .spawn(|| {
+                    for path in [&first_path, &alias] {
+                        assert!(matches!(
+                            CheckpointWriterGuard::acquire(path),
+                            Err(CheckpointStoreError::Busy)
+                        ));
+                    }
+                    let _second = CheckpointWriterGuard::acquire(&second_path)
+                        .expect("independent files must not contend");
+                })
+                .join()
+                .expect("ownership thread completes");
+        });
+        drop(cloned);
+        drop(reopened);
+        drop(first);
+        drop(CheckpointWriterGuard::acquire(&alias).expect("released alias is reusable"));
+        drop(CheckpointWriterGuard::acquire(&first_path).expect("released path is reusable"));
     }
     #[cfg(any(unix, windows))]
     #[test]

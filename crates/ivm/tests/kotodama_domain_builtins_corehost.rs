@@ -10,7 +10,7 @@ fn kotodama_unregister_domain() {
     let src = r#"
         seiyaku UnregisterDomain {
             kotoage fn main() authorize("UnregisterDomain") {
-                ledger::domain::unregister(DomainId::parse("wonderland.universal"));
+                ledger::domain::unregister(domain: DomainId::parse("wonderland.universal"));
             }
         }
     "#;

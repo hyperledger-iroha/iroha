@@ -1350,6 +1350,104 @@ fn production_owner_keeps_terminal_validate_and_live_serve_together() {
 }
 
 #[test]
+fn certified_serve_ingress_census_accepts_only_its_exact_ready_incumbent() {
+    run_durable_recovery_test_on_stack(|| {
+        use super::super::super::work_registry::ReadyCertifiedServeAttestationErrorV1;
+        let fixture = RecoveryFixture::new("serve-ingress-ready-census", 0x80);
+        let body = TempDir::new().expect("body store");
+        let payload = TempDir::new().expect("payload store");
+        let ledger_dir = TempDir::new().expect("ledger store");
+        let mut owner = fixture.open_empty_owner(&body, &payload, &ledger_dir);
+        let request = fixture.authenticated_serve_request(0, 0x81, 3);
+        let foreign = fixture.authenticated_serve_request(1, 0x82, 3);
+        let empty = LifecycleLedgerV1::from_coordinator(&owner.coordinator).expect("empty ledger");
+        assert_eq!(
+            owner
+                .registry
+                .registry()
+                .certified_serve_ingress_has_competing_ready_work(
+                    &fixture.verified,
+                    &owner.coordinator,
+                    &empty,
+                    &request,
+                ),
+            Ok(false),
+        );
+        let target = super::super::super::LifecycleIngressIoTargetSeal::for_certified_serve_test(
+            fixture.verified.context(),
+            request.request_hash(),
+            1,
+        );
+        let admitted = owner.admit_selected_certified_serve(target, &fixture.keys[0], &request);
+        assert!(matches!(
+            admitted.decision(),
+            Some(super::super::super::AdmissionDecision::Admitted { .. })
+        ));
+        assert!(admitted.into_safe_continuation().is_ok());
+        let current =
+            LifecycleLedgerV1::from_coordinator(&owner.coordinator).expect("current ledger");
+        let payload_before = snapshot_files(payload.path());
+        let ledger_before = snapshot_files(ledger_dir.path());
+        assert_eq!(
+            owner
+                .registry
+                .registry()
+                .certified_serve_ingress_has_competing_ready_work(
+                    &fixture.verified,
+                    &owner.coordinator,
+                    &current,
+                    &request,
+                ),
+            Ok(false),
+            "an exact Ready retry must remain dispatchable",
+        );
+        assert_eq!(
+            owner
+                .registry
+                .registry()
+                .certified_serve_ingress_has_competing_ready_work(
+                    &fixture.verified,
+                    &owner.coordinator,
+                    &current,
+                    &foreign,
+                ),
+            Ok(true),
+            "a different authenticated request must defer to the incumbent",
+        );
+        assert_eq!(
+            owner
+                .registry
+                .registry()
+                .certified_serve_ingress_has_competing_ready_work(
+                    &fixture.verified,
+                    &owner.coordinator,
+                    &empty,
+                    &request,
+                ),
+            Err(ReadyCertifiedServeAttestationErrorV1::LedgerMismatch),
+        );
+        owner.coordinator.ready_index.clear();
+        assert_eq!(
+            owner
+                .registry
+                .registry()
+                .certified_serve_ingress_has_competing_ready_work(
+                    &fixture.verified,
+                    &owner.coordinator,
+                    &current,
+                    &request,
+                ),
+            Err(ReadyCertifiedServeAttestationErrorV1::InvalidCarrier),
+            "an inconsistent reverse index cannot turn Ready work into an empty census",
+        );
+        assert_eq!(snapshot_files(payload.path()), payload_before);
+        assert_eq!(snapshot_files(ledger_dir.path()), ledger_before);
+        assert!(owner.coordinator.active_lease.is_none());
+        assert!(owner.coordinator.fault.is_none());
+    });
+}
+
+#[test]
 fn fresh_certified_serve_publishes_exact_ledger_beside_fetch_and_broadcast() {
     run_durable_recovery_test_on_stack(|| {
         let fixture = RecoveryFixture::new("fresh-serve-owner", 0x81);
@@ -1443,6 +1541,52 @@ fn fresh_certified_serve_publishes_exact_ledger_beside_fetch_and_broadcast() {
                 .exactly_covers_all_live_work(&fixture.verified, &owner.coordinator)
         );
         let request = fixture.authenticated_serve_request(1, 0x83, 3);
+        let before_serve = LifecycleLedgerV1::from_coordinator(&owner.coordinator)
+            .expect("project the existing Fetch and Ready Broadcast");
+        let payload_before_census = snapshot_files(payload_directory.path());
+        let ledger_before_census = snapshot_files(ledger_directory.path());
+        assert!(
+            owner
+                .registry
+                .registry()
+                .attest_ready_producer_turn_census(
+                    &fixture.verified,
+                    &owner.coordinator,
+                    &before_serve,
+                )
+                .expect("valid mixed-work census")
+                .is_none(),
+            "the former Producer-only guard misses the Ready Broadcast",
+        );
+        assert!(
+            owner
+                .registry
+                .registry()
+                .certified_serve_ingress_has_competing_ready_work(
+                    &fixture.verified,
+                    &owner.coordinator,
+                    &before_serve,
+                    &request,
+                )
+                .expect("authenticate every Ready row before Serve publication"),
+            "Serve ingress must defer to the unrelated Ready Broadcast",
+        );
+        assert_eq!(
+            snapshot_files(payload_directory.path()),
+            payload_before_census
+        );
+        assert_eq!(
+            snapshot_files(ledger_directory.path()),
+            ledger_before_census
+        );
+        assert_eq!(
+            owner.certified_serve_and_producer_carrier_counts_for_test(),
+            (0, 0)
+        );
+        assert!(owner.coordinator.active_lease.is_none());
+        assert!(owner.coordinator.fault.is_none());
+        // Exercise the lower-level publication separately, without claiming that
+        // this mixed Ready census may enter the Serve-only production scheduler.
         let target = super::super::super::LifecycleIngressIoTargetSeal::for_certified_serve_test(
             fixture.verified.context(),
             request.request_hash(),

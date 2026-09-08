@@ -15,7 +15,7 @@ use iroha_data_model_derive::model;
 use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
-#[cfg(feature = "json")]
+
 use norito::derive::{JsonDeserialize, JsonSerialize};
 use std::collections::{BTreeMap, BTreeSet};
 const FX_CORRIDOR_ESCROW_ACCOUNT_DOMAIN_V1: &[u8] = b"iroha:fx-corridor:escrow-account:v1";
@@ -78,10 +78,23 @@ impl Default for SettlementAtomicity {
 }
 /// Execution plan covering leg ordering and failure handling.
 #[derive(
-    Copy, Debug, Clone, PartialEq, Eq, PartialOrd, Ord, CopyGetters, Decode, Encode, IntoSchema,
+    Copy,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    CopyGetters,
+    Decode,
+    Encode,
+    IntoSchema,
+    JsonSerialize,
+    JsonDeserialize,
 )]
-#[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[getset(get_copy = "pub")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::settlement::SettlementPlan")]
 pub struct SettlementPlan {
     /// Ordering of the settlement legs.
     order: SettlementExecutionOrder,
@@ -103,9 +116,23 @@ impl Default for SettlementPlan {
     }
 }
 /// One leg of a bilateral settlement (asset or payment).
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Getters,
+    Decode,
+    Encode,
+    IntoSchema,
+    JsonSerialize,
+    JsonDeserialize,
+)]
 #[getset(get = "pub")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::settlement::SettlementLeg")]
 pub struct SettlementLeg {
     /// Asset definition exchanged in this leg.
     pub asset_definition_id: AssetDefinitionId,
@@ -119,8 +146,21 @@ pub struct SettlementLeg {
     pub metadata: Metadata,
 }
 /// Immutable identity of one first-release FX corridor.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_data_model::isi::settlement::FxCorridorId")]
 pub struct FxCorridorId {
     /// Stable governed corridor name.
     pub policy_id: Name,
@@ -134,8 +174,21 @@ pub struct FxCorridorId {
     pub destination_asset_definition_id: AssetDefinitionId,
 }
 /// Exact retained oracle event selected by a signed FX settlement.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_data_model::isi::settlement::FxCorridorOracleEvidence")]
 pub struct FxCorridorOracleEvidence {
     /// Governed feed that produced the rate.
     pub feed_id: FeedId,
@@ -149,8 +202,19 @@ pub struct FxCorridorOracleEvidence {
     pub event_hash: HashOf<FeedEvent>,
 }
 /// Deterministic fixed-window usage retained for one FX corridor.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_data_model::isi::settlement::FxCorridorUsage")]
 pub struct FxCorridorUsage {
     /// Consensus-time-aligned start of the current velocity window.
     pub window_start_ms: u64,
@@ -162,8 +226,21 @@ pub struct FxCorridorUsage {
     pub destination_amount: Quantity,
 }
 /// Immutable routing and pricing policy for one native FX corridor.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_data_model::isi::settlement::FxCorridorPolicy")]
 pub struct FxCorridorPolicy {
     /// Stable policy identifier referenced by settlement instructions.
     pub policy_id: Name,
@@ -272,8 +349,20 @@ pub fn fx_corridor_escrow_account_id_v1(
     ))
 }
 /// Complete governed set of native FX corridor policies.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    Default,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_data_model::isi::settlement::FxCorridorPolicyRegistry")]
 pub struct FxCorridorPolicyRegistry {
     /// Policies keyed by their stable identifier.
     pub policies: BTreeMap<Name, FxCorridorPolicy>,
@@ -305,7 +394,7 @@ impl FxCorridorPolicyRegistry {
         self.usage.get(policy_id)
     }
     /// Convert the registry into the custom parameter accepted by `SetParameter`.
-    #[cfg(feature = "json")]
+
     #[must_use]
     pub fn into_custom_parameter(self) -> crate::parameter::CustomParameter {
         crate::parameter::CustomParameter::new(
@@ -319,7 +408,7 @@ impl FxCorridorPolicyRegistry {
     ///
     /// Returns a Norito error when a parameter with the registry identifier
     /// does not contain a valid [`FxCorridorPolicyRegistry`].
-    #[cfg(feature = "json")]
+
     pub fn from_custom_parameter(
         custom: &crate::parameter::CustomParameter,
     ) -> Result<Option<Self>, norito::Error> {
@@ -330,7 +419,7 @@ impl FxCorridorPolicyRegistry {
     }
 }
 isi! {
-    #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
+    #[derive (JsonSerialize , JsonDeserialize)]
     /// Register or replace a native FX corridor policy.
     #[norito_schema(name = "iroha_data_model::isi::settlement::SetFxCorridorPolicy")]
     pub struct SetFxCorridorPolicy {
@@ -339,7 +428,7 @@ isi! {
     }
 }
 isi! {
-    #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
+    #[derive (JsonSerialize , JsonDeserialize)]
     /// Fund the isolated destination reserve of one exact FX corridor.
     #[norito_schema(name = "iroha_data_model::isi::settlement::FundFxCorridorEscrow")]
     pub struct FundFxCorridorEscrow {
@@ -354,7 +443,7 @@ isi! {
     }
 }
 isi! {
-    #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
+    #[derive (JsonSerialize , JsonDeserialize)]
     /// Refund an inactive FX corridor reserve to its immutable owner.
     #[norito_schema(name = "iroha_data_model::isi::settlement::RefundFxCorridorEscrow")]
     pub struct RefundFxCorridorEscrow {
@@ -369,7 +458,7 @@ isi! {
     }
 }
 isi! {
-    #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
+    #[derive (JsonSerialize , JsonDeserialize)]
     /// Atomically settle one policy-backed cross-dataspace FX conversion.
     #[norito_schema(name = "iroha_data_model::isi::settlement::SettleFxCorridor")]
     pub struct SettleFxCorridor {
@@ -459,7 +548,7 @@ impl SettlementLeg {
     }
 }
 isi! {
-    #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
+    #[derive (JsonSerialize , JsonDeserialize)]
     /// Delivery-versus-payment settlement instruction requiring exact counterparty consent.
     ///
     /// Core accepts this instruction only with `AllOrNothing` atomicity and a
@@ -479,7 +568,7 @@ isi! {
     }
 }
 isi! {
-    #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
+    #[derive (JsonSerialize , JsonDeserialize)]
     /// Payment-versus-payment settlement instruction requiring exact counterparty consent.
     ///
     /// Core accepts this instruction only with `AllOrNothing` atomicity and a
@@ -581,9 +670,21 @@ impl core::fmt::Display for PvpIsi {
     }
 }
 /// Settlement kind recorded in a successful receipt.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
-#[cfg_attr(feature = "json", norito(tag = "kind", content = "value"))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    JsonSerialize,
+    JsonDeserialize,
+)]
+#[norito(tag = "kind", content = "value")]
 #[cfg_attr(
     all(feature = "ffi_export", not(feature = "ffi_import")),
     derive(iroha_ffi::FfiType)
@@ -602,9 +703,21 @@ pub enum SettlementKind {
     FxCorridor,
 }
 /// Enumerates the logical role played by a settlement leg.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
-#[cfg_attr(feature = "json", norito(tag = "kind", content = "value"))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    JsonSerialize,
+    JsonDeserialize,
+)]
+#[norito(tag = "kind", content = "value")]
 #[cfg_attr(
     all(feature = "ffi_export", not(feature = "ffi_import")),
     derive(iroha_ffi::FfiType)
@@ -630,8 +743,9 @@ pub enum SettlementLegRole {
 }
 /// Snapshot of a single leg in a committed settlement receipt.
 #[allow(missing_copy_implementations)]
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema, JsonSerialize, JsonDeserialize,
+)]
 #[cfg_attr(
     all(feature = "ffi_export", not(feature = "ffi_import")),
     derive(iroha_ffi::FfiType)
@@ -650,8 +764,9 @@ pub struct SettlementLegSnapshot {
 ///
 /// The two generic leg snapshots retain the actual balance movements. This record additionally
 /// binds those legs to the exact governed policy revision and rate that the signer approved.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema, JsonSerialize, JsonDeserialize,
+)]
 #[cfg_attr(
     all(feature = "ffi_export", not(feature = "ffi_import")),
     derive(iroha_ffi::FfiType)
@@ -698,8 +813,9 @@ pub struct FxCorridorSettlementDetails {
 /// identifier is deliberately not duplicated here. Presence of a receipt means
 /// that both legs committed successfully. Failed attempts are observable only
 /// through bounded, node-local telemetry and never create consensus state.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema, JsonSerialize, JsonDeserialize,
+)]
 #[cfg_attr(
     all(feature = "ffi_export", not(feature = "ffi_import")),
     derive(iroha_ffi::FfiType)
@@ -724,7 +840,7 @@ pub struct SettlementReceipt {
     /// Block timestamp (milliseconds since Unix epoch).
     pub executed_at_ms: u64,
     /// The two committed settlement legs.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_array"))]
+    #[norito(json = "crate::json_helpers::fixed_array")]
     pub legs: [SettlementLegSnapshot; 2],
     /// Exact governed FX context, present only for native FX corridor settlements.
     pub fx_corridor: Option<FxCorridorSettlementDetails>,
@@ -1209,7 +1325,7 @@ mod tests {
         assert_ne!(first, other_asset);
         assert_ne!(first, other_corridor);
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn settlement_instructions_json_roundtrip() {
         let dvp = dvp_instruction();
@@ -1312,7 +1428,7 @@ mod tests {
         let decoded = SettlementReceipt::decode(&mut bytes.as_slice()).expect("decode receipt");
         assert_eq!(decoded, receipt);
         assert_eq!(decoded.legs.len(), 2);
-        #[cfg(feature = "json")]
+
         {
             let json = norito::json::to_json(&receipt).expect("serialize receipt");
             assert!(
@@ -1413,3 +1529,6 @@ mod tests {
         assert!(!registry.contains(std::any::type_name::<SettlementInstructionBox>()));
     }
 }
+
+#[cfg(test)]
+mod captured_settlement_ordinary_schema_tests;

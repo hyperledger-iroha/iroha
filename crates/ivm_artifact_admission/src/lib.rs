@@ -28,7 +28,6 @@ use ivm_abi::{
         ParsedProgramMetadata, ProgramMetadata, contract_code_hash, mode,
     },
 };
-use norito::codec::{Decode, Encode};
 #[cfg(test)]
 use norito::{NoritoSerialize, SerializePayload};
 use std::{error::Error as StdError, fmt, fmt::Write as _};
@@ -172,8 +171,8 @@ fn verified_from_parts(
         access_set_hints: contract_interface.access_set_hints.clone(),
         entrypoints: Some(entrypoints),
         states: Some(manifest_state_descriptors(&contract_interface.states)),
-        error_codes: (!contract_interface.error_codes.is_empty())
-            .then_some(contract_interface.error_codes.clone()),
+        error_types: (!contract_interface.error_types.is_empty())
+            .then_some(contract_interface.error_types.clone()),
         kotoba: (!contract_interface.kotoba.is_empty())
             .then_some(contract_interface.kotoba.clone()),
         provenance: None,
@@ -460,7 +459,7 @@ fn decode_literal_table(
 }
 fn decode_canonical_literal_payload<T>(payload: &[u8]) -> Result<T, VMError>
 where
-    T: Decode + Encode,
+    T: for<'__frame> norito::NoritoDeserialize<'__frame> + norito::NoritoSerialize,
 {
     decode_canonical_norito(payload).map_err(|_| VMError::InvalidMetadata)
 }
@@ -557,8 +556,10 @@ fn manifest_state_type_name(ty: &EmbeddedStateType) -> String {
     }
     output
 }
-fn manifest_scalar_state_type_name(ty: &EmbeddedStateType) -> Option<&'static str> {
+fn manifest_scalar_state_type_name(ty: &EmbeddedStateType) -> Option<&str> {
     match ty {
+        EmbeddedStateType::Unit => Some("()"),
+        EmbeddedStateType::Error(error) => Some(&error.identity),
         EmbeddedStateType::Int => Some("int"),
         EmbeddedStateType::Decimal => Some("decimal"),
         EmbeddedStateType::Quantity => Some("quantity"),
@@ -578,7 +579,8 @@ fn manifest_scalar_state_type_name(ty: &EmbeddedStateType) -> Option<&'static st
         | EmbeddedStateType::StateMap { .. }
         | EmbeddedStateType::Option(_)
         | EmbeddedStateType::Result { .. }
-        | EmbeddedStateType::List { .. } => None,
+        | EmbeddedStateType::List { .. }
+        | EmbeddedStateType::StateCursor(_) => None,
     }
 }
 fn schedule_manifest_state_type_name<'a>(
@@ -599,6 +601,16 @@ fn schedule_manifest_state_type_name<'a>(
         .checked_add(1)
         .expect("validated embedded state type depth cannot overflow");
     match ty {
+        EmbeddedStateType::StateCursor(key) => {
+            let schema = iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeV1 {
+                nodes: vec![iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeNodeV1::StateCursor(*key)],
+            };
+            output.push_str(
+                &schema
+                    .canonical_type_name()
+                    .expect("validated cursor key type"),
+            );
+        }
         EmbeddedStateType::Tuple(items) => {
             output.push('(');
             pending.push(ManifestStateTypeFragment::Text(")"));
@@ -727,8 +739,10 @@ mod tests {
             kind: EntryPointKind::Kotoage,
             params: Vec::new(),
             argument_schema: None,
-            return_type: None,
-            return_schema: None,
+            return_type: Some("()".to_owned()),
+            return_schema: Some(ivm_abi::entrypoint::EntrypointValueTypeV1 {
+                nodes: vec![ivm_abi::entrypoint::EntrypointValueTypeNodeV1::Unit],
+            }),
             permission: Some("Execute".to_owned()),
             read_keys: Vec::new(),
             write_keys: Vec::new(),
@@ -749,7 +763,7 @@ mod tests {
                 name: "deep_state".to_owned(),
                 ty,
             }],
-            error_codes: Vec::new(),
+            error_types: Vec::new(),
         };
         let mut artifact = ProgramMetadata::default().encode();
         artifact.extend_from_slice(&interface.encode_section());
@@ -773,6 +787,12 @@ mod tests {
             (EmbeddedStateType::DomainId, "DomainId"),
             (EmbeddedStateType::Name, "Name"),
             (EmbeddedStateType::Json, "Json"),
+            (
+                EmbeddedStateType::StateCursor(
+                    iroha_data_model::smart_contract::entrypoint::EntrypointValueKindV1::Int,
+                ),
+                "StateCursor<int>",
+            ),
         ];
         for (ty, expected) in scalar_cases {
             assert_eq!(manifest_state_type_name(&ty), expected);

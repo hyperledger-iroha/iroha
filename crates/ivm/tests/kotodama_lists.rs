@@ -270,7 +270,7 @@ fn try_set_gas_and_transactionality_cover_success_and_failure() {
         "List<int, 4>",
         r#"
         var List<int, 4> values = [10, 20];
-        values.try_set(index: 1, value: 99);
+        let _ = values.try_set(index: 1, value: 99);
         return values;
         "#,
     );
@@ -282,7 +282,7 @@ fn try_set_gas_and_transactionality_cover_success_and_failure() {
         "List<int, 4>",
         r#"
         var List<int, 4> values = [10, 20];
-        values.try_set(index: 8, value: 99);
+        let _ = values.try_set(index: 8, value: 99);
         return values;
         "#,
     );
@@ -316,10 +316,10 @@ fn arbitrary_width_out_of_range_indices_are_total_and_transactional() {
                 var List<int, 4> values = [10, 20];
                 let int index = {index};
                 if values.get(index).unwrap_or(77) != 77 {{
-                    values.try_set(index: 0, value: -1);
+                    let _ = values.try_set(index: 0, value: -1);
                 }}
-                if values.try_set(index: index, value: 99) {{
-                    values.try_set(index: 0, value: -2);
+                if values.try_set(index: index, value: 99).is_ok() {{
+                    let _ = values.try_set(index: 0, value: -2);
                 }}
                 return values;
                 "#
@@ -328,7 +328,7 @@ fn arbitrary_width_out_of_range_indices_are_total_and_transactional() {
         assert_eq!(
             returned_int_list(&vm, 4),
             (2, 4, vec![10, 20], vec![0, 0]),
-            "index {index} must produce none/false without mutating the List"
+            "index {index} must produce none/err without mutating the List"
         );
     }
 }
@@ -345,7 +345,7 @@ fn try_push_gas_and_transactionality_cover_space_and_full_capacity() {
         "List<int, 3>",
         r#"
         var List<int, 3> values = [10, 20];
-        values.try_push(30);
+        let _ = values.try_push(30);
         return values;
         "#,
     );
@@ -365,7 +365,7 @@ fn try_push_gas_and_transactionality_cover_space_and_full_capacity() {
         "List<int, 3>",
         r#"
         var List<int, 3> values = [10, 20, 30];
-        values.try_push(40);
+        let _ = values.try_push(40);
         return values;
         "#,
     );
@@ -386,7 +386,7 @@ fn try_push_gas_and_transactionality_cover_space_and_full_capacity() {
     );
 }
 #[test]
-fn failed_multiword_mutations_preserve_every_word_and_allocate_nothing_after_preflight() {
+fn failed_multiword_mutations_preserve_every_word_and_allocate_only_the_typed_result() {
     let program = KotodamaCompiler::new()
         .compile_source(
             include_str!("../fixtures/koto_v1/kotodama_lists/005.ko")
@@ -403,7 +403,7 @@ fn failed_multiword_mutations_preserve_every_word_and_allocate_nothing_after_pre
         );
         assert_eq!(
             failure.1, control.1,
-            "failed try_set({index}) allocated after its matched bounds proof"
+            "failed try_set({index}) allocated beyond its matched bounds proof and Result"
         );
     }
     let full_control = run_multiword_mutation_failure_case(&program, 2, "0");
@@ -414,7 +414,7 @@ fn failed_multiword_mutations_preserve_every_word_and_allocate_nothing_after_pre
     );
     assert_eq!(
         full_failure.1, full_control.1,
-        "full-capacity try_push allocated before returning false"
+        "full-capacity try_push allocated beyond its typed Result"
     );
 }
 #[test]

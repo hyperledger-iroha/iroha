@@ -3,7 +3,7 @@ use derive_more::Display;
 use drop_bomb::DropBomb;
 use error_stack::Report;
 use norito::{
-    NoritoDeserialize, NoritoSerialize, SerializePayload,
+    DeserializePayload, NoritoDeserialize, NoritoSerialize, SerializePayload,
     json::{self, JsonDeserialize, JsonSerialize},
 };
 use std::time::Duration;
@@ -54,15 +54,16 @@ impl SerializePayload for DurationMs {
         Some(U64_BYTES)
     }
 }
-impl<'de> NoritoDeserialize<'de> for DurationMs {
+impl NoritoDeserialize<'_> for DurationMs {}
+impl<'de> DeserializePayload<'de> for DurationMs {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
-        let millis = <u64 as NoritoDeserialize>::deserialize(archived.cast());
+        let millis = <u64 as DeserializePayload>::deserialize(archived.cast());
         Self(Duration::from_millis(millis))
     }
     fn try_deserialize(
         archived: &'de norito::core::Archived<Self>,
     ) -> Result<Self, norito::core::Error> {
-        let millis = <u64 as NoritoDeserialize>::deserialize(archived.cast());
+        let millis = <u64 as DeserializePayload>::deserialize(archived.cast());
         Ok(Self(Duration::from_millis(millis)))
     }
 }
@@ -125,7 +126,8 @@ impl SerializePayload for Bytes {
         self.0.encoded_len_exact()
     }
 }
-impl<'de> NoritoDeserialize<'de> for Bytes {
+impl NoritoDeserialize<'_> for Bytes {}
+impl<'de> DeserializePayload<'de> for Bytes {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
         let inner = u64::deserialize(archived.cast());
         Self(inner)

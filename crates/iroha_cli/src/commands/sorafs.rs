@@ -86,7 +86,7 @@ use iroha_storage_client::client::{
 use iroha_torii_shared::configuration::SoranetHandshakeSummary;
 use iroha_torii_shared::sorafs_hedging_billing_api::BILLING_ACKNOWLEDGEMENT_PROOF_MAX_BYTES_V1 as SORAFS_BILLING_ACKNOWLEDGEMENT_PROOF_MAX_BYTES_V1;
 use norito::json::{Map, Number, Value};
-use norito::{NoritoSerialize, SerializePayload, decode_from_bytes};
+use norito::{NoritoSerialize, decode_from_bytes};
 use rand::{
     CryptoRng, RngCore, SeedableRng,
     rand_core::{TryCryptoRng, TryRngCore},

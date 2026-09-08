@@ -28,10 +28,14 @@ mod model {
     use super::*;
     use crate::{consensus::NposConsensusEffects, da::commitment::DaCommitmentBundle};
     /// Core contents of a block.
-    #[derive(Debug, Clone, Encode, IntoSchema, Decode)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    #[derive(
+        Debug,
+        Clone,
+        Encode,
+        IntoSchema,
+        Decode,
+        crate :: DeriveJsonSerialize,
+        crate :: DeriveJsonDeserialize,
     )]
     #[allow(clippy::redundant_pub_crate)]
     pub(crate) struct BlockPayload {
@@ -59,10 +63,15 @@ mod model {
         pub execution_context: Option<BlockExecutionContextBundle>,
     }
     /// Secondary block state resulting from execution.
-    #[derive(Debug, Clone, Default, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    #[derive(
+        Debug,
+        Clone,
+        Default,
+        Decode,
+        Encode,
+        IntoSchema,
+        crate :: DeriveJsonSerialize,
+        crate :: DeriveJsonDeserialize,
     )]
     pub struct BlockResult {
         /// Time-triggered entrypoints, forming the second half of the transaction entrypoints.

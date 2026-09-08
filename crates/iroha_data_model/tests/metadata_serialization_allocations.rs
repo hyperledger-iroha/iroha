@@ -5,7 +5,7 @@
 
 use iroha_data_model::{metadata::Metadata, prelude::Name};
 use iroha_primitives::json::Json;
-use norito::core::{DecodeFlagsGuard, Encoder, NoritoSerialize, SerializePayload, header_flags};
+use norito::core::{DecodeFlagsGuard, Encoder, SerializePayload, header_flags};
 use std::{
     alloc::{GlobalAlloc, Layout, System},
     cell::Cell,

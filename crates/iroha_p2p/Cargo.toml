@@ -16,7 +16,7 @@ workspace = true
 norito = { workspace = true, default-features = false, features = ["node-codec"] }
 iroha_logger = { workspace = true }
 iroha_crypto = { workspace = true, default-features = false, features = ["node-crypto"] }
-iroha_data_model = { workspace = true, default-features = false, features = ["json"] }
+iroha_data_model = { workspace = true, default-features = false }
 iroha_primitives = { workspace = true }
 iroha_config = { workspace = true }
 iroha_futures = { workspace = true }

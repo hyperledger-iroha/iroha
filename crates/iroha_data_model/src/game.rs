@@ -15,21 +15,26 @@ macro_rules! game_record {
  ($(#[$meta:meta])* pub struct $name:ident { $($(#[$fm:meta])* pub $field:ident : $ty:ty,)* }) => {
   $(#[$meta])*
   #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-  #[cfg_attr(feature="json",derive(crate::DeriveJsonSerialize,crate::DeriveJsonDeserialize))]
-  #[cfg_attr(feature="json",norito(deny_unknown_fields))]
+  #[derive (crate :: DeriveJsonSerialize , crate :: DeriveJsonDeserialize)]
+  #[norito (deny_unknown_fields)]
   pub struct $name { $($(#[$fm])* pub $field:$ty,)* }
  };
 }
 /// Entry authorization independent of transaction spending authority.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "kind", content = "public_key", rename_all = "snake_case")
-)]
+#[norito(tag = "kind", content = "public_key", rename_all = "snake_case")]
 pub enum GameAccessV1 {
     /// Any wallet may join an available seat.
     Public,
@@ -37,15 +42,20 @@ pub enum GameAccessV1 {
     Invite(PublicKey),
 }
 /// Immutable payout interpretation of a verified generic outcome.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "kind", content = "value", rename_all = "snake_case")
-)]
+#[norito(tag = "kind", content = "value", rename_all = "snake_case")]
 pub enum GamePayoutPolicyV1 {
     /// No stakes or transfers; retain a verified outcome only.
     NoPayout,
@@ -337,15 +347,21 @@ game_record! {
  }
 }
 /// Monotone lifecycle phases; only proof validation authorizes settlement.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "kind", content = "value", rename_all = "snake_case")
-)]
+#[norito(tag = "kind", content = "value", rename_all = "snake_case")]
 pub enum GamePhaseV1 {
     /// Wallet-bound participant admission.
     Lobby,

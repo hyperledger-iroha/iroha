@@ -94,6 +94,12 @@ on:
       - "crates/sorafs_chunker/**"
       - "crates/sorafs_orchestrator/**"
       - "python/iroha_python/pyproject.toml"
+      - "python/iroha_native/pyproject.toml"
+      - "python/iroha_native/src/**"
+      - "python/iroha_native/src/**/*.py"
+      - "python/iroha_native/src/**/*.so"
+      - "python/iroha_native/src/**/*.dylib"
+      - "python/iroha_native/src/**/*.pyd"
       - "python/iroha_python/pytest.ini"
       - "python/iroha_python/iroha_python_rs/Cargo.toml"
       - "python/iroha_python/iroha_python_rs/build.rs"
@@ -209,15 +215,12 @@ on:
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/zk/VerifyingKeyRecordDescription.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/zk/VerifyingKeyStatus.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/PrivacyNativeBridge.java"
-      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/PrivacyExact12FixtureBundleV1.java"
-      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/PrivacyExact12FixtureCodecV1.java"
-      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/PrivacyExact12TypedFixtureRowV1.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/norito/TransactionPayloadAdapter.java"
       - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/model/instructions/ProofAttachmentModelTests.java"
       - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/model/instructions/VerifyingKeyInstructionUtilsTests.java"
       - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/norito/ProofAttachmentNoritoTests.java"
       - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/privacy/PrivacyNativeBridgeTest.java"
-      - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/privacy/PrivacyExact12FixtureCodecV1Tests.java"
+      - "kotlin/core-jvm/src/test/java/org/hyperledger/iroha/sdk/privacy/PrivacyExact12FixtureJavaConsumerTest.java"
       - "kotlin/README.md"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/instructions/RegisterPinManifestInstruction.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/instructions/ZkAssetInstructions.kt"
@@ -324,7 +327,7 @@ jobs:
         run: |
           release_lock="$RUNNER_TEMP/privacy-jvm-native-abi23/Cargo.lock"
           [[ "$("$MOBILE_SDK_PYTHON_BINARY" -I -S -c 'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "$release_lock")" == "cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79" ]]
-          [[ "$("$MOBILE_SDK_PYTHON_BINARY" -I -S -c 'import hashlib,pathlib; print(hashlib.sha256(pathlib.Path("Cargo.lock").read_bytes()).hexdigest())')" == "d5b8bf5efbdc3ce2a8b1c0d2d75e1c5d1a343a072f836cfb76205bc6ea4cf15f" ]]
+          [[ "$("$MOBILE_SDK_PYTHON_BINARY" -I -S -c 'import hashlib,pathlib; print(hashlib.sha256(pathlib.Path("Cargo.lock").read_bytes()).hexdigest())')" == "051423addf3830895e208c6276429a0e8f46c61954159b0ef913e8cfed33d3aa" ]]
           ! cmp -s "$release_lock" Cargo.lock
           source_date_epoch="$(git show -s --format=%ct "$GITHUB_SHA")"
           [[ "$source_date_epoch" =~ ^[1-9][0-9]*$ ]]
@@ -368,7 +371,7 @@ jobs:
       - name: Revalidate frozen Swift inputs and ABI23 artifacts
         if: always()
         run: |
-          [[ "$("$MOBILE_SDK_PYTHON_BINARY" -I -S -c 'import hashlib,pathlib; print(hashlib.sha256(pathlib.Path("Cargo.lock").read_bytes()).hexdigest())')" == "d5b8bf5efbdc3ce2a8b1c0d2d75e1c5d1a343a072f836cfb76205bc6ea4cf15f" ]]
+          [[ "$("$MOBILE_SDK_PYTHON_BINARY" -I -S -c 'import hashlib,pathlib; print(hashlib.sha256(pathlib.Path("Cargo.lock").read_bytes()).hexdigest())')" == "051423addf3830895e208c6276429a0e8f46c61954159b0ef913e8cfed33d3aa" ]]
           [[ "$("$MOBILE_SDK_PYTHON_BINARY" -I -S -c 'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "$IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH")" == "cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79" ]]
           scripts/check_mobile_sdk_artifacts.sh --apple-only
 
@@ -457,7 +460,7 @@ jobs:
         run: |
           input="$RUNNER_TEMP/privacy-jvm-native-abi23"
           [[ "$("$PRIVACY_CSHARP_PYTHON" -I -S -c 'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "$input/Cargo.lock")" == "cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79" ]]
-          [[ "$("$PRIVACY_CSHARP_PYTHON" -I -S -c 'import hashlib,pathlib; print(hashlib.sha256(pathlib.Path("Cargo.lock").read_bytes()).hexdigest())')" == "d5b8bf5efbdc3ce2a8b1c0d2d75e1c5d1a343a072f836cfb76205bc6ea4cf15f" ]]
+          [[ "$("$PRIVACY_CSHARP_PYTHON" -I -S -c 'import hashlib,pathlib; print(hashlib.sha256(pathlib.Path("Cargo.lock").read_bytes()).hexdigest())')" == "051423addf3830895e208c6276429a0e8f46c61954159b0ef913e8cfed33d3aa" ]]
           "$PRIVACY_CSHARP_PYTHON" -I -S scripts/check_native_sdk_abi23_artifact.py verify \
             --artifact "$input/libconnect_norito_bridge.so" \
             --manifest "$input/native-sdk-abi23-csharp.json" \
@@ -517,7 +520,7 @@ jobs:
         run: |
           release_lock="$RUNNER_TEMP/privacy-jvm-native-abi23/Cargo.lock"
           [[ "$("$PRIVACY_JS_PYTHON" -I -S -c 'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "$release_lock")" == "cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79" ]]
-          [[ "$("$PRIVACY_JS_PYTHON" -I -S -c 'import hashlib,pathlib; print(hashlib.sha256(pathlib.Path("Cargo.lock").read_bytes()).hexdigest())')" == "d5b8bf5efbdc3ce2a8b1c0d2d75e1c5d1a343a072f836cfb76205bc6ea4cf15f" ]]
+          [[ "$("$PRIVACY_JS_PYTHON" -I -S -c 'import hashlib,pathlib; print(hashlib.sha256(pathlib.Path("Cargo.lock").read_bytes()).hexdigest())')" == "051423addf3830895e208c6276429a0e8f46c61954159b0ef913e8cfed33d3aa" ]]
           ! cmp -s "$release_lock" Cargo.lock
           echo "IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH=$release_lock" >> "$GITHUB_ENV"
       - name: Prime privacy N-API dependencies from the frozen lock

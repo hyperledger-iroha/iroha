@@ -32,14 +32,15 @@ impl norito::SerializePayload for LooseScalar {
         norito::SerializePayload::encoded_len_exact(&self.0)
     }
 }
-impl<'a> norito::NoritoDeserialize<'a> for LooseScalar {
+impl norito::NoritoDeserialize<'_> for LooseScalar {}
+impl<'a> norito::DeserializePayload<'a> for LooseScalar {
     fn deserialize(archived: &'a norito::core::Archived<Self>) -> Self {
-        Self(<u32 as norito::NoritoDeserialize>::deserialize(
+        Self(<u32 as norito::DeserializePayload>::deserialize(
             archived.cast::<u32>(),
         ))
     }
     fn try_deserialize(archived: &'a norito::core::Archived<Self>) -> Result<Self, Error> {
-        <u32 as norito::NoritoDeserialize>::try_deserialize(archived.cast::<u32>()).map(Self)
+        <u32 as norito::DeserializePayload>::try_deserialize(archived.cast::<u32>()).map(Self)
     }
 }
 #[derive(Debug, PartialEq, Eq, norito::derive::Encode, norito::derive::Decode)]

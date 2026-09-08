@@ -2,6 +2,22 @@
 
 Core data structures for the Hyperledger Iroha blockchain.
 
+## Dependency boundary
+
+The model and its tests must remain independent of node execution, node
+configuration, telemetry implementations and storage runtimes. Tests that need
+ABI hashes, pointer validation or AXT policy records use the owning `ivm_abi`
+crate. Engine execution tests belong in IVM or Core.
+
+Run `python3 scripts/check_dependency_budget.py --check-boundaries --offline`
+from the repository root to validate the feature-resolved normal/build graph
+and the default/HTTP model graph including its root development dependencies.
+
+Protocol JSON is always available, including with `default-features = false`.
+Custom parameters, admission and consensus policies, and retained service metadata
+use canonical Norito JSON. Optional governance, HTTP and cryptographic capability
+features remain independent of this protocol requirement.
+
 ## FFI
 
 `iroha_data_model` can expose or import types for use over a foreign

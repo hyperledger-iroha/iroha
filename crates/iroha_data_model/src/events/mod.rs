@@ -3,7 +3,7 @@ pub use crate::{Decode, Encode};
 use iroha_data_model_derive::model;
 use iroha_macro::FromVariant;
 use iroha_schema::{Ident, IntoSchema, MetaMap, TypeId};
-#[cfg(feature = "json")]
+
 use norito::json::{self, JsonDeserialize, JsonSerialize};
 use pipeline::{BlockEvent, TransactionEvent};
 use std::{format, ops::Deref, string::String, sync::Arc, vec::Vec};
@@ -40,7 +40,8 @@ macro_rules! impl_json_via_norito_bytes {
 }
 pub use self::model::*;
 /// Shared, reference-counted wrapper for [`data::DataEvent`] to avoid repeated cloning.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
+#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::events::SharedDataEvent")]
 pub struct SharedDataEvent(Arc<data::DataEvent>);
 impl SharedDataEvent {
     /// Wrap an existing [`Arc`] around a [`data::DataEvent`].
@@ -99,7 +100,7 @@ mod tests {
     use iroha_crypto::Hash;
     use iroha_primitives::json::Json;
     use std::{str::FromStr, sync::Arc};
-    #[cfg(feature = "json")]
+
     #[test]
     fn event_filter_json_is_canonical_and_ambient_independent() {
         let filter = EventFilterBox::ExecuteTrigger(ExecuteTriggerEventFilter::new());
@@ -198,6 +199,8 @@ mod model {
     #[derive(Debug, Clone, PartialEq, Eq, FromVariant, Decode, Encode, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     /// Top-level wrapper for all streamed event payloads.
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::events::model::EventBox")]
     pub enum EventBox {
         /// Pipeline event.
         Pipeline(pipeline::PipelineEventBox),
@@ -213,7 +216,10 @@ mod model {
         TriggerCompleted(trigger_completed::TriggerCompletedEvent),
     }
     /// Event type which could invoke trigger execution.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
+    #[derive(
+        Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema, norito::NoritoSchema,
+    )]
+    #[norito_schema(name = "iroha_data_model::events::model::TriggeringEventType")]
     pub enum TriggeringEventType {
         /// Pipeline event.
         Pipeline,
@@ -230,6 +236,8 @@ mod model {
         Debug, Clone, PartialEq, Eq, PartialOrd, Ord, FromVariant, Decode, Encode, IntoSchema,
     )]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::events::model::EventFilterBox")]
     pub enum EventFilterBox {
         /// Listen to pipeline events with filter.
         Pipeline(pipeline::PipelineEventFilterBox),
@@ -246,7 +254,7 @@ mod model {
         TriggerCompleted(trigger_completed::TriggerCompletedEventFilter),
     }
 }
-#[cfg(feature = "json")]
+
 impl JsonSerialize for TriggeringEventType {
     fn json_serialize(&self, out: &mut String) {
         let label = match self {
@@ -270,7 +278,7 @@ impl JsonSerialize for TriggeringEventType {
         json::write_json_string_to(label, out)
     }
 }
-#[cfg(feature = "json")]
+
 impl JsonDeserialize for TriggeringEventType {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         let value = parser.parse_string()?;
@@ -285,7 +293,7 @@ impl JsonDeserialize for TriggeringEventType {
         }
     }
 }
-#[cfg(feature = "json")]
+
 impl_json_via_norito_bytes!(EventBox, EventFilterBox);
 impl From<TransactionEvent> for EventBox {
     fn from(source: TransactionEvent) -> Self {
@@ -297,24 +305,16 @@ impl From<BlockEvent> for EventBox {
         Self::Pipeline(source.into())
     }
 }
-// Provide slice decoding via Norito codec for core consumers that expect
-// `norito::core::DecodeFromSlice`. Delegate to the header-framed codec decoder.
+// Reconstruct each complete payload without resetting its caller's advertised
+// layout, resource limits, or structured errors.
 impl<'a> norito::core::DecodeFromSlice<'a> for EventBox {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-        let mut s: &'a [u8] = bytes;
-        let value = <Self as norito::codec::DecodeAll>::decode_all(&mut s)
-            .map_err(|e| norito::core::Error::Message(format!("codec decode error: {e}")))?;
-        let used = bytes.len() - s.len();
-        Ok((value, used))
+        norito::core::decode_field_canonical::<Self>(bytes)
     }
 }
 impl<'a> norito::core::DecodeFromSlice<'a> for EventFilterBox {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-        let mut s: &'a [u8] = bytes;
-        let value = <Self as norito::codec::DecodeAll>::decode_all(&mut s)
-            .map_err(|e| norito::core::Error::Message(format!("codec decode error: {e}")))?;
-        let used = bytes.len() - s.len();
-        Ok((value, used))
+        norito::core::decode_field_canonical::<Self>(bytes)
     }
 }
 impl EventBox {
@@ -506,22 +506,35 @@ pub mod stream {
     mod model {
         use super::*;
         /// Message sent by the stream producer. Event sent by the peer.
-        #[derive(Debug, Clone, Decode, Encode, IntoSchema, Constructor)]
-        #[cfg_attr(
-            feature = "json",
-            derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+        #[derive(
+            Debug,
+            Clone,
+            Decode,
+            Encode,
+            IntoSchema,
+            Constructor,
+            crate :: DeriveJsonSerialize,
+            crate :: DeriveJsonDeserialize,
         )]
         #[repr(transparent)]
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(name = "iroha_data_model::events::stream::model::EventMessage")]
         pub struct EventMessage(pub EventBox);
         /// Message sent by the stream consumer. Request sent by the client to subscribe to events.
         ///
         /// Proof filters are bundled with the primary subscription message to keep
         /// the WebSocket format single-shot and deterministic for the first release.
-        #[derive(Debug, Clone, Decode, Encode, IntoSchema)]
-        #[cfg_attr(
-            feature = "json",
-            derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+        #[derive(
+            Debug,
+            Clone,
+            Decode,
+            Encode,
+            IntoSchema,
+            crate :: DeriveJsonSerialize,
+            crate :: DeriveJsonDeserialize,
+            norito::NoritoSchema,
         )]
+        #[norito_schema(name = "iroha_data_model::events::stream::model::EventSubscriptionRequest")]
         pub struct EventSubscriptionRequest {
             /// Event filters applied to the stream.
             pub filters: Vec<EventFilterBox>,
@@ -530,17 +543,11 @@ pub mod stream {
             pub proof_backend: Option<Vec<String>>,
             /// Accept only these call hashes (empty or None disables call hash filtering).
             #[norito(default)]
-            #[cfg_attr(
-                feature = "json",
-                norito(json = "crate::json_helpers::fixed_bytes::option_vec")
-            )]
+            #[norito(json = "crate::json_helpers::fixed_bytes::option_vec")]
             pub proof_call_hash: Option<Vec<[u8; 32]>>,
             /// Accept only these envelope hashes (empty or None disables envelope hash filtering).
             #[norito(default)]
-            #[cfg_attr(
-                feature = "json",
-                norito(json = "crate::json_helpers::fixed_bytes::option_vec")
-            )]
+            #[norito(json = "crate::json_helpers::fixed_bytes::option_vec")]
             pub proof_envelope_hash: Option<Vec<[u8; 32]>>,
         }
         impl EventSubscriptionRequest {
@@ -555,23 +562,15 @@ pub mod stream {
                 }
             }
         }
-        // Provide slice decoding via Norito codec for HTTP payloads
+        // Decode the complete HTTP payload owner under its active wire context.
         impl<'a> norito::core::DecodeFromSlice<'a> for EventMessage {
             fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-                let (inner, used) =
-                    <EventBox as norito::core::DecodeFromSlice>::decode_from_slice(bytes)?;
-                Ok((EventMessage(inner), used))
+                norito::core::decode_field_canonical::<Self>(bytes)
             }
         }
         impl<'a> norito::core::DecodeFromSlice<'a> for EventSubscriptionRequest {
             fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-                let mut s: &'a [u8] = bytes;
-                let value =
-                    <Self as norito::codec::DecodeAll>::decode_all(&mut s).map_err(|e| {
-                        norito::core::Error::Message(format!("codec decode error: {e}"))
-                    })?;
-                let used = bytes.len() - s.len();
-                Ok((value, used))
+                norito::core::decode_field_canonical::<Self>(bytes)
             }
         }
     }
@@ -623,3 +622,6 @@ pub mod prelude {
         trigger_completed::prelude::*,
     };
 }
+
+#[cfg(test)]
+mod captured_event_boundary_identity_tests;

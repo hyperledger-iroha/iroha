@@ -24,7 +24,12 @@ enum PackedSelfDelimitingEnum {
 }
 fn packed_struct_roundtrip<T>(value: &T) -> T
 where
-    T: core::fmt::Debug + PartialEq + Eq + Encode + Decode,
+    T: core::fmt::Debug
+        + PartialEq
+        + Eq
+        + norito::NoritoSerialize
+        + Decode
+        + for<'de> norito::NoritoDeserialize<'de>,
 {
     let requested = header_flags::PACKED_STRUCT | header_flags::COMPACT_LEN;
     let _guard = DecodeFlagsGuard::enter(requested);

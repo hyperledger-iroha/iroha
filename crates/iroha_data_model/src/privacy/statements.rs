@@ -1,9 +1,21 @@
 /// One public selectively disclosed X.509 subject attribute.
 ///
 /// Indices use the paper's closed order: `0=C`, `1=O`, `2=OU`, `3=CN`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::PrivacyZkX509DisclosedAttributeV1")]
 pub struct PrivacyZkX509DisclosedAttributeV1 {
@@ -13,9 +25,20 @@ pub struct PrivacyZkX509DisclosedAttributeV1 {
     pub attribute_digest: PrivacyAttributeDigestV1,
 }
 /// Native X.509 credential-predicate STARK statement.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::IrohaZkX509StarkP256StatementV1")]
 pub struct IrohaZkX509StarkP256StatementV1 {
@@ -72,13 +95,26 @@ pub struct IrohaZkX509StarkP256StatementV1 {
 ///
 /// The compiled modulus is `3611623616^8 + 1`. Fixed width at the type boundary
 /// eliminates ambiguous byte order, truncation, and alternate field regimes.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::privacy::PrivacyJindoFieldElementV1")]
 pub struct PrivacyJindoFieldElementV1 {
     /// Exact canonical little-endian residue.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub encoding: [u8; IROHA_JINDO_FIELD_ELEMENT_BYTES_V1],
 }
 impl PrivacyJindoFieldElementV1 {
@@ -97,13 +133,24 @@ impl PrivacyJindoFieldElementV1 {
 ///
 /// The byte string contains 3 × 1024 signed little-endian `i32` coefficients. Native verification
 /// additionally enforces the compiled rounded-coefficient bound.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::privacy::PrivacyJindoLatticeCommitmentV1")]
 pub struct PrivacyJindoLatticeCommitmentV1 {
     /// Exact governed lattice-commitment encoding.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
+    #[norito(json = "crate::json_helpers::base64_vec")]
     pub encoding: Vec<u8>,
 }
 impl PrivacyJindoLatticeCommitmentV1 {
@@ -119,9 +166,20 @@ impl PrivacyJindoLatticeCommitmentV1 {
     }
 }
 /// Native Jindo batched univariate lattice polynomial-opening statement.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::IrohaJindoPolynomialCommitmentStatementV1")]
 pub struct IrohaJindoPolynomialCommitmentStatementV1 {
@@ -139,13 +197,26 @@ pub struct IrohaJindoPolynomialCommitmentStatementV1 {
 /// Bits are interpreted little-endian and become the 64 binary coefficients
 /// of exactly one application-ring polynomial. This is deliberately not an
 /// arbitrary byte string or a digest-preimage claim.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::privacy::BootleLanternAttributeValueV1")]
 pub struct BootleLanternAttributeValueV1(
     /// Exact little-endian 64-bit attribute encoding.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub [u8; BOOTLE_LANTERN_ATTRIBUTE_BYTES_V1],
 );
 impl BootleLanternAttributeValueV1 {
@@ -161,9 +232,20 @@ impl BootleLanternAttributeValueV1 {
     }
 }
 /// One polynomial in `Z_12289[X]/(X^64 + 1)`.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::BootleLanternPolynomialV1")]
 pub struct BootleLanternPolynomialV1 {
@@ -171,9 +253,20 @@ pub struct BootleLanternPolynomialV1 {
     pub coefficients: Vec<u16>,
 }
 /// Canonical issuer verification matrix `B` in the application ring.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::BootleLanternIssuerPublicMatrixV1")]
 pub struct BootleLanternIssuerPublicMatrixV1 {
@@ -395,9 +488,20 @@ impl BootleLanternIssuerPublicMatrixV1 {
     }
 }
 /// Governed allowed values for one required public attribute.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::BootleLanternAllowedAttributeValuesV1")]
 pub struct BootleLanternAllowedAttributeValuesV1 {
@@ -405,29 +509,49 @@ pub struct BootleLanternAllowedAttributeValuesV1 {
     pub values: Vec<BootleLanternAttributeValueV1>,
 }
 /// Forward-only lifecycle of one authoritative Bootle/Lantern issuer policy.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "state", content = "value", deny_unknown_fields)
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
 )]
+#[norito(tag = "state", content = "value", deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::BootleLanternIssuerPolicyLifecycleV1")]
 pub enum BootleLanternIssuerPolicyLifecycleV1 {
     /// Presentations selecting the exact current record may be admitted.
-    #[cfg_attr(feature = "json", norito(rename = "active"))]
+    #[norito(rename = "active")]
     Active,
     /// Terminal state; the lineage cannot be rotated or reactivated.
-    #[cfg_attr(feature = "json", norito(rename = "revoked"))]
+    #[norito(rename = "revoked")]
     Revoked,
 }
 /// Committed issuer key and selective-disclosure policy trusted by verification.
 ///
 /// The proof submitter supplies only the record identity and digest in the
 /// statement. Core resolves this complete record from committed state.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::BootleLanternIssuerPolicyV1")]
 pub struct BootleLanternIssuerPolicyV1 {
@@ -891,9 +1015,21 @@ pub enum BootleLanternIssuerPolicyValidationErrorV1 {
     RevocationMustPreservePolicy,
 }
 /// One canonical Bootle/Lantern selective-disclosure entry.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::BootleLanternDisclosedAttributeV1")]
 pub struct BootleLanternDisclosedAttributeV1 {
@@ -903,9 +1039,20 @@ pub struct BootleLanternDisclosedAttributeV1 {
     pub value: BootleLanternAttributeValueV1,
 }
 /// Native Bootle Lantern/LNP22 module-lattice anonymous-credential statement.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::IrohaBootleLanternAnoncredStatementV1")]
 pub struct IrohaBootleLanternAnoncredStatementV1 {
@@ -927,12 +1074,21 @@ pub struct IrohaBootleLanternAnoncredStatementV1 {
     pub disclosures: Vec<BootleLanternDisclosedAttributeV1>,
 }
 /// Direction of a public value balance relative to a private pool.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "direction", content = "value", deny_unknown_fields)
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
 )]
+#[norito(tag = "direction", content = "value", deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::PrivacyValueBalanceDirectionV1")]
 pub enum PrivacyValueBalanceDirectionV1 {
@@ -944,9 +1100,21 @@ pub enum PrivacyValueBalanceDirectionV1 {
     OutOfPool,
 }
 /// Signed public value balance represented without JSON-ambiguous `i128`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::PrivacyValueBalanceV1")]
 pub struct PrivacyValueBalanceV1 {
@@ -986,38 +1154,60 @@ impl PrivacyValueBalanceV1 {
     }
 }
 /// Exact public data for one Orchard V3 action.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::PrivacyOrchardActionV1")]
 pub struct PrivacyOrchardActionV1 {
     /// Canonical Pallas-base nullifier encoding.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub nullifier: [u8; 32],
     /// Canonical non-identity randomized `RedPallas` verification key.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub randomized_key: [u8; 32],
     /// Canonical extracted note commitment.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub note_commitment: [u8; 32],
     /// Canonical non-identity ephemeral Pallas public key.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub ephemeral_key: [u8; 32],
     /// Exact 580-byte Orchard encrypted-note ciphertext.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
+    #[norito(json = "crate::json_helpers::base64_vec")]
     pub encrypted_note: Vec<u8>,
     /// Exact 80-byte Orchard outgoing ciphertext.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
+    #[norito(json = "crate::json_helpers::base64_vec")]
     pub outgoing_ciphertext: Vec<u8>,
     /// Canonical Pallas value commitment.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub value_commitment: [u8; 32],
 }
 /// Orchard Halo2 private action-bundle statement.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::OrchardHalo2ActionsStatementV1")]
 pub struct OrchardHalo2ActionsStatementV1 {
@@ -1045,9 +1235,20 @@ pub struct OrchardHalo2ActionsStatementV1 {
     pub expiry_height: u64,
 }
 /// Monero FCMP++ full-chain-membership transfer statement.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::MoneroFcmpPlusPlusStatementV1")]
 pub struct MoneroFcmpPlusPlusStatementV1 {
@@ -1072,9 +1273,20 @@ pub struct MoneroFcmpPlusPlusStatementV1 {
     pub encrypted_outputs: Vec<PrivacyFcmpEncryptedOutputV1>,
 }
 /// Native IVM private-note execution statement.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::IrohaIvmPrivateNoteStarkStatementV1")]
 pub struct IrohaIvmPrivateNoteStarkStatementV1 {
@@ -1131,12 +1343,21 @@ impl IrohaIvmPrivateNoteStarkStatementV1 {
     }
 }
 /// Post-quantum authorization profile required by PQ-MASP V1.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "authorization", content = "value", deny_unknown_fields)
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
 )]
+#[norito(tag = "authorization", content = "value", deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::PrivacyPqAuthorizationProfileV1")]
 pub enum PrivacyPqAuthorizationProfileV1 {
@@ -1144,12 +1365,21 @@ pub enum PrivacyPqAuthorizationProfileV1 {
     MlDsa65,
 }
 /// Post-quantum note-encryption profile required by PQ-MASP V1.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "encryption", content = "value", deny_unknown_fields)
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
 )]
+#[norito(tag = "encryption", content = "value", deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::PrivacyPqNoteEncryptionProfileV1")]
 pub enum PrivacyPqNoteEncryptionProfileV1 {
@@ -1157,9 +1387,20 @@ pub enum PrivacyPqNoteEncryptionProfileV1 {
     MlKem768XChaCha20Poly1305,
 }
 /// Post-quantum MASP STARK transfer statement.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::PqMaspStarkStatementV1")]
 pub struct PqMaspStarkStatementV1 {
@@ -1198,13 +1439,13 @@ pub struct PqMaspStarkStatementV1 {
 /// Protocol-typed canonical privacy statement.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[norito(schema_name = "iroha.privacy.statement.v1")]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "protocol", content = "statement", deny_unknown_fields)
-)]
+#[derive(DeriveJsonSerialize, DeriveJsonDeserialize)]
+#[norito(tag = "protocol", content = "statement", deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::privacy::PrivacyStatementV1", frame = "iroha.privacy.statement.v1")]
+#[norito_schema(
+    name = "iroha_data_model::privacy::PrivacyStatementV1",
+    frame = "iroha.privacy.statement.v1"
+)]
 pub enum PrivacyStatementV1 {
     /// ZK-ACE post-quantum authorization statement.
     ZkAcePqAuthorizationV1(ZkAcePqAuthorizationStatementV1),

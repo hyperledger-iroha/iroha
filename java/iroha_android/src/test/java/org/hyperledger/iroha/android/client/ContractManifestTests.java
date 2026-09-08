@@ -20,6 +20,9 @@ public final class ContractManifestTests {
   private ContractManifestTests() {}
 
   public static void main(final String[] args) {
+    exportedStructIdentitySurvivesPublicAndDurableSchemas();
+    everyPublicEntrypointRequiresAnExplicitReturnSchema();
+    nominalErrorsPreserveSharedFixture();
     fullManifestPreservesExactKotodamaV1Interface();
     triggerBoundariesRejectExactAmountSourceFormOnly();
     manifestRejectsUnknownEnglishAndNoncanonicalShapes();
@@ -31,6 +34,102 @@ public final class ContractManifestTests {
     everyReservedProjectionAndPageHasAnExactNominalName();
     everyReservedProjectionAndPageRejectsForgedStructure();
     System.out.println("[IrohaAndroid] contract manifest tests passed.");
+  }
+
+  private static void exportedStructIdentitySurvivesPublicAndDurableSchemas() {
+    java.io.File directory = new java.io.File(".").getAbsoluteFile();
+    while (directory != null && !new java.io.File(directory, "fixtures/kotodama/exported_structs_v1.json").isFile()) {
+      directory = directory.getParentFile();
+    }
+    require(directory != null, "shared exported-struct fixture exists");
+    final String payload;
+    final java.util.Map<?, ?> vectors;
+    try {
+      payload = new String(java.nio.file.Files.readAllBytes(new java.io.File(directory, "fixtures/kotodama/exported_structs_v1.json").toPath()), StandardCharsets.UTF_8);
+      vectors = (java.util.Map<?, ?>) JsonParser.parse(new String(java.nio.file.Files.readAllBytes(new java.io.File(directory, "fixtures/kotodama/exported_struct_names_v1.json").toPath()), StandardCharsets.UTF_8));
+    } catch (java.io.IOException error) { throw new AssertionError(error); }
+    final String identity = "std/math@1.0.0::Math::Receipt";
+    for (final Object item : (List<?>) vectors.get("valid")) {
+      final String name = (String) item;
+      final ContractManifest manifest = ContractJsonParser.parseManifestRecord(payload.replace(identity, name).getBytes(StandardCharsets.UTF_8)).manifest();
+      final ContractManifest.EntrypointDescriptor entrypoint = manifest.entrypoints().get(0);
+      require(("struct " + name).equals(entrypoint.returnSchema().canonicalTypeName()), "exact exported return identity");
+      require(("struct " + name).equals(entrypoint.argumentSchema().fields().get(0).valueType().canonicalTypeName()), "exact exported argument identity");
+      require(manifest.states().get(0).typeName().contains(name + "{"), "exact exported state identity");
+    }
+    for (final Object item : (List<?>) vectors.get("invalid")) {
+      final java.util.Map<?, ?> root = (java.util.Map<?, ?>) JsonParser.parse(payload.replace(identity, (String) item));
+      final java.util.Map<?, ?> manifest = (java.util.Map<?, ?>) root.get("manifest");
+      for (final String removed : new String[] {"states", "entrypoints"}) {
+        final java.util.Map<Object, Object> isolated = new java.util.LinkedHashMap<>(manifest);
+        isolated.remove(removed);
+        expectFailure(() -> ContractJsonParser.parseManifestRecord(JsonEncoder.encode(Collections.singletonMap("manifest", isolated)).getBytes(StandardCharsets.UTF_8)));
+      }
+    }
+  }
+
+  private static void everyPublicEntrypointRequiresAnExplicitReturnSchema() {
+    final String prefix = "{\"manifest\":{\"entrypoints\":[{\"name\":\"done\",\"kind\":{\"kind\":\"View\",\"value\":null},\"params\":[]";
+    final String suffix = "}]}}";
+    for (final String returns : new String[] {
+      "",
+      ",\"return_type\":null,\"return_schema\":null",
+      ",\"return_type\":\"()\"",
+      ",\"return_schema\":{\"nodes\":[{\"kind\":\"Unit\",\"value\":null}]}"
+    }) {
+      expectFailure(() -> ContractJsonParser.parseManifestRecord((prefix + returns + suffix).getBytes(StandardCharsets.UTF_8)));
+    }
+    final ContractManifest.EntrypointDescriptor unit = ContractJsonParser.parseManifestRecord(
+        (prefix + ",\"return_type\":\"()\",\"return_schema\":{\"nodes\":[{\"kind\":\"Unit\",\"value\":null}]}" + suffix)
+            .getBytes(StandardCharsets.UTF_8)).manifest().entrypoints().get(0);
+    require("()".equals(unit.returnType()), "Unit return type is explicit");
+    require(unit.returnSchema().wordCount() == 1, "Unit return consumes one zero scalar word");
+  }
+
+  private static void nominalErrorsPreserveSharedFixture() {
+    java.io.File directory = new java.io.File(".").getAbsoluteFile();
+    java.io.File fixture = null;
+    while (directory != null) {
+      final java.io.File candidate = new java.io.File(directory, "fixtures/kotodama/nominal_errors_v1.json");
+      if (candidate.isFile()) { fixture = candidate; break; }
+      directory = directory.getParentFile();
+    }
+    require(fixture != null, "shared nominal error fixture exists");
+    final String payload;
+    try { payload = new String(java.nio.file.Files.readAllBytes(fixture.toPath()), StandardCharsets.UTF_8); }
+    catch (java.io.IOException error) { throw new AssertionError(error); }
+    final ContractManifest manifest = ContractJsonParser.parseManifestRecord(payload.getBytes(StandardCharsets.UTF_8)).manifest();
+    final ContractManifest.ValueTypeV1 schema = manifest.entrypoints().get(0).returnSchema();
+    require(schema.wordCount() == 1, "Result uses one ABI word");
+    require(schema.nodes().get(1).kind() == ContractManifest.ValueTypeNodeKindV1.UNIT, "Unit schema");
+    require("不足".equals(schema.nodes().get(2).errorType().variants().get(0).name()), "Japanese variant");
+    require(manifest.errorTypes().size() == 2, "enum-local code collisions are valid");
+    final ContractManifest.ValueTypeV1 cursor = manifest.entrypoints().get(1).returnSchema();
+    require("Option<StateCursor<int>>".equals(cursor.canonicalTypeName()), "cursor canonical schema");
+    require(cursor.nodes().get(1).kind() == ContractManifest.ValueTypeNodeKindV1.STATE_CURSOR, "nominal cursor role");
+    require(cursor.nodes().get(1).leafKind() == ContractManifest.ValueKindV1.INT, "exact cursor key kind");
+    require("StatePage<int, bool, 8>".equals(manifest.entrypoints().get(2).returnSchema().canonicalTypeName()), "page canonical type");
+    require(manifest.entrypoints().get(2).returnSchema().wordCount() == 2, "page list and cursor option words");
+    try {
+      ContractJsonParser.parseManifestRecord(payload.replaceFirst("CapacityExceeded", "DifferentMeaning").getBytes(StandardCharsets.UTF_8));
+      throw new AssertionError("nominal schema substitution must fail");
+    } catch (IllegalStateException expected) { /* Exact signed catalog mismatch. */ }
+    final String stateOnlyUnknown = payload.replace(
+        "\"type_name\": \"Result<(), example/vault@1.0.0::金庫::拒否>\"",
+        "\"type_name\": \"Result<(), missing/vault@1.0.0::金庫::拒否>\"");
+    try {
+      ContractJsonParser.parseManifestRecord(stateOnlyUnknown.getBytes(StandardCharsets.UTF_8));
+      throw new AssertionError("unknown nominal state error must fail even when public schemas match");
+    } catch (IllegalStateException expected) {
+      require(expected.getMessage().contains("error_types catalog"), "state identity requires catalog membership");
+    }
+    for (final String forged : new String[] {"StatePage{anything: int}", "StatePage{items: List<(int, bool), 8>, next: Option<StateCursor<bool>>}"}) {
+      try {
+        ContractJsonParser.parseManifestRecord(payload.replace(
+            "StatePage{items: List<(int, bool), 8>, next: Option<StateCursor<int>>}", forged).getBytes(StandardCharsets.UTF_8));
+        throw new AssertionError("forged reserved StatePage state type must fail");
+      } catch (IllegalStateException expected) { /* Reserved state shape is exact. */ }
+    }
   }
 
   private static void fullManifestPreservesExactKotodamaV1Interface() {
@@ -74,7 +173,7 @@ public final class ContractManifestTests {
     require(
         "StateMap<AccountId, quantity>".equals(manifest.states().get(0).typeName()),
         "state type");
-    require(manifest.errorCodes().get(0).code() == 1001, "error code");
+    require(manifest.errorTypes().get(0).variants().get(0).code() == 1001, "error code");
     require(
         "ja".equals(manifest.kotoba().get(0).translations().get(1).language()),
         "kotoba language");
@@ -177,8 +276,8 @@ public final class ContractManifestTests {
       replaceFirst(response, "\"kind\":\"Decimal\"", "\"kind\":\"U128\""),
       replaceFirst(
           response,
-          "\"namespace\":\"TransferError\"",
-          "\"namespace\":\"Option\""),
+          "\"identity\":\"Ledger::TransferError\"",
+          "\"identity\":\"Error<Injected>\""),
       replaceFirst(response, "\"features_bitmap\":0", "\"features_bitmap\":4"),
       replaceFirst(
           response,
@@ -316,7 +415,7 @@ public final class ContractManifestTests {
           "canonical dynamic key type " + keyType);
     }
 
-    for (final String boundKind : new String[] {"range", "take"}) {
+    for (final String boundKind : new String[] {"page", "take"}) {
       final String payload =
           replaceFirst(
               fullResponse(),
@@ -700,7 +799,7 @@ public final class ContractManifestTests {
             + "\"}],\"argument_schema\":{\"fields\":[{\"name\":\"value\","
             + "\"ty\":{\"nodes\":["
             + nodes
-            + "]}}]}}]}}";
+            + "]}}]},\"return_type\":\"()\",\"return_schema\":{\"nodes\":[{\"kind\":\"Unit\",\"value\":null}]}}]}}";
     return ContractJsonParser.parseManifestRecord(payload.getBytes(StandardCharsets.UTF_8))
         .manifest()
         .entrypoints()
@@ -857,7 +956,7 @@ public final class ContractManifestTests {
         + "\",\"authority\":null,\"metadata\":{\"purpose\":\"daily-settlement\",\"round\":7},"
         + "\"callback\":{\"namespace\":null,\"entrypoint\":\"transfer\"}}]}],"
         + "\"states\":[{\"name\":\"Balances\",\"type_name\":\"StateMap<AccountId, quantity>\"}],"
-        + "\"error_codes\":[{\"namespace\":\"TransferError\",\"name\":\"InsufficientFunds\",\"code\":1001}],"
+        + "\"error_types\":[{\"identity\":\"Ledger::TransferError\",\"variants\":[{\"name\":\"InsufficientFunds\",\"code\":1001}]}],"
         + "\"kotoba\":[{\"msg_id\":\"transfer.denied\",\"translations\":["
         + "{\"lang\":\"en\",\"text\":\"Transfer denied\"},{\"lang\":\"ja\",\"text\":\"送金は拒否されました\"}]}],"
         + "\"provenance\":{\"signer\":\"ed25519:fixture\",\"signature\":\"fixture-signature\"}},"

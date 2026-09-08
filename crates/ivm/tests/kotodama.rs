@@ -277,6 +277,8 @@ macro_rules! semantic_success_cases {
 }
 
 compile_cases! {
+    "for_each_map_snapshot_allows_mutation", Production,
+        CaseSource::Fixture(include_str!("../fixtures/koto_v1/kotodama/030.ko"));
     "string_equality_compiles", Production,
         CaseSource::Exact("seiyaku StringEquality { view fn f() { let _x = \"hi\" == \"hi\"; } }");
     "irohaswap_sample_compiles", Test,
@@ -330,10 +332,10 @@ compile_rejection_cases! {
         &["sysvar_authority"], &[];
     "dynamic_state_map_take_is_rejected", Production,
         CaseSource::Fixture(include_str!("../fixtures/koto_v1/kotodama/046.ko")),
-        &["E_UNBOUNDED_ITERATION", "literal"], &[];
+        &["E_UNBOUNDED_ITERATION", "constant expression"], &[];
     "dynamic_state_map_range_is_rejected", Production,
         CaseSource::Fixture(include_str!("../fixtures/koto_v1/kotodama/047.ko")),
-        &["E_UNBOUNDED_ITERATION", "literal"], &[];
+        &["range"], &[];
     "indirect_sensitive_calls_require_permission", Production,
         CaseSource::Fixture(include_str!("../fixtures/koto_v1/kotodama/055.ko")),
         &["authorize"], &[];
@@ -351,10 +353,10 @@ compile_rejection_cases! {
         &[], &["crypto::poseidon2", "crypto::poseidon6"];
     "unbounded_state_map_iteration_is_rejected", Production,
         CaseSource::Fixture(include_str!("../fixtures/koto_v1/kotodama/061.ko")),
-        &["StateMap iteration requires `.take(N)` or `.range(start, end)`"], &[];
+        &["E_UNBOUNDED_ITERATION", "for iteration requires a bounded List"], &[];
     "unbounded_state_map_iteration_cannot_infer_a_limit", Production,
         CaseSource::Fixture(include_str!("../fixtures/koto_v1/kotodama/062.ko")),
-        &["StateMap iteration requires `.take(N)` or `.range(start, end)`"], &[];
+        &["E_UNBOUNDED_ITERATION", "for iteration requires a bounded List"], &[];
     "map_new_is_rejected_in_v1", Production,
         CaseSource::Exact("module RemovedMap { fn make() -> int { return Map::new(); } }"),
         &["Map"], &[];
@@ -400,7 +402,7 @@ semantic_rejection_cases! {
     "decimal_literal_rejects_int_annotation", CaseSource::Fixture(include_str!("../fixtures/koto_v1/kotodama/005.ko")),
         Some("E_TYPE_ANNOTATION_MISMATCH"), "expected int, got decimal";
     "semantic_rejects_extended_sysvar_helper_args", CaseSource::Exact(r#"module InvalidContext { fn f() { let _chain = context::chain_id(1); } }"#),
-        None, "chain_id expects no arguments";
+        Some("K2003"), "call `context::chain_id` expects at most 0 arguments, got 1";
     "semantic_rejects_extended_query_and_authority_sysvar_helper_args/query", CaseSource::Exact(r#"module InvalidQuery { fn f() { let _response = query_execute_norito(1); } }"#),
         None, "query_execute_norito";
     "semantic_rejects_extended_query_and_authority_sysvar_helper_args/authority", CaseSource::Exact(r#"module InvalidAuthority { fn f() { let _caller = sysvar_authority(1); } }"#),
@@ -409,16 +411,14 @@ semantic_rejection_cases! {
         None, "ledger::query::account";
     "semantic_rejects_typed_query_get_helper_args/instance", CaseSource::Exact(r#"module InvalidQuery { fn f() { let _instance = ledger::query::seiyaku_instance(1); } }"#),
         None, "ledger::query::seiyaku_instance";
-    "semantic_rejects_zk_vrf_read_helper_args", CaseSource::Exact(r#"module InvalidVrfRequest { fn f() { let _seed = crypto::vrf::epoch_seed(1); } }"#),
+    "semantic_rejects_zk_vrf_read_helper_args", CaseSource::Exact(r#"module InvalidVrfRequest { fn f() { let _seed = crypto::vrf::epoch_seed(value: 1); } }"#),
         None, "crypto::vrf::epoch_seed expects (bytes) pointer to NoritoBytes VrfEpochSeedRequest";
-    "semantic_rejects_state_introspection_helper_args", CaseSource::Exact(r#"seiyaku C { fn f() { let prefix = Name::parse("Orders").path(0); let _keys = state::keys(path: prefix, offset: 0, limit: b"bad"); } }"#),
-        None, "state::keys expects (bytes StatePath, int offset, int limit)";
-    "semantic_rejects_legacy_name_state_path_carriers", CaseSource::Exact(r#"seiyaku C { fn f() { let _keys = state::keys(path: Name::parse("Orders"), offset: 0, limit: 1); } }"#),
-        Some("K2003"), "state::keys expects (bytes StatePath, int offset, int limit)";
+    "semantic_rejects_state_introspection_helper_args", CaseSource::Exact(r#"seiyaku C { fn f() { let _length = state::len(1); } }"#),
+        None, "state::len expects (bytes StatePath)";
+    "semantic_rejects_legacy_name_state_path_carriers", CaseSource::Exact(r#"seiyaku C { fn f() { let _count = state::count(Name::parse("Orders")); } }"#),
+        Some("K2003"), "state::count expects (bytes StatePath)";
     "semantic_rejects_extended_hash_non_bytes_arg", CaseSource::Exact(r#"module InvalidHash { fn f() { let digest = crypto::keccak256(1); } }"#),
         None, "crypto::keccak256 expects (bytes)";
-    "for_each_map_mutation_is_rejected", CaseSource::Fixture(include_str!("../fixtures/koto_v1/kotodama/030.ko")),
-        Some("E_ITER_MUTATION"), "";
     "semantic_type_error", CaseSource::Exact("module InvalidArithmetic { fn bad() { let a = 1 + \"hi\"; } }"),
         None, "operator Add is not defined for int and string";
     "invalid_numeric_on_struct_reports_error", CaseSource::Fixture(include_str!("../fixtures/koto_v1/kotodama/035.ko")),
@@ -438,9 +438,9 @@ semantic_rejection_cases! {
     "invalid_indexing_on_non_map_reports_error", CaseSource::Fixture(include_str!("../fixtures/koto_v1/kotodama/042.ko")),
         None, "indexing not supported on this type";
     "range_end_less_than_start_rejected", CaseSource::Fixture(include_str!("../fixtures/koto_v1/kotodama/044.ko")),
-        None, "end >= start";
+        None, "range";
     "range_non_integer_args_rejected", CaseSource::Fixture(include_str!("../fixtures/koto_v1/kotodama/045.ko")),
-        None, "range(start, end)";
+        None, "range";
     "parse_register_asset_rejects_bare_name_literal", CaseSource::Fixture(include_str!("../fixtures/koto_v1/kotodama/065.ko")),
         None, "AssetDefinitionId";
     "in_memory_map_methods_are_rejected", CaseSource::Fixture(include_str!("../fixtures/koto_v1/kotodama/066.ko")),
@@ -450,7 +450,9 @@ semantic_rejection_cases! {
     "ephemeral_keys_values_take2_helper_is_rejected", CaseSource::Fixture(include_str!("../fixtures/koto_v1/kotodama/069.ko")),
         None, "Map";
     "semantic_return_value_without_declared_type_is_rejected", CaseSource::Exact("module ReturnMismatch { fn f() { return 1; } }"),
-        Some("K2003"), "declared return type";
+        Some("E_RETURN_TYPE_MISMATCH"), "expected (), got int";
+    "semantic_rejects_unbounded_state_map_for_each", CaseSource::Fixture(include_str!("../fixtures/koto_v1/kotodama/014.ko")),
+        Some("E_UNBOUNDED_ITERATION"), "for iteration requires a bounded List";
 }
 
 vm_result_cases! {
@@ -473,8 +475,6 @@ vm_result_cases! {
 }
 
 parse_rejection_cases! {
-    "parse_for_each_map_and_builtins", CaseSource::Fixture(include_str!("../fixtures/koto_v1/kotodama/014.ko")),
-        &["StateMap iteration requires `.take(N)` or `.range(start, end)`"];
     "c_style_for_loop_is_rejected", CaseSource::Exact("module Loops { fn f() { for var i = 0; i < 3; i = i + 1 { let x = i; } } }"),
         &[];
     "removed_bounded_attribute_is_rejected", CaseSource::Fixture(include_str!("../fixtures/koto_v1/kotodama/016.ko")),
@@ -942,8 +942,8 @@ fn manifest_includes_exact_access_hints_for_static_zk_read_requests() {
         r#"
         seiyaku StaticReadHints {{
           view fn read() -> bytes {{
-            let roots = crypto::zk::roots(b"{}");
-            let tally = ledger::governance::tally(b"{}");
+            let roots = crypto::zk::roots(value: b"{}");
+            let tally = ledger::governance::tally(value: b"{}");
             return tally;
           }}
         }}
@@ -980,7 +980,7 @@ fn compile_emits_state_introspection_helpers() {
     let (_, off) = parse_meta_offset(&code).unwrap();
     let code_region = &code[off..];
     for (name, syscall) in [
-        ("STATE_KEYS", syscalls::SYSCALL_STATE_KEYS),
+        ("STATE_SCAN", syscalls::SYSCALL_STATE_SCAN),
         ("STATE_HAS", syscalls::SYSCALL_STATE_HAS),
         ("STATE_LEN", syscalls::SYSCALL_STATE_LEN),
         ("STATE_COUNT", syscalls::SYSCALL_STATE_COUNT),
@@ -1017,7 +1017,7 @@ fn compile_emits_extended_hash_syscalls() {
 }
 #[test]
 fn compile_emits_resolve_account_alias_syscall() {
-    let src = r#"seiyaku ResolveAlias { view fn f() { let a = ledger::account::resolve_alias("banking@centralbank"); } }"#;
+    let src = r#"seiyaku ResolveAlias { view fn f() { let a = ledger::account::resolve_alias(alias: "banking@centralbank"); } }"#;
     let code = Compiler::new().compile_source(src).expect("compile");
     let (_, off) = parse_meta_offset(&code).unwrap();
     let mut words = Vec::new();
@@ -1704,12 +1704,16 @@ fn parse_transfer_asset_builtin() {
 }
 #[test]
 fn parse_transfer_batch_builtin() {
-    use ivm::kotodama::ir::Instr;
-    let src = "module BatchHelpers { fn f(AccountId a, AccountId b, AssetDefinitionId c, quantity d) { ledger::asset::transfer_batch((a, b, c, d), (b, a, c, d)); } }";
+    use ivm::kotodama::ir::{Instr, Terminator};
+    let src = "module BatchHelpers { fn f(AccountId a, AccountId b, AssetDefinitionId c, quantity d) { ledger::asset::transfer_batch(transfers: [(a, b, c, d), (b, a, c, d)]); } }";
     let prog = parse(src).expect("parse failed");
     let typed = analyze(&prog).expect("semantic analysis failed");
     let ir = ivm::kotodama::ir::lower(&typed).expect("lower");
-    let instrs = &ir.functions[0].blocks[0].instrs;
+    let instrs = ir.functions[0]
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instrs)
+        .collect::<Vec<_>>();
     assert_eq!(
         instrs
             .iter()
@@ -1723,9 +1727,31 @@ fn parse_transfer_batch_builtin() {
         .filter(|i| matches!(i, Instr::TransferBatchAsset { .. }))
         .count();
     assert_eq!(
-        transfer_count, 2,
-        "expected two transfer calls inside batch"
+        transfer_count, 1,
+        "one bounded loop body applies each active transfer entry"
     );
+    let body = ir.functions[0]
+        .blocks
+        .iter()
+        .find(|block| {
+            block
+                .instrs
+                .iter()
+                .any(|instruction| matches!(instruction, Instr::TransferBatchAsset { .. }))
+        })
+        .expect("transfer loop body");
+    let Terminator::Jump(condition) = body.terminator else {
+        panic!("transfer loop must return to its active-length condition");
+    };
+    let condition = ir.functions[0]
+        .blocks
+        .iter()
+        .find(|block| block.label == condition)
+        .expect("bounded transfer condition");
+    assert!(matches!(
+        condition.terminator,
+        Terminator::Branch { then_bb, .. } if then_bb == body.label
+    ));
     assert_eq!(
         instrs
             .iter()
@@ -1746,7 +1772,7 @@ fn transfer_batch_requires_entries() {
 }
 #[test]
 fn transfer_batch_requires_tuple_entries() {
-    let src = "module InvalidBatch { fn f(AccountId a) { ledger::asset::transfer_batch(a); } }";
+    let src = "module InvalidBatch { fn f(AccountId a) { ledger::asset::transfer_batch(transfers: [a]); } }";
     let prog = parse(src).expect("parse failed");
     assert!(
         analyze(&prog).is_err(),

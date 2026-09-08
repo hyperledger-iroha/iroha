@@ -2,13 +2,22 @@
 use super::*;
 /// Register a consensus/committee key with lifecycle metadata.
 #[derive(
-    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, getset::Getters, Decode, Encode, IntoSchema,
-)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    getset::Getters,
+    Decode,
+    Encode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
 #[getset(get = "pub")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::consensus_keys::RegisterConsensusKey")]
 pub struct RegisterConsensusKey {
     /// Identifier of the key being registered.
     pub id: crate::consensus::ConsensusKeyId,
@@ -17,13 +26,22 @@ pub struct RegisterConsensusKey {
 }
 /// Rotate an existing consensus key by registering a successor and marking the old one retiring.
 #[derive(
-    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, getset::Getters, Decode, Encode, IntoSchema,
-)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    getset::Getters,
+    Decode,
+    Encode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
 #[getset(get = "pub")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::consensus_keys::RotateConsensusKey")]
 pub struct RotateConsensusKey {
     /// Identifier of the key being rotated out.
     pub id: crate::consensus::ConsensusKeyId,
@@ -32,25 +50,45 @@ pub struct RotateConsensusKey {
 }
 /// Disable an existing consensus key.
 #[derive(
-    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, getset::Getters, Decode, Encode, IntoSchema,
-)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    getset::Getters,
+    Decode,
+    Encode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
 #[getset(get = "pub")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::consensus_keys::DisableConsensusKey")]
 pub struct DisableConsensusKey {
     /// Identifier of the key being disabled.
     pub id: crate::consensus::ConsensusKeyId,
 }
 
 /// Exact threshold-key lifecycle action authorized by the block-height validator roster.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
 #[norito(tag = "action", content = "value", rename_all = "snake_case")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::consensus_keys::ThresholdKeyLifecycleActionV1")]
 pub enum ThresholdKeyLifecycleActionV1 {
     /// Install a finalized global-beacon key session for next-height activation.
     ///
@@ -78,13 +116,22 @@ pub enum ThresholdKeyLifecycleActionV1 {
 
 /// One exact-roster validator signature over a threshold-key lifecycle action.
 #[derive(
-    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, getset::Getters, Decode, Encode, IntoSchema,
-)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    getset::Getters,
+    Decode,
+    Encode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
 #[getset(get = "pub")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::consensus_keys::ThresholdKeyLifecycleSignatureV1")]
 pub struct ThresholdKeyLifecycleSignatureV1 {
     /// Zero-based seat in the exact ordered authorization roster at block `H`.
     pub signer_index: u16,
@@ -94,13 +141,22 @@ pub struct ThresholdKeyLifecycleSignatureV1 {
 
 /// Exact-roster quorum certificate for one threshold-key lifecycle action.
 #[derive(
-    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, getset::Getters, Decode, Encode, IntoSchema,
-)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    getset::Getters,
+    Decode,
+    Encode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
 #[getset(get = "pub")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::consensus_keys::ThresholdKeyLifecycleCertificateV1")]
 pub struct ThresholdKeyLifecycleCertificateV1 {
     /// Fixed certificate layout version.
     pub version: u16,
@@ -141,7 +197,7 @@ pub struct ThresholdKeyLifecycleCertificateV1 {
 
 super::isi! {
     /// Apply one effective-height-roster-certified threshold-key lifecycle action.
-    #[cfg_attr(feature = "json", derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize))]
+    #[derive (crate :: DeriveJsonSerialize , crate :: DeriveJsonDeserialize)]
     #[norito_schema(name = "iroha_data_model::isi::consensus_keys::ApplyThresholdKeyLifecycleCertificateV1")]
     pub struct ApplyThresholdKeyLifecycleCertificateV1 {
         /// Full proof-carrying exact-roster lifecycle certificate.
@@ -333,3 +389,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod captured_consensus_keys_ordinary_schema_tests;

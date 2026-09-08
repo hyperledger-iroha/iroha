@@ -513,6 +513,30 @@ struct QueryIngressMemoryEnvelope {
     scope_decode_allocated_bytes: usize,
     scope_canonical_encoded_bytes: usize,
 }
+/// Conservative strict-admission peak beyond the shared request representations.
+fn torii_proxy_strict_response_working_set_bytes() -> Option<usize> {
+    #[cfg(feature = "connect")]
+    {
+        let snapshot = checked_sum([
+            QUEUE_PLAN_SYNCED_CERTIFICATE_MAX_BODY_BYTES_V1,
+            QUEUE_PLAN_SYNCED_MAX_HEADER_BYTES_V1,
+            std::mem::size_of::<iroha_core::torii_proxy::ToriiProxyHeaderV1>()
+                .checked_mul(QUEUE_PLAN_SYNCED_MAX_HEADERS_V1)?,
+            std::mem::size_of::<ToriiProxyHttpResponseV1>(),
+        ])?;
+        // Include ready responses, the currently reduced response and encoded
+        // quorum output, plus separately owned expectation, decode scratch,
+        // validated certificate and accumulated attestations. The protocol's
+        // decode-allocation ceiling is a conservative bound for each graph.
+        snapshot
+            .checked_mul(QUEUE_PLAN_SYNCED_MAX_INFLIGHT_ATTEMPTS.checked_add(2)?)?
+            .checked_add(iroha_data_model::block::MAX_QUEUE_PLAN_ADMISSIONS_BYTES.checked_mul(4)?)
+    }
+    #[cfg(not(feature = "connect"))]
+    {
+        Some(0)
+    }
+}
 /// Complete memory admitted while one authenticated peer delivers an internal
 /// Torii proxy request over HTTP.
 ///
@@ -522,7 +546,9 @@ struct QueryIngressMemoryEnvelope {
 /// derived-codec scratch representations. Remote candidate attempts share the outbound frame;
 /// QueuePlanSynced may additionally retain exactly one owned local copy while collecting the
 /// remote attestation required for f+1. One fixed 64 KiB retryable diagnostic may remain while the
-/// next sequential authority is attempted; larger retry bodies are dropped before proceeding.
+/// next authority is attempted; larger retry bodies are dropped before proceeding. Strict
+/// admission additionally reserves its fixed response window and certificate-reduction peak;
+/// neither quantity multiplies by the authority roster.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ToriiProxyHttpIngressEnvelope {
     working_set_bytes: usize,
@@ -534,7 +560,8 @@ struct ToriiProxyHttpIngressEnvelope {
 impl ToriiProxyHttpIngressEnvelope {
     fn from_max_content_bytes(max_content_bytes: usize) -> Option<Self> {
         let fixed_overhead = query_fanout_fixed_overhead_bytes()?
-            .checked_add(TORII_PROXY_RETRYABLE_RETAINED_BODY_BYTES_V1)?;
+            .checked_add(TORII_PROXY_RETRYABLE_RETAINED_BODY_BYTES_V1)?
+            .checked_add(torii_proxy_strict_response_working_set_bytes()?)?;
         if max_content_bytes == 0 {
             return None;
         }
@@ -572,7 +599,8 @@ impl ToriiProxyHttpIngressEnvelope {
             .and_then(|peak| {
                 peak.checked_add(
                     query_fanout_fixed_overhead_bytes()?
-                        .checked_add(TORII_PROXY_RETRYABLE_RETAINED_BODY_BYTES_V1)?,
+                        .checked_add(TORII_PROXY_RETRYABLE_RETAINED_BODY_BYTES_V1)?
+                        .checked_add(torii_proxy_strict_response_working_set_bytes()?)?,
                 )
             })
             .is_some_and(|total| total <= self.working_set_bytes)

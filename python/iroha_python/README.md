@@ -7,17 +7,28 @@ implementation. See [`DESIGN.md`](DESIGN.md) for the package architecture and
 the [Python tutorial](https://docs.iroha.tech/guide/tutorials/python.html) for
 public integration guidance.
 
+The pure `iroha-python` wheel depends on the separate `iroha-native` wheel,
+whose `iroha_native._crypto` extension owns all cryptographic identity admission.
+Account constructors and exact I105 parsers require ABI 23 and preserve all eleven
+key algorithms and complete weighted multisig policies. `AccountId` is always
+domainless. Missing native validation fails explicitly, and canonical parsers
+reject surrounding whitespace. SCCP account principals require exact COMPACT_LEN
+AccountId bytes and a 65,535-byte maximum.
+
 ## Quickstart
 
 Build and install the package from the same Iroha source revision as the node
 you target:
 
 ```bash
-cd python/iroha_python
 python -m venv .venv
 source .venv/bin/activate
-python -m pip install "maturin>=1.5,<2"
-maturin develop --release
+python -m pip install --require-hashes -r python/iroha_python/requirements-ci.lock
+cd python/iroha_native
+maturin build --release --out ../../dist/python-native
+cd ../..
+python -m pip wheel --no-build-isolation --no-deps python/iroha_python -w dist/python-sdk
+python -m pip install dist/python-native/*.whl dist/python-sdk/*.whl
 ```
 
 ```python
@@ -314,7 +325,8 @@ from iroha_python.address import AccountAddress
 
 # Account IDs are domainless; domain context belongs in aliases and other
 # domain-owned state.
-address = AccountAddress.from_account(public_key=b"\x00" * 32)
+public_key = bytes.fromhex("d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a")
+address = AccountAddress.from_account(public_key=public_key)
 print(address.canonical_hex())
 print(address.to_i105(753))
 
@@ -2182,8 +2194,8 @@ client.stream_pipeline_witnesses(
 ```
 
 Connect frame encoding and crypto helpers require the compiled
-`iroha_python._crypto` extension. Run `maturin develop --release` from this
-directory before running tests that exercise Connect payloads.
+`iroha_native._crypto` extension. Build and install the matching
+`iroha-native` wheel from `../iroha_native` before running tests that exercise Connect payloads.
 
 From the repository root, the SoraFS V1 native parity lane uses exact Python
 3.12 and rebuilds the ABI-23 extension from the current clean source revision:

@@ -16,10 +16,17 @@ use std::collections::BTreeMap;
 /// Default cap for the number of implicit accounts that may be created in a single transaction.
 pub const DEFAULT_MAX_IMPLICIT_ACCOUNT_CREATIONS_PER_TX: u32 = 16;
 /// Admission mode for implicit account creation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
 #[norito(tag = "mode", content = "value", rename_all = "snake_case")]
 #[derive(norito::NoritoSchema)]
@@ -31,10 +38,16 @@ pub enum AccountAdmissionMode {
     ImplicitReceive,
 }
 /// Destination for implicit account creation fees.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
 #[norito(tag = "destination", content = "value", rename_all = "snake_case")]
 #[derive(norito::NoritoSchema)]
@@ -46,12 +59,18 @@ pub enum ImplicitAccountFeeDestination {
     Account(AccountId),
 }
 /// Fee charged when creating an account implicitly.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
+    norito::NoritoSchema,
 )]
-#[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::account::admission::ImplicitAccountCreationFee")]
 pub struct ImplicitAccountCreationFee {
     /// Asset definition used to pay the fee.
@@ -62,12 +81,18 @@ pub struct ImplicitAccountCreationFee {
     pub destination: ImplicitAccountFeeDestination,
 }
 /// Chain-level policy controlling whether receipt operations may create accounts implicitly.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
+    norito::NoritoSchema,
 )]
-#[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::account::admission::AccountAdmissionPolicy")]
 pub struct AccountAdmissionPolicy {
     /// Whether implicit account creation is enabled.
@@ -150,7 +175,7 @@ impl AccountAdmissionPolicy {
         self.default_role_on_create.as_ref()
     }
 }
-#[cfg(all(test, feature = "json"))]
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::domain::DomainId;

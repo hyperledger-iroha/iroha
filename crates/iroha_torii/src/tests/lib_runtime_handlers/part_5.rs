@@ -587,7 +587,8 @@ fn pipeline_fastpq_recovery_batch_is_canonical_and_budgeted_under_ambient_flags(
         b"after".to_vec(),
         fastpq_prover::OperationKind::MetaSet,
     ));
-    let canonical = norito::encode_canonical(&batch).unwrap();
+    let model = fastpq_prover::transition_batch_to_model(&batch);
+    let canonical = norito::encode_canonical(&model).unwrap();
     let expected_base64 = base64::engine::general_purpose::STANDARD.encode(&canonical);
     for flags in
         (u8::MIN..=u8::MAX).filter(|&flags| norito::core::validate_header_flags(flags).is_ok())
@@ -717,6 +718,69 @@ fn pipeline_fastpq_recovery_builder_paginates_and_bounds_encoding() {
     assert!(!encoded.is_empty());
     assert!(!reconstructed);
     assert!(artifact_bytes > 0);
+}
+#[test]
+fn pipeline_fastpq_recovery_emits_only_the_canonical_model_frame() {
+    use base64::Engine as _;
+    let mut batch = fastpq_prover::TransitionBatch::new(
+        "fastpq-state-transition-stark-v1",
+        fastpq_prover::PublicInputs::default(),
+    );
+    batch.push(fastpq_prover::StateTransition::new(
+        b"metadata/recovery".to_vec(),
+        b"before".to_vec(),
+        b"after".to_vec(),
+        fastpq_prover::OperationKind::MetaSet,
+    ));
+    let model = fastpq_prover::transition_batch_to_model(&batch);
+    let expected = norito::encode_canonical(&model).expect("canonical public batch");
+    for flags in [0, 1, 2, 3, 4, 5, 6, 7, 0x1b, 0x3f] {
+        let _layout = norito::core::DecodeFlagsGuard::enter(flags);
+        let effective_flags = norito::core::get_decode_flags();
+        let mut used = 0;
+        let (encoded, reconstructed) = encode_fastpq_recovery_batch(&batch, true, &mut used)
+            .expect("canonical recovery batch");
+        let actual = base64::engine::general_purpose::STANDARD
+            .decode(encoded)
+            .unwrap();
+        assert_eq!(actual, expected);
+        assert!(reconstructed);
+        assert_eq!(used, actual.len());
+        assert_eq!(
+            norito::decode_canonical::<iroha_data_model::fastpq::FastpqTransitionBatch>(&actual)
+                .unwrap(),
+            model
+        );
+        assert!(norito::decode_canonical::<fastpq_prover::TransitionBatch>(&actual).is_err());
+        assert_eq!(norito::core::get_decode_flags(), effective_flags);
+    }
+    let mut exact = PIPELINE_FASTPQ_RECOVERY_MAX_ARTIFACT_BYTES - expected.len();
+    encode_fastpq_recovery_batch(&batch, false, &mut exact).expect("exact aggregate budget");
+    assert_eq!(exact, PIPELINE_FASTPQ_RECOVERY_MAX_ARTIFACT_BYTES);
+    assert!(encode_fastpq_recovery_batch(&batch, false, &mut exact).is_err());
+    assert_eq!(exact, PIPELINE_FASTPQ_RECOVERY_MAX_ARTIFACT_BYTES);
+}
+#[test]
+fn pipeline_fastpq_recovery_rejects_oversized_rows_before_model_conversion() {
+    let mut batch = fastpq_prover::TransitionBatch::new(
+        "fastpq-state-transition-stark-v1",
+        fastpq_prover::PublicInputs::default(),
+    );
+    batch.metadata.insert(
+        "oversized".to_owned(),
+        vec![0; PIPELINE_FASTPQ_RECOVERY_MAX_BATCH_BYTES],
+    );
+    let mut used = 7;
+    let error = encode_fastpq_recovery_batch(&batch, false, &mut used)
+        .expect_err("oversized source must fail before cloning its row buffers");
+    assert!(matches!(
+        error,
+        Error::AppServiceUnavailable {
+            code: "pipeline_recovery_fastpq_artifact_too_large",
+            ..
+        }
+    ));
+    assert_eq!(used, 7);
 }
 #[cfg(feature = "app_api")]
 #[tokio::test]
@@ -2103,7 +2167,7 @@ async fn ledger_headers_respect_from_and_limit() {
     .expect("ok");
     let norito_bytes = torii_body_bytes(norito_resp, "norito body").await;
     let archived = norito::from_bytes::<Vec<BlockHeader>>(&norito_bytes).expect("archive");
-    let decoded: Vec<BlockHeader> = norito::core::NoritoDeserialize::deserialize(archived);
+    let decoded: Vec<BlockHeader> = norito::core::DeserializePayload::deserialize(archived);
     assert_eq!(decoded.len(), 2);
     assert_eq!(decoded[0].height().get(), 2);
     assert_eq!(decoded[1].height().get(), 1);
@@ -2192,7 +2256,7 @@ async fn ledger_state_endpoints_return_exact_v2_finality_in_json_and_norito() {
     let norito_bytes = torii_body_bytes(norito_resp, "norito body").await;
     let archived =
         norito::from_bytes::<StateFinalityResponse>(&norito_bytes).expect("state root archive");
-    let decoded: StateFinalityResponse = norito::core::NoritoDeserialize::deserialize(archived);
+    let decoded: StateFinalityResponse = norito::core::DeserializePayload::deserialize(archived);
     assert_eq!(decoded.state_root, expected_root);
     assert_eq!(decoded.finality_artifact, expected_artifact);
     let resp = handler_ledger_state_proof(
@@ -2214,7 +2278,7 @@ async fn ledger_state_endpoints_return_exact_v2_finality_in_json_and_norito() {
     let norito_bytes = torii_body_bytes(norito_resp, "bytes").await;
     let archived =
         norito::from_bytes::<StateFinalityResponse>(&norito_bytes).expect("state proof archive");
-    let decoded: StateFinalityResponse = norito::core::NoritoDeserialize::deserialize(archived);
+    let decoded: StateFinalityResponse = norito::core::DeserializePayload::deserialize(archived);
     assert_eq!(decoded.state_root, expected_root);
     assert_eq!(decoded.finality_artifact, expected_artifact);
 }
@@ -2257,7 +2321,7 @@ async fn state_proof_http_roundtrip_supports_json_and_norito() {
     let bytes = torii_body_bytes(response, "body").await;
     let archived =
         norito::from_bytes::<StateFinalityResponse>(&bytes).expect("archived state proof");
-    let proof: StateFinalityResponse = norito::core::NoritoDeserialize::deserialize(archived);
+    let proof: StateFinalityResponse = norito::core::DeserializePayload::deserialize(archived);
     assert_eq!(proof.height, 1);
     assert_eq!(proof.block_hash, expected_artifact.block_hash);
     assert_eq!(proof.state_root, expected_root);
@@ -2365,7 +2429,7 @@ async fn block_proof_handler_emits_norito() {
     );
     let bytes = torii_body_bytes(resp, "norito payload").await;
     let archived = norito::from_bytes::<BlockProofs>(&bytes).expect("archive decode");
-    let proofs: BlockProofs = norito::core::NoritoDeserialize::deserialize(archived);
+    let proofs: BlockProofs = norito::core::DeserializePayload::deserialize(archived);
     assert_eq!(proofs.block_height.get(), 1);
     assert_eq!(proofs.block_hash, expected_block_hash);
     assert_eq!(proofs.executed_block_wire_hash, expected_executed_wire_hash);

@@ -1,5 +1,4 @@
 //! Captured complete frames for every concrete type emitted by `queries!`.
-#![cfg(feature = "json")]
 
 use std::{collections::BTreeMap, fmt::Debug};
 
@@ -38,7 +37,7 @@ use iroha_data_model::{
     },
 };
 use norito::{
-    NoritoDeserialize, NoritoSerialize, SerializePayload,
+    NoritoDeserialize, NoritoSerialize,
     json::{self, JsonDeserialize, JsonSerialize, Value},
 };
 

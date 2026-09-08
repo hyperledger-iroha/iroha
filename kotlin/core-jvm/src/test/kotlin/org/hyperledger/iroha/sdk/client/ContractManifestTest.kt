@@ -13,6 +13,95 @@ import org.hyperledger.iroha.sdk.client.transport.TransportResponse
 
 class ContractManifestTest {
     @Test
+    fun exportedStructIdentitySurvivesPublicAndDurableSchemas() {
+        val directory = generateSequence(java.io.File(".").absoluteFile) { it.parentFile }
+            .map { java.io.File(it, "fixtures/kotodama") }
+            .first { java.io.File(it, "exported_structs_v1.json").isFile }
+        val payload = java.io.File(directory, "exported_structs_v1.json").readText(Charsets.UTF_8)
+        val vectors = JsonParser.parse(java.io.File(directory, "exported_struct_names_v1.json").readText(Charsets.UTF_8)) as Map<*, *>
+        val identity = "std/math@1.0.0::Math::Receipt"
+        for (name in vectors["valid"] as List<*>) {
+            val manifest = ContractJsonParser.parseManifestRecord(payload.replace(identity, name as String).toByteArray(StandardCharsets.UTF_8)).manifest
+            val entrypoint = manifest.entrypoints!!.first()
+            assertEquals("struct $name", entrypoint.returnSchema!!.canonicalTypeName)
+            assertEquals("struct $name", entrypoint.argumentSchema!!.fields.first().valueType.canonicalTypeName)
+            assertTrue(manifest.states!!.first().typeName.contains("$name{"))
+        }
+        for (name in vectors["invalid"] as List<*>) {
+            val root = JsonParser.parse(payload.replace(identity, name as String)) as Map<*, *>
+            val manifest = root["manifest"] as Map<*, *>
+            for (removed in listOf("states", "entrypoints")) {
+                val isolated = manifest.filterKeys { it != removed }
+                assertFailsWith<IllegalStateException>("invalid $removed-independent struct identity: $name") {
+                    ContractJsonParser.parseManifestRecord(JsonEncoder.encode(mapOf("manifest" to isolated)).toByteArray(StandardCharsets.UTF_8))
+                }
+            }
+        }
+    }
+
+    @Test
+    fun everyPublicEntrypointRequiresAnExplicitReturnSchema() {
+        fun response(returns: String) = """{"manifest":{"entrypoints":[{"name":"done","kind":{"kind":"View","value":null},"params":[]$returns}]}}"""
+        for (returns in listOf(
+            "",
+            ""","return_type":null,"return_schema":null""",
+            ",\"return_type\":\"()\"",
+            ""","return_schema":{"nodes":[{"kind":"Unit","value":null}]}""",
+        )) {
+            assertFailsWith<IllegalStateException> {
+                ContractJsonParser.parseManifestRecord(response(returns).toByteArray(StandardCharsets.UTF_8))
+            }
+        }
+        val unit = ContractJsonParser.parseManifestRecord(response(
+            ""","return_type":"()","return_schema":{"nodes":[{"kind":"Unit","value":null}]}""",
+        ).toByteArray(StandardCharsets.UTF_8)).manifest.entrypoints!!.single()
+        assertEquals("()", unit.returnType)
+        assertEquals(1, unit.returnSchema!!.wordCount)
+    }
+
+    @Test
+    fun nominalErrorFixtureBindsUnitAndJapaneseVariants() {
+        val file = generateSequence(java.io.File(".").absoluteFile) { it.parentFile }
+            .map { java.io.File(it, "fixtures/kotodama/nominal_errors_v1.json") }.first { it.isFile }
+        val payload = file.readText(Charsets.UTF_8)
+        val manifest = ContractJsonParser.parseManifestRecord(payload.toByteArray(StandardCharsets.UTF_8)).manifest
+        val schema = manifest.entrypoints!!.first().returnSchema!!
+        assertEquals("Result<(), example/vault@1.0.0::金庫::拒否>", schema.canonicalTypeName)
+        assertEquals(1, schema.wordCount)
+        assertEquals(EntrypointValueTypeNodeKindV1.UNIT, schema.nodes[1].kind)
+        assertEquals("不足", schema.nodes[2].errorType!!.variants[0].name)
+        assertEquals(2, manifest.errorTypes!!.size)
+        val cursor = manifest.entrypoints[1].returnSchema!!
+        assertEquals("Option<StateCursor<int>>", cursor.canonicalTypeName)
+        assertEquals(EntrypointValueTypeNodeKindV1.STATE_CURSOR, cursor.nodes[1].kind)
+        assertEquals(EntrypointValueKindV1.INT, cursor.nodes[1].leafKind)
+        assertEquals(1, cursor.wordCount)
+        assertEquals("StatePage<int, bool, 8>", manifest.entrypoints[2].returnSchema!!.canonicalTypeName)
+        assertEquals(2, manifest.entrypoints[2].returnSchema!!.wordCount)
+        assertFailsWith<IllegalStateException> {
+            ContractJsonParser.parseManifestRecord(payload.replaceFirst("CapacityExceeded", "DifferentMeaning").toByteArray(StandardCharsets.UTF_8))
+        }
+        assertFailsWith<IllegalStateException> {
+            ContractJsonParser.parseManifestRecord(payload.replaceFirst("\"code\": 1", "\"code\": 0").toByteArray(StandardCharsets.UTF_8))
+        }
+        val stateOnlyUnknown = payload.replace(
+            "\"type_name\": \"Result<(), example/vault@1.0.0::金庫::拒否>\"",
+            "\"type_name\": \"Result<(), missing/vault@1.0.0::金庫::拒否>\"",
+        )
+        val stateError = assertFailsWith<IllegalStateException> {
+            ContractJsonParser.parseManifestRecord(stateOnlyUnknown.toByteArray(StandardCharsets.UTF_8))
+        }
+        assertTrue(stateError.message!!.contains("error_types catalog"))
+        for (forged in listOf("StatePage{anything: int}", "StatePage{items: List<(int, bool), 8>, next: Option<StateCursor<bool>>}")) {
+            assertFailsWith<IllegalStateException> {
+                ContractJsonParser.parseManifestRecord(payload.replace(
+                    "StatePage{items: List<(int, bool), 8>, next: Option<StateCursor<int>>}", forged,
+                ).toByteArray(StandardCharsets.UTF_8))
+            }
+        }
+    }
+
+    @Test
     fun fullManifestPreservesExactKotodamaV1Interface() {
         val record = ContractJsonParser.parseManifestRecord(fullResponse().toByteArray(StandardCharsets.UTF_8))
         val manifest = record.manifest
@@ -40,7 +129,7 @@ class ContractManifestTest {
         assertEquals("transfer", entrypoint.triggers.single().callback.entrypoint)
         assertEquals("daily-settlement", entrypoint.triggers.single().metadata["purpose"])
         assertEquals("StateMap<AccountId, quantity>", manifest.states!!.single().typeName)
-        assertEquals(1001, manifest.errorCodes!!.single().code)
+        assertEquals(1001, manifest.errorTypes!!.single().variants.single().code)
         assertEquals("ja", manifest.kotoba!!.single().translations.last().language)
         assertEquals("ed25519:fixture", manifest.provenance!!.signer)
     }
@@ -102,7 +191,7 @@ class ContractManifestTest {
             ),
             fullResponse().replaceFirst("\"kind\":\"Quantity\"", "\"kind\":\"Amount\""),
             fullResponse().replaceFirst("\"kind\":\"Decimal\"", "\"kind\":\"U128\""),
-            fullResponse().replaceFirst("\"namespace\":\"TransferError\"", "\"namespace\":\"Option\""),
+            fullResponse().replaceFirst("\"identity\":\"Ledger::TransferError\"", "\"identity\":\"Error<Injected>\""),
             fullResponse().replaceFirst("\"features_bitmap\":0", "\"features_bitmap\":4"),
             fullResponse().replaceFirst("\"dynamic_writes\":[]", "\"dynamic_writes\":[],\"unknown\":true"),
             fullResponse().replaceFirst(
@@ -237,7 +326,7 @@ class ContractManifestTest {
             assertEquals(keyType, parse(payload).keyType)
         }
 
-        listOf("range", "take").forEach { boundKind ->
+        listOf("page", "take").forEach { boundKind ->
             val payload = fullResponse().replaceFirst(
                 "\"bound_kind\":\"take\"",
                 "\"bound_kind\":\"$boundKind\"",
@@ -598,7 +687,7 @@ class ContractManifestTest {
             typeName: String,
         ): EntrypointValueTypeV1 {
             val payload =
-                """{"manifest":{"entrypoints":[{"name":"inspect","kind":{"kind":"View","value":null},"params":[{"name":"value","type_name":"$typeName"}],"argument_schema":{"fields":[{"name":"value","ty":{"nodes":[$nodes]}}]}}]}}"""
+                """{"manifest":{"entrypoints":[{"name":"inspect","kind":{"kind":"View","value":null},"params":[{"name":"value","type_name":"$typeName"}],"argument_schema":{"fields":[{"name":"value","ty":{"nodes":[$nodes]}}]},"return_type":"()","return_schema":{"nodes":[{"kind":"Unit","value":null}]}}]}}"""
             return ContractJsonParser.parseManifestRecord(payload.toByteArray(StandardCharsets.UTF_8))
                 .manifest.entrypoints!!.single().argumentSchema!!.fields.single().valueType
         }
@@ -734,7 +823,7 @@ class ContractManifestTest {
                   }]
                 }],
                 "states":[{"name":"Balances","type_name":"StateMap<AccountId, quantity>"}],
-                "error_codes":[{"namespace":"TransferError","name":"InsufficientFunds","code":1001}],
+                "error_types":[{"identity":"Ledger::TransferError","variants":[{"name":"InsufficientFunds","code":1001}]}],
                 "kotoba":[{
                   "msg_id":"transfer.denied",
                   "translations":[

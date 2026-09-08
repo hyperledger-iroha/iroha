@@ -1,7 +1,7 @@
 //! Focused tests for the Norito core codec.
 use super::*;
 use crate::{
-    NoritoDeserialize, NoritoSerialize, SerializePayload, codec,
+    DeserializePayload, NoritoDeserialize, NoritoSerialize, SerializePayload, codec,
     codec::{encode_adaptive, encode_with_header_flags},
 };
 use crc64fast::Digest;
@@ -272,6 +272,7 @@ fn decode_field_prefix_allows_trailing_bytes_and_reports_consumption() {
 }
 #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[norito(decode_from_slice)]
+#[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
 struct PrefixRecord {
     label: String,
     count: u32,
@@ -352,7 +353,8 @@ impl SerializePayload for DropAfterLengthMismatch {
         Ok(())
     }
 }
-impl<'de> NoritoDeserialize<'de> for DropAfterLengthMismatch {
+impl NoritoDeserialize<'_> for DropAfterLengthMismatch {}
+impl<'de> DeserializePayload<'de> for DropAfterLengthMismatch {
     fn deserialize(_archived: &'de Archived<Self>) -> Self {
         Self
     }
@@ -375,7 +377,8 @@ fn erased_field_decoder_preserves_panic_type_name() {
             Ok(())
         }
     }
-    impl<'de> NoritoDeserialize<'de> for PanicDuringFieldDecode {
+    impl NoritoDeserialize<'_> for PanicDuringFieldDecode {}
+    impl<'de> DeserializePayload<'de> for PanicDuringFieldDecode {
         fn deserialize(_archived: &'de Archived<Self>) -> Self {
             panic!("intentional field decode panic")
         }
@@ -412,7 +415,8 @@ fn decode_archived_field_uses_one_charged_overaligned_copy() {
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     #[repr(C, align(64))]
     struct OveralignedField([u8; 64]);
-    impl<'de> NoritoDeserialize<'de> for OveralignedField {
+    impl NoritoDeserialize<'_> for OveralignedField {}
+    impl<'de> DeserializePayload<'de> for OveralignedField {
         fn deserialize(archived: &'de Archived<Self>) -> Self {
             DECODED_ADDRESS.store(
                 archived as *const Archived<Self> as usize,
@@ -466,7 +470,8 @@ fn decode_archived_field_charges_padding_and_aligned_copy() {
     #[derive(Debug, PartialEq, Eq)]
     #[repr(C, align(64))]
     struct ShortOveralignedField([u8; 64]);
-    impl<'de> NoritoDeserialize<'de> for ShortOveralignedField {
+    impl NoritoDeserialize<'_> for ShortOveralignedField {}
+    impl<'de> DeserializePayload<'de> for ShortOveralignedField {
         fn deserialize(_archived: &'de Archived<Self>) -> Self {
             Self([0; 64])
         }
@@ -511,7 +516,8 @@ fn decode_archived_field_charges_padding_and_aligned_copy() {
 fn decode_archived_field_preserves_deserializer_errors() {
     #[derive(Debug)]
     struct Rejected;
-    impl<'de> NoritoDeserialize<'de> for Rejected {
+    impl NoritoDeserialize<'_> for Rejected {}
+    impl<'de> DeserializePayload<'de> for Rejected {
         fn deserialize(_archived: &'de Archived<Self>) -> Self {
             unreachable!("the fallible implementation is used by the helper")
         }
@@ -527,7 +533,8 @@ fn decode_archived_field_preserves_deserializer_errors() {
 fn decode_archived_field_contains_deserializer_panics() {
     #[derive(Debug)]
     struct PanicDuringArchivedFieldDecode;
-    impl<'de> NoritoDeserialize<'de> for PanicDuringArchivedFieldDecode {
+    impl NoritoDeserialize<'_> for PanicDuringArchivedFieldDecode {}
+    impl<'de> DeserializePayload<'de> for PanicDuringArchivedFieldDecode {
         fn deserialize(_archived: &'de Archived<Self>) -> Self {
             panic!("intentional archived-field panic")
         }
@@ -710,6 +717,7 @@ fn decode_field_canonical_propagates_access_from_misaligned_copy() {
 }
 static PANIC_ON_SERIALIZE: AtomicBool = AtomicBool::new(false);
 #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
 struct CanonicalStruct {
     a: u32,
     b: Vec<u64>,
@@ -733,7 +741,8 @@ impl SerializePayload for CanonicalStructNoRecompute {
         self.0.encoded_len_exact()
     }
 }
-impl<'a> NoritoDeserialize<'a> for CanonicalStructNoRecompute {
+impl NoritoDeserialize<'_> for CanonicalStructNoRecompute {}
+impl<'a> DeserializePayload<'a> for CanonicalStructNoRecompute {
     fn deserialize(archived: &'a Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("CanonicalStructNoRecompute decode")
     }
@@ -760,10 +769,54 @@ fn decode_field_canonical_does_not_recompute_for_derived_struct() {
     PANIC_ON_SERIALIZE.store(false, Ordering::Relaxed);
 }
 #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[cfg_attr(feature = "schema-structural", derive(iroha_schema::TypeId))]
 enum CanonicalEnum {
     Unit,
     One(u32),
     Many { a: u32, b: Vec<u8> },
+}
+
+// Preserve the named codec variant while describing its actual schema fields.
+#[cfg(feature = "schema-structural")]
+#[derive(iroha_schema::IntoSchema)]
+#[allow(dead_code)]
+struct CanonicalEnumManyFields {
+    a: u32,
+    b: Vec<u8>,
+}
+
+#[cfg(feature = "schema-structural")]
+impl iroha_schema::IntoSchema for CanonicalEnum {
+    fn type_name() -> String {
+        "CanonicalEnum".to_owned()
+    }
+
+    fn update_schema_map(map: &mut iroha_schema::MetaMap) {
+        if map.contains_key::<Self>() {
+            return;
+        }
+        map.insert::<Self>(iroha_schema::Metadata::Enum(iroha_schema::EnumMeta {
+            variants: vec![
+                iroha_schema::EnumVariant {
+                    tag: "Unit".to_owned(),
+                    discriminant: 0,
+                    ty: None,
+                },
+                iroha_schema::EnumVariant {
+                    tag: "One".to_owned(),
+                    discriminant: 1,
+                    ty: Some(std::any::TypeId::of::<u32>()),
+                },
+                iroha_schema::EnumVariant {
+                    tag: "Many".to_owned(),
+                    discriminant: 2,
+                    ty: Some(std::any::TypeId::of::<CanonicalEnumManyFields>()),
+                },
+            ],
+        }));
+        <u32 as iroha_schema::IntoSchema>::update_schema_map(map);
+        CanonicalEnumManyFields::update_schema_map(map);
+    }
 }
 #[repr(transparent)]
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -783,7 +836,8 @@ impl SerializePayload for CanonicalEnumNoRecompute {
         self.0.encoded_len_exact()
     }
 }
-impl<'a> NoritoDeserialize<'a> for CanonicalEnumNoRecompute {
+impl NoritoDeserialize<'_> for CanonicalEnumNoRecompute {}
+impl<'a> DeserializePayload<'a> for CanonicalEnumNoRecompute {
     fn deserialize(archived: &'a Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("CanonicalEnumNoRecompute decode")
     }
@@ -981,6 +1035,8 @@ fn byte_sink_with_headroom_from_preserves_capacity() {
     assert!(sink.buf.capacity() >= cap);
 }
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
+#[cfg_attr(feature = "schema-structural", schema(transparent = "u32"))]
 struct BadExactLen(u32);
 impl crate::NoritoSerialize for BadExactLen {}
 impl crate::SerializePayload for BadExactLen {
@@ -991,7 +1047,8 @@ impl crate::SerializePayload for BadExactLen {
         Some(1)
     }
 }
-impl<'de> crate::NoritoDeserialize<'de> for BadExactLen {
+impl crate::NoritoDeserialize<'_> for BadExactLen {}
+impl<'de> crate::DeserializePayload<'de> for BadExactLen {
     fn deserialize(archived: &'de Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("BadExactLen decode must succeed")
     }
@@ -1240,10 +1297,12 @@ fn serialize_to_writer_exact_rejects_growth_before_forwarding_it() {
     assert_eq!(out.capacity(), initial_capacity);
 }
 #[derive(Clone, Debug, PartialEq, crate::Encode, crate::Decode)]
+#[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
 struct BadExactWrapper {
     inner: BadExactLen,
 }
 #[derive(Clone, Debug, PartialEq, crate::Encode, crate::Decode)]
+#[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
 enum BadExactEnum {
     One(BadExactLen),
 }
@@ -1267,6 +1326,7 @@ fn derived_enum_ignores_untrusted_exact_field_length() {
 }
 
 #[derive(crate::Encode)]
+#[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
 struct RecursiveEncodeNode {
     children: Vec<Self>,
 }
@@ -1303,6 +1363,7 @@ fn truncated_derived_enum_tag_is_a_length_error() {
 #[test]
 fn truncated_derived_struct_bitset_is_a_length_error() {
     #[derive(Clone, Debug, PartialEq, Eq, crate::Encode, crate::Decode)]
+    #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
     struct BitsetRecord {
         code: u8,
         digest: [u8; 32],
@@ -1336,7 +1397,8 @@ impl crate::SerializePayload for RootAware {
         crate::SerializePayload::encoded_len_exact(&self.0)
     }
 }
-impl<'de> crate::NoritoDeserialize<'de> for RootAware {
+impl crate::NoritoDeserialize<'_> for RootAware {}
+impl<'de> crate::DeserializePayload<'de> for RootAware {
     fn deserialize(archived: &'de Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("RootAware decode must succeed")
     }
@@ -1378,20 +1440,20 @@ fn archived_cast_is_an_opaque_address_marker_and_cannot_bypass_bounds() {
         core::ptr::from_ref(retagged).cast::<u8>()
     );
     let missing =
-        <u64 as NoritoDeserialize>::try_deserialize(retagged).expect_err("context is required");
+        <u64 as DeserializePayload>::try_deserialize(retagged).expect_err("context is required");
     assert!(matches!(missing, Error::MissingPayloadContext));
     let _payload = PayloadCtxGuard::enter(archived.bytes());
-    let bounded = <u64 as NoritoDeserialize>::try_deserialize(retagged)
+    let bounded = <u64 as DeserializePayload>::try_deserialize(retagged)
         .expect_err("a cast cannot enlarge the active payload");
     assert!(matches!(bounded, Error::LengthMismatch));
     drop(_payload);
     let empty = archived_from_slice::<()>(&[]).expect("empty archive marker");
     let option = empty.cast::<Option<u64>>();
-    let missing = <Option<u64> as NoritoDeserialize>::try_deserialize(option)
+    let missing = <Option<u64> as DeserializePayload>::try_deserialize(option)
         .expect_err("an opaque empty marker cannot be read without a payload context");
     assert!(matches!(missing, Error::MissingPayloadContext));
     let _empty_payload = PayloadCtxGuard::enter(empty.bytes());
-    let bounded = <Option<u64> as NoritoDeserialize>::try_deserialize(option)
+    let bounded = <Option<u64> as DeserializePayload>::try_deserialize(option)
         .expect_err("an opaque empty marker cannot provide an option tag");
     assert!(matches!(bounded, Error::LengthMismatch));
 }
@@ -1474,7 +1536,7 @@ fn archived_from_slice_realigns_payload() {
         archived_from_slice::<AlignSensitive>(misaligned).expect("realign archived payload");
     let _flags = DecodeFlagsGuard::enter(flags);
     let _payload = PayloadCtxGuard::enter(archived.bytes());
-    let decoded = <AlignSensitive as NoritoDeserialize>::try_deserialize(archived.as_ref())
+    let decoded = <AlignSensitive as DeserializePayload>::try_deserialize(archived.as_ref())
         .expect("decode misaligned AlignSensitive");
     assert_eq!(decoded, value);
     reset_decode_state();
@@ -2237,12 +2299,12 @@ fn box_roundtrip() {
     let value: Box<u32> = Box::new(41);
     let bytes = to_bytes(&value).unwrap();
     let archived = from_bytes::<Box<u32>>(&bytes).unwrap();
-    let decoded = <Box<u32> as NoritoDeserialize>::deserialize(archived);
+    let decoded = <Box<u32> as DeserializePayload>::deserialize(archived);
     assert_eq!(value, decoded);
     let str_box: Box<String> = Box::new("boxed".into());
     let bytes = to_bytes(&str_box).unwrap();
     let archived = from_bytes::<Box<String>>(&bytes).unwrap();
-    let decoded = <Box<String> as NoritoDeserialize>::deserialize(archived);
+    let decoded = <Box<String> as DeserializePayload>::deserialize(archived);
     assert_eq!(str_box, decoded);
 }
 #[test]
@@ -2250,12 +2312,12 @@ fn rc_roundtrip() {
     let value: Rc<u32> = Rc::new(7);
     let bytes = to_bytes(&value).unwrap();
     let archived = from_bytes::<Rc<u32>>(&bytes).unwrap();
-    let decoded = <Rc<u32> as NoritoDeserialize>::deserialize(archived);
+    let decoded = <Rc<u32> as DeserializePayload>::deserialize(archived);
     assert_eq!(value, decoded);
     let str_rc: Rc<String> = Rc::new(String::from("shared"));
     let bytes = to_bytes(&str_rc).unwrap();
     let archived = from_bytes::<Rc<String>>(&bytes).unwrap();
-    let decoded = <Rc<String> as NoritoDeserialize>::deserialize(archived);
+    let decoded = <Rc<String> as DeserializePayload>::deserialize(archived);
     assert_eq!(str_rc, decoded);
 }
 #[test]
@@ -2263,12 +2325,12 @@ fn arc_roundtrip() {
     let value: Arc<u32> = Arc::new(99);
     let bytes = to_bytes(&value).unwrap();
     let archived = from_bytes::<Arc<u32>>(&bytes).unwrap();
-    let decoded = <Arc<u32> as NoritoDeserialize>::deserialize(archived);
+    let decoded = <Arc<u32> as DeserializePayload>::deserialize(archived);
     assert_eq!(value, decoded);
     let str_arc: Arc<String> = Arc::new(String::from("threads"));
     let bytes = to_bytes(&str_arc).unwrap();
     let archived = from_bytes::<Arc<String>>(&bytes).unwrap();
-    let decoded = <Arc<String> as NoritoDeserialize>::deserialize(archived);
+    let decoded = <Arc<String> as DeserializePayload>::deserialize(archived);
     assert_eq!(str_arc, decoded);
 }
 #[test]
@@ -2421,7 +2483,7 @@ fn archived_cast_roundtrip() {
     let archived_vec = from_bytes::<Vec<u32>>(&bytes).unwrap();
     let archived_wrapper: &Archived<Wrapper> = archived_vec.cast::<Wrapper>();
     let archived_vec_again: &Archived<Vec<u32>> = archived_wrapper.cast::<Vec<u32>>();
-    let decoded = <Vec<u32> as NoritoDeserialize>::deserialize(archived_vec_again);
+    let decoded = <Vec<u32> as DeserializePayload>::deserialize(archived_vec_again);
     assert_eq!(value, decoded);
 }
 #[test]

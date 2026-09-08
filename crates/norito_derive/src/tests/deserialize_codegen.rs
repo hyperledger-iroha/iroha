@@ -43,6 +43,7 @@ fn context_field_paths_delegate_copy_and_context_setup_to_core() {
         &struct_data.fields,
         &struct_input.attrs,
         None,
+        true,
     ));
     let tuple_input: DeriveInput = syn::parse_quote! {
         struct Tuple(Opaque);
@@ -56,6 +57,7 @@ fn context_field_paths_delegate_copy_and_context_setup_to_core() {
         &tuple_data.fields,
         &tuple_input.attrs,
         None,
+        true,
     ));
     let enum_input: DeriveInput = syn::parse_quote! {
         enum Message {
@@ -72,6 +74,7 @@ fn context_field_paths_delegate_copy_and_context_setup_to_core() {
         enum_data,
         &enum_input.attrs,
         None,
+        true,
     ));
     for expansion in [&struct_expansion, &enum_expansion] {
         assert!(
@@ -188,6 +191,7 @@ fn binary_default_attributes_do_not_generate_missing_field_fallbacks() {
         &struct_data.fields,
         &struct_input.attrs,
         None,
+        true,
     ));
     let enum_input: DeriveInput = syn::parse_quote! {
         enum Message {
@@ -208,6 +212,7 @@ fn binary_default_attributes_do_not_generate_missing_field_fallbacks() {
         enum_data,
         &enum_input.attrs,
         None,
+        true,
     ));
     for expansion in [&struct_expansion, &enum_expansion] {
         assert!(
@@ -241,7 +246,8 @@ fn ordinary_struct_fields_use_counted_length_streaming() {
         &data.fields,
         &input.attrs,
         None,
-     true));
+        true,
+    ));
     assert_eq!(expansion.matches("write_len_prefixed(").count(), 2);
     assert!(!expansion.contains("write_len_prefixed_exact("));
     assert!(expansion.contains("EncodeValueDepthGuard::enter()"));
@@ -273,10 +279,16 @@ fn generated_serializers_use_two_argument_field_writers_without_scratch_buffers(
                 &data.fields,
                 &input.attrs,
                 None,
-             true),
-            Data::Enum(data) => {
-                derive_enum_serialize(&input.ident, &input.generics, data, &input.attrs, None, true)
-            }
+                true,
+            ),
+            Data::Enum(data) => derive_enum_serialize(
+                &input.ident,
+                &input.generics,
+                data,
+                &input.attrs,
+                None,
+                true,
+            ),
             Data::Union(_) => unreachable!("test inputs are structs or enums"),
         });
         assert!(expansion.contains("write_len_prefixed(writer,"));
@@ -310,7 +322,8 @@ fn packed_struct_codegen_delegates_measurement_and_streaming_to_one_owner() {
         &data.fields,
         &input.attrs,
         None,
-     true));
+        true,
+    ));
     assert_eq!(expansion.matches("write_packed_fields(").count(), 2);
     assert_eq!(
         expansion.matches("PackedField::Value(&self.named)").count(),
@@ -345,7 +358,8 @@ fn packed_struct_descriptors_preserve_raw_arrays_and_omit_skipped_fields() {
         &data.fields,
         &input.attrs,
         None,
-     true));
+        true,
+    ));
     assert_eq!(
         expansion.matches("PackedField::Bytes(&self.raw)").count(),
         2
@@ -374,7 +388,8 @@ fn packed_tuple_descriptors_keep_field_order() {
         &data.fields,
         &input.attrs,
         None,
-     true));
+        true,
+    ));
     assert_eq!(
         expansion.matches("&[norito::core::PackedField::Value(&self.0),norito::core::PackedField::Bytes(&self.1),norito::core::PackedField::Value(&self.2)]").count(),
         2,
@@ -397,7 +412,8 @@ fn ordinary_enum_fields_use_counted_length_streaming() {
         data,
         &input.attrs,
         None,
-     true));
+        true,
+    ));
     assert!(expansion.matches("write_len_prefixed(").count() >= 2);
     assert!(!expansion.contains("write_len_prefixed_exact("));
     assert!(expansion.contains("EncodeValueDepthGuard::enter()"));
@@ -419,7 +435,8 @@ fn enum_byte_array_lengths_use_the_raw_wire_width() {
         data,
         &input.attrs,
         None,
-     true));
+        true,
+    ));
     assert_eq!(
         expansion.matches("core::mem::size_of_val(field0)").count(),
         3,
@@ -440,5 +457,56 @@ fn enum_byte_array_lengths_use_the_raw_wire_width() {
             !expansion.contains(incorrect),
             "byte-array length oracle delegated to the generic array codec: {incorrect}"
         );
+    }
+}
+
+#[test]
+fn payload_and_frame_derives_share_reconstruction_without_identity_bounds() {
+    for input in [
+        syn::parse_quote! { struct Record<T> { value: T } },
+        syn::parse_quote! { struct Record<T>(T); },
+        syn::parse_quote! { struct Record; },
+        syn::parse_quote! { enum Record<T> { Unit, Value(T), Named { value: T } } },
+    ] {
+        let input: DeriveInput = input;
+        let generate = |framed| match &input.data {
+            Data::Struct(data) => derive_struct_deserialize(
+                &input.ident,
+                &input.generics,
+                &data.fields,
+                &input.attrs,
+                None,
+                framed,
+            ),
+            Data::Enum(data) => derive_enum_deserialize(
+                &input.ident,
+                &input.generics,
+                data,
+                &input.attrs,
+                None,
+                framed,
+            ),
+            Data::Union(_) => unreachable!(),
+        };
+        let payload: syn::File =
+            syn::parse2(generate(false)).expect("valid payload implementation");
+        let framed: syn::File = syn::parse2(generate(true)).expect("valid typed implementation");
+        assert_eq!(payload.items.len(), 1);
+        assert_eq!(framed.items.len(), 2);
+        let payload_source = compact(quote!(#payload));
+        assert!(payload_source.contains("norito::core::DeserializePayload"));
+        assert!(!payload_source.contains("NoritoDeserialize"));
+        assert!(!payload_source.contains("schema_hash"));
+        assert!(!payload_source.contains("IntoSchema"));
+        let framed_payload = &framed.items[1];
+        assert_eq!(payload_source, compact(quote!(#framed_payload)));
+        let syn::Item::Impl(frame) = &framed.items[0] else {
+            panic!("typed contract is a trait implementation");
+        };
+        assert_eq!(frame.items.len(), 1);
+        let syn::ImplItem::Fn(method) = &frame.items[0] else {
+            panic!("typed contract owns only the frame hash method");
+        };
+        assert_eq!(method.sig.ident, "schema_hash");
     }
 }

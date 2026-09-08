@@ -4,7 +4,7 @@
 //! credential and revocation-nonce commitments together with the exact signed public root and
 //! revocation-list publications needed by verifiers.
 use crate::account::AccountId;
-#[cfg(feature = "json")]
+
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use iroha_crypto::{Algorithm, PublicKey};
 use iroha_schema::IntoSchema;
@@ -41,9 +41,20 @@ pub const POP_REGISTRY_AUDIT_DIGEST_DOMAIN_V1: &[u8] = b"sorafs.pop.registry-aud
 /// Domain separator for exact registry operation payload digests.
 pub const POP_REGISTRY_PAYLOAD_DIGEST_DOMAIN_V1: &[u8] = b"sorafs.pop.registry-payload.v1";
 /// Governance-controlled issuer identity and bounded admission policy.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::pop_registry::PopIssuerPolicyV1")]
 pub struct PopIssuerPolicyV1 {
     /// Schema version; must equal [`POP_ISSUER_POLICY_VERSION_V1`].
@@ -51,17 +62,14 @@ pub struct PopIssuerPolicyV1 {
     /// Monotonic policy revision beginning at one.
     pub revision: u64,
     /// Digest of the immediately preceding policy, absent only at revision one.
-    #[cfg_attr(
-        feature = "json",
-        norito(json = "crate::json_helpers::fixed_bytes::option")
-    )]
+    #[norito(json = "crate::json_helpers::fixed_bytes::option")]
     pub predecessor_policy_digest: Option<[u8; 32]>,
     /// Canonical public issuer label (`pop-issuer-*`).
     pub issuer_id: String,
     /// Exact universal account authorised to publish issuer state.
     pub issuer_account: AccountId,
     /// Raw Ed25519 public key required on signed public publications.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub issuer_public_key: [u8; 32],
     /// Maximum credentials accepted in one atomic commitment batch.
     pub max_credentials_per_batch: u16,
@@ -226,19 +234,31 @@ pub enum PopIssuerPolicyValidationError {
     },
 }
 /// Payload-free issuer commitment to one private signed credential.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::pop_registry::PopCredentialCommitmentV1")]
 pub struct PopCredentialCommitmentV1 {
     /// Domain-separated BLAKE3-256 commitment to exact canonical signed credential bytes.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub credential_commitment: [u8; 32],
     /// Domain-separated BLAKE3-256 commitment to the private revocation nonce.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub revocation_nonce_commitment: [u8; 32],
     /// Public commitment root containing the credential.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub commitment_root: [u8; 32],
     /// Commitment-tree version containing the credential.
     pub commitment_tree_version: u64,
@@ -295,21 +315,30 @@ pub enum PopCredentialCommitmentValidationError {
     InvalidValidityWindow,
 }
 /// Atomic first-release credential commitment, root, and revocation snapshot.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::pop_registry::PopCredentialCommitmentBatchV1")]
 pub struct PopCredentialCommitmentBatchV1 {
     /// Schema version.
     pub version: u16,
     /// Exact active issuer-policy digest expected by the publisher.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub issuer_policy_digest: [u8; 32],
     /// Exact canonical signed `sorafs_manifest::PopCommitmentRootV1` bytes.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
+    #[norito(json = "crate::json_helpers::base64_vec")]
     pub commitment_root_payload: Vec<u8>,
     /// Exact canonical signed `sorafs_manifest::PopRevocationListV1` bytes.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
+    #[norito(json = "crate::json_helpers::base64_vec")]
     pub revocation_list_payload: Vec<u8>,
     /// Strictly credential-commitment-ordered payload-free issuer records.
     pub commitments: Vec<PopCredentialCommitmentV1>,
@@ -423,15 +452,24 @@ pub enum PopCredentialCommitmentBatchValidationError {
     DuplicateRevocationCommitment,
 }
 /// Activated issuer policy with ledger provenance.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::pop_registry::PopIssuerPolicyRecordV1")]
 pub struct PopIssuerPolicyRecordV1 {
     /// Active policy.
     pub policy: PopIssuerPolicyV1,
     /// Canonical policy digest.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub policy_digest: [u8; 32],
     /// Activation block timestamp.
     pub activated_at_epoch: u64,
@@ -440,13 +478,22 @@ pub struct PopIssuerPolicyRecordV1 {
     /// Audit-chain sequence of the activation.
     pub audit_sequence: u64,
     /// Audit-chain digest of the activation.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub audit_digest: [u8; 32],
 }
 /// Durable payload-free credential commitment record.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::pop_registry::PopCredentialCommitmentRecordV1")]
 pub struct PopCredentialCommitmentRecordV1 {
     /// Issuer commitment body.
@@ -456,82 +503,109 @@ pub struct PopCredentialCommitmentRecordV1 {
     /// Exact issuer account that committed the record.
     pub committed_by: AccountId,
     /// Issuer policy digest used for admission.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub admitted_policy_digest: [u8; 32],
     /// Audit-chain sequence of the atomic batch transition.
     pub audit_sequence: u64,
     /// Audit-chain digest of the atomic batch transition.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub audit_digest: [u8; 32],
 }
 /// Authoritative signed commitment-root publication record.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::pop_registry::PopCommitmentRootRecordV1")]
 pub struct PopCommitmentRootRecordV1 {
     /// Root digest.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub root_digest: [u8; 32],
     /// Monotonic tree version.
     pub tree_version: u64,
     /// Number of leaves committed by the root.
     pub tree_size: u64,
     /// Exact canonical signed root publication bytes.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
+    #[norito(json = "crate::json_helpers::base64_vec")]
     pub canonical_root_payload: Vec<u8>,
     /// Ledger timestamp at which the root became authoritative.
     pub recorded_at_epoch: u64,
     /// Exact issuer account that published the root.
     pub recorded_by: AccountId,
     /// Issuer policy digest used for admission.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub admitted_policy_digest: [u8; 32],
     /// Audit-chain sequence of the atomic publication.
     pub audit_sequence: u64,
     /// Audit-chain digest of the atomic publication.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub audit_digest: [u8; 32],
 }
 /// Authoritative signed revocation-list publication record.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::pop_registry::PopRevocationPublicationRecordV1")]
 pub struct PopRevocationPublicationRecordV1 {
     /// Monotonic list version.
     pub list_version: u64,
     /// Commitment root to which the list is bound.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub commitment_root: [u8; 32],
     /// Sparse revocation root.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub revocation_root: [u8; 32],
     /// Number of explicit revocation entries in the signed snapshot.
     pub entry_count: u32,
     /// Exact canonical signed revocation-list bytes.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
+    #[norito(json = "crate::json_helpers::base64_vec")]
     pub canonical_revocation_list_payload: Vec<u8>,
     /// Ledger timestamp at which the list became authoritative.
     pub recorded_at_epoch: u64,
     /// Exact issuer account that published the list.
     pub recorded_by: AccountId,
     /// Issuer policy digest used for admission.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub admitted_policy_digest: [u8; 32],
     /// Audit-chain sequence of the atomic publication.
     pub audit_sequence: u64,
     /// Audit-chain digest of the atomic publication.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub audit_digest: [u8; 32],
 }
 /// Stable public reason recorded for a private nonce commitment.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "reason", content = "value", rename_all = "snake_case")
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
 )]
+#[norito(tag = "reason", content = "value", rename_all = "snake_case")]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::sorafs::pop_registry::PopRegistryRevocationReasonV1")]
 pub enum PopRegistryRevocationReasonV1 {
@@ -547,21 +621,30 @@ pub enum PopRegistryRevocationReasonV1 {
     Expired,
 }
 /// Durable payload-free revocation record keyed by nonce commitment.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::pop_registry::PopRevocationRecordV1")]
 pub struct PopRevocationRecordV1 {
     /// Domain-separated revocation-nonce commitment.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub revocation_nonce_commitment: [u8; 32],
     /// Credential commitment bound to the revoked nonce.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub credential_commitment: [u8; 32],
     /// Signed list version that first introduced the revocation.
     pub list_version: u64,
     /// Commitment root to which that list was bound.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub commitment_root: [u8; 32],
     /// Issuer-authored revocation timestamp.
     pub revoked_at_epoch: u64,
@@ -572,21 +655,30 @@ pub struct PopRevocationRecordV1 {
     /// Exact issuer account that published the revocation.
     pub recorded_by: AccountId,
     /// Issuer policy digest used for admission.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub admitted_policy_digest: [u8; 32],
     /// Audit-chain sequence of the list publication.
     pub audit_sequence: u64,
     /// Audit-chain digest of the list publication.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub audit_digest: [u8; 32],
 }
 /// Kind of transition committed into the registry audit chain.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "kind", content = "value", rename_all = "snake_case")
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
 )]
+#[norito(tag = "kind", content = "value", rename_all = "snake_case")]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::sorafs::pop_registry::PopRegistryAuditEventKindV1")]
 pub enum PopRegistryAuditEventKindV1 {
@@ -609,9 +701,18 @@ impl PopRegistryAuditEventKindV1 {
     }
 }
 /// One link in the deterministic registry audit chain.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::pop_registry::PopRegistryAuditDigestRecordV1")]
 pub struct PopRegistryAuditDigestRecordV1 {
     /// Monotonic event sequence beginning at one.
@@ -619,16 +720,13 @@ pub struct PopRegistryAuditDigestRecordV1 {
     /// Transition kind.
     pub kind: PopRegistryAuditEventKindV1,
     /// Domain-separated digest of the exact canonical operation payload.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub payload_digest: [u8; 32],
     /// Previous audit digest, absent only for sequence one.
-    #[cfg_attr(
-        feature = "json",
-        norito(json = "crate::json_helpers::fixed_bytes::option")
-    )]
+    #[norito(json = "crate::json_helpers::fixed_bytes::option")]
     pub previous_audit_digest: Option<[u8; 32]>,
     /// Domain-separated digest of this audit link.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub audit_digest: [u8; 32],
     /// Ledger timestamp of the transition.
     pub recorded_at_epoch: u64,
@@ -636,26 +734,31 @@ pub struct PopRegistryAuditDigestRecordV1 {
     pub recorded_by: AccountId,
 }
 /// Constant-time authoritative registry counters and active anchors.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::pop_registry::PopRegistryStatusV1")]
 pub struct PopRegistryStatusV1 {
     /// Active commitment root, absent before the first issuer batch.
-    #[cfg_attr(
-        feature = "json",
-        norito(json = "crate::json_helpers::fixed_bytes::option")
-    )]
+    #[norito(json = "crate::json_helpers::fixed_bytes::option")]
     pub active_root_digest: Option<[u8; 32]>,
     /// Active commitment-tree version, or zero before first publication.
     pub active_tree_version: u64,
     /// Active revocation-list version, or zero before first publication.
     pub active_revocation_list_version: u64,
     /// Active sparse revocation root, absent before first publication.
-    #[cfg_attr(
-        feature = "json",
-        norito(json = "crate::json_helpers::fixed_bytes::option")
-    )]
+    #[norito(json = "crate::json_helpers::fixed_bytes::option")]
     pub active_revocation_root: Option<[u8; 32]>,
     /// Total unique private credentials represented by payload-free commitments.
     pub credential_commitment_count: u64,
@@ -664,10 +767,7 @@ pub struct PopRegistryStatusV1 {
     /// Latest registry audit sequence.
     pub audit_sequence: u64,
     /// Latest registry audit digest.
-    #[cfg_attr(
-        feature = "json",
-        norito(json = "crate::json_helpers::fixed_bytes::option")
-    )]
+    #[norito(json = "crate::json_helpers::fixed_bytes::option")]
     pub audit_head: Option<[u8; 32]>,
     /// Last authoritative ledger transition timestamp.
     pub updated_at_epoch: u64,

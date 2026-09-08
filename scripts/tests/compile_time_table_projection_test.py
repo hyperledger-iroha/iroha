@@ -356,36 +356,28 @@ class CompileTimeTableProjectionTests(unittest.TestCase):
             }.issubset(attributes)
         )
 
-    def test_kotodama_tables_equal_sealed_rust_declarations(self) -> None:
-        explanations = _sealed_declaration(
-            KOTODAMA_MANIFEST,
-            "diagnostic_explanations_v1.tsv",
-            "DIAGNOSTIC_EXPLANATIONS",
-        )
-        self.assertEqual(
-            _parse_diagnostic_explanations(explanations),
-            _table_rows(KOTODAMA_MANIFEST.parent / "diagnostic_explanations_v1.tsv"),
-        )
-        compile_fail = _sealed_declaration(
-            KOTODAMA_MANIFEST, "compile_fail_cases_v1.tsv", "CASES"
-        )
-        self.assertEqual(
-            _parse_struct_cases(
-                compile_fail,
-                "CompileFailCase",
-                ("name", "source", "phase", "code", "message", "line"),
-            ),
-            _table_rows(KOTODAMA_MANIFEST.parent / "compile_fail_cases_v1.tsv"),
-        )
-        secret = _sealed_declaration(
-            KOTODAMA_MANIFEST, "secret_reject_cases_v1.tsv", "REJECT_CASES"
-        )
-        self.assertEqual(
-            _parse_struct_cases(
-                secret, "RejectCase", ("name", "source", "code", "primary")
-            ),
-            _table_rows(KOTODAMA_MANIFEST.parent / "secret_reject_cases_v1.tsv"),
-        )
+    def test_kotodama_tables_are_bound_to_their_current_consumer(self) -> None:
+        # These first-release tables evolve with the language. Verify their current
+        # closed schemas and ownership instead of claiming an obsolete Rust preimage.
+        for filename, width in [
+            ("diagnostic_explanations_v1.tsv", 4),
+            ("compile_fail_cases_v1.tsv", 6),
+            ("secret_reject_cases_v1.tsv", 4),
+        ]:
+            manifest, asset = _manifest_asset(KOTODAMA_MANIFEST, filename)
+            self.assertEqual(manifest["source_slice_hash_scope"], "current Rust compile-time include consumer")
+            self.assertNotIn("source_commit", manifest)
+            self.assertEqual(asset["source_preimages"], [{"path": "../../../build.rs"}])
+            path = KOTODAMA_MANIFEST.parent / filename
+            rows = _table_rows(path)
+            self.assertEqual(int(path.read_text().splitlines()[0].split("\t")[1]), len(rows))
+            self.assertTrue(all(len(row) == width for row in rows))
+            self.assertEqual(len({row[0] for row in rows}), len(rows))
+        explanations = dict((row[0], row[1:]) for row in _table_rows(KOTODAMA_MANIFEST.parent / "diagnostic_explanations_v1.tsv"))
+        for code in ["E_TEST_REJECTION_EXPECTATION", "E_CONFLICTING_ERROR_TYPE", "E_POSITIONAL_ARGUMENT_ORDER", "E_POSITIONAL_STRUCT_PATTERN"]:
+            self.assertIn(code, explanations)
+            self.assertTrue(all(explanations[code]))
+        self.assertNotIn("E_DUPLICATE_ERROR_CODE", explanations)
 
     def test_iso_schema_is_closed_and_bound_to_its_current_consumer(self) -> None:
         manifest, asset = _manifest_asset(ISO_MANIFEST, "schema_v1.tsv")

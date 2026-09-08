@@ -13,7 +13,7 @@
 //! The module also defines the explicit finalized-archive retention request. That request is a
 //! caller-signed custom parameter with a strict digest-linked sequence and exact committed target;
 //! it intentionally contains no automatic age, capacity, or process-local retention policy.
-#[cfg(feature = "json")]
+
 use crate::parameter::{CustomParameter, CustomParameterId};
 use crate::{
     NetworkId,
@@ -87,12 +87,21 @@ pub const REPUTATION_JOURNAL_EVENT_ID_DOMAIN_V1: &[u8] = b"sorafs.reputation.jou
 pub const REPUTATION_FINALIZED_ARCHIVE_RETENTION_REQUEST_DIGEST_DOMAIN_V1: &[u8] =
     b"sorafs.reputation.finalized-archive.retention-request.v1";
 /// Exact finalized ancestor selected by one explicit archive-retention request.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
+    norito::NoritoSchema,
 )]
-#[derive(norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_data_model::sorafs::reputation::ReputationFinalizedArchiveRetentionTargetV1"
 )]
@@ -100,7 +109,7 @@ pub struct ReputationFinalizedArchiveRetentionTargetV1 {
     /// One-based finalized block height.
     pub height: u64,
     /// Exact finalized block hash at `height`.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub block_hash: [u8; 32],
 }
 impl ReputationFinalizedArchiveRetentionTargetV1 {
@@ -138,12 +147,21 @@ impl ReputationFinalizedArchiveRetentionTargetV1 {
 /// must submit the exact target as a custom parameter, and consensus validates
 /// that target against an already committed block. Successive requests form a
 /// strict digest-linked sequence so replicas can reconcile them idempotently.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
+    norito::NoritoSchema,
 )]
-#[derive(norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_data_model::sorafs::reputation::ReputationFinalizedArchiveRetentionRequestV1"
 )]
@@ -155,15 +173,12 @@ pub struct ReputationFinalizedArchiveRetentionRequestV1 {
     /// Monotonic request sequence beginning at one.
     pub sequence: u64,
     /// Digest of the immediately preceding canonical request.
-    #[cfg_attr(
-        feature = "json",
-        norito(json = "crate::json_helpers::fixed_bytes::option")
-    )]
+    #[norito(json = "crate::json_helpers::fixed_bytes::option")]
     pub predecessor_request_digest: Option<[u8; 32]>,
     /// Exact finalized ancestor selected explicitly by governance.
     pub compact_through: ReputationFinalizedArchiveRetentionTargetV1,
     /// Domain-separated digest of every preceding field.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub request_digest: [u8; 32],
 }
 impl ReputationFinalizedArchiveRetentionRequestV1 {
@@ -192,7 +207,7 @@ impl ReputationFinalizedArchiveRetentionRequestV1 {
         Ok(request)
     }
     /// Reserved custom-parameter identifier accepted by `SetParameter`.
-    #[cfg(feature = "json")]
+
     #[must_use]
     pub fn parameter_id() -> CustomParameterId {
         REPUTATION_FINALIZED_ARCHIVE_RETENTION_REQUEST_PARAMETER_ID_V1
@@ -200,7 +215,7 @@ impl ReputationFinalizedArchiveRetentionRequestV1 {
             .expect("valid finalized-reputation retention parameter identifier")
     }
     /// Convert this request into the caller-signed custom parameter.
-    #[cfg(feature = "json")]
+
     #[must_use]
     pub fn into_custom_parameter(self) -> CustomParameter {
         CustomParameter::new(
@@ -217,7 +232,7 @@ impl ReputationFinalizedArchiveRetentionRequestV1 {
     /// # Errors
     ///
     /// Returns a JSON error for malformed or semantically invalid matching payloads.
-    #[cfg(feature = "json")]
+
     pub fn from_custom_parameter(
         custom: &CustomParameter,
     ) -> Result<Option<Self>, norito::json::Error> {
@@ -395,11 +410,7 @@ pub enum ReputationFinalizedArchiveRetentionRequestErrorV1 {
     Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema, Default,
 )]
 #[repr(transparent)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-#[derive(norito::NoritoSchema)]
+#[derive(crate :: DeriveJsonSerialize, crate :: DeriveJsonDeserialize, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::sorafs::reputation::ReputationJournalSourceIdV1")]
 pub struct ReputationJournalSourceIdV1(pub [u8; 32]);
 impl ReputationJournalSourceIdV1 {
@@ -442,11 +453,7 @@ impl ReputationJournalSourceIdV1 {
     Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema, Default,
 )]
 #[repr(transparent)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-#[derive(norito::NoritoSchema)]
+#[derive(crate :: DeriveJsonSerialize, crate :: DeriveJsonDeserialize, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::sorafs::reputation::ReputationJournalEventIdV1")]
 pub struct ReputationJournalEventIdV1(pub [u8; 32]);
 impl ReputationJournalEventIdV1 {
@@ -459,15 +466,21 @@ impl ReputationJournalEventIdV1 {
     }
 }
 /// Stable journal source family.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "source", content = "detail", rename_all = "snake_case")
-)]
+#[norito(tag = "source", content = "detail", rename_all = "snake_case")]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::sorafs::reputation::ReputationJournalSourceKindV1")]
 pub enum ReputationJournalSourceKindV1 {
@@ -479,12 +492,20 @@ pub enum ReputationJournalSourceKindV1 {
     StreamToken,
 }
 /// Governed accounts allowed to append each first-release journal source.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
+    norito::NoritoSchema,
 )]
-#[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::sorafs::reputation::ReputationJournalAuthorityPolicyV1")]
 pub struct ReputationJournalAuthorityPolicyV1 {
     /// Schema version.
@@ -492,10 +513,7 @@ pub struct ReputationJournalAuthorityPolicyV1 {
     /// Monotonic policy revision beginning at one.
     pub revision: u64,
     /// Digest of the immediately preceding canonical policy.
-    #[cfg_attr(
-        feature = "json",
-        norito(json = "crate::json_helpers::fixed_bytes::option")
-    )]
+    #[norito(json = "crate::json_helpers::fixed_bytes::option")]
     pub predecessor_policy_digest: Option<[u8; 32]>,
     /// Exact governed authority allowed to record `PoR` terminals.
     pub por_recorder_authority: AccountId,
@@ -560,12 +578,20 @@ impl ReputationJournalAuthorityPolicyV1 {
     }
 }
 /// Auditable activation record for one governed recorder-policy revision.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
+    norito::NoritoSchema,
 )]
-#[derive(norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_data_model::sorafs::reputation::ReputationJournalAuthorityPolicyRecordV1"
 )]
@@ -573,7 +599,7 @@ pub struct ReputationJournalAuthorityPolicyRecordV1 {
     /// Canonical governed policy.
     pub policy: ReputationJournalAuthorityPolicyV1,
     /// Canonical domain-separated digest of `policy`.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub policy_digest: [u8; 32],
     /// Governance authority that activated the revision.
     pub activated_by: AccountId,
@@ -616,15 +642,21 @@ impl ReputationJournalAuthorityPolicyRecordV1 {
     }
 }
 /// Stable provider-attributable `PoR` failure classification.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "kind", content = "detail", rename_all = "snake_case")
-)]
+#[norito(tag = "kind", content = "detail", rename_all = "snake_case")]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::sorafs::reputation::PorTerminalFailureKindV1")]
 pub enum PorTerminalFailureKindV1 {
@@ -643,15 +675,21 @@ impl PorTerminalFailureKindV1 {
     }
 }
 /// `PoR` terminal that cannot safely affect provider reputation.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "kind", content = "detail", rename_all = "snake_case")
-)]
+#[norito(tag = "kind", content = "detail", rename_all = "snake_case")]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::sorafs::reputation::PorTerminalExcludedKindV1")]
 pub enum PorTerminalExcludedKindV1 {
@@ -661,15 +699,21 @@ pub enum PorTerminalExcludedKindV1 {
     AdmissionInactive,
 }
 /// Final, immutable `PoR` classification.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "status", content = "detail", rename_all = "snake_case")
-)]
+#[norito(tag = "status", content = "detail", rename_all = "snake_case")]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::sorafs::reputation::PorTerminalStatusV1")]
 pub enum PorTerminalStatusV1 {
@@ -704,19 +748,28 @@ impl PorTerminalStatusV1 {
     }
 }
 /// Payload-free terminal `PoR` projection.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
+    norito::NoritoSchema,
 )]
-#[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::sorafs::reputation::PorTerminalOutcomeV1")]
 pub struct PorTerminalOutcomeV1 {
     /// Native BLAKE3-256 challenge identifier.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub challenge_id: [u8; 32],
     /// Manifest named by the challenge.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub manifest_digest: [u8; 32],
     /// Challenge epoch.
     pub epoch_id: u64,
@@ -737,16 +790,10 @@ pub struct PorTerminalOutcomeV1 {
     /// Authenticated terminal decision time in milliseconds since Unix epoch.
     pub decided_at_unix_ms: u64,
     /// Canonical provider-signed proof digest for proof-bearing terminals.
-    #[cfg_attr(
-        feature = "json",
-        norito(json = "crate::json_helpers::fixed_bytes::option")
-    )]
+    #[norito(json = "crate::json_helpers::fixed_bytes::option")]
     pub proof_digest: Option<[u8; 32]>,
     /// Authoritative repair task for a failed challenge.
-    #[cfg_attr(
-        feature = "json",
-        norito(json = "crate::json_helpers::fixed_bytes::option")
-    )]
+    #[norito(json = "crate::json_helpers::fixed_bytes::option")]
     pub repair_task_id: Option<[u8; 32]>,
     /// Deterministic verifier latency in integer milliseconds.
     pub verifier_latency_ms: Option<u32>,
@@ -858,15 +905,21 @@ impl PorTerminalOutcomeV1 {
     }
 }
 /// Stable provider-dispute category aligned with capacity governance.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "kind", content = "detail", rename_all = "snake_case")
-)]
+#[norito(tag = "kind", content = "detail", rename_all = "snake_case")]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::sorafs::reputation::ProviderDisputeKindV1")]
 pub enum ProviderDisputeKindV1 {
@@ -882,12 +935,20 @@ pub enum ProviderDisputeKindV1 {
     Other,
 }
 /// Resolution material for a terminal provider-dispute transition.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
+    norito::NoritoSchema,
 )]
-#[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::sorafs::reputation::ProviderDisputeResolutionV1")]
 pub struct ProviderDisputeResolutionV1 {
     /// Existing capacity-governance outcome vocabulary.
@@ -895,21 +956,26 @@ pub struct ProviderDisputeResolutionV1 {
     /// Authenticated governance decision time.
     pub resolved_at_unix_ms: u64,
     /// Digest of the canonical decision evidence/envelope.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub decision_digest: [u8; 32],
     /// Optional bounded, canonical governance rationale.
     pub rationale: Option<String>,
 }
 /// Chain-authoritative provider-dispute lifecycle transition.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "status", content = "detail", rename_all = "snake_case")
-)]
+#[norito(tag = "status", content = "detail", rename_all = "snake_case")]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::sorafs::reputation::ProviderDisputeStatusV1")]
 pub enum ProviderDisputeStatusV1 {
@@ -922,12 +988,20 @@ pub enum ProviderDisputeStatusV1 {
     ),
 }
 /// Payload-free provider-dispute journal projection.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
+    norito::NoritoSchema,
 )]
-#[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::sorafs::reputation::ProviderDisputeEventV1")]
 pub struct ProviderDisputeEventV1 {
     /// Existing capacity-dispute identity.
@@ -935,7 +1009,7 @@ pub struct ProviderDisputeEventV1 {
     /// Existing capacity-dispute category.
     pub kind: ProviderDisputeKindV1,
     /// Digest of the canonical evidence bundle.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub evidence_digest: [u8; 32],
     /// Authenticated source submission time.
     pub submitted_at_unix_ms: u64,
@@ -974,15 +1048,21 @@ impl ProviderDisputeEventV1 {
     }
 }
 /// Provider-attributable stream-token policy violation.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "kind", content = "detail", rename_all = "snake_case")
-)]
+#[norito(tag = "kind", content = "detail", rename_all = "snake_case")]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::sorafs::reputation::StreamTokenViolationKindV1")]
 pub enum StreamTokenViolationKindV1 {
@@ -1010,15 +1090,21 @@ pub enum StreamTokenViolationKindV1 {
     IdentifierPolicyConflict,
 }
 /// Stream-token rejection that cannot safely affect provider reputation.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "kind", content = "detail", rename_all = "snake_case")
-)]
+#[norito(tag = "kind", content = "detail", rename_all = "snake_case")]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::sorafs::reputation::StreamTokenExcludedKindV1")]
 pub enum StreamTokenExcludedKindV1 {
@@ -1037,15 +1123,21 @@ impl StreamTokenExcludedKindV1 {
     }
 }
 /// Typed terminal result of one stream-token validation attempt.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "status", content = "detail", rename_all = "snake_case")
-)]
+#[norito(tag = "status", content = "detail", rename_all = "snake_case")]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::sorafs::reputation::StreamTokenValidationStatusV1")]
 pub enum StreamTokenValidationStatusV1 {
@@ -1184,11 +1276,7 @@ pub fn derive_stream_token_gateway_id_v1(
 /// raw token bytes never enter the canonical request context.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[repr(transparent)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-#[derive(norito::NoritoSchema)]
+#[derive(crate :: DeriveJsonSerialize, crate :: DeriveJsonDeserialize, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::sorafs::reputation::StreamTokenExactHeaderDigestV1")]
 pub struct StreamTokenExactHeaderDigestV1([u8; 32]);
 impl StreamTokenExactHeaderDigestV1 {
@@ -1216,19 +1304,25 @@ impl StreamTokenExactHeaderDigestV1 {
     }
 }
 /// Presence commitment for one stream-token presentation.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
-#[cfg_attr(
-    feature = "json",
-    norito(
-        tag = "presentation",
-        content = "detail",
-        rename_all = "snake_case",
-        deny_unknown_fields
-    )
+#[norito(
+    tag = "presentation",
+    content = "detail",
+    rename_all = "snake_case",
+    deny_unknown_fields
 )]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::sorafs::reputation::StreamTokenPresentationV1")]
@@ -1259,10 +1353,19 @@ impl StreamTokenPresentationV1 {
     }
 }
 /// Canonical inclusive CAR byte range committed by a validation context.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
@@ -1309,17 +1412,26 @@ impl StreamTokenCarRangeV1 {
     }
 }
 /// Canonical full-chunk selector committed by a validation context.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::sorafs::reputation::StreamTokenChunkRequestV1")]
 pub struct StreamTokenChunkRequestV1 {
     /// Exact BLAKE3 chunk digest resolved below the manifest.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub chunk_digest: [u8; 32],
     /// Exact stored chunk length served by this request.
     pub stored_length: u64,
@@ -1352,19 +1464,25 @@ impl StreamTokenChunkRequestV1 {
     }
 }
 /// Exact range-serving route committed by a stream-token validation context.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
-#[cfg_attr(
-    feature = "json",
-    norito(
-        tag = "route",
-        content = "detail",
-        rename_all = "snake_case",
-        deny_unknown_fields
-    )
+#[norito(
+    tag = "route",
+    content = "detail",
+    rename_all = "snake_case",
+    deny_unknown_fields
 )]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::sorafs::reputation::StreamTokenRequestRouteV1")]
@@ -1413,10 +1531,18 @@ impl StreamTokenRequestRouteV1 {
 ///
 /// Callers must use [`Self::try_new`] with the exact request nonce and optional raw token-header
 /// bytes. Deserialized values must pass [`Self::validate`] before use.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
@@ -1426,11 +1552,11 @@ impl StreamTokenRequestRouteV1 {
 pub struct StreamTokenValidationRequestContextV1 {
     version: u8,
     provider_id: ProviderId,
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     manifest_digest: [u8; 32],
     manifest_cid: Vec<u8>,
     chunk_profile_handle: String,
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     request_nonce_digest: [u8; 32],
     token_presentation: StreamTokenPresentationV1,
     route: StreamTokenRequestRouteV1,
@@ -1591,22 +1717,31 @@ impl StreamTokenValidationRequestContextV1 {
 /// `gateway_id[32] || gateway_sequence_le[8] || request_context_digest[32]`.
 ///
 /// There is no caller-supplied validation-id compatibility path.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::sorafs::reputation::StreamTokenValidationBindingV1")]
 pub struct StreamTokenValidationBindingV1 {
     /// Stable authenticated identity of the regional gateway.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub gateway_id: [u8; 32],
     /// Non-zero sequence allocated by that gateway's sealed monotonic state.
     pub gateway_sequence: u64,
     /// Digest of the exact range request and provider-serving context.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub request_context_digest: [u8; 32],
 }
 impl StreamTokenValidationBindingV1 {
@@ -1649,10 +1784,19 @@ impl StreamTokenValidationBindingV1 {
     }
 }
 /// Payload-free result of one provider-bound stream-token validation.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
@@ -1661,10 +1805,7 @@ pub struct StreamTokenValidationOutcomeV1 {
     /// Durable gateway sequence and request-context binding.
     pub binding: StreamTokenValidationBindingV1,
     /// Canonical signed token-body digest, present exactly after successful decode.
-    #[cfg_attr(
-        feature = "json",
-        norito(json = "crate::json_helpers::fixed_bytes::option")
-    )]
+    #[norito(json = "crate::json_helpers::fixed_bytes::option")]
     pub token_body_digest: Option<[u8; 32]>,
     /// Signing-key version from the decoded token body.
     pub token_key_version: Option<u32>,
@@ -1695,15 +1836,20 @@ impl StreamTokenValidationOutcomeV1 {
     }
 }
 /// One typed first-release journal payload.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "kind", content = "payload", rename_all = "snake_case")
-)]
+#[norito(tag = "kind", content = "payload", rename_all = "snake_case")]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::sorafs::reputation::ReputationJournalPayloadV1")]
 pub enum ReputationJournalPayloadV1 {
@@ -1757,12 +1903,20 @@ impl ReputationJournalPayloadV1 {
     }
 }
 /// One chain-authoritative reputation journal entry.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
+    norito::NoritoSchema,
 )]
-#[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::sorafs::reputation::ReputationJournalEntryV1")]
 pub struct ReputationJournalEntryV1 {
     /// Entry schema version.
@@ -1778,7 +1932,7 @@ pub struct ReputationJournalEntryV1 {
     /// Provider whose counters may be affected.
     pub provider_id: ProviderId,
     /// Digest of the active recorder-authority policy.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub authority_policy_digest: [u8; 32],
     /// Exact governed transaction authority that committed the entry.
     pub recorded_by: AccountId,
@@ -1952,12 +2106,19 @@ impl ReputationJournalEntryV1 {
     }
 }
 /// Authoritative head of one native reputation source lifecycle.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
+    norito::NoritoSchema,
 )]
-#[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::sorafs::reputation::ReputationJournalSourceHeadV1")]
 pub struct ReputationJournalSourceHeadV1 {
     /// Source family permanently bound to the source id.
@@ -2001,12 +2162,18 @@ impl ReputationJournalSourceHeadV1 {
 /// The committing block hash is deliberately absent while the block executes.
 /// Fixed-view queries resolve `target_block_height` against the finalized block
 /// hash journal and return [`ReputationJournalFinalizedEventV1`].
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
+    norito::NoritoSchema,
 )]
-#[derive(norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_data_model::sorafs::reputation::ReputationJournalCommittedEventRecordV1"
 )]
@@ -2044,18 +2211,27 @@ impl ReputationJournalCommittedEventRecordV1 {
     }
 }
 /// Finalized block anchor for one coherent journal query.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
+    norito::NoritoSchema,
 )]
-#[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::sorafs::reputation::ReputationJournalFinalizedCursorV1")]
 pub struct ReputationJournalFinalizedCursorV1 {
     /// Finalized block height observed by the immutable state view.
     pub height: u64,
     /// Exact finalized block hash from that same view.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub block_hash: [u8; 32],
     /// Exact finalized block timestamp in milliseconds since Unix epoch.
     pub finalized_at_unix_ms: u64,
@@ -2079,12 +2255,21 @@ impl ReputationJournalFinalizedCursorV1 {
     }
 }
 /// Exclusive cursor for one committed reputation-journal event.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
+    norito::NoritoSchema,
 )]
-#[derive(norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_data_model::sorafs::reputation::ReputationJournalFinalizedEventCursorV1"
 )]
@@ -2094,7 +2279,7 @@ pub struct ReputationJournalFinalizedEventCursorV1 {
     /// Finalized block height containing the event.
     pub block_height: u64,
     /// Exact committing block hash.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub block_hash: [u8; 32],
     /// Journal-event index within the committing block.
     pub event_index: u32,
@@ -2113,12 +2298,18 @@ impl ReputationJournalFinalizedEventCursorV1 {
     }
 }
 /// One typed journal entry with an unambiguous finalized-chain cursor.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
+    norito::NoritoSchema,
 )]
-#[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::sorafs::reputation::ReputationJournalFinalizedEventV1")]
 pub struct ReputationJournalFinalizedEventV1 {
     /// Monotonic journal sequence beginning at one.
@@ -2126,7 +2317,7 @@ pub struct ReputationJournalFinalizedEventV1 {
     /// Committing block height.
     pub block_height: u64,
     /// Committing block hash.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub block_hash: [u8; 32],
     /// Journal-event index within the committing block.
     pub event_index: u32,
@@ -2178,12 +2369,18 @@ impl ReputationJournalFinalizedEventV1 {
     }
 }
 /// Cursor-bounded page of typed committed reputation-journal events.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
+    norito::NoritoSchema,
 )]
-#[derive(norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_data_model::sorafs::reputation::ReputationJournalFinalizedEventPageV1"
 )]
@@ -2990,7 +3187,7 @@ mod tests {
             norito::to_bytes(&decoded).expect("re-encode retention request"),
             bytes
         );
-        #[cfg(feature = "json")]
+
         {
             let parameter = request.into_custom_parameter();
             assert_eq!(
@@ -3086,7 +3283,7 @@ mod tests {
         )
         .expect("valid PoR entry")
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn reputation_event_id_identity_projection_matches_capture() {
         let rows = [0x31, 0x52].map(|seed| {
@@ -3847,7 +4044,7 @@ mod tests {
             norito::decode_from_bytes::<StreamTokenValidationRequestContextV1>(&trailing).is_err(),
             "trailing Norito bytes must fail the hard cut"
         );
-        #[cfg(feature = "json")]
+
         {
             let value = norito::json::to_value(&context).expect("serialize request context");
             let decoded = norito::json::value::from_value::<StreamTokenValidationRequestContextV1>(
@@ -4004,7 +4201,7 @@ mod tests {
             substituted_context.binding.validation_id(),
             accepted.binding.validation_id()
         );
-        #[cfg(feature = "json")]
+
         {
             let mut aliased =
                 norito::json::to_value(&accepted).expect("serialize token validation outcome");
@@ -4343,7 +4540,7 @@ mod tests {
     fn canonical_norito_and_json_round_trip() {
         let value = page(vec![finalized_event(1, 0, 1)]);
         let bytes = norito::encode_canonical(&value).expect("encode canonical journal page");
-        #[cfg(feature = "json")]
+
         let canonical_json = norito::json::to_string(&value).expect("encode journal JSON");
         let expected_event_id = value.events[0].entry.event_id;
         let alternate_flags =
@@ -4365,7 +4562,7 @@ mod tests {
                     .expect("encode page under alternate ambient layout"),
                 bytes
             );
-            #[cfg(feature = "json")]
+
             assert_eq!(
                 norito::json::to_string(&value).expect("encode ambient-independent journal JSON"),
                 canonical_json
@@ -4387,7 +4584,7 @@ mod tests {
             norito::decode_canonical::<ReputationJournalFinalizedEventPageV1>(&alternate),
             Err(norito::Error::NonCanonicalEncoding)
         ));
-        #[cfg(feature = "json")]
+
         {
             let decoded: ReputationJournalFinalizedEventPageV1 =
                 norito::json::from_slice(canonical_json.as_bytes()).expect("decode journal JSON");
@@ -4440,7 +4637,7 @@ mod tests {
             norito::decode_canonical::<ProviderDisputeStatusV1>(&alternate),
             Err(norito::Error::NonCanonicalEncoding)
         ));
-        #[cfg(feature = "json")]
+
         {
             let json =
                 norito::json::to_string(&value).expect("encode provider-dispute resolution JSON");

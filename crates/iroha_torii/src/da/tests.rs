@@ -54,15 +54,15 @@ use iroha_primitives::{json::Json, numeric::XorQuantity};
 use iroha_telemetry::metrics::Metrics;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use norito::{
-    NoritoDeserialize, from_bytes,
+    DeserializePayload, from_bytes,
     json::{self, Value},
     to_bytes,
 };
 use reqwest::Url;
 use sorafs_car::{CarBuildPlan, PersistedChunkRecord};
 use sorafs_manifest::{
-    BLAKE3_256_MULTIHASH_CODE, ChunkingProfileV1, CouncilSignature, ProfileId,
-    ProviderAdmissionCouncilPolicy, canonical_manifest_root_cid,
+    BLAKE3_256_MULTIHASH_CODE, ChunkingProfileV1, CouncilSignature, ProviderAdmissionCouncilPolicy,
+    canonical_manifest_root_cid,
     pdp::{PdpCommitmentV1, PdpMerkleTreeV1},
     pin_registry::{
         AliasBindingV1, AliasProofBundleV1, alias_merkle_root, alias_proof_signature_digest,
@@ -1122,18 +1122,10 @@ fn sample_pdp_commitment_for_tests() -> PdpCommitmentV1 {
     PdpCommitmentV1::from_tree(
         &tree,
         [0x11; 32],
-        ChunkingProfileV1 {
-            profile_id: ProfileId(0xAB),
-            namespace: "inline".to_owned(),
-            name: "inline".to_owned(),
-            semver: "1.0.0".to_owned(),
-            min_size: 64 * 1024,
-            target_size: 64 * 1024,
-            max_size: 64 * 1024,
-            break_mask: 1,
-            multihash_code: BLAKE3_256_MULTIHASH_CODE,
-            aliases: vec!["inline.inline@1.0.0".to_owned()],
-        },
+        ChunkingProfileV1::from_profile(
+            chunk_profile_for_request(64 * 1024),
+            BLAKE3_256_MULTIHASH_CODE,
+        ),
         32,
         1_707_300_000,
     )

@@ -4742,17 +4742,24 @@ fn prepare_fault_bundle(
         .client()
         .get_privacy_capabilities()?
         .committed_height;
-    let authority_context_height = current_height
-        .checked_add(1)
-        .ok_or_else(|| eyre!("fault authority height overflow"))?;
-    let expiry_height = authority_context_height
+    let expiry_height = current_height
         .checked_add(FAULT_BUNDLE_EXPIRY_BLOCKS)
         .ok_or_else(|| eyre!("fault expiry height overflow"))?;
     let governed = fault_governed_legs(
         request,
         bundle_ordinal,
         routes,
-        authority_context_height,
+        current_height,
+        expiry_height,
+    )?;
+    let private_data = (0..routes.len())
+        .map(default_private_settlement_leg_data)
+        .collect::<Vec<_>>();
+    let authority_context_height = activate_governed_private_pools(
+        sponsor,
+        network.network_id(),
+        &governed,
+        &private_data,
         expiry_height,
     )?;
     let manifest = proof_manifest(
@@ -4769,37 +4776,6 @@ fn prepare_fault_bundle(
             prepare_leg(ordinal, leg, &manifest, committee.authority.digest()?)
         })
         .collect::<Result<Vec<_>>>()?;
-    let activations = prepared
-        .iter()
-        .map(|leg| {
-            ActivatePrivateSettlementPoolV1::from_restricted(
-                &leg.governed.governance,
-                leg.initial_commitments.to_vec(),
-            )
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    let activation = {
-        let account = sponsor.account_client();
-        account
-            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
-                activations,
-                bounded_nexus_fee(),
-                Metadata::default(),
-            ))
-            .and_then(|payload| account.sign_transaction(payload))
-    }
-    .wrap_err("build integration-test transaction")?;
-    sponsor
-        .submit_transaction_and_wait(&activation)
-        .wrap_err("activate fault-campaign private pools")?;
-    ensure!(
-        sponsor
-            .client()
-            .get_privacy_capabilities()?
-            .committed_height
-            == authority_context_height,
-        "fault pool activation did not land at the bound authority height"
-    );
     let materials = provisional_materials(manifest.clone(), &prepared, committees)?;
     let authorities = committees
         .iter()
@@ -8234,8 +8210,7 @@ fn run_real_process_leakage_campaign(
         collect_process_inventory(&network, &runtime, shape, &request.commit, &coordinator)?;
     let sponsor = network.client();
     let activated_height = activate_ivm_private_note(&sponsor)?;
-    let authority_context_height = activated_height + 1;
-    let expiry_height = authority_context_height + 1_000;
+    let expiry_height = activated_height + 1_000;
     let routes = routes_from_network(&network, shape)?;
     ensure!(routes.len() == request.participants, "route count mismatch");
     let committees = committees_from_network(&network, shape, &routes)?;
@@ -8246,9 +8221,20 @@ fn run_real_process_leakage_campaign(
     asset_definition_ids[0] = canary_asset;
     let governed = governed_legs_with_asset_definitions(
         &routes,
-        authority_context_height,
+        activated_height,
         expiry_height,
         Some(&asset_definition_ids),
+    )?;
+    let mut private_data = (0..routes.len())
+        .map(default_private_settlement_leg_data)
+        .collect::<Vec<_>>();
+    private_data[0] = private_leg_zero.clone();
+    let authority_context_height = activate_governed_private_pools(
+        &sponsor,
+        network.network_id(),
+        &governed,
+        &private_data,
+        expiry_height,
     )?;
     let manifest = proof_manifest(
         network.network_id(),
@@ -8292,37 +8278,6 @@ fn run_real_process_leakage_campaign(
             }
         })
         .collect::<Result<Vec<_>>>()?;
-    let activations = prepared
-        .iter()
-        .map(|leg| {
-            ActivatePrivateSettlementPoolV1::from_restricted(
-                &leg.governed.governance,
-                leg.initial_commitments.to_vec(),
-            )
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    let activation_transaction = {
-        let account = sponsor.account_client();
-        account
-            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
-                activations,
-                bounded_nexus_fee(),
-                Metadata::default(),
-            ))
-            .and_then(|payload| account.sign_transaction(payload))
-    }
-    .wrap_err("build integration-test transaction")?;
-    sponsor
-        .submit_transaction_and_wait(&activation_transaction)
-        .wrap_err("activate governed leakage pools")?;
-    ensure!(
-        sponsor
-            .client()
-            .get_privacy_capabilities()?
-            .committed_height
-            == authority_context_height,
-        "leakage pool activation did not land at the authority context"
-    );
 
     let before = wait_for_converged_fault_state_snapshot(&network, "leakage-before")?;
     let observer = FaultContinuousObserverV1::start_retaining_evidence(
@@ -8887,24 +8842,34 @@ fn run_real_process_private_benchmark(
     let pids = inventory.iter().map(|row| row.pid).collect::<Vec<_>>();
     let sponsor = network.client();
     let activated_height = activate_ivm_private_note(&sponsor)?;
-    let authority_context_height = activated_height + 1;
-    let expiry_height = authority_context_height + 1_000;
+    let expiry_height = activated_height + 1_000;
     let routes = routes_from_network(&network, shape)?;
     ensure!(routes.len() == request.participants, "route count mismatch");
     let committees = committees_from_network(&network, shape, &routes)?;
-    let governed = governed_legs(&routes, authority_context_height, expiry_height)?;
-    let manifest = proof_manifest(
-        network.network_id(),
-        authority_context_height,
-        expiry_height,
-        &governed,
-    )?;
+    let governed = governed_legs(&routes, activated_height, expiry_height)?;
 
     let process_before = sample_process_resources(&pids)?;
     let sampler = ProcessResourceSampler::start(pids.clone(), process_before.rss_bytes)?;
     let network_before = loopback_bytes()?;
     let storage_before = network_storage_bytes(&network)?;
     let end_to_end_started = Instant::now();
+
+    let private_data = (0..routes.len())
+        .map(default_private_settlement_leg_data)
+        .collect::<Vec<_>>();
+    let authority_context_height = activate_governed_private_pools(
+        &sponsor,
+        network.network_id(),
+        &governed,
+        &private_data,
+        expiry_height,
+    )?;
+    let manifest = proof_manifest(
+        network.network_id(),
+        authority_context_height,
+        expiry_height,
+        &governed,
+    )?;
 
     let proof_started = Instant::now();
     let prepared = governed
@@ -8922,37 +8887,6 @@ fn run_real_process_private_benchmark(
             .ok_or_else(|| eyre!("proof byte total overflow"))
     })?;
 
-    let activations = prepared
-        .iter()
-        .map(|leg| {
-            ActivatePrivateSettlementPoolV1::from_restricted(
-                &leg.governed.governance,
-                leg.initial_commitments.to_vec(),
-            )
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    let activation_transaction = {
-        let account = sponsor.account_client();
-        account
-            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
-                activations,
-                bounded_nexus_fee(),
-                Metadata::default(),
-            ))
-            .and_then(|payload| account.sign_transaction(payload))
-    }
-    .wrap_err("build integration-test transaction")?;
-    sponsor
-        .submit_transaction_and_wait(&activation_transaction)
-        .wrap_err("activate governed private pools")?;
-    ensure!(
-        sponsor
-            .client()
-            .get_privacy_capabilities()?
-            .committed_height
-            == authority_context_height,
-        "pool activation did not land at the manifest authority context"
-    );
     let atomicity_before = wait_for_converged_fault_state_snapshot(&network, "benchmark-before")?;
     let atomicity_observer = FaultContinuousObserverV1::start(
         &network,

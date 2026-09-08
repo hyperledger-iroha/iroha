@@ -163,6 +163,11 @@ pub(crate) fn reviewed_lifecycle_work_registry_source_for_test() -> &'static str
                     include_str!("v2_lifecycle_work_registry_validate_sidecar.rs"),
                     1,
                 )
+                .replacen(
+                    "include!(\"v2_lifecycle_work_registry_body_retirement.rs\");\n",
+                    include_str!("v2_lifecycle_work_registry_body_retirement.rs"),
+                    1,
+                )
         })
         .as_str()
 }
@@ -224,6 +229,7 @@ pub(crate) fn reviewed_v2_effects_source_for_test() -> &'static str {
                 "v2_effects_recovered_fetch_and_pipeline_types.rs",
                 "v2_effects_recovered_lifecycle_output_service.rs",
                 "v2_effects_lifecycle_admission_settlement.rs",
+                "v2_effects_body_retirement.rs",
                 "v2_effects_runner_decision_cleanup_plan.rs",
             )
         })
@@ -313,6 +319,7 @@ enum SourceId {
     Authority,
     BodyPipeline,
     BodyPipelineTests,
+    BodyRetirement,
     BodyStore,
     CanonicalRecoveryIngress,
     CertifiedServeStore,
@@ -321,6 +328,7 @@ enum SourceId {
     CoordinatorSupport,
     V2Core,
     Effects,
+    EffectsBodyRetirement,
     FairIngress,
     FormalFirstRelease,
     IngressPosition,
@@ -329,8 +337,8 @@ enum SourceId {
     KuraMergeSupport,
     KuraReleaseAuthority,
     LaneWork,
-    LeaderWireConsumer,
     Launch,
+    LeaderWireConsumer,
     Ledger,
     LifecycleOpen,
     LifecycleRecovery,
@@ -341,6 +349,7 @@ enum SourceId {
     Queue,
     Refinement,
     Registry,
+    RegistryBodyRetirement,
     RegistryRecovery,
     RegistryRecoveryImpl,
     ReplayAuthority,
@@ -368,6 +377,7 @@ impl SourceId {
             "authority" => Self::Authority,
             "body_pipeline" => Self::BodyPipeline,
             "body_pipeline_tests" => Self::BodyPipelineTests,
+            "body_retirement" => Self::BodyRetirement,
             "body_store" => Self::BodyStore,
             "canonical_recovery_ingress" => Self::CanonicalRecoveryIngress,
             "certified_serve_store" => Self::CertifiedServeStore,
@@ -376,6 +386,7 @@ impl SourceId {
             "coordinator_support" => Self::CoordinatorSupport,
             "v2_core" => Self::V2Core,
             "effects" => Self::Effects,
+            "effects_body_retirement" => Self::EffectsBodyRetirement,
             "fair_ingress" => Self::FairIngress,
             "formal_first_release" => Self::FormalFirstRelease,
             "ingress_position" => Self::IngressPosition,
@@ -384,8 +395,8 @@ impl SourceId {
             "kura_merge_support" => Self::KuraMergeSupport,
             "kura_release_authority" => Self::KuraReleaseAuthority,
             "lane_work" => Self::LaneWork,
-            "leader_wire_consumer" => Self::LeaderWireConsumer,
             "launch" => Self::Launch,
+            "leader_wire_consumer" => Self::LeaderWireConsumer,
             "ledger" => Self::Ledger,
             "lifecycle_open" => Self::LifecycleOpen,
             "lifecycle_recovery" => Self::LifecycleRecovery,
@@ -396,6 +407,7 @@ impl SourceId {
             "queue" => Self::Queue,
             "refinement" => Self::Refinement,
             "registry" => Self::Registry,
+            "registry_body_retirement" => Self::RegistryBodyRetirement,
             "registry_recovery" => Self::RegistryRecovery,
             "registry_recovery_impl" => Self::RegistryRecoveryImpl,
             "replay_authority" => Self::ReplayAuthority,
@@ -429,6 +441,7 @@ fn source(id: SourceId) -> String {
         SourceId::BodyPipelineTests => {
             include_str!("v2_lifecycle_body_pipeline_transition_tests.rs").to_owned()
         }
+        SourceId::BodyRetirement => include_str!("v2_lifecycle_body_retirement.rs").to_owned(),
         SourceId::BodyStore => include_str!("v2_body_store.rs").to_owned(),
         SourceId::CanonicalRecoveryIngress => {
             include_str!("v2_runner/canonical_recovery_ingress.rs").to_owned()
@@ -445,6 +458,7 @@ fn source(id: SourceId) -> String {
         }
         SourceId::V2Core => include_str!("v2_core.rs").to_owned(),
         SourceId::Effects => reviewed_v2_effects_source_for_test().to_owned(),
+        SourceId::EffectsBodyRetirement => include_str!("v2_effects_body_retirement.rs").to_owned(),
         SourceId::FairIngress => include_str!("mod.rs").to_owned(),
         SourceId::FormalFirstRelease => {
             include_str!("../../../../formal/sumeragi_v2/SumeragiV2InFlightFirstRelease.tla")
@@ -478,6 +492,9 @@ fn source(id: SourceId) -> String {
         SourceId::Queue => include_str!("../queue.rs").to_owned(),
         SourceId::Refinement => include_str!("v2_core/refinement.rs").to_owned(),
         SourceId::Registry => reviewed_lifecycle_work_registry_source_for_test().to_owned(),
+        SourceId::RegistryBodyRetirement => {
+            include_str!("v2_lifecycle_work_registry_body_retirement.rs").to_owned()
+        }
         SourceId::RegistryRecovery => {
             include_str!("v2_lifecycle_work_registry_validate_recovery.rs").to_owned()
         }
@@ -754,9 +771,9 @@ fn parse_contracts() -> Result<Vec<Case>, String> {
             _ => return Err(format!("invalid source contract asset line {line_number}")),
         }
     }
-    if current.is_some() || cases.len() != 54 {
+    if current.is_some() || cases.len() != 55 {
         return Err(format!(
-            "source contract asset must contain exactly 54 closed cases"
+            "source contract asset must contain exactly 55 closed cases"
         ));
     }
     Ok(cases)
@@ -887,6 +904,9 @@ macro_rules! source_contract_test {
 pub(crate) use source_contract_test;
 
 #[cfg(test)]
+source_contract_test!(superseded_certified_body_retirement_is_exact_and_durably_sealed);
+
+#[cfg(test)]
 #[test]
 fn source_contract_case_ids_are_unique() {
     let cases = parse_contracts().expect("strict source contract asset parses");
@@ -895,7 +915,7 @@ fn source_contract_case_ids_are_unique() {
         cases.iter().all(|case| ids.insert(case.id.as_str())),
         "source contract case IDs must be unique"
     );
-    assert_eq!(ids.len(), 54, "source contract inventory drifted");
+    assert_eq!(ids.len(), 55, "source contract inventory drifted");
     for id in ids {
         run_source_contract(id);
     }

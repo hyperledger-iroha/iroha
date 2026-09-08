@@ -27,6 +27,8 @@ mod model {
     )]
     #[getset(get = "pub")]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::events::time::model::TimeEvent")]
     pub struct TimeEvent {
         /// Time interval between creation of two blocks
         pub interval: TimeInterval,
@@ -37,10 +39,14 @@ mod model {
     )]
     #[repr(transparent)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::events::time::model::TimeEventFilter")]
     pub struct TimeEventFilter(pub ExecutionTime);
     /// Trigger execution time
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::events::time::model::ExecutionTime")]
     pub enum ExecutionTime {
         /// Execute right before block commit
         PreCommit,
@@ -50,6 +56,8 @@ mod model {
     /// Schedule of the trigger
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::events::time::model::Schedule")]
     pub struct Schedule {
         /// The first execution time
         pub start_ms: u64,
@@ -64,8 +72,10 @@ mod model {
     /// `since_ms` and `length_ms` are serialized as a number of milliseconds.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     // Durations are represented explicitly as millisecond counts (`since_ms`, `length_ms`) and
-    // JSON serialization is implemented manually below to keep the historical object layout.
+    // JSON serialization is implemented manually below for the canonical object layout.
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::events::time::model::TimeInterval")]
     pub struct TimeInterval {
         /// The start of a time interval
         pub since_ms: u64,
@@ -94,39 +104,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for TimeEventFilter {
         ))
     }
 }
-// Internal wire helper with a stable Norito tuple layout
-mod wire {
-    use super::*;
-    use norito::core as ncore;
-    pub(super) struct TimeIntervalWire(pub u64, pub u64);
-    impl From<TimeInterval> for TimeIntervalWire {
-        fn from(t: TimeInterval) -> Self {
-            Self(t.since_ms, t.length_ms)
-        }
-    }
-    impl From<TimeIntervalWire> for TimeInterval {
-        fn from(w: TimeIntervalWire) -> Self {
-            Self {
-                since_ms: w.0,
-                length_ms: w.1,
-            }
-        }
-    }
-    impl ncore::NoritoSerialize for TimeIntervalWire {}
-    impl ncore::SerializePayload for TimeIntervalWire {
-        fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
-            <(u64, u64) as ncore::SerializePayload>::serialize(&(self.0, self.1), writer)
-        }
-    }
-    impl<'de> ncore::NoritoDeserialize<'de> for TimeIntervalWire {
-        fn deserialize(archived: &'de ncore::Archived<Self>) -> Self {
-            let (a, b): (u64, u64) =
-                <(u64, u64) as ncore::NoritoDeserialize>::deserialize(archived.cast());
-            Self(a, b)
-        }
-    }
-}
-// (Codec for TimeInterval is provided by derive; use the wire helper for stable transport in tests.)
 #[cfg(feature = "transparent_api")]
 impl EventFilter for TimeEventFilter {
     type Event = TimeEvent;
@@ -232,14 +209,14 @@ impl Schedule {
         self.period_ms.map(Duration::from_millis)
     }
 }
-#[cfg(feature = "json")]
+
 fn write_key(out: &mut String, key: &str) {
     out.push('"');
     out.push_str(key);
     out.push('"');
     out.push(':');
 }
-#[cfg(feature = "json")]
+
 fn write_key_to(
     out: &mut dyn norito::json::JsonWriteSink,
     key: &str,
@@ -247,7 +224,7 @@ fn write_key_to(
     norito::json::write_json_string_to(key, out)?;
     out.push(':')
 }
-#[cfg(feature = "json")]
+
 fn expect_u64(field: &str, value: &norito::json::Value) -> Result<u64, norito::json::Error> {
     if let norito::json::Value::Number(num) = value {
         num.as_u64()
@@ -262,7 +239,7 @@ fn expect_u64(field: &str, value: &norito::json::Value) -> Result<u64, norito::j
         })
     }
 }
-#[cfg(feature = "json")]
+
 fn parse_value_as<T>(value: &norito::json::Value) -> Result<T, norito::json::Error>
 where
     T: norito::json::JsonDeserialize,
@@ -272,7 +249,7 @@ where
     let mut parser = norito::json::Parser::new(&json);
     T::json_deserialize(&mut parser)
 }
-#[cfg(feature = "json")]
+
 impl norito::json::FastJsonWrite for TimeEvent {
     fn write_json(&self, out: &mut String) {
         out.push('{');
@@ -293,7 +270,7 @@ impl norito::json::FastJsonWrite for TimeEvent {
         Ok(())
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonDeserialize for TimeEvent {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -320,7 +297,7 @@ impl norito::json::JsonDeserialize for TimeEvent {
         Ok(Self { interval })
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::FastJsonWrite for TimeEventFilter {
     fn write_json(&self, out: &mut String) {
         norito::json::JsonSerialize::json_serialize(&self.0, out);
@@ -332,7 +309,7 @@ impl norito::json::FastJsonWrite for TimeEventFilter {
         norito::json::JsonSerialize::json_serialize_to(&self.0, out)
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonDeserialize for TimeEventFilter {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -340,7 +317,7 @@ impl norito::json::JsonDeserialize for TimeEventFilter {
         ExecutionTime::json_deserialize(parser).map(TimeEventFilter)
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::FastJsonWrite for ExecutionTime {
     fn write_json(&self, out: &mut String) {
         match self {
@@ -372,7 +349,7 @@ impl norito::json::FastJsonWrite for ExecutionTime {
         }
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonDeserialize for ExecutionTime {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -418,7 +395,7 @@ impl norito::json::JsonDeserialize for ExecutionTime {
         }
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::FastJsonWrite for Schedule {
     fn write_json(&self, out: &mut String) {
         out.push('{');
@@ -445,7 +422,7 @@ impl norito::json::FastJsonWrite for Schedule {
         Ok(())
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonDeserialize for Schedule {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -488,7 +465,7 @@ impl norito::json::JsonDeserialize for Schedule {
         })
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::FastJsonWrite for TimeInterval {
     fn write_json(&self, out: &mut String) {
         out.push('{');
@@ -515,7 +492,7 @@ impl norito::json::FastJsonWrite for TimeInterval {
         Ok(())
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonDeserialize for TimeInterval {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -600,7 +577,7 @@ pub mod prelude {
 #[cfg(test)]
 mod json_tests {
     use super::*;
-    #[cfg(feature = "json")]
+
     #[test]
     fn json_roundtrip() {
         fn assert_bounded<T: norito::json::JsonSerialize>(value: &T) {
@@ -636,54 +613,38 @@ mod json_tests {
     }
     #[test]
     fn codec_roundtrip() {
-        // Use header-framed Norito path; headers now include hybrid packed-struct bits.
         let interval = TimeInterval {
             since_ms: 10,
             length_ms: 20,
         };
-        let bytes = norito::to_bytes(&wire::TimeIntervalWire::from(interval)).expect("encode");
-        let archived = norito::from_bytes::<wire::TimeIntervalWire>(&bytes).expect("archived");
-        let decoded_w = norito::core::NoritoDeserialize::deserialize(archived);
-        let decoded: TimeInterval = decoded_w.into();
+        let bytes = norito::to_bytes(&interval).expect("encode public interval");
+        let archived = norito::from_bytes::<TimeInterval>(&bytes).expect("archive public interval");
+        let decoded = <TimeInterval as norito::core::DeserializePayload>::try_deserialize(archived)
+            .expect("reconstruct the public interval");
         assert_eq!(decoded, interval);
     }
     #[test]
-    fn ti_roundtrip_diagnostics() {
-        use norito::codec::{Decode, Encode};
-        fn hex_prefix(bytes: &[u8], n: usize) -> String {
-            let mut s = String::new();
-            for b in bytes.iter().take(n) {
-                use std::fmt::Write as _;
-                let _ = write!(&mut s, "{b:02X}");
-            }
-            s
+    fn bare_and_framed_intervals_roundtrip() {
+        use norito::codec::{DecodeAll as _, Encode as _};
+
+        for (since_ms, length_ms) in [(0, 0), (10, 20), (u64::MAX, u64::MAX)] {
+            let interval = TimeInterval {
+                since_ms,
+                length_ms,
+            };
+            let bare = interval.encode();
+            let mut cursor = bare.as_slice();
+            let decoded_bare = TimeInterval::decode_all(&mut cursor)
+                .expect("decode the complete bare public interval");
+            assert!(cursor.is_empty());
+            assert_eq!(decoded_bare, interval);
+
+            let framed = norito::to_bytes(&interval).expect("frame the public interval");
+            let decoded_frame = norito::decode_from_bytes::<TimeInterval>(&framed)
+                .expect("decode the complete public frame");
+            assert_eq!(decoded_frame, interval);
+            assert_eq!(decoded_frame.encode(), bare);
         }
-        let interval = TimeInterval {
-            since_ms: 10,
-            length_ms: 20,
-        };
-        // Bare codec encode/decode
-        let bare = interval.encode();
-        let mut cur = bare.as_slice();
-        let decoded_bare = TimeInterval::decode(&mut cur).unwrap_or(TimeInterval {
-            since_ms: 0,
-            length_ms: 0,
-        });
-        // Header-framed encode/decode
-        let hdr = norito::to_bytes(&wire::TimeIntervalWire::from(interval)).expect("to_bytes");
-        let archived = norito::from_bytes::<wire::TimeIntervalWire>(&hdr).expect("from_bytes");
-        let decoded_hdr_w = norito::core::NoritoDeserialize::deserialize(archived);
-        let decoded_hdr: TimeInterval = decoded_hdr_w.into();
-        eprintln!("TI bare len={} hdr len={}", bare.len(), hdr.len());
-        eprintln!("bare[0..32] = {}", hex_prefix(&bare, 32));
-        eprintln!("hdr[0..32]  = {}", hex_prefix(&hdr, 32));
-        eprintln!(
-            "decoded: bare=({}, {}), hdr=({}, {})",
-            decoded_bare.since_ms,
-            decoded_bare.length_ms,
-            decoded_hdr.since_ms,
-            decoded_hdr.length_ms
-        );
     }
 }
 #[cfg(test)]

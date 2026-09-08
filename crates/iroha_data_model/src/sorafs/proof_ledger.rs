@@ -5,7 +5,7 @@
 //! authenticates the canonical proof digest.  PoTR keeps the exact canonical
 //! dual-signed receipt because that receipt is the exactly-once identity used by
 //! latency repair and downstream audit consumers.
-#[cfg(feature = "json")]
+
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{
     account::AccountId,
@@ -26,9 +26,20 @@ pub const PROOF_OUTCOME_SIGNER_POLICY_VERSION_V1: u16 = 1;
 /// Maximum canonical ML-DSA provider public-key bytes retained by signer policy.
 pub const PROOF_OUTCOME_MAX_PROVIDER_KEY_BYTES_V1: usize = 8 * 1024;
 /// Provider-scoped governed keys used to validate relayed PDP and `PoTR` outcomes.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::proof_ledger::ProofOutcomeSignerPolicyV1")]
 pub struct ProofOutcomeSignerPolicyV1 {
     /// Policy schema version.
@@ -38,22 +49,19 @@ pub struct ProofOutcomeSignerPolicyV1 {
     /// Monotonic provider-scoped policy revision beginning at one.
     pub revision: u64,
     /// Digest of the previous canonical policy, absent only at revision one.
-    #[cfg_attr(
-        feature = "json",
-        norito(json = "crate::json_helpers::fixed_bytes::option")
-    )]
+    #[norito(json = "crate::json_helpers::fixed_bytes::option")]
     pub predecessor_digest: Option<[u8; 32]>,
     /// Active council-verified admission envelope identity.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub admission_envelope_digest: [u8; 32],
     /// Admission-governed PDP Ed25519 public key.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub pdp_public_key: [u8; 32],
     /// Admission-governed `PoTR` ML-DSA public key.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
+    #[norito(json = "crate::json_helpers::base64_vec")]
     pub potr_mldsa_public_key: Vec<u8>,
     /// Governed gateway Ed25519 public key.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub gateway_public_key: [u8; 32],
     /// Inclusive Unix timestamp at which this key set becomes active.
     pub valid_from_unix: u64,
@@ -61,15 +69,26 @@ pub struct ProofOutcomeSignerPolicyV1 {
     pub valid_until_unix: u64,
 }
 /// Activated provider-scoped proof signer policy with governance provenance.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::proof_ledger::ProofOutcomeSignerPolicyRecordV1")]
 pub struct ProofOutcomeSignerPolicyRecordV1 {
     /// Canonical governed key policy.
     pub policy: ProofOutcomeSignerPolicyV1,
     /// BLAKE3 digest of the exact canonical policy bytes.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub policy_digest: [u8; 32],
     /// Governance authority that activated this revision.
     pub activated_by: AccountId,
@@ -77,8 +96,20 @@ pub struct ProofOutcomeSignerPolicyRecordV1 {
     pub activated_at_unix_ms: u64,
 }
 /// Stable proof protocol discriminator.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(tag = "kind", content = "detail", rename_all = "snake_case")]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::sorafs::proof_ledger::ProofOutcomeKindV1")]
@@ -89,8 +120,20 @@ pub enum ProofOutcomeKindV1 {
     Potr,
 }
 /// Payload-free stable PDP terminal classification.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(tag = "status", content = "detail", rename_all = "snake_case")]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::sorafs::proof_ledger::PdpOutcomeStatusV1")]
@@ -131,8 +174,20 @@ impl PdpOutcomeStatusV1 {
     }
 }
 /// Payload-free stable `PoTR` terminal classification.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(tag = "status", content = "detail", rename_all = "snake_case")]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::sorafs::proof_ledger::PotrOutcomeStatusV1")]
@@ -149,22 +204,46 @@ pub enum PotrOutcomeStatusV1 {
     ClientCancelled,
 }
 /// Detached Ed25519 provider attestation over a canonical PDP proof digest.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::proof_ledger::ProofOutcomeEd25519AttestationV1")]
 pub struct ProofOutcomeEd25519AttestationV1 {
     /// Admission-governed provider public key.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub public_key: [u8; 32],
     /// Strict Ed25519 signature from the canonical PDP proof.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub signature: [u8; 64],
 }
 /// Payload-free PDP-specific terminal projection.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::proof_ledger::PdpOutcomeProjectionV1")]
 pub struct PdpOutcomeProjectionV1 {
     /// Monotonic sequence assigned by the provider challenge protocol.
@@ -175,10 +254,7 @@ pub struct PdpOutcomeProjectionV1 {
     pub status: PdpOutcomeStatusV1,
     /// Canonical provider-signed proof digest, absent when no canonical proof
     /// evidence was retained.
-    #[cfg_attr(
-        feature = "json",
-        norito(json = "crate::json_helpers::fixed_bytes::option")
-    )]
+    #[norito(json = "crate::json_helpers::fixed_bytes::option")]
     pub proof_digest: Option<[u8; 32]>,
     /// Detached provider attestation, present exactly when `proof_digest` is present.
     pub provider_attestation: Option<ProofOutcomeEd25519AttestationV1>,
@@ -196,9 +272,20 @@ pub struct PdpOutcomeProjectionV1 {
     pub decided_at_unix: u64,
 }
 /// PoTR-specific terminal projection retaining the canonical signed receipt.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::proof_ledger::PotrOutcomeProjectionV1")]
 pub struct PotrOutcomeProjectionV1 {
     /// Stable receipt classification.
@@ -218,18 +305,29 @@ pub struct PotrOutcomeProjectionV1 {
     /// Inclusive range end.
     pub range_end: u64,
     /// Runtime-governed gateway Ed25519 public key.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub gateway_public_key: [u8; 32],
     /// Digest of the runtime-governed provider ML-DSA public key.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub governed_provider_key_digest: [u8; 32],
     /// Exact canonical dual-signed `sorafs_manifest::PotrReceiptV1` bytes.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
+    #[norito(json = "crate::json_helpers::base64_vec")]
     pub canonical_signed_receipt: Vec<u8>,
 }
 /// Protocol-specific terminal projection.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(tag = "kind", content = "projection", rename_all = "snake_case")]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::sorafs::proof_ledger::ProofOutcomeProjectionV1")]
@@ -250,25 +348,36 @@ impl ProofOutcomeProjectionV1 {
     }
 }
 /// One chain-authoritative proof terminal outcome.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::proof_ledger::ProofOutcomeRecordV1")]
 pub struct ProofOutcomeRecordV1 {
     /// Projection schema version.
     pub version: u16,
     /// Protocol-scoped exactly-once identity: challenge ID for PDP and request scope for `PoTR`.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub identity_digest: [u8; 32],
     /// Digest of the canonical governance archive or final signed receipt.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub outcome_digest: [u8; 32],
     /// Provider named by the canonical proof material.
     pub provider_id: ProviderId,
     /// Manifest named by the canonical proof material.
     pub manifest_digest: ManifestDigest,
     /// Active council-verified admission envelope captured during runtime validation.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub admission_envelope_digest: [u8; 32],
     /// Transaction authority that committed the validated projection.
     pub submitted_by: AccountId,
@@ -285,21 +394,42 @@ impl ProofOutcomeRecordV1 {
     }
 }
 /// Finalized block anchor for one coherent proof-outcome query result.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::proof_ledger::ProofOutcomeFinalizedCursorV1")]
 pub struct ProofOutcomeFinalizedCursorV1 {
     /// Finalized block height observed by the immutable state view.
     pub height: u64,
     /// Finalized block hash resolved from that same immutable state view.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub block_hash: [u8; 32],
 }
 /// One authoritative proof outcome anchored to finalized chain state.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::proof_ledger::ProofOutcomeFinalizedRecordV1")]
 pub struct ProofOutcomeFinalizedRecordV1 {
     /// Finalized state anchor at which the outcome was read.
@@ -308,9 +438,21 @@ pub struct ProofOutcomeFinalizedRecordV1 {
     pub outcome: ProofOutcomeRecordV1,
 }
 /// Exclusive cursor for one committed proof-outcome event.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(
     name = "iroha_data_model::sorafs::proof_ledger::ProofOutcomeFinalizedEventCursorV1"
 )]
@@ -320,15 +462,24 @@ pub struct ProofOutcomeFinalizedEventCursorV1 {
     /// Finalized block height containing the event.
     pub block_height: u64,
     /// Finalized block hash resolved only after the block commits.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub block_hash: [u8; 32],
     /// Proof-outcome event index within the committing block.
     pub event_index: u32,
 }
 /// Typed proof-outcome event with an unambiguous finalized-chain cursor.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::proof_ledger::ProofOutcomeFinalizedEventV1")]
 pub struct ProofOutcomeFinalizedEventV1 {
     /// Monotonic proof-outcome event sequence beginning at one.
@@ -336,7 +487,7 @@ pub struct ProofOutcomeFinalizedEventV1 {
     /// Committing block height.
     pub block_height: u64,
     /// Committing block hash resolved from finalized state.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub block_hash: [u8; 32],
     /// Proof-outcome event index within the committing block.
     pub event_index: u32,
@@ -356,9 +507,18 @@ impl ProofOutcomeFinalizedEventV1 {
     }
 }
 /// Cursor-bounded page of typed committed proof-outcome events.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::proof_ledger::ProofOutcomeFinalizedEventPageV1")]
 pub struct ProofOutcomeFinalizedEventPageV1 {
     /// Finalized state anchor shared by every event in the page.

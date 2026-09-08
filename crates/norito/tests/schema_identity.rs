@@ -11,7 +11,9 @@ use std::{
 };
 
 use norito::schema::identity::frame_hash;
-use norito::{NoritoDeserialize, NoritoSchema, NoritoSerialize, core::Header, json};
+use norito::{
+    DeserializePayload, NoritoDeserialize, NoritoSchema, NoritoSerialize, core::Header, json,
+};
 
 mod original {
     use super::*;

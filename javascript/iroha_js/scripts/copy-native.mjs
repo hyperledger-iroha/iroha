@@ -125,6 +125,8 @@ const TRANSACTION_ARTIFACT_NAMES = new Set([
 ]);
 
 export const REQUIRED_NATIVE_EXPORTS = Object.freeze([
+  "accountAddressParseEncoded",
+  "accountAddressRender",
   "blockProofsVerifyAuthenticatedV1",
   "connectNoritoBridgeAbiVersion",
   "noritoEncodeInstruction",

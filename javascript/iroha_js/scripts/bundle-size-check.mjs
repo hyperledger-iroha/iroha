@@ -98,11 +98,10 @@ export const BUNDLE_TARGETS = Object.freeze([
     entryPoint: join(ROOT, "dist", "kotodamaCompiler", "browser.js"),
     platform: "browser",
     target: "es2020",
-    // Pinned-esbuild predecessor is 52,156 bytes. Exact V1 manifest state-type,
-    // feature-bit, dynamic-access, and trigger-identifier validation produces
-    // 52,928 bytes (+1.48%); the 53 KiB ceiling keeps this required boundary hardening
-    // below the release-wide 5% regression limit.
-    limitKb: 53,
+    // Final V1 nominal errors, Unit, qualified structs, and cursor/page schemas
+    // require 56,823 bytes across seven canonical modules with pinned esbuild.
+    // The 56 KiB ceiling leaves 521 bytes; browser isolation remains mandatory.
+    limitKb: 56,
     forbidNodeInputs: true,
     forbidGlobalBuffer: true,
   }),

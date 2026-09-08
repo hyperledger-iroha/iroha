@@ -15,17 +15,34 @@ pub(crate) fn emit() {
         0x01,
     ];
     let asset = AssetDefinitionId::from_uuid_bytes(uuid).unwrap();
-    let positive = source.get("positive").unwrap().as_array().unwrap().iter().map(|case| {
-        let name = case.get("name").unwrap().as_str().unwrap();
-        let account_hex = case.get("account_id_frame_hex").unwrap().as_str().unwrap();
-        let account: AccountId = norito::decode_canonical(&hex::decode(account_hex).unwrap()).unwrap();
-        let key = transfer_balance_key(&asset, &account).unwrap();
-        let decoded: iroha_data_model::fastpq::FastpqBalanceKeyV1 = norito::decode_canonical(&key).unwrap();
-        assert_eq!(decoded.asset_definition, asset);
-        assert_eq!(decoded.account, account);
-        json!({"name":name, "account_id_frame_hex":account_hex, "key_frame_hex":(hex::encode(key))})
-    }).collect::<Vec<_>>();
-    let fixture = json!({"schema":"iroha.fastpq.balance-key.v1", "asset_uuid_hex":(hex::encode(uuid)),
-        "layout_flags":2u64, "positive":positive});
+    let positive = source
+        .get("positive")
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|case| {
+            let name = case.get("name").unwrap().as_str().unwrap();
+            let account_hex = case.get("account_id_frame_hex").unwrap().as_str().unwrap();
+            let account: AccountId =
+                norito::decode_canonical(&hex::decode(account_hex).unwrap()).unwrap();
+            let key = transfer_balance_key(&asset, &account).unwrap();
+            let decoded: iroha_data_model::fastpq::FastpqBalanceKeyV1 =
+                norito::decode_canonical(&key).unwrap();
+            assert_eq!(decoded.asset_definition, asset);
+            assert_eq!(decoded.account, account);
+            json!({
+                "name": name,
+                "account_id_frame_hex": account_hex,
+                "key_frame_hex": (hex::encode(key)),
+            })
+        })
+        .collect::<Vec<_>>();
+    let fixture = json!({
+        "schema": "iroha.fastpq.balance-key.v1",
+        "asset_uuid_hex": (hex::encode(uuid)),
+        "layout_flags": 2u64,
+        "positive": positive,
+    });
     println!("{}", norito::json::to_json(&fixture).unwrap());
 }

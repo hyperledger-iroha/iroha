@@ -16087,17 +16087,11 @@ impl V2LaneWorkAdapter {
             if !self
                 .consensus_storage_read(
                     self.state
-                        .certified_autonomous_lane_block_is_globally_applied(proposal),
+                        .certified_autonomous_lane_block_or_predecessor_is_globally_applied(
+                            proposal,
+                        ),
                 )
                 .map_err(|error| error.to_string())?
-                && !self
-                    .consensus_storage_read(
-                        self.state
-                            .certified_autonomous_lane_block_predecessor_is_globally_applied(
-                                proposal,
-                            ),
-                    )
-                    .map_err(|error| error.to_string())?
             {
                 return Err(
                     "finalized autonomous carrier has neither exact application nor an applied predecessor"
@@ -18574,21 +18568,25 @@ impl V2LaneWorkAdapter {
                 VALIDATOR_SET_HASH_VERSION_V1,
                 validator_set_hash,
             );
-            if *digest != recomputed
-                || *bytes != candidate.canonical_bytes()
-                || self
-                    .validate_merge_candidate_for_active_round(
-                        candidate,
-                        &parent_header,
-                        active_view,
-                    )
-                    .is_err()
-            {
+            if *digest != recomputed || *bytes != candidate.canonical_bytes() {
                 return Err(V2LaneWorkError::SigningGuard(
-                    "durable merge candidate no longer revalidates against its exact global round"
+                    "durable merge candidate canonical bytes or digest differ from its exact global round"
                         .to_owned(),
                 ));
             }
+            // Preserve the actual rejection at the fail-stop boundary. A
+            // frontier race, invalid execution and damaged signing record
+            // require different repairs; collapsing them loses that evidence.
+            self.validate_merge_candidate_for_active_round(
+                candidate,
+                &parent_header,
+                active_view,
+            )
+            .map_err(|reason| {
+                V2LaneWorkError::SigningGuard(format!(
+                    "durable merge candidate no longer revalidates against its exact global round: {reason}"
+                ))
+            })?;
         }
         let installed_candidate_bodies = self
             .merge_entries

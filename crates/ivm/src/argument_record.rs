@@ -323,6 +323,13 @@ fn value_materialization_bound(
             .ok_or(VMError::DecodeError)?;
         let children = &rendered[children_start..rendered_len];
         let bound = match node {
+            EntrypointValueTypeNodeV1::Unit | EntrypointValueTypeNodeV1::Error(_) => {
+                SchemaMaterializationBound {
+                    words: 1,
+                    pointer_envelopes: 0,
+                    raw_heap_bytes: 0,
+                }
+            }
             EntrypointValueTypeNodeV1::Struct(_) | EntrypointValueTypeNodeV1::Tuple(_) => children
                 .iter()
                 .fold(SchemaMaterializationBound::ZERO, |total, child| {
@@ -377,6 +384,11 @@ fn value_materialization_bound(
                     ),
                 }
             }
+            EntrypointValueTypeNodeV1::StateCursor(_) => SchemaMaterializationBound {
+                words: 1,
+                pointer_envelopes: 1,
+                raw_heap_bytes: 0,
+            },
             EntrypointValueTypeNodeV1::Leaf(kind) => SchemaMaterializationBound {
                 words: 1,
                 pointer_envelopes: u64::from(kind.is_pointer()),
@@ -696,7 +708,10 @@ fn argument_node_child_count(node: &EntrypointValueTypeNodeV1) -> usize {
         EntrypointValueTypeNodeV1::Tuple(arity) => usize::from(*arity),
         EntrypointValueTypeNodeV1::Option | EntrypointValueTypeNodeV1::List(_) => 1,
         EntrypointValueTypeNodeV1::Result => 2,
-        EntrypointValueTypeNodeV1::Leaf(_) => 0,
+        EntrypointValueTypeNodeV1::Leaf(_)
+        | EntrypointValueTypeNodeV1::Unit
+        | EntrypointValueTypeNodeV1::StateCursor(_)
+        | EntrypointValueTypeNodeV1::Error(_) => 0,
     }
 }
 /// Return the exclusive end of one preorder subtree without recursion.
@@ -760,7 +775,16 @@ fn argument_node_word_count(
                 | EntrypointValueTypeNodeV1::Result
                 | EntrypointValueTypeNodeV1::List(_)
         );
-        if !suppress_words && (is_handle || matches!(node, EntrypointValueTypeNodeV1::Leaf(_))) {
+        if !suppress_words
+            && (is_handle
+                || matches!(
+                    node,
+                    EntrypointValueTypeNodeV1::Leaf(_)
+                        | EntrypointValueTypeNodeV1::Unit
+                        | EntrypointValueTypeNodeV1::StateCursor(_)
+                        | EntrypointValueTypeNodeV1::Error(_)
+                ))
+        {
             words = words.checked_add(1).ok_or(VMError::DecodeError)?;
         }
         let children = argument_node_child_count(node);
@@ -813,6 +837,26 @@ fn decode_argument_node(
             Task::Visit { node_start, value } => {
                 let node = nodes.get(node_start).ok_or(VMError::DecodeError)?;
                 match node {
+                    EntrypointValueTypeNodeV1::StateCursor(key) => {
+                        let envelope = encode_tlv(PointerType::NoritoBytes, &decode_blob(value)?)?;
+                        ivm_abi::state_cursor::validate_cursor_envelope(*key, &envelope)?;
+                        results.push(vec![EntrypointValueAtomV1::Pointer(envelope)]);
+                    }
+                    EntrypointValueTypeNodeV1::Unit => {
+                        if !matches!(value, njson::Value::Null) {
+                            return Err(VMError::DecodeError);
+                        }
+                        results.push(vec![EntrypointValueAtomV1::Unit]);
+                    }
+                    EntrypointValueTypeNodeV1::Error(error) => {
+                        let name = value.as_str().ok_or(VMError::DecodeError)?;
+                        let variant = error
+                            .variants
+                            .iter()
+                            .find(|variant| variant.name == name)
+                            .ok_or(VMError::DecodeError)?;
+                        results.push(vec![EntrypointValueAtomV1::ErrorCode(variant.code)]);
+                    }
                     EntrypointValueTypeNodeV1::Struct(node) => {
                         let object = value.as_object().ok_or(VMError::DecodeError)?;
                         if object.len() != node.fields.len() {
@@ -1077,7 +1121,7 @@ fn expected_pointer_type(kind: EntrypointValueKindV1) -> Option<PointerType> {
 }
 fn decode_canonical_norito<T>(payload: &[u8]) -> Result<T, VMError>
 where
-    T: norito::codec::Decode + norito::codec::Encode,
+    T: for<'__frame> norito::NoritoDeserialize<'__frame> + norito::NoritoSerialize,
 {
     decode_abi_canonical_norito(payload).map_err(|_| VMError::DecodeError)
 }
@@ -1153,6 +1197,26 @@ fn validate_argument_atoms(
     while let Some(node_start) = actions.pop() {
         let node = nodes.get(node_start).ok_or(VMError::DecodeError)?;
         match node {
+            EntrypointValueTypeNodeV1::StateCursor(key) => {
+                let Some(EntrypointValueAtomV1::Pointer(envelope)) = atoms.get(cursor) else {
+                    return Err(VMError::DecodeError);
+                };
+                ivm_abi::state_cursor::validate_cursor_envelope(*key, envelope)?;
+                cursor = cursor.checked_add(1).ok_or(VMError::DecodeError)?;
+            }
+            EntrypointValueTypeNodeV1::Unit => {
+                if !matches!(atoms.get(cursor), Some(EntrypointValueAtomV1::Unit)) {
+                    return Err(VMError::DecodeError);
+                }
+                cursor = cursor.checked_add(1).ok_or(VMError::DecodeError)?;
+            }
+            EntrypointValueTypeNodeV1::Error(error) => {
+                let Some(EntrypointValueAtomV1::ErrorCode(code)) = atoms.get(cursor) else {
+                    return Err(VMError::DecodeError);
+                };
+                error.variant(*code).ok_or(VMError::DecodeError)?;
+                cursor = cursor.checked_add(1).ok_or(VMError::DecodeError)?;
+            }
             EntrypointValueTypeNodeV1::Struct(node) => {
                 let starts = argument_child_starts(nodes, node_start, node.fields.len())?;
                 actions.extend(starts.into_iter().rev());
@@ -1509,6 +1573,20 @@ fn plan_argument_atoms(
                         frame.roots.push(index);
                     }
                 }
+                EntrypointValueTypeNodeV1::Unit | EntrypointValueTypeNodeV1::Error(_) => {
+                    let scalar = match (node, atoms.get(cursor)) {
+                        (EntrypointValueTypeNodeV1::Unit, Some(EntrypointValueAtomV1::Unit)) => 0,
+                        (
+                            EntrypointValueTypeNodeV1::Error(error),
+                            Some(EntrypointValueAtomV1::ErrorCode(code)),
+                        ) if error.variant(*code).is_some() => u64::from(*code),
+                        _ => return Err(VMError::DecodeError),
+                    };
+                    cursor = cursor.checked_add(1).ok_or(VMError::DecodeError)?;
+                    let index = decoded.len();
+                    decoded.push(DecodedArgument::Scalar(scalar));
+                    frame.roots.push(index);
+                }
                 EntrypointValueTypeNodeV1::Leaf(EntrypointValueKindV1::Bool) => {
                     let EntrypointValueAtomV1::Bool(value) =
                         atoms.get(cursor).ok_or(VMError::DecodeError)?
@@ -1520,7 +1598,7 @@ fn plan_argument_atoms(
                     decoded.push(DecodedArgument::Scalar(u64::from(*value)));
                     frame.roots.push(index);
                 }
-                EntrypointValueTypeNodeV1::Leaf(_) => {
+                EntrypointValueTypeNodeV1::Leaf(_) | EntrypointValueTypeNodeV1::StateCursor(_) => {
                     let EntrypointValueAtomV1::Pointer(envelope) =
                         atoms.get(cursor).ok_or(VMError::DecodeError)?
                     else {
@@ -1899,6 +1977,72 @@ mod tests {
         IntValueV1::decode_frame(value.payload)
             .expect("decode canonical Int frame")
             .into_int()
+    }
+    #[test]
+    fn cursor_argument_materializes_exact_frame_and_rejects_wrong_key_kind() {
+        use iroha_data_model::smart_contract::state_cursor::StateCursorV1;
+        let cursor = StateCursorV1 {
+            instance: "local::金庫".into(),
+            map: "balances".parse().unwrap(),
+            schema_hash: [3; 32],
+            key_type: EntrypointValueKindV1::Int,
+            last_key: "balances/00".parse().unwrap(),
+        };
+        let frame = cursor.encode_frame().unwrap();
+        let schema = EntrypointArgumentSchemaV1 {
+            fields: vec![EntrypointArgumentFieldV1 {
+                name: "cursor".into(),
+                ty: EntrypointValueTypeV1 {
+                    nodes: vec![EntrypointValueTypeNodeV1::StateCursor(
+                        EntrypointValueKindV1::Int,
+                    )],
+                },
+            }],
+        };
+        let cursor_hex = format!("0x{}", hex::encode(&frame));
+        let payload = Json::new(norito::json!({"cursor": cursor_hex}));
+        let mut vm = install_record(&schema, &payload);
+        decode_argument_record(&mut vm).unwrap();
+        let words = decoded_words(&vm);
+        let materialized = vm.validate_tlv(words[0]).unwrap();
+        assert_eq!(materialized.type_id, PointerType::NoritoBytes);
+        assert_eq!(materialized.payload, frame);
+        let mut wrong = schema;
+        wrong.fields[0].ty.nodes[0] =
+            EntrypointValueTypeNodeV1::StateCursor(EntrypointValueKindV1::Bool);
+        assert!(argument_record_from_json(&wrong, &payload).is_err());
+    }
+    #[test]
+    fn unit_and_nominal_error_arguments_materialize_as_canonical_scalar_words() {
+        let schema = EntrypointArgumentSchemaV1 {
+            fields: vec![
+                EntrypointArgumentFieldV1 {
+                    name: "completed".into(),
+                    ty: EntrypointValueTypeV1 {
+                        nodes: vec![EntrypointValueTypeNodeV1::Unit],
+                    },
+                },
+                EntrypointArgumentFieldV1 {
+                    name: "failure".into(),
+                    ty: EntrypointValueTypeV1 {
+                        nodes: vec![EntrypointValueTypeNodeV1::Error(
+                            ivm_abi::error_types::list_error_type(),
+                        )],
+                    },
+                },
+            ],
+        };
+        let payload = Json::new(norito::json!({"completed": null, "failure": "CapacityExceeded"}));
+        let mut vm = install_record(&schema, &payload);
+        decode_argument_record(&mut vm).expect("decode nominal scalar arguments");
+        assert_eq!(decoded_words(&vm), vec![0, 2]);
+        for invalid in [
+            norito::json!({"completed": 0, "failure": "CapacityExceeded"}),
+            norito::json!({"completed": null, "failure": 2}),
+            norito::json!({"completed": null, "failure": "Unknown"}),
+        ] {
+            assert!(argument_record_from_json(&schema, &Json::new(invalid)).is_err());
+        }
     }
     #[test]
     fn argument_record_binding_v1_golden() {

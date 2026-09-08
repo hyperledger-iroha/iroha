@@ -1,4 +1,4 @@
-"""Guard extracted Kotodama v1 fixtures against their Rust-source preimage."""
+"""Guard the current Kotodama v1 fixture bytes and their Rust consumers."""
 
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ class AssetSpec:
 
 @dataclass(frozen=True)
 class SourceSpec:
-    """Preimage fingerprint and closed fixture assets for one Rust source."""
+    """Current consumer fingerprint and closed fixture assets for one Rust source."""
 
     path: str
     skeleton_digest: str
@@ -37,9 +37,9 @@ class SourceSpec:
 SOURCES = (
     SourceSpec(
         'crates/ivm/tests/kotodama.rs',
-        '5b5fc67bbd15da08d0fa3140c69d7518948e30bb8a441c68b850a44a14f5c752',
+        '02077b99802e3ccefc22b4e58e46513b88fadf3c8a4fb236ecf114d42f2d6f04',
         (
-            AssetSpec('001.ko', '2cd0d5b786b303f342a13799a5828a17903c4b3934b6b7332e994e080039d6ee', 225, True),
+            AssetSpec('001.ko', '0c9adc69818f257e8f29ea98f7dd576fc5afdb801030f3413c11056086d491a2', 228, True),
             AssetSpec('002.ko', '4b32085d63144de5a6d19634490994a0fadca60737bab8dfb5ef361d1ebd7135', 311, True),
             AssetSpec('003.ko', 'b14baa9b8e0440810a7dce52d52b5f36e792970f24ff2919ddb918708360ce4c', 163, True),
             AssetSpec('004.ko', 'f382e02e14ed9425efacc2ad5aa3982295b108f808578700db2addebdcf68482', 170, True),
@@ -47,9 +47,9 @@ SOURCES = (
             AssetSpec('006.ko', '80f14302dcc42236cd45cbe6df02c6d8c47a6093ac439c0f5cd09c0ee9d0f145', 206, True),
             AssetSpec('007.ko', 'f272a218947dfa895db04c3d0cfd6433af9d82b95dcc2017c1b581a3733a0306', 784, True),
             AssetSpec('008.ko', '285f3d0cee63b9376b82f7d80a07bd1ed966725a9ede1fed7f20dc3ea6630cc4', 498, True),
-            AssetSpec('009.ko', 'b9bb5a002b0ec67b259cc643efbfa231c92f000820b39e597c6b497a82c1dbda', 182, True),
-            AssetSpec('010.ko', '993f32bca29416fec872303bf59624c871a3247c4c4de7e3511e6b51c8a3193c', 242, True),
-            AssetSpec('011.ko', '8dafec1369197bae80c4c6e9e5f5d20ae97e29b79fe85d7ef6ed94b244a4448e', 236, True),
+            AssetSpec('009.ko', '083ebf36c723c55e213deb4889167104c982c7798648dd1417a18a89bdd96b29', 188, True),
+            AssetSpec('010.ko', '239cd99bc552605c176661b236974a9945ee418de80888a4cc3cc75a1f117205', 251, True),
+            AssetSpec('011.ko', '7f178c55d3519a2429faee5078a9159b2488d25a9b6e0ab61974d8aa765f6e69', 263, True),
             AssetSpec('012.ko', '20b74f016c6bb60d3c1ebbceb858bb071bc1b9add55320e9d7153e51bb52fda9', 517, True),
             AssetSpec('013.ko', '48d35b21e5f51653be0d296aa6aab87466e7d739c773871d52ae607d258afba4', 112, True),
             AssetSpec('014.ko', '602d184a1de110a5aeb5c46c4e1667b73aa08dcfcf117acaa54dcd4d7dcb42db', 162, True),
@@ -57,19 +57,19 @@ SOURCES = (
             AssetSpec('016.ko', '811fc7a898f67069ff71d8903532aeb03bafd0c685962efa0b722dc636e9c073', 166, True),
             AssetSpec('017.ko', '94ed7125f30bd27b2669808da547ce3672274ffb0f75d7bde9a8634554c1920e', 160, True),
             AssetSpec('018.ko', '2578ccf838a45a667ee0c2006624dc52d7919c9218e40f6348aeb668d4144595', 165, True),
-            AssetSpec('019.ko', '9cc9765ae187377e3bc6e789af439e24a6484bccd0447552a78274a8f88a1860', 200, True),
-            AssetSpec('020.ko', 'd16a70b192a570167675d60fb7d1e819196ddff22287d20ac57c233dd9be88ba', 169, True),
+            AssetSpec('019.ko', '8e6a77231d2597294ee8c962ff7d3b270e43f26fd739b21803af0685dca49171', 208, True),
+            AssetSpec('020.ko', 'ca839ce3f395e5ca112ef092afcd49094486f6d47d069fa7672315c8a374b372', 178, True),
             AssetSpec('021.ko', '77d91765870ff02dc5f237d026ced940fea0a18bd2b5df4703ac8db1818e87d8', 129, True),
             AssetSpec('022.ko', '19848e7e3e9a9d0ed22d36f96ba27667da79be8dd6154700dd4bc234e9bc1e42', 233, True),
             AssetSpec('023.ko', 'e258a52c5903476cb548f0540c0d10048f8bcf8530e58f6fd7c8df035ad00bdc', 377, True),
             AssetSpec('024.ko', '42dc30b6781a7a2627c150a2060683ae7fca5b7ee7eb6e9b535723abc47b0887', 154, True),
             AssetSpec('025.ko', '078be32ef21983f426eb76592942be102f9a82c374e02c0903fa7289e8d2e6e9', 730, True),
-            AssetSpec('026.ko', '3a2fe5bf47b042887d4c498308c65833cccfd064556eb7595885e44025c65276', 289, True),
-            AssetSpec('027.ko', '559e1abc62ccad8e703e8979bc13e03dd5da16715480cde2f755370cbd979979', 425, True),
+            AssetSpec('026.ko', 'fbbf800a66eae1bbedfffba92a12948277d101a691a45d850bad68dda538318a', 310, True),
+            AssetSpec('027.ko', '9242071365c8030e5b555a6f1ab5275eea11964d77841f8290d3124198f32371', 452, True),
             AssetSpec('028.ko', 'b9ba0f19e9bc976a08a90746f5308bf6f7c3785f650943a9c86f2b3adf505d19', 307, True),
             AssetSpec('029.ko', 'b5fed2a934b7531e36aee4926adfa6d138429bff91fede7c59222ca308d30b1f', 178, True),
-            AssetSpec('030.ko', '0b659d2a00a6a674c0b1cf37a0e253f4d4ebdb2c07e61f8ef0695d693a94815a', 178, True),
-            AssetSpec('031.ko', 'a737212afed59fe5a4dfb9ba3770364599efb525330e709bece80dd6d2755617', 193, True),
+            AssetSpec('030.ko', '3e4e2f7c2fe3d8663b96875c2647271ded50b78719ade161d2819ec667325a83', 210, True),
+            AssetSpec('031.ko', '5ef60e29bac801dd04239067384b430d5b2c2bf379f47cbc406db549539070d4', 196, True),
             AssetSpec('032.ko', 'c234aebb84c948b9646efa22fe3341fcfddddfbb9195c2118f6a03ac7f7e86af', 607, True),
             AssetSpec('033.ko', '392f3dcbdc94c293fb1e2deed6d8dfd5bfb2969b9bf70c39ba09beed5bc2aab0', 342, True),
             AssetSpec('034.ko', '6d3e76782c07431125da993926e0d0d716b9de7214e3378a118fa16b27ac6fff', 308, True),
@@ -81,7 +81,7 @@ SOURCES = (
             AssetSpec('040.ko', '1d98703152432503cd3a31f37fca9fbdc63ae578a1cb8eecaba71be843d6133e', 143, True),
             AssetSpec('041.ko', '62425d3edb9ebeddd582a2ddc8886552f826c138218d1bdf69cfa864aa988a9d', 96, True),
             AssetSpec('042.ko', '95b1ed8b5d96addf0d4adec3a9e1abcdc4bda6160655e38ee33245fbfb5beb1c', 134, True),
-            AssetSpec('043.ko', '8f81e647161ae8d6c2d175b6fc8a3b4d9ebd2cef03770be7417c9a1cee48398b', 156, True),
+            AssetSpec('043.ko', 'd344b366142a55ffa9625913049db9e59384d04e553b9f91e5278586db928f13', 159, True),
             AssetSpec('044.ko', '393bd41567ee72e67bfc7f6d71b13d13d7c9569dfba5fb0c2b5abd5df6b172c2', 180, True),
             AssetSpec('045.ko', 'dbf13f8f1f50e7824695beaeef9b5e5753000982331e2dbbeeb43e89c0999d7f', 189, True),
             AssetSpec('046.ko', 'c0646b2148f2012fb28efccb8d61abb89514a2fd60f801bfbf86e1fe4a5c092e', 259, True),
@@ -104,12 +104,12 @@ SOURCES = (
             AssetSpec('063.ko', '2b8a960fff60716f5cecb3a55b84ac826537109ae6e1cceac8e0379e365fa410', 239, True),
             AssetSpec('064.ko', '0ea8cfbfde95bcb823ce737caee66bdf84462f309e3808e1bfcd6dd53a854715', 466, True),
             AssetSpec('065.ko', 'f39fd28a02a80405e1ada957d6fd05d746a2e9c5c894c2f37d9d3ce76dbb4763', 162, True),
-            AssetSpec('066.ko', '658453582064d166ec721b21ee468b4eeb506db38543d5f21fe6e81d4c24142d', 176, True),
+            AssetSpec('066.ko', '823bd17e2814b1cfba2eaf448356370d5a74cd62cf5967a2ce91bca4a0219084', 181, True),
             AssetSpec('067.ko', 'a3ef06c323fecd3c4ca014f2cdde27d03823bf8324fe1ac041e77036517d0c5b', 150, True),
             AssetSpec('068.ko', 'ff651181676cea49b7be9b8aebee25084604e94acd62e7aee2d70166b7168552', 125, True),
             AssetSpec('069.ko', '5a4efca7c24949bcac1f0b0b5cab8841da9d40e1aa9a9bdc36d687f5a728ff1f', 220, True),
             AssetSpec('070.ko', 'b1cc15ced97ba921503f39122e09fbdac3c27877eefe1a65f328bc0adf87ac3c', 176, True),
-            AssetSpec('071.ko', '9ead8388e83e9f1c2f68bf2a4a2f28682bb3313534298545042d7989aafcd2d2', 274, True),
+            AssetSpec('071.ko', '03dcac4af7dc73b2c668d86b81582155f4b7ab95605cf77a44014d0ac3cd8c6f', 283, True),
             AssetSpec('072.ko', '65ca96fb48e1f0853bf297c912d5e64f5eba8250cb0edfa63c3b949c9b23b451', 164, True),
         ),
     ),
@@ -120,21 +120,21 @@ SOURCES = (
             AssetSpec('001.ko', 'c0d59dd29744c70955b883227fdd3d48e50bbabe387a71b85a62cc2feea227d3', 269, True),
             AssetSpec('002.ko', '5a82559e5cba3e2df840615c6385f3931602c3e9494bee83f3328c47e442e5ff', 396, True),
             AssetSpec('003.ko', '2c3571b2bed367612c48ea17f51f434949fed07191bfb3b3af44cbfdbfeed8ff', 411, True),
-            AssetSpec('004.ko', '769f5974f1a69f84bd4a89f086fdb33b108fc33f9bdd7e11821d92c4b4592168', 370, True),
-            AssetSpec('005.ko', '5c3fa4dc8f041f7ca01e286bbd4ee9f16cd0a21f3cec67c6314358a3a58a1de0', 363, True),
-            AssetSpec('006.ko', '63cdabe7de8392a3acb3fc5aa633cf0148036e3ab373dd3b809056cb1d1be671', 673, True),
+            AssetSpec('004.ko', '6a7c441c4df0d773807dc4f64f62c62439a3644b6e0230c4851d41c6ac7d48f8', 375, True),
+            AssetSpec('005.ko', '7054cde997e369fa050ab2cb1685f4f0af9357fb54f08cd7736df916f7d70a75', 382, True),
+            AssetSpec('006.ko', '2e60d1ad5d5ae4a065d2498e60e861ebbaf870ce3132f02035e60c8454fc6085', 678, True),
             AssetSpec('007.ko', '6f78caa2f2d5dfac0f3cf9f237001c9de1181699f080135d428113216773b556', 1231, True),
             AssetSpec('008.ko', '9f9e69c99e53dca0310123d8319ed66f3934932f67dad65ed04100a114bbe8d4', 1616, True),
             AssetSpec('009.ko', 'a5b81e37f9623c63b884b8d82c1c1b929b4638642328808666108dda56539605', 1479, True),
             AssetSpec('010.ko', '83e6f4c0ae22baed111845366b1a95497a708bc3b3d15401c583109f666521c9', 1159, True),
             AssetSpec('011.ko', 'e0c6e256744e5bb217ed56bbd6aed29f21b2f2f87ddec176c113a538848ab765', 1553, True),
             AssetSpec('012.ko', 'db922cff3b92f0b245471cb1747a301dc71a8c2a30f9cb47e5409b1001cd14da', 431, True),
-            AssetSpec('013.ko', 'e19eb88b7ec56c8b6785b1d0c7f7935b6fc4230bc29f376b2406a5a6cfc02c71', 495, True),
+            AssetSpec('013.ko', '045ae3a047002469a9633c4cba21f5e52dfceb7802a6bdf7f9d64cda2e85a6c8', 500, True),
             AssetSpec('014.ko', '2c9a5fbf372e062bf9c6b628a5ae15d26749fb9c78e36d16d072f0b2251e878f', 195, True),
             AssetSpec('015.ko', '6473b188d414f8da053cf1c769c91c173cc6179aaab72c3d4d7c30df0f6db529', 195, True),
             AssetSpec('016.ko', 'ac356bdd991059b0900a545ce8e31a043042f6e9ab3258e072bc00f93d98dea3', 744, True),
             AssetSpec('017.ko', 'd500900564fe0cf2fec084d0fec0121f3a95cbe6c1891e9e0d845e42370db3d5', 1622, True),
-            AssetSpec('018.ko', '389b11d70e39084793e2a45c730968e7a1d1917b54435f073b258baf41736bdc', 699, True),
+            AssetSpec('018.ko', 'fb2687e6b28731bc6a52a608eeeda143bf5a068fcf478d7af487b1fc680b7825', 727, True),
             AssetSpec('019.ko', '2c9a5fbf372e062bf9c6b628a5ae15d26749fb9c78e36d16d072f0b2251e878f', 195, True),
             AssetSpec('020.ko', '61f7a1d7ea1b401b93b5fded4e6f77730b858d6a675b4b051e90b02f30dbd035', 337, True),
             AssetSpec('021.ko', '1bdf1b3435d204b9dafa8346ac92fe5d8aaf2fe6c5e0c89fc4938ac1b1798fe4', 394, True),
@@ -150,37 +150,37 @@ SOURCES = (
     ),
     SourceSpec(
         'crates/ivm/tests/kotodama_v1_runtime_acceptance.rs',
-        '0c3464bfaa18d0601abdfc75edbc64b85f067bd8ad17cffaf9e00431e82da8f8',
+        'f3a84d80c4607ee21d8b59902a7f848ee6e88ebd00aef2b16e528f9086c62d2c',
         (
-            AssetSpec('001.ko', 'e74a429259169313587e92db6f37a267ec784845a32bb273770952315beead8e', 309, False),
-            AssetSpec('002.ko', '03ab49f13ad97b62a823f31fa261ee44841b2dd5ff95c7891fea8a3eaceea302', 566, False),
-            AssetSpec('003.ko', 'e4865353cede48373fc29e7d67890c18de428130ae57536daa42eceab9de7a54', 467, False),
+            AssetSpec('001.ko', 'b224232a52b7ed477fc6573e7f7c0804a493b104c26f5e61d3232497e13e4950', 316, False),
+            AssetSpec('002.ko', '301483b79eb9279a9c84bda840ef3e601bcb283c7c50143922cf28498b4aea2b', 606, False),
+            AssetSpec('003.ko', '36dbaca21178bc265588ea19d84a408ab6c1a6fedc08d1a9e2b258e093b8c3c1', 495, False),
             AssetSpec('004.ko', '8fcd373fcd0128886088cd3e7078cdfc857f5b417de2f8071eee710af989f8d4', 1024, False),
             AssetSpec('005.ko', 'f2aeb898a0aba9d5b44396c6d058d2d78a22b00d7551555244abfe9a4be04fc2', 899, False),
             AssetSpec('006.ko', '393d51e87ca4d42ae15888f9ffbace829c1e7f49342ac53fe9a7d56775c6f0b9', 1411, False),
             AssetSpec('007.ko', '94c042d66b09a78d956ba981776bd0bc3ec0d374fdd1f683ae92521a76e33800', 219, False),
             AssetSpec('008.ko', 'ac946aa366514a971bac1a9dbd1b622608256d549b39d154e289445817fce700', 204, False),
-            AssetSpec('009.ko', '2611e354702608d6df0bbe27a20c73e0c8dea80a61c09cc066eec78c780b272d', 403, False),
+            AssetSpec('009.ko', 'd73d779021120518653a990f870361abb53934761d3ef48d8ec4a68b96866c88', 419, False),
             AssetSpec('010.ko', '41e04413da4f085c280e55e6a61994f8bb612051993333cdfdcf15c252d80ebf', 233, False),
             AssetSpec('011.ko', '96d520e8e059e3131c76bbfd3f7700c3c2490b3ee702f49e770ff8444504015a', 1066, False),
             AssetSpec('012.ko', '0c675d75cce585f838906daa785bfb86723baa63da14db609fb1de5545cdf61e', 259, False),
-            AssetSpec('013.ko', '20af20313599fef597d4e6a911b722790a4349833093ab0485cf633f4899e146', 958, False),
+            AssetSpec('013.ko', 'bda5dfe6f0e2038ae4a65991fa74f7946e84e3b444322cdaf72eb4b2500178e3', 990, False),
             AssetSpec('014.ko', 'ffe7247562f6e28500f81895ea257952ca667fea7d41ae360c1eb328bd5c67e5', 225, False),
             AssetSpec('015.ko', '5feef1cf37b5216389879edee71bbf471741ee2ca57c1aecc91d9987ceee9d25', 812, False),
         ),
     ),
     SourceSpec(
         'crates/ivm/tests/kotodama_lists.rs',
-        '0dbe720a1a5465d09865480bc1fc716665d7ed200037ec13ab5f087751e8d1b4',
+        'a0ace51a68895a17ff986061528a1a95a3a8dd1386b944ab6ed9843380bb4f77',
         (
-            AssetSpec('001.ko', '3b4501aa4bc185ec588c95dab1cdba69b6af4ec811261c2193817c06762e089b', 551, True),
+            AssetSpec('001.ko', 'eefd96e03bd7bd00aaa6da1aefa41385f86bcf702f60e4c949de1e905f3a0fac', 575, True),
             AssetSpec('002.ko', '06544f9c17080965311c0537d02d2d8f97b34b20a14183cc08a476fca66da4b8', 412, True),
             AssetSpec('003.ko', '2997eec9d68e16f8cfe0180d3934aba49c9d77753033d2a0293a6d97334101c0', 251, True),
             AssetSpec('004.ko', 'e65cca98c6b412a99c1222ae6518d2c69f33144b9e8f9596c70909e99867930d', 164, True),
-            AssetSpec('005.ko', '20a299fc9eb9521dd8bdbabf4d04a6f322a53fce63c9e847df9ed86655441879', 2436, True),
+            AssetSpec('005.ko', 'b9011422becc62e9056a5615ea9c52cec229e15a4c5ab663787a07727d55317d', 2832, True),
             AssetSpec('006.ko', '302d68471d332d57abdf4168500e2d5b8917bb5211c9c6ac5f1a6583fc3291ec', 299, True),
             AssetSpec('007.ko', 'fc476f04c52324d3da9a03bde5e47d1a2a7dde987e6b2aa87418286260be47a9', 166, True),
-            AssetSpec('008.ko', '05e7ea350a091f727b91410fce5a9f281326a73ab7dee78c964c3dac4a1cc421', 2523, True),
+            AssetSpec('008.ko', '501affaa1fe5b0c2c9dbf68b604d6a97f60f32d133eb590f4ce3d7b102f0663d', 2593, True),
             AssetSpec('009.ko', '378ccac3bbbefa217795e304349635f58757d2a9e177d8401f57da42b93add87', 243, True),
             AssetSpec('010.ko', '84bd59d0b0cf59aa69fc2e6eb80ac7fc2b2bb542b0a62157b81ed6f1d3b93994', 251, True),
             AssetSpec('011.ko', 'efb4f83e8ec832983b8975082f5feb9e3cbc40c4ba8bc0a29260977f32fd8fca', 210, True),
@@ -188,13 +188,13 @@ SOURCES = (
     ),
     SourceSpec(
         'crates/ivm/src/koto_test_driver_tests.rs',
-        '1eaa76514bd3b3682ff92888a5c231598411cb9f712123bd00bb9fe07caafbe0',
+        'f23b28ae78de8aaed2244f872e5ccfd0b8f817713b4fb6cafa436801d984b06d',
         (
-            AssetSpec('001.ko', '7548b3a38f2c54eb30a4ea614e67ebc342db76efc18fad0366863f4e1518e800', 875, True),
+            AssetSpec('001.ko', 'e005c7a50dbd95fc718ff68174019a8313a923d497efe1eab9dbfb3f161e9d52', 892, True),
             AssetSpec('002.ko', '63961644f937f1cc2e56f76506f3578fc93067ce0da0da17203855519f13394d', 217, True),
             AssetSpec('003.ko', '37ddb3b719eceeee875a6df34cf7d17fd41b4fa567b4c2c68c72f25bd392c594', 267, True),
             AssetSpec('004.ko', '9fc45b8cb8b97a5fe6838693b63ecc4f1c480c356b94659c836f0488492c8dfa', 187, True),
-            AssetSpec('005.ko', 'dfcd055a36c0a68f156e629625d5dd554c7c048f8a16c2db0b072fce7962f4a6', 248, True),
+            AssetSpec('005.ko', '2b09ebbd5c41ad3cb4d16f8ea31977d434208b878982c87c4caf7d66713145fa', 251, True),
             AssetSpec('006.ko', '080477cee70499044c0d28af4431ff5e2bff1537cc26b90858df8eb9265e1db3', 243, True),
             AssetSpec('007.ko', '0751af63650077193b32850f41db8807a1c1acb3c6c087e613fcd5f59169778c', 164, True),
             AssetSpec('008.ko', '1e8d71c182215071d4038d53fa290ad0238c3c8b6bf25011ada4f37e98392a71', 113, True),
@@ -222,9 +222,9 @@ SOURCES = (
             AssetSpec('011.ko', '5e47b99c06346a4cb1db45614dd55ea2c21b634a4de81e99f7624b8305b0e28c', 223, True),
             AssetSpec('012.ko', '151e9fcef3565ad99c463d222a291962f68a21604dcbe6b4517d3745e6cf5665', 290, True),
             AssetSpec('013.ko', 'bba63f6e8104bd05d9a229b27744883564dd2c35a11caec5551f970da68e04cd', 339, True),
-            AssetSpec('014.ko', 'a2d9c16be24ec8525dc50e6a2ede7df7fa08e0beb9452fdf8ec458169fd63bac', 427, True),
-            AssetSpec('015.ko', '580b4497f269ff9bd664bce278243ab97fecf1263dbc6bc9a3727ce378ebec55', 554, True),
-            AssetSpec('016.ko', '92d841f7c0f9355d8f92747630ecca3220d955e15152bc00c05bdcceb3b95bb1', 658, True),
+            AssetSpec('014.ko', '307726e4729bf892c6def4894d7fef957da67bb3b9d7881eda31d2085ca0a807', 440, True),
+            AssetSpec('015.ko', '319ca9647efd52ae1e54b3e68209df993473644d7e13cd61738a76dc519005ed', 568, True),
+            AssetSpec('016.ko', 'ee89fa11b9cc4bce605987ac21adba5a90921aee7d632e0187d78c8f4da0ae53', 672, True),
             AssetSpec('017.ko', '333db7ccc47420e2dd3fbf7e7fdc7762baf0441bb3711a92c2dc5c16755683d7', 278, True),
             AssetSpec('018.ko', '6bb07589b57ccf62cbfd9b2c26ef999d3e375181d43c07ee20e373640cb5d834', 172, True),
         ),
@@ -239,28 +239,28 @@ SOURCES = (
     ),
     SourceSpec(
         'crates/kotodama_lang/src/compiler/tests/staged_mint_access_hints.rs',
-        '79a04d2d38d38cc69f86c6eea381d87ba27a67aed990b92d5e43a49f8c674ccd',
+        'dbd47ce160cd3204deccb472e38e7a25368ff7bd543af0954a24bfe6038740e1',
         (
             AssetSpec('001.ko', '84c5f786e83b467f1f9799bfcd79e1c2f42e983d0207ae16bf586c8591b2c571', 3546, False),
         ),
     ),
     SourceSpec(
         'crates/ivm/tests/kotodama_state_scalar.rs',
-        'c5ad7f7744504ebbc39643e08fb517caca7050f8a0f6fad4d8e03b19d9e108e5',
+        'e1ae85ff9384ef55f063f3af15df6d347ab4015b510006be428ecc797906fe19',
         (
             AssetSpec('001.ko', '378b20a6b02c767716a13c52402a2e60f0755bf6d2d3ae1cc26bef854a24fe41', 198, True),
-            AssetSpec('002.ko', '88c59c7bfc201457408150dd24125bc13785df86a5ec23ccd9fdffc0b9f179e8', 741, True),
-            AssetSpec('003.ko', '580b4497f269ff9bd664bce278243ab97fecf1263dbc6bc9a3727ce378ebec55', 554, True),
-            AssetSpec('004.ko', '92d841f7c0f9355d8f92747630ecca3220d955e15152bc00c05bdcceb3b95bb1', 658, True),
+            AssetSpec('002.ko', '5ab0c326c77dffbec932ee230893a42207f8160499c70455fe198d2b20f19303', 755, True),
+            AssetSpec('003.ko', '319ca9647efd52ae1e54b3e68209df993473644d7e13cd61738a76dc519005ed', 568, True),
+            AssetSpec('004.ko', 'ee89fa11b9cc4bce605987ac21adba5a90921aee7d632e0187d78c8f4da0ae53', 672, True),
         ),
     ),
     SourceSpec(
         'crates/kotodama_lang/src/resolved.rs',
-        'dfeef80a82e2dac369312c85b0aa70709c4d18d1a634b176c505192948852d58',
+        '10c339775b1992ac4a752f06a1ac760aaccb1a6e1a0cc57723d21e88a856e0d5',
         (
             AssetSpec('001.ko', 'a15f6256b419624f839af6961586120b08958cb3886b9f7a51671471b7a85e88', 176, False),
             AssetSpec('002.ko', 'fbdce614e48b118614c6817b2ec40eaa3719125c19ec72fe332acd0d5c0e8577', 249, False),
-            AssetSpec('003.ko', '1e7b9d779fc7a9874e53d4ddbe32da61318f813a42b04ad816d398f1070d15c7', 191, False),
+            AssetSpec('003.ko', 'e982bf117c6f855f37ff228750cdf1340e20a5eff9aee131145d61621d5c748c', 198, False),
             AssetSpec('004.ko', '7b0764e31e6fbe2cd284a2fa67564d9ff77273dac2a22a0968ed7685ca76f3e1', 497, False),
             AssetSpec('005.ko', 'eceba390f4dd9d44387db298d606595ee18d6f9b92b4d47f64118c2bbf7df89c', 127, False),
             AssetSpec('006.ko', 'b634a8c1d989eaabc4b6590ddff68e41edb613756c4176e12a9453de2ee88bdd', 345, False),
@@ -272,7 +272,7 @@ SOURCES = (
     ),
     SourceSpec(
         'crates/kotodama_lang/src/secret.rs',
-        'd3bec512e608596622a1358926652b1fbf2f191a0ac887823b769fae310aad42',
+        '7d7d133b50e5da1cee7f846e0e4ff4d9edbb65025251bf053d939d4532987d02',
         (
             AssetSpec('001.ko', '2cabbe93cb0612dc119067e16807af6d72934d1fef6cbf0b193f9fcaea6cc746', 328, True),
             AssetSpec('002.ko', 'cafb2cda4762224b1a8cda1e3eb0c3f7dcb49346185613905a294f9eac69bfe6', 224, True),
@@ -286,13 +286,17 @@ SOURCES = (
     ),
 )
 
-# These semantic anchors explain the reviewed Rust preimage changes instead
+# These semantic anchors explain the reviewed Rust consumer changes instead
 # of allowing their skeleton seals to be advanced as opaque digest substitutions.
 SOURCE_REQUIRED_FRAGMENTS = {
     'crates/ivm/tests/kotodama.rs': (
         br'Json::parse(\"{\\\"cursor\\\":1,\\\"query\\\":\\\"sc_dummy\\\"}\")',
     ),
     'crates/ivm/tests/kotodama_v1_runtime_acceptance.rs': (
+        b'fn native_json_literal_and_dynamic_options_preserve_identical_tags()',
+        b'"maybe": { "some": "1.25" },',
+        b'"present": { "some": null },',
+        b'"absent": { "none": true },',
         b'fn exact_numeric_state_survives_a_fresh_host_snapshot_roundtrip()',
         b'1606938044258990275541962092341162602522202993782792835301376',
         b'assert_eq!(writer.state_paths(), ["Rate", "Supply", "Whole"]);',

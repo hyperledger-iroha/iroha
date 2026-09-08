@@ -5,7 +5,6 @@ use getset::Getters;
 use iroha_data_model_derive::{EventSet, HasOrigin, model};
 use iroha_primitives::{json::Json, numeric::Quantity};
 #[allow(unused_imports)]
-#[cfg(feature = "json")]
 use norito::json::{self, JsonDeserialize, JsonSerialize};
 use std::{fmt, string::String, vec::Vec};
 macro_rules! data_event {
@@ -28,7 +27,7 @@ macro_rules! data_event {
             #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
             $(#[$meta])* $vis enum $name { $($body)* }
         }
-        #[cfg(feature = "json")]
+
         impl_json_via_norito_bytes!($name);
     };
 }
@@ -130,7 +129,7 @@ mod model {
         GameSession(super::game::GameSessionEventV1),
     }
 }
-#[cfg(feature = "json")]
+
 impl<Id> JsonSerialize for MetadataChanged<Id>
 where
     Id: JsonSerialize,
@@ -166,7 +165,7 @@ where
         Ok(())
     }
 }
-#[cfg(feature = "json")]
+
 impl<Id> JsonDeserialize for MetadataChanged<Id>
 where
     Id: JsonDeserialize,
@@ -220,7 +219,7 @@ where
         })
     }
 }
-#[cfg(feature = "json")]
+
 impl_json_via_norito_bytes!(DataEvent);
 mod asset {
     //! This module contains `AssetEvent`, `AssetDefinitionEvent` and its impls
@@ -301,8 +300,11 @@ mod asset {
         )]
         #[getset(get = "pub")]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-        #[cfg_attr(feature = "json", norito(reuse_archived))]
-        #[cfg_attr(not(feature = "json"), norito(reuse_archived))]
+        #[norito(reuse_archived)]
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_data_model::events::data::events::asset::model::AssetChanged"
+        )]
         pub struct AssetChanged {
             pub asset: AssetId,
             pub amount: Quantity,
@@ -317,8 +319,11 @@ mod asset {
         )]
         #[getset(get = "pub")]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-        #[cfg_attr(feature = "json", norito(reuse_archived))]
-        #[cfg_attr(not(feature = "json"), norito(reuse_archived))]
+        #[norito(reuse_archived)]
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_data_model::events::data::events::asset::model::AssetTransferred"
+        )]
         pub struct AssetTransferred {
             /// Debited asset balance.
             pub source: AssetId,
@@ -329,15 +334,26 @@ mod asset {
         }
         /// Stable rejection classification for one independently settled batch leg.
         #[derive(
-            Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema,
-        )]
-        #[cfg_attr(
-            feature = "json",
-            derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+            Debug,
+            Clone,
+            Copy,
+            PartialEq,
+            Eq,
+            PartialOrd,
+            Ord,
+            Decode,
+            Encode,
+            IntoSchema,
+            crate :: DeriveJsonSerialize,
+            crate :: DeriveJsonDeserialize,
         )]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-        #[cfg_attr(feature = "json", norito(tag = "code", content = "value"))]
+        #[norito(tag = "code", content = "value")]
         #[repr(u8)]
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_data_model::events::data::events::asset::model::AssetBatchTransferRejectionCode"
+        )]
         pub enum AssetBatchTransferRejectionCode {
             /// The source balance cannot cover the requested quantity.
             InsufficientFunds,
@@ -353,13 +369,25 @@ mod asset {
             PolicyRejected,
         }
         /// Final status for one native batch-transfer leg.
-        #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-        #[cfg_attr(
-            feature = "json",
-            derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+        #[derive(
+            Debug,
+            Clone,
+            PartialEq,
+            Eq,
+            PartialOrd,
+            Ord,
+            Decode,
+            Encode,
+            IntoSchema,
+            crate :: DeriveJsonSerialize,
+            crate :: DeriveJsonDeserialize,
         )]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-        #[cfg_attr(feature = "json", norito(tag = "status", content = "value"))]
+        #[norito(tag = "status", content = "value")]
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_data_model::events::data::events::asset::model::AssetBatchTransferLegStatus"
+        )]
         pub enum AssetBatchTransferLegStatus {
             /// The leg changed balances and committed.
             Applied,
@@ -367,12 +395,24 @@ mod asset {
             Rejected(AssetBatchTransferRejection),
         }
         /// Stable rejection detail for one independent batch leg.
-        #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-        #[cfg_attr(
-            feature = "json",
-            derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+        #[derive(
+            Debug,
+            Clone,
+            PartialEq,
+            Eq,
+            PartialOrd,
+            Ord,
+            Decode,
+            Encode,
+            IntoSchema,
+            crate :: DeriveJsonSerialize,
+            crate :: DeriveJsonDeserialize,
         )]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_data_model::events::data::events::asset::model::AssetBatchTransferRejection"
+        )]
         pub struct AssetBatchTransferRejection {
             /// Stable machine-readable rejection code.
             pub code: AssetBatchTransferRejectionCode,
@@ -380,12 +420,24 @@ mod asset {
             pub message: String,
         }
         /// Consensus-bound receipt row for one ordered native batch-transfer leg.
-        #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-        #[cfg_attr(
-            feature = "json",
-            derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+        #[derive(
+            Debug,
+            Clone,
+            PartialEq,
+            Eq,
+            PartialOrd,
+            Ord,
+            Decode,
+            Encode,
+            IntoSchema,
+            crate :: DeriveJsonSerialize,
+            crate :: DeriveJsonDeserialize,
         )]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_data_model::events::data::events::asset::model::AssetBatchTransferOutcome"
+        )]
         pub struct AssetBatchTransferOutcome {
             /// Zero-based position within the batch instruction.
             pub leg_index: u32,
@@ -403,8 +455,11 @@ mod asset {
         /// [`Self`] represents updated total asset quantity.
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-        #[cfg_attr(feature = "json", norito(reuse_archived))]
-        #[cfg_attr(not(feature = "json"), norito(reuse_archived))]
+        #[norito(reuse_archived)]
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_data_model::events::data::events::asset::model::AssetDefinitionTotalQuantityChanged"
+        )]
         pub struct AssetDefinitionTotalQuantityChanged {
             pub asset_definition: AssetDefinitionId,
             pub total_amount: Quantity,
@@ -412,8 +467,11 @@ mod asset {
         /// [`Self`] represents updated total asset quantity.
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-        #[cfg_attr(feature = "json", norito(reuse_archived))]
-        #[cfg_attr(not(feature = "json"), norito(reuse_archived))]
+        #[norito(reuse_archived)]
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_data_model::events::data::events::asset::model::AssetDefinitionOwnerChanged"
+        )]
         pub struct AssetDefinitionOwnerChanged {
             /// Id of asset definition being updated
             pub asset_definition: AssetDefinitionId,
@@ -425,8 +483,11 @@ mod asset {
         /// exhausts its mintability budget and flips to `Mintable::Not`.
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-        #[cfg_attr(feature = "json", norito(reuse_archived))]
-        #[cfg_attr(not(feature = "json"), norito(reuse_archived))]
+        #[norito(reuse_archived)]
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_data_model::events::data::events::asset::model::AssetDefinitionMintabilityChanged"
+        )]
         pub struct AssetDefinitionMintabilityChanged {
             /// Id of the asset definition that flipped to `Not`.
             pub asset_definition: AssetDefinitionId,
@@ -437,7 +498,7 @@ mod asset {
         }
     }
 }
-#[cfg(feature = "json")]
+
 impl_json_via_norito_bytes!(
     AssetChanged,
     AssetDefinitionTotalQuantityChanged,
@@ -450,13 +511,25 @@ pub mod bridge {
     use crate::nexus::LaneId;
 
     /// Ledger event carrying one authenticated SCCP replay-forest transition.
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        IntoSchema,
+        crate :: DeriveJsonSerialize,
+        crate :: DeriveJsonDeserialize,
     )]
-    #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+    #[norito(no_fast_from_json)]
     #[norito(deny_unknown_fields)]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(
+        name = "iroha_data_model::events::data::events::bridge::SccpReplayDeltaEventV1"
+    )]
     pub struct SccpReplayDeltaEventV1 {
         /// Nexus lane that executed the SCCP state transition.
         pub lane: LaneId,
@@ -516,8 +589,11 @@ mod nft {
         /// Event indicates that owner of the [`Nft`] is changed
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-        #[cfg_attr(feature = "json", norito(reuse_archived))]
-        #[cfg_attr(not(feature = "json"), norito(reuse_archived))]
+        #[norito(reuse_archived)]
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_data_model::events::data::events::nft::model::NftOwnerChanged"
+        )]
         pub struct NftOwnerChanged {
             /// Id of NFT being updated
             pub nft: NftId,
@@ -526,7 +602,7 @@ mod nft {
         }
     }
 }
-#[cfg(feature = "json")]
+
 impl_json_via_norito_bytes!(NftOwnerChanged);
 mod rwa {
     //! This module contains `RwaEvent` and its impls.
@@ -588,8 +664,11 @@ mod rwa {
         /// Event emitted when full-lot ownership changes in place.
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-        #[cfg_attr(feature = "json", norito(reuse_archived))]
-        #[cfg_attr(not(feature = "json"), norito(reuse_archived))]
+        #[norito(reuse_archived)]
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_data_model::events::data::events::rwa::model::RwaOwnerChanged"
+        )]
         pub struct RwaOwnerChanged {
             /// Lot whose owner changed.
             pub rwa: RwaId,
@@ -599,8 +678,9 @@ mod rwa {
         /// Event emitted when quantity is split out of a source lot into a child lot.
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-        #[cfg_attr(feature = "json", norito(reuse_archived))]
-        #[cfg_attr(not(feature = "json"), norito(reuse_archived))]
+        #[norito(reuse_archived)]
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(name = "iroha_data_model::events::data::events::rwa::model::RwaSplit")]
         pub struct RwaSplit {
             /// Source lot reduced in place.
             pub source: RwaId,
@@ -614,8 +694,9 @@ mod rwa {
         /// Event emitted when a derived lot is created from parent contributions.
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-        #[cfg_attr(feature = "json", norito(reuse_archived))]
-        #[cfg_attr(not(feature = "json"), norito(reuse_archived))]
+        #[norito(reuse_archived)]
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(name = "iroha_data_model::events::data::events::rwa::model::RwaMerged")]
         pub struct RwaMerged {
             /// Child lot created by the merge.
             pub child: RwaId,
@@ -625,8 +706,11 @@ mod rwa {
         /// Event emitted when lot quantity changes due to redemption.
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-        #[cfg_attr(feature = "json", norito(reuse_archived))]
-        #[cfg_attr(not(feature = "json"), norito(reuse_archived))]
+        #[norito(reuse_archived)]
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_data_model::events::data::events::rwa::model::RwaQuantityChanged"
+        )]
         pub struct RwaQuantityChanged {
             /// Lot whose quantity changed.
             pub rwa: RwaId,
@@ -636,8 +720,11 @@ mod rwa {
         /// Event emitted when held quantity changes.
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-        #[cfg_attr(feature = "json", norito(reuse_archived))]
-        #[cfg_attr(not(feature = "json"), norito(reuse_archived))]
+        #[norito(reuse_archived)]
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_data_model::events::data::events::rwa::model::RwaHoldChanged"
+        )]
         pub struct RwaHoldChanged {
             /// Lot whose held quantity changed.
             pub rwa: RwaId,
@@ -647,8 +734,11 @@ mod rwa {
         /// Event emitted when a lot's control policy changes.
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-        #[cfg_attr(feature = "json", norito(reuse_archived))]
-        #[cfg_attr(not(feature = "json"), norito(reuse_archived))]
+        #[norito(reuse_archived)]
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_data_model::events::data::events::rwa::model::RwaControlsChanged"
+        )]
         pub struct RwaControlsChanged {
             /// Lot whose controls changed.
             pub rwa: RwaId,
@@ -657,7 +747,7 @@ mod rwa {
         }
     }
 }
-#[cfg(feature = "json")]
+
 impl_json_via_norito_bytes!(
     RwaOwnerChanged,
     RwaSplit,
@@ -712,8 +802,11 @@ mod role {
         /// Depending on the wrapping event, [`RolePermissionChanged`] role represents the added or removed role's permission
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-        #[cfg_attr(feature = "json", norito(reuse_archived))]
-        #[cfg_attr(not(feature = "json"), norito(reuse_archived))]
+        #[norito(reuse_archived)]
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_data_model::events::data::events::role::model::RolePermissionChanged"
+        )]
         pub struct RolePermissionChanged {
             pub role: RoleId,
             // Getter derived via `getset` is skipped so the field remains opaque to FFI bindings.
@@ -721,7 +814,7 @@ mod role {
         }
     }
 }
-#[cfg(feature = "json")]
+
 impl_json_via_norito_bytes!(RolePermissionChanged);
 impl RolePermissionChanged {
     /// Create a new [`RolePermissionChanged`] event payload.
@@ -814,14 +907,21 @@ mod account {
         /// Account creation payload.
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_data_model::events::data::events::account::model::AccountCreated"
+        )]
         pub struct AccountCreated {
             pub account: Account,
         }
         /// Depending on the wrapping event, [`AccountPermissionChanged`] role represents the added or removed account role
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-        #[cfg_attr(feature = "json", norito(reuse_archived))]
-        #[cfg_attr(not(feature = "json"), norito(reuse_archived))]
+        #[norito(reuse_archived)]
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_data_model::events::data::events::account::model::AccountPermissionChanged"
+        )]
         pub struct AccountPermissionChanged {
             pub account: AccountId,
             // Getter derived via `getset` is skipped so the field remains opaque to FFI bindings.
@@ -830,6 +930,10 @@ mod account {
         /// Payload emitted when an account controller is replaced.
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_data_model::events::data::events::account::model::AccountControllerReplaced"
+        )]
         pub struct AccountControllerReplaced {
             /// New canonical account identifier after replacement.
             pub account: AccountId,
@@ -843,8 +947,11 @@ mod account {
         /// Depending on the wrapping event, [`AccountRoleChanged`] represents the granted or revoked role
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-        #[cfg_attr(feature = "json", norito(reuse_archived))]
-        #[cfg_attr(not(feature = "json"), norito(reuse_archived))]
+        #[norito(reuse_archived)]
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_data_model::events::data::events::account::model::AccountRoleChanged"
+        )]
         pub struct AccountRoleChanged {
             pub account: AccountId,
             pub role: RoleId,
@@ -852,7 +959,11 @@ mod account {
         /// Recovery-policy update payload.
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-        #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+        #[norito(no_fast_from_json)]
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_data_model::events::data::events::account::model::AccountRecoveryPolicySet"
+        )]
         pub struct AccountRecoveryPolicySet {
             /// Account whose stable alias policy was updated.
             pub account: AccountId,
@@ -864,6 +975,10 @@ mod account {
         /// Recovery-policy removal payload.
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_data_model::events::data::events::account::model::AccountRecoveryPolicyCleared"
+        )]
         pub struct AccountRecoveryPolicyCleared {
             /// Account whose stable alias policy was cleared.
             pub account: AccountId,
@@ -873,7 +988,11 @@ mod account {
         /// Recovery-request proposal payload.
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-        #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+        #[norito(no_fast_from_json)]
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_data_model::events::data::events::account::model::AccountRecoveryProposed"
+        )]
         pub struct AccountRecoveryProposed {
             /// Account currently active behind the alias.
             pub account: AccountId,
@@ -885,7 +1004,11 @@ mod account {
         /// Recovery-request approval payload.
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-        #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+        #[norito(no_fast_from_json)]
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_data_model::events::data::events::account::model::AccountRecoveryApproved"
+        )]
         pub struct AccountRecoveryApproved {
             /// Account currently active behind the alias.
             pub account: AccountId,
@@ -899,7 +1022,11 @@ mod account {
         /// Recovery-request cancellation payload.
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-        #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+        #[norito(no_fast_from_json)]
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_data_model::events::data::events::account::model::AccountRecoveryCancelled"
+        )]
         pub struct AccountRecoveryCancelled {
             /// Account currently active behind the alias.
             pub account: AccountId,
@@ -913,7 +1040,11 @@ mod account {
         /// Recovery-request finalization payload.
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-        #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+        #[norito(no_fast_from_json)]
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_data_model::events::data::events::account::model::AccountRecoveryFinalized"
+        )]
         pub struct AccountRecoveryFinalized {
             /// New account active behind the alias after finalization.
             pub account: AccountId,
@@ -948,7 +1079,7 @@ mod account {
         }
     }
 }
-#[cfg(feature = "json")]
+
 impl_json_via_norito_bytes!(
     AccountPermissionChanged,
     AccountRoleChanged,
@@ -997,6 +1128,8 @@ mod repo_account {
         ffi_type(opaque)
     )]
     /// Role carried by accounts participating in the repository subsystem.
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::events::data::events::repo_account::RepoAccountRole")]
     pub enum RepoAccountRole {
         /// Account initiated the agreement (borrower).
         Initiator,
@@ -1014,6 +1147,10 @@ mod repo_account {
         )]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         #[getset(get = "pub")]
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_data_model::events::data::events::repo_account::model::RepoAccountInitiated"
+        )]
         pub struct RepoAccountInitiated {
             /// Account receiving the event.
             pub account: AccountId,
@@ -1030,6 +1167,10 @@ mod repo_account {
         )]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         #[getset(get = "pub")]
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_data_model::events::data::events::repo_account::model::RepoAccountSettled"
+        )]
         pub struct RepoAccountSettled {
             /// Account receiving the event.
             pub account: AccountId,
@@ -1052,6 +1193,10 @@ mod repo_account {
         )]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         #[getset(get = "pub")]
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_data_model::events::data::events::repo_account::model::RepoAccountMarginCalled"
+        )]
         pub struct RepoAccountMarginCalled {
             /// Account receiving the margin call event.
             pub account: AccountId,
@@ -1126,7 +1271,7 @@ mod repo_account {
         }
     }
 }
-#[cfg(feature = "json")]
+
 impl_json_via_norito_bytes!(
     repo_account::RepoAccountInitiated,
     repo_account::RepoAccountSettled
@@ -1224,6 +1369,10 @@ mod domain {
         /// Event indicate that owner of the [`Domain`] is changed
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_data_model::events::data::events::domain::model::DomainOwnerChanged"
+        )]
         pub struct DomainOwnerChanged {
             pub domain: DomainId,
             pub new_owner: AccountId,
@@ -1231,6 +1380,10 @@ mod domain {
         /// Account event paired with an explicit, authoritative routing domain.
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_data_model::events::data::events::domain::model::ScopedAccount"
+        )]
         pub struct ScopedAccount {
             /// Authoritative domain routing context.
             pub domain: DomainId,
@@ -1240,6 +1393,10 @@ mod domain {
         /// Asset event paired with an explicit, authoritative routing domain.
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_data_model::events::data::events::domain::model::ScopedAsset"
+        )]
         pub struct ScopedAsset {
             /// Authoritative asset-definition domain context.
             pub domain: DomainId,
@@ -1249,6 +1406,10 @@ mod domain {
         /// Asset-definition event paired with an explicit, authoritative routing domain.
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_data_model::events::data::events::domain::model::ScopedAssetDefinition"
+        )]
         pub struct ScopedAssetDefinition {
             /// Authoritative asset-definition domain context.
             pub domain: DomainId,
@@ -1258,6 +1419,10 @@ mod domain {
         /// Account-domain link payload emitted when membership links change.
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_data_model::events::data::events::domain::model::AccountDomainLinkChanged"
+        )]
         pub struct AccountDomainLinkChanged {
             /// Domain where the link mutation happened.
             pub domain: DomainId,
@@ -1267,6 +1432,10 @@ mod domain {
         /// Aggregated Kaigi roster counts without exposing individual identities.
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_data_model::events::data::events::domain::model::KaigiRosterSummary"
+        )]
         pub struct KaigiRosterSummary {
             /// Call identifier.
             pub call: KaigiId,
@@ -1308,6 +1477,10 @@ mod domain {
         )]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         #[getset(get = "pub")]
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_data_model::events::data::events::domain::model::KaigiRelayRegistrationSummary"
+        )]
         pub struct KaigiRelayRegistrationSummary {
             /// Domain where the relay registration was recorded.
             pub domain: DomainId,
@@ -1341,6 +1514,10 @@ mod domain {
         )]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         #[getset(get = "pub")]
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_data_model::events::data::events::domain::model::KaigiRelayUnregistrationSummary"
+        )]
         pub struct KaigiRelayUnregistrationSummary {
             /// Domain from which the relay descriptor was removed.
             pub domain: DomainId,
@@ -1360,6 +1537,10 @@ mod domain {
         )]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         #[getset(get = "pub")]
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_data_model::events::data::events::domain::model::KaigiStatusSummary"
+        )]
         pub struct KaigiStatusSummary {
             /// Call identifier.
             pub call: KaigiId,
@@ -1385,6 +1566,10 @@ mod domain {
         )]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         #[getset(get = "pub")]
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_data_model::events::data::events::domain::model::KaigiRelayManifestSummary"
+        )]
         pub struct KaigiRelayManifestSummary {
             /// Call identifier.
             pub call: KaigiId,
@@ -1407,6 +1592,10 @@ mod domain {
         /// Health update emitted when a relay status changes.
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_data_model::events::data::events::domain::model::KaigiRelayHealthSummary"
+        )]
         pub struct KaigiRelayHealthSummary {
             /// Domain that owns the reported relay registration.
             pub domain: DomainId,
@@ -1441,6 +1630,10 @@ mod domain {
         /// Aggregated usage totals for a Kaigi session.
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_data_model::events::data::events::domain::model::KaigiUsageSummary"
+        )]
         pub struct KaigiUsageSummary {
             /// Call identifier.
             pub call: KaigiId,
@@ -1471,6 +1664,10 @@ mod domain {
         /// Relay descriptor emitted alongside streaming ticket events.
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_data_model::events::data::events::domain::model::StreamingPrivacyRelay"
+        )]
         pub struct StreamingPrivacyRelay {
             pub relay_id: [u8; 32],
             pub endpoint: Multiaddr,
@@ -1519,8 +1716,11 @@ mod domain {
             Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema,
         )]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-        #[cfg_attr(feature = "json", norito(reuse_archived, decode_from_slice))]
-        #[cfg_attr(not(feature = "json"), norito(reuse_archived, decode_from_slice))]
+        #[norito(reuse_archived, decode_from_slice)]
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_data_model::events::data::events::domain::model::StreamingSoranetAccessKind"
+        )]
         pub enum StreamingSoranetAccessKind {
             ReadOnly,
             Authenticated,
@@ -1546,8 +1746,11 @@ mod domain {
             Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema, Default,
         )]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-        #[cfg_attr(feature = "json", norito(reuse_archived, decode_from_slice))]
-        #[cfg_attr(not(feature = "json"), norito(reuse_archived, decode_from_slice))]
+        #[norito(reuse_archived, decode_from_slice)]
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_data_model::events::data::events::domain::model::StreamingSoranetStreamTag"
+        )]
         pub enum StreamingSoranetStreamTag {
             #[default]
             NoritoStream,
@@ -1576,8 +1779,11 @@ mod domain {
         )]
         #[getset(get = "pub")]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-        #[cfg_attr(feature = "json", norito(reuse_archived, decode_from_slice))]
-        #[cfg_attr(not(feature = "json"), norito(reuse_archived, decode_from_slice))]
+        #[norito(reuse_archived, decode_from_slice)]
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_data_model::events::data::events::domain::model::StreamingSoranetRoute"
+        )]
         pub struct StreamingSoranetRoute {
             pub channel_id: [u8; 32],
             pub exit_multiaddr: Multiaddr,
@@ -1658,6 +1864,10 @@ mod domain {
         #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         #[getset(get = "pub")]
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_data_model::events::data::events::domain::model::StreamingPrivacyRoute"
+        )]
         pub struct StreamingPrivacyRoute {
             pub route_id: [u8; 32],
             pub entry: StreamingPrivacyRelay,
@@ -1813,6 +2023,10 @@ mod domain {
         )]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         #[getset(get = "pub")]
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_data_model::events::data::events::domain::model::StreamingRouteBinding"
+        )]
         pub struct StreamingRouteBinding {
             /// Route descriptor (entry/exit relays, HPKE tokens, expiry segment).
             pub route: StreamingPrivacyRoute,
@@ -1850,9 +2064,12 @@ mod domain {
             Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema,
         )]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-        #[cfg_attr(feature = "json", norito(reuse_archived, decode_from_slice))]
-        #[cfg_attr(not(feature = "json"), norito(reuse_archived, decode_from_slice))]
+        #[norito(reuse_archived, decode_from_slice)]
         #[getset(get = "pub")]
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_data_model::events::data::events::domain::model::StreamingTicketPolicy"
+        )]
         pub struct StreamingTicketPolicy {
             /// Maximum number of relays allowed to serve this ticket concurrently.
             pub max_relays: u16,
@@ -1891,8 +2108,11 @@ mod domain {
             ffi_type(unsafe {robust})
         )]
         #[repr(transparent)]
-        #[cfg_attr(feature = "json", norito(reuse_archived))]
-        #[cfg_attr(not(feature = "json"), norito(reuse_archived))]
+        #[norito(reuse_archived)]
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_data_model::events::data::events::domain::model::StreamingTicketCapabilities"
+        )]
         pub struct StreamingTicketCapabilities(u32);
         impl StreamingTicketCapabilities {
             /// Capability flag allowing live streaming access.
@@ -1946,6 +2166,10 @@ mod domain {
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         #[norito(reuse_archived, decode_from_slice)]
         #[getset(get = "pub")]
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_data_model::events::data::events::domain::model::StreamingTicketRecord"
+        )]
         pub struct StreamingTicketRecord {
             /// Capability ticket identifier.
             #[getset(skip)]
@@ -2057,6 +2281,10 @@ mod domain {
         )]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         #[getset(get = "pub")]
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_data_model::events::data::events::domain::model::StreamingTicketReady"
+        )]
         pub struct StreamingTicketReady {
             /// Domain identifier the stream belongs to.
             pub domain: DomainId,
@@ -2095,6 +2323,10 @@ mod domain {
         )]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         #[getset(get = "pub")]
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_data_model::events::data::events::domain::model::StreamingTicketRevoked"
+        )]
         pub struct StreamingTicketRevoked {
             /// Domain identifier the stream belongs to.
             pub domain: DomainId,
@@ -2138,7 +2370,7 @@ mod domain {
         }
     }
 }
-#[cfg(feature = "json")]
+
 impl_json_via_norito_bytes!(
     DomainOwnerChanged,
     domain::KaigiRosterSummary,
@@ -2192,13 +2424,17 @@ mod trigger {
         /// Depending on the wrapping event, [`Self`] represents the increased or decreased number of event executions.
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_data_model::events::data::events::trigger::model::TriggerNumberOfExecutionsChanged"
+        )]
         pub struct TriggerNumberOfExecutionsChanged {
             pub trigger: TriggerId,
             pub by: u32,
         }
     }
 }
-#[cfg(feature = "json")]
+
 impl_json_via_norito_bytes!(TriggerNumberOfExecutionsChanged);
 mod config {
     pub use self::model::*;
@@ -2212,6 +2448,10 @@ mod config {
             Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema,
         )]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_data_model::events::data::events::config::model::SccpRegistryOperation"
+        )]
         pub enum SccpRegistryOperation {
             /// Register one complete staged immutable route revision.
             RegisterRoute,
@@ -2229,6 +2469,10 @@ mod config {
         /// Bounded lifecycle event for a journaled SCCP registry mutation.
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_data_model::events::data::events::config::model::SccpRegistryChanged"
+        )]
         pub struct SccpRegistryChanged {
             /// Mutation kind.
             pub operation: SccpRegistryOperation,
@@ -2244,6 +2488,10 @@ mod config {
         /// Changed parameter event
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_data_model::events::data::events::config::model::ParameterChanged"
+        )]
         pub struct ParameterChanged {
             /// Previous value for the parameter
             pub old_value: Parameter,
@@ -2268,6 +2516,10 @@ mod config {
         #[event_set(
             schema_name = "iroha_data_model::events::data::events::config::model::ConfigurationEventSet"
         )]
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_data_model::events::data::events::config::model::ConfigurationEvent"
+        )]
         pub enum ConfigurationEvent {
             /// Configuration parameter value changed.
             Changed(ParameterChanged),
@@ -2276,7 +2528,7 @@ mod config {
         }
     }
 }
-#[cfg(feature = "json")]
+
 impl_json_via_norito_bytes!(
     ParameterChanged,
     SccpRegistryOperation,
@@ -2314,6 +2566,10 @@ mod executor {
         #[event_set(
             schema_name = "iroha_data_model::events::data::events::executor::model::ExecutorEventSet"
         )]
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_data_model::events::data::events::executor::model::ExecutorEvent"
+        )]
         pub enum ExecutorEvent {
             /// Executor data model was upgraded.
             Upgraded(ExecutorUpgrade),
@@ -2325,13 +2581,17 @@ mod executor {
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         #[repr(transparent)]
         #[getset(get = "pub")]
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_data_model::events::data::events::executor::model::ExecutorUpgrade"
+        )]
         pub struct ExecutorUpgrade {
             /// Updated data model
             pub new_data_model: ExecutorDataModel,
         }
     }
 }
-#[cfg(feature = "json")]
+
 impl_json_via_norito_bytes!(ExecutorEvent, ExecutorUpgrade);
 /// Trait for events originating from [`HasOrigin::Origin`].
 pub trait HasOrigin {
@@ -2489,7 +2749,7 @@ mod event_routing_tests {
         assert!(decoded.domain().is_none());
     }
 }
-#[cfg(all(test, feature = "json"))]
+#[cfg(test)]
 mod tests {
     use super::MetadataChanged;
     use crate::domain::DomainId;
@@ -2564,3 +2824,6 @@ pub mod prelude {
     };
     pub use crate::{DataSpaceId, LaneId};
 }
+
+#[cfg(test)]
+mod captured_event_boundary_identity_tests;

@@ -349,10 +349,11 @@ impl norito::core::SerializePayload for LayerWidthBuckets {
         norito::core::SerializePayload::serialize(&payload, writer)
     }
 }
-impl<'a> norito::core::NoritoDeserialize<'a> for LayerWidthBuckets {
+impl norito::core::NoritoDeserialize<'_> for LayerWidthBuckets {}
+impl<'a> norito::core::DeserializePayload<'a> for LayerWidthBuckets {
     fn deserialize(archived: &'a norito::core::Archived<Self>) -> Self {
         let payload: (u64, u64, u64, u64, u64, u64, u64, u64) =
-            norito::core::NoritoDeserialize::deserialize(archived.cast());
+            norito::core::DeserializePayload::deserialize(archived.cast());
         Self([
             payload.0, payload.1, payload.2, payload.3, payload.4, payload.5, payload.6, payload.7,
         ])
@@ -441,7 +442,7 @@ struct TaikaiAliasRotationSnapshotArgs<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use norito::{NoritoDeserialize, from_bytes, to_bytes};
+    use norito::{DeserializePayload, from_bytes, to_bytes};
     fn find_metric_line<'a>(dump: &'a str, prefix: &str) -> &'a str {
         dump.lines()
             .find(|line| line.starts_with(prefix))
@@ -733,7 +734,7 @@ mod tests {
         let bytes = to_bytes(&buckets).expect("serialize buckets");
         let archived =
             from_bytes::<SchedulerLayerWidthBuckets>(&bytes).expect("archived buckets payload");
-        let decoded = norito::core::NoritoDeserialize::deserialize(archived);
+        let decoded = norito::core::DeserializePayload::deserialize(archived);
         assert_eq!(decoded.as_slice(), &values);
         let json_bytes = norito::json::to_vec(&buckets).expect("JSON encode buckets");
         let parsed: SchedulerLayerWidthBuckets =
@@ -1087,7 +1088,7 @@ mod serde_tests {
         let archived = from_bytes::<SumeragiConsensusStatus>(&bytes)
             .expect("archive sumeragi consensus status");
         let decoded: SumeragiConsensusStatus =
-            norito::core::NoritoDeserialize::deserialize(archived);
+            norito::core::DeserializePayload::deserialize(archived);
         assert_eq!(decoded.tx_queue_depth, 31);
         assert_eq!(decoded.tx_queue_capacity, 64);
         assert_eq!(decoded.tx_queue_retained_bytes, 98_304);

@@ -1,6 +1,6 @@
 use super::*;
 use iroha_primitives::numeric::Quantity;
-#[cfg(feature = "json")]
+
 use norito::json::{FastJsonWrite, JsonSerialize};
 use std::fmt::Display;
 isi! {
@@ -91,7 +91,7 @@ impl_into_box! {
     Burn<u32, Trigger>
 => BurnBox
 }
-#[cfg(feature = "json")]
+
 impl<O, D> FastJsonWrite for Mint<O, D>
 where
     O: JsonSerialize,
@@ -120,7 +120,7 @@ where
         Ok(())
     }
 }
-#[cfg(feature = "json")]
+
 impl<O, D> FastJsonWrite for Burn<O, D>
 where
     O: JsonSerialize,
@@ -337,7 +337,7 @@ mod tests {
     fn trigger_id() -> TriggerId {
         "nightly_tick".parse().expect("trigger id")
     }
-    #[cfg(feature = "json")]
+
     fn assert_exact_json<T: norito::json::JsonSerialize>(value: &T) {
         let legacy = norito::json::to_json(value).expect("serialize legacy JSON");
         assert_eq!(
@@ -349,7 +349,7 @@ mod tests {
             Err(norito::json::BoundedJsonError::BodyTooLarge)
         );
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn mint_and_burn_json_match_legacy_bytes_at_exact_bounds() {
         assert_exact_json(&Mint::asset_quantity(7_u32, asset_id()));

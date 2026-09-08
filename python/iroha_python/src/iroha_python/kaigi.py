@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING, Any, Final, Mapping, Sequence
 
 from norito.crc64 import crc64 as _crc64
 
-from ._native import load_crypto_extension
+from iroha_native import load_crypto_extension
 
 if TYPE_CHECKING:
     from .crypto import Instruction
@@ -217,7 +217,7 @@ def _canonical_identity(
     encoder = getattr(native, f"_encode_{kind}_v1", None)
     if encoder is None:
         raise RuntimeError(
-            f"iroha_python._crypto is missing the canonical {kind} encoder; rebuild the extension"
+            f"iroha_native._crypto is missing the canonical {kind} encoder; rebuild the extension"
         )
     try:
         canonical, frame = encoder(literal)

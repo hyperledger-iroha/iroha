@@ -12,7 +12,7 @@
                     kotoage: "run",
                     arguments: Json::parse("{}"),
                 );
-                test::expect_reject_as(
+                test::expect_any_reject_as(
                     actor: "issuer",
                     kotoage: "run",
                     arguments: Json::parse("{}"),

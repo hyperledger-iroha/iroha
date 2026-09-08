@@ -754,7 +754,7 @@ internal class TransactionPayloadAdapter private constructor(
             private fun parseAuthority(authority: String): ControllerPayload {
                 val canonicalAuthority = requireCanonicalI105Address(authority, "authority")
                 val parsed = try {
-                    AccountAddress.parseEncodedIgnoringCurveSupport(
+                    AccountAddress.parseEncoded(
                         canonicalAuthority,
                         requiredChainDiscriminant(),
                     )
@@ -766,12 +766,12 @@ internal class TransactionPayloadAdapter private constructor(
 
             private fun parseAddressToController(address: AccountAddress): ControllerPayload {
                 try {
-                    val singlePayload = address.singleKeyPayloadIgnoringCurveSupport()
+                    val singlePayload = address.singleKeyPayload()
                     if (singlePayload != null) {
                         val publicKeyPayload = compactPublicKeyPayload(singlePayload.curveId, singlePayload.publicKey)
                         return ControllerPayload.single(publicKeyPayload)
                     }
-                    val multisigPayload = address.multisigPolicyPayloadIgnoringCurveSupport()
+                    val multisigPayload = address.multisigPolicyPayload()
                     if (multisigPayload != null) {
                         return ControllerPayload.multisig(multisigPayload)
                     }
