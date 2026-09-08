@@ -132,7 +132,9 @@ pub struct RaceDnfEventV1 {
     IntoSchema,
     DeriveJsonDeserialize,
     DeriveJsonSerialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_data_model::execution_proofs::RaceReplayV1")]
 pub struct RaceReplayV1 {
     /// Immutable track selection.
     pub track: RaceTrackV1,
@@ -189,7 +191,9 @@ pub struct RaceCarStateV1 {
     IntoSchema,
     DeriveJsonDeserialize,
     DeriveJsonSerialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_data_model::execution_proofs::RaceStateV1")]
 pub struct RaceStateV1 {
     /// Number of completed ticks.
     pub tick: u32,
@@ -238,7 +242,9 @@ pub struct RaceStandingV1 {
     IntoSchema,
     DeriveJsonDeserialize,
     DeriveJsonSerialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_data_model::execution_proofs::RaceResultV1")]
 pub struct RaceResultV1 {
     /// Exact number of simulated ticks.
     pub ticks: u32,
@@ -567,5 +573,23 @@ mod tests {
                 result
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod additional_frame_owner_identity_tests {
+    //! Typed frame contracts observed with the original codec.
+
+    #[test]
+    fn captured_additional_frame_owner_identities() {
+        crate::frame_owner_identity_tests::assert_bidirectional::<
+            crate::execution_proofs::RaceReplayV1,
+        >("iroha_data_model::execution_proofs::RaceReplayV1");
+        crate::frame_owner_identity_tests::assert_bidirectional::<
+            crate::execution_proofs::RaceResultV1,
+        >("iroha_data_model::execution_proofs::RaceResultV1");
+        crate::frame_owner_identity_tests::assert_bidirectional::<
+            crate::execution_proofs::RaceStateV1,
+        >("iroha_data_model::execution_proofs::RaceStateV1");
     }
 }

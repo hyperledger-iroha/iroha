@@ -12,8 +12,8 @@ use norito::core::serialize_to_buffer;
 use norito::{
     Decode, Encode,
     core::{
-        Archived, DecodeFromSlice, DeserializePayload, Error as NoritoError, NoritoDeserialize,
-        NoritoSerialize, SerializePayload, serialize_to_writer,
+        Archived, DecodeFromSlice, DeserializePayload, Error as NoritoError, SerializePayload,
+        serialize_to_writer,
     },
 };
 use std::io::{self, Write};
@@ -175,7 +175,8 @@ fn decode_state_value_payload_wrapper<'a, T>(
     Ok((payload, used))
 }
 /// Canonical representation of one scalar leaf in a durable aggregate.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(name = "ivm_abi::state_value::StateValueKindV1")]
 pub enum StateValueKindV1 {
     /// Canonical Kotodama signed 512-bit integer pointer.
     #[codec(index = 0)]
@@ -326,7 +327,8 @@ impl StateValueKindV1 {
     }
 }
 /// One preorder node in a compiler-emitted durable-value schema.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(name = "ivm_abi::state_value::StateValueNodeV1")]
 pub enum StateValueNodeV1 {
     /// Unit value represented by one canonical zero scalar.
     #[codec(index = 6)]
@@ -409,7 +411,11 @@ impl StateValueNodeV1 {
 /// Wire traversal and owned-value cleanup are iterative. The standalone derived codec, `Clone`,
 /// `Debug`, and equality implementations on recursive [`StateValueNodeV1`] remain nominal Rust
 /// convenience surfaces and are not used at the untrusted aggregate-state boundary.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, norito::NoritoSchema)]
+#[norito_schema(
+    name = "ivm_abi::state_value::StateValueSchemaV1",
+    frame = "iroha.kotodama.StateValueSchemaV1"
+)]
 pub struct StateValueSchemaV1 {
     /// Preorder aggregate layout.
     pub nodes: Vec<StateValueNodeV1>,
@@ -903,21 +909,13 @@ fn decode_state_value_schema_payload(encoded: &[u8]) -> Result<StateValueSchemaV
     }
     Ok(schema)
 }
-impl NoritoSerialize for StateValueSchemaV1 {
-    fn schema_hash() -> [u8; 16] {
-        norito::core::schema_hash_for_name(STATE_VALUE_SCHEMA_NAME_V1)
-    }
-}
+
 impl SerializePayload for StateValueSchemaV1 {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), NoritoError> {
         encode_state_value_schema_payload(self)?.serialize(writer)
     }
 }
-impl NoritoDeserialize<'_> for StateValueSchemaV1 {
-    fn schema_hash() -> [u8; 16] {
-        norito::core::schema_hash_for_name(STATE_VALUE_SCHEMA_NAME_V1)
-    }
-}
+
 impl<'a> DeserializePayload<'a> for StateValueSchemaV1 {
     fn deserialize(archived: &'a Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("StateValueSchemaV1 decode")
@@ -1839,7 +1837,8 @@ pub enum StateValueWordKindV1 {
 /// Record wire traversal and owner cleanup are iterative. The standalone derived codec, `Clone`,
 /// `Debug`, and equality implementations remain recursive nominal Rust convenience surfaces and are
 /// not used by the KRV1 aggregate-state boundary.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(name = "ivm_abi::state_value::StateValueAtomV1")]
 pub enum StateValueAtomV1 {
     /// Canonical unit value.
     #[codec(index = 4)]
@@ -2428,7 +2427,11 @@ fn decode_state_value_record_payload(encoded: &[u8]) -> Result<StateValueRecordV
     }
 }
 /// Canonical Norito value stored under one aggregate durable-state key.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, norito::NoritoSchema)]
+#[norito_schema(
+    name = "ivm_abi::state_value::StateValueRecordV1",
+    frame = "iroha.kotodama.StateValueRecordV1"
+)]
 pub struct StateValueRecordV1 {
     /// Domain-separated hash of the exact encoded schema.
     pub schema_hash: [u8; 32],
@@ -2440,21 +2443,13 @@ impl Drop for StateValueRecordV1 {
         drop_state_value_atom_streams_iteratively(vec![std::mem::take(&mut self.atoms)]);
     }
 }
-impl NoritoSerialize for StateValueRecordV1 {
-    fn schema_hash() -> [u8; 16] {
-        norito::core::schema_hash_for_name(STATE_VALUE_RECORD_NAME_V1)
-    }
-}
+
 impl SerializePayload for StateValueRecordV1 {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), NoritoError> {
         encode_state_value_record_payload(self)?.serialize(writer)
     }
 }
-impl NoritoDeserialize<'_> for StateValueRecordV1 {
-    fn schema_hash() -> [u8; 16] {
-        norito::core::schema_hash_for_name(STATE_VALUE_RECORD_NAME_V1)
-    }
-}
+
 impl<'a> DeserializePayload<'a> for StateValueRecordV1 {
     fn deserialize(archived: &'a Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("StateValueRecordV1 decode")
@@ -2874,11 +2869,11 @@ mod tests {
     #[test]
     fn schema_and_record_roundtrip_deterministically() {
         assert_eq!(
-            <StateValueSchemaV1 as norito::NoritoSerialize>::schema_hash(),
+            norito::schema::identity::frame_hash::<StateValueSchemaV1>(),
             norito::core::schema_hash_for_name(STATE_VALUE_SCHEMA_NAME_V1)
         );
         assert_eq!(
-            <StateValueRecordV1 as norito::NoritoSerialize>::schema_hash(),
+            norito::schema::identity::frame_hash::<StateValueRecordV1>(),
             norito::core::schema_hash_for_name(STATE_VALUE_RECORD_NAME_V1)
         );
         let schema = StateValueSchemaV1 {
@@ -3822,5 +3817,38 @@ mod tests {
         ];
         assert!(schema.validate_atoms(&atoms));
         assert_eq!(schema.word_kinds_for_atoms(&atoms), Some(expected_words));
+    }
+}
+
+#[cfg(test)]
+mod captured_frame_identity_tests {
+    #[test]
+    fn observed_declared_identities() {
+        crate::captured_identity_tests::assert_bidirectional::<super::StateValueKindV1>(
+            "ivm_abi::state_value::StateValueKindV1",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::StateValueNodeV1>(
+            "ivm_abi::state_value::StateValueNodeV1",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::StateValueAtomV1>(
+            "ivm_abi::state_value::StateValueAtomV1",
+        );
+    }
+    #[test]
+    fn observed_manual_frames() {
+        use super::*;
+        crate::captured_identity_tests::assert_manual::<StateValueSchemaV1>(
+            "StateValueSchemaV1",
+            &(StateValueSchemaV1 {
+                nodes: vec![StateValueNodeV1::Leaf(StateValueKindV1::Bool)],
+            }),
+        );
+        crate::captured_identity_tests::assert_manual::<StateValueRecordV1>(
+            "StateValueRecordV1",
+            &(StateValueRecordV1 {
+                schema_hash: [0x5a; 32],
+                atoms: vec![StateValueAtomV1::Bool(true)],
+            }),
+        );
     }
 }

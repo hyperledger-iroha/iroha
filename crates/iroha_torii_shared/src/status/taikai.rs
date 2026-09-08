@@ -11,8 +11,12 @@ use iroha_schema::IntoSchema;
     norito::derive::NoritoDeserialize,
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
+    norito::NoritoSchema,
 )]
-#[norito(schema_name = "iroha_telemetry::metrics::TaikaiIngestStatus")]
+#[norito_schema(
+    name = "iroha_torii_shared::status::taikai::TaikaiIngestStatus",
+    frame = "iroha_telemetry::metrics::TaikaiIngestStatus"
+)]
 pub struct TaikaiIngestStatus {
     /// Cluster label associated with the ingest pipeline.
     pub cluster: String,
@@ -41,8 +45,12 @@ pub struct TaikaiIngestStatus {
     norito::derive::NoritoDeserialize,
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
+    norito::NoritoSchema,
 )]
-#[norito(schema_name = "iroha_telemetry::metrics::TaikaiIngestErrorCounter")]
+#[norito_schema(
+    name = "iroha_torii_shared::status::taikai::TaikaiIngestErrorCounter",
+    frame = "iroha_telemetry::metrics::TaikaiIngestErrorCounter"
+)]
 pub struct TaikaiIngestErrorCounter {
     /// Normalised error reason identifier (HTTP canonical reason or status code).
     pub reason: String,
@@ -59,8 +67,12 @@ pub struct TaikaiIngestErrorCounter {
     norito::derive::NoritoDeserialize,
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
+    norito::NoritoSchema,
 )]
-#[norito(schema_name = "iroha_telemetry::metrics::TaikaiAliasRotationStatus")]
+#[norito_schema(
+    name = "iroha_torii_shared::status::taikai::TaikaiAliasRotationStatus",
+    frame = "iroha_telemetry::metrics::TaikaiAliasRotationStatus"
+)]
 pub struct TaikaiAliasRotationStatus {
     /// Cluster label associated with the ingest pipeline.
     pub cluster: String,
@@ -82,4 +94,20 @@ pub struct TaikaiAliasRotationStatus {
     pub rotations_total: u64,
     /// UNIX timestamp (seconds) when this snapshot was last updated.
     pub last_updated_unix: u64,
+}
+
+#[cfg(test)]
+mod captured_frame_identity_tests {
+    #[test]
+    fn observed_declared_identities() {
+        crate::captured_identity_tests::assert_bidirectional::<super::TaikaiAliasRotationStatus>(
+            "iroha_torii_shared::status::taikai::TaikaiAliasRotationStatus",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::TaikaiIngestErrorCounter>(
+            "iroha_torii_shared::status::taikai::TaikaiIngestErrorCounter",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::TaikaiIngestStatus>(
+            "iroha_torii_shared::status::taikai::TaikaiIngestStatus",
+        );
+    }
 }

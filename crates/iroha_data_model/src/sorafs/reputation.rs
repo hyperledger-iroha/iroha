@@ -2879,11 +2879,7 @@ impl norito::NoritoSchema for ReputationJournalEventIdSource<'_> {
         <ReputationJournalEntryV1 as norito::NoritoSchema>::frame_name()
     }
 }
-impl norito::core::NoritoSerialize for ReputationJournalEventIdSource<'_> {
-    fn schema_hash() -> [u8; 16] {
-        <ReputationJournalEntryV1 as norito::core::NoritoSerialize>::schema_hash()
-    }
-}
+
 impl norito::core::SerializePayload for ReputationJournalEventIdSource<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         if norito::core::use_packed_struct() {

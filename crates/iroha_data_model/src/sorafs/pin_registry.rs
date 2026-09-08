@@ -80,7 +80,7 @@ impl TryFrom<Vec<u8>> for ManifestRootCid {
         Self::try_from_slice(&bytes)
     }
 }
-impl norito::NoritoSerialize for ManifestRootCid {}
+
 impl norito::SerializePayload for ManifestRootCid {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         norito::SerializePayload::serialize(&self.0, writer)
@@ -92,7 +92,7 @@ impl norito::SerializePayload for ManifestRootCid {
         norito::SerializePayload::encoded_len_exact(&self.0)
     }
 }
-impl norito::NoritoDeserialize<'_> for ManifestRootCid {}
+
 impl<'de> norito::DeserializePayload<'de> for ManifestRootCid {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived)

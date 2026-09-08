@@ -15,6 +15,8 @@ use super::*;
     crate :: DeriveJsonDeserialize,
 )]
 #[getset(get = "pub")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::endorsement::RegisterDomainCommittee")]
 pub struct RegisterDomainCommittee {
     /// Committee configuration to register.
     pub committee: crate::nexus::DomainCommittee,
@@ -35,6 +37,8 @@ pub struct RegisterDomainCommittee {
     crate :: DeriveJsonDeserialize,
 )]
 #[getset(get = "pub")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::endorsement::SetDomainEndorsementPolicy")]
 pub struct SetDomainEndorsementPolicy {
     /// Domain requiring endorsements.
     pub domain: crate::domain::DomainId,
@@ -57,6 +61,8 @@ pub struct SetDomainEndorsementPolicy {
     crate :: DeriveJsonDeserialize,
 )]
 #[getset(get = "pub")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::endorsement::SubmitDomainEndorsement")]
 pub struct SubmitDomainEndorsement {
     /// Endorsement to validate and record.
     pub endorsement: crate::nexus::DomainEndorsement,
@@ -230,6 +236,24 @@ mod tests {
             SubmitDomainEndorsement {
                 endorsement: endorsement(),
             },
+        );
+    }
+}
+
+#[cfg(test)]
+mod frame_owner_identity_tests {
+    //! Frame roots observed in the original codec before the identity cutover.
+
+    #[test]
+    fn captured_frame_owner_identities() {
+        crate::frame_owner_identity_tests::assert_bidirectional::<super::RegisterDomainCommittee>(
+            "iroha_data_model::isi::endorsement::RegisterDomainCommittee",
+        );
+        crate::frame_owner_identity_tests::assert_bidirectional::<super::SetDomainEndorsementPolicy>(
+            "iroha_data_model::isi::endorsement::SetDomainEndorsementPolicy",
+        );
+        crate::frame_owner_identity_tests::assert_bidirectional::<super::SubmitDomainEndorsement>(
+            "iroha_data_model::isi::endorsement::SubmitDomainEndorsement",
         );
     }
 }

@@ -1003,7 +1003,7 @@ mod model {
             .checked_add(norito::core::len_prefix_len_with_flags(payload_len, flags))?
             .checked_add(payload_len)
     }
-    impl norito::core::NoritoSerialize for QueryBox<QueryOutputBatchBox> {}
+
     impl norito::core::SerializePayload for QueryBox<QueryOutputBatchBox> {
         fn serialize(
             &self,
@@ -1071,7 +1071,7 @@ mod model {
             query_box_encoded_len(name, query.encoded_payload_len_exact()?, flags)
         }
     }
-    impl norito::core::NoritoDeserialize<'_> for QueryBox<QueryOutputBatchBox> {}
+
     impl<'a> norito::core::DeserializePayload<'a> for QueryBox<QueryOutputBatchBox> {
         fn deserialize(
             archived: &'a norito::core::Archived<QueryBox<QueryOutputBatchBox>>,
@@ -2147,12 +2147,7 @@ mod model {
             Ok((QuerySignature(signature), used))
         }
     }
-    #[cfg(not(feature = "ffi_import"))]
-    impl norito::core::NoritoSerialize for QuerySignature {
-        fn schema_hash() -> [u8; 16] {
-            <SignatureOf<QueryRequestWithAuthority> as norito::core::NoritoSerialize>::schema_hash()
-        }
-    }
+
     #[cfg(not(feature = "ffi_import"))]
     impl norito::core::SerializePayload for QuerySignature {
         fn encoded_len_hint(&self) -> Option<usize> {
@@ -2168,13 +2163,7 @@ mod model {
             norito::core::SerializePayload::serialize(&self.0, writer)
         }
     }
-    #[cfg(not(feature = "ffi_import"))]
-    impl norito::core::NoritoDeserialize<'_> for QuerySignature {
-        fn schema_hash() -> [u8; 16] {
-            <SignatureOf<QueryRequestWithAuthority> as norito::core::NoritoDeserialize>::schema_hash(
-            )
-        }
-    }
+
     #[cfg(not(feature = "ffi_import"))]
     impl<'de> norito::core::DeserializePayload<'de> for QuerySignature {
         fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
@@ -2975,11 +2964,7 @@ impl QueryOutputBatchBoxTupleCandidate {
         QueryOutputBatchBoxTuple::new(self.tuple)
     }
 }
-impl norito::core::NoritoDeserialize<'_> for QueryOutputBatchBoxTuple {
-    fn schema_hash() -> [u8; 16] {
-        <Self as norito::core::NoritoSerialize>::schema_hash()
-    }
-}
+
 impl<'de> norito::core::DeserializePayload<'de> for QueryOutputBatchBoxTuple {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived)
@@ -3363,7 +3348,7 @@ mod candidate {
             Ok((candidate.into_signed(), used))
         }
     }
-    impl norito::core::NoritoDeserialize<'_> for SignedQuery {}
+
     impl<'de> norito::core::DeserializePayload<'de> for SignedQuery {
         fn deserialize(archived: &'de norito::core::Archived<SignedQuery>) -> Self {
             let candidate = <SignedQueryCandidate as norito::core::DeserializePayload>::deserialize(

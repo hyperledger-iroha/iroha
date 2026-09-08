@@ -1437,9 +1437,19 @@ pub struct PqMaspStarkStatementV1 {
     pub authorization_epoch: u64,
 }
 /// Protocol-typed canonical privacy statement.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[norito(schema_name = "iroha.privacy.statement.v1")]
-#[derive(DeriveJsonSerialize, DeriveJsonDeserialize)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(tag = "protocol", content = "statement", deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(

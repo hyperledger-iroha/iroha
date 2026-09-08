@@ -579,7 +579,7 @@ fn maintenance_reset_invokes_kagami_and_cleans_storage() {
             "snapshot directory should exist for {}",
             peer.alias()
         );
-        let entries = fs::read_dir(&snapshot_dir)
+        let entries = fs::read_dir(snapshot_dir)
             .expect("snapshot dir entries")
             .map(|entry| entry.expect("snapshot entry").file_name())
             .collect::<Vec<_>>();

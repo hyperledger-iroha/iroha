@@ -26,14 +26,6 @@ impl<T> FixtureValue for T where
 
 fn record<T: FixtureValue>(case: &str, value: &T) -> Value {
     assert_eq!(T::frame_name(), T::nominal_name());
-    assert_eq!(
-        norito::schema::identity::frame_hash::<T>(),
-        <T as NoritoSerialize>::schema_hash(),
-    );
-    assert_eq!(
-        norito::schema::identity::frame_hash::<T>(),
-        <T as NoritoDeserialize>::schema_hash(),
-    );
     let bare = value.encode();
     let frame = norito::encode_canonical(value).expect("encode complete manual identity frame");
     let decoded: T =
@@ -41,8 +33,7 @@ fn record<T: FixtureValue>(case: &str, value: &T) -> Value {
     assert_eq!(decoded.encode(), bare);
     assert_eq!(norito::encode_canonical(&decoded).unwrap(), frame);
     let header = norito::core::Header::read(std::io::Cursor::new(&frame)).unwrap();
-    assert_eq!(header.schema, <T as NoritoSerialize>::schema_hash());
-    assert_eq!(header.schema, <T as NoritoDeserialize>::schema_hash());
+    assert_eq!(header.schema, norito::schema::identity::frame_hash::<T>());
     let mut wrong_schema = frame.clone();
     wrong_schema[6] ^= 1;
     assert!(norito::decode_canonical::<T>(&wrong_schema).is_err());
@@ -58,8 +49,8 @@ fn record<T: FixtureValue>(case: &str, value: &T) -> Value {
     norito::json!({
         "case": case,
         "declared_nominal_name": (T::nominal_name()),
-        "serialize_hash": (hex::encode(<T as NoritoSerialize>::schema_hash())),
-        "deserialize_hash": (hex::encode(<T as NoritoDeserialize>::schema_hash())),
+        "serialize_hash": (hex::encode(norito::schema::identity::frame_hash::<T>())),
+        "deserialize_hash": (hex::encode(norito::schema::identity::frame_hash::<T>())),
         "header_flags": (header.flags),
         "bare_hex": (hex::encode(bare)),
         "frame_hex": (hex::encode(frame)),

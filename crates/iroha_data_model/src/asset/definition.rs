@@ -885,11 +885,11 @@ mod validation_tests {
             expected
         );
         assert_eq!(
-            <NewAssetDefinition as norito::NoritoSerialize>::schema_hash(),
+            norito::schema::identity::frame_hash::<NewAssetDefinition>(),
             expected
         );
         assert_eq!(
-            <NewAssetDefinition as norito::NoritoDeserialize>::schema_hash(),
+            norito::schema::identity::frame_hash::<NewAssetDefinition>(),
             expected
         );
     }

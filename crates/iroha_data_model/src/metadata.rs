@@ -22,7 +22,7 @@ mod model {
     #[norito_schema(name = "iroha_data_model::metadata::model::Metadata")]
     pub struct Metadata(pub(super) BTreeMap<Name, Json>);
 }
-impl ncore::NoritoSerialize for Metadata {}
+
 impl ncore::SerializePayload for Metadata {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
         // Metadata retains sequence-of-tuples bytes, including in packed mode.
@@ -74,7 +74,6 @@ impl ncore::SerializePayload for MetadataEntryRef<'_> {
     }
 }
 
-impl ncore::NoritoDeserialize<'_> for Metadata {}
 impl<'de> ncore::DeserializePayload<'de> for Metadata {
     fn deserialize(archived: &'de ncore::Archived<Self>) -> Self {
         let entries: Vec<(Name, Json)> =

@@ -28,7 +28,7 @@ fn vec_hint_size() {
 }
 // Custom type that provides no size hint regardless of content
 struct NoHint(u32);
-impl NoritoSerialize for NoHint {}
+
 impl SerializePayload for NoHint {
     fn serialize(&self, encoder: &mut Encoder<'_>) -> Result<(), Error> {
         // Serialize as a fixed 4-byte little-endian value
@@ -41,7 +41,7 @@ impl SerializePayload for NoHint {
 }
 // Custom type that advertises a very large hint to exercise saturating math
 struct BigHint;
-impl NoritoSerialize for BigHint {}
+
 impl SerializePayload for BigHint {
     fn serialize(&self, _encoder: &mut Encoder<'_>) -> Result<(), Error> {
         // Minimal payload; not used in these tests
@@ -77,7 +77,8 @@ fn vec_hint_saturating_big() {
     let v = vec![BigHint];
     assert_eq!(v.encoded_len_hint(), None);
 }
-#[derive(IntoSchema, norito::NoritoSerialize, norito::NoritoDeserialize)]
+#[derive(IntoSchema, norito::NoritoSerialize, norito::NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(name = "norito.test.encoded_len_hint.Pair")]
 struct Pair {
     a: u32,
     b: u64,

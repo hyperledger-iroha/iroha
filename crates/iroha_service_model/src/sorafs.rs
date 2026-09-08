@@ -1,4 +1,4 @@
-//! Shared SoraFS protocol policy defaults used by gateways and clients.
+//! Shared `SoraFS` protocol policy defaults used by gateways and clients.
 
 /// Alias cache positive TTL (seconds) applied by Torii gateways and SDK helpers.
 pub const DEFAULT_ALIAS_POSITIVE_TTL_SECS: u64 = 10 * 60;

@@ -812,6 +812,10 @@ mod tests {
             loop {
                 match listener.accept() {
                     Ok((mut stream, _)) => {
+                        // Accepted sockets can inherit the listener's nonblocking mode.
+                        stream
+                            .set_nonblocking(false)
+                            .expect("blocking proxy test stream");
                         stream
                             .set_read_timeout(Some(Duration::from_secs(1)))
                             .expect("proxy test stream read timeout");

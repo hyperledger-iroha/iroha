@@ -10,7 +10,7 @@ use iroha_data_model_derive::model;
 use iroha_primitives::const_vec::ConstVec;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
-use norito::{DeserializePayload, NoritoDeserialize, core as ncore};
+use norito::{DeserializePayload, core as ncore};
 use std::{fmt, iter::IntoIterator, ops::Deref, vec::Vec};
 #[model]
 mod model {
@@ -208,7 +208,7 @@ impl TryFrom<Vec<u8>> for ContractArgumentRecord {
         Self::try_new(bytes)
     }
 }
-impl ncore::NoritoSerialize for ContractArgumentRecord {}
+
 impl ncore::SerializePayload for ContractArgumentRecord {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
         ncore::SerializePayload::serialize(&self.0, writer)
@@ -220,7 +220,7 @@ impl ncore::SerializePayload for ContractArgumentRecord {
         ncore::SerializePayload::encoded_len_exact(&self.0)
     }
 }
-impl NoritoDeserialize<'_> for ContractArgumentRecord {}
+
 impl<'de> DeserializePayload<'de> for ContractArgumentRecord {
     fn deserialize(archived: &'de ncore::Archived<Self>) -> Self {
         // Norito's public decode functions, Option decoder, and generated

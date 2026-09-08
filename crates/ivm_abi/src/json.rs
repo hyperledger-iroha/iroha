@@ -17,7 +17,8 @@ pub const MAX_JSON_LITERAL_ITEMS_V1: usize = 64;
 /// Maximum canonical encoded construction-schema size.
 pub const MAX_JSON_CONSTRUCTION_SCHEMA_BYTES_V1: usize = MAX_STATE_VALUE_SCHEMA_BYTES;
 /// One preorder node in a compiler-emitted native JSON construction schema.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(name = "ivm_abi::json::JsonConstructionNodeV1")]
 pub enum JsonConstructionNodeV1 {
     /// JSON object. One child immediately follows for every key in source order.
     Object {
@@ -36,7 +37,8 @@ pub enum JsonConstructionNodeV1 {
     },
 }
 /// Compiler-owned schema for one native `json { ... }` or `json [ ... ]` expression.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(name = "ivm_abi::json::JsonConstructionSchemaV1")]
 pub struct JsonConstructionSchemaV1 {
     /// Preorder construction tree.
     pub nodes: Vec<JsonConstructionNodeV1>,
@@ -366,5 +368,18 @@ mod tests {
             decode_from_bytes(&encoded).expect("decode JSON construction schema");
         assert_eq!(decoded, schema);
         assert_eq!(to_bytes(&decoded).expect("re-encode schema"), encoded);
+    }
+}
+
+#[cfg(test)]
+mod captured_frame_identity_tests {
+    #[test]
+    fn observed_declared_identities() {
+        crate::captured_identity_tests::assert_bidirectional::<super::JsonConstructionNodeV1>(
+            "ivm_abi::json::JsonConstructionNodeV1",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::JsonConstructionSchemaV1>(
+            "ivm_abi::json::JsonConstructionSchemaV1",
+        );
     }
 }

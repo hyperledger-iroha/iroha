@@ -1,12 +1,4 @@
 impl V2LaneWorkAdapter {
-    #[cfg(test)]
-    pub(in crate::sumeragi) fn set_queue_plan_test_network_id(
-        &mut self,
-        network_id: iroha_data_model::NetworkId,
-    ) {
-        self.context.network_id = network_id;
-    }
-
     pub(crate) fn reconcile_pending_queue_plan_admissions(
         &mut self,
         active_view: wire::View,

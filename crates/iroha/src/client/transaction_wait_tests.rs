@@ -201,19 +201,35 @@ fn transaction_wait_backpressure_does_not_retry_malformed_instructions_or_other_
         .headers_mut()
         .append(http::header::RETRY_AFTER, "2".parse().expect("header"));
     let cases = [
-        backpressure(Some("-1")),
-        backpressure(Some("18446744073709551616")),
-        duplicate,
-        json_response(StatusCode::FORBIDDEN, "permission denied"),
-        json_response(StatusCode::SERVICE_UNAVAILABLE, "route unavailable"),
-        json_response(StatusCode::OK, "{}"),
+        (
+            backpressure(Some("-1")),
+            "invalid Retry-After delta seconds",
+        ),
+        (
+            backpressure(Some("18446744073709551616")),
+            "invalid Retry-After delta seconds",
+        ),
+        (duplicate, "multiple Retry-After values"),
+        (
+            json_response(StatusCode::FORBIDDEN, "permission denied"),
+            "403 Forbidden",
+        ),
+        (
+            json_response(StatusCode::SERVICE_UNAVAILABLE, "route unavailable"),
+            "503 Service Unavailable",
+        ),
+        (
+            json_response(StatusCode::OK, "{}"),
+            "Failed to get pipeline transaction status",
+        ),
     ];
     for asynchronous in [false, true] {
-        for response in &cases {
+        for (response, expected_error) in &cases {
             let (client, snapshots) =
                 scripted_client(vec![response.clone(), status("Applied", "state")]);
-            let _ = wait(&client, asynchronous, Duration::from_secs(1))
+            let error = wait(&client, asynchronous, Duration::from_secs(1))
                 .expect_err("non-retryable error");
+            assert!(format!("{error:#}").contains(*expected_error), "{error:#}");
             assert_eq!(snapshots.lock().expect("snapshots").len(), 1);
         }
     }
@@ -239,8 +255,14 @@ fn transaction_wait_backpressure_preserves_fixed_failure_and_hash_binding() {
             )
             .into_bytes();
         let (client, snapshots) = scripted_client(vec![backpressure(None), wrong]);
-        let _ =
+        let error =
             wait(&client, asynchronous, Duration::from_secs(1)).expect_err("wrong hash must fail");
+        assert!(
+            error
+                .to_string()
+                .contains("does not match requested transaction"),
+            "{error:#}"
+        );
         assert_eq!(snapshots.lock().expect("snapshots").len(), 2);
     }
 }

@@ -1347,31 +1347,6 @@ fn fixed_lde_columns_v1(
         Ok(coefficients)
     })
 }
-#[cfg(test)]
-/// Compare selected execution evaluations against the original native full-LDE path.
-pub(crate) fn execution_fixed_query_parity_v1<A: ProofManagedNoteStarkAdapterV1>(
-    adapter: &A,
-    query_indices: &[usize],
-) -> Result<bool, ProofManagedNoteStarkErrorV1> {
-    let prepared = prepare_note_profile_v1(adapter)?;
-    let reference = fixed_lde_columns_v1(
-        &prepared.fixed_columns,
-        prepared.trace_log2,
-        prepared.layout.common_lde_log2(),
-    )?;
-    let queries = execution_fixed::query_rows_v1(
-        prepared.fixed_columns,
-        prepared.trace_log2,
-        prepared.layout.common_lde_log2(),
-        query_indices,
-    )?;
-    for index in query_indices {
-        if queries.get(index) != Some(&row_at_columns_v1(&reference, *index)?) {
-            return Ok(false);
-        }
-    }
-    Ok(true)
-}
 fn masked_lde_columns_v1<R: TryRngCore>(
     columns: &[Vec<F>],
     trace_log2: u8,

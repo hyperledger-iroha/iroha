@@ -2988,7 +2988,7 @@ fn iroha_da_submit_records_pdp_commitment_receipt() {
         nexus::LaneId,
     };
     use norito::{
-        core::DeserializePayload,
+        DeserializePayload,
         json::{Map as JsonMap, Value},
     };
     use sorafs_manifest::{

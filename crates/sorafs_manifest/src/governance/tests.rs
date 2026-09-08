@@ -62,8 +62,8 @@ where
     Borrowed: norito::core::NoritoSerialize,
 {
     assert_eq!(
-        Borrowed::schema_hash(),
-        Owned::schema_hash(),
+        norito::schema::identity::frame_hash::<Borrowed>(),
+        norito::schema::identity::frame_hash::<Owned>(),
         "{label} schema hash changed"
     );
     assert_eq!(
@@ -188,7 +188,7 @@ fn governance_log_node_cid_is_stable_and_input_sensitive() {
     assert_ne!(first, changed);
     assert_eq!(first.len(), blake3::OUT_LEN);
 }
-fn sign_governance_node(node: &mut GovernanceLogNodeV1, seed: &[u8; 32]) {
+pub(super) fn sign_governance_node(node: &mut GovernanceLogNodeV1, seed: &[u8; 32]) {
     let signing_key = SigningKey::from_bytes(seed);
     let payload_bytes = node
         .signature_payload_bytes()
@@ -323,7 +323,7 @@ fn governance_source_and_node_preflights_accept_boundary_and_reject_one_over() {
         }) if found == node_len && maximum == node_len - 1
     ));
 }
-fn sign_governance_block(block: &mut GovernanceDagBlockV1, seed: &[u8; 32]) {
+pub(super) fn sign_governance_block(block: &mut GovernanceDagBlockV1, seed: &[u8; 32]) {
     let signing_key = SigningKey::from_bytes(seed);
     let payload_bytes = block
         .signature_payload_bytes()
@@ -335,7 +335,7 @@ fn sign_governance_block(block: &mut GovernanceDagBlockV1, seed: &[u8; 32]) {
         signature: signature.to_bytes().to_vec(),
     };
 }
-fn sign_governance_head(head: &mut GovernanceDagHeadV1, seed: &[u8; 32]) {
+pub(super) fn sign_governance_head(head: &mut GovernanceDagHeadV1, seed: &[u8; 32]) {
     let signing_key = SigningKey::from_bytes(seed);
     let payload_bytes = head
         .signature_payload_bytes()
@@ -347,7 +347,7 @@ fn sign_governance_head(head: &mut GovernanceDagHeadV1, seed: &[u8; 32]) {
         signature: signature.to_bytes().to_vec(),
     };
 }
-fn signed_governance_block(
+pub(super) fn signed_governance_block(
     prev_block_cid: Option<Vec<u8>>,
     prev_node_cid: Option<Vec<u8>>,
     sequence: u64,
@@ -401,7 +401,7 @@ fn governance_block_preflight_accepts_boundary_and_rejects_one_over() {
         }) if found == block_len && maximum == block_len - 1
     ));
 }
-fn signed_governance_head(blocks: &[GovernanceDagBlockV1]) -> GovernanceDagHeadV1 {
+pub(super) fn signed_governance_head(blocks: &[GovernanceDagBlockV1]) -> GovernanceDagHeadV1 {
     let head_block_cid = blocks.last().expect("at least one block").block_cid.clone();
     let checkpoint_cid = (blocks.len() > GOVERNANCE_DAG_CHECKPOINT_WINDOW_BLOCKS_V1).then(|| {
         let checkpoint_index = blocks
@@ -813,9 +813,16 @@ fn governance_signing_payload_limit_dominates_largest_embedded_envelope() {
     );
 }
 #[test]
-fn governance_signing_payload_requires_allocation_free_exact_size() {
+pub(super) fn governance_signing_payload_requires_allocation_free_exact_size() {
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(
+        name = "sorafs_manifest::governance::tests::governance_signing_payload_requires_allocation_free_exact_size::InexactSigningPayload"
+    )]
     struct InexactSigningPayload;
-    impl norito::NoritoSerialize for InexactSigningPayload {}
+    crate::signing_identity_test_support::check_rejected_identity::<InexactSigningPayload>(
+        "governance/inexact",
+    );
+
     impl norito::SerializePayload for InexactSigningPayload {
         fn serialize(
             &self,
@@ -834,9 +841,16 @@ fn governance_signing_payload_requires_allocation_free_exact_size() {
     );
 }
 #[test]
-fn governance_signing_payload_rejects_oversize_before_serialize_or_allocate() {
+pub(super) fn governance_signing_payload_rejects_oversize_before_serialize_or_allocate() {
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(
+        name = "sorafs_manifest::governance::tests::governance_signing_payload_rejects_oversize_before_serialize_or_allocate::OversizedSigningPayload"
+    )]
     struct OversizedSigningPayload;
-    impl norito::NoritoSerialize for OversizedSigningPayload {}
+    crate::signing_identity_test_support::check_rejected_identity::<OversizedSigningPayload>(
+        "governance/oversized",
+    );
+
     impl norito::SerializePayload for OversizedSigningPayload {
         fn serialize(
             &self,
@@ -1769,7 +1783,7 @@ fn moderation_ballot_event_enforces_exact_size_and_text_boundaries() {
         ) if found == SORAFS_MODERATION_IDENTIFIER_MAX_BYTES_V1 + 1
     ));
 }
-fn sample_appeal_finance_report() -> SoraFsAppealFinanceReportV1 {
+pub(super) fn sample_appeal_finance_report() -> SoraFsAppealFinanceReportV1 {
     SoraFsAppealFinanceReportV1 {
         version: SORAFS_APPEAL_FINANCE_REPORT_VERSION_V1,
         report_id: [0x42; 16],

@@ -1375,11 +1375,18 @@ fn absolute_output_path(path: &Path, label: &str) -> Result<PathBuf, String> {
     }
 }
 #[cfg(any(target_os = "android", target_os = "linux"))]
-const OUTPUT_PARENT_OPEN_FLAGS: i32 = 0o200000 | 0o400000 | 0o2000000;
+const OUTPUT_PARENT_OPEN_FLAGS: i32 = (rustix::fs::OFlags::DIRECTORY.bits()
+    | rustix::fs::OFlags::NOFOLLOW.bits()
+    | rustix::fs::OFlags::CLOEXEC.bits()) as i32;
 #[cfg(any(target_os = "android", target_os = "linux"))]
-const OUTPUT_CREATE_FLAGS: i32 = 0x1 | 0o100 | 0o200 | 0o400000 | 0o2000000;
+const OUTPUT_CREATE_FLAGS: i32 = (rustix::fs::OFlags::WRONLY.bits()
+    | rustix::fs::OFlags::CREATE.bits()
+    | rustix::fs::OFlags::EXCL.bits()
+    | rustix::fs::OFlags::NOFOLLOW.bits()
+    | rustix::fs::OFlags::CLOEXEC.bits()) as i32;
 #[cfg(any(target_os = "android", target_os = "linux"))]
-const OUTPUT_REOPEN_FLAGS: i32 = 0o400000 | 0o2000000;
+const OUTPUT_REOPEN_FLAGS: i32 =
+    (rustix::fs::OFlags::NOFOLLOW.bits() | rustix::fs::OFlags::CLOEXEC.bits()) as i32;
 #[cfg(any(target_os = "ios", target_os = "macos"))]
 const OUTPUT_PARENT_OPEN_FLAGS: i32 = 0x100000 | 0x100 | 0x1000000;
 #[cfg(any(target_os = "ios", target_os = "macos"))]

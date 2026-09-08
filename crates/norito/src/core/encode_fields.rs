@@ -84,7 +84,6 @@ pub fn write_packed_fields(
 
 #[cfg(test)]
 mod tests {
-    use crate::NoritoSerialize;
     use std::cell::Cell;
 
     use super::*;
@@ -98,7 +97,6 @@ mod tests {
         bytes: &'a [u8],
     }
 
-    impl NoritoSerialize for CountedValue<'_> {}
     impl SerializePayload for CountedValue<'_> {
         fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
             self.visits.set(self.visits.get() + 1);
@@ -120,7 +118,6 @@ mod tests {
         bitset: Option<&'a [u8]>,
     }
 
-    impl NoritoSerialize for Record<'_> {}
     impl SerializePayload for Record<'_> {
         fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
             write_packed_fields(writer, self.fields, self.bitset)
@@ -232,7 +229,6 @@ mod tests {
 
     struct FailingValue;
 
-    impl NoritoSerialize for FailingValue {}
     impl SerializePayload for FailingValue {
         fn serialize(&self, _writer: &mut Encoder<'_>) -> Result<(), Error> {
             Err(Error::NonCanonicalEncoding)
@@ -264,7 +260,6 @@ mod tests {
         grows: bool,
     }
 
-    impl NoritoSerialize for ChangingValue {}
     impl SerializePayload for ChangingValue {
         fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
             let first = self.visits.replace(self.visits.get() + 1) == 0;
@@ -316,6 +311,8 @@ mod tests {
 
     #[derive(crate::Encode, crate::Decode, Debug, PartialEq)]
     #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
+    #[derive(crate::NoritoSchema)]
+    #[norito_schema(name = "norito.test.core.encode_fields.WithRaw")]
     struct WithRaw {
         wrapped: Wrapped,
         raw: [u8; 3],

@@ -31,7 +31,11 @@ pub(in crate::backend) mod codec;
 /// Canonical serialization counts its fixed-layout frame; prototype decoding is test-only.
 #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize)]
 #[cfg_attr(test, derive(NoritoDeserialize))]
-#[norito(schema_name = "fastpq_prover::compact_prototype::SharedProofV1")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "fastpq_prover::backend::compact_protocol::shared_openings::SharedProof",
+    frame = "fastpq_prover::compact_prototype::SharedProofV1"
+)]
 pub(in crate::backend) struct SharedProof {
     row_root: WireDigest,
     mixed_root: WireDigest,
@@ -48,8 +52,11 @@ pub(in crate::backend) struct SharedProof {
 
 /// Distinct candidate frame with the same bounded payload layout.
 /// No qualified production entry point currently admits this schema.
-#[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
-#[norito(schema_name = "fastpq_prover::compact_candidate::ShakeSharedProofV1")]
+#[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "fastpq_prover::backend::compact_protocol::shared_openings::ShakeSharedProof",
+    frame = "fastpq_prover::compact_candidate::ShakeSharedProofV1"
+)]
 pub(in crate::backend) struct ShakeSharedProof {
     row_root: WireDigest,
     mixed_root: WireDigest,

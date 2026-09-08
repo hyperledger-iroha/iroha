@@ -3105,7 +3105,7 @@ required|successor_attestation|LifecycleDecisionApplySuccessorOutputModeV1::Dela
 required|successor_attestation|output_address: ConcreteWorkAddress|post-Apply proof stopped retaining the exact Broadcast row address
 required|successor_attestation|output_digest: LifecycleDigest|post-Apply proof stopped retaining the installed Broadcast digest
 required|successor_holder|.attest_lifecycle_decision_apply_successor_outputs(|production holder omitted the sealed singleton CommitQC attestation
-required|successor_holder|.classify_lifecycle_decision_apply_pending_output_census(|production holder omitted the sealed Apply/output ordering classifier
+required|successor_holder|.try_classify_lifecycle_decision_apply_pending_output_census(|production holder omitted the sealed Apply/output ordering classifier
 forbidden|successor_holder|registry_mut|successor-output attestation exposed mutable registry access
 required|periodic_batch|predecessor.owner == self.owner|periodic CommitQC and Apply stopped sharing one lifecycle owner
 required|periodic_batch|predecessor.binding.effect_count == 2|periodic Decision exemption stopped requiring a two-effect batch

@@ -2985,6 +2985,11 @@ struct GovernanceLogNodeCidPayloadViewWireV1<'a> {
     submission_provenance: Option<borrowed_norito::Value<'a, GovernanceDagSubmissionProvenanceV1>>,
     payload: borrowed_norito::Value<'a, GovernanceLogPayloadV1>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "sorafs_manifest::governance::GovernanceLogNodeCidPayloadViewV1",
+    frame = "sorafs_manifest::governance::GovernanceLogNodeCidPayloadV1"
+)]
 struct GovernanceLogNodeCidPayloadViewV1<'a>(GovernanceLogNodeCidPayloadViewWireV1<'a>);
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "sorafs_manifest::governance::GovernanceDagBlockCidPayloadV1")]
@@ -3006,6 +3011,11 @@ struct GovernanceDagBlockCidPayloadViewWireV1<'a> {
     publisher_peer_id: borrowed_norito::Vec<'a>,
     node: borrowed_norito::Value<'a, GovernanceLogNodeV1>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "sorafs_manifest::governance::GovernanceDagBlockCidPayloadViewV1",
+    frame = "sorafs_manifest::governance::GovernanceDagBlockCidPayloadV1"
+)]
 struct GovernanceDagBlockCidPayloadViewV1<'a>(GovernanceDagBlockCidPayloadViewWireV1<'a>);
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "sorafs_manifest::governance::GovernanceDagBlockSignaturePayloadV1")]
@@ -3029,6 +3039,11 @@ struct GovernanceDagBlockSignaturePayloadViewWireV1<'a> {
     publisher_peer_id: borrowed_norito::Vec<'a>,
     node: borrowed_norito::Value<'a, GovernanceLogNodeV1>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "sorafs_manifest::governance::GovernanceDagBlockSignaturePayloadViewV1",
+    frame = "sorafs_manifest::governance::GovernanceDagBlockSignaturePayloadV1"
+)]
 struct GovernanceDagBlockSignaturePayloadViewV1<'a>(
     GovernanceDagBlockSignaturePayloadViewWireV1<'a>,
 );
@@ -3274,6 +3289,11 @@ struct GovernanceDagHeadSignaturePayloadViewWireV1<'a> {
     publisher_peer_id: borrowed_norito::Vec<'a>,
     checkpoint_cid: borrowed_norito::Option<'a>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "sorafs_manifest::governance::GovernanceDagHeadSignaturePayloadViewV1",
+    frame = "sorafs_manifest::governance::GovernanceDagHeadSignaturePayloadV1"
+)]
 struct GovernanceDagHeadSignaturePayloadViewV1<'a>(GovernanceDagHeadSignaturePayloadViewWireV1<'a>);
 /// Signed public Governance DAG head manifest.
 #[derive(norito::NoritoSchema)]
@@ -3429,6 +3449,11 @@ struct GovernanceLogSignaturePayloadViewWireV1<'a> {
     submission_provenance: Option<borrowed_norito::Value<'a, GovernanceDagSubmissionProvenanceV1>>,
     payload: borrowed_norito::Value<'a, GovernanceLogPayloadV1>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "sorafs_manifest::governance::GovernanceLogSignaturePayloadViewV1",
+    frame = "sorafs_manifest::governance::GovernanceLogSignaturePayloadV1"
+)]
 struct GovernanceLogSignaturePayloadViewV1<'a>(GovernanceLogSignaturePayloadViewWireV1<'a>);
 /// Algorithms supported for governance signatures.
 #[derive(norito::NoritoSchema)]
@@ -4963,3 +4988,7 @@ include!("governance/captured_owner_identity_tests.rs");
 #[cfg(test)]
 #[path = "governance/borrowed_payload_tests.rs"]
 mod borrowed_payload_tests;
+
+#[cfg(test)]
+#[path = "governance/signing_identity_tests.rs"]
+pub(crate) mod signing_identity_tests;

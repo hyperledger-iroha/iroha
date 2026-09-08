@@ -968,11 +968,6 @@ impl<'a> PopSignatureSigningViewV1<'a> {
         })
     }
 }
-impl norito::core::NoritoSerialize for PopSignatureSigningViewV1<'_> {
-    fn schema_hash() -> [u8; 16] {
-        PopSignatureV1::schema_hash()
-    }
-}
 impl norito::core::SerializePayload for PopSignatureSigningViewV1<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         self.0.serialize(writer)
@@ -1002,6 +997,11 @@ struct PopCredentialSigningViewWireV1<'a> {
     revocation_list_version: u64,
     issuer_signature: PopSignatureSigningViewV1<'a>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "sorafs_manifest::pop_credentials::PopCredentialSigningViewV1",
+    frame = "sorafs_manifest::pop_credentials::PopCredentialV1"
+)]
 struct PopCredentialSigningViewV1<'a>(PopCredentialSigningViewWireV1<'a>);
 impl<'a> PopCredentialSigningViewV1<'a> {
     fn from_credential(credential: &'a PopCredentialV1) -> Self {
@@ -1025,11 +1025,7 @@ impl<'a> PopCredentialSigningViewV1<'a> {
         })
     }
 }
-impl norito::core::NoritoSerialize for PopCredentialSigningViewV1<'_> {
-    fn schema_hash() -> [u8; 16] {
-        PopCredentialV1::schema_hash()
-    }
-}
+
 impl norito::core::SerializePayload for PopCredentialSigningViewV1<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         self.0.serialize(writer)
@@ -1054,6 +1050,11 @@ struct PopCommitmentRootSigningViewWireV1<'a> {
     governance_event_digest: [u8; 32],
     publisher_signature: PopSignatureSigningViewV1<'a>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "sorafs_manifest::pop_credentials::PopCommitmentRootSigningViewV1",
+    frame = "sorafs_manifest::pop_credentials::PopCommitmentRootV1"
+)]
 struct PopCommitmentRootSigningViewV1<'a>(PopCommitmentRootSigningViewWireV1<'a>);
 impl<'a> PopCommitmentRootSigningViewV1<'a> {
     fn from_root(root: &'a PopCommitmentRootV1) -> Self {
@@ -1073,11 +1074,7 @@ impl<'a> PopCommitmentRootSigningViewV1<'a> {
         })
     }
 }
-impl norito::core::NoritoSerialize for PopCommitmentRootSigningViewV1<'_> {
-    fn schema_hash() -> [u8; 16] {
-        PopCommitmentRootV1::schema_hash()
-    }
-}
+
 impl norito::core::SerializePayload for PopCommitmentRootSigningViewV1<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         self.0.serialize(writer)
@@ -1101,6 +1098,11 @@ struct PopRevocationListSigningViewWireV1<'a> {
     entries: borrowed_norito::Vec<'a, PopRevocationEntryV1>,
     publisher_signature: PopSignatureSigningViewV1<'a>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "sorafs_manifest::pop_credentials::PopRevocationListSigningViewV1",
+    frame = "sorafs_manifest::pop_credentials::PopRevocationListV1"
+)]
 struct PopRevocationListSigningViewV1<'a>(PopRevocationListSigningViewWireV1<'a>);
 impl<'a> PopRevocationListSigningViewV1<'a> {
     fn from_revocations(revocations: &'a PopRevocationListV1) -> Self {
@@ -1119,11 +1121,7 @@ impl<'a> PopRevocationListSigningViewV1<'a> {
         })
     }
 }
-impl norito::core::NoritoSerialize for PopRevocationListSigningViewV1<'_> {
-    fn schema_hash() -> [u8; 16] {
-        PopRevocationListV1::schema_hash()
-    }
-}
+
 impl norito::core::SerializePayload for PopRevocationListSigningViewV1<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         self.0.serialize(writer)
@@ -1885,12 +1883,12 @@ mod tests {
         bytes[..8].copy_from_slice(&value.to_le_bytes());
         bytes
     }
-    fn nonce(value: u128) -> [u8; 32] {
+    pub(super) fn nonce(value: u128) -> [u8; 32] {
         let mut bytes = [0u8; 32];
         bytes[..16].copy_from_slice(&value.to_le_bytes());
         bytes
     }
-    fn signing_key(seed: u8) -> SigningKey {
+    pub(super) fn signing_key(seed: u8) -> SigningKey {
         SigningKey::from_bytes(&[seed; 32])
     }
     fn empty_signature(key: &SigningKey) -> PopSignatureV1 {
@@ -1929,10 +1927,10 @@ mod tests {
         *hasher.finalize().as_bytes()
     }
     #[derive(Clone)]
-    struct Fixture {
-        credential: PopCredentialV1,
-        root: PopCommitmentRootV1,
-        revocations: PopRevocationListV1,
+    pub(super) struct Fixture {
+        pub(super) credential: PopCredentialV1,
+        pub(super) root: PopCommitmentRootV1,
+        pub(super) revocations: PopRevocationListV1,
         proof: PopMembershipProofV1,
         holder_secret: [u8; 32],
         credential_path: PopCredentialMerklePathV1,
@@ -2042,7 +2040,7 @@ mod tests {
             revocation_path,
         }
     }
-    fn fixture() -> &'static Fixture {
+    pub(super) fn fixture() -> &'static Fixture {
         static FIXTURE: OnceLock<Fixture> = OnceLock::new();
         FIXTURE.get_or_init(build_fixture)
     }
@@ -3104,3 +3102,7 @@ include!("pop_credentials/captured_owner_identity_tests.rs");
 #[cfg(test)]
 #[path = "pop_credentials/borrowed_payload_tests.rs"]
 mod borrowed_payload_tests;
+
+#[cfg(test)]
+#[path = "pop_credentials/signing_identity_tests.rs"]
+pub(crate) mod signing_identity_tests;

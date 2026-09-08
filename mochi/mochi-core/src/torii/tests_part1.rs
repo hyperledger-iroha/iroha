@@ -423,15 +423,92 @@ fn reject_code_and_message_helpers_extract_values() {
         reject_code_from_headers(&axt_headers).as_deref(),
         Some("AXT_HANDLE_ERA")
     );
-    let envelope = ToriiErrorEnvelope {
-        code: "PRTRY:AXT_HANDLE_ERA".to_owned(),
-        message: "handle era too low".to_owned(),
-    };
+    let envelope = ErrorEnvelope::new("PRTRY:AXT_HANDLE_ERA", "handle era too low");
+    assert!(envelope.details.is_none());
     let body = norito::to_bytes(&envelope).expect("encode envelope");
     assert_eq!(
         error_message_from_body(&body).as_deref(),
         Some("PRTRY:AXT_HANDLE_ERA: handle era too low")
     );
+}
+#[test]
+fn error_message_decodes_canonical_envelope_with_details() {
+    let envelope = ErrorEnvelope::new("queue_full", "transaction queue is at capacity")
+        .with_details(iroha_torii_shared::ErrorDetails {
+            reject_code: Some("PRTRY:QUEUE_FULL".to_owned()),
+            retry_after_seconds: Some(3),
+            endpoint: Some("/transaction".to_owned()),
+            ..Default::default()
+        });
+    let body = norito::to_bytes(&envelope).expect("encode server-owned envelope");
+    let decoded = decode_norito::<ErrorEnvelope>(&body).expect("decode complete shared envelope");
+    let details = decoded
+        .details
+        .expect("retain populated details on the wire");
+    assert_eq!(details.reject_code.as_deref(), Some("PRTRY:QUEUE_FULL"));
+    assert_eq!(details.retry_after_seconds, Some(3));
+    assert_eq!(details.endpoint.as_deref(), Some("/transaction"));
+    assert_eq!(
+        error_message_from_body(&body).as_deref(),
+        Some("queue_full: transaction queue is at capacity")
+    );
+}
+#[test]
+fn error_message_preserves_empty_code_for_canonical_envelopes() {
+    for envelope in [
+        ErrorEnvelope::new("", "request failed"),
+        ErrorEnvelope::new("", "request failed").with_details(iroha_torii_shared::ErrorDetails {
+            layer: Some("torii".to_owned()),
+            ..Default::default()
+        }),
+    ] {
+        let body = norito::to_bytes(&envelope).expect("encode server-owned envelope");
+        assert_eq!(
+            error_message_from_body(&body).as_deref(),
+            Some("request failed"),
+            "empty codes must not add a colon prefix"
+        );
+    }
+}
+#[test]
+fn error_message_rejects_truncated_canonical_envelope_before_fallback() {
+    let envelope = ErrorEnvelope::new("request_invalid", "invalid field");
+    let complete = norito::to_bytes(&envelope).expect("encode server-owned envelope");
+    assert_eq!(
+        error_message_from_body(&complete).as_deref(),
+        Some("request_invalid: invalid field")
+    );
+    let truncated = &complete[..complete.len() - 1];
+    assert!(decode_norito::<ErrorEnvelope>(truncated).is_err());
+    assert_ne!(
+        error_message_from_body(truncated).as_deref(),
+        Some("request_invalid: invalid field"),
+        "an incomplete frame must not be accepted as a typed error envelope"
+    );
+}
+#[test]
+fn error_message_preserves_json_and_text_fallbacks() {
+    let envelope = ErrorEnvelope::new("request_invalid", "invalid field");
+    let body = norito::json::to_vec(&envelope).expect("encode shared JSON envelope");
+    assert_eq!(
+        error_message_from_body(&body).as_deref(),
+        Some("request_invalid: invalid field")
+    );
+    let empty_code = norito::json::to_vec(&ErrorEnvelope::new("", "request failed"))
+        .expect("encode shared JSON envelope with empty code");
+    assert_eq!(
+        error_message_from_body(&empty_code).as_deref(),
+        Some("request failed")
+    );
+    assert_eq!(
+        error_message_from_body(br#"{"error":"gateway unavailable"}"#).as_deref(),
+        Some("gateway unavailable")
+    );
+    assert_eq!(
+        error_message_from_body(b"  gateway unavailable\n").as_deref(),
+        Some("gateway unavailable")
+    );
+    assert_eq!(error_message_from_body(b" \n\t"), None);
 }
 #[test]
 fn rejects_unsupported_base_scheme() {
@@ -1868,10 +1945,7 @@ async fn block_stream_reports_decode_errors() {
         .expect("error event value");
     match event {
         BlockStreamEvent::DecodeError { error } => {
-            assert!(matches!(
-                error.stage,
-                BlockDecodeStage::Frame
-            ));
+            assert!(matches!(error.stage, BlockDecodeStage::Frame));
             assert_eq!(error.raw_len, Some(3));
         }
         other => panic!("expected decode error event, got {other:?}"),

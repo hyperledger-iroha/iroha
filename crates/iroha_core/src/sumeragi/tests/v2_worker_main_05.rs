@@ -2183,20 +2183,6 @@ fn outbound_payload_at_view(service: &ProductionV2Services, view: u64) -> Encode
     )
     .expect("encode view-owned payload")
 }
-fn timeout_certificate_at_view(
-    service: &ProductionV2Services,
-    view: u64,
-) -> wire::TimeoutCertificate {
-    wire::TimeoutCertificate {
-        round: wire::ConsensusRound {
-            context_id: service.context.id(),
-            height: service.context.height,
-            view,
-        },
-        groups: Vec::new(),
-    }
-}
-
 #[cfg(feature = "bls")]
 struct WorkerWalAuthorityFixture {
     adapter: SumeragiV2Adapter,

@@ -4,12 +4,16 @@ use norito::{
 };
 #[derive(Debug, Clone, PartialEq, NoritoSerialize, NoritoDeserialize)]
 #[norito(decode_from_slice)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "norito.test.flatten.InnerSelector")]
 struct InnerSelector {
     first: Option<u32>,
     second: Option<String>,
 }
 #[derive(Debug, Clone, PartialEq, NoritoSerialize, NoritoDeserialize)]
 #[norito(decode_from_slice)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "norito.test.flatten.OuterRequest")]
 struct OuterRequest {
     #[norito(flatten)]
     selector: InnerSelector,

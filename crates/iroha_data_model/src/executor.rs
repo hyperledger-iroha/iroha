@@ -112,7 +112,8 @@ mod model {
     )]
     #[ignore_extra_doc_attributes]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
-    #[derive(thiserror::Error)]
+    #[derive(thiserror::Error, norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::executor::model::ValidationFail")]
     pub enum ValidationFail {
         /// Operation is not permitted: {0}
         NotPermitted(
@@ -166,6 +167,8 @@ mod model {
     #[display("Seiyaku {contract} rejected with {error_type}::{name} ({code})")]
     #[derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::executor::model::ContractRejection")]
     pub struct ContractRejection {
         /// Canonical source-level contract identity embedded in the artifact.
         pub contract: String,
@@ -654,5 +657,17 @@ mod tests {
             IvmAdmissionError::decode_all(&mut unknown.as_slice()).is_err(),
             "unknown admission error tags must fail closed"
         );
+    }
+}
+
+#[cfg(test)]
+mod additional_frame_owner_identity_tests {
+    //! Typed frame contracts observed with the original codec.
+
+    #[test]
+    fn captured_additional_frame_owner_identities() {
+        crate::frame_owner_identity_tests::assert_bidirectional::<
+            crate::executor::model::ContractRejection,
+        >("iroha_data_model::executor::model::ContractRejection");
     }
 }

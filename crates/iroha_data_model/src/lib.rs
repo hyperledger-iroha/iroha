@@ -404,6 +404,9 @@ pub mod prelude {
 mod captured_schema_tests;
 
 #[cfg(test)]
+mod frame_owner_identity_tests;
+
+#[cfg(test)]
 mod generic_identity_tests;
 
 #[cfg(test)]

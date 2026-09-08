@@ -91,7 +91,8 @@ pub struct LaneLifecycleIncarnationEntry {
 /// The status carries the exact canonical lane catalog and its domain-separated commitment. Clients
 /// must validate the snapshot before embedding [`Self::catalog_hash`] as
 /// [`LaneLifecycleParameterV1::expected_catalog_hash`].
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::LaneLifecycleStatusV1")]
 pub struct LaneLifecycleStatusV1 {
     /// Status layout version. This must be [`Self::VERSION`].
     pub version: u8,
@@ -3314,4 +3315,16 @@ pub mod prelude {
         LaneStorageProfile, LaneStorageProfileParseError, LaneVisibility, LaneVisibilityParseError,
         ShardId,
     };
+}
+
+#[cfg(test)]
+mod additional_frame_owner_identity_tests {
+    //! Typed frame contracts observed with the original codec.
+
+    #[test]
+    fn captured_additional_frame_owner_identities() {
+        crate::frame_owner_identity_tests::assert_bidirectional::<
+            crate::nexus::LaneLifecycleStatusV1,
+        >("iroha_data_model::nexus::LaneLifecycleStatusV1");
+    }
 }

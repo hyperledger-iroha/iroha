@@ -263,7 +263,7 @@ impl Name {
         self.0.as_ref().eq_ignore_ascii_case("genesis")
     }
 }
-impl norito::core::NoritoSerialize for Name {}
+
 impl norito::core::SerializePayload for Name {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         <&str as norito::core::SerializePayload>::serialize(&self.as_ref(), writer)
@@ -275,7 +275,7 @@ impl norito::core::SerializePayload for Name {
         <&str as norito::core::SerializePayload>::encoded_len_exact(&self.as_ref())
     }
 }
-impl norito::core::NoritoDeserialize<'_> for Name {}
+
 impl<'a> norito::core::DeserializePayload<'a> for Name {
     fn deserialize(archived: &'a norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived)

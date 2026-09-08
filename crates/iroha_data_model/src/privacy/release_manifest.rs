@@ -694,9 +694,17 @@ pub struct PrivacyReleaseSignatureV1 {
 }
 
 /// Portable, self-authenticating first-release Exact12 manifest.
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[norito(schema_name = "iroha.privacy.exact12-release-manifest.v1")]
-#[derive(DeriveJsonSerialize, DeriveJsonDeserialize)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
@@ -832,9 +840,17 @@ pub struct PrivacyDeploymentValidatorSignatureV1 {
 }
 
 /// Network-bound four-validator deployment qualification.
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[norito(schema_name = "iroha.privacy.exact12-deployment-qualification.v1")]
-#[derive(DeriveJsonSerialize, DeriveJsonDeserialize)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
@@ -880,9 +896,17 @@ pub struct PrivacyExact12DeploymentQualificationV1 {
 /// The record is a singleton in world state and is accepted only after Core
 /// validates it against the running chain, genesis, validator roster, ABI, and
 /// all twelve committed activations.
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[norito(schema_name = "iroha.privacy.exact12-qualification-record.v1")]
-#[derive(DeriveJsonSerialize, DeriveJsonDeserialize)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(

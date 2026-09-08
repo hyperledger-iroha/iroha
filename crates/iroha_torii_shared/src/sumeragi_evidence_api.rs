@@ -38,9 +38,11 @@ pub const SUMERAGI_EVIDENCE_LIST_WIRE_RESPONSE_SCHEMA_NAME_V1: &str =
     NoritoSerialize,
     NoritoDeserialize,
 )]
-#[norito(
-    schema_name = "iroha.torii.v1.sumeragi.evidence.count.response",
-    deny_unknown_fields
+#[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii_shared::sumeragi_evidence_api::SumeragiEvidenceCountResponse",
+    frame = "iroha.torii.v1.sumeragi.evidence.count.response"
 )]
 pub struct SumeragiEvidenceCountResponse {
     /// Total number of committed evidence records.
@@ -48,8 +50,11 @@ pub struct SumeragiEvidenceCountResponse {
 }
 
 /// Exact Norito response returned by `/v1/sumeragi/evidence`.
-#[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
-#[norito(schema_name = "iroha.torii.v1.sumeragi.evidence.list.response")]
+#[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii_shared::sumeragi_evidence_api::SumeragiEvidenceListWireResponse",
+    frame = "iroha.torii.v1.sumeragi.evidence.list.response"
+)]
 pub struct SumeragiEvidenceListWireResponse {
     /// Total number of matching committed evidence records before pagination.
     pub total: u64,
@@ -64,11 +69,11 @@ mod tests {
     #[test]
     fn response_envelopes_use_their_public_schema_names() {
         assert_eq!(
-            <SumeragiEvidenceCountResponse as norito::NoritoSerialize>::schema_hash(),
+            norito::schema::identity::frame_hash::<SumeragiEvidenceCountResponse>(),
             norito::core::schema_hash_for_name(SUMERAGI_EVIDENCE_COUNT_RESPONSE_SCHEMA_NAME_V1)
         );
         assert_eq!(
-            <SumeragiEvidenceListWireResponse as norito::NoritoSerialize>::schema_hash(),
+            norito::schema::identity::frame_hash::<SumeragiEvidenceListWireResponse>(),
             norito::core::schema_hash_for_name(SUMERAGI_EVIDENCE_LIST_WIRE_RESPONSE_SCHEMA_NAME_V1)
         );
     }
@@ -84,5 +89,18 @@ mod tests {
                 "invalid count response must be rejected: {invalid}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod captured_frame_identity_tests {
+    #[test]
+    fn observed_declared_identities() {
+        crate::captured_identity_tests::assert_bidirectional::<super::SumeragiEvidenceCountResponse>(
+            "iroha_torii_shared::sumeragi_evidence_api::SumeragiEvidenceCountResponse",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<
+            super::SumeragiEvidenceListWireResponse,
+        >("iroha_torii_shared::sumeragi_evidence_api::SumeragiEvidenceListWireResponse");
     }
 }

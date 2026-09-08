@@ -152,6 +152,8 @@ impl RegisterPeerWithPop {
     crate :: DeriveJsonDeserialize,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::register::RegisterCommitteePeerWithPop")]
 pub struct RegisterCommitteePeerWithPop {
     /// Peer identity to register outside the global voting roster.
     pub peer: PeerId,
@@ -459,7 +461,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RegisterCommitteePeerWithPop {
 impl<'a, O> norito::core::DecodeFromSlice<'a> for Register<O>
 where
     O: Registered,
-    O::With: for<'de> norito::core::NoritoDeserialize<'de> + norito::core::NoritoSerialize,
+    O::With: for<'de> norito::core::DeserializePayload<'de> + norito::core::SerializePayload,
     Self: norito::codec::Decode,
 {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
@@ -483,7 +485,7 @@ where
 impl<'a, O> norito::core::DecodeFromSlice<'a> for Unregister<O>
 where
     O: Identifiable,
-    O::Id: for<'de> norito::core::NoritoDeserialize<'de> + norito::core::NoritoSerialize,
+    O::Id: for<'de> norito::core::DeserializePayload<'de> + norito::core::SerializePayload,
     Self: norito::codec::Decode,
 {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
@@ -801,5 +803,17 @@ mod tests {
         for value in unregister_cases {
             assert_registry_decodes(&registry, UnregisterBox::WIRE_ID, value);
         }
+    }
+}
+
+#[cfg(test)]
+mod frame_owner_identity_tests {
+    //! Frame roots observed in the original codec before the identity cutover.
+
+    #[test]
+    fn captured_frame_owner_identities() {
+        crate::frame_owner_identity_tests::assert_bidirectional::<
+            super::RegisterCommitteePeerWithPop,
+        >("iroha_data_model::isi::register::RegisterCommitteePeerWithPop");
     }
 }

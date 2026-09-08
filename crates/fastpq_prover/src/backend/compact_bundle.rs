@@ -66,8 +66,11 @@ impl Default for BundleLimits {
 }
 
 /// Canonical carrier only; decoding it does not validate any contained proof.
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
-#[norito(schema_name = "fastpq_prover::compact_prototype::OrdinaryTransferBundleV1")]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "fastpq_prover::backend::compact_bundle::BundleWire",
+    frame = "fastpq_prover::compact_prototype::OrdinaryTransferBundleV1"
+)]
 pub(super) struct BundleWire {
     /// Exact bundle format version.
     pub(super) version: u16,
@@ -81,8 +84,11 @@ pub(super) struct BundleWire {
 ///
 /// Although its structural fields match the ordinary carrier, the nominal
 /// schema differs. Re-encoding a carrier cannot retag child segment identities.
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
-#[norito(schema_name = "fastpq_prover::compact_prototype::AxtTransferBundleV1")]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "fastpq_prover::backend::compact_bundle::AxtBundleWire",
+    frame = "fastpq_prover::compact_prototype::AxtTransferBundleV1"
+)]
 pub(super) struct AxtBundleWire {
     /// Exact bundle format version.
     pub(super) version: u16,
@@ -94,8 +100,11 @@ pub(super) struct AxtBundleWire {
 
 /// Distinct candidate ordinary carrier. The contained frames must also match
 /// the caller-selected candidate transcript; encoding supplies no qualification.
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
-#[norito(schema_name = "fastpq_prover::compact_candidate::ShakeOrdinaryTransferBundleV1")]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "fastpq_prover::backend::compact_bundle::ShakeBundleWire",
+    frame = "fastpq_prover::compact_candidate::ShakeOrdinaryTransferBundleV1"
+)]
 pub(super) struct ShakeBundleWire {
     /// Exact carrier version.
     pub(super) version: u16,
@@ -106,8 +115,11 @@ pub(super) struct ShakeBundleWire {
 }
 
 /// Distinct candidate AXT carrier; complete trusted AXT context stays outside it.
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
-#[norito(schema_name = "fastpq_prover::compact_candidate::ShakeAxtTransferBundleV1")]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "fastpq_prover::backend::compact_bundle::ShakeAxtBundleWire",
+    frame = "fastpq_prover::compact_candidate::ShakeAxtTransferBundleV1"
+)]
 pub(super) struct ShakeAxtBundleWire {
     /// Exact carrier version.
     pub(super) version: u16,

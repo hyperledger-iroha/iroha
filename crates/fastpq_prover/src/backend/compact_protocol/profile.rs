@@ -46,8 +46,11 @@ impl Protocol {
     }
 }
 
-#[derive(NoritoSerialize)]
-#[norito(schema_name = "fastpq_prover::compact_candidate::ShakeEngineStatementV1")]
+#[derive(NoritoSerialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "fastpq_prover::backend::compact_protocol::profile::StatementContext",
+    frame = "fastpq_prover::compact_candidate::ShakeEngineStatementV1"
+)]
 struct StatementContext {
     relation: String,
     trace_rows: u32,

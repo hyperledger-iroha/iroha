@@ -16,7 +16,7 @@ use iroha::{
     client::{
         AccountFaucetPolicyV1, AccountFaucetPreparedTransactionV1, AccountOnboardingPlanReceiptV1,
         AccountOnboardingPreparedTransactionV1, AccountOnboardingProofRequiredPrepareResponseV1,
-        TairaPublicResetMutationBindingV1, verify_account_faucet_prepared_transaction_v1,
+        verify_account_faucet_prepared_transaction_v1,
         verify_account_onboarding_prepared_transaction_v1,
         verify_account_onboarding_proof_required_result_v1,
     },
@@ -1423,9 +1423,10 @@ fn validate_prepared_mutation_envelope(
         }
         None
     } else {
-        let exact: TairaPublicResetMutationBindingV1 = json::from_value(binding_value.clone())
-            .wrap_err("prepared write binding is not exact typed V1 JSON")?;
-        if exact.schema != TairaPublicResetMutationBindingV1::SCHEMA
+        let exact: crate::taira::PreparedMutationBindingV1 =
+            json::from_value(binding_value.clone())
+                .wrap_err("prepared write binding is not exact typed V1 JSON")?;
+        if exact.schema != crate::taira::PreparedMutationBindingV1::SCHEMA
             || json::to_value(&exact)? != *binding_value
         {
             return Err(eyre!(
@@ -1519,7 +1520,7 @@ fn validate_prepared_mutation_envelope(
                 .get("schema")
                 .and_then(norito::json::Value::as_str)
                 != Some("iroha.taira.prepared-onboarding-proof-required.v1")
-            || exact_binding != &result.binding
+            || exact_binding.onboarding_binding(&receipt)? != result.binding
             || receipt.body.request != admitted.inventory.canary_onboarding_request
         {
             return Err(eyre!(
@@ -1531,7 +1532,7 @@ fn validate_prepared_mutation_envelope(
             &admitted.inventory.canary_onboarding_request,
             &result,
             &receipt,
-            exact_binding,
+            &exact_binding.onboarding_binding(&receipt)?,
         )
         .wrap_err("proof-required onboarding receipt or result authentication failed")?;
         return Ok((
@@ -1540,7 +1541,10 @@ fn validate_prepared_mutation_envelope(
             "onboarding_proof_required".to_owned(),
         ));
     }
-    if operation.len() != 2 || operation_envelope.get("binding") != root.get("binding") {
+    if operation.len() != 2
+        || ((is_inrou || admitted.request.mutation_kind == "write_canary")
+            && operation_envelope.get("binding") != root.get("binding"))
+    {
         return Err(eyre!(
             "prepared mutation operation does not duplicate the exact binding"
         ));
@@ -1695,7 +1699,11 @@ fn validate_prepared_mutation_envelope(
             if json::to_value(&prepared)? != norito::json::Value::Object(operation_envelope.clone())
                 || prepared.schema != AccountOnboardingPreparedTransactionV1::SCHEMA
                 || prepared.operation != AccountOnboardingPreparedTransactionV1::OPERATION
-                || Some(&prepared.binding) != exact_write_binding.as_ref()
+                || prepared.binding
+                    != exact_write_binding
+                        .as_ref()
+                        .expect("onboarding custody")
+                        .onboarding_binding(&prepared.receipt)?
                 || prepared.receipt.body.request != admitted.inventory.canary_onboarding_request
             {
                 return Err(eyre!(
@@ -1711,9 +1719,10 @@ fn validate_prepared_mutation_envelope(
                 &admitted.inventory.canary_onboarding_request,
                 &prepared,
                 &prepared.receipt,
-                exact_write_binding
+                &exact_write_binding
                     .as_ref()
-                    .expect("prepared onboarding uses a write binding"),
+                    .expect("prepared onboarding uses a write binding")
+                    .onboarding_binding(&prepared.receipt)?,
                 &expected_fee_payment,
             )
             .wrap_err("prepared onboarding transaction authentication failed")?;
@@ -1725,7 +1734,11 @@ fn validate_prepared_mutation_envelope(
             if json::to_value(&prepared)? != norito::json::Value::Object(operation_envelope.clone())
                 || prepared.schema != AccountFaucetPreparedTransactionV1::SCHEMA
                 || prepared.operation != AccountFaucetPreparedTransactionV1::OPERATION
-                || Some(&prepared.binding) != exact_write_binding.as_ref()
+                || prepared.binding
+                    != exact_write_binding
+                        .as_ref()
+                        .expect("faucet custody")
+                        .faucet_binding(&prepared.claim)?
                 || prepared.account_id != admitted.inventory.canary_onboarding_request.account_id
             {
                 return Err(eyre!(
@@ -1742,9 +1755,10 @@ fn validate_prepared_mutation_envelope(
                 network_id,
                 &prepared,
                 &prepared.claim,
-                exact_write_binding
+                &exact_write_binding
                     .as_ref()
-                    .expect("prepared faucet uses a write binding"),
+                    .expect("prepared faucet uses a write binding")
+                    .faucet_binding(&prepared.claim)?,
                 &expected_fee_payment,
                 &expected_faucet_policy,
             )
@@ -1916,11 +1930,23 @@ fn validate_prepared_mutation_envelope(
             "prepared mutation fee payer differs from the signed reset inventory"
         ));
     }
+    let public_operation = matches!(
+        admitted.request.mutation_kind.as_str(),
+        "onboarding" | "faucet"
+    );
     let binding_json = json::to_json(
-        root.get("binding")
-            .expect("binding was validated immediately above"),
+        if public_operation {
+            operation_envelope.get("binding")
+        } else {
+            root.get("binding")
+        }
+        .expect("binding was authenticated immediately above"),
     )?;
-    let binding_name = Name::from_str("taira_public_reset_binding")?;
+    let binding_name = Name::from_str(if public_operation {
+        "prepared_operation_binding"
+    } else {
+        "taira_public_reset_binding"
+    })?;
     let committed_binding_matches = transaction
         .metadata()
         .get(&binding_name)
@@ -2035,16 +2061,21 @@ fn validate_prepared_mutation_envelope(
             .and_then(norito::json::Value::as_str)
             .ok_or_else(|| eyre!("prepared write transaction omits its semantic hash"))?;
         let is_final_canary = admitted.request.mutation_kind == "write_canary";
-        if transaction.metadata().iter().count() != if is_final_canary { 5 } else { 3 }
+        if transaction.metadata().iter().count()
+            != match admitted.request.mutation_kind.as_str() {
+                "write_canary" => 5,
+                "faucet" => 4,
+                _ => 3,
+            }
             || transaction
                 .metadata()
-                .get(&Name::from_str("taira_prepared_operation")?)
+                .get(&Name::from_str("prepared_operation")?)
                 .and_then(|value| value.try_into_any_norito::<String>().ok())
                 .as_deref()
                 != Some(operation_label)
             || transaction
                 .metadata()
-                .get(&Name::from_str("taira_prepared_semantic_hash")?)
+                .get(&Name::from_str("prepared_semantic_hash")?)
                 .and_then(|value| value.try_into_any_norito::<String>().ok())
                 .as_deref()
                 != Some(semantic)
@@ -11189,6 +11220,110 @@ fn require_success(output: ProcessOutput, label: &str) -> Result<Vec<u8>> {
     Err(eyre!("{label} failed with {}: {stderr}", output.status))
 }
 
+fn require_doctor_success(output: ProcessOutput, public_root: &str) -> Result<Vec<u8>> {
+    if !output.status.success()
+        && let Ok(value) = json::from_slice::<norito::json::Value>(&output.stdout)
+        && value.get("command").and_then(norito::json::Value::as_str) == Some("taira_doctor")
+        && value
+            .get("public_root")
+            .and_then(norito::json::Value::as_str)
+            == Some(public_root)
+        && let Some(checks) = value.get("checks").and_then(norito::json::Value::as_array)
+        && checks.len() <= 32
+    {
+        // Report only fixed check names and numeric status codes. Never forward
+        // arbitrary response bodies, details, or failure text into reset logs.
+        let failures = checks
+            .iter()
+            .filter_map(|check| {
+                let name = check.get("name")?.as_str()?;
+                let status = check.get("http_status")?.as_u64()?;
+                (check.get("ok")?.as_bool()? == false
+                    && status <= 599
+                    && DOCTOR_EXPECTED_CHECKS
+                        .iter()
+                        .any(|(expected, _, _)| *expected == name))
+                .then(|| format!("{name}: HTTP {status}"))
+            })
+            .collect::<Vec<_>>();
+        if !failures.is_empty() {
+            return Err(eyre!(
+                "same-revision Taira doctor failed: {}",
+                failures.join(", ")
+            ));
+        }
+    }
+    require_success(output, "same-revision Taira doctor")
+}
+
+/// A running systemd process can still be initializing storage and Torii.
+/// Wait only for HTTP availability here; the signed convergence and public
+/// doctor checks remain responsible for identity and protocol validation.
+fn wait_for_validator_http_readiness(
+    origins: &[String],
+    deadline: Instant,
+    mut check_authorization: impl FnMut() -> Result<()>,
+) -> Result<()> {
+    let http = HttpClient::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(Duration::from_secs(2))
+        .build()
+        .wrap_err("failed to build validator readiness HTTP client")?;
+    let urls = origins
+        .iter()
+        .map(|origin| Url::parse(origin)?.join("status"))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    if urls.len() != 4 {
+        return Err(eyre!(
+            "validator readiness requires exactly four Torii origins"
+        ));
+    }
+    loop {
+        check_authorization()?;
+        let mut ready = 0;
+        for url in &urls {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(eyre!(
+                    "four-validator Torii HTTP readiness deadline elapsed"
+                ));
+            }
+            match http
+                .get(url.clone())
+                .header(ACCEPT, "application/json")
+                .timeout(Duration::from_secs(2).min(remaining))
+                .send()
+            {
+                Ok(response) if response.status() == StatusCode::OK => ready += 1,
+                Ok(response)
+                    if matches!(response.status().as_u16(), 408 | 429 | 502 | 503 | 504) => {}
+                Ok(response) => {
+                    return Err(eyre!(
+                        "validator Torii readiness returned permanent HTTP status {}",
+                        response.status()
+                    ));
+                }
+                Err(error) if error.is_connect() || error.is_timeout() => {}
+                Err(error) => {
+                    return Err(error).wrap_err("validator Torii readiness request failed");
+                }
+            }
+        }
+        if ready == urls.len() {
+            check_authorization()?;
+            return Ok(());
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(eyre!(
+                "four-validator Torii HTTP readiness deadline elapsed"
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(250).min(remaining));
+    }
+}
+
 #[derive(Debug)]
 struct LocalArtifactClosure {
     files: BTreeMap<(String, String), StagedArtifact>,
@@ -13213,21 +13348,15 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
                 .into(),
             "--json".into(),
         ];
-        let output = if recovery_only {
-            let deadline = Instant::now()
-                .checked_add(Duration::from_secs(timeout_secs))
-                .ok_or_else(|| eyre!("doctor recovery deadline overflow"))?;
-            self.run_local_cli_until(
-                args,
-                Vec::new(),
-                timeout_secs,
-                deadline,
-                true,
-                "same-revision Taira doctor",
-            )?
-        } else {
-            self.run_local_cli(args, Vec::new(), timeout_secs, "same-revision Taira doctor")?
-        };
+        let deadline = Instant::now()
+            .checked_add(Duration::from_secs(timeout_secs))
+            .ok_or_else(|| eyre!("doctor deadline overflow"))?;
+        if !recovery_only {
+            require_forward_lease_budget(self.admitted, timeout_secs)?;
+        }
+        let output = self.run_local_cli_process_until(args, Vec::new(), deadline, recovery_only)?;
+        let output =
+            require_doctor_success(output, &self.admitted.inventory.inrou_canary.public_root)?;
         let value = parse_json_report(&output, "same-revision Taira doctor")?;
         validate_doctor_report(&value, &self.admitted.inventory.inrou_canary.public_root)
     }
@@ -15296,8 +15425,28 @@ impl<R: ProcessRunner> ResetTransport for OpenSshTransport<'_, R> {
                 Ok(())
             }
             ExecutionStep::Convergence => {
-                self.doctor(timeout_secs)?;
-                self.convergence(timeout_secs, 0, false)
+                require_forward_lease_budget(self.admitted, timeout_secs)?;
+                let deadline = Instant::now()
+                    .checked_add(Duration::from_secs(timeout_secs))
+                    .ok_or_else(|| eyre!("convergence readiness deadline overflow"))?;
+                let origins = inventory
+                    .validator_clients
+                    .iter()
+                    .map(|client| client.torii_origin.clone())
+                    .collect::<Vec<_>>();
+                wait_for_validator_http_readiness(&origins, deadline, || {
+                    ensure_authorization_current(self.admitted)
+                })?;
+                let remaining = deadline.saturating_duration_since(Instant::now()).as_secs();
+                if remaining == 0 {
+                    return Err(eyre!("convergence deadline elapsed after Torii readiness"));
+                }
+                self.doctor(remaining)?;
+                let remaining = deadline.saturating_duration_since(Instant::now()).as_secs();
+                if remaining == 0 {
+                    return Err(eyre!("convergence deadline elapsed after public doctor"));
+                }
+                self.convergence(remaining, 0, false)
             }
             ExecutionStep::Canary => {
                 self.write_canary(timeout_secs)?;
@@ -15307,11 +15456,22 @@ impl<R: ProcessRunner> ResetTransport for OpenSshTransport<'_, R> {
                 self.ensure_inrou_restart_baselines(inventory.timeouts.canary_secs)?;
                 for (index, validator) in inventory.validators.iter().enumerate() {
                     let wave = index + 1;
+                    let ready_deadline = Instant::now()
+                        .checked_add(Duration::from_secs(inventory.timeouts.restart_secs))
+                        .ok_or_else(|| eyre!("restart readiness deadline overflow"))?;
                     self.bootstrap_and_dispatch_validator(
                         validator,
                         HostAction::Restart,
                         inventory.timeouts.restart_secs,
                     )?;
+                    let origins = inventory
+                        .validator_clients
+                        .iter()
+                        .map(|client| client.torii_origin.clone())
+                        .collect::<Vec<_>>();
+                    wait_for_validator_http_readiness(&origins, ready_deadline, || {
+                        ensure_authorization_current(self.admitted)
+                    })?;
                     self.write_canary_for_phase(
                         inventory.timeouts.canary_secs,
                         &format!("restart-wave-{wave}"),
@@ -17425,6 +17585,111 @@ fn verify_remote_reservation_receipt(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn readiness_http_server(statuses: Vec<u16>) -> (String, std::thread::JoinHandle<usize>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("readiness listener");
+        listener
+            .set_nonblocking(true)
+            .expect("nonblocking listener");
+        let origin = format!(
+            "http://{}/",
+            listener.local_addr().expect("listener address")
+        );
+        let worker = std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let count = statuses.len();
+            for status in statuses {
+                let mut stream = loop {
+                    match listener.accept() {
+                        Ok((stream, _)) => break stream,
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            assert!(Instant::now() < deadline, "missing readiness request");
+                            std::thread::sleep(Duration::from_millis(5));
+                        }
+                        Err(error) => panic!("readiness accept failed: {error}"),
+                    }
+                };
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .expect("read deadline");
+                let mut request = Vec::new();
+                let mut buffer = [0_u8; 1024];
+                while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    let count = stream.read(&mut buffer).expect("read request");
+                    assert!(count > 0 && request.len() < 8192);
+                    request.extend_from_slice(&buffer[..count]);
+                }
+                assert!(request.starts_with(b"GET /status HTTP/1.1\r\n"));
+                stream.write_all(format!("HTTP/1.1 {status} Test\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").as_bytes()).expect("readiness response");
+            }
+            count
+        });
+        (origin, worker)
+    }
+
+    #[test]
+    fn validator_http_readiness_retries_cold_backends_before_strict_checks() {
+        let (origin, worker) = readiness_http_server(vec![502, 503, 504, 503, 200, 200, 200, 200]);
+        let mut authorization_checks = 0;
+        wait_for_validator_http_readiness(
+            &vec![origin; 4],
+            Instant::now() + Duration::from_secs(3),
+            || {
+                authorization_checks += 1;
+                Ok(())
+            },
+        )
+        .expect("all four cold backends become available");
+        assert_eq!(worker.join().expect("server thread"), 8);
+        assert!(
+            authorization_checks >= 3,
+            "lease rechecked while waiting and before success"
+        );
+    }
+
+    #[test]
+    fn validator_http_readiness_rejects_permanent_http_errors() {
+        let (origin, worker) = readiness_http_server(vec![401]);
+        let error = wait_for_validator_http_readiness(
+            &vec![origin; 4],
+            Instant::now() + Duration::from_secs(3),
+            || Ok(()),
+        )
+        .expect_err("authentication errors must not be retried");
+        assert!(error.to_string().contains("401"));
+        assert_eq!(worker.join().expect("server thread"), 1);
+    }
+
+    #[test]
+    fn validator_http_readiness_keeps_deadline_and_authorization() {
+        let origins = vec!["http://127.0.0.1:1/".to_owned(); 4];
+        let error = wait_for_validator_http_readiness(&origins, Instant::now(), || Ok(()))
+            .expect_err("expired deadline");
+        assert!(error.to_string().contains("deadline"));
+        let error = wait_for_validator_http_readiness(
+            &origins,
+            Instant::now() + Duration::from_secs(3),
+            || Err(eyre!("authorization expired")),
+        )
+        .expect_err("expired authorization");
+        assert_eq!(error.to_string(), "authorization expired");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn doctor_failure_reports_only_fixed_checks_and_status_codes() {
+        use std::os::unix::process::ExitStatusExt as _;
+        let output = ProcessOutput {
+            status: ExitStatus::from_raw(1 << 8),
+            stdout: br#"{"command":"taira_doctor","public_root":"https://taira.sora.org","checks":[{"name":"status","http_status":502,"ok":false,"detail":"do-not-forward-response-body"},{"name":"untrusted-label","http_status":200,"ok":false}],"failures":["do-not-forward-failure-text"]}"#.to_vec(),
+            stderr: b"generic CLI failure".to_vec(),
+        };
+        let error = require_doctor_success(output, "https://taira.sora.org")
+            .expect_err("doctor failure")
+            .to_string();
+        assert!(error.contains("status: HTTP 502"));
+        assert!(!error.contains("do-not-forward") && !error.contains("untrusted-label"));
+    }
 
     #[derive(Debug, clap::Parser)]
     struct HostProtocolProbe {
@@ -20715,16 +20980,25 @@ time.sleep(30)
         admitted.inventory.next_genesis_hash = hex::encode(network_id.as_bytes());
         admitted.inventory.inrou_canary.public_root = public_root.to_owned();
         admitted.inventory.canary_onboarding_request = typed_receipt.body.request.clone();
-        admitted.inventory.authorization_nonce = typed_result.binding.authorization_nonce.clone();
-        admitted.authorization_sha256 = typed_result.binding.authorization_sha256.clone();
+        let native_binding = crate::taira::PreparedMutationBindingV1 {
+            schema: crate::taira::PreparedMutationBindingV1::SCHEMA.to_owned(),
+            authorization_sha256: "11".repeat(32),
+            authorization_nonce: "n".repeat(32),
+            kind: "onboarding".to_owned(),
+            phase: "pre_edge".to_owned(),
+            idempotency_key: typed_result.binding.request_id.clone(),
+            execution_expires_at_unix_ms: typed_result.binding.execution_expires_at_unix_ms,
+        };
+        admitted.inventory.authorization_nonce = native_binding.authorization_nonce.clone();
+        admitted.authorization_sha256 = native_binding.authorization_sha256.clone();
         admitted.authorization.claims.authorization_nonce =
-            typed_result.binding.authorization_nonce.clone();
+            native_binding.authorization_nonce.clone();
         admitted.authorization.claims.execution_expires_at_unix_ms =
             typed_result.binding.execution_expires_at_unix_ms;
         admitted.request.authorization_semantic_sha256 = admitted.authorization_sha256.clone();
         admitted.request.mutation_kind = typed_result.binding.kind.clone();
-        admitted.request.mutation_phase = typed_result.binding.phase.clone();
-        admitted.request.mutation_idempotency_key = typed_result.binding.idempotency_key.clone();
+        admitted.request.mutation_phase = native_binding.phase.clone();
+        admitted.request.mutation_idempotency_key = native_binding.idempotency_key.clone();
         admitted.action_deadline = Instant::now() + Duration::from_secs(10);
         // This captured signed proof fixture deliberately uses a foreign chain_id. Its
         // inventory is only hashed here, never passed to the Taira admission decoder.
@@ -20736,7 +21010,7 @@ time.sleep(30)
 
         let envelope = norito::json!({
             "schema": "iroha.taira.prepared-mutation-envelope.v1",
-            "binding": (json::to_value(&typed_result.binding).expect("fixture binding")),
+            "binding": (json::to_value(&native_binding).expect("native fixture custody")),
             "public_root": public_root,
             "chain_id": (admitted.inventory.chain_id.clone()),
             "network_id": network_id_literal,
@@ -21303,7 +21577,7 @@ time.sleep(30)
     #[test]
     fn validator_process_readiness_preserves_original_deadline() {
         let mut observations = 0;
-        wait_for_validator_process(Instant::now(), || {
+        let _ = wait_for_validator_process(Instant::now(), || {
             observations += 1;
             Ok(ValidatorProcessReadiness::Attested)
         })
@@ -21311,7 +21585,7 @@ time.sleep(30)
         assert_eq!(observations, 0);
 
         let deadline = Instant::now() + Duration::from_secs(1);
-        wait_for_validator_process(deadline, || {
+        let _ = wait_for_validator_process(deadline, || {
             observations += 1;
             // Force this observation to exhaust the original deadline instead of
             // depending on how many polling ticks the scheduler grants the test.
@@ -21320,7 +21594,7 @@ time.sleep(30)
         })
         .expect_err("a launcher cannot extend the existing action deadline");
         assert_eq!(observations, 1);
-        wait_for_validator_process(deadline, || {
+        let _ = wait_for_validator_process(deadline, || {
             observations += 1;
             Ok(ValidatorProcessReadiness::Attested)
         })
@@ -21334,7 +21608,7 @@ time.sleep(30)
     fn validator_process_readiness_rejects_changed_launcher_immediately() {
         let unit = b"[Service]\nExecStart=/usr/bin/python3 -c \"signed_command()\"\n";
         let mut observations = 0;
-        wait_for_validator_process(Instant::now() + Duration::from_secs(1), || {
+        let _ = wait_for_validator_process(Instant::now() + Duration::from_secs(1), || {
             observations += 1;
             validate_validator_launcher_argv(b"/usr/bin/python3\0-c\0changed_command()\0", unit)?;
             Ok(ValidatorProcessReadiness::LauncherPending)

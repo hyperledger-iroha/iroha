@@ -386,16 +386,14 @@ ACCOUNT_FAUCET_PUZZLE_FIELDS_V1 = frozenset(
     }
 )
 ACCOUNT_ONBOARDING_TOKEN_HEADER = "X-Iroha-Onboarding-Token"
-TAIRA_PUBLIC_RESET_MUTATION_BINDING_SCHEMA = (
-    "iroha.taira.public-reset.mutation-binding.v1"
-)
+PREPARED_OPERATION_BINDING_SCHEMA = "iroha.prepared-operation.binding.v1"
 ACCOUNT_ONBOARDING_PREPARE_SCHEMA = "iroha.accounts.onboard.prepare.v1"
 ACCOUNT_FAUCET_PREPARE_SCHEMA = "iroha.accounts.faucet.prepare.v1"
-TAIRA_PREPARED_TRANSACTION_SCHEMA = "iroha.taira.prepared-transaction.v1"
-TAIRA_PREPARED_SIGNATURE_TRANSCRIPT_SCHEMA = (
-    "iroha.taira.prepared-signature-transcript.v1"
+PREPARED_TRANSACTION_SCHEMA = "iroha.prepared-transaction.v1"
+PREPARED_SIGNATURE_TRANSCRIPT_SCHEMA = (
+    "iroha.prepared-signature-transcript.v1"
 )
-TAIRA_PREPARED_SIGNATURE_DOMAIN = b"iroha:taira:prepared-transaction:v1\0"
+PREPARED_SIGNATURE_DOMAIN = b"iroha:prepared-transaction:v1\0"
 ACCOUNT_ONBOARDING_PROOF_REQUIRED_SCHEMA = "iroha.accounts.onboard.prepare-proof-required.v1"
 ACCOUNT_ONBOARDING_CURRENT_STATE_RESPONSE_MAX_BYTES = 4 * 1024
 _ROUTE_SECRET_HEADER_NAMES = frozenset(
@@ -539,7 +537,7 @@ def _require_mapping(value: Any, context: str) -> Mapping[str, Any]:
     return value
 
 
-def _copy_taira_mutation_binding(
+def _copy_prepared_operation_binding(
     value: Any,
     *,
     expected_kind: str,
@@ -549,38 +547,43 @@ def _copy_taira_mutation_binding(
     binding = _require_mapping(value, context)
     required = {
         "schema",
-        "authorization_sha256",
-        "authorization_nonce",
+        "semantic_hash_hex",
         "kind",
-        "phase",
-        "idempotency_key",
+        "request_id",
         "execution_expires_at_unix_ms",
     }
     if set(binding) != required:
-        raise TypeError(f"{context} must contain exactly the V1 mutation-binding fields")
-    if binding.get("schema") != TAIRA_PUBLIC_RESET_MUTATION_BINDING_SCHEMA:
-        raise ValueError(f"{context}.schema is not the V1 mutation-binding schema")
+        raise TypeError(f"{context} must contain exactly the V1 prepared-operation binding fields")
+    if binding.get("schema") != PREPARED_OPERATION_BINDING_SCHEMA:
+        raise ValueError(f"{context}.schema is not the V1 prepared-operation binding schema")
     if binding.get("kind") != expected_kind:
         raise ValueError(f"{context}.kind must be {expected_kind!r}")
-    for hex_field in ("authorization_sha256", "idempotency_key"):
+    for hex_field in ("semantic_hash_hex", "request_id"):
         field_value = binding.get(hex_field)
         if not isinstance(field_value, str) or re.fullmatch(r"[0-9a-f]{64}", field_value) is None:
             raise ValueError(f"{context}.{hex_field} must be exactly 64 lowercase hex characters")
-    nonce = binding.get("authorization_nonce")
-    if not isinstance(nonce, str) or re.fullmatch(r"[a-z0-9_-]{32}", nonce) is None:
-        raise ValueError(
-            f"{context}.authorization_nonce must be exactly 32 lowercase token characters"
-        )
-    phase = binding.get("phase")
-    if not isinstance(phase, str) or re.fullmatch(r"[a-z0-9_-]{1,128}", phase) is None:
-        raise ValueError(f"{context}.phase is not a canonical reset phase")
     expiry = binding.get("execution_expires_at_unix_ms")
-    if isinstance(expiry, bool) or not isinstance(expiry, int) or expiry <= 0:
+    if isinstance(expiry, bool) or not isinstance(expiry, int) or not 0 < expiry < 1 << 64:
         raise ValueError(f"{context}.execution_expires_at_unix_ms must be positive")
     if require_active and expiry <= time.time_ns() // 1_000_000:
         raise ValueError(f"{context} is expired")
     return copy.deepcopy(dict(binding))
 
+
+def _require_onboarding_binding_receipt(
+    binding: Mapping[str, Any], receipt: Mapping[str, Any], context: str
+) -> None:
+    """Bind an operation to its independently authenticated semantic receipt."""
+    if binding["semantic_hash_hex"] != _canonical_receipt_plan_hash_hex(receipt, context):
+        raise ValueError(f"{context}.binding.semantic_hash_hex differs from the receipt")
+    valid_until = _require_mapping(receipt.get("body"), f"{context}.body").get("valid_until_ms")
+    if (
+        isinstance(valid_until, bool)
+        or not isinstance(valid_until, int)
+        or not 0 < valid_until < 1 << 64
+        or binding["execution_expires_at_unix_ms"] > valid_until
+    ):
+        raise ValueError(f"{context}.binding execution deadline exceeds the receipt validity")
 
 def _copy_fee_payment_intent_v1(value: Any, context: str) -> Dict[str, Any]:
     intent = _require_mapping(value, context)
@@ -680,7 +683,7 @@ def _require_same_fee_payer_and_gas_bound_v1(
     return expected_intent
 
 
-def _copy_prepared_taira_transaction(
+def _copy_prepared_transaction(
     value: Any,
     *,
     expected_operation: str,
@@ -711,16 +714,18 @@ def _copy_prepared_taira_transaction(
     expected_fields = common | operation_fields[expected_operation]
     if set(prepared) != expected_fields:
         raise TypeError(f"{context} must contain exactly the {expected_operation} V1 fields")
-    if prepared.get("schema") != TAIRA_PREPARED_TRANSACTION_SCHEMA:
+    if prepared.get("schema") != PREPARED_TRANSACTION_SCHEMA:
         raise ValueError(f"{context}.schema is not the prepared-transaction V1 schema")
     if prepared.get("operation") != expected_operation:
         raise ValueError(f"{context}.operation must be {expected_operation!r}")
-    _copy_taira_mutation_binding(
+    _copy_prepared_operation_binding(
         prepared.get("binding"),
         expected_kind=expected_operation,
         context=f"{context}.binding",
         require_active=False,
     )
+    if prepared["binding"]["semantic_hash_hex"] != prepared.get("semantic_hash_hex"):
+        raise ValueError(f"{context}.binding.semantic_hash_hex differs from the envelope")
     for hex_field in ("semantic_hash_hex", "signed_transaction_wire_sha256"):
         field_value = prepared.get(hex_field)
         if not isinstance(field_value, str) or re.fullmatch(r"[0-9a-f]{64}", field_value) is None:
@@ -749,7 +754,8 @@ def _copy_prepared_taira_transaction(
             f"{context}.server_signature must be one nonzero uppercase Ed25519 signature"
         )
     if expected_operation == "onboarding":
-        _require_mapping(prepared.get("receipt"), f"{context}.receipt")
+        receipt = _require_mapping(prepared.get("receipt"), f"{context}.receipt")
+        _require_onboarding_binding_receipt(prepared["binding"], receipt, context)
         _require_exact_non_empty_string(prepared.get("alias"), f"{context}.alias")
         _require_mapping(prepared.get("disposition"), f"{context}.disposition")
     else:
@@ -795,17 +801,15 @@ def _prepared_binding_transcript(
     operation: str,
     binding: Mapping[str, Any],
 ) -> bytearray:
-    transcript = bytearray(_prepared_signature_frame(TAIRA_PREPARED_SIGNATURE_DOMAIN))
+    transcript = bytearray(_prepared_signature_frame(PREPARED_SIGNATURE_DOMAIN))
     for label, value in (
-        ("transcript_schema", TAIRA_PREPARED_SIGNATURE_TRANSCRIPT_SCHEMA),
+        ("transcript_schema", PREPARED_SIGNATURE_TRANSCRIPT_SCHEMA),
         ("envelope_schema", envelope_schema),
         ("operation", operation),
         ("binding.schema", binding["schema"]),
-        ("binding.authorization_sha256", binding["authorization_sha256"]),
-        ("binding.authorization_nonce", binding["authorization_nonce"]),
+        ("binding.semantic_hash_hex", binding["semantic_hash_hex"]),
         ("binding.kind", binding["kind"]),
-        ("binding.phase", binding["phase"]),
-        ("binding.idempotency_key", binding["idempotency_key"]),
+        ("binding.request_id", binding["request_id"]),
         (
             "binding.execution_expires_at_unix_ms",
             str(binding["execution_expires_at_unix_ms"]),
@@ -1106,7 +1110,7 @@ def _copy_account_onboarding_proof_required_v1(
         or proof_required.get("proof_kind") != "account_alias_current_state"
     ):
         raise ValueError(f"{context} is not the exact nonterminal proof-required outcome")
-    binding = _copy_taira_mutation_binding(
+    binding = _copy_prepared_operation_binding(
         proof_required.get("binding"),
         expected_kind="onboarding",
         context=f"{context}.binding",
@@ -1116,6 +1120,7 @@ def _copy_account_onboarding_proof_required_v1(
         raise ValueError(f"{context}.binding differs from the exact prepare request")
     body = _require_mapping(expected_receipt.get("body"), f"{context}.receipt.body")
     request = _require_mapping(body.get("request"), f"{context}.receipt.body.request")
+    _require_onboarding_binding_receipt(binding, expected_receipt, context)
     semantic_hash_hex = _canonical_receipt_plan_hash_hex(expected_receipt, f"{context}.receipt")
     if proof_required.get("semantic_hash_hex") != semantic_hash_hex:
         raise ValueError(f"{context}.semantic_hash_hex differs from the receipt")
@@ -1182,7 +1187,7 @@ def _validate_prepared_submit_response_v1(
         "outcome",
     }:
         raise TypeError(f"{context} must contain exactly the submit V1 fields")
-    if payload.get("schema") != "iroha.taira.prepared-transaction-submit.v1":
+    if payload.get("schema") != "iroha.prepared-transaction-submit.v1":
         raise ValueError(f"{context}.schema is not the submit V1 schema")
     for response_field in ("binding", "operation", "transaction_hash_hex"):
         if payload.get(response_field) != expected_prepared.get(response_field):
@@ -20529,7 +20534,7 @@ class ToriiClient(
             expected_amount,
             "prepare_account_faucet.expected_policy",
         )
-        exact_binding = _copy_taira_mutation_binding(
+        exact_binding = _copy_prepared_operation_binding(
             binding,
             expected_kind="faucet",
             context="prepare_account_faucet.binding",
@@ -20583,7 +20588,7 @@ class ToriiClient(
                 payload = response.json()
             except ValueError as error:
                 raise RuntimeError("prepare_account_faucet returned invalid JSON") from error
-            prepared = _copy_prepared_taira_transaction(
+            prepared = _copy_prepared_transaction(
                 payload,
                 expected_operation="faucet",
                 context="prepare_account_faucet.response",
@@ -20630,7 +20635,7 @@ class ToriiClient(
             expected_amount,
             "submit_prepared_account_faucet.expected_policy",
         )
-        exact_prepared = _copy_prepared_taira_transaction(
+        exact_prepared = _copy_prepared_transaction(
             prepared,
             expected_operation="faucet",
             context="submit_prepared_account_faucet.prepared",
@@ -20640,7 +20645,7 @@ class ToriiClient(
             exact_prepared["fee_payment"],
             "submit_prepared_account_faucet.prepared",
         )
-        _copy_taira_mutation_binding(
+        _copy_prepared_operation_binding(
             exact_prepared["binding"],
             expected_kind="faucet",
             context="submit_prepared_account_faucet.prepared.binding",
@@ -20774,7 +20779,7 @@ class ToriiClient(
         """Prepare an exact sponsored transaction from one signed semantic receipt."""
 
         exact_onboarding_token = _require_account_onboarding_token(onboarding_token)
-        exact_binding = _copy_taira_mutation_binding(
+        exact_binding = _copy_prepared_operation_binding(
             binding,
             expected_kind="onboarding",
             context="prepare_account_onboarding.binding",
@@ -20802,6 +20807,7 @@ class ToriiClient(
             expected_request=exact_expected_request,
             context="prepare_account_onboarding.receipt",
         )
+        _require_onboarding_binding_receipt(exact_binding, exact_receipt, "prepare_account_onboarding")
         response = self._request(
             "POST",
             "/v1/accounts/onboard/prepare",
@@ -20825,8 +20831,8 @@ class ToriiClient(
             except ValueError as error:
                 raise RuntimeError("prepare_account_onboarding returned invalid JSON") from error
             schema = payload.get("schema") if isinstance(payload, Mapping) else None
-            if schema == TAIRA_PREPARED_TRANSACTION_SCHEMA:
-                prepared = _copy_prepared_taira_transaction(
+            if schema == PREPARED_TRANSACTION_SCHEMA:
+                prepared = _copy_prepared_transaction(
                     payload,
                     expected_operation="onboarding",
                     context="prepare_account_onboarding.response",
@@ -20915,7 +20921,7 @@ class ToriiClient(
         from durable state must invoke it again.
         """
 
-        exact_binding = _copy_taira_mutation_binding(
+        exact_binding = _copy_prepared_operation_binding(
             binding,
             expected_kind="onboarding",
             context="prove_account_onboarding_current_state.binding",
@@ -20956,6 +20962,7 @@ class ToriiClient(
             expected_request=exact_expected_request,
             context="prove_account_onboarding_current_state.receipt",
         )
+        _require_onboarding_binding_receipt(exact_binding, exact_receipt, "prove_account_onboarding_current_state")
         exact_proof_required = _copy_account_onboarding_proof_required_v1(
             proof_required,
             expected_binding=exact_binding,
@@ -21089,7 +21096,7 @@ class ToriiClient(
         """Submit only one server-authenticated exact onboarding transaction."""
 
         exact_onboarding_token = _require_account_onboarding_token(onboarding_token)
-        exact_prepared = _copy_prepared_taira_transaction(
+        exact_prepared = _copy_prepared_transaction(
             prepared,
             expected_operation="onboarding",
             context="submit_prepared_account_onboarding.prepared",
@@ -21099,7 +21106,7 @@ class ToriiClient(
             exact_prepared["fee_payment"],
             "submit_prepared_account_onboarding.prepared",
         )
-        _copy_taira_mutation_binding(
+        _copy_prepared_operation_binding(
             exact_prepared["binding"],
             expected_kind="onboarding",
             context="submit_prepared_account_onboarding.prepared.binding",

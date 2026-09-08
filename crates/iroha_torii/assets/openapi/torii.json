@@ -357,7 +357,7 @@
         "additionalProperties": false,
         "properties": {
           "binding": {
-            "$ref": "#/components/schemas/TairaPublicResetFaucetMutationBinding"
+            "$ref": "#/components/schemas/PreparedFaucetOperationBinding"
           },
           "claim": {
             "$ref": "#/components/schemas/AccountFaucetClaim"
@@ -396,7 +396,7 @@
             "type": "string"
           },
           "binding": {
-            "$ref": "#/components/schemas/TairaPublicResetFaucetMutationBinding"
+            "$ref": "#/components/schemas/PreparedFaucetOperationBinding"
           },
           "claim": {
             "$ref": "#/components/schemas/AccountFaucetClaim"
@@ -409,7 +409,7 @@
             "type": "string"
           },
           "schema": {
-            "const": "iroha.taira.prepared-transaction.v1",
+            "const": "iroha.prepared-transaction.v1",
             "type": "string"
           },
           "semantic_hash_hex": {
@@ -793,7 +793,7 @@
         "additionalProperties": false,
         "properties": {
           "binding": {
-            "$ref": "#/components/schemas/TairaPublicResetOnboardingMutationBinding"
+            "$ref": "#/components/schemas/PreparedOnboardingOperationBinding"
           },
           "fee_payment": {
             "$ref": "#/components/schemas/FeePaymentIntent"
@@ -824,7 +824,7 @@
             "$ref": "#/components/schemas/CanonicalAccountAliasLiteral"
           },
           "binding": {
-            "$ref": "#/components/schemas/TairaPublicResetOnboardingMutationBinding"
+            "$ref": "#/components/schemas/PreparedOnboardingOperationBinding"
           },
           "disposition": {
             "$ref": "#/components/schemas/AliasPlanDispositionV1"
@@ -840,7 +840,7 @@
             "$ref": "#/components/schemas/AccountOnboardingPlanReceipt"
           },
           "schema": {
-            "const": "iroha.taira.prepared-transaction.v1",
+            "const": "iroha.prepared-transaction.v1",
             "type": "string"
           },
           "semantic_hash_hex": {
@@ -907,7 +907,7 @@
             "$ref": "#/components/schemas/CanonicalAccountAliasLiteral"
           },
           "binding": {
-            "$ref": "#/components/schemas/TairaPublicResetOnboardingMutationBinding"
+            "$ref": "#/components/schemas/PreparedOnboardingOperationBinding"
           },
           "disposition": {
             "$ref": "#/components/schemas/AliasPlanDispositionV1"
@@ -23877,17 +23877,41 @@
       },
       "NativeAmxParticipantSettlement": {
         "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "participant_lane_block_height": {
+                  "const": 1
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "previous_native_settlement_hash": {
+                  "type": "null"
+                }
+              }
+            }
+          }
+        ],
         "description": "Nonrecursive Native AMX participant control commitment. Source IDs are unique and retain candidate order; this type has no economic or nested fields.",
         "properties": {
-          "lane_id": {
-            "format": "uint32",
-            "maximum": 4294967295,
-            "minimum": 0,
+          "authority_context_height": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 1,
             "type": "integer"
           },
           "dataspace_id": {
             "format": "uint64",
             "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "lane_id": {
+            "format": "uint32",
+            "maximum": 4294967295,
             "minimum": 0,
             "type": "integer"
           },
@@ -23904,12 +23928,6 @@
             ]
           },
           "participant_lane_block_height": {
-            "format": "uint64",
-            "maximum": 18446744073709551615,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "authority_context_height": {
             "format": "uint64",
             "maximum": 18446744073709551615,
             "minimum": 1,
@@ -23940,10 +23958,10 @@
               "pattern": "^(?!0{64}$)[0-9A-F]{64}$",
               "type": "string"
             },
-            "minItems": 1,
             "maxItems": 4096,
-            "uniqueItems": true,
-            "type": "array"
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
           }
         },
         "required": [
@@ -23955,25 +23973,7 @@
           "previous_native_settlement_hash",
           "source_ids"
         ],
-        "type": "object",
-        "allOf": [
-          {
-            "if": {
-              "properties": {
-                "participant_lane_block_height": {
-                  "const": 1
-                }
-              }
-            },
-            "then": {
-              "properties": {
-                "previous_native_settlement_hash": {
-                  "type": "null"
-                }
-              }
-            }
-          }
-        ]
+        "type": "object"
       },
       "NativeAmxPhase": {
         "additionalProperties": false,
@@ -25369,11 +25369,83 @@
         ],
         "description": "Canonical exact XOR quantity which must be strictly positive."
       },
+      "PreparedFaucetOperationBinding": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/PreparedOperationBinding"
+          },
+          {
+            "properties": {
+              "kind": {
+                "const": "faucet",
+                "type": "string"
+              }
+            }
+          }
+        ],
+        "description": "Canonical public operation binding specialized to the faucet operation."
+      },
+      "PreparedOnboardingOperationBinding": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/PreparedOperationBinding"
+          },
+          {
+            "properties": {
+              "kind": {
+                "const": "onboarding",
+                "type": "string"
+              }
+            }
+          }
+        ],
+        "description": "Canonical public operation binding specialized to the onboarding operation."
+      },
+      "PreparedOperationBinding": {
+        "additionalProperties": false,
+        "properties": {
+          "execution_expires_at_unix_ms": {
+            "description": "Positive absolute deadline; onboarding cannot outlive its signed receipt.",
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "kind": {
+            "enum": [
+              "onboarding",
+              "faucet"
+            ],
+            "type": "string"
+          },
+          "request_id": {
+            "description": "Caller-owned 64-hex operation identity, persisted across retries; not a server deduplication guarantee.",
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "schema": {
+            "const": "iroha.prepared-operation.binding.v1",
+            "type": "string"
+          },
+          "semantic_hash_hex": {
+            "description": "Hash of the exact signed onboarding receipt or solved faucet claim.",
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema",
+          "semantic_hash_hex",
+          "kind",
+          "request_id",
+          "execution_expires_at_unix_ms"
+        ],
+        "type": "object"
+      },
       "PreparedTransactionSubmitResponse": {
         "additionalProperties": false,
         "properties": {
           "binding": {
-            "$ref": "#/components/schemas/TairaPublicResetMutationBinding"
+            "$ref": "#/components/schemas/PreparedOperationBinding"
           },
           "operation": {
             "enum": [
@@ -25391,7 +25463,7 @@
             "type": "string"
           },
           "schema": {
-            "const": "iroha.taira.prepared-transaction-submit.v1",
+            "const": "iroha.prepared-transaction-submit.v1",
             "type": "string"
           },
           "transaction_hash_hex": {
@@ -47581,89 +47653,6 @@
           "successor_height"
         ],
         "type": "object"
-      },
-      "TairaPublicResetFaucetMutationBinding": {
-        "allOf": [
-          {
-            "$ref": "#/components/schemas/TairaPublicResetMutationBinding"
-          },
-          {
-            "properties": {
-              "kind": {
-                "const": "faucet",
-                "type": "string"
-              }
-            }
-          }
-        ],
-        "description": "Canonical public-reset mutation binding specialized to the faucet operation."
-      },
-      "TairaPublicResetMutationBinding": {
-        "additionalProperties": false,
-        "properties": {
-          "authorization_nonce": {
-            "maxLength": 32,
-            "minLength": 32,
-            "pattern": "^[a-z0-9_-]{32}$",
-            "type": "string"
-          },
-          "authorization_sha256": {
-            "pattern": "^[0-9a-f]{64}$",
-            "type": "string"
-          },
-          "execution_expires_at_unix_ms": {
-            "format": "uint64",
-            "minimum": 1,
-            "type": "integer"
-          },
-          "idempotency_key": {
-            "pattern": "^[0-9a-f]{64}$",
-            "type": "string"
-          },
-          "kind": {
-            "enum": [
-              "onboarding",
-              "faucet"
-            ],
-            "type": "string"
-          },
-          "phase": {
-            "maxLength": 128,
-            "minLength": 1,
-            "pattern": "^[a-z0-9_-]+$",
-            "type": "string"
-          },
-          "schema": {
-            "const": "iroha.taira.public-reset.mutation-binding.v1",
-            "type": "string"
-          }
-        },
-        "required": [
-          "schema",
-          "authorization_sha256",
-          "authorization_nonce",
-          "kind",
-          "phase",
-          "idempotency_key",
-          "execution_expires_at_unix_ms"
-        ],
-        "type": "object"
-      },
-      "TairaPublicResetOnboardingMutationBinding": {
-        "allOf": [
-          {
-            "$ref": "#/components/schemas/TairaPublicResetMutationBinding"
-          },
-          {
-            "properties": {
-              "kind": {
-                "const": "onboarding",
-                "type": "string"
-              }
-            }
-          }
-        ],
-        "description": "Canonical public-reset mutation binding specialized to the onboarding operation."
       },
       "TimeHealth": {
         "additionalProperties": false,

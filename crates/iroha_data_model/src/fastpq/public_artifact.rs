@@ -32,8 +32,20 @@ pub const FASTPQ_AXT_COMPACT_ARTIFACT_V1_SCHEMA_NAME: &str =
     "iroha_data_model::fastpq::FastpqAxtCompactArtifactV1";
 
 /// One exact public transfer occurrence, with no sparse-Merkle witnesses.
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, IntoSchema)]
-#[norito(schema_name = "iroha_data_model::fastpq::FastpqPublicTransferDeltaV1")]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    NoritoSerialize,
+    NoritoDeserialize,
+    IntoSchema,
+    norito::NoritoSchema,
+)]
+#[norito_schema(
+    name = "iroha_data_model::fastpq::public_artifact::FastpqPublicTransferDeltaV1",
+    frame = "iroha_data_model::fastpq::FastpqPublicTransferDeltaV1"
+)]
 pub struct FastpqPublicTransferDeltaV1 {
     /// Source account, independent of domain routing or aliases.
     pub from_account: AccountId,
@@ -69,8 +81,20 @@ impl From<&TransferDeltaTranscript> for FastpqPublicTransferDeltaV1 {
 }
 
 /// Original ordered public transcript; equal hashes retain separate occurrences.
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, IntoSchema)]
-#[norito(schema_name = "iroha_data_model::fastpq::FastpqPublicTransferTranscriptV1")]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    NoritoSerialize,
+    NoritoDeserialize,
+    IntoSchema,
+    norito::NoritoSchema,
+)]
+#[norito_schema(
+    name = "iroha_data_model::fastpq::public_artifact::FastpqPublicTransferTranscriptV1",
+    frame = "iroha_data_model::fastpq::FastpqPublicTransferTranscriptV1"
+)]
 pub struct FastpqPublicTransferTranscriptV1 {
     /// Original execution entrypoint hash.
     pub batch_hash: Hash,
@@ -101,8 +125,20 @@ impl From<&TransferTranscript> for FastpqPublicTransferTranscriptV1 {
 ///
 /// The six model inputs plus `ordering_hash` preserve all seven verifier inputs.
 /// Wire bytes of this DTO are distinct from the existing prepared AIR statement.
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, IntoSchema)]
-#[norito(schema_name = "iroha_data_model::fastpq::FastpqPublicTransferStatementV1")]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    NoritoSerialize,
+    NoritoDeserialize,
+    IntoSchema,
+    norito::NoritoSchema,
+)]
+#[norito_schema(
+    name = "iroha_data_model::fastpq::public_artifact::FastpqPublicTransferStatementV1",
+    frame = "iroha_data_model::fastpq::FastpqPublicTransferStatementV1"
+)]
 pub struct FastpqPublicTransferStatementV1 {
     /// Advertised six model public inputs; trusted expectations arrive separately.
     pub public_inputs: FastpqPublicInputs,
@@ -118,8 +154,21 @@ pub struct FastpqPublicTransferStatementV1 {
 ///
 /// No value is registered or qualified by this transport type. A future verifier
 /// must resolve it through its own reviewed registry before any proof admission.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, IntoSchema)]
-#[norito(schema_name = "iroha_data_model::fastpq::FastpqCompactProfileIdV1")]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    NoritoSerialize,
+    NoritoDeserialize,
+    IntoSchema,
+    norito::NoritoSchema,
+)]
+#[norito_schema(
+    name = "iroha_data_model::fastpq::public_artifact::FastpqCompactProfileIdV1",
+    frame = "iroha_data_model::fastpq::FastpqCompactProfileIdV1"
+)]
 pub struct FastpqCompactProfileIdV1(pub [u8; 32]);
 
 /// Exact original public AXT execution metadata fields, with no arbitrary map.
@@ -127,8 +176,20 @@ pub struct FastpqCompactProfileIdV1(pub [u8; 32]);
 /// Byte arrays preserve the accepted field encodings, including absence versus
 /// an explicitly encoded zero. Semantic and mirror validation belongs to the
 /// typed AXT public constructor. No completed-proof amount commitment is present.
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, IntoSchema)]
-#[norito(schema_name = "iroha_data_model::fastpq::FastpqAxtPublicMetadataV1")]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    NoritoSerialize,
+    NoritoDeserialize,
+    IntoSchema,
+    norito::NoritoSchema,
+)]
+#[norito_schema(
+    name = "iroha_data_model::fastpq::public_artifact::FastpqAxtPublicMetadataV1",
+    frame = "iroha_data_model::fastpq::FastpqAxtPublicMetadataV1"
+)]
 pub struct FastpqAxtPublicMetadataV1 {
     /// Original execution parameter string.
     pub parameter: String,
@@ -145,8 +206,21 @@ pub struct FastpqAxtPublicMetadataV1 {
 }
 
 /// Advertised pre-proof AXT outer mirrors; callers must authenticate their own values.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, IntoSchema)]
-#[norito(schema_name = "iroha_data_model::fastpq::FastpqAxtPreProofMirrorsV1")]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    NoritoSerialize,
+    NoritoDeserialize,
+    IntoSchema,
+    norito::NoritoSchema,
+)]
+#[norito_schema(
+    name = "iroha_data_model::fastpq::public_artifact::FastpqAxtPreProofMirrorsV1",
+    frame = "iroha_data_model::fastpq::FastpqAxtPreProofMirrorsV1"
+)]
 pub struct FastpqAxtPreProofMirrorsV1 {
     /// Advertised enclosing dataspace.
     pub dsid: DataSpaceId,
@@ -161,8 +235,20 @@ pub struct FastpqAxtPreProofMirrorsV1 {
 }
 
 /// Unverified ordinary compact artifact under a route-specific nominal schema.
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, IntoSchema)]
-#[norito(schema_name = "iroha_data_model::fastpq::FastpqOrdinaryCompactArtifactV1")]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    NoritoSerialize,
+    NoritoDeserialize,
+    IntoSchema,
+    norito::NoritoSchema,
+)]
+#[norito_schema(
+    name = "iroha_data_model::fastpq::public_artifact::FastpqOrdinaryCompactArtifactV1",
+    frame = "iroha_data_model::fastpq::FastpqOrdinaryCompactArtifactV1"
+)]
 pub struct FastpqOrdinaryCompactArtifactV1 {
     /// Advertised exact compact profile identifier.
     pub profile_id: FastpqCompactProfileIdV1,
@@ -173,8 +259,20 @@ pub struct FastpqOrdinaryCompactArtifactV1 {
 }
 
 /// Unverified AXT compact artifact with complete explicit public binding inputs.
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, IntoSchema)]
-#[norito(schema_name = "iroha_data_model::fastpq::FastpqAxtCompactArtifactV1")]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    NoritoSerialize,
+    NoritoDeserialize,
+    IntoSchema,
+    norito::NoritoSchema,
+)]
+#[norito_schema(
+    name = "iroha_data_model::fastpq::public_artifact::FastpqAxtCompactArtifactV1",
+    frame = "iroha_data_model::fastpq::FastpqAxtCompactArtifactV1"
+)]
 pub struct FastpqAxtCompactArtifactV1 {
     /// Advertised exact compact profile identifier.
     pub profile_id: FastpqCompactProfileIdV1,
@@ -193,8 +291,21 @@ pub struct FastpqAxtCompactArtifactV1 {
 }
 
 /// Proof-kind description; this enum never selects a verifier by itself.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, IntoSchema)]
-#[norito(schema_name = "iroha_data_model::fastpq::FastpqProofKindV1")]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    NoritoSerialize,
+    NoritoDeserialize,
+    IntoSchema,
+    norito::NoritoSchema,
+)]
+#[norito_schema(
+    name = "iroha_data_model::fastpq::public_artifact::FastpqProofKindV1",
+    frame = "iroha_data_model::fastpq::FastpqProofKindV1"
+)]
 pub enum FastpqProofKindV1 {
     /// Existing replay-based proof, whose commitment covers preprocessing rows.
     #[codec(index = 0)]
@@ -210,8 +321,20 @@ pub enum FastpqProofKindV1 {
 /// Advertised compact AIR row roots in chronological segment order.
 ///
 /// Decoding preserves these claims; it does not check them against opaque proofs.
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, IntoSchema)]
-#[norito(schema_name = "iroha_data_model::fastpq::FastpqOrderedCompactAirCommitmentsV1")]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    NoritoSerialize,
+    NoritoDeserialize,
+    IntoSchema,
+    norito::NoritoSchema,
+)]
+#[norito_schema(
+    name = "iroha_data_model::fastpq::public_artifact::FastpqOrderedCompactAirCommitmentsV1",
+    frame = "iroha_data_model::fastpq::FastpqOrderedCompactAirCommitmentsV1"
+)]
 pub struct FastpqOrderedCompactAirCommitmentsV1 {
     /// Advertised exact segment count, to be checked against roots and frames.
     pub segment_count: u64,
@@ -220,8 +343,20 @@ pub struct FastpqOrderedCompactAirCommitmentsV1 {
 }
 
 /// Untrusted commitment description with explicit, non-interchangeable meanings.
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, IntoSchema)]
-#[norito(schema_name = "iroha_data_model::fastpq::FastpqCommitmentDescriptionV1")]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    NoritoSerialize,
+    NoritoDeserialize,
+    IntoSchema,
+    norito::NoritoSchema,
+)]
+#[norito_schema(
+    name = "iroha_data_model::fastpq::public_artifact::FastpqCommitmentDescriptionV1",
+    frame = "iroha_data_model::fastpq::FastpqCommitmentDescriptionV1"
+)]
 pub enum FastpqCommitmentDescriptionV1 {
     /// Advertised legacy preprocessing commitment; not a compact AIR row root.
     #[codec(index = 0)]
@@ -236,8 +371,20 @@ pub enum FastpqCommitmentDescriptionV1 {
 /// A consumer must independently recompute the canonical wrapper, public statement
 /// and inner-frame digests, byte length and bounded commitment list. This DTO has
 /// no constructor that claims to extract roots from opaque child proof bytes.
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, IntoSchema)]
-#[norito(schema_name = "iroha_data_model::fastpq::FastpqArtifactIdentityDescriptionV1")]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    NoritoSerialize,
+    NoritoDeserialize,
+    IntoSchema,
+    norito::NoritoSchema,
+)]
+#[norito_schema(
+    name = "iroha_data_model::fastpq::public_artifact::FastpqArtifactIdentityDescriptionV1",
+    frame = "iroha_data_model::fastpq::FastpqArtifactIdentityDescriptionV1"
+)]
 pub struct FastpqArtifactIdentityDescriptionV1 {
     /// Advertised proof kind, to be compared to the nominal artifact schema.
     pub proof_kind: FastpqProofKindV1,
@@ -668,16 +815,16 @@ mod tests {
         let raw = norito::encode_canonical(&ordinary).unwrap();
         let axt_raw = norito::encode_canonical(&axt).unwrap();
         assert_eq!(
-            <FastpqOrdinaryCompactArtifactV1 as NoritoSerialize>::schema_hash(),
+            norito::schema::identity::frame_hash::<FastpqOrdinaryCompactArtifactV1>(),
             norito::core::schema_hash_for_name(FASTPQ_ORDINARY_COMPACT_ARTIFACT_V1_SCHEMA_NAME)
         );
         assert_eq!(
-            <FastpqAxtCompactArtifactV1 as NoritoSerialize>::schema_hash(),
+            norito::schema::identity::frame_hash::<FastpqAxtCompactArtifactV1>(),
             norito::core::schema_hash_for_name(FASTPQ_AXT_COMPACT_ARTIFACT_V1_SCHEMA_NAME)
         );
         assert_ne!(
-            <FastpqOrdinaryCompactArtifactV1 as NoritoSerialize>::schema_hash(),
-            <FastpqAxtCompactArtifactV1 as NoritoSerialize>::schema_hash()
+            norito::schema::identity::frame_hash::<FastpqOrdinaryCompactArtifactV1>(),
+            norito::schema::identity::frame_hash::<FastpqAxtCompactArtifactV1>()
         );
         assert!(
             FastpqAxtCompactArtifactV1::decode_canonical_with_limits(&raw, PROFILE, limits())
@@ -1043,8 +1190,11 @@ mod tests {
 
     #[test]
     fn negative_quantity_cannot_enter_the_path_free_delta_codec() {
-        #[derive(NoritoSerialize)]
-        #[norito(schema_name = "iroha_data_model::fastpq::FastpqPublicTransferDeltaV1")]
+        #[derive(NoritoSerialize, norito::NoritoSchema)]
+        #[norito_schema(
+            name = "test::iroha_data_model::ForgedDelta",
+            frame = "iroha_data_model::fastpq::FastpqPublicTransferDeltaV1"
+        )]
         struct ForgedDelta {
             from_account: AccountId,
             to_account: AccountId,
@@ -1068,5 +1218,84 @@ mod tests {
         };
         let raw = norito::encode_canonical(&forged).unwrap();
         assert!(norito::decode_canonical::<FastpqPublicTransferDeltaV1>(&raw).is_err());
+    }
+}
+
+#[cfg(test)]
+mod captured_cutover_identity_tests {
+    fn check<T>(nominal: &str, frame: &str, hash: &str)
+    where
+        T: norito::NoritoSerialize + for<'de> norito::NoritoDeserialize<'de>,
+    {
+        assert_eq!(T::nominal_name(), nominal);
+        assert_eq!(T::frame_name(), frame);
+        assert_eq!(
+            hex::encode(norito::schema::identity::frame_hash::<T>()),
+            hash
+        );
+    }
+
+    #[test]
+    fn captured_owner_identities() {
+        check::<super::FastpqPublicTransferDeltaV1>(
+            "iroha_data_model::fastpq::public_artifact::FastpqPublicTransferDeltaV1",
+            "iroha_data_model::fastpq::FastpqPublicTransferDeltaV1",
+            "979da16441261bf40f67490e06ec6eed",
+        );
+        check::<super::FastpqPublicTransferTranscriptV1>(
+            "iroha_data_model::fastpq::public_artifact::FastpqPublicTransferTranscriptV1",
+            "iroha_data_model::fastpq::FastpqPublicTransferTranscriptV1",
+            "9248584076d13d12c48b473d98f4a825",
+        );
+        check::<super::FastpqPublicTransferStatementV1>(
+            "iroha_data_model::fastpq::public_artifact::FastpqPublicTransferStatementV1",
+            "iroha_data_model::fastpq::FastpqPublicTransferStatementV1",
+            "313b4cd0ee947685d49f3a3c698a4b87",
+        );
+        check::<super::FastpqCompactProfileIdV1>(
+            "iroha_data_model::fastpq::public_artifact::FastpqCompactProfileIdV1",
+            "iroha_data_model::fastpq::FastpqCompactProfileIdV1",
+            "a2547f570ec6e27ca5e6e09db2c8b940",
+        );
+        check::<super::FastpqAxtPublicMetadataV1>(
+            "iroha_data_model::fastpq::public_artifact::FastpqAxtPublicMetadataV1",
+            "iroha_data_model::fastpq::FastpqAxtPublicMetadataV1",
+            "c26823c05d27299e6cf1fbf1ccbc39cb",
+        );
+        check::<super::FastpqAxtPreProofMirrorsV1>(
+            "iroha_data_model::fastpq::public_artifact::FastpqAxtPreProofMirrorsV1",
+            "iroha_data_model::fastpq::FastpqAxtPreProofMirrorsV1",
+            "f8b326d71c246cf8d556c75fceb831ee",
+        );
+        check::<super::FastpqOrdinaryCompactArtifactV1>(
+            "iroha_data_model::fastpq::public_artifact::FastpqOrdinaryCompactArtifactV1",
+            "iroha_data_model::fastpq::FastpqOrdinaryCompactArtifactV1",
+            "cbe7fa95c951290f8150e1f1d4530aab",
+        );
+        check::<super::FastpqAxtCompactArtifactV1>(
+            "iroha_data_model::fastpq::public_artifact::FastpqAxtCompactArtifactV1",
+            "iroha_data_model::fastpq::FastpqAxtCompactArtifactV1",
+            "b6a7547776f8603a47d39c2a911a30bb",
+        );
+        check::<super::FastpqProofKindV1>(
+            "iroha_data_model::fastpq::public_artifact::FastpqProofKindV1",
+            "iroha_data_model::fastpq::FastpqProofKindV1",
+            "7473d5902b4074340f2866aece4ab520",
+        );
+        check::<super::FastpqOrderedCompactAirCommitmentsV1>(
+            "iroha_data_model::fastpq::public_artifact::FastpqOrderedCompactAirCommitmentsV1",
+            "iroha_data_model::fastpq::FastpqOrderedCompactAirCommitmentsV1",
+            "3ffb6be7b03f410a7065f101463c12c5",
+        );
+        check::<super::FastpqCommitmentDescriptionV1>(
+            "iroha_data_model::fastpq::public_artifact::FastpqCommitmentDescriptionV1",
+            "iroha_data_model::fastpq::FastpqCommitmentDescriptionV1",
+            "121e0f8bbc60014240065d0a0bece355",
+        );
+        check::<super::FastpqArtifactIdentityDescriptionV1>(
+            "iroha_data_model::fastpq::public_artifact::FastpqArtifactIdentityDescriptionV1",
+            "iroha_data_model::fastpq::FastpqArtifactIdentityDescriptionV1",
+            "bf062c0828e208bb8189f0c38dac1154",
+        );
     }
 }

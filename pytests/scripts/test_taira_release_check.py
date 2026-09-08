@@ -82,5 +82,26 @@ class EarlyReleaseCheckTests(unittest.TestCase):
                     gate.require_one_pass("example", subprocess.CompletedProcess([], code, output, ""))
 
 
+    def test_frozen_harness_uses_captured_manifest_config_and_no_git_lookup(self):
+        child = MagicMock()
+        child.stdout = io.StringIO(json.dumps({"reason": "compiler-artifact", "target": {"name": "iroha", "kind": ["bin"]}, "profile": {"test": True}, "executable": "/warm/iroha-test"}) + "\n")
+        child.wait.return_value = 0
+        process = MagicMock()
+        process.__enter__.return_value = child
+        with patch.object(gate.subprocess, "Popen", return_value=process) as spawn, contextlib.redirect_stdout(io.StringIO()):
+            gate.compile_harness(Path("/frozen"), {"CARGO": "/fixed/cargo"}, frozen=True, lock_fds=(77, 88))
+        self.assertEqual(spawn.call_args.args[0][:4], ["/fixed/cargo", "--config", "/frozen/.cargo/config.toml", "test"])
+        self.assertEqual(spawn.call_args.kwargs["cwd"], "/")
+        self.assertEqual(spawn.call_args.kwargs["pass_fds"], (77, 88))
+        with patch.object(gate.subprocess, "check_output", side_effect=AssertionError("must not inspect mutable Git")), \
+             patch.object(gate, "compile_harness", return_value="/fixture/harness") as compile, \
+             patch.object(gate.subprocess, "run", side_effect=[subprocess.CompletedProcess([], 0, "fixture: test\n", ""), subprocess.CompletedProcess([], 0, "test fixture ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored;\n", "")]) as run, \
+             patch.object(gate, "STAGES", (("fixtures", ("fixture",)),)), contextlib.redirect_stdout(io.StringIO()):
+            gate.run_checks(Path("/frozen"), environment={"CARGO": "/fixed/cargo", "CARGO_TARGET_DIR": "/warm"}, source_commit="a" * 40, lock_fds=(77, 88))
+        self.assertEqual([call.kwargs["cwd"] for call in run.call_args_list], [Path("/warm"), Path("/warm")])
+        self.assertTrue(compile.call_args.kwargs["frozen"])
+        self.assertEqual(compile.call_args.args[1]["VERGEN_GIT_SHA"], "a" * 40)
+
+
 if __name__ == "__main__":
     unittest.main()

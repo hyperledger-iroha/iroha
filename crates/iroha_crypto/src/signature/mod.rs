@@ -644,7 +644,7 @@ impl<T: IntoSchema> IntoSchema for SignatureOf<T> {
 }
 /// Archived representation of [`SignatureOf`].
 pub type ArchivedSignatureOf<T> = norito::core::Archived<SignatureOf<T>>;
-impl ncore::NoritoSerialize for Signature {}
+
 impl ncore::SerializePayload for Signature {
     fn serialize(&self, writer: &mut ncore::Encoder<'_>) -> Result<(), ncore::Error> {
         self.payload.serialize(writer)
@@ -656,7 +656,7 @@ impl ncore::SerializePayload for Signature {
         self.payload.encoded_len_exact()
     }
 }
-impl ncore::NoritoDeserialize<'_> for Signature {}
+
 impl<'de> ncore::DeserializePayload<'de> for Signature {
     fn deserialize(archived: &'de ncore::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("Signature decode")
@@ -693,7 +693,7 @@ impl<T: norito::NoritoSchema> norito::NoritoSchema for SignatureOf<T> {
         )
     }
 }
-impl<T> norito::core::NoritoSerialize for SignatureOf<T> {}
+
 impl<T> norito::core::SerializePayload for SignatureOf<T> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         // Delegate to inner Signature so SignatureOf has identical on-wire bytes.
@@ -706,7 +706,7 @@ impl<T> norito::core::SerializePayload for SignatureOf<T> {
         norito::core::SerializePayload::encoded_len_exact(&self.0)
     }
 }
-impl<T> norito::core::NoritoDeserialize<'_> for SignatureOf<T> {}
+
 impl<'de, T> norito::core::DeserializePayload<'de> for SignatureOf<T> {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("SignatureOf decode")
@@ -1407,7 +1407,7 @@ mod tests {
     #[test]
     fn signature_norito_roundtrip_preserves_payload() {
         use norito::{
-            DeserializePayload, NoritoDeserialize,
+            DeserializePayload,
             codec::{Decode, Encode},
             core::DecodeFromSlice as _,
         };
@@ -1502,7 +1502,7 @@ mod tests {
     }
     #[test]
     fn signature_vec_roundtrip_via_norito() {
-        use norito::{DeserializePayload, NoritoDeserialize};
+        use norito::DeserializePayload;
         let payload = (0u8..16).collect::<Vec<_>>();
         let signature = Signature::from_bytes(&payload);
         let values = vec![signature.clone()];

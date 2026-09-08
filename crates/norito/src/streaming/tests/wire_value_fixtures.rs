@@ -56,8 +56,8 @@ where
         frame,
         "{case}"
     );
-    let serialize_hash = <T as crate::NoritoSerialize>::schema_hash();
-    let deserialize_hash = <T as crate::NoritoDeserialize>::schema_hash();
+    let serialize_hash = norito::schema::identity::frame_hash::<T>();
+    let deserialize_hash = norito::schema::identity::frame_hash::<T>();
     assert_eq!(
         serialize_hash, deserialize_hash,
         "both codec directions for {case}"

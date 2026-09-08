@@ -240,8 +240,11 @@ fn source_entry_manifest_rejects_leaf_fields_outside_its_expected_entry() {
 
 #[test]
 fn source_entry_manifest_rejects_the_unqualified_fieldless_digest_layout() {
-    #[derive(NoritoSerialize)]
-    #[norito(schema_name = "iroha_data_model::fastpq::FastpqOrdinarySourceStatementManifestV1")]
+    #[derive(NoritoSerialize, norito::NoritoSchema)]
+    #[norito_schema(
+        name = "test::iroha_data_model::PreviousManifest",
+        frame = "iroha_data_model::fastpq::FastpqOrdinarySourceStatementManifestV1"
+    )]
     struct PreviousManifest {
         source: FastpqSourceStatementContextV1,
         executed_entry_count: u32,
@@ -255,8 +258,8 @@ fn source_entry_manifest_rejects_the_unqualified_fieldless_digest_layout() {
         statement_root: fastpq_ordinary_source_statement_empty_root_v1(),
     };
     assert_eq!(
-        <PreviousManifest as norito::core::NoritoSerialize>::schema_hash(),
-        <FastpqOrdinarySourceStatementManifestV1 as norito::core::NoritoSerialize>::schema_hash(),
+        norito::schema::identity::frame_hash::<PreviousManifest>(),
+        norito::schema::identity::frame_hash::<FastpqOrdinarySourceStatementManifestV1>(),
     );
     let frame = norito::encode_canonical(&old).unwrap();
     assert!(norito::decode_canonical::<FastpqOrdinarySourceStatementManifestV1>(&frame).is_err());

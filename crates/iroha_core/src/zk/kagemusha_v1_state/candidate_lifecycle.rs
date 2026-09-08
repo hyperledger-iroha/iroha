@@ -2200,52 +2200,6 @@ impl KagemushaSenderOutboxCapacityV1 {
         }
         Ok(())
     }
-
-    #[cfg(test)]
-    pub(super) fn remove_reservation_for_recovery_test(
-        &mut self,
-        reservation_id: DigestV1,
-        journal: &KagemushaOutgoingCandidateJournalV1,
-    ) {
-        assert!(self.reservations.remove(&reservation_id).is_some());
-        self.reconcile_capacity_meters(journal)
-            .expect("tampered test capacity remains internally metered");
-    }
-
-    #[cfg(test)]
-    pub(super) fn replace_terminal_digest_for_recovery_test(
-        &mut self,
-        reservation_id: DigestV1,
-        envelope_digest: DigestV1,
-        journal: &KagemushaOutgoingCandidateJournalV1,
-    ) {
-        self.reservations
-            .get_mut(&reservation_id)
-            .expect("test reservation exists")
-            .terminal_envelope_digest = Some(envelope_digest);
-        self.reconcile_capacity_meters(journal)
-            .expect("tampered test capacity remains internally metered");
-    }
-
-    #[cfg(test)]
-    pub(super) fn replace_reservation_for_recovery_test(
-        &mut self,
-        reservation_id: DigestV1,
-        reservation: KagemushaOutboxReservationV1,
-        journal: &KagemushaOutgoingCandidateJournalV1,
-    ) {
-        assert_eq!(reservation.reservation_id, reservation_id);
-        let record = self
-            .reservations
-            .get_mut(&reservation_id)
-            .expect("test reservation exists");
-        record.reservation = reservation;
-        record.reservation_commitment = reservation
-            .canonical_commitment()
-            .expect("tampered test reservation remains internally valid");
-        self.reconcile_capacity_meters(journal)
-            .expect("tampered test capacity remains internally metered");
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Encode)]

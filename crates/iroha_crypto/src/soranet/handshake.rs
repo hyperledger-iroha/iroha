@@ -86,7 +86,7 @@ const HANDSHAKE_FIXTURE_MAX_BYTES_V1: usize = 1024 * 1024;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 const HANDSHAKE_FIXTURE_O_NOFOLLOW_FLAG: i32 = 0x0000_0100;
 #[cfg(any(target_os = "linux", target_os = "android"))]
-const HANDSHAKE_FIXTURE_O_NOFOLLOW_FLAG: i32 = 0x0002_0000;
+const HANDSHAKE_FIXTURE_O_NOFOLLOW_FLAG: i32 = rustix::fs::OFlags::NOFOLLOW.bits() as i32;
 #[cfg(any(
     target_os = "freebsd",
     target_os = "netbsd",

@@ -11,8 +11,12 @@ use norito::derive::{NoritoDeserialize, NoritoSerialize};
     NoritoDeserialize,
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
+    norito::NoritoSchema,
 )]
-#[norito(schema_name = "iroha_telemetry::metrics::TxGossipCaps")]
+#[norito_schema(
+    name = "iroha_torii_shared::status::gossip::TxGossipCaps",
+    frame = "iroha_telemetry::metrics::TxGossipCaps"
+)]
 pub struct TxGossipCaps {
     /// Max gossip frame size in bytes for transaction payloads.
     pub frame_cap_bytes: u64,
@@ -65,8 +69,12 @@ impl Default for TxGossipCaps {
     NoritoDeserialize,
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
+    norito::NoritoSchema,
 )]
-#[norito(schema_name = "iroha_telemetry::metrics::TxGossipStatus")]
+#[norito_schema(
+    name = "iroha_torii_shared::status::gossip::TxGossipStatus",
+    frame = "iroha_telemetry::metrics::TxGossipStatus"
+)]
 pub struct TxGossipStatus {
     /// Plane used for the gossip attempt (`public` or `restricted`).
     pub plane: String,
@@ -116,8 +124,12 @@ pub struct TxGossipStatus {
     NoritoDeserialize,
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
+    norito::NoritoSchema,
 )]
-#[norito(schema_name = "iroha_telemetry::metrics::TxGossipSnapshot")]
+#[norito_schema(
+    name = "iroha_torii_shared::status::gossip::TxGossipSnapshot",
+    frame = "iroha_telemetry::metrics::TxGossipSnapshot"
+)]
 pub struct TxGossipSnapshot {
     /// Configured caps and frame limits.
     pub caps: TxGossipCaps,
@@ -137,8 +149,12 @@ pub struct TxGossipSnapshot {
     IntoSchema,
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
+    norito::NoritoSchema,
 )]
-#[norito(schema_name = "iroha_telemetry::metrics::DaReceiptCursorStatus")]
+#[norito_schema(
+    name = "iroha_torii_shared::status::gossip::DaReceiptCursorStatus",
+    frame = "iroha_telemetry::metrics::DaReceiptCursorStatus"
+)]
 pub struct DaReceiptCursorStatus {
     /// Numeric lane identifier.
     pub lane_id: u32,
@@ -146,4 +162,23 @@ pub struct DaReceiptCursorStatus {
     pub epoch: u64,
     /// Highest recorded receipt sequence for the lane/epoch.
     pub highest_sequence: u64,
+}
+
+#[cfg(test)]
+mod captured_frame_identity_tests {
+    #[test]
+    fn observed_declared_identities() {
+        crate::captured_identity_tests::assert_bidirectional::<super::DaReceiptCursorStatus>(
+            "iroha_torii_shared::status::gossip::DaReceiptCursorStatus",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::TxGossipCaps>(
+            "iroha_torii_shared::status::gossip::TxGossipCaps",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::TxGossipSnapshot>(
+            "iroha_torii_shared::status::gossip::TxGossipSnapshot",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::TxGossipStatus>(
+            "iroha_torii_shared::status::gossip::TxGossipStatus",
+        );
+    }
 }

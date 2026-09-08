@@ -22841,7 +22841,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     public func prepareAccountOnboarding(
         _ receipt: ToriiAccountOnboardingPlanReceipt,
         request originalRequest: ToriiAccountOnboardingPlanRequest,
-        binding: ToriiTairaPublicResetMutationBindingV1,
+        binding: ToriiPreparedOperationBindingV1,
         feePayment: FeePaymentIntent,
         onboardingToken: String,
         expectedAuthority: String,
@@ -22872,7 +22872,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         _ proofRequired: ToriiAccountOnboardingProofRequiredPrepareResponseV1,
         request originalRequest: ToriiAccountOnboardingPlanRequest,
         receipt: ToriiAccountOnboardingPlanReceipt,
-        binding: ToriiTairaPublicResetMutationBindingV1,
+        binding: ToriiPreparedOperationBindingV1,
         expectedAuthority: String,
         expectedNetworkId: NetworkId,
         canonicalAuth: ToriiCanonicalRequestAuth,
@@ -22927,7 +22927,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     @discardableResult
     public func prepareAccountFaucet(
         _ claim: ToriiAccountFaucetClaimV1,
-        binding: ToriiTairaPublicResetMutationBindingV1,
+        binding: ToriiPreparedOperationBindingV1,
         feePayment: FeePaymentIntent,
         policy: ToriiAccountFaucetPolicyV1,
         expectedNetworkId: NetworkId,
@@ -23075,7 +23075,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     public func prepareAccountOnboarding(
         _ receipt: ToriiAccountOnboardingPlanReceipt,
         request originalRequest: ToriiAccountOnboardingPlanRequest,
-        binding: ToriiTairaPublicResetMutationBindingV1,
+        binding: ToriiPreparedOperationBindingV1,
         feePayment: FeePaymentIntent,
         onboardingToken: String,
         expectedAuthority: String,
@@ -23156,7 +23156,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         _ proofRequired: ToriiAccountOnboardingProofRequiredPrepareResponseV1,
         request originalRequest: ToriiAccountOnboardingPlanRequest,
         receipt: ToriiAccountOnboardingPlanReceipt,
-        binding: ToriiTairaPublicResetMutationBindingV1,
+        binding: ToriiPreparedOperationBindingV1,
         expectedAuthority: String,
         expectedNetworkId: NetworkId,
         canonicalAuth: ToriiCanonicalRequestAuth,
@@ -23325,7 +23325,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
 
     public func prepareAccountFaucet(
         _ claim: ToriiAccountFaucetClaimV1,
-        binding: ToriiTairaPublicResetMutationBindingV1,
+        binding: ToriiPreparedOperationBindingV1,
         feePayment: FeePaymentIntent,
         policy: ToriiAccountFaucetPolicyV1,
         expectedNetworkId: NetworkId

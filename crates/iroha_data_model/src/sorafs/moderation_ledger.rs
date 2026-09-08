@@ -3256,7 +3256,11 @@ mod tests {
     }
     #[test]
     fn appeal_sortition_anchor_schema_roundtrips_and_rejects_pre_cut_layout() {
-        #[derive(norito::codec::Encode)]
+        #[derive(norito::codec::Encode, norito::NoritoSchema)]
+        #[norito_schema(
+            name = "test::iroha_data_model::sorafs::moderation_ledger::PreCutModerationAppealRecordV1",
+            frame = "iroha_data_model::sorafs::moderation_ledger::ModerationAppealRecordV1"
+        )]
         struct PreCutModerationAppealRecordV1 {
             intake: ModerationAppealIntakeV1,
             intake_digest: [u8; 32],
@@ -3301,6 +3305,18 @@ mod tests {
         };
         let pre_cut_bytes =
             norito::encode_canonical(&pre_cut).expect("encode pre-cut appeal layout");
+        assert_eq!(
+            norito::schema::identity::frame_hash::<PreCutModerationAppealRecordV1>(),
+            norito::schema::identity::frame_hash::<ModerationAppealRecordV1>(),
+            "malformed fixture must use the production frame identity"
+        );
+        assert_eq!(
+            norito::core::Header::read(pre_cut_bytes.as_slice())
+                .expect("read malformed fixture header")
+                .schema,
+            norito::schema::identity::frame_hash::<ModerationAppealRecordV1>(),
+            "malformed fixture header must reach the production decoder"
+        );
         assert!(
             norito::decode_canonical::<ModerationAppealRecordV1>(&pre_cut_bytes).is_err(),
             "the first-release appeal schema must reject bytes without the anchor field"

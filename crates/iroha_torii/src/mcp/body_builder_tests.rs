@@ -196,11 +196,9 @@ fn sponsored_account_tool_descriptors_close_nested_v1_objects() {
 
     let binding_fields = [
         "schema",
-        "authorization_sha256",
-        "authorization_nonce",
+        "semantic_hash_hex",
         "kind",
-        "phase",
-        "idempotency_key",
+        "request_id",
         "execution_expires_at_unix_ms",
     ];
     for tool in [
@@ -494,7 +492,7 @@ fn faucet_body_builders_require_exact_prepare_and_submit_envelopes() {
 
     let submit = norito::json!({
         "body": {
-            "schema": "iroha.taira.prepared-transaction.v1",
+            "schema": "iroha.prepared-transaction.v1",
             "binding": {},
             "operation": "faucet",
             "claim": {},

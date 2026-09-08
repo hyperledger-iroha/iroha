@@ -596,7 +596,6 @@ impl Default for PrivacyProofWireMagicV1 {
     }
 }
 
-impl norito::core::NoritoSerialize for PrivacyProofWireMagicV1 {}
 impl norito::core::SerializePayload for PrivacyProofWireMagicV1 {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         writer.write_all(&self.0)?;
@@ -612,7 +611,6 @@ impl norito::core::SerializePayload for PrivacyProofWireMagicV1 {
     }
 }
 
-impl norito::core::NoritoDeserialize<'_> for PrivacyProofWireMagicV1 {}
 impl<'de> norito::core::DeserializePayload<'de> for PrivacyProofWireMagicV1 {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("canonical privacy proof wire magic")
@@ -740,7 +738,6 @@ impl AsRef<[u8; fastpq_isi::GOLDILOCKS_DIGEST384_BYTES_V1]> for GoldilocksDigest
     }
 }
 
-impl norito::core::NoritoSerialize for GoldilocksDigest384V1 {}
 impl norito::core::SerializePayload for GoldilocksDigest384V1 {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         writer.write_all(&self.0)?;
@@ -756,7 +753,6 @@ impl norito::core::SerializePayload for GoldilocksDigest384V1 {
     }
 }
 
-impl norito::core::NoritoDeserialize<'_> for GoldilocksDigest384V1 {}
 impl<'de> norito::core::DeserializePayload<'de> for GoldilocksDigest384V1 {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("canonical GoldilocksDigest384V1 decode")
@@ -879,8 +875,6 @@ macro_rules! define_zk_ace_digest384 {
             }
         }
 
-        impl norito::core::NoritoSerialize for $name {
-}
 impl norito::core::SerializePayload for $name {
             fn serialize(
                 &self,
@@ -898,9 +892,6 @@ impl norito::core::SerializePayload for $name {
             }
         }
 
-        impl norito::core::NoritoDeserialize<'_> for $name {
-
-}
 impl<'de> norito::core::DeserializePayload<'de> for $name {
             fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
                 Self::try_deserialize(archived).expect("canonical ZK-ACE digest decode")
@@ -1032,7 +1023,6 @@ impl Default for PrivacyExact12CatalogCommitmentV1 {
     }
 }
 
-impl norito::core::NoritoSerialize for PrivacyExact12CatalogCommitmentV1 {}
 impl norito::core::SerializePayload for PrivacyExact12CatalogCommitmentV1 {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         norito::core::SerializePayload::serialize(&self.0, writer)
@@ -1047,7 +1037,6 @@ impl norito::core::SerializePayload for PrivacyExact12CatalogCommitmentV1 {
     }
 }
 
-impl norito::core::NoritoDeserialize<'_> for PrivacyExact12CatalogCommitmentV1 {}
 impl<'de> norito::core::DeserializePayload<'de> for PrivacyExact12CatalogCommitmentV1 {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("canonical Exact12 catalog commitment")

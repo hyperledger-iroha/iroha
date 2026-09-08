@@ -1,0 +1,14 @@
+[
+  {
+    "deserialize_hash": "1f96482d0f94008a738d7b10ee055c46",
+    "label": "bad_length_hint",
+    "nominal": "iroha_p2p::network::handle_update_tests::BadLengthHintPayload",
+    "serialize_hash": "1f96482d0f94008a738d7b10ee055c46"
+  },
+  {
+    "deserialize_hash": "d1bb0193480b17bbdf9ffafad43bea15",
+    "label": "failing_serializer",
+    "nominal": "iroha_p2p::network::handle_update_tests::FailingSerializerPayload",
+    "serialize_hash": "d1bb0193480b17bbdf9ffafad43bea15"
+  }
+]

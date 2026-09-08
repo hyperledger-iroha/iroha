@@ -54,7 +54,6 @@ impl Default for BatchContextLimits {
 }
 
 #[derive(NoritoSerialize)]
-#[norito(schema_name = "fastpq_prover::compact_prototype::OrdinaryTransferBatchContextV1")]
 struct BoundBatchContext {
     version: u16,
     segment_count: u32,
@@ -63,7 +62,6 @@ struct BoundBatchContext {
 }
 
 #[derive(NoritoSerialize)]
-#[norito(schema_name = "fastpq_prover::compact_prototype::OrdinaryTransferSegmentContextV1")]
 struct BoundSegmentContext {
     version: u16,
     segment_count: u32,

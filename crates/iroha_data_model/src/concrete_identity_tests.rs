@@ -36,11 +36,10 @@ fn serialized_record<T: NoritoSchema + NoritoSerialize>(value: &T) -> Value {
     let header = norito::core::Header::read(&mut frame.as_slice())
         .expect("read emitted concrete identity header");
     let expected_hash = norito::schema::identity::frame_hash::<T>();
-    assert_eq!(<T as NoritoSerialize>::schema_hash(), expected_hash);
     assert_eq!(header.schema, expected_hash);
     norito::json!({
         "actual_type_name": (T::nominal_name()),
-        "serialize_hash": (hex::encode(<T as NoritoSerialize>::schema_hash())),
+        "serialize_hash": (hex::encode(norito::schema::identity::frame_hash::<T>())),
         "bare_hex": (hex::encode(bare)),
         "frame_hex": (hex::encode(&frame)),
         "frame_sha256": (hex::encode(Sha256::digest(&frame))),
@@ -63,10 +62,6 @@ where
         .expect("decode current-layout concrete identity payload");
     assert_eq!(norito::codec::encode_adaptive(&decoded_bare), bare);
     assert_eq!(T::frame_name(), T::nominal_name());
-    assert_eq!(
-        <T as NoritoDeserialize>::schema_hash(),
-        norito::schema::identity::frame_hash::<T>(),
-    );
     let mut wrong_schema = frame.clone();
     wrong_schema[6] ^= 1;
     assert!(matches!(
@@ -78,7 +73,7 @@ where
     }
     norito::json!({
         "encoding": (serialized_record(value)),
-        "deserialize_hash": (hex::encode(<T as NoritoDeserialize>::schema_hash())),
+        "deserialize_hash": (hex::encode(norito::schema::identity::frame_hash::<T>())),
         "decode_reencode_exact": true,
         "bare_decode_reencode_exact": true,
     })
@@ -107,8 +102,8 @@ where
     let projected = norito::encode_canonical(projection).expect("encode projected frame");
     let owned = norito::encode_canonical(material).expect("encode owned projection material");
     assert_eq!(
-        <P as NoritoSerialize>::schema_hash(),
-        <T as NoritoSerialize>::schema_hash()
+        norito::schema::identity::frame_hash::<P>(),
+        norito::schema::identity::frame_hash::<T>()
     );
     assert_eq!(
         projected, owned,

@@ -10,6 +10,8 @@ use std::{
 };
 #[derive(Debug, PartialEq, Eq, Encode, Decode)]
 #[cfg_attr(feature = "schema-structural", derive(iroha_schema::TypeId))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "norito.test.decode_sequence_limits.WrappedSequence")]
 enum WrappedSequence {
     Direct(Vec<u16>),
     Boxed(Box<Vec<u16>>),

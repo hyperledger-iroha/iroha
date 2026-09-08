@@ -183,7 +183,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RawVersioned {
 pub mod codec {
     use super::{Version, error::Result};
     use norito::{
-        NoritoDeserialize,
+        DeserializePayload,
         codec::{DecodeAll, Encode},
         core::DecodeFromSlice,
     };
@@ -205,7 +205,8 @@ pub mod codec {
     /// Decode a leading-version Norito payload using exact-slice semantics.
     ///
     /// The input must contain the version byte followed by the exact Norito
-    /// payload for `T`. Unsupported versions preserve the original bytes in the
+    /// payload for `T`. This bare decoder requires no frame identity.
+    /// Unsupported versions preserve the original bytes in the
     /// returned [`crate::UnsupportedVersion`] payload for diagnostics.
     ///
     /// # Errors
@@ -215,7 +216,7 @@ pub mod codec {
     /// or a wrapped Norito decode error when the payload body is malformed.
     pub fn decode_exact_versioned<T>(input: &[u8]) -> Result<T>
     where
-        T: Version + for<'de> NoritoDeserialize<'de> + for<'de> DecodeFromSlice<'de>,
+        T: Version + for<'de> DeserializePayload<'de> + for<'de> DecodeFromSlice<'de>,
     {
         decode_exact_versioned_with_raw(input, input)
     }
@@ -234,7 +235,7 @@ pub mod codec {
         raw_for_error: &[u8],
     ) -> Result<T>
     where
-        T: Version + for<'de> NoritoDeserialize<'de> + for<'de> DecodeFromSlice<'de>,
+        T: Version + for<'de> DeserializePayload<'de> + for<'de> DecodeFromSlice<'de>,
     {
         use crate::{RawVersioned, UnsupportedVersion, error::Error};
         let Some((&version, payload)) = bare_versioned.split_first() else {
@@ -385,6 +386,30 @@ mod tests {
         let decoded =
             crate::codec::decode_exact_versioned::<ExactPayload>(&encoded).expect("decode");
         assert_eq!(decoded, ExactPayload(42));
+    }
+    #[test]
+    fn versioned_payload_decoders_reject_truncation_and_trailing_bytes_without_frame_identity() {
+        let encoded = crate::codec::EncodeVersioned::encode_versioned(&ExactPayload(42));
+        for len in 0..encoded.len() {
+            assert!(crate::codec::decode_exact_versioned::<ExactPayload>(&encoded[..len]).is_err());
+            assert!(
+                crate::codec::decode_exact_versioned_with_raw::<ExactPayload>(
+                    &encoded[..len],
+                    b"original envelope",
+                )
+                .is_err()
+            );
+        }
+        let mut trailing = encoded;
+        trailing.push(0);
+        assert!(crate::codec::decode_exact_versioned::<ExactPayload>(&trailing).is_err());
+        assert!(
+            crate::codec::decode_exact_versioned_with_raw::<ExactPayload>(
+                &trailing,
+                b"original envelope",
+            )
+            .is_err()
+        );
     }
     #[test]
     fn decode_exact_versioned_with_raw_preserves_custom_error_bytes() {

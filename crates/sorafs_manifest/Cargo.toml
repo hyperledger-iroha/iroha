@@ -62,6 +62,9 @@ rand_core_06 = { workspace = true }
 halo2_proofs = { version = "0.5.1", package = "halo2-axiom", features = ["circuit-params", "multicore"] }
 poseidon-primitives = "0.2.0"
 
+[target.'cfg(any(target_os = "linux", target_os = "android"))'.dependencies]
+rustix = { version = "1.1.4", features = ["fs"] }
+
 [dev-dependencies]
 tempfile = "3.23.0"
 assert_cmd = "2.1.1"

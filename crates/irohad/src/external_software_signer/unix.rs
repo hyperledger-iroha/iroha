@@ -20,7 +20,7 @@ use super::{
 use crate::runtime_credential::{RuntimeCredentialErrorV1, load_bounded_runtime_credential_v1};
 use iroha_crypto::Signature;
 use norito::{
-    NoritoDeserialize, NoritoSerialize, SerializePayload,
+    NoritoDeserialize, NoritoSerialize,
     codec::{Decode, Encode},
 };
 use std::{

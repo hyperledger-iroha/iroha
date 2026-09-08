@@ -153,16 +153,22 @@ struct AbsorbedPrefix {
 // Two independently framed values allow prefix absorption to be reused. Each
 // header advertises its own canonical schema, layout, byte length and CRC. The
 // full context is present in P; neither P nor any raw tape is replaced by a hash.
-#[derive(Clone, Debug, NoritoSerialize)]
-#[norito(schema_name = "fastpq_prover::compact_candidate::ShakePrefixV1")]
+#[derive(Clone, Debug, NoritoSerialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "fastpq_prover::backend::compact_shake_candidate::PrefixFrame",
+    frame = "fastpq_prover::compact_candidate::ShakePrefixV1"
+)]
 struct PrefixFrame {
     version: u16,
     identity: Vec<u8>,
     context: Vec<u8>,
 }
 
-#[derive(Clone, Debug, NoritoSerialize)]
-#[norito(schema_name = "fastpq_prover::compact_candidate::ShakeBodyV1")]
+#[derive(Clone, Debug, NoritoSerialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "fastpq_prover::backend::compact_shake_candidate::Frame",
+    frame = "fastpq_prover::compact_candidate::ShakeBodyV1"
+)]
 struct Frame {
     kind: u8,
     oracle: u8,

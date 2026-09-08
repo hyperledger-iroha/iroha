@@ -17,6 +17,7 @@ mod panic_recovery;
 #[path = "main/peers_gossiper_topology_sync.rs"]
 mod peers_gossiper_topology_sync;
 /// Root-custodied immutable no-replace artifact publication.
+#[cfg(all(test, unix))]
 #[path = "main/root_owned_artifact_publication.rs"]
 mod root_owned_artifact_publication;
 /// Platform-fixed local runtime-provider broker used by the stock launcher.
@@ -8780,7 +8781,6 @@ impl Iroha {
         #[cfg(feature = "dag-recovery-verify")]
         if !emergency_fast {
             use iroha_core::pipeline::access::{IvmStrategy, derive_for_transaction};
-            use nonzero_ext::nonzero;
             use sha2::{Digest, Sha256};
             // Choose strategy based on configured pipeline prepass
             let view = state.query_view();
@@ -9208,6 +9208,48 @@ impl Iroha {
             prepared_sorafs_reputation_archive.is_some(),
         )
         .map_err(|message| Report::new(StartError::StartP2p).attach(message))?;
+        let soracloud_runtime_mutation_signer =
+            runtime_deps.soracloud_runtime_mutation_signer.clone();
+        let soracloud_local_validator_account_id =
+            soracloud_runtime_mutation_signer.as_ref().map_or_else(
+                || {
+                    AccountId::new(
+                        config
+                            .common
+                            .trusted_peers
+                            .value()
+                            .myself
+                            .id()
+                            .public_key()
+                            .clone(),
+                    )
+                },
+                |signer| signer.authority(),
+            );
+        let soracloud_local_peer_id = config.common.trusted_peers.value().myself.id().to_string();
+        // A failed host prerequisite must not leave newly emitted consensus WAL.
+        let prepared_soracloud_runtime = if emergency_fast {
+            None
+        } else {
+            Some(
+                SoracloudRuntimeManager::new(
+                    soracloud_runtime::SoracloudRuntimeManagerConfig::from_runtime_config(
+                        &config.soracloud_runtime,
+                    )
+                    .with_local_host_identity(
+                        soracloud_local_validator_account_id.clone(),
+                        soracloud_local_peer_id.clone(),
+                    ),
+                    Arc::clone(&state),
+                )
+                .preflight_startup()
+                .map_err(|error| {
+                    Report::new(StartError::StartTorii).attach(format!(
+                        "failed to qualify Soracloud host prerequisites before consensus: {error:#}"
+                    ))
+                })?,
+            )
+        };
         let sumeragi = if emergency_fast {
             drop(v2_replay_plan);
             drop(startup_replay_inventory_guard);
@@ -9367,25 +9409,6 @@ impl Iroha {
             runtime_deps.sorafs_reserve_transaction_signer.clone();
         let sorafs_orderbook_transaction_signer =
             runtime_deps.sorafs_orderbook_transaction_signer.clone();
-        let soracloud_runtime_mutation_signer =
-            runtime_deps.soracloud_runtime_mutation_signer.clone();
-        let soracloud_local_validator_account_id =
-            soracloud_runtime_mutation_signer.as_ref().map_or_else(
-                || {
-                    AccountId::new(
-                        config
-                            .common
-                            .trusted_peers
-                            .value()
-                            .myself
-                            .id()
-                            .public_key()
-                            .clone(),
-                    )
-                },
-                |signer| signer.authority(),
-            );
-        let soracloud_local_peer_id = config.common.trusted_peers.value().myself.id().to_string();
         let soracloud_operator_preseed_store = if !emergency_fast
             && config.soracloud_runtime.inrou.enabled
             && !sorafs_storage_config.enabled()
@@ -10028,21 +10051,14 @@ impl Iroha {
             );
             None
         } else {
-            let local_validator_account_id = soracloud_local_validator_account_id;
-            let local_peer_id = soracloud_local_peer_id;
-            let runtime_manager = SoracloudRuntimeManager::new(
-                soracloud_runtime::SoracloudRuntimeManagerConfig::from_runtime_config(
-                    &config.soracloud_runtime,
-                )
-                .with_local_host_identity(local_validator_account_id, local_peer_id),
-                Arc::clone(&state),
-            )
-            .with_sorafs_node(sorafs_node::NodeHandle::clone(
-                sorafs_node
-                    .as_ref()
-                    .expect("Soracloud is disabled during emergency Fast startup"),
-            ))
-            .with_remote_stream_token_operator_from_config(&config);
+            let runtime_manager = prepared_soracloud_runtime
+                .expect("normal startup qualified the same manager before consensus")
+                .with_sorafs_node(sorafs_node::NodeHandle::clone(
+                    sorafs_node
+                        .as_ref()
+                        .expect("Soracloud is disabled during emergency Fast startup"),
+                ))
+                .with_remote_stream_token_operator_from_config(&config);
             let runtime_manager = if let Some((store, qualified_manifest_digests)) =
                 soracloud_operator_preseed_store
             {
@@ -19305,7 +19321,6 @@ mod tests {
         use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair, bls_normal_pop_prove};
         use iroha_genesis::GenesisBuilder;
         use iroha_primitives::addr::socket_addr;
-        use path_absolutize::Absolutize as _;
 
         fn config_test_args(config_path: PathBuf, genesis_manifest_json: Option<PathBuf>) -> Args {
             Args {

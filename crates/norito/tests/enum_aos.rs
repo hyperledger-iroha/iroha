@@ -18,8 +18,14 @@ struct StructPayload {
     tag: [u8; 4],
 }
 #[derive(
-    IntoSchema, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize, Debug, PartialEq,
+    IntoSchema,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    Debug,
+    PartialEq,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "norito.test.enum_aos.AoSEnum")]
 enum AoSEnum {
     Unit,
     Tuple(TuplePayload),
@@ -27,6 +33,8 @@ enum AoSEnum {
 }
 #[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize, Debug, PartialEq)]
 #[norito(decode_from_slice)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "norito.test.enum_aos.AoSNamedEnum")]
 enum AoSNamedEnum {
     StructLike {
         label: String,
@@ -36,8 +44,14 @@ enum AoSNamedEnum {
     Unit,
 }
 #[derive(
-    IntoSchema, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize, Debug, PartialEq,
+    IntoSchema,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    Debug,
+    PartialEq,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "norito.test.enum_aos.AoSU8ArrayEnum")]
 enum AoSU8ArrayEnum {
     Unit,
     Bytes([u8; 12]),
@@ -46,7 +60,14 @@ enum AoSU8ArrayEnum {
 enum NamedArrayEnum {
     Raw { prefix: i32, bytes: [u8; 32] },
 }
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize, Debug, PartialEq)]
+#[derive(
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    Debug,
+    PartialEq,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "norito.test.enum_aos.NestedNamedArray")]
 struct NestedNamedArray {
     first: String,
     value: NamedArrayEnum,

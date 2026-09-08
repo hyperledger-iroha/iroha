@@ -143,11 +143,25 @@ def fake_prepared_payload(
     transaction_hash: str | None,
 ) -> dict[str, object]:
     semantic_hash = "e" * 64
+    public_binding = {
+        "schema": "iroha.prepared-operation.binding.v1",
+        "kind": binding["kind"],
+        "semantic_hash_hex": semantic_hash,
+        "request_id": binding["idempotency_key"],
+        "execution_expires_at_unix_ms": binding["execution_expires_at_unix_ms"],
+    }
+    if tag in {"onboarding_prepared", "onboarding_proof_required"}:
+        receipt = fake_onboarding_receipt()
+        semantic_hash = receipt["plan_hash"][5:69].lower()
+        public_binding["semantic_hash_hex"] = semantic_hash
+        public_binding["execution_expires_at_unix_ms"] = min(
+            binding["execution_expires_at_unix_ms"], receipt["body"]["valid_until_ms"]
+        )
     if tag == "onboarding_prepared":
         assert transaction_hash is not None
         return {
-            "schema": "iroha.taira.prepared-transaction.v1",
-            "binding": binding,
+            "schema": "iroha.prepared-transaction.v1",
+            "binding": public_binding,
             "operation": "onboarding",
             "receipt": fake_onboarding_receipt(),
             "semantic_hash_hex": semantic_hash,
@@ -166,7 +180,7 @@ def fake_prepared_payload(
             "receipt": fake_onboarding_receipt(),
             "result": {
                 "schema": "iroha.accounts.onboard.prepare-proof-required.v1",
-                "binding": binding,
+                "binding": public_binding,
                 "operation": "onboarding",
                 "outcome": "ProofRequired",
                 "proof_kind": "account_alias_current_state",
@@ -180,8 +194,8 @@ def fake_prepared_payload(
     if tag == "faucet_prepared":
         assert transaction_hash is not None
         return {
-            "schema": "iroha.taira.prepared-transaction.v1",
-            "binding": binding,
+            "schema": "iroha.prepared-transaction.v1",
+            "binding": public_binding,
             "operation": "faucet",
             "claim": {
                 "account_id": "test-authority",
@@ -3153,6 +3167,75 @@ class TairaDevnetTests(unittest.TestCase):
 
         with self.assertRaisesRegex(module.DevnetError, "substituted child"):
             module.check(args, run=runtime.run, request=runtime.request)
+
+    def test_native_prepared_account_payloads_use_only_public_projection(self) -> None:
+        binding = {
+            "schema": "iroha.taira.public-reset.mutation-binding.v1",
+            "authorization_sha256": "a" * 64,
+            "authorization_nonce": "n" * 32,
+            "kind": "onboarding",
+            "phase": "canary",
+            "idempotency_key": "b" * 64,
+            "execution_expires_at_unix_ms": 9_999_999_999_999,
+        }
+        for tag, validator in (
+            ("onboarding_prepared", module._validate_prepared_onboarding_v1),
+            ("onboarding_proof_required", module._validate_prepared_onboarding_proof_required_v1),
+            ("faucet_prepared", module._validate_prepared_faucet_v1),
+        ):
+            with self.subTest(tag=tag):
+                root = {**binding, "kind": "faucet" if tag == "faucet_prepared" else "onboarding"}
+                payload = fake_prepared_payload(tag, root, root["kind"], "a" * 63 + "b")
+                validator(payload, "prepared", root)
+                public_payload = payload["result"] if tag == "onboarding_proof_required" else payload
+                self.assertNotEqual(public_payload["binding"], root)
+                public_payload["binding"] = root
+                with self.assertRaisesRegex(module.DevnetError, "exactly the V1 fields"):
+                    validator(payload, "prepared", root)
+
+    def test_public_prepared_binding_projects_only_native_operation_identity(self) -> None:
+        private_binding = {
+            "kind": "onboarding",
+            "authorization_sha256": "a" * 64,
+            "authorization_nonce": "n" * 32,
+            "phase": "canary",
+            "idempotency_key": "b" * 64,
+            "execution_expires_at_unix_ms": 200,
+        }
+        public_binding = {
+            "schema": "iroha.prepared-operation.binding.v1",
+            "kind": "onboarding",
+            "semantic_hash_hex": "c" * 64,
+            "request_id": "b" * 64,
+            "execution_expires_at_unix_ms": 100,
+        }
+        module._validate_public_prepared_binding_v1(
+            public_binding, "binding", private_binding, "c" * 64, 100
+        )
+        for field, value in (
+            ("request_id", "d" * 64),
+            ("semantic_hash_hex", "d" * 64),
+            ("execution_expires_at_unix_ms", 101),
+            ("kind", "faucet"),
+        ):
+            with self.subTest(field=field):
+                changed = {**public_binding, field: value}
+                with self.assertRaisesRegex(module.DevnetError, "substituted public"):
+                    module._validate_public_prepared_binding_v1(
+                        changed, "binding", private_binding, "c" * 64, 100
+                    )
+        for field in ("authorization_sha256", "authorization_nonce", "phase", "idempotency_key"):
+            with self.subTest(field=field):
+                changed = {**public_binding, field: private_binding[field]}
+                with self.assertRaisesRegex(module.DevnetError, "exactly the V1 fields"):
+                    module._validate_public_prepared_binding_v1(
+                        changed, "binding", private_binding, "c" * 64, 100
+                    )
+        faucet_root = {**private_binding, "kind": "faucet"}
+        faucet_public = {**public_binding, "kind": "faucet", "execution_expires_at_unix_ms": 200}
+        module._validate_public_prepared_binding_v1(
+            faucet_public, "binding", faucet_root, "c" * 64
+        )
 
     def test_prepared_inrou_envelope_v1_rejects_unknown_fields_recursively(
         self,

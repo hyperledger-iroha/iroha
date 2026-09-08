@@ -752,7 +752,6 @@ impl Default for ConfidentialMemoEnvelopeV1 {
     }
 }
 
-impl norito::NoritoSerialize for ConfidentialMemoEnvelopeV1 {}
 impl norito::SerializePayload for ConfidentialMemoEnvelopeV1 {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), NoritoError> {
         writer.write_all(&self.encode_wire()?)?;
@@ -768,7 +767,6 @@ impl norito::SerializePayload for ConfidentialMemoEnvelopeV1 {
     }
 }
 
-impl norito::NoritoDeserialize<'_> for ConfidentialMemoEnvelopeV1 {}
 impl<'de> norito::DeserializePayload<'de> for ConfidentialMemoEnvelopeV1 {
     fn deserialize(archived: &'de norito_core::Archived<Self>) -> Self {
         Self::try_deserialize(archived)
@@ -1071,6 +1069,8 @@ impl Display for ConfidentialParamsId {
 #[norito(reuse_archived)]
 #[derive(DeriveJsonSer, DeriveJsonDe, DeriveFast)]
 #[norito(no_fast_from_json)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::confidential::PedersenParams")]
 pub struct PedersenParams {
     /// Identifier referenced by shielded assets and proofs.
     pub params_id: ConfidentialParamsId,
@@ -1110,6 +1110,8 @@ impl PedersenParams {
 #[norito(reuse_archived)]
 #[derive(DeriveJsonSer, DeriveJsonDe, DeriveFast)]
 #[norito(no_fast_from_json)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::confidential::PoseidonParams")]
 pub struct PoseidonParams {
     /// Identifier referenced by shielded assets and proofs.
     pub params_id: ConfidentialParamsId,
@@ -1407,3 +1409,18 @@ mod tests {
 
 #[cfg(test)]
 mod captured_confidential_schema_tests;
+
+#[cfg(test)]
+mod additional_frame_owner_identity_tests {
+    //! Typed frame contracts observed with the original codec.
+
+    #[test]
+    fn captured_additional_frame_owner_identities() {
+        crate::frame_owner_identity_tests::assert_bidirectional::<
+            crate::confidential::PedersenParams,
+        >("iroha_data_model::confidential::PedersenParams");
+        crate::frame_owner_identity_tests::assert_bidirectional::<
+            crate::confidential::PoseidonParams,
+        >("iroha_data_model::confidential::PoseidonParams");
+    }
+}

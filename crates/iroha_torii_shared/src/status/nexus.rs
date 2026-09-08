@@ -16,6 +16,11 @@ use norito::{
     IntoSchema,
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito_schema(
+    name = "iroha_torii_shared::status::nexus::NexusLaneTeuBuckets",
+    frame = "iroha_telemetry::metrics::NexusLaneTeuBuckets"
 )]
 pub struct NexusLaneTeuBuckets {
     /// TEU sourced from configured per-lane floor allocation.
@@ -40,11 +45,7 @@ impl NexusLaneTeuBuckets {
         .into_iter()
     }
 }
-impl norito::core::NoritoSerialize for NexusLaneTeuBuckets {
-    fn schema_hash() -> [u8; 16] {
-        norito::core::schema_hash_for_name("iroha_telemetry::metrics::NexusLaneTeuBuckets")
-    }
-}
+
 impl norito::core::SerializePayload for NexusLaneTeuBuckets {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let payload = (
@@ -56,11 +57,7 @@ impl norito::core::SerializePayload for NexusLaneTeuBuckets {
         norito::core::SerializePayload::serialize(&payload, writer)
     }
 }
-impl norito::core::NoritoDeserialize<'_> for NexusLaneTeuBuckets {
-    fn schema_hash() -> [u8; 16] {
-        norito::core::schema_hash_for_name("iroha_telemetry::metrics::NexusLaneTeuBuckets")
-    }
-}
+
 impl<'a> norito::core::DeserializePayload<'a> for NexusLaneTeuBuckets {
     fn deserialize(archived: &'a norito::core::Archived<Self>) -> Self {
         let (floor, headroom, must_serve, circuit_breaker) =
@@ -89,7 +86,11 @@ impl<'a> DecodeFromSlice<'a> for NexusLaneTeuBuckets {
     }
 }
 /// Fixed-length histogram for scheduler layer widths.
-#[derive(Clone, Copy, Debug, Default, IntoSchema)]
+#[derive(Clone, Copy, Debug, Default, IntoSchema, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii_shared::status::nexus::SchedulerLayerWidthBuckets",
+    frame = "iroha_telemetry::metrics::SchedulerLayerWidthBuckets"
+)]
 pub struct SchedulerLayerWidthBuckets {
     buckets: [u64; 8],
 }
@@ -151,11 +152,7 @@ impl norito::json::JsonDeserialize for SchedulerLayerWidthBuckets {
         Ok(Self { buckets })
     }
 }
-impl norito::core::NoritoSerialize for SchedulerLayerWidthBuckets {
-    fn schema_hash() -> [u8; 16] {
-        norito::core::schema_hash_for_name("iroha_telemetry::metrics::SchedulerLayerWidthBuckets")
-    }
-}
+
 impl norito::core::SerializePayload for SchedulerLayerWidthBuckets {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let payload = (
@@ -171,11 +168,7 @@ impl norito::core::SerializePayload for SchedulerLayerWidthBuckets {
         norito::core::SerializePayload::serialize(&payload, writer)
     }
 }
-impl norito::core::NoritoDeserialize<'_> for SchedulerLayerWidthBuckets {
-    fn schema_hash() -> [u8; 16] {
-        norito::core::schema_hash_for_name("iroha_telemetry::metrics::SchedulerLayerWidthBuckets")
-    }
-}
+
 impl<'a> norito::core::DeserializePayload<'a> for SchedulerLayerWidthBuckets {
     fn deserialize(archived: &'a norito::core::Archived<Self>) -> Self {
         let (b0, b1, b2, b3, b4, b5, b6, b7) =
@@ -212,6 +205,11 @@ impl std::ops::Index<usize> for SchedulerLayerWidthBuckets {
     IntoSchema,
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito_schema(
+    name = "iroha_torii_shared::status::nexus::NexusLaneTeuDeferrals",
+    frame = "iroha_telemetry::metrics::NexusLaneTeuDeferrals"
 )]
 pub struct NexusLaneTeuDeferrals {
     /// Deferred because the lane exceeded its configured TEU cap.
@@ -239,11 +237,7 @@ impl NexusLaneTeuDeferrals {
         }
     }
 }
-impl norito::core::NoritoSerialize for NexusLaneTeuDeferrals {
-    fn schema_hash() -> [u8; 16] {
-        norito::core::schema_hash_for_name("iroha_telemetry::metrics::NexusLaneTeuDeferrals")
-    }
-}
+
 impl norito::core::SerializePayload for NexusLaneTeuDeferrals {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let payload = (
@@ -255,11 +249,7 @@ impl norito::core::SerializePayload for NexusLaneTeuDeferrals {
         norito::core::SerializePayload::serialize(&payload, writer)
     }
 }
-impl norito::core::NoritoDeserialize<'_> for NexusLaneTeuDeferrals {
-    fn schema_hash() -> [u8; 16] {
-        norito::core::schema_hash_for_name("iroha_telemetry::metrics::NexusLaneTeuDeferrals")
-    }
-}
+
 impl<'a> norito::core::DeserializePayload<'a> for NexusLaneTeuDeferrals {
     fn deserialize(archived: &'a norito::core::Archived<Self>) -> Self {
         let (cap_exceeded, envelope_limit, quota, circuit_breaker) =
@@ -297,8 +287,12 @@ impl<'a> DecodeFromSlice<'a> for NexusLaneTeuDeferrals {
     NoritoDeserialize,
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
+    norito::NoritoSchema,
 )]
-#[norito(schema_name = "iroha_telemetry::metrics::NexusLaneTeuStatus")]
+#[norito_schema(
+    name = "iroha_torii_shared::status::nexus::NexusLaneTeuStatus",
+    frame = "iroha_telemetry::metrics::NexusLaneTeuStatus"
+)]
 pub struct NexusLaneTeuStatus {
     /// Numeric lane identifier.
     pub lane_id: u32,
@@ -403,8 +397,12 @@ pub struct NexusLaneTeuStatus {
     NoritoDeserialize,
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
+    norito::NoritoSchema,
 )]
-#[norito(schema_name = "iroha_telemetry::metrics::NexusDataspaceCatalogStatus")]
+#[norito_schema(
+    name = "iroha_torii_shared::status::nexus::NexusDataspaceCatalogStatus",
+    frame = "iroha_telemetry::metrics::NexusDataspaceCatalogStatus"
+)]
 pub struct NexusDataspaceCatalogStatus {
     /// Numeric lane identifier that services this dataspace.
     pub lane_id: u32,
@@ -443,8 +441,12 @@ pub struct NexusDataspaceCatalogStatus {
     NoritoDeserialize,
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
+    norito::NoritoSchema,
 )]
-#[norito(schema_name = "iroha_telemetry::metrics::NexusRoutingPolicyStatus")]
+#[norito_schema(
+    name = "iroha_torii_shared::status::nexus::NexusRoutingPolicyStatus",
+    frame = "iroha_telemetry::metrics::NexusRoutingPolicyStatus"
+)]
 pub struct NexusRoutingPolicyStatus {
     /// Lane used when no policy rule matches.
     pub default_lane: u32,
@@ -463,8 +465,12 @@ pub struct NexusRoutingPolicyStatus {
     NoritoDeserialize,
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
+    norito::NoritoSchema,
 )]
-#[norito(schema_name = "iroha_telemetry::metrics::NexusRoutingRuleStatus")]
+#[norito_schema(
+    name = "iroha_torii_shared::status::nexus::NexusRoutingRuleStatus",
+    frame = "iroha_telemetry::metrics::NexusRoutingRuleStatus"
+)]
 pub struct NexusRoutingRuleStatus {
     /// Target lane identifier for the rule.
     pub lane: u32,
@@ -485,8 +491,12 @@ pub struct NexusRoutingRuleStatus {
     NoritoDeserialize,
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
+    norito::NoritoSchema,
 )]
-#[norito(schema_name = "iroha_telemetry::metrics::NexusRoutingMatcherStatus")]
+#[norito_schema(
+    name = "iroha_torii_shared::status::nexus::NexusRoutingMatcherStatus",
+    frame = "iroha_telemetry::metrics::NexusRoutingMatcherStatus"
+)]
 pub struct NexusRoutingMatcherStatus {
     /// Optional authority/account string match.
     #[norito(default)]
@@ -511,8 +521,12 @@ pub struct NexusRoutingMatcherStatus {
     NoritoDeserialize,
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
+    norito::NoritoSchema,
 )]
-#[norito(schema_name = "iroha_telemetry::metrics::NexusStatus")]
+#[norito_schema(
+    name = "iroha_torii_shared::status::nexus::NexusStatus",
+    frame = "iroha_telemetry::metrics::NexusStatus"
+)]
 pub struct NexusStatus {
     /// Effective routing policy enforced by Nexus routing.
     pub routing_policy: NexusRoutingPolicyStatus,
@@ -525,6 +539,11 @@ pub struct NexusStatus {
     IntoSchema,
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito_schema(
+    name = "iroha_torii_shared::status::nexus::NexusDataspaceTeuStatus",
+    frame = "iroha_telemetry::metrics::NexusDataspaceTeuStatus"
 )]
 pub struct NexusDataspaceTeuStatus {
     /// Numeric lane identifier for the dataspace queue.
@@ -546,11 +565,7 @@ pub struct NexusDataspaceTeuStatus {
     /// Optional description provided in configuration.
     pub description: Option<String>,
 }
-impl norito::core::NoritoSerialize for NexusDataspaceTeuStatus {
-    fn schema_hash() -> [u8; 16] {
-        norito::core::schema_hash_for_name("iroha_telemetry::metrics::NexusDataspaceTeuStatus")
-    }
-}
+
 impl norito::core::SerializePayload for NexusDataspaceTeuStatus {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let payload = (
@@ -567,11 +582,7 @@ impl norito::core::SerializePayload for NexusDataspaceTeuStatus {
         norito::core::SerializePayload::serialize(&payload, writer)
     }
 }
-impl norito::core::NoritoDeserialize<'_> for NexusDataspaceTeuStatus {
-    fn schema_hash() -> [u8; 16] {
-        norito::core::schema_hash_for_name("iroha_telemetry::metrics::NexusDataspaceTeuStatus")
-    }
-}
+
 impl<'a> norito::core::DeserializePayload<'a> for NexusDataspaceTeuStatus {
     fn deserialize(archived: &'a norito::core::Archived<Self>) -> Self {
         let (
@@ -647,6 +658,11 @@ impl<'a> DecodeFromSlice<'a> for NexusDataspaceTeuStatus {
     norito::derive::JsonDeserialize,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii_shared::status::nexus::NexusLaneManifestValidatorBindingStatus",
+    frame = "iroha_telemetry::metrics::manifest_status::NexusLaneManifestValidatorBindingStatus"
+)]
 pub struct NexusLaneManifestValidatorBindingStatus {
     /// Canonical validator authority account.
     pub validator: String,
@@ -657,13 +673,6 @@ pub struct NexusLaneManifestValidatorBindingStatus {
     pub torii_url: Option<String>,
 }
 
-impl norito::core::NoritoSerialize for NexusLaneManifestValidatorBindingStatus {
-    fn schema_hash() -> [u8; 16] {
-        norito::core::schema_hash_for_name(
-            "iroha_telemetry::metrics::manifest_status::NexusLaneManifestValidatorBindingStatus",
-        )
-    }
-}
 impl norito::core::SerializePayload for NexusLaneManifestValidatorBindingStatus {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let payload = (
@@ -675,13 +684,6 @@ impl norito::core::SerializePayload for NexusLaneManifestValidatorBindingStatus 
     }
 }
 
-impl norito::core::NoritoDeserialize<'_> for NexusLaneManifestValidatorBindingStatus {
-    fn schema_hash() -> [u8; 16] {
-        norito::core::schema_hash_for_name(
-            "iroha_telemetry::metrics::manifest_status::NexusLaneManifestValidatorBindingStatus",
-        )
-    }
-}
 impl<'a> norito::core::DeserializePayload<'a> for NexusLaneManifestValidatorBindingStatus {
     fn deserialize(archived: &'a norito::core::Archived<Self>) -> Self {
         let (validator, peer_id, torii_url) =
@@ -717,6 +719,11 @@ impl<'a> DecodeFromSlice<'a> for NexusLaneManifestValidatorBindingStatus {
     IntoSchema,
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito_schema(
+    name = "iroha_torii_shared::status::nexus::NexusLaneRuntimeUpgradeHookStatus",
+    frame = "iroha_telemetry::metrics::manifest_status::NexusLaneRuntimeUpgradeHookStatus"
 )]
 pub struct NexusLaneRuntimeUpgradeHookStatus {
     /// Whether runtime-upgrade instructions are permitted.
@@ -730,13 +737,6 @@ pub struct NexusLaneRuntimeUpgradeHookStatus {
     pub allowed_ids: Vec<String>,
 }
 
-impl norito::core::NoritoSerialize for NexusLaneRuntimeUpgradeHookStatus {
-    fn schema_hash() -> [u8; 16] {
-        norito::core::schema_hash_for_name(
-            "iroha_telemetry::metrics::manifest_status::NexusLaneRuntimeUpgradeHookStatus",
-        )
-    }
-}
 impl norito::core::SerializePayload for NexusLaneRuntimeUpgradeHookStatus {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let payload = (
@@ -749,13 +749,6 @@ impl norito::core::SerializePayload for NexusLaneRuntimeUpgradeHookStatus {
     }
 }
 
-impl norito::core::NoritoDeserialize<'_> for NexusLaneRuntimeUpgradeHookStatus {
-    fn schema_hash() -> [u8; 16] {
-        norito::core::schema_hash_for_name(
-            "iroha_telemetry::metrics::manifest_status::NexusLaneRuntimeUpgradeHookStatus",
-        )
-    }
-}
 impl<'a> norito::core::DeserializePayload<'a> for NexusLaneRuntimeUpgradeHookStatus {
     fn deserialize(archived: &'a norito::core::Archived<Self>) -> Self {
         let (allow, require_metadata, metadata_key, allowed_ids) =
@@ -782,5 +775,51 @@ impl<'a> DecodeFromSlice<'a> for NexusLaneRuntimeUpgradeHookStatus {
             },
             used,
         ))
+    }
+}
+
+#[cfg(test)]
+mod captured_frame_identity_tests {
+    #[test]
+    fn observed_declared_identities() {
+        crate::captured_identity_tests::assert_bidirectional::<super::NexusDataspaceCatalogStatus>(
+            "iroha_torii_shared::status::nexus::NexusDataspaceCatalogStatus",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::NexusLaneTeuStatus>(
+            "iroha_torii_shared::status::nexus::NexusLaneTeuStatus",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::NexusRoutingMatcherStatus>(
+            "iroha_torii_shared::status::nexus::NexusRoutingMatcherStatus",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::NexusRoutingPolicyStatus>(
+            "iroha_torii_shared::status::nexus::NexusRoutingPolicyStatus",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::NexusRoutingRuleStatus>(
+            "iroha_torii_shared::status::nexus::NexusRoutingRuleStatus",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::NexusStatus>(
+            "iroha_torii_shared::status::nexus::NexusStatus",
+        );
+    }
+    #[test]
+    fn observed_manual_frame_goldens() {
+        crate::captured_identity_tests::assert_manual::<super::NexusLaneTeuBuckets>(
+            "NexusLaneTeuBuckets",
+        );
+        crate::captured_identity_tests::assert_manual::<super::SchedulerLayerWidthBuckets>(
+            "SchedulerLayerWidthBuckets",
+        );
+        crate::captured_identity_tests::assert_manual::<super::NexusLaneTeuDeferrals>(
+            "NexusLaneTeuDeferrals",
+        );
+        crate::captured_identity_tests::assert_manual::<super::NexusDataspaceTeuStatus>(
+            "NexusDataspaceTeuStatus",
+        );
+        crate::captured_identity_tests::assert_manual::<
+            super::NexusLaneManifestValidatorBindingStatus,
+        >("NexusLaneManifestValidatorBindingStatus");
+        crate::captured_identity_tests::assert_manual::<super::NexusLaneRuntimeUpgradeHookStatus>(
+            "NexusLaneRuntimeUpgradeHookStatus",
+        );
     }
 }

@@ -57,7 +57,6 @@ const FIXED_COEFFICIENT_BYTES: usize = 25_690_112;
 const PHASE_CYCLE_BYTES: usize = 16_777_216;
 
 #[derive(NoritoSerialize)]
-#[norito(schema_name = "fastpq_prover::compact_prototype::TransferUpdateV1")]
 struct BoundUpdate {
     old_leaf: [u8; 32],
     new_leaf: [u8; 32],
@@ -65,7 +64,6 @@ struct BoundUpdate {
 }
 
 #[derive(NoritoSerialize)]
-#[norito(schema_name = "fastpq_prover::compact_prototype::TransferStatementV1")]
 struct BoundStatement {
     version: u16,
     updates: [BoundUpdate; 2],

@@ -9,8 +9,16 @@ use norito::{
 };
 use std::sync::{Mutex, OnceLock};
 #[derive(
-    Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq, iroha_schema::IntoSchema,
+    Debug,
+    Clone,
+    NoritoSerialize,
+    NoritoDeserialize,
+    PartialEq,
+    Eq,
+    iroha_schema::IntoSchema,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "norito.test.compression_metrics.TelemetrySample")]
 struct TelemetrySample {
     id: u32,
     payload: Vec<u8>,

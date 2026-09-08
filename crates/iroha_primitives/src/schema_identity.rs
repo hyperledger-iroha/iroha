@@ -25,16 +25,12 @@ pub(crate) fn record_encode<T: NoritoSchema + NoritoSerialize>(
 ) -> json::Value {
     assert_eq!(T::nominal_name(), std::any::type_name::<T>());
     assert_eq!(T::frame_name(), frame_name);
-    assert_eq!(
-        norito::schema::identity::frame_hash::<T>(),
-        <T as NoritoSerialize>::schema_hash()
-    );
     let frame = norito::to_bytes(value).unwrap();
-    assert_eq!(frame[6..22], <T as NoritoSerialize>::schema_hash());
+    assert_eq!(frame[6..22], norito::schema::identity::frame_hash::<T>());
     norito::json!({
         "nominal": (std::any::type_name::<T>()),
         "frame_name": frame_name,
-        "serialize_hash": (hex(&<T as NoritoSerialize>::schema_hash())),
+        "serialize_hash": (hex(&norito::schema::identity::frame_hash::<T>())),
         "deserialize_hash": (json::Value::Null),
         "frame_hex": (hex(&frame)),
     })
@@ -44,17 +40,13 @@ pub(crate) fn record<T: NoritoSchema + NoritoSerialize + for<'a> NoritoDeseriali
     value: T,
     frame_name: &str,
 ) -> json::Value {
-    assert_eq!(
-        norito::schema::identity::frame_hash::<T>(),
-        <T as NoritoDeserialize>::schema_hash()
-    );
     let mut record = record_encode(&value, frame_name);
     let frame = norito::to_bytes(&value).unwrap();
     let decoded: T = norito::decode_from_bytes(&frame).unwrap();
     assert_eq!(norito::to_bytes(&decoded).unwrap(), frame);
     record.as_object_mut().unwrap().insert(
         "deserialize_hash".to_owned(),
-        json::Value::from(hex(&<T as NoritoDeserialize>::schema_hash())),
+        json::Value::from(hex(&norito::schema::identity::frame_hash::<T>())),
     );
     record
 }

@@ -31,7 +31,8 @@ mod model {
     )]
     /// High-level failure reasons for query execution.
     #[norito(tag = "kind", content = "content")]
-    #[derive(thiserror::Error)]
+    #[derive(thiserror::Error, norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::query::error::model::QueryExecutionFail")]
     pub enum QueryExecutionFail {
         /// {0}
         #[error(transparent)]
@@ -477,5 +478,17 @@ mod tests {
                 norito::json::from_str(&json).expect("decode canonical-history query failure JSON");
             assert_eq!(decoded, failure);
         }
+    }
+}
+
+#[cfg(test)]
+mod additional_frame_owner_identity_tests {
+    //! Typed frame contracts observed with the original codec.
+
+    #[test]
+    fn captured_additional_frame_owner_identities() {
+        crate::frame_owner_identity_tests::assert_bidirectional::<
+            crate::query::error::model::QueryExecutionFail,
+        >("iroha_data_model::query::error::model::QueryExecutionFail");
     }
 }

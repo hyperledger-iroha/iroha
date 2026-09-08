@@ -11,7 +11,7 @@ use crate::bigint::BigInt;
 use core::{cmp::Ordering, str::FromStr};
 pub use iroha_primitives_derive::numeric;
 use norito::{
-    Archived, DeserializePayload, Error, NoritoDeserialize, NoritoSerialize, SerializePayload,
+    Archived, DeserializePayload, Error, SerializePayload,
     json::{self, FastJsonWrite, JsonDeserialize, JsonSerialize},
 };
 use num_bigint::{BigInt as UnboundedBigInt, Sign as UnboundedSign};
@@ -132,7 +132,7 @@ pub struct NumericSpec {
     /// Currently only positive scale up to 28 decimal points is supported.
     scale: Option<u32>,
 }
-impl NoritoSerialize for NumericSpec {}
+
 impl SerializePayload for NumericSpec {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), Error> {
         SerializePayload::serialize(&self.scale, writer)
@@ -155,7 +155,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for Numeric {
         Ok((value, used))
     }
 }
-impl NoritoDeserialize<'_> for NumericSpec {}
+
 impl<'a> DeserializePayload<'a> for NumericSpec {
     fn deserialize(archived: &'a Archived<NumericSpec>) -> Self {
         Self::try_deserialize(archived).expect("invalid numeric specification")
@@ -1852,7 +1852,7 @@ impl From<u128> for Quantity {
         Self(Numeric::new(BigInt::from(value), 0))
     }
 }
-impl NoritoSerialize for Quantity {}
+
 impl SerializePayload for Quantity {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), Error> {
         self.0.serialize(writer)
@@ -1861,7 +1861,7 @@ impl SerializePayload for Quantity {
         self.0.encoded_len_exact()
     }
 }
-impl NoritoDeserialize<'_> for Quantity {}
+
 impl<'a> DeserializePayload<'a> for Quantity {
     fn deserialize(archived: &'a Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("invalid canonical quantity")
@@ -2164,7 +2164,7 @@ impl From<XorQuantity> for Quantity {
         value.0
     }
 }
-impl NoritoSerialize for XorQuantity {}
+
 impl SerializePayload for XorQuantity {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), Error> {
         self.0.serialize(writer)
@@ -2173,7 +2173,7 @@ impl SerializePayload for XorQuantity {
         self.0.encoded_len_exact()
     }
 }
-impl NoritoDeserialize<'_> for XorQuantity {}
+
 impl<'a> DeserializePayload<'a> for XorQuantity {
     fn deserialize(archived: &'a Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("invalid canonical XOR quantity")
@@ -2607,7 +2607,7 @@ impl Numeric {
         }
     }
 }
-impl NoritoSerialize for Numeric {}
+
 impl SerializePayload for Numeric {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), Error> {
         let helper = scale_::NumericScaleHelper {
@@ -2624,7 +2624,7 @@ impl SerializePayload for Numeric {
         .encoded_len_exact()
     }
 }
-impl NoritoDeserialize<'_> for Numeric {}
+
 impl<'a> DeserializePayload<'a> for Numeric {
     fn deserialize(archived: &'a Archived<Numeric>) -> Self {
         Self::try_deserialize(archived).expect("invalid numeric")
@@ -2932,11 +2932,7 @@ mod scale_ {
         /// Canonical bounded integer serialized by the view.
         pub(super) &'a crate::bigint::BigInt,
     );
-    impl norito::core::NoritoSerialize for BigIntView<'_> {
-        fn schema_hash() -> [u8; 16] {
-            <crate::bigint::BigInt as norito::core::NoritoSerialize>::schema_hash()
-        }
-    }
+
     impl norito::core::SerializePayload for BigIntView<'_> {
         fn serialize(
             &self,

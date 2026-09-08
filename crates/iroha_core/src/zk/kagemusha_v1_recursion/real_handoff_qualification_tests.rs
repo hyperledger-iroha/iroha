@@ -107,9 +107,7 @@ use super::{
     native_backend::{verify_ep_succinct_protocol, verify_eq_succinct_protocol},
     state_relation::{PUBLIC_INSTANCE_COUNT, public_instance},
     transport_decider::{
-        KagemushaTransportDeciderCapacityProfileV1, KagemushaTransportDeciderEpCircuitV1,
-        KagemushaTransportDeciderEqCircuitV1, KagemushaTransportDeciderParityWitnessV1,
-        KagemushaTransportDeciderWitnessV1, build_kagemusha_transport_decider_pair_v1,
+        KagemushaTransportDeciderEpCircuitV1, KagemushaTransportDeciderEqCircuitV1,
     },
 };
 use crate::zk::{
@@ -881,7 +879,6 @@ struct CredentialKeys {
 
 struct CredentialProof {
     relation: KagemushaPlatformCredentialRelationWitnessV1,
-    device_secret: DigestV1,
     eq_instances: Vec<Vec<Fp>>,
     ep_instances: Vec<Vec<Fq>>,
     eq_proof: Vec<u8>,
@@ -1068,7 +1065,6 @@ impl CredentialKeys {
         eq_hash: &KagemushaLoadedEqMintHashArtifactsV1,
         ep_hash: &KagemushaLoadedEpMintHashArtifactsV1,
         relation: KagemushaPlatformCredentialRelationWitnessV1,
-        device_secret: DigestV1,
     ) -> CredentialProof {
         let provider_policy_root = self.provider_policy_root;
         assert_eq!(
@@ -1183,7 +1179,6 @@ impl CredentialKeys {
         );
         CredentialProof {
             relation,
-            device_secret,
             eq_instances,
             ep_instances,
             eq_proof,
@@ -1811,121 +1806,6 @@ fn prove_guard(
     }
 }
 
-struct DisabledMint {
-    eq_protocol: PlonkProtocol<EqAffine>,
-    ep_protocol: PlonkProtocol<EpAffine>,
-    eq_protocol_digest: DigestV1,
-    ep_protocol_digest: DigestV1,
-    mint_authorization_eq_protocol_digest: DigestV1,
-    mint_authorization_ep_protocol_digest: DigestV1,
-    eq_instances: Vec<Vec<Fp>>,
-    ep_instances: Vec<Vec<Fq>>,
-    eq_proof: Vec<u8>,
-    ep_proof: Vec<u8>,
-    eq_history: KagemushaEqAccumulatorV1,
-    ep_history: KagemushaEpAccumulatorV1,
-    eq_fold: KagemushaEqFoldProofV1,
-    ep_fold: KagemushaEpFoldProofV1,
-}
-
-impl DisabledMint {
-    fn new(
-        eq_params: &ParamsIPA<EqAffine>,
-        ep_params: &ParamsIPA<EpAffine>,
-        guard_keys: &GuardKeys,
-    ) -> Self {
-        let eq_protocol = compile(
-            eq_params,
-            &guard_keys.eq_verifying_key,
-            snark_verifier::system::halo2::Config::ipa()
-                .with_num_instance(vec![KAGEMUSHA_MINT_AUTHORITY_PUBLIC_INSTANCE_COUNT_V1]),
-        );
-        let ep_protocol = compile(
-            ep_params,
-            &guard_keys.ep_verifying_key,
-            snark_verifier::system::halo2::Config::ipa()
-                .with_num_instance(vec![KAGEMUSHA_MINT_AUTHORITY_PUBLIC_INSTANCE_COUNT_V1]),
-        );
-        let eq_protocol_digest =
-            native_parent_protocol_digest_v1(&eq_protocol, KagemushaPastaParityV1::Eq)
-                .expect("Eq disabled-mint protocol digest");
-        let ep_protocol_digest =
-            native_parent_protocol_digest_v1(&ep_protocol, KagemushaPastaParityV1::Ep)
-                .expect("Ep disabled-mint protocol digest");
-        let eq_history =
-            initial_kagemusha_eq_accumulator_v1(eq_params).expect("Eq disabled-mint seed history");
-        let ep_history =
-            initial_kagemusha_ep_accumulator_v1(ep_params).expect("Ep disabled-mint seed history");
-        let prefix = KAGEMUSHA_MINT_AUTHORITY_PUBLIC_INSTANCE_COUNT_V1
-            .checked_sub(accumulator_limb_count())
-            .expect("mint public prefix");
-        Self {
-            eq_instances: history_instances(prefix, eq_history.as_bytes()),
-            ep_instances: history_instances(prefix, ep_history.as_bytes()),
-            eq_proof: dummy_ordinary_proof(&eq_protocol, EqAffine::generator()),
-            ep_proof: dummy_ordinary_proof(&ep_protocol, EpAffine::generator()),
-            eq_protocol,
-            ep_protocol,
-            eq_protocol_digest,
-            ep_protocol_digest,
-            mint_authorization_eq_protocol_digest: encode_pasta(Fp::from(0x19)),
-            mint_authorization_ep_protocol_digest: encode_pasta(Fq::from(0x1a)),
-            eq_history,
-            ep_history,
-            eq_fold: dummy_eq_fold(),
-            ep_fold: dummy_ep_fold(),
-        }
-    }
-}
-
-fn bootstrap_state_relation(
-    successor: KagemushaStateV1,
-    guard: &GuardProof,
-    eq_protocol_digest: DigestV1,
-    ep_protocol_digest: DigestV1,
-    incoming_eq_protocol_digest: DigestV1,
-    incoming_ep_protocol_digest: DigestV1,
-    guard_keys: &GuardKeys,
-    mint: &DisabledMint,
-) -> KagemushaStateRelationWitnessV1 {
-    let witness = KagemushaStateRelationWitnessV1 {
-        operation: KagemushaOperationV1::Bootstrap,
-        predecessor: None,
-        successor,
-        amount: 0,
-        journal_revision_before: 0,
-        journal_revision_after: 0,
-        transition_effect_digest: guard.relation.statement.transition_effect_digest,
-        mint_finality_semantic_digest: [0; 32],
-        mint_finality_proof_binding_digest: [0; 32],
-        peer_credit_id: [0; 32],
-        recipient_encryption_key_binding: [0; 32],
-        receive_credit: None,
-        receive_credit_binding_digest: [0; 32],
-        lifecycle_binding_digest: guard.relation.statement.lifecycle_binding_digest,
-        prepared_transition_binding_digest: [0; 32],
-        transport_semantic_digest: digest(b"bootstrap-transport", 0),
-        guard_statement_digest: guard.relation.statement_digest(),
-        eq_protocol_digest,
-        ep_protocol_digest,
-        guard_eq_protocol_digest: guard_keys.eq_protocol_digest,
-        guard_ep_protocol_digest: guard_keys.ep_protocol_digest,
-        mint_eq_protocol_digest: mint.eq_protocol_digest,
-        mint_ep_protocol_digest: mint.ep_protocol_digest,
-        mint_authorization_eq_protocol_digest: mint.mint_authorization_eq_protocol_digest,
-        mint_authorization_ep_protocol_digest: mint.mint_authorization_ep_protocol_digest,
-        commit_wrapper_eq_protocol_digest: incoming_eq_protocol_digest,
-        commit_wrapper_ep_protocol_digest: incoming_ep_protocol_digest,
-        guard_eq_credential_audit: guard.eq_credential_audit,
-        guard_ep_credential_audit: guard.ep_credential_audit,
-        eq_deferred_audit: [1; 32],
-        ep_deferred_audit: [2; 32],
-        replay_insert: None,
-    };
-    witness.validate().expect("valid bootstrap state relation");
-    witness
-}
-
 struct ParentProof {
     eq_instances: Vec<Vec<Fp>>,
     ep_instances: Vec<Vec<Fq>>,
@@ -1981,88 +1861,6 @@ fn parent_from_generated(proof: KagemushaGeneratedRecursiveStateProofV1) -> Pare
     }
 }
 
-struct StateHistoryFolds {
-    eq_parent_fold: KagemushaEqFoldProofV1,
-    ep_parent_fold: KagemushaEpFoldProofV1,
-    eq_guard_history_fold: KagemushaEqFoldProofV1,
-    ep_guard_history_fold: KagemushaEpFoldProofV1,
-    eq_guard_merge_fold: KagemushaEqFoldProofV1,
-    ep_guard_merge_fold: KagemushaEpFoldProofV1,
-    eq_successor_history: KagemushaEqAccumulatorV1,
-    ep_successor_history: KagemushaEpAccumulatorV1,
-}
-
-fn prepare_state_histories(
-    eq_params: &ParamsIPA<EqAffine>,
-    ep_params: &ParamsIPA<EpAffine>,
-    parent: &ParentProof,
-    guard: &GuardProof,
-) -> StateHistoryFolds {
-    let recovery_seed = test_only_recovery_seed();
-    let (eq_parent_fold, eq_base_history) = if let Some(current) = &parent.eq_current {
-        let fold = fold_kagemusha_eq_accumulators_v1(
-            eq_params,
-            current,
-            &parent.eq_history,
-            &recovery_seed,
-        )
-        .expect("fold Eq state predecessor");
-        (fold.proof().clone(), fold.successor().clone())
-    } else {
-        (dummy_eq_fold(), parent.eq_history.clone())
-    };
-    let (ep_parent_fold, ep_base_history) = if let Some(current) = &parent.ep_current {
-        let fold = fold_kagemusha_ep_accumulators_v1(
-            ep_params,
-            current,
-            &parent.ep_history,
-            &recovery_seed,
-        )
-        .expect("fold Ep state predecessor");
-        (fold.proof().clone(), fold.successor().clone())
-    } else {
-        (dummy_ep_fold(), parent.ep_history.clone())
-    };
-    let eq_guard_history = fold_kagemusha_eq_accumulators_v1(
-        eq_params,
-        &guard.eq_current,
-        &guard.eq_history,
-        &recovery_seed,
-    )
-    .expect("complete Eq GuardBundle history");
-    let ep_guard_history = fold_kagemusha_ep_accumulators_v1(
-        ep_params,
-        &guard.ep_current,
-        &guard.ep_history,
-        &recovery_seed,
-    )
-    .expect("complete Ep GuardBundle history");
-    let eq_guard_merge = fold_kagemusha_eq_accumulators_v1(
-        eq_params,
-        &eq_base_history,
-        eq_guard_history.successor(),
-        &recovery_seed,
-    )
-    .expect("merge Eq GuardBundle history");
-    let ep_guard_merge = fold_kagemusha_ep_accumulators_v1(
-        ep_params,
-        &ep_base_history,
-        ep_guard_history.successor(),
-        &recovery_seed,
-    )
-    .expect("merge Ep GuardBundle history");
-    StateHistoryFolds {
-        eq_parent_fold,
-        ep_parent_fold,
-        eq_guard_history_fold: eq_guard_history.proof().clone(),
-        ep_guard_history_fold: ep_guard_history.proof().clone(),
-        eq_guard_merge_fold: eq_guard_merge.proof().clone(),
-        ep_guard_merge_fold: ep_guard_merge.proof().clone(),
-        eq_successor_history: eq_guard_merge.successor().clone(),
-        ep_successor_history: ep_guard_merge.successor().clone(),
-    }
-}
-
 struct StateKeys {
     eq: KagemushaLoadedEqRecursiveStateArtifactsV1,
     ep: KagemushaLoadedEpRecursiveStateArtifactsV1,
@@ -2072,8 +1870,6 @@ struct StateKeys {
     ep_protocol: PlonkProtocol<EpAffine>,
     eq_protocol_digest: DigestV1,
     ep_protocol_digest: DigestV1,
-    eq_transport_capacity: KagemushaTransportDeciderCapacityProfileV1,
-    ep_transport_capacity: KagemushaTransportDeciderCapacityProfileV1,
 }
 
 fn decode_state_keys(
@@ -2082,8 +1878,10 @@ fn decode_state_keys(
     state: &KagemushaStateV1,
     generated: super::KagemushaGeneratedRecursiveStateArtifactsV1,
 ) -> StateKeys {
-    let eq_transport_capacity = generated.eq_transport_capacity.clone();
-    let ep_transport_capacity = generated.ep_transport_capacity.clone();
+    eprintln!(
+        "KAGEMUSHA generated State transport capacity: Eq {:?}; Ep {:?}",
+        generated.eq_transport_capacity, generated.ep_transport_capacity,
+    );
     let mut eq_transport_vk_cursor = Cursor::new(generated.eq.verifying_key.as_ref());
     let eq_transport_verifying_key = VerifyingKey::read::<_, KagemushaTransportDeciderEqCircuitV1>(
         &mut eq_transport_vk_cursor,
@@ -2292,36 +2090,7 @@ fn decode_state_keys(
         ep_protocol,
         eq_protocol_digest,
         ep_protocol_digest,
-        eq_transport_capacity,
-        ep_transport_capacity,
     }
-}
-
-fn paired_state_proof(
-    state_relation: &KagemushaStateRelationWitnessV1,
-    guard: &GuardProof,
-    state_keys: &StateKeys,
-    proof: &KagemushaGeneratedRecursiveStateProofV1,
-) -> KagemushaPairedProofV1 {
-    let paired = proof.proof.clone();
-    assert_eq!(paired.eq_protocol_digest, state_keys.eq_protocol_digest);
-    assert_eq!(paired.ep_protocol_digest, state_keys.ep_protocol_digest);
-    assert_eq!(
-        paired.semantic_digest,
-        state_relation.transport_semantic_digest
-    );
-    assert_eq!(paired.guard_eq_credential_audit, guard.eq_credential_audit);
-    assert_eq!(paired.guard_ep_credential_audit, guard.ep_credential_audit);
-    paired
-        .validate_shape_for_semantic_digest(state_relation.transport_semantic_digest)
-        .expect("valid constant-size paired state proof");
-    assert!(
-        norito::encode_canonical(&paired)
-            .expect("paired proof encoding")
-            .len()
-            <= KAGEMUSHA_PAIRED_PROOF_MAX_BYTES_V1
-    );
-    paired
 }
 
 fn terminally_verify_state_proof(
@@ -2557,190 +2326,6 @@ fn assert_transport_public_substitutions_rejected(
             &ep_semantic,
         ),
         "the outer boundary must reject substituted semantic/public outputs",
-    );
-}
-
-fn assert_altered_private_fold_proof_rejected(
-    state_keys: &StateKeys,
-    proof: &KagemushaGeneratedRecursiveStateProofV1,
-) {
-    let recovery_seed = test_only_recovery_seed();
-    let eq_history = proof
-        .eq_history
-        .to_native()
-        .expect("decode Eq private history for negative transport witness");
-    let ep_history = proof
-        .ep_history
-        .to_native()
-        .expect("decode Ep private history for negative transport witness");
-    let eq_fold = fold_kagemusha_eq_accumulators_v1(
-        &state_keys.eq.parameters,
-        &proof.eq_current_accumulator,
-        &proof.eq_history,
-        &recovery_seed,
-    )
-    .expect("construct Eq fold control for negative transport witness");
-    let ep_fold = fold_kagemusha_ep_accumulators_v1(
-        &state_keys.ep.parameters,
-        &proof.ep_current_accumulator,
-        &proof.ep_history,
-        &recovery_seed,
-    )
-    .expect("construct Ep fold control for negative transport witness");
-    let mut altered_eq_fold = eq_fold.proof().as_bytes().to_vec();
-    altered_eq_fold[64..96].fill(0xff);
-    let Err(error) = build_kagemusha_transport_decider_pair_v1(
-        &state_keys.eq.parameters,
-        &state_keys.ep.parameters,
-        KagemushaTransportDeciderWitnessV1 {
-            eq: KagemushaTransportDeciderParityWitnessV1 {
-                inner_protocol: &state_keys.eq_protocol,
-                inner_instances: &proof.eq_public_instances,
-                inner_proof: &proof.eq_inner_proof,
-                inner_history: &eq_history,
-                inner_history_fold_proof: &altered_eq_fold,
-                outer_instances: &proof.eq_transport_public_instances,
-            },
-            ep: KagemushaTransportDeciderParityWitnessV1 {
-                inner_protocol: &state_keys.ep_protocol,
-                inner_instances: &proof.ep_public_instances,
-                inner_proof: &proof.ep_inner_proof,
-                inner_history: &ep_history,
-                inner_history_fold_proof: ep_fold.proof().as_bytes(),
-                outer_instances: &proof.ep_transport_public_instances,
-            },
-        },
-    ) else {
-        panic!("the outer circuit builder accepted an altered Eq history-fold proof");
-    };
-    assert!(
-        error.contains("failed to fold current carrier into history"),
-        "unexpected altered-fold rejection: {error}",
-    );
-
-    let mut altered_ep_fold = ep_fold.proof().as_bytes().to_vec();
-    altered_ep_fold[64..96].fill(0xff);
-    let Err(error) = build_kagemusha_transport_decider_pair_v1(
-        &state_keys.eq.parameters,
-        &state_keys.ep.parameters,
-        KagemushaTransportDeciderWitnessV1 {
-            eq: KagemushaTransportDeciderParityWitnessV1 {
-                inner_protocol: &state_keys.eq_protocol,
-                inner_instances: &proof.eq_public_instances,
-                inner_proof: &proof.eq_inner_proof,
-                inner_history: &eq_history,
-                inner_history_fold_proof: eq_fold.proof().as_bytes(),
-                outer_instances: &proof.eq_transport_public_instances,
-            },
-            ep: KagemushaTransportDeciderParityWitnessV1 {
-                inner_protocol: &state_keys.ep_protocol,
-                inner_instances: &proof.ep_public_instances,
-                inner_proof: &proof.ep_inner_proof,
-                inner_history: &ep_history,
-                inner_history_fold_proof: &altered_ep_fold,
-                outer_instances: &proof.ep_transport_public_instances,
-            },
-        },
-    ) else {
-        panic!("the outer circuit builder accepted an altered Ep history-fold proof");
-    };
-    assert!(
-        error.contains("failed to fold current carrier into history"),
-        "unexpected altered-fold rejection: {error}",
-    );
-}
-
-fn assert_mixed_transport_pairs_rejected(
-    state_keys: &StateKeys,
-    first: &KagemushaGeneratedRecursiveStateProofV1,
-    second: &KagemushaGeneratedRecursiveStateProofV1,
-) {
-    assert!(paired_transport_boundary_accepts(
-        state_keys,
-        &second.proof,
-        second.proof.semantic_digest,
-        &second.eq_transport_public_instances,
-        &second.ep_transport_public_instances,
-    ));
-
-    let mut mixed = second.proof.clone();
-    mixed.eq_proof.clone_from(&first.proof.eq_proof);
-    mixed.eq_history.clone_from(&first.proof.eq_history);
-    assert!(
-        !paired_transport_boundary_accepts(
-            state_keys,
-            &mixed,
-            second.proof.semantic_digest,
-            &second.eq_transport_public_instances,
-            &second.ep_transport_public_instances,
-        ),
-        "the outer boundary must reject an old Eq proof/history mixed with a new Ep half",
-    );
-
-    mixed = second.proof.clone();
-    mixed.eq_proof.clone_from(&first.proof.eq_proof);
-    assert!(
-        !paired_transport_boundary_accepts(
-            state_keys,
-            &mixed,
-            second.proof.semantic_digest,
-            &second.eq_transport_public_instances,
-            &second.ep_transport_public_instances,
-        ),
-        "the outer boundary must reject an old Eq proof paired with current histories",
-    );
-
-    mixed = second.proof.clone();
-    mixed.ep_proof.clone_from(&first.proof.ep_proof);
-    mixed.ep_history.clone_from(&first.proof.ep_history);
-    assert!(
-        !paired_transport_boundary_accepts(
-            state_keys,
-            &mixed,
-            second.proof.semantic_digest,
-            &second.eq_transport_public_instances,
-            &second.ep_transport_public_instances,
-        ),
-        "the outer boundary must reject a new Eq half mixed with an old Ep proof/history",
-    );
-
-    mixed = second.proof.clone();
-    mixed.ep_proof.clone_from(&first.proof.ep_proof);
-    assert!(
-        !paired_transport_boundary_accepts(
-            state_keys,
-            &mixed,
-            second.proof.semantic_digest,
-            &second.eq_transport_public_instances,
-            &second.ep_transport_public_instances,
-        ),
-        "the outer boundary must reject an old Ep proof paired with current histories",
-    );
-
-    mixed = second.proof.clone();
-    mixed.eq_history.clone_from(&first.proof.eq_history);
-    assert!(
-        !paired_transport_boundary_accepts(
-            state_keys,
-            &mixed,
-            second.proof.semantic_digest,
-            &second.eq_transport_public_instances,
-            &second.ep_transport_public_instances,
-        ),
-        "the outer boundary must reject a current Eq proof with an old Eq history",
-    );
-
-    mixed = second.proof.clone();
-    mixed.ep_history.clone_from(&first.proof.ep_history);
-    assert!(
-        !paired_transport_boundary_accepts(
-            state_keys,
-            &mixed,
-            second.proof.semantic_digest,
-            &second.eq_transport_public_instances,
-            &second.ep_transport_public_instances,
-        ),
-        "the outer boundary must reject a current Ep proof with an old Ep history",
     );
 }
 

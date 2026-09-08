@@ -22,8 +22,20 @@ pub const FASTPQ_ORDINARY_SOURCE_STATEMENT_ARCHIVE_VERSION_V1: u16 = 1;
 ///
 /// An empty leaf sequence still carries its actual manifest and path. Statement
 /// preimages, private transfer paths and per-leaf membership proofs are not included.
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, IntoSchema)]
-#[norito(schema_name = "iroha_data_model::fastpq::FastpqOrdinarySourceStatementArchiveV1")]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    NoritoSerialize,
+    NoritoDeserialize,
+    IntoSchema,
+    norito::NoritoSchema,
+)]
+#[norito_schema(
+    name = "iroha_data_model::fastpq::source_archive::FastpqOrdinarySourceStatementArchiveV1",
+    frame = "iroha_data_model::fastpq::FastpqOrdinarySourceStatementArchiveV1"
+)]
 pub struct FastpqOrdinarySourceStatementArchiveV1 {
     /// Must equal [`FASTPQ_ORDINARY_SOURCE_STATEMENT_ARCHIVE_VERSION_V1`].
     pub version: u16,
@@ -150,3 +162,27 @@ pub fn decode_fastpq_ordinary_source_statement_archive_v1(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod captured_cutover_identity_tests {
+    fn check<T>(nominal: &str, frame: &str, hash: &str)
+    where
+        T: norito::NoritoSerialize + for<'de> norito::NoritoDeserialize<'de>,
+    {
+        assert_eq!(T::nominal_name(), nominal);
+        assert_eq!(T::frame_name(), frame);
+        assert_eq!(
+            hex::encode(norito::schema::identity::frame_hash::<T>()),
+            hash
+        );
+    }
+
+    #[test]
+    fn captured_owner_identities() {
+        check::<super::FastpqOrdinarySourceStatementArchiveV1>(
+            "iroha_data_model::fastpq::source_archive::FastpqOrdinarySourceStatementArchiveV1",
+            "iroha_data_model::fastpq::FastpqOrdinarySourceStatementArchiveV1",
+            "f7dc5ff15a6a3fbedaab46301e10f269",
+        );
+    }
+}

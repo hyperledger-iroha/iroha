@@ -144,6 +144,11 @@ struct ProviderAdvertSignaturePayloadViewWireV1<'a> {
     signature_strict: bool,
     allow_unknown_capabilities: bool,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "sorafs_manifest::provider_advert::ProviderAdvertSignaturePayloadViewV1",
+    frame = "sorafs_manifest::provider_advert::ProviderAdvertSignaturePayloadV1"
+)]
 struct ProviderAdvertSignaturePayloadViewV1<'a>(ProviderAdvertSignaturePayloadViewWireV1<'a>);
 impl<'a> From<&'a ProviderAdvertV1> for ProviderAdvertSignaturePayloadViewV1<'a> {
     fn from(advert: &'a ProviderAdvertV1) -> Self {
@@ -159,11 +164,7 @@ impl<'a> From<&'a ProviderAdvertV1> for ProviderAdvertSignaturePayloadViewV1<'a>
         })
     }
 }
-impl norito::core::NoritoSerialize for ProviderAdvertSignaturePayloadViewV1<'_> {
-    fn schema_hash() -> [u8; 16] {
-        ProviderAdvertSignaturePayloadV1::schema_hash()
-    }
-}
+
 impl norito::core::SerializePayload for ProviderAdvertSignaturePayloadViewV1<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         self.0.serialize(writer)
@@ -1686,7 +1687,7 @@ mod tests {
     use super::*;
     use ed25519_dalek::{Signer, SigningKey};
     use iroha_crypto::{Algorithm, KeyPair};
-    use norito::{NoritoSerialize as _, SerializePayload as _, decode_from_bytes, to_bytes};
+    use norito::{SerializePayload as _, decode_from_bytes, to_bytes};
     fn encode_bare_with_flags<T: norito::core::NoritoSerialize>(value: &T, flags: u8) -> Vec<u8> {
         let _guard = norito::core::DecodeFlagsGuard::enter(flags);
         let mut bytes = Vec::new();
@@ -1787,7 +1788,7 @@ mod tests {
             allow_unknown_capabilities: false,
         }
     }
-    fn signed_sample_advert(now: u64) -> ProviderAdvertV1 {
+    pub(super) fn signed_sample_advert(now: u64) -> ProviderAdvertV1 {
         let mut advert = sample_advert(now);
         let signing_key = SigningKey::from_bytes(&[0xA5; 32]);
         advert.signature = AdvertSignature {
@@ -1868,8 +1869,8 @@ mod tests {
         let owned = advert.signature_payload();
         let borrowed = ProviderAdvertSignaturePayloadViewV1::from(&advert);
         assert_eq!(
-            <ProviderAdvertSignaturePayloadViewV1<'_> as norito::core::NoritoSerialize>::schema_hash(),
-            ProviderAdvertSignaturePayloadV1::schema_hash()
+            norito::schema::identity::frame_hash::<ProviderAdvertSignaturePayloadViewV1<'_>>(),
+            norito::schema::identity::frame_hash::<ProviderAdvertSignaturePayloadV1>()
         );
         let owned_frame =
             norito::encode_canonical(&owned).expect("encode owned signature envelope");
@@ -2682,3 +2683,7 @@ include!("provider_advert/captured_owner_identity_tests.rs");
 #[cfg(test)]
 #[path = "provider_advert/borrowed_payload_tests.rs"]
 mod borrowed_payload_tests;
+
+#[cfg(test)]
+#[path = "provider_advert/signing_identity_tests.rs"]
+pub(crate) mod signing_identity_tests;

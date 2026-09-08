@@ -230,7 +230,7 @@ impl ProofBox {
         )
     }
 }
-impl norito::NoritoDeserialize<'_> for ProofBox {}
+
 impl<'de> norito::DeserializePayload<'de> for ProofBox {
     fn deserialize(archived: &'de ncore::Archived<Self>) -> Self {
         Self::try_deserialize(archived)
@@ -297,7 +297,7 @@ impl VerifyingKeyBox {
         Self { backend, bytes }
     }
 }
-impl norito::NoritoDeserialize<'_> for VerifyingKeyBox {}
+
 impl<'de> norito::DeserializePayload<'de> for VerifyingKeyBox {
     fn deserialize(archived: &'de ncore::Archived<Self>) -> Self {
         Self::try_deserialize(archived)
@@ -1622,7 +1622,7 @@ impl norito::json::JsonDeserialize for ProofAttachment {
         norito::json::from_str(&canonical_json)
     }
 }
-impl norito::NoritoSerialize for ProofAttachment {}
+
 impl norito::SerializePayload for ProofAttachment {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
         ncore::write_len_prefixed(writer, &self.backend)?;
@@ -1681,7 +1681,7 @@ impl norito::SerializePayload for ProofAttachment {
         Some(total)
     }
 }
-impl norito::NoritoDeserialize<'_> for ProofAttachment {}
+
 impl<'de> norito::DeserializePayload<'de> for ProofAttachment {
     fn deserialize(archived: &'de ncore::Archived<Self>) -> Self {
         Self::try_deserialize(archived)
@@ -1978,7 +1978,7 @@ impl TryFrom<Vec<ProofAttachment>> for ProofAttachmentList {
         Ok(list)
     }
 }
-impl norito::NoritoSerialize for ProofAttachmentList {}
+
 impl norito::SerializePayload for ProofAttachmentList {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
         let field_len = norito::SerializePayload::encoded_len_exact(&self.0)
@@ -1997,7 +1997,7 @@ impl norito::SerializePayload for ProofAttachmentList {
         ncore::len_prefix_len(field_len).checked_add(field_len)
     }
 }
-impl norito::NoritoDeserialize<'_> for ProofAttachmentList {}
+
 impl<'de> norito::DeserializePayload<'de> for ProofAttachmentList {
     fn deserialize(archived: &'de ncore::Archived<Self>) -> Self {
         Self::try_deserialize(archived)

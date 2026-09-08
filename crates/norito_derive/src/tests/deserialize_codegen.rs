@@ -42,8 +42,6 @@ fn context_field_paths_delegate_copy_and_context_setup_to_core() {
         &struct_input.generics,
         &struct_data.fields,
         &struct_input.attrs,
-        None,
-        true,
     ));
     let tuple_input: DeriveInput = syn::parse_quote! {
         struct Tuple(Opaque);
@@ -56,8 +54,6 @@ fn context_field_paths_delegate_copy_and_context_setup_to_core() {
         &tuple_input.generics,
         &tuple_data.fields,
         &tuple_input.attrs,
-        None,
-        true,
     ));
     let enum_input: DeriveInput = syn::parse_quote! {
         enum Message {
@@ -73,8 +69,6 @@ fn context_field_paths_delegate_copy_and_context_setup_to_core() {
         &enum_input.generics,
         enum_data,
         &enum_input.attrs,
-        None,
-        true,
     ));
     for expansion in [&struct_expansion, &enum_expansion] {
         assert!(
@@ -190,8 +184,6 @@ fn binary_default_attributes_do_not_generate_missing_field_fallbacks() {
         &struct_input.generics,
         &struct_data.fields,
         &struct_input.attrs,
-        None,
-        true,
     ));
     let enum_input: DeriveInput = syn::parse_quote! {
         enum Message {
@@ -211,8 +203,6 @@ fn binary_default_attributes_do_not_generate_missing_field_fallbacks() {
         &enum_input.generics,
         enum_data,
         &enum_input.attrs,
-        None,
-        true,
     ));
     for expansion in [&struct_expansion, &enum_expansion] {
         assert!(
@@ -245,7 +235,6 @@ fn ordinary_struct_fields_use_counted_length_streaming() {
         &input.generics,
         &data.fields,
         &input.attrs,
-        None,
         true,
     ));
     assert_eq!(expansion.matches("write_len_prefixed(").count(), 2);
@@ -278,17 +267,11 @@ fn generated_serializers_use_two_argument_field_writers_without_scratch_buffers(
                 &input.generics,
                 &data.fields,
                 &input.attrs,
-                None,
                 true,
             ),
-            Data::Enum(data) => derive_enum_serialize(
-                &input.ident,
-                &input.generics,
-                data,
-                &input.attrs,
-                None,
-                true,
-            ),
+            Data::Enum(data) => {
+                derive_enum_serialize(&input.ident, &input.generics, data, &input.attrs, true)
+            }
             Data::Union(_) => unreachable!("test inputs are structs or enums"),
         });
         assert!(expansion.contains("write_len_prefixed(writer,"));
@@ -321,7 +304,6 @@ fn packed_struct_codegen_delegates_measurement_and_streaming_to_one_owner() {
         &input.generics,
         &data.fields,
         &input.attrs,
-        None,
         true,
     ));
     assert_eq!(expansion.matches("write_packed_fields(").count(), 2);
@@ -357,7 +339,6 @@ fn packed_struct_descriptors_preserve_raw_arrays_and_omit_skipped_fields() {
         &input.generics,
         &data.fields,
         &input.attrs,
-        None,
         true,
     ));
     assert_eq!(
@@ -387,7 +368,6 @@ fn packed_tuple_descriptors_keep_field_order() {
         &input.generics,
         &data.fields,
         &input.attrs,
-        None,
         true,
     ));
     assert_eq!(
@@ -411,7 +391,6 @@ fn ordinary_enum_fields_use_counted_length_streaming() {
         &input.generics,
         data,
         &input.attrs,
-        None,
         true,
     ));
     assert!(expansion.matches("write_len_prefixed(").count() >= 2);
@@ -434,7 +413,6 @@ fn enum_byte_array_lengths_use_the_raw_wire_width() {
         &input.generics,
         data,
         &input.attrs,
-        None,
         true,
     ));
     assert_eq!(
@@ -469,44 +447,96 @@ fn payload_and_frame_derives_share_reconstruction_without_identity_bounds() {
         syn::parse_quote! { enum Record<T> { Unit, Value(T), Named { value: T } } },
     ] {
         let input: DeriveInput = input;
-        let generate = |framed| match &input.data {
-            Data::Struct(data) => derive_struct_deserialize(
+        // Both public derive spellings call this same payload generator.
+        let tokens = match &input.data {
+            Data::Struct(data) => {
+                derive_struct_deserialize(&input.ident, &input.generics, &data.fields, &input.attrs)
+            }
+            Data::Enum(data) => {
+                derive_enum_deserialize(&input.ident, &input.generics, data, &input.attrs)
+            }
+            Data::Union(_) => unreachable!(),
+        };
+        let payload: syn::File = syn::parse2(tokens).expect("valid payload implementation");
+        assert_eq!(payload.items.len(), 1);
+        let payload_source = compact(quote!(#payload));
+        assert!(payload_source.contains("norito::core::DeserializePayload"));
+        // Debug labels may report Rust type names; they never select a frame.
+        for forbidden in [
+            "NoritoDeserialize",
+            "NoritoSchema",
+            "schema_hash",
+            "IntoSchema",
+            "module_path",
+            "schema-structural",
+        ] {
+            assert!(
+                !payload_source.contains(forbidden),
+                "{forbidden}: {payload_source}"
+            );
+        }
+        if !input.generics.params.is_empty() {
+            assert!(payload_source.contains("T:for<'__d>norito::core::DeserializePayload<'__d>"));
+            assert!(payload_source.contains("T:norito::core::SerializePayload"));
+        }
+    }
+}
+
+#[test]
+fn serialization_derives_differ_only_by_the_requested_archived_alias() {
+    for input in [
+        syn::parse_quote! { struct Record<T> { value: T } },
+        syn::parse_quote! { struct Record<T>(T); },
+        syn::parse_quote! { struct Record; },
+        syn::parse_quote! { enum Record<T> { Unit, Value(T), Named { value: T } } },
+    ] {
+        let mut input: DeriveInput = input;
+        let generate = |input: &DeriveInput, archived| match &input.data {
+            Data::Struct(data) => derive_struct_serialize(
                 &input.ident,
                 &input.generics,
                 &data.fields,
                 &input.attrs,
-                None,
-                framed,
+                archived,
             ),
-            Data::Enum(data) => derive_enum_deserialize(
-                &input.ident,
-                &input.generics,
-                data,
-                &input.attrs,
-                None,
-                framed,
-            ),
+            Data::Enum(data) => {
+                derive_enum_serialize(&input.ident, &input.generics, data, &input.attrs, archived)
+            }
             Data::Union(_) => unreachable!(),
         };
-        let payload: syn::File =
-            syn::parse2(generate(false)).expect("valid payload implementation");
-        let framed: syn::File = syn::parse2(generate(true)).expect("valid typed implementation");
+        let payload: syn::File = syn::parse2(generate(&input, false)).expect("valid payload impl");
+        let archived: syn::File =
+            syn::parse2(generate(&input, true)).expect("valid alias and impl");
         assert_eq!(payload.items.len(), 1);
-        assert_eq!(framed.items.len(), 2);
+        assert_eq!(archived.items.len(), 2);
+        let syn::Item::Type(alias) = &archived.items[0] else {
+            panic!("NoritoSerialize must retain its archived alias");
+        };
+        assert_eq!(alias.ident, "ArchivedRecord");
+        let archived_payload = &archived.items[1];
         let payload_source = compact(quote!(#payload));
-        assert!(payload_source.contains("norito::core::DeserializePayload"));
-        assert!(!payload_source.contains("NoritoDeserialize"));
-        assert!(!payload_source.contains("schema_hash"));
-        assert!(!payload_source.contains("IntoSchema"));
-        let framed_payload = &framed.items[1];
-        assert_eq!(payload_source, compact(quote!(#framed_payload)));
-        let syn::Item::Impl(frame) = &framed.items[0] else {
-            panic!("typed contract is a trait implementation");
-        };
-        assert_eq!(frame.items.len(), 1);
-        let syn::ImplItem::Fn(method) = &frame.items[0] else {
-            panic!("typed contract owns only the frame hash method");
-        };
-        assert_eq!(method.sig.ident, "schema_hash");
+        assert_eq!(payload_source, compact(quote!(#archived_payload)));
+        assert!(payload_source.contains("norito::core::SerializePayload"));
+        for forbidden in [
+            "NoritoSerialize",
+            "NoritoSchema",
+            "schema_hash",
+            "IntoSchema",
+            "type_name",
+            "module_path",
+            "schema-structural",
+        ] {
+            assert!(
+                !payload_source.contains(forbidden),
+                "{forbidden}: {payload_source}"
+            );
+        }
+        if !input.generics.params.is_empty() {
+            assert!(payload_source.contains("T:norito::core::SerializePayload"));
+        }
+        input
+            .attrs
+            .push(syn::parse_quote!(#[norito(reuse_archived)]));
+        assert_eq!(payload_source, compact(generate(&input, true)));
     }
 }

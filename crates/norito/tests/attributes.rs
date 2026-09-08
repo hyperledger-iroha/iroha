@@ -1,7 +1,8 @@
 #![allow(clippy::manual_div_ceil)]
 use iroha_schema::IntoSchema;
 use norito::core::*;
-#[derive(IntoSchema, NoritoSerialize, NoritoDeserialize)]
+#[derive(IntoSchema, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(name = "norito.test.attributes.Rename")]
 struct Rename {
     #[norito(rename = "z")]
     x: u32,
@@ -14,7 +15,8 @@ fn rename_roundtrip() {
     let decoded = <Rename as DeserializePayload>::deserialize(archived);
     assert_eq!(decoded.x, 42);
 }
-#[derive(IntoSchema, NoritoSerialize, NoritoDeserialize)]
+#[derive(IntoSchema, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(name = "norito.test.attributes.SkipDefault")]
 struct SkipDefault {
     a: u32,
     #[norito(skip)]
@@ -27,14 +29,16 @@ const fn custom_default() -> u16 {
     41
 }
 
-#[derive(Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(name = "norito.test.attributes.TupleDefaults")]
 struct TupleDefaults(
     u32,
     #[norito(default)] Option<u64>,
     #[norito(default = "custom_default")] u16,
 );
 
-#[derive(Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(name = "norito.test.attributes.NamedDecision")]
 enum NamedDecision {
     Accepted {
         source: u32,
@@ -45,12 +49,14 @@ enum NamedDecision {
     },
 }
 
-#[derive(NoritoSerialize)]
+#[derive(NoritoSerialize, norito::NoritoSchema)]
+#[norito_schema(name = "norito.test.attributes.IncompleteNamedDecision")]
 enum IncompleteNamedDecision {
     Accepted { source: u32 },
 }
 
-#[derive(Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(name = "norito.test.attributes.TupleDecision")]
 enum TupleDecision {
     Accepted(
         u32,
@@ -59,12 +65,14 @@ enum TupleDecision {
     ),
 }
 
-#[derive(NoritoSerialize)]
+#[derive(NoritoSerialize, norito::NoritoSchema)]
+#[norito_schema(name = "norito.test.attributes.IncompleteTupleDecision")]
 enum IncompleteTupleDecision {
     Accepted(u32),
 }
 
-#[derive(NoritoSerialize)]
+#[derive(NoritoSerialize, norito::NoritoSchema)]
+#[norito_schema(name = "norito.test.attributes.IncompleteSkipDefault")]
 struct IncompleteSkipDefault {
     a: u32,
 }
@@ -76,7 +84,8 @@ enum DecisionMode {
     Manual,
 }
 
-#[derive(Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(name = "norito.test.attributes.DefaultedDecisionMode")]
 enum DefaultedDecisionMode {
     Accepted {
         #[norito(default)]

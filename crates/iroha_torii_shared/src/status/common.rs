@@ -9,29 +9,25 @@ use norito::{
 use std::time::Duration;
 
 /// Thin wrapper around duration that `impl`s [`Default`]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii_shared::status::common::Uptime",
+    frame = "iroha_telemetry::metrics::Uptime"
+)]
 pub struct Uptime(pub Duration);
 impl Default for Uptime {
     fn default() -> Self {
         Self(Duration::from_millis(0))
     }
 }
-impl norito::core::NoritoSerialize for Uptime {
-    fn schema_hash() -> [u8; 16] {
-        norito::core::schema_hash_for_name("iroha_telemetry::metrics::Uptime")
-    }
-}
+
 impl norito::core::SerializePayload for Uptime {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let pair = (self.0.as_secs(), self.0.subsec_nanos());
         norito::core::SerializePayload::serialize(&pair, writer)
     }
 }
-impl norito::core::NoritoDeserialize<'_> for Uptime {
-    fn schema_hash() -> [u8; 16] {
-        norito::core::schema_hash_for_name("iroha_telemetry::metrics::Uptime")
-    }
-}
+
 impl<'a> norito::core::DeserializePayload<'a> for Uptime {
     fn deserialize(archived: &'a norito::core::Archived<Uptime>) -> Self {
         let (secs, nanos): (u64, u32) =
@@ -117,8 +113,12 @@ impl IntoSchema for Uptime {
     NoritoDeserialize,
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
+    norito::NoritoSchema,
 )]
-#[norito(schema_name = "iroha_telemetry::metrics::CryptoStatus")]
+#[norito_schema(
+    name = "iroha_torii_shared::status::common::CryptoStatus",
+    frame = "iroha_telemetry::metrics::CryptoStatus"
+)]
 pub struct CryptoStatus {
     /// Indicates whether SM helper syscalls are available in this build.
     #[norito(default)]
@@ -140,8 +140,12 @@ pub struct CryptoStatus {
     NoritoDeserialize,
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
+    norito::NoritoSchema,
 )]
-#[norito(schema_name = "iroha_telemetry::metrics::Halo2Status")]
+#[norito_schema(
+    name = "iroha_torii_shared::status::common::Halo2Status",
+    frame = "iroha_telemetry::metrics::Halo2Status"
+)]
 pub struct Halo2Status {
     /// Whether Halo2 verification is enabled for the host.
     #[norito(default)]
@@ -183,8 +187,12 @@ impl Default for CryptoStatus {
     NoritoDeserialize,
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
+    norito::NoritoSchema,
 )]
-#[norito(schema_name = "iroha_telemetry::metrics::StackStatus")]
+#[norito_schema(
+    name = "iroha_torii_shared::status::common::StackStatus",
+    frame = "iroha_telemetry::metrics::StackStatus"
+)]
 pub struct StackStatus {
     /// Requested scheduler stack size in bytes.
     #[norito(default)]
@@ -233,8 +241,12 @@ pub struct StackStatus {
     norito::derive::NoritoDeserialize,
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
+    norito::NoritoSchema,
 )]
-#[norito(schema_name = "iroha_telemetry::metrics::BuildStatus")]
+#[norito_schema(
+    name = "iroha_torii_shared::status::common::BuildStatus",
+    frame = "iroha_telemetry::metrics::BuildStatus"
+)]
 pub struct BuildStatus {
     /// Semantic version baked into this binary.
     pub version: String,
@@ -257,8 +269,12 @@ pub struct BuildStatus {
     NoritoDeserialize,
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
+    norito::NoritoSchema,
 )]
-#[norito(schema_name = "iroha_telemetry::metrics::Status")]
+#[norito_schema(
+    name = "iroha_torii_shared::status::common::Status",
+    frame = "iroha_telemetry::metrics::Status"
+)]
 pub struct Status {
     /// Build metadata for the currently running node binary.
     pub build: BuildStatus,
@@ -335,4 +351,30 @@ pub struct Status {
     #[norito(default)]
     #[norito(skip_serializing_if = "Vec::is_empty")]
     pub da_receipt_cursors: Vec<DaReceiptCursorStatus>,
+}
+
+#[cfg(test)]
+mod captured_frame_identity_tests {
+    #[test]
+    fn observed_declared_identities() {
+        crate::captured_identity_tests::assert_bidirectional::<super::BuildStatus>(
+            "iroha_torii_shared::status::common::BuildStatus",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::CryptoStatus>(
+            "iroha_torii_shared::status::common::CryptoStatus",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::Halo2Status>(
+            "iroha_torii_shared::status::common::Halo2Status",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::StackStatus>(
+            "iroha_torii_shared::status::common::StackStatus",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::Status>(
+            "iroha_torii_shared::status::common::Status",
+        );
+    }
+    #[test]
+    fn observed_manual_frame_goldens() {
+        crate::captured_identity_tests::assert_manual::<super::Uptime>("Uptime");
+    }
 }

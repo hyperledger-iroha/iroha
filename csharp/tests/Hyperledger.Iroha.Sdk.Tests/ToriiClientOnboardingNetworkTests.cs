@@ -28,13 +28,11 @@ public sealed partial class ToriiClientTests
         await Assert.ThrowsAnyAsync<ArgumentException>(() => client.PrepareAccountOnboardingAsync(
             receipt.Body.Request,
             receipt,
-            new ToriiTairaPublicResetMutationBindingV1
+            new ToriiPreparedOperationBindingV1
             {
-                AuthorizationSha256 = new string('a', 64),
-                AuthorizationNonce = new string('n', 32),
+                SemanticHashHex = new string('a', 64),
                 Kind = ToriiAccountOnboardingPreparedTransactionV1.OperationV1,
-                Phase = "pre_edge",
-                IdempotencyKey = new string('b', 64),
+                RequestId = new string('b', 64),
                 ExecutionExpiresAtUnixMilliseconds = ulong.MaxValue,
             },
             PreparedAccountFeePayment,

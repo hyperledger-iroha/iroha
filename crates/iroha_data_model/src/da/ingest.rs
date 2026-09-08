@@ -859,6 +859,8 @@ pub struct DaStripeLayout {
     ffi_type(opaque)
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::da::ingest::DaIngestRequest")]
 pub struct DaIngestRequest {
     /// Exact genesis-derived network identity authorising this request.
     pub network_id: NetworkId,
@@ -1278,6 +1280,8 @@ impl DaIngestRequest {
     ffi_type(opaque)
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::da::ingest::DaIngestReceipt")]
 pub struct DaIngestReceipt {
     /// Caller-supplied blob identifier echoed back to the submitter.
     pub client_blob_id: BlobDigest,

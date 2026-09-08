@@ -74,7 +74,6 @@ const CANCEL_ASSET_LOCK_REFERENCE_MAX_BYTES_V1: usize = 4 * 1024;
     frame = "iroha_data_model::isi::escrow::CancelAssetLock"
 )]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
-#[norito(schema_name = "iroha_data_model::isi::escrow::CancelAssetLock")]
 struct CancelAssetLockWireV1 {
     escrow_id: Hash,
     expected_remaining_amount: Quantity,

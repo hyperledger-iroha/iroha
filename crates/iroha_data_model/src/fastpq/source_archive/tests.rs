@@ -466,9 +466,10 @@ fn fixed_manifest_path_rejects_other_lengths_and_vector_layouts() {
     let root = expected_root(&archive);
     macro_rules! path_frame {
         ($path_type:ty, $path:expr) => {{
-            #[derive(NoritoSerialize)]
-            #[norito(
-                schema_name = "iroha_data_model::fastpq::FastpqOrdinarySourceStatementArchiveV1"
+            #[derive(NoritoSerialize, norito::NoritoSchema)]
+            #[norito_schema(
+                name = "test::iroha_data_model::ForgedArchive",
+                frame = "iroha_data_model::fastpq::FastpqOrdinarySourceStatementArchiveV1"
             )]
             struct ForgedArchive {
                 version: u16,
@@ -477,8 +478,8 @@ fn fixed_manifest_path_rejects_other_lengths_and_vector_layouts() {
                 manifest_siblings: $path_type,
             }
             assert_eq!(
-                <ForgedArchive as NoritoSerialize>::schema_hash(),
-                <FastpqOrdinarySourceStatementArchiveV1 as NoritoSerialize>::schema_hash()
+                norito::schema::identity::frame_hash::<ForgedArchive>(),
+                norito::schema::identity::frame_hash::<FastpqOrdinarySourceStatementArchiveV1>()
             );
             norito::encode_canonical(&ForgedArchive {
                 version: archive.version,

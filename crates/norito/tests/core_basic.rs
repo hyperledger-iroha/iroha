@@ -74,7 +74,7 @@ fn header_serialization() {
     assert_eq!(&bytes[..4], &MAGIC);
     assert_eq!(bytes[4], VERSION_MAJOR);
     assert_eq!(bytes[5], VERSION_MINOR);
-    assert_eq!(&bytes[6..22], &<u8 as NoritoSerialize>::schema_hash());
+    assert_eq!(&bytes[6..22], &norito::schema::identity::frame_hash::<u8>());
     assert_eq!(bytes[22], 0);
     let len = LittleEndian::read_u64(&bytes[23..31]);
     assert_eq!(len, 1);
@@ -93,8 +93,10 @@ fn checksum_validation() {
     ));
 }
 #[repr(C)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "norito.test.core_basic.A")]
 struct A(u32, u32);
-impl NoritoSerialize for A {}
+
 impl SerializePayload for A {
     fn serialize(&self, encoder: &mut Encoder<'_>) -> Result<(), Error> {
         self.0.serialize(encoder)?;
@@ -102,8 +104,10 @@ impl SerializePayload for A {
     }
 }
 #[repr(C)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "norito.test.core_basic.B")]
 struct B(u64);
-impl NoritoDeserialize<'_> for B {}
+
 impl<'a> DeserializePayload<'a> for B {
     fn deserialize(archived: &'a Archived<B>) -> Self {
         Self::try_deserialize(archived).expect("decode B")
@@ -236,7 +240,10 @@ fn triple_roundtrip() {
     let decoded = <(u8, bool, String) as DeserializePayload>::deserialize(archived);
     assert_eq!(value, decoded);
 }
-#[derive(IntoSchema, NoritoSerialize, NoritoDeserialize, PartialEq, Debug)]
+#[derive(
+    IntoSchema, NoritoSerialize, NoritoDeserialize, PartialEq, Debug, norito::NoritoSchema,
+)]
+#[norito_schema(name = "norito.test.core_basic.Mixed")]
 struct Mixed {
     name: String,
     nums: Vec<u32>,
@@ -252,7 +259,10 @@ fn derive_struct_variable_roundtrip() {
     let decoded = Mixed::deserialize(archived);
     assert_eq!(value, decoded);
 }
-#[derive(IntoSchema, NoritoSerialize, NoritoDeserialize, PartialEq, Debug)]
+#[derive(
+    IntoSchema, NoritoSerialize, NoritoDeserialize, PartialEq, Debug, norito::NoritoSchema,
+)]
+#[norito_schema(name = "norito.test.core_basic.Custom")]
 enum Custom {
     #[codec(index = 5)]
     Text(String),

@@ -197,8 +197,12 @@ pub fn kagemusha_verify_device_response_v1<'a>(
     IntoSchema,
     DeriveJsonSerialize,
     DeriveJsonDeserialize,
+    norito::NoritoSchema,
 )]
-#[norito(schema_name = "iroha.kagemusha.device.v1.read-active-hardware-credential-command")]
+#[norito_schema(
+    name = "iroha_data_model::kagemusha::kagemusha_device_response_v1::KagemushaDeviceReadCredentialCommandV1",
+    frame = "iroha.kagemusha.device.v1.read-active-hardware-credential-command"
+)]
 #[norito(deny_unknown_fields)]
 pub struct KagemushaDeviceReadCredentialCommandV1 {
     /// Sole command body version, 1.
@@ -231,8 +235,12 @@ impl KagemushaDeviceReadCredentialCommandV1 {
     IntoSchema,
     DeriveJsonSerialize,
     DeriveJsonDeserialize,
+    norito::NoritoSchema,
 )]
-#[norito(schema_name = "iroha.kagemusha.device.v1.active-hardware-credential-reply")]
+#[norito_schema(
+    name = "iroha_data_model::kagemusha::kagemusha_device_response_v1::KagemushaDeviceQualificationReplyV1",
+    frame = "iroha.kagemusha.device.v1.active-hardware-credential-reply"
+)]
 #[norito(deny_unknown_fields)]
 pub struct KagemushaDeviceQualificationReplyV1 {
     /// Sole reply version, 1.
@@ -277,5 +285,34 @@ impl KagemushaDeviceQualificationReplyV1 {
             return Err(KagemushaDeviceResponseErrorV1::Qualification);
         }
         Ok(reply)
+    }
+}
+
+#[cfg(test)]
+mod captured_cutover_identity_tests {
+    fn check<T>(nominal: &str, frame: &str, hash: &str)
+    where
+        T: norito::NoritoSerialize + for<'de> norito::NoritoDeserialize<'de>,
+    {
+        assert_eq!(T::nominal_name(), nominal);
+        assert_eq!(T::frame_name(), frame);
+        assert_eq!(
+            hex::encode(norito::schema::identity::frame_hash::<T>()),
+            hash
+        );
+    }
+
+    #[test]
+    fn captured_owner_identities() {
+        check::<super::KagemushaDeviceReadCredentialCommandV1>(
+            "iroha_data_model::kagemusha::kagemusha_device_response_v1::KagemushaDeviceReadCredentialCommandV1",
+            "iroha.kagemusha.device.v1.read-active-hardware-credential-command",
+            "e120abca2729a4eeb3be9832cee509db",
+        );
+        check::<super::KagemushaDeviceQualificationReplyV1>(
+            "iroha_data_model::kagemusha::kagemusha_device_response_v1::KagemushaDeviceQualificationReplyV1",
+            "iroha.kagemusha.device.v1.active-hardware-credential-reply",
+            "f4af747f418c6bd25a4b4c9a599805c9",
+        );
     }
 }

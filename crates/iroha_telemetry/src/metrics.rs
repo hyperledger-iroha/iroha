@@ -15,7 +15,6 @@ use iroha_data_model::{
     },
 };
 use iroha_torii_shared::status::*;
-use norito::core::DecodeFromSlice;
 use prometheus::{
     CounterVec, Encoder, Gauge, Histogram, HistogramOpts, HistogramVec, IntCounter, IntCounterVec,
     IntGauge, IntGaugeVec, Opts, Registry,
@@ -304,71 +303,6 @@ pub fn stack_settings_snapshot() -> StackSettingsSnapshot {
         pool_fallback_total: STACK_POOL_FALLBACK_TOTAL.load(Ordering::Relaxed),
         budget_hit_total: STACK_BUDGET_HIT_TOTAL.load(Ordering::Relaxed),
         gas_to_stack_multiplier: STACK_GAS_TO_STACK_MULTIPLIER.load(Ordering::Relaxed),
-    }
-}
-/// Helper container for fixed-size scheduler histogram buckets.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct LayerWidthBuckets([u64; 8]);
-impl LayerWidthBuckets {
-    /// Construct buckets directly from an array.
-    pub const fn new(values: [u64; 8]) -> Self {
-        Self(values)
-    }
-    /// Build buckets from a slice, truncating to the first eight entries.
-    pub fn from_slice(values: &[u64]) -> Self {
-        let mut buckets = [0_u64; 8];
-        let len = values.len().min(8);
-        buckets[..len].copy_from_slice(&values[..len]);
-        Self(buckets)
-    }
-    /// Borrow the underlying bucket array.
-    pub const fn as_array(&self) -> &[u64; 8] {
-        &self.0
-    }
-    /// Consume the wrapper, returning the inner bucket array.
-    pub const fn into_inner(self) -> [u64; 8] {
-        self.0
-    }
-}
-impl From<[u64; 8]> for LayerWidthBuckets {
-    fn from(values: [u64; 8]) -> Self {
-        Self(values)
-    }
-}
-impl From<LayerWidthBuckets> for [u64; 8] {
-    fn from(value: LayerWidthBuckets) -> Self {
-        value.0
-    }
-}
-impl norito::core::NoritoSerialize for LayerWidthBuckets {}
-impl norito::core::SerializePayload for LayerWidthBuckets {
-    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
-        let payload = (
-            self.0[0], self.0[1], self.0[2], self.0[3], self.0[4], self.0[5], self.0[6], self.0[7],
-        );
-        norito::core::SerializePayload::serialize(&payload, writer)
-    }
-}
-impl norito::core::NoritoDeserialize<'_> for LayerWidthBuckets {}
-impl<'a> norito::core::DeserializePayload<'a> for LayerWidthBuckets {
-    fn deserialize(archived: &'a norito::core::Archived<Self>) -> Self {
-        let payload: (u64, u64, u64, u64, u64, u64, u64, u64) =
-            norito::core::DeserializePayload::deserialize(archived.cast());
-        Self([
-            payload.0, payload.1, payload.2, payload.3, payload.4, payload.5, payload.6, payload.7,
-        ])
-    }
-}
-impl<'a> DecodeFromSlice<'a> for LayerWidthBuckets {
-    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-        let (payload, used) = <(u64, u64, u64, u64, u64, u64, u64, u64)>::decode_from_slice(bytes)?;
-        Ok((
-            Self([
-                payload.0, payload.1, payload.2, payload.3, payload.4, payload.5, payload.6,
-                payload.7,
-            ]),
-            used,
-        ))
     }
 }
 /// Snapshot of a Metal queue lane captured by the FASTPQ runtime.

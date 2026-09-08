@@ -3,14 +3,15 @@ use derive_more::Display;
 use drop_bomb::DropBomb;
 use error_stack::Report;
 use norito::{
-    DeserializePayload, NoritoDeserialize, NoritoSerialize, SerializePayload,
+    DeserializePayload, SerializePayload,
     json::{self, JsonDeserialize, JsonSerialize},
 };
 use std::time::Duration;
 const U64_BYTES: usize = core::mem::size_of::<u64>();
 const DURATION_OVERFLOW: &str = "duration does not fit into u64 milliseconds";
 /// Serialize [`Duration`] as a number of milliseconds.
-#[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Display)]
+#[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Display, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_config_base::util::DurationMs")]
 #[display("{_0:?}")]
 #[repr(transparent)]
 pub struct DurationMs(pub Duration);
@@ -41,7 +42,7 @@ impl From<Duration> for DurationMs {
         Self(value)
     }
 }
-impl NoritoSerialize for DurationMs {}
+
 impl SerializePayload for DurationMs {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let millis = self.to_millis()?;
@@ -54,7 +55,7 @@ impl SerializePayload for DurationMs {
         Some(U64_BYTES)
     }
 }
-impl NoritoDeserialize<'_> for DurationMs {}
+
 impl<'de> DeserializePayload<'de> for DurationMs {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
         let millis = <u64 as DeserializePayload>::deserialize(archived.cast());
@@ -92,7 +93,8 @@ impl core::str::FromStr for DurationMs {
     }
 }
 /// A byte count represented canonically as an unsigned 64-bit integer.
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_config_base::util::Bytes")]
 #[repr(transparent)]
 pub struct Bytes(pub u64);
 impl Bytes {
@@ -114,7 +116,7 @@ impl core::str::FromStr for Bytes {
         Ok(Self(value))
     }
 }
-impl NoritoSerialize for Bytes {}
+
 impl SerializePayload for Bytes {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         self.0.serialize(writer)
@@ -126,7 +128,7 @@ impl SerializePayload for Bytes {
         self.0.encoded_len_exact()
     }
 }
-impl NoritoDeserialize<'_> for Bytes {}
+
 impl<'de> DeserializePayload<'de> for Bytes {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
         let inner = u64::deserialize(archived.cast());
@@ -211,6 +213,55 @@ impl<T, C> EmitterResultExt<T, C> for core::result::Result<T, Report<C>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn check_scalar_frame<T>(owner: &str, value: &T)
+    where
+        T: norito::NoritoSerialize + for<'de> norito::NoritoDeserialize<'de>,
+    {
+        let rows: Vec<json::Value> = include_str!("../tests/fixtures/config_scalar_frames.jsonl")
+            .lines()
+            .map(|line| json::from_json(line).expect("original compiler observation"))
+            .collect();
+        assert_eq!(rows.len(), 4);
+        let rows: Vec<_> = rows
+            .iter()
+            .filter(|row| row["owner"].as_str() == Some(owner))
+            .collect();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0]["direction"].as_str(), Some("Serialize"));
+        assert_eq!(rows[1]["direction"].as_str(), Some("Deserialize"));
+        for row in rows {
+            assert_eq!(row["nominal"].as_str().unwrap(), T::nominal_name());
+            assert_eq!(
+                row["schema_hash"].as_str().unwrap(),
+                hex::encode(norito::schema::identity::frame_hash::<T>()),
+            );
+            let expected = hex::decode(row["canonical_hex"].as_str().unwrap()).unwrap();
+            assert_eq!(norito::encode_canonical(value).unwrap(), expected);
+            let decoded: T = norito::decode_canonical(&expected).unwrap();
+            assert_eq!(norito::encode_canonical(&decoded).unwrap(), expected);
+            for len in 0..expected.len() {
+                assert!(norito::decode_canonical::<T>(&expected[..len]).is_err());
+            }
+            let mut wrong_owner = expected.clone();
+            wrong_owner[6] ^= 1;
+            assert!(norito::decode_canonical::<T>(&wrong_owner).is_err());
+            let mut trailing = expected;
+            trailing.push(0);
+            assert!(norito::decode_canonical::<T>(&trailing).is_err());
+        }
+    }
+
+    #[test]
+    fn duration_ms_frame_matches_original_capture() {
+        check_scalar_frame("DurationMs", &DurationMs(Duration::from_millis(42)));
+    }
+
+    #[test]
+    fn bytes_frame_matches_original_capture() {
+        check_scalar_frame("Bytes", &Bytes(1024));
+    }
+
     #[test]
     fn duration_ms_json_roundtrip() {
         let original = DurationMs(Duration::from_millis(42));

@@ -13,6 +13,8 @@ iroha_data_model_derive::model_single! {
     #[derive(iroha_schema::IntoSchema)]
     #[display("SET `{_0}`")]
     #[repr(transparent)]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::isi::transparent::SetParameter")]
     pub struct SetParameter(pub Parameter);
 }
 isi! {
@@ -1970,6 +1972,18 @@ mod tests {
             &registry,
             InvalidInstruction::WIRE_ID,
             InvalidInstruction::new("iroha.unknown", [0xAB; 32], "bad payload"),
+        );
+    }
+}
+
+#[cfg(test)]
+mod frame_owner_identity_tests {
+    //! Frame roots observed in the original codec before the identity cutover.
+
+    #[test]
+    fn captured_frame_owner_identities() {
+        crate::frame_owner_identity_tests::assert_bidirectional::<super::SetParameter>(
+            "iroha_data_model::isi::transparent::SetParameter",
         );
     }
 }

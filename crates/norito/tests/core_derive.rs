@@ -3,6 +3,8 @@ use iroha_schema::IntoSchema;
 use norito::core::*;
 #[derive(IntoSchema, NoritoSerialize, NoritoDeserialize)]
 #[repr(C)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "norito.test.core_derive.Point")]
 struct Point {
     x: u32,
     y: bool,
@@ -17,6 +19,8 @@ fn struct_roundtrip() {
 }
 #[derive(IntoSchema, NoritoSerialize, NoritoDeserialize)]
 #[repr(C)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "norito.test.core_derive.Tuple")]
 struct Tuple(u32, bool);
 #[test]
 fn tuple_roundtrip() {

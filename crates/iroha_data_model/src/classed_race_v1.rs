@@ -123,6 +123,8 @@ pub struct ClassedRaceDnfEventV1 {
     DeriveJsonSerialize,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::classed_race_v1::ClassedRaceReplayV1")]
 pub struct ClassedRaceReplayV1 {
     /// Wire/rules generation, exactly one.
     pub version: u16,
@@ -186,6 +188,8 @@ pub struct ClassedRaceCarStateV1 {
     DeriveJsonSerialize,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::classed_race_v1::ClassedRaceStateV1")]
 pub struct ClassedRaceStateV1 {
     /// Number of completed simulation ticks.
     pub tick: u32,
@@ -239,6 +243,8 @@ pub struct ClassedRaceStandingV1 {
     DeriveJsonSerialize,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::classed_race_v1::ClassedRaceResultV1")]
 pub struct ClassedRaceResultV1 {
     /// Exact class interpreted by this result.
     pub class_id: ClassedRaceClassV1,
@@ -324,5 +330,23 @@ mod tests {
             norito::decode_canonical::<ClassedRaceResultV1>(&bytes).unwrap(),
             result
         );
+    }
+}
+
+#[cfg(test)]
+mod additional_frame_owner_identity_tests {
+    //! Typed frame contracts observed with the original codec.
+
+    #[test]
+    fn captured_additional_frame_owner_identities() {
+        crate::frame_owner_identity_tests::assert_bidirectional::<
+            crate::classed_race_v1::ClassedRaceReplayV1,
+        >("iroha_data_model::classed_race_v1::ClassedRaceReplayV1");
+        crate::frame_owner_identity_tests::assert_bidirectional::<
+            crate::classed_race_v1::ClassedRaceResultV1,
+        >("iroha_data_model::classed_race_v1::ClassedRaceResultV1");
+        crate::frame_owner_identity_tests::assert_bidirectional::<
+            crate::classed_race_v1::ClassedRaceStateV1,
+        >("iroha_data_model::classed_race_v1::ClassedRaceStateV1");
     }
 }

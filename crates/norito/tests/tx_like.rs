@@ -57,7 +57,10 @@ struct MetadataEntry {
     key: String,
     value: String,
 }
-#[derive(Clone, Debug, PartialEq, NoritoSerialize, NoritoDeserialize, IntoSchema)]
+#[derive(
+    Clone, Debug, PartialEq, NoritoSerialize, NoritoDeserialize, IntoSchema, norito::NoritoSchema,
+)]
+#[norito_schema(name = "norito.test.tx_like.SignedTransaction")]
 struct SignedTransaction {
     creator: AccountId,
     timestamp_ms: u64,

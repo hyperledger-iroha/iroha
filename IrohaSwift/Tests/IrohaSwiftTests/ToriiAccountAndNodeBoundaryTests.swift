@@ -268,15 +268,25 @@ final class ToriiAccountAndNodeBoundaryTests: XCTestCase {
     }
 
     private func preparedAccountBinding(
-        operation: ToriiPreparedAccountOperationV1,
-        idempotencyByte: String
-    ) throws -> ToriiTairaPublicResetMutationBindingV1 {
-        try ToriiTairaPublicResetMutationBindingV1(
-            authorizationSHA256: String(repeating: "11", count: 32),
-            authorizationNonce: String(repeating: "n", count: 32),
-            kind: operation,
-            phase: "canary",
-            idempotencyKey: String(repeating: idempotencyByte, count: 32),
+        receipt: ToriiAccountOnboardingPlanReceipt,
+        requestByte: String
+    ) throws -> ToriiPreparedOperationBindingV1 {
+        try ToriiPreparedOperationBindingV1(
+            semanticHashHex: XCTUnwrap(ToriiCanonicalHashLiteral.normalizedHex(from: receipt.planHash)),
+            kind: .onboarding,
+            requestId: String(repeating: requestByte, count: 32),
+            executionExpiresAtUnixMs: 4_102_444_800_000
+        )
+    }
+
+    private func preparedAccountBinding(
+        claim: ToriiAccountFaucetClaimV1,
+        requestByte: String
+    ) throws -> ToriiPreparedOperationBindingV1 {
+        try ToriiPreparedOperationBindingV1(
+            semanticHashHex: ToriiPreparedAccountProtocolV1.faucetSemanticHash(claim),
+            kind: .faucet,
+            requestId: String(repeating: requestByte, count: 32),
             executionExpiresAtUnixMs: 4_102_444_800_000
         )
     }
@@ -285,10 +295,11 @@ final class ToriiAccountAndNodeBoundaryTests: XCTestCase {
         authority: String,
         networkId: NetworkId,
         feePayment: FeePaymentIntent,
-        binding: ToriiTairaPublicResetMutationBindingV1,
+        binding: ToriiPreparedOperationBindingV1,
         operation: ToriiPreparedAccountOperationV1,
         semanticHashHex: String,
-        instructionPayloads: [Data] = [Data([0])]
+        instructionPayloads: [Data] = [Data([0])],
+        faucetMarker: ToriiJSONValue? = .number(1)
     ) throws -> Data {
         var instructions = CompactNoritoWriter()
         instructions.writeUInt64LE(UInt64(instructionPayloads.count))
@@ -300,33 +311,36 @@ final class ToriiAccountAndNodeBoundaryTests: XCTestCase {
         executable.writeField(instructions.data)
         let bindingJSON = ToriiJSONValue.object([
             "schema": .string(binding.schema),
-            "authorization_sha256": .string(binding.authorizationSHA256),
-            "authorization_nonce": .string(binding.authorizationNonce),
+            "semantic_hash_hex": .string(binding.semanticHashHex),
             "kind": .string(binding.kind.rawValue),
-            "phase": .string(binding.phase),
-            "idempotency_key": .string(binding.idempotencyKey),
+            "request_id": .string(binding.requestId),
             "execution_expires_at_unix_ms": .number(Double(binding.executionExpiresAtUnixMs)),
         ])
+        var metadata: [String: ToriiJSONValue] = [
+            "prepared_operation_binding": bindingJSON,
+            "prepared_operation": .string(operation.rawValue),
+            "prepared_semantic_hash": .string(semanticHashHex),
+        ]
+        if operation == .faucet, let faucetMarker {
+            metadata["taira_faucet_claim_marker_version"] = faucetMarker
+        }
+        let creationTimeMs = min(4_000_000_000_000, binding.executionExpiresAtUnixMs - 1)
         return try CanonicalUnsignedTransactionTestSupport.transactionPayload(
             networkId: networkId,
             authority: authority,
-            creationTimeMs: 4_000_000_000_000,
+            creationTimeMs: creationTimeMs,
             executable: executable.data,
-            timeToLiveMs: 3_600_000,
+            timeToLiveMs: min(3_600_000, binding.executionExpiresAtUnixMs - creationTimeMs),
             nonce: operation == .onboarding ? 1 : 2,
             feePayment: feePayment,
             admissionIntent: .queuePlanSynced,
-            metadata: [
-                "taira_public_reset_binding": bindingJSON,
-                "taira_prepared_operation": .string(operation.rawValue),
-                "taira_prepared_semantic_hash": .string(semanticHashHex),
-            ]
+            metadata: metadata
         )
     }
 
     private func preparedOnboardingTransaction(
         receipt: ToriiAccountOnboardingPlanReceipt,
-        binding: ToriiTairaPublicResetMutationBindingV1
+        binding: ToriiPreparedOperationBindingV1
     ) throws -> ToriiAccountOnboardingPreparedTransactionV1 {
         let canonicalBody = try encodeTestCanonicalOnboardingBody(receipt.body)
         let semanticHash = try ToriiAccountOnboardingReceiptVerifier.canonicalHash(
@@ -378,7 +392,7 @@ final class ToriiAccountAndNodeBoundaryTests: XCTestCase {
 
     private func proofRequiredOnboardingResponse(
         receipt: ToriiAccountOnboardingPlanReceipt,
-        binding: ToriiTairaPublicResetMutationBindingV1
+        binding: ToriiPreparedOperationBindingV1
     ) throws -> ToriiAccountOnboardingProofRequiredPrepareResponseV1 {
         let canonicalBody = try encodeTestCanonicalOnboardingBody(receipt.body)
         let semanticHash = try ToriiAccountOnboardingReceiptVerifier.canonicalHash(
@@ -407,7 +421,7 @@ final class ToriiAccountAndNodeBoundaryTests: XCTestCase {
 
     private func preparedFaucetTransaction(
         claim: ToriiAccountFaucetClaimV1,
-        binding: ToriiTairaPublicResetMutationBindingV1
+        binding: ToriiPreparedOperationBindingV1
     ) throws -> ToriiAccountFaucetPreparedTransactionV1 {
         let signer = try SigningKey.ed25519(privateKey: Data(repeating: 0x61, count: 32))
         let authority = try AccountId.makeI105(publicKey: signer.publicKey())
@@ -677,8 +691,8 @@ final class ToriiAccountAndNodeBoundaryTests: XCTestCase {
         )
 
         let binding = try preparedAccountBinding(
-            operation: .onboarding,
-            idempotencyByte: "22"
+            receipt: receipt,
+            requestByte: "22"
         )
         let prepared = try preparedOnboardingTransaction(receipt: receipt, binding: binding)
         let proofRequired = try proofRequiredOnboardingResponse(
@@ -755,7 +769,7 @@ final class ToriiAccountAndNodeBoundaryTests: XCTestCase {
             permissions: ["CanBar", "CanFoo"]
         )
         let receipt = try onboardingPlanReceipt(request: intent)
-        let binding = try preparedAccountBinding(operation: .onboarding, idempotencyByte: "22")
+        let binding = try preparedAccountBinding(receipt: receipt, requestByte: "22")
         let prepared = try preparedOnboardingTransaction(receipt: receipt, binding: binding)
         let receiptBody = try JSONEncoder().encode(receipt)
         let preparedBody = try JSONEncoder().encode(prepared)
@@ -904,7 +918,7 @@ final class ToriiAccountAndNodeBoundaryTests: XCTestCase {
             accountId: accountId
         )
         let receipt = try onboardingPlanReceipt(request: intent, disposition: .noOp)
-        let binding = try preparedAccountBinding(operation: .onboarding, idempotencyByte: "22")
+        let binding = try preparedAccountBinding(receipt: receipt, requestByte: "22")
         let proofRequired = try proofRequiredOnboardingResponse(
             receipt: receipt,
             binding: binding
@@ -1015,7 +1029,7 @@ final class ToriiAccountAndNodeBoundaryTests: XCTestCase {
             accountId: canonicalOwnerLiteral()
         )
         let receipt = try onboardingPlanReceipt(request: intent, disposition: .noOp)
-        let binding = try preparedAccountBinding(operation: .onboarding, idempotencyByte: "22")
+        let binding = try preparedAccountBinding(receipt: receipt, requestByte: "22")
         let proofRequired = try proofRequiredOnboardingResponse(
             receipt: receipt,
             binding: binding
@@ -1089,7 +1103,7 @@ final class ToriiAccountAndNodeBoundaryTests: XCTestCase {
             accountId: canonicalOwnerLiteral()
         )
         let receipt = try onboardingPlanReceipt(request: intent, disposition: .noOp)
-        let binding = try preparedAccountBinding(operation: .onboarding, idempotencyByte: "22")
+        let binding = try preparedAccountBinding(receipt: receipt, requestByte: "22")
         let proofRequired = try proofRequiredOnboardingResponse(
             receipt: receipt,
             binding: binding
@@ -1241,7 +1255,7 @@ final class ToriiAccountAndNodeBoundaryTests: XCTestCase {
             powAnchorHeight: 42,
             powNonceHex: "0a"
         )
-        let binding = try preparedAccountBinding(operation: .faucet, idempotencyByte: "33")
+        let binding = try preparedAccountBinding(claim: claim, requestByte: "33")
         let prepared = try preparedFaucetTransaction(claim: claim, binding: binding)
         let submitResult = try ToriiPreparedTransactionSubmitResponseV1(
             binding: binding,
@@ -1330,8 +1344,8 @@ final class ToriiAccountAndNodeBoundaryTests: XCTestCase {
         )
         let receipt = try onboardingPlanReceipt(request: intent)
         let onboardingBinding = try preparedAccountBinding(
-            operation: .onboarding,
-            idempotencyByte: "22"
+            receipt: receipt,
+            requestByte: "22"
         )
         let onboarding = try preparedOnboardingTransaction(
             receipt: receipt,
@@ -1343,8 +1357,8 @@ final class ToriiAccountAndNodeBoundaryTests: XCTestCase {
             powNonceHex: "0a"
         )
         let faucetBinding = try preparedAccountBinding(
-            operation: .faucet,
-            idempotencyByte: "33"
+            claim: claim,
+            requestByte: "33"
         )
         let faucet = try preparedFaucetTransaction(claim: claim, binding: faucetBinding)
         let policy = try faucetPolicy(for: faucet)
@@ -1438,8 +1452,8 @@ final class ToriiAccountAndNodeBoundaryTests: XCTestCase {
         )
         let receipt = try onboardingPlanReceipt(request: intent)
         let binding = try preparedAccountBinding(
-            operation: .onboarding,
-            idempotencyByte: "22"
+            receipt: receipt,
+            requestByte: "22"
         )
         let semanticHash = try ToriiAccountOnboardingReceiptVerifier.canonicalHash(
             canonicalBodyNorito: encodeTestCanonicalOnboardingBody(receipt.body)
@@ -1477,14 +1491,107 @@ final class ToriiAccountAndNodeBoundaryTests: XCTestCase {
         )
     }
 
+    func testPreparedFaucetRequiresExactConsumeOnceMarker() throws {
+        let claim = try ToriiAccountFaucetClaimV1(
+            accountId: canonicalOwnerLiteral(), powAnchorHeight: 42, powNonceHex: "0a"
+        )
+        let binding = try preparedAccountBinding(claim: claim, requestByte: "33")
+        let signer = try SigningKey.ed25519(privateKey: Data(repeating: 0x61, count: 32))
+        let authority = try AccountId.makeI105(publicKey: signer.publicKey())
+        let feePayment = testFeePayment()
+        for marker: ToriiJSONValue? in [.number(1), nil, .number(2), .string("1"), .bool(true)] {
+            let payload = try preparedTransactionPayload(
+                authority: authority, networkId: TestNetworkIds.canonical,
+                feePayment: feePayment, binding: binding, operation: .faucet,
+                semanticHashHex: binding.semanticHashHex, faucetMarker: marker
+            )
+            let (wire, transactionHash) = try preparedTransactionWire(payload: payload, signer: signer)
+            let inspected = try ToriiPreparedAccountProtocolV1.inspectWire(
+                transactionHashHex: transactionHash,
+                signedTransactionWireHex: wire.hexEncodedString(),
+                signedTransactionWireSHA256: Data(SHA256.hash(data: wire)).hexEncodedString()
+            )
+            let validate = {
+                try ToriiPreparedAccountProtocolV1.validatePreparedTransaction(
+                    inspected, feePayment: feePayment, binding: binding, operation: .faucet,
+                    semanticHashHex: binding.semanticHashHex, expectedAuthority: authority,
+                    expectedNetworkId: TestNetworkIds.canonical
+                )
+            }
+            if marker == .number(1) {
+                XCTAssertNoThrow(try validate())
+            } else {
+                XCTAssertThrowsError(try validate())
+            }
+        }
+    }
+
+    func testPreparedExecutionLifetimeIsBoundedByOperationDeadline() throws {
+        try ToriiPreparedAccountProtocolV1.validateExecutionLifetime(
+            creationTimeMs: 10, timeToLiveMs: 5, deadline: 15
+        )
+        for ttl: UInt64? in [nil, 0, 6, UInt64.max] {
+            XCTAssertThrowsError(try ToriiPreparedAccountProtocolV1.validateExecutionLifetime(
+                creationTimeMs: 10, timeToLiveMs: ttl, deadline: 15
+            ))
+        }
+    }
+
+    func testPreparedOperationBindingRejectsPrivateCustodyAndSemanticSubstitution() throws {
+        let intent = try ToriiAccountOnboardingPlanRequest(
+            alias: "alice@universal", accountId: canonicalOwnerLiteral()
+        )
+        let receipt = try onboardingPlanReceipt(request: intent)
+        let binding = try preparedAccountBinding(receipt: receipt, requestByte: "22")
+        XCTAssertThrowsError(try ToriiPreparedOperationBindingV1(
+            semanticHashHex: binding.semanticHashHex, kind: .onboarding,
+            requestId: binding.requestId, executionExpiresAtUnixMs: (1 << 53) + 1
+        ))
+        let encoded = try JSONEncoder().encode(binding)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        XCTAssertEqual(Set(object.keys), Set([
+            "schema", "kind", "semantic_hash_hex", "request_id", "execution_expires_at_unix_ms"
+        ]))
+        for field in ["authorization_sha256", "authorization_nonce", "phase", "idempotency_key"] {
+            var contaminated = object
+            contaminated[field] = "private-custody-is-not-public"
+            XCTAssertThrowsError(try JSONDecoder().decode(
+                ToriiPreparedOperationBindingV1.self,
+                from: JSONSerialization.data(withJSONObject: contaminated)
+            ))
+        }
+        let substituted = try ToriiPreparedOperationBindingV1(
+            semanticHashHex: String(repeating: "11", count: 32), kind: .onboarding,
+            requestId: binding.requestId, executionExpiresAtUnixMs: binding.executionExpiresAtUnixMs
+        )
+        XCTAssertThrowsError(try ToriiAccountOnboardingPrepareRequestV1(
+            binding: substituted, receipt: receipt, feePayment: testFeePayment()
+        ))
+        var shortReceiptObject = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(receipt)) as? [String: Any]
+        )
+        var body = try XCTUnwrap(shortReceiptObject["body"] as? [String: Any])
+        body["valid_until_ms"] = 1
+        shortReceiptObject["body"] = body
+        let shortReceipt = try JSONDecoder().decode(
+            ToriiAccountOnboardingPlanReceipt.self,
+            from: JSONSerialization.data(withJSONObject: shortReceiptObject)
+        )
+        XCTAssertThrowsError(try binding.validate(receipt: shortReceipt))
+        let transcript = ToriiPreparedAccountProtocolV1.baseSignatureTranscript(
+            envelopeSchema: ToriiPreparedAccountProtocolV1.preparedTransactionSchema,
+            operation: .onboarding, binding: binding
+        )
+        XCTAssertFalse(String(decoding: transcript, as: UTF8.self).contains("authorization_nonce"))
+        XCTAssertTrue(String(decoding: transcript, as: UTF8.self).contains("binding.request_id"))
+    }
+
     func testPreparedAccountProtocolRejectsLegacyApplyAndOpenEnvelopes() throws {
         XCTAssertThrowsError(
-            try ToriiTairaPublicResetMutationBindingV1(
-                authorizationSHA256: String(repeating: "11", count: 32),
-                authorizationNonce: String(repeating: "n", count: 32),
+            try ToriiPreparedOperationBindingV1(
+                semanticHashHex: String(repeating: "11", count: 32),
                 kind: .onboarding,
-                phase: "canary",
-                idempotencyKey: String(repeating: "22", count: 32),
+                requestId: String(repeating: "22", count: 32),
                 executionExpiresAtUnixMs: 0
             )
         )
@@ -1508,7 +1615,7 @@ final class ToriiAccountAndNodeBoundaryTests: XCTestCase {
             )
         )
 
-        let binding = try preparedAccountBinding(operation: .onboarding, idempotencyByte: "22")
+        let binding = try preparedAccountBinding(receipt: receipt, requestByte: "22")
         var openPrepare = try XCTUnwrap(
             JSONSerialization.jsonObject(
                 with: JSONEncoder().encode(
@@ -1528,14 +1635,14 @@ final class ToriiAccountAndNodeBoundaryTests: XCTestCase {
                 from: JSONSerialization.data(withJSONObject: missingOnboardingFee)
             )
         )
-        let faucetBinding = try preparedAccountBinding(
-            operation: .faucet,
-            idempotencyByte: "33"
-        )
         let faucetClaim = try ToriiAccountFaucetClaimV1(
             accountId: accountId,
             powAnchorHeight: 42,
             powNonceHex: "0a"
+        )
+        let faucetBinding = try preparedAccountBinding(
+            claim: faucetClaim,
+            requestByte: "33"
         )
         var missingFaucetFee = try XCTUnwrap(
             JSONSerialization.jsonObject(
@@ -1565,7 +1672,7 @@ final class ToriiAccountAndNodeBoundaryTests: XCTestCase {
 
         let validBinding = try XCTUnwrap(openPrepare["binding"] as? [String: Any])
         var uppercaseBinding = validBinding
-        uppercaseBinding["idempotency_key"] = String(repeating: "AA", count: 32)
+        uppercaseBinding["request_id"] = String(repeating: "AA", count: 32)
         openPrepare.removeValue(forKey: "legacy_apply")
         openPrepare["binding"] = uppercaseBinding
         XCTAssertThrowsError(
@@ -1642,13 +1749,11 @@ final class ToriiAccountAndNodeBoundaryTests: XCTestCase {
             accountId: canonicalOwnerLiteral()
         )
         let receipt = try onboardingPlanReceipt(request: intent)
-        let expiredBinding = try ToriiTairaPublicResetMutationBindingV1(
-            authorizationSHA256: String(repeating: "11", count: 32),
-            authorizationNonce: String(repeating: "n", count: 32),
+        let expiredBinding = try ToriiPreparedOperationBindingV1(
+            semanticHashHex: XCTUnwrap(ToriiCanonicalHashLiteral.normalizedHex(from: receipt.planHash)),
             kind: .onboarding,
-            phase: "canary",
-            idempotencyKey: String(repeating: "22", count: 32),
-            executionExpiresAtUnixMs: 1
+            requestId: String(repeating: "22", count: 32),
+            executionExpiresAtUnixMs: 100
         )
         let prepared = try preparedOnboardingTransaction(
             receipt: receipt,

@@ -138,7 +138,7 @@ fn captured_parameter_serialize_hashes() {
                 captured_hash($serialize)
             );
             assert_eq!(
-                <$owner as norito::NoritoSerialize>::schema_hash(),
+                norito::schema::identity::frame_hash::<$owner>(),
                 captured_hash($serialize)
             );
         };
@@ -155,7 +155,7 @@ fn captured_parameter_deserialize_hashes() {
                 captured_hash($deserialize)
             );
             assert_eq!(
-                <$owner as norito::NoritoDeserialize<'_>>::schema_hash(),
+                norito::schema::identity::frame_hash::<$owner>(),
                 captured_hash($deserialize)
             );
         };

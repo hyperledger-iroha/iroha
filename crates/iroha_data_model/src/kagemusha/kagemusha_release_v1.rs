@@ -458,8 +458,12 @@ pub struct KagemushaEnabledProfileV1 {
     IntoSchema,
     DeriveJsonSerialize,
     DeriveJsonDeserialize,
+    norito::NoritoSchema,
 )]
-#[norito(schema_name = "iroha.kagemusha.v1.provider-policy-entry")]
+#[norito_schema(
+    name = "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaProviderPolicyEntryV1",
+    frame = "iroha.kagemusha.v1.provider-policy-entry"
+)]
 #[norito(deny_unknown_fields)]
 pub struct KagemushaProviderPolicyEntryV1 {
     /// Exact enabled hardware profile; entries are strictly ordered by this ID.
@@ -474,8 +478,11 @@ pub struct KagemushaProviderPolicyEntryV1 {
     pub issuer_signature: super::KagemushaDeviceSignatureV1,
 }
 
-#[derive(Encode)]
-#[norito(schema_name = "iroha.kagemusha.v1.provider-policy-authorization")]
+#[derive(Encode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_data_model::kagemusha::kagemusha_release_v1::ProviderPolicyAuthorizationPreimageV1",
+    frame = "iroha.kagemusha.v1.provider-policy-authorization"
+)]
 struct ProviderPolicyAuthorizationPreimageV1 {
     domain: Vec<u8>,
     version: u16,
@@ -1741,9 +1748,7 @@ struct KagemushaReleaseSubjectV1 {
     artifacts: Vec<KagemushaArtifactBindingV1>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Encode)]
-#[norito(schema_name = "iroha.kagemusha.v1.release-vk-set-digest-subject")]
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaVkSetSubjectV1",
     frame = "iroha.kagemusha.v1.release-vk-set-digest-subject"
@@ -1756,9 +1761,7 @@ struct KagemushaVkSetSubjectV1 {
     verifying_keys: Vec<KagemushaArtifactBindingV1>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Encode)]
-#[norito(schema_name = "iroha.kagemusha.v1.release-artifact-set-digest-subject")]
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaArtifactSetDigestSubjectV1",
     frame = "iroha.kagemusha.v1.release-artifact-set-digest-subject"
@@ -1767,9 +1770,7 @@ struct KagemushaArtifactSetDigestSubjectV1 {
     artifacts: Vec<KagemushaArtifactBindingV1>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Encode)]
-#[norito(schema_name = "iroha.kagemusha.v1.release-hardware-policy-digest-subject")]
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaHardwarePolicyDigestSubjectV1",
     frame = "iroha.kagemusha.v1.release-hardware-policy-digest-subject"
@@ -1778,9 +1779,7 @@ struct KagemushaHardwarePolicyDigestSubjectV1 {
     enabled_profiles: Vec<KagemushaEnabledProfileV1>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Encode)]
-#[norito(schema_name = "iroha.kagemusha.v1.release-profile-qualification-digest-subject")]
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaProfileQualificationDigestSubjectV1",
     frame = "iroha.kagemusha.v1.release-profile-qualification-digest-subject"
@@ -1789,9 +1788,7 @@ struct KagemushaProfileQualificationDigestSubjectV1 {
     qualification: KagemushaProfileQualificationV1,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Encode)]
-#[norito(schema_name = "iroha.kagemusha.v1.release-profile-digest-subject")]
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaReleaseProfileDigestSubjectV1",
     frame = "iroha.kagemusha.v1.release-profile-digest-subject"
@@ -3558,3 +3555,44 @@ mod inner_mint_artifact_tests {
 
 #[cfg(test)]
 mod captured_kagemusha_release_v1_schema_tests;
+
+#[cfg(test)]
+mod captured_cutover_identity_tests {
+    fn check<T>(nominal: &str, frame: &str, hash: &str)
+    where
+        T: norito::NoritoSerialize + for<'de> norito::NoritoDeserialize<'de>,
+    {
+        assert_eq!(T::nominal_name(), nominal);
+        assert_eq!(T::frame_name(), frame);
+        assert_eq!(
+            hex::encode(norito::schema::identity::frame_hash::<T>()),
+            hash
+        );
+    }
+
+    #[test]
+    fn captured_owner_identities() {
+        check::<super::KagemushaProviderPolicyEntryV1>(
+            "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaProviderPolicyEntryV1",
+            "iroha.kagemusha.v1.provider-policy-entry",
+            "33503249cdefa762f6d0ffa42983c6f1",
+        );
+    }
+
+    #[test]
+    fn captured_serialize_only_preimage_identity() {
+        fn check<T: norito::NoritoSerialize>(nominal: &str, frame: &str, hash: &str) {
+            assert_eq!(T::nominal_name(), nominal);
+            assert_eq!(T::frame_name(), frame);
+            assert_eq!(
+                hex::encode(norito::schema::identity::frame_hash::<T>()),
+                hash
+            );
+        }
+        check::<super::ProviderPolicyAuthorizationPreimageV1>(
+            "iroha_data_model::kagemusha::kagemusha_release_v1::ProviderPolicyAuthorizationPreimageV1",
+            "iroha.kagemusha.v1.provider-policy-authorization",
+            "779107008bd31fb01e66d644a082ad5e",
+        );
+    }
+}

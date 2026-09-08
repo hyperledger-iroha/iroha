@@ -4,7 +4,8 @@ use norito::{
     codec::{Decode as _, DecodeAll as _, Encode as _},
 };
 use std::sync::atomic::{AtomicUsize, Ordering};
-#[derive(Encode, Decode, PartialEq, Debug, iroha_schema::IntoSchema)]
+#[derive(Encode, Decode, PartialEq, Debug, iroha_schema::IntoSchema, norito::NoritoSchema)]
+#[norito_schema(name = "norito.test.codec.Sample")]
 struct Sample(u32);
 #[derive(Encode, Decode, PartialEq, Debug, iroha_schema::IntoSchema)]
 enum Color {
@@ -18,7 +19,6 @@ static TRACKED_SERIALIZE_CALLS: AtomicUsize = AtomicUsize::new(0);
 #[derive(Debug, PartialEq, Eq)]
 struct AccessTrackedByte(u8);
 
-impl norito::NoritoSerialize for AccessTrackedByte {}
 impl norito::SerializePayload for AccessTrackedByte {
     fn serialize(&self, encoder: &mut norito::core::Encoder<'_>) -> Result<(), norito::Error> {
         TRACKED_SERIALIZE_CALLS.fetch_add(1, Ordering::Relaxed);
@@ -27,7 +27,6 @@ impl norito::SerializePayload for AccessTrackedByte {
     }
 }
 
-impl norito::NoritoDeserialize<'_> for AccessTrackedByte {}
 impl<'a> norito::DeserializePayload<'a> for AccessTrackedByte {
     fn deserialize(archived: &'a norito::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("valid tracked byte")
@@ -42,10 +41,10 @@ impl<'a> norito::DeserializePayload<'a> for AccessTrackedByte {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, norito::NoritoSchema)]
+#[norito_schema(name = "norito.test.codec.PartiallyReadPair")]
 struct PartiallyReadPair(u8);
 
-impl norito::NoritoSerialize for PartiallyReadPair {}
 impl norito::SerializePayload for PartiallyReadPair {
     fn serialize(&self, encoder: &mut norito::core::Encoder<'_>) -> Result<(), norito::Error> {
         encoder.write_all(&[self.0, 0])?;
@@ -53,7 +52,6 @@ impl norito::SerializePayload for PartiallyReadPair {
     }
 }
 
-impl norito::NoritoDeserialize<'_> for PartiallyReadPair {}
 impl<'a> norito::DeserializePayload<'a> for PartiallyReadPair {
     fn deserialize(archived: &'a norito::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("valid partially read pair")
@@ -121,7 +119,7 @@ fn frame_with_checksummed_payload<T: norito::NoritoSerialize>(payload: &[u8]) ->
     frame[LENGTH_OFFSET..CHECKSUM_OFFSET].copy_from_slice(&(payload.len() as u64).to_le_bytes());
     frame[CHECKSUM_OFFSET..CHECKSUM_OFFSET + 8]
         .copy_from_slice(&norito::hardware_crc64(payload).to_le_bytes());
-    frame[6..22].copy_from_slice(&<T as norito::NoritoSerialize>::schema_hash());
+    frame[6..22].copy_from_slice(&norito::schema::identity::frame_hash::<T>());
     frame.extend_from_slice(payload);
     frame
 }
@@ -600,7 +598,8 @@ fn decode_helper_roundtrip() {
     let decoded = norito::decode_from_bytes::<Sample>(&bytes).expect("decode");
     assert_eq!(original, decoded);
 }
-#[derive(Encode, Decode, PartialEq, Debug, iroha_schema::IntoSchema)]
+#[derive(Encode, Decode, PartialEq, Debug, iroha_schema::IntoSchema, norito::NoritoSchema)]
+#[norito_schema(name = "norito.test.codec.Mixed")]
 struct Mixed {
     name: String,
     nums: Vec<u32>,

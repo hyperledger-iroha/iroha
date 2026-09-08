@@ -233,7 +233,6 @@ macro_rules! define_hash32_newtype {
                 f.write_str(&self.to_hex())
             }
         }
-        impl norito::core::NoritoSerialize for $name {}
         impl norito::core::SerializePayload for $name {
             fn serialize(
                 &self,
@@ -251,7 +250,6 @@ macro_rules! define_hash32_newtype {
                 <HashWire32 as norito::core::SerializePayload>::encoded_len_exact(&wire)
             }
         }
-        impl norito::core::NoritoDeserialize<'_> for $name {}
         impl<'de> norito::core::DeserializePayload<'de> for $name {
             fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
                 Self::try_deserialize(archived).expect("fixed-length hash decode should succeed")
@@ -856,14 +854,14 @@ pub struct GovernanceParameters {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, IntoSchema, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::parliament_types::ProposalId")]
 pub struct ProposalId(pub [u8; 32]);
-impl norito::core::NoritoSerialize for ProposalId {}
+
 impl norito::core::SerializePayload for ProposalId {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let wire = HashWire32::new(self.0);
         <HashWire32 as norito::core::SerializePayload>::serialize(&wire, writer)
     }
 }
-impl norito::core::NoritoDeserialize<'_> for ProposalId {}
+
 impl<'de> norito::core::DeserializePayload<'de> for ProposalId {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("ProposalId must decode from fixed-length payload")

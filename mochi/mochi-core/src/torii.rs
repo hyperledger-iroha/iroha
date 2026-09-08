@@ -32,7 +32,9 @@ use iroha_data_model::{
 };
 use iroha_primitives::{json::Json, numeric::Quantity};
 use iroha_torii_shared::status::Status as TelemetryStatus;
-use iroha_torii_shared::{mcp as torii_mcp, route_catalog as torii_routes, uri as torii_uri};
+use iroha_torii_shared::{
+    ErrorEnvelope, mcp as torii_mcp, route_catalog as torii_routes, uri as torii_uri,
+};
 use iroha_version::codec::EncodeVersioned;
 use norito::json;
 use rand::{TryRngCore as _, rngs::OsRng};
@@ -325,20 +327,6 @@ impl ToriiError {
         }
     }
 }
-#[derive(Debug, Clone, norito::NoritoDeserialize, norito::NoritoSerialize)]
-struct ToriiErrorEnvelope {
-    code: String,
-    message: String,
-}
-impl ToriiErrorEnvelope {
-    fn summary(&self) -> String {
-        if self.code.is_empty() {
-            self.message.clone()
-        } else {
-            format!("{}: {}", self.code, self.message)
-        }
-    }
-}
 include!("torii/response_error_headers.rs");
 fn response_status_error(response: &reqwest::Response) -> ToriiError {
     if response.status() == StatusCode::TOO_MANY_REQUESTS {
@@ -359,8 +347,12 @@ impl From<iroha::Error> for ToriiError {
     }
 }
 fn error_message_from_body(body: &[u8]) -> Option<String> {
-    if let Ok(envelope) = decode_norito::<ToriiErrorEnvelope>(body) {
-        return Some(envelope.summary());
+    if let Ok(envelope) = decode_norito::<ErrorEnvelope>(body) {
+        return Some(if envelope.code.is_empty() {
+            envelope.message
+        } else {
+            format!("{}: {}", envelope.code, envelope.message)
+        });
     }
     if let Ok(value) = norito::json::from_slice::<json::Value>(body)
         && let Some(message) = value

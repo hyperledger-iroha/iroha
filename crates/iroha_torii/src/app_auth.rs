@@ -72,7 +72,6 @@ use iroha_torii_shared::FeeQuoteRequest;
 use norito::codec::{Decode, Encode};
 use sha2::{Digest as _, Sha256};
 use std::{
-    borrow::Cow,
     fmt,
     io::Write as _,
     num::NonZeroUsize,
@@ -794,36 +793,6 @@ pub fn signature_header_value(signature: &Signature) -> Result<String, norito::E
         "canonical request signature",
     )
 }
-struct BorrowedCanonicalRequestAccountId<'a>(&'a AccountId);
-
-impl norito::core::NoritoSerialize for BorrowedCanonicalRequestAccountId<'_> {
-    fn schema_hash() -> [u8; 16] {
-        <AccountId as norito::core::NoritoSerialize>::schema_hash()
-    }
-}
-impl norito::core::SerializePayload for BorrowedCanonicalRequestAccountId<'_> {
-    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
-        norito::core::SerializePayload::serialize(self.0, writer)
-    }
-
-    fn encoded_len_hint(&self) -> Option<usize> {
-        norito::core::SerializePayload::encoded_len_hint(self.0)
-    }
-
-    fn encoded_len_exact(&self) -> Option<usize> {
-        norito::core::SerializePayload::encoded_len_exact(self.0)
-    }
-}
-
-#[derive(Encode)]
-struct CanonicalRequestWitnessPayloadV1<'a> {
-    schema_version: u16,
-    subject_account: BorrowedCanonicalRequestAccountId<'a>,
-    timestamp_ms: u64,
-    nonce: Cow<'a, str>,
-    canonical_request_hash: Hash,
-}
-
 /// Wire-identical wrapper that rejects an excessive witness signature count
 /// before the decoder reserves the source-controlled vector.
 #[derive(Default)]
@@ -834,7 +803,6 @@ struct BoundedCanonicalRequestWitnessSignaturesV1(
 /// Wire-identical detached signature wrapper with a pre-allocation byte cap.
 struct BoundedCanonicalRequestSignatureV1(Signature);
 
-impl norito::core::NoritoSerialize for BoundedCanonicalRequestSignatureV1 {}
 impl norito::core::SerializePayload for BoundedCanonicalRequestSignatureV1 {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         norito::core::SerializePayload::serialize(&self.0, writer)
@@ -849,7 +817,6 @@ impl norito::core::SerializePayload for BoundedCanonicalRequestSignatureV1 {
     }
 }
 
-impl norito::core::NoritoDeserialize<'_> for BoundedCanonicalRequestSignatureV1 {}
 impl<'de> norito::core::DeserializePayload<'de> for BoundedCanonicalRequestSignatureV1 {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("bounded canonical request signature decode")
@@ -898,7 +865,6 @@ impl From<BoundedCanonicalRequestSignatureWitnessWireV1> for CanonicalRequestSig
     }
 }
 
-impl norito::core::NoritoSerialize for BoundedCanonicalRequestWitnessSignaturesV1 {}
 impl norito::core::SerializePayload for BoundedCanonicalRequestWitnessSignaturesV1 {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         norito::core::SerializePayload::serialize(&self.0, writer)
@@ -913,7 +879,6 @@ impl norito::core::SerializePayload for BoundedCanonicalRequestWitnessSignatures
     }
 }
 
-impl norito::core::NoritoDeserialize<'_> for BoundedCanonicalRequestWitnessSignaturesV1 {}
 impl<'de> norito::core::DeserializePayload<'de> for BoundedCanonicalRequestWitnessSignaturesV1 {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("bounded canonical request witness decode")
@@ -960,11 +925,6 @@ mod bounded_signatures_wire {
 mod bounded_nonce_wire {
     pub(super) struct String(pub(super) std::string::String);
 
-    impl norito::core::NoritoSerialize for String {
-        fn schema_hash() -> [u8; 16] {
-            <std::string::String as norito::core::NoritoSerialize>::schema_hash()
-        }
-    }
     impl norito::core::SerializePayload for String {
         fn serialize(
             &self,
@@ -982,11 +942,6 @@ mod bounded_nonce_wire {
         }
     }
 
-    impl<'de> norito::core::NoritoDeserialize<'de> for String {
-        fn schema_hash() -> [u8; 16] {
-            <std::string::String as norito::core::NoritoDeserialize<'de>>::schema_hash()
-        }
-    }
     impl<'de> norito::core::DeserializePayload<'de> for String {
         fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
             Self::try_deserialize(archived).expect("bounded canonical request nonce decode")
@@ -1045,13 +1000,13 @@ struct BoundedCanonicalRequestWitnessWireV1 {
 
 /// Canonical witness decoder with the public V1 schema identity and bounded
 /// signature-vector wire implementation.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii::app_auth::BoundedCanonicalRequestWitnessV1",
+    frame = "iroha_data_model::soracloud::CanonicalRequestWitnessV1"
+)]
 struct BoundedCanonicalRequestWitnessV1(BoundedCanonicalRequestWitnessWireV1);
 
-impl norito::core::NoritoSerialize for BoundedCanonicalRequestWitnessV1 {
-    fn schema_hash() -> [u8; 16] {
-        <CanonicalRequestWitnessV1 as norito::core::NoritoSerialize>::schema_hash()
-    }
-}
 impl norito::core::SerializePayload for BoundedCanonicalRequestWitnessV1 {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         norito::core::SerializePayload::serialize(&self.0, writer)
@@ -1066,11 +1021,6 @@ impl norito::core::SerializePayload for BoundedCanonicalRequestWitnessV1 {
     }
 }
 
-impl<'de> norito::core::NoritoDeserialize<'de> for BoundedCanonicalRequestWitnessV1 {
-    fn schema_hash() -> [u8; 16] {
-        <CanonicalRequestWitnessV1 as norito::core::NoritoDeserialize<'de>>::schema_hash()
-    }
-}
 impl<'de> norito::core::DeserializePayload<'de> for BoundedCanonicalRequestWitnessV1 {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("bounded canonical request witness decode")
@@ -1127,30 +1077,25 @@ pub fn canonical_request_witness_message(
     witness: &CanonicalRequestWitnessV1,
 ) -> Result<Vec<u8>, norito::Error> {
     validate_canonical_request_witness_for_encoding(witness)?;
-    let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
-    let payload = CanonicalRequestWitnessPayloadV1 {
-        schema_version: witness.schema_version,
-        subject_account: BorrowedCanonicalRequestAccountId(&witness.subject_account),
-        timestamp_ms: witness.timestamp_ms,
-        nonce: Cow::Borrowed(&witness.nonce),
-        canonical_request_hash: witness.canonical_request_hash,
-    };
-    norito::core::to_bytes_bounded(&payload, CANONICAL_REQUEST_WITNESS_MAX_DECODED_BYTES_V1)
-        .map_err(|error| match error {
-            norito::core::BoundedEncodeError::FrameTooLarge {
-                encoded_bytes,
-                max_bytes,
-            } => norito::Error::ArchiveLengthExceeded {
-                length: u64::try_from(encoded_bytes).unwrap_or(u64::MAX),
-                limit: u64::try_from(max_bytes).unwrap_or(u64::MAX),
-            },
-            norito::core::BoundedEncodeError::AllocationFailed { bytes } => {
-                norito::Error::AllocationFailed {
-                    bytes: u64::try_from(bytes).unwrap_or(u64::MAX),
-                }
+    iroha_torii_shared::canonical_request_witness::encode_signing_message(
+        witness,
+        CANONICAL_REQUEST_WITNESS_MAX_DECODED_BYTES_V1,
+    )
+    .map_err(|error| match error {
+        norito::core::BoundedEncodeError::FrameTooLarge {
+            encoded_bytes,
+            max_bytes,
+        } => norito::Error::ArchiveLengthExceeded {
+            length: u64::try_from(encoded_bytes).unwrap_or(u64::MAX),
+            limit: u64::try_from(max_bytes).unwrap_or(u64::MAX),
+        },
+        norito::core::BoundedEncodeError::AllocationFailed { bytes } => {
+            norito::Error::AllocationFailed {
+                bytes: u64::try_from(bytes).unwrap_or(u64::MAX),
             }
-            norito::core::BoundedEncodeError::Serialization(error) => error,
-        })
+        }
+        norito::core::BoundedEncodeError::Serialization(error) => error,
+    })
 }
 /// Encode a multisig witness payload for use in `X-Iroha-Witness` headers.
 ///
@@ -3108,24 +3053,7 @@ mod tests {
     }
     #[test]
     fn borrowed_witness_signature_payload_preserves_owned_wire_bytes() {
-        fn encode_bare<T: norito::core::NoritoSerialize>(value: &T) -> Vec<u8> {
-            let mut bytes = Vec::new();
-            let mut encoder = norito::core::Encoder::for_buffer(&mut bytes);
-            norito::core::SerializePayload::serialize(value, &mut encoder)
-                .expect("serialize bare witness payload");
-            bytes
-        }
-
-        #[derive(Encode)]
-        struct OwnedCanonicalRequestWitnessPayloadV1 {
-            schema_version: u16,
-            subject_account: AccountId,
-            timestamp_ms: u64,
-            nonce: String,
-            canonical_request_hash: Hash,
-        }
-
-        let witness = CanonicalRequestWitnessV1 {
+        let mut witness = CanonicalRequestWitnessV1 {
             schema_version: CANONICAL_REQUEST_WITNESS_VERSION_V1,
             subject_account: ALICE_ID.clone(),
             timestamp_ms: 42,
@@ -3133,26 +3061,63 @@ mod tests {
             canonical_request_hash: Hash::new(b"borrowed witness payload parity"),
             signatures: Vec::new(),
         };
-        let borrowed = CanonicalRequestWitnessPayloadV1 {
-            schema_version: witness.schema_version,
-            subject_account: BorrowedCanonicalRequestAccountId(&witness.subject_account),
-            timestamp_ms: witness.timestamp_ms,
-            nonce: Cow::Borrowed(&witness.nonce),
-            canonical_request_hash: witness.canonical_request_hash,
-        };
-        let owned = OwnedCanonicalRequestWitnessPayloadV1 {
-            schema_version: witness.schema_version,
-            subject_account: witness.subject_account.clone(),
-            timestamp_ms: witness.timestamp_ms,
-            nonce: witness.nonce.clone(),
-            canonical_request_hash: witness.canonical_request_hash,
-        };
-        assert_eq!(encode_bare(&borrowed), encode_bare(&owned));
+        let sdk =
+            iroha::client::canonical_request_witness_message(&witness).expect("SDK signing frame");
+        let server = canonical_request_witness_message(&witness).expect("server signing frame");
+        let captured = include_bytes!(
+            "../../iroha_torii_shared/tests/fixtures/canonical_request_witness_sdk_v1.bin"
+        );
+        assert_eq!(sdk, captured);
+        assert_eq!(server, sdk);
+        let sdk_signature = checked_signature(ALICE_KEYPAIR.private_key(), &sdk);
+        sdk_signature
+            .verify(ALICE_KEYPAIR.public_key(), &server)
+            .expect("SDK signature must verify against server bytes");
+        let server_signature = checked_signature(ALICE_KEYPAIR.private_key(), &server);
+        server_signature
+            .verify(ALICE_KEYPAIR.public_key(), &sdk)
+            .expect("server signature must verify against SDK bytes");
+        let rejected = include_bytes!(
+            "../../iroha_torii_shared/tests/fixtures/rejected_canonical_request_witness_torii_v1.bin"
+        );
+        assert_eq!(
+            norito::core::from_bytes_view(captured)
+                .expect("captured SDK archive")
+                .as_bytes(),
+            norito::core::from_bytes_view(rejected)
+                .expect("conflicting Torii archive")
+                .as_bytes()
+        );
+        assert_ne!(server, rejected);
+        let rejected_signature = checked_signature(ALICE_KEYPAIR.private_key(), rejected);
+        assert!(
+            rejected_signature
+                .verify(ALICE_KEYPAIR.public_key(), &server)
+                .is_err()
+        );
+        assert!(
+            sdk_signature
+                .verify(ALICE_KEYPAIR.public_key(), rejected)
+                .is_err()
+        );
+        witness.signatures.push(CanonicalRequestSignatureWitnessV1 {
+            signer: ALICE_KEYPAIR.public_key().clone(),
+            signature: sdk_signature,
+        });
         let flags = norito::core::header_flags::PACKED_STRUCT
             | norito::core::header_flags::FIELD_BITSET
             | norito::core::header_flags::COMPACT_LEN;
         let _flags = norito::core::DecodeFlagsGuard::enter(flags);
-        assert_eq!(encode_bare(&borrowed), encode_bare(&owned));
+        assert_eq!(
+            canonical_request_witness_message(&witness).expect("server frame excludes signatures"),
+            sdk
+        );
+        assert_eq!(
+            iroha::client::canonical_request_witness_message(&witness)
+                .expect("SDK frame excludes signatures"),
+            sdk
+        );
+        assert_eq!(norito::core::effective_decode_flags(), Some(flags));
     }
 
     #[test]
@@ -3188,6 +3153,71 @@ mod tests {
         );
     }
 
+    #[test]
+    fn bounded_witness_frame_identity_matches_original_observations() {
+        use norito::NoritoSchema as _;
+        let source =
+            include_str!("../tests/fixtures/bounded_request_witness_frame_identity.v1.json");
+        assert_eq!(
+            hex::encode(iroha_crypto::sha256(source)),
+            "be29c14a2a72fa9a07d9eeafdd306fa48e9ce9945355076b1a4387bf5be8b26f"
+        );
+        let fixture: norito::json::Value =
+            norito::json::from_str(source).expect("original observation");
+        assert_eq!(
+            BoundedCanonicalRequestWitnessV1::nominal_name(),
+            fixture["nominal"].as_str().unwrap()
+        );
+        assert_eq!(
+            BoundedCanonicalRequestWitnessV1::frame_name(),
+            fixture["root_nominal"].as_str().unwrap()
+        );
+        fn typed_contract<T: norito::NoritoSerialize + for<'de> norito::NoritoDeserialize<'de>>()
+        -> [u8; 16] {
+            norito::schema::identity::frame_hash::<T>()
+        }
+        let hash = typed_contract::<BoundedCanonicalRequestWitnessV1>();
+        for direction in [
+            "serialize_hash",
+            "deserialize_hash",
+            "root_serialize_hash",
+            "root_deserialize_hash",
+        ] {
+            assert_eq!(hex::encode(hash), fixture[direction].as_str().unwrap());
+        }
+        assert_eq!(fixture["frames"].as_array().unwrap().len(), 2);
+        for row in fixture["frames"].as_array().unwrap() {
+            let flags = u8::try_from(row["flags"].as_u64().unwrap()).expect("recorded flags");
+            let bytes =
+                hex::decode(row["frame_hex"].as_str().unwrap()).expect("captured complete frame");
+            let header = norito::core::Header::read(&bytes[..]).expect("captured header");
+            assert_eq!(header.schema, hash);
+            assert_eq!(header.flags, flags);
+            let _flags = norito::core::DecodeFlagsGuard::enter(flags);
+            let limits = norito::DecodeLimits::new(
+                CANONICAL_REQUEST_WITNESS_MAX_DECODED_BYTES_V1,
+                CANONICAL_REQUEST_WITNESS_MAX_DECODED_BYTES_V1,
+                CANONICAL_REQUEST_WITNESS_MAX_DECODED_BYTES_V1,
+                CANONICAL_REQUEST_WITNESS_MAX_DECODED_BYTES_V1.saturating_mul(2),
+                norito::core::MAX_VALUE_NESTING_DEPTH,
+            );
+            let bounded: BoundedCanonicalRequestWitnessV1 =
+                norito::decode_from_bytes_with_limits(&bytes, limits)
+                    .expect("original frame bounded decode");
+            assert_eq!(norito::to_bytes(&bounded).expect("bounded frame"), bytes);
+            let public = CanonicalRequestWitnessV1::try_from(bounded).expect("bounded conversion");
+            assert_eq!(norito::to_bytes(&public).expect("public frame"), bytes);
+            if flags == norito::core::default_encode_flags() {
+                norito::decode_canonical::<BoundedCanonicalRequestWitnessV1>(&bytes)
+                    .expect("canonical frame");
+            } else {
+                assert!(matches!(
+                    norito::decode_canonical::<BoundedCanonicalRequestWitnessV1>(&bytes),
+                    Err(norito::Error::NonCanonicalEncoding)
+                ));
+            }
+        }
+    }
     #[test]
     fn bounded_witness_wrapper_preserves_public_packed_wire() {
         let signature = checked_signature(ALICE_KEYPAIR.private_key(), b"packed witness fixture");
@@ -4592,6 +4622,88 @@ mod tests {
                 signer_one.public_key().clone(),
                 signer_two.public_key().clone()
             ]
+        );
+    }
+    #[test]
+    fn verify_accepts_sdk_signed_multisig_witness_and_rejects_conflicting_frame() {
+        let _guard = test_guard(CanonicalRequestAuthConfig::default());
+        let signer = checked_app_auth_key_fixture();
+        let policy = MultisigPolicy::new(
+            1,
+            vec![MultisigMember::new(signer.public_key().clone(), 1).expect("member")],
+        )
+        .expect("policy");
+        let account = AccountId::new_multisig(policy);
+        let state = minimal_state_with_account(&account);
+        let method = Method::POST;
+        let uri: Uri = "/v1/soracloud/deploy?view=full".parse().expect("uri");
+        let body = b"{\"deploy\":true}";
+        let mut witness = CanonicalRequestWitnessV1 {
+            schema_version: CANONICAL_REQUEST_WITNESS_VERSION_V1,
+            subject_account: account.clone(),
+            timestamp_ms: now_unix_ms(),
+            nonce: "sdk-signed-witness".to_owned(),
+            canonical_request_hash: canonical_network_request_hash(
+                state.network_id_ref(),
+                &method,
+                &uri,
+                body,
+            )
+            .expect("canonical request"),
+            signatures: Vec::new(),
+        };
+        let sdk =
+            iroha::client::canonical_request_witness_message(&witness).expect("SDK signing frame");
+        assert_eq!(
+            canonical_request_witness_message(&witness).expect("server frame"),
+            sdk
+        );
+        let mut conflicting_frame = sdk.clone();
+        // The historical Torii frame differs only in this Norito header field.
+        let schema_offset = norito::core::MAGIC.len() + 2;
+        let rejected_schema: [u8; 16] = hex::decode("5f285eb4475d17f4f8f7971788dae774")
+            .expect("captured conflicting root")
+            .try_into()
+            .expect("16-byte root");
+        conflicting_frame[schema_offset..schema_offset + rejected_schema.len()]
+            .copy_from_slice(&rejected_schema);
+        assert_eq!(
+            norito::core::Header::read(&conflicting_frame[..])
+                .expect("header")
+                .schema,
+            rejected_schema
+        );
+        witness.signatures.push(CanonicalRequestSignatureWitnessV1 {
+            signer: signer.public_key().clone(),
+            signature: checked_signature(signer.private_key(), &conflicting_frame),
+        });
+        let rejected_headers = witness_headers(&account, &witness);
+        let rejected_error =
+            verify_canonical_request(&state, &rejected_headers, &method, &uri, body, None)
+                .expect_err("a signature over the conflicting root must fail");
+        assert!(matches!(
+            rejected_error,
+            crate::Error::Query(ValidationFail::NotPermitted(message))
+                if message == "query signature failed verification"
+        ));
+        witness.signatures[0].signature = checked_signature(signer.private_key(), &sdk);
+        let mut headers = witness_headers(&account, &witness);
+        headers.insert(
+            HEADER_WITNESS,
+            iroha::client::canonical_request_witness_header_value(&witness)
+                .expect("SDK witness header")
+                .parse()
+                .expect("HTTP header"),
+        );
+        let verified = verify_canonical_request(&state, &headers, &method, &uri, body, None)
+            .expect("SDK-produced witness must verify")
+            .expect("witness auth is present");
+        assert_eq!(verified.account, account);
+        assert_eq!(verified.signer, signer.public_key().clone());
+        assert_eq!(verified.verified_signers, vec![signer.public_key().clone()]);
+        assert!(
+            verify_canonical_request(&state, &headers, &method, &uri, body, None).is_err(),
+            "successful SDK witness must retain replay protection"
         );
     }
     #[test]

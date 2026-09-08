@@ -27,8 +27,8 @@ fn assert_identity<T: NoritoSchema + NoritoSerialize + for<'de> NoritoDeserializ
     assert_eq!(T::nominal_name(), nominal);
     assert_eq!(T::frame_name(), nominal);
     assert_eq!(norito::schema::identity::frame_hash::<T>(), expected);
-    assert_eq!(<T as NoritoSerialize>::schema_hash(), expected);
-    assert_eq!(<T as NoritoDeserialize>::schema_hash(), expected);
+    assert_eq!(norito::schema::identity::frame_hash::<T>(), expected);
+    assert_eq!(norito::schema::identity::frame_hash::<T>(), expected);
 }
 
 #[test]

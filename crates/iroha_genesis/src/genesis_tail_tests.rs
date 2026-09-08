@@ -534,6 +534,12 @@ fn uses_shared_instruction_registry() {
     let local = default_instruction_registry();
     assert_eq!(local.len(), shared.len());
     for name in shared.names() {
-        assert!(local.contains(name), "missing {name}");
+        let wire_id = shared.wire_id(name).expect("registered type has a wire ID");
+        assert_eq!(local.wire_id(name), Some(wire_id), "mismatched {name}");
+        assert!(local.contains(wire_id), "missing {wire_id}");
+        assert!(
+            !local.contains(name),
+            "Rust type names are not wire ID aliases"
+        );
     }
 }

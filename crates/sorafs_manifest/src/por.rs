@@ -1002,6 +1002,11 @@ struct PorProofSigningPayloadViewWireV1<'a> {
     auth_path: borrowed_norito::Vec<'a, [u8; 32]>,
     submitted_at: u64,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "sorafs_manifest::por::PorProofSigningPayloadViewV1",
+    frame = "sorafs_manifest::por::PorProofSigningPayloadV1"
+)]
 struct PorProofSigningPayloadViewV1<'a>(PorProofSigningPayloadViewWireV1<'a>);
 impl<'a> From<&'a PorProofV1> for PorProofSigningPayloadViewV1<'a> {
     fn from(proof: &'a PorProofV1) -> Self {
@@ -1017,11 +1022,7 @@ impl<'a> From<&'a PorProofV1> for PorProofSigningPayloadViewV1<'a> {
         })
     }
 }
-impl norito::core::NoritoSerialize for PorProofSigningPayloadViewV1<'_> {
-    fn schema_hash() -> [u8; 16] {
-        PorProofSigningPayloadV1::schema_hash()
-    }
-}
+
 impl norito::core::SerializePayload for PorProofSigningPayloadViewV1<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         self.0.serialize(writer)
@@ -1345,6 +1346,11 @@ struct AuditVerdictSigningPayloadViewWireV1<'a> {
     decided_at: u64,
     metadata: borrowed_norito::Vec<'a, CapacityMetadataEntry>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "sorafs_manifest::por::AuditVerdictSigningPayloadViewV1",
+    frame = "sorafs_manifest::por::AuditVerdictSigningPayloadV1"
+)]
 struct AuditVerdictSigningPayloadViewV1<'a>(AuditVerdictSigningPayloadViewWireV1<'a>);
 impl<'a> From<&'a AuditVerdictV1> for AuditVerdictSigningPayloadViewV1<'a> {
     fn from(verdict: &'a AuditVerdictV1) -> Self {
@@ -1362,11 +1368,7 @@ impl<'a> From<&'a AuditVerdictV1> for AuditVerdictSigningPayloadViewV1<'a> {
         })
     }
 }
-impl norito::core::NoritoSerialize for AuditVerdictSigningPayloadViewV1<'_> {
-    fn schema_hash() -> [u8; 16] {
-        AuditVerdictSigningPayloadV1::schema_hash()
-    }
-}
+
 impl norito::core::SerializePayload for AuditVerdictSigningPayloadViewV1<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         self.0.serialize(writer)
@@ -2860,7 +2862,6 @@ pub fn decode_por_weekly_report_v1(bytes: &[u8]) -> Result<PorWeeklyReportV1, no
 mod tests {
     use super::*;
     use ed25519_dalek::{Signer as _, SigningKey};
-    use norito::core::NoritoSerialize as _;
     fn encode_bare_with_flags<T: norito::core::NoritoSerialize>(value: &T, flags: u8) -> Vec<u8> {
         let _guard = norito::core::DecodeFlagsGuard::enter(flags);
         let mut bytes = Vec::new();
@@ -2978,7 +2979,7 @@ mod tests {
             },
         }
     }
-    fn proof_fixture() -> PorProofV1 {
+    pub(super) fn proof_fixture() -> PorProofV1 {
         PorProofV1 {
             version: POR_PROOF_VERSION_V1,
             challenge_id: [1; 32],
@@ -3000,14 +3001,14 @@ mod tests {
             submitted_at: 1_700_000_100,
         }
     }
-    fn sign_proof(proof: &mut PorProofV1, signing_key: &SigningKey) {
+    pub(super) fn sign_proof(proof: &mut PorProofV1, signing_key: &SigningKey) {
         proof.signature.public_key = signing_key.verifying_key().to_bytes().to_vec();
         let payload = proof
             .signature_payload_bytes()
             .expect("encode proof signing payload");
         proof.signature.signature = signing_key.sign(&payload).to_bytes().to_vec();
     }
-    fn verdict_fixture() -> AuditVerdictV1 {
+    pub(super) fn verdict_fixture() -> AuditVerdictV1 {
         AuditVerdictV1 {
             version: AUDIT_VERDICT_VERSION_V1,
             manifest_digest: [1; 32],
@@ -3021,7 +3022,7 @@ mod tests {
             metadata: Vec::new(),
         }
     }
-    fn add_verdict_signature(verdict: &mut AuditVerdictV1, signing_key: &SigningKey) {
+    pub(super) fn add_verdict_signature(verdict: &mut AuditVerdictV1, signing_key: &SigningKey) {
         let payload = verdict
             .signature_payload_bytes()
             .expect("encode verdict signing payload");
@@ -3400,8 +3401,8 @@ mod tests {
         let owned = PorProofSigningPayloadV1::from(&proof);
         let borrowed = PorProofSigningPayloadViewV1::from(&proof);
         assert_eq!(
-            <PorProofSigningPayloadViewV1<'_> as norito::core::NoritoSerialize>::schema_hash(),
-            PorProofSigningPayloadV1::schema_hash()
+            norito::schema::identity::frame_hash::<PorProofSigningPayloadViewV1<'_>>(),
+            norito::schema::identity::frame_hash::<PorProofSigningPayloadV1>()
         );
         assert_eq!(
             norito::to_bytes(&borrowed).expect("encode borrowed proof signing payload"),
@@ -3758,8 +3759,8 @@ mod tests {
         let owned = AuditVerdictSigningPayloadV1::from(&verdict);
         let borrowed = AuditVerdictSigningPayloadViewV1::from(&verdict);
         assert_eq!(
-            <AuditVerdictSigningPayloadViewV1<'_> as norito::core::NoritoSerialize>::schema_hash(),
-            AuditVerdictSigningPayloadV1::schema_hash()
+            norito::schema::identity::frame_hash::<AuditVerdictSigningPayloadViewV1<'_>>(),
+            norito::schema::identity::frame_hash::<AuditVerdictSigningPayloadV1>()
         );
         assert_eq!(
             norito::to_bytes(&borrowed).expect("encode borrowed verdict signing payload"),
@@ -4749,3 +4750,7 @@ include!("por/captured_owner_identity_tests.rs");
 #[cfg(test)]
 #[path = "por/borrowed_payload_tests.rs"]
 mod borrowed_payload_tests;
+
+#[cfg(test)]
+#[path = "por/signing_identity_tests.rs"]
+pub(crate) mod signing_identity_tests;

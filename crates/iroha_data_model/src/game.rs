@@ -503,6 +503,8 @@ game_record! {
 }
 game_record! {
     /// One compact immutable admission body shared by ledger, proof and browser.
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::game::GameAdmissionBodyV1")]
     pub struct GameAdmissionBodyV1 {
         /// Exactly one.
         pub version: u16,
@@ -617,3 +619,15 @@ impl GameAdmissionBodyV1 {
 #[cfg(test)]
 #[path = "game_admission_tests.rs"]
 mod admission_tests;
+
+#[cfg(test)]
+mod additional_frame_owner_identity_tests {
+    //! Typed frame contracts observed with the original codec.
+
+    #[test]
+    fn captured_additional_frame_owner_identities() {
+        crate::frame_owner_identity_tests::assert_bidirectional::<crate::game::GameAdmissionBodyV1>(
+            "iroha_data_model::game::GameAdmissionBodyV1",
+        );
+    }
+}

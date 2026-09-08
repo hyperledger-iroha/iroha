@@ -57,7 +57,18 @@ mod at_window_placeholder {
     }
 }
 /// Propose deployment of an IVM bytecode (`.to`) by hash
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Encode, Decode, iroha_schema::IntoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Encode,
+    Decode,
+    iroha_schema::IntoSchema,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_data_model::isi::governance::ProposeDeployContract")]
 pub struct ProposeDeployContract {
     /// Canonical public contract address targeted by the proposal.
     pub contract_address: crate::smart_contract::ContractAddress,
@@ -73,8 +84,18 @@ pub struct ProposeDeployContract {
 impl crate::seal::Instruction for ProposeDeployContract {}
 /// Propose one owner-consented contract lifecycle transition through Parliament.
 #[derive(
-    Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, iroha_schema::IntoSchema,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    iroha_schema::IntoSchema,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_data_model::isi::governance::ProposeContractLifecycleGovernance")]
 pub struct ProposeContractLifecycleGovernance {
     /// Complete compare-and-swap lifecycle proposal.
     pub proposal: ContractLifecycleGovernanceProposalV1,
@@ -82,8 +103,18 @@ pub struct ProposeContractLifecycleGovernance {
 impl crate::seal::Instruction for ProposeContractLifecycleGovernance {}
 /// Propose one non-consensual, time-bounded emergency contract hold.
 #[derive(
-    Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, iroha_schema::IntoSchema,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    iroha_schema::IntoSchema,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_data_model::isi::governance::ProposeContractEmergencyHold")]
 pub struct ProposeContractEmergencyHold {
     /// Complete emergency-containment proposal.
     pub proposal: ContractEmergencyHoldProposalV1,
@@ -91,7 +122,19 @@ pub struct ProposeContractEmergencyHold {
 impl crate::seal::Instruction for ProposeContractEmergencyHold {}
 /// Propose granting or revoking one exact account's global data-trigger capability.
 #[derive(
-    Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, iroha_schema::IntoSchema,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    iroha_schema::IntoSchema,
+    norito::NoritoSchema,
+)]
+#[norito_schema(
+    name = "iroha_data_model::isi::governance::ProposeGlobalDataTriggerPermissionGovernance"
 )]
 pub struct ProposeGlobalDataTriggerPermissionGovernance {
     /// Complete exact-account permission proposal.
@@ -102,28 +145,72 @@ impl crate::seal::Instruction for ProposeGlobalDataTriggerPermissionGovernance {
 ///
 /// Ledger admission requires an exact `CanProposeRuntimeUpgrade` permission whose ABI version and
 /// hash match the manifest; contract-deployment permissions do not authorize runtime upgrades.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Encode, Decode, iroha_schema::IntoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Encode,
+    Decode,
+    iroha_schema::IntoSchema,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_data_model::isi::governance::ProposeRuntimeUpgradeProposal")]
 pub struct ProposeRuntimeUpgradeProposal {
     /// Canonical runtime-upgrade manifest payload.
     pub manifest: RuntimeUpgradeManifest,
 }
 impl crate::seal::Instruction for ProposeRuntimeUpgradeProposal {}
 /// Propose one closed SCCP registry action through governance.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Encode, Decode, iroha_schema::IntoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Encode,
+    Decode,
+    iroha_schema::IntoSchema,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_data_model::isi::governance::ProposeSccpRouteGovernance")]
 pub struct ProposeSccpRouteGovernance {
     /// Complete network- and action-bound proposal anchor.
     pub anchor: crate::isi::bridge::SccpRouteGovernanceAnchorV1,
 }
 impl crate::seal::Instruction for ProposeSccpRouteGovernance {}
 /// Propose one closed `SoraFS` provider-owner transition through governance.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Encode, Decode, iroha_schema::IntoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Encode,
+    Decode,
+    iroha_schema::IntoSchema,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_data_model::isi::governance::ProposeSorafsProviderGovernance")]
 pub struct ProposeSorafsProviderGovernance {
     /// Exact compare-and-set owner transition to execute if enacted.
     pub action: SorafsProviderGovernanceActionV1,
 }
 impl crate::seal::Instruction for ProposeSorafsProviderGovernance {}
 /// Propose one validation-fee policy through SORA Parliament.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Encode, Decode, iroha_schema::IntoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Encode,
+    Decode,
+    iroha_schema::IntoSchema,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_data_model::isi::governance::ProposeValidationFeePolicy")]
 pub struct ProposeValidationFeePolicy {
     /// Complete policy to append if Parliament certifies it.
     pub policy: ValidationFeePolicyV1,
@@ -132,7 +219,18 @@ pub struct ProposeValidationFeePolicy {
 }
 impl crate::seal::Instruction for ProposeValidationFeePolicy {}
 /// Propose one exact validation-fee payout lifecycle through SORA Parliament.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Encode, Decode, iroha_schema::IntoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Encode,
+    Decode,
+    iroha_schema::IntoSchema,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_data_model::isi::governance::ProposeValidationFeePayoutLifecycle")]
 pub struct ProposeValidationFeePayoutLifecycle {
     /// Exact treasury payout binding authorized by this lifecycle.
     ///
@@ -142,7 +240,18 @@ pub struct ProposeValidationFeePayoutLifecycle {
 }
 impl crate::seal::Instruction for ProposeValidationFeePayoutLifecycle {}
 /// Cast a ZK ballot (default voting mode)
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Encode, Decode, iroha_schema::IntoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Encode,
+    Decode,
+    iroha_schema::IntoSchema,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_data_model::isi::governance::CastZkBallot")]
 pub struct CastZkBallot {
     /// Canonical V1 election/referendum selector.
     pub election_id: String,
@@ -195,7 +304,18 @@ pub struct BallotProof {
     pub direction: Option<String>,
 }
 /// Cast a non‑ZK quadratic ballot (optional mode)
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Encode, Decode, iroha_schema::IntoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Encode,
+    Decode,
+    iroha_schema::IntoSchema,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_data_model::isi::governance::CastPlainBallot")]
 pub struct CastPlainBallot {
     /// Canonical V1 selector of the referendum this ballot targets.
     pub referendum_id: String,
@@ -214,7 +334,18 @@ impl crate::seal::Instruction for CastPlainBallot {}
 /// Ordinary execution is owner-authorized. The authenticated initial genesis may instead seed an
 /// exact citizen from that citizen's prefunded balance; the exception is unavailable once any
 /// block has been committed.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Encode, Decode, iroha_schema::IntoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Encode,
+    Decode,
+    iroha_schema::IntoSchema,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_data_model::isi::governance::RegisterCitizen")]
 pub struct RegisterCitizen {
     /// Account receiving citizenship.
     pub owner: AccountId,
@@ -223,14 +354,36 @@ pub struct RegisterCitizen {
 }
 impl crate::seal::Instruction for RegisterCitizen {}
 /// Unbond and remove a citizen from the registry.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Encode, Decode, iroha_schema::IntoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Encode,
+    Decode,
+    iroha_schema::IntoSchema,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_data_model::isi::governance::UnregisterCitizen")]
 pub struct UnregisterCitizen {
     /// Account to remove from the registry.
     pub owner: AccountId,
 }
 impl crate::seal::Instruction for UnregisterCitizen {}
 /// Slash a governance bond lock for a referendum.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Encode, Decode, iroha_schema::IntoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Encode,
+    Decode,
+    iroha_schema::IntoSchema,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_data_model::isi::governance::SlashGovernanceLock")]
 pub struct SlashGovernanceLock {
     /// Canonical V1 selector of the referendum whose lock is being slashed.
     pub referendum_id: String,
@@ -243,7 +396,18 @@ pub struct SlashGovernanceLock {
 }
 impl crate::seal::Instruction for SlashGovernanceLock {}
 /// Restitute a previously slashed governance bond lock.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Encode, Decode, iroha_schema::IntoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Encode,
+    Decode,
+    iroha_schema::IntoSchema,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_data_model::isi::governance::RestituteGovernanceLock")]
 pub struct RestituteGovernanceLock {
     /// Canonical V1 selector of the referendum whose lock is being restored.
     pub referendum_id: String,
@@ -722,6 +886,60 @@ mod tests {
                 owner: account(1),
                 amount: 2_000_u64.into(),
             },
+        );
+    }
+}
+
+#[cfg(test)]
+mod frame_owner_identity_tests {
+    //! Frame roots observed in the original codec before the identity cutover.
+
+    #[test]
+    fn captured_frame_owner_identities() {
+        crate::frame_owner_identity_tests::assert_bidirectional::<super::CastPlainBallot>(
+            "iroha_data_model::isi::governance::CastPlainBallot",
+        );
+        crate::frame_owner_identity_tests::assert_bidirectional::<super::CastZkBallot>(
+            "iroha_data_model::isi::governance::CastZkBallot",
+        );
+        crate::frame_owner_identity_tests::assert_bidirectional::<
+            super::ProposeContractEmergencyHold,
+        >("iroha_data_model::isi::governance::ProposeContractEmergencyHold");
+        crate::frame_owner_identity_tests::assert_bidirectional::<
+            super::ProposeContractLifecycleGovernance,
+        >("iroha_data_model::isi::governance::ProposeContractLifecycleGovernance");
+        crate::frame_owner_identity_tests::assert_bidirectional::<super::ProposeDeployContract>(
+            "iroha_data_model::isi::governance::ProposeDeployContract",
+        );
+        crate::frame_owner_identity_tests::assert_bidirectional::<
+            super::ProposeGlobalDataTriggerPermissionGovernance,
+        >("iroha_data_model::isi::governance::ProposeGlobalDataTriggerPermissionGovernance");
+        crate::frame_owner_identity_tests::assert_bidirectional::<
+            super::ProposeRuntimeUpgradeProposal,
+        >("iroha_data_model::isi::governance::ProposeRuntimeUpgradeProposal");
+        crate::frame_owner_identity_tests::assert_bidirectional::<super::ProposeSccpRouteGovernance>(
+            "iroha_data_model::isi::governance::ProposeSccpRouteGovernance",
+        );
+        crate::frame_owner_identity_tests::assert_bidirectional::<
+            super::ProposeSorafsProviderGovernance,
+        >("iroha_data_model::isi::governance::ProposeSorafsProviderGovernance");
+        crate::frame_owner_identity_tests::assert_bidirectional::<
+            super::ProposeValidationFeePayoutLifecycle,
+        >("iroha_data_model::isi::governance::ProposeValidationFeePayoutLifecycle");
+        crate::frame_owner_identity_tests::assert_bidirectional::<super::ProposeValidationFeePolicy>(
+            "iroha_data_model::isi::governance::ProposeValidationFeePolicy",
+        );
+        crate::frame_owner_identity_tests::assert_bidirectional::<super::RegisterCitizen>(
+            "iroha_data_model::isi::governance::RegisterCitizen",
+        );
+        crate::frame_owner_identity_tests::assert_bidirectional::<super::RestituteGovernanceLock>(
+            "iroha_data_model::isi::governance::RestituteGovernanceLock",
+        );
+        crate::frame_owner_identity_tests::assert_bidirectional::<super::SlashGovernanceLock>(
+            "iroha_data_model::isi::governance::SlashGovernanceLock",
+        );
+        crate::frame_owner_identity_tests::assert_bidirectional::<super::UnregisterCitizen>(
+            "iroha_data_model::isi::governance::UnregisterCitizen",
         );
     }
 }

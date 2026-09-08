@@ -16,6 +16,7 @@ import org.hyperledger.iroha.sdk.core.model.Executable
 import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
 import org.hyperledger.iroha.sdk.core.model.FeeSponsorProgramId
 import org.hyperledger.iroha.sdk.core.model.NetworkId
+import org.hyperledger.iroha.sdk.core.model.TransactionPayload
 import org.hyperledger.iroha.sdk.core.util.HashLiteral
 import org.hyperledger.iroha.sdk.norito.NoritoHeader
 import org.hyperledger.iroha.sdk.numeric.KotodamaQuantity
@@ -625,13 +626,11 @@ class AliasSetupModelsTest {
         val receipt = AccountOnboardingPlanReceiptV1(body, "03".repeat(32), "AA")
         val encoded = JsonEncoder.encode(receipt.toJsonMap()).toByteArray(StandardCharsets.UTF_8)
         assertEquals(receipt, AccountOnboardingJsonParser.parseReceipt(encoded))
-        val binding = TairaPublicResetMutationBindingV1(
-            authorizationSha256 = "11".repeat(32),
-            authorizationNonce = "onboarding-fixture-nonce-0000001",
-            kind = TairaPublicResetMutationBindingV1.ONBOARDING,
-            phase = "onboarding",
-            idempotencyKey = "22".repeat(32),
-            executionExpiresAtUnixMs = 4_102_444_800_000,
+        val binding = PreparedOperationBindingV1(
+            semanticHashHex = receipt.planHash,
+            kind = PreparedOperationBindingV1.ONBOARDING,
+            requestId = "22".repeat(32),
+            executionExpiresAtUnixMs = receipt.body.validUntilMs,
         )
         val feePayment = FeePaymentIntent.authority(emptyList())
         val prepare = AccountOnboardingPrepareRequestV1(binding, receipt, feePayment).toJsonMap()
@@ -640,15 +639,8 @@ class AliasSetupModelsTest {
         assertTrue(JsonEncoder.encode(prepare).contains("\"schema\":\"iroha.accounts.onboard.prepare.v1\""))
         assertEquals(feePayment.toJsonMap(), prepare["fee_payment"])
 
-        val faucetBinding = TairaPublicResetMutationBindingV1(
-            authorizationSha256 = "33".repeat(32),
-            authorizationNonce = "faucet-fixture-nonce-00000000001",
-            kind = TairaPublicResetMutationBindingV1.FAUCET,
-            phase = "faucet",
-            idempotencyKey = "44".repeat(32),
-            executionExpiresAtUnixMs = 4_102_444_800_000,
-        )
         val claim = AccountFaucetClaimV1(account(0x22), BigInteger.valueOf(42), "0001020304050607")
+        val faucetBinding = PreparedOperationBindingV1.faucet(claim, "44".repeat(32), 4_102_444_800_000)
         val faucetPrepare = AccountFaucetPrepareRequestV1(faucetBinding, claim, feePayment).toJsonMap()
         assertEquals(AccountFaucetPrepareRequestV1.SCHEMA, faucetPrepare["schema"])
         assertEquals(claim.toJsonMap(), faucetPrepare["claim"])
@@ -844,6 +836,79 @@ class AliasSetupModelsTest {
                 body.networkId,
                 authority,
             )
+        }
+    }
+
+    @Test
+    fun publicOperationBindingUsesSignedReceiptAndRejectsSubstitution() {
+        val signer = Ed25519PrivateKeyParameters(ByteArray(32) { 0x51.toByte() }, 0)
+        val authority = AccountAddress.fromAccount(signer.generatePublicKey().encoded, "ed25519")
+            .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
+        val receipt = signedOnboardingReceipt(onboardingBody(authority), signer)
+        val requestId = "12".repeat(32)
+        val binding = PreparedOperationBindingV1.onboarding(receipt, requestId, receipt.body.validUntilMs)
+        assertEquals(hex(AccountOnboardingReceiptVerifier.canonicalHash(receipt.body)), binding.semanticHashHex)
+        assertEquals(requestId, binding.requestId)
+        assertEquals(binding.toJsonMap(), PreparedOperationBindingV1.onboarding(receipt, requestId, 50_000).toJsonMap())
+        val feePayment = FeePaymentIntent.authority(emptyList())
+        AccountOnboardingPrepareRequestV1(binding, receipt, feePayment)
+        assertFailsWith<IllegalArgumentException> {
+            PreparedOperationBindingV1.onboarding(receipt, requestId, receipt.body.validUntilMs + 1)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            PreparedOperationBindingV1.onboarding(
+                AccountOnboardingPlanReceiptV1(receipt.body, receipt.planHash, "00".repeat(64)),
+                requestId,
+                50_000,
+            )
+        }
+        val differentReceipt = signedOnboardingReceipt(onboardingBody(authority, OTHER_NETWORK_ID), signer)
+        assertFailsWith<IllegalArgumentException> {
+            AccountOnboardingPrepareRequestV1(binding, differentReceipt, feePayment)
+        }
+    }
+
+    @Test
+    fun publicOperationBindingParserRejectsPrivateCustodyFields() {
+        val binding = PreparedOperationBindingV1(semanticHashHex = "03".repeat(32), kind = "onboarding", requestId = "12".repeat(32), executionExpiresAtUnixMs = 50_000)
+        fun response(fields: Map<String, Any?>): ByteArray = JsonEncoder.encode(
+            linkedMapOf(
+                "schema" to PreparedTransactionSubmitResponseV1.SCHEMA,
+                "binding" to fields,
+                "operation" to AccountOnboardingPreparedTransactionV1.OPERATION,
+                "transaction_hash_hex" to "03".repeat(32),
+                "outcome" to "Pending",
+            ),
+        ).toByteArray(StandardCharsets.UTF_8)
+        assertEquals(binding.toJsonMap(), AccountOnboardingJsonParser.parseSubmitResponse(response(binding.toJsonMap())).binding.toJsonMap())
+        for (field in listOf("authorization_sha256", "nonce", "phase", "idempotency_key")) {
+            assertFailsWith<IllegalStateException> {
+                AccountOnboardingJsonParser.parseSubmitResponse(response(binding.toJsonMap() + (field to "untrusted")))
+            }
+        }
+    }
+
+    @Test
+    fun preparedOperationLifetimeRejectsDeadlineOverrunAndOverflow() {
+        val binding = PreparedOperationBindingV1(semanticHashHex = "03".repeat(32), kind = "onboarding", requestId = "12".repeat(32), executionExpiresAtUnixMs = 50_000)
+        val payload = TransactionPayload(
+            TEST_NETWORK_ID,
+            account(0x22),
+            creationTimeMs = 49_000,
+            timeToLiveMs = 1_000,
+            feePayment = FeePaymentIntent.authority(emptyList()),
+        )
+        requirePreparedOperationLifetime(payload, binding)
+        assertFailsWith<IllegalArgumentException> {
+            requirePreparedOperationLifetime(payload.copy(timeToLiveMs = 1_001), binding)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            requirePreparedOperationLifetime(payload.copy(creationTimeMs = 50_000), binding)
+        }
+        val maximumDeadline = PreparedOperationBindingV1(semanticHashHex = "03".repeat(32), kind = "onboarding", requestId = "12".repeat(32), executionExpiresAtUnixMs = Long.MAX_VALUE)
+        requirePreparedOperationLifetime(payload.copy(creationTimeMs = Long.MAX_VALUE - 1, timeToLiveMs = 1), maximumDeadline)
+        assertFailsWith<IllegalArgumentException> {
+            requirePreparedOperationLifetime(payload.copy(creationTimeMs = Long.MAX_VALUE - 1, timeToLiveMs = 2), maximumDeadline)
         }
     }
 

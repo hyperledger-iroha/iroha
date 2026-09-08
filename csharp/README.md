@@ -87,6 +87,24 @@ API, and zeros its owned copy when disposed. `Ed25519KeyPair` follows the same o
 model; its deliberately named `ExportPrivateKeySeed()` returns a caller-owned secret
 that must also be zeroed.
 
+## Prepared onboarding and faucet operations
+
+Prepared operations use the closed `ToriiPreparedOperationBindingV1` contract:
+`schema`, `semantic_hash_hex`, `kind`, `request_id`, and
+`execution_expires_at_unix_ms`. The SDK authenticates the exact wire, signatures,
+metadata and requested fee intent against the caller's network and onboarding
+authority or faucet policy.
+
+`ToriiClient.VerifyAccountOnboardingPreparedTransactionV1` and
+`ToriiClient.VerifyAccountFaucetPreparedTransactionV1` verify retained envelopes
+without HTTP or a current-time check. Supply the independently trusted request or
+claim, binding, network, fee intent and authority/policy; onboarding also requires
+the trusted receipt and its canonical body encoder. `SubmitPreparedAccountOnboardingAsync`
+and `SubmitPreparedAccountFaucetAsync` repeat authentication and reject expired
+operations immediately before HTTP dispatch. Signed transaction TTL must be positive
+and fit within the authenticated deadline. Uncertain submissions are never replayed
+automatically.
+
 ## Quote, sign, submit, and wait
 
 The guided ledger flow freezes the transaction draft before awaiting the fee quote,

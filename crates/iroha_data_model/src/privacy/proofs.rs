@@ -141,9 +141,19 @@ impl IrohaZkAmsProofV1 {
     }
 }
 /// Protocol-typed native proof payload.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[norito(schema_name = "iroha.privacy.proof.v1")]
-#[derive(crate :: DeriveJsonSerialize, crate :: DeriveJsonDeserialize)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
+)]
 #[norito(tag = "protocol", content = "proof", deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
@@ -977,9 +987,19 @@ pub enum PrivacyProofValidationError {
     LengthOverflow,
 }
 /// Complete protocol-bound privacy proof admission envelope.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[norito(schema_name = "iroha.privacy.proof-envelope.v1")]
-#[derive(crate :: DeriveJsonSerialize, crate :: DeriveJsonDeserialize)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
@@ -2162,8 +2182,11 @@ mod exact12_fixture {
     /// discriminant next to the complete statement, envelope, instruction,
     /// intent, unsigned-payload, and signed-transaction bytes lets downstream
     /// SDKs reject cross-protocol substitution at every transaction layer.
-    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-    #[norito(schema_name = "iroha.privacy.exact12-typed-fixture-row.v1")]
+    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema, norito::NoritoSchema)]
+    #[norito_schema(
+        name = "iroha_data_model::privacy::exact12_fixture::PrivacyExact12TypedFixtureRowV1",
+        frame = "iroha.privacy.exact12-typed-fixture-row.v1"
+    )]
     pub struct PrivacyExact12TypedFixtureRowV1 {
         /// Closed protocol identity in canonical discriminant order.
         pub protocol_id: PrivacyProtocolIdV1,
@@ -2187,8 +2210,11 @@ mod exact12_fixture {
         pub signed_transaction_hash: [u8; 32],
     }
     /// Signed byte-level KAT material for all first-release privacy protocols.
-    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-    #[norito(schema_name = "iroha.privacy.exact12-typed-fixture-bundle.v1")]
+    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema, norito::NoritoSchema)]
+    #[norito_schema(
+        name = "iroha_data_model::privacy::exact12_fixture::PrivacyExact12FixtureBundleV1",
+        frame = "iroha.privacy.exact12-typed-fixture-bundle.v1"
+    )]
     pub struct PrivacyExact12FixtureBundleV1 {
         /// Exact first-release bundle version.
         pub version: u32,

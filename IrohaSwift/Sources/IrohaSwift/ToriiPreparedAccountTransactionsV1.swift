@@ -2,19 +2,20 @@ import CryptoKit
 import Foundation
 
 enum ToriiPreparedAccountProtocolV1 {
-  static let bindingSchema = "iroha.taira.public-reset.mutation-binding.v1"
-  static let preparedTransactionSchema = "iroha.taira.prepared-transaction.v1"
+  static let bindingSchema = "iroha.prepared-operation.binding.v1"
+  static let preparedTransactionSchema = "iroha.prepared-transaction.v1"
   static let onboardingPrepareSchema = "iroha.accounts.onboard.prepare.v1"
   static let onboardingProofRequiredSchema =
     "iroha.accounts.onboard.prepare-proof-required.v1"
   static let faucetPrepareSchema = "iroha.accounts.faucet.prepare.v1"
-  static let submitResponseSchema = "iroha.taira.prepared-transaction-submit.v1"
-  static let signatureTranscriptSchema = "iroha.taira.prepared-signature-transcript.v1"
-  static let signatureDomain = Data("iroha:taira:prepared-transaction:v1\0".utf8)
+  static let submitResponseSchema = "iroha.prepared-transaction-submit.v1"
+  static let signatureTranscriptSchema = "iroha.prepared-signature-transcript.v1"
+  static let signatureDomain = Data("iroha:prepared-transaction:v1\0".utf8)
   static let faucetClaimHashDomain = Data("iroha:accounts:faucet:claim:v1\0".utf8)
-  static let preparedBindingMetadataKey = "taira_public_reset_binding"
-  static let preparedOperationMetadataKey = "taira_prepared_operation"
-  static let preparedSemanticHashMetadataKey = "taira_prepared_semantic_hash"
+  static let preparedBindingMetadataKey = "prepared_operation_binding"
+  static let preparedOperationMetadataKey = "prepared_operation"
+  static let preparedSemanticHashMetadataKey = "prepared_semantic_hash"
+  static let faucetClaimMarkerVersionMetadataKey = "taira_faucet_claim_marker_version"
 
   static func rejectUnknownFields<K: CodingKey & CaseIterable>(
     from decoder: Decoder,
@@ -218,7 +219,7 @@ enum ToriiPreparedAccountProtocolV1 {
   static func baseSignatureTranscript(
     envelopeSchema: String,
     operation: ToriiPreparedAccountOperationV1,
-    binding: ToriiTairaPublicResetMutationBindingV1
+    binding: ToriiPreparedOperationBindingV1
   ) -> Data {
     var transcript = Data()
     appendFrame(signatureDomain, to: &transcript)
@@ -227,18 +228,12 @@ enum ToriiPreparedAccountProtocolV1 {
     appendField("operation", operation.rawValue, to: &transcript)
     appendField("binding.schema", binding.schema, to: &transcript)
     appendField(
-      "binding.authorization_sha256",
-      binding.authorizationSHA256,
-      to: &transcript
-    )
-    appendField(
-      "binding.authorization_nonce",
-      binding.authorizationNonce,
+      "binding.semantic_hash_hex",
+      binding.semanticHashHex,
       to: &transcript
     )
     appendField("binding.kind", binding.kind.rawValue, to: &transcript)
-    appendField("binding.phase", binding.phase, to: &transcript)
-    appendField("binding.idempotency_key", binding.idempotencyKey, to: &transcript)
+    appendField("binding.request_id", binding.requestId, to: &transcript)
     appendField(
       "binding.execution_expires_at_unix_ms",
       String(binding.executionExpiresAtUnixMs),
@@ -285,7 +280,7 @@ enum ToriiPreparedAccountProtocolV1 {
   static func validatePreparedTransaction(
     _ transaction: ToriiCanonicalTransactionDraft.SignedTransactionV1,
     feePayment: FeePaymentIntent,
-    binding: ToriiTairaPublicResetMutationBindingV1,
+    binding: ToriiPreparedOperationBindingV1,
     operation: ToriiPreparedAccountOperationV1,
     semanticHashHex: String,
     expectedAuthority: String,
@@ -306,27 +301,45 @@ enum ToriiPreparedAccountProtocolV1 {
         "prepared transaction changed the pinned network, authority, signature, or fee payment."
       )
     }
+    try validateExecutionLifetime(
+      creationTimeMs: transaction.payload.creationTimeMs,
+      timeToLiveMs: transaction.payload.timeToLiveMs,
+      deadline: binding.executionExpiresAtUnixMs
+    )
     let bindingJSON = ToriiJSONValue.object([
       "schema": .string(binding.schema),
-      "authorization_sha256": .string(binding.authorizationSHA256),
-      "authorization_nonce": .string(binding.authorizationNonce),
+      "semantic_hash_hex": .string(binding.semanticHashHex),
       "kind": .string(binding.kind.rawValue),
-      "phase": .string(binding.phase),
-      "idempotency_key": .string(binding.idempotencyKey),
+      "request_id": .string(binding.requestId),
       "execution_expires_at_unix_ms": .number(Double(binding.executionExpiresAtUnixMs)),
     ])
-    let expectedMetadata: [String: ToriiJSONValue] = [
+    var expectedMetadata: [String: ToriiJSONValue] = [
       preparedBindingMetadataKey: bindingJSON,
       preparedOperationMetadataKey: .string(operation.rawValue),
       preparedSemanticHashMetadataKey: .string(semanticHashHex),
     ]
+    if operation == .faucet {
+      expectedMetadata[faucetClaimMarkerVersionMetadataKey] = .number(1)
+    }
     guard transaction.payload.metadata == expectedMetadata,
       transaction.payload.metadataWire
         == (try ToriiCanonicalTransactionDraft.compactMetadata(expectedMetadata))
     else {
       throw ToriiClientError.invalidPayload(
-        "prepared transaction metadata differs from its exact V1 reset binding."
+        "prepared transaction metadata differs from its exact V1 operation binding."
       )
+    }
+  }
+
+  static func validateExecutionLifetime(
+    creationTimeMs: UInt64, timeToLiveMs: UInt64?, deadline: UInt64
+  ) throws {
+    guard let timeToLiveMs, timeToLiveMs > 0 else {
+      throw ToriiClientError.invalidPayload("prepared transaction requires a positive TTL.")
+    }
+    let (expiresAt, overflow) = creationTimeMs.addingReportingOverflow(timeToLiveMs)
+    guard !overflow, expiresAt <= deadline else {
+      throw ToriiClientError.invalidPayload("prepared transaction outlives its operation binding.")
     }
   }
 
@@ -373,32 +386,27 @@ public enum ToriiPreparedAccountOperationV1: String, Codable, Equatable, Sendabl
   case faucet
 }
 
-/// Exact authorization and idempotency identity committed by a prepared transaction.
-public struct ToriiTairaPublicResetMutationBindingV1: Codable, Equatable, Sendable {
+/// Exact semantic operation and persisted caller request identity committed by a prepared transaction.
+public struct ToriiPreparedOperationBindingV1: Codable, Equatable, Sendable {
   public static let schemaV1 = ToriiPreparedAccountProtocolV1.bindingSchema
 
   public let schema: String
-  public let authorizationSHA256: String
-  public let authorizationNonce: String
+  public let semanticHashHex: String
   public let kind: ToriiPreparedAccountOperationV1
-  public let phase: String
-  public let idempotencyKey: String
+  public let requestId: String
   public let executionExpiresAtUnixMs: UInt64
 
   private enum CodingKeys: String, CodingKey, CaseIterable {
-    case schema, kind, phase
-    case authorizationSHA256 = "authorization_sha256"
-    case authorizationNonce = "authorization_nonce"
-    case idempotencyKey = "idempotency_key"
+    case schema, kind
+    case semanticHashHex = "semantic_hash_hex"
+    case requestId = "request_id"
     case executionExpiresAtUnixMs = "execution_expires_at_unix_ms"
   }
 
   public init(
-    authorizationSHA256: String,
-    authorizationNonce: String,
+    semanticHashHex: String,
     kind: ToriiPreparedAccountOperationV1,
-    phase: String,
-    idempotencyKey: String,
+    requestId: String,
     executionExpiresAtUnixMs: UInt64
   ) throws {
     guard executionExpiresAtUnixMs > 0 else {
@@ -406,38 +414,22 @@ public struct ToriiTairaPublicResetMutationBindingV1: Codable, Equatable, Sendab
         "execution_expires_at_unix_ms must be a positive u64 timestamp."
       )
     }
-    guard authorizationNonce.utf8.count == 32,
-      authorizationNonce.utf8.allSatisfy({
-        (97...122).contains($0) || (48...57).contains($0) || $0 == 45 || $0 == 95
-      })
-    else {
+    guard UInt64(exactly: Double(executionExpiresAtUnixMs)) == executionExpiresAtUnixMs else {
       throw ToriiClientError.invalidPayload(
-        "authorization_nonce must be exactly 32 lowercase URL-safe characters."
-      )
-    }
-    guard !phase.isEmpty,
-      phase.utf8.count <= 128,
-      phase.utf8.allSatisfy({
-        (97...122).contains($0) || (48...57).contains($0) || $0 == 45 || $0 == 95
-      })
-    else {
-      throw ToriiClientError.invalidPayload(
-        "phase must be a canonical lowercase reset phase label."
+        "execution_expires_at_unix_ms must be exactly representable in transaction JSON metadata."
       )
     }
     schema = Self.schemaV1
-    self.authorizationSHA256 = try ToriiPreparedAccountProtocolV1.exactLowerHex(
-      authorizationSHA256,
+    self.semanticHashHex = try ToriiPreparedAccountProtocolV1.exactLowerHex(
+      semanticHashHex,
       bytes: 32,
-      field: "authorization_sha256"
+      field: "semantic_hash_hex"
     )
-    self.authorizationNonce = authorizationNonce
     self.kind = kind
-    self.phase = phase
-    self.idempotencyKey = try ToriiPreparedAccountProtocolV1.exactLowerHex(
-      idempotencyKey,
+    self.requestId = try ToriiPreparedAccountProtocolV1.exactLowerHex(
+      requestId,
       bytes: 32,
-      field: "idempotency_key"
+      field: "request_id"
     )
     self.executionExpiresAtUnixMs = executionExpiresAtUnixMs
   }
@@ -446,24 +438,38 @@ public struct ToriiTairaPublicResetMutationBindingV1: Codable, Equatable, Sendab
     try ToriiPreparedAccountProtocolV1.rejectUnknownFields(
       from: decoder,
       keys: CodingKeys.self,
-      name: "public-reset mutation binding"
+      name: "prepared-operation binding"
     )
     let container = try decoder.container(keyedBy: CodingKeys.self)
     guard try container.decode(String.self, forKey: .schema) == Self.schemaV1 else {
       throw DecodingError.dataCorruptedError(
         forKey: .schema,
         in: container,
-        debugDescription: "unsupported public-reset mutation binding schema"
+        debugDescription: "unsupported prepared-operation binding schema"
       )
     }
     try self.init(
-      authorizationSHA256: container.decode(String.self, forKey: .authorizationSHA256),
-      authorizationNonce: container.decode(String.self, forKey: .authorizationNonce),
+      semanticHashHex: container.decode(String.self, forKey: .semanticHashHex),
       kind: container.decode(ToriiPreparedAccountOperationV1.self, forKey: .kind),
-      phase: container.decode(String.self, forKey: .phase),
-      idempotencyKey: container.decode(String.self, forKey: .idempotencyKey),
+      requestId: container.decode(String.self, forKey: .requestId),
       executionExpiresAtUnixMs: container.decode(UInt64.self, forKey: .executionExpiresAtUnixMs)
     )
+  }
+
+  func validate(receipt: ToriiAccountOnboardingPlanReceipt) throws {
+    guard semanticHashHex == ToriiCanonicalHashLiteral.normalizedHex(from: receipt.planHash),
+      executionExpiresAtUnixMs <= receipt.body.validUntilMs
+    else {
+      throw ToriiClientError.invalidPayload(
+        "prepared operation binding differs from the receipt hash or validity."
+      )
+    }
+  }
+
+  func validate(claim: ToriiAccountFaucetClaimV1) throws {
+    guard semanticHashHex == (try ToriiPreparedAccountProtocolV1.faucetSemanticHash(claim)) else {
+      throw ToriiClientError.invalidPayload("prepared operation binding differs from the faucet claim.")
+    }
   }
 
   func validate(
@@ -488,7 +494,7 @@ public struct ToriiAccountOnboardingPrepareRequestV1: Codable, Equatable, Sendab
   public static let schemaV1 = ToriiPreparedAccountProtocolV1.onboardingPrepareSchema
 
   public let schema: String
-  public let binding: ToriiTairaPublicResetMutationBindingV1
+  public let binding: ToriiPreparedOperationBindingV1
   public let receipt: ToriiAccountOnboardingPlanReceipt
   public let feePayment: FeePaymentIntent
 
@@ -498,11 +504,12 @@ public struct ToriiAccountOnboardingPrepareRequestV1: Codable, Equatable, Sendab
   }
 
   public init(
-    binding: ToriiTairaPublicResetMutationBindingV1,
+    binding: ToriiPreparedOperationBindingV1,
     receipt: ToriiAccountOnboardingPlanReceipt,
     feePayment: FeePaymentIntent
   ) throws {
     try binding.validate(expectedOperation: .onboarding, activeAtUnixMs: nil)
+    try binding.validate(receipt: receipt)
     _ = try feePayment.canonicalJSONData()
     schema = Self.schemaV1
     self.binding = binding
@@ -525,7 +532,7 @@ public struct ToriiAccountOnboardingPrepareRequestV1: Codable, Equatable, Sendab
       )
     }
     try self.init(
-      binding: container.decode(ToriiTairaPublicResetMutationBindingV1.self, forKey: .binding),
+      binding: container.decode(ToriiPreparedOperationBindingV1.self, forKey: .binding),
       receipt: container.decode(ToriiAccountOnboardingPlanReceipt.self, forKey: .receipt),
       feePayment: container.decode(FeePaymentIntent.self, forKey: .feePayment)
     )
@@ -537,7 +544,7 @@ public struct ToriiAccountOnboardingPreparedTransactionV1: Codable, Equatable, S
   public static let schemaV1 = ToriiPreparedAccountProtocolV1.preparedTransactionSchema
 
   public let schema: String
-  public let binding: ToriiTairaPublicResetMutationBindingV1
+  public let binding: ToriiPreparedOperationBindingV1
   public let operation: ToriiPreparedAccountOperationV1
   public let receipt: ToriiAccountOnboardingPlanReceipt
   public let semanticHashHex: String
@@ -562,7 +569,7 @@ public struct ToriiAccountOnboardingPreparedTransactionV1: Codable, Equatable, S
   }
 
   public init(
-    binding: ToriiTairaPublicResetMutationBindingV1,
+    binding: ToriiPreparedOperationBindingV1,
     receipt: ToriiAccountOnboardingPlanReceipt,
     semanticHashHex: String,
     accountId: String,
@@ -575,6 +582,7 @@ public struct ToriiAccountOnboardingPreparedTransactionV1: Codable, Equatable, S
     serverSignature: String
   ) throws {
     try binding.validate(expectedOperation: .onboarding, activeAtUnixMs: nil)
+    try binding.validate(receipt: receipt)
     let wire = try ToriiPreparedAccountProtocolV1.wireIdentity(
       transactionHashHex: transactionHashHex,
       signedTransactionWireHex: signedTransactionWireHex,
@@ -604,6 +612,9 @@ public struct ToriiAccountOnboardingPreparedTransactionV1: Codable, Equatable, S
     self.binding = binding
     operation = .onboarding
     self.receipt = receipt
+    guard binding.semanticHashHex == semanticHashHex else {
+      throw ToriiClientError.invalidPayload("prepared binding semantic hash differs from its envelope.")
+    }
     self.semanticHashHex = try ToriiPreparedAccountProtocolV1.exactLowerHex(
       semanticHashHex,
       bytes: 32,
@@ -637,7 +648,7 @@ public struct ToriiAccountOnboardingPreparedTransactionV1: Codable, Equatable, S
       )
     }
     try self.init(
-      binding: container.decode(ToriiTairaPublicResetMutationBindingV1.self, forKey: .binding),
+      binding: container.decode(ToriiPreparedOperationBindingV1.self, forKey: .binding),
       receipt: container.decode(ToriiAccountOnboardingPlanReceipt.self, forKey: .receipt),
       semanticHashHex: container.decode(String.self, forKey: .semanticHashHex),
       accountId: container.decode(String.self, forKey: .accountId),
@@ -654,7 +665,7 @@ public struct ToriiAccountOnboardingPreparedTransactionV1: Codable, Equatable, S
 
   func validate(
     receipt expectedReceipt: ToriiAccountOnboardingPlanReceipt,
-    binding expectedBinding: ToriiTairaPublicResetMutationBindingV1,
+    binding expectedBinding: ToriiPreparedOperationBindingV1,
     semanticHashHex expectedSemanticHashHex: String,
     expectedFeePayment: FeePaymentIntent,
     expectedAuthority: String,
@@ -737,7 +748,7 @@ public struct ToriiAccountOnboardingProofRequiredPrepareResponseV1:
   public static let schemaV1 = ToriiPreparedAccountProtocolV1.onboardingProofRequiredSchema
 
   public let schema: String
-  public let binding: ToriiTairaPublicResetMutationBindingV1
+  public let binding: ToriiPreparedOperationBindingV1
   public let operation: ToriiPreparedAccountOperationV1
   public let outcome: String
   public let proofKind: String
@@ -756,7 +767,7 @@ public struct ToriiAccountOnboardingProofRequiredPrepareResponseV1:
   }
 
   public init(
-    binding: ToriiTairaPublicResetMutationBindingV1,
+    binding: ToriiPreparedOperationBindingV1,
     semanticHashHex: String,
     accountId: String,
     alias: String,
@@ -774,6 +785,9 @@ public struct ToriiAccountOnboardingProofRequiredPrepareResponseV1:
     operation = .onboarding
     outcome = "ProofRequired"
     proofKind = "account_alias_current_state"
+    guard binding.semanticHashHex == semanticHashHex else {
+      throw ToriiClientError.invalidPayload("prepared binding semantic hash differs from its envelope.")
+    }
     self.semanticHashHex = try ToriiPreparedAccountProtocolV1.exactLowerHex(
       semanticHashHex,
       bytes: 32,
@@ -808,7 +822,7 @@ public struct ToriiAccountOnboardingProofRequiredPrepareResponseV1:
       )
     }
     try self.init(
-      binding: container.decode(ToriiTairaPublicResetMutationBindingV1.self, forKey: .binding),
+      binding: container.decode(ToriiPreparedOperationBindingV1.self, forKey: .binding),
       semanticHashHex: container.decode(String.self, forKey: .semanticHashHex),
       accountId: container.decode(String.self, forKey: .accountId),
       alias: container.decode(String.self, forKey: .alias),
@@ -819,10 +833,11 @@ public struct ToriiAccountOnboardingProofRequiredPrepareResponseV1:
 
   func validate(
     receipt: ToriiAccountOnboardingPlanReceipt,
-    binding expectedBinding: ToriiTairaPublicResetMutationBindingV1,
+    binding expectedBinding: ToriiPreparedOperationBindingV1,
     semanticHashHex expectedSemanticHashHex: String,
     expectedAuthority: String
   ) throws {
+    try binding.validate(receipt: receipt)
     guard binding == expectedBinding,
       semanticHashHex == expectedSemanticHashHex,
       accountId == receipt.body.request.accountId,
@@ -1220,7 +1235,7 @@ public struct ToriiAccountFaucetPrepareRequestV1: Codable, Equatable, Sendable {
   public static let schemaV1 = ToriiPreparedAccountProtocolV1.faucetPrepareSchema
 
   public let schema: String
-  public let binding: ToriiTairaPublicResetMutationBindingV1
+  public let binding: ToriiPreparedOperationBindingV1
   public let claim: ToriiAccountFaucetClaimV1
   public let feePayment: FeePaymentIntent
 
@@ -1230,11 +1245,12 @@ public struct ToriiAccountFaucetPrepareRequestV1: Codable, Equatable, Sendable {
   }
 
   public init(
-    binding: ToriiTairaPublicResetMutationBindingV1,
+    binding: ToriiPreparedOperationBindingV1,
     claim: ToriiAccountFaucetClaimV1,
     feePayment: FeePaymentIntent
   ) throws {
     try binding.validate(expectedOperation: .faucet, activeAtUnixMs: nil)
+    try binding.validate(claim: claim)
     _ = try feePayment.canonicalJSONData()
     schema = Self.schemaV1
     self.binding = binding
@@ -1257,7 +1273,7 @@ public struct ToriiAccountFaucetPrepareRequestV1: Codable, Equatable, Sendable {
       )
     }
     try self.init(
-      binding: container.decode(ToriiTairaPublicResetMutationBindingV1.self, forKey: .binding),
+      binding: container.decode(ToriiPreparedOperationBindingV1.self, forKey: .binding),
       claim: container.decode(ToriiAccountFaucetClaimV1.self, forKey: .claim),
       feePayment: container.decode(FeePaymentIntent.self, forKey: .feePayment)
     )
@@ -1269,7 +1285,7 @@ public struct ToriiAccountFaucetPreparedTransactionV1: Codable, Equatable, Senda
   public static let schemaV1 = ToriiPreparedAccountProtocolV1.preparedTransactionSchema
 
   public let schema: String
-  public let binding: ToriiTairaPublicResetMutationBindingV1
+  public let binding: ToriiPreparedOperationBindingV1
   public let operation: ToriiPreparedAccountOperationV1
   public let claim: ToriiAccountFaucetClaimV1
   public let semanticHashHex: String
@@ -1297,7 +1313,7 @@ public struct ToriiAccountFaucetPreparedTransactionV1: Codable, Equatable, Senda
   }
 
   public init(
-    binding: ToriiTairaPublicResetMutationBindingV1,
+    binding: ToriiPreparedOperationBindingV1,
     claim: ToriiAccountFaucetClaimV1,
     semanticHashHex: String,
     accountId: String,
@@ -1311,6 +1327,7 @@ public struct ToriiAccountFaucetPreparedTransactionV1: Codable, Equatable, Senda
     serverSignature: String
   ) throws {
     try binding.validate(expectedOperation: .faucet, activeAtUnixMs: nil)
+    try binding.validate(claim: claim)
     let wire = try ToriiPreparedAccountProtocolV1.wireIdentity(
       transactionHashHex: transactionHashHex,
       signedTransactionWireHex: signedTransactionWireHex,
@@ -1332,6 +1349,9 @@ public struct ToriiAccountFaucetPreparedTransactionV1: Codable, Equatable, Senda
     self.binding = binding
     operation = .faucet
     self.claim = claim
+    guard binding.semanticHashHex == semanticHashHex else {
+      throw ToriiClientError.invalidPayload("prepared binding semantic hash differs from its envelope.")
+    }
     self.semanticHashHex = try ToriiPreparedAccountProtocolV1.exactLowerHex(
       semanticHashHex,
       bytes: 32,
@@ -1372,7 +1392,7 @@ public struct ToriiAccountFaucetPreparedTransactionV1: Codable, Equatable, Senda
       )
     }
     try self.init(
-      binding: container.decode(ToriiTairaPublicResetMutationBindingV1.self, forKey: .binding),
+      binding: container.decode(ToriiPreparedOperationBindingV1.self, forKey: .binding),
       claim: container.decode(ToriiAccountFaucetClaimV1.self, forKey: .claim),
       semanticHashHex: container.decode(String.self, forKey: .semanticHashHex),
       accountId: container.decode(String.self, forKey: .accountId),
@@ -1390,7 +1410,7 @@ public struct ToriiAccountFaucetPreparedTransactionV1: Codable, Equatable, Senda
 
   func validate(
     claim expectedClaim: ToriiAccountFaucetClaimV1,
-    binding expectedBinding: ToriiTairaPublicResetMutationBindingV1,
+    binding expectedBinding: ToriiPreparedOperationBindingV1,
     expectedFeePayment: FeePaymentIntent,
     policy: ToriiAccountFaucetPolicyV1,
     expectedNetworkId: NetworkId
@@ -1495,7 +1515,7 @@ public struct ToriiPreparedTransactionSubmitResponseV1: Codable, Equatable, Send
   public static let schemaV1 = ToriiPreparedAccountProtocolV1.submitResponseSchema
 
   public let schema: String
-  public let binding: ToriiTairaPublicResetMutationBindingV1
+  public let binding: ToriiPreparedOperationBindingV1
   public let operation: ToriiPreparedAccountOperationV1
   public let transactionHashHex: String
   public let outcome: ToriiPreparedTransactionOutcomeV1
@@ -1506,7 +1526,7 @@ public struct ToriiPreparedTransactionSubmitResponseV1: Codable, Equatable, Send
   }
 
   public init(
-    binding: ToriiTairaPublicResetMutationBindingV1,
+    binding: ToriiPreparedOperationBindingV1,
     operation: ToriiPreparedAccountOperationV1,
     transactionHashHex: String,
     outcome: ToriiPreparedTransactionOutcomeV1
@@ -1538,7 +1558,7 @@ public struct ToriiPreparedTransactionSubmitResponseV1: Codable, Equatable, Send
       )
     }
     try self.init(
-      binding: container.decode(ToriiTairaPublicResetMutationBindingV1.self, forKey: .binding),
+      binding: container.decode(ToriiPreparedOperationBindingV1.self, forKey: .binding),
       operation: container.decode(ToriiPreparedAccountOperationV1.self, forKey: .operation),
       transactionHashHex: container.decode(String.self, forKey: .transactionHashHex),
       outcome: container.decode(ToriiPreparedTransactionOutcomeV1.self, forKey: .outcome)
@@ -1546,7 +1566,7 @@ public struct ToriiPreparedTransactionSubmitResponseV1: Codable, Equatable, Send
   }
 
   func validate(
-    binding expectedBinding: ToriiTairaPublicResetMutationBindingV1,
+    binding expectedBinding: ToriiPreparedOperationBindingV1,
     operation expectedOperation: ToriiPreparedAccountOperationV1,
     transactionHashHex expectedTransactionHashHex: String,
     httpStatus: Int

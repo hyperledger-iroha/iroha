@@ -445,6 +445,10 @@ pub enum PrivateSettlementProofProfileV1 {
     crate :: DeriveJsonDeserialize,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_data_model::nexus::private_settlement::PrivateSettlementProofStatementV1"
+)]
 pub struct PrivateSettlementProofStatementV1 {
     /// Statement wire version.
     pub version: u8,
@@ -1423,7 +1427,10 @@ struct PrivateSettlementAuditOutputCommitmentMaterialV1 {
     dummy_domain: Option<Hash>,
 }
 
-#[derive(Encode)]
+#[derive(Encode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_data_model::nexus::private_settlement::PrivateSettlementAuditCommitmentMaterialV1"
+)]
 struct PrivateSettlementAuditCommitmentMaterialV1 {
     version: u8,
     network_id: NetworkId,
@@ -1448,7 +1455,10 @@ struct PrivateSettlementAuditCommitmentMaterialV1 {
     outputs: Vec<PrivateSettlementAuditOutputCommitmentMaterialV1>,
 }
 
-#[derive(Encode)]
+#[derive(Encode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_data_model::nexus::private_settlement::PrivateSettlementReimbursementTermsMaterialV1"
+)]
 struct PrivateSettlementReimbursementTermsMaterialV1 {
     network_id: NetworkId,
     leg_ordinal: u8,
@@ -4939,3 +4949,25 @@ pub(crate) mod tests;
 
 #[cfg(test)]
 mod captured_private_settlement_ordinary_schema_tests;
+
+#[cfg(test)]
+mod frame_owner_identity_tests {
+    //! Frame roots observed in the original codec before the identity cutover.
+
+    #[test]
+    fn captured_frame_owner_identities() {
+        crate::frame_owner_identity_tests::assert_serialize::<
+            super::PrivateSettlementAuditCommitmentMaterialV1,
+        >(
+            "iroha_data_model::nexus::private_settlement::PrivateSettlementAuditCommitmentMaterialV1",
+        );
+        crate::frame_owner_identity_tests::assert_bidirectional::<
+            super::PrivateSettlementProofStatementV1,
+        >("iroha_data_model::nexus::private_settlement::PrivateSettlementProofStatementV1");
+        crate::frame_owner_identity_tests::assert_serialize::<
+            super::PrivateSettlementReimbursementTermsMaterialV1,
+        >(
+            "iroha_data_model::nexus::private_settlement::PrivateSettlementReimbursementTermsMaterialV1",
+        );
+    }
+}

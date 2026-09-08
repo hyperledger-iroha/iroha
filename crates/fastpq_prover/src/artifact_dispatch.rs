@@ -56,8 +56,11 @@ mod tests {
 
     use super::*;
 
-    #[derive(Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
-    #[norito(schema_name = "fastpq_prover::artifact_dispatch::LegacyFixtureV1")]
+    #[derive(Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+    #[norito_schema(
+        name = "fastpq_prover::artifact_dispatch::tests::LegacyFixture",
+        frame = "fastpq_prover::artifact_dispatch::LegacyFixtureV1"
+    )]
     struct LegacyFixture {
         number: u64,
         bytes: Vec<u8>,
@@ -77,8 +80,8 @@ mod tests {
 
     #[test]
     fn compact_dispatch_uses_distinct_exact_model_schema_identities() {
-        let ordinary = <FastpqOrdinaryCompactArtifactV1 as NoritoSerialize>::schema_hash();
-        let axt = <FastpqAxtCompactArtifactV1 as NoritoSerialize>::schema_hash();
+        let ordinary = norito::schema::identity::frame_hash::<FastpqOrdinaryCompactArtifactV1>();
+        let axt = norito::schema::identity::frame_hash::<FastpqAxtCompactArtifactV1>();
         assert_eq!(
             ordinary,
             norito::core::schema_hash_for_name(FASTPQ_ORDINARY_COMPACT_ARTIFACT_V1_SCHEMA_NAME)
@@ -88,7 +91,8 @@ mod tests {
             norito::core::schema_hash_for_name(FASTPQ_AXT_COMPACT_ARTIFACT_V1_SCHEMA_NAME)
         );
         assert_ne!(ordinary, axt);
-        let legacy = <crate::axt_binding::AxtFastpqProofPayload as NoritoSerialize>::schema_hash();
+        let legacy =
+            norito::schema::identity::frame_hash::<crate::axt_binding::AxtFastpqProofPayload>();
         assert_ne!(legacy, ordinary);
         assert_ne!(legacy, axt);
     }

@@ -46,7 +46,7 @@ impl EscrowId {
         Self(Hash::new(format!("{KOTODAMA_ESCROW_ID_PREFIX}{name}")))
     }
 }
-impl norito::core::NoritoSerialize for EscrowId {}
+
 impl norito::core::SerializePayload for EscrowId {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         norito::core::SerializePayload::serialize(&self.0, writer)
@@ -58,7 +58,7 @@ impl norito::core::SerializePayload for EscrowId {
         norito::core::SerializePayload::encoded_len_exact(&self.0)
     }
 }
-impl norito::core::NoritoDeserialize<'_> for EscrowId {}
+
 impl<'de> norito::core::DeserializePayload<'de> for EscrowId {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("archived escrow id must be a canonical hash")

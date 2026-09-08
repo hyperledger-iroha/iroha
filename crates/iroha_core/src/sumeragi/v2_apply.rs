@@ -5570,7 +5570,7 @@ mod fastpq_submission_tests {
             public_inputs: Some(public_inputs),
             tx_set_hash: Some(tx_set_hash),
             entry_dataspaces: BTreeMap::from([(entry_hash, entry_dsid)]),
-            source_inventory: Some(Arc::clone(&inventory)),
+            _source_inventory: Some(Arc::clone(&inventory)),
         };
         let captured = RefCell::new(None);
 
@@ -5595,7 +5595,7 @@ mod fastpq_submission_tests {
         assert_eq!(actual_public_inputs.perm_root, public_inputs.perm_root);
         assert_eq!(job.context.tx_set_hash, Some(tx_set_hash));
         assert!(Arc::ptr_eq(
-            job.context.source_inventory.as_ref().unwrap(),
+            job.context._source_inventory.as_ref().unwrap(),
             &inventory
         ));
         assert_eq!(

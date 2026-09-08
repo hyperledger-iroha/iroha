@@ -9,9 +9,7 @@ use core::ops::Deref;
 use iroha_schema::{IntoSchema, MetaMap, Metadata, TypeId, VecMeta};
 #[cfg(feature = "json")]
 use norito::json::{self, JsonDeserialize, JsonSerialize};
-use norito::{
-    DeserializePayload, NoritoDeserialize, NoritoSerialize, SerializePayload, core as ncore,
-};
+use norito::{DeserializePayload, SerializePayload, core as ncore};
 use std::{boxed::Box, format, string::String, vec::Vec};
 ffi::ffi_item! {
     /// Stores bytes that are not supposed to change during the runtime of the
@@ -122,7 +120,7 @@ where
         Ok(ConstVec::from(values))
     }
 }
-impl<T: NoritoSerialize> NoritoSerialize for ConstVec<T> {}
+
 impl<T: SerializePayload> SerializePayload for ConstVec<T> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
         ncore::write_element_sequence::<T, _>(writer, self.0.iter(), ncore::max_archive_len())
@@ -205,10 +203,6 @@ where
     Ok(ConstVec::from(items))
 }
 
-impl<T> NoritoDeserialize<'_> for ConstVec<T> where
-    T: for<'de> NoritoDeserialize<'de> + SerializePayload
-{
-}
 impl<'a, T> DeserializePayload<'a> for ConstVec<T>
 where
     T: for<'de> DeserializePayload<'de> + SerializePayload,
@@ -291,7 +285,7 @@ mod tests {
     #[repr(transparent)]
     #[derive(Clone, Debug, PartialEq, Eq)]
     struct InexactBytes(Vec<u8>);
-    impl norito::NoritoSerialize for InexactBytes {}
+
     impl norito::SerializePayload for InexactBytes {
         fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
             self.0.serialize(writer)
@@ -307,7 +301,7 @@ mod tests {
     }
     #[derive(Clone, Debug, PartialEq, Eq)]
     struct InexactByte(u8);
-    impl norito::NoritoSerialize for InexactByte {}
+
     impl norito::SerializePayload for InexactByte {
         fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
             self.0.serialize(writer)
@@ -322,7 +316,7 @@ mod tests {
     #[test]
     fn packed_serialization_rejects_a_changed_counted_payload() {
         struct Growing(Cell<usize>);
-        impl NoritoSerialize for Growing {}
+
         impl SerializePayload for Growing {
             fn serialize(
                 &self,
@@ -345,7 +339,7 @@ mod tests {
     #[test]
     fn nested_const_vec_measurement_visits_each_leaf_once_in_every_layout() {
         struct Leaf<'a>(&'a Cell<usize>);
-        impl NoritoSerialize for Leaf<'_> {}
+
         impl SerializePayload for Leaf<'_> {
             fn serialize(&self, writer: &mut ncore::Encoder<'_>) -> Result<(), ncore::Error> {
                 self.0.set(self.0.get() + 1);

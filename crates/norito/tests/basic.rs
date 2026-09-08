@@ -7,17 +7,41 @@ use norito::{
     },
     deserialize_from, serialize_into,
 };
-#[derive(Debug, PartialEq, NoritoSerialize, NoritoDeserialize, iroha_schema::IntoSchema)]
+#[derive(
+    Debug,
+    PartialEq,
+    NoritoSerialize,
+    NoritoDeserialize,
+    iroha_schema::IntoSchema,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "norito.test.basic.TestData")]
 struct TestData {
     a: u32,
     b: bool,
 }
-#[derive(Debug, PartialEq, NoritoSerialize, NoritoDeserialize, iroha_schema::IntoSchema)]
+#[derive(
+    Debug,
+    PartialEq,
+    NoritoSerialize,
+    NoritoDeserialize,
+    iroha_schema::IntoSchema,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "norito.test.basic.VecStruct")]
 struct VecStruct {
     flag: bool,
     values: Vec<u8>,
 }
-#[derive(Debug, PartialEq, NoritoSerialize, NoritoDeserialize, iroha_schema::IntoSchema)]
+#[derive(
+    Debug,
+    PartialEq,
+    NoritoSerialize,
+    NoritoDeserialize,
+    iroha_schema::IntoSchema,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "norito.test.basic.OptionStruct")]
 struct OptionStruct {
     value: Option<[u8; 32]>,
 }

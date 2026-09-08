@@ -131,6 +131,9 @@ pqcrypto-mldsa = { version = "0.1.2", default-features = false, features = ["std
 [target.'cfg(not(all(target_os = "windows", target_arch = "aarch64")))'.dependencies]
 pqcrypto-mldsa = { version = "0.1.2", optional = true }
 
+[target.'cfg(any(target_os = "linux", target_os = "android"))'.dependencies]
+rustix = { version = "1.1.4", features = ["fs"] }
+
 [dev-dependencies]
 criterion = { workspace = true }
 norito = { workspace = true, default-features = false, features = ["compression"] }

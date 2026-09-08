@@ -26,6 +26,10 @@ use eyre::WrapErr as _;
 use iroha_crypto::Hash;
 use iroha_data_model::soracloud::SoraResourceLimitsV1;
 
+#[path = "inrou_cgroup/io_device.rs"]
+mod io_device;
+use io_device::InrouCgroupIoDevice;
+
 const INROU_CGROUP2_MOUNT: &str = "/sys/fs/cgroup";
 const INROU_CGROUP_SUBTREE_NAME: &str = "iroha-inrou-v1";
 const INROU_CGROUP_WORKER_PREFIX: &str = "worker-";
@@ -88,12 +92,6 @@ struct InrouCgroupLimits {
     io_write_bytes_per_sec: u64,
     io_read_iops: u64,
     io_write_iops: u64,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-struct InrouCgroupIoDevice {
-    major: u32,
-    minor: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -909,7 +907,7 @@ impl InrouWorkerCgroup {
             write_control(
                 &io_max_path,
                 &format_inrou_io_max_line(*device, *io_limits),
-                "Inrou io.max",
+                &format!("Inrou io.max device {}:{}", device.major, device.minor),
             )?;
         }
         let actual_io = parse_inrou_io_max(&read_bounded_text(
@@ -1232,7 +1230,7 @@ fn resolve_inrou_cgroup_io_devices(
     if io_backing_paths.is_empty() {
         eyre::bail!("Inrou cgroup IO confinement requires at least one VM backing path");
     }
-    io_backing_paths
+    let devices = io_backing_paths
         .iter()
         .map(|path| {
             let metadata = fs::metadata(path)
@@ -1250,7 +1248,8 @@ fn resolve_inrou_cgroup_io_devices(
             }
             Ok(InrouCgroupIoDevice { major, minor })
         })
-        .collect()
+        .collect::<eyre::Result<BTreeSet<_>>>()?;
+    io_device::resolve_inrou_whole_io_devices(&devices, Path::new("/sys"))
 }
 
 fn inrou_cgroup_worker_name(key: InrouCgroupWorkerKey<'_>) -> String {

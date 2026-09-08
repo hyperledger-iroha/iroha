@@ -1,4 +1,3 @@
-#![allow(unexpected_cfgs)]
 //! pass: allowed attributes on named fields
 #[derive(norito::NoritoSerialize, norito::NoritoDeserialize)]
 struct WithAttrs {

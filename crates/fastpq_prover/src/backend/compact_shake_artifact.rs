@@ -140,7 +140,6 @@ pub(in crate::backend) fn diagnostic_profile_id() -> FastpqCompactProfileIdV1 {
 
 /// Fixed nominal description of the full-domain artifact's complete value relation.
 #[derive(NoritoSerialize)]
-#[norito(schema_name = "fastpq_prover::compact_candidate::QuantityArtifactProfileV1")]
 struct QuantityArtifactProfile {
     version: u16,
     protocol_identity: Vec<u8>,

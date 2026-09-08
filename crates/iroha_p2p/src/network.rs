@@ -584,6 +584,14 @@ struct RelayMessage<T> {
     origin_signature: Vec<u8>,
     payload: T,
 }
+impl<T: norito::NoritoSchema> norito::NoritoSchema for RelayMessage<T> {
+    fn nominal_name() -> String {
+        norito::schema::identity::generic_name(
+            "iroha_p2p::network::RelayMessage",
+            &[T::nominal_name()],
+        )
+    }
+}
 impl<'a, T> ncore::DecodeFromSlice<'a> for RelayMessage<T>
 where
     T: ncore::NoritoSerialize + for<'de> ncore::NoritoDeserialize<'de>,
@@ -8876,6 +8884,23 @@ mod accept_stream_tests {
     #[allow(unused_imports)]
     use quinn::crypto::rustls::QuicClientConfig;
     use std::time::Duration;
+    #[test]
+    fn captured_original_test_payload_identities() {
+        crate::frame_identity_tests::test_payload_identity::<Dummy>(
+            "iroha_p2p::network::accept_stream_tests::Dummy",
+        );
+        crate::frame_identity_tests::test_payload_identity::<DummyConsensus>(
+            "iroha_p2p::network::accept_stream_tests::DummyConsensus",
+        );
+        crate::frame_identity_tests::test_payload_identity::<DummyConsensusPayload>(
+            "iroha_p2p::network::accept_stream_tests::DummyConsensusPayload",
+        );
+        crate::frame_identity_tests::test_payload_identity::<DummyConsensusChunk>(
+            "iroha_p2p::network::accept_stream_tests::DummyConsensusChunk",
+        );
+    }
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_p2p::network::accept_stream_tests::Dummy")]
     #[derive(Clone, Debug, Decode, Encode)]
     struct Dummy;
     fn test_node_key_pair() -> KeyPair {
@@ -8938,6 +8963,8 @@ mod accept_stream_tests {
         };
     }
     impl_decode_from_slice_via_codec!(Dummy);
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_p2p::network::accept_stream_tests::DummyConsensus")]
     #[derive(Clone, Debug, Decode, Encode)]
     struct DummyConsensus;
     impl message::ClassifyTopic for DummyConsensus {
@@ -8949,6 +8976,8 @@ mod accept_stream_tests {
         }
     }
     impl_decode_from_slice_via_codec!(DummyConsensus);
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_p2p::network::accept_stream_tests::DummyConsensusPayload")]
     #[derive(Clone, Debug, Decode, Encode)]
     struct DummyConsensusPayload;
     impl message::ClassifyTopic for DummyConsensusPayload {
@@ -8960,6 +8989,8 @@ mod accept_stream_tests {
         }
     }
     impl_decode_from_slice_via_codec!(DummyConsensusPayload);
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_p2p::network::accept_stream_tests::DummyConsensusChunk")]
     #[derive(Clone, Debug, Decode, Encode)]
     struct DummyConsensusChunk;
     impl message::ClassifyTopic for DummyConsensusChunk {
@@ -11141,6 +11172,14 @@ mod quic_tests {
     use iroha_primitives::addr::socket_addr;
     use norito::codec::{Decode, Encode};
     use std::sync::Arc;
+    #[test]
+    fn captured_original_test_payload_identities() {
+        crate::frame_identity_tests::test_payload_identity::<Dummy>(
+            "iroha_p2p::network::quic_tests::Dummy",
+        );
+    }
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_p2p::network::quic_tests::Dummy")]
     #[derive(Clone, Debug, Decode, Encode)]
     struct Dummy;
     impl<'a> ncore::DecodeFromSlice<'a> for Dummy {
@@ -15904,8 +15943,39 @@ mod tests {
     use std::collections::{BTreeSet, HashSet};
     use std::sync::{Mutex, OnceLock};
     use tokio::sync::mpsc::error::TryRecvError;
+    #[test]
+    fn captured_original_test_payload_identities() {
+        crate::frame_identity_tests::test_payload_identity::<DummyMsg>(
+            "iroha_p2p::network::tests::DummyMsg",
+        );
+        crate::frame_identity_tests::test_payload_identity::<TamperableMsg>(
+            "iroha_p2p::network::tests::TamperableMsg",
+        );
+        crate::frame_identity_tests::test_payload_identity::<SafetyMsg>(
+            "iroha_p2p::network::tests::SafetyMsg",
+        );
+        crate::frame_identity_tests::test_payload_identity::<TrustGossipMsg>(
+            "iroha_p2p::network::tests::TrustGossipMsg",
+        );
+        crate::frame_identity_tests::test_payload_identity::<PeerGossipMsg>(
+            "iroha_p2p::network::tests::PeerGossipMsg",
+        );
+        crate::frame_identity_tests::test_payload_identity::<TopicMsg>(
+            "iroha_p2p::network::tests::TopicMsg",
+        );
+        crate::frame_identity_tests::test_payload_identity::<RouteMsg>(
+            "iroha_p2p::network::tests::RouteMsg",
+        );
+        crate::frame_identity_tests::test_payload_identity::<DeferredProgressMsg>(
+            "iroha_p2p::network::tests::DeferredProgressMsg",
+        );
+    }
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_p2p::network::tests::DummyMsg")]
     #[derive(Clone, Debug, Decode, Encode)]
     struct DummyMsg;
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_p2p::network::tests::TamperableMsg")]
     #[derive(Clone, Debug, Decode, Encode)]
     struct TamperableMsg {
         tag: u8,
@@ -15916,6 +15986,8 @@ mod tests {
         }
     }
     impl message::ClassifyTopic for Vec<u8> {}
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_p2p::network::tests::SafetyMsg")]
     #[derive(Clone, Copy, Debug, Decode, Encode, PartialEq, Eq)]
     struct SafetyMsg(u8);
     impl message::ClassifyTopic for SafetyMsg {
@@ -15926,6 +15998,8 @@ mod tests {
             message::ProgressReconstruction::Retransmit
         }
     }
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_p2p::network::tests::TrustGossipMsg")]
     #[derive(Clone, Copy, Debug, Decode, Encode)]
     struct TrustGossipMsg;
     impl message::ClassifyTopic for TrustGossipMsg {
@@ -15933,6 +16007,8 @@ mod tests {
             message::Topic::TrustGossip
         }
     }
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_p2p::network::tests::PeerGossipMsg")]
     #[derive(Clone, Copy, Debug, Decode, Encode)]
     struct PeerGossipMsg;
     impl message::ClassifyTopic for PeerGossipMsg {
@@ -15940,6 +16016,8 @@ mod tests {
             message::Topic::PeerGossip
         }
     }
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_p2p::network::tests::TopicMsg")]
     #[derive(Clone, Copy, Debug, Decode, Encode)]
     enum TopicMsg {
         Trust,
@@ -15953,6 +16031,8 @@ mod tests {
             }
         }
     }
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_p2p::network::tests::RouteMsg")]
     #[derive(Clone, Copy, Debug, Decode, Encode, PartialEq, Eq)]
     enum RouteMsg {
         Control,
@@ -16058,6 +16138,8 @@ mod tests {
             );
         }
     }
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_p2p::network::tests::DeferredProgressMsg")]
     #[derive(Clone, Copy, Debug, Decode, Encode, PartialEq, Eq)]
     enum DeferredProgressMsg {
         Safety(u8),
@@ -26881,3 +26963,6 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
         }
     }
 }
+
+#[cfg(test)]
+mod frame_identity_tests;

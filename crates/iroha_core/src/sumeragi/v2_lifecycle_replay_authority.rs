@@ -1933,6 +1933,11 @@ impl RecoveredLifecycleNextWalVoteSealV1 {
     }
 }
 impl RecoveredLifecycleNextWalVoteCandidateProjectionV1 {
+    /// Borrow a WAL-derived candidate only to construct exact durable crash fixtures.
+    #[cfg(test)]
+    pub(super) fn candidate_for_continuation_test(&self) -> &CandidateAdmission {
+        &self.candidate
+    }
     /// Revalidate the full retained executable seal, pending owner, candidate,
     /// and canonical standalone Ready/Effect geometry.
     pub(in crate::sumeragi) fn is_exact(&self, verified: &VerifiedHeightContext) -> bool {

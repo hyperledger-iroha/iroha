@@ -17,7 +17,11 @@ use norito::derive::{NoritoDeserialize, NoritoSerialize};
     clippy::struct_excessive_bools,
     reason = "first-release consensus telemetry exposes independent status flags without compatibility aliases"
 )]
-#[norito(schema_name = "iroha_telemetry::metrics::SumeragiConsensusStatus")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii_shared::status::consensus::SumeragiConsensusStatus",
+    frame = "iroha_telemetry::metrics::SumeragiConsensusStatus"
+)]
 pub struct SumeragiConsensusStatus {
     /// Current runtime consensus mode tag.
     pub mode_tag: String,
@@ -99,4 +103,14 @@ pub struct SumeragiConsensusStatus {
     pub lane_governance_sealed_total: u32,
     /// Aliases of lanes that remain sealed awaiting governance manifests.
     pub lane_governance_sealed_aliases: Vec<String>,
+}
+
+#[cfg(test)]
+mod captured_frame_identity_tests {
+    #[test]
+    fn observed_declared_identities() {
+        crate::captured_identity_tests::assert_bidirectional::<super::SumeragiConsensusStatus>(
+            "iroha_torii_shared::status::consensus::SumeragiConsensusStatus",
+        );
+    }
 }

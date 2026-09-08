@@ -133,7 +133,7 @@ mod candidate {
             }
         }
     }
-    impl norito::core::NoritoDeserialize<'_> for Trigger {}
+
     impl<'de> norito::core::DeserializePayload<'de> for Trigger {
         fn deserialize(archived: &'de norito::core::Archived<Trigger>) -> Self {
             let candidate = <TriggerCandidate as norito::core::DeserializePayload>::deserialize(
@@ -142,7 +142,7 @@ mod candidate {
             candidate.into_trigger()
         }
     }
-    impl norito::core::NoritoSerialize for Trigger {}
+
     impl norito::core::SerializePayload for Trigger {
         fn serialize(
             &self,
@@ -372,6 +372,10 @@ pub mod action {
             Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema,
         )]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_data_model::trigger::model::action::model::TimeTriggerRetryPolicy"
+        )]
         pub struct TimeTriggerRetryPolicy {
             /// Maximum number of automatic retries after the initial failed firing.
             pub max_retries: NonZeroU32,
@@ -1036,7 +1040,7 @@ pub mod action {
                 })
             }
         }
-        impl norito::core::NoritoDeserialize<'_> for Action {}
+
         impl<'de> norito::core::DeserializePayload<'de> for Action {
             fn deserialize(archived: &'de norito::core::Archived<Action>) -> Self {
                 Self::try_deserialize(archived).expect("invalid Action")
@@ -1053,7 +1057,7 @@ pub mod action {
                     .map_err(|error| norito::core::Error::Message(error.to_string()))
             }
         }
-        impl norito::core::NoritoSerialize for Action {}
+
         impl norito::core::SerializePayload for Action {
             fn serialize(
                 &self,
@@ -1170,5 +1174,17 @@ mod tests {
         let json = norito::json::to_json(&indefinite).expect("serialize indefinitely");
         let decoded: Repeats = norito::json::from_str(&json).expect("deserialize indefinitely");
         assert_eq!(indefinite, decoded);
+    }
+}
+
+#[cfg(test)]
+mod frame_owner_identity_tests {
+    //! Frame roots observed in the original codec before the identity cutover.
+
+    #[test]
+    fn captured_frame_owner_identities() {
+        crate::frame_owner_identity_tests::assert_bidirectional::<
+            super::action::TimeTriggerRetryPolicy,
+        >("iroha_data_model::trigger::model::action::model::TimeTriggerRetryPolicy");
     }
 }

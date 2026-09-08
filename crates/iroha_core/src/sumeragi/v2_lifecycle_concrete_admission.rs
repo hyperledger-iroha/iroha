@@ -1612,23 +1612,6 @@ impl ProductionLifecycleOwnerV1 {
             )
     }
 
-    /// Authenticate whether one pending CommitQC output is immediately before
-    /// or after the exact Ready live Apply.
-    #[allow(single_use_lifetimes)]
-    pub(in crate::sumeragi) fn classify_lifecycle_decision_apply_pending_output_census<'a>(
-        &self,
-        authority: LiveLifecycleDecisionApplyReconciliationAuthorityV1,
-        pending_outputs: impl ExactSizeIterator<Item = &'a PendingLifecycleOutputAdmissionV1>,
-    ) -> Option<LifecycleDecisionApplyPendingOutputCensusV1> {
-        self.registry
-            .registry()
-            .classify_lifecycle_decision_apply_pending_output_census(
-                &self.coordinator,
-                authority,
-                pending_outputs,
-            )
-    }
-
     /// Authenticate one pending CommitQC output and retain a structural failure category.
     #[allow(single_use_lifetimes)]
     pub(in crate::sumeragi) fn try_classify_lifecycle_decision_apply_pending_output_census<'a>(

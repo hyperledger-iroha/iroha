@@ -2777,6 +2777,9 @@ impl ConcreteLifecycleWorkRegistry {
     /// `None` from this function means ambiguity (including phase and control
     /// together), while `Some(None)` is the exact zero-carrier shape.
     fn exact_recovered_wal_registry_slot(&self) -> Option<RecoveredWalRegistrySlotV1> {
+        if let Some(addresses) = self.exact_control_continuation_addresses() {
+            return Some(RecoveredWalRegistrySlotV1::ControlContinuation(addresses));
+        }
         let mut signs = self
             .entries
             .iter()
@@ -3553,6 +3556,25 @@ impl ConcreteLifecycleWorkRegistry {
             })
             .collect::<Vec<_>>();
         match extra {
+            RecoveredWalRegistrySlotV1::ControlContinuation(addresses) => {
+                self.exact_control_continuation_addresses() == Some(addresses)
+                    && unsupported_live.len() == addresses.into_iter().flatten().count()
+                    && addresses.into_iter().flatten().all(|address| {
+                        let Some(record) = unsupported_live.iter().find(|record|
+                            record.ordinal == address.ordinal && record.owner == address.owner) else { return false; };
+                        self.entries.get(&address).is_some_and(|work| {
+                            record.physical_slots.get(&address.slot) == Some(&work.digest)
+                                && work.validates_at(address)
+                                && match &work.kind {
+                                    ConcreteLifecycleWorkKind::DurableRecoveredLifecycleSignedBroadcast(carrier) =>
+                                        carrier.matches_current_ready_record(address, work.digest, coordinator),
+                                    ConcreteLifecycleWorkKind::DurableRecoveredLifecycleNextWalVoteSign(carrier) =>
+                                        carrier.matches_current_ready_record(address, work.digest, coordinator),
+                                    _ => false,
+                                }
+                        })
+                    })
+            }
             RecoveredWalRegistrySlotV1::None => unsupported_live.is_empty(),
             RecoveredWalRegistrySlotV1::PhaseVote(address) => {
                 let [record] = unsupported_live.as_slice() else {

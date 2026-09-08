@@ -1,29 +1,24 @@
-//! Stable cross-SDK signing transcript for Taira prepared transactions.
+//! Stable cross-SDK signing transcript for prepared public operations.
 
 use iroha_crypto::Hash;
 
 /// Domain prepended to every V1 prepared-transaction signing transcript.
-pub const PREPARED_TRANSACTION_SIGNATURE_DOMAIN_V1: &[u8] =
-    b"iroha:taira:prepared-transaction:v1\0";
+pub const PREPARED_TRANSACTION_SIGNATURE_DOMAIN_V1: &[u8] = b"iroha:prepared-transaction:v1\0";
 /// Schema identifier carried inside every V1 transcript.
 pub const PREPARED_TRANSACTION_SIGNATURE_TRANSCRIPT_SCHEMA_V1: &str =
-    "iroha.taira.prepared-signature-transcript.v1";
+    "iroha.prepared-signature-transcript.v1";
 
-/// Borrowed public-reset mutation binding fields committed by a transcript.
+/// Borrowed public operation binding fields committed by a transcript.
 #[derive(Clone, Copy, Debug)]
-pub struct PreparedMutationBindingRefV1<'a> {
+pub struct PreparedOperationBindingRefV1<'a> {
     /// Exact binding schema.
     pub schema: &'a str,
-    /// Lowercase SHA-256 of the admitted reset authorization.
-    pub authorization_sha256: &'a str,
-    /// Exact authorization nonce.
-    pub authorization_nonce: &'a str,
+    /// Lowercase hash of the exact signed receipt or solved claim.
+    pub semantic_hash_hex: &'a str,
     /// Exact operation kind.
     pub kind: &'a str,
-    /// Exact reset phase.
-    pub phase: &'a str,
-    /// Lowercase mutation idempotency digest.
-    pub idempotency_key: &'a str,
+    /// Caller-owned request identity, persisted across exact-envelope retries.
+    pub request_id: &'a str,
     /// Absolute execution deadline in Unix milliseconds.
     pub execution_expires_at_unix_ms: u64,
 }
@@ -33,8 +28,8 @@ pub struct PreparedMutationBindingRefV1<'a> {
 pub struct OnboardingPreparedSignatureFieldsV1<'a> {
     /// Exact envelope schema.
     pub envelope_schema: &'a str,
-    /// Exact public-reset mutation binding.
-    pub binding: PreparedMutationBindingRefV1<'a>,
+    /// Exact public operation binding.
+    pub binding: PreparedOperationBindingRefV1<'a>,
     /// Lowercase signed receipt/body hash.
     pub semantic_hash_hex: &'a str,
     /// Canonical target account.
@@ -56,8 +51,8 @@ pub struct OnboardingPreparedSignatureFieldsV1<'a> {
 pub struct OnboardingProofRequiredSignatureFieldsV1<'a> {
     /// Exact proof-required result schema.
     pub envelope_schema: &'a str,
-    /// Exact public-reset mutation binding.
-    pub binding: PreparedMutationBindingRefV1<'a>,
+    /// Exact public operation binding.
+    pub binding: PreparedOperationBindingRefV1<'a>,
     /// Exact nonterminal outcome, always `ProofRequired`.
     pub outcome: &'a str,
     /// Exact live-state proof required before a coordinator may terminalize the result.
@@ -77,8 +72,8 @@ pub struct OnboardingProofRequiredSignatureFieldsV1<'a> {
 pub struct FaucetPreparedSignatureFieldsV1<'a> {
     /// Exact envelope schema.
     pub envelope_schema: &'a str,
-    /// Exact public-reset mutation binding.
-    pub binding: PreparedMutationBindingRefV1<'a>,
+    /// Exact public operation binding.
+    pub binding: PreparedOperationBindingRefV1<'a>,
     /// Canonical claim account.
     pub claim_account_id: &'a str,
     /// Positive committed block height anchoring the proof of work.
@@ -224,7 +219,7 @@ pub fn prepared_signature_digest_v1(transcript: &[u8]) -> Hash {
 fn base_transcript(
     envelope_schema: &str,
     operation: &str,
-    binding: PreparedMutationBindingRefV1<'_>,
+    binding: PreparedOperationBindingRefV1<'_>,
 ) -> Vec<u8> {
     let mut transcript = Vec::new();
     append_frame(&mut transcript, PREPARED_TRANSACTION_SIGNATURE_DOMAIN_V1);
@@ -246,20 +241,14 @@ fn base_transcript(
     );
     append_field(
         &mut transcript,
-        b"binding.authorization_sha256",
-        binding.authorization_sha256.as_bytes(),
-    );
-    append_field(
-        &mut transcript,
-        b"binding.authorization_nonce",
-        binding.authorization_nonce.as_bytes(),
+        b"binding.semantic_hash_hex",
+        binding.semantic_hash_hex.as_bytes(),
     );
     append_field(&mut transcript, b"binding.kind", binding.kind.as_bytes());
-    append_field(&mut transcript, b"binding.phase", binding.phase.as_bytes());
     append_field(
         &mut transcript,
-        b"binding.idempotency_key",
-        binding.idempotency_key.as_bytes(),
+        b"binding.request_id",
+        binding.request_id.as_bytes(),
     );
     append_field(
         &mut transcript,
@@ -286,13 +275,11 @@ mod tests {
 
     #[test]
     fn transcript_frames_are_unambiguous_and_domain_first() {
-        let binding = PreparedMutationBindingRefV1 {
+        let binding = PreparedOperationBindingRefV1 {
             schema: "binding",
-            authorization_sha256: "11",
-            authorization_nonce: "nonce",
+            semantic_hash_hex: "11",
             kind: "onboarding",
-            phase: "pre_edge",
-            idempotency_key: "22",
+            request_id: "22",
             execution_expires_at_unix_ms: 42,
         };
         let transcript = onboarding_proof_required_signature_transcript_v1(
@@ -328,16 +315,62 @@ mod tests {
     }
 
     #[test]
+    fn public_binding_request_semantics_kind_and_deadline_are_signature_bound() {
+        let binding = PreparedOperationBindingRefV1 {
+            schema: "iroha.prepared-operation.binding.v1",
+            semantic_hash_hex: "11",
+            kind: "onboarding",
+            request_id: "22",
+            execution_expires_at_unix_ms: 42,
+        };
+        let digest = |binding| {
+            prepared_signature_digest_v1(&base_transcript("prepared", "onboarding", binding))
+        };
+        let original = digest(binding);
+        for changed in [
+            PreparedOperationBindingRefV1 {
+                semantic_hash_hex: "33",
+                ..binding
+            },
+            PreparedOperationBindingRefV1 {
+                request_id: "44",
+                ..binding
+            },
+            PreparedOperationBindingRefV1 {
+                kind: "faucet",
+                ..binding
+            },
+            PreparedOperationBindingRefV1 {
+                execution_expires_at_unix_ms: 43,
+                ..binding
+            },
+        ] {
+            assert_ne!(original, digest(changed));
+        }
+        let transcript = base_transcript("prepared", "onboarding", binding);
+        for retired in [
+            b"authorization_sha256".as_slice(),
+            b"authorization_nonce",
+            b"idempotency_key",
+            b"binding.phase",
+        ] {
+            assert!(
+                !transcript
+                    .windows(retired.len())
+                    .any(|window| window == retired)
+            );
+        }
+    }
+
+    #[test]
     fn faucet_transcript_commits_direct_required_pow_values() {
         let transcript = faucet_prepared_signature_transcript_v1(FaucetPreparedSignatureFieldsV1 {
             envelope_schema: "faucet-envelope",
-            binding: PreparedMutationBindingRefV1 {
+            binding: PreparedOperationBindingRefV1 {
                 schema: "binding",
-                authorization_sha256: "11",
-                authorization_nonce: "nonce",
+                semantic_hash_hex: "11",
                 kind: "faucet",
-                phase: "faucet",
-                idempotency_key: "22",
+                request_id: "22",
                 execution_expires_at_unix_ms: 42,
             },
             claim_account_id: "account",

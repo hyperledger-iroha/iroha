@@ -51356,10 +51356,6 @@ impl<'state> StateBlock<'state> {
     pub(crate) fn set_fastpq_tx_set_hash(&mut self, tx_set_hash: [u8; 32]) {
         self.fastpq_tx_set_hash = Some(tx_set_hash);
     }
-    /// Cache per-entry dataspace ids for FASTPQ public inputs.
-    pub(crate) fn set_fastpq_entry_dataspaces(&mut self, entries: BTreeMap<Hash, DataSpaceId>) {
-        self.fastpq_entry_dataspaces = entries;
-    }
     /// Capture the execution witness only while its execution-owned source seal remains valid.
     /// Authenticated replay retains its separate path and creates no local source inventory.
     /// Call while holding the exclusive execution-witness guard, after all execution workers
@@ -51472,7 +51468,7 @@ impl<'state> StateBlock<'state> {
                     public_inputs,
                     tx_set_hash,
                     entry_dataspaces: entry_dsid_bytes,
-                    source_inventory: Some(source_inventory),
+                    _source_inventory: Some(source_inventory),
                 });
             self.exec_witness = Some(witness);
         } else {

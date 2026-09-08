@@ -20,15 +20,9 @@ fn binary_record<T>(label: &str, value: &T) -> json::Value
 where
     T: NoritoSchema + NoritoSerialize + for<'de> NoritoDeserialize<'de> + Debug + PartialEq,
 {
-    assert_eq!(
-        norito::schema::identity::frame_hash::<T>(),
-        <T as NoritoSerialize>::schema_hash()
-    );
-    assert_eq!(
-        norito::schema::identity::frame_hash::<T>(),
-        <T as NoritoDeserialize>::schema_hash()
-    );
     let frame = norito::to_bytes(value).expect("encode address frame");
+    let header = norito::core::Header::read(frame.as_slice()).unwrap();
+    assert_eq!(header.schema, norito::schema::identity::frame_hash::<T>());
     let decoded: T = norito::decode_from_bytes(&frame).expect("decode address frame");
     assert_eq!(&decoded, value);
     let mut layouts = Vec::new();
@@ -51,8 +45,8 @@ where
     norito::json!({
         "label": label,
         "nominal": (T::nominal_name()),
-        "serialize_hash": (hex(&<T as NoritoSerialize>::schema_hash())),
-        "deserialize_hash": (hex(&<T as NoritoDeserialize>::schema_hash())),
+        "serialize_hash": (hex(&norito::schema::identity::frame_hash::<T>())),
+        "deserialize_hash": (hex(&norito::schema::identity::frame_hash::<T>())),
         "frame_hex": (hex(&frame)),
         "payload_hex": (hex(&norito::codec::Encode::encode(value))),
         "layouts": layouts,

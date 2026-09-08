@@ -667,6 +667,8 @@ mod json_utils {
 )]
 #[norito(deny_unknown_fields)]
 /// Canonical cross-domain asset transfer payload.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_sccp::TransferPayloadV1")]
 pub struct TransferPayloadV1 {
     /// Payload schema version. SCCP V1 requires `1`.
     pub version: u8,
@@ -709,6 +711,8 @@ pub struct TransferPayloadV1 {
     Clone, Debug, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
 )]
 /// Closed SCCP V1 application-payload union.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_sccp::SccpPayloadV1")]
 pub enum SccpPayloadV1 {
     /// Transfer an asset between domains.
     Transfer(TransferPayloadV1),
@@ -754,6 +758,8 @@ impl std::error::Error for SccpCanonicalPayloadEncodingErrorV1 {}
     norito::derive::NoritoDeserialize,
 )]
 /// Stable message-kind tag committed by the SCCP hub Merkle tree.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_sccp::SccpHubMessageKind")]
 pub enum SccpHubMessageKind {
     /// Asset transfer.
     Transfer,
@@ -771,6 +777,8 @@ pub enum SccpHubMessageKind {
 )]
 #[norito(deny_unknown_fields)]
 /// Merkle-leaf commitment for one outbound SCCP message.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_sccp::SccpHubCommitmentV1")]
 pub struct SccpHubCommitmentV1 {
     /// Commitment schema version. SCCP V1 requires `1`.
     pub version: u8,
@@ -798,6 +806,8 @@ pub struct SccpHubCommitmentV1 {
 )]
 #[norito(deny_unknown_fields)]
 /// One sibling step in an SCCP commitment Merkle proof.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_sccp::SccpMerkleStepV1")]
 pub struct SccpMerkleStepV1 {
     /// Hash of the sibling node at this level.
     #[norito(with = "json_utils::hex32")]
@@ -817,6 +827,8 @@ pub struct SccpMerkleStepV1 {
 )]
 #[norito(deny_unknown_fields)]
 /// Bounded Merkle path from one SCCP commitment to its block commitment root.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_sccp::SccpMerkleProofV1")]
 pub struct SccpMerkleProofV1 {
     /// Bottom-up sibling steps.
     pub steps: Vec<SccpMerkleStepV1>,
@@ -838,6 +850,8 @@ pub type TairaBridgeFinalityProofV1 = iroha_data_model::bridge::BridgeFinalityPr
 )]
 #[norito(deny_unknown_fields)]
 /// Canonical SORA-origin SCCP message, Merkle inclusion, and Taira finality bundle.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_sccp::TairaSccpMessageProofV1")]
 pub struct TairaSccpMessageProofV1 {
     /// Bundle schema version. SCCP V1 requires `1`.
     pub version: u8,
@@ -867,6 +881,8 @@ pub struct TairaSccpMessageProofV1 {
 )]
 #[norito(deny_unknown_fields)]
 /// Public statement exposed to a destination-chain SCCP verifier.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_sccp::SccpMessagePublicInputsV1")]
 pub struct SccpMessagePublicInputsV1 {
     /// Statement schema version. SCCP V1 requires `1`.
     pub version: u8,
@@ -906,6 +922,8 @@ pub struct SccpMessagePublicInputsV1 {
     deny_unknown_fields
 )]
 /// Exact governed EVM-family destination contract selected for verified material.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_sccp::SccpDestinationCallTargetV1")]
 pub enum SccpDestinationCallTargetV1 {
     /// EVM route contract on the exact governed EVM network.
     Evm {
@@ -936,6 +954,8 @@ pub enum SccpDestinationCallTargetV1 {
 )]
 #[norito(deny_unknown_fields)]
 /// State-verified EVM/TRON settlement material derived from one closed BN254 artifact.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_sccp::SccpVerifiedBn254DestinationMaterialV1")]
 pub struct SccpVerifiedBn254DestinationMaterialV1 {
     /// Material schema version. SCCP V1 requires `1`.
     pub version: u8,
@@ -997,6 +1017,8 @@ pub struct SccpVerifiedBn254DestinationMaterialV1 {
     deny_unknown_fields
 )]
 /// Curve- and destination-family-specific material produced by one verified proof.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_sccp::SccpVerifiedDestinationMaterialV1")]
 pub enum SccpVerifiedDestinationMaterialV1 {
     /// EVM or TRON material authenticated by the BN254 verifier.
     EvmOrTron(SccpVerifiedBn254DestinationMaterialV1),
@@ -1066,6 +1088,8 @@ pub fn encode_sccp_verified_destination_calldata_v1(
     norito::derive::JsonDeserialize,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_sccp::SccpGroth16Bn254PublicSignalsV1")]
 pub struct SccpGroth16Bn254PublicSignalsV1 {
     /// Domain-separated message-id signal.
     #[norito(with = "json_utils::hex32")]
@@ -1241,6 +1265,8 @@ impl SccpParsedDestinationProofV1 {
     Clone, Debug, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
 )]
 /// Decoded value of one closed SCCP V1 wire codec.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_sccp::SccpNormalizedCodecValueV1")]
 pub enum SccpNormalizedCodecValueV1 {
     /// Printable ASCII text or an exact canonical I105 account literal.
     CanonicalText {
@@ -1277,6 +1303,8 @@ pub enum SccpNormalizedCodecValueV1 {
 )]
 #[norito(deny_unknown_fields)]
 /// Normalized transfer payload consumed by proof backends.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_sccp::SccpTransferProjectionV1")]
 pub struct SccpTransferProjectionV1 {
     /// Payload schema version.
     pub version: u8,
@@ -1307,6 +1335,8 @@ pub struct SccpTransferProjectionV1 {
     Clone, Debug, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
 )]
 /// Closed normalized payload union consumed by SCCP proof backends.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_sccp::SccpPayloadProjectionV1")]
 pub enum SccpPayloadProjectionV1 {
     /// Transfer projection.
     Transfer(SccpTransferProjectionV1),
@@ -1643,6 +1673,8 @@ pub struct SccpEvmGroth16Bn254ProofV1 {
 )]
 #[norito(deny_unknown_fields)]
 /// Immutable input archive handed to an external EVM/TVM Groth16 prover.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_sccp::SccpGroth16Bn254ProofRequestV1")]
 pub struct SccpGroth16Bn254ProofRequestV1 {
     /// Request schema version. SCCP V1 requires `1`.
     pub version: u8,
@@ -1701,6 +1733,8 @@ pub type SccpTronGroth16Bn254ProofRequestV1 = SccpGroth16Bn254ProofRequestV1;
 )]
 #[norito(deny_unknown_fields)]
 /// Minimal request-bound result returned by an external BN254 Groth16 prover.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_sccp::SccpGroth16Bn254ProofResultV1")]
 pub struct SccpGroth16Bn254ProofResultV1 {
     /// Result schema version. SCCP V1 requires `1`.
     pub version: u8,
@@ -1726,6 +1760,8 @@ pub struct SccpGroth16Bn254ProofResultV1 {
 )]
 #[norito(deny_unknown_fields)]
 /// Self-contained canonical Groth16 proof artifact.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_sccp::SccpGroth16Bn254ProofArtifactV1")]
 pub struct SccpGroth16Bn254ProofArtifactV1 {
     /// Artifact schema version. SCCP V1 requires `1`.
     pub version: u8,
@@ -1750,6 +1786,8 @@ pub type SccpTronGroth16Bn254ProofArtifactV1 = SccpGroth16Bn254ProofArtifactV1;
 )]
 #[norito(deny_unknown_fields)]
 /// One canonical compressed non-identity BLS12-381 G1 point.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_sccp::SccpBls12381G1CompressedV1")]
 pub struct SccpBls12381G1CompressedV1 {
     /// IETF-compatible 48-byte compressed point encoding.
     #[norito(with = "json_utils::bytes_hex")]
@@ -1767,6 +1805,8 @@ pub struct SccpBls12381G1CompressedV1 {
 )]
 #[norito(deny_unknown_fields)]
 /// One canonical compressed non-identity BLS12-381 G2 point.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_sccp::SccpBls12381G2CompressedV1")]
 pub struct SccpBls12381G2CompressedV1 {
     /// IETF-compatible 96-byte compressed point encoding.
     #[norito(with = "json_utils::bytes_hex")]
@@ -1784,6 +1824,8 @@ pub struct SccpBls12381G2CompressedV1 {
 )]
 #[norito(deny_unknown_fields)]
 /// Canonical compressed BLS12-381 Groth16 proof tuple.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_sccp::SccpGroth16Bls12381ProofV1")]
 pub struct SccpGroth16Bls12381ProofV1 {
     /// Proof point A in G1.
     pub a: SccpBls12381G1CompressedV1,
@@ -1805,6 +1847,8 @@ pub struct SccpGroth16Bls12381ProofV1 {
 )]
 #[norito(deny_unknown_fields)]
 /// Exact eleven BLS12-381 scalar-field signals consumed by the TON verifier.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_sccp::SccpGroth16Bls12381PublicSignalsV1")]
 pub struct SccpGroth16Bls12381PublicSignalsV1 {
     /// Domain-separated message-id signal.
     #[norito(with = "json_utils::hex32")]
@@ -1888,6 +1932,8 @@ impl From<[H256; 11]> for SccpGroth16Bls12381PublicSignalsV1 {
 )]
 #[norito(deny_unknown_fields)]
 /// Immutable state-derived input archive for the TON BLS12-381 prover.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_sccp::SccpTonGroth16Bls12381ProofRequestV1")]
 pub struct SccpTonGroth16Bls12381ProofRequestV1 {
     /// Request schema version. SCCP V1 requires `1`.
     pub version: u8,
@@ -2026,6 +2072,8 @@ impl SccpDestinationProofRequestV1 {
 )]
 #[norito(deny_unknown_fields)]
 /// Request-bound result returned by a TON BLS12-381 Groth16 prover.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_sccp::SccpTonGroth16Bls12381ProofResultV1")]
 pub struct SccpTonGroth16Bls12381ProofResultV1 {
     /// Result schema version. SCCP V1 requires `1`.
     pub version: u8,
@@ -2050,6 +2098,8 @@ pub struct SccpTonGroth16Bls12381ProofResultV1 {
 )]
 #[norito(deny_unknown_fields)]
 /// Self-contained TON BLS12-381 destination proof artifact.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_sccp::SccpTonGroth16Bls12381ProofArtifactV1")]
 pub struct SccpTonGroth16Bls12381ProofArtifactV1 {
     /// Artifact schema version. SCCP V1 requires `1`.
     pub version: u8,
@@ -2070,6 +2120,8 @@ pub struct SccpTonGroth16Bls12381ProofArtifactV1 {
 )]
 #[norito(deny_unknown_fields)]
 /// Fully verified TON settlement material.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_sccp::SccpVerifiedTonDestinationMaterialV1")]
 pub struct SccpVerifiedTonDestinationMaterialV1 {
     /// Material schema version. SCCP V1 requires `1`.
     pub version: u8,
@@ -8417,7 +8469,11 @@ mod tests {
             signal_8: SccpBn254G1PointV1,
             signal_9: SccpBn254G1PointV1,
         }
-        #[derive(norito::derive::NoritoSerialize)]
+        #[derive(norito::derive::NoritoSerialize, norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_sccp::tests::TenSignalVerifyingKeyV1",
+            frame = "iroha_data_model::bridge::sccp_registry::SccpGroth16Bn254VerifyingKeyV1"
+        )]
         struct TenSignalVerifyingKeyV1 {
             version: u8,
             alpha1: SccpBn254G1PointV1,
@@ -8466,6 +8522,14 @@ mod tests {
             },
         };
         let old_key_bytes = to_bytes(&old_key).expect("encode old ten-signal Norito key");
+        let canonical_schema =
+            norito::schema::identity::frame_hash::<SccpGroth16Bn254VerifyingKeyV1>();
+        assert_eq!(
+            norito::schema::identity::frame_hash::<TenSignalVerifyingKeyV1>(),
+            canonical_schema,
+            "the malformed fixture must use the production frame identity"
+        );
+        assert_eq!(&old_key_bytes[6..22], canonical_schema.as_slice());
         assert!(
             norito::decode_from_bytes::<SccpGroth16Bn254VerifyingKeyV1>(&old_key_bytes).is_err()
         );
@@ -9158,3 +9222,6 @@ mod tests {
         assert!(!verify_taira_bridge_finality_proof_structure(&attack));
     }
 }
+
+#[cfg(test)]
+mod frame_identity_tests;

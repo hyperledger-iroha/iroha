@@ -197,7 +197,6 @@ impl AsRef<[u8; BFV_GOLDILOCKS_DIGEST384_BYTES_V1]> for BfvGoldilocksDigest384V1
     }
 }
 
-impl norito::core::NoritoSerialize for BfvGoldilocksDigest384V1 {}
 impl norito::core::SerializePayload for BfvGoldilocksDigest384V1 {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         writer.write_all(&self.0)?;
@@ -213,7 +212,6 @@ impl norito::core::SerializePayload for BfvGoldilocksDigest384V1 {
     }
 }
 
-impl norito::core::NoritoDeserialize<'_> for BfvGoldilocksDigest384V1 {}
 impl<'de> norito::core::DeserializePayload<'de> for BfvGoldilocksDigest384V1 {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("canonical BFV Goldilocks digest decode")
@@ -38944,7 +38942,8 @@ mod first_release_hard_cut_tests {
     use super::*;
     use sha3::Sha3_256;
 
-    #[derive(Encode)]
+    #[derive(Encode, norito::NoritoSchema)]
+    #[norito_schema(name = "test::iroha_crypto::retired_sha256_verifier_payload")]
     struct RetiredSha256VerifierPayloadV0 {
         version: u16,
         field_count: u16,

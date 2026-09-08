@@ -29,7 +29,34 @@ and hash-only schema traversal; it adds no stack override or protocol bypass.
 
 ## Qualification
 
-TODO: Record the final fixture-corrected runtimes and source-bound artifacts.
+The final combined Mochi build succeeded with 179 unchanged scoped inputs
+(fingerprint `b60d3be92aef5e668825cf717dc3510fd9be4338bcbbecfe7eb939b81f8d1491`).
+Its exact compiler artifacts pass 445 core tests (one ignored), 181 GUI tests,
+12 readiness tests (one ignored), nine mock-Kagami tests, three integration
+library tests (one ignored) and two stream integration tests. The explicitly
+selected real-Kagami bootstrap test also passes, including the sole reader grant
+and every existing Hijiri assertion. All runs use the default test thread stack.
+
+A concurrent merge changed Cargo.lock and two SDK inputs after compilation.
+The core and GUI runtime wrappers correctly rejected source drift even though
+the test executables passed; readiness's runtime source was stable but differed
+from the compiler source. These are artifact results, not merged-tree passes.
+All 179 exact compiler inputs were recovered and fingerprint-verified in
+`as-built-inputs`; three drifted files came from matching retained Git blobs.
+The remaining artifact runs verify that snapshot and executable hashes before
+and after execution. The separately built real Kagami has 68 unchanged direct
+Kagami/genesis inputs, not a complete transitive release-source capture.
+
+The preceding SDK candidate passes all 783 library tests and six fresh doctests;
+its strict library Clippy check passes. Eleven selected SDK/consumer packages
+compile with all targets on the earlier scoped source. Those results precede
+the final Mochi fixture repairs and concurrent merge; they do not qualify the
+merged SDK. Five manifest scopes, 16 feature-resolved dependency boundaries,
+53 architecture script tests, codec and history guards pass on their recorded
+inputs. The source budget still reports 238 findings with 172 exceptions.
+Mochi strict Clippy remains a nonpass: the duplicate local error-envelope derive
+emits two unexpected-cfg diagnostics and genesis construction takes eight
+arguments. No lint suppression or policy exception was added.
 
 ## Limits and retained failures
 
@@ -51,7 +78,7 @@ fingerprint caused one primary failure and 59 poisoned-lock follow-ons. The
 fixture also ignored an explicit VRF seed; fixing seed materialization alone
 left the independent fingerprint failure (12 passed, five failed in the focused
 genesis suite). Both failed source captures remain retained. The signing test
-adapter must publish matching signed-block and bound-manifest artifacts; the
+adapter now publishes matching signed-block and bound-manifest artifacts; the
 production consistency check remains mandatory.
 
 The next GUI run passed 175 tests and failed four: its maintenance test exhausted
@@ -68,7 +95,8 @@ failed three during initialization; restore passed alone on the same executable.
 The review identified retained temporary paths in global CLI configuration and
 inconsistent synchronization of process-environment readers and writers.
 
-All 11 selected SDK, Mochi and other consumer packages compile with all targets.
+The earlier all-target check of all 11 selected SDK, Mochi and other consumer
+packages passed on its captured source.
 The external SDK error-constructor audit found one test-network literal requiring
 the new optional Retry-After field; its existing classifier assertions remain.
 

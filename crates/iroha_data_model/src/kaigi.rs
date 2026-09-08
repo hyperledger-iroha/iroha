@@ -104,6 +104,8 @@ fn compute_roster_root_from(commitments: &[KaigiParticipantCommitment]) -> Hash 
 )]
 #[norito(reuse_archived)]
 #[display("{domain_id}:{call_name}")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::kaigi::KaigiId")]
 pub struct KaigiId {
     /// Domain that owns the call.
     pub domain_id: DomainId,
@@ -1160,3 +1162,15 @@ mod tests {
 
 #[cfg(test)]
 mod final_wire_tests;
+
+#[cfg(test)]
+mod frame_owner_identity_tests {
+    //! Frame roots observed in the original codec before the identity cutover.
+
+    #[test]
+    fn captured_frame_owner_identities() {
+        crate::frame_owner_identity_tests::assert_bidirectional::<super::KaigiId>(
+            "iroha_data_model::kaigi::KaigiId",
+        );
+    }
+}

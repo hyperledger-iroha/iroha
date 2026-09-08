@@ -19,6 +19,8 @@ use norito::{
     From,
 )]
 #[norito(tag = "profile", content = "value")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "settlement_router::haircut::LiquidityProfile")]
 pub enum LiquidityProfile {
     /// Deep pools with negligible slippage.
     #[display("tier1-deep")]
@@ -52,7 +54,9 @@ impl LiquidityProfile {
     NoritoDeserialize,
     JsonSerialize,
     JsonDeserialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "settlement_router::haircut::HaircutTier")]
 pub struct HaircutTier {
     profile: LiquidityProfile,
     /// Explicit override in basis points, when governance tightens/loosens a

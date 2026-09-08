@@ -1,7 +1,7 @@
 use norito::{NoritoDeserialize, NoritoSerialize};
 use std::borrow::Cow;
 use std::collections::BTreeMap;
-/// Canonical nominal Norito schema identity for [`TransitionBatch`].
+/// Canonical Norito root-frame identity for [`TransitionBatch`].
 ///
 /// An explicit name keeps the release wire format independent of Cargo features
 /// and Rust module refactors.
@@ -43,7 +43,9 @@ pub struct PublicInputs {
     NoritoDeserialize,
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "fastpq_prover::batch::StateTransition")]
 pub struct StateTransition {
     /// Schema-qualified logical key (e.g., account/asset path) encoded as bytes.
     pub key: Vec<u8>,
@@ -154,8 +156,12 @@ impl OperationKind {
     NoritoDeserialize,
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
+    norito::NoritoSchema,
 )]
-#[norito(schema_name = "fastpq_prover::batch::FastpqStateTransitionBatchV1")]
+#[norito_schema(
+    name = "fastpq_prover::batch::TransitionBatch",
+    frame = "fastpq_prover::batch::FastpqStateTransitionBatchV1"
+)]
 pub struct TransitionBatch {
     /// Canonical parameter set name expected for this proof.
     pub parameter: String,
@@ -266,12 +272,12 @@ mod tests {
     fn transition_batch_schema_identity_is_stable() {
         let expected = norito::core::schema_hash_for_name(TRANSITION_BATCH_SCHEMA_NAME);
         assert_eq!(
-            <TransitionBatch as NoritoSerialize>::schema_hash(),
+            norito::schema::identity::frame_hash::<TransitionBatch>(),
             expected
         );
         assert_eq!(
-            <TransitionBatch as NoritoDeserialize>::schema_hash(),
-            expected
+            <TransitionBatch as norito::NoritoSchema>::frame_name(),
+            TRANSITION_BATCH_SCHEMA_NAME
         );
         assert_eq!(
             expected,

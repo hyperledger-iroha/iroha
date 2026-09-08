@@ -9,8 +9,17 @@ use norito::{
 };
 /// Result of a shadow-price computation.
 #[derive(
-    Clone, Debug, Eq, PartialEq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    NoritoSerialize,
+    NoritoDeserialize,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "settlement_router::price::ShadowPrice")]
 pub struct ShadowPrice {
     /// Exact XOR amount that must be debited immediately.
     pub xor_due: XorQuantity,

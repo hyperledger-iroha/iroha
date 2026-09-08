@@ -39,6 +39,8 @@ pub const KAIGI_AUTHORIZATION_IDENTITY_MAX_BYTES_V1: usize = 1024 * 1024;
     JsonDeserialize,
 )]
 #[norito(reuse_archived)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::kaigi::authorization::KaigiAuthorizationIdentitiesV1")]
 pub struct KaigiAuthorizationIdentitiesV1 {
     /// Exact network identity supplied by the trusted ledger context.
     pub network_id: NetworkId,
@@ -374,5 +376,17 @@ mod tests {
             )
             .is_err()
         );
+    }
+}
+
+#[cfg(test)]
+mod additional_frame_owner_identity_tests {
+    //! Typed frame contracts observed with the original codec.
+
+    #[test]
+    fn captured_additional_frame_owner_identities() {
+        crate::frame_owner_identity_tests::assert_bidirectional::<
+            crate::kaigi::authorization::KaigiAuthorizationIdentitiesV1,
+        >("iroha_data_model::kaigi::authorization::KaigiAuthorizationIdentitiesV1");
     }
 }

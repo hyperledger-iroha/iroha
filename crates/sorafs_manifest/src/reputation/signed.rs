@@ -1248,9 +1248,16 @@ mod tests {
         );
     }
     #[test]
-    fn bounded_encoder_rejects_exact_oversize_before_serialization() {
+    pub(super) fn bounded_encoder_rejects_exact_oversize_before_serialization() {
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "sorafs_manifest::reputation::signed::tests::bounded_encoder_rejects_exact_oversize_before_serialization::MustNotSerialize"
+        )]
         struct MustNotSerialize;
-        impl norito::NoritoSerialize for MustNotSerialize {}
+        crate::signing_identity_test_support::check_rejected_identity::<MustNotSerialize>(
+            "reputation/oversized",
+        );
+
         impl norito::SerializePayload for MustNotSerialize {
             fn serialize(
                 &self,
@@ -1539,3 +1546,7 @@ mod tests {
 
 #[cfg(test)]
 include!("signed/captured_owner_identity_tests.rs");
+
+#[cfg(test)]
+#[path = "signed/signing_identity_tests.rs"]
+pub(crate) mod signing_identity_tests;

@@ -1339,7 +1339,10 @@ pub enum ProviderAdmissionRevocationError {
 impl ProviderAdmissionRevocationV1 {
     /// Computes the canonical digest signed by council members.
     pub fn digest(&self) -> Result<[u8; 32], NoritoError> {
-        #[derive(NoritoSerialize)]
+        #[derive(NoritoSerialize, norito::NoritoSchema)]
+        #[norito_schema(
+            name = "sorafs_manifest::provider_admission::ProviderAdmissionRevocationV1::digest::RevocationBody"
+        )]
         struct RevocationBody<'a> {
             version: u8,
             provider_id: [u8; 32],

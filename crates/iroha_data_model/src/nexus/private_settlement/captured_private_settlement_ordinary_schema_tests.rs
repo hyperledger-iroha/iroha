@@ -22,14 +22,6 @@ where
         norito::schema::identity::frame_hash::<T>(),
         deserialize_hash
     );
-    assert_eq!(
-        <T as norito::NoritoSerialize>::schema_hash(),
-        serialize_hash
-    );
-    assert_eq!(
-        <T as norito::NoritoDeserialize>::schema_hash(),
-        deserialize_hash
-    );
 }
 
 #[test]

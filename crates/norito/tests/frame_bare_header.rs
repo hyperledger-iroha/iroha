@@ -1,6 +1,14 @@
 //! Verify framing bare Norito payloads with explicit header flags roundtrips via `from_bytes`.
 use norito::{DeserializePayload, NoritoDeserialize, NoritoSerialize};
-#[derive(Debug, PartialEq, NoritoSerialize, NoritoDeserialize, iroha_schema::IntoSchema)]
+#[derive(
+    Debug,
+    PartialEq,
+    NoritoSerialize,
+    NoritoDeserialize,
+    iroha_schema::IntoSchema,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "norito.test.frame_bare_header.Item")]
 struct Item(u32, String);
 #[test]
 fn frame_bare_with_header_flags_roundtrip() {

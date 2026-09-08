@@ -25,7 +25,7 @@ import org.hyperledger.iroha.sdk.alias.AccountFaucetClaimV1
 import org.hyperledger.iroha.sdk.alias.AccountFaucetPolicyV1
 import org.hyperledger.iroha.sdk.alias.AccountFaucetPreparedTransactionV1
 import org.hyperledger.iroha.sdk.alias.PreparedTransactionSubmitResponseV1
-import org.hyperledger.iroha.sdk.alias.TairaPublicResetMutationBindingV1
+import org.hyperledger.iroha.sdk.alias.PreparedOperationBindingV1
 import org.hyperledger.iroha.sdk.alias.AliasSetupReportV1
 import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
 import org.hyperledger.iroha.sdk.core.model.NetworkId
@@ -326,7 +326,7 @@ interface IrohaClient {
     fun prepareSponsoredAccountOnboarding(
         request: AccountOnboardingPlanRequestV1,
         receipt: AccountOnboardingPlanReceiptV1,
-        binding: TairaPublicResetMutationBindingV1,
+        binding: PreparedOperationBindingV1,
         feePayment: FeePaymentIntent,
         onboardingToken: String,
         expectedAuthority: String,
@@ -338,7 +338,7 @@ interface IrohaClient {
         proofRequired: AccountOnboardingProofRequiredPrepareResponseV1,
         request: AccountOnboardingPlanRequestV1,
         receipt: AccountOnboardingPlanReceiptV1,
-        binding: TairaPublicResetMutationBindingV1,
+        binding: PreparedOperationBindingV1,
         expectedAuthority: String,
         expectedNetworkId: NetworkId,
         canonicalAuth: ToriiCanonicalRequestAuth,
@@ -357,7 +357,7 @@ interface IrohaClient {
     /** Prepares and authenticates one exact faucet transaction against independent local policy. */
     fun prepareAccountFaucetTransaction(
         claim: AccountFaucetClaimV1,
-        binding: TairaPublicResetMutationBindingV1,
+        binding: PreparedOperationBindingV1,
         feePayment: FeePaymentIntent,
         policy: AccountFaucetPolicyV1,
         expectedNetworkId: NetworkId,

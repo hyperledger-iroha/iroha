@@ -1140,3 +1140,6 @@ include!("captured_owner_identity_tests.rs");
 
 #[cfg(test)]
 mod captured_owner_identity_support;
+
+#[cfg(test)]
+mod signing_identity_test_support;

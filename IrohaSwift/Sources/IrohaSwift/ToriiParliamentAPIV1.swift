@@ -161,6 +161,8 @@ public enum ToriiParliamentLifecycleTransitionV1: Sendable, Equatable, Encodable
     case registerBallotParticipant(ballotAttemptId: String, registrationRecord: [UInt8])
     case recordBallotDropout(ballotAttemptId: String)
     case failPublicFindingNoResult(bodyInstanceId: String)
+    /// Register the first sortition generation using only the enclosing attempt binding.
+    case registerInitialSortition
 
     public var layout: ToriiParliamentTransitionLayoutV1 {
         switch self {
@@ -185,6 +187,7 @@ public enum ToriiParliamentLifecycleTransitionV1: Sendable, Equatable, Encodable
         case .registerBallotParticipant: ToriiParliamentAPIV1.publicTransitions[18]
         case .recordBallotDropout: ToriiParliamentAPIV1.publicTransitions[19]
         case .failPublicFindingNoResult: ToriiParliamentAPIV1.publicTransitions[20]
+        case .registerInitialSortition: ToriiParliamentAPIV1.publicTransitions[21]
         }
     }
 
@@ -200,7 +203,7 @@ public enum ToriiParliamentLifecycleTransitionV1: Sendable, Equatable, Encodable
         switch self {
         case let .escalateRisk(target):
             try payload.encode(target, forKey: .init("target"))
-        case .completeQualification:
+        case .completeQualification, .registerInitialSortition:
             break
         case let .registerSortitionRequest(requests):
             try payload.encode(requests, forKey: .init("requests"))
@@ -279,7 +282,7 @@ public enum ToriiParliamentLifecycleTransitionV1: Sendable, Equatable, Encodable
         switch self {
         case let .escalateRisk(target):
             try ToriiParliamentAPIV1.rejectSigningMaterial(target, context: "EscalateRisk.target")
-        case .completeQualification:
+        case .completeQualification, .registerInitialSortition:
             break
         case let .registerSortitionRequest(requests):
             guard (1...ToriiParliamentAPIV1.maximumSortitionRequestsPerBatch)
@@ -745,6 +748,7 @@ public enum ToriiParliamentAPIV1 {
         .init(noritoIndex: 18, jsonTag: "RegisterBallotParticipant", jsonPayloadRequired: true, eventKindIndex: 21),
         .init(noritoIndex: 19, jsonTag: "RecordBallotDropout", jsonPayloadRequired: true, eventKindIndex: 22),
         .init(noritoIndex: 20, jsonTag: "FailPublicFindingNoResult", jsonPayloadRequired: true, eventKindIndex: 23),
+        .init(noritoIndex: 21, jsonTag: "RegisterInitialSortition", jsonPayloadRequired: false, eventKindIndex: 24),
     ]
 
     public static let automaticExecutionOutcomes: [ToriiParliamentAutomaticOutcomeLayoutV1] = [

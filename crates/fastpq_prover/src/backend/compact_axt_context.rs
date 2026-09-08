@@ -38,8 +38,11 @@ use crate::{
     proof::PublicIO,
 };
 
-#[derive(NoritoSerialize)]
-#[norito(schema_name = "fastpq_prover::compact_prototype::AxtTransferContextV1")]
+#[derive(NoritoSerialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "fastpq_prover::backend::compact_axt_context::BoundContext",
+    frame = "fastpq_prover::compact_prototype::AxtTransferContextV1"
+)]
 #[cfg(test)]
 struct BoundContext {
     version: u16,

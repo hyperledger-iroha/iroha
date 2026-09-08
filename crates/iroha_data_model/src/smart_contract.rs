@@ -383,7 +383,9 @@ mod model {
         IntoSchema,
         crate :: DeriveJsonSerialize,
         crate :: DeriveJsonDeserialize,
+        norito::NoritoSchema,
     )]
+    #[norito_schema(name = "iroha_data_model::smart_contract::model::ContractLifecycleControlV1")]
     pub struct ContractLifecycleControlV1 {
         /// Exact persisted schema version; first-release snapshots require `1`.
         pub version: u16,
@@ -681,7 +683,7 @@ impl AsRef<str> for ContractAlias {
         self.0.as_ref()
     }
 }
-impl norito::core::NoritoSerialize for ContractAlias {}
+
 impl norito::core::SerializePayload for ContractAlias {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         <&str as norito::core::SerializePayload>::serialize(&self.as_ref(), writer)
@@ -693,7 +695,7 @@ impl norito::core::SerializePayload for ContractAlias {
         <&str as norito::core::SerializePayload>::encoded_len_exact(&self.as_ref())
     }
 }
-impl norito::core::NoritoDeserialize<'_> for ContractAlias {}
+
 impl<'a> norito::core::DeserializePayload<'a> for ContractAlias {
     fn deserialize(archived: &'a norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived)
@@ -863,7 +865,7 @@ impl AsRef<str> for ContractAddress {
         &self.0
     }
 }
-impl norito::core::NoritoSerialize for ContractAddress {}
+
 impl norito::core::SerializePayload for ContractAddress {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         <&str as norito::core::SerializePayload>::serialize(&self.as_ref(), writer)
@@ -875,7 +877,7 @@ impl norito::core::SerializePayload for ContractAddress {
         <&str as norito::core::SerializePayload>::encoded_len_exact(&self.as_ref())
     }
 }
-impl norito::core::NoritoDeserialize<'_> for ContractAddress {}
+
 impl<'a> norito::core::DeserializePayload<'a> for ContractAddress {
     fn deserialize(archived: &'a norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived)
@@ -1383,6 +1385,8 @@ pub mod manifest {
         all(feature = "ffi_export", not(feature = "ffi_import")),
         ffi_type(opaque)
     )]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::smart_contract::manifest::ContractManifest")]
     pub struct ContractManifest {
         /// Canonical source-level seiyaku name embedded by the compiler.
         #[norito(default)]
@@ -1756,6 +1760,10 @@ pub mod manifest {
     #[norito(decode_from_slice)]
     #[derive(DeriveFast, DeriveJsonSer, DeriveJsonDe)]
     #[norito(no_fast_from_json, deny_unknown_fields)]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(
+        name = "iroha_data_model::smart_contract::manifest::ContractErrorTypeDescriptor"
+    )]
     pub struct ContractErrorTypeDescriptor {
         /// Stable locked-package, source-unit and enum identity; never a linker ordinal.
         pub identity: String,
@@ -2001,6 +2009,10 @@ pub mod manifest {
     #[cfg_attr(
         all(feature = "ffi_export", not(feature = "ffi_import")),
         ffi_type(opaque)
+    )]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(
+        name = "iroha_data_model::smart_contract::manifest::ContractManifestSignaturePayload"
     )]
     pub struct ContractManifestSignaturePayload {
         /// Canonical source-level seiyaku name.
@@ -2402,5 +2414,35 @@ pub mod manifest {
                 .verify(kp.public_key(), &payload)
                 .expect("signature must verify");
         }
+    }
+}
+
+#[cfg(test)]
+mod frame_owner_identity_tests {
+    //! Frame roots observed in the original codec before the identity cutover.
+
+    #[test]
+    fn captured_frame_owner_identities() {
+        crate::frame_owner_identity_tests::assert_bidirectional::<
+            super::manifest::ContractManifestSignaturePayload,
+        >("iroha_data_model::smart_contract::manifest::ContractManifestSignaturePayload");
+    }
+}
+
+#[cfg(test)]
+mod additional_frame_owner_identity_tests {
+    //! Typed frame contracts observed with the original codec.
+
+    #[test]
+    fn captured_additional_frame_owner_identities() {
+        crate::frame_owner_identity_tests::assert_bidirectional::<
+            crate::smart_contract::manifest::ContractErrorTypeDescriptor,
+        >("iroha_data_model::smart_contract::manifest::ContractErrorTypeDescriptor");
+        crate::frame_owner_identity_tests::assert_bidirectional::<
+            crate::smart_contract::manifest::ContractManifest,
+        >("iroha_data_model::smart_contract::manifest::ContractManifest");
+        crate::frame_owner_identity_tests::assert_bidirectional::<
+            crate::smart_contract::model::ContractLifecycleControlV1,
+        >("iroha_data_model::smart_contract::model::ContractLifecycleControlV1");
     }
 }

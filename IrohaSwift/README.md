@@ -373,13 +373,16 @@ let onboardingReceipt = try await torii.planAccountOnboarding(
     expectedAuthority: configuredOnboardingAuthority,
     expectedNetworkId: networkId
 )
-let onboardingBinding = try ToriiTairaPublicResetMutationBindingV1(
-    authorizationSHA256: admittedAuthorizationSHA256,
-    authorizationNonce: admittedAuthorizationNonce,
+// Persist the caller's 64-character lowercase hexadecimal request ID across retries.
+// It identifies this operation; it does not promise server-side deduplication.
+let verifiedReceiptPlanHashHex = try ToriiAccountOnboardingReceiptVerifier.canonicalHash(
+    canonicalBodyNorito: ToriiAccountOnboardingPlanBodyNorito.encode(onboardingReceipt.body)
+).hexEncodedString()
+let onboardingBinding = try ToriiPreparedOperationBindingV1(
+    semanticHashHex: verifiedReceiptPlanHashHex,
     kind: .onboarding,
-    phase: "canary",
-    idempotencyKey: onboardingIdempotencySHA256,
-    executionExpiresAtUnixMs: admittedExecutionExpiryMs
+    requestId: persistedCallerRequestId,
+    executionExpiresAtUnixMs: onboardingReceipt.body.validUntilMs
 )
 let onboardingPreparation = try await torii.prepareAccountOnboarding(
     onboardingReceipt,

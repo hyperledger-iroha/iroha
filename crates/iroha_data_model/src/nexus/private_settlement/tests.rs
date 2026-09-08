@@ -835,11 +835,12 @@ fn audit_commitment_material_confidential_discard_scrubs_secret_projection() {
 
 #[test]
 fn confidential_canonical_error_path_scrubs_staged_bytes() {
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "test::iroha_data_model::FailAfterLengthPass")]
     struct FailAfterLengthPass {
         calls: std::cell::Cell<usize>,
     }
 
-    impl norito::core::NoritoSerialize for FailAfterLengthPass {}
     impl norito::core::SerializePayload for FailAfterLengthPass {
         fn serialize(&self, encoder: &mut norito::core::Encoder<'_>) -> Result<(), norito::Error> {
             let call = self.calls.get();

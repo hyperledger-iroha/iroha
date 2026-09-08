@@ -1,11 +1,10 @@
 //! Typed local-test rejection expectations shared by compiler and in-process runner.
-// Norito derives probe schema-structural; this module does not enable structural schema emission.
-#![allow(unexpected_cfgs)]
 use iroha_data_model::smart_contract::manifest::ContractErrorTypeDescriptor;
 use ivm_abi::error::VmTrapKind;
 
 /// Exact reason requested by a test-only nested invocation.
-#[derive(Clone, Debug, PartialEq, Eq, norito::Encode, norito::Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, norito::Encode, norito::Decode, norito::NoritoSchema)]
+#[norito_schema(name = "kotodama_lang::testing::RejectionExpectation")]
 pub enum RejectionExpectation {
     /// Explicitly accept any rejection through `test::expect_any_reject_as`.
     Any,
@@ -216,3 +215,6 @@ mod tests {
         assert!(RejectionExpectation::Any.matches_runtime(&ivm_abi::VMError::OutOfGas, None));
     }
 }
+
+#[cfg(test)]
+mod frame_identity_tests;

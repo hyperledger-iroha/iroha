@@ -8,7 +8,7 @@ use iroha::{
         AccountOnboardingCurrentStateV1, AccountOnboardingPlanReceiptV1,
         AccountOnboardingPlanRequestV1, AccountOnboardingPrepareResponseV1,
         AccountOnboardingPreparedTransactionV1, AccountOnboardingProofRequiredPrepareResponseV1,
-        Client as IrohaClient, PreparedTransactionOutcomeV1, TairaPublicResetMutationBindingV1,
+        Client as IrohaClient, PreparedOperationBindingV1, PreparedTransactionOutcomeV1,
         TransactionWaitOptions,
     },
     config::Config,
@@ -229,7 +229,62 @@ impl Doctor {
         self.run_with_output(&mut output)
     }
 }
-type PreparedMutationBindingV1 = TairaPublicResetMutationBindingV1;
+/// Native operator custody binding; never sent as public customer authorization.
+#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+pub(super) struct PreparedMutationBindingV1 {
+    /// Exact immutable binding schema.
+    pub schema: String,
+    /// SHA-256 of the admitted reset authorization.
+    pub authorization_sha256: String,
+    /// Exact authorization nonce.
+    pub authorization_nonce: String,
+    /// Exact operation kind: `onboarding` or `faucet`.
+    pub kind: String,
+    /// Canonical reset phase label.
+    pub phase: String,
+    /// Exact mutation idempotency digest.
+    pub idempotency_key: String,
+    /// Absolute execution deadline from the admitted authorization.
+    pub execution_expires_at_unix_ms: u64,
+}
+impl PreparedMutationBindingV1 {
+    /// Current immutable binding schema.
+    pub const SCHEMA: &'static str = "iroha.taira.public-reset.mutation-binding.v1";
+
+    /// Project admitted native custody onto the exact signed public onboarding operation.
+    pub(super) fn onboarding_binding(
+        &self,
+        receipt: &AccountOnboardingPlanReceiptV1,
+    ) -> Result<PreparedOperationBindingV1> {
+        validate_prepared_binding(self)?;
+        if self.kind != "onboarding" {
+            eyre::bail!("native reset binding does not authorize onboarding");
+        }
+        PreparedOperationBindingV1::onboarding(
+            receipt,
+            self.idempotency_key.clone(),
+            self.execution_expires_at_unix_ms
+                .min(receipt.body.valid_until_ms),
+        )
+    }
+
+    /// Project admitted native custody onto the exact solved public faucet claim.
+    pub(super) fn faucet_binding(
+        &self,
+        claim: &AccountFaucetClaimV1,
+    ) -> Result<PreparedOperationBindingV1> {
+        validate_prepared_binding(self)?;
+        if self.kind != "faucet" {
+            eyre::bail!("native reset binding does not authorize a faucet claim");
+        }
+        PreparedOperationBindingV1::faucet(
+            claim,
+            self.idempotency_key.clone(),
+            self.execution_expires_at_unix_ms,
+        )
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
@@ -268,13 +323,40 @@ enum PreparedTransactionOperationV1 {
 }
 
 impl PreparedTransactionOperationV1 {
-    fn binding(&self) -> &PreparedMutationBindingV1 {
-        match self {
-            Self::OnboardingPrepared(operation) => &operation.binding,
-            Self::OnboardingProofRequired(operation) => &operation.result.binding,
-            Self::FaucetPrepared(operation) => &operation.binding,
-            Self::FinalCanary(operation) => &operation.binding,
-        }
+    fn matches_binding(&self, binding: &PreparedMutationBindingV1) -> Result<bool> {
+        Ok(match self {
+            Self::OnboardingPrepared(operation) => {
+                operation.binding == binding.onboarding_binding(&operation.receipt)?
+            }
+            Self::OnboardingProofRequired(operation) => {
+                operation.result.binding == binding.onboarding_binding(&operation.receipt)?
+            }
+            Self::FaucetPrepared(operation) => {
+                operation.binding == binding.faucet_binding(&operation.claim)?
+            }
+            Self::FinalCanary(operation) => &operation.binding == binding,
+        })
+    }
+
+    fn binding_metadata(&self) -> Result<(&'static str, String)> {
+        Ok(match self {
+            Self::OnboardingPrepared(operation) => (
+                "prepared_operation_binding",
+                json::to_json(&operation.binding)?,
+            ),
+            Self::OnboardingProofRequired(operation) => (
+                "prepared_operation_binding",
+                json::to_json(&operation.result.binding)?,
+            ),
+            Self::FaucetPrepared(operation) => (
+                "prepared_operation_binding",
+                json::to_json(&operation.binding)?,
+            ),
+            Self::FinalCanary(operation) => (
+                PREPARED_BINDING_METADATA,
+                json::to_json(&operation.binding)?,
+            ),
+        })
     }
 
     const fn label(&self) -> &'static str {
@@ -3565,8 +3647,8 @@ fn validate_inrou_canary_timeout(timeout_secs: u64) -> Result<()> {
 }
 
 const PREPARED_BINDING_METADATA: &str = "taira_public_reset_binding";
-const PREPARED_OPERATION_METADATA: &str = "taira_prepared_operation";
-const PREPARED_SEMANTIC_METADATA: &str = "taira_prepared_semantic_hash";
+const PREPARED_OPERATION_METADATA: &str = "prepared_operation";
+const PREPARED_SEMANTIC_METADATA: &str = "prepared_semantic_hash";
 
 struct ValidatedPreparedOperation {
     envelope: PreparedMutationEnvelopeV1,
@@ -4052,7 +4134,7 @@ fn validate_prepared_operation(
         eyre::bail!("prepared mutation envelope does not bind the exact CLI authorization");
     }
     let operation = &envelope.operation;
-    if operation.binding() != &envelope.binding
+    if !operation.matches_binding(&envelope.binding)?
         || operation.label() != expected_operation.label()
         || !matches!(
             (expected_operation, operation),
@@ -4249,10 +4331,9 @@ fn validate_prepared_transaction_closure(
     if prepared.as_bytes() != wire || prepared.hash() != transaction.hash() {
         eyre::bail!("prepared client payload differs from the exact signed transaction");
     }
-    let binding_json = json::to_json(operation.binding())
-        .wrap_err("serialize expected prepared mutation binding")?;
+    let (binding_key, binding_json) = operation.binding_metadata()?;
     let metadata = transaction.metadata();
-    let binding_name = Name::from_str(PREPARED_BINDING_METADATA)?;
+    let binding_name = Name::from_str(binding_key)?;
     if metadata
         .get(&binding_name)
         .map(IrohaJson::get)
@@ -4614,9 +4695,8 @@ fn verify_exact_committed_prepared_operation(
     client: &IrohaClient,
     validated: &ValidatedPreparedOperation,
 ) -> Result<Hash> {
-    let expected_binding = json::to_json(&validated.envelope.binding)
-        .wrap_err("serialize expected committed mutation binding")?;
-    let binding_name = Name::from_str(PREPARED_BINDING_METADATA)?;
+    let (binding_key, expected_binding) = validated.envelope.operation.binding_metadata()?;
+    let binding_name = Name::from_str(binding_key)?;
     let operation_name = Name::from_str(PREPARED_OPERATION_METADATA)?;
     let expected_transaction = validated.transaction()?;
     let entrypoint_hash = expected_transaction.hash_as_entrypoint();
@@ -4826,11 +4906,12 @@ fn prepare_onboarding_operation(
     let receipt = client
         .plan_account_onboarding(&request, token.as_str())
         .wrap_err("failed to obtain an authenticated onboarding plan")?;
+    let public_binding = binding.onboarding_binding(&receipt)?;
     let operation = match client
         .prepare_account_onboarding_transaction(
             &request,
             &receipt,
-            binding,
+            &public_binding,
             fee_payment,
             token.as_str(),
         )
@@ -4889,8 +4970,9 @@ fn prepare_faucet_operation(
     let faucet_policy = args.faucet_policy()?;
     let claim =
         solve_account_faucet_claim(public_root, &signer.account_id, &canary_config.network_id)?;
+    let public_binding = binding.faucet_binding(&claim)?;
     let prepared = client
-        .prepare_account_faucet_transaction(&claim, binding, fee_payment, &faucet_policy)
+        .prepare_account_faucet_transaction(&claim, &public_binding, fee_payment, &faucet_policy)
         .wrap_err("failed to prepare exact faucet transaction")?;
     let wire = hex::decode(&prepared.signed_transaction_wire_hex)
         .wrap_err("prepared faucet wire is not hexadecimal")?;
@@ -7543,7 +7625,7 @@ mod tests {
     fn inrou_predecessor_decoder_rejects_unknown_fields_at_every_envelope_layer() {
         let account = AccountId::new(fixture_key_pair(0x45).public_key().clone());
         let fee_payment = FeePaymentIntent::authority(Vec::new(), None);
-        let binding = TairaPublicResetMutationBindingV1 {
+        let binding = PreparedMutationBindingV1 {
             schema: PREPARED_BINDING_SCHEMA_V1.to_owned(),
             authorization_sha256: "ab".repeat(32),
             authorization_nonce: "n".repeat(32),
@@ -9819,6 +9901,86 @@ mod tests {
         )
         .expect("a DeterministicService revision may project an explicit all-null route");
     }
+    #[test]
+    fn native_reset_projection_keeps_operator_authority_out_of_public_binding() {
+        let fixture: Value = json::from_slice(include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/norito_rpc/alias_setup_v1/alias_setup_v1.json"
+        )))
+        .expect("public receipt fixture");
+        let receipt: AccountOnboardingPlanReceiptV1 =
+            json::from_value(fixture["account_onboarding_receipt_vector"]["receipt_json"].clone())
+                .expect("typed receipt");
+        let native = fixture_write_canary_args(WriteCanaryOperation::Onboarding)
+            .binding()
+            .expect("native custody");
+        let public = native
+            .onboarding_binding(&receipt)
+            .expect("public projection");
+        assert_eq!(public.request_id, native.idempotency_key);
+        assert_eq!(
+            public.semantic_hash_hex,
+            hex::encode(receipt.plan_hash.as_ref())
+        );
+        assert_eq!(
+            public.execution_expires_at_unix_ms,
+            native
+                .execution_expires_at_unix_ms
+                .min(receipt.body.valid_until_ms)
+        );
+        let value = json::to_value(&public).expect("public JSON");
+        let fields = value.as_object().expect("binding object");
+        assert_eq!(fields.len(), 5);
+        for private_field in [
+            "authorization_sha256",
+            "authorization_nonce",
+            "phase",
+            "idempotency_key",
+        ] {
+            assert!(!fields.contains_key(private_field));
+        }
+        assert_eq!(native.schema, PREPARED_BINDING_SCHEMA_V1);
+        let mut different = native.clone();
+        different.idempotency_key = "aa".repeat(32);
+        assert_ne!(
+            different
+                .onboarding_binding(&receipt)
+                .expect("other request"),
+            public
+        );
+        different = native.clone();
+        different.kind = "faucet".to_owned();
+        assert!(different.onboarding_binding(&receipt).is_err());
+        let mut changed = receipt;
+        changed.body.request.alias.push('x');
+        assert!(native.onboarding_binding(&changed).is_err());
+    }
+
+    #[test]
+    fn native_faucet_projection_changes_with_exact_claim() {
+        let native = fixture_write_canary_args(WriteCanaryOperation::Faucet)
+            .binding()
+            .expect("native faucet custody");
+        let account = AccountId::new(fixture_key_pair(0x45).public_key().clone());
+        let claim = AccountFaucetClaimV1 {
+            account_id: account.to_string(),
+            pow_anchor_height: 42,
+            pow_nonce_hex: "0001".to_owned(),
+        };
+        let public = native.faucet_binding(&claim).expect("project claim");
+        assert_eq!(public.request_id, native.idempotency_key);
+        let mut changed = claim;
+        changed.pow_nonce_hex = "0002".to_owned();
+        let changed_public = native
+            .faucet_binding(&changed)
+            .expect("project different claim");
+        assert_ne!(public.semantic_hash_hex, changed_public.semantic_hash_hex);
+        assert_eq!(public.request_id, changed_public.request_id);
+        let mut wrong_kind = native;
+        wrong_kind.kind = "onboarding".to_owned();
+        assert!(wrong_kind.faucet_binding(&changed).is_err());
+    }
+
     #[test]
     fn write_canary_child_idempotency_keys_are_domain_separated() {
         let nonce = "n".repeat(32);

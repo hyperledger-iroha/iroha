@@ -1543,7 +1543,7 @@ impl JsonDeserialize for Sm3Digest {
         Ok(Self(bytes))
     }
 }
-impl norito::core::NoritoSerialize for Sm3Digest {}
+
 impl norito::core::SerializePayload for Sm3Digest {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         writer.write_all(&self.0)?;
@@ -1556,7 +1556,7 @@ impl norito::core::SerializePayload for Sm3Digest {
         Some(Self::LENGTH)
     }
 }
-impl norito::core::NoritoDeserialize<'_> for Sm3Digest {}
+
 impl<'de> norito::core::DeserializePayload<'de> for Sm3Digest {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
         let archived_bytes: &norito::core::Archived<[u8; Sm3Digest::LENGTH]> = archived.cast();

@@ -109,8 +109,11 @@ impl<R: FixedAir + ?Sized> PreparedAir for DirectPrepared<'_, R> {
 }
 
 /// Private typed proof; its Norito schema is distinct from production ProofV1.
-#[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
-#[norito(schema_name = "fastpq_prover::compact_prototype::SinglePhaseProofV1")]
+#[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "fastpq_prover::backend::compact_protocol::CompactProof",
+    frame = "fastpq_prover::compact_prototype::SinglePhaseProofV1"
+)]
 pub(super) struct CompactProof {
     row_root: WireDigest,
     mixed_root: WireDigest,

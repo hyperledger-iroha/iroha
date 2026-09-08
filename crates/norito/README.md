@@ -26,20 +26,22 @@ norito = { version = "*", default-features = false }
 ```
 
 The payload traits are independent of typed frames. `SerializePayload` owns
-bare serialization and size methods; `DeserializePayload<'a>` owns `deserialize`
-and `try_deserialize` within a bounded archived payload context. The typed
-`NoritoSerialize` and `NoritoDeserialize` markers add frame contracts. Their
-derives emit the corresponding payload implementation and typed marker;
-`#[derive(SerializePayload, DeserializePayload)]` emits only the payload
-implementations and rejects `#[norito(schema_name = "...")]`.
+bare serialization and size methods; `DeserializePayload<'a>` owns reconstruction
+within a bounded archived payload context. Their derives emit payload codecs.
+`NoritoSerialize` and `NoritoDeserialize` are blanket implementations for owners
+that implement the corresponding payload trait and `NoritoSchema`.
+
+Declare each frame identity once with `#[derive(NoritoSchema)]` and
+`#[norito_schema(name = "protocol.name")]`. An optional `frame = "protocol.root"`
+projects a borrowed root to an owned record's frame. The fixed
+`schema::identity::frame_hash` selects the same header digest for both directions.
+Schema inspection features do not alter it; codec derives reject the retired
+`#[norito(schema_name = "...")]` attribute.
 
 Bare `Encode` requires `SerializePayload`; bare `Decode` requires
 `for<'de> DeserializePayload<'de> + SerializePayload`. Field and container
-reconstruction uses the payload contracts without inventing child frame
-identities. Generic typed frame callers must explicitly require
-`NoritoSerialize`/`NoritoDeserialize`; bare codec bounds do not imply them.
-The typed directions retain their existing independent hash methods until the
-planned atomic `NoritoSchema` cutover.
+reconstruction uses those payload contracts. Generic frame callers explicitly
+require `NoritoSerialize`/`NoritoDeserialize`; bare codec bounds do not imply them.
 
 ### Derive attributes
 
@@ -76,7 +78,7 @@ The supported field-level attributes are:
 - `#[norito(flatten)]` flattens a named field into its enclosing JSON object.
 - `#[norito(needs_size)]` forces an explicit packed-struct size entry.
 
-Container-level options are `rename_all`, `schema_name`,
+Container-level options are `rename_all`,
 `deny_unknown_fields`, `decode_from_slice`, `reuse_archived`, `validate`,
 `no_fast_from_json`, `tag`, and `content`. Enum variants support only
 `#[norito(rename = "other")]`.
@@ -170,7 +172,7 @@ Every Norito payload begins with a compact header followed by the archived paylo
 
 - magic: 4 bytes, ASCII `NRT0`
 - version: 1 byte major, 1 byte minor (current: 0.0; v1 minor is fixed to 0x00)
-- schema_hash: 16 bytes (type-name based by default; structural with `schema-structural`)
+- schema_hash: 16 bytes (fixed digest of the declared `NoritoSchema` root identity)
 - compression: 1 byte (`0 = None`, `1 = Zstd`)
 - length: 8 bytes little-endian (uncompressed payload length in bytes)
 - checksum: 8 bytes little-endian (CRC64-XZ of the uncompressed payload)

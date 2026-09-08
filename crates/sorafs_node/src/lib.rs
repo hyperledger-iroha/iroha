@@ -1486,7 +1486,7 @@ fn set_local_no_follow_flag(options: &mut fs::OpenOptions) {
 fn set_local_no_follow_flag(_options: &mut fs::OpenOptions) {}
 #[cfg(any(target_os = "linux", target_os = "android"))]
 const fn local_no_follow_flag() -> i32 {
-    0o400000
+    rustix::fs::OFlags::NOFOLLOW.bits() as i32
 }
 #[cfg(all(
     unix,

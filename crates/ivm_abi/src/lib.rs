@@ -30,3 +30,6 @@ pub enum SyscallPolicy {
     /// ABI surface for version 1 programs.
     AbiV1,
 }
+
+#[cfg(test)]
+mod captured_identity_tests;

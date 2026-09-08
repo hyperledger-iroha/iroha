@@ -25,25 +25,37 @@ fn string_exact_len_matches() {
     assert_eq!(bytes.len(), norito::core::Header::SIZE + expected);
     norito::core::reset_decode_state();
 }
-#[derive(Debug, PartialEq, NoritoSerialize, NoritoDeserialize, iroha_schema::IntoSchema)]
+#[derive(
+    Debug,
+    PartialEq,
+    NoritoSerialize,
+    NoritoDeserialize,
+    iroha_schema::IntoSchema,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "norito.test.encoded_len_exact.S")]
 struct S {
     a: u32,
     b: String,
 }
-#[derive(NoritoSerialize)]
+#[derive(NoritoSerialize, norito::NoritoSchema)]
+#[norito_schema(name = "norito.test.encoded_len_exact.NamedByteArrays")]
 struct NamedByteArrays {
     tag: u8,
     digest: [u8; 32],
     suffix: [u8; 7],
 }
-#[derive(NoritoSerialize)]
+#[derive(NoritoSerialize, norito::NoritoSchema)]
+#[norito_schema(name = "norito.test.encoded_len_exact.TupleByteArrays")]
 struct TupleByteArrays(u8, [u8; 32], [u8; 7]);
-#[derive(Clone, Debug, PartialEq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Clone, Debug, PartialEq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(name = "norito.test.encoded_len_exact.EnumByteArrays")]
 enum EnumByteArrays {
     Tuple([u8; 32], u16),
     Named { digest: [u8; 32], suffix: [u8; 7] },
 }
-#[derive(Debug, PartialEq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, PartialEq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(name = "norito.test.encoded_len_exact.NestedEnumByteArrays")]
 struct NestedEnumByteArrays {
     prefix: u8,
     value: EnumByteArrays,

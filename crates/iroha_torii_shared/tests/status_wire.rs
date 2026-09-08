@@ -1,7 +1,7 @@
 //! Named status wire identities and complete payloads captured before DTO extraction.
 use iroha_torii_shared::status::*;
 use norito::{
-    core::{DeserializePayload, NoritoDeserialize, NoritoSerialize, SerializePayload},
+    core::{NoritoDeserialize, NoritoSerialize},
     json::{self, JsonDeserialize, JsonSerialize, Value},
 };
 
@@ -25,7 +25,7 @@ where
         "{name} frame changed"
     );
     assert_eq!(
-        hex::encode(<T as NoritoSerialize>::schema_hash()),
+        hex::encode(norito::schema::identity::frame_hash::<T>()),
         record
             .get("serialize_schema_hash")
             .and_then(Value::as_str)
@@ -33,7 +33,7 @@ where
         "{name} encode schema identity changed"
     );
     assert_eq!(
-        hex::encode(<T as NoritoDeserialize>::schema_hash()),
+        hex::encode(norito::schema::identity::frame_hash::<T>()),
         record
             .get("deserialize_schema_hash")
             .and_then(Value::as_str)
@@ -41,7 +41,7 @@ where
         "{name} decode schema identity changed"
     );
     assert_eq!(
-        <T as NoritoSerialize>::schema_hash(),
+        norito::schema::identity::frame_hash::<T>(),
         norito::core::schema_hash_for_name(
             record.get("schema_name").and_then(Value::as_str).unwrap()
         )

@@ -4,7 +4,8 @@
 Requires Python 3.11+, Git, the repository Rust toolchain, a warm Cargo target,
 and explicitly hash-pinned Zig/cargo-zigbuild executables. `check` runs the
 maintained native CLI gate; `prepare` also builds the four Linux release binaries
-with six jobs and captures read-only copies. Rerun the same prepare command to
+from one fixed Git-object source capture with six jobs and captures read-only
+copies. Rerun the same prepare command to
 reuse completed checks/captures or retry an incomplete local build in the same
 warm Cargo lane. Failed attempt directories and logs remain intact.
 No keys, runtime configuration, SSH, signing, activation or publishing inputs
@@ -19,16 +20,17 @@ import contextlib
 import fcntl
 import json
 import hashlib
+import types
 import os
 from pathlib import Path
 import re
 import shutil
-import signal
 import stat
 import struct
 import subprocess
 import sys
 import time
+import tomllib
 import uuid
 
 sys.dont_write_bytecode = True
@@ -38,6 +40,7 @@ from release_artifact_contract import (
     stable_open_relative,
 )
 import taira_release_check as gate
+from taira_cargo_cache import admit_source_fingerprints, local_package_names, source_fingerprints
 
 
 TARGET = "aarch64-unknown-linux-gnu"
@@ -49,6 +52,7 @@ CAPTURE_HEADROOM_BYTES = 256 * 1024**2
 PROGRESS_SECONDS = 30
 SESSION_SCHEMA = "taira.local-preparation.v1"
 BUILD_SOURCES = ("scripts/taira_release.py", "scripts/taira_release_check.py",
+                 "scripts/taira_cargo_cache.py",
                  "scripts/release_artifact_contract.py", "scripts/cargo_fast.sh",
                  "scripts/cargo_zigbuild_linux.sh", "scripts/zig_linux_gnu.py")
 
@@ -112,9 +116,9 @@ def file_identity(info: os.stat_result) -> tuple[int, ...]:
             info.st_gid, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
 
 
-def source_snapshot(root: Path) -> list[dict[str, object]]:
+def source_snapshot(root: Path, entries: bytes | None = None, *, frozen: bool = False) -> list[dict[str, object]]:
     rows = []
-    for raw in git(root, "ls-files", "--stage", "-z").split(b"\0"):
+    for raw in (git(root, "ls-files", "--stage", "-z") if entries is None else entries).split(b"\0"):
         if not raw:
             continue
         entry = re.fullmatch(rb"(100644|100755|120000|160000) ([0-9a-f]{40}) 0\t(.+)", raw, re.DOTALL)
@@ -144,6 +148,8 @@ def source_snapshot(root: Path) -> list[dict[str, object]]:
         before = path.lstat()
         if stat.S_ISLNK(before.st_mode):
             require(mode == b"120000", "tracked source kind differs from the index: " + relative)
+            if frozen:
+                require(path.resolve(strict=False).is_relative_to(root), "source symlink escapes capture")
             payload = os.fsencode(os.readlink(path))
             blob = hashlib.sha1(f"blob {len(payload)}\0".encode() + payload).hexdigest()
             digest, size, kind = hashlib.sha256(payload).hexdigest(), len(payload), "symlink"
@@ -152,6 +158,10 @@ def source_snapshot(root: Path) -> list[dict[str, object]]:
             require(mode in (b"100644", b"100755")
                     and bool(before.st_mode & stat.S_IXUSR) == (mode == b"100755"),
                     "tracked source mode differs from the index: " + relative)
+            if frozen:
+                require(before.st_uid == os.geteuid() and before.st_nlink == 1
+                        and stat.S_IMODE(before.st_mode) == (0o500 if mode == b"100755" else 0o400),
+                        "captured source file is not owner-held and read-only")
             fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
             with os.fdopen(fd, "rb") as stream:
                 require(file_identity(os.fstat(stream.fileno())) == file_identity(before),
@@ -175,6 +185,212 @@ def source_snapshot(root: Path) -> list[dict[str, object]]:
     return rows
 
 
+def commit_entries(root: Path, commit: str) -> bytes:
+    rows = []
+    for row in git(root, "ls-tree", "-r", "-z", "--full-tree", commit).split(b"\0"):
+        if not row:
+            continue
+        metadata, path = row.split(b"\t", 1)
+        mode, kind, oid = metadata.split(b" ")
+        require((mode == b"160000" and kind == b"commit")
+                or (mode in (b"100644", b"100755", b"120000") and kind == b"blob"),
+                "unsupported signed source entry")
+        require(b".git" not in path.split(b"/") and not path.startswith(b"target/"),
+                "signed source includes a repository or build-output path")
+        rows.append(mode + b" " + oid + b" 0\t" + path)
+    return b"\0".join(sorted(rows, key=lambda row: row.split(b"\t", 1)[1])) + b"\0"
+
+
+def verify_signed_source(root: Path, commit: str, signer: str) -> str:
+    require(git(root, "rev-parse", "--show-toplevel") == os.fsencode(root)
+            and git(root, "branch", "--show-current") == b"optimizations",
+            "Taira preparation requires the selected optimizations repository")
+    require(re.fullmatch(r"[0-9a-f]{40}", commit) is not None, "invalid source commit")
+    git(root, "verify-commit", commit)
+    require(git(root, "show", "--no-patch", "--format=%GF", commit).decode() == signer,
+            "commit signature does not match the expected signer")
+    return git(root, "rev-parse", commit + "^{tree}").decode()
+
+
+def frozen_snapshot(source: Path, entries: bytes, target_dir: Path) -> list[dict[str, object]]:
+    rows = source_snapshot(source, entries, frozen=True)
+    binding = source / "target"
+    require(binding.is_symlink() and binding.lstat().st_uid == os.geteuid()
+            and os.readlink(binding) == str(target_dir) and binding.resolve(strict=True) == target_dir,
+            "captured source output binding differs from the selected Cargo target")
+    expected = {Path(row["path"]) for row in rows} | {Path("target")}
+    for path in list(expected):
+        expected.update(parent for parent in path.parents if parent != Path("."))
+    actual = set()
+    for parent, directories, files in os.walk(source, followlinks=False):
+        info = Path(parent).lstat()
+        require(stat.S_IMODE(info.st_mode) == 0o500 and info.st_uid == os.geteuid(),
+                "captured source directory is not owner-held and read-only")
+        actual.update((Path(parent) / name).relative_to(source) for name in directories + files)
+    require(actual == expected, "captured source has missing or extra inputs")
+    return rows
+
+
+def capture_source(root: Path, source: Path, target_dir: Path, commit: str, entries: bytes) -> Path:
+    """Publish one fixed Git-object capture; never copy the mutable worktree."""
+    parent = source.parent
+    state_path = parent / "source-state.json"
+    state = read_record(state_path) if state_path.exists() else None
+    require(state is None or set(state) == {"commit"}, "invalid captured source checkpoint")
+    if os.path.lexists(source):
+        real_path(source)
+        if state == {"commit": commit}:
+            frozen_snapshot(source, entries, target_dir)
+            return source
+        try:
+            frozen_snapshot(source, entries, target_dir)
+        except PrepareError:
+            require(state is not None, "unexpected unrecorded source capture")
+            # Preserve timestamps only from a complete, unchanged previous tree.
+            frozen_snapshot(source, commit_entries(root, state["commit"]), target_dir)
+        else:
+            # Publication may have completed before its small pointer checkpoint.
+            checkpoint = parent / ("source-state.pending-" + uuid.uuid4().hex)
+            write_record(checkpoint, {"commit": commit})
+            os.replace(checkpoint, state_path)
+            return source
+    # The lane lock covers refresh, native checks, Linux compilation and capture.
+    # No running Cargo process may observe the source-directory replacement.
+    pending = create_fresh_directory(parent / ("source.pending-" + uuid.uuid4().hex), mode=0o700)
+    # Batch mode reads exact committed blobs without archive export filters.
+    with subprocess.Popen(["git", "--no-replace-objects", "cat-file", "--batch"], cwd=root,
+                          env=child_environment(dict(os.environ), root / "target"),
+                          stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE) as child:
+        assert child.stdin is not None and child.stdout is not None
+        try:
+            for row in entries.split(b"\0"):
+                if not row:
+                    continue
+                metadata, relative = row.split(b"\t", 1)
+                mode, oid, _ = metadata.split(b" ")
+                path = pending / os.fsdecode(relative)
+                require(not Path(os.fsdecode(relative)).is_absolute()
+                        and ".." not in Path(os.fsdecode(relative)).parts, "source path escapes capture")
+                path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+                if mode == b"160000":
+                    path.mkdir(mode=0o700)
+                    continue
+                child.stdin.write(oid + b"\n")
+                child.stdin.flush()
+                header = child.stdout.readline().split()
+                require(len(header) == 3 and header[:2] == [oid, b"blob"], "missing signed source blob")
+                size = int(header[2])
+                payload = child.stdout.read(size)
+                require(len(payload) == size and child.stdout.read(1) == b"\n", "truncated source blob")
+                require(hashlib.sha1(f"blob {size}\0".encode() + payload).hexdigest() == oid.decode(),
+                        "source blob differs from the signed tree")
+                if mode == b"120000":
+                    path.symlink_to(os.fsdecode(payload))
+                    require(path.resolve(strict=False).is_relative_to(pending), "source symlink escapes capture")
+                else:
+                    exclusive_write_bytes(path, payload, mode=0o755 if mode == b"100755" else 0o600)
+                    freeze(path)
+                    previous = source / os.fsdecode(relative)
+                    if state is not None and previous.is_file() and not previous.is_symlink():
+                        try:
+                            old = stable_hash_path(previous)
+                        except (ReleaseArtifactError, OSError):
+                            old = None
+                        if old is not None and old.sha256 == hashlib.sha256(payload).hexdigest():
+                            info = previous.stat()
+                            os.utime(path, ns=(info.st_atime_ns, info.st_mtime_ns), follow_symlinks=False)
+            child.stdin.close()
+            require(child.wait() == 0, "Git source capture failed")
+        finally:
+            child.stdin.close()
+            child.stdout.close()
+            if child.stderr is not None:
+                child.stderr.close()
+    # Some native fixtures use CARGO_MANIFEST_DIR/../../target. Admit only this
+    # exact output binding; inventories never follow it into generated files.
+    (pending / "target").symlink_to(target_dir, target_is_directory=True)
+    for path, directories, _ in os.walk(pending, topdown=False):
+        freeze(Path(path), directory=True)
+    frozen_snapshot(pending, entries, target_dir)
+    if os.path.lexists(source):
+        real_path(source)
+        os.rename(source, parent / ("source.retained-" + uuid.uuid4().hex))
+    os.rename(pending, source)
+    checkpoint = parent / ("source-state.pending-" + uuid.uuid4().hex)
+    write_record(checkpoint, {"commit": commit})
+    os.replace(checkpoint, state_path)
+    fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    return source
+
+
+def captured_gate(source: Path, before: list[dict[str, object]]):
+    path = source / "scripts/taira_release_check.py"
+    expected = stable_hash_path(path)
+    row = next(row for row in before if row["path"] == "scripts/taira_release_check.py")
+    require(expected.sha256 == row["sha256"], "captured native gate changed")
+    with stable_open_relative(path.parent, path.name, expected=expected) as fd:
+        with os.fdopen(os.dup(fd), "rb") as stream:
+            code = stream.read()
+    module = types.ModuleType("taira_captured_release_check")
+    module.__file__ = str(path)
+    exec(compile(code, str(path), "exec"), module.__dict__)
+    return module
+
+
+def isolated_cargo_environment(root: Path, source: Path, env: dict[str, str]) -> tuple[dict[str, str], list[dict[str, object]]]:
+    """Select the captured toolchain, sharing cache bytes but no ambient config."""
+    channel = tomllib.loads((source / "rust-toolchain.toml").read_text())["toolchain"]["channel"]
+    require(isinstance(channel, str) and re.fullmatch(r"[A-Za-z0-9_.-]+", channel) is not None,
+            "invalid captured Rust toolchain")
+    tools = []
+    for name in ("cargo", "rustc", "rustdoc"):
+        selected = subprocess.check_output(["rustup", "which", "--toolchain", channel, name],
+                                          cwd="/", env=env, stdin=subprocess.DEVNULL, text=True).strip()
+        path = real_path(Path(selected).resolve(strict=True))
+        info = stable_hash_path(path)
+        require(info.mode & stat.S_IXUSR, "selected Rust tool is not executable")
+        tools.append({"name": name, "path": str(path), "sha256": info.sha256, "size": info.size})
+    original = Path(env.get("CARGO_HOME", str(Path(env["HOME"]) / ".cargo")))
+    home = root / "target/taira-release-cargo-home"
+    home.mkdir(mode=0o700, exist_ok=True)
+    real_path(home)
+    require(home.stat().st_uid == os.geteuid() and stat.S_IMODE(home.stat().st_mode) == 0o700,
+            "isolated Cargo home must remain owner-private")
+    cache_files = {".package-cache", ".package-cache-mutate", ".global-cache", ".global-cache-shm", ".global-cache-wal"}
+    for path in home.iterdir():
+        if path.name in ("registry", "git"):
+            continue
+        info = path.lstat()
+        require(path.name in cache_files and stat.S_ISREG(info.st_mode) and info.st_nlink == 1
+                and info.st_uid == os.geteuid() and not info.st_mode & 0o022,
+                "unexpected isolated Cargo home entry: " + path.name)
+    for name in ("registry", "git"):
+        path, cache = home / name, original / name
+        if not os.path.lexists(path):
+            if cache.exists():
+                path.symlink_to(real_path(cache), target_is_directory=True)
+            else:
+                path.mkdir(mode=0o700)
+        require((path.is_symlink() and os.readlink(path) == str(cache) and cache.is_dir())
+                or (not path.is_symlink() and path.is_dir() and path.stat().st_uid == os.geteuid()),
+                "Cargo cache location changed")
+    require(not any(os.path.lexists(path) for path in ("/.cargo/config", "/.cargo/config.toml")),
+            "root-level Cargo config prevents isolated preparation")
+    result = dict(env)
+    result.update(CARGO_HOME=str(home), CARGO=tools[0]["path"], RUSTC=tools[1]["path"], RUSTDOC=tools[2]["path"],
+                  RUSTUP_TOOLCHAIN=channel, CARGO_BUILD_JOBS="6", CARGO_NET_OFFLINE="true",
+                  CARGO_ZIGBUILD_ZIG_PATH=str(source / "scripts/zig_linux_gnu.py"),
+                  CARGO_ZIGBUILD_PYTHON_PATH="/usr/bin/false", CC_ENABLE_DEBUG_OUTPUT="1")
+    sccache = shutil.which("sccache", path=env.get("PATH", ""))
+    if sccache:
+        result["RUSTC_WRAPPER"] = str(Path(sccache).resolve(strict=True))
+    return result, tools
+
+
 def verify_tool(path: Path, expected: str) -> dict[str, object]:
     real_path(path)
     require(re.fullmatch(r"[0-9a-f]{64}", expected) is not None, "tool digest must be lowercase SHA256")
@@ -184,9 +400,10 @@ def verify_tool(path: Path, expected: str) -> dict[str, object]:
     return {"path": str(path), "sha256": info.sha256, "size": info.size}
 
 
-def build_command(root: Path, target_dir: Path) -> list[str]:
-    command = [str(root / "scripts/cargo_zigbuild_linux.sh"), "--target-dir", str(target_dir),
-               "--linker", "off", "--jobs", "6", "--", "zigbuild", "--locked",
+def build_command(root: Path, target_dir: Path, cargo: str) -> list[str]:
+    # cwd=/ plus this explicit config excludes the mutable checkout's ancestors.
+    command = [cargo, "zigbuild", "--config", str(root / ".cargo/config.toml"),
+               "--manifest-path", str(root / "Cargo.toml"), "--target-dir", str(target_dir), "--locked", "--offline",
                "--profile", "release", "--target", TARGET]
     for name, package in BINARIES:
         command.extend(("-p", package, "--bin", name))
@@ -194,16 +411,16 @@ def build_command(root: Path, target_dir: Path) -> list[str]:
 
 
 def run_build(root: Path, command: list[str], env: dict[str, str], log: Path,
-              *, lock_fd: int | None = None) -> None:
+              *, lock_fd: int | None = None, lane_lock_fd: int | None = None) -> None:
     failure = None
     started = time.monotonic()
     # Commit diagnostic output even on compiler failure; the result is published
     # only after a successful build and independent source/tool revalidation.
     with exclusive_output_fd(log, mode=0o600) as output:
         try:
-            child = subprocess.Popen(command, cwd=root, env=env, stdin=subprocess.DEVNULL,
+            child = subprocess.Popen(command, cwd="/", env=env, stdin=subprocess.DEVNULL,
                                      stdout=output, stderr=subprocess.STDOUT, start_new_session=True,
-                                     pass_fds=() if lock_fd is None else (lock_fd,))
+                                     pass_fds=tuple(fd for fd in (lock_fd, lane_lock_fd) if fd is not None))
             try:
                 while True:
                     try:
@@ -215,19 +432,11 @@ def run_build(root: Path, command: list[str], env: dict[str, str], log: Path,
                 require(code == 0, "Linux build failed; inspect " + str(log)
                         + "; rerun the same prepare command to reuse the warm Cargo lane")
             except BaseException:
+                # The inherited preparation lock remains held by any active child.
+                # A launcher interruption does not authorize killing Cargo.
                 if child.poll() is None:
-                    try:
-                        os.killpg(child.pid, signal.SIGTERM)
-                    except ProcessLookupError:
-                        pass
-                    try:
-                        child.wait(timeout=10)
-                    except subprocess.TimeoutExpired:
-                        try:
-                            os.killpg(child.pid, signal.SIGKILL)
-                        except ProcessLookupError:
-                            pass
-                        child.wait(timeout=10)
+                    print(f"[taira-release] build process {child.pid} retained; log {log}",
+                          file=sys.stderr, flush=True)
                 raise
         except BaseException as error:
             failure = error
@@ -406,7 +615,26 @@ def verify_capture(result: dict[str, object], base: dict[str, object], output: P
                 "captured artifact changed; retained output must be inspected: " + str(path))
 
 
+@contextlib.contextmanager
+def source_lane(root: Path, target_dir: Path):
+    # One source path per established Cargo lane keeps absolute compiler paths
+    # stable across releases. The same lock survives in any active Cargo child.
+    key = hashlib.sha256(os.fsencode(target_dir)).hexdigest()[:24]
+    parent = target_dir / "taira-release-sources" / key
+    parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    real_path(parent)
+    with preparation_lock(parent) as lock_fd:
+        yield parent / "source", lock_fd
+
+
 def prepare(args: argparse.Namespace) -> dict[str, object]:
+    root, target_dir = real_path(args.repo_root), real_path(args.target_dir)
+    require(target_dir.is_dir(), "target-dir must be an existing warm Cargo lane")
+    with source_lane(root, target_dir) as (source, lock_fd):
+        return prepare_in_lane(args, source, lock_fd)
+
+
+def prepare_in_lane(args: argparse.Namespace, source: Path, lane_lock_fd: int) -> dict[str, object]:
     root, target_dir = real_path(args.repo_root), real_path(args.target_dir)
     output = real_path(args.output_dir, exists=False)
     require(Path(__file__).resolve() == root / "scripts/taira_release.py",
@@ -419,8 +647,18 @@ def prepare(args: argparse.Namespace) -> dict[str, object]:
         require(output.is_relative_to(root / "target"), "repository outputs must stay under target/")
     require(output != target_dir and not target_dir.is_relative_to(output),
             "output-dir must not contain the Cargo lane")
-    tree = verify_checkout(root, args.expected_commit, args.expected_signer)
-    before = source_snapshot(root)
+    if fresh:
+        verify_checkout(root, args.expected_commit, args.expected_signer)
+        # Detect index flags concealing modifications before capturing signed objects.
+        checkout_rows = source_snapshot(root)
+        capacity_preflight([(root / "target", sum(row.get("size", 0) for row in checkout_rows),
+                             "fixed source capture"),
+                            (target_dir, BUILD_FREE_FLOOR_BYTES, "Cargo working space floor"),
+                            (output, CAPTURE_HEADROOM_BYTES, "capture headroom")])
+    tree = verify_signed_source(root, args.expected_commit, args.expected_signer)
+    entries = commit_entries(root, args.expected_commit)
+    source = capture_source(root, source, target_dir, args.expected_commit, entries)
+    before = frozen_snapshot(source, entries, target_dir)
     env = child_environment(dict(os.environ), target_dir)
     tools = [verify_tool(args.zig, args.zig_sha256),
              verify_tool(args.cargo_zigbuild, args.cargo_zigbuild_sha256)]
@@ -429,11 +667,13 @@ def prepare(args: argparse.Namespace) -> dict[str, object]:
             "PATH must select the explicitly pinned cargo-zigbuild")
     env.update(IROHA_ZIG_BINARY=str(args.zig), IROHA_GIT_COMMIT_HASH=args.expected_commit,
                VERGEN_GIT_SHA=args.expected_commit)
-    command = build_command(root, target_dir)
+    env, compiler_tools = isolated_cargo_environment(root, source, env)
+    command = build_command(source, target_dir, env["CARGO"])
     base = {"commit": args.expected_commit, "signer_fingerprint": args.expected_signer,
             "tree": tree, "target": TARGET, "profile": "release", "jobs": 6,
             "source_unchanged": True, "toolchain_unchanged": True,
             "source_snapshot_sha256": hashlib.sha256(canonical_json_bytes(before)).hexdigest(),
+            "source_root": str(source), "source_output_target": str(target_dir), "compiler_tools": compiler_tools,
             "tools": tools, "command": command, "release_qualified": False, "deployed": False}
     request = {"schema": SESSION_SCHEMA, "repo_root": str(root), "target_dir": str(target_dir), **base}
     if fresh:
@@ -442,8 +682,9 @@ def prepare(args: argparse.Namespace) -> dict[str, object]:
         output = create_fresh_directory(output, mode=0o700)
 
     def revalidate():
-        require(verify_checkout(root, args.expected_commit, args.expected_signer) == tree
-                and source_snapshot(root) == before, "signed source changed during preparation")
+        require(frozen_snapshot(source, entries, target_dir) == before, "captured source changed during preparation")
+        require([{"name": row["name"], **verify_tool(Path(row["path"]), row["sha256"])}
+                 for row in compiler_tools] == compiler_tools, "Rust toolchain changed during preparation")
         require([verify_tool(args.zig, args.zig_sha256),
                  verify_tool(args.cargo_zigbuild, args.cargo_zigbuild_sha256)] == tools,
                 "toolchain changed during preparation")
@@ -502,17 +743,42 @@ def prepare(args: argparse.Namespace) -> dict[str, object]:
                 print(f"[taira-release] {label} elapsed {timings[label]:.3f}s", flush=True)
 
         checks = output / "checks.json"
+        packages = local_package_names(source, env)
         if checks.exists():
             require(read_record(checks) == {"request": request, "passed": True}, "native check checkpoint differs")
+
+        def retire_checks():
+            # Remove the resumable success checkpoint before retiring any cache
+            # metadata. A crash or a failed rerun must never revive an old pass.
+            if checks.exists():
+                os.rename(checks, attempt / "retired-checks.json")
+                for directory in (attempt, output):
+                    fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+                    try:
+                        os.fsync(fd)
+                    finally:
+                        os.close(fd)
+
+        admit_source_fingerprints(source, target_dir, TARGET, packages, before_retire=retire_checks)
+        if checks.exists():
             print("[taira-release] reused completed native CLI checks", flush=True)
         else:
-            stage("native CLI checks", lambda: gate.run_checks(root, environment=env))
+            selected_gate = captured_gate(source, before)
+            def run_native_checks():
+                try:
+                    selected_gate.run_checks(source, environment=env, source_commit=args.expected_commit,
+                                             lock_fds=(lock_fd, lane_lock_fd))
+                except selected_gate.CheckError as error:
+                    raise PrepareError(str(error)) from error
+            stage("native CLI checks", run_native_checks)
             revalidate()
-            write_record(checks, {"request": request, "passed": True})
-        stage("Linux release build", lambda: run_build(root, command, env, attempt / "cargo.log", lock_fd=lock_fd))
-        revalidate()
-        artifacts = stage("read-only artifact capture", lambda: capture_artifacts(target_dir, attempt))
-        revalidate()
+            if not checks.exists():
+                write_record(checks, {"request": request, "passed": True})
+        stage("Linux release build", lambda: run_build(source, command, env, attempt / "cargo.log", lock_fd=lock_fd, lane_lock_fd=lane_lock_fd))
+        with source_fingerprints(source, target_dir, TARGET, packages, repair=False):
+            revalidate()
+            artifacts = stage("read-only artifact capture", lambda: capture_artifacts(target_dir, attempt))
+            revalidate()
         result = {**base, "artifacts": artifacts, "timings_seconds": timings,
                   "attempt": "attempts/" + attempt.name}
         freeze(attempt / "cargo.log")
@@ -553,7 +819,7 @@ def main() -> int:
         else:
             prepared = prepare(args)
             print(f"[taira-release] prepared {prepared['commit']}: {args.output_dir / 'result.json'}", flush=True)
-    except (PrepareError, ReleaseArtifactError, gate.CheckError, OSError, subprocess.SubprocessError) as error:
+    except (PrepareError, ReleaseArtifactError, gate.CheckError, OSError, ValueError, subprocess.SubprocessError) as error:
         print(f"[taira-release] FAIL: {error}", file=sys.stderr, flush=True)
         return 1
     return 0

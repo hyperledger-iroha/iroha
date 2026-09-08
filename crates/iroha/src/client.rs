@@ -593,6 +593,8 @@ macro_rules! sorafs_reserve_detail_methods {
 }
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NSer, NDe)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha::client::ContractCodeBytesResponse")]
 struct ContractCodeBytesResponse {
     code_b64: String,
 }
@@ -1291,6 +1293,8 @@ pub const ACCOUNT_ONBOARDING_RECEIPT_HASH_DOMAIN_V1: &[u8] =
 /// Secret-free intent accepted by the sponsored account-onboarding planner.
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NEnc, NDec)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha::client::AccountOnboardingPlanRequestV1")]
 pub struct AccountOnboardingPlanRequestV1 {
     /// Request layout version. The only supported value is `1`.
     pub version: u8,
@@ -1373,6 +1377,8 @@ impl AccountOnboardingPlanRequestV1 {
 /// Canonical body committed by a stateless sponsored-onboarding receipt.
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NEnc, NDec)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha::client::AccountOnboardingPlanBodyV1")]
 pub struct AccountOnboardingPlanBodyV1 {
     /// Receipt body layout version. The only supported value is `1`.
     pub version: u8,
@@ -1418,6 +1424,8 @@ impl AccountOnboardingPlanBodyV1 {
 /// Stateless signed receipt returned by sponsored account-onboarding planning.
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NEnc, NDec)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha::client::AccountOnboardingPlanReceiptV1")]
 pub struct AccountOnboardingPlanReceiptV1 {
     /// Canonical receipt body.
     pub body: AccountOnboardingPlanBodyV1,
@@ -1753,37 +1761,91 @@ pub fn decode_and_verify_account_onboarding_plan_for_request(
     }
     Ok(instructions)
 }
-/// Public-reset mutation identity committed by every prepared transaction.
+/// Public operation identity committed by every prepared transaction.
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NEnc, NDec)]
 #[norito(deny_unknown_fields)]
-pub struct TairaPublicResetMutationBindingV1 {
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha::client::PreparedOperationBindingV1")]
+pub struct PreparedOperationBindingV1 {
     /// Exact immutable binding schema.
     pub schema: String,
-    /// SHA-256 of the admitted reset authorization.
-    pub authorization_sha256: String,
-    /// Exact authorization nonce.
-    pub authorization_nonce: String,
+    /// Lowercase hash of the exact signed receipt or solved claim.
+    pub semantic_hash_hex: String,
     /// Exact operation kind: `onboarding` or `faucet`.
     pub kind: String,
-    /// Canonical reset phase label.
-    pub phase: String,
-    /// Exact mutation idempotency digest.
-    pub idempotency_key: String,
-    /// Absolute execution deadline from the admitted authorization.
+    /// Caller-owned canonical 64-hex request identity, persisted across retries.
+    pub request_id: String,
+    /// Absolute operation deadline; onboarding cannot outlive its signed receipt.
     pub execution_expires_at_unix_ms: u64,
 }
-impl TairaPublicResetMutationBindingV1 {
+impl PreparedOperationBindingV1 {
     /// Current immutable binding schema.
-    pub const SCHEMA: &'static str = "iroha.taira.public-reset.mutation-binding.v1";
+    pub const SCHEMA: &'static str = "iroha.prepared-operation.binding.v1";
+
+    /// Bind a self-consistent signed onboarding receipt to a caller-owned request and deadline.
+    ///
+    /// Callers must independently trust the issuer and verify the original request and network;
+    /// this constructor does not establish trust in an issuer supplied by the receipt.
+    ///
+    /// # Errors
+    /// Rejects an invalid receipt, noncanonical request identity, or a deadline outside the receipt.
+    pub fn onboarding(
+        receipt: &AccountOnboardingPlanReceiptV1,
+        request_id: impl Into<String>,
+        execution_expires_at_unix_ms: u64,
+    ) -> Result<Self> {
+        if !receipt.verify() {
+            return Err(eyre!(
+                "onboarding operation requires an authentic signed receipt"
+            ));
+        }
+        let binding = Self {
+            schema: Self::SCHEMA.to_owned(),
+            kind: "onboarding".to_owned(),
+            semantic_hash_hex: hex::encode(receipt.plan_hash.as_ref()),
+            request_id: request_id.into(),
+            execution_expires_at_unix_ms,
+        };
+        validate_prepared_mutation_binding(&binding, "onboarding", false)?;
+        validate_prepared_semantic_binding(
+            &binding,
+            &binding.semantic_hash_hex,
+            receipt.body.valid_until_ms,
+        )?;
+        Ok(binding)
+    }
+
+    /// Bind an exact solved faucet claim to a caller-owned request and deadline.
+    ///
+    /// # Errors
+    /// Rejects a malformed claim, request identity, or zero deadline.
+    pub fn faucet(
+        claim: &AccountFaucetClaimV1,
+        request_id: impl Into<String>,
+        execution_expires_at_unix_ms: u64,
+    ) -> Result<Self> {
+        validate_account_faucet_claim(claim)?;
+        let binding = Self {
+            schema: Self::SCHEMA.to_owned(),
+            kind: "faucet".to_owned(),
+            semantic_hash_hex: hex::encode(faucet_claim_hash(claim).as_ref()),
+            request_id: request_id.into(),
+            execution_expires_at_unix_ms,
+        };
+        validate_prepared_mutation_binding(&binding, "faucet", false)?;
+        Ok(binding)
+    }
 }
 /// Prepare request consuming one authenticated semantic onboarding receipt.
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NEnc, NDec)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha::client::AccountOnboardingPrepareRequestV1")]
 pub struct AccountOnboardingPrepareRequestV1 {
     /// Exact immutable request schema.
     pub schema: String,
-    /// Public-reset mutation identity.
-    pub binding: TairaPublicResetMutationBindingV1,
+    /// Public operation identity.
+    pub binding: PreparedOperationBindingV1,
     /// Receipt returned by the planner.
     pub receipt: AccountOnboardingPlanReceiptV1,
     /// Exact payer, sponsor revision, and gas bound Torii may quote.
@@ -1796,11 +1858,13 @@ impl AccountOnboardingPrepareRequestV1 {
 /// Authenticated exact sponsored-onboarding transaction prepared by Torii.
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NEnc, NDec)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha::client::AccountOnboardingPreparedTransactionV1")]
 pub struct AccountOnboardingPreparedTransactionV1 {
     /// Exact immutable prepared-transaction schema.
     pub schema: String,
-    /// Public-reset mutation identity committed by transaction metadata.
-    pub binding: TairaPublicResetMutationBindingV1,
+    /// Public operation identity committed by transaction metadata.
+    pub binding: PreparedOperationBindingV1,
     /// Exact operation label, always `onboarding`.
     pub operation: String,
     /// Exact signed semantic receipt consumed during prepare.
@@ -1826,18 +1890,20 @@ pub struct AccountOnboardingPreparedTransactionV1 {
 }
 impl AccountOnboardingPreparedTransactionV1 {
     /// Current immutable prepared-transaction schema.
-    pub const SCHEMA: &'static str = "iroha.taira.prepared-transaction.v1";
+    pub const SCHEMA: &'static str = "iroha.prepared-transaction.v1";
     /// Exact operation label.
     pub const OPERATION: &'static str = "onboarding";
 }
 /// Authenticated nonterminal result requiring a fresh account-and-alias state proof.
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NEnc, NDec)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha::client::AccountOnboardingProofRequiredPrepareResponseV1")]
 pub struct AccountOnboardingProofRequiredPrepareResponseV1 {
     /// Exact immutable result schema.
     pub schema: String,
-    /// Public-reset mutation identity checked by Torii.
-    pub binding: TairaPublicResetMutationBindingV1,
+    /// Public operation identity checked by Torii.
+    pub binding: PreparedOperationBindingV1,
     /// Exact operation label, always `onboarding`.
     pub operation: String,
     /// Exact nonterminal result label, always `ProofRequired`.
@@ -1913,6 +1979,8 @@ mod onboarding_result_storage_tests {
 /// Solved faucet proof-of-work claim.
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NEnc, NDec)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha::client::AccountFaucetClaimV1")]
 pub struct AccountFaucetClaimV1 {
     /// Canonical domainless target account.
     pub account_id: String,
@@ -1924,11 +1992,13 @@ pub struct AccountFaucetClaimV1 {
 /// Prepare request consuming one solved faucet claim.
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NEnc, NDec)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha::client::AccountFaucetPrepareRequestV1")]
 pub struct AccountFaucetPrepareRequestV1 {
     /// Exact immutable request schema.
     pub schema: String,
-    /// Public-reset mutation identity.
-    pub binding: TairaPublicResetMutationBindingV1,
+    /// Public operation identity.
+    pub binding: PreparedOperationBindingV1,
     /// Solved faucet claim.
     pub claim: AccountFaucetClaimV1,
     /// Exact payer, sponsor revision, and gas bound Torii may quote.
@@ -1941,11 +2011,13 @@ impl AccountFaucetPrepareRequestV1 {
 /// Authenticated exact faucet transaction prepared by Torii.
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NEnc, NDec)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha::client::AccountFaucetPreparedTransactionV1")]
 pub struct AccountFaucetPreparedTransactionV1 {
     /// Exact immutable prepared-transaction schema.
     pub schema: String,
-    /// Public-reset mutation identity committed by transaction metadata.
-    pub binding: TairaPublicResetMutationBindingV1,
+    /// Public operation identity committed by transaction metadata.
+    pub binding: PreparedOperationBindingV1,
     /// Exact operation label, always `faucet`.
     pub operation: String,
     /// Exact solved semantic claim consumed during prepare.
@@ -1973,7 +2045,7 @@ pub struct AccountFaucetPreparedTransactionV1 {
 }
 impl AccountFaucetPreparedTransactionV1 {
     /// Current immutable prepared-transaction schema.
-    pub const SCHEMA: &'static str = "iroha.taira.prepared-transaction.v1";
+    pub const SCHEMA: &'static str = "iroha.prepared-transaction.v1";
     /// Exact operation label.
     pub const OPERATION: &'static str = "faucet";
 }
@@ -2045,8 +2117,8 @@ pub enum PreparedTransactionOutcomeV1 {
 /// Reconciled result of submitting one exact prepared transaction.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PreparedTransactionSubmitResponseV1 {
-    /// Public-reset mutation identity from the submitted envelope.
-    pub binding: TairaPublicResetMutationBindingV1,
+    /// Public operation identity from the submitted envelope.
+    pub binding: PreparedOperationBindingV1,
     /// Exact operation label.
     pub operation: String,
     /// Hash of the only transaction considered by the request.
@@ -2433,7 +2505,7 @@ struct PreparedResponseSchemaProbeV1 {
 #[norito(deny_unknown_fields)]
 struct PreparedTransactionSubmitResponseWireV1 {
     schema: String,
-    binding: TairaPublicResetMutationBindingV1,
+    binding: PreparedOperationBindingV1,
     operation: String,
     transaction_hash_hex: String,
     outcome: String,
@@ -2441,7 +2513,7 @@ struct PreparedTransactionSubmitResponseWireV1 {
 #[derive(Clone)]
 struct AccountOnboardingPreparedSignaturePayloadV1 {
     schema: String,
-    binding: TairaPublicResetMutationBindingV1,
+    binding: PreparedOperationBindingV1,
     operation: String,
     receipt: AccountOnboardingPlanReceiptV1,
     semantic_hash_hex: String,
@@ -2472,7 +2544,7 @@ impl From<&AccountOnboardingPreparedTransactionV1> for AccountOnboardingPrepared
 #[derive(Clone)]
 struct AccountOnboardingProofRequiredSignaturePayloadV1 {
     schema: String,
-    binding: TairaPublicResetMutationBindingV1,
+    binding: PreparedOperationBindingV1,
     operation: String,
     outcome: String,
     proof_kind: String,
@@ -2501,7 +2573,7 @@ impl From<&AccountOnboardingProofRequiredPrepareResponseV1>
 #[derive(Clone)]
 struct AccountFaucetPreparedSignaturePayloadV1 {
     schema: String,
-    binding: TairaPublicResetMutationBindingV1,
+    binding: PreparedOperationBindingV1,
     operation: String,
     claim: AccountFaucetClaimV1,
     semantic_hash_hex: String,
@@ -2533,15 +2605,15 @@ impl From<&AccountFaucetPreparedTransactionV1> for AccountFaucetPreparedSignatur
 }
 
 fn prepared_binding_ref(
-    binding: &TairaPublicResetMutationBindingV1,
-) -> iroha_torii_shared::prepared_transaction::PreparedMutationBindingRefV1<'_> {
-    iroha_torii_shared::prepared_transaction::PreparedMutationBindingRefV1 {
+    binding: &PreparedOperationBindingV1,
+) -> iroha_torii_shared::prepared_transaction::PreparedOperationBindingRefV1<'_> {
+    iroha_torii_shared::prepared_transaction::PreparedOperationBindingRefV1 {
         schema: &binding.schema,
-        authorization_sha256: &binding.authorization_sha256,
-        authorization_nonce: &binding.authorization_nonce,
+        semantic_hash_hex: &binding.semantic_hash_hex,
+
         kind: &binding.kind,
-        phase: &binding.phase,
-        idempotency_key: &binding.idempotency_key,
+
+        request_id: &binding.request_id,
         execution_expires_at_unix_ms: binding.execution_expires_at_unix_ms,
     }
 }
@@ -2652,6 +2724,8 @@ impl PreparedSignatureTranscriptV1 for AccountFaucetPreparedSignaturePayloadV1 {
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NSer, NDe)]
 #[norito(deny_unknown_fields)]
 /// Selector-explicit request for the Torii multisig authority-spec API.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha::client::MultisigSpecRequest")]
 pub struct MultisigSpecRequest {
     /// Active concrete multisig account id.
     #[norito(default)]
@@ -2663,6 +2737,8 @@ pub struct MultisigSpecRequest {
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NSer, NDe)]
 #[norito(deny_unknown_fields)]
 /// Exact active multisig authority spec returned by Torii.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha::client::MultisigSpecResponse")]
 pub struct MultisigSpecResponse {
     /// Canonical multisig account id resolved by the server.
     pub resolved_multisig_account_id: iroha_data_model::account::AccountId,
@@ -2672,6 +2748,8 @@ pub struct MultisigSpecResponse {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NSer, NDe)]
 #[norito(deny_unknown_fields)]
 /// Fixed SCCP V1 route-registry capacity limits.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha::client::SccpRegistryLimits")]
 pub struct SccpRegistryLimits {
     /// Maximum governed lanes retained by the registry.
     #[norito(rename = "max_governed_lanes")]
@@ -2692,6 +2770,8 @@ pub struct SccpRegistryLimits {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NSer, NDe)]
 #[norito(deny_unknown_fields)]
 /// Consensus-critical SCCP proof and verifier-work limits.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha::client::SccpResourceLimits")]
 pub struct SccpResourceLimits {
     /// Maximum successful outbound SCCP messages committed by one block.
     #[norito(rename = "max_outbound_messages_per_block")]
@@ -2784,6 +2864,8 @@ pub struct SccpResourceLimits {
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NSer, NDe)]
 #[norito(deny_unknown_fields)]
 /// Public SCCP capability snapshot advertised by the node.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha::client::SccpCapabilities")]
 pub struct SccpCapabilities {
     /// Capability schema version. First release is exactly `1`.
     pub version: u8,
@@ -3046,6 +3128,8 @@ fn validate_sccp_capabilities(capabilities: &SccpCapabilities) -> Result<()> {
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NSer, NDe)]
 #[norito(deny_unknown_fields)]
 /// Exact response returned by either SCCP bridge submit endpoint.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha::client::SccpBridgeSubmitResponse")]
 pub struct SccpBridgeSubmitResponse {
     /// Whether Torii submitted the transaction to the pipeline.
     pub submitted: bool,
@@ -3077,6 +3161,8 @@ pub struct SccpBridgeSubmitResponse {
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NSer, NDe)]
 #[norito(deny_unknown_fields)]
 /// Canonical readback and proof-request links for a recent SCCP message.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha::client::SccpRecentMessageLinks")]
 pub struct SccpRecentMessageLinks {
     /// Canonical SCCP bundle lookup path.
     pub bundle_path: String,
@@ -3086,6 +3172,8 @@ pub struct SccpRecentMessageLinks {
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NSer, NDe)]
 #[norito(deny_unknown_fields)]
 /// Compact newest-first SCCP outbound message discovery record.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha::client::SccpRecentMessage")]
 pub struct SccpRecentMessage {
     /// Height of the finalized SORA block that anchored the message.
     pub height: u64,
@@ -3127,6 +3215,8 @@ pub struct SccpRecentMessage {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NSer, NDe)]
 #[norito(deny_unknown_fields)]
 /// Compound continuation returned by recent SCCP discovery.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha::client::SccpRecentCursor")]
 pub struct SccpRecentCursor {
     /// Height of the last returned item.
     pub from: u64,
@@ -3136,6 +3226,8 @@ pub struct SccpRecentCursor {
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NSer, NDe)]
 #[norito(deny_unknown_fields)]
 /// Newest-first committed SCCP message discovery response.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha::client::SccpRecentMessages")]
 pub struct SccpRecentMessages {
     /// Newest-first committed outbound SCCP messages.
     pub items: Vec<SccpRecentMessage>,
@@ -4950,6 +5042,8 @@ fn decode_sccp_bridge_submit_response(
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NSer, NDe)]
 #[norito(deny_unknown_fields)]
 /// Selector-explicit request for the Torii multisig proposals query API.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha::client::MultisigProposalsQueryRequest")]
 pub struct MultisigProposalsQueryRequest {
     /// Active concrete multisig account id.
     #[norito(default)]
@@ -4970,6 +5064,8 @@ pub struct MultisigProposalsQueryRequest {
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NSer, NDe)]
 #[norito(deny_unknown_fields)]
 /// Multisig proposal entry returned by the Torii multisig proposals API.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha::client::MultisigProposalEntry")]
 pub struct MultisigProposalEntry {
     /// Stable proposal identifier.
     pub proposal_id: String,
@@ -4991,6 +5087,8 @@ pub struct MultisigProposalEntry {
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NSer, NDe)]
 #[norito(deny_unknown_fields)]
 /// Response payload returned by the Torii multisig proposals query API.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha::client::MultisigProposalsQueryResponse")]
 pub struct MultisigProposalsQueryResponse {
     /// Canonical multisig account id resolved by the server.
     pub resolved_multisig_account_id: iroha_data_model::account::AccountId,
@@ -5003,6 +5101,8 @@ pub struct MultisigProposalsQueryResponse {
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NSer, NDe)]
 #[norito(deny_unknown_fields)]
 /// Selector-explicit request for one multisig proposal.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha::client::MultisigProposalsResolveRequest")]
 pub struct MultisigProposalsResolveRequest {
     /// Active concrete multisig account id.
     #[norito(default)]
@@ -5020,6 +5120,8 @@ pub struct MultisigProposalsResolveRequest {
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NSer, NDe)]
 #[norito(deny_unknown_fields)]
 /// Response payload returned by the Torii multisig proposal resolve API.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha::client::MultisigProposalResolveResponse")]
 pub struct MultisigProposalResolveResponse {
     /// Canonical multisig account id resolved by the server.
     pub resolved_multisig_account_id: iroha_data_model::account::AccountId,
@@ -5043,6 +5145,8 @@ pub struct MultisigProposalResolveResponse {
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NSer, NDe)]
 /// Request payload for proposing a generic multisig instruction batch.
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha::client::MultisigProposeRequest")]
 pub struct MultisigProposeRequest {
     /// Active concrete multisig account id.
     #[norito(default)]
@@ -5086,6 +5190,8 @@ pub struct MultisigProposeRequest {
 }
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NSer, NDe)]
 /// Response payload returned by multisig participation endpoints.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha::client::MultisigResponse")]
 pub struct MultisigResponse {
     /// Whether processing succeeded.
     pub ok: bool,
@@ -5319,9 +5425,9 @@ fn decode_account_aliases_by_account(
     }
 }
 const FAUCET_CLAIM_HASH_DOMAIN_V1: &[u8] = b"iroha:accounts:faucet:claim:v1\0";
-const PREPARED_BINDING_METADATA_KEY_V1: &str = "taira_public_reset_binding";
-const PREPARED_OPERATION_METADATA_KEY_V1: &str = "taira_prepared_operation";
-const PREPARED_SEMANTIC_HASH_METADATA_KEY_V1: &str = "taira_prepared_semantic_hash";
+const PREPARED_BINDING_METADATA_KEY_V1: &str = "prepared_operation_binding";
+const PREPARED_OPERATION_METADATA_KEY_V1: &str = "prepared_operation";
+const PREPARED_SEMANTIC_HASH_METADATA_KEY_V1: &str = "prepared_semantic_hash";
 
 fn lower_hex_with_len(value: &str, length: usize) -> bool {
     value.len() == length
@@ -5331,35 +5437,63 @@ fn lower_hex_with_len(value: &str, length: usize) -> bool {
 }
 
 fn validate_prepared_mutation_binding(
-    binding: &TairaPublicResetMutationBindingV1,
+    binding: &PreparedOperationBindingV1,
     expected_kind: &str,
     require_active: bool,
 ) -> Result<()> {
-    let nonce_is_canonical = binding.authorization_nonce.len() == 32
-        && binding.authorization_nonce.bytes().all(|byte| {
-            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'_')
-        });
-    let phase_is_canonical = !binding.phase.is_empty()
-        && binding.phase.len() <= 128
-        && binding.phase.bytes().all(|byte| {
-            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'_')
-        });
     let now_ms: u64 = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis()
         .try_into()
         .unwrap_or(u64::MAX);
-    if binding.schema != TairaPublicResetMutationBindingV1::SCHEMA
+    if binding.schema != PreparedOperationBindingV1::SCHEMA
         || binding.kind != expected_kind
-        || !lower_hex_with_len(&binding.authorization_sha256, 64)
-        || !nonce_is_canonical
-        || !phase_is_canonical
-        || !lower_hex_with_len(&binding.idempotency_key, 64)
+        || !lower_hex_with_len(&binding.semantic_hash_hex, 64)
+        || !lower_hex_with_len(&binding.request_id, 64)
+        || binding.execution_expires_at_unix_ms == 0
         || (require_active && binding.execution_expires_at_unix_ms <= now_ms)
     {
         return Err(eyre!(
             "prepared transaction binding is noncanonical, expired, or belongs to another operation"
+        ));
+    }
+    Ok(())
+}
+
+fn validate_public_prepared_transaction_lifetime(
+    transaction: &SignedTransaction,
+    binding: &PreparedOperationBindingV1,
+) -> Result<()> {
+    let creation = u64::try_from(transaction.creation_time().as_millis())
+        .map_err(|_| eyre!("prepared transaction creation time overflows"))?;
+    let ttl = transaction
+        .time_to_live()
+        .and_then(|ttl| u64::try_from(ttl.as_millis()).ok())
+        .filter(|ttl| *ttl > 0)
+        .ok_or_else(|| eyre!("prepared transaction requires a positive bounded TTL"))?;
+    if creation
+        .checked_add(ttl)
+        .is_none_or(|expiry| expiry > binding.execution_expires_at_unix_ms)
+    {
+        return Err(eyre!(
+            "prepared transaction outlives its operation deadline"
+        ));
+    }
+    Ok(())
+}
+
+fn validate_prepared_semantic_binding(
+    binding: &PreparedOperationBindingV1,
+    semantic_hash_hex: &str,
+    semantic_expires_at_unix_ms: u64,
+) -> Result<()> {
+    if binding.semantic_hash_hex != semantic_hash_hex
+        || binding.execution_expires_at_unix_ms == 0
+        || binding.execution_expires_at_unix_ms > semantic_expires_at_unix_ms
+    {
+        return Err(eyre!(
+            "prepared operation binding differs from its exact semantic intent or deadline"
         ));
     }
     Ok(())
@@ -5432,7 +5566,7 @@ fn faucet_claim_hash(claim: &AccountFaucetClaimV1) -> Hash {
 }
 
 fn expected_prepared_transaction_metadata(
-    binding: &TairaPublicResetMutationBindingV1,
+    binding: &PreparedOperationBindingV1,
     operation: &str,
     semantic_hash_hex: &str,
 ) -> Result<Metadata> {
@@ -5459,6 +5593,16 @@ fn expected_prepared_transaction_metadata(
             .expect("static semantic-hash metadata key"),
         iroha_primitives::json::Json::new(semantic_hash_hex.to_owned()),
     );
+    if operation == AccountFaucetPreparedTransactionV1::OPERATION {
+        metadata.insert(
+            iroha_data_model::transaction::FAUCET_CLAIM_MARKER_VERSION_METADATA_KEY
+                .parse()
+                .expect("static faucet claim marker key"),
+            iroha_primitives::json::Json::new(
+                iroha_data_model::transaction::FAUCET_CLAIM_MARKER_VERSION_V1,
+            ),
+        );
+    }
     Ok(metadata)
 }
 
@@ -5585,9 +5729,14 @@ pub fn verify_account_onboarding_prepared_transaction_v1(
     request: &AccountOnboardingPlanRequestV1,
     prepared: &AccountOnboardingPreparedTransactionV1,
     receipt: &AccountOnboardingPlanReceiptV1,
-    binding: &TairaPublicResetMutationBindingV1,
+    binding: &PreparedOperationBindingV1,
     expected_fee_payment: &FeePaymentIntent,
 ) -> Result<SignedTransaction> {
+    validate_prepared_semantic_binding(
+        binding,
+        &hex::encode(receipt.plan_hash.as_ref()),
+        receipt.body.valid_until_ms,
+    )?;
     expected_fee_payment
         .validate()
         .map_err(|error| eyre!("invalid requested onboarding fee payment: {error}"))?;
@@ -5631,6 +5780,7 @@ pub fn verify_account_onboarding_prepared_transaction_v1(
         &prepared.signed_transaction_wire_hex,
         &prepared.signed_transaction_wire_sha256,
     )?;
+    validate_public_prepared_transaction_lifetime(&transaction, binding)?;
     let Executable::Instructions(instructions) = transaction.instructions() else {
         return Err(eyre!(
             "prepared onboarding transaction must contain a direct instruction sequence"
@@ -5665,10 +5815,15 @@ pub fn verify_account_faucet_prepared_transaction_v1(
     expected_network_id: NetworkId,
     prepared: &AccountFaucetPreparedTransactionV1,
     claim: &AccountFaucetClaimV1,
-    binding: &TairaPublicResetMutationBindingV1,
+    binding: &PreparedOperationBindingV1,
     expected_fee_payment: &FeePaymentIntent,
     policy: &AccountFaucetPolicyV1,
 ) -> Result<SignedTransaction> {
+    validate_prepared_semantic_binding(
+        binding,
+        &hex::encode(faucet_claim_hash(claim).as_ref()),
+        u64::MAX,
+    )?;
     expected_fee_payment
         .validate()
         .map_err(|error| eyre!("invalid requested faucet fee payment: {error}"))?;
@@ -5705,6 +5860,7 @@ pub fn verify_account_faucet_prepared_transaction_v1(
         &prepared.signed_transaction_wire_hex,
         &prepared.signed_transaction_wire_sha256,
     )?;
+    validate_public_prepared_transaction_lifetime(&transaction, binding)?;
     let expected_metadata = expected_prepared_transaction_metadata(
         binding,
         AccountFaucetPreparedTransactionV1::OPERATION,
@@ -5738,8 +5894,13 @@ pub fn verify_account_onboarding_proof_required_result_v1(
     request: &AccountOnboardingPlanRequestV1,
     proof_required: &AccountOnboardingProofRequiredPrepareResponseV1,
     receipt: &AccountOnboardingPlanReceiptV1,
-    binding: &TairaPublicResetMutationBindingV1,
+    binding: &PreparedOperationBindingV1,
 ) -> Result<()> {
+    validate_prepared_semantic_binding(
+        binding,
+        &hex::encode(receipt.plan_hash.as_ref()),
+        receipt.body.valid_until_ms,
+    )?;
     validate_prepared_mutation_binding(
         &proof_required.binding,
         AccountOnboardingPreparedTransactionV1::OPERATION,
@@ -5769,7 +5930,7 @@ pub fn verify_account_onboarding_proof_required_result_v1(
 
 fn parse_prepared_submit_response(
     response: &Response<Vec<u8>>,
-    expected_binding: &TairaPublicResetMutationBindingV1,
+    expected_binding: &PreparedOperationBindingV1,
     expected_operation: &str,
     expected_hash: &str,
 ) -> Result<PreparedTransactionSubmitResponseV1> {
@@ -5782,7 +5943,7 @@ fn parse_prepared_submit_response(
     let wire: PreparedTransactionSubmitResponseWireV1 =
         norito::json::from_slice(response.body())
             .wrap_err("decode prepared transaction submit response")?;
-    if wire.schema != "iroha.taira.prepared-transaction-submit.v1"
+    if wire.schema != "iroha.prepared-transaction-submit.v1"
         || &wire.binding != expected_binding
         || wire.operation != expected_operation
         || wire.transaction_hash_hex != expected_hash
@@ -7997,7 +8158,7 @@ fn parse_optional_string(value: Option<&JsonValue>, context: &str) -> Result<Opt
     }
 }
 fn signed_transaction_schema_hash_hex() -> String {
-    hex::encode(<SignedTransaction as norito::core::NoritoSerialize>::schema_hash())
+    hex::encode(norito::schema::identity::frame_hash::<SignedTransaction>())
 }
 fn parse_signed_transaction_schema_hash_hex(
     capabilities: &JsonValue,
@@ -13712,8 +13873,8 @@ mod evidence_http_tests {
             items: vec![sample.clone()],
         };
         assert_eq!(
-            <SharedSumeragiEvidenceListWireResponse as norito::NoritoSerialize>::schema_hash(),
-            <SumeragiEvidenceListWireResponse as norito::NoritoSerialize>::schema_hash(),
+            norito::schema::identity::frame_hash::<SharedSumeragiEvidenceListWireResponse>(),
+            norito::schema::identity::frame_hash::<SumeragiEvidenceListWireResponse>(),
             "the server and client must negotiate one named Norito schema",
         );
         let response = with_mock_http(
@@ -17736,11 +17897,16 @@ impl Client {
         &self,
         request: &AccountOnboardingPlanRequestV1,
         receipt: &AccountOnboardingPlanReceiptV1,
-        binding: &TairaPublicResetMutationBindingV1,
+        binding: &PreparedOperationBindingV1,
         fee_payment: &FeePaymentIntent,
         onboarding_token: &str,
     ) -> Result<Response<Vec<u8>>> {
         self.verify_account_onboarding_plan_for_request(request, receipt)?;
+        validate_prepared_semantic_binding(
+            binding,
+            &hex::encode(receipt.plan_hash.as_ref()),
+            receipt.body.valid_until_ms,
+        )?;
         validate_prepared_mutation_binding(
             binding,
             AccountOnboardingPreparedTransactionV1::OPERATION,
@@ -17775,7 +17941,7 @@ impl Client {
         &self,
         request: &AccountOnboardingPlanRequestV1,
         receipt: &AccountOnboardingPlanReceiptV1,
-        binding: &TairaPublicResetMutationBindingV1,
+        binding: &PreparedOperationBindingV1,
         fee_payment: &FeePaymentIntent,
         onboarding_token: &str,
     ) -> Result<AccountOnboardingPrepareResponseV1> {
@@ -17840,7 +18006,7 @@ impl Client {
         request: &AccountOnboardingPlanRequestV1,
         prepared: &AccountOnboardingPreparedTransactionV1,
         receipt: &AccountOnboardingPlanReceiptV1,
-        binding: &TairaPublicResetMutationBindingV1,
+        binding: &PreparedOperationBindingV1,
         expected_fee_payment: &FeePaymentIntent,
     ) -> Result<SignedTransaction> {
         verify_account_onboarding_prepared_transaction_v1(
@@ -17866,7 +18032,7 @@ impl Client {
         request: &AccountOnboardingPlanRequestV1,
         proof_required: &AccountOnboardingProofRequiredPrepareResponseV1,
         receipt: &AccountOnboardingPlanReceiptV1,
-        binding: &TairaPublicResetMutationBindingV1,
+        binding: &PreparedOperationBindingV1,
     ) -> Result<()> {
         verify_account_onboarding_proof_required_result_v1(
             self.network_id,
@@ -18016,10 +18182,15 @@ impl Client {
     pub fn post_account_faucet_prepare(
         &self,
         claim: &AccountFaucetClaimV1,
-        binding: &TairaPublicResetMutationBindingV1,
+        binding: &PreparedOperationBindingV1,
         fee_payment: &FeePaymentIntent,
         _policy: &AccountFaucetPolicyV1,
     ) -> Result<Response<Vec<u8>>> {
+        validate_prepared_semantic_binding(
+            binding,
+            &hex::encode(faucet_claim_hash(claim).as_ref()),
+            u64::MAX,
+        )?;
         validate_prepared_mutation_binding(
             binding,
             AccountFaucetPreparedTransactionV1::OPERATION,
@@ -18051,7 +18222,7 @@ impl Client {
     pub fn prepare_account_faucet_transaction(
         &self,
         claim: &AccountFaucetClaimV1,
-        binding: &TairaPublicResetMutationBindingV1,
+        binding: &PreparedOperationBindingV1,
         fee_payment: &FeePaymentIntent,
         policy: &AccountFaucetPolicyV1,
     ) -> Result<AccountFaucetPreparedTransactionV1> {
@@ -18083,7 +18254,7 @@ impl Client {
         &self,
         prepared: &AccountFaucetPreparedTransactionV1,
         claim: &AccountFaucetClaimV1,
-        binding: &TairaPublicResetMutationBindingV1,
+        binding: &PreparedOperationBindingV1,
         expected_fee_payment: &FeePaymentIntent,
         policy: &AccountFaucetPolicyV1,
     ) -> Result<SignedTransaction> {
@@ -26111,14 +26282,14 @@ mod tests {
         receipt.signature = Signature::try_new(signer.private_key(), receipt.plan_hash.as_ref())
             .expect("re-sign onboarding receipt fixture");
     }
-    fn prepared_binding_fixture(kind: &str) -> TairaPublicResetMutationBindingV1 {
-        TairaPublicResetMutationBindingV1 {
-            schema: TairaPublicResetMutationBindingV1::SCHEMA.to_owned(),
-            authorization_sha256: "11".repeat(32),
-            authorization_nonce: "reset_nonce_00000000000000000000".to_owned(),
+    fn prepared_binding_fixture(kind: &str) -> PreparedOperationBindingV1 {
+        PreparedOperationBindingV1 {
+            schema: PreparedOperationBindingV1::SCHEMA.to_owned(),
+            semantic_hash_hex: "11".repeat(32),
+
             kind: kind.to_owned(),
-            phase: format!("prepare_{kind}"),
-            idempotency_key: "22".repeat(32),
+
+            request_id: "22".repeat(32),
             execution_expires_at_unix_ms: u64::MAX,
         }
     }
@@ -26209,7 +26380,7 @@ mod tests {
         signed_transaction_wire_hex: &str,
         signed_transaction_wire_sha256: &str,
         fee_payment: &FeePaymentIntent,
-        binding: &TairaPublicResetMutationBindingV1,
+        binding: &PreparedOperationBindingV1,
         operation: &str,
         semantic_hash_hex: &str,
         signer: &KeyPair,
@@ -26223,7 +26394,7 @@ mod tests {
         let Executable::Instructions(instructions) = original.instructions() else {
             panic!("prepared fixture transaction must contain direct instructions");
         };
-        TransactionBuilder::new(
+        let mut builder = TransactionBuilder::new(
             *original
                 .network_id()
                 .expect("prepared fixture transaction network"),
@@ -26234,12 +26405,16 @@ mod tests {
             expected_prepared_transaction_metadata(binding, operation, semantic_hash_hex)
                 .expect("prepared fixture metadata"),
         )
-        .with_instructions(instructions.as_ref().to_vec())
-        .sign(signer.private_key())
+        .with_instructions(instructions.as_ref().to_vec());
+        // These rebound fixtures exercise durable verification after expiry.
+        // Keep the signed lifetime within even the one-millisecond binding.
+        builder.set_creation_time(Duration::ZERO);
+        builder.set_ttl(Duration::from_millis(1));
+        builder.sign(signer.private_key())
     }
     fn replace_onboarding_prepared_binding(
         prepared: &mut AccountOnboardingPreparedTransactionV1,
-        binding: TairaPublicResetMutationBindingV1,
+        binding: PreparedOperationBindingV1,
     ) {
         let signer = KeyPair::try_from_seed(vec![0x51; 32], Algorithm::Ed25519)
             .expect("derive onboarding prepared fixture signer");
@@ -26270,7 +26445,7 @@ mod tests {
     }
     fn replace_faucet_prepared_binding(
         prepared: &mut AccountFaucetPreparedTransactionV1,
-        binding: TairaPublicResetMutationBindingV1,
+        binding: PreparedOperationBindingV1,
     ) {
         let signer = KeyPair::try_from_seed(vec![0x61; 32], Algorithm::Ed25519)
             .expect("derive faucet prepared fixture signer");
@@ -26284,10 +26459,17 @@ mod tests {
             &prepared.semantic_hash_hex,
             &signer,
         );
+        prepared.binding = binding;
+        replace_faucet_prepared_transaction(prepared, &transaction, &signer);
+    }
+    fn replace_faucet_prepared_transaction(
+        prepared: &mut AccountFaucetPreparedTransactionV1,
+        transaction: &SignedTransaction,
+        signer: &KeyPair,
+    ) {
         let wire = transaction
             .encode_wire_v1()
             .expect("encode rebound faucet transaction");
-        prepared.binding = binding;
         prepared.transaction_hash_hex = hex::encode(transaction.hash().as_ref());
         prepared.signed_transaction_wire_sha256 = hex::encode(Sha256::digest(&wire));
         prepared.signed_transaction_wire_hex = hex::encode(wire);
@@ -27291,10 +27473,144 @@ mod tests {
         assert_eq!(decoded, request);
     }
     #[test]
+    fn prepared_operation_signed_lifetime_cannot_exceed_deadline() {
+        let mut client = client_with_base_url(base_url());
+        let prepared = onboarding_prepared_signature_fixture(&mut client);
+        let transaction = decode_canonical_prepared_transaction(
+            &prepared.transaction_hash_hex,
+            &prepared.signed_transaction_wire_hex,
+            &prepared.signed_transaction_wire_sha256,
+        )
+        .expect("fixture transaction");
+        let expiry = u64::try_from(
+            transaction.creation_time().as_millis()
+                + transaction.time_to_live().expect("TTL").as_millis(),
+        )
+        .expect("expiry");
+        let mut binding = prepared.binding;
+        binding.execution_expires_at_unix_ms = expiry;
+        validate_public_prepared_transaction_lifetime(&transaction, &binding)
+            .expect("exact deadline accepted");
+        binding.execution_expires_at_unix_ms = expiry - 1;
+        assert!(validate_public_prepared_transaction_lifetime(&transaction, &binding).is_err());
+    }
+
+    #[test]
+    fn prepared_operation_binding_derives_signed_intent_and_rejects_reset_fields() {
+        let client = client_with_base_url(base_url());
+        let (_, receipt) = account_onboarding_plan_fixture(&client);
+        let binding = PreparedOperationBindingV1::onboarding(
+            &receipt,
+            "ab".repeat(32),
+            receipt.body.valid_until_ms,
+        )
+        .expect("bound signed receipt");
+        assert_eq!(
+            binding.semantic_hash_hex,
+            hex::encode(receipt.plan_hash.as_ref())
+        );
+        assert!(
+            PreparedOperationBindingV1::onboarding(
+                &receipt,
+                "AB".repeat(32),
+                receipt.body.valid_until_ms
+            )
+            .is_err()
+        );
+        assert!(PreparedOperationBindingV1::onboarding(&receipt, "ab".repeat(32), 0).is_err());
+        assert!(
+            PreparedOperationBindingV1::onboarding(
+                &receipt,
+                "ab".repeat(32),
+                receipt.body.valid_until_ms + 1
+            )
+            .is_err()
+        );
+        let mut bad_receipt = receipt.clone();
+        bad_receipt.body.request.alias.push('x');
+        assert!(
+            PreparedOperationBindingV1::onboarding(
+                &bad_receipt,
+                "ab".repeat(32),
+                receipt.body.valid_until_ms
+            )
+            .is_err()
+        );
+        let mut value = norito::json::to_value(&binding).expect("encode binding");
+        value
+            .as_object_mut()
+            .expect("binding object")
+            .insert("authorization_sha256".to_owned(), "11".repeat(32).into());
+        assert!(norito::json::from_value::<PreparedOperationBindingV1>(value).is_err());
+        let bytes = norito::codec::Encode::encode(&binding);
+        let decoded: PreparedOperationBindingV1 =
+            norito::codec::Decode::decode(&mut bytes.as_slice()).expect("binding wire roundtrip");
+        assert_eq!(decoded, binding);
+    }
+
+    #[test]
+    fn prepared_operation_binding_rejects_semantic_substitution_before_http() {
+        let client = client_with_base_url(base_url());
+        let (request, receipt) = account_onboarding_plan_fixture(&client);
+        let mut binding = PreparedOperationBindingV1::onboarding(
+            &receipt,
+            "ab".repeat(32),
+            receipt.body.valid_until_ms,
+        )
+        .expect("binding");
+        binding.semantic_hash_hex = "cd".repeat(32);
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        with_mock_http(
+            respond_with(&store, empty_response(StatusCode::OK)),
+            |transport| {
+                let client = client.clone().with_test_http_transport(transport.clone());
+                assert!(
+                    client
+                        .post_account_onboarding_prepare(
+                            &request,
+                            &receipt,
+                            &binding,
+                            &prepared_fee_payment_fixture(),
+                            &"T".repeat(32)
+                        )
+                        .is_err()
+                );
+            },
+        );
+        assert!(store.lock().expect("snapshots").is_empty());
+        let claim = AccountFaucetClaimV1 {
+            account_id: receipt.body.request.account_id.clone(),
+            pow_anchor_height: 42,
+            pow_nonce_hex: "0001".to_owned(),
+        };
+        let faucet = PreparedOperationBindingV1::faucet(&claim, "ab".repeat(32), 42)
+            .expect("faucet binding");
+        assert_eq!(
+            faucet.semantic_hash_hex,
+            hex::encode(faucet_claim_hash(&claim).as_ref())
+        );
+        let mut changed = claim;
+        changed.pow_nonce_hex = "0002".to_owned();
+        assert!(
+            validate_prepared_semantic_binding(
+                &faucet,
+                &hex::encode(faucet_claim_hash(&changed).as_ref()),
+                u64::MAX
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
     fn sponsored_onboarding_prepare_forwards_exact_receipt_and_binding_without_token_body() {
         let client = client_with_base_url(base_url());
         let (request, receipt) = account_onboarding_plan_fixture(&client);
-        let binding = prepared_binding_fixture("onboarding");
+        let binding = PreparedOperationBindingV1::onboarding(
+            &receipt,
+            "22".repeat(32),
+            receipt.body.valid_until_ms,
+        )
+        .expect("onboarding binding");
         let fee_payment = prepared_fee_payment_fixture();
         let token = "A".repeat(32);
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
@@ -27636,6 +27952,88 @@ mod tests {
                 "unexpected substituted {label} error: {error:#}"
             );
         }
+    }
+
+    #[test]
+    fn faucet_prepared_verifier_requires_exact_claim_marker_metadata() {
+        use iroha_data_model::transaction::{
+            FAUCET_CLAIM_MARKER_VERSION_METADATA_KEY, FAUCET_CLAIM_MARKER_VERSION_V1,
+        };
+
+        let mut client = client_with_base_url(base_url());
+        let fixture = faucet_prepared_signature_fixture(&mut client);
+        let policy = faucet_policy_fixture();
+        let signer = KeyPair::try_from_seed(vec![0x61; 32], Algorithm::Ed25519)
+            .expect("derive faucet fixture signer");
+        let original = decode_canonical_prepared_transaction(
+            &fixture.transaction_hash_hex,
+            &fixture.signed_transaction_wire_hex,
+            &fixture.signed_transaction_wire_sha256,
+        )
+        .expect("canonical signed fixture");
+        let Executable::Instructions(instructions) = original.instructions() else {
+            panic!("faucet fixture requires direct instructions");
+        };
+        let marker: Name = FAUCET_CLAIM_MARKER_VERSION_METADATA_KEY.parse().unwrap();
+        assert_eq!(
+            original.metadata().get(&marker),
+            Some(&Json::new(FAUCET_CLAIM_MARKER_VERSION_V1))
+        );
+        for label in ["missing", "wrong version", "wrong type", "extra metadata"] {
+            let mut metadata = original.metadata().clone();
+            match label {
+                "missing" => {
+                    assert!(metadata.remove(&marker).is_some());
+                }
+                "wrong version" => {
+                    metadata.insert(marker.clone(), Json::new(2_u64));
+                }
+                "wrong type" => {
+                    metadata.insert(marker.clone(), Json::new("1"));
+                }
+                "extra metadata" => {
+                    metadata.insert("unexpected".parse().unwrap(), Json::new(1_u64));
+                }
+                _ => unreachable!("fixed metadata mutation"),
+            }
+            let mut builder = TransactionBuilder::new(
+                *original.network_id().expect("fixture network"),
+                original.authority().clone(),
+                fixture.fee_payment.clone(),
+            )
+            .with_metadata(metadata)
+            .with_instructions(instructions.as_ref().to_vec());
+            builder.set_creation_time(original.creation_time());
+            builder.set_ttl(original.time_to_live().expect("fixture lifetime"));
+            let transaction = builder.sign(signer.private_key());
+            let mut substituted = fixture.clone();
+            replace_faucet_prepared_transaction(&mut substituted, &transaction, &signer);
+            let error = client
+                .verify_account_faucet_prepared_transaction(
+                    &substituted,
+                    &fixture.claim,
+                    &fixture.binding,
+                    &fixture.fee_payment,
+                    &policy,
+                )
+                .expect_err(label);
+            assert!(
+                error.to_string().contains("substituted"),
+                "{label}: signed metadata mutation must fail exact comparison: {error:#}"
+            );
+        }
+        let onboarding = onboarding_prepared_signature_fixture(&mut client);
+        assert!(
+            expected_prepared_transaction_metadata(
+                &onboarding.binding,
+                AccountOnboardingPreparedTransactionV1::OPERATION,
+                &onboarding.semantic_hash_hex,
+            )
+            .unwrap()
+            .get(&marker)
+            .is_none(),
+            "the claim marker belongs only to faucet transactions"
+        );
     }
 
     #[test]
@@ -28016,7 +28414,7 @@ mod tests {
         let binding = prepared_binding_fixture("faucet");
         let hash = "ab".repeat(32);
         let body = norito::json::to_json(&PreparedTransactionSubmitResponseWireV1 {
-            schema: "iroha.taira.prepared-transaction-submit.v1".to_owned(),
+            schema: "iroha.prepared-transaction-submit.v1".to_owned(),
             binding: binding.clone(),
             operation: "faucet".to_owned(),
             transaction_hash_hex: hash.clone(),
@@ -38570,4 +38968,12 @@ mod response_report {
         assert!(text.contains("fanout attempted: 3"));
         assert!(text.contains("fanout succeeded: 1"));
     }
+}
+
+#[cfg(test)]
+#[test]
+fn captured_contract_code_frame_identity() {
+    crate::frame_identity_tests::assert_bidirectional::<ContractCodeBytesResponse>(
+        "iroha::client::ContractCodeBytesResponse",
+    );
 }

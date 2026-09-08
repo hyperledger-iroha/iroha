@@ -106,6 +106,11 @@ struct PotrReceiptSigningViewWireV1<'a> {
     gateway_signature: Option<PotrSignatureV1>,
     provider_signature: Option<PotrSignatureV1>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "sorafs_manifest::potr::PotrReceiptSigningViewV1",
+    frame = "sorafs_manifest::potr::PotrReceiptV1"
+)]
 struct PotrReceiptSigningViewV1<'a>(PotrReceiptSigningViewWireV1<'a>);
 impl<'a> PotrReceiptSigningViewV1<'a> {
     fn from_receipt(receipt: &'a PotrReceiptV1) -> Self {
@@ -130,11 +135,7 @@ impl<'a> PotrReceiptSigningViewV1<'a> {
         })
     }
 }
-impl norito::core::NoritoSerialize for PotrReceiptSigningViewV1<'_> {
-    fn schema_hash() -> [u8; 16] {
-        <PotrReceiptV1 as norito::core::NoritoSerialize>::schema_hash()
-    }
-}
+
 impl norito::core::SerializePayload for PotrReceiptSigningViewV1<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         self.0.serialize(writer)
@@ -776,12 +777,12 @@ mod tests {
             provider_signature: None,
         }
     }
-    fn base_receipt() -> PotrReceiptV1 {
+    pub(super) fn base_receipt() -> PotrReceiptV1 {
         let mut receipt = unsigned_receipt();
         resign(&mut receipt);
         receipt
     }
-    fn resign(receipt: &mut PotrReceiptV1) {
+    pub(super) fn resign(receipt: &mut PotrReceiptV1) {
         receipt.gateway_signature =
             Some(sign_receipt(receipt, &SigningKey::from_bytes(&[0x11; 32])));
         receipt.provider_signature = Some(sign_receipt_mldsa(receipt, &[0x31; 32]));
@@ -1211,3 +1212,7 @@ include!("potr/captured_owner_identity_tests.rs");
 #[cfg(test)]
 #[path = "potr/borrowed_payload_tests.rs"]
 mod borrowed_payload_tests;
+
+#[cfg(test)]
+#[path = "potr/signing_identity_tests.rs"]
+pub(crate) mod signing_identity_tests;
