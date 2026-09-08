@@ -1511,10 +1511,15 @@ def _retire_prune_scopes(g, context, inventory):
             # The directory's BLAKE3 identity and SHA256-bound small manifest
             # both come from native public SF1 admission. Never decode private
             # storage metadata or select other manifests/ingest staging.
-            raw = _retire_read_public(g, manifest / "manifest.to", limit=1024 * 1024)
-            _retire_need(_retire_digest(raw) == manifest_sha,
-                         "retired store is not an admitted public manifest")
-            protected[str(manifest / "manifest.to")] = list(identity((manifest / "manifest.to").lstat()))
+            # SF1 manifests are public records; authority receipts still use
+            # the distinct private-custody reader above.
+            manifest_path = manifest / "manifest.to"
+            manifest_identity = identity(_retire_prune_info(manifest_path))
+            public_record(manifest_path, manifest_sha,
+                          owner=os.geteuid(), limit=1024 * 1024)
+            _retire_need(identity(_retire_prune_info(manifest_path)) == manifest_identity,
+                         "public manifest changed during prune admission")
+            protected[str(manifest_path)] = list(manifest_identity)
             chunk_dirs.add(chunks)
     for path in exact:
         _retire_need(str(path) not in protected and not path.is_relative_to(RETIRE_BINS)

@@ -1460,7 +1460,7 @@ class RetiredPublicPruneTests(unittest.TestCase):
                 self.file(store / '.storage.lock', b'', 0o600)
                 for index, role in enumerate(('bundle', 'guest', 'discovery'), 1):
                     manifest = store / 'manifests' / (str(index) * 64)
-                    self.file(manifest / 'manifest.to', ('public ' + role + ' manifest').encode(), 0o600)
+                    self.file(manifest / 'manifest.to', ('public ' + role + ' manifest').encode(), 0o644)
                     self.file(manifest / 'metadata.to', b'PRIVATE METADATA PRESERVE', 0o600)
                     chunk = manifest / 'chunks/chunk_00000.bin'
                     self.file(chunk, b'public chunk', 0o600); self.targets.append(chunk)
@@ -1490,7 +1490,12 @@ class RetiredPublicPruneTests(unittest.TestCase):
                             ('RETIRE_BINS', self.bins), ('CONTINUITY_PREP', self.prep),
                             ('RETIRE_INVENTORY_PATH', self.invpath)]:
             self.stack.enter_context(mock.patch.object(retry, name, value))
-        self.stack.enter_context(mock.patch.object(retry, '_retire_read_public', side_effect=lambda g,p,**k: Path(p).read_bytes()))
+        def private_record(g, path, **kwargs):
+            # Model the support helper's exact private-file mode, so this fixture
+            # cannot silently admit public manifests through a private reader.
+            self.assertEqual(Path(path).stat().st_mode & 0o7777, 0o600)
+            return retry.public_record(path, owner=os.geteuid(), private=True, **kwargs)
+        self.stack.enter_context(mock.patch.object(retry, '_retire_read_public', side_effect=private_record))
         self.stack.enter_context(mock.patch.object(retry, '_retire_retained_state'))
         self.stack.enter_context(mock.patch.object(retry, '_retire_live_references', return_value={'passed': True}))
         self.trim = self.stack.enter_context(mock.patch.object(retry.subprocess, 'run', return_value=SimpleNamespace(returncode=0)))
@@ -1540,8 +1545,45 @@ class RetiredPublicPruneTests(unittest.TestCase):
         with self.assertRaises(retry._retire_RebindError): self.prune()
         self.result['published'] = True
         manifest = next(self.work.rglob('manifest.to')); manifest.write_bytes(b'forged public manifest')
-        with self.assertRaisesRegex(retry._retire_RebindError, 'admitted public manifest'): self.prune()
+        with self.assertRaisesRegex(retry.RetryError, 'public record digest differs'): self.prune()
         self.assertTrue(all(path.exists() for path in self.targets))
+
+    def test_closed_public_prune_accepts_public_manifest_modes_without_chmod(self):
+        manifests = list(self.work.rglob('manifest.to'))
+        for index, path in enumerate(manifests):
+            path.chmod(0o444 if index % 2 else 0o644)
+        before = {path: retry.identity(path.stat()) for path in manifests}
+        self.assertEqual(self.prune()['file_count'], 53)
+        self.assertEqual(before, {path: retry.identity(path.stat()) for path in manifests})
+
+    def test_closed_public_prune_rejects_public_manifest_write_permissions_and_links(self):
+        manifest = next(self.work.rglob('manifest.to'))
+        original = manifest.read_bytes()
+        manifest.chmod(0o664)
+        with self.assertRaisesRegex(retry._retire_RebindError, 'custody'): self.prune()
+        manifest.chmod(0o644)
+        link = manifest.with_name('manifest.extra')
+        os.link(manifest, link)
+        with self.assertRaisesRegex(retry._retire_RebindError, 'links'): self.prune()
+        link.unlink(); manifest.unlink()
+        self.file(link, original, 0o644); manifest.symlink_to(link)
+        with self.assertRaisesRegex(retry.RetryError, 'direct'): self.prune()
+        self.assertTrue(all(path.exists() for path in self.targets))
+
+    def test_closed_public_prune_rejects_manifest_replacement_after_authenticated_read(self):
+        public_record = retry.public_record
+        def replace_after_read(path, *args, **kwargs):
+            raw = public_record(path, *args, **kwargs)
+            if Path(path).name == 'manifest.to':
+                replacement = Path(path).with_name('manifest.replacement')
+                self.file(replacement, b'unadmitted replacement', 0o644)
+                replacement.replace(path)
+            return raw
+        with mock.patch.object(retry, 'public_record', side_effect=replace_after_read), \
+             self.assertRaisesRegex(retry._retire_RebindError, 'changed during prune admission'):
+            self.prune()
+        self.assertTrue(all(path.exists() for path in self.targets))
+        self.assertFalse((self.work / 'public-prune-intent.json').exists())
 
     def test_closed_public_prune_rejects_links_unknown_chunks_and_live_references(self):
         victim = self.targets[0]; original = victim.read_bytes(); victim.unlink()
