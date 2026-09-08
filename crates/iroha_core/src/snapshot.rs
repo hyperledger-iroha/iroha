@@ -1430,14 +1430,17 @@ fn bind_current_snapshot_generation_with_mode(
     emergency_fast: bool,
 ) -> Result<BoundSnapshotGeneration, TryReadError> {
     let store_dir_identity = direct_snapshot_directory_identity(store_dir)?;
-    let generations_dir = store_dir.join(SNAPSHOT_GENERATIONS_DIR_NAME);
-    let generations_dir_identity = direct_snapshot_directory_identity(&generations_dir)?;
     let pointer_path = store_dir.join(SNAPSHOT_CURRENT_FILE_NAME);
     let Some((pointer, pointer_bytes)) =
         bind_snapshot_file(&pointer_path, SNAPSHOT_CURRENT_MAX_BYTES)?
     else {
+        // An owned snapshot root exists before its first publication (including
+        // after a public reset). Without a committed pointer there is no snapshot;
+        // the writer has not necessarily created the generations directory yet.
         return Err(TryReadError::NotFound);
     };
+    let generations_dir = store_dir.join(SNAPSHOT_GENERATIONS_DIR_NAME);
+    let generations_dir_identity = direct_snapshot_directory_identity(&generations_dir)?;
     let digest_hex = parse_snapshot_current_pointer(&pointer_bytes, &pointer_path)?;
     let generation_dir = generations_dir.join(&digest_hex);
     let generation_dir_identity = direct_snapshot_directory_identity(&generation_dir)?;

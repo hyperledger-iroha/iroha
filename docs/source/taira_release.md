@@ -102,8 +102,8 @@ Before compilation, it groups requirements by filesystem and checks an 8 GiB
 Cargo working-space floor plus 256 MiB capture headroom. Before capture,
 it checks the exact binary-copy bytes plus that headroom. The build floor is an
 operational minimum, not a prediction of Cargo's peak use. This local check cannot
-observe a remote guest's sparse backing disk; native host capacity admission and
-operator backing-volume checks remain necessary. No cache or output is deleted
+observe a remote guest's sparse backing disk. Run the deployment capacity check
+below on the guest and its backing host. No cache or output is deleted
 automatically, and the warm Cargo target is never replaced with a new lane.
 
 The output directory contains read-only `request.json`, `checks.json`, and
@@ -129,3 +129,56 @@ Validate the local orchestration without Cargo or network:
 
 The gate's existing selection and diagnostics are documented in
 [Taira CLI release checks](taira_release_check.md).
+
+## Deployment capacity and retrying an unchanged release
+
+Keep the build identity separate from the deployment attempt. A storage or host
+failure does not require another build, source import, or binary transfer when
+the retained artifacts still match their successful preparation and transfer
+receipts. After a completed native rollback, retain its terminal record and
+create fresh deployment custody and authorization for the same artifacts. Never
+replay the failed authorization or edit a terminal journal to resume it.
+
+Before preparing a deployment, and again immediately before apply, run:
+
+    python3 scripts/taira_disk_capacity.py --plan /absolute/public-capacity-plan.json
+
+The public JSON plan uses schema `taira.disk-capacity.plan.v1` and an
+`allocations` list. Each allocation has exactly `path`, `label`, `bytes`, and
+`inodes`. Quantities describe additional allocated space, including concurrently
+live temporary files and explicit operating headroom. The helper resolves paths
+without following symlinks, groups requirements by actual filesystem, and checks
+both available bytes and inodes. It reads no configuration or credentials and
+performs no cleanup. Failure returns exit code 2 with required and available
+quantities. Success is an observation, not a disk reservation.
+
+For the current four-validator deployment on one physical guest, a fresh attempt
+requires `3*A + 2*S + 4*P + 4*R`, plus operating headroom:
+
+- `A` includes the complete artifact sets for all four validators and the edge.
+  The coordinator snapshot, host uploads, and installed releases coexist.
+- `S` includes the full Inrou stage tree. Its coordinator snapshot and host upload
+  coexist with the already retained source tree.
+- `P` includes one complete SoraFS store: all three payloads, chunk allocation
+  slack, manifest and PoR metadata, index files, and temporary publication files.
+- `R` includes one replica's hydrated guest, independent writable root disk,
+  application extraction and publication, data lease, ephemeral storage, and
+  runtime metadata. All four replicas keep their own runtime files.
+
+The helper's `allocation_bound` and `cohost_peak_plan` functions construct these
+byte and inode bounds. See [the allocation contract](taira_disk_capacity.md) for
+the persisted metadata limits and backing-volume requirements. Logical SoraFS quotas are not free-space checks. Existing
+files are already charged against available space; do not subtract proposed
+cleanup until it has actually completed. Check a sparse VM's physical backing
+filesystem separately, including its possible additional allocation.
+
+When reclaiming failed attempts, remove only identified obsolete generated
+payloads that have no live references and are outside current deployment or
+recovery inputs. Hold the deployment coordinator and physical-host action locks.
+Retain terminal journals, manifests, cleanup receipts, runtime custody, and the
+current artifact set. Repeatedly retaining every large failed upload eventually
+exhausts the guest even when the next store fits its logical quota.
+
+Validate the capacity helper without network access:
+
+    python3 -B -m unittest discover -s scripts/tests -p 'taira_disk_capacity_test.py'

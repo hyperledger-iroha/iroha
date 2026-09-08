@@ -11220,6 +11220,110 @@ fn require_success(output: ProcessOutput, label: &str) -> Result<Vec<u8>> {
     Err(eyre!("{label} failed with {}: {stderr}", output.status))
 }
 
+fn require_doctor_success(output: ProcessOutput, public_root: &str) -> Result<Vec<u8>> {
+    if !output.status.success()
+        && let Ok(value) = json::from_slice::<norito::json::Value>(&output.stdout)
+        && value.get("command").and_then(norito::json::Value::as_str) == Some("taira_doctor")
+        && value
+            .get("public_root")
+            .and_then(norito::json::Value::as_str)
+            == Some(public_root)
+        && let Some(checks) = value.get("checks").and_then(norito::json::Value::as_array)
+        && checks.len() <= 32
+    {
+        // Report only fixed check names and numeric status codes. Never forward
+        // arbitrary response bodies, details, or failure text into reset logs.
+        let failures = checks
+            .iter()
+            .filter_map(|check| {
+                let name = check.get("name")?.as_str()?;
+                let status = check.get("http_status")?.as_u64()?;
+                (check.get("ok")?.as_bool()? == false
+                    && status <= 599
+                    && DOCTOR_EXPECTED_CHECKS
+                        .iter()
+                        .any(|(expected, _, _)| *expected == name))
+                .then(|| format!("{name}: HTTP {status}"))
+            })
+            .collect::<Vec<_>>();
+        if !failures.is_empty() {
+            return Err(eyre!(
+                "same-revision Taira doctor failed: {}",
+                failures.join(", ")
+            ));
+        }
+    }
+    require_success(output, "same-revision Taira doctor")
+}
+
+/// A running systemd process can still be initializing storage and Torii.
+/// Wait only for HTTP availability here; the signed convergence and public
+/// doctor checks remain responsible for identity and protocol validation.
+fn wait_for_validator_http_readiness(
+    origins: &[String],
+    deadline: Instant,
+    mut check_authorization: impl FnMut() -> Result<()>,
+) -> Result<()> {
+    let http = HttpClient::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(Duration::from_secs(2))
+        .build()
+        .wrap_err("failed to build validator readiness HTTP client")?;
+    let urls = origins
+        .iter()
+        .map(|origin| Url::parse(origin)?.join("status"))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    if urls.len() != 4 {
+        return Err(eyre!(
+            "validator readiness requires exactly four Torii origins"
+        ));
+    }
+    loop {
+        check_authorization()?;
+        let mut ready = 0;
+        for url in &urls {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(eyre!(
+                    "four-validator Torii HTTP readiness deadline elapsed"
+                ));
+            }
+            match http
+                .get(url.clone())
+                .header(ACCEPT, "application/json")
+                .timeout(Duration::from_secs(2).min(remaining))
+                .send()
+            {
+                Ok(response) if response.status() == StatusCode::OK => ready += 1,
+                Ok(response)
+                    if matches!(response.status().as_u16(), 408 | 429 | 502 | 503 | 504) => {}
+                Ok(response) => {
+                    return Err(eyre!(
+                        "validator Torii readiness returned permanent HTTP status {}",
+                        response.status()
+                    ));
+                }
+                Err(error) if error.is_connect() || error.is_timeout() => {}
+                Err(error) => {
+                    return Err(error).wrap_err("validator Torii readiness request failed");
+                }
+            }
+        }
+        if ready == urls.len() {
+            check_authorization()?;
+            return Ok(());
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(eyre!(
+                "four-validator Torii HTTP readiness deadline elapsed"
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(250).min(remaining));
+    }
+}
+
 #[derive(Debug)]
 struct LocalArtifactClosure {
     files: BTreeMap<(String, String), StagedArtifact>,
@@ -13244,21 +13348,15 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
                 .into(),
             "--json".into(),
         ];
-        let output = if recovery_only {
-            let deadline = Instant::now()
-                .checked_add(Duration::from_secs(timeout_secs))
-                .ok_or_else(|| eyre!("doctor recovery deadline overflow"))?;
-            self.run_local_cli_until(
-                args,
-                Vec::new(),
-                timeout_secs,
-                deadline,
-                true,
-                "same-revision Taira doctor",
-            )?
-        } else {
-            self.run_local_cli(args, Vec::new(), timeout_secs, "same-revision Taira doctor")?
-        };
+        let deadline = Instant::now()
+            .checked_add(Duration::from_secs(timeout_secs))
+            .ok_or_else(|| eyre!("doctor deadline overflow"))?;
+        if !recovery_only {
+            require_forward_lease_budget(self.admitted, timeout_secs)?;
+        }
+        let output = self.run_local_cli_process_until(args, Vec::new(), deadline, recovery_only)?;
+        let output =
+            require_doctor_success(output, &self.admitted.inventory.inrou_canary.public_root)?;
         let value = parse_json_report(&output, "same-revision Taira doctor")?;
         validate_doctor_report(&value, &self.admitted.inventory.inrou_canary.public_root)
     }
@@ -15327,8 +15425,28 @@ impl<R: ProcessRunner> ResetTransport for OpenSshTransport<'_, R> {
                 Ok(())
             }
             ExecutionStep::Convergence => {
-                self.doctor(timeout_secs)?;
-                self.convergence(timeout_secs, 0, false)
+                require_forward_lease_budget(self.admitted, timeout_secs)?;
+                let deadline = Instant::now()
+                    .checked_add(Duration::from_secs(timeout_secs))
+                    .ok_or_else(|| eyre!("convergence readiness deadline overflow"))?;
+                let origins = inventory
+                    .validator_clients
+                    .iter()
+                    .map(|client| client.torii_origin.clone())
+                    .collect::<Vec<_>>();
+                wait_for_validator_http_readiness(&origins, deadline, || {
+                    ensure_authorization_current(self.admitted)
+                })?;
+                let remaining = deadline.saturating_duration_since(Instant::now()).as_secs();
+                if remaining == 0 {
+                    return Err(eyre!("convergence deadline elapsed after Torii readiness"));
+                }
+                self.doctor(remaining)?;
+                let remaining = deadline.saturating_duration_since(Instant::now()).as_secs();
+                if remaining == 0 {
+                    return Err(eyre!("convergence deadline elapsed after public doctor"));
+                }
+                self.convergence(remaining, 0, false)
             }
             ExecutionStep::Canary => {
                 self.write_canary(timeout_secs)?;
@@ -15338,11 +15456,22 @@ impl<R: ProcessRunner> ResetTransport for OpenSshTransport<'_, R> {
                 self.ensure_inrou_restart_baselines(inventory.timeouts.canary_secs)?;
                 for (index, validator) in inventory.validators.iter().enumerate() {
                     let wave = index + 1;
+                    let ready_deadline = Instant::now()
+                        .checked_add(Duration::from_secs(inventory.timeouts.restart_secs))
+                        .ok_or_else(|| eyre!("restart readiness deadline overflow"))?;
                     self.bootstrap_and_dispatch_validator(
                         validator,
                         HostAction::Restart,
                         inventory.timeouts.restart_secs,
                     )?;
+                    let origins = inventory
+                        .validator_clients
+                        .iter()
+                        .map(|client| client.torii_origin.clone())
+                        .collect::<Vec<_>>();
+                    wait_for_validator_http_readiness(&origins, ready_deadline, || {
+                        ensure_authorization_current(self.admitted)
+                    })?;
                     self.write_canary_for_phase(
                         inventory.timeouts.canary_secs,
                         &format!("restart-wave-{wave}"),
@@ -17456,6 +17585,111 @@ fn verify_remote_reservation_receipt(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn readiness_http_server(statuses: Vec<u16>) -> (String, std::thread::JoinHandle<usize>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("readiness listener");
+        listener
+            .set_nonblocking(true)
+            .expect("nonblocking listener");
+        let origin = format!(
+            "http://{}/",
+            listener.local_addr().expect("listener address")
+        );
+        let worker = std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let count = statuses.len();
+            for status in statuses {
+                let mut stream = loop {
+                    match listener.accept() {
+                        Ok((stream, _)) => break stream,
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            assert!(Instant::now() < deadline, "missing readiness request");
+                            std::thread::sleep(Duration::from_millis(5));
+                        }
+                        Err(error) => panic!("readiness accept failed: {error}"),
+                    }
+                };
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .expect("read deadline");
+                let mut request = Vec::new();
+                let mut buffer = [0_u8; 1024];
+                while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    let count = stream.read(&mut buffer).expect("read request");
+                    assert!(count > 0 && request.len() < 8192);
+                    request.extend_from_slice(&buffer[..count]);
+                }
+                assert!(request.starts_with(b"GET /status HTTP/1.1\r\n"));
+                stream.write_all(format!("HTTP/1.1 {status} Test\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").as_bytes()).expect("readiness response");
+            }
+            count
+        });
+        (origin, worker)
+    }
+
+    #[test]
+    fn validator_http_readiness_retries_cold_backends_before_strict_checks() {
+        let (origin, worker) = readiness_http_server(vec![502, 503, 504, 503, 200, 200, 200, 200]);
+        let mut authorization_checks = 0;
+        wait_for_validator_http_readiness(
+            &vec![origin; 4],
+            Instant::now() + Duration::from_secs(3),
+            || {
+                authorization_checks += 1;
+                Ok(())
+            },
+        )
+        .expect("all four cold backends become available");
+        assert_eq!(worker.join().expect("server thread"), 8);
+        assert!(
+            authorization_checks >= 3,
+            "lease rechecked while waiting and before success"
+        );
+    }
+
+    #[test]
+    fn validator_http_readiness_rejects_permanent_http_errors() {
+        let (origin, worker) = readiness_http_server(vec![401]);
+        let error = wait_for_validator_http_readiness(
+            &vec![origin; 4],
+            Instant::now() + Duration::from_secs(3),
+            || Ok(()),
+        )
+        .expect_err("authentication errors must not be retried");
+        assert!(error.to_string().contains("401"));
+        assert_eq!(worker.join().expect("server thread"), 1);
+    }
+
+    #[test]
+    fn validator_http_readiness_keeps_deadline_and_authorization() {
+        let origins = vec!["http://127.0.0.1:1/".to_owned(); 4];
+        let error = wait_for_validator_http_readiness(&origins, Instant::now(), || Ok(()))
+            .expect_err("expired deadline");
+        assert!(error.to_string().contains("deadline"));
+        let error = wait_for_validator_http_readiness(
+            &origins,
+            Instant::now() + Duration::from_secs(3),
+            || Err(eyre!("authorization expired")),
+        )
+        .expect_err("expired authorization");
+        assert_eq!(error.to_string(), "authorization expired");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn doctor_failure_reports_only_fixed_checks_and_status_codes() {
+        use std::os::unix::process::ExitStatusExt as _;
+        let output = ProcessOutput {
+            status: ExitStatus::from_raw(1 << 8),
+            stdout: br#"{"command":"taira_doctor","public_root":"https://taira.sora.org","checks":[{"name":"status","http_status":502,"ok":false,"detail":"do-not-forward-response-body"},{"name":"untrusted-label","http_status":200,"ok":false}],"failures":["do-not-forward-failure-text"]}"#.to_vec(),
+            stderr: b"generic CLI failure".to_vec(),
+        };
+        let error = require_doctor_success(output, "https://taira.sora.org")
+            .expect_err("doctor failure")
+            .to_string();
+        assert!(error.contains("status: HTTP 502"));
+        assert!(!error.contains("do-not-forward") && !error.contains("untrusted-label"));
+    }
 
     #[derive(Debug, clap::Parser)]
     struct HostProtocolProbe {

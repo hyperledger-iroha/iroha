@@ -25,6 +25,50 @@ def record(paths):
 
 
 class CargoSourceAdmissionTests(unittest.TestCase):
+    def test_foreign_source_retires_only_its_host_and_cross_profile_family(self):
+        triple = "aarch64-unknown-linux-gnu"
+        for stale_family, preserved_family in (("debug", "release"), ("release", "debug")):
+            with self.subTest(stale_family=stale_family), tempfile.TemporaryDirectory() as temporary:
+                target = Path(temporary).resolve()
+                source = target / "source"
+                source.mkdir()
+                paths = {}
+                for family in ("debug", "release"):
+                    for cross in (False, True):
+                        profile = target / triple / family if cross else target / family
+                        directory = profile / ".fingerprint/ivm-1111111111111111"
+                        directory.mkdir(parents=True)
+                        dependency = ("old-source/crates/ivm/build.rs"
+                                      if family == stale_family and not cross
+                                      else "source/crates/ivm/src/lib.rs")
+                        (directory / "dep-fixture").write_bytes(record([(1, dependency)]))
+                        artifact = profile / "retained-compiled-output"
+                        artifact.write_bytes(b"compiled output")
+                        paths[family, cross] = directory
+                self.assertEqual(cache.admit_source_fingerprints(source, target, triple, {"ivm"}), ["ivm"])
+                for cross in (False, True):
+                    self.assertFalse(paths[stale_family, cross].exists())
+                    self.assertTrue(paths[preserved_family, cross].exists())
+                    self.assertEqual((paths[stale_family, cross].parent.parent / "retained-compiled-output").read_bytes(),
+                                     b"compiled output")
+                self.assertEqual(len(list((target / "taira-release-cache-retired").glob("**/ivm-*"))), 2)
+                self.assertEqual(cache.admit_source_fingerprints(source, target, triple, {"ivm"}, repair=False), [])
+
+    def test_generated_build_script_paths_are_bound_to_the_same_profile_family(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            target = Path(temporary).resolve()
+            source = target / "source"
+            source.mkdir()
+            for family, generated in (("debug", "release/build/ivm/out/generated.rs"),
+                                      ("release", "release/build/ivm/out/generated.rs")):
+                directory = target / family / ".fingerprint/ivm-1111111111111111"
+                directory.mkdir(parents=True)
+                (directory / "dep-fixture").write_bytes(record([(1, generated)]))
+            self.assertEqual(cache.admit_source_fingerprints(source, target, "aarch64-unknown-linux-gnu", {"ivm"}),
+                             ["ivm"])
+            self.assertFalse((target / "debug/.fingerprint/ivm-1111111111111111").exists())
+            self.assertTrue((target / "release/.fingerprint/ivm-1111111111111111").exists())
+
     def test_parser_rejects_unknown_truncated_and_trailing_records(self):
         expected = [(1, Path("source/build.rs")), (0, Path("src/lib.rs"))]
         raw = record(expected)

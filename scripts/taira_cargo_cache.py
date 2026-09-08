@@ -5,6 +5,9 @@ before considering the package root. A fingerprint from another frozen source
 can consequently remain fresh forever. Inspect those paths under Cargo's own
 profile locks and retain foreign local-package fingerprints outside its lookup
 namespace. Registry/git artifacts and compiled outputs remain available.
+Retirement stays inside one Cargo profile family: host and cross-target debug
+metadata share a family, as do host and cross-target release metadata. Debug
+source changes must not invalidate an already admitted release build.
 """
 
 from __future__ import annotations
@@ -106,9 +109,10 @@ def source_fingerprints(source: Path, target: Path, triple: str,
     profiles = [target / profile for profile in ("debug", "release")]
     profiles += [target / triple / profile for profile in ("debug", "release")]
     profiles = [path for path in profiles if path.is_dir()]
-    generated = [profile / name for profile in profiles for name in ("build", "deps")]
-    stale: set[str] = set()
-    directories: list[tuple[Path, str]] = []
+    generated = {family: [profile / name for profile in profiles if profile.name == family
+                          for name in ("build", "deps")] for family in ("debug", "release")}
+    stale: set[tuple[str, str]] = set()
+    directories: list[tuple[Path, str, str]] = []
     if not source.is_relative_to(target):
         raise ValueError("source admission requires the maintained capture below the Cargo target")
     with contextlib.ExitStack() as stack:
@@ -123,6 +127,7 @@ def source_fingerprints(source: Path, target: Path, triple: str,
                 raise ValueError("unsafe Cargo profile lock")
             fcntl.flock(fd, fcntl.LOCK_EX)
         for profile in profiles:
+            family = profile.name
             fingerprints = profile / ".fingerprint"
             if not fingerprints.exists():
                 continue
@@ -135,26 +140,28 @@ def source_fingerprints(source: Path, target: Path, triple: str,
                 if directory.is_symlink() or not directory.is_dir():
                     raise ValueError("unsafe local Cargo fingerprint directory")
                 name = match[1]
-                directories.append((directory, name))
+                directories.append((directory, name, family))
                 for record in directory.glob("dep-*"):
                     try:
                         paths = dependency_paths(private_regular(record, 16 * 1024**2))
                     except ValueError:
-                        stale.add(name)
+                        stale.add((family, name))
                         continue
                     for kind, path in paths:
                         if kind == 0:
                             # This capture is below target. Cargo therefore
                             # encodes every captured source as build-relative;
                             # package-relative paths belong to another checkout.
-                            stale.add(name)
+                            stale.add((family, name))
                             continue
                         path = (target / path).resolve()
-                        if path.is_relative_to(source) or any(path.is_relative_to(p) for p in generated):
+                        if path.is_relative_to(source) or any(path.is_relative_to(p) for p in generated[family]):
                             continue
-                        stale.add(name)
+                        stale.add((family, name))
+        stale_names = sorted({name for _, name in stale})
         if stale and not repair:
-            raise ValueError("foreign Cargo source fingerprints after build: " + ", ".join(sorted(stale)))
+            raise ValueError("foreign Cargo source fingerprints after build: "
+                             + ", ".join(f"{family}/{name}" for family, name in sorted(stale)))
         if stale:
             if before_retire is not None:
                 before_retire()
@@ -164,15 +171,18 @@ def source_fingerprints(source: Path, target: Path, triple: str,
                 raise ValueError("unsafe Cargo fingerprint archive")
             archive = parent / uuid.uuid4().hex
             archive.mkdir(mode=0o700)
-            for directory, name in directories:
-                if name not in stale:
+            for directory, name, family in directories:
+                # A host build-script producer and its cross-target consumers
+                # share the profile family, but debug and release units have
+                # independent Cargo fingerprints and generated output trees.
+                if (family, name) not in stale:
                     continue
                 destination = archive / directory.relative_to(target)
                 destination.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
                 os.rename(directory, destination)
             print("[taira-release] retained foreign source fingerprints for "
-                  + str(len(stale)) + " local packages; compiled artifacts and dependency caches retained", flush=True)
-        yield sorted(stale)
+                  + str(len(stale)) + " local package/profile families; compiled artifacts and dependency caches retained", flush=True)
+        yield stale_names
 
 
 def admit_source_fingerprints(source: Path, target: Path, triple: str,

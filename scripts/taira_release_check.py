@@ -85,6 +85,10 @@ STAGES = (
         "taira_public_reset::host::tests::receipt_names_reject_path_control_and_unicode_escape",
     )),
     ("systemd operation and validator lifecycle", (
+        "taira_public_reset::host::tests::validator_http_readiness_retries_cold_backends_before_strict_checks",
+        "taira_public_reset::host::tests::validator_http_readiness_rejects_permanent_http_errors",
+        "taira_public_reset::host::tests::validator_http_readiness_keeps_deadline_and_authorization",
+        "taira_public_reset::host::tests::doctor_failure_reports_only_fixed_checks_and_status_codes",
         "taira_public_reset::host::tests::manager_evidence_stays_pending_until_exact_terminal_job",
         "taira_public_reset::host::tests::manager_recovery_uses_immutable_mutation_deadline_but_observes_terminal_state",
         "taira_public_reset::host::tests::manager_evidence_rejects_wrong_or_duplicate_exec_identity",
