@@ -10190,6 +10190,7 @@ dependencies = [
  "norito",
  "rand 0.9.4",
  "reqwest",
+ "rustix 1.1.4",
  "sorafs_chunker",
  "sorafs_manifest",
  "sorafs_orchestrator",

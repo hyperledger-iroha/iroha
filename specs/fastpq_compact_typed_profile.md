@@ -257,8 +257,9 @@ sum_j [floor(a_j/136) + ceil(output_bytes_j/136)].
 The prefix/body framing specification fixes the successor input encoding and
 records cached-absorption arithmetic separately from retained predecessor
 measurements. The identity is five bytes longer, so input-work bounds also
-change. Fresh successor Rust tests and complete proof measurements remain
-outstanding; the Python checks are supplemental build-independent evidence.
+change. Fresh Rust tests and complete ordinary/AXT proof measurements now pass
+as recorded in [production readiness](fastpq_production_readiness.md#current-optimizations-integration);
+the Python checks are supplemental build-independent evidence.
 H's internal permutation cost also remains separate from its 44,562 logical
 calls. No end-to-end runtime is extrapolated from these counts.
 

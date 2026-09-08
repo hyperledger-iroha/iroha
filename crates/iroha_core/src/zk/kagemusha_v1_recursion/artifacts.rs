@@ -1,10 +1,10 @@
 //! Content-addressed artifact resolution for the authenticated Kagemusha V1 release.
 //!
 //! The threshold-authenticated release manifest is the only role registry. Artifact files
-//! use canonical `ParamsIPA::write` parameters, explicitly framed compact-v1 proving keys, and
-//! `SerdeFormat::Processed` verifying keys. The compact frame binds the codec, curve and length;
+//! use canonical `ParamsIPA::write` parameters, explicitly framed structured-v1 proving keys, and
+//! `SerdeFormat::Processed` verifying keys. The structured frame binds the codec, curve and length;
 //! it does not select a circuit role. The manifest's `(role, sha256, byte_len)` remains authoritative.
-//! There is one first-release proving-key codec; Processed proving-key artifacts are rejected.
+//! There is one first-release proving-key codec; Processed and compact-v1 proving-key artifacts are rejected.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -131,7 +131,7 @@ pub enum KagemushaCircuitFamilyV1 {
 pub enum KagemushaArtifactKindV1 {
     /// Canonical transparent IPA parameters produced by `ParamsIPA::write`.
     Parameters,
-    /// Halo2 proving key in the explicit compact-v1 codec.
+    /// Halo2 proving key in the explicit structured-v1 codec.
     ProvingKey,
     /// Halo2 verifying key in `SerdeFormat::Processed`.
     VerifyingKey,

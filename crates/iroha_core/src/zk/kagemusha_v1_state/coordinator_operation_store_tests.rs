@@ -99,12 +99,22 @@ fn machine_for_payment_scope(
         KagemushaMemoryAuthenticatedHistoryStoreV1::new(8 * 1024 * 1024),
     )
     .expect("empty authenticated history");
+    // Operation-store pairing now checks the actual selected prefix, so the structural
+    // machine fixture derives its initializer from a real private WAL instead of a fake head.
+    let (_initial_root, initial_path) = location();
+    let initial_store = KagemushaCoordinatorOperationStoreV1::create_new(
+        &initial_path,
+        state.lane.clone(),
+        state.asset_incarnation,
+        CAPACITY,
+    )
+    .unwrap();
+    let mut recovery_metadata =
+        snapshot_initial_metadata(&state, &proof_release, old_credential.clone());
+    recovery_metadata.journals.coordinator = initial_store.recovery_prefix().unwrap();
+    drop(initial_store);
     let machine = KagemushaStateMachineV1 {
-        recovery_metadata: snapshot_initial_metadata(
-            &state,
-            &proof_release,
-            old_credential.clone(),
-        ),
+        recovery_metadata,
         published_checkpoint: None,
         state,
         journal_revision: 0,

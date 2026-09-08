@@ -1654,6 +1654,10 @@ pub enum DirectoryPublicationStatus {
 }
 #[cfg(unix)]
 const ATOMIC_PATH_RETRIES: usize = 32;
+// Keep original writer handles until durability errors have been checked. The fixed array
+// bounds descriptor use without adding plan-sized allocations to the sink's heap budget.
+#[cfg(unix)]
+const DIRECTORY_SYNC_BATCH_CHUNKS: usize = 64;
 #[cfg(unix)]
 fn normalized_parent(path: &Path) -> Result<&Path, ChunkStoreError> {
     path.parent()
@@ -1852,7 +1856,8 @@ fn platform_no_follow_flag() -> i32 {
 /// Writes are assembled in a private sibling directory and published only from [`Self::finish`].
 /// Publication requires `root` to remain absent for the entire ingest; existing destinations are
 /// never replaced. The final same-filesystem rename therefore exposes either no directory or the
-/// complete immutable chunk set, including across a process crash.
+/// complete immutable chunk set, including across a process crash. Private writes are flushed
+/// in bounded batches; all chunk data and staging entries are durable before publication.
 /// Secure publication is currently Unix-only; other platforms fail closed.
 #[derive(Debug)]
 pub struct DirectoryChunkSink {
@@ -1874,12 +1879,20 @@ pub struct DirectoryChunkSink {
     staging_before: Option<fs::Metadata>,
     #[cfg(unix)]
     parent_before: Option<fs::Metadata>,
+    #[cfg(unix)]
+    pending_files: [Option<File>; DIRECTORY_SYNC_BATCH_CHUNKS],
+    #[cfg(unix)]
+    pending_len: usize,
+    #[cfg(unix)]
+    durability_failed: bool,
     #[cfg(all(test, unix))]
     commit_fault: Option<DirectoryCommitFault>,
 }
 #[cfg(all(test, unix))]
 #[derive(Debug, Clone, Copy)]
 enum DirectoryCommitFault {
+    BatchFlush,
+    ChunkFlush(usize),
     PostRenameIdentity,
     ParentSync,
 }
@@ -1912,6 +1925,12 @@ impl DirectoryChunkSink {
             staging_before: None,
             #[cfg(unix)]
             parent_before: None,
+            #[cfg(unix)]
+            pending_files: std::array::from_fn(|_| None),
+            #[cfg(unix)]
+            pending_len: 0,
+            #[cfg(unix)]
+            durability_failed: false,
             #[cfg(all(test, unix))]
             commit_fault: None,
         }
@@ -1928,7 +1947,9 @@ impl DirectoryChunkSink {
         Ok(self)
     }
     #[cfg(unix)]
-    fn write_atomic(path: &Path, data: &[u8]) -> Result<(), ChunkStoreError> {
+    // Only used inside unpublished private staging. The returned original writer must remain
+    // open until flush_pending_chunks checks its durability; this rename is not publication.
+    fn write_staged_chunk(path: &Path, data: &[u8]) -> Result<File, ChunkStoreError> {
         let parent = normalized_parent(path)?;
         validate_directory_path(parent)?;
         let parent_before = fs::symlink_metadata(parent).map_err(ChunkStoreError::Io)?;
@@ -1975,9 +1996,7 @@ impl DirectoryChunkSink {
         })?;
         let result = (|| {
             file.write_all(data).map_err(ChunkStoreError::Io)?;
-            file.sync_all().map_err(ChunkStoreError::Io)?;
             validate_atomic_temp(&temp_path, &file)?;
-            drop(file);
             let parent_after = fs::symlink_metadata(parent).map_err(ChunkStoreError::Io)?;
             if !metadata_identifies_same_file(&parent_before, &parent_after) {
                 return Err(ChunkStoreError::Io(io::Error::other(format!(
@@ -1988,12 +2007,89 @@ impl DirectoryChunkSink {
             validate_directory_metadata(parent, &parent_after)?;
             validate_atomic_destination_absent(path)?;
             fs::rename(&temp_path, path).map_err(ChunkStoreError::Io)?;
-            sync_directory(parent).map_err(ChunkStoreError::Io)
+            Ok(file)
         })();
         if result.is_err() {
             let _ = fs::remove_file(&temp_path);
         }
         result
+    }
+    #[cfg(unix)]
+    fn ensure_durability_healthy(&self) -> Result<(), ChunkStoreError> {
+        if self.durability_failed {
+            return Err(ChunkStoreError::Io(io::Error::other(
+                "chunk sink cannot publish after a durability failure",
+            )));
+        }
+        Ok(())
+    }
+    #[cfg(unix)]
+    fn flush_pending_chunks(&mut self) -> Result<(), ChunkStoreError> {
+        self.ensure_durability_healthy()?;
+        if self.pending_len == 0 {
+            return Ok(());
+        }
+        let result = (|| {
+            let staging = self.staging_root.as_ref().ok_or_else(|| {
+                ChunkStoreError::Io(io::Error::other("chunk sink was not prepared"))
+            })?;
+            self.validate_staging_unchanged(staging)?;
+            let first_index = self.next_chunk_index - self.pending_len;
+            for (offset, file) in self.pending_files[..self.pending_len].iter().enumerate() {
+                let file = file.as_ref().ok_or_else(|| {
+                    ChunkStoreError::Io(io::Error::other("pending chunk writer was not retained"))
+                })?;
+                let path = staging.join(format!("chunk_{:05}.bin", first_index + offset));
+                validate_atomic_temp(&path, file)?;
+            }
+            #[cfg(test)]
+            if matches!(self.commit_fault, Some(DirectoryCommitFault::BatchFlush)) {
+                return Err(ChunkStoreError::Io(io::Error::other(
+                    "injected chunk batch flush failure",
+                )));
+            }
+            // Linux flushes the filesystem once for the batch, amortizing writeback barriers.
+            // Still fsync every ORIGINAL writer below: syncfs alone is insufficient for portable
+            // per-file writeback error reporting. Other Unix hosts use those fsyncs directly.
+            #[cfg(any(target_os = "linux", target_os = "android"))]
+            {
+                let file = self.pending_files[0].as_ref().ok_or_else(|| {
+                    ChunkStoreError::Io(io::Error::other("pending chunk writer was not retained"))
+                })?;
+                rustix::fs::syncfs(file)
+                    .map_err(io::Error::from)
+                    .map_err(ChunkStoreError::Io)?;
+            }
+            for (offset, file) in self.pending_files[..self.pending_len].iter().enumerate() {
+                let file = file.as_ref().ok_or_else(|| {
+                    ChunkStoreError::Io(io::Error::other("pending chunk writer was not retained"))
+                })?;
+                #[cfg(test)]
+                if matches!(
+                    self.commit_fault,
+                    Some(DirectoryCommitFault::ChunkFlush(index)) if index == offset
+                ) {
+                    return Err(ChunkStoreError::Io(io::Error::other(
+                        "injected chunk file flush failure",
+                    )));
+                }
+                file.sync_all().map_err(ChunkStoreError::Io)?;
+                let path = staging.join(format!("chunk_{:05}.bin", first_index + offset));
+                validate_atomic_temp(&path, file)?;
+            }
+            self.validate_staging_unchanged(staging)
+        })();
+        if result.is_err() {
+            // A later fsync may not report an already-consumed writeback error. Never permit
+            // a caller that catches write_chunk's error to retry this batch into publication.
+            self.durability_failed = true;
+            return result;
+        }
+        for file in &mut self.pending_files[..self.pending_len] {
+            *file = None;
+        }
+        self.pending_len = 0;
+        Ok(())
     }
     #[cfg(unix)]
     fn create_staging_root(&self, parent: &Path) -> Result<PathBuf, ChunkStoreError> {
@@ -2233,6 +2329,7 @@ impl ChunkSink for DirectoryChunkSink {
         chunk: &CarChunk,
         data: &[u8],
     ) -> Result<(), ChunkStoreError> {
+        self.ensure_durability_healthy()?;
         if index != self.next_chunk_index {
             return Err(ChunkStoreError::SinkChunkOrder {
                 expected: self.next_chunk_index,
@@ -2276,7 +2373,9 @@ impl ChunkSink for DirectoryChunkSink {
             .ok_or_else(|| ChunkStoreError::Io(io::Error::other("chunk sink was not prepared")))?;
         self.validate_staging_unchanged(staging)?;
         let path = staging.join(&file_name);
-        Self::write_atomic(&path, data)?;
+        let file = Self::write_staged_chunk(&path, data)?;
+        self.pending_files[self.pending_len] = Some(file);
+        self.pending_len += 1;
         self.records.push(PersistedChunkRecord {
             file_name,
             offset: chunk.offset,
@@ -2293,6 +2392,9 @@ impl ChunkSink for DirectoryChunkSink {
                     actual: u64::MAX,
                 })?;
         self.next_chunk_index += 1;
+        if self.pending_len == DIRECTORY_SYNC_BATCH_CHUNKS {
+            self.flush_pending_chunks()?;
+        }
         Ok(())
     }
     #[cfg(not(unix))]
@@ -2306,6 +2408,7 @@ impl ChunkSink for DirectoryChunkSink {
     }
     #[cfg(unix)]
     fn finish(mut self) -> Result<Self::Output, ChunkStoreError> {
+        self.ensure_durability_healthy()?;
         if self.next_chunk_index != self.expected_chunks.len()
             || self.records.len() != self.expected_chunks.len()
             || self.total_bytes != self.expected_total_bytes
@@ -2317,6 +2420,7 @@ impl ChunkSink for DirectoryChunkSink {
                 actual_bytes: self.total_bytes,
             });
         }
+        self.flush_pending_chunks()?;
         let staging = self
             .staging_root
             .as_ref()
@@ -7261,6 +7365,155 @@ mod tests {
     }
     #[cfg(unix)]
     #[test]
+    fn directory_sink_batches_full_and_tail_with_bounded_writer_handles() {
+        let base = tempdir().expect("base");
+        let root = fs::canonicalize(base.path())
+            .expect("canonical base")
+            .join("chunks");
+        let payload = (0..DIRECTORY_SYNC_BATCH_CHUNKS * 2 + 1)
+            .map(|index| index as u8)
+            .collect::<Vec<_>>();
+        let profile = ChunkProfile {
+            min_size: 1,
+            target_size: 1,
+            max_size: 1,
+            break_mask: 1,
+        };
+        let plan = CarBuildPlan::single_file_with_profile(&payload, profile).expect("plan");
+        assert_eq!(plan.chunks.len(), payload.len());
+        let mut sink = DirectoryChunkSink::new(&root);
+        sink.prepare(&plan).expect("prepare");
+        for (index, chunk) in plan.chunks.iter().enumerate() {
+            sink.write_chunk(index, chunk, &payload[index..index + 1])
+                .expect("write chunk");
+            let pending = (index + 1) % DIRECTORY_SYNC_BATCH_CHUNKS;
+            assert_eq!(sink.pending_len, pending);
+            assert_eq!(
+                sink.pending_files
+                    .iter()
+                    .filter(|file| file.is_some())
+                    .count(),
+                pending
+            );
+            assert!(!root.exists(), "even flushed full batches remain private");
+        }
+        assert_eq!(
+            sink.pending_len, 1,
+            "finish must flush the final partial batch"
+        );
+        let output = sink.finish().expect("publish durable chunks");
+        assert_eq!(output.publication, DirectoryPublicationStatus::Durable);
+        assert_eq!(output.records.len(), payload.len());
+        for (index, record) in output.records.iter().enumerate() {
+            assert_eq!(
+                fs::read(root.join(&record.file_name)).expect("chunk"),
+                [payload[index]]
+            );
+        }
+    }
+    #[cfg(unix)]
+    #[test]
+    fn directory_sink_full_batch_failure_permanently_blocks_publication() {
+        for fault in [
+            DirectoryCommitFault::BatchFlush,
+            DirectoryCommitFault::ChunkFlush(DIRECTORY_SYNC_BATCH_CHUNKS - 1),
+        ] {
+            let base = tempdir().expect("base");
+            let root = fs::canonicalize(base.path())
+                .expect("canonical base")
+                .join("chunks");
+            let payload = vec![7u8; DIRECTORY_SYNC_BATCH_CHUNKS + 1];
+            let profile = ChunkProfile {
+                min_size: 1,
+                target_size: 1,
+                max_size: 1,
+                break_mask: 1,
+            };
+            let plan = CarBuildPlan::single_file_with_profile(&payload, profile).expect("plan");
+            let mut sink = DirectoryChunkSink::new(&root);
+            sink.prepare(&plan).expect("prepare");
+            let staging = sink.staging_root.clone().expect("staging");
+            sink.commit_fault = Some(fault);
+            for index in 0..DIRECTORY_SYNC_BATCH_CHUNKS - 1 {
+                sink.write_chunk(index, &plan.chunks[index], &payload[index..index + 1])
+                    .expect("private write before flush");
+            }
+            let index = DIRECTORY_SYNC_BATCH_CHUNKS - 1;
+            assert!(
+                sink.write_chunk(index, &plan.chunks[index], &payload[index..index + 1])
+                    .is_err()
+            );
+            assert!(sink.durability_failed);
+            assert_eq!(sink.pending_len, DIRECTORY_SYNC_BATCH_CHUNKS);
+            assert!(sink.pending_files.iter().all(Option::is_some));
+            assert!(!root.exists());
+            sink.commit_fault = None;
+            assert!(
+                sink.flush_pending_chunks().is_err(),
+                "consumed writeback errors cannot be retried away"
+            );
+            let index = DIRECTORY_SYNC_BATCH_CHUNKS;
+            assert!(
+                sink.write_chunk(index, &plan.chunks[index], &payload[index..index + 1])
+                    .is_err()
+            );
+            assert!(sink.finish().is_err());
+            assert!(!root.exists());
+            assert!(!staging.exists(), "failed private staging is discarded");
+        }
+    }
+    #[cfg(unix)]
+    #[test]
+    fn directory_sink_tail_flush_failure_preserves_store_and_removes_staging() {
+        for fault in [
+            DirectoryCommitFault::BatchFlush,
+            DirectoryCommitFault::ChunkFlush(0),
+        ] {
+            let base = tempdir().expect("base");
+            let canonical_base = fs::canonicalize(base.path()).expect("canonical base");
+            let root = canonical_base.join("chunks");
+            let payload = b"tail payload";
+            let plan = CarBuildPlan::single_file(payload).expect("plan");
+            let mut sink = DirectoryChunkSink::new(&root);
+            sink.commit_fault = Some(fault);
+            let mut store = ChunkStore::new();
+            store.ingest_bytes(b"previous state").expect("seed store");
+            let before = StoreSnapshot::capture(&store);
+            let mut source = InMemoryPayload::new(payload);
+            assert!(
+                store
+                    .ingest_plan_source_with_sink(&plan, &mut source, sink)
+                    .is_err()
+            );
+            before.assert_unchanged(&store);
+            assert!(!root.exists());
+            assert_eq!(fs::read_dir(&canonical_base).expect("listing").count(), 0);
+        }
+    }
+    #[cfg(unix)]
+    #[test]
+    fn directory_sink_rejects_replaced_pending_writer_before_flush() {
+        let base = tempdir().expect("base");
+        let canonical_base = fs::canonicalize(base.path()).expect("canonical base");
+        let root = canonical_base.join("chunks");
+        let payload = b"matching bytes do not replace original writer custody";
+        let plan = CarBuildPlan::single_file(payload).expect("plan");
+        let mut sink = DirectoryChunkSink::new(&root);
+        sink.prepare(&plan).expect("prepare");
+        sink.write_chunk(0, &plan.chunks[0], payload)
+            .expect("write");
+        let staging = sink.staging_root.clone().expect("staging");
+        let chunk = staging.join("chunk_00000.bin");
+        let displaced = canonical_base.join("displaced");
+        fs::rename(&chunk, &displaced).expect("displace original writer");
+        fs::write(&chunk, payload).expect("replace with identical bytes");
+        assert!(sink.finish().is_err());
+        assert!(!root.exists());
+        assert!(!staging.exists());
+        assert_eq!(fs::read(displaced).expect("original retained"), payload);
+    }
+    #[cfg(unix)]
+    #[test]
     fn directory_sink_rechecks_staged_chunk_before_publication() {
         let base = tempdir().expect("base");
         let root = fs::canonicalize(base.path())
@@ -7328,7 +7581,7 @@ mod tests {
         let victim = dir.path().join("victim");
         fs::write(&victim, b"victim").expect("victim");
         std::os::unix::fs::symlink(&victim, &stale_partial).expect("partial symlink");
-        DirectoryChunkSink::write_atomic(&output, b"new chunk").expect("atomic write");
+        DirectoryChunkSink::write_staged_chunk(&output, b"new chunk").expect("atomic write");
         assert_eq!(fs::read(&output).expect("output"), b"new chunk");
         assert_eq!(fs::read(&victim).expect("victim"), b"victim");
         assert!(fs::symlink_metadata(&stale_partial).is_ok());
@@ -7350,7 +7603,7 @@ mod tests {
         let output = dir.path().join("chunk.bin");
         fs::write(&output, b"old chunk").expect("old chunk");
         assert!(matches!(
-            DirectoryChunkSink::write_atomic(&output, b"new chunk"),
+            DirectoryChunkSink::write_staged_chunk(&output, b"new chunk"),
             Err(ChunkStoreError::Io(_))
         ));
         assert_eq!(fs::read(&output).expect("output"), b"old chunk");
@@ -7365,14 +7618,14 @@ mod tests {
         let symlink_path = dir.path().join("symlink-chunk");
         symlink(&victim, &symlink_path).expect("symlink");
         assert!(matches!(
-            DirectoryChunkSink::write_atomic(&symlink_path, b"attack"),
+            DirectoryChunkSink::write_staged_chunk(&symlink_path, b"attack"),
             Err(ChunkStoreError::Io(_))
         ));
         assert_eq!(fs::read(&victim).expect("victim"), b"victim");
         let hardlink_path = dir.path().join("hardlink-chunk");
         fs::hard_link(&victim, &hardlink_path).expect("hard link");
         assert!(matches!(
-            DirectoryChunkSink::write_atomic(&hardlink_path, b"attack"),
+            DirectoryChunkSink::write_staged_chunk(&hardlink_path, b"attack"),
             Err(ChunkStoreError::Io(_))
         ));
         assert_eq!(fs::read(&victim).expect("victim"), b"victim");

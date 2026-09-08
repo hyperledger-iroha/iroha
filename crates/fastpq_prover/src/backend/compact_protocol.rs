@@ -1,44 +1,42 @@
 //! Private compact AIR engine for bounded candidate verification.
 //!
-//! The test prover commits complete base-field LDE rows before full-Fp4 column
+//! The prover commits complete base-field LDE rows before full-Fp4 column
 //! mixing, commits the mixed oracle before independent Fp4 constraint alphas,
 //! then commits the quotient before joint trace/quotient FRI challenges. The
 //! verifier checks only bounded authenticated openings and caller-fixed AIR and
 //! public polynomials. It has no witness, trace construction, FFT or LDE replay.
 //!
-//! TODO: Integrate the complete SMT/public statement relation, independently
-//! qualify proximity/Fiat-Shamir/query security, and measure the final schema and
-//! resource envelope before any production switch. The canonical 136-query
-//! profile remains unqualified. Production verification still requires replay;
-//! test-only diagnostic byte budgets are not production admission limits. This
-//! proof is not a zero-knowledge claim.
+//! TODO: Connect the typed quantity producer and verifier to authenticated ledger
+//! admission, independently qualify proximity/Fiat-Shamir/query security, and
+//! measure the final resource envelope before any production switch. The fixed
+//! 375-query SHAKE profile and retained 136-query diagnostic are unqualified.
+//! Production verification still requires replay; explicit offline byte budgets
+//! do not grant production admission authority. This proof is not a zero-knowledge
+//! claim.
 
 use fastpq_isi::{FASTPQ_FINAL_V1, GoldilocksDigest384V1 as Digest};
 use iroha_data_model::privacy::GoldilocksDigest384V1 as WireDigest;
 #[cfg(test)]
 use norito::DeserializePayload;
 use norito::{NoritoDeserialize, NoritoSerialize};
-#[cfg(test)]
 use rayon::prelude::*;
 
 use super::{
-    AirQuotientDomain, FriDomain, GOLDILOCKS_MODULUS, GoldilocksFp4V1, JointFriBatch,
-    MerkleTreeRoleV1, fixed_domain::FixedTraceDomain,
+    AirQuotientDomain, ExecutionMode, FriDomain, GOLDILOCKS_MODULUS, GoldilocksFp4V1,
+    JointFriBatch, MerkleTreeRoleV1, fixed_domain::FixedTraceDomain,
 };
 #[cfg(test)]
 use super::{
-    ExecutionMode, MerkleNodeCache, Transcript, build_merkle_levels_with_mode,
-    hash_air_composition_leaf, hash_air_trace_row, hash_air_trace_rows_with_mode,
-    hash_fp4_single_leaves_with_role, hash_lde_chunk_fp4, sample_queries,
-};
-use crate::{
-    Error, Result,
-    proof::{VerifyLimits, compact_fri_support},
+    MerkleNodeCache, Transcript, build_merkle_levels_with_mode, hash_air_composition_leaf,
+    hash_air_trace_row, hash_air_trace_rows_with_mode, hash_fp4_single_leaves_with_role,
+    hash_lde_chunk_fp4, sample_queries,
 };
 #[cfg(test)]
+use crate::proof::PublicIO;
 use crate::{
+    Error, Result,
     fft::Planner,
-    proof::{FriQueryOpening, PublicIO},
+    proof::{FriQueryOpening, VerifyLimits, compact_fri_support},
 };
 
 #[path = "compact_protocol/shared_openings.rs"]
@@ -46,13 +44,13 @@ pub(super) mod shared_openings;
 
 #[path = "compact_protocol/profile.rs"]
 mod profile;
-#[cfg(test)]
-use profile::ProtocolTranscript;
-use profile::{Binding, Protocol};
+use profile::{Binding, Protocol, ProtocolTranscript};
 
 #[cfg(test)]
 const PROTOCOL_TAG: &str = "fastpq:prototype:compact-single-phase:v1";
 const MAX_CONSTRAINTS: usize = 1024;
+/// Maximum independently allocated row/evaluator workspaces in one proof phase.
+pub(super) const MAX_PROVER_JOBS: usize = 32;
 
 /// Exact trusted relation geometry and circuit identity; never taken from a proof.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -68,12 +66,10 @@ pub(super) struct FixedAirSchema {
 }
 
 /// Prepared prover callback; mutable captures may retain per-proof scratch space.
-#[cfg(test)]
 pub(super) type ProverEvaluator<'a> =
     Box<dyn FnMut(usize, u64, &[u64], &[u64]) -> Result<Vec<u64>> + Send + 'a>;
 
 /// Immutable prover preparation shared across jobs; each evaluator owns its scratch.
-#[cfg(test)]
 pub(super) trait PreparedAir: Sync {
     /// Create a worker-local evaluator borrowing only immutable prepared data.
     fn evaluator(&self) -> ProverEvaluator<'_>;
@@ -94,7 +90,6 @@ pub(super) trait FixedAir: Sync {
     /// Evaluate every base-field numerator at x from complete current/next rows.
     fn evaluate(&self, point: u64, current: &[u64], next: &[u64]) -> Result<Vec<u64>>;
     /// Prepare prover-only acceleration without changing the verifier relation.
-    #[cfg(test)]
     fn prepare_prover(&self) -> Result<Box<dyn PreparedAir + '_>>
     where
         Self: Sized,
@@ -103,12 +98,10 @@ pub(super) trait FixedAir: Sync {
     }
 }
 
-#[cfg(test)]
 struct DirectPrepared<'a, R: FixedAir + ?Sized> {
     relation: &'a R,
 }
 
-#[cfg(test)]
 impl<R: FixedAir + ?Sized> PreparedAir for DirectPrepared<'_, R> {
     fn evaluator(&self) -> ProverEvaluator<'_> {
         Box::new(move |_, point, current, next| self.relation.evaluate(point, current, next))
@@ -116,7 +109,6 @@ impl<R: FixedAir + ?Sized> PreparedAir for DirectPrepared<'_, R> {
 }
 
 /// Private typed proof; its Norito schema is distinct from production ProofV1.
-#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[norito(schema_name = "fastpq_prover::compact_prototype::SinglePhaseProofV1")]
 pub(super) struct CompactProof {
@@ -127,7 +119,6 @@ pub(super) struct CompactProof {
     queries: Vec<CompactQuery>,
 }
 
-#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct CompactQuery {
     index: u32,
@@ -216,8 +207,107 @@ impl Geometry {
     }
 }
 
+// Canonical compact-length Norito framing: fields carry a varint byte length,
+// vectors carry an eight-byte count and framed elements. All arithmetic is
+// checked even though normal proving fixes the geometry before using it.
+fn wire_add(left: usize, right: usize) -> Result<usize> {
+    left.checked_add(right)
+        .ok_or_else(|| shape("compact wire-size arithmetic overflow"))
+}
+
+fn wire_field(payload: usize) -> Result<usize> {
+    let bits = (usize::BITS - payload.leading_zeros()).max(1) as usize;
+    wire_add(payload, bits.div_ceil(7))
+}
+
+fn wire_vector(count: usize, element: usize) -> Result<usize> {
+    let elements = count
+        .checked_mul(wire_field(element)?)
+        .ok_or_else(|| shape("compact wire-size arithmetic overflow"))?;
+    wire_add(8, elements)
+}
+
+fn wire_struct(fields: &[usize]) -> Result<usize> {
+    fields
+        .iter()
+        .try_fold(0, |size, &field| wire_add(size, wire_field(field)?))
+}
+
+/// Exact fixed-layout size of the prover's temporary repeated openings.
+/// This internal representation is not the caller's shared-output byte budget.
+fn repeated_wire_bytes(geometry: &Geometry) -> Result<usize> {
+    let depth = geometry.lde_rows.ilog2() as usize;
+    let layers = geometry.fri_lengths.len();
+    let terminal = *geometry
+        .fri_lengths
+        .last()
+        .ok_or_else(|| shape("compact wire size needs a terminal layer"))?;
+    let mut rounds = 8;
+    for &length in geometry.fri_lengths.iter().take(layers - 1) {
+        let round = wire_struct(&[
+            4,
+            4,
+            wire_vector(2, 32)?,
+            32,
+            wire_vector((length / 2).ilog2() as usize, 48)?,
+        ])?;
+        rounds = wire_add(rounds, wire_field(round)?)?;
+    }
+    let fri = wire_struct(&[
+        4,
+        rounds,
+        4,
+        wire_vector(terminal, 32)?,
+        wire_vector(1, 48)?,
+    ])?;
+    let row = wire_vector(geometry.schema.width, 8)?;
+    let path = wire_vector(depth, 48)?;
+    let query = wire_struct(&[4, row, row, path, path, 32, path, 32, path, fri])?;
+    wire_add(
+        norito::core::Header::SIZE,
+        wire_struct(&[
+            48,
+            48,
+            48,
+            wire_vector(layers, 48)?,
+            wire_vector(geometry.protocol.query_count(geometry.lde_rows), query)?,
+        ])?,
+    )
+}
+
+/// Evaluate at most 32 contiguous ranges, preserving both row and error order.
+/// Each range owns one scratch workspace; Rayon cannot subdivide its evaluator.
+fn collect_prover_rows<T: Send>(
+    length: usize,
+    evaluate: impl Fn(std::ops::Range<usize>) -> Result<Vec<T>> + Sync + Send,
+) -> Result<Vec<T>> {
+    if length == 0 {
+        return Err(shape("compact prover needs nonempty row ranges"));
+    }
+    let rows_per_job = length.div_ceil(MAX_PROVER_JOBS);
+    let chunks: Vec<Result<Vec<T>>> = (0..length.div_ceil(rows_per_job))
+        .into_par_iter()
+        .map(|job| {
+            let start = job * rows_per_job;
+            let end = start.saturating_add(rows_per_job).min(length);
+            let rows = evaluate(start..end)?;
+            if rows.len() != end - start {
+                return Err(shape("compact prover range returned another row count"));
+            }
+            Ok(rows)
+        })
+        .collect();
+    let mut rows = Vec::with_capacity(length);
+    for chunk in chunks {
+        rows.extend(chunk?);
+    }
+    if rows.len() != length {
+        return Err(shape("compact prover range returned another row count"));
+    }
+    Ok(rows)
+}
+
 /// Reusable committed prover data. It is never constructed by verification.
-#[cfg(test)]
 struct PreparedTrace {
     geometry: Geometry,
     columns: Vec<Vec<u64>>,
@@ -226,14 +316,13 @@ struct PreparedTrace {
     bound_statement: Option<Vec<u8>>,
 }
 
-#[cfg(test)]
 struct CommittedTree {
     levels: Vec<Vec<Digest>>,
     leaf_count: usize,
 }
 
-#[cfg(test)]
 impl CommittedTree {
+    #[cfg(test)]
     fn from_leaves(leaves: &[Digest], role: MerkleTreeRoleV1) -> Result<Self> {
         if leaves.is_empty() || !leaves.len().is_power_of_two() {
             return Err(shape(
@@ -278,7 +367,6 @@ fn prepare_trace(relation: &impl FixedAir, columns: &[Vec<u64>]) -> Result<Prepa
     prepare_trace_for(relation, columns, Protocol::Prototype)
 }
 
-#[cfg(test)]
 fn prepare_trace_for(
     relation: &impl FixedAir,
     columns: &[Vec<u64>],
@@ -313,20 +401,18 @@ fn prepare_trace_for(
     planner.ifft_columns(&mut coefficients);
     let columns = planner.lde_columns(&coefficients);
     drop(coefficients);
-    let leaves = if protocol == Protocol::Prototype {
-        hash_air_trace_rows_with_mode(&columns, ExecutionMode::Cpu)?
-    } else {
-        let results: Vec<Result<Digest>> = (0..geometry.lde_rows)
-            .into_par_iter()
-            .map_init(
-                || vec![0; geometry.schema.width],
-                |row, index| {
-                    fill_row(&columns, index, row);
-                    binding.row(index, row)
-                },
-            )
-            .collect();
-        results.into_iter().collect::<Result<_>>()?
+    let leaves = match protocol {
+        #[cfg(test)]
+        Protocol::Prototype => hash_air_trace_rows_with_mode(&columns, ExecutionMode::Cpu)?,
+        Protocol::ShakeCandidate => collect_prover_rows(geometry.lde_rows, |indices| {
+            let mut row = vec![0; geometry.schema.width];
+            indices
+                .map(|index| {
+                    fill_row(&columns, index, &mut row);
+                    binding.row(index, &row)
+                })
+                .collect()
+        })?,
     };
     let rows = binding.tree(&leaves, MerkleTreeRoleV1::AirTrace)?;
     Ok(PreparedTrace {
@@ -338,7 +424,6 @@ fn prepare_trace_for(
     })
 }
 
-#[cfg(test)]
 fn prove_prepared(relation: &impl FixedAir, trace: &PreparedTrace) -> Result<CompactProof> {
     let geometry = &trace.geometry;
     if relation.schema() != geometry.schema {
@@ -374,54 +459,56 @@ fn prove_prepared(relation: &impl FixedAir, trace: &PreparedTrace) -> Result<Com
                 })
         })
         .collect();
-    let mixed_leaves = if geometry.protocol == Protocol::Prototype {
-        hash_fp4_single_leaves_with_role(super::LDE_COMMITMENT_ROLE_V1, &mixed)?
-    } else {
-        let results: Vec<Result<Digest>> = mixed
-            .par_iter()
-            .enumerate()
-            .map(|(i, &v)| binding.mixed(i, v))
-            .collect();
-        results.into_iter().collect::<Result<_>>()?
+    let mixed_leaves: Vec<Digest> = match geometry.protocol {
+        #[cfg(test)]
+        Protocol::Prototype => {
+            hash_fp4_single_leaves_with_role(super::LDE_COMMITMENT_ROLE_V1, &mixed)?
+        }
+        Protocol::ShakeCandidate => {
+            let results: Vec<Result<Digest>> = mixed
+                .par_iter()
+                .enumerate()
+                .map(|(i, &v)| binding.mixed(i, v))
+                .collect();
+            results.into_iter().collect::<Result<_>>()?
+        }
     };
     let mixed_tree = binding.tree(&mixed_leaves, MerkleTreeRoleV1::Lde)?;
     drop(mixed_leaves);
     let alphas = transcript.alphas(mixed_tree.root())?;
     let weights = AirQuotientDomain::new(&FASTPQ_FINAL_V1, geometry.lde_rows)?;
     let prepared = relation.prepare_prover()?;
-    let mut current = vec![0; geometry.schema.width];
-    let mut next = current.clone();
-    let quotient_results: Vec<Result<GoldilocksFp4V1>> = (0..geometry.lde_rows)
-        .into_par_iter()
-        .with_min_len(64)
-        .map_init(
-            || {
-                (
-                    prepared.evaluator(),
-                    vec![0; geometry.schema.width],
-                    vec![0; geometry.schema.width],
-                )
-            },
-            |(evaluate, current, next), index| {
-                fill_row(&trace.columns, index, current);
-                fill_row(&trace.columns, next_index(index, geometry.lde_rows), next);
-                let residues = evaluate(index, geometry.domain.point(index), current, next)?;
+    let quotients = collect_prover_rows(geometry.lde_rows, |indices| {
+        let mut evaluate = prepared.evaluator();
+        let mut current = vec![0; geometry.schema.width];
+        let mut next = vec![0; geometry.schema.width];
+        indices
+            .map(|index| {
+                fill_row(&trace.columns, index, &mut current);
+                fill_row(
+                    &trace.columns,
+                    next_index(index, geometry.lde_rows),
+                    &mut next,
+                );
+                let residues = evaluate(index, geometry.domain.point(index), &current, &next)?;
                 Ok(combine(&residues, &alphas)?.mul_base(weights.weights_at(index)?.all_rows))
-            },
-        )
-        .collect();
-    // Indexed collection fixes row order; select any errors in that same order.
-    let quotients = quotient_results.into_iter().collect::<Result<Vec<_>>>()?;
+            })
+            .collect()
+    })?;
     drop(prepared); // No evaluator remains; release all prover-only fixed LDEs.
-    let quotient_leaves = if geometry.protocol == Protocol::Prototype {
-        hash_fp4_single_leaves_with_role(super::AIR_COMPOSITION_COMMITMENT_ROLE_V1, &quotients)?
-    } else {
-        let results: Vec<Result<Digest>> = quotients
-            .par_iter()
-            .enumerate()
-            .map(|(i, &v)| binding.quotient(i, v))
-            .collect();
-        results.into_iter().collect::<Result<_>>()?
+    let quotient_leaves: Vec<Digest> = match geometry.protocol {
+        #[cfg(test)]
+        Protocol::Prototype => {
+            hash_fp4_single_leaves_with_role(super::AIR_COMPOSITION_COMMITMENT_ROLE_V1, &quotients)?
+        }
+        Protocol::ShakeCandidate => {
+            let results: Vec<Result<Digest>> = quotients
+                .par_iter()
+                .enumerate()
+                .map(|(i, &v)| binding.quotient(i, v))
+                .collect();
+            results.into_iter().collect::<Result<_>>()?
+        }
     };
     let quotient_tree = binding.tree(&quotient_leaves, MerkleTreeRoleV1::AirComposition)?;
     drop(quotient_leaves);
@@ -434,6 +521,8 @@ fn prove_prepared(relation: &impl FixedAir, trace: &PreparedTrace) -> Result<Com
     )?;
     let chains = fri.open_query_chains(&indices, FASTPQ_FINAL_V1.fri.arity)?;
     let mut queries = Vec::with_capacity(indices.len());
+    let mut current = vec![0; geometry.schema.width];
+    let mut next = current.clone();
     for (index, fri) in indices.into_iter().zip(chains) {
         fill_row(&trace.columns, index, &mut current);
         let next_index = next_index(index, geometry.lde_rows);
@@ -462,7 +551,6 @@ fn prove_prepared(relation: &impl FixedAir, trace: &PreparedTrace) -> Result<Com
 
 // Hash and transcript orchestration differ by descriptor; the fold arithmetic,
 // domain schedule and retained opening owner are shared by both implementations.
-#[cfg(test)]
 fn fold_protocol_layers(
     evaluations: &[GoldilocksFp4V1],
     geometry: &Geometry,
@@ -484,15 +572,19 @@ fn fold_protocol_layers(
                 "compact FRI layer length differs from fixed geometry",
             ));
         }
-        let leaves = if geometry.protocol == Protocol::Prototype {
-            super::hash_fri_leaves_with_mode(round, &current, 2, ExecutionMode::Cpu)?
-        } else {
-            let half = current.len() / 2;
-            let results: Vec<Result<Digest>> = (0..half)
-                .into_par_iter()
-                .map(|i| binding.fri(round, i, &[current[i], current[i + half]]))
-                .collect();
-            results.into_iter().collect::<Result<_>>()?
+        let leaves: Vec<Digest> = match geometry.protocol {
+            #[cfg(test)]
+            Protocol::Prototype => {
+                super::hash_fri_leaves_with_mode(round, &current, 2, ExecutionMode::Cpu)?
+            }
+            Protocol::ShakeCandidate => {
+                let half = current.len() / 2;
+                let results: Vec<Result<Digest>> = (0..half)
+                    .into_par_iter()
+                    .map(|i| binding.fri(round, i, &[current[i], current[i + half]]))
+                    .collect();
+                results.into_iter().collect::<Result<_>>()?
+            }
         };
         let tree = binding.tree(&leaves, MerkleTreeRoleV1::Fri(round as u32))?;
         let root = tree.root();
@@ -664,7 +756,6 @@ fn verify_recorded(
     Ok(())
 }
 
-#[cfg(test)]
 fn preflight(
     relation: &impl FixedAir,
     proof: &CompactProof,
@@ -836,7 +927,6 @@ fn combine(residues: &[u64], alphas: &[GoldilocksFp4V1]) -> Result<GoldilocksFp4
     Ok(value)
 }
 
-#[cfg(test)]
 fn fill_row(columns: &[Vec<u64>], index: usize, row: &mut [u64]) {
     for (value, column) in row.iter_mut().zip(columns) {
         *value = column[index];
@@ -1095,23 +1185,25 @@ mod tests {
         }
         let digest = WireDigest::new([0; 6]).unwrap();
         // Fp4 payloads are the canonical 32-byte carrier, without struct framing.
-        for (rows, width, constraints, expected_bytes) in
-            [(512, 310, 688, 1_737_603), (65_536, 342, 923, 2_826_491)]
-        {
+        for (rows, width, constraints, protocol, expected_bytes) in [
+            (512, 310, 688, Protocol::Prototype, 1_737_603),
+            (65_536, 342, 923, Protocol::Prototype, 2_826_491),
+            (65_536, 342, 923, Protocol::ShakeCandidate, 7_791_716),
+        ] {
             let air = ShapeOnly(FixedAirSchema {
                 trace_rows: rows,
                 width,
                 constraints,
                 identity: "test-only-shape-accounting",
             });
-            let geometry = Geometry::new(&air).unwrap();
+            let geometry = Geometry::for_protocol(&air, protocol).unwrap();
             let depth = geometry.lde_rows.ilog2() as usize;
             let proof = CompactProof {
                 row_root: digest,
                 mixed_root: digest,
                 quotient_root: digest,
                 fri_roots: vec![digest; geometry.fri_lengths.len()],
-                queries: (0..FASTPQ_FINAL_V1.fri.queries)
+                queries: (0..geometry.protocol.query_count(geometry.lde_rows) as u32)
                     .map(|index| CompactQuery {
                         index,
                         current: vec![0; width],
@@ -1146,22 +1238,81 @@ mod tests {
                     .collect(),
             };
             let limits = VerifyLimits {
-                max_proof_bytes: 4 * 1024 * 1024,
+                max_proof_bytes: 8 * 1024 * 1024,
+                max_queries: 375,
                 ..VerifyLimits::default()
             };
             let _flags =
                 norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
             let counted = preflight(&air, &proof, limits, &geometry).unwrap();
             assert_eq!(counted, norito::core::to_bytes(&proof).unwrap().len());
+            assert_eq!(repeated_wire_bytes(&geometry).unwrap(), counted);
             assert_eq!(counted, expected_bytes, "rows={rows}; width={width}");
             assert!(matches!(
-                preflight(&air, &proof, VerifyLimits::default(), &geometry),
+                preflight(
+                    &air,
+                    &proof,
+                    VerifyLimits {
+                        max_queries: 375,
+                        ..VerifyLimits::default()
+                    },
+                    &geometry,
+                ),
                 Err(Error::VerifierLimitExceeded {
                     limit: "max_proof_bytes",
                     ..
                 })
             ));
         }
+    }
+
+    #[test]
+    fn canonical_wire_arithmetic_checks_prefixes_and_overflow() {
+        assert_eq!(wire_field(0).unwrap(), 1);
+        assert_eq!(wire_field(127).unwrap(), 128);
+        assert_eq!(wire_field(128).unwrap(), 130);
+        assert_eq!(wire_vector(0, 32).unwrap(), 8);
+        assert_eq!(wire_struct(&[4, 32, 32]).unwrap(), 71);
+        assert!(wire_field(usize::MAX).is_err());
+        assert!(wire_vector(usize::MAX, 32).is_err());
+        assert!(wire_struct(&[usize::MAX]).is_err());
+    }
+
+    #[test]
+    fn prover_row_jobs_are_bounded_and_preserve_rows_and_first_error() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let jobs = AtomicUsize::new(0);
+        let rows = collect_prover_rows(1_003, |indices| {
+            jobs.fetch_add(1, Ordering::Relaxed);
+            Ok(indices.map(|index| index * 3).collect::<Vec<_>>())
+        })
+        .unwrap();
+        assert_eq!(jobs.load(Ordering::Relaxed), MAX_PROVER_JOBS);
+        assert_eq!(rows, (0..1_003).map(|index| index * 3).collect::<Vec<_>>());
+        assert!(matches!(
+            collect_prover_rows::<usize>(1_003, |indices| {
+                let start = indices.start;
+                Err(Error::QueryIndexOutOfRange {
+                    index: start,
+                    len: 0,
+                })
+            }),
+            Err(Error::QueryIndexOutOfRange { index: 0, len: 0 })
+        ));
+        assert!(collect_prover_rows::<usize>(0, |_| panic!("empty ranges never run")).is_err());
+        assert!(collect_prover_rows::<usize>(1, |_| Ok(Vec::new())).is_err());
+        // An excess row in one job cannot compensate for a missing row in the
+        // next job and silently shift every subsequent oracle coordinate.
+        assert!(
+            collect_prover_rows::<usize>(2, |indices| {
+                Ok(if indices.start == 0 {
+                    vec![0, 1]
+                } else {
+                    Vec::new()
+                })
+            })
+            .is_err()
+        );
     }
 
     fn mutate_digest(value: WireDigest) -> WireDigest {

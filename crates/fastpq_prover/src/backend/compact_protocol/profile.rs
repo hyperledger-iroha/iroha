@@ -241,8 +241,8 @@ impl Binding {
     }
 
     /// Build a prover-owned tree with exact candidate geometry and ordered parents.
-    #[cfg(test)]
     pub(super) fn tree(&self, leaves: &[Digest], role: MerkleTreeRoleV1) -> Result<CommittedTree> {
+        #[cfg(test)]
         if self.shake.is_none() {
             return CommittedTree::from_leaves(leaves, role);
         }

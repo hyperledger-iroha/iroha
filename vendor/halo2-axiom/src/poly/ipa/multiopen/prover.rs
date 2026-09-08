@@ -1,9 +1,9 @@
 use super::{ChallengeX1, ChallengeX2, ChallengeX3, ChallengeX4, construct_intermediate_sets};
-use crate::arithmetic::{CurveAffine, eval_polynomial, kate_division};
+use crate::arithmetic::{CurveAffine, eval_polynomial, parallelize};
 use crate::poly::commitment::ParamsProver;
 use crate::poly::commitment::{Blind, Prover};
 use crate::poly::ipa::commitment::{self, IPACommitmentScheme, ParamsIPA};
-use crate::poly::query::ProverQuery;
+use crate::poly::query::{PolynomialPointer, ProverQuery};
 use crate::poly::{Coeff, Polynomial};
 use crate::transcript::{EncodedChallenge, TranscriptWrite};
 
@@ -80,55 +80,29 @@ impl<
             )
         })?;
 
-        // Collapse openings at same point sets together into single openings using
-        // x_1 challenge.
-        let mut q_polys: Vec<Option<Polynomial<C::Scalar, Coeff>>> = vec![None; point_sets.len()];
-        let mut q_blinds = vec![Blind(C::Scalar::ZERO); point_sets.len()];
-
-        {
-            let mut accumulate = |set_idx: usize,
-                                  new_poly: &Polynomial<C::Scalar, Coeff>,
-                                  blind: Blind<C::Scalar>| {
-                if let Some(poly) = &q_polys[set_idx] {
-                    q_polys[set_idx] = Some(poly.clone() * *x_1 + new_poly);
-                } else {
-                    q_polys[set_idx] = Some(new_poly.clone());
-                }
-                q_blinds[set_idx] *= *x_1;
-                q_blinds[set_idx] += blind;
-            };
-
-            for commitment_data in poly_map.into_iter() {
-                accumulate(
-                    commitment_data.set_index,        // set_idx,
-                    commitment_data.commitment.poly,  // poly,
-                    commitment_data.commitment.blind, // blind,
-                );
+        // Reconstruct one Q at a time in exactly the original commitment and
+        // point-set orders. Keep only this reusable buffer and the quotient
+        // accumulator; no polynomial bank grows with the number of point sets.
+        let mut q_poly = Polynomial {
+            values: Vec::with_capacity(self.params.n as usize),
+            _marker: PhantomData,
+        };
+        let mut q_prime_poly: Option<Polynomial<C::Scalar, Coeff>> = None;
+        for (set_idx, points) in point_sets.iter().enumerate() {
+            reconstruct_q(&poly_map, set_idx, *x_1, &mut q_poly);
+            for point in points {
+                kate_division_in_place(&mut q_poly.values, *point);
+            }
+            q_poly
+                .values
+                .resize(self.params.n as usize, C::Scalar::ZERO);
+            if let Some(accumulator) = &mut q_prime_poly {
+                fold_polynomial_in_place(accumulator, *x_2, &q_poly);
+            } else {
+                q_prime_poly = Some(q_poly.clone());
             }
         }
-
-        let q_prime_poly = point_sets
-            .iter()
-            .zip(q_polys.iter())
-            .fold(None, |q_prime_poly, (points, poly)| {
-                let mut poly = points
-                    .iter()
-                    .fold(poly.clone().unwrap().values, |poly, point| {
-                        kate_division(&poly, *point)
-                    });
-                poly.resize(self.params.n as usize, C::Scalar::ZERO);
-                let poly = Polynomial {
-                    values: poly,
-                    _marker: PhantomData,
-                };
-
-                if q_prime_poly.is_none() {
-                    Some(poly)
-                } else {
-                    q_prime_poly.map(|q_prime_poly| q_prime_poly * *x_2 + &poly)
-                }
-            })
-            .unwrap();
+        let mut q_prime_poly = q_prime_poly.unwrap();
 
         let q_prime_blind = Blind(C::Scalar::random(&mut rng));
         let q_prime_commitment = self.params.commit(&q_prime_poly, q_prime_blind).to_affine();
@@ -139,22 +113,95 @@ impl<
 
         // Prover sends u_i for all i, which correspond to the evaluation
         // of each Q polynomial commitment at x_3.
-        for q_i_poly in &q_polys {
-            transcript.write_scalar(eval_polynomial(q_i_poly.as_ref().unwrap(), *x_3))?;
+        for set_idx in 0..point_sets.len() {
+            reconstruct_q(&poly_map, set_idx, *x_1, &mut q_poly);
+            transcript.write_scalar(eval_polynomial(&q_poly, *x_3))?;
         }
 
         let x_4: ChallengeX4<_> = transcript.squeeze_challenge_scalar();
 
-        let (p_poly, p_poly_blind) = q_polys.into_iter().zip(q_blinds).fold(
-            (q_prime_poly, q_prime_blind),
-            |(q_prime_poly, q_prime_blind), (poly, blind)| {
-                (
-                    q_prime_poly * *x_4 + &poly.unwrap(),
-                    Blind((q_prime_blind.0 * &(*x_4)) + &blind.0),
-                )
-            },
-        );
+        let mut p_poly_blind = q_prime_blind;
+        for set_idx in 0..point_sets.len() {
+            let blind = reconstruct_q(&poly_map, set_idx, *x_1, &mut q_poly);
+            fold_polynomial_in_place(&mut q_prime_poly, *x_4, &q_poly);
+            p_poly_blind = Blind((p_poly_blind.0 * &(*x_4)) + &blind.0);
+        }
+        // Release reconstruction storage before the inner IPA allocates its
+        // own work buffers. The quotient accumulator becomes the final p.
+        drop(q_poly);
+        drop(poly_map);
+        let p_poly = q_prime_poly;
 
         commitment::create_proof(self.params, rng, transcript, &p_poly, p_poly_blind, *x_3)
     }
 }
+
+/// Rebuild a point set's Horner combination without retaining other sets.
+fn reconstruct_q<C: CurveAffine>(
+    poly_map: &[super::CommitmentData<C::Scalar, PolynomialPointer<'_, C>>],
+    set_idx: usize,
+    challenge: C::Scalar,
+    output: &mut Polynomial<C::Scalar, Coeff>,
+) -> Blind<C::Scalar> {
+    let mut initialized = false;
+    let mut blind = Blind(C::Scalar::ZERO);
+    for data in poly_map.iter().filter(|data| data.set_index == set_idx) {
+        if initialized {
+            fold_polynomial_in_place(output, challenge, data.commitment.poly);
+        } else {
+            output.values.clear();
+            output
+                .values
+                .extend_from_slice(&data.commitment.poly.values);
+            initialized = true;
+        }
+        blind *= challenge;
+        blind += data.commitment.blind;
+    }
+    assert!(initialized, "every point set has a polynomial");
+    blind
+}
+
+/// Preserve the original polynomial multiply-then-add operations in place.
+fn fold_polynomial_in_place<F: Field>(
+    accumulator: &mut Polynomial<F, Coeff>,
+    challenge: F,
+    addend: &Polynomial<F, Coeff>,
+) {
+    if challenge == F::ZERO {
+        accumulator.values.fill(F::ZERO);
+    } else if challenge != F::ONE {
+        parallelize(&mut accumulator.values, |values, _| {
+            for value in values {
+                *value *= challenge;
+            }
+        });
+    }
+    parallelize(&mut accumulator.values, |values, start| {
+        for (value, addend) in values.iter_mut().zip(addend.values[start..].iter()) {
+            *value += *addend;
+        }
+    });
+}
+
+/// Apply the original Kate-division recurrence without allocating a quotient.
+fn kate_division_in_place<F: Field>(values: &mut Vec<F>, point: F) {
+    let b = -point;
+    let mut original = *values.last().expect("Kate division requires a coefficient");
+    let mut tmp = F::ZERO;
+    for index in (0..values.len() - 1).rev() {
+        // Writing q[index] would overwrite the next original coefficient.
+        // Carry it before the write, preserving the reference recurrence.
+        let next_original = values[index];
+        let mut lead_coeff = original;
+        lead_coeff -= tmp;
+        values[index] = lead_coeff;
+        tmp = lead_coeff;
+        tmp *= b;
+        original = next_original;
+    }
+    values.pop();
+}
+
+#[cfg(test)]
+mod bounded_tests;

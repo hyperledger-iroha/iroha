@@ -41,6 +41,8 @@ use encode_frames::write_frame_to_writer_with_flags;
 pub use encode_frames::write_frame_with_prefix;
 pub(crate) use encode_writers::ExactSliceWriter;
 use encode_writers::{ExactLengthWriter, LengthCountingWriter};
+mod sequence_length;
+pub use sequence_length::SequencePayloadLength;
 #[cfg(test)]
 #[path = "core/counting_tests.rs"]
 mod counting_tests;
@@ -2301,6 +2303,12 @@ pub fn write_varint_len_to_vec(out: &mut Vec<u8>, value: u64) {
     let used = encode_varint(value, &mut buf);
     out.extend_from_slice(&buf[..used]);
 }
+// A packed sequence always has one initial zero offset, including when empty.
+fn packed_sequence_table_len(len: usize) -> Result<usize, Error> {
+    len.checked_add(1)
+        .and_then(|entries| entries.checked_mul(core::mem::size_of::<u64>()))
+        .ok_or(Error::LengthMismatch)
+}
 /// Write the canonical packed-sequence offset table for counted payload lengths.
 ///
 /// The table always starts at zero and contains one checked cumulative offset
@@ -2405,10 +2413,7 @@ where
     // The offset table alone may exceed the packed bound (including for
     // zero-sized elements). Reject that before allocating a length table or
     // invoking any element serializer.
-    let table_bytes = len
-        .checked_add(1)
-        .and_then(|entries| entries.checked_mul(core::mem::size_of::<u64>()))
-        .ok_or(Error::LengthMismatch)?;
+    let table_bytes = packed_sequence_table_len(len)?;
     if let Some(limit) = packed_byte_limit {
         let length = u64::try_from(table_bytes).map_err(|_| Error::LengthMismatch)?;
         if length > limit {

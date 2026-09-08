@@ -39,18 +39,43 @@ source. Compiler overrides, interpreter hooks and runtime credentials are not
 forwarded to the child environment; local Cargo/Rustup and sccache paths remain
 available. The gate receives the same explicit target directory.
 
-The command reports each stage and its elapsed time. An early-gate failure stops
-before Linux compilation. A compiler failure retains cargo.log in the private
-output directory. Changed source or tools, missing/wrong-architecture binaries,
-and artifacts replaced during capture cannot publish result.json. Existing
-output directories are never reused: inspect a failed attempt and choose a fresh
-output directory for the next attempt while retaining the same warm Cargo lane.
+Rerun the exact same `prepare` command and output directory after interruption.
+The command locks that owner-private preparation directory, checks that its
+recorded inputs still match the signed checkout and tools, and resumes locally:
 
-Successful output contains bin/ with four 0500 executable copies, a 0400 cargo.log,
-and a 0400 result.json with source/tool/artifact hashes and stage durations. The
-capture and output directories are 0500. The mutable Cargo binaries remain in
-place. The local result is explicitly not release qualification and is not an
-authenticated prebuilt-provenance manifest accepted by run_release_pipeline.py.
+- Completed native checks are reused for those exact inputs.
+- A failed or interrupted build runs Cargo again in the same warm target. Cargo
+  reuses its cache; each attempt gets a fresh private log and capture directory.
+- A completed read-only capture is revalidated and reused without running checks
+  or Cargo, including a crash before the final result was published.
+- Changed input identity or a modified captured binary stops with a specific
+  error. Active preparations retain their lock; a second command stops promptly.
+
+The command reports stage durations and emits elapsed time, compiler-output size,
+and the log path every 30 seconds during Linux compilation. It does not repeatedly
+hash source or artifacts while reporting progress and does not impose an arbitrary
+cold-build deadline. Source, tools and artifacts are checked at actual consumption
+and reuse boundaries. Runtime secrets remain excluded from the child environment.
+
+Before compilation, local admission groups requirements by filesystem and checks
+an 8 GiB Cargo working-space floor plus 256 MiB capture headroom. Before capture,
+it checks the exact binary-copy bytes plus that headroom. The build floor is an
+operational minimum, not a prediction of Cargo's peak use. This local check cannot
+observe a remote guest's sparse backing disk; native host capacity admission and
+operator backing-volume checks remain necessary. No cache or output is deleted
+automatically, and the warm Cargo target is never replaced with a new lane.
+
+The output directory contains read-only `request.json`, `checks.json`, and
+`result.json`, a persistent private `session.lock`, and numbered `attempts/`
+directories. Failed attempt logs and partial captures stay available. Successful
+captures contain four 0500 executables and a 0400 `capture.json`; its artifact paths
+are returned in `result.json`. The successful attempt, capture and top-level output
+directories are 0500. The mutable Cargo binaries remain in place. Existing unrelated
+output directories cannot be adopted as resumable preparations.
+
+This result remains a local build observation with `release_qualified=false` and
+`deployed=false`. It is not an authenticated prebuilt-provenance manifest accepted
+by `run_release_pipeline.py`, and local resume does not resume a deployment journal.
 
 Canonical release signing remains in run_release_pipeline.py. Controller import
 and native public-reset source-manifest, assemble, authorize, preflight and apply

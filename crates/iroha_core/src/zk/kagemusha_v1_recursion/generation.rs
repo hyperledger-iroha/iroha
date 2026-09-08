@@ -1,7 +1,7 @@
 //! Deterministic fixed-k artifact generation and proving for the recursive aggregate state.
 //!
 //! The emitted files use exactly the raw formats authenticated by the V1 release manifest:
-//! `ParamsIPA::write`, compact-v1 proving keys and Processed verifying keys. State-role keys are derived only from
+//! `ParamsIPA::write`, structured-v1 proving keys and Processed verifying keys. State-role keys are derived only from
 //! the complete recursive circuit: the six-operation balance relation, predecessor recursion,
 //! delayed-history fold, mint-finality helper, normalized hardware GuardBundle, and reciprocal
 //! Pasta equation audit are one inseparable proving authority. Device proof writers require a
@@ -127,7 +127,7 @@ mod mint_hash_generation;
 pub(super) use artifact_resource_preflight::keygen_pk_with_helper_resource_preflight_consuming_v1;
 #[cfg(feature = "zk-halo2-ipa")]
 use artifact_resource_preflight::{
-    KagemushaCompactKeyLimitsV1, keygen_pk_with_key_resource_limits_consuming_v1,
+    KagemushaKeyLimitsV1, keygen_pk_with_key_resource_limits_consuming_v1,
     keygen_vk_with_helper_resource_preflight_consuming_v1,
     keygen_vk_with_key_resource_limits_consuming_v1, preflight_helper_key_configuration_v1,
 };
@@ -288,7 +288,7 @@ pub struct KagemushaGeneratedOperationArtifactsV1 {
     pub parity: KagemushaPastaParityV1,
     /// Canonical transparent IPA parameter bytes.
     pub parameters: Arc<[u8]>,
-    /// Compact-v1 native state proving key.
+    /// Structured-v1 native state proving key.
     pub proving_key: Arc<[u8]>,
     /// Processed native state verifying key.
     pub verifying_key: Arc<[u8]>,
@@ -625,13 +625,13 @@ pub struct KagemushaGeneratedRecursiveStateArtifactsV1 {
     pub inner_eq: KagemushaGeneratedOperationArtifactsV1,
     /// Ep/Fq parameter and private recursive aggregate-state carrier key bytes.
     pub inner_ep: KagemushaGeneratedOperationArtifactsV1,
-    /// Exact Eq outer-decider layout required to decode the compact proving key and Processed verifying key.
+    /// Exact Eq outer-decider layout required to decode the structured proving key and Processed verifying key.
     pub eq_circuit_params: BaseCircuitParams,
-    /// Exact Ep outer-decider layout required to decode the compact proving key and Processed verifying key.
+    /// Exact Ep outer-decider layout required to decode the structured proving key and Processed verifying key.
     pub ep_circuit_params: BaseCircuitParams,
-    /// Exact Eq inner-carrier layout required to decode the compact proving key and Processed verifying key.
+    /// Exact Eq inner-carrier layout required to decode the structured proving key and Processed verifying key.
     pub inner_eq_circuit_params: BaseCircuitParams,
-    /// Exact Ep inner-carrier layout required to decode the compact proving key and Processed verifying key.
+    /// Exact Ep inner-carrier layout required to decode the structured proving key and Processed verifying key.
     pub inner_ep_circuit_params: BaseCircuitParams,
     /// Eq compiled outer transport-decider identity committed by every payment proof.
     pub eq_protocol_digest: [u8; 32],
@@ -1048,11 +1048,11 @@ pub struct KagemushaGeneratedTerminalAuthorizationArtifactsV1 {
     pub eq_parameters: Arc<[u8]>,
     /// Canonical Ep transparent IPA parameters used during key generation.
     pub ep_parameters: Arc<[u8]>,
-    /// Compact-v1 Eq terminal-authorization proving key.
+    /// Structured-v1 Eq terminal-authorization proving key.
     pub eq_proving_key: Arc<[u8]>,
     /// Processed Eq terminal-authorization verifying key.
     pub eq_verifying_key: Arc<[u8]>,
-    /// Compact-v1 Ep terminal-authorization proving key.
+    /// Structured-v1 Ep terminal-authorization proving key.
     pub ep_proving_key: Arc<[u8]>,
     /// Processed Ep terminal-authorization verifying key.
     pub ep_verifying_key: Arc<[u8]>,
@@ -1323,11 +1323,11 @@ pub struct KagemushaGeneratedCommitWrapperArtifactsV1 {
     pub eq_parameters: Arc<[u8]>,
     /// Canonical Ep transparent IPA parameters.
     pub ep_parameters: Arc<[u8]>,
-    /// Compact-v1 Eq authorization proving key.
+    /// Structured-v1 Eq authorization proving key.
     pub eq_proving_key: Arc<[u8]>,
     /// Processed Eq authorization verifying key.
     pub eq_verifying_key: Arc<[u8]>,
-    /// Compact-v1 Ep authorization proving key.
+    /// Structured-v1 Ep authorization proving key.
     pub ep_proving_key: Arc<[u8]>,
     /// Processed Ep authorization verifying key.
     pub ep_verifying_key: Arc<[u8]>,
@@ -1942,11 +1942,11 @@ pub struct KagemushaGeneratedMintAuthorizationArtifactsV1 {
     pub eq_parameters: Arc<[u8]>,
     /// Canonical Ep transparent IPA parameters.
     pub ep_parameters: Arc<[u8]>,
-    /// Compact-v1 Eq mint-authorization proving key.
+    /// Structured-v1 Eq mint-authorization proving key.
     pub eq_proving_key: Arc<[u8]>,
     /// Processed Eq mint-authorization verifying key.
     pub eq_verifying_key: Arc<[u8]>,
-    /// Compact-v1 Ep mint-authorization proving key.
+    /// Structured-v1 Ep mint-authorization proving key.
     pub ep_proving_key: Arc<[u8]>,
     /// Processed Ep mint-authorization verifying key.
     pub ep_verifying_key: Arc<[u8]>,
@@ -1958,11 +1958,11 @@ pub struct KagemushaGeneratedMintAuthorizationArtifactsV1 {
     pub eq_protocol_digest: [u8; 32],
     /// Compiled Ep mint-authorization protocol digest.
     pub ep_protocol_digest: [u8; 32],
-    /// Compact-v1 Eq private SHA/credential carrier proving key.
+    /// Structured-v1 Eq private SHA/credential carrier proving key.
     pub inner_eq_proving_key: Arc<[u8]>,
     /// Processed Eq private SHA/credential carrier verifying key.
     pub inner_eq_verifying_key: Arc<[u8]>,
-    /// Compact-v1 Ep private SHA/credential carrier proving key.
+    /// Structured-v1 Ep private SHA/credential carrier proving key.
     pub inner_ep_proving_key: Arc<[u8]>,
     /// Processed Ep private SHA/credential carrier verifying key.
     pub inner_ep_verifying_key: Arc<[u8]>,
@@ -2511,9 +2511,9 @@ pub struct KagemushaGeneratedMintAuthorityArtifactsV1 {
     pub eq_parameters: Arc<[u8]>,
     /// Canonical Ep transparent IPA parameters.
     pub ep_parameters: Arc<[u8]>,
-    /// Compact-v1 Eq mint-authority proving key.
+    /// Structured-v1 Eq mint-authority proving key.
     pub eq_proving_key: Arc<[u8]>,
-    /// Compact-v1 Ep mint-authority proving key.
+    /// Structured-v1 Ep mint-authority proving key.
     pub ep_proving_key: Arc<[u8]>,
     /// Processed Eq mint-authority verifying key.
     pub eq_verifying_key: Arc<[u8]>,
@@ -2784,9 +2784,9 @@ pub enum KagemushaArtifactGenerationErrorV1 {
         /// Generated length.
         actual: u64,
     },
-    /// The configured compressed Processed key layout cannot fit immutable helper limits.
+    /// The structured proving/Processed verifying key profile cannot fit immutable helper limits.
     #[error(
-        "Kagemusha V1 {parity:?} {kind} compact proving/Processed verifying key profile (advice={advice_columns}, instance={instance_columns}, fixed={configured_fixed_columns}, original_selectors={selector_columns}, materialized_selectors={materialized_selector_columns}, selector_bitmap_bytes={selector_bitmap_bytes}, permutation={permutation_columns}) predicts proving-key length {predicted_proving_key_bytes}/{proving_key_maximum} and verifying-key length {predicted_verifying_key_bytes}/{verifying_key_maximum}"
+        "Kagemusha V1 {parity:?} {kind} structured proving/Processed verifying key profile (advice={advice_columns}, instance={instance_columns}, fixed={configured_fixed_columns}, original_selectors={selector_columns}, materialized_selectors={materialized_selector_columns}, selector_bitmap_bytes={selector_bitmap_bytes}, permutation={permutation_columns}) predicts proving-key length {predicted_proving_key_bytes}/{proving_key_maximum} and verifying-key length {predicted_verifying_key_bytes}/{verifying_key_maximum}"
     )]
     PredictedKeyResourceLimit {
         /// Pasta parity being configured.
@@ -2799,19 +2799,19 @@ pub enum KagemushaArtifactGenerationErrorV1 {
         instance_columns: u64,
         /// Fixed columns configured before selector materialization.
         configured_fixed_columns: u64,
-        /// Original virtual selectors retained as bitmaps.
+        /// Original virtual selectors configured by the circuit.
         selector_columns: u64,
-        /// Fixed columns produced by selector compression.
+        /// Fixed columns produced by the selected selector materialization.
         materialized_selector_columns: u64,
         /// Bit-packed original-selector activations serialized in the verifier key.
         selector_bitmap_bytes: u64,
         /// Columns participating in the permutation argument.
         permutation_columns: u64,
-        /// Exact predicted Processed proving-key bytes.
+        /// Predicted structured proving-key bytes at the rejecting preflight stage.
         predicted_proving_key_bytes: u64,
         /// Immutable helper proving-key maximum.
         proving_key_maximum: u64,
-        /// Exact predicted Processed verifying-key bytes.
+        /// Predicted Processed verifying-key bytes at the rejecting preflight stage.
         predicted_verifying_key_bytes: u64,
         /// Immutable verifying-key maximum.
         verifying_key_maximum: u64,
@@ -10685,7 +10685,7 @@ impl io::Write for CanonicalArtifactDigestWriterV1 {
     }
 }
 
-/// Decode a shape-checked key and compare its streamed canonical encoding to the manifest.
+/// Decode the sole structured-v1 key format and compare its streamed canonical encoding to the manifest.
 /// The caller must separately authenticate and fully consume the input stream before exposing
 /// this return value; production uses `KagemushaAuthenticatedArtifactSetV1::read_verified`.
 #[cfg(feature = "zk-halo2-ipa")]
@@ -10701,7 +10701,7 @@ where
     C::Scalar: halo2_proofs::SerdePrimeField + ff::FromUniformBytes<64>,
     ConcreteCircuit: halo2_proofs::plonk::Circuit<C::Scalar>,
 {
-    let key = ProvingKey::read_compact_v1_checked::<_, ConcreteCircuit>(
+    let key = ProvingKey::read_structured_v1_checked::<_, ConcreteCircuit>(
         &mut reader,
         expected_k,
         binding.byte_len,
@@ -10709,13 +10709,13 @@ where
     )
     .map_err(|error| key_decode_error(parity, "proving key", error))?;
     let mut canonical = CanonicalArtifactDigestWriterV1::new(binding.byte_len);
-    key.write_compact_v1(&mut canonical)
+    key.write_structured_v1(&mut canonical)
         .map_err(|error| key_decode_error(parity, "proving key canonical encoding", error))?;
     if !canonical.matches(binding) {
         return Err(key_decode_message(
             parity,
             "proving key",
-            "compact proving-key encoding is non-canonical",
+            "structured proving-key encoding is non-canonical",
         ));
     }
     Ok(key)
@@ -10810,8 +10810,8 @@ fn key_decode_message(
     }
 }
 
-/// Check the exact compact shape against the caller's unchanged cap before allocating output.
-fn compact_proving_key_buffer_v1<C>(
+/// Check the exact structured shape against the caller's unchanged cap before allocating output.
+fn structured_proving_key_buffer_v1<C>(
     parity: KagemushaPastaParityV1,
     kind: &'static str,
     maximum: u64,
@@ -10821,7 +10821,7 @@ where
     C: CurveAffine + halo2_proofs::SerdeCurveAffine,
     C::Scalar: halo2_proofs::SerdePrimeField + ff::FromUniformBytes<64>,
 {
-    let length = key.compact_v1_bytes_length().map_err(|error| {
+    let length = key.structured_v1_bytes_length().map_err(|error| {
         KagemushaArtifactGenerationErrorV1::KeyGeneration {
             parity,
             kind,
@@ -10857,14 +10857,14 @@ where
             reason: error.to_string(),
         }
     })?;
-    let mut proving_key_bytes = compact_proving_key_buffer_v1(
+    let mut proving_key_bytes = structured_proving_key_buffer_v1(
         parity,
         "proving key",
         KAGEMUSHA_STATE_PROVING_KEY_MAX_BYTES_V1,
         &proving_key,
     )?;
     proving_key
-        .write_compact_v1_consuming(&mut proving_key_bytes)
+        .write_structured_v1_consuming(&mut proving_key_bytes)
         .map_err(|error| KagemushaArtifactGenerationErrorV1::KeyGeneration {
             parity,
             kind: "proving key",
@@ -10933,14 +10933,14 @@ where
         KAGEMUSHA_VERIFYING_KEY_MAX_BYTES_V1,
         false,
     )?;
-    let mut proving_key_bytes = compact_proving_key_buffer_v1(
+    let mut proving_key_bytes = structured_proving_key_buffer_v1(
         parity,
         "mint-authority proving key",
         KAGEMUSHA_HELPER_PROVING_KEY_MAX_BYTES_V1,
         &proving_key,
     )?;
     proving_key
-        .write_compact_v1_consuming(&mut proving_key_bytes)
+        .write_structured_v1_consuming(&mut proving_key_bytes)
         .map_err(|error| KagemushaArtifactGenerationErrorV1::KeyGeneration {
             parity,
             kind: "mint-authority proving key",
@@ -10994,14 +10994,14 @@ where
         KAGEMUSHA_VERIFYING_KEY_MAX_BYTES_V1,
         false,
     )?;
-    let mut proving_key_bytes = compact_proving_key_buffer_v1(
+    let mut proving_key_bytes = structured_proving_key_buffer_v1(
         parity,
         label,
         KAGEMUSHA_HELPER_PROVING_KEY_MAX_BYTES_V1,
         &proving_key,
     )?;
     proving_key
-        .write_compact_v1_consuming(&mut proving_key_bytes)
+        .write_structured_v1_consuming(&mut proving_key_bytes)
         .map_err(|error| KagemushaArtifactGenerationErrorV1::KeyGeneration {
             parity,
             kind: label,
@@ -11557,12 +11557,18 @@ mod tests {
                 let vk = keygen_vk(&params, &circuit).expect("small canonical VK");
                 let pk = keygen_pk(&params, vk, &circuit).expect("small canonical PK");
                 let processed = pk.to_bytes(SerdeFormat::Processed);
-                let mut bytes = compact_proving_key_buffer_v1(
+                let mut bytes = structured_proving_key_buffer_v1(
                     KagemushaPastaParityV1::$parity, "test proving key", 64 * 1024 * 1024, &pk,
-                ).expect("bounded compact output");
-                pk.write_compact_v1(&mut bytes).expect("compact proving key");
+                ).expect("bounded structured output");
+                pk.write_structured_v1(&mut bytes).expect("structured proving key");
+                let mut consumed = structured_proving_key_buffer_v1(
+                    KagemushaPastaParityV1::$parity, "test proving key", 64 * 1024 * 1024, &pk,
+                ).expect("bounded consuming structured output");
+                pk.clone().write_structured_v1_consuming(&mut consumed)
+                    .expect("consuming structured proving key");
+                assert_eq!(consumed, bytes, "Core output sizing preserves both writer encodings");
                 assert!(bytes.len() < processed.len());
-                assert!(compact_proving_key_buffer_v1(
+                assert!(structured_proving_key_buffer_v1(
                     KagemushaPastaParityV1::$parity, "test proving key", bytes.len() as u64 - 1, &pk,
                 ).is_err(), "enforce cap before allocating output");
                 let binding = binding(KagemushaArtifactRoleV1::$role, &bytes);
@@ -11589,6 +11595,9 @@ mod tests {
                     &pk.get_vk().to_bytes(SerdeFormat::Processed),
                 )
                 .expect("same embedded VK");
+                // Structured framing is magic[16], curve-domain[32], total-u64-LE[8],
+                // Processed VK, then three coefficient masks. Each mask starts with its
+                // checked u32-BE row count and uses canonical 32-byte Pasta scalars.
                 let vk_len = 56 + pk.get_vk().to_bytes(SerdeFormat::Processed).len();
                 let mut invalid_length = bytes.clone();
                 invalid_length[vk_len..vk_len + 4].copy_from_slice(&u32::MAX.to_be_bytes());
@@ -11598,16 +11607,23 @@ mod tests {
                     .into_iter()
                     .chain([0, 9, vk_len, vk_len + 5, bytes.len() - 1].map(|cut| &bytes[..cut]))
                 {
-                    let result = std::panic::catch_unwind(|| {
-                        read_canonical_proving_key_v1::<$curve, SmallRecoveryCircuit<$scalar>>(
-                            &mut Cursor::new(malformed),
-                            binding,
-                            KagemushaPastaParityV1::$parity,
-                            6,
-                            (),
-                        )
-                    });
-                    assert!(result.expect("malformed key must not panic").is_err());
+                    let rehashed = KagemushaArtifactBindingV1 {
+                        byte_len: malformed.len() as u64,
+                        sha256: Sha256::digest(malformed).into(),
+                        ..binding
+                    };
+                    for malformed_binding in [binding, rehashed] {
+                        let result = std::panic::catch_unwind(|| {
+                            read_canonical_proving_key_v1::<$curve, SmallRecoveryCircuit<$scalar>>(
+                                &mut Cursor::new(malformed),
+                                malformed_binding,
+                                KagemushaPastaParityV1::$parity,
+                                6,
+                                (),
+                            )
+                        });
+                        assert!(result.expect("malformed key must not panic").is_err());
+                    }
                 }
                 let old_binding = KagemushaArtifactBindingV1 {
                     byte_len: processed.len() as u64,
@@ -11618,7 +11634,21 @@ mod tests {
                     &mut Cursor::new(processed.as_slice()), old_binding,
                     KagemushaPastaParityV1::$parity, 6, (),
                 ).is_err(), "even authenticated old Processed PKs are rejected");
+                // The retired writer is used only to construct a correctly hash-bound negative
+                // fixture. Production decoding has one explicit format and no fallback.
+                let mut retired_compact = Vec::new();
+                pk.write_compact_v1(&mut retired_compact).expect("retired compact test fixture");
+                let compact_binding = KagemushaArtifactBindingV1 {
+                    byte_len: retired_compact.len() as u64,
+                    sha256: Sha256::digest(&retired_compact).into(),
+                    ..binding
+                };
+                assert!(read_canonical_proving_key_v1::<$curve, SmallRecoveryCircuit<$scalar>>(
+                    &mut Cursor::new(retired_compact.as_slice()), compact_binding,
+                    KagemushaPastaParityV1::$parity, 6, (),
+                ).is_err(), "even authenticated old compact-v1 PKs are rejected");
                 let mut wrong_version = bytes.clone();
+                // Byte 14 belongs to the exact 16-byte magic; byte 16 begins the curve domain.
                 wrong_version[14] ^= 1;
                 let mut wrong_curve = bytes.clone();
                 wrong_curve[16] ^= 1;

@@ -56,6 +56,15 @@ its actual typed device-command codec. The transport-only frame validator does n
 establish typed admission. Exact accepted retries survive reopening under a lower
 capacity budget. The journal reconciles every Core-owned operation against the
 actual outgoing index; retained public intent never becomes a Prepared capability.
+Every supplied operation WAL must also contain the exact coordinator prefix selected by
+Core's published recovery metadata. This includes the frame sequence, hash and byte boundary,
+so a different same-lane WAL cannot hide a checkpointed reservation or pre-Prepared intent.
+Valid append-only suffixes remain usable after reopening, including under a lower capacity.
+Fresh creation is permitted only for the exact selected initializer; once that selected prefix
+advances, creation rejects before touching a new path. Prefix matching uses the held descriptor
+and existing ownership/generation checks, including before reusing its single verified-prefix
+slot. It does not supply hardware freshness or authenticate a speculative suffix by itself;
+those remain the qualified guard's responsibilities.
 
 A sender journal allowance is returned only after the exact Core Released record is
 fsynced. Complete ID, binding, intent and terminal tombstones remain retained. Replay

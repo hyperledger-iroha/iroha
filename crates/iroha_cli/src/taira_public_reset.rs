@@ -47,7 +47,7 @@ const GIT: &str = "/usr/bin/git";
 const MAX_JSON_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_AUTHORIZATION_LIFETIME_MS: u64 = 15 * 60 * 1_000;
 const EXECUTION_SAFETY_MARGIN_MS: u64 = 5 * 60 * 1_000;
-const MAX_EXECUTION_LIFETIME_MS: u64 = 4 * 60 * 60 * 1_000;
+const MAX_EXECUTION_LIFETIME_MS: u64 = 12 * 60 * 60 * 1_000;
 const MAX_CLOCK_SKEW_MS: u64 = 30_000;
 const VALIDATOR_SLUGS: [&str; 4] = [
     "taira-validator-1",
@@ -72,6 +72,8 @@ const INROU_CANARY_SERVICE_VERSION_PREFIX_V1: &str = "artifact-";
 const JOURNAL_ROOT: &str = "/private/runtime/taira-public-reset/journal-v1";
 const RECOVERY_INTENT_SCHEMA_V1: &str = "iroha.taira.public-reset.recovery-intent.v1";
 
+#[path = "taira_public_reset_config.rs"]
+mod config;
 #[path = "taira_public_reset_host.rs"]
 mod host;
 #[path = "taira_public_reset_inputs.rs"]
@@ -91,6 +93,8 @@ pub(crate) struct PublicReset {
 enum PublicResetCommand {
     /// Export the exact clean local source manifest without contacting hosts or loading keys.
     SourceManifest(PublicResetSourceManifest),
+    /// Materialize a retained validator config from an inherited descriptor without printing secrets.
+    ConfigRebase(config::ConfigRebase),
     /// Assemble exact release inputs locally from an explicit inventory draft.
     Assemble(inputs::Assemble),
     /// Sign retained release inputs using an independently trusted owner key.
@@ -255,6 +259,10 @@ impl PublicReset {
         let report = match &self.command {
             PublicResetCommand::SourceManifest(args) => {
                 source::export_manifest(&args.source_root, &mut output)?;
+                return Ok(());
+            }
+            PublicResetCommand::ConfigRebase(args) => {
+                config::config_rebase(args)?;
                 return Ok(());
             }
             PublicResetCommand::Assemble(args) => {
@@ -799,6 +807,7 @@ struct TimeoutsV1 {
     stop_secs: u64,
     install_secs: u64,
     reset_secs: u64,
+    preseed_secs: u64,
     start_secs: u64,
     convergence_secs: u64,
     canary_secs: u64,
@@ -1262,12 +1271,14 @@ fn execution_lifetime_ms(inventory: &InventoryV1) -> Result<u64> {
                 .ok_or_else(|| eyre!("install action count overflow"))?,
         )
         .and_then(|value| value.checked_add(timeouts.stop_secs.checked_mul(4)?))
-        // Four state resets plus one all-store Inrou preseed barrier per host.
+        // State reset is an atomic rename. Offline ingest and the carrier's
+        // before-start verification each traverse every store on that host.
+        .and_then(|value| value.checked_add(timeouts.reset_secs.checked_mul(4)?))
         .and_then(|value| {
             value.checked_add(
                 timeouts
-                    .reset_secs
-                    .checked_mul(4_u64.checked_add(physical_validator_hosts)?)?,
+                    .preseed_secs
+                    .checked_mul(physical_validator_hosts.checked_mul(2)?)?,
             )
         })
         .and_then(|value| value.checked_add(timeouts.start_secs.checked_mul(4)?))
@@ -2234,7 +2245,7 @@ fn artifact_role_policy(role: &str) -> Result<(u16, u64)> {
     const MIB: u64 = 1024 * 1024;
     match role {
         "iroha3d" | "iroha_cli" | "sorafs_node" => Ok((0o755, 512 * MIB)),
-        "config" => Ok((0o640, MIB)),
+        "config" => Ok((0o600, MIB)),
         "genesis" => Ok((0o644, 64 * MIB)),
         "genesis_hash" => Ok((0o644, 65)),
         "edge_config" => Ok((0o640, MIB)),
@@ -2585,6 +2596,9 @@ fn validate_timeouts(timeouts: &TimeoutsV1) -> Result<()> {
         if !(1..=600).contains(&value) {
             return Err(eyre!("{name} timeout must be within 1..=600 seconds"));
         }
+    }
+    if !(1..=3_600).contains(&timeouts.preseed_secs) {
+        return Err(eyre!("preseed timeout must be within 1..=3600 seconds"));
     }
     Ok(())
 }
@@ -4325,7 +4339,7 @@ mod executor_model {
                 Self::Stop => timeouts.stop_secs,
                 Self::Install => timeouts.install_secs,
                 Self::Reset => timeouts.reset_secs,
-                Self::Preseed => timeouts.reset_secs,
+                Self::Preseed => timeouts.preseed_secs,
                 Self::Start => timeouts.start_secs,
                 Self::Convergence => timeouts.convergence_secs,
                 Self::Canary => timeouts.canary_secs,
@@ -6095,7 +6109,8 @@ mod executor_model {
             let timeouts = &inventory.timeouts;
             let action_seconds = 38 * timeouts.install_secs
                 + 4 * timeouts.stop_secs
-                + 5 * timeouts.reset_secs
+                + 4 * timeouts.reset_secs
+                + 2 * timeouts.preseed_secs
                 + 4 * timeouts.start_secs
                 + 10 * timeouts.edge_secs
                 + 6 * timeouts.convergence_secs
@@ -6121,7 +6136,8 @@ mod executor_model {
             }
             assert_delta!(install_secs, 38);
             assert_delta!(stop_secs, 4);
-            assert_delta!(reset_secs, 5);
+            assert_delta!(reset_secs, 4);
+            assert_delta!(preseed_secs, 2);
             assert_delta!(start_secs, 4);
             assert_delta!(edge_secs, 10);
             assert_delta!(convergence_secs, 6);
@@ -6129,16 +6145,17 @@ mod executor_model {
             assert_delta!(restart_secs, 4);
             assert_delta!(cleanup_secs, 5);
             assert_delta!(rollback_secs, 5);
-            let additional_host_seconds = timeouts.install_secs + timeouts.reset_secs;
+            let additional_host_seconds = timeouts.install_secs + 2 * timeouts.preseed_secs;
 
             let mut boundary = inventory.clone();
             boundary.timeouts = TimeoutsV1 {
                 stop_secs: 1,
-                install_secs: 345,
+                install_secs: 600,
                 reset_secs: 1,
+                preseed_secs: 3_600,
                 start_secs: 1,
                 convergence_secs: 1,
-                canary_secs: 1,
+                canary_secs: 323,
                 restart_secs: 1,
                 edge_secs: 1,
                 cleanup_secs: 1,
@@ -6146,11 +6163,11 @@ mod executor_model {
             };
             assert_eq!(
                 execution_lifetime_ms(&boundary).expect("last bounded lifetime"),
-                14_390_000
+                43_193_000
             );
-            boundary.timeouts.install_secs = 346;
+            boundary.timeouts.canary_secs = 324;
             let _ = execution_lifetime_ms(&boundary)
-                .expect_err("next exact action quantum exceeds four hours");
+                .expect_err("next exact action quantum exceeds twelve hours");
 
             let mut multi_host = sample_inventory();
             for (index, validator) in multi_host.validators.iter_mut().enumerate() {
@@ -7753,6 +7770,7 @@ mod executor_model {
                     stop_secs: 30,
                     install_secs: 60,
                     reset_secs: 60,
+                    preseed_secs: 60,
                     start_secs: 60,
                     convergence_secs: 120,
                     canary_secs: 120,

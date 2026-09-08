@@ -18,11 +18,15 @@ and Appendix A. Independent protocol-specific qROM and final-artifact digest
 review remain mandatory.
 
 The selected bounded-opening quantity verifier is now available to normal callers
-through `fastpq_prover::offline_compact`. Fresh ordinary/AXT single and ordered
+through `fastpq_prover::offline_compact`. Normal callers can also produce complete
+quantity artifacts under explicit resource policy; the producer validates supplied
+roots, proves segments sequentially and verifies the result before returning it.
+Fresh ordinary/AXT single and ordered
 two-segment proofs verify without their private witnesses, and both complete
 artifact routes pass cumulative-limit and independent-context tests. The fixed
-candidate uses 375 queries from 401 sampler candidates. Its 909-test normal library
-suite passes; this does not qualify the cryptography or supply authenticated source
+candidate uses 375 queries from 401 sampler candidates. Its latest full normal
+library run passes 953 tests; the final 14-test producer selection and 20-test
+integration suite pass. These checks do not qualify cryptography or supply authenticated source
 expectations. Node admission still uses replay. Execution resource ownership, D7
 publication, finalized source binding, AXT authorization and release qualification
 remain required; the [current evidence](fastpq_production_readiness.md#current-optimizations-integration)

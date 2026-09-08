@@ -13,18 +13,16 @@
 //! before production admission. The candidate verifier raises no default limit;
 //! sharing Merkle paths does not guarantee the 512 KiB production byte target.
 
-#[cfg(test)]
-use std::collections::BTreeMap;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use super::*;
 use crate::backend::{
     fold_fri_coset,
-    merkle_multiproof::{MultiproofLimits, MultiproofPlan},
+    merkle_multiproof::{MultiproofLimits, MultiproofPlan, SiblingPosition},
 };
 
 #[cfg(test)]
-use crate::backend::{hash_fri_chunk, merkle_multiproof::SiblingPosition, merkle_node_hash};
+use crate::backend::{hash_fri_chunk, merkle_node_hash};
 
 #[path = "shared_openings/codec.rs"]
 pub(in crate::backend) mod codec;
@@ -67,7 +65,6 @@ pub(in crate::backend) struct ShakeSharedProof {
 }
 
 impl ShakeSharedProof {
-    #[cfg(test)]
     fn from_shared(proof: SharedProof) -> Self {
         Self {
             row_root: proof.row_root,
@@ -329,7 +326,6 @@ pub(in crate::backend) fn from_compact(
     from_compact_for(relation, proof, limits, Protocol::Prototype)
 }
 
-#[cfg(test)]
 fn from_compact_for(
     relation: &impl FixedAir,
     proof: &CompactProof,
@@ -558,7 +554,6 @@ fn from_compact_for(
     })
 }
 
-#[cfg(test)]
 fn insert_equal<K: Ord, V: PartialEq>(map: &mut BTreeMap<K, V>, key: K, value: V) -> Result<()> {
     match map.entry(key) {
         std::collections::btree_map::Entry::Vacant(entry) => {
@@ -572,7 +567,6 @@ fn insert_equal<K: Ord, V: PartialEq>(map: &mut BTreeMap<K, V>, key: K, value: V
     Ok(())
 }
 
-#[cfg(test)]
 fn extract_frontier(
     binding: &Binding,
     leaf_count: usize,
@@ -823,23 +817,157 @@ pub(in crate::backend) fn verify_shared(
     Ok(work)
 }
 
-/// Prove the fixed SHAKE candidate and encode only canonical shared openings.
-/// The caller supplies diagnostic limits; this does not qualify a production profile.
-#[cfg(test)]
+// For m opened leaves in a binary tree, there are at most
+// sum_h min(m, 2^h) selected parents and parents-m+1 frontier siblings.
+// The combined framed values and frontier size increases with m: one extra
+// group adds 73 bytes and removes at most one 49-byte framed sibling (plus
+// at most one byte from its enclosing length). Complete rows add more bytes.
+fn maximal_frontier(leaves: usize, opened: usize) -> Result<usize> {
+    if !leaves.is_power_of_two() || opened == 0 || opened > leaves {
+        return Err(shape(
+            "compact wire bound needs valid binary opening counts",
+        ));
+    }
+    let mut parents = 0;
+    for level in 0..leaves.ilog2() {
+        parents = wire_add(parents, opened.min(1_usize << level))?;
+    }
+    wire_add(parents, 1)?
+        .checked_sub(opened)
+        .ok_or_else(|| shape("compact frontier count underflow"))
+}
+
+/// Conservative canonical size for every valid generated minimal-frontier DTO.
+/// Independent per-tree maxima need not occur together; their sum still bounds
+/// every query set. This is tighter than the decoder's invalid loose shapes.
+fn shared_prover_wire_bound(geometry: &Geometry) -> Result<usize> {
+    let queries = geometry.protocol.query_count(geometry.lde_rows);
+    let rows = queries
+        .checked_mul(2)
+        .ok_or_else(|| shape("compact shared row count overflow"))?
+        .min(geometry.lde_rows);
+    let row_size = wire_struct(&[4, wire_vector(geometry.schema.width, 8)?])?;
+    let query_size = wire_struct(&[4, 32, 32])?;
+    let group_size = wire_struct(&[4, wire_struct(&[32, 32])?])?;
+    let layers = geometry.fri_lengths.len();
+    let terminal = *geometry
+        .fri_lengths
+        .last()
+        .ok_or_else(|| shape("compact wire bound needs a terminal layer"))?;
+    let mut rounds = 8;
+    for &length in geometry.fri_lengths.iter().take(layers - 1) {
+        let leaves = length / 2;
+        let groups = queries.min(leaves);
+        let round = wire_struct(&[
+            wire_vector(groups, group_size)?,
+            wire_vector(maximal_frontier(leaves, groups)?, 48)?,
+        ])?;
+        rounds = wire_add(rounds, wire_field(round)?)?;
+    }
+    let scalar_siblings = maximal_frontier(geometry.lde_rows, queries)?;
+    wire_add(
+        norito::core::Header::SIZE,
+        wire_struct(&[
+            48,
+            48,
+            48,
+            wire_vector(layers, 48)?,
+            wire_vector(rows, row_size)?,
+            wire_vector(queries, query_size)?,
+            wire_vector(maximal_frontier(geometry.lde_rows, rows)?, 48)?,
+            wire_vector(scalar_siblings, 48)?,
+            wire_vector(scalar_siblings, 48)?,
+            rounds,
+            wire_vector(terminal, 32)?,
+        ])?,
+    )
+}
+
+fn checked_shake_prover_geometry(
+    relation: &impl FixedAir,
+    limits: VerifyLimits,
+) -> Result<Geometry> {
+    let geometry = Geometry::for_protocol(relation, Protocol::ShakeCandidate)?;
+    for (limit, actual, maximum) in [
+        (
+            "max_compact_statement_bytes",
+            relation.statement_bytes().len(),
+            limits.max_batch_bytes,
+        ),
+        (
+            "max_air_row_values",
+            geometry.schema.width,
+            limits.max_air_row_values,
+        ),
+        (
+            "max_fri_layers",
+            geometry.fri_lengths.len(),
+            limits.max_fri_layers,
+        ),
+        (
+            "max_queries",
+            geometry.protocol.query_count(geometry.lde_rows),
+            limits.max_queries,
+        ),
+        (
+            "max_query_path_len",
+            geometry.lde_rows.ilog2() as usize,
+            limits.max_query_path_len,
+        ),
+        (
+            "max_fri_round_values",
+            *geometry
+                .fri_lengths
+                .last()
+                .expect("validated nonempty FRI geometry"),
+            limits.max_fri_round_values,
+        ),
+        (
+            "max_proof_bytes",
+            shared_prover_wire_bound(&geometry)?,
+            limits.max_proof_bytes,
+        ),
+    ] {
+        check_limit(limit, actual, maximum)?;
+    }
+    // The encoded context has its own fixed ceiling, including the envelope.
+    // Validate it before any private witness, column clone, NTT or AIR preparation.
+    Binding::new(relation, &geometry)?;
+    Ok(geometry)
+}
+
+/// Check fixed geometry, statement and output policy without private trace work.
+///
+/// Output admission is conservative: the byte ceiling must fit every valid
+/// generated query set, even when a particular proof would be smaller. The
+/// temporary repeated representation has a separate geometry-derived ceiling.
+/// Trace workspace limits belong to the enclosing typed producer.
+pub(in crate::backend) fn preflight_shake_prover(
+    relation: &impl FixedAir,
+    limits: VerifyLimits,
+) -> Result<()> {
+    checked_shake_prover_geometry(relation, limits).map(|_| ())
+}
+
+/// Prove the fixed SHAKE candidate with separately bounded internal/output frames.
+/// This does not qualify a production profile or grant ledger admission authority.
 pub(in crate::backend) fn prove_shake_shared(
     relation: &impl FixedAir,
     columns: &[Vec<u64>],
     limits: VerifyLimits,
 ) -> Result<ShakeSharedProof> {
+    let geometry = checked_shake_prover_geometry(relation, limits)?;
     let trace = prepare_trace_for(relation, columns, Protocol::ShakeCandidate)?;
     let proof = prove_prepared(relation, &trace)?;
     drop(trace);
-    Ok(ShakeSharedProof::from_shared(from_compact_for(
-        relation,
-        &proof,
-        limits,
-        Protocol::ShakeCandidate,
-    )?))
+    let internal_limits = VerifyLimits {
+        max_proof_bytes: repeated_wire_bytes(&geometry)?,
+        ..limits
+    };
+    let shared = from_compact_for(relation, &proof, internal_limits, Protocol::ShakeCandidate)?;
+    drop(proof);
+    preflight_shared(relation, &shared, limits, &geometry)?;
+    Ok(ShakeSharedProof::from_shared(shared))
 }
 
 /// Consume a candidate DTO and verify it through the common bounded engine.
@@ -1092,6 +1220,316 @@ mod tests {
     use std::sync::OnceLock;
 
     use super::*;
+
+    struct CandidateProverAir {
+        schema: FixedAirSchema,
+        statement: Vec<u8>,
+    }
+
+    impl FixedAir for CandidateProverAir {
+        fn schema(&self) -> FixedAirSchema {
+            self.schema
+        }
+
+        fn statement_bytes(&self) -> &[u8] {
+            &self.statement
+        }
+
+        fn evaluate(&self, _: u64, _: &[u64], _: &[u64]) -> Result<Vec<u64>> {
+            panic!("prover preflight must not evaluate an AIR")
+        }
+
+        fn prepare_prover(&self) -> Result<Box<dyn PreparedAir + '_>> {
+            panic!("prover preflight must not prepare an AIR")
+        }
+    }
+
+    fn candidate_prover_air() -> CandidateProverAir {
+        CandidateProverAir {
+            schema: FixedAirSchema {
+                trace_rows: 65_536,
+                width: 342,
+                constraints: 923,
+                identity: "candidate-prover-preflight-only",
+            },
+            statement: vec![7],
+        }
+    }
+
+    fn candidate_prover_limits() -> VerifyLimits {
+        VerifyLimits {
+            max_batch_bytes: 1,
+            max_proof_bytes: 4_279_877,
+            max_fri_layers: 18,
+            max_queries: 375,
+            max_query_path_len: 19,
+            max_fri_round_values: 4,
+            max_air_row_values: 342,
+            // These legacy fields do not describe compact AIR/FRI shapes.
+            max_transitions: 0,
+            max_query_chunk_values: 0,
+        }
+    }
+
+    #[test]
+    fn candidate_prover_preflight_rejects_limits_before_private_columns_and_ntt() {
+        let air = candidate_prover_air();
+        let limits = candidate_prover_limits();
+        preflight_shake_prover(&air, limits).unwrap();
+        let cases = [
+            (
+                VerifyLimits {
+                    max_batch_bytes: 0,
+                    ..limits
+                },
+                "max_compact_statement_bytes",
+                1,
+            ),
+            (
+                VerifyLimits {
+                    max_air_row_values: 341,
+                    ..limits
+                },
+                "max_air_row_values",
+                342,
+            ),
+            (
+                VerifyLimits {
+                    max_fri_layers: 17,
+                    ..limits
+                },
+                "max_fri_layers",
+                18,
+            ),
+            (
+                VerifyLimits {
+                    max_queries: 374,
+                    ..limits
+                },
+                "max_queries",
+                375,
+            ),
+            (
+                VerifyLimits {
+                    max_query_path_len: 18,
+                    ..limits
+                },
+                "max_query_path_len",
+                19,
+            ),
+            (
+                VerifyLimits {
+                    max_fri_round_values: 3,
+                    ..limits
+                },
+                "max_fri_round_values",
+                4,
+            ),
+            (
+                VerifyLimits {
+                    max_proof_bytes: 4_279_876,
+                    ..limits
+                },
+                "max_proof_bytes",
+                4_279_877,
+            ),
+        ];
+        for (restricted, expected_limit, expected_actual) in cases {
+            // Empty columns cannot enter an NTT. The policy error must precede
+            // even their shape rejection, and the AIR preparation above panics.
+            assert!(matches!(
+                prove_shake_shared(&air, &[], restricted),
+                Err(Error::VerifierLimitExceeded { limit, actual, .. })
+                    if limit == expected_limit && actual == expected_actual
+            ));
+        }
+        assert!(matches!(
+            prove_shake_shared(&air, &[], limits),
+            Err(Error::InvalidTraceShape { .. })
+        ));
+        let mut malformed = candidate_prover_air();
+        for schema in [
+            FixedAirSchema {
+                trace_rows: 512,
+                ..air.schema
+            },
+            FixedAirSchema {
+                width: 341,
+                ..air.schema
+            },
+            FixedAirSchema {
+                constraints: 922,
+                ..air.schema
+            },
+        ] {
+            malformed.schema = schema;
+            assert!(preflight_shake_prover(&malformed, limits).is_err());
+        }
+        let mut columns = vec![Vec::new(); 342];
+        assert!(matches!(
+            prove_shake_shared(&air, &columns, limits),
+            Err(Error::InvalidTraceShape { .. })
+        ));
+        columns[0] = vec![0; 65_536];
+        columns[0][0] = GOLDILOCKS_MODULUS;
+        assert!(matches!(
+            prove_shake_shared(&air, &columns, limits),
+            Err(Error::NonCanonicalGoldilocksElement {
+                context: "compact_base_trace",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn candidate_prover_preflight_checks_complete_fixed_context_envelope() {
+        let mut air = candidate_prover_air();
+        air.statement = vec![0; 256 * 1024];
+        let limits = VerifyLimits {
+            max_batch_bytes: air.statement.len(),
+            ..candidate_prover_limits()
+        };
+        // Raw public bytes meet both limits; the encoded context adds fields.
+        assert!(matches!(
+            preflight_shake_prover(&air, limits),
+            Err(Error::InvalidTraceShape { .. })
+        ));
+        air.statement.push(0);
+        assert!(matches!(
+            preflight_shake_prover(
+                &air,
+                VerifyLimits {
+                    max_batch_bytes: air.statement.len(),
+                    ..limits
+                }
+            ),
+            Err(Error::VerifierLimitExceeded {
+                limit: "max_shake_public_bytes",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn shared_prover_frontier_bound_covers_every_small_binary_tree_subset() {
+        // Enumerate exact sibling frontiers independently of the closed form.
+        // This also establishes that the bound is attained for each leaf count.
+        for leaves in [2_usize, 4, 8, 16] {
+            let mut maxima = vec![0; leaves + 1];
+            for subset in 1_u32..(1_u32 << leaves) {
+                let opened = subset.count_ones() as usize;
+                let mut selected = subset;
+                let mut width = leaves;
+                let mut siblings = 0;
+                while width > 1 {
+                    let mut parents = 0;
+                    for parent in 0..width / 2 {
+                        let children = (selected >> (2 * parent)) & 3;
+                        siblings += usize::from(children == 1 || children == 2);
+                        parents |= u32::from(children != 0) << parent;
+                    }
+                    selected = parents;
+                    width /= 2;
+                }
+                let bound = maximal_frontier(leaves, opened).unwrap();
+                assert!(siblings <= bound, "leaves={leaves}, subset={subset}");
+                maxima[opened] = maxima[opened].max(siblings);
+            }
+            for (opened, maximum) in maxima.into_iter().enumerate().skip(1) {
+                assert_eq!(maximal_frontier(leaves, opened).unwrap(), maximum);
+            }
+        }
+        // The output bound substitutes the largest group count. Its complete
+        // framed values/frontier size must therefore be monotone in that count.
+        let group_size = wire_struct(&[4, wire_struct(&[32, 32]).unwrap()]).unwrap();
+        for leaves in (1..=18).map(|depth| 1_usize << depth) {
+            let mut previous = 0;
+            for opened in 1..=375.min(leaves) {
+                let bytes = wire_struct(&[
+                    wire_vector(opened, group_size).unwrap(),
+                    wire_vector(maximal_frontier(leaves, opened).unwrap(), 48).unwrap(),
+                ])
+                .unwrap();
+                assert!(bytes > previous);
+                previous = bytes;
+            }
+        }
+    }
+
+    #[test]
+    fn candidate_prover_shared_wire_bound_matches_canonical_shape_and_final_cap() {
+        let air = candidate_prover_air();
+        let geometry = Geometry::for_protocol(&air, Protocol::ShakeCandidate).unwrap();
+        let bound = shared_prover_wire_bound(&geometry).unwrap();
+        assert_eq!(bound, 4_279_877);
+        assert_eq!(repeated_wire_bytes(&geometry).unwrap(), 7_791_716);
+        assert!(bound < repeated_wire_bytes(&geometry).unwrap());
+        let digest = WireDigest::new([0; 6]).unwrap();
+        let queries = 375;
+        let rows = 750;
+        // Each table takes its valid combined values/frontier upper shape.
+        // Dummy commitments are size controls, not a cryptographically valid proof.
+        let shared = SharedProof {
+            row_root: digest,
+            mixed_root: digest,
+            quotient_root: digest,
+            fri_roots: vec![digest; 18],
+            rows: (0..rows)
+                .map(|index| SharedRow {
+                    index: index as u32,
+                    values: vec![0; 342],
+                })
+                .collect(),
+            queries: (0..queries)
+                .map(|index| SharedQuery {
+                    index: index as u32,
+                    mixed: GoldilocksFp4V1::ZERO,
+                    quotient: GoldilocksFp4V1::ZERO,
+                })
+                .collect(),
+            row_siblings: vec![digest; maximal_frontier(geometry.lde_rows, rows).unwrap()],
+            mixed_siblings: vec![digest; maximal_frontier(geometry.lde_rows, queries).unwrap()],
+            quotient_siblings: vec![digest; maximal_frontier(geometry.lde_rows, queries).unwrap()],
+            rounds: geometry
+                .fri_lengths
+                .iter()
+                .take(17)
+                .map(|&length| {
+                    let leaves = length / 2;
+                    let groups = queries.min(leaves);
+                    SharedRound {
+                        groups: (0..groups)
+                            .map(|index| SharedGroup {
+                                index: index as u32,
+                                values: [GoldilocksFp4V1::ZERO; 2],
+                            })
+                            .collect(),
+                        siblings: vec![digest; maximal_frontier(leaves, groups).unwrap()],
+                    }
+                })
+                .collect(),
+            terminal_values: vec![GoldilocksFp4V1::ZERO; 4],
+        };
+        let limits = candidate_prover_limits();
+        assert_eq!(
+            preflight_shared(&air, &shared, limits, &geometry).unwrap(),
+            bound
+        );
+        assert!(matches!(
+            preflight_shared(&air, &shared, VerifyLimits { max_proof_bytes: bound - 1, ..limits }, &geometry),
+            Err(Error::VerifierLimitExceeded { limit: "max_proof_bytes", actual, max })
+                if actual == bound && max == bound - 1
+        ));
+        let candidate = ShakeSharedProof::from_shared(shared);
+        let _canonical =
+            norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+        assert_eq!(norito::core::encoded_frame_len(&candidate).unwrap(), bound);
+        assert_eq!(norito::encode_canonical(&candidate).unwrap().len(), bound);
+        assert!(maximal_frontier(0, 0).is_err());
+        assert!(maximal_frontier(8, 0).is_err());
+        assert!(maximal_frontier(8, 9).is_err());
+        assert_eq!(maximal_frontier(8, 8).unwrap(), 0);
+    }
 
     pub(super) struct TinyAir {
         public: [u8; 1],

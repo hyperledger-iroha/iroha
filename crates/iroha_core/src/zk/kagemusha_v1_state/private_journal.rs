@@ -9,7 +9,7 @@ use std::{
     cell::Cell,
     fs::{File, Metadata, TryLockError},
     io::{Read, Seek, SeekFrom, Write},
-    os::unix::fs::MetadataExt as _,
+    os::unix::fs::{FileExt as _, MetadataExt as _},
     path::{Component, Path, PathBuf},
 };
 
@@ -48,6 +48,8 @@ pub(crate) struct PrivateJournal {
     read_bytes: u64,
     next_sequence: u64,
     previous_frame_hash: DigestV1,
+    // One verified immutable prefix, scoped to this held descriptor and invalidated by poison.
+    verified_recovery_prefix: Cell<Option<super::KagemushaRecoveryJournalPrefixV1>>,
     poisoned: Cell<bool>,
     #[cfg(test)]
     pub(crate) failure: Cell<Option<TestPersistenceFailure>>,
@@ -169,6 +171,7 @@ impl PrivateJournal {
             read_bytes: 0,
             next_sequence: 0,
             previous_frame_hash: [0; 32],
+            verified_recovery_prefix: Cell::new(None),
             poisoned: Cell::new(false),
             #[cfg(test)]
             failure: Cell::new(None),
@@ -259,6 +262,106 @@ impl PrivateJournal {
             head: self.previous_frame_hash,
             byte_len: self.acknowledged_bytes,
         })
+    }
+
+    /// Require the selected frame boundary to occur in this actual owned, fully replayed WAL.
+    /// A validated append-only suffix is permitted; this does not authenticate hardware selection.
+    /// Positional reads leave the replay/append cursor untouched. At most one verified prefix is
+    /// retained, and even a cached match requires the existing descriptor/generation checks.
+    pub(crate) fn contains_recovery_prefix(
+        &self,
+        expected: super::KagemushaRecoveryJournalPrefixV1,
+    ) -> Result<bool, PrivateJournalError> {
+        let current = self.recovery_prefix()?;
+        if expected.sequence == 0
+            || expected.head == [0; 32]
+            || expected.byte_len == 0
+            || expected.sequence > current.sequence
+            || expected.byte_len > current.byte_len
+        {
+            return Ok(false);
+        }
+        if expected == current || self.verified_recovery_prefix.get() == Some(expected) {
+            self.verified_recovery_prefix.set(Some(expected));
+            return Ok(true);
+        }
+        let result = self.scan_recovery_prefix(expected);
+        // Never retain a successful scan across file replacement, edits, or storage failure.
+        self.check_owned()?;
+        match result {
+            Ok(true) => {
+                self.verified_recovery_prefix.set(Some(expected));
+                Ok(true)
+            }
+            Ok(false) => Ok(false),
+            Err(error) => {
+                self.poisoned.set(true);
+                Err(error)
+            }
+        }
+    }
+
+    fn scan_recovery_prefix(
+        &self,
+        expected: super::KagemushaRecoveryJournalPrefixV1,
+    ) -> Result<bool, PrivateJournalError> {
+        let mut offset = 0_u64;
+        let mut previous = [0; 32];
+        let mut buffer = [0_u8; 8192];
+        for sequence in 0..expected.sequence {
+            if expected.byte_len.saturating_sub(offset) < FRAME_HEADER_BYTES as u64 {
+                return Ok(false);
+            }
+            let mut header = [0_u8; FRAME_HEADER_BYTES];
+            self.journal
+                .read_exact_at(&mut header, offset)
+                .map_err(storage_error)?;
+            let length = u64::from_le_bytes(
+                header[8..16]
+                    .try_into()
+                    .map_err(|_| PrivateJournalError::Corrupt)?,
+            );
+            let stored_sequence = u64::from_le_bytes(
+                header[16..24]
+                    .try_into()
+                    .map_err(|_| PrivateJournalError::Corrupt)?,
+            );
+            if &header[..8] != self.format.magic
+                || stored_sequence != sequence
+                || header[24..56] != previous
+                || length == 0
+                || length > self.format.maximum_payload_bytes
+            {
+                return Err(PrivateJournalError::Corrupt);
+            }
+            offset = offset
+                .checked_add(FRAME_HEADER_BYTES as u64)
+                .ok_or(PrivateJournalError::Corrupt)?;
+            if length > expected.byte_len.saturating_sub(offset) {
+                return Ok(false);
+            }
+            let mut hash = Sha256::new();
+            hash.update(self.format.hash_domain);
+            hash.update(&header[..56]);
+            let mut remaining = length;
+            while remaining != 0 {
+                let count = remaining.min(buffer.len() as u64) as usize;
+                self.journal
+                    .read_exact_at(&mut buffer[..count], offset)
+                    .map_err(storage_error)?;
+                hash.update(&buffer[..count]);
+                offset = offset
+                    .checked_add(count as u64)
+                    .ok_or(PrivateJournalError::Corrupt)?;
+                remaining -= count as u64;
+            }
+            let actual: DigestV1 = hash.finalize().into();
+            if header[56..] != actual {
+                return Err(PrivateJournalError::Corrupt);
+            }
+            previous = actual;
+        }
+        Ok(offset == expected.byte_len && previous == expected.head)
     }
 
     pub(crate) fn check_owned(&self) -> Result<(), PrivateJournalError> {
@@ -594,5 +697,117 @@ mod tests {
         let mut again = PrivateJournal::open_existing(&path, FORMAT).unwrap();
         while again.replay_next().unwrap().is_some() {}
         assert_eq!(again.recovery_prefix().unwrap(), adopted);
+    }
+
+    #[test]
+    fn selected_prefix_ancestry_preserves_exact_boundaries_and_appended_suffixes() {
+        let format = PrivateJournalFormat {
+            maximum_payload_bytes: 32 * 1024,
+            ..FORMAT
+        };
+        let selected_payload = vec![73; 2 * 8192 + 17];
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().canonicalize().unwrap().join("journal");
+        let mut journal = PrivateJournal::create_new(&path, format).unwrap();
+        journal.append(b"initialize").unwrap();
+        let initial = journal.recovery_prefix().unwrap();
+        journal.append(&selected_payload).unwrap();
+        let selected = journal.recovery_prefix().unwrap();
+        assert!(journal.contains_recovery_prefix(selected).unwrap());
+        journal.append(b"valid unselected suffix").unwrap();
+        assert!(journal.contains_recovery_prefix(selected).unwrap());
+        assert!(journal.contains_recovery_prefix(initial).unwrap());
+        drop(journal);
+        let mut journal = PrivateJournal::open_existing(&path, format).unwrap();
+        assert_eq!(
+            journal.contains_recovery_prefix(selected),
+            Err(PrivateJournalError::Corrupt)
+        );
+        while journal.replay_next().unwrap().is_some() {}
+        assert!(journal.contains_recovery_prefix(selected).unwrap());
+        assert!(journal.contains_recovery_prefix(initial).unwrap());
+        for field in 0..6 {
+            let mut wrong = selected;
+            match field {
+                0 => wrong.sequence = 0,
+                1 => wrong.sequence += 1,
+                2 => wrong.byte_len -= 1,
+                3 => wrong.byte_len += 1,
+                4 => wrong.head[0] ^= 1,
+                _ => wrong.byte_len = u64::MAX,
+            }
+            assert!(!journal.contains_recovery_prefix(wrong).unwrap());
+        }
+        // A mismatched selection is not storage corruption. Exact ancestry stays usable,
+        // and positional validation neither consumes replay nor changes the append cursor.
+        assert!(journal.contains_recovery_prefix(selected).unwrap());
+        journal.append(b"another valid suffix").unwrap();
+        let extended = journal.recovery_prefix().unwrap();
+        assert_eq!(extended.sequence, selected.sequence + 2);
+        assert!(journal.contains_recovery_prefix(selected).unwrap());
+        drop(journal);
+        let mut journal = PrivateJournal::open_existing(&path, format).unwrap();
+        let mut payloads = Vec::new();
+        while let Some((_, payload)) = journal.replay_next().unwrap() {
+            payloads.push(payload);
+        }
+        assert_eq!(
+            payloads,
+            vec![
+                b"initialize".to_vec(),
+                selected_payload,
+                b"valid unselected suffix".to_vec(),
+                b"another valid suffix".to_vec(),
+            ]
+        );
+        assert_eq!(journal.recovery_prefix().unwrap(), extended);
+        assert!(journal.contains_recovery_prefix(selected).unwrap());
+    }
+
+    #[test]
+    fn cached_selected_prefix_never_bypasses_owned_file_or_durability_checks() {
+        for change in 0..4 {
+            let root = tempfile::tempdir().unwrap();
+            let path = root.path().canonicalize().unwrap().join("journal");
+            let mut journal = PrivateJournal::create_new(&path, FORMAT).unwrap();
+            journal.append(b"initialize").unwrap();
+            let selected = journal.recovery_prefix().unwrap();
+            assert!(journal.contains_recovery_prefix(selected).unwrap());
+            journal.append(b"retained suffix").unwrap();
+            assert!(journal.contains_recovery_prefix(selected).unwrap());
+            let file = path.join(FORMAT.filename);
+            match change {
+                0 => {
+                    let mut bytes = std::fs::read(&file).unwrap();
+                    *bytes.last_mut().unwrap() ^= 1;
+                    std::fs::write(&file, bytes).unwrap();
+                }
+                1 => {
+                    let moved = path.join("displaced.wal");
+                    std::fs::rename(&file, &moved).unwrap();
+                    std::fs::copy(&moved, &file).unwrap();
+                }
+                2 => {
+                    std::fs::OpenOptions::new()
+                        .write(true)
+                        .open(&file)
+                        .unwrap()
+                        .set_len(selected.byte_len)
+                        .unwrap();
+                }
+                _ => {
+                    journal.failure.set(Some(TestPersistenceFailure::AfterSync));
+                    assert_eq!(
+                        journal.append(b"uncertain result"),
+                        Err(PrivateJournalError::Uncertain)
+                    );
+                }
+            }
+            assert!(journal.contains_recovery_prefix(selected).is_err());
+            assert_eq!(
+                journal.contains_recovery_prefix(selected),
+                Err(PrivateJournalError::Uncertain)
+            );
+        }
     }
 }

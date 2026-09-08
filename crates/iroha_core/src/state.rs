@@ -51109,6 +51109,11 @@ impl<'state> StateBlock<'state> {
     pub(crate) fn add_committed_fragments(&mut self, additional: usize) {
         self.committed_fragments = self.committed_fragments.saturating_add(additional);
     }
+    /// Record successful routing lanes after their shared transaction overlay is applied.
+    /// Rejected entries and dropped overlays must not contribute lanes to this set.
+    pub(crate) fn record_applied_batch_lanes(&mut self, lanes: BTreeSet<LaneId>) {
+        self.touched_lanes.extend(lanes);
+    }
     fn record_da_shard_cursor_issue(
         &self,
         _reason: &'static str,

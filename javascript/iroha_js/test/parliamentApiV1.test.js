@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -196,6 +197,67 @@ test("shared Parliament fixture pins routes, all transition inventories, and cer
   assert.equal(
     fixture.attempt_read_body_presentation.subset_rule,
     "strictly increasing subset of canonical_body_order",
+  );
+});
+
+test("initial sortition draft accepts only the enclosing attempt binding", () => {
+  const transition = { transition: "RegisterInitialSortition" };
+  assert.deepEqual(PARLIAMENT_PUBLIC_TRANSITIONS_V1[21], {
+    noritoIndex: 21,
+    jsonTag: "RegisterInitialSortition",
+    jsonPayloadRequired: false,
+    eventKindIndex: 24,
+  });
+  assert.deepEqual(
+    buildParliamentTransitionDraftRequestV1(ATTEMPT_ID, transition),
+    { version: 1, governance_attempt_id: ATTEMPT_ID, transition },
+  );
+  assert.throws(
+    () => buildParliamentTransitionDraftRequestV1(ID(0), transition),
+    /non-zero/u,
+  );
+  for (const payload of [undefined, null, {}, { target_seats: 1 }]) {
+    assert.throws(
+      () => buildParliamentTransitionDraftRequestV1(
+        ATTEMPT_ID,
+        { ...transition, payload },
+      ),
+      /unknown, aliased, or missing/u,
+    );
+  }
+  for (const field of [
+    "candidates", "candidate_root", "candidate_count", "target_seats",
+    "request_height", "pulse_height", "beacon_session_id", "body",
+    "body_election_attempt_id", "sequence",
+  ]) {
+    assert.throws(
+      () => buildParliamentTransitionDraftRequestV1(
+        ATTEMPT_ID,
+        { ...transition, [field]: "caller selected" },
+      ),
+      /unknown, aliased, or missing/u,
+      field,
+    );
+  }
+});
+
+test("initial sortition declarations expose an intent without caller payload fields", () => {
+  const packageRoot = fileURLToPath(new URL("..", import.meta.url));
+  const result = spawnSync(
+    process.execPath,
+    [
+      "./node_modules/typescript/bin/tsc",
+      "--noEmit", "--strict", "--skipLibCheck",
+      "--module", "NodeNext", "--moduleResolution", "NodeNext",
+      "--target", "ES2022", "--types", "node",
+      "./test/fixtures/typescript/parliamentInitialSortition.types.ts",
+    ],
+    { cwd: packageRoot, encoding: "utf8" },
+  );
+  assert.equal(
+    result.status,
+    0,
+    [result.stdout, result.stderr].filter(Boolean).join("\n"),
   );
 });
 
@@ -1399,7 +1461,7 @@ function transitionFixture(tag) {
     RecordBallotDropout: { ballot_attempt_id: one },
     FailPublicFindingNoResult: { body_instance_id: one },
   };
-  return tag === "CompleteQualification"
+  return tag === "CompleteQualification" || tag === "RegisterInitialSortition"
     ? { transition: tag }
     : { transition: tag, payload: payloads[tag] };
 }

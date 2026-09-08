@@ -92,9 +92,9 @@ impl ProviderPolicyRootConfigV1 {
                     let assigned = region.assign_advice(column, 0, Value::known(*value.value()));
                     if let Some(physical) = &physical {
                         let virtual_cell = value.cell.ok_or(Error::Synthesis)?;
-                        let original = *physical
+                        let original = physical
                             .assigned_advices
-                            .get(&virtual_cell)
+                            .resolve(&virtual_cell)
                             .ok_or(Error::Synthesis)?;
                         region.constrain_equal(assigned.cell(), original);
                     }

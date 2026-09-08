@@ -679,16 +679,16 @@ impl HostAction {
         }
     }
 
-    const fn timeout_secs(self, inventory: &InventoryV1) -> u64 {
-        match self {
+    fn timeout_secs(self, inventory: &InventoryV1, host_slug: &str) -> Result<u64> {
+        Ok(match self {
             Self::Preflight | Self::Upload | Self::Stage | Self::InrouStageUpload => {
                 inventory.timeouts.install_secs
             }
             Self::Stop => inventory.timeouts.stop_secs,
             Self::Install => inventory.timeouts.install_secs,
             Self::Reset => inventory.timeouts.reset_secs,
-            Self::Preseed => inventory.timeouts.reset_secs,
-            Self::Start => inventory.timeouts.start_secs,
+            Self::Preseed => inventory.timeouts.preseed_secs,
+            Self::Start => validator_start_timeout_secs(inventory, host_slug)?,
             Self::Restart => inventory.timeouts.restart_secs,
             Self::EdgeStage | Self::EdgeCutover | Self::EdgeVerify | Self::Seal => {
                 inventory.timeouts.edge_secs
@@ -696,7 +696,27 @@ impl HostAction {
             Self::Cleanup => inventory.timeouts.cleanup_secs,
             Self::Rollback => inventory.timeouts.rollback_secs,
             Self::MutationReserve => inventory.timeouts.canary_secs,
-        }
+        })
+    }
+}
+
+/// Only the first validator on each physical host performs the offline all-store
+/// verification. Charge that work separately from starting its daemon.
+fn validator_start_timeout_secs(inventory: &InventoryV1, host_slug: &str) -> Result<u64> {
+    let validator = inventory
+        .validators
+        .iter()
+        .find(|validator| validator.slug == host_slug)
+        .ok_or_else(|| eyre!("start timeout requires an admitted validator"))?;
+    let carrier = inrou_stage_carrier(inventory, &validator.endpoint.host_identity_sha256)?;
+    if carrier.slug == validator.slug {
+        inventory
+            .timeouts
+            .start_secs
+            .checked_add(inventory.timeouts.preseed_secs)
+            .ok_or_else(|| eyre!("carrier verification and start timeout overflow"))
+    } else {
+        Ok(inventory.timeouts.start_secs)
     }
 }
 
@@ -3253,7 +3273,7 @@ fn validate_action_deadline(
     now_ms: u64,
 ) -> Result<()> {
     let action_window_ms = action
-        .timeout_secs(inventory)
+        .timeout_secs(inventory, &request.host_slug)?
         .checked_mul(1_000)
         .and_then(|value| value.checked_add(super::MAX_CLOCK_SKEW_MS))
         .ok_or_else(|| eyre!("host action deadline overflow"))?;
@@ -5599,7 +5619,9 @@ fn execute_host_action(
             let release = Path::new(&validator.service_root)
                 .join("releases")
                 .join(&admitted.inventory.revision.commit);
-            attest_validator_process(admitted, validator, &release, true)?;
+            wait_for_validator_process(admitted.action_deadline, || {
+                observe_validator_process(admitted, validator, &release, true)
+            })?;
             Ok((0, 0, "validator started".to_owned()))
         }
         HostAction::Restart => {
@@ -5611,7 +5633,9 @@ fn execute_host_action(
             let release = Path::new(&validator.service_root)
                 .join("releases")
                 .join(&admitted.inventory.revision.commit);
-            attest_validator_process(admitted, validator, &release, true)?;
+            wait_for_validator_process(admitted.action_deadline, || {
+                observe_validator_process(admitted, validator, &release, true)
+            })?;
             Ok((0, 0, "validator restarted".to_owned()))
         }
         HostAction::EdgeCutover => {
@@ -7075,7 +7099,7 @@ fn validator_preseed_store(
     )?;
     let text = std::str::from_utf8(&bytes).wrap_err("installed validator config is not UTF-8")?;
     let config: toml::Value =
-        toml::from_str(text).wrap_err("installed validator config is not valid TOML")?;
+        toml::from_str(text).map_err(|_| eyre!("installed validator config is not valid TOML"))?;
     let placement =
         inventory_inrou_placement_target_for_slug(&admitted.inventory, &validator.slug)?;
     let configured_peer_literal = config
@@ -8265,12 +8289,53 @@ fn validate_loaded_unit_evidence(bytes: &[u8], expected_fragment: &Path) -> Resu
     Ok(())
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum ValidatorProcessReadiness {
+    Attested,
+    LauncherPending,
+}
+
+fn wait_for_validator_process(
+    deadline: Instant,
+    mut observe: impl FnMut() -> Result<ValidatorProcessReadiness>,
+) -> Result<()> {
+    // Manager submission is deliberately outside this loop for both Start and Restart.
+    loop {
+        if Instant::now() >= deadline {
+            return Err(eyre!("validator process attestation deadline elapsed"));
+        }
+        if observe()? == ValidatorProcessReadiness::Attested {
+            if Instant::now() >= deadline {
+                return Err(eyre!("validator process attestation deadline elapsed"));
+            }
+            return Ok(());
+        }
+        std::thread::sleep(
+            PROCESS_POLL_INTERVAL.min(deadline.saturating_duration_since(Instant::now())),
+        );
+    }
+}
+
 fn attest_validator_process(
     admitted: &HostAdmission,
     validator: &ValidatorV1,
     release_root: &Path,
     fresh_state: bool,
 ) -> Result<()> {
+    match observe_validator_process(admitted, validator, release_root, fresh_state)? {
+        ValidatorProcessReadiness::Attested => Ok(()),
+        ValidatorProcessReadiness::LauncherPending => Err(eyre!(
+            "validator MainPID still executes its signed launcher"
+        )),
+    }
+}
+
+fn observe_validator_process(
+    admitted: &HostAdmission,
+    validator: &ValidatorV1,
+    release_root: &Path,
+    fresh_state: bool,
+) -> Result<ValidatorProcessReadiness> {
     ensure_action_deadline(admitted)?;
     attest_loaded_systemd_unit(validator, admitted.action_deadline)?;
     if validated_current_release_target(admitted)? != release_root {
@@ -8296,10 +8361,48 @@ fn attest_validator_process(
         .ok_or_else(|| eyre!("validator unit has no exact positive MainPID"))?;
     let proc_root = PathBuf::from(format!("/proc/{pid}"));
     let expected_executable = release_root.join("bin/iroha3d_taira");
-    if fs::read_link(proc_root.join("exe"))? != expected_executable {
-        return Err(eyre!(
-            "validator MainPID does not execute the selected release"
-        ));
+    let executable = fs::read_link(proc_root.join("exe"))?;
+    if executable != expected_executable {
+        let launcher = fs::canonicalize("/usr/bin/python3")?;
+        if executable != launcher {
+            return Err(eyre!(
+                "validator MainPID does not execute the selected release"
+            ));
+        }
+        super::validate_fixed_executable(&launcher, "validator Python launcher")?;
+        let cmdline = fs::read(proc_root.join("cmdline"))?;
+        // The launcher can exec the daemon between the exe and argv reads. Only
+        // that exact transition may defer the complete attestation to the next poll.
+        let executable_after = fs::read_link(proc_root.join("exe"))?;
+        if executable_after != expected_executable {
+            if executable_after != launcher {
+                return Err(eyre!(
+                    "validator launcher changed to an unexpected executable"
+                ));
+            }
+            let fragment = Path::new("/etc/systemd/system").join(&validator.systemd_unit);
+            let unit = fs::read(&fragment)?;
+            if sha256_hex(&unit) != validator.systemd_unit_sha256 {
+                return Err(eyre!("validator launcher unit changed after attestation"));
+            }
+            validate_validator_launcher_argv(&cmdline, &unit)?;
+        }
+        let pid_after = run_host_command(
+            SYSTEMCTL,
+            &[
+                "show",
+                "--property=MainPID",
+                "--value",
+                &validator.systemd_unit,
+            ],
+            admitted.action_deadline,
+        )?;
+        if pid_after != pid_bytes {
+            return Err(eyre!(
+                "validator MainPID changed during launcher attestation"
+            ));
+        }
+        return Ok(ValidatorProcessReadiness::LauncherPending);
     }
     let cmdline = fs::read(proc_root.join("cmdline"))?;
     if cmdline.is_empty() || cmdline.len() > 8 * 1024 || !cmdline.ends_with(&[0]) {
@@ -8372,6 +8475,45 @@ fn attest_validator_process(
     if pid_after != pid_bytes {
         return Err(eyre!(
             "validator MainPID changed during process attestation"
+        ));
+    }
+    Ok(ValidatorProcessReadiness::Attested)
+}
+
+fn validate_validator_launcher_argv(cmdline: &[u8], unit: &[u8]) -> Result<()> {
+    if cmdline.is_empty() || cmdline.len() > 64 * 1024 || !cmdline.ends_with(&[0]) {
+        return Err(eyre!(
+            "validator launcher cmdline is outside the exact bound"
+        ));
+    }
+    let arguments = cmdline[..cmdline.len() - 1]
+        .split(|byte| *byte == 0)
+        .collect::<Vec<_>>();
+    if arguments.len() != 3 || arguments[0] != b"/usr/bin/python3" || arguments[1] != b"-c" {
+        return Err(eyre!(
+            "validator launcher argv is not the signed inline Python command"
+        ));
+    }
+    let code = std::str::from_utf8(arguments[2])?;
+    if code.is_empty() {
+        return Err(eyre!("validator launcher has no inline command"));
+    }
+    // Match the signed fragment's canonical systemd escaping, not arbitrary Python.
+    let encoded = code
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+        .replace('\t', "\\t")
+        .replace('%', "%%")
+        .replace('$', "$$");
+    let expected = format!("ExecStart=/usr/bin/python3 -c \"{encoded}\"");
+    if !std::str::from_utf8(unit)?
+        .lines()
+        .any(|line| line == expected)
+    {
+        return Err(eyre!(
+            "validator launcher argv differs from the exact signed unit"
         ));
     }
     Ok(())
@@ -15104,7 +15246,7 @@ impl<R: ProcessRunner> ResetTransport for OpenSshTransport<'_, R> {
 
     fn validator_step(
         &mut self,
-        _inventory: &InventoryV1,
+        inventory: &InventoryV1,
         validator: &ValidatorV1,
         step: ExecutionStep,
         timeout_secs: u64,
@@ -15117,6 +15259,11 @@ impl<R: ProcessRunner> ResetTransport for OpenSshTransport<'_, R> {
             ExecutionStep::Reset => HostAction::Reset,
             ExecutionStep::Start => HostAction::Start,
             other => return Err(eyre!("validator received invalid step `{}`", other.label())),
+        };
+        let timeout_secs = if action == HostAction::Start {
+            validator_start_timeout_secs(inventory, &validator.slug)?
+        } else {
+            timeout_secs
         };
         self.bootstrap_and_dispatch_validator(validator, action, timeout_secs)?;
         Ok(())
@@ -16889,9 +17036,7 @@ fn validate_receipt_name(name: &str) -> Result<()> {
         || name.len() > 128
         || !name.ends_with(".json")
         || !name.bytes().all(|byte| {
-            byte.is_ascii_lowercase()
-                || byte.is_ascii_digit()
-                || matches!(byte, b'-' | b'_' | b'.')
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'_' | b'.')
         })
     {
         return Err(eyre!("receipt name escaped the closed local namespace"));
@@ -17285,6 +17430,112 @@ mod tests {
     struct HostProtocolProbe {
         #[command(flatten)]
         host: PublicResetHost,
+    }
+
+    #[test]
+    fn preseed_and_start_deadlines_charge_only_each_physical_host_carrier() {
+        let mut inventory = super::super::sample_inventory_fixture();
+        inventory.timeouts.reset_secs = 60;
+        inventory.timeouts.preseed_secs = 1_800;
+        inventory.timeouts.start_secs = 120;
+        for validator in &mut inventory.validators {
+            validator.endpoint.host_identity_sha256 = "a".repeat(64);
+        }
+        assert_eq!(
+            HostAction::Preseed
+                .timeout_secs(&inventory, "taira-validator-1")
+                .unwrap(),
+            1_800
+        );
+        assert_eq!(
+            HostAction::Reset
+                .timeout_secs(&inventory, "taira-validator-1")
+                .unwrap(),
+            60
+        );
+        for (index, validator) in inventory.validators.iter().enumerate() {
+            assert_eq!(
+                HostAction::Start
+                    .timeout_secs(&inventory, &validator.slug)
+                    .unwrap(),
+                if index == 0 { 1_920 } else { 120 }
+            );
+        }
+        assert!(validator_start_timeout_secs(&inventory, "taira-edge").is_err());
+        for (index, validator) in inventory.validators.iter_mut().enumerate() {
+            validator.endpoint.host_identity_sha256 = hex::encode([index as u8 + 1; 32]);
+        }
+        for validator in &inventory.validators {
+            assert_eq!(
+                validator_start_timeout_secs(&inventory, &validator.slug).unwrap(),
+                1_920
+            );
+        }
+        inventory.timeouts.preseed_secs = u64::MAX;
+        assert!(validator_start_timeout_secs(&inventory, "taira-validator-1").is_err());
+    }
+
+    #[test]
+    fn host_admission_accepts_combined_carrier_verification_but_rejects_borrowed_time() {
+        let mut admitted = progress_admission();
+        admitted.inventory.timeouts.preseed_secs = 1_800;
+        admitted.inventory.timeouts.start_secs = 120;
+        let now = 1_000;
+        let mut request = admitted.request.clone();
+        request.host_slug = "taira-validator-1".to_owned();
+        request.action_deadline_unix_ms = now + 1_920_000 + super::super::MAX_CLOCK_SKEW_MS;
+        validate_action_deadline(
+            &request,
+            HostAction::Start,
+            &admitted.inventory,
+            &admitted.authorization,
+            now,
+        )
+        .expect("carrier has a signed store verification plus daemon start window");
+        request.action_deadline_unix_ms += 1;
+        assert!(
+            validate_action_deadline(
+                &request,
+                HostAction::Start,
+                &admitted.inventory,
+                &admitted.authorization,
+                now
+            )
+            .is_err()
+        );
+        request.action_deadline_unix_ms -= 1;
+        request.host_slug = "taira-validator-2".to_owned();
+        assert!(
+            validate_action_deadline(
+                &request,
+                HostAction::Start,
+                &admitted.inventory,
+                &admitted.authorization,
+                now
+            )
+            .is_err(),
+            "ordinary validator cannot borrow the carrier verification budget"
+        );
+        request.action_deadline_unix_ms = now + 1_800_000;
+        validate_action_deadline(
+            &request,
+            HostAction::Preseed,
+            &admitted.inventory,
+            &admitted.authorization,
+            now,
+        )
+        .expect("preseed uses its explicit work budget");
+        assert!(
+            validate_action_deadline(
+                &request,
+                HostAction::Reset,
+                &admitted.inventory,
+                &admitted.authorization,
+                now
+            )
+            .is_err(),
+            "atomic reset cannot borrow the preseed budget"
+        );
     }
 
     #[test]
@@ -18384,6 +18635,37 @@ mod tests {
         }
     }
 
+    #[test]
+    fn config_upload_admission_requires_owner_private_artifact_mode() {
+        let admitted = progress_admission();
+        let selected = artifact(admitted.target.artifacts(), "config").unwrap();
+        assert_eq!(selected.mode, 0o600);
+        let mut request = admitted.request.clone();
+        request.artifact_role = selected.role.clone();
+        request.artifact_sha256 = selected.sha256.clone();
+        request.artifact_size = selected.size;
+        request.artifact_mode = selected.mode;
+        validate_host_artifact_request(
+            &request,
+            &admitted.inventory,
+            &admitted.target,
+            HostAction::Upload,
+        )
+        .unwrap();
+        for mode in [0o400, 0o640, 0o644] {
+            request.artifact_mode = mode;
+            assert!(
+                validate_host_artifact_request(
+                    &request,
+                    &admitted.inventory,
+                    &admitted.target,
+                    HostAction::Upload,
+                )
+                .is_err()
+            );
+        }
+    }
+
     fn progress_admission() -> HostAdmission {
         let mut inventory = super::super::sample_inventory_fixture();
         let shared_identity = "a".repeat(64);
@@ -18669,18 +18951,47 @@ mod tests {
     #[test]
     fn receipt_names_reject_path_control_and_unicode_escape() {
         for name in [
-            "", ".", "..", "receipt", "../receipt.json", "/receipt.json",
-            "dir/receipt.json", "dir\\receipt.json", "receipt.json/..",
-            "receipt.json\0", "receipt.json\n", "receipt.json\r", "receipt\t.json",
-            "receipt name.json", "Receipt.json", "réceipt.json", "receipt．json",
+            "",
+            ".",
+            "..",
+            "receipt",
+            "../receipt.json",
+            "/receipt.json",
+            "dir/receipt.json",
+            "dir\\receipt.json",
+            "receipt.json/..",
+            "receipt.json\0",
+            "receipt.json\n",
+            "receipt.json\r",
+            "receipt\t.json",
+            "receipt name.json",
+            "Receipt.json",
+            "réceipt.json",
+            "receipt．json",
         ] {
-            assert!(validate_receipt_name(name).is_err(), "unsafe receipt {name:?}");
+            assert!(
+                validate_receipt_name(name).is_err(),
+                "unsafe receipt {name:?}"
+            );
         }
         let longest = format!("{}.json", "a".repeat(123));
         validate_receipt_name(&longest).expect("exact 128-byte bound");
         assert!(validate_receipt_name(&format!("a{longest}")).is_err());
-        for role in ["", "../iroha_cli", "iroha/cli", "iroha\\cli", "iroha.cli", "iroha-cli", "iroha_cli\0", "iroha_cli\n", "iróha_cli"] {
-            assert!(host_receipt_name(HostAction::Upload, role).is_err(), "unsafe role {role:?}");
+        for role in [
+            "",
+            "../iroha_cli",
+            "iroha/cli",
+            "iroha\\cli",
+            "iroha.cli",
+            "iroha-cli",
+            "iroha_cli\0",
+            "iroha_cli\n",
+            "iróha_cli",
+        ] {
+            assert!(
+                host_receipt_name(HostAction::Upload, role).is_err(),
+                "unsafe role {role:?}"
+            );
         }
         assert!(host_receipt_name(HostAction::Upload, &"a".repeat(65)).is_err());
     }
@@ -20969,6 +21280,75 @@ time.sleep(30)
         let edge = build_recovery_intent(&inventory, ExecutionStep::EdgeVerify)
             .expect("edge recovery intent");
         assert_eq!(edge.mutations.len(), 3);
+    }
+
+    #[test]
+    fn validator_process_readiness_waits_for_launcher_then_daemon() {
+        let unit = b"[Service]\nExecStart=/usr/bin/python3 -c \"import os\\nos.execv(\\\"daemon\\\", [\\\"daemon\\\"])\"\n";
+        let launcher = b"/usr/bin/python3\0-c\0import os\nos.execv(\"daemon\", [\"daemon\"])\0";
+        let mut observations = 0;
+        wait_for_validator_process(Instant::now() + Duration::from_secs(1), || {
+            observations += 1;
+            if observations == 1 {
+                validate_validator_launcher_argv(launcher, unit)?;
+                Ok(ValidatorProcessReadiness::LauncherPending)
+            } else {
+                Ok(ValidatorProcessReadiness::Attested)
+            }
+        })
+        .expect("the signed launcher must be followed by complete daemon attestation");
+        assert_eq!(observations, 2);
+    }
+
+    #[test]
+    fn validator_process_readiness_preserves_original_deadline() {
+        let mut observations = 0;
+        wait_for_validator_process(Instant::now(), || {
+            observations += 1;
+            Ok(ValidatorProcessReadiness::Attested)
+        })
+        .expect_err("an elapsed deadline must not invoke the observer");
+        assert_eq!(observations, 0);
+
+        let deadline = Instant::now() + Duration::from_secs(1);
+        wait_for_validator_process(deadline, || {
+            observations += 1;
+            // Force this observation to exhaust the original deadline instead of
+            // depending on how many polling ticks the scheduler grants the test.
+            std::thread::sleep(deadline.saturating_duration_since(Instant::now()));
+            Ok(ValidatorProcessReadiness::LauncherPending)
+        })
+        .expect_err("a launcher cannot extend the existing action deadline");
+        assert_eq!(observations, 1);
+        wait_for_validator_process(deadline, || {
+            observations += 1;
+            Ok(ValidatorProcessReadiness::Attested)
+        })
+        .expect_err("reentry cannot renew the elapsed deadline or perform more work");
+        assert_eq!(observations, 1);
+        // Both callers submit their durable manager operation before entering
+        // this observer-only loop; pending observations cannot resubmit it.
+    }
+
+    #[test]
+    fn validator_process_readiness_rejects_changed_launcher_immediately() {
+        let unit = b"[Service]\nExecStart=/usr/bin/python3 -c \"signed_command()\"\n";
+        let mut observations = 0;
+        wait_for_validator_process(Instant::now() + Duration::from_secs(1), || {
+            observations += 1;
+            validate_validator_launcher_argv(b"/usr/bin/python3\0-c\0changed_command()\0", unit)?;
+            Ok(ValidatorProcessReadiness::LauncherPending)
+        })
+        .expect_err("a different Python command must fail without polling");
+        assert_eq!(observations, 1);
+        for argv in [
+            b"/usr/bin/python3\0script.py\0".as_slice(),
+            b"/usr/bin/python3\0-c\0\0".as_slice(),
+            b"/tmp/python3\0-c\0signed_command()\0".as_slice(),
+            b"/usr/bin/python3\0-c\0signed_command()\0extra\0".as_slice(),
+        ] {
+            assert!(validate_validator_launcher_argv(argv, unit).is_err());
+        }
     }
 
     fn manager_intent_fixture() -> ManagerIntentV1 {

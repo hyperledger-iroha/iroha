@@ -1,18 +1,19 @@
-//! Fixed quantity-artifact verification for offline callers.
+//! Fixed quantity-artifact production and verification for offline callers.
 //!
 //! The two routes verify complete ordered bundles under the existing fixed SHAKE
 //! candidate. The caller supplies independent expected public inputs and AXT
 //! context; artifact bytes cannot select another value domain or protocol.
 //! Success establishes mathematical consistency with those expectations, not
 //! their authority, ledger finality, replay admission or production qualification.
-//! No proving, profile registry or production ingress is enabled by this module.
+//! Proving uses explicit work limits and constructs one segment at a time.
+//! No profile registry or production ingress is enabled by this module.
 //! TODO: Complete independent protocol qualification and authenticated admission.
 
 use iroha_data_model::{
     fastpq::{
         FastpqArtifactIdentityDescriptionV1, FastpqAxtPreProofMirrorsV1, FastpqAxtPublicMetadataV1,
         FastpqCompactArtifactDecodeError, FastpqCompactArtifactDecodeLimits,
-        FastpqCompactProfileIdV1, FastpqPublicInputs,
+        FastpqCompactProfileIdV1, FastpqPublicInputs, FastpqPublicTransferStatementV1,
     },
     nexus::{AxtFastpqBinding, AxtRemoteSpendClaimV1},
     privacy::GoldilocksDigest384V1,
@@ -27,7 +28,7 @@ use super::{
 use crate::{
     Error, VerifyLimits,
     axt_binding::{AxtProofContextMirrors, AxtPublicMetadataBytes},
-    gadgets::public_transfer_statement::PublicTransferLimits,
+    gadgets::public_transfer_statement::{PublicTransferLimits, TransferSmtBuildLimits},
     proof::PublicIO,
 };
 
@@ -50,7 +51,7 @@ pub struct ExpectedStatement {
 }
 
 impl ExpectedStatement {
-    fn internal(self) -> PublicIO {
+    pub(super) fn internal(self) -> PublicIO {
         PublicIO {
             dsid: self.inputs.dsid,
             slot: self.inputs.slot,
@@ -80,7 +81,7 @@ pub struct ExpectedAxtContext<'a> {
 }
 
 impl<'a> ExpectedAxtContext<'a> {
-    fn internal(self) -> AxtVerificationContext<'a> {
+    pub(super) fn internal(self) -> AxtVerificationContext<'a> {
         AxtVerificationContext {
             binding: self.binding,
             metadata: AxtPublicMetadataBytes {
@@ -129,7 +130,7 @@ pub struct BundleVerificationLimits {
 }
 
 impl BundleVerificationLimits {
-    fn internal(self) -> BundleLimits {
+    pub(super) fn internal(self) -> BundleLimits {
         BundleLimits {
             max_segments: self.max_segments,
             max_wire_bytes: self.max_wire_bytes,
@@ -171,6 +172,89 @@ impl VerificationLimits {
             total_decode: self.total_decode,
         }
     }
+}
+
+/// Explicit additional work policy for producing a complete quantity artifact.
+///
+/// No defaults or node admission profile are selected. At most one call to either
+/// producer runs at a time in this process; a concurrent call returns `Busy`.
+/// Private witnesses are bounded separately, and physical columns are constructed
+/// and dropped one segment at a time. Verification limits also constrain output.
+#[derive(Debug, Clone, Copy)]
+pub struct ProvingLimits {
+    /// Limits on private touched-tree construction and retained path material.
+    pub private_smt: TransferSmtBuildLimits,
+    /// Maximum total base trace cells across the ordered segments.
+    pub max_total_trace_cells: usize,
+    /// Maximum conservative structural working-payload charge for one segment.
+    ///
+    /// This is an accounting charge, not reserved memory or an RSS ceiling. It
+    /// sums trace, fixed-column, commitment, FRI and bounded evaluator buffers;
+    /// allocator metadata, runtime thread stacks, cold hash-DAG compilation and
+    /// unrelated process memory are excluded. Public inputs, retained child
+    /// frames, private SMT work and decoder charges have separate limits.
+    pub max_segment_charge_bytes: usize,
+}
+
+/// A producer failure; no partial artifact is returned.
+#[derive(Debug, thiserror::Error)]
+pub enum ProvingError {
+    /// Another ordinary or AXT quantity artifact is currently being produced.
+    #[error("a compact quantity artifact producer is already running")]
+    Busy,
+    /// Public expectations, proving work, encoding or output policy failed.
+    #[error(transparent)]
+    Prove(#[from] Error),
+    /// The completed artifact failed the caller's public verification policy.
+    #[error(transparent)]
+    Verify(#[from] VerificationError),
+}
+
+/// Produce a canonical ordinary quantity bundle under independent expectations.
+///
+/// Even one segment uses the complete bundle relation. All original quantities,
+/// identities and occurrences are checked; derived private roots must equal the
+/// expected roots. Returned bytes have passed the public offline verifier below.
+/// Conservative output preflight requires room for every valid query set, so a
+/// budget may reject even if one particular proof would be smaller. Final decode
+/// checks retain any stricter enclosing Norito budget. This grants no finality.
+///
+/// # Errors
+/// Returns `Busy` for concurrent production, or rejects inconsistent public
+/// facts, exceeded work/output limits, invalid roots or final verification failure.
+pub fn prove_quantity_ordinary_artifact(
+    statement: &FastpqPublicTransferStatementV1,
+    expected: ExpectedStatement,
+    proving: ProvingLimits,
+    verification: VerificationLimits,
+) -> Result<Vec<u8>, ProvingError> {
+    super::compact_quantity_producer::prove(statement, expected, None, proving, verification)
+}
+
+/// Produce a canonical AXT quantity bundle with complete independent AXT context.
+///
+/// The complete original binding, metadata, mirrors and remote-spend claims are
+/// checked before trace work and bound into every segment. Source authentication,
+/// expiry-at-use and issuer authorization remain the surrounding caller's duties.
+/// Returned bytes have passed the same public AXT verifier exposed below.
+///
+/// # Errors
+/// Returns `Busy` for concurrent production, or rejects public/AXT mismatches,
+/// exceeded work/output limits, invalid roots or final verification failure.
+pub fn prove_quantity_axt_artifact(
+    statement: &FastpqPublicTransferStatementV1,
+    expected: ExpectedStatement,
+    context: ExpectedAxtContext<'_>,
+    proving: ProvingLimits,
+    verification: VerificationLimits,
+) -> Result<Vec<u8>, ProvingError> {
+    super::compact_quantity_producer::prove(
+        statement,
+        expected,
+        Some(context),
+        proving,
+        verification,
+    )
 }
 
 /// Failure before an all-or-nothing offline verification result can be returned.

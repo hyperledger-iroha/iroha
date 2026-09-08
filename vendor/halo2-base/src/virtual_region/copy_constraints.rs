@@ -1,5 +1,5 @@
 use std::cmp::Reverse;
-use std::collections::{BTreeMap, BinaryHeap, HashMap};
+use std::collections::{BTreeMap, BinaryHeap};
 use std::ops::DerefMut;
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -14,6 +14,10 @@ use crate::AssignedValue;
 use crate::{ff::Field, ContextCell};
 
 pub use crate::EXTERNAL_CELL_TYPE_ID;
+
+#[path = "physical_advice.rs"]
+mod physical_advice;
+pub use physical_advice::PhysicalAdviceMap;
 
 use super::manager::VirtualRegionManager;
 
@@ -313,7 +317,8 @@ impl<F: Field + Ord> ConstantEqualities<F> {
 
 /// Global manager for all copy constraints. Thread-safe.
 ///
-/// This will only be accessed during key generation, not proof generation, so it does not need to be optimized.
+/// Virtual equality edges are collected for key generation. Physical coordinates
+/// are also retained during witness assignment for lookup and native-chip bindings.
 ///
 /// Implements [VirtualRegionManager], which should be assigned only after all cells have been assigned
 /// by other managers.
@@ -331,7 +336,7 @@ pub struct CopyConstraintManager<F: Field + Ord> {
 
     // In circuit assignments
     /// Advice assignments, mapping from virtual [ContextCell] to assigned physical [Cell]
-    pub assigned_advices: HashMap<ContextCell, Cell>,
+    pub assigned_advices: PhysicalAdviceMap,
     /// Constant assignments, (key = constant, value = [Cell])
     pub assigned_constants: BTreeMap<F, Cell>,
     /// Flag for whether `assign_raw` has been called, for safety only.
@@ -481,22 +486,22 @@ impl<F: Field + Ord> VirtualRegionManager<F> for SharedCopyConstraintManager<F> 
         for (left, right) in &manager.advice_equalities {
             let left = manager
                 .assigned_advices
-                .get(left)
+                .resolve(left)
                 .expect("virtual cell not assigned");
             let right = manager
                 .assigned_advices
-                .get(right)
+                .resolve(right)
                 .expect("virtual cell not assigned");
-            raw_constrain_equal(region, *left, *right);
+            raw_constrain_equal(region, left, right);
         }
         for (constant, cells) in manager.constant_equalities.buckets() {
             let left = manager.assigned_constants[constant];
             for right in cells {
                 let right = manager
                     .assigned_advices
-                    .get(right)
+                    .resolve(right)
                     .expect("virtual cell not assigned");
-                raw_constrain_equal(region, left, *right);
+                raw_constrain_equal(region, left, right);
             }
         }
         // We can't clear advice_equalities and constant_equalities because keygen_vk and keygen_pk will call this function twice

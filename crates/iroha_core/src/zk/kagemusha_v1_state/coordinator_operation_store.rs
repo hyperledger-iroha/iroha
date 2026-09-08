@@ -511,21 +511,26 @@ where
     H: KagemushaAuthenticatedHistoryStoreV1,
 {
     /// Create new coordinator retry storage for this actual Core wallet. Existing files never reset.
-    /// An existing Core operation requires an existing matching store, not a new empty journal.
+    /// Creation is permitted only while the selected prefix is the exact initializer. Once
+    /// checkpointed journal history advances, recovery must reopen its retained prefix.
     pub fn create_coordinator_operation_store(
         &self,
         path: &Path,
         maximum_reserved_bytes: u64,
     ) -> Result<KagemushaCoordinatorOperationStoreV1> {
-        if !self.outgoing_operation_index().is_empty() {
+        if !self.outgoing_operation_index().is_empty()
+            || self.recovery_metadata.journals.coordinator.sequence != 1
+        {
             return Err(Error::CoreMismatch);
         }
-        KagemushaCoordinatorOperationStoreV1::create_new(
+        let store = KagemushaCoordinatorOperationStoreV1::create_new(
             path,
             self.state.lane.clone(),
             self.state.asset_incarnation,
             maximum_reserved_bytes,
-        )
+        )?;
+        self.reconcile_coordinator_operations(&store)?;
+        Ok(store)
     }
 
     /// Open the existing journal and reconcile every retained Core operation before serving it.
@@ -637,6 +642,17 @@ where
     ) -> Result<()> {
         store.wal.check_owned().map_err(storage_error)?;
         if store.lane != self.state.lane || store.asset_incarnation != self.state.asset_incarnation
+        {
+            return Err(Error::CoreMismatch);
+        }
+        // Reserve/BeginIntent entries can precede every outgoing Core index entry. Index
+        // coverage alone cannot reject rollback or a different same-lane WAL at that stage.
+        // The selected prefix must exist in this exact held descriptor, including its hash,
+        // sequence and byte boundary; validated local append-only suffixes remain recoverable.
+        if !store
+            .wal
+            .contains_recovery_prefix(self.recovery_metadata.journals.coordinator)
+            .map_err(storage_error)?
         {
             return Err(Error::CoreMismatch);
         }

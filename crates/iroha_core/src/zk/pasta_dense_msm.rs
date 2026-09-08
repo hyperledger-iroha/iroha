@@ -1047,7 +1047,7 @@ where
         self.capacity_profile_with_lanes(DENSE_LANES)
     }
     /// Return queued-job, source, and row geometry for `configured_lanes` lanes.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
     pub(super) fn capacity_profile_with_lanes(
         &self,
         configured_lanes: usize,
@@ -2150,10 +2150,12 @@ fn bind_virtual<F: BigPrimeField>(
     region: &mut halo2_base::halo2_proofs::circuit::Region<'_, F>,
     raw: Cell,
     virtual_value: AssignedValue<F>,
-    physical_cells: &std::collections::HashMap<halo2_base::ContextCell, Cell>,
+    physical_cells: &halo2_base::virtual_region::copy_constraints::PhysicalAdviceMap,
 ) -> Result<(), Error> {
     let virtual_cell = virtual_value.cell.ok_or(Error::Synthesis)?;
-    let physical = *physical_cells.get(&virtual_cell).ok_or(Error::Synthesis)?;
+    let physical = physical_cells
+        .resolve(&virtual_cell)
+        .ok_or(Error::Synthesis)?;
     region.constrain_equal(raw, physical);
     Ok(())
 }

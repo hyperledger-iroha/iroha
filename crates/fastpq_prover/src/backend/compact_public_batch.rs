@@ -15,7 +15,6 @@
 
 use norito::{NoritoSerialize, codec::Encode};
 
-#[cfg(test)]
 use super::compact_protocol::PreparedAir;
 use super::compact_value_domain::CompactTransferValue;
 use super::{
@@ -170,7 +169,6 @@ impl PublicTransferBatch {
     }
 
     /// Exact ports derived from the complete preparation in chronological order.
-    #[cfg(test)]
     pub(super) fn statements(&self) -> &[PublicStatement] {
         &self.statements
     }
@@ -240,7 +238,6 @@ impl FixedAir for PublicTransferSegmentAir {
     fn evaluate(&self, point: u64, current: &[u64], next: &[u64]) -> Result<Vec<u64>> {
         self.inner.evaluate(point, current, next)
     }
-    #[cfg(test)]
     fn prepare_prover(&self) -> Result<Box<dyn PreparedAir + '_>> {
         self.inner.prepare_prover()
     }

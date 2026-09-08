@@ -268,6 +268,7 @@ fn aggregate_timeout_budget_rejects_assembly_and_authorization_before_input_or_c
         stop_secs: 600,
         install_secs: 600,
         reset_secs: 600,
+        preseed_secs: 3_600,
         start_secs: 600,
         convergence_secs: 600,
         canary_secs: 600,
@@ -302,7 +303,7 @@ fn aggregate_timeout_budget_rejects_assembly_and_authorization_before_input_or_c
         edge_unit: absent.join("edge.service"),
         known_hosts: absent.join("known-hosts"),
     };
-    let expected = "bounded execution plan requires 72000 seconds (actions: 70800 seconds, admission: 900 seconds, safety: 300 seconds), exceeding the 14400-second limit by 57600 seconds";
+    let expected = "bounded execution plan requires 78600 seconds (actions: 77400 seconds, admission: 900 seconds, safety: 300 seconds), exceeding the 43200-second limit by 35400 seconds";
     assert_eq!(
         derive_inventory(&mut inventory, &local())
             .expect_err("budget must fail before opening the absent source manifest")
@@ -358,6 +359,7 @@ fn aggregate_timeout_policy_accepts_deployment_defaults_and_preserves_individual
         stop_secs: 60,
         install_secs: 90,
         reset_secs: 60,
+        preseed_secs: 1_800,
         start_secs: 120,
         convergence_secs: 180,
         canary_secs: 120,
@@ -370,7 +372,7 @@ fn aggregate_timeout_policy_accepts_deployment_defaults_and_preserves_individual
     validate_inventory(&inventory).expect("deployment defaults pass structural admission");
     assert_eq!(
         execution_lifetime_ms(&inventory).expect("bounded deployment lease"),
-        13_140_000,
+        16_680_000,
     );
     let (key, trusted) = owner();
     let bytes = canonical_inventory_bytes(&inventory).expect("inventory");
@@ -379,7 +381,7 @@ fn aggregate_timeout_policy_accepts_deployment_defaults_and_preserves_individual
         .expect("admitted defaults are signable under the same budget");
     assert_eq!(
         envelope.claims.execution_expires_at_unix_ms - issued_at,
-        13_140_000,
+        16_680_000,
     );
 
     inventory.timeouts.stop_secs = 0;
@@ -396,4 +398,31 @@ fn aggregate_timeout_policy_accepts_deployment_defaults_and_preserves_individual
             .to_string(),
         "stop timeout must be within 1..=600 seconds",
     );
+}
+
+#[test]
+fn preseed_timeout_is_required_and_has_its_own_physical_work_bound() {
+    let mut inventory = sample_inventory_fixture();
+    let mut encoded = json::to_value(&inventory.timeouts).expect("encode timeout policy");
+    encoded
+        .as_object_mut()
+        .expect("timeout object")
+        .remove("preseed_secs");
+    assert!(
+        json::from_value::<TimeoutsV1>(encoded).is_err(),
+        "old timeout policy must not silently borrow reset time"
+    );
+    for value in [0, 3_601, u64::MAX] {
+        inventory.timeouts.preseed_secs = value;
+        assert_eq!(
+            validate_timeouts(&inventory.timeouts)
+                .unwrap_err()
+                .to_string(),
+            "preseed timeout must be within 1..=3600 seconds"
+        );
+    }
+    for value in [1, 1_800, 3_600] {
+        inventory.timeouts.preseed_secs = value;
+        validate_timeouts(&inventory.timeouts).expect("independent bounded preseed work");
+    }
 }

@@ -69,11 +69,14 @@ class TairaPrepareTests(unittest.TestCase):
         def default_build(_root, _command, _env, log):
             self.binaries()
             log.write_bytes(b"fixture compiler output\n")
+        def wrapped_build(*args, **kwargs):
+            return (build or default_build)(*args)
         with patch.object(release, "verify_checkout", return_value="b" * 40), \
              patch.object(release, "source_snapshot", side_effect=snapshot or (lambda _: [])), \
              patch.object(release.shutil, "which", return_value=str(self.zigbuild)), \
              patch.object(release.gate, "run_checks", side_effect=check) as gate, \
-             patch.object(release, "run_build", side_effect=build or default_build) as compile, \
+             patch.object(release, "run_build", side_effect=wrapped_build) as compile, \
+             patch.object(release, "capacity_preflight", return_value=[]), \
              contextlib.redirect_stdout(io.StringIO()):
             result = release.prepare(self.args)
         return result, gate, compile
@@ -110,14 +113,14 @@ class TairaPrepareTests(unittest.TestCase):
             with self.assertRaisesRegex(release.gate.CheckError, "fixture gate failed"):
                 self.prepare(check=release.gate.CheckError("fixture gate failed"))
             build.assert_not_called()
-        self.assertFalse((self.out / "bin").exists())
+        self.assertFalse(list(self.out.glob("attempts/*/bin")))
         self.assertFalse((self.out / "result.json").exists())
 
     def test_source_drift_stops_before_linux_build(self):
         snapshots = iter([[], [{"path": "changed"}]])
         with self.assertRaisesRegex(release.PrepareError, "source changed"):
             self.prepare(snapshot=lambda _: next(snapshots))
-        self.assertFalse((self.out / "cargo.log").exists())
+        self.assertFalse(list(self.out.glob("attempts/*/cargo.log")))
         self.assertFalse((self.out / "result.json").exists())
 
     def test_changed_tool_after_gate_stops_before_build(self):
@@ -125,7 +128,7 @@ class TairaPrepareTests(unittest.TestCase):
             self.zig.write_bytes(b"different tool")
         with self.assertRaisesRegex(release.PrepareError, "reviewed executable"):
             self.prepare(check=check)
-        self.assertFalse((self.out / "cargo.log").exists())
+        self.assertFalse(list(self.out.glob("attempts/*/cargo.log")))
         self.assertFalse((self.out / "result.json").exists())
 
     def test_wrong_architecture_cannot_publish_result(self):
@@ -171,6 +174,123 @@ class TairaPrepareTests(unittest.TestCase):
         with self.assertRaisesRegex(release.PrepareError, "symlinks"):
             release.real_path(alias)
 
+    def test_same_command_reuses_completed_capture_without_gate_or_build(self):
+        first, _, _ = self.prepare()
+        second, gate, build = self.prepare()
+        self.assertEqual(second, first)
+        gate.assert_not_called()
+        build.assert_not_called()
+        self.assertEqual(len(list((self.out / "attempts").iterdir())), 1)
+
+    def test_failed_build_retry_retains_log_and_reuses_gate_and_warm_lane(self):
+        def failed(_root, _command, _environment, log):
+            log.write_bytes(b"first build failed")
+            raise release.PrepareError("fixture build failed")
+        with self.assertRaisesRegex(release.PrepareError, "fixture build failed"):
+            self.prepare(build=failed)
+        original = self.out / "attempts/000001/cargo.log"
+        before = original.read_bytes()
+        result, gate, build = self.prepare()
+        gate.assert_not_called()
+        self.assertEqual(build.call_count, 1)
+        self.assertEqual(result["attempt"], "attempts/000002")
+        self.assertEqual(original.read_bytes(), before)
+        self.assertEqual(build.call_args.args[1], release.build_command(SCRIPT.parent.parent, self.target))
+
+    def test_crash_after_request_recovers_attempts_directory_before_work(self):
+        real_create = release.create_fresh_directory
+        def interrupt_attempts(path, *, mode):
+            if path == self.out / "attempts":
+                raise OSError("fixture crash after durable request")
+            return real_create(path, mode=mode)
+        with patch.object(release, "create_fresh_directory", side_effect=interrupt_attempts):
+            with self.assertRaisesRegex(OSError, "fixture crash after durable request"):
+                self.prepare()
+        self.assertTrue((self.out / "request.json").is_file())
+        self.assertFalse((self.out / "attempts").exists())
+        result, gate, build = self.prepare()
+        self.assertEqual(gate.call_count, 1)
+        self.assertEqual(build.call_count, 1)
+        self.assertEqual(result["attempt"], "attempts/000001")
+
+    def test_capture_checkpoint_recovers_missing_final_result_without_build(self):
+        real_write = release.write_record
+        def fail_final(path, value):
+            if path == self.out / "result.json":
+                raise OSError("fixture crash before final result")
+            real_write(path, value)
+        with patch.object(release, "write_record", side_effect=fail_final):
+            with self.assertRaisesRegex(OSError, "fixture crash"):
+                self.prepare()
+        result, gate, build = self.prepare()
+        gate.assert_not_called()
+        build.assert_not_called()
+        self.assertEqual(result["attempt"], "attempts/000001")
+
+    def test_changed_captured_binary_cannot_be_reused_or_trigger_build(self):
+        result, _, _ = self.prepare()
+        binary = Path(result["artifacts"][0]["path"])
+        binary.chmod(0o700)
+        binary.write_bytes(elf() + b"changed")
+        binary.chmod(0o500)
+        with patch.object(release, "run_build") as build:
+            with self.assertRaisesRegex(release.PrepareError, "captured artifact changed"):
+                self.prepare()
+            build.assert_not_called()
+
+    def test_changed_command_cannot_reuse_checkpoint(self):
+        self.prepare()
+        self.args.expected_commit = "c" * 40
+        with self.assertRaisesRegex(release.PrepareError, "different inputs"):
+            self.prepare()
+
+    def test_concurrent_prepare_fails_without_waiting_or_breaking_lock(self):
+        self.out.mkdir(mode=0o700)
+        with release.preparation_lock(self.out):
+            with self.assertRaisesRegex(release.PrepareError, "still running"):
+                with release.preparation_lock(self.out):
+                    self.fail("second writer acquired held lock")
+
+    def test_capacity_groups_same_filesystem_and_exact_boundary(self):
+        from types import SimpleNamespace
+        with patch.object(release.os, "fstatvfs", return_value=SimpleNamespace(f_bavail=100, f_frsize=1)):
+            rows = release.capacity_preflight([(self.target, 60, "build"), (self.out, 40, "capture")])
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["required_bytes"], 100)
+            with self.assertRaisesRegex(release.PrepareError, "need 101 additional bytes"):
+                release.capacity_preflight([(self.target, 60, "build"), (self.out, 41, "capture")])
+
+    def test_low_space_stops_before_output_or_native_gate(self):
+        with patch.object(release, "verify_checkout", return_value="b" * 40), \
+             patch.object(release, "source_snapshot", return_value=[]), \
+             patch.object(release.shutil, "which", return_value=str(self.zigbuild)), \
+             patch.object(release, "capacity_preflight", side_effect=release.PrepareError("insufficient free space")), \
+             patch.object(release.gate, "run_checks") as gate:
+            with self.assertRaisesRegex(release.PrepareError, "insufficient free space"):
+                release.prepare(self.args)
+            gate.assert_not_called()
+            self.assertFalse(self.out.exists())
+
+    def test_build_progress_only_inspects_elapsed_time_and_log_metadata(self):
+        class Child:
+            count = 0
+            def wait(self, timeout=None):
+                self.count += 1
+                if self.count == 1:
+                    raise subprocess.TimeoutExpired("fixture", timeout)
+                return 0
+            def poll(self):
+                return 0
+        log = self.root / "progress.log"
+        with patch.object(release.subprocess, "Popen", return_value=Child()) as spawn, \
+             patch.object(release, "source_snapshot", side_effect=AssertionError("poll must not hash source")), \
+             patch.object(release, "stable_hash_path", side_effect=AssertionError("poll must not hash artifacts")), \
+             contextlib.redirect_stdout(io.StringIO()) as output:
+            release.run_build(self.root, ["fixture"], {}, log, lock_fd=77)
+        self.assertIn("Linux build running", output.getvalue())
+        self.assertEqual(spawn.call_args.kwargs["pass_fds"], (77,))
+        self.assertEqual(stat.S_IMODE(log.stat().st_mode), 0o600)
+
     def test_environment_excludes_secrets_hooks_and_compiler_overrides(self):
         env = release.child_environment({"PATH": "/bin", "HOME": "/fixture",
             "CARGO_TARGET_DIR": "/wrong", "RUSTFLAGS": "bad", "CARGO_PROFILE_RELEASE_LTO": "off",
@@ -191,7 +311,7 @@ class TairaPrepareTests(unittest.TestCase):
 
     def test_failed_build_keeps_diagnostic_log(self):
         class FailedChild:
-            def wait(self):
+            def wait(self, timeout=None):
                 return 101
             def poll(self):
                 return 101

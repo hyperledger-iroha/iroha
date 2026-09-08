@@ -689,9 +689,9 @@ where
                             );
                             Error::Synthesis
                         })?;
-                        let physical_cell = *physical_cells
+                        let physical_cell = physical_cells
                             .assigned_advices
-                            .get(&virtual_cell)
+                            .resolve(&virtual_cell)
                             .ok_or_else(|| {
                                 iroha_logger::error!(
                                     job_index,
@@ -836,9 +836,9 @@ fn bind_sha256_digest_v1<F: BigPrimeField>(
                     );
                     Error::Synthesis
                 })?;
-                let physical_cell = *physical_cells
+                let physical_cell = physical_cells
                     .assigned_advices
-                    .get(&virtual_cell)
+                    .resolve(&virtual_cell)
                     .ok_or_else(|| {
                         iroha_logger::error!(
                             word_index,
