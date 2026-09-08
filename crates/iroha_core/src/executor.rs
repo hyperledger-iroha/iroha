@@ -10939,6 +10939,9 @@ pub(crate) fn extract_register_asset_definition(
     .ok()
     .flatten()
 }
+/// Authorize registration against the signed owning domain and its current owner.
+/// Domainless definitions are restricted to the authenticated genesis context;
+/// optional aliases never supply registration authority.
 pub(crate) fn ensure_asset_definition_registration_allowed(
     state_transaction: &mut StateTransaction<'_, '_>,
     authority: &AccountId,
@@ -10952,24 +10955,16 @@ pub(crate) fn ensure_asset_definition_registration_allowed(
     if is_genesis_context {
         return Ok(());
     }
-    let Some(alias) = reg_asset_definition.object().alias.as_ref() else {
+    // Ownership is an explicit signed field. Optional display aliases cannot grant
+    // registration authority or replace the canonical owning-domain binding.
+    let Some(domain_id) = reg_asset_definition.object().owning_domain.as_ref() else {
         return Err(ValidationFail::NotPermitted(
             "domainless asset definitions may only be registered in genesis".to_owned(),
         ));
     };
-    let Some(domain_alias) = alias.domain_segment() else {
-        return Err(ValidationFail::NotPermitted(
-            "domainless asset definitions may only be registered in genesis".to_owned(),
-        ));
-    };
-    let domain_id = DomainId::try_new(domain_alias, alias.dataspace_segment()).map_err(|err| {
-        ValidationFail::NotPermitted(format!(
-            "asset definition registration alias has invalid domain context: {err}"
-        ))
-    })?;
     let domain_owner = state_transaction
         .world
-        .domain(&domain_id)
+        .domain(domain_id)
         .map(|domain| domain.owned_by().clone())
         .map_err(|err| ValidationFail::InstructionFailed(InstructionExecutionError::Find(err)))?;
     if &domain_owner == authority {
@@ -18108,6 +18103,73 @@ mod tests {
             Some(&domain_id),
             "registration must derive the domain index from explicit ownership"
         );
+    }
+    #[test]
+    fn asset_definition_registration_alias_cannot_supply_owning_domain_authority() {
+        let owned_domain = DomainId::try_new("owned", "universal").expect("owned domain");
+        let foreign_domain = DomainId::try_new("foreign", "universal").expect("foreign domain");
+        let foreign_owner = checked_account_id();
+        let state = state_after_genesis(World::with(
+            [
+                Domain::new(owned_domain.clone()).build(&ALICE_ID),
+                Domain::new(foreign_domain.clone()).build(&foreign_owner),
+            ],
+            [
+                Account::new(ALICE_ID.clone()).build(&ALICE_ID),
+                Account::new(foreign_owner.clone()).build(&foreign_owner),
+            ],
+            [],
+        ));
+        let asset_id = AssetDefinitionId::derive_from_components(
+            owned_domain,
+            "coin".parse().expect("asset name"),
+        );
+        let owned_alias: iroha_data_model::asset::AssetDefinitionAlias =
+            "coin#owned.universal".parse().expect("asset alias");
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+        for (owning_domain, alias, expected) in [
+            (
+                None,
+                Some(owned_alias.clone()),
+                "domainless asset definitions may only be registered in genesis",
+            ),
+            (
+                Some(foreign_domain.clone()),
+                Some(owned_alias),
+                "Can't register asset definition",
+            ),
+            (
+                Some(foreign_domain),
+                None,
+                "Can't register asset definition",
+            ),
+        ] {
+            let registration = Register::asset_definition(
+                AssetDefinition::numeric(
+                    asset_id.clone(),
+                    "coin",
+                    iroha_data_model::asset::AssetBalancePolicy::Global,
+                    owning_domain,
+                )
+                .with_alias(alias),
+            );
+            let mut transaction = block.transaction();
+            let error = super::ensure_asset_definition_registration_allowed(
+                &mut transaction,
+                &ALICE_ID,
+                &registration,
+            )
+            .expect_err("only the owner of the explicit owning domain may register an asset");
+            assert!(matches!(error, ValidationFail::NotPermitted(message) if message == expected));
+            assert!(transaction.world.asset_definition(&asset_id).is_err());
+            assert!(
+                transaction
+                    .world
+                    .asset_definition_domains
+                    .get(&asset_id)
+                    .is_none()
+            );
+        }
     }
     #[test]
     fn initial_executor_enforces_exact_pkr_mint_and_metadata_permissions() {

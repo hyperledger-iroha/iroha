@@ -330,7 +330,11 @@ impl norito::SerializePayload for BudgetedField {
     }
 }
 
-impl NoritoSerialize for BudgetedField {}
+impl NoritoSerialize for BudgetedField {
+    fn schema_hash() -> [u8; 16] {
+        <u8 as NoritoSerialize>::schema_hash()
+    }
+}
 
 #[test]
 fn canonical_field_preserves_inherited_serializer_resource_errors() {
@@ -342,7 +346,11 @@ fn canonical_field_preserves_inherited_serializer_resource_errors() {
         Hash::new_from_writer(|writer| write_canonical_field(writer, &BudgetedField))
     });
     assert!(result.is_err());
-    assert!(Hash::new_from_writer(|writer| write_canonical_field(writer, &BudgetedField)).is_ok());
+    assert_eq!(
+        Hash::new_from_writer(|writer| write_canonical_field(writer, &BudgetedField)).unwrap(),
+        Hash::new_from_writer(|writer| write_canonical_field(writer, &42_u8)).unwrap(),
+        "the budgeted byte serializer must retain its primitive frame identity"
+    );
 }
 
 #[test]

@@ -208,7 +208,7 @@ fn seed_soracloud_mailbox_fixture(
         SoraServiceRuntimeStateV1 {
             schema_version: iroha_data_model::soracloud::SORA_SERVICE_RUNTIME_STATE_VERSION_V1,
             service_name: service_name.clone(),
-            active_service_version: service_version,
+            active_service_version: service_version.clone(),
             health_status: SoraServiceHealthStatusV1::Healthy,
             load_factor_bps: 77,
             materialized_bundle_hash: bundle_hash,
@@ -218,10 +218,10 @@ fn seed_soracloud_mailbox_fixture(
         schema_version: iroha_data_model::soracloud::SORA_SERVICE_MAILBOX_MESSAGE_VERSION_V1,
         message_id: Hash::prehashed([0; Hash::LENGTH]),
         from_service: service_name.clone(),
-        from_service_version: "1.0.0".to_string(),
+        from_service_version: service_version.clone(),
         from_handler: "update".parse().expect("valid from handler"),
         to_service: service_name.clone(),
-        to_service_version: "1.0.0".to_string(),
+        to_service_version: service_version,
         to_handler: "update".parse().expect("valid to handler"),
         payload_bytes: b"portal-mailbox-payload".to_vec(),
         payload_commitment: Hash::new(b"portal-mailbox-payload"),
@@ -791,7 +791,7 @@ fn validate_and_record_transactions_rejects_sccp_root_after_duplicate_overlay_re
     ));
 }
 #[test]
-fn validate_and_record_transactions_executes_soracloud_mailbox_runtime_once() {
+fn validate_and_record_transactions_never_executes_local_soracloud_mailbox_runtime() {
     let mut world = World::new();
     let (service_name, message_id) = seed_soracloud_mailbox_fixture(&mut world, Vec::new());
     let kura = Kura::blank_kura_for_testing();
@@ -805,40 +805,33 @@ fn validate_and_record_transactions_executes_soracloud_mailbox_runtime_once() {
         .sign(leader.private_key())
         .unpack(|_| {});
     let mut state_block = state.block(block.header);
+    let audit_sequence_before = crate::smartcontracts::isi::soracloud::next_soracloud_audit_sequence(
+        &state_block.transaction(),
+    ).expect("fixture audit sequence");
     let _valid = block.validate_and_record_transactions(&mut state_block);
-    state_block.commit().expect("commit first mailbox block");
-    {
-        let view = state.view();
-        let world = view.world();
-        let runtime_state = world
-            .soracloud_service_runtime()
-            .get(&service_name)
-            .expect("runtime state after execution");
-        let receipt = world
-            .soracloud_runtime_receipts()
-            .iter()
-            .next()
-            .map(|(_receipt_id, receipt)| receipt.clone())
-            .expect("runtime receipt recorded");
-        assert_eq!(runtime.ordered_mailbox_call_count(), 1);
-        assert_eq!(runtime_state.load_factor_bps, 111);
-        assert_eq!(receipt.mailbox_message_id, Some(message_id));
-    }
-    let follow_up_header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
-    let mut follow_up_state_block = state.block(follow_up_header);
-    let follow_up_transaction = follow_up_state_block.transaction();
-    assert!(
-        collect_ready_soracloud_mailbox_messages(&follow_up_transaction).is_empty(),
-        "mailbox receipts must suppress re-delivery on later blocks"
+    assert_eq!(
+        crate::smartcontracts::isi::soracloud::next_soracloud_audit_sequence(
+            &state_block.transaction(),
+        ).expect("audit sequence after block execution"),
+        audit_sequence_before,
+        "local runtime output cannot advance the consensus audit sequence",
     );
+    state_block.commit().expect("commit first mailbox block");
     let view = state.view();
     let world = view.world();
-    assert_eq!(runtime.ordered_mailbox_call_count(), 1);
-    assert_eq!(world.soracloud_runtime_receipts().iter().count(), 1);
+    let runtime_state = world
+        .soracloud_service_runtime()
+        .get(&service_name)
+        .expect("seeded runtime state remains available");
+    assert_eq!(runtime.ordered_mailbox_call_count(), 0);
+    assert_eq!(runtime_state.load_factor_bps, 77);
+    assert!(world.soracloud_runtime_receipts().is_empty());
+    assert!(world.soracloud_mailbox_messages().get(&message_id).is_some());
+
 }
 
 #[test]
-fn validate_and_record_transactions_persists_soracloud_mailbox_state_mutations() {
+fn validate_and_record_transactions_ignores_local_soracloud_mailbox_state_mutations() {
     let mut world = World::new();
     let binding_name: iroha_data_model::name::Name = "vault".parse().expect("valid binding name");
     let state_key = "/state/private/patient-1".to_string();
@@ -877,56 +870,31 @@ fn validate_and_record_transactions_persists_soracloud_mailbox_state_mutations()
         .sign(leader.private_key())
         .unpack(|_| {});
     let mut state_block = state.block(block.header);
+    let audit_sequence_before = crate::smartcontracts::isi::soracloud::next_soracloud_audit_sequence(
+        &state_block.transaction(),
+    ).expect("fixture audit sequence");
     let _valid = block.validate_and_record_transactions(&mut state_block);
-    state_block.commit().expect("commit mailbox state block");
-    let receipt = {
-        let view = state.view();
-        let world = view.world();
-        let runtime_state = world
-            .soracloud_service_runtime()
-            .get(&service_name)
-            .expect("runtime state after state mutation execution");
-        let receipt = world
-            .soracloud_runtime_receipts()
-            .iter()
-            .next()
-            .map(|(_receipt_id, receipt)| receipt.clone())
-            .expect("runtime receipt recorded");
-        let entry = world
-            .soracloud_service_state_entries()
-            .get(&(
-                service_name.as_ref().to_owned(),
-                binding_name.as_ref().to_owned(),
-                state_key.clone(),
-            ))
-            .expect("mailbox-driven service state entry");
-        assert_eq!(runtime.ordered_mailbox_call_count(), 1);
-        assert_eq!(runtime_state.load_factor_bps, 111);
-        assert_eq!(receipt.mailbox_message_id, Some(message_id));
-        assert_eq!(entry.encryption, SoraStateEncryptionV1::Plaintext);
-        assert_eq!(entry.payload_bytes.get(), 28);
-        assert_eq!(entry.payload_commitment, payload_commitment);
-        assert_eq!(entry.governance_tx_hash, receipt.receipt_id);
-        assert_eq!(entry.last_update_sequence, receipt.emitted_sequence);
-        assert_eq!(
-            entry.source_action,
-            SoraServiceLifecycleActionV1::StateMutation
-        );
-        receipt
-    };
-    let follow_up_header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
-    let mut follow_up_state_block = state.block(follow_up_header);
-    let follow_up_transaction = follow_up_state_block.transaction();
     assert_eq!(
         crate::smartcontracts::isi::soracloud::next_soracloud_audit_sequence(
-            &follow_up_transaction
-        )
-        .expect("runtime receipt must leave an available Soracloud audit sequence"),
-        receipt.emitted_sequence.saturating_add(1),
-        "runtime receipts must advance the shared Soracloud execution sequence"
+            &state_block.transaction(),
+        ).expect("audit sequence after block execution"),
+        audit_sequence_before,
+        "local runtime output cannot advance the consensus audit sequence",
     );
-    assert!(
-        collect_ready_soracloud_mailbox_messages(&follow_up_transaction).is_empty(),
-        "mailbox receipts must suppress re-delivery after state mutation write-back"
-    );
+    state_block.commit().expect("commit mailbox state block");
+    let view = state.view();
+    let world = view.world();
+    let runtime_state = world
+        .soracloud_service_runtime()
+        .get(&service_name)
+        .expect("seeded runtime state remains available");
+    assert_eq!(runtime.ordered_mailbox_call_count(), 0);
+    assert_eq!(runtime_state.load_factor_bps, 77);
+    assert!(world.soracloud_runtime_receipts().is_empty());
+    assert!(world.soracloud_mailbox_messages().get(&message_id).is_some());
+    assert!(world.soracloud_service_state_entries().get(&(
+        service_name.as_ref().to_owned(),
+        binding_name.as_ref().to_owned(),
+        state_key,
+    )).is_none(), "local runtime mutations must never alter consensus state");
 }

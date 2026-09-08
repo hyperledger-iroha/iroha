@@ -5226,7 +5226,7 @@ impl V2ApplyService {
                 }
             })?;
             archive
-                .capture_kura_authenticated_view(&state_block, self.kura.as_ref(), receipt)
+                .capture_kura_authenticated_view(state_block.as_ref(), self.kura.as_ref(), receipt)
                 .map_err(|error| {
                     V2ApplyError::committed_recovery_required(
                         "provider-ingest finalized archive capture",
@@ -5244,7 +5244,7 @@ impl V2ApplyService {
                 }
             })?;
             archive
-                .capture_kura_authenticated_view(&state_block, self.kura.as_ref(), receipt)
+                .capture_kura_authenticated_view(state_block.as_ref(), self.kura.as_ref(), receipt)
                 .map_err(|error| {
                     V2ApplyError::committed_recovery_required(
                         "reputation finalized archive capture",

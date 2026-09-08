@@ -168,7 +168,7 @@ impl RecoveryFixture {
         ordinal: u128,
         certified_sources: Option<Vec<PeerId>>,
         corrupt_qc: bool,
-        block_signature_override: Option<(u64, usize)>,
+        block_signer: Option<(u64, usize)>,
     ) -> LifecycleLedgerRecordV1 {
         let context = self.verified.context();
         let round = wire::ConsensusRound {
@@ -179,7 +179,7 @@ impl RecoveryFixture {
         let leader = context.leader(view);
         let leader_index = usize::try_from(leader).expect("fixture leader fits usize");
         let (block_signature_index, block_signer_index) =
-            block_signature_override.unwrap_or((u64::from(leader), leader_index));
+            block_signer.unwrap_or((u64::from(leader), leader_index));
         let header = BlockHeader::new(
             NonZeroU64::new(context.height).expect("fixture height is non-zero"),
             None,

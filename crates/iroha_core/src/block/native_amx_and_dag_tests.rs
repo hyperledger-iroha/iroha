@@ -54,16 +54,15 @@ fn native_amx_receipt_survives_into_final_header_bound_lane_statement() {
         .insert(authority_uaid, bindings);
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    let mut state = State::try_new_with_chain_and_network_id_with_default_telemetry(
+    let mut state = State::new_with_chain_and_network_id_for_testing(
         world,
         kura,
         query_handle,
         chain_id.clone(),
         native_amx_test_network_id(),
-    )
-    .expect("native AMX test state accepts its explicit network id");
+    );
     {
-        let nexus = state.nexus.get_mut();
+        let mut nexus = state.nexus_snapshot();
         nexus.lane_catalog = LaneCatalog::new(
             nonzero!(4_u32),
             vec![
@@ -86,6 +85,9 @@ fn native_amx_receipt_survives_into_final_header_bound_lane_statement() {
         nexus.lane_config =
             iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
         nexus.dataspace_catalog = native_amx_test_catalog(paynet, cbuae);
+        state
+            .set_nexus(nexus)
+            .expect("install complete Native AMX lane incarnations before execution");
     }
     install_test_lane_manifests(&state);
     for (dataspace, lane) in [(paynet, LaneId::new(1)), (cbuae, LaneId::new(2))] {

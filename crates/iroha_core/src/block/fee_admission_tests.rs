@@ -1,31 +1,3 @@
-/// The fee fixtures start from a synthetic parent with already registered assets.
-/// Give those definitions their parent registration identities before exercising fees.
-fn seed_fee_fixture_asset_incarnations(state: &State, parent: &SignedBlock) {
-    let registration_header_hash = parent.header().hash();
-    let execution_identity = Hash::new(b"fee-fixture-parent-asset-registration");
-    let mut definitions = state
-        .world
-        .asset_definitions
-        .view()
-        .iter()
-        .map(|(id, _)| id.clone())
-        .collect::<Vec<_>>();
-    definitions.sort();
-    let mut incarnations = state.world.axt_asset_incarnations.block();
-    for (ordinal, definition) in definitions.iter().enumerate() {
-        assert!(incarnations.get(definition).is_none());
-        let incarnation = iroha_data_model::nexus::AxtAssetIncarnationV1::derive(
-            &state.network_id,
-            definition,
-            &registration_header_hash,
-            &execution_identity,
-            u64::try_from(ordinal).expect("fixture registration ordinal"),
-        );
-        incarnations.insert(definition.clone(), incarnation);
-    }
-    incarnations.commit();
-}
-
 #[test]
 fn fee_enabled_single_transfer_uses_detached_merge_without_fee_fallback() {
     let _guard = crate::sumeragi::status::nexus_fee_test_lock()
@@ -101,7 +73,7 @@ fn fee_enabled_single_transfer_uses_detached_merge_without_fee_fallback() {
         header.set_height(nonzero!(1_u64));
     });
     let latest_signed: SignedBlock = latest_valid.into();
-    seed_fee_fixture_asset_incarnations(&state, &latest_signed);
+    finalize_test_genesis_assets(&state, &latest_signed);
     let fee_payment = iroha_data_model::transaction::FeePaymentIntent::authority(
         vec![iroha_data_model::transaction::FeeChargeLimit::new(
             iroha_data_model::transaction::FeeChargeKind::Nexus,
@@ -232,7 +204,7 @@ fn fee_enabled_supported_non_transfer_uses_fee_postprocessing_fallback() {
         header.set_height(nonzero!(1_u64));
     });
     let latest_signed: SignedBlock = latest_valid.into();
-    seed_fee_fixture_asset_incarnations(&state, &latest_signed);
+    finalize_test_genesis_assets(&state, &latest_signed);
     let marker_key: Name = "fee_fallback_marker".parse().expect("metadata key");
     let fee_payment = iroha_data_model::transaction::FeePaymentIntent::authority(
         vec![iroha_data_model::transaction::FeeChargeLimit::new(
@@ -381,11 +353,18 @@ fn fee_enabled_single_transfer_rejects_without_partial_state_when_fee_missing() 
         header.set_height(nonzero!(1_u64));
     });
     let latest_signed: SignedBlock = latest_valid.into();
-    seed_fee_fixture_asset_incarnations(&state, &latest_signed);
+    finalize_test_genesis_assets(&state, &latest_signed);
     let mut builder = TransactionBuilder::new(
         state.network_id,
         payer_id.clone(),
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        iroha_data_model::transaction::FeePaymentIntent::authority(
+            vec![iroha_data_model::transaction::FeeChargeLimit::new(
+                iroha_data_model::transaction::FeeChargeKind::Nexus,
+                fee_asset_definition_id.clone(),
+                Quantity::one(),
+            )],
+            None,
+        ),
     );
     builder.set_creation_time(Duration::from_millis(0));
     let tx = builder
@@ -417,6 +396,18 @@ fn fee_enabled_single_transfer_rejects_without_partial_state_when_fee_missing() 
         valid_block.as_ref().errors().next().map(|(idx, _)| idx),
         Some(0),
         "insufficient fee must reject the transaction"
+    );
+    let (_, rejection) = valid_block.as_ref().errors().next().expect("fee rejection");
+    let expected = format!(
+        "fee balance `{payer_fee_asset}` for authority `{payer_id}` is insufficient: requires 1, available 0"
+    );
+    assert!(
+        matches!(
+            rejection,
+            TransactionRejectionReason::Validation(ValidationFail::NotPermitted(message))
+                if message == &expected
+        ),
+        "the signed fee limit must pass before rejecting insufficient funding: {rejection:?}"
     );
     let assets = state_block.world.assets();
     assert_eq!(
@@ -728,7 +719,7 @@ fn same_block_data_trigger_registration_is_atomic_with_rejected_transfer() {
         header.set_height(nonzero!(1_u64));
     });
     let previous: SignedBlock = previous.into();
-    seed_fee_fixture_asset_incarnations(&state, &previous);
+    finalize_test_genesis_assets(&state, &previous);
     let (_block_handle, block_time_source) = TimeSource::new_mock(Duration::from_millis(10));
     let block = BlockBuilder::new_with_time_source(vec![register, transfer], block_time_source)
         .chain(1, Some(&previous))
@@ -987,7 +978,7 @@ fn fee_enabled_single_transfer_rejects_without_partial_state_when_fee_asset_miss
         header.set_height(nonzero!(1_u64));
     });
     let latest_signed: SignedBlock = latest_valid.into();
-    seed_fee_fixture_asset_incarnations(&state, &latest_signed);
+    finalize_test_genesis_assets(&state, &latest_signed);
     let fee_payment = iroha_data_model::transaction::FeePaymentIntent::authority(
         vec![iroha_data_model::transaction::FeeChargeLimit::new(
             iroha_data_model::transaction::FeeChargeKind::Nexus,
@@ -1027,6 +1018,18 @@ fn fee_enabled_single_transfer_rejects_without_partial_state_when_fee_asset_miss
         valid_block.as_ref().errors().next().map(|(idx, _)| idx),
         Some(0),
         "missing payer fee asset must reject the transaction"
+    );
+    let (_, rejection) = valid_block.as_ref().errors().next().expect("fee rejection");
+    let expected = format!(
+        "fee balance `{payer_fee_asset}` for authority `{payer_id}` is insufficient: requires 1, available 0"
+    );
+    assert!(
+        matches!(
+            rejection,
+            TransactionRejectionReason::Validation(ValidationFail::NotPermitted(message))
+                if message == &expected
+        ),
+        "the signed fee limit must pass before rejecting insufficient funding: {rejection:?}"
     );
     let assets = state_block.world.assets();
     assert_eq!(
@@ -1108,7 +1111,7 @@ fn fee_enabled_transfer_fee_same_asset_rejects_without_partial_state() {
         header.set_height(nonzero!(1_u64));
     });
     let latest_signed: SignedBlock = latest_valid.into();
-    seed_fee_fixture_asset_incarnations(&state, &latest_signed);
+    finalize_test_genesis_assets(&state, &latest_signed);
     let fee_payment = iroha_data_model::transaction::FeePaymentIntent::authority(
         vec![iroha_data_model::transaction::FeeChargeLimit::new(
             iroha_data_model::transaction::FeeChargeKind::Nexus,
@@ -1239,7 +1242,7 @@ fn fee_enabled_shared_fee_balance_rejects_later_transfer_without_rolling_back_pr
         header.set_height(nonzero!(1_u64));
     });
     let latest_signed: SignedBlock = latest_valid.into();
-    seed_fee_fixture_asset_incarnations(&state, &latest_signed);
+    finalize_test_genesis_assets(&state, &latest_signed);
     let fee_payment = iroha_data_model::transaction::FeePaymentIntent::authority(
         vec![iroha_data_model::transaction::FeeChargeLimit::new(
             iroha_data_model::transaction::FeeChargeKind::Nexus,
@@ -1309,6 +1312,18 @@ fn fee_enabled_shared_fee_balance_rejects_later_transfer_without_rolling_back_pr
     assert_eq!(
         snapshot.pipeline_execution.detached_fallback_total, 0,
         "signed fee admission must reject after the first debit drains the balance, before detached execution"
+    );
+    let (_, rejection) = valid_block.as_ref().errors().next().expect("fee rejection");
+    let expected = format!(
+        "fee balance `{payer_fee_asset}` for authority `{payer_id}` is insufficient: requires 1, available 0"
+    );
+    assert!(
+        matches!(
+            rejection,
+            TransactionRejectionReason::Validation(ValidationFail::NotPermitted(message))
+                if message == &expected
+        ),
+        "the signed fee limit must pass before rejecting insufficient funding: {rejection:?}"
     );
     let assets = state_block.world.assets();
     assert_eq!(
@@ -1411,7 +1426,7 @@ fn fee_enabled_transfer_then_failing_instruction_falls_back_without_leaking_tran
         header.set_height(nonzero!(1_u64));
     });
     let latest_signed: SignedBlock = latest_valid.into();
-    seed_fee_fixture_asset_incarnations(&state, &latest_signed);
+    finalize_test_genesis_assets(&state, &latest_signed);
     let fee_payment = iroha_data_model::transaction::FeePaymentIntent::authority(
         vec![iroha_data_model::transaction::FeeChargeLimit::new(
             iroha_data_model::transaction::FeeChargeKind::Nexus,
@@ -1426,7 +1441,7 @@ fn fee_enabled_transfer_then_failing_instruction_falls_back_without_leaking_tran
     let tx = builder
         .with_instructions::<InstructionBox>([
             Transfer::asset_quantity(payer_transfer_asset.clone(), 1_u32, recipient_id).into(),
-            Unregister::domain(missing_domain_id).into(),
+            Unregister::domain(missing_domain_id.clone()).into(),
         ])
         .sign(payer_keypair.private_key());
     let tx = accept_transaction_at_mock_time(
@@ -1461,6 +1476,18 @@ fn fee_enabled_transfer_then_failing_instruction_falls_back_without_leaking_tran
             .detached_fallback_unsupported_instruction_total,
         1,
         "multi-instruction transfer transactions must not use detached transfer merge"
+    );
+    let (_, rejection) = valid_block.as_ref().errors().next().expect("instruction rejection");
+    assert!(
+        matches!(
+            rejection,
+            TransactionRejectionReason::Validation(ValidationFail::InstructionFailed(
+                iroha_data_model::isi::error::InstructionExecutionError::Find(
+                    iroha_data_model::query::error::FindError::Domain(domain)
+                )
+            )) if domain == &missing_domain_id
+        ),
+        "the missing domain instruction must reject after successful fee admission: {rejection:?}"
     );
     let assets = state_block.world.assets();
     assert_eq!(
@@ -1567,7 +1594,7 @@ fn fee_enabled_non_increasing_sequence_rejects_before_transfer_or_fee() {
         header.set_height(nonzero!(1_u64));
     });
     let latest_signed: SignedBlock = latest_valid.into();
-    seed_fee_fixture_asset_incarnations(&state, &latest_signed);
+    finalize_test_genesis_assets(&state, &latest_signed);
     let mut metadata = Metadata::default();
     metadata.insert(
         Name::from_str("tx_sequence").expect("metadata key"),
@@ -1576,7 +1603,14 @@ fn fee_enabled_non_increasing_sequence_rejects_before_transfer_or_fee() {
     let mut builder = TransactionBuilder::new(
         state.network_id,
         payer_id.clone(),
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        iroha_data_model::transaction::FeePaymentIntent::authority(
+            vec![iroha_data_model::transaction::FeeChargeLimit::new(
+                iroha_data_model::transaction::FeeChargeKind::Nexus,
+                fee_asset_definition_id.clone(),
+                Quantity::one(),
+            )],
+            None,
+        ),
     );
     builder.set_creation_time(Duration::from_millis(0));
     let tx = builder
@@ -1613,6 +1647,16 @@ fn fee_enabled_non_increasing_sequence_rejects_before_transfer_or_fee() {
     let snapshot = crate::sumeragi::status::snapshot();
     assert_eq!(snapshot.pipeline_execution.detached_merged_total, 0);
     assert_eq!(snapshot.pipeline_execution.detached_fallback_total, 0);
+    let (_, rejection) = valid_block.as_ref().errors().next().expect("sequence rejection");
+    let expected = format!("Transaction sequence 5 for {payer_id} must exceed previous 5");
+    assert!(
+        matches!(
+            rejection,
+            TransactionRejectionReason::Validation(ValidationFail::NotPermitted(message))
+                if message == &expected
+        ),
+        "the repeated sequence must be the precise rejection cause: {rejection:?}"
+    );
     let assets = state_block.world.assets();
     assert_eq!(
         assets
@@ -1933,7 +1977,7 @@ fn fee_enabled_invalid_fee_asset_rejects_without_partial_transfer_or_fee() {
         header.set_height(nonzero!(1_u64));
     });
     let latest_signed: SignedBlock = latest_valid.into();
-    seed_fee_fixture_asset_incarnations(&state, &latest_signed);
+    finalize_test_genesis_assets(&state, &latest_signed);
     let mut builder = TransactionBuilder::new(
         state.network_id,
         payer_id.clone(),
@@ -1975,6 +2019,15 @@ fn fee_enabled_invalid_fee_asset_rejects_without_partial_transfer_or_fee() {
     assert_eq!(
         snapshot.pipeline_execution.detached_fallback_total, 0,
         "invalid governed fee configuration must fail signed admission before execution"
+    );
+    let (_, rejection) = valid_block.as_ref().errors().next().expect("configuration rejection");
+    assert!(
+        matches!(
+            rejection,
+            TransactionRejectionReason::Validation(ValidationFail::InternalError(message))
+                if message == "invalid Nexus fee asset; expected a registered canonical asset definition"
+        ),
+        "the configured fee asset must be the precise rejection cause: {rejection:?}"
     );
     let assets = state_block.world.assets();
     assert_eq!(
@@ -2062,7 +2115,7 @@ fn rejected_data_trigger_execution_still_charges_nexus_fee() {
         header.set_height(nonzero!(1_u64));
     });
     let latest_signed: SignedBlock = latest_valid.into();
-    seed_fee_fixture_asset_incarnations(&state, &latest_signed);
+    finalize_test_genesis_assets(&state, &latest_signed);
     let trigger_id: TriggerId = "fee_depth_limit_trigger".parse().unwrap();
     let flag_key: Name = "fee_trigger_flag".parse().unwrap();
     let event_key: Name = "fee_trigger_event".parse().unwrap();

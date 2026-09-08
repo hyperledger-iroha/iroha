@@ -1405,9 +1405,10 @@ mod tests {
     #[test]
     fn configured_payment_asset_validation_matches_consensus_policy_check() {
         let owner = account(15);
-        let payment_asset: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc"
-            .parse()
-            .expect("default payment asset id");
+        let payment_asset: AssetDefinitionId =
+            iroha_config::parameters::defaults::nexus::fees::fee_asset_id()
+                .parse()
+                .expect("default payment asset id");
         let payment_definition = AssetDefinition::numeric(
             payment_asset.clone(),
             "xor".to_owned(),
@@ -1418,9 +1419,31 @@ mod tests {
         let owner_account = Account::new(owner.clone()).build(&owner);
         let mut world = World::with([], [owner_account], [payment_definition]);
         crate::sns::seed_default_namespace_policies(&mut world);
-        let target = dynamic_dataspace_intent(owner).target();
+        let target = dynamic_dataspace_intent(owner.clone()).target();
         validate_configured_alias_payment_asset(&world.view(), &target, &payment_asset.to_string())
             .expect("registered configured asset matches the seeded namespace policy");
+        let other_asset = AssetDefinitionId::derive_from_components(
+            iroha_data_model::domain::DomainId::try_new("fees", "universal")
+                .expect("alternate asset domain"),
+            "other".parse().expect("alternate asset name"),
+        );
+        world.asset_definitions.insert(
+            other_asset.clone(),
+            AssetDefinition::numeric(
+                other_asset.clone(),
+                "other",
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
+            .build(&owner),
+        );
+        let error = validate_configured_alias_payment_asset(
+            &world.view(),
+            &target,
+            &other_asset.to_string(),
+        )
+        .expect_err("a registered asset must still match the namespace payment policy");
+        assert_eq!(error.code(), "alias.quote.payment_asset_mismatch");
         let error = validate_configured_alias_payment_asset(
             &world.view(),
             &target,

@@ -355,6 +355,7 @@ macro_rules! hybrid_recovery_test {
             let different_phase = make(&key, &seed, KagemushaProofRecoveryPhaseV1::StateTransport);
             assert_ne!(original, different_seed);
             assert_ne!(original, different_phase);
+            // Complete borrowed-key checks before transferring the recovered key.
             let consuming = $consume::<_, KAGEMUSHA_ONE_CARRIER_INSTANCE_MASK_V1>(
                 &parameters,
                 recovered,
