@@ -17455,6 +17455,10 @@ fn validate_convergence_wave(
         }
     }
     let checkpoint = common.expect("four reports yield a checkpoint");
+    // Typed serialization and a parsed JSON object may order fields differently.
+    // Preserve every first-report QC field without treating object key order as evidence.
+    let expected_commit_qc: norito::json::Value = json::from_str(&checkpoint.3)
+        .wrap_err("validated convergence CommitQC is not canonical JSON")?;
     if object.get("height").and_then(norito::json::Value::as_u64) != Some(checkpoint.0)
         || object
             .get("height_context_id")
@@ -17464,12 +17468,7 @@ fn validate_convergence_wave(
             .get("block_hash")
             .and_then(norito::json::Value::as_str)
             != Some(checkpoint.2.as_str())
-        || object
-            .get("last_commit_qc")
-            .map(json::to_json)
-            .transpose()?
-            .as_deref()
-            != Some(checkpoint.3.as_str())
+        || object.get("last_commit_qc") != Some(&expected_commit_qc)
     {
         return Err(eyre!(
             "convergence-wave summary differs from its four reports"
@@ -19285,15 +19284,15 @@ mod tests {
             ("restart_required", true.into()),
             (
                 "node_fingerprint",
-                Hash::new(b"wrong public node").to_string().into(),
+                json::to_value(&Hash::new(b"wrong public node")).unwrap(),
             ),
             (
                 "build_fingerprint",
-                Hash::new(b"wrong public build").to_string().into(),
+                json::to_value(&Hash::new(b"wrong public build")).unwrap(),
             ),
             (
                 "config_fingerprint",
-                Hash::new(b"wrong public config").to_string().into(),
+                json::to_value(&Hash::new(b"wrong public config")).unwrap(),
             ),
         ] {
             let mut changed = startup.clone();
