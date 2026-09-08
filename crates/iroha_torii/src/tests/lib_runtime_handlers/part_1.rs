@@ -31,9 +31,9 @@ use iroha_data_model::{
     block::{
         BlockHeader, BlockSignature, SignedBlock,
         consensus_v2::{
-            BlockSubject, ConsensusMode, ConsensusRound, DualQuorum,
-            ExecutionCommitment, GlobalPhase, HeightContext, PROTOCOL_VERSION,
-            QuorumCertificate, ValidatorPower, finality::V2FinalityArtifact,
+            BlockSubject, ConsensusMode, ConsensusRound, DualQuorum, ExecutionCommitment,
+            GlobalPhase, HeightContext, PROTOCOL_VERSION, QuorumCertificate, ValidatorPower,
+            finality::V2FinalityArtifact,
         },
     },
     consensus::{
@@ -2143,12 +2143,8 @@ fn mk_app_state_for_tests_with_world_and_options_and_network_id(
     })
 }
 #[cfg(feature = "telemetry")]
-pub async fn mk_norito_rpc_test_harness(
-    cfg: NoritoRpcTransport,
-) -> (SharedAppState, Arc<iroha_telemetry::metrics::Metrics>) {
-    let app = mk_app_state_for_tests_with_options(None, None, Some(cfg), None);
-    let metrics = iroha_telemetry::metrics::global_or_default();
-    (app, metrics)
+pub async fn mk_norito_rpc_test_harness(cfg: NoritoRpcTransport) -> SharedAppState {
+    mk_app_state_for_tests_with_options(None, None, Some(cfg), None)
 }
 #[tokio::test]
 async fn runtime_handlers_ok_without_token_and_rate_limit() {

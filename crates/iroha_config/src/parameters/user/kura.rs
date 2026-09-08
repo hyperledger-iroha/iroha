@@ -28,6 +28,9 @@ pub struct Kura {
         default = "defaults::kura::LANE_HISTORY_RETENTION"
     )]
     pub lane_history_retention: NonZeroUsize,
+    /// Bounded FASTPQ artifact content store. No environment-based policy override is accepted.
+    #[config(nested)]
+    pub fastpq_artifacts: KuraFastpqArtifacts,
     /// Distinct remote peers that must advertise a canonical block before local body eviction.
     #[config(
         env = "KURA_EVICTION_REQUIRED_REPLICAS",
@@ -80,6 +83,7 @@ impl Kura {
             max_disk_usage_bytes,
             blocks_in_memory,
             lane_history_retention,
+            fastpq_artifacts,
             eviction_required_replicas,
             replica_advert_evictable_window,
             replica_advert_ttl_ms,
@@ -92,6 +96,14 @@ impl Kura {
                     output_new_blocks: debug_output_new_blocks,
                 },
         } = self;
+        let fastpq_artifacts = actual::KuraFastpqArtifactPolicy {
+            max_artifact_bytes: fastpq_artifacts.max_artifact_bytes,
+            max_artifacts: fastpq_artifacts.max_artifacts,
+            max_total_bytes: fastpq_artifacts.max_total_bytes,
+        };
+        if let Err(error) = fastpq_artifacts.validate() {
+            emitter.emit(Report::new(ParseError::InvalidKuraConfig).attach(error));
+        }
         let replica_advert = actual::KuraReplicaAdvertPolicy {
             eviction_required_replicas,
             evictable_window: replica_advert_evictable_window,
@@ -107,6 +119,7 @@ impl Kura {
             max_disk_usage_bytes,
             blocks_in_memory,
             lane_history_retention,
+            fastpq_artifacts,
             replica_advert,
             debug_output_new_blocks,
             merge_ledger_cache_capacity,
@@ -114,6 +127,19 @@ impl Kura {
             fsync_interval: fsync_interval_ms.0,
         }
     }
+}
+/// File-configured FASTPQ content-store policy with explicit byte/count units.
+#[derive(Debug, Clone, Copy, ReadConfig)]
+pub struct KuraFastpqArtifacts {
+    /// Maximum complete artifact bytes, including the encoded wrapper.
+    #[config(default = "defaults::kura::FASTPQ_ARTIFACT_MAX_BYTES")]
+    pub max_artifact_bytes: NonZeroUsize,
+    /// Maximum stable content records, plus one separately bounded temporary.
+    #[config(default = "defaults::kura::FASTPQ_ARTIFACT_MAX_COUNT")]
+    pub max_artifacts: NonZeroUsize,
+    /// Maximum sum of stable and temporary file bytes.
+    #[config(default = "defaults::kura::FASTPQ_ARTIFACT_MAX_TOTAL_BYTES")]
+    pub max_total_bytes: NonZeroU64,
 }
 /// User-level configuration container for `KuraDebug`.
 #[derive(Debug, Clone, Copy, ReadConfig)]

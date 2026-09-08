@@ -4,16 +4,15 @@
 #
 # This file is both a small command-line utility and a sourceable shell library.
 # Callers must select exactly one lock with
-# IROHA_PRIVACY_CARGO_LOCKFILE_PATH. The selected lock may be external to the
-# repository or at a non-workspace path inside it. The tracked repository-root
-# Cargo.lock is a distinct source authority and is never a valid privacy-release
-# lock selection. SDK-specific environment names are outputs derived from that
+# IROHA_PRIVACY_CARGO_LOCKFILE_PATH. The selected lock must be external to the
+# repository. The tracked repository-root Cargo.lock owns the reviewed graph
+# but is never a valid SDK build lock selection. The external snapshot has the
+# same authenticated bytes and an independently sealed physical identity.
+# SDK-specific environment names are outputs derived from that
 # authenticated selection, never aliases or fallback inputs.
 
-readonly PRIVACY_SDK_FROZEN_RELEASE_CARGO_LOCK_SHA256=\
-"cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79"
-readonly PRIVACY_SDK_TRACKED_ROOT_CARGO_LOCK_SHA256=\
-"051423addf3830895e208c6276429a0e8f46c61954159b0ef913e8cfed33d3aa"
+readonly PRIVACY_SDK_CANONICAL_CARGO_LOCK_SHA256=\
+"fe9a6f9e30fe537059868ebddd826a70c1312d09b7d308cbe5d55e6ec7bfd32b"
 
 privacy_sdk_resolve_cargo_lockfile() {
   local repository_root="$1"
@@ -80,10 +79,13 @@ if selected.name != "Cargo.lock":
 workspace_lock = repository_root / "Cargo.lock"
 if selected == workspace_lock:
     fail("privacy SDK Cargo.lock must not select the workspace Cargo.lock")
+if repository_root in selected.parents:
+    fail("privacy SDK Cargo.lock must remain external to the repository")
 
 open_flags = os.O_RDONLY
 open_flags |= getattr(os, "O_CLOEXEC", 0)
 open_flags |= getattr(os, "O_NOFOLLOW", 0)
+open_flags |= os.O_NONBLOCK
 try:
     descriptor = os.open(selected, open_flags)
 except OSError as error:
@@ -141,6 +143,8 @@ except OSError as error:
     fail(f"selected privacy SDK Cargo.lock became unavailable: {error}")
 if (path_metadata.st_dev, path_metadata.st_ino) != (before.st_dev, before.st_ino):
     fail("selected privacy SDK Cargo.lock changed identity while it was read")
+if selected.resolve(strict=True) != selected:
+    fail("selected privacy SDK Cargo.lock path became noncanonical while it was read")
 
 try:
     lock_text = payload.decode("utf-8", errors="strict")
@@ -177,7 +181,7 @@ from pathlib import Path
 
 MAX_BYTES = 16 * 1024 * 1024
 path = Path(sys.argv[1])
-flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+flags = os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
 try:
     descriptor = os.open(path, flags)
 except OSError as error:
@@ -521,7 +525,7 @@ if canonical != path:
     raise SystemExit(
         "error: authenticated toolchain executable path must be canonical"
     )
-flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+flags = os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
 try:
     descriptor = os.open(path, flags)
 except OSError as error:
@@ -1090,7 +1094,7 @@ privacy_sdk_assert_ci_cargo_lock_state() {
   : "${IROHA_PRIVACY_AUTHENTICATED_WORKSPACE_CARGO_LOCK_STATE:?CI lock verification requires an authenticated workspace lock state}"
 
   case "${IROHA_PRIVACY_AUTHENTICATED_WORKSPACE_CARGO_LOCK_STATE}" in
-    "present:${PRIVACY_SDK_TRACKED_ROOT_CARGO_LOCK_SHA256}:"*) ;;
+    "present:${PRIVACY_SDK_CANONICAL_CARGO_LOCK_SHA256}:"*) ;;
     *)
       echo "error: privacy SDK CI requires the sealed tracked root Cargo.lock" >&2
       return 1
@@ -1143,9 +1147,9 @@ privacy_sdk_assert_ci_cargo_lock_state() {
     return 1
   fi
   case "${IROHA_PRIVACY_AUTHENTICATED_CARGO_LOCKFILE_SEAL}" in
-    "${PRIVACY_SDK_FROZEN_RELEASE_CARGO_LOCK_SHA256}:"*) ;;
+    "${PRIVACY_SDK_CANONICAL_CARGO_LOCK_SHA256}:"*) ;;
     *)
-      echo "error: privacy SDK CI selected lock does not match the distinct immutable privacy release authority" >&2
+      echo "error: privacy SDK CI selected lock does not match the canonical reviewed dependency graph" >&2
       return 1
       ;;
   esac
@@ -1271,6 +1275,99 @@ privacy_sdk_assert_ci_executable_path_order() {
   fi
 }
 
+# Materialize authenticated graph bytes at a new external inode. This is not
+# dependency resolution: Cargo must subsequently accept these exact bytes locked.
+privacy_sdk_materialize_canonical_cargo_lock() {
+  local repository_root="$1"
+  local destination="$2"
+  local workspace_lock_state="$3"
+  local python_bin="${4:-python3}"
+
+  "${python_bin}" -I - "${repository_root}" "${destination}" \
+    "${workspace_lock_state}" "${PRIVACY_SDK_CANONICAL_CARGO_LOCK_SHA256}" <<'PY'
+import hashlib
+import os
+import stat
+import sys
+from pathlib import Path
+
+root, destination = map(Path, sys.argv[1:3])
+expected_state, expected_digest = sys.argv[3:5]
+source = root / "Cargo.lock"
+maximum = 16 * 1024 * 1024
+
+
+def fail(message):
+    raise SystemExit("error: " + message)
+
+
+def identity(metadata):
+    return (metadata.st_dev, metadata.st_ino, metadata.st_mode,
+            metadata.st_nlink, metadata.st_size, metadata.st_mtime_ns,
+            metadata.st_ctime_ns)
+
+
+def seal(payload, metadata):
+    return ":".join((hashlib.sha256(payload).hexdigest(), str(metadata.st_dev),
+                     str(metadata.st_ino), str(metadata.st_size),
+                     str(metadata.st_mtime_ns), str(metadata.st_ctime_ns),
+                     oct(stat.S_IMODE(metadata.st_mode))))
+
+
+if not root.is_absolute() or root.resolve(strict=True) != root:
+    fail("canonical graph source root must be absolute and canonical")
+if source.resolve(strict=True) != source:
+    fail("canonical graph source must contain no symlink components")
+if (not destination.is_absolute() or destination.name != "Cargo.lock"
+        or destination.parent.resolve(strict=True) != destination.parent
+        or destination == source or root in destination.parents):
+    fail("canonical graph snapshot must be an explicit canonical external Cargo.lock")
+flags = os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+with os.fdopen(os.open(source, flags), "rb") as stream:
+    before = os.fstat(stream.fileno())
+    if (not stat.S_ISREG(before.st_mode) or before.st_nlink != 1
+            or before.st_mode & 0o111 or not 0 < before.st_size <= maximum):
+        fail("canonical graph source must be a bounded singly linked non-executable regular file")
+    payload = stream.read(maximum + 1)
+    after = os.fstat(stream.fileno())
+    if (identity(before) != identity(after) or len(payload) != before.st_size
+            or source.resolve(strict=True) != source
+            or identity(os.stat(source, follow_symlinks=False)) != identity(before)):
+        fail("canonical graph source changed during materialization")
+    if ("present:" + seal(payload, before) != expected_state
+            or hashlib.sha256(payload).hexdigest() != expected_digest):
+        fail("canonical graph source differs from its authenticated reviewed state")
+    parent_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    parent = os.open(destination.parent, parent_flags)
+    try:
+        parent_before = os.fstat(parent)
+        write_flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(destination.name, write_flags, 0o600, dir_fd=parent)
+        with os.fdopen(descriptor, "wb") as output:
+            output.write(payload)
+            output.flush()
+            os.fsync(output.fileno())
+            os.fchmod(output.fileno(), 0o400)
+            written = os.fstat(output.fileno())
+            if (not stat.S_ISREG(written.st_mode) or written.st_nlink != 1
+                    or written.st_size != len(payload)
+                    or (written.st_dev, written.st_ino) == (before.st_dev, before.st_ino)):
+                fail("canonical graph snapshot has invalid independent file identity")
+        parent_after = os.stat(destination.parent, follow_symlinks=False)
+        if ((parent_before.st_dev, parent_before.st_ino, parent_before.st_mode)
+                != (parent_after.st_dev, parent_after.st_ino, parent_after.st_mode)
+                or destination.parent.resolve(strict=True) != destination.parent
+                or identity(os.stat(destination, follow_symlinks=False)) != identity(written)):
+            fail("canonical graph snapshot path changed during materialization")
+    finally:
+        os.close(parent)
+    if (identity(os.fstat(stream.fileno())) != identity(before)
+            or source.resolve(strict=True) != source
+            or identity(os.stat(source, follow_symlinks=False)) != identity(before)):
+        fail("canonical graph source changed after materialization")
+PY
+}
+
 privacy_sdk_provision_ci_cargo_lock() {
   local repository_root="$1"
   local corridor_root="$2"
@@ -1290,7 +1387,7 @@ privacy_sdk_provision_ci_cargo_lock() {
   local private_cargo_home_state private_cargo_registry_state
   local private_cargo_git_state
   local private_cargo_target private_cargo_target_state
-  local resolved_python_path
+  local resolved_python_path compatibility_status=0
 
   case "${repository_root}" in
     /*) ;;
@@ -1355,7 +1452,7 @@ privacy_sdk_provision_ci_cargo_lock() {
     return 1
   fi
   case "${workspace_lock_state}" in
-    "present:${PRIVACY_SDK_TRACKED_ROOT_CARGO_LOCK_SHA256}:"*) ;;
+    "present:${PRIVACY_SDK_CANONICAL_CARGO_LOCK_SHA256}:"*) ;;
     *)
       echo "error: privacy SDK CI requires the tracked root Cargo.lock" >&2
       return 1
@@ -1504,28 +1601,37 @@ privacy_sdk_provision_ci_cargo_lock() {
     return 1
   fi
 
-  if ! (
+  privacy_sdk_materialize_canonical_cargo_lock \
+    "${canonical_repository_root}" "${lock_path}" \
+    "${workspace_lock_state}" "${python_bin}" || return 1
+  resolved_lock_seal="$(privacy_sdk_file_seal "${lock_path}" "${python_bin}")" || return 1
+  # Full metadata resolves all workspace packages and target dependencies. The
+  # pinned graph must already fit; never retry without --locked or update it.
+  (
+    set -C
     cd "${canonical_repository_root}" || exit 1
     CARGO_HOME="${private_cargo_home}" \
     CARGO_NET_OFFLINE=false \
     RUSTC="${real_rustc}" \
     RUSTDOC="${real_rustdoc}" \
     RUSTC_BOOTSTRAP=1 \
-      "${real_cargo}" -Z unstable-options generate-lockfile \
+      "${real_cargo}" -Z unstable-options metadata --locked --format-version 1 \
         --manifest-path "${canonical_repository_root}/Cargo.toml" \
-        --lockfile-path "${lock_path}"
-  ); then
-    echo "error: Cargo failed to generate the required external Cargo.lock" >&2
-    return 1
-  fi
+        --lockfile-path "${lock_path}" \
+        >"${canonical_corridor_root}/dependency-metadata.json"
+  ) || compatibility_status=$?
+  privacy_sdk_assert_file_seal \
+    "${lock_path}" "${resolved_lock_seal}" \
+    "canonical external Cargo.lock after locked compatibility validation" \
+    "${python_bin}" || return 1
   if ! privacy_sdk_assert_optional_file_state \
     "${workspace_lock}" "${workspace_lock_state}" \
     "tracked root Cargo.lock" "${python_bin}"; then
-    echo "error: external lock generation changed the tracked root Cargo.lock" >&2
+    echo "error: locked graph compatibility validation changed the tracked root Cargo.lock" >&2
     return 1
   fi
   if [[ ! -f "${lock_path}" || -L "${lock_path}" ]]; then
-    echo "error: Cargo did not generate the required external Cargo.lock" >&2
+    echo "error: canonical external Cargo.lock disappeared after locked compatibility validation" >&2
     return 1
   fi
   privacy_sdk_validate_repository_cargo_configuration \
@@ -1553,7 +1659,11 @@ privacy_sdk_provision_ci_cargo_lock() {
       "${canonical_repository_root}" \
       "${python_bin}" || return 1
 
-  chmod 400 "${lock_path}" || return 1
+  if [[ "${compatibility_status}" != "0" ]]; then
+    echo "error: Cargo rejected locked compatibility of the canonical dependency graph" >&2
+    return 1
+  fi
+
   if ! lock_path="$(
     cd "$(dirname "${lock_path}")" && printf '%s/Cargo.lock\n' "$(pwd -P)"
   )"; then
@@ -1572,10 +1682,10 @@ privacy_sdk_provision_ci_cargo_lock() {
     return 1
   fi
   case "${resolved_lock_seal}" in
-    "${PRIVACY_SDK_FROZEN_RELEASE_CARGO_LOCK_SHA256}:"*) ;;
+    "${PRIVACY_SDK_CANONICAL_CARGO_LOCK_SHA256}:"*) ;;
     *)
       echo \
-        "error: generated privacy Cargo.lock candidate does not match the distinct immutable cd9e release authority; external release-artifact requalification is required" \
+        "error: materialized Cargo.lock does not match the canonical reviewed dependency graph" \
         >&2
       return 1
       ;;

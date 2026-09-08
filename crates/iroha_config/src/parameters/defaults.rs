@@ -798,10 +798,16 @@ pub mod oracle {
 }
 /// Kura block-store defaults.
 pub mod kura {
-    use crate::{kura::FsyncMode, parameters::actual::KuraReplicaAdvertPolicy};
+    use crate::{
+        kura::FsyncMode,
+        parameters::actual::{KuraFastpqArtifactPolicy, KuraReplicaAdvertPolicy},
+    };
     use iroha_config_base::util::Bytes;
     use nonzero_ext::nonzero;
-    use std::{num::NonZeroUsize, time::Duration};
+    use std::{
+        num::{NonZeroU64, NonZeroUsize},
+        time::Duration,
+    };
     /// Directory for Kura storage relative to the node working directory.
     pub const STORE_DIR: &str = "./storage";
     /// Number of blocks cached in memory to accelerate lookups.
@@ -823,6 +829,19 @@ pub mod kura {
         evictable_window: REPLICA_ADVERT_EVICTABLE_WINDOW,
         ttl: REPLICA_ADVERT_TTL,
         refresh_interval: REPLICA_ADVERT_REFRESH_INTERVAL,
+    };
+    /// Maximum complete stored FASTPQ artifact bytes, matching the proof-sidecar default.
+    pub const FASTPQ_ARTIFACT_MAX_BYTES: NonZeroUsize =
+        nonzero!(super::zk::fastpq::PROOF_SIDECAR_MAX_BYTES.0 as usize);
+    /// Maximum stable FASTPQ content records retained before storage refuses new content.
+    pub const FASTPQ_ARTIFACT_MAX_COUNT: NonZeroUsize = nonzero!(1024_usize);
+    /// Maximum stable plus temporary FASTPQ artifact bytes (256 MiB).
+    pub const FASTPQ_ARTIFACT_MAX_TOTAL_BYTES: NonZeroU64 = nonzero!(256_u64 * 1024 * 1024);
+    /// Complete configured default FASTPQ artifact storage policy.
+    pub const FASTPQ_ARTIFACT_POLICY: KuraFastpqArtifactPolicy = KuraFastpqArtifactPolicy {
+        max_artifact_bytes: FASTPQ_ARTIFACT_MAX_BYTES,
+        max_artifacts: FASTPQ_ARTIFACT_MAX_COUNT,
+        max_total_bytes: FASTPQ_ARTIFACT_MAX_TOTAL_BYTES,
     };
     /// Default number of merge-ledger entries cached in memory.
     pub const MERGE_LEDGER_CACHE_CAPACITY: usize = 256;
@@ -1925,8 +1944,6 @@ pub mod sorafs {
         pub mod tokens {
             /// Enable gateway-issued stream tokens.
             pub const ENABLED: bool = false;
-            /// Token public-key version advertised to clients.
-            pub const KEY_VERSION: u32 = 1;
             /// Default TTL applied to issued tokens (seconds).
             pub const DEFAULT_TTL_SECS: u64 = 900; // 15 minutes
             /// Default maximum concurrent streams permitted per token.

@@ -42,6 +42,74 @@ import {
   AUTHENTICATED_BLOCK_PROOFS_MAX_PROOF_BYTES_V1,
 } from "./authenticatedBlockProofs.browser.js";
 
+const TEXT_MUST_BE_AN = " must be an ";
+const TEXT_MUST_BE_A_2 = " must be a ";
+const TEXT_DOES_NOT_MATCH_THE = " does not match the ";
+const TEXT_POSITIVE_DECIMAL_INTEGER = "positive decimal integer";
+const TEXT_REQUIRES_TORII_BROWSER_CLIENT_OPTIONS_NETWORK_ID = "requires ToriiBrowserClient options.networkId";
+const TEXT_CONTAINS_RETIRED_OR_UNSUPPORTED_FIELDS = " contains retired or unsupported fields: ";
+const TEXT_CANONICAL_KOTODAMA_V1_QUANTITY_STRING = "canonical Kotodama V1 quantity string";
+const TEXT_AUTHENTICATION_ONLY_SUPPORTS_EMPTY_BODY_GETS = " authentication only supports empty-body GETs";
+
+
+const TEXT_CONTRACT_DEPLOYMENT_STATE_RESPONSE = "contract deployment-state response ";
+const TEXT_TORII_BROWSER_CLIENT = "ToriiBrowserClient ";
+const TEXT_V1_EXPLORER = "/v1/explorer/";
+const TEXT_GET_CONTRACT_DEPLOYMENT_STATE = "getContractDeploymentState ";
+const TEXT_MUST_BE_A = TEXT_MUST_BE_A_2;
+const TEXT_CONTRACT_DEPLOYMENT_STATE = "contract deployment-state ";
+const TEXT_TORII_ONE_SHOT_REQUEST_MUST_NOT_ACCEPT_A_REDIRECTED_RESPONSE = "Torii one-shot request must not accept a redirected response";
+const TEXT_LIMIT_MUST_BE_BETWEEN_1_AND = ".limit must be between 1 and ";
+const TEXT_STATUS_BLOCK_HEIGHT_MUST_BE_A_POSITIVE_SAFE_INTEGER = (".status.block_height" + TEXT_MUST_BE_A_2 + "positive safe integer");
+const TEXT_SUBMIT_MULTISIG_CONTRACT_CALL_PROPOSE = "submitMultisigContractCallPropose ";
+const TEXT_SUBMIT_MULTISIG_CONTRACT_CALL_APPROVE = "submitMultisigContractCallApprove ";
+const TEXT_SUBMIT_TRANSACTION_AND_WAIT = "submitTransactionAndWait ";
+const TEXT_CONTAINS_UNSUPPORTED_OPTION = " contains unsupported option ";
+const TEXT_STATUS_KIND_IS_NOT_A_CURRENT_PIPELINE_STATUS = ".status.kind is not a current pipeline status";
+const TEXT_RESOLVED_FROM_IS_NOT_A_CURRENT_STATUS_SOURCE = ".resolved_from is not a current status source";
+const TEXT_HAS_MORE_MUST_MATCH_NEXT_CURSOR_AVAILABILITY = ".has_more must match next_cursor availability";
+const TEXT_V1_ACCOUNTS = "/v1/accounts/";
+const TEXT_ITEMS_MUST_BE_AN_ARRAY = (".items" + TEXT_MUST_BE_AN + "array");
+const TEXT_ITEMS_MUST_NOT_EXCEED_PAGINATION_LIMIT = ".items must not exceed pagination.limit";
+const TEXT_V1_CONTRACTS = "/v1/contracts/";
+const TEXT_THE_CONTRACT_EVENT_STREAM = "The contract event stream ";
+const TEXT_LIST_EXPLORER_ASSET_DEFINITIONS_OPTIONS = "listExplorerAssetDefinitions options";
+
+
+// Reuse exact wire names and diagnostic fields throughout this module.
+const FIELD_AUTHORITY = "authority";
+const WIRE_FIELD_ASSET_ID = "asset_id";
+const FIELD_TRANSACTION_HASH = "transactionHash";
+const FIELD_COUNT_MODE = "countMode";
+const FIELD_RESULT_OK = "resultOk";
+const FIELD_SINCE_TIMESTAMP_MS = "sinceTimestampMs";
+const FIELD_UNTIL_TIMESTAMP_MS = "untilTimestampMs";
+const FIELD_CONTRACT_ADDRESS = "contractAddress";
+const WIRE_FIELD_CONTRACT_ADDRESS = "contract_address";
+const FIELD_CONTRACT_ALIAS = "contractAlias";
+const WIRE_FIELD_CONTRACT_ALIAS = "contract_alias";
+const WIRE_FIELD_SINCE_TIMESTAMP_MS = "since_timestamp_ms";
+const WIRE_FIELD_UNTIL_TIMESTAMP_MS = "until_timestamp_ms";
+const WIRE_FIELD_RESULT_OK = "result_ok";
+const FIELD_ACCOUNT_ID = "accountId";
+const FIELD_FUNCTION = "function";
+const WIRE_FIELD_TOTAL_QUANTITY = "total_quantity";
+const WIRE_FIELD_LOCKED_QUANTITY = "locked_quantity";
+const WIRE_FIELD_CIRCULATING_QUANTITY = "circulating_quantity";
+const WIRE_FIELD_TIMESTAMP_MS = "timestamp_ms";
+const FIELD_APPLICATION_JSON = "application/json";
+const CONTEXT_KAIGI_RELAY_LIST_RESPONSE = "kaigi relay list response";
+const WIRE_FIELD_REGISTRATIONS_TOTAL = "registrations_total";
+const WIRE_FIELD_FAILOVERS_TOTAL = "failovers_total";
+const CONTEXT_KAIGI_RELAY_DETAIL_RESPONSE = "kaigi relay detail response";
+const CONTEXT_KAIGI_RELAY_HEALTH_RESPONSE = "kaigi relay health response";
+const FIELD_CONTENT_TYPE = "content-type";
+const CONTEXT_KAGEMUSHA_OPERATION_RESPONSE = "KAGEMUSHA operation response";
+const FIELD_APPLICATION_X_NORITO = "application/x-norito";
+const FIELD_V1_CONTRACTS_DEPLOYMENT_STATE = (TEXT_V1_CONTRACTS + "deployment-state");
+const FIELD_QUANTITY = "quantity";
+const FIELD_ASSET_DEFINITION_ID = "assetDefinitionId";
+
 const DEFAULT_SUCCESS_STATUSES = Object.freeze([200]);
 const BOUNDED_RESPONSE_MAX_STREAM_CHUNKS = 16_384;
 const DEFAULT_JSON_RESPONSE_MAX_BYTES = 8 * 1024 * 1024;
@@ -61,24 +129,24 @@ const EXPLORER_CURSOR_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrst
 const EXPLORER_HISTORY_OPTION_KEYS = new Set(["cursor", "limit", "signal"]);
 const EXPLORER_TRANSACTION_HISTORY_OPTION_KEYS = new Set([
   ...EXPLORER_HISTORY_OPTION_KEYS,
-  "authority",
+  FIELD_AUTHORITY,
   "block",
   "status",
   "assetId",
-  "asset_id",
+  WIRE_FIELD_ASSET_ID,
 ]);
 const EXPLORER_INSTRUCTION_HISTORY_OPTION_KEYS = new Set([
   ...EXPLORER_HISTORY_OPTION_KEYS,
   "account",
-  "authority",
+  FIELD_AUTHORITY,
   "kind",
-  "transactionHash",
+  FIELD_TRANSACTION_HASH,
   "transaction_hash",
   "transactionStatus",
   "transaction_status",
   "block",
   "assetId",
-  "asset_id",
+  WIRE_FIELD_ASSET_ID,
 ]);
 const PIPELINE_SUCCESS_STATUS = "Applied";
 const PIPELINE_STATUS_VALUES = new Set([
@@ -124,56 +192,56 @@ const MULTISIG_PROPOSAL_STATUS_VALUES = new Set([
 const COUNTED_LIST_OPTION_KEYS = new Set([
   "limit",
   "offset",
-  "countMode",
+  FIELD_COUNT_MODE,
   "count_mode",
   "signal",
 ]);
 const ACCOUNT_HISTORY_OPTION_KEYS = new Set([
   ...COUNTED_LIST_OPTION_KEYS,
   "assetId",
-  "asset_id",
+  WIRE_FIELD_ASSET_ID,
 ]);
 const TRANSACTION_QUERY_OPTION_KEYS = new Set([
-  "limit", "offset", "filter", "sort", "fetch_size", "countMode", "count_mode",
-  "queryName", "query_name", "select", "assetId", "authority", "resultOk",
-  "sinceTimestampMs", "untilTimestampMs", "authAccountId", "sign", "timestampMs",
+  "limit", "offset", "filter", "sort", "fetch_size", FIELD_COUNT_MODE, "count_mode",
+  "queryName", "query_name", "select", "assetId", FIELD_AUTHORITY, FIELD_RESULT_OK,
+  FIELD_SINCE_TIMESTAMP_MS, FIELD_UNTIL_TIMESTAMP_MS, "authAccountId", "sign", "timestampMs",
   "nonce", "headers", "signal",
 ]);
 const CONTRACT_ACTIVITY_OPTION_KEYS = new Set([
   ...COUNTED_LIST_OPTION_KEYS,
-  "authority",
-  "contractAddress",
-  "contract_address",
-  "contractAlias",
-  "contract_alias",
+  FIELD_AUTHORITY,
+  FIELD_CONTRACT_ADDRESS,
+  WIRE_FIELD_CONTRACT_ADDRESS,
+  FIELD_CONTRACT_ALIAS,
+  WIRE_FIELD_CONTRACT_ALIAS,
   "contractEntrypoint",
   "contract_entrypoint",
-  "sinceTimestampMs",
-  "since_timestamp_ms",
-  "untilTimestampMs",
-  "until_timestamp_ms",
-  "resultOk",
-  "result_ok",
+  FIELD_SINCE_TIMESTAMP_MS,
+  WIRE_FIELD_SINCE_TIMESTAMP_MS,
+  FIELD_UNTIL_TIMESTAMP_MS,
+  WIRE_FIELD_UNTIL_TIMESTAMP_MS,
+  FIELD_RESULT_OK,
+  WIRE_FIELD_RESULT_OK,
 ]);
 const CONTRACT_EVENT_FILTER_OPTION_KEYS = new Set([
-  "authority",
-  "contractAddress",
-  "contract_address",
-  "contractAlias",
-  "contract_alias",
+  FIELD_AUTHORITY,
+  FIELD_CONTRACT_ADDRESS,
+  WIRE_FIELD_CONTRACT_ADDRESS,
+  FIELD_CONTRACT_ALIAS,
+  WIRE_FIELD_CONTRACT_ALIAS,
   "module",
   "eventKind",
   "event_kind",
   "participant",
   "assetId",
-  "asset_id",
+  WIRE_FIELD_ASSET_ID,
   "provenance",
-  "sinceTimestampMs",
-  "since_timestamp_ms",
-  "untilTimestampMs",
-  "until_timestamp_ms",
-  "resultOk",
-  "result_ok",
+  FIELD_SINCE_TIMESTAMP_MS,
+  WIRE_FIELD_SINCE_TIMESTAMP_MS,
+  FIELD_UNTIL_TIMESTAMP_MS,
+  WIRE_FIELD_UNTIL_TIMESTAMP_MS,
+  FIELD_RESULT_OK,
+  WIRE_FIELD_RESULT_OK,
 ]);
 const CONTRACT_EVENT_LIST_OPTION_KEYS = new Set([
   ...COUNTED_LIST_OPTION_KEYS,
@@ -188,25 +256,25 @@ const LEDGER_READ_OPTION_KEYS = new Set(["signal"]);
 
 function normalizeBaseUrl(baseUrl) {
   if (typeof baseUrl !== "string" && !(baseUrl instanceof URL)) {
-    rejectType("ToriiBrowserClient baseUrl must be a string or URL");
+    rejectType((TEXT_TORII_BROWSER_CLIENT + "baseUrl" + TEXT_MUST_BE_A_2 + "string or URL"));
   }
   const raw = typeof baseUrl === "string" ? baseUrl : baseUrl.toString();
   if (raw.length === 0 || raw.trim() !== raw) {
-    rejectType("ToriiBrowserClient baseUrl must be a non-empty URL");
+    rejectType((TEXT_TORII_BROWSER_CLIENT + "baseUrl" + TEXT_MUST_BE_A_2 + "non-empty URL"));
   }
   const parsed = new URL(raw);
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    rejectType("ToriiBrowserClient baseUrl must use http or https");
+    rejectType((TEXT_TORII_BROWSER_CLIENT + "baseUrl must use http or https"));
   }
   if (parsed.username !== "" || parsed.password !== "") {
-    rejectType("ToriiBrowserClient baseUrl must not contain credentials");
+    rejectType((TEXT_TORII_BROWSER_CLIENT + "baseUrl must not contain credentials"));
   }
   if (parsed.search !== "" || parsed.hash !== "") {
-    rejectType("ToriiBrowserClient baseUrl must not contain a query or fragment");
+    rejectType((TEXT_TORII_BROWSER_CLIENT + "baseUrl must not contain a query or fragment"));
   }
   const pathname = parsed.pathname.replace(/\/+$/u, "");
   if (/\/v1(?:\/explorer)?$/iu.test(pathname)) {
-    rejectType("ToriiBrowserClient baseUrl must be the Torii root, without /v1 or /v1/explorer");
+    rejectType((TEXT_TORII_BROWSER_CLIENT + "baseUrl must be the Torii root, without /v1 or /v1/explorer"));
   }
   return `${parsed.origin}${pathname}`;
 }
@@ -223,14 +291,14 @@ function appendSearchParams(url, params) {
 function requireObject(value, context) {
   if (value === undefined || value === null) return {};
   if (typeof value !== "object" || Array.isArray(value)) {
-    rejectType(`${context} must be an object`);
+    rejectType(`${context}${TEXT_MUST_BE_AN}object`);
   }
   return value;
 }
 
 function requirePlainObject(value, context) {
   if (!isPlainObject(value)) {
-    rejectType(`${context} must be a plain object`);
+    rejectType(`${context}${TEXT_MUST_BE_A}plain object`);
   }
   return value;
 }
@@ -246,7 +314,7 @@ function normalizeDefaultHeaders(value, context) {
       rejectType(`${context} contains invalid header name ${name}`);
     }
     if (typeof headerValue !== "string" || /[\0\r\n]/u.test(headerValue)) {
-      rejectType(`${context}.${name} must be a single-line string`);
+      rejectType(`${context}.${name}${TEXT_MUST_BE_A}single-line string`);
     }
     Object.defineProperty(headers, name, {
       configurable: true,
@@ -295,7 +363,7 @@ function isPlainObject(value) {
 
 function requireNonEmptyString(value, context) {
   if (typeof value !== "string") {
-    rejectType(`${context} must be a string`);
+    rejectType(`${context}${TEXT_MUST_BE_A}string`);
   }
   const trimmed = value.trim();
   if (!trimmed) {
@@ -307,51 +375,51 @@ function requireNonEmptyString(value, context) {
 function normalizeBrowserCanonicalRequestAuth(value, networkId) {
   if (value === undefined || value === null) return null;
   if (!isPlainObject(value)) {
-    rejectType("ToriiBrowserClient options.canonicalRequestAuth must be a plain object");
+    rejectType((TEXT_TORII_BROWSER_CLIENT + "options.canonicalRequestAuth" + TEXT_MUST_BE_A_2 + "plain object"));
   }
   const keys = Object.keys(value).sort();
   if (
     keys.length !== 2
-    || keys[0] !== "accountId"
+    || keys[0] !== FIELD_ACCOUNT_ID
     || keys[1] !== "sign"
   ) {
-    rejectType("ToriiBrowserClient options.canonicalRequestAuth requires exactly accountId and sign");
+    rejectType((TEXT_TORII_BROWSER_CLIENT + "options.canonicalRequestAuth requires exactly accountId and sign"));
   }
   if (networkId === null) {
-    rejectType("ToriiBrowserClient options.canonicalRequestAuth requires options.networkId");
+    rejectType((TEXT_TORII_BROWSER_CLIENT + "options.canonicalRequestAuth requires options.networkId"));
   }
   const accountId = requireCanonicalAuthAccount(
     value.accountId,
-    "ToriiBrowserClient options.canonicalRequestAuth.accountId",
+    (TEXT_TORII_BROWSER_CLIENT + "options.canonicalRequestAuth.accountId"),
   );
-  if (typeof value.sign !== "function") {
-    rejectType("ToriiBrowserClient options.canonicalRequestAuth.sign must be a function");
+  if (typeof value.sign !== FIELD_FUNCTION) {
+    rejectType((TEXT_TORII_BROWSER_CLIENT + "options.canonicalRequestAuth.sign" + TEXT_MUST_BE_A_2 + "function"));
   }
   return Object.freeze({ accountId, sign: value.sign });
 }
 
 function normalizeContractDeploymentStateRequest(value) {
   if (!isPlainObject(value)) {
-    rejectType("contract deployment-state request must be a plain object");
+    rejectType((TEXT_CONTRACT_DEPLOYMENT_STATE + "request" + TEXT_MUST_BE_A_2 + "plain object"));
   }
   const keys = Object.keys(value).sort();
   if (
     keys.length !== 2 ||
-    keys[0] !== "authority" ||
-    keys[1] !== "contract_alias"
+    keys[0] !== FIELD_AUTHORITY ||
+    keys[1] !== WIRE_FIELD_CONTRACT_ALIAS
   ) {
-    rejectType("contract deployment-state request requires exactly authority and contract_alias");
+    rejectType((TEXT_CONTRACT_DEPLOYMENT_STATE + "request requires exactly authority and contract_alias"));
   }
   const authority = requireNonEmptyString(
     value.authority,
-    "contract deployment-state authority",
+    (TEXT_CONTRACT_DEPLOYMENT_STATE + "authority"),
   );
   const contractAlias = requireNonEmptyString(
     value.contract_alias,
-    "contract deployment-state contract_alias",
+    (TEXT_CONTRACT_DEPLOYMENT_STATE + "contract_alias"),
   );
   if (authority !== value.authority || contractAlias !== value.contract_alias) {
-    rejectType("contract deployment-state identifiers must be exact strings");
+    rejectType((TEXT_CONTRACT_DEPLOYMENT_STATE + "identifiers must be exact strings"));
   }
   return {
     authority,
@@ -361,7 +429,7 @@ function normalizeContractDeploymentStateRequest(value) {
 
 function requireCanonicalDecimalString(value, context, { positive = false } = {}) {
   if (typeof value !== "string" || !/^(?:0|[1-9]\d*)$/u.test(value)) {
-    rejectType(`${context} must be a canonical decimal string`);
+    rejectType(`${context}${TEXT_MUST_BE_A}canonical decimal string`);
   }
   if (positive && value === "0") {
     rejectType(`${context} must be positive`);
@@ -371,11 +439,11 @@ function requireCanonicalDecimalString(value, context, { positive = false } = {}
 
 function normalizeContractDeploymentStateResponse(value, request) {
   if (!isPlainObject(value)) {
-    rejectType("contract deployment-state response must be a plain object");
+    rejectType((TEXT_CONTRACT_DEPLOYMENT_STATE_RESPONSE + "must be a plain object"));
   }
   const fields = [
-    "authority",
-    "contract_alias",
+    FIELD_AUTHORITY,
+    WIRE_FIELD_CONTRACT_ALIAS,
     "deploy_nonce",
     "dataspace_alias",
     "dataspace_id",
@@ -387,71 +455,71 @@ function normalizeContractDeploymentStateResponse(value, request) {
   ];
   const keys = Object.keys(value).sort();
   if (keys.length !== fields.length || keys.some((key) => !fields.includes(key))) {
-    rejectType("contract deployment-state response has missing or unsupported fields");
+    rejectType((TEXT_CONTRACT_DEPLOYMENT_STATE_RESPONSE + "has missing or unsupported fields"));
   }
   if (value.authority !== request.authority) {
-    rejectError("contract deployment-state response authority mismatch");
+    rejectError((TEXT_CONTRACT_DEPLOYMENT_STATE_RESPONSE + "authority mismatch"));
   }
   if (value.contract_alias !== request.contract_alias) {
-    rejectError("contract deployment-state response alias mismatch");
+    rejectError((TEXT_CONTRACT_DEPLOYMENT_STATE_RESPONSE + "alias mismatch"));
   }
   const dataspaceAlias = requireNonEmptyString(
     value.dataspace_alias,
-    "contract deployment-state response dataspace_alias",
+    (TEXT_CONTRACT_DEPLOYMENT_STATE_RESPONSE + "dataspace_alias"),
   );
   if (dataspaceAlias !== value.dataspace_alias) {
-    rejectType("contract deployment-state response dataspace_alias must be exact");
+    rejectType((TEXT_CONTRACT_DEPLOYMENT_STATE_RESPONSE + "dataspace_alias must be exact"));
   }
   const observedBlockHash = requireNonEmptyString(
     value.observed_block_hash,
-    "contract deployment-state response observed_block_hash",
+    (TEXT_CONTRACT_DEPLOYMENT_STATE_RESPONSE + "observed_block_hash"),
   );
   const hashMatch = HASH_LITERAL_PATTERN.exec(observedBlockHash);
   if (
     hashMatch === null ||
     computeHashLiteralCrc("hash", hashMatch[1]) !== hashMatch[2]
   ) {
-    rejectType("contract deployment-state response observed_block_hash must be canonical");
+    rejectType((TEXT_CONTRACT_DEPLOYMENT_STATE_RESPONSE + "observed_block_hash must be canonical"));
   }
   const previous = value.previous_contract_address;
   if (previous !== null) {
     const exactPrevious = requireNonEmptyString(
       previous,
-      "contract deployment-state response previous_contract_address",
+      (TEXT_CONTRACT_DEPLOYMENT_STATE_RESPONSE + "previous_contract_address"),
     );
     if (exactPrevious !== previous) {
-      rejectType("contract deployment-state response previous_contract_address must be exact");
+      rejectType((TEXT_CONTRACT_DEPLOYMENT_STATE_RESPONSE + "previous_contract_address must be exact"));
     }
   }
   const chainDiscriminant = requireCanonicalDecimalString(
     value.chain_discriminant,
-    "contract deployment-state response chain_discriminant",
+    (TEXT_CONTRACT_DEPLOYMENT_STATE_RESPONSE + "chain_discriminant"),
   );
   if (BigInt(chainDiscriminant) > 0xffffn) {
-    rejectRange("contract deployment-state response chain_discriminant exceeds u16");
+    rejectRange((TEXT_CONTRACT_DEPLOYMENT_STATE_RESPONSE + "chain_discriminant exceeds u16"));
   }
   return Object.freeze({
     authority: value.authority,
     contract_alias: value.contract_alias,
     deploy_nonce: requireCanonicalDecimalString(
       value.deploy_nonce,
-      "contract deployment-state response deploy_nonce",
+      (TEXT_CONTRACT_DEPLOYMENT_STATE_RESPONSE + "deploy_nonce"),
     ),
     dataspace_alias: dataspaceAlias,
     dataspace_id: requireCanonicalDecimalString(
       value.dataspace_id,
-      "contract deployment-state response dataspace_id",
+      (TEXT_CONTRACT_DEPLOYMENT_STATE_RESPONSE + "dataspace_id"),
     ),
     previous_contract_address: previous,
     observed_block_height: requireCanonicalDecimalString(
       value.observed_block_height,
-      "contract deployment-state response observed_block_height",
+      (TEXT_CONTRACT_DEPLOYMENT_STATE_RESPONSE + "observed_block_height"),
       { positive: true },
     ),
     observed_block_hash: observedBlockHash,
     ledger_time_ms: requireCanonicalDecimalString(
       value.ledger_time_ms,
-      "contract deployment-state response ledger_time_ms",
+      (TEXT_CONTRACT_DEPLOYMENT_STATE_RESPONSE + "ledger_time_ms"),
     ),
     chain_discriminant: chainDiscriminant,
   });
@@ -459,7 +527,7 @@ function normalizeContractDeploymentStateResponse(value, request) {
 
 function requireExactHashHex(value, context) {
   if (typeof value !== "string" || !/^[0-9a-f]{63}[13579bdf]$/u.test(value)) {
-    rejectType(`${context} must be an exact canonical lowercase 32-byte Iroha hash`);
+    rejectType(`${context}${TEXT_MUST_BE_AN}exact canonical lowercase 32-byte Iroha hash`);
   }
   return value;
 }
@@ -470,7 +538,7 @@ function requireMatchingReceiptHashHeader(response, name, expectedHash) {
     rejectError(`${name} must occur exactly once as a canonical lowercase Iroha hash`);
   }
   if (value !== expectedHash) {
-    rejectError(`${name} does not match the locally signed transaction`);
+    rejectError(`${name}${TEXT_DOES_NOT_MATCH_THE}locally signed transaction`);
   }
 }
 
@@ -488,38 +556,38 @@ function requireTransactionBytes(value, context) {
     rejectType(`${context} must be transaction bytes`);
   }
   if (bytes.length < 2 || bytes[0] !== 1) {
-    rejectType(`${context} must be an exact version-1 signed transaction payload`);
+    rejectType(`${context}${TEXT_MUST_BE_AN}exact version-1 signed transaction payload`);
   }
   return bytes;
 }
 
 function normalizePublicPipelineStatusEnvelope(value, context) {
   if (!isPlainObject(value)) {
-    rejectType(`${context} must be a pipeline status object`);
+    rejectType(`${context}${TEXT_MUST_BE_A}pipeline status object`);
   }
   const rootFields = new Set(["hash", "status", "scope", "resolved_from"]);
   const unexpectedRootFields = Object.keys(value).filter(
     (field) => !rootFields.has(field),
   );
   if (unexpectedRootFields.length > 0) {
-    rejectType(`${context} contains retired or unsupported fields: ${unexpectedRootFields.join(", ")}`);
+    rejectType(`${context}${TEXT_CONTAINS_RETIRED_OR_UNSUPPORTED_FIELDS}${unexpectedRootFields.join(", ")}`);
   }
   const hash = requireExactHashHex(value.hash, `${context}.hash`);
   if (!isPlainObject(value.status)) {
-    rejectType(`${context}.status must be an object`);
+    rejectType(`${context}.status${TEXT_MUST_BE_AN}object`);
   }
   const statusFields = new Set(["kind", "block_height"]);
   const unexpectedStatusFields = Object.keys(value.status).filter(
     (field) => !statusFields.has(field),
   );
   if (unexpectedStatusFields.length > 0) {
-    rejectType(`${context}.status contains retired or unsupported fields: ${unexpectedStatusFields.join(", ")}`);
+    rejectType(`${context}.status${TEXT_CONTAINS_RETIRED_OR_UNSUPPORTED_FIELDS}${unexpectedStatusFields.join(", ")}`);
   }
   if (
     typeof value.status.kind !== "string" ||
     !PIPELINE_STATUS_VALUES.has(value.status.kind)
   ) {
-    rejectType(`${context}.status.kind is not a current pipeline status`);
+    rejectType(`${context}${TEXT_STATUS_KIND_IS_NOT_A_CURRENT_PIPELINE_STATUS}`);
   }
   const status = { kind: value.status.kind };
   if (value.status.block_height !== undefined) {
@@ -527,7 +595,7 @@ function normalizePublicPipelineStatusEnvelope(value, context) {
       !Number.isSafeInteger(value.status.block_height) ||
       value.status.block_height < 1
     ) {
-      rejectType(`${context}.status.block_height must be a positive safe integer`);
+      rejectType(`${context}${TEXT_STATUS_BLOCK_HEIGHT_MUST_BE_A_POSITIVE_SAFE_INTEGER}`);
     }
     status.block_height = value.status.block_height;
   }
@@ -535,7 +603,7 @@ function normalizePublicPipelineStatusEnvelope(value, context) {
     rejectType(`${context}.scope is not a current status scope`);
   }
   if (!PIPELINE_STATUS_RESOLUTION_VALUES.has(value.resolved_from)) {
-    rejectType(`${context}.resolved_from is not a current status source`);
+    rejectType(`${context}${TEXT_RESOLVED_FROM_IS_NOT_A_CURRENT_STATUS_SOURCE}`);
   }
   return Object.freeze({
     hash,
@@ -547,29 +615,29 @@ function normalizePublicPipelineStatusEnvelope(value, context) {
 
 function classifyGlobalPipelineStatusEnvelope(value, requestedHash, context) {
   if (!isPlainObject(value)) {
-    rejectType(`${context} must be a pipeline status object`);
+    rejectType(`${context}${TEXT_MUST_BE_A}pipeline status object`);
   }
   const hash = requireExactHashHex(value.hash, `${context}.hash`);
   if (hash !== requestedHash) {
-    rejectError(`${context}.hash does not match the requested transaction`);
+    rejectError(`${context}.hash${TEXT_DOES_NOT_MATCH_THE}requested transaction`);
   }
   if (value.scope !== "global") {
     rejectError(`${context}.scope must be global`);
   }
   if (!isPlainObject(value.status) || typeof value.status.kind !== "string") {
-    rejectType(`${context}.status.kind must be a string`);
+    rejectType(`${context}.status.kind${TEXT_MUST_BE_A_2}string`);
   }
   if (!PIPELINE_STATUS_VALUES.has(value.status.kind)) {
-    rejectError(`${context}.status.kind is not a current pipeline status`);
+    rejectError(`${context}${TEXT_STATUS_KIND_IS_NOT_A_CURRENT_PIPELINE_STATUS}`);
   }
   if (!PIPELINE_STATUS_RESOLUTION_VALUES.has(value.resolved_from)) {
-    rejectError(`${context}.resolved_from is not a current status source`);
+    rejectError(`${context}${TEXT_RESOLVED_FROM_IS_NOT_A_CURRENT_STATUS_SOURCE}`);
   }
   const kind = value.status.kind;
   if (kind === PIPELINE_SUCCESS_STATUS) {
     const blockHeight = value.status.block_height;
     if (!Number.isSafeInteger(blockHeight) || blockHeight < 1) {
-      rejectError(`${context}.status.block_height must be a positive safe integer`);
+      rejectError(`${context}${TEXT_STATUS_BLOCK_HEIGHT_MUST_BE_A_POSITIVE_SAFE_INTEGER}`);
     }
   }
   return {
@@ -579,7 +647,7 @@ function classifyGlobalPipelineStatusEnvelope(value, requestedHash, context) {
 }
 
 function abortError() {
-  if (typeof DOMException === "function") {
+  if (typeof DOMException === FIELD_FUNCTION) {
     return new DOMException("The operation was aborted", "AbortError");
   }
   const error = new Error("The operation was aborted");
@@ -610,13 +678,13 @@ function delayWithSignal(milliseconds, signal) {
 
 function requireCanonicalQuantity(value, context) {
   if (typeof value !== "string") {
-    rejectType(`${context} must be a canonical Kotodama V1 quantity string`);
+    rejectType(`${context}${TEXT_MUST_BE_A}${TEXT_CANONICAL_KOTODAMA_V1_QUANTITY_STRING}`);
   }
   try {
     return NumericV1.decodeQuantityJson(value).toString();
   } catch (error) {
     if (!(error instanceof NumericV1Error)) throw error;
-    rejectType(`${context} must be a canonical non-negative Kotodama V1 quantity (${error.code})`);
+    rejectType(`${context}${TEXT_MUST_BE_A}canonical non-negative Kotodama V1 quantity (${error.code})`);
   }
 }
 
@@ -626,7 +694,7 @@ function normalizeQuantityRecord(value, context, fields, { optional = false } = 
   for (const field of fields) {
     if (normalized[field] === undefined || normalized[field] === null) {
       if (!optional) {
-        rejectType(`${context}.${field} must be a canonical Kotodama V1 quantity string`);
+        rejectType(`${context}.${field}${TEXT_MUST_BE_A}${TEXT_CANONICAL_KOTODAMA_V1_QUANTITY_STRING}`);
       }
     } else {
       normalized[field] = requireCanonicalQuantity(
@@ -641,7 +709,7 @@ function normalizeQuantityRecord(value, context, fields, { optional = false } = 
 function normalizeQuantityPage(value, context, fields, options) {
   const page = requireObject(value, context);
   if (!Array.isArray(page.items)) {
-    rejectType(`${context}.items must be an array`);
+    rejectType(`${context}${TEXT_ITEMS_MUST_BE_AN_ARRAY}`);
   }
   return {
     ...page,
@@ -653,7 +721,7 @@ function normalizeQuantityPage(value, context, fields, options) {
 
 function normalizeExplorerAssetDefinitionRecord(value, context) {
   if (!isPlainObject(value)) {
-    rejectType(`${context} must be an object`);
+    rejectType(`${context}${TEXT_MUST_BE_AN}object`);
   }
   const fields = [
     "id",
@@ -663,9 +731,9 @@ function normalizeExplorerAssetDefinitionRecord(value, context) {
     "metadata",
     "owned_by",
     "assets",
-    "total_quantity",
-    "locked_quantity",
-    "circulating_quantity",
+    WIRE_FIELD_TOTAL_QUANTITY,
+    WIRE_FIELD_LOCKED_QUANTITY,
+    WIRE_FIELD_CIRCULATING_QUANTITY,
   ];
   const keys = Object.keys(value);
   if (keys.length !== fields.length || keys.some((key) => !fields.includes(key))) {
@@ -674,7 +742,7 @@ function normalizeExplorerAssetDefinitionRecord(value, context) {
   for (const field of ["id", "mintable", "owned_by"]) {
     const normalized = requireNonEmptyString(value[field], `${context}.${field}`);
     if (normalized !== value[field]) {
-      rejectType(`${context}.${field} must be an exact string`);
+      rejectType(`${context}.${field}${TEXT_MUST_BE_AN}exact string`);
     }
   }
   if (value.owning_domain !== null) {
@@ -683,22 +751,22 @@ function normalizeExplorerAssetDefinitionRecord(value, context) {
       `${context}.owning_domain`,
     );
     if (owningDomain !== value.owning_domain) {
-      rejectType(`${context}.owning_domain must be an exact string or null`);
+      rejectType(`${context}.owning_domain${TEXT_MUST_BE_AN}exact string or null`);
     }
   }
-  for (const field of ["logo", "locked_quantity", "circulating_quantity"]) {
+  for (const field of ["logo", WIRE_FIELD_LOCKED_QUANTITY, WIRE_FIELD_CIRCULATING_QUANTITY]) {
     if (value[field] !== null && typeof value[field] !== "string") {
-      rejectType(`${context}.${field} must be a string or null`);
+      rejectType(`${context}.${field}${TEXT_MUST_BE_A}string or null`);
     }
   }
   if (!Number.isInteger(value.assets) || value.assets < 0 || value.assets > 0xffff_ffff) {
-    rejectType(`${context}.assets must be a uint32`);
+    rejectType(`${context}.assets${TEXT_MUST_BE_A_2}uint32`);
   }
   if (!isPlainObject(value.metadata)) {
-    rejectType(`${context}.metadata must be an object`);
+    rejectType(`${context}.metadata${TEXT_MUST_BE_AN}object`);
   }
-  const normalized = normalizeQuantityRecord(value, context, ["total_quantity"]);
-  for (const field of ["locked_quantity", "circulating_quantity"]) {
+  const normalized = normalizeQuantityRecord(value, context, [WIRE_FIELD_TOTAL_QUANTITY]);
+  for (const field of [WIRE_FIELD_LOCKED_QUANTITY, WIRE_FIELD_CIRCULATING_QUANTITY]) {
     if (normalized[field] !== null) {
       normalized[field] = requireCanonicalQuantity(
         normalized[field],
@@ -712,7 +780,7 @@ function normalizeExplorerAssetDefinitionRecord(value, context) {
 function normalizeExplorerCursor(value, context, { nullable = false } = {}) {
   if (value === null && nullable) return null;
   if (typeof value !== "string" || value.length === 0) {
-    rejectType(`${context} must be a non-empty base64url string`);
+    rejectType(`${context}${TEXT_MUST_BE_A}non-empty base64url string`);
   }
   const remainder = value.length % 4;
   const trailingSextet = EXPLORER_CURSOR_ALPHABET.indexOf(value[value.length - 1]);
@@ -750,19 +818,19 @@ function normalizeExplorerCursorMeta(value, context) {
   requireExactExplorerCursorFields(meta, ["limit", "next_cursor", "has_more"], context);
   const limit = normalizePositiveInteger(meta.limit, `${context}.limit`, undefined);
   if (limit === undefined || limit > EXPLORER_CURSOR_MAX_LIMIT) {
-    rejectType(`${context}.limit must be between 1 and ${EXPLORER_CURSOR_MAX_LIMIT}`);
+    rejectType(`${context}${TEXT_LIMIT_MUST_BE_BETWEEN_1_AND}${EXPLORER_CURSOR_MAX_LIMIT}`);
   }
   if (typeof meta.has_more !== "boolean") {
-    rejectType(`${context}.has_more must be a boolean`);
+    rejectType(`${context}.has_more${TEXT_MUST_BE_A_2}boolean`);
   }
   if (meta.next_cursor === undefined) {
-    rejectType(`${context}.next_cursor must be a string or null`);
+    rejectType(`${context}.next_cursor${TEXT_MUST_BE_A_2}string or null`);
   }
   const nextCursor = normalizeExplorerCursor(meta.next_cursor, `${context}.next_cursor`, {
     nullable: true,
   });
   if (meta.has_more !== (nextCursor !== null)) {
-    rejectType(`${context}.has_more must match next_cursor availability`);
+    rejectType(`${context}${TEXT_HAS_MORE_MUST_MATCH_NEXT_CURSOR_AVAILABILITY}`);
   }
   return { limit, next_cursor: nextCursor, has_more: meta.has_more };
 }
@@ -771,11 +839,11 @@ function normalizeExplorerCursorPage(value, context, normalizeItem = (item) => i
   const page = requireObject(value, context);
   requireExactExplorerCursorFields(page, ["pagination", "items"], context);
   if (!Array.isArray(page.items)) {
-    rejectType(`${context}.items must be an array`);
+    rejectType(`${context}${TEXT_ITEMS_MUST_BE_AN_ARRAY}`);
   }
   const pagination = normalizeExplorerCursorMeta(page.pagination, `${context}.pagination`);
   if (page.items.length > pagination.limit) {
-    rejectType(`${context}.items must not exceed pagination.limit`);
+    rejectType(`${context}${TEXT_ITEMS_MUST_NOT_EXCEED_PAGINATION_LIMIT}`);
   }
   return {
     pagination,
@@ -791,10 +859,10 @@ function normalizeExplorerHistoryCursorMeta(value, context) {
     context,
   );
   if (!Number.isSafeInteger(meta.limit) || meta.limit < 1 || meta.limit > EXPLORER_CURSOR_MAX_LIMIT) {
-    rejectType(`${context}.limit must be between 1 and ${EXPLORER_CURSOR_MAX_LIMIT}`);
+    rejectType(`${context}${TEXT_LIMIT_MUST_BE_BETWEEN_1_AND}${EXPLORER_CURSOR_MAX_LIMIT}`);
   }
   if (!Number.isSafeInteger(meta.snapshot_height) || meta.snapshot_height < 0) {
-    rejectType(`${context}.snapshot_height must be a non-negative safe integer`);
+    rejectType(`${context}.snapshot_height${TEXT_MUST_BE_A_2}non-negative safe integer`);
   }
   let snapshotHash = null;
   if (meta.snapshot_hash !== null) {
@@ -807,13 +875,13 @@ function normalizeExplorerHistoryCursorMeta(value, context) {
     rejectType(`${context}.snapshot_hash must be null exactly when snapshot_height is zero`);
   }
   if (typeof meta.has_more !== "boolean") {
-    rejectType(`${context}.has_more must be a boolean`);
+    rejectType(`${context}.has_more${TEXT_MUST_BE_A_2}boolean`);
   }
   const nextCursor = normalizeExplorerCursor(meta.next_cursor, `${context}.next_cursor`, {
     nullable: true,
   });
   if (meta.has_more !== (nextCursor !== null)) {
-    rejectType(`${context}.has_more must match next_cursor availability`);
+    rejectType(`${context}${TEXT_HAS_MORE_MUST_MATCH_NEXT_CURSOR_AVAILABILITY}`);
   }
   return {
     limit: meta.limit,
@@ -828,14 +896,14 @@ function normalizeExplorerHistoryPage(value, context, normalizeItem = (item) => 
   const page = requireObject(value, context);
   requireExactExplorerCursorFields(page, ["pagination", "items"], context);
   if (!Array.isArray(page.items)) {
-    rejectType(`${context}.items must be an array`);
+    rejectType(`${context}${TEXT_ITEMS_MUST_BE_AN_ARRAY}`);
   }
   const pagination = normalizeExplorerHistoryCursorMeta(
     page.pagination,
     `${context}.pagination`,
   );
   if (page.items.length > pagination.limit) {
-    rejectType(`${context}.items must not exceed pagination.limit`);
+    rejectType(`${context}${TEXT_ITEMS_MUST_NOT_EXCEED_PAGINATION_LIMIT}`);
   }
   return {
     pagination,
@@ -848,7 +916,7 @@ function normalizeExplorerLatestHistoryPage(value, context, normalizeItem = (ite
   requireExactExplorerCursorFields(page, ["sampled_at", "pagination", "items"], context);
   const sampledAt = requireNonEmptyString(page.sampled_at, `${context}.sampled_at`);
   if (sampledAt !== page.sampled_at) {
-    rejectType(`${context}.sampled_at must be an exact non-empty string`);
+    rejectType(`${context}.sampled_at${TEXT_MUST_BE_AN}exact non-empty string`);
   }
   const normalized = normalizeExplorerHistoryPage(
     { pagination: page.pagination, items: page.items },
@@ -862,7 +930,7 @@ function normalizePositiveInteger(value, context, fallback) {
   if (value === undefined || value === null) return fallback;
   const numeric = normalizeSafeInteger(value, context);
   if (numeric < 1) {
-    rejectType(`${context} must be a positive safe integer`);
+    rejectType(`${context}${TEXT_MUST_BE_A}positive safe integer`);
   }
   return numeric;
 }
@@ -871,7 +939,7 @@ function normalizeOffset(value, context, fallback = 0) {
   if (value === undefined || value === null) return fallback;
   const numeric = normalizeSafeInteger(value, context);
   if (numeric < 0) {
-    rejectType(`${context} must be a non-negative safe integer`);
+    rejectType(`${context}${TEXT_MUST_BE_A}non-negative safe integer`);
   }
   return numeric;
 }
@@ -891,12 +959,12 @@ function normalizeSafeInteger(value, context) {
       return Number(parsed);
     }
   }
-  rejectType(`${context} must be a safe integer`);
+  rejectType(`${context}${TEXT_MUST_BE_A}safe integer`);
 }
 
 function normalizeBoolean(value, context) {
   if (typeof value !== "boolean") {
-    rejectType(`${context} must be a boolean`);
+    rejectType(`${context}${TEXT_MUST_BE_A}boolean`);
   }
   return value;
 }
@@ -913,7 +981,7 @@ function normalizeExplorerCursorPagination(options, context) {
     EXPLORER_CURSOR_DEFAULT_LIMIT,
   );
   if (limit > EXPLORER_CURSOR_MAX_LIMIT) {
-    rejectType(`${context}.limit must be between 1 and ${EXPLORER_CURSOR_MAX_LIMIT}`);
+    rejectType(`${context}${TEXT_LIMIT_MUST_BE_BETWEEN_1_AND}${EXPLORER_CURSOR_MAX_LIMIT}`);
   }
   const params = { limit };
   if (options.cursor !== undefined && options.cursor !== null) {
@@ -926,7 +994,7 @@ function normalizeExplorerHistoryOptionalString(value, context) {
   if (value === undefined || value === null) return undefined;
   const normalized = requireNonEmptyString(value, context);
   if (normalized !== value) {
-    rejectType(`${context} must be an exact non-empty string`);
+    rejectType(`${context}${TEXT_MUST_BE_AN}exact non-empty string`);
   }
   return value;
 }
@@ -964,13 +1032,13 @@ function normalizeTransactionQuerySort(sort) {
     const normalized = sort.trim().toLowerCase();
     if (normalized === "newest") {
       return [
-        { key: "timestamp_ms", order: "desc" },
+        { key: WIRE_FIELD_TIMESTAMP_MS, order: "desc" },
         { key: "entrypoint_hash", order: "desc" },
       ];
     }
     if (normalized === "oldest") {
       return [
-        { key: "timestamp_ms", order: "asc" },
+        { key: WIRE_FIELD_TIMESTAMP_MS, order: "asc" },
         { key: "entrypoint_hash", order: "asc" },
       ];
     }
@@ -999,13 +1067,13 @@ function normalizeTransactionQuerySort(sort) {
       };
     });
   }
-  rejectType("sort must be a string or array");
+  rejectType(("sort" + TEXT_MUST_BE_A_2 + "string or array"));
 }
 
 function normalizeQueryFieldName(value, context) {
   const field = requireNonEmptyString(value, context);
   if (!/^[A-Za-z_][A-Za-z0-9_.-]*$/.test(field)) {
-    rejectType(`${context} must be an ASCII field name`);
+    rejectType(`${context}${TEXT_MUST_BE_AN}ASCII field name`);
   }
   return field;
 }
@@ -1033,7 +1101,7 @@ function requireSupportedOptions(value, context, supportedKeys) {
   const options = requireObject(value, context);
   const unsupported = Object.keys(options).find((key) => !supportedKeys.has(key));
   if (unsupported !== undefined) {
-    rejectType(`${context} contains unsupported option ${unsupported}`);
+    rejectType(`${context}${TEXT_CONTAINS_UNSUPPORTED_OPTION}${unsupported}`);
   }
   return options;
 }
@@ -1046,7 +1114,7 @@ function normalizeCountedListParams(options, context) {
   return {
     ...normalizeIterablePagination(options, context),
     count_mode: normalizeCountMode(
-      optionAlias(options, "countMode", "count_mode"),
+      optionAlias(options, FIELD_COUNT_MODE, "count_mode"),
       `${context}.countMode`,
     ),
   };
@@ -1071,7 +1139,7 @@ function normalizeLedgerHeight(value, context) {
   let integer;
   if (typeof value === "number") {
     if (!Number.isSafeInteger(value)) {
-      rejectType(`${context} must be a positive safe integer number or an exact decimal string/bigint`);
+      rejectType(`${context}${TEXT_MUST_BE_A}positive safe integer number or an exact decimal string/bigint`);
     }
     integer = BigInt(value);
   } else if (typeof value === "bigint") {
@@ -1079,14 +1147,14 @@ function normalizeLedgerHeight(value, context) {
   } else if (typeof value === "string") {
     const trimmed = value.trim();
     if (!/^[0-9]+$/u.test(trimmed)) {
-      rejectType(`${context} must be a positive decimal integer`);
+      rejectType(`${context}${TEXT_MUST_BE_A}${TEXT_POSITIVE_DECIMAL_INTEGER}`);
     }
     integer = BigInt(trimmed);
   } else {
-    rejectType(`${context} must be a positive decimal integer`);
+    rejectType(`${context}${TEXT_MUST_BE_A}${TEXT_POSITIVE_DECIMAL_INTEGER}`);
   }
   if (integer <= 0n) {
-    rejectType(`${context} must be a positive decimal integer`);
+    rejectType(`${context}${TEXT_MUST_BE_A}${TEXT_POSITIVE_DECIMAL_INTEGER}`);
   }
   if (integer > MAX_UINT64_BIGINT) {
     rejectRange(`${context} must not exceed ${MAX_UINT64_BIGINT.toString(10)}`);
@@ -1111,11 +1179,11 @@ function normalizeContractEventFilterParams(options, context) {
   return {
     authority: normalizeOptionalString(options.authority, `${context}.authority`),
     contract_address: normalizeOptionalString(
-      optionAlias(options, "contractAddress", "contract_address"),
+      optionAlias(options, FIELD_CONTRACT_ADDRESS, WIRE_FIELD_CONTRACT_ADDRESS),
       `${context}.contractAddress`,
     ),
     contract_alias: normalizeOptionalString(
-      optionAlias(options, "contractAlias", "contract_alias"),
+      optionAlias(options, FIELD_CONTRACT_ALIAS, WIRE_FIELD_CONTRACT_ALIAS),
       `${context}.contractAlias`,
     ),
     module: normalizeOptionalString(options.module, `${context}.module`),
@@ -1125,20 +1193,20 @@ function normalizeContractEventFilterParams(options, context) {
     ),
     participant: normalizeOptionalString(options.participant, `${context}.participant`),
     asset_id: normalizeOptionalString(
-      optionAlias(options, "assetId", "asset_id"),
+      optionAlias(options, "assetId", WIRE_FIELD_ASSET_ID),
       `${context}.assetId`,
     ),
     provenance,
     since_timestamp_ms: normalizeOptionalUnsignedInteger(
-      optionAlias(options, "sinceTimestampMs", "since_timestamp_ms"),
+      optionAlias(options, FIELD_SINCE_TIMESTAMP_MS, WIRE_FIELD_SINCE_TIMESTAMP_MS),
       `${context}.sinceTimestampMs`,
     ),
     until_timestamp_ms: normalizeOptionalUnsignedInteger(
-      optionAlias(options, "untilTimestampMs", "until_timestamp_ms"),
+      optionAlias(options, FIELD_UNTIL_TIMESTAMP_MS, WIRE_FIELD_UNTIL_TIMESTAMP_MS),
       `${context}.untilTimestampMs`,
     ),
     result_ok: normalizeOptionalBoolean(
-      optionAlias(options, "resultOk", "result_ok"),
+      optionAlias(options, FIELD_RESULT_OK, WIRE_FIELD_RESULT_OK),
       `${context}.resultOk`,
     ),
   };
@@ -1148,14 +1216,14 @@ function normalizeSelectEntry(entry, context) {
   if (typeof entry === "string") {
     const fieldPath = entry.trim();
     if (!fieldPath) {
-      rejectType(`${context} must be a non-empty field path`);
+      rejectType(`${context}${TEXT_MUST_BE_A}non-empty field path`);
     }
     return fieldPath;
   }
   if (isPlainObject(entry)) {
     return entry;
   }
-  rejectType(`${context} must be a field-path string or plain object`);
+  rejectType(`${context}${TEXT_MUST_BE_A}field-path string or plain object`);
 }
 
 function transactionFilter(op, field, value) {
@@ -1170,19 +1238,19 @@ function normalizeTransactionQueryEnvelope(options, context) {
     filters.push(requireObject(opts.filter, `${context}.filter`));
   }
   if (opts.assetId !== undefined && opts.assetId !== null) {
-    filters.push(transactionFilter("eq", "asset_id", requireNonEmptyString(opts.assetId, "assetId")));
+    filters.push(transactionFilter("eq", WIRE_FIELD_ASSET_ID, requireNonEmptyString(opts.assetId, "assetId")));
   }
   if (opts.authority !== undefined && opts.authority !== null) {
-    filters.push(transactionFilter("eq", "authority", requireNonEmptyString(opts.authority, "authority")));
+    filters.push(transactionFilter("eq", FIELD_AUTHORITY, requireNonEmptyString(opts.authority, FIELD_AUTHORITY)));
   }
   if (opts.resultOk !== undefined && opts.resultOk !== null) {
-    filters.push(transactionFilter("eq", "result_ok", normalizeBoolean(opts.resultOk, "resultOk")));
+    filters.push(transactionFilter("eq", WIRE_FIELD_RESULT_OK, normalizeBoolean(opts.resultOk, FIELD_RESULT_OK)));
   }
   if (opts.sinceTimestampMs !== undefined && opts.sinceTimestampMs !== null) {
-    filters.push(transactionFilter("gte", "timestamp_ms", normalizeOffset(opts.sinceTimestampMs, "sinceTimestampMs")));
+    filters.push(transactionFilter("gte", WIRE_FIELD_TIMESTAMP_MS, normalizeOffset(opts.sinceTimestampMs, FIELD_SINCE_TIMESTAMP_MS)));
   }
   if (opts.untilTimestampMs !== undefined && opts.untilTimestampMs !== null) {
-    filters.push(transactionFilter("lte", "timestamp_ms", normalizeOffset(opts.untilTimestampMs, "untilTimestampMs")));
+    filters.push(transactionFilter("lte", WIRE_FIELD_TIMESTAMP_MS, normalizeOffset(opts.untilTimestampMs, FIELD_UNTIL_TIMESTAMP_MS)));
   }
   const envelope = {
     pagination,
@@ -1196,7 +1264,7 @@ function normalizeTransactionQueryEnvelope(options, context) {
   if (opts.fetch_size !== undefined && opts.fetch_size !== null) {
     envelope.fetch_size = normalizePositiveInteger(opts.fetch_size, "fetch_size", undefined);
   }
-  const countMode = normalizeCountMode(opts.countMode ?? opts.count_mode, "countMode");
+  const countMode = normalizeCountMode(opts.countMode ?? opts.count_mode, FIELD_COUNT_MODE);
   if (countMode !== undefined) {
     envelope.count_mode = countMode;
   }
@@ -1206,7 +1274,7 @@ function normalizeTransactionQueryEnvelope(options, context) {
   }
   if (opts.select !== undefined && opts.select !== null) {
     if (!Array.isArray(opts.select)) {
-      rejectType("select must be an array");
+      rejectType(("select" + TEXT_MUST_BE_AN + "array"));
     }
     envelope.select = opts.select.map((entry, index) =>
       normalizeSelectEntry(entry, `select[${index}]`),
@@ -1223,14 +1291,14 @@ function signalOnlyOptions(options, context) {
   const item = requireObject(options, context);
   const unknown = Object.keys(item).filter((key) => key !== "signal");
   if (unknown.length > 0) {
-    rejectType(`${context} contains unsupported option ${unknown[0]}`);
+    rejectType(`${context}${TEXT_CONTAINS_UNSUPPORTED_OPTION}${unknown[0]}`);
   }
   return item;
 }
 
 function rejectSuccessStatuses(options, context) {
   if (Object.hasOwn(options, "successStatuses")) {
-    rejectType(`${context} contains unsupported option successStatuses`);
+    rejectType(`${context}${TEXT_CONTAINS_UNSUPPORTED_OPTION}successStatuses`);
   }
 }
 
@@ -1293,7 +1361,7 @@ function normalizeMultisigProposalsQueryBody(value, context) {
   const body = normalizeMultisigSelectorBody(source, context);
   if (source.status !== undefined) {
     if (!Array.isArray(source.status)) {
-      rejectType(`${context}.status must be an array`);
+      rejectType(`${context}.status${TEXT_MUST_BE_AN}array`);
     }
     body.status = source.status.map((value, index) => {
       const status = requireNonEmptyString(value, `${context}.status[${index}]`).toUpperCase();
@@ -1348,10 +1416,10 @@ function responseStatus(response) {
 }
 
 async function responseText(response) {
-  if (typeof response?.text === "function") {
+  if (typeof response?.text === FIELD_FUNCTION) {
     return response.text().catch(() => "");
   }
-  if (typeof response?.json === "function") {
+  if (typeof response?.json === FIELD_FUNCTION) {
     try {
       return JSON.stringify(await response.json());
     } catch {
@@ -1363,7 +1431,7 @@ async function responseText(response) {
 
 function requestSignal(options, timeoutMs) {
   const callerSignal = options.signal;
-  if (!(timeoutMs > 0) || typeof AbortController !== "function") {
+  if (!(timeoutMs > 0) || typeof AbortController !== FIELD_FUNCTION) {
     return { signal: callerSignal, cleanup() {} };
   }
   const controller = new AbortController();
@@ -1398,11 +1466,11 @@ function normalizeSuccessStatuses(value, context) {
     return DEFAULT_SUCCESS_STATUSES;
   }
   if (!Array.isArray(value) || value.length === 0) {
-    rejectType(`${context} must be a non-empty status array`);
+    rejectType(`${context}${TEXT_MUST_BE_A}non-empty status array`);
   }
   return value.map((status, index) => {
     if (!Number.isSafeInteger(status) || status < 100 || status > 599) {
-      rejectType(`${context}[${index}] must be an HTTP status integer`);
+      rejectType(`${context}[${index}]${TEXT_MUST_BE_AN}HTTP status integer`);
     }
     return status;
   });
@@ -1422,11 +1490,11 @@ async function fetchToriiResponse(
     cleanupSignal();
   }
   if (init.redirect === "error" && response?.redirected === true) {
-    rejectType("Torii one-shot request must not accept a redirected response");
+    rejectType(TEXT_TORII_ONE_SHOT_REQUEST_MUST_NOT_ACCEPT_A_REDIRECTED_RESPONSE);
   }
   const status = responseStatus(response);
   if (!successStatuses.includes(status)) {
-    const errorResponse = typeof response?.clone === "function" ? response.clone() : response;
+    const errorResponse = typeof response?.clone === FIELD_FUNCTION ? response.clone() : response;
     const bodyText = await responseText(response);
     throw new ToriiBrowserHttpError(errorResponse, bodyText, status);
   }
@@ -1437,7 +1505,7 @@ function requireExactJsonContentType(contentType, context) {
   const mediaType = typeof contentType === "string"
     ? contentType.split(";", 1)[0].trim()
     : "";
-  if (mediaType.toLowerCase() !== "application/json") {
+  if (mediaType.toLowerCase() !== FIELD_APPLICATION_JSON) {
     rejectType(`${context} must use the application/json media type`);
   }
 }
@@ -1454,14 +1522,14 @@ function requireExactKaigiAccountId(value, context) {
   const literal = requireExactKaigiString(value, context);
   const canonical = ensureCanonicalAccountId(literal, context);
   if (canonical !== literal) {
-    rejectType(`${context} must be a canonical I105 account id`);
+    rejectType(`${context}${TEXT_MUST_BE_A}canonical I105 account id`);
   }
   return literal;
 }
 
 function requireExactKaigiObject(value, requiredFields, optionalFields, context) {
   if (!isPlainObject(value)) {
-    rejectType(`${context} must be an object`);
+    rejectType(`${context}${TEXT_MUST_BE_AN}object`);
   }
   const allowed = new Set([...requiredFields, ...optionalFields]);
   const missing = requiredFields.filter(
@@ -1476,11 +1544,11 @@ function requireExactKaigiObject(value, requiredFields, optionalFields, context)
 
 function requireDenseBrowserKaigiArray(value, context) {
   if (!Array.isArray(value)) {
-    rejectType(`${context} must be an array`);
+    rejectType(`${context}${TEXT_MUST_BE_AN}array`);
   }
   for (let index = 0; index < value.length; index += 1) {
     if (!Object.prototype.hasOwnProperty.call(value, index)) {
-      rejectType(`${context} must be a dense array`);
+      rejectType(`${context}${TEXT_MUST_BE_A}dense array`);
     }
   }
   return value;
@@ -1497,7 +1565,7 @@ function normalizeBrowserKaigiU64(value, context) {
   } else if (typeof value === "bigint") {
     integer = value;
   } else {
-    rejectType(`${context} must be a canonical unsigned integer`);
+    rejectType(`${context}${TEXT_MUST_BE_A}canonical unsigned integer`);
   }
   if (integer < 0n || integer > MAX_UINT64_BIGINT) {
     rejectRange(`${context} must be between 0 and ${MAX_UINT64_BIGINT}`);
@@ -1562,7 +1630,7 @@ function normalizeBrowserKaigiRelaySummary(value, context) {
 }
 
 function normalizeBrowserKaigiRelayList(value) {
-  const context = "kaigi relay list response";
+  const context = CONTEXT_KAIGI_RELAY_LIST_RESPONSE;
   const record = requireExactKaigiObject(value, ["total", "items"], [], context);
   const rawItems = requireDenseBrowserKaigiArray(record.items, `${context}.items`);
   if (rawItems.length > KAIGI_RELAY_DIAGNOSTIC_MAX_RELAYS) {
@@ -1584,9 +1652,9 @@ function normalizeBrowserKaigiRelayList(value) {
 function normalizeBrowserKaigiDomainMetrics(value, context) {
   const fields = [
     "domain",
-    "registrations_total",
+    WIRE_FIELD_REGISTRATIONS_TOTAL,
     "manifest_updates_total",
-    "failovers_total",
+    WIRE_FIELD_FAILOVERS_TOTAL,
     "health_reports_total",
   ];
   const record = requireExactKaigiObject(value, fields, [], context);
@@ -1612,7 +1680,7 @@ function normalizeBrowserKaigiDomainMetrics(value, context) {
 }
 
 function normalizeBrowserKaigiRelayDetail(value) {
-  const context = "kaigi relay detail response";
+  const context = CONTEXT_KAIGI_RELAY_DETAIL_RESPONSE;
   const record = requireExactKaigiObject(
     value,
     ["relay", "hpke_public_key_b64"],
@@ -1657,7 +1725,7 @@ function normalizeBrowserKaigiRelayDetail(value) {
     ? requireExactKaigiAccountId(record.reported_by, `${context}.reported_by`)
     : null;
   if (hasNotes && typeof record.notes !== "string") {
-    rejectType(`${context}.notes must be a string`);
+    rejectType(`${context}.notes${TEXT_MUST_BE_A_2}string`);
   }
   const notes = hasNotes ? record.notes : null;
   const metrics = Object.prototype.hasOwnProperty.call(record, "metrics")
@@ -1677,14 +1745,14 @@ function normalizeBrowserKaigiRelayDetail(value) {
 }
 
 function normalizeBrowserKaigiHealth(value) {
-  const context = "kaigi relay health response";
+  const context = CONTEXT_KAIGI_RELAY_HEALTH_RESPONSE;
   const fields = [
     "healthy_total",
     "degraded_total",
     "unavailable_total",
     "reports_total",
-    "registrations_total",
-    "failovers_total",
+    WIRE_FIELD_REGISTRATIONS_TOTAL,
+    WIRE_FIELD_FAILOVERS_TOTAL,
     "domains",
   ];
   const record = requireExactKaigiObject(value, fields, [], context);
@@ -1725,8 +1793,8 @@ function normalizeBrowserKaigiHealth(value) {
   }
   for (const [totalField, domainField] of [
     ["reports_total", "health_reports_total"],
-    ["registrations_total", "registrations_total"],
-    ["failovers_total", "failovers_total"],
+    [WIRE_FIELD_REGISTRATIONS_TOTAL, WIRE_FIELD_REGISTRATIONS_TOTAL],
+    [WIRE_FIELD_FAILOVERS_TOTAL, WIRE_FIELD_FAILOVERS_TOTAL],
   ]) {
     let expected = 0n;
     for (const domain of domains) {
@@ -1751,7 +1819,7 @@ async function readBoundedResponseBytes(response, maximumBodyBytes, context) {
       typeof rawContentLength !== "string"
       || !/^(?:0|[1-9][0-9]*)$/u.test(rawContentLength)
     ) {
-      rejectType(`${context} Content-Length must be a canonical unsigned decimal integer`);
+      rejectType(`${context} Content-Length${TEXT_MUST_BE_A_2}canonical unsigned decimal integer`);
     }
     declaredLength = Number(rawContentLength);
     if (
@@ -1761,7 +1829,7 @@ async function readBoundedResponseBytes(response, maximumBodyBytes, context) {
       rejectRange(`${context} exceeds its ${maximumBodyBytes}-byte response limit`);
     }
   }
-  if (typeof response?.body?.getReader !== "function") {
+  if (typeof response?.body?.getReader !== FIELD_FUNCTION) {
     rejectType(`${context} requires a byte-stream response body so its size can be bounded`);
   }
 
@@ -1792,7 +1860,7 @@ async function readBoundedResponseBytes(response, maximumBodyBytes, context) {
       chunks.push(new Uint8Array(result.value));
     }
   } catch (error) {
-    if (!complete && typeof reader.cancel === "function") {
+    if (!complete && typeof reader.cancel === FIELD_FUNCTION) {
       try {
         await reader.cancel(error);
       } catch {
@@ -1801,7 +1869,7 @@ async function readBoundedResponseBytes(response, maximumBodyBytes, context) {
     }
     throw error;
   } finally {
-    if (typeof reader.releaseLock === "function") reader.releaseLock();
+    if (typeof reader.releaseLock === FIELD_FUNCTION) reader.releaseLock();
   }
 
   const bytes = new Uint8Array(totalBytes);
@@ -1811,7 +1879,7 @@ async function readBoundedResponseBytes(response, maximumBodyBytes, context) {
     offset += chunk.byteLength;
   }
   if (declaredLength !== null && declaredLength !== totalBytes) {
-    rejectType(`${context} Content-Length does not match the response body`);
+    rejectType(`${context} Content-Length${TEXT_DOES_NOT_MATCH_THE}response body`);
   }
   return bytes;
 }
@@ -1914,7 +1982,7 @@ function streamGapFromEvent(event) {
   const message =
     typeof payload?.message === "string" && payload.message.trim() !== ""
       ? payload.message
-      : "The contract event stream reported a non-replayable gap.";
+      : (TEXT_THE_CONTRACT_EVENT_STREAM + "reported a non-replayable gap.");
   const droppedMessages =
     Number.isSafeInteger(payload?.dropped_messages) && payload.dropped_messages >= 0
       ? payload.dropped_messages
@@ -1947,24 +2015,24 @@ export class ToriiBrowserClient {
 
   constructor(baseUrl, options = {}) {
     const normalizedOptions = requireSupportedOptions(
-      requirePlainObject(options, "ToriiBrowserClient options"),
-      "ToriiBrowserClient options",
+      requirePlainObject(options, (TEXT_TORII_BROWSER_CLIENT + "options")),
+      (TEXT_TORII_BROWSER_CLIENT + "options"),
       TORII_BROWSER_CLIENT_OPTION_KEYS,
     );
     this.#baseUrl = normalizeBaseUrl(baseUrl);
     this.#fetchImpl = normalizedOptions.fetchImpl ?? globalThis.fetch?.bind(globalThis);
-    if (typeof this.#fetchImpl !== "function") {
-      rejectType("ToriiBrowserClient requires a fetch implementation");
+    if (typeof this.#fetchImpl !== FIELD_FUNCTION) {
+      rejectType((TEXT_TORII_BROWSER_CLIENT + "requires a fetch implementation"));
     }
     const defaultHeaders = normalizeDefaultHeaders(
       normalizedOptions.defaultHeaders,
-      "ToriiBrowserClient options.defaultHeaders",
+      (TEXT_TORII_BROWSER_CLIENT + "options.defaultHeaders"),
     );
     rejectPrecomputedCanonicalHeaders(defaultHeaders);
     this.#defaultHeaders = Object.freeze(defaultHeaders);
     const allowInsecure = normalizedOptions.allowInsecure ?? false;
     if (typeof allowInsecure !== "boolean") {
-      rejectType("ToriiBrowserClient options.allowInsecure must be a boolean");
+      rejectType((TEXT_TORII_BROWSER_CLIENT + "options.allowInsecure" + TEXT_MUST_BE_A_2 + "boolean"));
     }
     const protocol = new URL(this.#baseUrl).protocol.toLowerCase();
     if (
@@ -1976,12 +2044,12 @@ export class ToriiBrowserClient {
     }
     this.#timeoutMs = normalizeOffset(
       normalizedOptions.timeoutMs,
-      "ToriiBrowserClient options.timeoutMs",
+      (TEXT_TORII_BROWSER_CLIENT + "options.timeoutMs"),
       null,
     );
     this.#networkId = normalizedOptions.networkId ?? null;
     if (this.#networkId !== null) {
-      networkIdBytes(this.#networkId, "ToriiBrowserClient options.networkId");
+      networkIdBytes(this.#networkId, (TEXT_TORII_BROWSER_CLIENT + "options.networkId"));
     }
     this.#canonicalRequestAuth = normalizeBrowserCanonicalRequestAuth(
       normalizedOptions.canonicalRequestAuth,
@@ -1992,7 +2060,7 @@ export class ToriiBrowserClient {
       ? null
       : requireOperatorSigningContext(
           operatorSigningContext,
-          "ToriiBrowserClient options.operatorSigningContext",
+          (TEXT_TORII_BROWSER_CLIENT + "options.operatorSigningContext"),
         );
   }
 
@@ -2009,9 +2077,9 @@ export class ToriiBrowserClient {
     const opts = signalOnlyOptions(options, "getAccountCapabilities options");
     const { signal, cleanup } = requestSignal(opts, this.#timeoutMs);
     try {
-      const response = await this.#fetchImpl(this._url("/v1/accounts/capabilities"), {
+      const response = await this.#fetchImpl(this._url((TEXT_V1_ACCOUNTS + "capabilities")), {
         method: "GET",
-        headers: { Accept: "application/json" },
+        headers: { Accept: FIELD_APPLICATION_JSON },
         credentials: "omit",
         cache: "no-store",
         redirect: "error",
@@ -2034,7 +2102,7 @@ export class ToriiBrowserClient {
         "KAGEMUSHA readiness response",
       ),
       responseObserver: (response) => requireKagemushaJsonContentTypeV1(
-        response.headers.get("content-type"),
+        response.headers.get(FIELD_CONTENT_TYPE),
         "KAGEMUSHA readiness response",
       ),
     }).then((payload) => normalizeKagemushaReadinessV1(payload));
@@ -2081,15 +2149,15 @@ export class ToriiBrowserClient {
       signal: opts.signal,
       oneShot: true,
       maximumBodyBytes: KAGEMUSHA_OPERATION_STATUS_JSON_MAX_BYTES_V1,
-      jsonParser: (text) => parseStrictLosslessIntegerJson(text, "KAGEMUSHA operation response"),
+      jsonParser: (text) => parseStrictLosslessIntegerJson(text, CONTEXT_KAGEMUSHA_OPERATION_RESPONSE),
       responseObserver: (response) => requireKagemushaJsonContentTypeV1(
-        response.headers.get("content-type"),
-        "KAGEMUSHA operation response",
+        response.headers.get(FIELD_CONTENT_TYPE),
+        CONTEXT_KAGEMUSHA_OPERATION_RESPONSE,
       ),
     }).then((payload) => {
       const status = normalizeUnverifiedKagemushaOperationStatusV1(payload);
       if (kagemushaOperationIdHexV1(status.operationId) !== operationIdHex) {
-        rejectType("KAGEMUSHA operation response ID does not match the requested resource");
+        rejectType(("KAGEMUSHA operation response ID" + TEXT_DOES_NOT_MATCH_THE + "requested resource"));
       }
       return status;
     });
@@ -2099,17 +2167,17 @@ export class ToriiBrowserClient {
     let transportResponse = null;
     return this._json("POST", path, {
       rawBody: body,
-      contentType: "application/x-norito",
-      headers: { Accept: "application/json", "Idempotency-Key": operationIdHex },
+      contentType: FIELD_APPLICATION_X_NORITO,
+      headers: { Accept: FIELD_APPLICATION_JSON, "Idempotency-Key": operationIdHex },
       signal,
       oneShot: true,
       successStatuses: [200, 202],
       maximumBodyBytes: KAGEMUSHA_OPERATION_STATUS_JSON_MAX_BYTES_V1,
-      jsonParser: (text) => parseStrictLosslessIntegerJson(text, "KAGEMUSHA operation response"),
+      jsonParser: (text) => parseStrictLosslessIntegerJson(text, CONTEXT_KAGEMUSHA_OPERATION_RESPONSE),
       responseObserver: (response) => {
         requireKagemushaJsonContentTypeV1(
-          response.headers.get("content-type"),
-          "KAGEMUSHA operation response",
+          response.headers.get(FIELD_CONTENT_TYPE),
+          CONTEXT_KAGEMUSHA_OPERATION_RESPONSE,
         );
         transportResponse = {
           statusCode: response.status,
@@ -2120,7 +2188,7 @@ export class ToriiBrowserClient {
     }).then((payload) => {
       const status = normalizeUnverifiedKagemushaOperationStatusV1(payload);
       if (kagemushaOperationIdHexV1(status.operationId) !== operationIdHex || status.kind !== kind) {
-        rejectType("KAGEMUSHA operation response does not match the submitted request");
+        rejectType(("KAGEMUSHA operation response" + TEXT_DOES_NOT_MATCH_THE + "submitted request"));
       }
       requireKagemushaSubmissionResponseV1({
         ...transportResponse,
@@ -2141,7 +2209,7 @@ export class ToriiBrowserClient {
 
   async _applyDataspaceReadIdentity(url, init) {
     if (init.method !== "GET" || init.body !== undefined) {
-      rejectType("browser dataspace authentication only supports empty-body GETs");
+      rejectType(("browser dataspace" + TEXT_AUTHENTICATION_ONLY_SUPPORTS_EMPTY_BODY_GETS));
     }
     rejectPrecomputedCanonicalHeaders(init.headers);
     init.credentials = "omit";
@@ -2166,7 +2234,7 @@ export class ToriiBrowserClient {
       `${method} ${path} successStatuses`,
     );
     const headers = {
-      Accept: "application/json",
+      Accept: FIELD_APPLICATION_JSON,
       ...this.#defaultHeaders,
       ...(normalizedOptions.headers ?? {}),
     };
@@ -2193,7 +2261,7 @@ export class ToriiBrowserClient {
       init.body = JSON.stringify(normalizedOptions.body);
       init.headers = {
         ...headers,
-        "Content-Type": "application/json",
+        "Content-Type": FIELD_APPLICATION_JSON,
       };
     }
     const url = this._url(path, normalizedOptions.params);
@@ -2202,7 +2270,7 @@ export class ToriiBrowserClient {
     }
     if (normalizedOptions.operatorSigningContext !== undefined) {
       if (method !== "GET" || init.body !== undefined) {
-        rejectType("browser operator authentication only supports empty-body GETs");
+        rejectType(("browser operator" + TEXT_AUTHENTICATION_ONLY_SUPPORTS_EMPTY_BODY_GETS));
       }
       await applyOperatorGetHeaders(
         init.headers,
@@ -2223,8 +2291,8 @@ export class ToriiBrowserClient {
       cleanup,
     );
     if (normalizedOptions.responseObserver !== undefined) {
-      if (typeof normalizedOptions.responseObserver !== "function") {
-        rejectType(`${method} ${path} responseObserver must be a function`);
+      if (typeof normalizedOptions.responseObserver !== FIELD_FUNCTION) {
+        rejectType(`${method} ${path} responseObserver${TEXT_MUST_BE_A_2}function`);
       }
       normalizedOptions.responseObserver(response);
     }
@@ -2233,8 +2301,8 @@ export class ToriiBrowserClient {
       || normalizedOptions.nullStatuses?.includes(status)
     ) return null;
     const jsonParser = normalizedOptions.jsonParser ?? JSON.parse;
-    if (typeof jsonParser !== "function") {
-      rejectType(`${method} ${path} jsonParser must be a function`);
+    if (typeof jsonParser !== FIELD_FUNCTION) {
+      rejectType(`${method} ${path} jsonParser${TEXT_MUST_BE_A_2}function`);
     }
     const text = await readBoundedResponseText(
       response,
@@ -2250,7 +2318,7 @@ export class ToriiBrowserClient {
     const headers = {
       ...this.#defaultHeaders,
       ...(normalizedOptions.headers ?? {}),
-      Accept: "application/x-norito",
+      Accept: FIELD_APPLICATION_X_NORITO,
     };
     const { signal, cleanup } = requestSignal(normalizedOptions, this.#timeoutMs);
     const { response } = await fetchToriiResponse(
@@ -2265,7 +2333,7 @@ export class ToriiBrowserClient {
       DEFAULT_SUCCESS_STATUSES,
       cleanup,
     );
-    const contentType = response.headers?.get?.("content-type") ?? "";
+    const contentType = response.headers?.get?.(FIELD_CONTENT_TYPE) ?? "";
     if (!/^application\/x-norito(?:\s*;|$)/iu.test(contentType)) {
       rejectType(`${method} ${path} must return application/x-norito`);
     }
@@ -2281,11 +2349,11 @@ export class ToriiBrowserClient {
   async _canonicalJson(method, path, body, options) {
     const opts = requireObject(options, `${method} ${path} canonical options`);
     rejectSuccessStatuses(opts, `${method} ${path} canonical options`);
-    if (typeof opts.sign !== "function") {
+    if (typeof opts.sign !== FIELD_FUNCTION) {
       rejectType(`${method} ${path} options.sign is required`);
     }
     if (this.#networkId === null) {
-      rejectType(`${method} ${path} requires ToriiBrowserClient options.networkId`);
+      rejectType(`${method} ${path} ${TEXT_REQUIRES_TORII_BROWSER_CLIENT_OPTIONS_NETWORK_ID}`);
     }
     const signed = await buildCanonicalJsonRequest({
       accountId: requireNonEmptyString(opts.authAccountId, `${method} ${path} options.authAccountId`),
@@ -2301,7 +2369,7 @@ export class ToriiBrowserClient {
     });
     return this._json(method, path, {
       rawBody: signed.body || undefined,
-      contentType: body === undefined ? undefined : "application/json",
+      contentType: body === undefined ? undefined : FIELD_APPLICATION_JSON,
       headers: signed.headers,
       oneShot: true,
       signal: signalFrom(opts),
@@ -2312,7 +2380,7 @@ export class ToriiBrowserClient {
     const opts = requireSupportedOptions(options, `${path} query options`, TRANSACTION_QUERY_OPTION_KEYS);
     const accountId = ensureCanonicalAccountId(opts.authAccountId, `${path} query options.authAccountId`);
     if (accountId !== opts.authAccountId) {
-      rejectType(`${path} query authAccountId must be an exact canonical I105 account id`);
+      rejectType(`${path} query authAccountId${TEXT_MUST_BE_AN}exact canonical I105 account id`);
     }
     rejectPrecomputedCanonicalHeaders({ ...this.#defaultHeaders, ...(opts.headers ?? {}) });
     return this._canonicalJson("POST", path, body, opts);
@@ -2332,9 +2400,9 @@ export class ToriiBrowserClient {
     const expectedEntrypointHash = browserSignedTransactionHashHex(body);
     return this._json("POST", "/v1/pipeline/transactions", {
       rawBody: body,
-      contentType: "application/x-norito",
+      contentType: FIELD_APPLICATION_X_NORITO,
       headers: {
-        Accept: "application/json",
+        Accept: FIELD_APPLICATION_JSON,
         ...(opts.headers ?? {}),
       },
       oneShot: true,
@@ -2463,22 +2531,22 @@ export class ToriiBrowserClient {
 
   /** Submit exact locally signed bytes and wait for global state-resolved Applied finality. */
   async submitTransactionAndWait(signedTransaction, options = {}) {
-    const context = "submitTransactionAndWait options";
+    const context = (TEXT_SUBMIT_TRANSACTION_AND_WAIT + "options");
     const opts = requireObject(options, context);
     rejectRemovedWaitScope(opts, context);
     requireSupportedOptions(opts, context, SUBMIT_TRANSACTION_AND_WAIT_OPTION_KEYS);
     const body = requireTransactionBytes(
       signedTransaction,
-      "submitTransactionAndWait signedTransaction",
+      (TEXT_SUBMIT_TRANSACTION_AND_WAIT + "signedTransaction"),
     );
     const hashHex = browserSignedTransactionHashHex(body);
     if (opts.hashHex !== undefined) {
       const assertedHash = requireExactHashHex(
         opts.hashHex,
-        "submitTransactionAndWait options.hashHex",
+        (TEXT_SUBMIT_TRANSACTION_AND_WAIT + "options.hashHex"),
       );
       if (assertedHash !== hashHex) {
-        rejectError("submitTransactionAndWait options.hashHex does not match signedTransaction");
+        rejectError((TEXT_SUBMIT_TRANSACTION_AND_WAIT + "options.hashHex does not match signedTransaction"));
       }
     }
     await this.submitTransaction(body, {
@@ -2502,7 +2570,7 @@ export class ToriiBrowserClient {
 
   /** Resolve a contract alias; caller-supplied canonical signing headers are preserved. */
   resolveContractAlias(contractAlias, options) {
-    return this._canonicalJson("POST", "/v1/contracts/aliases/resolve", {
+    return this._canonicalJson("POST", (TEXT_V1_CONTRACTS + "aliases/resolve"), {
         contract_alias: requireNonEmptyString(
           contractAlias,
           "resolveContractAlias contractAlias",
@@ -2513,23 +2581,23 @@ export class ToriiBrowserClient {
   /** Read the exact one-view deployment CAS state through canonical app auth. */
   async getContractDeploymentState(request, options = {}) {
     const body = normalizeContractDeploymentStateRequest(request);
-    const opts = requireObject(options, "getContractDeploymentState options");
-    rejectSuccessStatuses(opts, "getContractDeploymentState options");
+    const opts = requireObject(options, (TEXT_GET_CONTRACT_DEPLOYMENT_STATE + "options"));
+    rejectSuccessStatuses(opts, (TEXT_GET_CONTRACT_DEPLOYMENT_STATE + "options"));
     if (opts.sign !== undefined) {
-      if (typeof opts.sign !== "function") {
-        rejectType("getContractDeploymentState options.sign must be a function");
+      if (typeof opts.sign !== FIELD_FUNCTION) {
+        rejectType((TEXT_GET_CONTRACT_DEPLOYMENT_STATE + "options.sign" + TEXT_MUST_BE_A_2 + "function"));
       }
       if (this.#networkId === null) {
-        rejectType("getContractDeploymentState requires ToriiBrowserClient options.networkId");
+        rejectType((TEXT_GET_CONTRACT_DEPLOYMENT_STATE + TEXT_REQUIRES_TORII_BROWSER_CLIENT_OPTIONS_NETWORK_ID));
       }
       const signed = await buildCanonicalJsonRequest({
         accountId: requireNonEmptyString(
           opts.authAccountId,
-          "getContractDeploymentState options.authAccountId",
+          (TEXT_GET_CONTRACT_DEPLOYMENT_STATE + "options.authAccountId"),
         ),
         networkId: this.#networkId,
         method: "POST",
-        path: "/v1/contracts/deployment-state",
+        path: FIELD_V1_CONTRACTS_DEPLOYMENT_STATE,
         baseUrl: this.#baseUrl,
         body,
         headers: opts.headers,
@@ -2537,16 +2605,16 @@ export class ToriiBrowserClient {
         timestampMs: opts.timestampMs,
         nonce: opts.nonce,
       });
-      const response = await this._json("POST", "/v1/contracts/deployment-state", {
+      const response = await this._json("POST", FIELD_V1_CONTRACTS_DEPLOYMENT_STATE, {
         rawBody: signed.body,
-        contentType: "application/json",
+        contentType: FIELD_APPLICATION_JSON,
         headers: signed.headers,
         oneShot: true,
         signal: signalFrom(opts),
       });
       return normalizeContractDeploymentStateResponse(response, body);
     }
-    const response = await this._json("POST", "/v1/contracts/deployment-state", {
+    const response = await this._json("POST", FIELD_V1_CONTRACTS_DEPLOYMENT_STATE, {
       body,
       headers: opts.headers,
       signal: signalFrom(opts),
@@ -2560,7 +2628,7 @@ export class ToriiBrowserClient {
     rejectSuccessStatuses(opts, "getAccount options");
     return this._json(
       "GET",
-      `/v1/accounts/${encodeURIComponent(requireNonEmptyString(accountId, "accountId"))}`,
+      `${TEXT_V1_ACCOUNTS}${encodeURIComponent(requireNonEmptyString(accountId, FIELD_ACCOUNT_ID))}`,
       {
         headers: opts.headers,
         dataspaceVisible: true,
@@ -2571,7 +2639,7 @@ export class ToriiBrowserClient {
 
   listExplorerAccounts(options = {}) {
     const opts = requireObject(options, "listExplorerAccounts options");
-    return this._json("GET", "/v1/explorer/accounts", {
+    return this._json("GET", (TEXT_V1_EXPLORER + "accounts"), {
       params: {
         ...normalizeExplorerCursorPagination(opts, "listExplorerAccounts options"),
         domain: opts.domain,
@@ -2587,7 +2655,7 @@ export class ToriiBrowserClient {
 
   getExplorerAccount(accountId, options = {}) {
     const opts = requireObject(options, "getExplorerAccount options");
-    return this._json("GET", `/v1/explorer/accounts/${encodeURIComponent(requireNonEmptyString(accountId, "accountId"))}`, {
+    return this._json("GET", `${TEXT_V1_EXPLORER}accounts/${encodeURIComponent(requireNonEmptyString(accountId, FIELD_ACCOUNT_ID))}`, {
       params: { address_format: opts.addressFormat ?? opts.address_format },
       dataspaceVisible: true,
       signal: signalFrom(opts),
@@ -2596,7 +2664,7 @@ export class ToriiBrowserClient {
 
   listExplorerDomains(options = {}) {
     const opts = requireObject(options, "listExplorerDomains options");
-    return this._json("GET", "/v1/explorer/domains", {
+    return this._json("GET", (TEXT_V1_EXPLORER + "domains"), {
       params: {
         ...normalizeExplorerCursorPagination(opts, "listExplorerDomains options"),
         owned_by: opts.ownedBy ?? opts.owned_by,
@@ -2610,7 +2678,7 @@ export class ToriiBrowserClient {
 
   getExplorerDomain(domainId, options = {}) {
     const opts = requireObject(options, "getExplorerDomain options");
-    return this._json("GET", `/v1/explorer/domains/${encodeURIComponent(requireNonEmptyString(domainId, "domainId"))}`, {
+    return this._json("GET", `${TEXT_V1_EXPLORER}domains/${encodeURIComponent(requireNonEmptyString(domainId, "domainId"))}`, {
       dataspaceVisible: true,
       signal: signalFrom(opts),
     });
@@ -2618,7 +2686,7 @@ export class ToriiBrowserClient {
 
   listExplorerAssets(options = {}) {
     const opts = requireObject(options, "listExplorerAssets options");
-    return this._json("GET", "/v1/explorer/assets", {
+    return this._json("GET", (TEXT_V1_EXPLORER + "assets"), {
       params: {
         ...normalizeExplorerCursorPagination(opts, "listExplorerAssets options"),
         owned_by: opts.ownedBy ?? opts.owned_by,
@@ -2637,27 +2705,27 @@ export class ToriiBrowserClient {
 
   getExplorerAsset(assetId, options = {}) {
     const opts = requireObject(options, "getExplorerAsset options");
-    return this._json("GET", `/v1/explorer/assets/${encodeURIComponent(requireNonEmptyString(assetId, "assetId"))}`, {
+    return this._json("GET", `${TEXT_V1_EXPLORER}assets/${encodeURIComponent(requireNonEmptyString(assetId, "assetId"))}`, {
       dataspaceVisible: true,
       signal: signalFrom(opts),
     }).then((payload) =>
-      normalizeQuantityRecord(payload, "explorer asset response", ["quantity"]),
+      normalizeQuantityRecord(payload, "explorer asset response", [FIELD_QUANTITY]),
     );
   }
 
   listAccountAssets(accountId, options = {}) {
     const opts = requireObject(options, "listAccountAssets options");
-    return this._json("GET", `/v1/accounts/${encodeURIComponent(requireNonEmptyString(accountId, "accountId"))}/assets`, {
+    return this._json("GET", `${TEXT_V1_ACCOUNTS}${encodeURIComponent(requireNonEmptyString(accountId, FIELD_ACCOUNT_ID))}/assets`, {
       params: {
         ...normalizeIterablePagination(opts, "listAccountAssets options"),
         asset: opts.asset ?? opts.assetId,
         scope: opts.scope,
-        count_mode: normalizeCountMode(opts.countMode ?? opts.count_mode, "countMode"),
+        count_mode: normalizeCountMode(opts.countMode ?? opts.count_mode, FIELD_COUNT_MODE),
       },
       dataspaceVisible: true,
       signal: signalFrom(opts),
     }).then((payload) =>
-      normalizeQuantityPage(payload, "account assets response", ["quantity"]),
+      normalizeQuantityPage(payload, "account assets response", [FIELD_QUANTITY]),
     );
   }
 
@@ -2667,7 +2735,7 @@ export class ToriiBrowserClient {
     const opts = requireSupportedOptions(options, context, COUNTED_LIST_OPTION_KEYS);
     return this._json(
       "GET",
-      `/v1/accounts/${encodeURIComponent(requireNonEmptyString(accountId, "accountId"))}/permissions`,
+      `${TEXT_V1_ACCOUNTS}${encodeURIComponent(requireNonEmptyString(accountId, FIELD_ACCOUNT_ID))}/permissions`,
       {
         params: normalizeCountedListParams(opts, context),
         dataspaceVisible: true,
@@ -2682,12 +2750,12 @@ export class ToriiBrowserClient {
     const opts = requireSupportedOptions(options, context, ACCOUNT_HISTORY_OPTION_KEYS);
     return this._json(
       "GET",
-      `/v1/accounts/${encodeURIComponent(requireNonEmptyString(accountId, "accountId"))}/history`,
+      `${TEXT_V1_ACCOUNTS}${encodeURIComponent(requireNonEmptyString(accountId, FIELD_ACCOUNT_ID))}/history`,
       {
         params: {
           ...normalizeCountedListParams(opts, context),
           asset_id: normalizeOptionalString(
-            optionAlias(opts, "assetId", "asset_id"),
+            optionAlias(opts, "assetId", WIRE_FIELD_ASSET_ID),
             `${context}.assetId`,
           ),
         },
@@ -2698,7 +2766,7 @@ export class ToriiBrowserClient {
   }
 
   queryAccountTransactions(accountId, options) {
-    const path = `/v1/accounts/${encodeURIComponent(requireNonEmptyString(accountId, "accountId"))}/transactions/query`;
+    const path = `${TEXT_V1_ACCOUNTS}${encodeURIComponent(requireNonEmptyString(accountId, FIELD_ACCOUNT_ID))}/transactions/query`;
     return this._canonicalQueryJson(path, options, normalizeTransactionQueryEnvelope(options, "queryAccountTransactions"));
   }
 
@@ -2714,16 +2782,16 @@ export class ToriiBrowserClient {
   listContractActivity(options = {}) {
     const context = "listContractActivity options";
     const opts = requireSupportedOptions(options, context, CONTRACT_ACTIVITY_OPTION_KEYS);
-    return this._json("GET", "/v1/contracts/activity", {
+    return this._json("GET", (TEXT_V1_CONTRACTS + "activity"), {
       params: {
         ...normalizeCountedListParams(opts, context),
         authority: normalizeOptionalString(opts.authority, `${context}.authority`),
         contract_address: normalizeOptionalString(
-          optionAlias(opts, "contractAddress", "contract_address"),
+          optionAlias(opts, FIELD_CONTRACT_ADDRESS, WIRE_FIELD_CONTRACT_ADDRESS),
           `${context}.contractAddress`,
         ),
         contract_alias: normalizeOptionalString(
-          optionAlias(opts, "contractAlias", "contract_alias"),
+          optionAlias(opts, FIELD_CONTRACT_ALIAS, WIRE_FIELD_CONTRACT_ALIAS),
           `${context}.contractAlias`,
         ),
         contract_entrypoint: normalizeOptionalString(
@@ -2731,15 +2799,15 @@ export class ToriiBrowserClient {
           `${context}.contractEntrypoint`,
         ),
         since_timestamp_ms: normalizeOptionalUnsignedInteger(
-          optionAlias(opts, "sinceTimestampMs", "since_timestamp_ms"),
+          optionAlias(opts, FIELD_SINCE_TIMESTAMP_MS, WIRE_FIELD_SINCE_TIMESTAMP_MS),
           `${context}.sinceTimestampMs`,
         ),
         until_timestamp_ms: normalizeOptionalUnsignedInteger(
-          optionAlias(opts, "untilTimestampMs", "until_timestamp_ms"),
+          optionAlias(opts, FIELD_UNTIL_TIMESTAMP_MS, WIRE_FIELD_UNTIL_TIMESTAMP_MS),
           `${context}.untilTimestampMs`,
         ),
         result_ok: normalizeOptionalBoolean(
-          optionAlias(opts, "resultOk", "result_ok"),
+          optionAlias(opts, FIELD_RESULT_OK, WIRE_FIELD_RESULT_OK),
           `${context}.resultOk`,
         ),
       },
@@ -2752,7 +2820,7 @@ export class ToriiBrowserClient {
   listContractEvents(options = {}) {
     const context = "listContractEvents options";
     const opts = requireSupportedOptions(options, context, CONTRACT_EVENT_LIST_OPTION_KEYS);
-    return this._json("GET", "/v1/contracts/events", {
+    return this._json("GET", (TEXT_V1_CONTRACTS + "events"), {
       params: {
         ...normalizeCountedListParams(opts, context),
         ...normalizeContractEventFilterParams(opts, context),
@@ -2772,7 +2840,7 @@ export class ToriiBrowserClient {
     const params = normalizeContractEventFilterParams(opts, context);
     const client = this;
     return (async function* contractEventIterator() {
-      const url = client._url("/v1/contracts/events/sse", params);
+      const url = client._url((TEXT_V1_CONTRACTS + "events/sse"), params);
       const init = {
         method: "GET",
         cache: "no-store",
@@ -2782,17 +2850,17 @@ export class ToriiBrowserClient {
       await client._applyDataspaceReadIdentity(url, init);
       const response = await client.#fetchImpl(url, init);
       if (init.redirect === "error" && response?.redirected === true) {
-        rejectType("Torii one-shot request must not accept a redirected response");
+        rejectType(TEXT_TORII_ONE_SHOT_REQUEST_MUST_NOT_ACCEPT_A_REDIRECTED_RESPONSE);
       }
       const status = responseStatus(response);
       if (status !== 200) {
-        const errorResponse = typeof response?.clone === "function" ? response.clone() : response;
+        const errorResponse = typeof response?.clone === FIELD_FUNCTION ? response.clone() : response;
         const bodyText = await responseText(response);
         throw new ToriiBrowserHttpError(errorResponse, bodyText, status);
       }
-      if (typeof response?.body?.getReader !== "function") {
+      if (typeof response?.body?.getReader !== FIELD_FUNCTION) {
         throw new ToriiBrowserStreamGapError(
-          "The contract event stream ended without a readable response body.",
+          (TEXT_THE_CONTRACT_EVENT_STREAM + "ended without a readable response body."),
           { code: "stream_unexpected_eof" },
         );
       }
@@ -2818,34 +2886,34 @@ export class ToriiBrowserClient {
         }
         if (opts.signal?.aborted === true) return;
         throw new ToriiBrowserStreamGapError(
-          "The contract event stream ended unexpectedly and cannot be resumed.",
+          (TEXT_THE_CONTRACT_EVENT_STREAM + "ended unexpectedly and cannot be resumed."),
           { code: "stream_unexpected_eof" },
         );
       } finally {
-        if (!ended && typeof reader.cancel === "function") {
+        if (!ended && typeof reader.cancel === FIELD_FUNCTION) {
           try {
             await reader.cancel();
           } catch {
             // Preserve the stream error or consumer cancellation that entered this block.
           }
         }
-        if (typeof reader.releaseLock === "function") reader.releaseLock();
+        if (typeof reader.releaseLock === FIELD_FUNCTION) reader.releaseLock();
       }
     })();
   }
 
   listAssetHolders(assetDefinitionId, options = {}) {
     const opts = requireObject(options, "listAssetHolders options");
-    return this._json("GET", `/v1/assets/${encodeURIComponent(requireNonEmptyString(assetDefinitionId, "assetDefinitionId"))}/holders`, {
+    return this._json("GET", `/v1/assets/${encodeURIComponent(requireNonEmptyString(assetDefinitionId, FIELD_ASSET_DEFINITION_ID))}/holders`, {
       params: {
         ...normalizeIterablePagination(opts, "listAssetHolders options"),
         account_id: opts.accountId ?? opts.account_id,
         scope: opts.scope,
-        count_mode: normalizeCountMode(opts.countMode ?? opts.count_mode, "countMode"),
+        count_mode: normalizeCountMode(opts.countMode ?? opts.count_mode, FIELD_COUNT_MODE),
       },
       signal: signalFrom(opts),
     }).then((payload) =>
-      normalizeQuantityPage(payload, "asset holders response", ["quantity"]),
+      normalizeQuantityPage(payload, "asset holders response", [FIELD_QUANTITY]),
     );
   }
 
@@ -2854,14 +2922,14 @@ export class ToriiBrowserClient {
     return this._json("GET", "/v1/assets/definitions", {
       params: {
         ...normalizeIterablePagination(opts, "listAssetDefinitions options"),
-        count_mode: normalizeCountMode(opts.countMode ?? opts.count_mode, "countMode"),
+        count_mode: normalizeCountMode(opts.countMode ?? opts.count_mode, FIELD_COUNT_MODE),
       },
       signal: signalFrom(opts),
     }).then((payload) =>
       normalizeQuantityPage(
         payload,
         "asset definitions response",
-        ["total_quantity"],
+        [WIRE_FIELD_TOTAL_QUANTITY],
         { optional: true },
       ),
     );
@@ -2869,13 +2937,13 @@ export class ToriiBrowserClient {
 
   getAssetDefinition(assetDefinitionId, options = {}) {
     const opts = requireObject(options, "getAssetDefinition options");
-    return this._json("GET", `/v1/assets/definitions/${encodeURIComponent(requireNonEmptyString(assetDefinitionId, "assetDefinitionId"))}`, {
+    return this._json("GET", `/v1/assets/definitions/${encodeURIComponent(requireNonEmptyString(assetDefinitionId, FIELD_ASSET_DEFINITION_ID))}`, {
       signal: signalFrom(opts),
     }).then((payload) =>
       normalizeQuantityRecord(
         payload,
         "asset definition response",
-        ["total_quantity"],
+        [WIRE_FIELD_TOTAL_QUANTITY],
         { optional: true },
       ),
     );
@@ -2906,10 +2974,10 @@ export class ToriiBrowserClient {
   }
 
   listExplorerAssetDefinitions(options = {}) {
-    const opts = requireObject(options, "listExplorerAssetDefinitions options");
-    return this._json("GET", "/v1/explorer/asset-definitions", {
+    const opts = requireObject(options, TEXT_LIST_EXPLORER_ASSET_DEFINITIONS_OPTIONS);
+    return this._json("GET", (TEXT_V1_EXPLORER + "asset-definitions"), {
       params: {
-        ...normalizeExplorerCursorPagination(opts, "listExplorerAssetDefinitions options"),
+        ...normalizeExplorerCursorPagination(opts, TEXT_LIST_EXPLORER_ASSET_DEFINITIONS_OPTIONS),
         owning_domain: opts.owningDomain ?? opts.owning_domain,
         owned_by: opts.ownedBy ?? opts.owned_by,
       },
@@ -2925,7 +2993,7 @@ export class ToriiBrowserClient {
 
   getExplorerAssetDefinitionEconometrics(assetDefinitionId, options = {}) {
     const opts = requireObject(options, "getExplorerAssetDefinitionEconometrics options");
-    return this._json("GET", `/v1/explorer/asset-definitions/${encodeURIComponent(requireNonEmptyString(assetDefinitionId, "assetDefinitionId"))}/econometrics`, {
+    return this._json("GET", `${TEXT_V1_EXPLORER}asset-definitions/${encodeURIComponent(requireNonEmptyString(assetDefinitionId, FIELD_ASSET_DEFINITION_ID))}/econometrics`, {
       dataspaceVisible: true,
       signal: signalFrom(opts),
     });
@@ -2933,7 +3001,7 @@ export class ToriiBrowserClient {
 
   getExplorerAssetDefinitionSnapshot(assetDefinitionId, options = {}) {
     const opts = requireObject(options, "getExplorerAssetDefinitionSnapshot options");
-    return this._json("GET", `/v1/explorer/asset-definitions/${encodeURIComponent(requireNonEmptyString(assetDefinitionId, "assetDefinitionId"))}/snapshot`, {
+    return this._json("GET", `${TEXT_V1_EXPLORER}asset-definitions/${encodeURIComponent(requireNonEmptyString(assetDefinitionId, FIELD_ASSET_DEFINITION_ID))}/snapshot`, {
       dataspaceVisible: true,
       signal: signalFrom(opts),
     });
@@ -2941,7 +3009,7 @@ export class ToriiBrowserClient {
 
   listExplorerNfts(options = {}) {
     const opts = requireObject(options, "listExplorerNfts options");
-    return this._json("GET", "/v1/explorer/nfts", {
+    return this._json("GET", (TEXT_V1_EXPLORER + "nfts"), {
       params: {
         ...normalizeExplorerCursorPagination(opts, "listExplorerNfts options"),
         owned_by: opts.ownedBy ?? opts.owned_by,
@@ -2956,7 +3024,7 @@ export class ToriiBrowserClient {
 
   getExplorerNft(nftId, options = {}) {
     const opts = requireObject(options, "getExplorerNft options");
-    return this._json("GET", `/v1/explorer/nfts/${encodeURIComponent(requireNonEmptyString(nftId, "nftId"))}`, {
+    return this._json("GET", `${TEXT_V1_EXPLORER}nfts/${encodeURIComponent(requireNonEmptyString(nftId, "nftId"))}`, {
       dataspaceVisible: true,
       signal: signalFrom(opts),
     });
@@ -2964,7 +3032,7 @@ export class ToriiBrowserClient {
 
   listExplorerRwas(options = {}) {
     const opts = requireObject(options, "listExplorerRwas options");
-    return this._json("GET", "/v1/explorer/rwas", {
+    return this._json("GET", (TEXT_V1_EXPLORER + "rwas"), {
       params: {
         ...normalizeExplorerCursorPagination(opts, "listExplorerRwas options"),
         owned_by: opts.ownedBy ?? opts.owned_by,
@@ -2978,7 +3046,7 @@ export class ToriiBrowserClient {
         normalizeQuantityRecord(
           item,
           `${context}.items[${index}]`,
-          ["quantity", "held_quantity"],
+          [FIELD_QUANTITY, "held_quantity"],
         ),
       );
     });
@@ -2986,18 +3054,18 @@ export class ToriiBrowserClient {
 
   getExplorerRwa(rwaId, options = {}) {
     const opts = requireObject(options, "getExplorerRwa options");
-    return this._json("GET", `/v1/explorer/rwas/${encodeURIComponent(requireNonEmptyString(rwaId, "rwaId"))}`, {
+    return this._json("GET", `${TEXT_V1_EXPLORER}rwas/${encodeURIComponent(requireNonEmptyString(rwaId, "rwaId"))}`, {
       dataspaceVisible: true,
       signal: signalFrom(opts),
     }).then((payload) =>
-      normalizeQuantityRecord(payload, "explorer rwa response", ["quantity", "held_quantity"]),
+      normalizeQuantityRecord(payload, "explorer rwa response", [FIELD_QUANTITY, "held_quantity"]),
     );
   }
 
   listExplorerBlocks(options = {}) {
     const context = "listExplorerBlocks options";
     const opts = requireSupportedOptions(options, context, EXPLORER_HISTORY_OPTION_KEYS);
-    return this._json("GET", "/v1/explorer/blocks", {
+    return this._json("GET", (TEXT_V1_EXPLORER + "blocks"), {
       params: normalizeExplorerCursorPagination(opts, context),
       dataspaceVisible: true,
       signal: signalFrom(opts),
@@ -3006,7 +3074,7 @@ export class ToriiBrowserClient {
 
   getExplorerBlock(identifier, options = {}) {
     const opts = requireObject(options, "getExplorerBlock options");
-    return this._json("GET", `/v1/explorer/blocks/${encodeURIComponent(String(identifier))}`, {
+    return this._json("GET", `${TEXT_V1_EXPLORER}blocks/${encodeURIComponent(String(identifier))}`, {
       dataspaceVisible: true,
       signal: signalFrom(opts),
     });
@@ -3093,7 +3161,7 @@ export class ToriiBrowserClient {
 
   getExplorerMetrics(options = {}) {
     const opts = requireObject(options, "getExplorerMetrics options");
-    return this._json("GET", "/v1/explorer/metrics", {
+    return this._json("GET", (TEXT_V1_EXPLORER + "metrics"), {
       dataspaceVisible: true,
       signal: signalFrom(opts),
     });
@@ -3101,7 +3169,7 @@ export class ToriiBrowserClient {
 
   getExplorerHealth(options = {}) {
     const opts = requireObject(options, "getExplorerHealth options");
-    return this._json("GET", "/v1/explorer/health", { signal: signalFrom(opts) });
+    return this._json("GET", (TEXT_V1_EXPLORER + "health"), { signal: signalFrom(opts) });
   }
 
   listExplorerTransactions(options = {}) {
@@ -3111,7 +3179,7 @@ export class ToriiBrowserClient {
       context,
       EXPLORER_TRANSACTION_HISTORY_OPTION_KEYS,
     );
-    return this._json("GET", "/v1/explorer/transactions", {
+    return this._json("GET", (TEXT_V1_EXPLORER + "transactions"), {
       params: {
         ...normalizeExplorerCursorPagination(opts, context),
         authority: normalizeExplorerHistoryOptionalString(
@@ -3139,7 +3207,7 @@ export class ToriiBrowserClient {
       context,
       EXPLORER_TRANSACTION_HISTORY_OPTION_KEYS,
     );
-    return this._json("GET", "/v1/explorer/transactions/latest", {
+    return this._json("GET", (TEXT_V1_EXPLORER + "transactions/latest"), {
       params: {
         ...normalizeExplorerCursorPagination(opts, context),
         authority: normalizeExplorerHistoryOptionalString(
@@ -3165,7 +3233,7 @@ export class ToriiBrowserClient {
 
   getExplorerTransaction(hash, options = {}) {
     const opts = requireObject(options, "getExplorerTransaction options");
-    return this._json("GET", `/v1/explorer/transactions/${encodeURIComponent(requireNonEmptyString(hash, "hash"))}`, {
+    return this._json("GET", `${TEXT_V1_EXPLORER}transactions/${encodeURIComponent(requireNonEmptyString(hash, "hash"))}`, {
       params: { address_format: opts.addressFormat ?? opts.address_format },
       dataspaceVisible: true,
       signal: signalFrom(opts),
@@ -3179,7 +3247,7 @@ export class ToriiBrowserClient {
       context,
       EXPLORER_INSTRUCTION_HISTORY_OPTION_KEYS,
     );
-    return this._json("GET", "/v1/explorer/instructions", {
+    return this._json("GET", (TEXT_V1_EXPLORER + "instructions"), {
       params: {
         ...normalizeExplorerCursorPagination(opts, context),
         account: normalizeExplorerHistoryOptionalString(
@@ -3219,7 +3287,7 @@ export class ToriiBrowserClient {
       context,
       EXPLORER_INSTRUCTION_HISTORY_OPTION_KEYS,
     );
-    return this._json("GET", "/v1/explorer/instructions/latest", {
+    return this._json("GET", (TEXT_V1_EXPLORER + "instructions/latest"), {
       params: {
         ...normalizeExplorerCursorPagination(opts, context),
         account: normalizeExplorerHistoryOptionalString(
@@ -3257,7 +3325,7 @@ export class ToriiBrowserClient {
 
   getExplorerInstruction(transactionHash, index, options = {}) {
     const opts = requireObject(options, "getExplorerInstruction options");
-    return this._json("GET", `/v1/explorer/instructions/${encodeURIComponent(requireNonEmptyString(transactionHash, "transactionHash"))}/${encodeURIComponent(String(index))}`, {
+    return this._json("GET", `${TEXT_V1_EXPLORER}instructions/${encodeURIComponent(requireNonEmptyString(transactionHash, FIELD_TRANSACTION_HASH))}/${encodeURIComponent(String(index))}`, {
       params: { address_format: opts.addressFormat ?? opts.address_format },
       dataspaceVisible: true,
       signal: signalFrom(opts),
@@ -3266,7 +3334,7 @@ export class ToriiBrowserClient {
 
   getExplorerInstructionContractView(transactionHash, index, options = {}) {
     const opts = requireObject(options, "getExplorerInstructionContractView options");
-    return this._json("GET", `/v1/explorer/instructions/${encodeURIComponent(requireNonEmptyString(transactionHash, "transactionHash"))}/${encodeURIComponent(String(index))}/contract-view`, {
+    return this._json("GET", `${TEXT_V1_EXPLORER}instructions/${encodeURIComponent(requireNonEmptyString(transactionHash, FIELD_TRANSACTION_HASH))}/${encodeURIComponent(String(index))}/contract-view`, {
       dataspaceVisible: true,
       signal: signalFrom(opts),
     });
@@ -3300,36 +3368,36 @@ export class ToriiBrowserClient {
     rejectSuccessStatuses(opts, "submitMultisigPropose options");
     return this._json("POST", "/v1/multisig/propose", {
       rawBody: noritoEncodeMultisigProposeRequest(requireObject(request, "submitMultisigPropose request")),
-      contentType: "application/x-norito",
-      headers: { Accept: "application/json", ...(opts.headers ?? {}) },
+      contentType: FIELD_APPLICATION_X_NORITO,
+      headers: { Accept: FIELD_APPLICATION_JSON, ...(opts.headers ?? {}) },
       signal: signalFrom(opts),
       successStatuses: [200, 202],
     });
   }
 
   async submitMultisigContractCallPropose(request, options = {}) {
-    const opts = requireObject(options, "submitMultisigContractCallPropose options");
-    rejectSuccessStatuses(opts, "submitMultisigContractCallPropose options");
-    return this._json("POST", "/v1/contracts/call/multisig/propose", {
+    const opts = requireObject(options, (TEXT_SUBMIT_MULTISIG_CONTRACT_CALL_PROPOSE + "options"));
+    rejectSuccessStatuses(opts, (TEXT_SUBMIT_MULTISIG_CONTRACT_CALL_PROPOSE + "options"));
+    return this._json("POST", (TEXT_V1_CONTRACTS + "call/multisig/propose"), {
       rawBody: noritoEncodeMultisigContractCallProposeRequest(
-        requireObject(request, "submitMultisigContractCallPropose request"),
+        requireObject(request, (TEXT_SUBMIT_MULTISIG_CONTRACT_CALL_PROPOSE + "request")),
       ),
-      contentType: "application/x-norito",
-      headers: { Accept: "application/json", ...(opts.headers ?? {}) },
+      contentType: FIELD_APPLICATION_X_NORITO,
+      headers: { Accept: FIELD_APPLICATION_JSON, ...(opts.headers ?? {}) },
       signal: signalFrom(opts),
       successStatuses: [200, 202],
     });
   }
 
   async submitMultisigContractCallApprove(request, options = {}) {
-    const opts = requireObject(options, "submitMultisigContractCallApprove options");
-    rejectSuccessStatuses(opts, "submitMultisigContractCallApprove options");
-    return this._json("POST", "/v1/contracts/call/multisig/approve", {
+    const opts = requireObject(options, (TEXT_SUBMIT_MULTISIG_CONTRACT_CALL_APPROVE + "options"));
+    rejectSuccessStatuses(opts, (TEXT_SUBMIT_MULTISIG_CONTRACT_CALL_APPROVE + "options"));
+    return this._json("POST", (TEXT_V1_CONTRACTS + "call/multisig/approve"), {
       rawBody: noritoEncodeMultisigContractCallApproveRequest(
-        requireObject(request, "submitMultisigContractCallApprove request"),
+        requireObject(request, (TEXT_SUBMIT_MULTISIG_CONTRACT_CALL_APPROVE + "request")),
       ),
-      contentType: "application/x-norito",
-      headers: { Accept: "application/json", ...(opts.headers ?? {}) },
+      contentType: FIELD_APPLICATION_X_NORITO,
+      headers: { Accept: FIELD_APPLICATION_JSON, ...(opts.headers ?? {}) },
       signal: signalFrom(opts),
       successStatuses: [200, 202],
     });
@@ -3349,7 +3417,7 @@ export class ToriiBrowserClient {
   getSumeragiStatusTyped(options = {}) {
     const opts = signalOnlyOptions(options, "getSumeragiStatusTyped options");
     return this._json("GET", "/v1/sumeragi/status", {
-      headers: { Accept: "application/json" },
+      headers: { Accept: FIELD_APPLICATION_JSON },
       signal: signalFrom(opts),
       operatorSigningContext: requireOperatorSigningContext(
         this.#operatorSigningContext,
@@ -3358,7 +3426,7 @@ export class ToriiBrowserClient {
       maximumBodyBytes: SUMERAGI_STATUS_TYPED_JSON_MAX_BYTES,
       responseObserver: (response) => {
         requireExactJsonContentType(
-          response.headers.get("content-type"),
+          response.headers.get(FIELD_CONTENT_TYPE),
           "Sumeragi typed status response",
         );
       },
@@ -3385,7 +3453,7 @@ export class ToriiBrowserClient {
   getSumeragiDiagnosticsTyped(options = {}) {
     const opts = signalOnlyOptions(options, "getSumeragiDiagnosticsTyped options");
     return this._json("GET", "/v1/sumeragi/diagnostics", {
-      headers: { Accept: "application/json" },
+      headers: { Accept: FIELD_APPLICATION_JSON },
       signal: signalFrom(opts),
       operatorSigningContext: requireOperatorSigningContext(
         this.#operatorSigningContext,
@@ -3394,7 +3462,7 @@ export class ToriiBrowserClient {
       maximumBodyBytes: SUMERAGI_DIAGNOSTICS_TYPED_JSON_MAX_BYTES,
       responseObserver: (response) => {
         requireExactJsonContentType(
-          response.headers.get("content-type"),
+          response.headers.get(FIELD_CONTENT_TYPE),
           "Sumeragi typed diagnostics response",
         );
       },
@@ -3418,11 +3486,11 @@ export class ToriiBrowserClient {
       maximumBodyBytes: KAIGI_JSON_RESPONSE_MAX_BYTES,
       jsonParser: (text) => parseStrictLosslessIntegerJson(
         text,
-        "kaigi relay list response",
+        CONTEXT_KAIGI_RELAY_LIST_RESPONSE,
       ),
       responseObserver: (response) => requireExactJsonContentType(
-        response.headers?.get?.("content-type"),
-        "kaigi relay list response",
+        response.headers?.get?.(FIELD_CONTENT_TYPE),
+        CONTEXT_KAIGI_RELAY_LIST_RESPONSE,
       ),
     }).then(normalizeBrowserKaigiRelayList);
   }
@@ -3441,15 +3509,15 @@ export class ToriiBrowserClient {
       nullStatuses: [404],
       jsonParser: (text) => parseStrictLosslessIntegerJson(
         text,
-        "kaigi relay detail response",
+        CONTEXT_KAIGI_RELAY_DETAIL_RESPONSE,
       ),
       responseObserver: (response) => {
         if (responseStatus(response) === 404) {
           return;
         }
         requireExactJsonContentType(
-          response.headers?.get?.("content-type"),
-          "kaigi relay detail response",
+          response.headers?.get?.(FIELD_CONTENT_TYPE),
+          CONTEXT_KAIGI_RELAY_DETAIL_RESPONSE,
         );
       },
     }).then((payload) => payload === null ? null : normalizeBrowserKaigiRelayDetail(payload));
@@ -3466,11 +3534,11 @@ export class ToriiBrowserClient {
       maximumBodyBytes: KAIGI_JSON_RESPONSE_MAX_BYTES,
       jsonParser: (text) => parseStrictLosslessIntegerJson(
         text,
-        "kaigi relay health response",
+        CONTEXT_KAIGI_RELAY_HEALTH_RESPONSE,
       ),
       responseObserver: (response) => requireExactJsonContentType(
-        response.headers?.get?.("content-type"),
-        "kaigi relay health response",
+        response.headers?.get?.(FIELD_CONTENT_TYPE),
+        CONTEXT_KAIGI_RELAY_HEALTH_RESPONSE,
       ),
     }).then(normalizeBrowserKaigiHealth);
   }

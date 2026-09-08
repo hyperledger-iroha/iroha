@@ -334,3 +334,17 @@ To keep CI deterministic, **do not** set `[build] build-dir` in
 need a custom build directory for local experimentation, export
 `CARGO_TARGET_DIR` in your shell session but reset it before running any
 `ci/check_*` script.
+
+## Privacy SDK dependency graph
+
+`ci/privacy_sdk_cargo_lockfile.sh` owns the one reviewed Cargo graph digest for
+both the workspace and native SDKs. `provision-ci` authenticates the tracked
+root lock, creates a separate read-only external snapshot from those exact
+bytes, and requires full `cargo metadata --locked` compatibility with the
+pinned toolchain before exporting build inputs. It never resolves a new graph
+or retries without `--locked`. Every privacy release selection must name the external
+file explicitly; root paths, internal paths, symlinks, hardlinks and fallback
+selectors are rejected. Root and external file identities remain independently
+sealed even though their bytes match. Changed manifests or dependencies require
+an explicit graph review, a coherent owner update, and fresh native artifacts;
+source, wheel, ABI, hardware and clean-release gates still apply.

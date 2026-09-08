@@ -6,10 +6,10 @@
 //! verifier checks only bounded authenticated openings and caller-fixed AIR and
 //! public polynomials. It has no witness, trace construction, FFT or LDE replay.
 //!
-//! TODO: Integrate the complete SMT/public statement relation, independently
-//! qualify proximity/Fiat-Shamir/query security, and measure the final schema and
-//! resource envelope before any production switch. The canonical 136-query
-//! profile remains unqualified. Production verification still requires replay;
+//! TODO: Independently qualify the connected SMT/public statement relation,
+//! proximity/Fiat-Shamir/query security and the concrete six-lane construction,
+//! and close the proof-size and resource gaps before production admission. The
+//! fixed 375-query profile remains unqualified. Production still requires replay;
 //! test-only diagnostic byte budgets are not production admission limits. This
 //! proof is not a zero-knowledge claim.
 
@@ -19,15 +19,11 @@ use norito::{NoritoDeserialize, NoritoSerialize};
 #[cfg(test)]
 use rayon::prelude::*;
 
+#[cfg(test)]
+use super::ExecutionMode;
 use super::{
     AirQuotientDomain, FriDomain, GOLDILOCKS_MODULUS, GoldilocksFp4V1, JointFriBatch,
     MerkleTreeRoleV1, fixed_domain::FixedTraceDomain,
-};
-#[cfg(test)]
-use super::{
-    ExecutionMode, MerkleNodeCache, Transcript, build_merkle_levels_with_mode,
-    hash_air_composition_leaf, hash_air_trace_row, hash_air_trace_rows_with_mode,
-    hash_fp4_single_leaves_with_role, hash_lde_chunk_fp4, sample_queries,
 };
 use crate::{
     Error, Result,
@@ -42,14 +38,20 @@ use crate::{
 #[path = "compact_protocol/shared_openings.rs"]
 pub(super) mod shared_openings;
 
+#[cfg(test)]
+#[path = "compact_protocol/metal_diagnostic.rs"]
+pub(super) mod metal_diagnostic;
 #[path = "compact_protocol/profile.rs"]
 mod profile;
 #[cfg(test)]
+#[path = "compact_protocol/test_fixture.rs"]
+mod test_fixture;
+use profile::Binding;
+#[cfg(test)]
 use profile::ProtocolTranscript;
-use profile::{Binding, Protocol};
 
 #[cfg(test)]
-const PROTOCOL_TAG: &str = "fastpq:prototype:compact-single-phase:v1";
+const PROTOCOL_TAG: &str = "fastpq:compact:v1:compact-single-phase:v1";
 const MAX_CONSTRAINTS: usize = 1024;
 
 /// Exact trusted relation geometry and circuit identity; never taken from a proof.
@@ -116,7 +118,7 @@ impl<R: FixedAir + ?Sized> PreparedAir for DirectPrepared<'_, R> {
 /// Private typed proof; its Norito schema is distinct from production ProofV1.
 #[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
-#[norito(schema_name = "fastpq_prover::compact_prototype::SinglePhaseProofV1")]
+#[norito(schema_name = "fastpq_prover::compact_v1::SinglePhaseProofV1")]
 pub(super) struct CompactProof {
     row_root: WireDigest,
     mixed_root: WireDigest,
@@ -157,7 +159,6 @@ pub(super) struct VerificationWork {
 }
 
 struct Geometry {
-    protocol: Protocol,
     schema: FixedAirSchema,
     lde_rows: usize,
     domain: FriDomain,
@@ -166,12 +167,7 @@ struct Geometry {
 }
 
 impl Geometry {
-    #[cfg(test)]
     fn new(relation: &impl FixedAir) -> Result<Self> {
-        Self::for_protocol(relation, Protocol::Prototype)
-    }
-
-    fn for_protocol(relation: &impl FixedAir, protocol: Protocol) -> Result<Self> {
         let schema = relation.schema();
         if schema.width == 0
             || schema.width > 512
@@ -202,14 +198,13 @@ impl Geometry {
             &fri_lengths,
         )?;
         let geometry = Self {
-            protocol,
             schema,
             lde_rows,
             domain,
             fri_lengths,
             terminal_degree,
         };
-        protocol.check_geometry(&geometry)?;
+        profile::check_geometry(&geometry)?;
         Ok(geometry)
     }
 }
@@ -221,7 +216,7 @@ struct PreparedTrace {
     columns: Vec<Vec<u64>>,
     rows: CommittedTree,
     binding: Binding,
-    bound_statement: Option<Vec<u8>>,
+    bound_statement: Vec<u8>,
 }
 
 #[cfg(test)]
@@ -232,18 +227,6 @@ struct CommittedTree {
 
 #[cfg(test)]
 impl CommittedTree {
-    fn from_leaves(leaves: &[Digest], role: MerkleTreeRoleV1) -> Result<Self> {
-        if leaves.is_empty() || !leaves.len().is_power_of_two() {
-            return Err(shape(
-                "compact prototype requires nonempty power-of-two trees",
-            ));
-        }
-        Ok(Self {
-            levels: build_merkle_levels_with_mode(leaves, role, ExecutionMode::Cpu)?,
-            leaf_count: leaves.len(),
-        })
-    }
-
     fn root(&self) -> Digest {
         self.levels.last().expect("nonempty tree")[0]
     }
@@ -270,19 +253,9 @@ pub(super) fn prove(relation: &impl FixedAir, columns: &[Vec<u64>]) -> Result<Co
     let trace = prepare_trace(relation, columns)?;
     prove_prepared(relation, &trace)
 }
-
 #[cfg(test)]
 fn prepare_trace(relation: &impl FixedAir, columns: &[Vec<u64>]) -> Result<PreparedTrace> {
-    prepare_trace_for(relation, columns, Protocol::Prototype)
-}
-
-#[cfg(test)]
-fn prepare_trace_for(
-    relation: &impl FixedAir,
-    columns: &[Vec<u64>],
-    protocol: Protocol,
-) -> Result<PreparedTrace> {
-    let geometry = Geometry::for_protocol(relation, protocol)?;
+    let geometry = Geometry::new(relation)?;
     check_limit(
         "max_compact_statement_bytes",
         relation.statement_bytes().len(),
@@ -304,16 +277,13 @@ fn prepare_trace_for(
         }
     }
     let binding = Binding::new(relation, &geometry)?;
-    let bound_statement =
-        (protocol == Protocol::ShakeCandidate).then(|| relation.statement_bytes().to_vec());
+    let bound_statement = relation.statement_bytes().to_vec();
     let planner = Planner::new(&FASTPQ_FINAL_V1);
     let mut coefficients = columns.to_vec();
     planner.ifft_columns(&mut coefficients);
     let columns = planner.lde_columns(&coefficients);
     drop(coefficients);
-    let leaves = if protocol == Protocol::Prototype {
-        hash_air_trace_rows_with_mode(&columns, ExecutionMode::Cpu)?
-    } else {
+    let leaves = {
         let results: Vec<Result<Digest>> = (0..geometry.lde_rows)
             .into_par_iter()
             .map_init(
@@ -324,7 +294,7 @@ fn prepare_trace_for(
                 },
             )
             .collect();
-        results.into_iter().collect::<Result<_>>()?
+        results.into_iter().collect::<Result<Vec<Digest>>>()?
     };
     let rows = binding.tree(&leaves, MerkleTreeRoleV1::AirTrace)?;
     Ok(PreparedTrace {
@@ -342,13 +312,9 @@ fn prove_prepared(relation: &impl FixedAir, trace: &PreparedTrace) -> Result<Com
     if relation.schema() != geometry.schema {
         return Err(shape("prepared compact trace has another fixed schema"));
     }
-    if trace
-        .bound_statement
-        .as_deref()
-        .is_some_and(|statement| statement != relation.statement_bytes())
-    {
+    if trace.bound_statement != relation.statement_bytes() {
         return Err(shape(
-            "prepared SHAKE row tree belongs to another public statement",
+            "prepared compact V1 row tree belongs to another public statement",
         ));
     }
     let binding = &trace.binding;
@@ -372,15 +338,13 @@ fn prove_prepared(relation: &impl FixedAir, trace: &PreparedTrace) -> Result<Com
                 })
         })
         .collect();
-    let mixed_leaves = if geometry.protocol == Protocol::Prototype {
-        hash_fp4_single_leaves_with_role(super::LDE_COMMITMENT_ROLE_V1, &mixed)?
-    } else {
+    let mixed_leaves = {
         let results: Vec<Result<Digest>> = mixed
             .par_iter()
             .enumerate()
             .map(|(i, &v)| binding.mixed(i, v))
             .collect();
-        results.into_iter().collect::<Result<_>>()?
+        results.into_iter().collect::<Result<Vec<Digest>>>()?
     };
     let mixed_tree = binding.tree(&mixed_leaves, MerkleTreeRoleV1::Lde)?;
     drop(mixed_leaves);
@@ -411,15 +375,13 @@ fn prove_prepared(relation: &impl FixedAir, trace: &PreparedTrace) -> Result<Com
     // Indexed collection fixes row order; select any errors in that same order.
     let quotients = quotient_results.into_iter().collect::<Result<Vec<_>>>()?;
     drop(prepared); // No evaluator remains; release all prover-only fixed LDEs.
-    let quotient_leaves = if geometry.protocol == Protocol::Prototype {
-        hash_fp4_single_leaves_with_role(super::AIR_COMPOSITION_COMMITMENT_ROLE_V1, &quotients)?
-    } else {
+    let quotient_leaves = {
         let results: Vec<Result<Digest>> = quotients
             .par_iter()
             .enumerate()
             .map(|(i, &v)| binding.quotient(i, v))
             .collect();
-        results.into_iter().collect::<Result<_>>()?
+        results.into_iter().collect::<Result<Vec<Digest>>>()?
     };
     let quotient_tree = binding.tree(&quotient_leaves, MerkleTreeRoleV1::AirComposition)?;
     drop(quotient_leaves);
@@ -482,15 +444,13 @@ fn fold_protocol_layers(
                 "compact FRI layer length differs from fixed geometry",
             ));
         }
-        let leaves = if geometry.protocol == Protocol::Prototype {
-            super::hash_fri_leaves_with_mode(round, &current, 2, ExecutionMode::Cpu)?
-        } else {
+        let leaves = {
             let half = current.len() / 2;
             let results: Vec<Result<Digest>> = (0..half)
                 .into_par_iter()
                 .map(|i| binding.fri(round, i, &[current[i], current[i + half]]))
                 .collect();
-            results.into_iter().collect::<Result<_>>()?
+            results.into_iter().collect::<Result<Vec<Digest>>>()?
         };
         let tree = binding.tree(&leaves, MerkleTreeRoleV1::Fri(round as u32))?;
         let root = tree.root();
@@ -552,114 +512,19 @@ fn verify_recorded(
     limits: VerifyLimits,
     work: &mut VerificationWork,
 ) -> Result<()> {
-    let geometry = Geometry::new(relation)?;
-    let proof_bytes = preflight(relation, proof, limits, &geometry)?;
-    work.proof_bytes = proof_bytes;
-    work.transcripts += 1;
-    let mut transcript = initialise_transcript(relation, &geometry, proof.row_root.as_fastpq())?;
-    let mixing = challenges(&mut transcript, "compact:column-mix", geometry.schema.width);
-    transcript.append_message("compact:mixed-root", &proof.mixed_root.to_le_bytes());
-    let alphas = challenges(
-        &mut transcript,
-        "compact:constraint-alpha",
-        geometry.schema.constraints,
-    );
-    transcript.append_message("compact:quotient-root", &proof.quotient_root.to_le_bytes());
-    let joint =
-        JointFriBatch::from_transcript(&FASTPQ_FINAL_V1, geometry.lde_rows, &mut transcript)?;
-    let mut betas = Vec::with_capacity(proof.fri_roots.len() - 1);
-    for (round, root) in proof.fri_roots.iter().enumerate() {
-        if round + 1 == proof.fri_roots.len() {
-            transcript.append_fri_final(root.as_fastpq());
-        } else {
-            transcript.append_fri_layer(round, root.as_fastpq());
-            betas.push(transcript.challenge_beta(round));
-        }
-    }
-    let indices = sample_queries(
-        geometry.lde_rows,
-        FASTPQ_FINAL_V1.fri.queries as usize,
-        &mut transcript,
-    )?;
-    let weights = AirQuotientDomain::new(&FASTPQ_FINAL_V1, geometry.lde_rows)?;
-    let mut cache = MerkleNodeCache::default();
-    for (position, (query, &index)) in proof.queries.iter().zip(&indices).enumerate() {
-        if query.index as usize != index {
-            return Err(Error::QueryMismatch { index: position });
-        }
-        for (row_index, row, path) in [
-            (index, &query.current, &query.current_path),
-            (
-                next_index(index, geometry.lde_rows),
-                &query.next,
-                &query.next_path,
-            ),
-        ] {
-            let leaf = hash_air_trace_row(row_index, row)?;
-            work.row_leaves += 1;
-            authenticate(
-                &mut cache,
-                MerkleTreeRoleV1::AirTrace,
-                proof.row_root,
-                leaf,
-                row_index,
-                path,
-                position,
-            )?;
-        }
-        let mixed = query
-            .current
-            .iter()
-            .zip(&mixing)
-            .fold(GoldilocksFp4V1::ZERO, |sum, (&value, coefficient)| {
-                sum.add(coefficient.mul_base(value))
-            });
-        if mixed != query.mixed {
-            return Err(Error::QueryMismatch { index: position });
-        }
-        authenticate(
-            &mut cache,
-            MerkleTreeRoleV1::Lde,
-            proof.mixed_root,
-            hash_lde_chunk_fp4(index, &[query.mixed])?,
-            index,
-            &query.mixed_path,
-            position,
-        )?;
-        let residues =
-            relation.evaluate(geometry.domain.point(index), &query.current, &query.next)?;
-        work.air_evaluations += 1;
-        let quotient = combine(&residues, &alphas)?.mul_base(weights.weights_at(index)?.all_rows);
-        if quotient != query.quotient {
-            return Err(Error::AirOpeningMismatch { index: position });
-        }
-        authenticate(
-            &mut cache,
-            MerkleTreeRoleV1::AirComposition,
-            proof.quotient_root,
-            hash_air_composition_leaf(index, query.quotient)?,
-            index,
-            &query.quotient_path,
-            position,
-        )?;
-        compact_fri_support::verify_query(
-            &mut cache,
-            &query.fri,
-            compact_fri_support::Context {
-                query_pos: position,
-                initial_index: index,
-                initial_value: joint.value_at(index, query.quotient, query.mixed)?,
-                fri_layers: &proof.fri_roots,
-                betas: &betas,
-                fri_layer_lengths: &geometry.fri_lengths,
-                terminal_degree_bound: geometry.terminal_degree,
-                arity: FASTPQ_FINAL_V1.fri.arity,
-                domain: geometry.domain,
-            },
-        )?;
-        work.fri_queries += 1;
-    }
-    Ok(())
+    let shared = shared_openings::from_compact(relation, proof, limits)?;
+    let mut actual = shared_openings::SharedVerificationWork::default();
+    let result = shared_openings::verify_shared_recorded(relation, &shared, limits, &mut actual);
+    work.proof_bytes = actual.proof_bytes;
+    work.transcripts = actual.transcripts;
+    work.air_evaluations = actual.air_evaluations;
+    work.row_leaves = actual.row_leaves;
+    work.fri_queries = if result.is_ok() {
+        profile::QUERY_COUNT
+    } else {
+        0
+    };
+    result
 }
 
 #[cfg(test)]
@@ -686,7 +551,7 @@ fn preflight(
     )?;
     check_limit("max_queries", proof.queries.len(), limits.max_queries)?;
     if proof.fri_roots.len() != geometry.fri_lengths.len()
-        || proof.queries.len() != geometry.protocol.query_count(geometry.lde_rows)
+        || proof.queries.len() != profile::QUERY_COUNT
     {
         return Err(shape(
             "compact proof needs the exact canonical layer and query counts",
@@ -785,43 +650,6 @@ fn preflight(
     }
     Ok(bytes)
 }
-
-#[cfg(test)]
-fn initialise_transcript(
-    relation: &impl FixedAir,
-    geometry: &Geometry,
-    row_root: Digest,
-) -> Result<Transcript> {
-    let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
-    let schema = geometry.schema;
-    // Norito's nominal Vec encoding provides the sequence schema; bare byte
-    // slices do not implement NoritoSerialize. Both callers preflight the
-    // complete public statement before this bounded copy or any hashing.
-    let statement = relation.statement_bytes().to_vec();
-    let frame = norito::core::to_bytes(&(
-        PROTOCOL_TAG,
-        schema.identity,
-        schema.trace_rows as u32,
-        geometry.lde_rows as u32,
-        schema.width as u32,
-        schema.constraints as u32,
-        2_u32,
-        statement,
-    ))?;
-    let mut transcript =
-        Transcript::initialise(&PublicIO::default(), FASTPQ_FINAL_V1.name, 1, PROTOCOL_TAG)?;
-    transcript.append_message("compact:fixed-schema-and-statement", &frame);
-    transcript.append_message("compact:full-row-root", &row_root.to_le_bytes());
-    Ok(transcript)
-}
-
-#[cfg(test)]
-fn challenges(transcript: &mut Transcript, tag: &str, count: usize) -> Vec<GoldilocksFp4V1> {
-    (0..count)
-        .map(|index| transcript.challenge_extension(&format!("{tag}:{index}")))
-        .collect()
-}
-
 fn combine(residues: &[u64], alphas: &[GoldilocksFp4V1]) -> Result<GoldilocksFp4V1> {
     if residues.len() != alphas.len() {
         return Err(shape("fixed AIR returned another exact numerator count"));
@@ -844,24 +672,6 @@ fn fill_row(columns: &[Vec<u64>], index: usize, row: &mut [u64]) {
 fn next_index(index: usize, lde_rows: usize) -> usize {
     (index + FASTPQ_FINAL_V1.fri.blowup_factor as usize) % lde_rows
 }
-
-#[cfg(test)]
-fn authenticate(
-    cache: &mut MerkleNodeCache,
-    role: MerkleTreeRoleV1,
-    root: WireDigest,
-    leaf: Digest,
-    index: usize,
-    path: &[WireDigest],
-    position: usize,
-) -> Result<()> {
-    let native: Vec<_> = path.iter().copied().map(WireDigest::as_fastpq).collect();
-    if !cache.verify_path(role, root.as_fastpq(), leaf, index, &native)? {
-        return Err(Error::QueryMerklePathMismatch { index: position });
-    }
-    Ok(())
-}
-
 fn canonical_base(value: u64, context: &'static str, indices: &[usize]) -> Result<()> {
     if value >= GOLDILOCKS_MODULUS {
         return Err(Error::NonCanonicalGoldilocksElement {
@@ -1017,68 +827,50 @@ impl PreparedAir for PreparedHashDigest<'_> {
 
 #[cfg(test)]
 mod tests {
+    // Isolate the unchanged512KiB byte ceiling from the independently retained
+    // raw-replay default query ceiling. This is an explicit test policy.
+    fn byte_limit_policy() -> crate::VerifyLimits {
+        crate::VerifyLimits {
+            max_queries: 375,
+            ..crate::VerifyLimits::default()
+        }
+    }
+
     use super::*;
     use crate::gadgets::{
         compact_blake2b_air::{CompactHashWitness, CompactRow},
         compact_trace_columns::hash_row_cells,
     };
-    use std::sync::OnceLock;
 
-    struct Fixture {
-        digest: [u8; 32],
-        proof: CompactProof,
-        false_digest: [u8; 32],
-        false_proof: CompactProof,
-    }
-
-    fn fixture() -> &'static Fixture {
-        static FIXTURE: OnceLock<Fixture> = OnceLock::new();
-        FIXTURE.get_or_init(|| {
-            let started = std::time::Instant::now();
-            let bytes: Vec<_> = (0..83).map(|index| (index * 73 + 11) as u8).collect();
-            let witness = CompactHashWitness::from_bytes(&bytes).unwrap();
-            let digest = *iroha_crypto::Hash::new(&bytes).as_ref();
-            let relation = HashDigestAir::new(digest).unwrap();
-            let mut columns = vec![vec![0; 512]; 310];
-            for (row, values) in witness.rows().iter().enumerate() {
-                for (column, value) in columns.iter_mut().zip(hash_row_cells(values)) {
-                    column[row] = value;
-                }
-            }
-            let trace = prepare_trace(&relation, &columns).unwrap();
-            let proof = prove_prepared(&relation, &trace).unwrap();
-            let mut false_digest = digest;
-            false_digest[31] ^= 1; // Clear the mandatory Iroha marker bit248.
-            let false_relation = HashDigestAir::new(false_digest).unwrap();
-            let false_proof = prove_prepared(&false_relation, &trace).unwrap();
-            assert_eq!(proof.row_root, false_proof.row_root);
-            assert_ne!(proof.mixed_root, false_proof.mixed_root);
-            eprintln!(
-                "compact_single_hash_two_statement_proofs={:?}",
-                started.elapsed()
-            );
-            // The fixture retains only public digests and bounded proof objects.
-            // Base witness, coefficients, LDE rows and all prover trees drop here.
-            Fixture {
-                digest,
-                proof,
-                false_digest,
-                false_proof,
-            }
-        })
+    use super::test_fixture::{FixedColumnsAir, false_fixture, fixture};
+    #[test]
+    fn raw_replay_default_query_ceiling_does_not_admit_final_geometry() {
+        let policy = crate::VerifyLimits::default();
+        assert_eq!(policy.max_queries, 136);
+        assert_eq!(policy.max_proof_bytes, 512 * 1024);
+        let mut work = VerificationWork::default();
+        assert!(matches!(
+            verify_recorded(
+                &FixedColumnsAir::new(7),
+                &fixture().compact,
+                policy,
+                &mut work
+            ),
+            Err(Error::VerifierLimitExceeded {
+                limit: "max_queries",
+                actual: 375,
+                max: 136
+            })
+        ));
+        assert_eq!(work, VerificationWork::default());
     }
 
     fn diagnostic_limits() -> VerifyLimits {
-        // Explicit private measurement envelope only. Production remains512KiB;
-        // neither query count nor any production admission setting is changed.
-        VerifyLimits {
-            max_proof_bytes: 2 * 1024 * 1024,
-            ..VerifyLimits::default()
-        }
+        test_fixture::limits()
     }
 
     #[test]
-    fn canonical_wire_sizes_match_complete_hash_and_transfer_opening_shapes() {
+    fn canonical_wire_sizes_match_the_exact_final_opening_shape() {
         struct ShapeOnly(FixedAirSchema);
         impl FixedAir for ShapeOnly {
             fn schema(&self) -> FixedAirSchema {
@@ -1093,9 +885,7 @@ mod tests {
         }
         let digest = WireDigest::new([0; 6]).unwrap();
         // Fp4 payloads are the canonical 32-byte carrier, without struct framing.
-        for (rows, width, constraints, expected_bytes) in
-            [(512, 310, 688, 1_737_603), (65_536, 342, 923, 2_826_491)]
-        {
+        for (rows, width, constraints) in [(65_536, 342, 923)] {
             let air = ShapeOnly(FixedAirSchema {
                 trace_rows: rows,
                 width,
@@ -1109,7 +899,7 @@ mod tests {
                 mixed_root: digest,
                 quotient_root: digest,
                 fri_roots: vec![digest; geometry.fri_lengths.len()],
-                queries: (0..FASTPQ_FINAL_V1.fri.queries)
+                queries: (0..profile::QUERY_COUNT as u32)
                     .map(|index| CompactQuery {
                         index,
                         current: vec![0; width],
@@ -1144,22 +934,60 @@ mod tests {
                     .collect(),
             };
             let limits = VerifyLimits {
-                max_proof_bytes: 4 * 1024 * 1024,
-                ..VerifyLimits::default()
+                max_proof_bytes: 16 * 1024 * 1024,
+                max_queries: 375,
+                ..byte_limit_policy()
             };
             let _flags =
                 norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
             let counted = preflight(&air, &proof, limits, &geometry).unwrap();
             assert_eq!(counted, norito::core::to_bytes(&proof).unwrap().len());
-            assert_eq!(counted, expected_bytes, "rows={rows}; width={width}");
+            assert_eq!(
+                counted,
+                expanded_wire_bytes(profile::QUERY_COUNT, width, depth, &geometry.fri_lengths)
+            );
+            assert_eq!(counted, 7_791_716);
             assert!(matches!(
-                preflight(&air, &proof, VerifyLimits::default(), &geometry),
+                preflight(&air, &proof, byte_limit_policy(), &geometry),
                 Err(Error::VerifierLimitExceeded {
                     limit: "max_proof_bytes",
                     ..
                 })
             ));
         }
+    }
+
+    fn expanded_wire_bytes(queries: usize, width: usize, depth: usize, layers: &[usize]) -> usize {
+        // Canonical flags0x02: u64 Vec counts and canonical unsigned LEB field
+        // lengths. This formula reproduces both retired 136-query size controls
+        // (1,737,603 and 2,826,491) and independently fixes final shape7,791,716.
+        let field =
+            |body: usize| body + ((usize::BITS - body.leading_zeros()).max(1) as usize).div_ceil(7);
+        let vector = |count: usize, body: usize| 8 + count * field(body);
+        let round = |length: usize| {
+            2 * field(4)
+                + field(vector(2, 32))
+                + field(32)
+                + field(vector((length / 2).ilog2() as usize, 48))
+        };
+        let rounds = 8 + layers[..layers.len() - 1]
+            .iter()
+            .map(|&length| field(round(length)))
+            .sum::<usize>();
+        let fri = field(4)
+            + field(rounds)
+            + field(4)
+            + field(vector(*layers.last().unwrap(), 32))
+            + field(vector(1, 48));
+        let query = field(4)
+            + 2 * field(vector(width, 8))
+            + 4 * field(vector(depth, 48))
+            + 2 * field(32)
+            + field(fri);
+        norito::core::Header::SIZE
+            + 3 * field(48)
+            + field(vector(layers.len(), 48))
+            + field(vector(queries, query))
     }
 
     fn mutate_digest(value: WireDigest) -> WireDigest {
@@ -1169,15 +997,17 @@ mod tests {
     }
 
     fn rejected_before_hashing(proof: &CompactProof, limits: VerifyLimits) {
-        let relation = HashDigestAir::new(fixture().digest).unwrap();
+        let relation = FixedColumnsAir {
+            public: fixture().digest,
+        };
         let mut work = VerificationWork::default();
         assert!(verify_recorded(&relation, proof, limits, &mut work).is_err());
         assert_eq!(work, VerificationWork::default());
     }
 
     #[test]
-    fn end_to_end_public_digest_proof_verifies_without_private_trace_replay() {
-        struct VerifyOnly(HashDigestAir);
+    fn full_geometry_columns_proof_verifies_without_private_trace_replay() {
+        struct VerifyOnly(FixedColumnsAir);
         impl FixedAir for VerifyOnly {
             fn schema(&self) -> FixedAirSchema {
                 self.0.schema()
@@ -1193,33 +1023,35 @@ mod tests {
             }
         }
         let fixture = fixture();
-        let relation = VerifyOnly(HashDigestAir::new(fixture.digest).unwrap());
+        let relation = VerifyOnly(FixedColumnsAir {
+            public: fixture.digest,
+        });
         let started = std::time::Instant::now();
-        let work = verify(&relation, &fixture.proof, diagnostic_limits()).unwrap();
+        let work = verify(&relation, &fixture.compact, diagnostic_limits()).unwrap();
         assert_eq!(work.transcripts, 1);
-        assert_eq!(work.air_evaluations, 136);
-        assert_eq!(work.row_leaves, 272);
-        assert_eq!(work.fri_queries, 136);
-        assert!(work.proof_bytes > VerifyLimits::default().max_proof_bytes);
-        assert_eq!(fixture.proof.queries.len(), 136);
+        assert_eq!(work.air_evaluations, 375);
+        assert!(work.row_leaves <= 750);
+        assert_eq!(work.fri_queries, 375);
+        assert!(work.proof_bytes > byte_limit_policy().max_proof_bytes);
+        assert_eq!(fixture.compact.queries.len(), 375);
         assert!(
             fixture
-                .proof
+                .compact
                 .queries
                 .iter()
-                .all(|query| query.current.len() == 310 && query.next.len() == 310)
+                .all(|query| query.current.len() == 342 && query.next.len() == 342)
         );
         eprintln!(
-            "compact_single_hash_verify={:?}; work={work:?}; canonical_queries=136; production_512KiB_admitted=false; profile_security_qualified=false",
+            "compact_single_hash_verify={:?}; work={work:?}; canonical_queries=375; production_512KiB_admitted=false; profile_security_qualified=false",
             started.elapsed()
         );
-        rejected_before_hashing(&fixture.proof, VerifyLimits::default());
+        rejected_before_hashing(&fixture.compact, byte_limit_policy());
     }
 
     #[test]
-    fn shared_full_hash_proof_verifies_without_replay_and_false_proof_fails_degree() {
+    fn shared_full_geometry_proof_verifies_without_replay_and_false_claim_fails_degree() {
         use shared_openings::{from_compact, verify_shared};
-        struct VerifyOnly(HashDigestAir);
+        struct VerifyOnly(FixedColumnsAir);
         impl FixedAir for VerifyOnly {
             fn schema(&self) -> FixedAirSchema {
                 self.0.schema()
@@ -1235,8 +1067,10 @@ mod tests {
             }
         }
         let fixture = fixture();
-        let air = VerifyOnly(HashDigestAir::new(fixture.digest).unwrap());
-        let shared = from_compact(&air, &fixture.proof, diagnostic_limits()).unwrap();
+        let air = VerifyOnly(FixedColumnsAir {
+            public: fixture.digest,
+        });
+        let shared = from_compact(&air, &fixture.compact, diagnostic_limits()).unwrap();
         let started = std::time::Instant::now();
         let work = verify_shared(&air, &shared, diagnostic_limits()).unwrap();
         let encoded = norito::core::to_bytes(&shared).unwrap();
@@ -1245,13 +1079,13 @@ mod tests {
             work,
         );
         assert_eq!(work.transcripts, 1);
-        assert_eq!(work.air_evaluations, 136);
-        assert!(work.row_leaves <= 272);
-        assert_eq!(work.oracle_leaves, 272);
+        assert_eq!(work.air_evaluations, 375);
+        assert!(work.row_leaves <= 750);
+        assert_eq!(work.oracle_leaves, 750);
         assert_eq!(work.terminal_degree_checks, 1);
-        assert!(work.proof_bytes < 1_737_603);
+        assert!(work.proof_bytes < norito::encode_canonical(&fixture.compact).unwrap().len());
         assert!(matches!(
-            verify_shared(&air, &shared, VerifyLimits::default()),
+            verify_shared(&air, &shared, byte_limit_policy()),
             Err(Error::VerifierLimitExceeded {
                 limit: "max_proof_bytes",
                 ..
@@ -1261,10 +1095,12 @@ mod tests {
             "compact_shared_hash_verify={:?}; work={work:?}; production_security_qualified=false",
             started.elapsed()
         );
-        let false_air = VerifyOnly(HashDigestAir::new(fixture.false_digest).unwrap());
+        let false_air = VerifyOnly(FixedColumnsAir {
+            public: false_fixture().digest,
+        });
         assert!(verify_shared(&false_air, &shared, diagnostic_limits()).is_err());
         let false_shared =
-            from_compact(&false_air, &fixture.false_proof, diagnostic_limits()).unwrap();
+            from_compact(&false_air, &false_fixture().compact, diagnostic_limits()).unwrap();
         assert!(matches!(
             verify_shared(&false_air, &false_shared, diagnostic_limits()),
             Err(Error::FriTerminalDegreeMismatch { .. })
@@ -1281,25 +1117,17 @@ mod tests {
 
     #[test]
     fn parallel_prover_preserves_complete_proof_bytes_across_worker_counts() {
-        let bytes: Vec<_> = (0..83).map(|index| (index * 73 + 11) as u8).collect();
-        let witness = CompactHashWitness::from_bytes(&bytes).unwrap();
-        let relation = HashDigestAir::new(*iroha_crypto::Hash::new(&bytes).as_ref()).unwrap();
-        let mut columns = vec![vec![0; 512]; 310];
-        for (row, values) in witness.rows().iter().enumerate() {
-            for (column, value) in columns.iter_mut().zip(hash_row_cells(values)) {
-                column[row] = value;
-            }
-        }
+        let air = FixedColumnsAir::new(7);
+        let columns = air.columns();
         let mut previous = None;
         for workers in [1, 4] {
             let pool = rayon::ThreadPoolBuilder::new()
                 .num_threads(workers)
                 .build()
                 .unwrap();
-            let proof = pool.install(|| prove(&relation, &columns)).unwrap();
-            let _flags =
-                norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
-            let encoded = norito::core::to_bytes(&proof).unwrap();
+            let proof = pool.install(|| prove(&air, &columns)).unwrap();
+            let shared = shared_openings::from_compact(&air, &proof, diagnostic_limits()).unwrap();
+            let encoded = norito::encode_canonical(&shared).unwrap();
             if let Some(expected) = &previous {
                 assert_eq!(&encoded, expected, "workers={workers}");
             }
@@ -1308,16 +1136,27 @@ mod tests {
     }
 
     #[test]
-    fn a_fresh_proof_for_a_false_public_digest_fails_the_actual_air_relation() {
+    fn a_fresh_proof_for_a_false_constant_claim_fails_the_fixture_air_relation() {
         let fixture = fixture();
-        let valid_relation = HashDigestAir::new(fixture.digest).unwrap();
-        let false_relation = HashDigestAir::new(fixture.false_digest).unwrap();
-        assert!(verify(&false_relation, &fixture.proof, diagnostic_limits()).is_err());
-        assert!(verify(&valid_relation, &fixture.false_proof, diagnostic_limits()).is_err());
+        let valid_relation = FixedColumnsAir {
+            public: fixture.digest,
+        };
+        let false_relation = FixedColumnsAir {
+            public: false_fixture().digest,
+        };
+        assert!(verify(&false_relation, &fixture.compact, diagnostic_limits()).is_err());
+        assert!(
+            verify(
+                &valid_relation,
+                &false_fixture().compact,
+                diagnostic_limits()
+            )
+            .is_err()
+        );
         let mut work = VerificationWork::default();
         let result = verify_recorded(
             &false_relation,
-            &fixture.false_proof,
+            &false_fixture().compact,
             diagnostic_limits(),
             &mut work,
         );
@@ -1328,15 +1167,17 @@ mod tests {
             matches!(result, Err(Error::FriTerminalDegreeMismatch { .. })),
             "{result:?}"
         );
-        assert_eq!(work.air_evaluations, 1);
+        assert_eq!(work.air_evaluations, 375);
     }
 
     #[test]
     fn roots_columns_paths_oracle_coordinates_and_fri_values_are_bound() {
         let fixture = fixture();
-        let relation = HashDigestAir::new(fixture.digest).unwrap();
+        let relation = FixedColumnsAir {
+            public: fixture.digest,
+        };
         for root in 0..4 {
-            let mut proof = fixture.proof.clone();
+            let mut proof = fixture.compact.clone();
             let target = match root {
                 0 => &mut proof.row_root,
                 1 => &mut proof.mixed_root,
@@ -1351,9 +1192,9 @@ mod tests {
         }
         for side in 0..2 {
             for column in [
-                0, 31, 32, 63, 64, 79, 80, 271, 272, 275, 276, 299, 300, 301, 302, 309,
+                0, 31, 32, 63, 64, 79, 80, 271, 272, 275, 276, 299, 300, 301, 302, 309, 310, 341,
             ] {
-                let mut proof = fixture.proof.clone();
+                let mut proof = fixture.compact.clone();
                 let row = if side == 0 {
                     &mut proof.queries[0].current
                 } else {
@@ -1367,7 +1208,7 @@ mod tests {
             }
         }
         for role in 0..4 {
-            let mut proof = fixture.proof.clone();
+            let mut proof = fixture.compact.clone();
             let query = &mut proof.queries[0];
             let path = match role {
                 0 => &mut query.current_path,
@@ -1383,7 +1224,7 @@ mod tests {
         }
         for oracle in 0..4 {
             for lane in 0..4 {
-                let mut proof = fixture.proof.clone();
+                let mut proof = fixture.compact.clone();
                 let query = &mut proof.queries[0];
                 let value = match oracle {
                     0 => &mut query.mixed,
@@ -1400,17 +1241,17 @@ mod tests {
                 );
             }
         }
-        let mut proof = fixture.proof.clone();
+        let mut proof = fixture.compact.clone();
         proof.queries.swap(0, 1);
         assert!(verify(&relation, &proof, diagnostic_limits()).is_err());
-        let mut proof = fixture.proof.clone();
+        let mut proof = fixture.compact.clone();
         proof.queries[0].fri.rounds[0].index ^= 1 << 20;
         assert!(verify(&relation, &proof, diagnostic_limits()).is_err());
     }
 
     #[test]
     fn resource_shapes_and_all_fp4_coefficients_are_rejected_before_hashing() {
-        let base = &fixture().proof;
+        let base = &fixture().compact;
         for malformed in 0..8 {
             let mut proof = base.clone();
             match malformed {
@@ -1435,7 +1276,7 @@ mod tests {
             }
             rejected_before_hashing(&proof, diagnostic_limits());
         }
-        for column in [0, 31, 80, 272, 300, 309] {
+        for column in [0, 31, 80, 272, 300, 309, 310, 341] {
             let mut proof = base.clone();
             proof.queries[0].current[column] = GOLDILOCKS_MODULUS;
             rejected_before_hashing(&proof, diagnostic_limits());
@@ -1459,19 +1300,19 @@ mod tests {
         }
         for limits in [
             VerifyLimits {
-                max_queries: 135,
+                max_queries: 374,
                 ..diagnostic_limits()
             },
             VerifyLimits {
-                max_air_row_values: 309,
+                max_air_row_values: 341,
                 ..diagnostic_limits()
             },
             VerifyLimits {
-                max_query_path_len: 11,
+                max_query_path_len: 18,
                 ..diagnostic_limits()
             },
             VerifyLimits {
-                max_fri_layers: 10,
+                max_fri_layers: 17,
                 ..diagnostic_limits()
             },
             VerifyLimits {
@@ -1519,14 +1360,31 @@ mod tests {
 
     #[test]
     fn schema_statement_and_root_order_bind_independent_extension_challenges() {
-        let relation = HashDigestAir::new([17; 32]).unwrap();
-        let geometry = Geometry::new(&relation).unwrap();
+        struct StatementOnly([u8; 32]);
+        impl FixedAir for StatementOnly {
+            fn schema(&self) -> FixedAirSchema {
+                FixedAirSchema {
+                    trace_rows: 65_536,
+                    width: 342,
+                    constraints: 923,
+                    identity: "complete-final-statement-challenge-test:v1",
+                }
+            }
+            fn statement_bytes(&self) -> &[u8] {
+                &self.0
+            }
+            fn evaluate(&self, _: u64, _: &[u64], _: &[u64]) -> Result<Vec<u64>> {
+                panic!("challenge binding does not evaluate AIR")
+            }
+        }
+        let relation = StatementOnly([17; 32]);
         let root = Digest::new([1, 2, 3, 4, 5, 6]).unwrap();
-        let first = |relation: &HashDigestAir, root: Digest, mixed: Digest| {
-            let mut transcript = initialise_transcript(relation, &geometry, root).unwrap();
-            let mix = challenges(&mut transcript, "compact:column-mix", 310);
-            transcript.append_message("compact:mixed-root", &mixed.to_le_bytes());
-            let alpha = challenges(&mut transcript, "compact:constraint-alpha", 688);
+        let first = |relation: &StatementOnly, root: Digest, mixed: Digest| {
+            let geometry = Geometry::new(relation).unwrap();
+            let binding = Binding::new(relation, &geometry).unwrap();
+            let mut transcript = binding.transcript(relation, &geometry, root).unwrap();
+            let mix = transcript.columns().unwrap();
+            let alpha = transcript.alphas(mixed).unwrap();
             (mix, alpha)
         };
         let baseline = first(&relation, root, root);
@@ -1541,10 +1399,7 @@ mod tests {
         let later = first(&relation, root, changed_root);
         assert_eq!(baseline.0, later.0);
         assert_ne!(baseline.1, later.1);
-        assert_ne!(
-            baseline.0,
-            first(&HashDigestAir::new([18; 32]).unwrap(), root, root).0
-        );
+        assert_ne!(baseline.0, first(&StatementOnly([18; 32]), root, root).0);
         for (index, coefficient) in baseline.1.iter().enumerate().take(16) {
             assert!(!baseline.1[..index].contains(coefficient));
         }
@@ -1557,16 +1412,18 @@ mod tests {
     #[test]
     fn canonical_norito_frame_and_verification_ignore_ambient_layout_flags() {
         let fixture = fixture();
-        let relation = HashDigestAir::new(fixture.digest).unwrap();
+        let relation = FixedColumnsAir {
+            public: fixture.digest,
+        };
         let canonical = || {
             let _flags =
                 norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
-            norito::core::to_bytes(&fixture.proof).unwrap()
+            norito::core::to_bytes(&fixture.compact).unwrap()
         };
         let expected = canonical();
         let decoded = norito::core::from_bytes::<CompactProof>(&expected).unwrap();
         let decoded = CompactProof::try_deserialize(decoded).unwrap();
-        assert_eq!(decoded, fixture.proof);
+        assert_eq!(decoded, fixture.compact);
         for flags in [
             0,
             norito::core::header_flags::PACKED_SEQ,
@@ -1575,7 +1432,10 @@ mod tests {
             let _ambient = norito::core::DecodeFlagsGuard::enter(flags);
             let before = norito::core::to_bytes(&vec![1_u64, 2, 3]).unwrap();
             let work = verify(&relation, &decoded, diagnostic_limits()).unwrap();
-            assert_eq!(work.proof_bytes, expected.len());
+            assert_eq!(
+                work.proof_bytes,
+                norito::encode_canonical(&fixture.shared).unwrap().len()
+            );
             assert_eq!(canonical(), expected);
             assert_eq!(before, norito::core::to_bytes(&vec![1_u64, 2, 3]).unwrap());
         }
@@ -1583,61 +1443,48 @@ mod tests {
 
     #[test]
     fn generic_engine_default_prover_and_exact_schema_errors_are_exercised() {
-        struct ZeroAir;
-        impl FixedAir for ZeroAir {
-            fn schema(&self) -> FixedAirSchema {
-                FixedAirSchema {
-                    trace_rows: 4,
-                    width: 1,
-                    constraints: 1,
-                    identity: "compact-prototype-zero-column:v1",
-                }
-            }
-            fn statement_bytes(&self) -> &[u8] {
-                b"the committed column is zero"
-            }
-            fn evaluate(&self, _: u64, current: &[u64], _: &[u64]) -> Result<Vec<u64>> {
-                Ok(vec![current[0]])
-            }
-        }
-        let proof = prove(&ZeroAir, &[vec![0; 4]]).unwrap();
-        let work = verify(&ZeroAir, &proof, VerifyLimits::default()).unwrap();
-        assert_eq!(work.air_evaluations, 32);
-        assert_eq!(work.fri_queries, 32);
-        assert!(prove(&ZeroAir, &[]).is_err());
-        assert!(prove(&ZeroAir, &[vec![0; 3]]).is_err());
-        assert!(prove(&ZeroAir, &[vec![GOLDILOCKS_MODULUS; 4]]).is_err());
-        let geometry = Geometry::new(&ZeroAir).unwrap();
-        assert_eq!(next_index(31, geometry.lde_rows), 7);
-        let leaves = [Digest::new([1; 6]).unwrap(), Digest::new([2; 6]).unwrap()];
-        let tree = CommittedTree::from_leaves(&leaves, MerkleTreeRoleV1::AirTrace).unwrap();
-        assert!(tree.path(2).is_err());
-        assert!(CommittedTree::from_leaves(&[], MerkleTreeRoleV1::AirTrace).is_err());
-        let sole = CommittedTree::from_leaves(&leaves[..1], MerkleTreeRoleV1::AirTrace).unwrap();
-        assert_eq!(sole.path(0).unwrap(), vec![WireDigest::from(leaves[0])]);
+        let air = FixedColumnsAir::new(7);
+        let proof = &fixture().compact;
+        let work = verify(&air, proof, diagnostic_limits()).unwrap();
+        assert_eq!(work.air_evaluations, 375);
+        assert_eq!(work.fri_queries, 375);
+        assert!(prove(&air, &[]).is_err());
+        assert!(prove(&air, &vec![vec![0; 3]; 342]).is_err());
+        let mut columns = air.columns();
+        columns[341][65_535] = GOLDILOCKS_MODULUS;
+        assert!(prove(&air, &columns).is_err());
+        drop(columns);
+        let geometry = Geometry::new(&air).unwrap();
+        assert_eq!(next_index(geometry.lde_rows - 1, geometry.lde_rows), 7);
+        // A terminal tree is the sole one-leaf final tree. Every constructor and
+        // parent check below uses its exact canonical context and role.
+        let binding = Binding::new(&air, &geometry).unwrap();
+        let role = MerkleTreeRoleV1::Fri(17);
+        let leaf = binding.fri(17, 0, &[GoldilocksFp4V1::ZERO; 4]).unwrap();
+        let sole = binding.tree(&[leaf], role).unwrap();
+        assert_eq!(sole.path(0).unwrap(), vec![WireDigest::from(leaf)]);
         assert!(sole.path(1).is_err());
-        let mut cache = MerkleNodeCache::default();
-        authenticate(
-            &mut cache,
-            MerkleTreeRoleV1::AirTrace,
-            tree.root().into(),
-            leaves[0],
-            0,
-            &tree.path(0).unwrap(),
-            0,
+        assert!(sole.path(2).is_err());
+        assert!(binding.tree(&[], role).is_err());
+        assert!(binding.tree(&[leaf, leaf], role).is_err());
+        let plan = crate::backend::merkle_multiproof::MultiproofPlan::new(
+            1,
+            &[0],
+            crate::backend::merkle_multiproof::MultiproofLimits {
+                max_depth: 1,
+                max_queried_leaves: 1,
+                max_siblings: 1,
+                max_parent_hashes: 1,
+            },
         )
         .unwrap();
+        binding
+            .verify_tree(&plan, role, sole.root(), &[leaf], &[leaf])
+            .unwrap();
         assert!(
-            authenticate(
-                &mut cache,
-                MerkleTreeRoleV1::Lde,
-                tree.root().into(),
-                leaves[0],
-                0,
-                &tree.path(0).unwrap(),
-                0
-            )
-            .is_err()
+            binding
+                .verify_tree(&plan, MerkleTreeRoleV1::Lde, sole.root(), &[leaf], &[leaf])
+                .is_err()
         );
     }
 }

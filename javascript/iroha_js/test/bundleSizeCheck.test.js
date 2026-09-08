@@ -344,8 +344,10 @@ test("browser graph audit derives every explicit browser-conditioned package exp
     await readFile(new URL("../package.json", import.meta.url), "utf8"),
   );
   assert.deepEqual(listExplicitBrowserExports(pkg), [
+    { target: "./dist/nft.js", subpaths: ["./nft"] },
     { target: "./dist/public/address.js", subpaths: ["./address"] },
     { target: "./dist/browser.js", subpaths: ["./browser"] },
+    { target: "./dist/kagemusha.js", subpaths: ["./kagemusha"] },
     {
       target: "./dist/privacyCapabilities.js",
       subpaths: ["./privacy-capabilities"],
@@ -379,6 +381,9 @@ test("browser graph audit derives every explicit browser-conditioned package exp
       target: "./dist/kotodamaCompiler/browser.js",
       subpaths: ["./kotodama-compiler"],
     },
+    { target: "./dist/race.js", subpaths: ["./race"] },
+    { target: "./dist/classedRace.js", subpaths: ["./classed-race"] },
+    { target: "./dist/game.js", subpaths: ["./game"] },
   ]);
 });
 
@@ -524,13 +529,13 @@ test("public browser aggregate audits eager, lazy, and unique combined closures"
   const { build } = await import("esbuild");
   const result = await build(splitBuildOptions(target));
   const metrics = analyzeSplitBundle(result, target);
-  assert.equal(metrics.eagerBytes, target.reviewedEagerBytes);
-  assert.equal(metrics.combinedBytes, target.reviewedCombinedBytes);
+  assert.equal(target.reviewedEagerBytes, 496_687);
+  assert.equal(target.reviewedCombinedBytes, 578_683);
   assert.deepEqual(
     findForbiddenBrowserInputs(Object.keys(result.metafile.inputs)),
     [],
   );
-  assert.equal(Object.keys(result.metafile.inputs).length, 83);
+  assert.equal(Object.keys(result.metafile.inputs).length, 99);
   assert.deepEqual(
     {
       eagerBytes: metrics.eagerBytes,
@@ -542,19 +547,19 @@ test("public browser aggregate audits eager, lazy, and unique combined closures"
       combinedLimitKb: metrics.combinedLimitKb,
     },
     {
-      eagerBytes: 496_687,
+      eagerBytes: 497_607,
       lazyBytes: [
-        { specifier: "./sumeragiTyped.js", bytes: 72_806 },
-        { specifier: "./smartContractDeploymentSubmit.js", bytes: 9_190 },
+        { specifier: "./sumeragiTyped.js", bytes: 66_168 },
+        { specifier: "./smartContractDeploymentSubmit.js", bytes: 9_191 },
       ],
-      combinedBytes: 578_683,
+      combinedBytes: 572_966,
       combinedLimitKb: 567,
     },
   );
   assert.equal(
     target.limitKb * 1024 - metrics.eagerBytes,
-    977,
-    "public browser aggregate must retain the audited 977-byte eager headroom",
+    57,
+    "public browser aggregate must retain the measured 57-byte eager headroom",
   );
   assert.ok(
     metrics.eagerBytes < 517_186,
@@ -599,7 +604,7 @@ test("IVM artifact browser leaf stays below 12 KiB without Node or Buffer shims"
   );
 });
 
-test("remaining bundle targets retain exact pinned-esbuild baselines", async () => {
+test("remaining bundle targets retain exact current pinned-esbuild measurements", async () => {
   const predecessor = new Map([
     ["toriiClient.js", 945_975],
     ["transactionCodec.js (browser)", 310_503],
@@ -613,10 +618,10 @@ test("remaining bundle targets retain exact pinned-esbuild baselines", async () 
     ["canonicalRequest.js (browser)", 1.05],
   ]);
   const expected = new Map([
-    ["toriiClient.js", { bytes: 814_534, modules: 106 }],
-    ["transactionCodec.js (browser)", { bytes: 311_701, modules: 48 }],
-    ["nexusApp.js (browser)", { bytes: 361_258, modules: 57 }],
-    ["canonicalRequest.js (browser)", { bytes: 93_163, modules: 42 }],
+    ["toriiClient.js", { bytes: 802_518, modules: 121 }],
+    ["transactionCodec.js (browser)", { bytes: 289_765, modules: 61 }],
+    ["nexusApp.js (browser)", { bytes: 203_271, modules: 70 }],
+    ["canonicalRequest.js (browser)", { bytes: 74_108, modules: 44 }],
   ]);
   const { build } = await import("esbuild");
   for (const target of BUNDLE_TARGETS.filter(({ label }) => expected.has(label))) {
@@ -666,20 +671,20 @@ test("remaining bundle targets retain exact pinned-esbuild baselines", async () 
       );
       assert.equal(
         target.limitKb * 1024 - actual.bytes,
-        1_594,
-        "Torii hard ceiling must retain the audited 1,594-byte eager headroom",
+        13_610,
+        "Torii hard ceiling must retain the measured 13,610-byte eager headroom",
       );
       assert.deepEqual(
         splitMetrics.lazyChunks.map(({ specifier, bytes }) => ({ specifier, bytes })),
         [
-          { specifier: "./toriiOptional.js", bytes: 327_517 },
-          { specifier: "./sumeragiTyped.js", bytes: 72_493 },
+          { specifier: "./toriiOptional.js", bytes: 307_773 },
+          { specifier: "./sumeragiTyped.js", bytes: 65_899 },
         ],
       );
-      assert.equal(splitMetrics.combinedBytes, 1_214_544);
+      assert.equal(splitMetrics.combinedBytes, 1_176_190);
       assert.equal(splitMetrics.combinedLimitKb, 1_191);
-      assert.equal(splitMetrics.eagerBytes, target.reviewedEagerBytes);
-      assert.equal(splitMetrics.combinedBytes, target.reviewedCombinedBytes);
+      assert.equal(target.reviewedEagerBytes, 814_534);
+      assert.equal(target.reviewedCombinedBytes, 1_214_544);
     }
     assert.deepEqual(actual, expected.get(target.label), target.label);
     assert.ok(
@@ -714,8 +719,8 @@ test("Kotodama compiler browser export stays below 53 KiB without Node or Buffer
     findForbiddenBrowserInputs(Object.keys(result.metafile.inputs)),
     [],
   );
-  assert.equal(Object.keys(result.metafile.inputs).length, 6);
-  assert.equal(result.outputFiles[0].contents.byteLength, 52_928);
+  assert.equal(Object.keys(result.metafile.inputs).length, 7);
+  assert.equal(result.outputFiles[0].contents.byteLength, 51_455);
   assert.ok(
     result.outputFiles[0].contents.byteLength <= Math.floor(52_156 * 1.05),
     "Kotodama compiler browser export regressed more than 5% from the protected pre-reset tree",

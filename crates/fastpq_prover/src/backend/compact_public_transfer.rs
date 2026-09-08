@@ -32,7 +32,7 @@ use crate::{
 };
 
 #[derive(NoritoSerialize)]
-#[norito(schema_name = "fastpq_prover::compact_prototype::PublicDeltaV1")]
+#[norito(schema_name = "fastpq_prover::compact_v1::PublicDeltaV1")]
 struct BoundDelta {
     from_account: AccountId,
     to_account: AccountId,
@@ -58,7 +58,7 @@ impl From<&PublicTransferDelta> for BoundDelta {
 }
 
 #[derive(NoritoSerialize)]
-#[norito(schema_name = "fastpq_prover::compact_prototype::PublicTranscriptV1")]
+#[norito(schema_name = "fastpq_prover::compact_v1::PublicTranscriptV1")]
 struct BoundTranscript {
     batch_hash: Hash,
     authority_digest: Hash,
@@ -67,7 +67,7 @@ struct BoundTranscript {
 }
 
 #[derive(NoritoSerialize)]
-#[norito(schema_name = "fastpq_prover::compact_prototype::PublicTransferContextV1")]
+#[norito(schema_name = "fastpq_prover::compact_v1::PublicTransferContextV1")]
 struct BoundContext {
     version: u16,
     semantics: u8,
@@ -78,7 +78,7 @@ struct BoundContext {
 
 /// Nominal full-domain envelope; its identity requires QuantityValueV1 rows.
 #[derive(NoritoSerialize)]
-#[norito(schema_name = "fastpq_prover::compact_prototype::QuantityTransferContextV1")]
+#[norito(schema_name = "fastpq_prover::compact_v1::QuantityTransferContextV1")]
 struct BoundQuantityContext {
     version: u16,
     quantity_value_format: u16,
@@ -252,6 +252,15 @@ fn invariant(details: &str) -> Error {
 
 #[cfg(test)]
 mod tests {
+    // Isolate the unchanged512KiB byte ceiling from the independently retained
+    // raw-replay default query ceiling. This is an explicit test policy.
+    fn byte_limit_policy() -> crate::VerifyLimits {
+        crate::VerifyLimits {
+            max_queries: 375,
+            ..crate::VerifyLimits::default()
+        }
+    }
+
     use super::*;
     use crate::{
         OperationKind, PublicInputs,
@@ -493,7 +502,7 @@ mod tests {
         // Keep a separate schema spelling and original field order as the
         // extraction oracle; do not route this through the new shared encoder.
         #[derive(NoritoSerialize)]
-        #[norito(schema_name = "fastpq_prover::compact_prototype::PublicDeltaV1")]
+        #[norito(schema_name = "fastpq_prover::compact_v1::PublicDeltaV1")]
         struct OriginalDelta {
             from_account: AccountId,
             to_account: AccountId,
@@ -501,7 +510,7 @@ mod tests {
             quantities: [Quantity; 5],
         }
         #[derive(NoritoSerialize)]
-        #[norito(schema_name = "fastpq_prover::compact_prototype::PublicTranscriptV1")]
+        #[norito(schema_name = "fastpq_prover::compact_v1::PublicTranscriptV1")]
         struct OriginalTranscript {
             batch_hash: Hash,
             authority_digest: Hash,
@@ -509,7 +518,7 @@ mod tests {
             poseidon_preimage_digest: Option<Hash>,
         }
         #[derive(NoritoSerialize)]
-        #[norito(schema_name = "fastpq_prover::compact_prototype::PublicTransferContextV1")]
+        #[norito(schema_name = "fastpq_prover::compact_v1::PublicTransferContextV1")]
         struct OriginalContext {
             version: u16,
             semantics: u8,
@@ -670,23 +679,24 @@ mod tests {
         }
         let verifier = VerifyOnly(&air);
         assert!(matches!(
-            super::super::compact_protocol::verify(&verifier, &proof, VerifyLimits::default()),
+            super::super::compact_protocol::verify(&verifier, &proof, byte_limit_policy()),
             Err(Error::VerifierLimitExceeded {
                 limit: "max_proof_bytes",
                 ..
             })
         ));
         let limits = VerifyLimits {
-            max_proof_bytes: 4 * 1024 * 1024,
-            ..VerifyLimits::default()
+            max_proof_bytes: 16 * 1024 * 1024,
+            max_queries: 375,
+            ..byte_limit_policy()
         };
         let verifying_started = std::time::Instant::now();
         let work = super::super::compact_protocol::verify(&verifier, &proof, limits).unwrap();
         let verifying = verifying_started.elapsed();
-        assert_eq!(work.air_evaluations, 136);
-        assert_eq!(work.row_leaves, 272);
-        assert_eq!(work.fri_queries, 136);
-        assert_eq!(work.proof_bytes, 2_826_491);
+        assert_eq!(work.air_evaluations, 375);
+        assert!(work.row_leaves <= 750);
+        assert_eq!(work.fri_queries, 375);
+        assert_eq!(norito::encode_canonical(&proof).unwrap().len(), 7_791_716);
         let shared_conversion_started = std::time::Instant::now();
         let shared = super::super::compact_protocol::shared_openings::from_compact(
             &verifier, &proof, limits,
@@ -727,22 +737,23 @@ mod tests {
                 &prepared,
                 &expected(&prepared),
                 &encoded,
-                VerifyLimits::default(),
+                byte_limit_policy(),
             ),
             Err(Error::VerifierLimitExceeded {
                 limit: "max_proof_bytes",
                 ..
             })
         ));
-        assert_eq!(shared_work.air_evaluations, 136);
-        assert!(shared_work.row_leaves <= 272);
+        assert_eq!(shared_work.air_evaluations, 375);
+        assert!(shared_work.row_leaves <= 750);
         assert_eq!(shared_work.terminal_degree_checks, 1);
-        assert!(shared_work.proof_bytes < work.proof_bytes);
+        assert_eq!(shared_work.proof_bytes, work.proof_bytes);
+        assert!(shared_work.proof_bytes < norito::encode_canonical(&proof).unwrap().len());
         assert!(matches!(
             super::super::compact_protocol::shared_openings::verify_shared(
                 &verifier,
                 &shared,
-                VerifyLimits::default()
+                byte_limit_policy()
             ),
             Err(Error::VerifierLimitExceeded {
                 limit: "max_proof_bytes",

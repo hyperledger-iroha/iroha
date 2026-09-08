@@ -31,4 +31,7 @@ pub use poseidon_digest384::{
     GoldilocksDigest384V1, GoldilocksDigestDomainV1, goldilocks_digest384_lane_initial_state_v1,
     goldilocks_digest384_lane_round_constants_v1, hash_bytes_384_v1,
 };
-pub use poseidon_digest384_prefix::GoldilocksDigest384DomainPrefixV1;
+pub use poseidon_digest384_prefix::{
+    GoldilocksDigest384DomainPrefixV1, GoldilocksDigest384OwnedDomainPrefixV1,
+    GoldilocksDigest384OwnedDomainV1,
+};

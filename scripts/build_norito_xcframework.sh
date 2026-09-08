@@ -109,14 +109,14 @@ run_python312_clean() {
 #   rustup executable when the canonical home-local proxy is unavailable.
 #
 # Usage:
-#   scripts/build_norito_xcframework.sh
-#   scripts/build_norito_xcframework.sh --bridge-version 1.0.0
-#   scripts/build_norito_xcframework.sh --archive-output /absolute/NoritoBridge.xcframework.zip
-#   scripts/build_norito_xcframework.sh --privacy-production-enabled
-#   scripts/build_norito_xcframework.sh --privacy-production-enabled --allow-dirty-source
-#   scripts/build_norito_xcframework.sh --ci-handoff-only
-#   scripts/build_norito_xcframework.sh --ci-apple-slice aarch64-apple-ios
-#   scripts/build_norito_xcframework.sh --ci-handoff-only \
+#   scripts/build_norito_xcframework.sh --lockfile-path "$PWD/Cargo.lock"
+#   scripts/build_norito_xcframework.sh --lockfile-path "$PWD/Cargo.lock" --bridge-version 1.0.0
+#   scripts/build_norito_xcframework.sh --lockfile-path "$PWD/Cargo.lock" --archive-output /absolute/NoritoBridge.xcframework.zip
+#   scripts/build_norito_xcframework.sh --lockfile-path "$PWD/Cargo.lock" --privacy-production-enabled
+#   scripts/build_norito_xcframework.sh --lockfile-path "$PWD/Cargo.lock" --privacy-production-enabled --allow-dirty-source
+#   scripts/build_norito_xcframework.sh --lockfile-path "$PWD/Cargo.lock" --ci-handoff-only
+#   scripts/build_norito_xcframework.sh --lockfile-path "$PWD/Cargo.lock" --ci-apple-slice aarch64-apple-ios
+#   scripts/build_norito_xcframework.sh --lockfile-path "$PWD/Cargo.lock" --ci-handoff-only \
 #     --ci-assemble-apple-slices /absolute/download/root \
 #     --ci-apple-slice-sha256 aarch64-apple-ios=<sha256> [...]
 #
@@ -354,9 +354,17 @@ CI_HANDOFF_ONLY=0
 CI_APPLE_SLICE=""
 CI_ASSEMBLE_APPLE_SLICES=""
 CI_APPLE_SLICE_SHA256=()
-CARGO_LOCKFILE="${IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH:-$ROOT_DIR/Cargo.lock}"
+CARGO_LOCKFILE=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --lockfile-path)
+      shift
+      if [[ -n "$CARGO_LOCKFILE" || -z "${1:-}" ]]; then
+        echo "error: --lockfile-path requires exactly one explicit value" >&2
+        exit 64
+      fi
+      CARGO_LOCKFILE="$1"
+      ;;
     --bridge-version)
       shift
       BRIDGE_VERSION="${1:-}"
@@ -439,12 +447,17 @@ while [[ $# -gt 0 ]]; do
       ;;
     *)
       echo "[-] Unknown argument: $1" >&2
-      echo "    Usage: $0 [--bridge-version <version>] [--archive-output <absolute-path>] [--privacy-production-enabled] [--allow-dirty-source] [--ci-handoff-only] [--ci-apple-slice <target>] [--ci-assemble-apple-slices <absolute-dir> --ci-apple-slice-sha256 <target=digest> ...]" >&2
+      echo "    Usage: $0 --lockfile-path <absolute-path> [--bridge-version <version>] [--archive-output <absolute-path>] [--privacy-production-enabled] [--allow-dirty-source] [--ci-handoff-only] [--ci-apple-slice <target>] [--ci-assemble-apple-slices <absolute-dir> --ci-apple-slice-sha256 <target=digest> ...]" >&2
       exit 1
       ;;
   esac
   shift
 done
+
+if [[ -z "$CARGO_LOCKFILE" ]]; then
+  echo "error: --lockfile-path is required; no implicit Cargo.lock selection" >&2
+  exit 64
+fi
 
 CI_HANDOFF_DIR="$OUT_DIR/NoritoBridge.ci-handoff"
 CI_APPLE_SLICE_ARCHIVE="$OUT_DIR/NoritoBridge.apple-slice.tar"
@@ -609,6 +622,7 @@ fi
 
 PINNED_RUST_TOOLCHAIN="1.93.1"
 SOURCE_SEAL_SCRIPT="$ROOT_DIR/scripts/norito_bridge_source_seal.py"
+CARGO_GRAPH_OWNER="$ROOT_DIR/ci/privacy_sdk_cargo_lockfile.sh"
 PIN_COMMIT_CHECKER="$ROOT_DIR/scripts/check_mobile_sdk_artifact_pin_commit.py"
 HERMETIC_RUNNER="$ROOT_DIR/scripts/run_mobile_hermetic_command.py"
 APPLE_SLICE_HANDOFF="$ROOT_DIR/scripts/norito_bridge_apple_slice_handoff.py"
@@ -642,6 +656,7 @@ for tool_path in "$PYTHON_BINARY" "$GIT_BINARY" "$RUSTUP_BINARY"; do
 done
 for required_input in \
   "$SOURCE_SEAL_SCRIPT" \
+  "$CARGO_GRAPH_OWNER" \
   "$PIN_COMMIT_CHECKER" \
   "$HERMETIC_RUNNER" \
   "$APPLE_SLICE_HANDOFF" \
@@ -755,45 +770,35 @@ run_isolated_python() {
 }
 
 selected_cargo_lock_sha256() {
-  run_isolated_python - "$CARGO_LOCKFILE" <<'PY'
-import hashlib
-import os
+  run_isolated_python - "$SOURCE_SEAL_SCRIPT" "$CARGO_LOCKFILE" "$PRIVACY_PRODUCTION_ENABLED" <<'PY_LOCK'
+import importlib.util
 from pathlib import Path
-import stat
 import sys
 
-candidate = Path(sys.argv[1])
-if not candidate.is_absolute():
-    raise SystemExit("selected Cargo lock path must be absolute")
-if candidate != Path(os.path.abspath(candidate)):
-    raise SystemExit("selected Cargo lock path must be canonical")
+spec = importlib.util.spec_from_file_location("norito_bridge_selected_lock_owner", sys.argv[1])
+if spec is None or spec.loader is None:
+    raise SystemExit("selected Cargo lock owner is unavailable")
+owner = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(owner)
 try:
-    metadata = candidate.lstat()
-    resolved = candidate.resolve(strict=True)
-except OSError:
-    raise SystemExit(
-        "selected Cargo lock must be a non-symbolic regular file"
-    ) from None
-if (
-    resolved != candidate
-    or stat.S_ISLNK(metadata.st_mode)
-    or not stat.S_ISREG(metadata.st_mode)
-):
-    raise SystemExit("selected Cargo lock must be a non-symbolic regular file")
-digest = hashlib.sha256()
-with candidate.open("rb") as handle:
-    while chunk := handle.read(1024 * 1024):
-        digest.update(chunk)
-print(digest.hexdigest())
-PY
+    identity = owner.lockfile_identity(Path(sys.argv[2]))
+except RuntimeError as error:
+    raise SystemExit(str(error)) from error
+if sys.argv[3] == "1" and identity[2] & 0o222:
+    raise SystemExit("privacy production selected Cargo lock must be read-only")
+print(identity[-1])
+PY_LOCK
 }
 
 CARGO_LOCK_SHA256_START="$(selected_cargo_lock_sha256)"
-if [[ -n "${IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH+x}" ]]; then
-  if [[ "$CARGO_LOCKFILE" == "$ROOT_DIR/Cargo.lock" \
-      || "$CARGO_LOCK_SHA256_START" != \
-        "cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79" ]]; then
-    echo "[-] Privacy release builds require the distinct authenticated cd9e Cargo.lock" >&2
+source "$CARGO_GRAPH_OWNER"
+if [[ "$PRIVACY_PRODUCTION_ENABLED" == "1" && "$CARGO_LOCKFILE" == "$ROOT_DIR/Cargo.lock" ]]; then
+  echo "[-] Privacy production builds require an explicit external canonical graph snapshot" >&2
+  exit 1
+fi
+if [[ "$CARGO_LOCKFILE" != "$ROOT_DIR/Cargo.lock" ]]; then
+  if [[ "$CARGO_LOCK_SHA256_START" != "$PRIVACY_SDK_CANONICAL_CARGO_LOCK_SHA256" ]]; then
+    echo "[-] External Cargo.lock must match the canonical reviewed graph" >&2
     exit 1
   fi
 fi
@@ -1828,6 +1833,7 @@ SWIFT_PIN_PREIMAGE_SHA256="$(
 SWIFT_PIN_OWNER_ARGUMENTS=(
   --root "$ROOT_DIR"
   --artifact-dir "$PUBLISH_ROOT"
+  --lockfile-path "$CARGO_LOCKFILE"
   --output "$PUBLISH_PROSPECTIVE_LOADER"
   --expected-preimage-sha256 "$SWIFT_PIN_PREIMAGE_SHA256"
 )
@@ -2036,6 +2042,7 @@ PY
 run_isolated_python \
   "$ROOT_DIR/scripts/validate_norito_bridge_xcframework.py" \
   --root "$ROOT_DIR" \
+  --lockfile-path "$CARGO_LOCKFILE" \
   --xcframework "$PUBLISH_XCFRAMEWORK" \
   --manifest "$PUBLISH_MANIFEST" \
   --manifest-link "$PUBLISH_MANIFEST_LINK" \
@@ -2054,13 +2061,13 @@ else
       MOBILE_SDK_RUSTUP_BINARY="$RUSTUP_BINARY" \
       MOBILE_SDK_STAGED_BUILD_VALIDATION=1 \
       MOBILE_SDK_PROSPECTIVE_SWIFT_LOADER_PATH="$PUBLISH_PROSPECTIVE_LOADER" \
-      bash "$ROOT_DIR/scripts/check_mobile_sdk_artifacts.sh" --root "$ROOT_DIR" --apple-only
+      bash "$ROOT_DIR/scripts/check_mobile_sdk_artifacts.sh" --root "$ROOT_DIR" --lockfile-path "$CARGO_LOCKFILE" --apple-only
   else
     MOBILE_SDK_APPLE_ARTIFACT_DIR="$PUBLISH_ROOT" \
       MOBILE_SDK_RUSTUP_BINARY="$RUSTUP_BINARY" \
       MOBILE_SDK_STAGED_BUILD_VALIDATION=1 \
       MOBILE_SDK_PROSPECTIVE_SWIFT_LOADER_PATH="$PUBLISH_PROSPECTIVE_LOADER" \
-      bash "$ROOT_DIR/scripts/check_mobile_sdk_artifacts.sh" --root "$ROOT_DIR" --apple-only
+      bash "$ROOT_DIR/scripts/check_mobile_sdk_artifacts.sh" --root "$ROOT_DIR" --lockfile-path "$CARGO_LOCKFILE" --apple-only
   fi
 
   assert_bridge_source_seal "pre-publication artifact verification"
@@ -2312,6 +2319,7 @@ if [[ -n "$ARCHIVE_OUTPUT" ]]; then
     exit 1
   fi
   ARCHIVE_OWNER_ARGUMENTS=(
+    --lockfile-path "$CARGO_LOCKFILE"
     --xcframework "$FINAL_XCFRAMEWORK"
     --output "$ARCHIVE_OUTPUT"
     --scratch-dir "$BUILD_DIR"

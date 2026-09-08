@@ -1273,9 +1273,9 @@ async fn assert_bpng_metadata(
 ) -> Result<()> {
     let client = client.clone();
     let domain = read(move || {
-        client
+        Ok(client
             .client()
-            .query_single(FindDomainById::new(DomainId::try_new("mibank", "bpng")?))
+            .query_single(FindDomainById::new(DomainId::try_new("mibank", "bpng")?))?)
     })
     .await?;
     ensure!(
@@ -1854,6 +1854,7 @@ fn inspect_stopped_peer(
         fsync_mode: FsyncMode::Batched,
         fsync_interval: defaults::kura::FSYNC_INTERVAL,
         lane_history_retention: defaults::kura::LANE_HISTORY_RETENTION,
+        fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
         replica_advert: defaults::kura::REPLICA_ADVERT_POLICY,
     };
     let (kura, _) = Kura::new_with_configured_lane_catalog(&config, &lanes, &catalog)?;
@@ -2350,11 +2351,7 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
         .collect::<Vec<_>>();
     layers.push(Cow::Owned(dataspace_only_restart_layer(&grant)));
     try_join_all(network.peers().iter().map(|peer| async {
-        timeout(
-            NETWORK_TIMEOUT,
-            peer.start_checked(layers.iter().map(Cow::Borrowed), None),
-        )
-        .await??;
+        timeout(NETWORK_TIMEOUT, peer.start_checked(layers.iter(), None)).await??;
         Ok::<_, eyre::Report>(())
     }))
     .await?;
@@ -2621,11 +2618,7 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
     // Restart two deliberately reuses the same dataspace-only operator layer.
     // Lane 8 must come exclusively from the signed lifecycle replay.
     try_join_all(network.peers().iter().map(|peer| async {
-        timeout(
-            NETWORK_TIMEOUT,
-            peer.start_checked(layers.iter().map(Cow::Borrowed), None),
-        )
-        .await??;
+        timeout(NETWORK_TIMEOUT, peer.start_checked(layers.iter(), None)).await??;
         Ok::<_, eyre::Report>(())
     }))
     .await?;

@@ -3491,7 +3491,8 @@ impl MaybeTelemetry {
             let _runtime_guard = tokio::runtime::Handle::try_current()
                 .is_err()
                 .then(|| TEST_TELEMETRY_RUNTIME.enter());
-            let metrics = iroha_telemetry::metrics::global_or_default();
+            // Each test owner needs its own registry; resource sources cannot be rebound.
+            let metrics = Arc::new(iroha_telemetry::metrics::Metrics::default());
             let kura = Kura::blank_kura_for_testing();
             let query = LiveQueryStore::start_test();
             let local_peer_keypair = checked_routing_fixture_keypair(
@@ -3533,7 +3534,8 @@ impl MaybeTelemetry {
                 local_peer_id,
                 time_source,
                 true,
-            );
+            )
+            .expect("test telemetry resource registration");
             let _ = peers_tx;
             MaybeTelemetry::from_profile(Some(tel), TelemetryProfile::Full)
         }

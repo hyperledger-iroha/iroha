@@ -269,7 +269,7 @@ struct BlockReplicaKey {
     executed_block_wire_len: u64,
     executed_block_wire_hash: Hash,
 }
-type BlockReplicaRegistry = BTreeMap<BlockReplicaKey, BTreeMap<PeerId, BlockReplicaAdvert>>;
+type BlockReplicaRegistry = NestedMap<BlockReplicaKey, BTreeMap<PeerId, BlockReplicaAdvert>>;
 #[derive(Debug, Default)]
 struct MergeCarrierIndex {
     initialized: bool,
@@ -685,6 +685,8 @@ pub(crate) struct KaigiSignalCandidateLocatorPage {
 
 #[derive(Debug)]
 struct TransactionEntrypointIndex {
+    /// All nested memberships; outer height-marker maps are counted separately.
+    nested_associations: AssociationCount,
     complete: bool,
     indexed_heights: BTreeSet<NonZeroUsize>,
     incomplete_merge_heights: BTreeSet<NonZeroUsize>,
@@ -699,6 +701,7 @@ struct TransactionEntrypointIndex {
 impl TransactionEntrypointIndex {
     fn complete_empty() -> Self {
         Self {
+            nested_associations: AssociationCount::default(),
             complete: true,
             indexed_heights: BTreeSet::new(),
             incomplete_merge_heights: BTreeSet::new(),
@@ -1115,6 +1118,8 @@ struct CommitManifestReconciliation {
 }
 #[derive(Debug)]
 struct MergeLedgerLog {
+    /// Cleared after a failed mutation until a validated whole-owner reload.
+    resident_inventory_valid: bool,
     /// Fast mode deliberately leaves the durable log opaque until a Strict restart.
     history_deferred: bool,
     file: Option<FileWrap>,

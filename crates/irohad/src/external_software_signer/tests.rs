@@ -19,8 +19,7 @@ use iroha_data_model::{
     transaction::{FeePaymentIntent, TransactionBuilder},
 };
 use sorafs_manifest::{
-    POTR_RECEIPT_VERSION_V1, PotrReceiptV1, PotrStatus, StreamTokenBodyV1,
-    proof_stream::ProofStreamTier,
+    POTR_RECEIPT_VERSION_V1, PotrReceiptV1, PotrStatus, proof_stream::ProofStreamTier,
 };
 use std::{fs, os::unix::fs::PermissionsExt as _, path::Path};
 const WRAPPING_KEY: [u8; 32] = [0xA5; 32];
@@ -71,7 +70,9 @@ fn provisioning(
             signer_id: "billing-signer-primary".to_owned(),
         },
         SignerRoleV1::EvidenceViewer => SignerPurposeBindingV1::EvidenceViewer,
-        SignerRoleV1::StreamToken => SignerPurposeBindingV1::StreamToken,
+        SignerRoleV1::StreamToken => SignerPurposeBindingV1::StreamToken {
+            provider_id: [0x62; 32],
+        },
         SignerRoleV1::ReleaseManifest => SignerPurposeBindingV1::ReleaseManifest {
             deployment_id: "production-primary".into(),
         },
@@ -481,32 +482,6 @@ fn typed_service_boundary_enforces_roles_purposes_algorithms_and_public_identiti
             .expect("cross-purpose replay result")
             .status,
         SignStatusV1::Equivocation
-    );
-    let stream_parent = temporary_parent();
-    let stream = provision(
-        stream_parent.path(),
-        SignerRoleV1::StreamToken,
-        SignerKeyAlgorithmV1::Ed25519,
-    );
-    let stream_message = StreamTokenBodyV1 {
-        token_id: "11".repeat(16),
-        manifest_cid: vec![0x61; 32],
-        provider_id: [0x62; 32],
-        profile_handle: "sorafs.standard".to_owned(),
-        max_streams: 1,
-        ttl_epoch: 1_060,
-        rate_limit_bytes: 1_024,
-        issued_at: 1_000,
-        requests_per_minute: 1,
-        token_pk_version: 1,
-    }
-    .signing_payload_bytes()
-    .expect("stream-token signing payload");
-    assert_typed_signs(
-        &stream,
-        [0x0C; 32],
-        SoftwareSignerPurposeV1::StreamToken,
-        &stream_message,
     );
     let pop_parent = temporary_parent();
     let pop = provision(
@@ -973,3 +948,6 @@ fn cli_value_parsers_accept_only_canonical_role_and_algorithm_labels() {
         assert!(alias.parse::<SignerKeyAlgorithmV1>().is_err());
     }
 }
+
+#[path = "tests/stream_token_software_rejection.rs"]
+mod stream_token_software_rejection;

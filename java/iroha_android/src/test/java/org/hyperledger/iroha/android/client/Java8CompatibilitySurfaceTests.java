@@ -25,7 +25,6 @@ import org.hyperledger.iroha.android.crypto.keystore.KeyGenParameters;
 import org.hyperledger.iroha.android.model.Executable;
 import org.hyperledger.iroha.android.model.InstructionBox;
 import org.hyperledger.iroha.android.model.zk.VerifyingKeyBackendTag;
-import org.hyperledger.iroha.android.privacy.PrivacyConfidentialWitness;
 import org.hyperledger.iroha.android.testing.TestEd25519Keys;
 import org.hyperledger.iroha.android.testing.TestNetworkIds;
 import org.junit.Test;
@@ -175,7 +174,7 @@ public final class Java8CompatibilitySurfaceTests {
   }
 
   @Test
-  public void privacyAndBfvJava8SurfaceCopiesLists() {
+  public void bfvJava8SurfaceCopiesLists() {
     final List<Long> b = new ArrayList<>();
     final List<Long> a = new ArrayList<>();
     b.add(Long.valueOf(11L));
@@ -195,40 +194,6 @@ public final class Java8CompatibilitySurfaceTests {
       // Expected immutable list behavior.
     }
 
-    final PrivacyConfidentialWitness.NoteWitnessV1 input =
-        new PrivacyConfidentialWitness.NoteWitnessV1(
-            "7", repeatedByte(0x22), repeatedByte(0x33), 0L);
-    final PrivacyConfidentialWitness.TransferOutputWitnessV1 output =
-        new PrivacyConfidentialWitness.TransferOutputWitnessV1(
-            "7", repeatedByte(0x44), repeatedByte(0x55));
-    final List<PrivacyConfidentialWitness.NoteWitnessV1> inputs = new ArrayList<>();
-    final List<PrivacyConfidentialWitness.TransferOutputWitnessV1> outputs = new ArrayList<>();
-    inputs.add(input);
-    outputs.add(output);
-
-    final PrivacyConfidentialWitness.WitnessV1 witness =
-        new PrivacyConfidentialWitness.WitnessV1(
-            TestNetworkIds.canonical(),
-            "xor#universal",
-            repeatedByte(0x11),
-            Collections.singletonList(repeatedByte(0x10)),
-            inputs,
-            outputs,
-            Collections.emptyList(),
-            "0",
-            repeatedByte(0x66));
-    inputs.clear();
-    outputs.clear();
-
-    assertTrue("privacy witness inputs must be copied", witness.inputs().size() == 1);
-    assertTrue(
-        "privacy witness transfer outputs must be copied", witness.transferOutputs().size() == 1);
-    try {
-      witness.inputs().add(input);
-      fail("privacy witness input lists must be immutable");
-    } catch (final UnsupportedOperationException expected) {
-      // Expected immutable list behavior.
-    }
   }
 
   @Test

@@ -10,8 +10,6 @@ TEST_VENV_OVERRIDE="${PRIVACY_PYTHON_SDK_TEST_VENV:-}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REQUIREMENTS_LOCKFILE="${ROOT_DIR}/python/iroha_python/requirements-ci.lock"
 CHECKOUT_NATIVE_DIR="${ROOT_DIR}/python"
-FROZEN_CARGO_LOCK_SHA256="cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79"
-TRACKED_ROOT_CARGO_LOCK_SHA256="051423addf3830895e208c6276429a0e8f46c61954159b0ef913e8cfed33d3aa"
 ABI23_CHECKER="${ROOT_DIR}/scripts/check_native_sdk_abi23_artifact.py"
 WHEEL_PATH=""
 WHEEL_SEAL=""
@@ -793,7 +791,7 @@ WORKSPACE_CARGO_LOCK_STATE="$(
     "${PYTHON_BIN}"
 )"
 case "${WORKSPACE_CARGO_LOCK_STATE}" in
-  "present:${TRACKED_ROOT_CARGO_LOCK_SHA256}:"*) ;;
+  "present:${PRIVACY_SDK_CANONICAL_CARGO_LOCK_SHA256}:"*) ;;
   *)
     echo "error: privacy Python SDK requires the exact tracked root Cargo.lock authority" >&2
     exit 1
@@ -802,8 +800,8 @@ esac
 SELECTED_CARGO_LOCK_SEAL="$(
   privacy_sdk_file_seal "${SELECTED_CARGO_LOCKFILE}" "${PYTHON_BIN}"
 )"
-if [[ "${SELECTED_CARGO_LOCK_SEAL%%:*}" != "${FROZEN_CARGO_LOCK_SHA256}" ]]; then
-  echo "error: privacy Python SDK Cargo.lock does not match the frozen release digest" >&2
+if [[ "${SELECTED_CARGO_LOCK_SEAL%%:*}" != "${PRIVACY_SDK_CANONICAL_CARGO_LOCK_SHA256}" ]]; then
+  echo "error: privacy Python SDK Cargo.lock does not match the canonical reviewed graph" >&2
   exit 1
 fi
 REQUIREMENTS_LOCKFILE_SEAL="$(

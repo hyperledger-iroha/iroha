@@ -435,5 +435,5 @@ mod tests {
     }
 }
 
-#[path = "compact_shake_artifact.rs"]
+#[path = "compact_artifact.rs"]
 pub(super) mod candidate_artifact;

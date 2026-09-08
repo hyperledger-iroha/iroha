@@ -1361,6 +1361,7 @@ fn build_test_router() -> (iroha_torii::TestApiRouterRuntime, Arc<Metrics>, KeyP
             ts,
             true,
         )
+        .expect("test telemetry resource registration")
         .0
     };
     let operator_key_pair = cfg.common.key_pair.clone();

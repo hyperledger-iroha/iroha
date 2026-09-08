@@ -1436,7 +1436,7 @@ pub(crate) struct AxtPublicMetadataBytes<'a> {
 
 /// Pre-proof outer metadata mirrors; completed-proof commitments are excluded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize)]
-#[norito(schema_name = "fastpq_prover::compact_prototype::AxtProofContextMirrorsV1")]
+#[norito(schema_name = "fastpq_prover::compact_v1::AxtProofContextMirrorsV1")]
 pub(crate) struct AxtProofContextMirrors {
     /// Exact outer envelope dataspace.
     pub(crate) dsid: DataSpaceId,

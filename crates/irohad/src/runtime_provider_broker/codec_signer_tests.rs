@@ -789,7 +789,8 @@ fn canonical_broker_codec_accounts_for_variable_payload_frame_header() {
     let bare_payload_len = value
         .encoded_len_exact()
         .expect("variable request has an exact bare payload length");
-    let framed_len = norito::core::encoded_frame_len(&value).expect("compute exact framed length");
+    let framed_len =
+        norito::canonical_frame_len(&value).expect("compute exact canonical framed length");
     assert!(
         framed_len > bare_payload_len,
         "the outer Norito frame must be included in broker limits"
@@ -1583,6 +1584,145 @@ fn handshake_rejects_catalog_nonce_session_binding_metadata_and_transcript_confu
         assert!(
             validate_handshake_response(&request, &confused).is_err(),
             "mutation {mutation} must fail"
+        );
+    }
+}
+
+#[test]
+fn canonical_broker_encoding_counts_exact_output_and_limit_under_all_ten_layouts() {
+    let value = SoracloudProvenanceSignRequestWireV1 {
+        purpose: iroha_data_model::soracloud::SoracloudRuntimeProvenancePurposeV1::InrouHostAdvert
+            .wire_id(),
+        preimage: vec![0xc1; 257],
+    };
+    let canonical = norito::encode_canonical(&value).unwrap();
+    let layouts: Vec<_> = (0..=u8::MAX)
+        .filter(|flags| norito::core::validate_header_flags(*flags).is_ok())
+        .collect();
+    assert_eq!(layouts.len(), 10, "exercise every supported V1 layout");
+    let mut different_ambient_length = false;
+    for flags in layouts {
+        let _ambient = norito::core::DecodeFlagsGuard::enter(flags);
+        let ambient_before = norito::core::to_bytes(&value).unwrap();
+        different_ambient_length |= ambient_before.len() != canonical.len();
+        assert_eq!(
+            norito::canonical_frame_len(&value).unwrap(),
+            canonical.len()
+        );
+        let pool = Arc::new(DecodeResourcePoolV1::new(
+            CONTROL_DECODE_POLICY_V1.max_composed_bytes,
+        ));
+        let admission =
+            DecodeResourceAdmissionV1::acquire_from(pool, None, CONTROL_DECODE_POLICY_V1).unwrap();
+        let scope = admission.enter();
+        assert_eq!(
+            encode_canonical(&value, canonical.len()).unwrap(),
+            canonical,
+            "layout {flags:#04x}"
+        );
+        let charged = admission.usage.lock().unwrap().consumed_bytes;
+        assert_eq!(
+            charged,
+            canonical.len(),
+            "only the complete canonical frame is charged"
+        );
+        assert_eq!(
+            encode_canonical(&value, canonical.len() - 1),
+            Err(BrokerError::Rejected)
+        );
+        assert_eq!(
+            admission.usage.lock().unwrap().consumed_bytes,
+            charged,
+            "over-limit counting rejects before allocation/admission"
+        );
+        assert_eq!(
+            decode_canonical::<SoracloudProvenanceSignRequestWireV1>(&canonical, canonical.len())
+                .unwrap(),
+            value
+        );
+        drop(scope);
+        assert_eq!(
+            norito::core::to_bytes(&value).unwrap(),
+            ambient_before,
+            "canonical broker encoding/decoding restores ambient layout"
+        );
+    }
+    assert!(
+        different_ambient_length,
+        "the fixture exposes the former ambient count mismatch"
+    );
+}
+
+#[test]
+fn stream_token_discriminator_rejects_foreign_bulk_operations_before_reading_length() {
+    let slot = IrohaRuntimeProviderSlotV1::StreamTokenSigner.wire_id();
+    let allowed = [
+        OPERATION_QUALIFY_V1,
+        OPERATION_STREAM_TOKEN_SIGN_V1,
+        OPERATION_STREAM_TOKEN_RECOVER_V1,
+        OPERATION_STREAM_TOKEN_OBSERVE_V1,
+    ];
+    let mut rejected = 0;
+    for operation in 0..=u16::MAX {
+        if !operation_is_known(operation) || allowed.contains(&operation) {
+            continue;
+        }
+        let mut wire = slot.to_be_bytes().to_vec();
+        wire.extend_from_slice(&operation.to_be_bytes());
+        wire.extend_from_slice(&u32::MAX.to_be_bytes());
+        let mut reader = Cursor::new(wire);
+        let inbound = Arc::new(tokio::sync::Semaphore::new(1));
+        let pool = Arc::new(DecodeResourcePoolV1::new(1));
+        assert_eq!(
+            read_operation_request_frame_inner(&mut reader, Some(inbound.clone()), Some(pool))
+                .err(),
+            Some(BrokerError::Protocol)
+        );
+        assert_eq!(
+            reader.position(),
+            4,
+            "known foreign operation {operation} must not read even its length"
+        );
+        assert_eq!(
+            inbound.available_permits(),
+            1,
+            "foreign bulk reservation cannot consume raw capacity"
+        );
+        rejected += 1;
+    }
+    assert!(
+        rejected > 100,
+        "cover every known unrelated operation, including all bulk paths"
+    );
+    for (slot, operation) in allowed
+        .into_iter()
+        .map(|operation| (slot, operation))
+        .chain([
+            (
+                IrohaRuntimeProviderSlotV1::GovernanceDagSigner.wire_id(),
+                OPERATION_SIGN_V1,
+            ),
+            (
+                IrohaRuntimeProviderSlotV1::ProviderIngestAuthenticatedSource.wire_id(),
+                OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V1,
+            ),
+        ])
+    {
+        // This layer reads only discriminator and bounded raw frame; typed canonical validation follows.
+        let body = [0xc2; 32];
+        let mut wire = slot.to_be_bytes().to_vec();
+        wire.extend_from_slice(&operation.to_be_bytes());
+        wire.extend_from_slice(&(body.len() as u32).to_be_bytes());
+        wire.extend_from_slice(&body);
+        let mut reader = Cursor::new(wire);
+        let (actual_slot, actual_operation, frame, _) =
+            read_operation_request_frame_inner(&mut reader, None, None).unwrap();
+        assert_eq!((actual_slot, actual_operation), (slot, operation));
+        assert_eq!(&frame[..], &body);
+        assert_eq!(
+            reader.position(),
+            40,
+            "valid slot-11 and unrelated role admission remains intact"
         );
     }
 }

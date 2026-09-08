@@ -31,6 +31,7 @@ mod subscriptions;
 mod sumeragi;
 mod taira;
 mod taira_public_reset;
+mod transaction_load;
 mod zk; // ZK helpers (app API convenience) // IVM/ABI helpers
 use clap::{CommandFactory, FromArgMatches, error::ErrorKind};
 use error_stack::{IntoReportCompat, Report, ResultExt, fmt::ColorMode};
@@ -4695,6 +4696,8 @@ mod transaction {
         Get(Get),
         /// Send an empty transaction that logs a message
         Ping(Ping),
+        /// Collect an exact fixed-schedule transaction trace for multilane qualification
+        Load(crate::transaction_load::Args),
         /// Send a transaction using IVM bytecode
         Ivm(Ivm),
         /// Send a transaction using JSON input from stdin
@@ -4709,6 +4712,7 @@ mod transaction {
                 Status(cmd) => cmd.run(context),
                 Get(cmd) => cmd.run(context),
                 Ping(cmd) => cmd.run(context),
+                Load(cmd) => cmd.run(context),
                 Ivm(cmd) => cmd.run(context),
                 Stdin(cmd) => cmd.run(context),
                 SignedSize(cmd) => cmd.run(context),

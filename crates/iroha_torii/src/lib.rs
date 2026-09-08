@@ -48206,7 +48206,11 @@ pub struct ToriiRuntimeDeps {
     soracloud_runtime: Option<SharedSoracloudRuntime>,
     sorafs_node: Option<sorafs_node::NodeHandle>,
     #[cfg(feature = "app_api")]
-    sorafs_stream_token_signer: Option<Arc<dyn sorafs::StreamTokenRuntimeSigner>>,
+    sorafs_stream_token_hardware_client: Option<Arc<dyn sorafs::StreamTokenHardwareClientV1>>,
+    #[cfg(feature = "app_api")]
+    sorafs_stream_token_state_observer: Option<Arc<dyn sorafs::StreamTokenStateObserverClientV1>>,
+    #[cfg(feature = "app_api")]
+    sorafs_stream_token_approved_anchor: Option<sorafs::StreamTokenApprovedCustodyAnchorV1>,
     #[cfg(feature = "app_api")]
     sorafs_stream_token_admission_capture: Option<Arc<sorafs::StreamTokenAdmissionCaptureV1>>,
     #[cfg(feature = "app_api")]
@@ -48327,7 +48331,11 @@ impl ToriiRuntimeDeps {
             soracloud_runtime: None,
             sorafs_node: None,
             #[cfg(feature = "app_api")]
-            sorafs_stream_token_signer: None,
+            sorafs_stream_token_hardware_client: None,
+            #[cfg(feature = "app_api")]
+            sorafs_stream_token_state_observer: None,
+            #[cfg(feature = "app_api")]
+            sorafs_stream_token_approved_anchor: None,
             #[cfg(feature = "app_api")]
             sorafs_stream_token_admission_capture: None,
             #[cfg(feature = "app_api")]
@@ -52419,7 +52427,14 @@ impl Torii {
         let soracloud_runtime = runtime_deps.soracloud_runtime.clone();
         let shared_sorafs_node = runtime_deps.sorafs_node.clone();
         #[cfg(feature = "app_api")]
-        let shared_sorafs_stream_token_signer = runtime_deps.sorafs_stream_token_signer.clone();
+        let shared_sorafs_stream_token_hardware_client =
+            runtime_deps.sorafs_stream_token_hardware_client.clone();
+        #[cfg(feature = "app_api")]
+        let shared_sorafs_stream_token_state_observer =
+            runtime_deps.sorafs_stream_token_state_observer.clone();
+        #[cfg(feature = "app_api")]
+        let shared_sorafs_stream_token_approved_anchor =
+            runtime_deps.sorafs_stream_token_approved_anchor;
         #[cfg(feature = "app_api")]
         let shared_sorafs_stream_token_admission_capture =
             runtime_deps.sorafs_stream_token_admission_capture.clone();
@@ -53524,15 +53539,25 @@ impl Torii {
         };
         #[cfg(feature = "app_api")]
         let stream_token_issuer = {
-            if config.sorafs_storage.stream_tokens.enabled && !operator_signatures.is_enabled() {
+            if sorafs::stream_token_runtime::validate_issuer_operator_signatures(
+                &config.sorafs_storage.stream_tokens,
+                operator_signatures.is_enabled(),
+            )
+            .is_err()
+            {
                 return Err(ToriiBuildError::invalid_configuration(
                     "sorafs.storage.stream_tokens",
                     "enabled stream-token issuance requires operator_signatures.enabled",
                 ));
             }
             sorafs::StreamTokenIssuer::from_config(
-                &config.sorafs_storage.stream_tokens,
-                shared_sorafs_stream_token_signer,
+                &config.sorafs_storage,
+                chain_id.as_ref(),
+                *network_id.as_bytes(),
+                shared_sorafs_stream_token_hardware_client,
+                shared_sorafs_stream_token_state_observer,
+                shared_sorafs_stream_token_approved_anchor,
+                Arc::clone(&state),
             )
             .map_err(|error| {
                 ToriiBuildError::invalid_runtime_dependency("sorafs.storage.stream_tokens", error)
@@ -56778,35 +56803,6 @@ mod gateway_runtime_config_tests {
             ))
         }
     }
-    #[derive(Debug)]
-    struct TestStreamTokenRuntimeSigner {
-        public_key: [u8; 32],
-    }
-    impl sorafs::StreamTokenRuntimeSigner for TestStreamTokenRuntimeSigner {
-        fn handle(&self) -> &str {
-            "provider:prod/stream-token/v1"
-        }
-        fn public_key(&self) -> [u8; 32] {
-            self.public_key
-        }
-        fn qualification(
-            &self,
-        ) -> Result<
-            sorafs::StreamTokenRuntimeSignerQualificationV1,
-            sorafs::StreamTokenRuntimeSignerProbeErrorV1,
-        > {
-            Ok(sorafs::StreamTokenRuntimeSignerQualificationV1::new(
-                4, [0xb4; 32],
-            ))
-        }
-        fn sign(
-            &self,
-            _signing_payload: &[u8],
-        ) -> Result<[u8; ed25519_dalek::SIGNATURE_LENGTH], sorafs::StreamTokenSigningError>
-        {
-            Err(sorafs::StreamTokenSigningError::Refused)
-        }
-    }
     fn compliance_signer(
         signer_id: &str,
         signing_key_byte: u8,
@@ -57048,43 +57044,7 @@ mod gateway_runtime_config_tests {
         );
         mapped.validate().expect("mapped policy must remain valid");
     }
-    #[test]
-    fn runtime_dependency_builders_retain_injected_instances() {
-        let acme_client: Arc<dyn sorafs::gateway::AcmeClient> = Arc::new(TestAcmeClient);
-        let compliance_transport: Arc<dyn sorafs::gateway::GatewayComplianceFeedTransport> =
-            Arc::new(TestComplianceFeedTransport);
-        let stream_token_signer: Arc<dyn sorafs::StreamTokenRuntimeSigner> =
-            Arc::new(TestStreamTokenRuntimeSigner {
-                public_key: SigningKey::from_bytes(&[0x54; 32])
-                    .verifying_key()
-                    .to_bytes(),
-            });
-        let dependencies = ToriiRuntimeDeps::new(routing::MaybeTelemetry::disabled())
-            .with_sorafs_stream_token_signer(Arc::clone(&stream_token_signer))
-            .with_sorafs_gateway_acme_client(Arc::clone(&acme_client))
-            .with_sorafs_gateway_compliance_feed_transport(Arc::clone(&compliance_transport));
-        assert!(Arc::ptr_eq(
-            dependencies
-                .sorafs_stream_token_signer
-                .as_ref()
-                .expect("stream-token signer retained"),
-            &stream_token_signer
-        ));
-        assert!(Arc::ptr_eq(
-            dependencies
-                .sorafs_gateway_acme_client
-                .as_ref()
-                .expect("ACME client retained"),
-            &acme_client
-        ));
-        assert!(Arc::ptr_eq(
-            dependencies
-                .sorafs_gateway_compliance_feed_transport
-                .as_ref()
-                .expect("compliance transport retained"),
-            &compliance_transport
-        ));
-    }
+    include!("runtime_dependency_tests/stream_token_hardware.rs");
     #[test]
     fn gateway_security_builds_only_from_resolved_config_and_runtime_dependencies() {
         let checkpoint_dir = tempfile::tempdir().expect("temporary checkpoint directory");

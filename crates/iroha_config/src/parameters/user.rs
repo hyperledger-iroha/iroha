@@ -28254,6 +28254,9 @@ impl SorafsStorage {
                 "sorafs.storage.governance_dag_service.publisher_public_key_hex must exactly match governance_dag_publisher_public_key_hex",
             ));
         }
+        let stream_tokens = self
+            .stream_tokens
+            .parse(self.enabled, provider_id.is_some(), emitter);
         actual::SorafsStorage {
             enabled: self.enabled,
             provider_id,
@@ -28282,7 +28285,7 @@ impl SorafsStorage {
             alias: self.alias.or_else(super::defaults::sorafs::storage::alias),
             adverts: self.adverts.parse(),
             metering_smoothing: self.metering_smoothing.parse(),
-            stream_tokens: self.stream_tokens.parse(self.enabled, emitter),
+            stream_tokens,
             native_transaction_signers,
             orderbook_worker: self.orderbook_worker.parse(emitter),
             reserve_worker: self.reserve_worker.parse(emitter),
@@ -31929,20 +31932,21 @@ fn sorafs_por_rejects_obsolete_competing_state_paths() {
 }
 #[path = "user/stream_token_admission.rs"]
 mod stream_token_admission;
+#[path = "user/stream_token_hardware.rs"]
+mod stream_token_hardware;
+pub use stream_token_hardware::{
+    SorafsStreamTokenAttesterConfig, SorafsStreamTokenHardwareConfig,
+    SorafsStreamTokenObserverConfig,
+};
 /// User-level configuration for stream-token issuance.
 #[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
 pub struct SorafsStreamTokenConfig {
     /// Enable stream-token issuance.
     #[config(default = "defaults::sorafs::storage::tokens::ENABLED")]
     pub enabled: bool,
-    /// Opaque runtime-only authenticated external signer handle.
-    pub signer_handle: Option<String>,
-    /// Canonical lowercase Ed25519 public key bound to the runtime signer.
-    pub signer_public_key_hex: Option<String>,
-    /// Exact non-zero deployment adapter revision bound to the runtime signer.
-    pub signer_revision: Option<u64>,
-    /// Exact non-zero public-policy digest as lowercase hexadecimal.
-    pub signer_policy_digest_hex: Option<String>,
+    /// Complete hardware signer and independent attester/observer trust.
+    #[config(nested)]
+    pub hardware: SorafsStreamTokenHardwareConfig,
     /// Credential-free deployment-owned quota/sequence/outbox provider handle.
     pub admission_provider_handle: Option<String>,
     /// Exact non-zero external admission-provider contract revision.
@@ -31961,9 +31965,6 @@ pub struct SorafsStreamTokenConfig {
     /// Maximum lifetime of one cross-replica concurrency lease.
     #[config(default = "defaults::sorafs::storage::tokens::ADMISSION_LEASE_TTL_MS")]
     pub admission_lease_ttl_ms: u64,
-    /// Public-key version advertised in tokens.
-    #[config(default = "defaults::sorafs::storage::tokens::KEY_VERSION")]
-    pub key_version: u32,
     /// Default TTL applied to issued tokens (seconds).
     #[config(default = "defaults::sorafs::storage::tokens::DEFAULT_TTL_SECS")]
     pub default_ttl_secs: u64,
@@ -31981,10 +31982,7 @@ impl Default for SorafsStreamTokenConfig {
     fn default() -> Self {
         Self {
             enabled: defaults::sorafs::storage::tokens::ENABLED,
-            signer_handle: None,
-            signer_public_key_hex: None,
-            signer_revision: None,
-            signer_policy_digest_hex: None,
+            hardware: SorafsStreamTokenHardwareConfig::default(),
             admission_provider_handle: None,
             admission_provider_revision: None,
             admission_provider_policy_digest_hex: None,
@@ -31994,7 +31992,6 @@ impl Default for SorafsStreamTokenConfig {
             admission_reconcile_max_items:
                 defaults::sorafs::storage::tokens::ADMISSION_RECONCILE_MAX_ITEMS,
             admission_lease_ttl_ms: defaults::sorafs::storage::tokens::ADMISSION_LEASE_TTL_MS,
-            key_version: defaults::sorafs::storage::tokens::KEY_VERSION,
             default_ttl_secs: defaults::sorafs::storage::tokens::DEFAULT_TTL_SECS,
             default_max_streams: defaults::sorafs::storage::tokens::DEFAULT_MAX_STREAMS,
             default_rate_limit_bytes: defaults::sorafs::storage::tokens::DEFAULT_RATE_LIMIT_BYTES,
@@ -32007,40 +32004,9 @@ impl SorafsStreamTokenConfig {
     fn parse(
         self,
         storage_enabled: bool,
+        provider_configured: bool,
         emitter: &mut Emitter<ParseError>,
     ) -> actual::SorafsTokenConfig {
-        let signer_public_key = self
-            .signer_public_key_hex
-            .as_deref()
-            .and_then(|value| {
-                if !is_canonical_nonzero_ed25519_public_key_hex(value) {
-                    emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(
-                        "sorafs.storage.stream_tokens.signer_public_key_hex must be canonical lowercase non-zero 32-byte hex",
-                    ));
-                    return None;
-                }
-                let bytes: [u8; 32] = hex::decode(value)
-                    .expect("validated lowercase Ed25519 public key hex")
-                    .try_into()
-                    .expect("validated 32-byte Ed25519 public key");
-                if PublicKey::from_bytes(Algorithm::Ed25519, &bytes).is_err() {
-                    emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(
-                        "sorafs.storage.stream_tokens.signer_public_key_hex is not a valid Ed25519 public key",
-                    ));
-                    return None;
-                }
-                Some(bytes)
-            });
-        let admission_provider_policy_digest = stream_token_admission::decode_policy_digest(
-            self.admission_provider_policy_digest_hex.as_deref(),
-            "admission_provider_policy_digest_hex",
-            emitter,
-        );
-        let signer_policy_digest = stream_token_admission::decode_policy_digest(
-            self.signer_policy_digest_hex.as_deref(),
-            "signer_policy_digest_hex",
-            emitter,
-        );
         if self.enabled {
             if !storage_enabled {
                 emitter.emit(
@@ -32048,57 +32014,27 @@ impl SorafsStreamTokenConfig {
                         .attach("sorafs.storage.stream_tokens.enabled requires storage.enabled"),
                 );
             }
-            match self.signer_handle.as_deref() {
-                Some(handle) if is_production_runtime_handle(handle) => {}
-                Some(_) => {
-                    emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(
-                        "sorafs.storage.stream_tokens.signer_handle must be a canonical credential-free production runtime handle",
-                    ));
-                }
-                None => {
-                    emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(
-                        "sorafs.storage.stream_tokens.signer_handle is required when issuance is enabled",
-                    ));
-                }
-            }
-            if self.signer_public_key_hex.is_none() {
+            if !provider_configured {
                 emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(
-                    "sorafs.storage.stream_tokens.signer_public_key_hex is required when issuance is enabled",
-                ));
+                    "sorafs.storage.stream_tokens.enabled requires a canonical non-zero storage.provider_id_hex"));
             }
-            match self.signer_revision {
-                Some(0) => emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(
-                    "sorafs.storage.stream_tokens.signer_revision must be non-zero",
-                )),
-                None => emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(
-                    "sorafs.storage.stream_tokens.signer_revision is required when issuance is enabled",
-                )),
-                Some(_) => {}
-            }
-            if self.signer_policy_digest_hex.is_none() {
-                emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(
-                    "sorafs.storage.stream_tokens.signer_policy_digest_hex is required when issuance is enabled",
-                ));
-            }
-        } else if self.signer_handle.is_some()
-            || self.signer_public_key_hex.is_some()
-            || self.signer_revision.is_some()
-            || self.signer_policy_digest_hex.is_some()
-            || self.admission_provider_handle.is_some()
+        } else if self.admission_provider_handle.is_some()
             || self.admission_provider_revision.is_some()
             || self.admission_provider_policy_digest_hex.is_some()
         {
             emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(
-                "sorafs.storage.stream_tokens runtime bindings are forbidden while issuance is disabled",
-            ));
+                "sorafs.storage.stream_tokens runtime bindings are forbidden while issuance is disabled"));
         }
+        let hardware = self.hardware.parse(self.enabled, emitter);
+        let admission_provider_policy_digest = stream_token_admission::decode_policy_digest(
+            self.admission_provider_policy_digest_hex.as_deref(),
+            "admission_provider_policy_digest_hex",
+            emitter,
+        );
         stream_token_admission::validate_binding_and_bounds(&self, emitter);
         actual::SorafsTokenConfig {
             enabled: self.enabled,
-            signer_handle: self.signer_handle,
-            signer_public_key,
-            signer_revision: self.signer_revision,
-            signer_policy_digest,
+            hardware,
             admission_provider_handle: self.admission_provider_handle,
             admission_provider_revision: self.admission_provider_revision,
             admission_provider_policy_digest,
@@ -32106,7 +32042,6 @@ impl SorafsStreamTokenConfig {
             admission_max_tracked_tokens: self.admission_max_tracked_tokens,
             admission_reconcile_max_items: self.admission_reconcile_max_items,
             admission_lease_ttl_ms: self.admission_lease_ttl_ms,
-            key_version: self.key_version,
             default_ttl_secs: self.default_ttl_secs,
             default_max_streams: self.default_max_streams,
             default_rate_limit_bytes: self.default_rate_limit_bytes,

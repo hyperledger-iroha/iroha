@@ -84,6 +84,18 @@ impl PendingLifecycleOutputAdmissionV1 {
         self.ownership.owner().clone()
     }
 
+    /// Identify an exact single-effect periodic Broadcast without an Apply suffix.
+    pub(in crate::sumeragi) fn binds_single_periodic_retransmit_broadcast(&self) -> bool {
+        self.ownership
+            .binds_single_periodic_retransmit_broadcast(&self.effect)
+    }
+
+    /// Identify the bound periodic two-effect prefix without authorizing its suffix.
+    pub(in crate::sumeragi) fn binds_periodic_retransmit_apply_prefix(&self) -> bool {
+        self.ownership
+            .binds_periodic_retransmit_apply_prefix(&self.effect)
+    }
+
     /// Authenticate this exact periodic CommitQC output as the first member
     /// of the retained Apply's two-effect reducer batch.
     pub(in crate::sumeragi) fn exactly_precedes_periodic_retransmit_apply(

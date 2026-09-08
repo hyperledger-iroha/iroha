@@ -1092,3 +1092,154 @@ fn certified_bundle_startup_rebuild_publishes_nothing_on_late_route_error() {
         "a late rebuild error must not publish a partial replacement map"
     );
 }
+#[test]
+fn certified_bundle_guard_retry_tracks_partial_then_complete_consumption() {
+    use crate::kura::resident_inventory::ResidentOwner;
+
+    let temp_dir = TempDir::new().expect("guard retry temp dir");
+    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+    let lane_config = two_lane_runtime_config();
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("guard retry Kura");
+    let prepared =
+        prepare_autonomous_certification_for_capacity(&kura, &lane_config, LaneId::new(1));
+    let artifact =
+        CertifiedLaneBlockArtifact::new(prepared.session.clone(), prepared.signer_pops.clone());
+    let _prune_guard = kura.prune_lock.lock();
+    assert_eq!(
+        kura.ensure_certified_bundle_capacity_reservation_under_prune_guard(
+            &artifact,
+            &prepared.source,
+            None,
+        )
+        .expect("admit actual signed source through the capacity snapshot owner"),
+        initial_certified_bundle_reserved(&prepared.plan),
+    );
+    let all: BTreeSet<_> = prepared.plan.component_bytes.keys().copied().collect();
+    assert_eq!(all.len(), 3);
+    let consumed = BTreeSet::from([CertifiedBundleCapacityComponent::LatestCertifiedFrontier]);
+    let remaining: BTreeSet<_> = all.difference(&consumed).copied().collect();
+    assert_eq!(remaining.len(), 2);
+    // Existing-record retries do not consult admission snapshot arguments. The
+    // initial record above was admitted using the actual configured snapshot.
+    let partial = kura
+        .ensure_certified_bundle_capacity_plan_locked(prepared.plan.clone(), &consumed, 0, 0, 0, 0)
+        .expect("the exact existing record consumes only its attested frontier");
+    assert_eq!(
+        partial,
+        certified_bundle_reserved_for(&prepared.plan, remaining.iter().copied()),
+    );
+    {
+        let reservations = kura.certified_bundle_capacity_reservations.lock();
+        assert_eq!(reservations.len(), 1);
+        assert_eq!(
+            reservations[&prepared.plan.identity].outstanding_components,
+            remaining,
+        );
+        assert_eq!(
+            reservations
+                .resident_associations()
+                .expect("valid partial count"),
+            (1 + prepared.plan.component_bytes.len()
+                + prepared.plan.component_transient_bytes.len()
+                + remaining.len()) as u64,
+        );
+    }
+    assert_eq!(
+        kura.ensure_certified_bundle_capacity_plan_locked(prepared.plan.clone(), &all, 0, 0, 0, 0)
+            .expect("complete existing record ends its value guard before map removal"),
+        0,
+    );
+    {
+        let reservations = kura.certified_bundle_capacity_reservations.lock();
+        assert!(!reservations.contains_key(&prepared.plan.identity));
+        assert!(reservations.is_empty());
+        assert_eq!(
+            reservations
+                .resident_associations()
+                .expect("valid empty count"),
+            0
+        );
+    }
+    assert_eq!(kura.certified_bundle_capacity_reserved_bytes().unwrap(), 0);
+}
+
+#[test]
+fn certified_bundle_guard_retry_rejects_immutable_plan_and_consumed_component_loss() {
+    use crate::kura::resident_inventory::ResidentOwner;
+
+    let temp_dir = TempDir::new().expect("guard retry rejection temp dir");
+    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+    let lane_config = two_lane_runtime_config();
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("guard retry rejection Kura");
+    let prepared =
+        prepare_autonomous_certification_for_capacity(&kura, &lane_config, LaneId::new(1));
+    let artifact =
+        CertifiedLaneBlockArtifact::new(prepared.session.clone(), prepared.signer_pops.clone());
+    let _prune_guard = kura.prune_lock.lock();
+    kura.ensure_certified_bundle_capacity_reservation_under_prune_guard(
+        &artifact,
+        &prepared.source,
+        None,
+    )
+    .expect("admit actual signed source before negative retries");
+    let before = kura.certified_bundle_capacity_reservations.lock().clone();
+    assert_eq!(before.len(), 1);
+    let before_count = before
+        .resident_associations()
+        .expect("complete baseline count");
+    let all: BTreeSet<_> = prepared.plan.component_bytes.keys().copied().collect();
+    assert_eq!(all.len(), 3);
+    for changed_field in 0..3 {
+        let mut changed = prepared.plan.clone();
+        let slot = match changed_field {
+            0 => &mut changed.certified_bytes_hash,
+            1 => &mut changed.frontier_bytes_hash,
+            _ => &mut changed.bundle_bytes_hash,
+        };
+        let different = Hash::new(b"guard retry changed immutable byte plan");
+        assert_ne!(*slot, different);
+        *slot = different;
+        let error = kura
+            .ensure_certified_bundle_capacity_plan_locked(changed, &all, 0, 0, 0, 0)
+            .expect_err("all-consumed retry cannot bypass immutable-plan validation");
+        assert!(
+            error
+                .to_string()
+                .contains("retry changed its immutable byte plan")
+        );
+        let reservations = kura.certified_bundle_capacity_reservations.lock();
+        assert_eq!(*reservations, before);
+        assert_eq!(reservations.resident_associations().unwrap(), before_count);
+    }
+    let consumed = BTreeSet::from([CertifiedBundleCapacityComponent::LatestCertifiedFrontier]);
+    kura.ensure_certified_bundle_capacity_plan_locked(prepared.plan.clone(), &consumed, 0, 0, 0, 0)
+        .expect("establish actual partially consumed retry state");
+    let partial = kura.certified_bundle_capacity_reservations.lock().clone();
+    assert_eq!(
+        partial[&prepared.plan.identity]
+            .outstanding_components
+            .len(),
+        2
+    );
+    let partial_count = partial.resident_associations().unwrap();
+    let error = kura
+        .ensure_certified_bundle_capacity_plan_locked(
+            prepared.plan.clone(),
+            &BTreeSet::new(),
+            0,
+            0,
+            0,
+            0,
+        )
+        .expect_err("a previously consumed durable component cannot disappear");
+    assert!(
+        error
+            .to_string()
+            .contains("durability-attested certified/bundle component disappeared")
+    );
+    let reservations = kura.certified_bundle_capacity_reservations.lock();
+    assert_eq!(*reservations, partial);
+    assert_eq!(reservations.resident_associations().unwrap(), partial_count);
+}

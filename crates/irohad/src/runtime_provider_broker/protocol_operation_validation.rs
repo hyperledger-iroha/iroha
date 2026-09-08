@@ -1,5 +1,8 @@
 const fn operation_decode_policy(operation: u16) -> DecodeResourcePolicyV1 {
     match operation {
+        OPERATION_STREAM_TOKEN_SIGN_V1
+        | OPERATION_STREAM_TOKEN_RECOVER_V1
+        | OPERATION_STREAM_TOKEN_OBSERVE_V1 => STREAM_TOKEN_HARDWARE_DECODE_POLICY_V1,
         OPERATION_BILLING_IDENTITY_V1
         | OPERATION_BILLING_READINESS_V1
         | OPERATION_BILLING_QUERY_CAPABILITIES_V1
@@ -76,9 +79,10 @@ const fn operation_semantic_frame_limit(operation: u16) -> usize {
         OPERATION_NATIVE_TRANSACTION_SIGN_V1 | OPERATION_SORACLOUD_PROVENANCE_SIGN_V1 => {
             MAX_NATIVE_TRANSACTION_FRAME_BYTES_V1
         }
-        OPERATION_STREAM_TOKEN_SIGN_V1 | OPERATION_APPEAL_FINANCE_CHECKPOINT_SIGN_V1 => {
-            MAX_STREAM_TOKEN_FRAME_BYTES_V1
-        }
+        OPERATION_STREAM_TOKEN_SIGN_V1
+        | OPERATION_STREAM_TOKEN_RECOVER_V1
+        | OPERATION_STREAM_TOKEN_OBSERVE_V1 => MAX_STREAM_TOKEN_HARDWARE_FRAME_BYTES_V1,
+        OPERATION_APPEAL_FINANCE_CHECKPOINT_SIGN_V1 => MAX_STREAM_TOKEN_FRAME_BYTES_V1,
         OPERATION_APPEAL_FINANCE_TRANSACTION_SIGN_V1 => {
             MAX_APPEAL_FINANCE_TRANSACTION_FRAME_BYTES_V1
         }
@@ -296,6 +300,8 @@ const fn operation_is_known(operation: u16) -> bool {
             | OPERATION_NATIVE_TRANSACTION_SIGN_V1
             | OPERATION_SORACLOUD_PROVENANCE_SIGN_V1
             | OPERATION_STREAM_TOKEN_SIGN_V1
+            | OPERATION_STREAM_TOKEN_RECOVER_V1
+            | OPERATION_STREAM_TOKEN_OBSERVE_V1
             | OPERATION_STREAM_TOKEN_GATEWAY_ADMIT_V1
             | OPERATION_STREAM_TOKEN_GATEWAY_PENDING_V1
             | OPERATION_STREAM_TOKEN_GATEWAY_ACKNOWLEDGE_V1
@@ -1288,7 +1294,8 @@ fn validate_operation_result(
     if status == STATUS_AMBIGUOUS_V1
         && !matches!(
             request.operation,
-            OPERATION_MODERATION_QUARANTINE_WRAP_DEK_V1
+            OPERATION_STREAM_TOKEN_SIGN_V1
+                | OPERATION_MODERATION_QUARANTINE_WRAP_DEK_V1
                 | OPERATION_REPUTATION_JOURNAL_SUBMIT_V1
                 | OPERATION_REPUTATION_THRESHOLD_RECONCILE_V1
                 | OPERATION_REPUTATION_GOVERNANCE_RECONCILE_V1
@@ -1557,15 +1564,7 @@ fn validate_operation_result(
                 if request.binding.slot
                     == IrohaRuntimeProviderSlotV1::StreamTokenSigner.wire_id() =>
             {
-                let qualification = decode_canonical::<QualificationResultWireV1>(
-                    result,
-                    MAX_OPERATION_FRAME_BYTES_V1,
-                )?;
-                if Some(qualification.revision) != request.binding.revision
-                    || Some(qualification.policy_digest) != request.binding.policy_digest
-                {
-                    return Err(BrokerError::Protocol);
-                }
+                validate_stream_token_metadata_result(&request.binding, result)?;
             }
             OPERATION_QUALIFY_V1
                 if matches!(
@@ -2110,21 +2109,11 @@ fn validate_operation_result(
             OPERATION_SIGN_V1 => {
                 validate_governance_sign_operation_result(request, result)?;
             }
-            OPERATION_STREAM_TOKEN_SIGN_V1 => {
-                let signed =
-                    decode_canonical::<SignResultWireV1>(result, MAX_STREAM_TOKEN_FRAME_BYTES_V1)?;
-                let sign = decode_canonical::<SignRequestWireV1>(
-                    &request.payload,
-                    MAX_STREAM_TOKEN_FRAME_BYTES_V1,
-                )?;
-                let public_key =
-                    required_binding_value!(&request.binding, stream_token_signer_public_key);
-                verify_evidence_viewer_ed25519_signature(
-                    public_key,
-                    signed.signature,
-                    &sign.payload,
-                )
-                .map_err(|_| BrokerError::Protocol)?;
+            OPERATION_STREAM_TOKEN_SIGN_V1 | OPERATION_STREAM_TOKEN_RECOVER_V1 => {
+                validate_stream_token_receipt_result(request, result)?;
+            }
+            OPERATION_STREAM_TOKEN_OBSERVE_V1 => {
+                decode_stream_token_observer_reply(&request.binding, &request.payload, result)?;
             }
             OPERATION_STREAM_TOKEN_GATEWAY_ADMIT_V1 => {
                 let admission = decode_canonical::<

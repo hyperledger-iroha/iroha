@@ -14,6 +14,53 @@ import {
   validateNoritoFrame,
 } from "./norito.js";
 
+const TEXT_AMOUNT_MUST_BE_POSITIVE = "amount must be positive";
+const TEXT_IS_INVALID = " is invalid";
+const TEXT_VERSION_MISMATCH = "version mismatch";
+const TEXT_POLICY_EPOCH_MUST_BE_POSITIVE = "policy epoch must be positive";
+const TEXT_CREDIT_OPENING_HAS_A_NONCANONICAL_FIXED_SIZE = "credit opening has a noncanonical fixed size";
+const TEXT_MINT_STAGE_DISPOSITION_MUST_BE_0_OR_1 = "mint-stage disposition must be 0 or 1";
+
+
+const TEXT_IROHA_KAGEMUSHA_V1 = "iroha:kagemusha:v1:";
+const TEXT_KAGEMUSHA_V1 = "KAGEMUSHA V1 ";
+const TEXT_MINT_AUTHORIZATION = "mint authorization ";
+const TEXT_UNKNOWN_KAGEMUSHA_V1 = "unknown KAGEMUSHA V1 ";
+const TEXT_IROHA_KAGEMUSHA_V1_2 = "iroha.kagemusha.v1.";
+const TEXT_COMMIT_CERTIFICATE = "commit certificate ";
+const TEXT_KAGEMUSHA_MINT_AUTHORIZATION_STATEMENT_V1 = "KagemushaMintAuthorizationStatementV1";
+
+
+// Reuse exact wire names and diagnostic fields throughout this module.
+const FIELD_ACKNOWLEDGEMENT = "acknowledgement";
+const FIELD_COMMIT_EVIDENCE = "commitEvidence";
+const FIELD_NETWORK_ID = "networkId";
+const FIELD_HARDWARE_PROFILE_ID = "hardwareProfileId";
+const FIELD_POLICY_EPOCH = "policyEpoch";
+const FIELD_EQ_PROTOCOL_DIGEST = "eqProtocolDigest";
+const FIELD_EP_PROTOCOL_DIGEST = "epProtocolDigest";
+const FIELD_SEMANTIC_DIGEST = "semanticDigest";
+const FIELD_EQ_DEFERRED_AUDIT = "eqDeferredAudit";
+const FIELD_EP_DEFERRED_AUDIT = "epDeferredAudit";
+const FIELD_CREDIT_ID = "creditId";
+const FIELD_ASSET_INCARNATION = "assetIncarnation";
+const FIELD_LIABILITY_POOL_ID = "liabilityPoolId";
+const FIELD_RECIPIENT_ENCRYPTION_KEY = "recipientEncryptionKey";
+const FIELD_REQUEST_DIGEST = "requestDigest";
+const FIELD_SENDER_BEFORE_COMMITMENT = "senderBeforeCommitment";
+const FIELD_SENDER_AFTER_COMMITMENT = "senderAfterCommitment";
+const FIELD_CANDIDATE_ENVELOPE_DIGEST = "candidateEnvelopeDigest";
+const FIELD_TRANSITION_NULLIFIER = "transitionNullifier";
+const FIELD_ENCRYPTED_CREDIT = "encryptedCredit";
+const FIELD_ARTIFACT_MANIFEST_DIGEST = "artifactManifestDigest";
+const FIELD_RECIPIENT_CREDENTIAL_COMMITMENT = "recipientCredentialCommitment";
+const FIELD_CREDIT_COMMITMENT = "creditCommitment";
+const FIELD_ISSUANCE_COMMITMENT = "issuanceCommitment";
+const CONTEXT_PAYMENT_REQUEST = "payment request";
+const CONTEXT_COMMIT_CERTIFICATE = "commit certificate";
+const CONTEXT_MINT_AUTHORIZATION = "mint authorization";
+const CONTEXT_UNKNOWN_KAGEMUSHA_V1_PAYLOAD_KIND = (TEXT_UNKNOWN_KAGEMUSHA_V1 + "payload kind");
+
 const UTF8 = new TextEncoder();
 const MODEL = "iroha_data_model::kagemusha::kagemusha_v1::";
 const DEVICE_MODEL = "iroha_data_model::kagemusha::kagemusha_device_v1::";
@@ -26,62 +73,57 @@ const ENCRYPTED_CREDIT_BYTES = CREDIT_OPENING_BYTES + 16;
 const TOP_UP_REQUEST_MAX_BYTES = 16 * 1024;
 const DEVICE_MINT_STAGE_COMMAND_MAX_BYTES = 64 * 1024;
 const DEVICE_MINT_STAGE_RESULT_MAX_BYTES = 128;
-const TOP_UP_INSTRUCTION_WIRE_ID = "iroha.kagemusha.v1.top_up";
+const TOP_UP_INSTRUCTION_WIRE_ID = (TEXT_IROHA_KAGEMUSHA_V1_2 + "top_up");
 
-const SCHEMAS = Object.freeze({
-  request: `${MODEL}KagemushaPaymentRequestV1`,
-  peerCreditContext: `${MODEL}KagemushaPeerCreditContextV1`,
-  lifecycle: `${MODEL}KagemushaLifecycleBindingV1`,
-  commitCertificate: `${MODEL}KagemushaCommitCertificateV1`,
-  redemptionProof: `${MODEL}KagemushaRedemptionProofV1`,
-  paymentProof: `${MODEL}KagemushaPaymentProofV1`,
-  paymentOutput: `${MODEL}KagemushaPaymentOutputV1`,
-  payment: `${MODEL}KagemushaPaymentV1`,
-  acknowledgement: `${MODEL}KagemushaAcknowledgementV1`,
-  mintAuthorizationContext: `${MODEL}KagemushaMintAuthorizationContextV1`,
-  mintAuthorizationStatement: `${MODEL}KagemushaMintAuthorizationStatementV1`,
-  mintAuthorization: `${MODEL}KagemushaMintAuthorizationV1`,
-  mintStatement: `${MODEL}KagemushaMintCreditStatementV1`,
-  mintCredit: `${MODEL}KagemushaMintCreditV1`,
-  deviceMintStageCommand: `${DEVICE_MODEL}KagemushaDeviceMintStageCommandV1`,
-  deviceMintStageResult: `${DEVICE_MODEL}KagemushaDeviceMintStageResultV1`,
-  redemptionStatement: `${MODEL}KagemushaRedemptionStatementV1`,
-  redemptionVoucher: `${MODEL}KagemushaRedemptionVoucherV1`,
-  encryptedCreditEnvelope: `${MODEL}KagemushaEncryptedCreditEnvelopeV1`,
-  encryptedCreditAad: `${MODEL}KagemushaEncryptedCreditAadV1`,
-  creditOpening: `${MODEL}KagemushaCreditOpeningV1`,
-  topUpRequest: "iroha.torii.v1.kagemusha.top_up.request",
-  redemptionRequest: "iroha.torii.v1.kagemusha.redeem.request",
-});
+const K_SCHEMA_REQUEST = (MODEL + "KagemushaPaymentRequestV1");
+const K_SCHEMA_PEER_CREDIT_CONTEXT = (MODEL + "KagemushaPeerCreditContextV1");
+const K_SCHEMA_LIFECYCLE = (MODEL + "KagemushaLifecycleBindingV1");
+const K_SCHEMA_COMMIT_CERTIFICATE = (MODEL + "KagemushaCommitCertificateV1");
+const K_SCHEMA_REDEMPTION_PROOF = (MODEL + "KagemushaRedemptionProofV1");
+const K_SCHEMA_PAYMENT_PROOF = (MODEL + "KagemushaPaymentProofV1");
+const K_SCHEMA_PAYMENT = (MODEL + "KagemushaPaymentV1");
+const K_SCHEMA_ACKNOWLEDGEMENT = (MODEL + "KagemushaAcknowledgementV1");
+const K_SCHEMA_MINT_AUTHORIZATION_CONTEXT = (MODEL + "KagemushaMintAuthorizationContextV1");
+const K_SCHEMA_MINT_AUTHORIZATION_STATEMENT = (MODEL + TEXT_KAGEMUSHA_MINT_AUTHORIZATION_STATEMENT_V1);
+const K_SCHEMA_MINT_AUTHORIZATION = (MODEL + "KagemushaMintAuthorizationV1");
+const K_SCHEMA_MINT_STATEMENT = (MODEL + "KagemushaMintCreditStatementV1");
+const K_SCHEMA_MINT_CREDIT = (MODEL + "KagemushaMintCreditV1");
+const K_SCHEMA_DEVICE_MINT_STAGE_COMMAND = (DEVICE_MODEL + "KagemushaDeviceMintStageCommandV1");
+const K_SCHEMA_DEVICE_MINT_STAGE_RESULT = (DEVICE_MODEL + "KagemushaDeviceMintStageResultV1");
+const K_SCHEMA_REDEMPTION_STATEMENT = (MODEL + "KagemushaRedemptionStatementV1");
+const K_SCHEMA_REDEMPTION_VOUCHER = (MODEL + "KagemushaRedemptionVoucherV1");
+const K_SCHEMA_ENCRYPTED_CREDIT_ENVELOPE = (MODEL + "KagemushaEncryptedCreditEnvelopeV1");
+const K_SCHEMA_ENCRYPTED_CREDIT_AAD = (MODEL + "KagemushaEncryptedCreditAadV1");
+const K_SCHEMA_CREDIT_OPENING = (MODEL + "KagemushaCreditOpeningV1");
+const K_SCHEMA_TOP_UP_REQUEST = "iroha.torii.v1.kagemusha.top_up.request";
+const K_SCHEMA_REDEMPTION_REQUEST = "iroha.torii.v1.kagemusha.redeem.request";
 
-const DOMAIN = Object.freeze({
-  deviceKeyReference: ascii("iroha:kagemusha:v1:device-key-reference"),
-  pastaStateCommitment: ascii("iroha:kagemusha:v1:pasta-state-commitment"),
-  liabilityPool: ascii("iroha:kagemusha:v1:liability-pool"),
-  requestSigning: ascii("iroha:kagemusha:v1:payment-request-signing"),
-  requestDigest: ascii("iroha:kagemusha:v1:payment-request"),
-  peerCreditContextDigest: ascii("iroha:kagemusha:v1:peer-credit-context"),
-  peerCreditOpeningCommitment: ascii("iroha:kagemusha:v1:peer-credit-opening-commitment"),
-  creditId: ascii("iroha:kagemusha:v1:credit-id"),
-  lifecycleDigest: ascii("iroha:kagemusha:v1:lifecycle-binding"),
-  commitCertificateId: ascii("iroha:kagemusha:v1:commit-certificate-id"),
-  commitCertificateDigest: ascii("iroha:kagemusha:v1:commit-certificate"),
-  statementDigest: ascii("iroha:kagemusha:v1:send-split-statement"),
-  paymentDigest: ascii("iroha:kagemusha:v1:payment"),
-  preparedTransfer: ascii("iroha:kagemusha:v1:prepared-transfer"),
-  paymentBodyDigest: ascii("iroha:kagemusha:v1:payment-body"),
-  assetIdentity: ascii("iroha:kagemusha:v1:asset-identity"),
-  accountIdentity: ascii("iroha:kagemusha:v1:account-identity"),
-  ciphertextDigest: ascii("iroha:kagemusha:v1:ciphertext"),
-  mintAuthorizationContextDigest: ascii("iroha:kagemusha:v1:mint-authorization-context"),
-  mintAuthorizationStatementDigest: ascii("iroha:kagemusha:v1:mint-authorization-statement"),
-  mintAuthorizationDigest: ascii("iroha:kagemusha:v1:mint-authorization"),
-  mintStatementDigest: ascii("iroha:kagemusha:v1:mint-statement"),
-  mintLifecycleContextDigest: ascii("iroha:kagemusha:v1:mint-lifecycle-context"),
-  mintCreditId: ascii("iroha:kagemusha:v1:mint-credit-id"),
-  redemptionStatementDigest: ascii("iroha:kagemusha:v1:redemption-statement"),
-  redemptionId: ascii("iroha:kagemusha:v1:redemption-id"),
-});
+const K_DOMAIN_DEVICE_KEY_REFERENCE = /* @__PURE__ */ ascii((TEXT_IROHA_KAGEMUSHA_V1 + "device-key-reference"));
+const K_DOMAIN_PASTA_STATE_COMMITMENT = /* @__PURE__ */ ascii((TEXT_IROHA_KAGEMUSHA_V1 + "pasta-state-commitment"));
+const K_DOMAIN_LIABILITY_POOL = /* @__PURE__ */ ascii((TEXT_IROHA_KAGEMUSHA_V1 + "liability-pool"));
+const K_DOMAIN_REQUEST_SIGNING = /* @__PURE__ */ ascii((TEXT_IROHA_KAGEMUSHA_V1 + "payment-request-signing"));
+const K_DOMAIN_REQUEST_DIGEST = /* @__PURE__ */ ascii((TEXT_IROHA_KAGEMUSHA_V1 + "payment-request"));
+const K_DOMAIN_PEER_CREDIT_CONTEXT_DIGEST = /* @__PURE__ */ ascii((TEXT_IROHA_KAGEMUSHA_V1 + "peer-credit-context"));
+const K_DOMAIN_PEER_CREDIT_OPENING_COMMITMENT = /* @__PURE__ */ ascii((TEXT_IROHA_KAGEMUSHA_V1 + "peer-credit-opening-commitment"));
+const K_DOMAIN_CREDIT_ID = /* @__PURE__ */ ascii((TEXT_IROHA_KAGEMUSHA_V1 + "credit-id"));
+const K_DOMAIN_LIFECYCLE_DIGEST = /* @__PURE__ */ ascii((TEXT_IROHA_KAGEMUSHA_V1 + "lifecycle-binding"));
+const K_DOMAIN_COMMIT_CERTIFICATE_ID = /* @__PURE__ */ ascii((TEXT_IROHA_KAGEMUSHA_V1 + "commit-certificate-id"));
+const K_DOMAIN_COMMIT_CERTIFICATE_DIGEST = /* @__PURE__ */ ascii((TEXT_IROHA_KAGEMUSHA_V1 + "commit-certificate"));
+const K_DOMAIN_STATEMENT_DIGEST = /* @__PURE__ */ ascii((TEXT_IROHA_KAGEMUSHA_V1 + "send-split-statement"));
+const K_DOMAIN_PAYMENT_DIGEST = /* @__PURE__ */ ascii((TEXT_IROHA_KAGEMUSHA_V1 + "payment"));
+const K_DOMAIN_PREPARED_TRANSFER = /* @__PURE__ */ ascii((TEXT_IROHA_KAGEMUSHA_V1 + "prepared-transfer"));
+const K_DOMAIN_PAYMENT_BODY_DIGEST = /* @__PURE__ */ ascii((TEXT_IROHA_KAGEMUSHA_V1 + "payment-body"));
+const K_DOMAIN_ASSET_IDENTITY = /* @__PURE__ */ ascii((TEXT_IROHA_KAGEMUSHA_V1 + "asset-identity"));
+const K_DOMAIN_ACCOUNT_IDENTITY = /* @__PURE__ */ ascii((TEXT_IROHA_KAGEMUSHA_V1 + "account-identity"));
+const K_DOMAIN_CIPHERTEXT_DIGEST = /* @__PURE__ */ ascii((TEXT_IROHA_KAGEMUSHA_V1 + "ciphertext"));
+const K_DOMAIN_MINT_AUTHORIZATION_CONTEXT_DIGEST = /* @__PURE__ */ ascii((TEXT_IROHA_KAGEMUSHA_V1 + "mint-authorization-context"));
+const K_DOMAIN_MINT_AUTHORIZATION_STATEMENT_DIGEST = /* @__PURE__ */ ascii((TEXT_IROHA_KAGEMUSHA_V1 + "mint-authorization-statement"));
+const K_DOMAIN_MINT_AUTHORIZATION_DIGEST = /* @__PURE__ */ ascii((TEXT_IROHA_KAGEMUSHA_V1 + "mint-authorization"));
+const K_DOMAIN_MINT_STATEMENT_DIGEST = /* @__PURE__ */ ascii((TEXT_IROHA_KAGEMUSHA_V1 + "mint-statement"));
+const K_DOMAIN_MINT_LIFECYCLE_CONTEXT_DIGEST = /* @__PURE__ */ ascii((TEXT_IROHA_KAGEMUSHA_V1 + "mint-lifecycle-context"));
+const K_DOMAIN_MINT_CREDIT_ID = /* @__PURE__ */ ascii((TEXT_IROHA_KAGEMUSHA_V1 + "mint-credit-id"));
+const K_DOMAIN_REDEMPTION_STATEMENT_DIGEST = /* @__PURE__ */ ascii((TEXT_IROHA_KAGEMUSHA_V1 + "redemption-statement"));
+const K_DOMAIN_REDEMPTION_ID = /* @__PURE__ */ ascii((TEXT_IROHA_KAGEMUSHA_V1 + "redemption-id"));
 
 const LIMITS = Object.freeze({
   paymentRequest: [928, 1243],
@@ -92,17 +134,17 @@ const LIMITS = Object.freeze({
   redemptionVoucher: [7936, 10587],
 });
 
-const PAYLOAD_KINDS = Object.freeze(Object.fromEntries(
+const PAYLOAD_KINDS = /* @__PURE__ */ (() => Object.freeze(Object.fromEntries(
   Object.entries(LIMITS).map(([name, [maximumRawBytes, maximumTextBytes]]) => [
     name,
     Object.freeze({ maximumRawBytes, maximumTextBytes }),
   ]),
-));
+)))();
 
 const IPM1_PAYLOAD_KINDS = Object.freeze({
   request: Object.freeze({ tag: 1, payloadKind: "paymentRequest" }),
   payment: Object.freeze({ tag: 2, payloadKind: "payment" }),
-  acknowledgement: Object.freeze({ tag: 3, payloadKind: "acknowledgement" }),
+  acknowledgement: Object.freeze({ tag: 3, payloadKind: FIELD_ACKNOWLEDGEMENT }),
 });
 
 const COMPLETE_EXCHANGE_TARGET_RAW_BYTES = 8960;
@@ -114,9 +156,9 @@ class KagemushaAssetDefinitionIdV1 {
 
   constructor(value) {
     const payload = typeof value === "string"
-      ? encodeAssetDefinitionIdNoritoValue(value, "KAGEMUSHA V1 asset")
-      : bytes(value, "KAGEMUSHA V1 asset payload");
-    requireFixedArchive(payload, 16, "KAGEMUSHA V1 asset payload");
+      ? encodeAssetDefinitionIdNoritoValue(value, (TEXT_KAGEMUSHA_V1 + "asset"))
+      : bytes(value, (TEXT_KAGEMUSHA_V1 + "asset payload"));
+    requireFixedArchive(payload, 16, (TEXT_KAGEMUSHA_V1 + "asset payload"));
     this.#payload = Uint8Array.from(payload);
     Object.freeze(this);
   }
@@ -129,11 +171,11 @@ class KagemushaAccountIdV1 {
 
   constructor(value) {
     const payload = typeof value === "string"
-      ? encodeAccountIdNoritoValue(value, "KAGEMUSHA V1 account")
-      : bytes(value, "KAGEMUSHA V1 account payload");
-    if (payload.length === 0 || payload.length > 512) rejectRange("KAGEMUSHA V1 account payload is empty or oversized");
-    const canonical = _canonicalAccountIdNoritoValue(payload, "KAGEMUSHA V1 account");
-    if (!equalBytes(payload, canonical)) rejectType("KAGEMUSHA V1 account payload is not canonical");
+      ? encodeAccountIdNoritoValue(value, (TEXT_KAGEMUSHA_V1 + "account"))
+      : bytes(value, (TEXT_KAGEMUSHA_V1 + "account payload"));
+    if (payload.length === 0 || payload.length > 512) rejectRange((TEXT_KAGEMUSHA_V1 + "account payload is empty or oversized"));
+    const canonical = _canonicalAccountIdNoritoValue(payload, (TEXT_KAGEMUSHA_V1 + "account"));
+    if (!equalBytes(payload, canonical)) rejectType((TEXT_KAGEMUSHA_V1 + "account payload is not canonical"));
     this.#payload = Uint8Array.from(payload);
     Object.freeze(this);
   }
@@ -145,8 +187,8 @@ class KagemushaAssetIncarnationV1 {
   #hash;
 
   constructor(value) {
-    const raw = bytes(value, "KAGEMUSHA V1 asset incarnation");
-    if (raw.length !== 32 || (raw[31] & 1) !== 1) rejectType("KAGEMUSHA V1 asset incarnation must be a marked 32-byte Iroha hash");
+    const raw = bytes(value, (TEXT_KAGEMUSHA_V1 + "asset incarnation"));
+    if (raw.length !== 32 || (raw[31] & 1) !== 1) rejectType((TEXT_KAGEMUSHA_V1 + "asset incarnation must be a marked 32-byte Iroha hash"));
     this.#hash = Uint8Array.from(raw);
     Object.freeze(this);
   }
@@ -158,8 +200,8 @@ class KagemushaDevicePublicKeyV1 {
   #bytes;
 
   constructor(value) {
-    const raw = bytes(value, "KAGEMUSHA V1 device public key");
-    if (raw.length !== 65 || raw[0] !== 4 || isZero(raw.subarray(1))) rejectType("KAGEMUSHA V1 device public key must be nonzero 65-byte uncompressed SEC1");
+    const raw = bytes(value, (TEXT_KAGEMUSHA_V1 + "device public key"));
+    if (raw.length !== 65 || raw[0] !== 4 || isZero(raw.subarray(1))) rejectType((TEXT_KAGEMUSHA_V1 + "device public key must be nonzero 65-byte uncompressed SEC1"));
     this.#bytes = Uint8Array.from(raw);
     Object.freeze(this);
   }
@@ -171,8 +213,8 @@ class KagemushaDeviceSignatureV1 {
   #bytes;
 
   constructor(value) {
-    const raw = bytes(value, "KAGEMUSHA V1 device signature");
-    if (raw.length !== 64 || isZero(raw.subarray(0, 32)) || isZero(raw.subarray(32))) rejectType("KAGEMUSHA V1 device signature must be nonzero fixed-width r || s");
+    const raw = bytes(value, (TEXT_KAGEMUSHA_V1 + "device signature"));
+    if (raw.length !== 64 || isZero(raw.subarray(0, 32)) || isZero(raw.subarray(32))) rejectType((TEXT_KAGEMUSHA_V1 + "device signature must be nonzero fixed-width r || s"));
     this.#bytes = Uint8Array.from(raw);
     Object.freeze(this);
   }
@@ -198,7 +240,7 @@ const K_TYPE_SIGNATURE = "signature";
 const K_TYPE_VECTOR = "vector";
 const K_TYPE_OPERATION_KIND = "operationKind";
 const K_TYPE_CREDIT_PURPOSE = "creditPurpose";
-const K_TYPE_COMMIT_EVIDENCE = "commitEvidence";
+const K_TYPE_COMMIT_EVIDENCE = FIELD_COMMIT_EVIDENCE;
 const K_TYPE_MINT_FRAME = "mintFrame";
 
 // Private constructor metadata keeps unrelated model graphs independently removable.
@@ -229,13 +271,13 @@ function defineModel(name, fields, validate, alignment = 16) {
 
 const KagemushaHardwareCredentialV1 = /* @__PURE__ */ defineModel(
   "KagemushaHardwareCredentialV1",
-  [["version", K_TYPE_U16], ["credentialId", K_TYPE_FIXED32], ["networkId", K_TYPE_NETWORK], ["hardwareProfileId", K_TYPE_FIXED32],
-    ["suiteId", K_TYPE_FIXED32], ["firmwarePolicyDigest", K_TYPE_FIXED32], ["policyEpoch", K_TYPE_U64], ["laneCommitment", K_TYPE_FIXED32],
+  [["version", K_TYPE_U16], ["credentialId", K_TYPE_FIXED32], [FIELD_NETWORK_ID, K_TYPE_NETWORK], [FIELD_HARDWARE_PROFILE_ID, K_TYPE_FIXED32],
+    ["suiteId", K_TYPE_FIXED32], ["firmwarePolicyDigest", K_TYPE_FIXED32], [FIELD_POLICY_EPOCH, K_TYPE_U64], ["laneCommitment", K_TYPE_FIXED32],
     ["hardwareEpochId", K_TYPE_FIXED32], ["hardwareEpochGeneration", K_TYPE_U64], ["devicePublicKey", K_TYPE_PUBLIC_KEY],
     ["deviceKeyReference", K_TYPE_FIXED32], ["issuedAtMs", K_TYPE_U64], ["expiresAtMs", K_TYPE_U64], ["governanceSignature", K_TYPE_SIGNATURE]],
   (v) => {
     requireVersion(v.version);
-    if (v.policyEpoch === 0n || v.issuedAtMs >= v.expiresAtMs) rejectType("KAGEMUSHA V1 hardware credential header is invalid");
+    if (v.policyEpoch === 0n || v.issuedAtMs >= v.expiresAtMs) rejectType((TEXT_KAGEMUSHA_V1 + "hardware credential header" + TEXT_IS_INVALID));
     requireEqual(v.deviceKeyReference, deviceKeyReference(v.devicePublicKey), "hardware credential device key reference");
   },
 );
@@ -247,23 +289,23 @@ const KagemushaPastaStateCommitmentV1 = /* @__PURE__ */ defineModel(
 
 const KagemushaPairedProofV1 = /* @__PURE__ */ defineModel(
   "KagemushaPairedProofV1",
-  [["version", K_TYPE_U16], ["eqProtocolDigest", K_TYPE_FIXED32], ["epProtocolDigest", K_TYPE_FIXED32], ["semanticDigest", K_TYPE_FIXED32],
-    ["guardEqCredentialAudit", K_TYPE_FIXED32], ["guardEpCredentialAudit", K_TYPE_FIXED32], ["eqDeferredAudit", K_TYPE_FIXED32],
-    ["epDeferredAudit", K_TYPE_FIXED32], ["eqProof", K_TYPE_VECTOR], ["epProof", K_TYPE_VECTOR], ["eqHistory", K_TYPE_VECTOR], ["epHistory", K_TYPE_VECTOR]],
+  [["version", K_TYPE_U16], [FIELD_EQ_PROTOCOL_DIGEST, K_TYPE_FIXED32], [FIELD_EP_PROTOCOL_DIGEST, K_TYPE_FIXED32], [FIELD_SEMANTIC_DIGEST, K_TYPE_FIXED32],
+    ["guardEqCredentialAudit", K_TYPE_FIXED32], ["guardEpCredentialAudit", K_TYPE_FIXED32], [FIELD_EQ_DEFERRED_AUDIT, K_TYPE_FIXED32],
+    [FIELD_EP_DEFERRED_AUDIT, K_TYPE_FIXED32], ["eqProof", K_TYPE_VECTOR], ["epProof", K_TYPE_VECTOR], ["eqHistory", K_TYPE_VECTOR], ["epHistory", K_TYPE_VECTOR]],
   validatePairedProofValues,
 );
 
 const KagemushaCreditOpeningV1 = /* @__PURE__ */ defineModel(
   "KagemushaCreditOpeningV1",
-  [["version", K_TYPE_U16], ["creditId", K_TYPE_FIXED32], ["amount", K_TYPE_U128], ["creditCommitmentOpening", K_TYPE_FIXED32],
+  [["version", K_TYPE_U16], [FIELD_CREDIT_ID, K_TYPE_FIXED32], ["amount", K_TYPE_U128], ["creditCommitmentOpening", K_TYPE_FIXED32],
     ["recipientBindingOpening", K_TYPE_FIXED32], ["recoveryNonce", K_TYPE_FIXED32]],
-  (v) => { requireVersion(v.version); if (v.amount === 0n) rejectType("KAGEMUSHA V1 credit opening amount must be positive"); },
+  (v) => { requireVersion(v.version); if (v.amount === 0n) rejectType((TEXT_KAGEMUSHA_V1 + "credit opening " + TEXT_AMOUNT_MUST_BE_POSITIVE)); },
 );
 const KagemushaEncryptedCreditAadV1 = /* @__PURE__ */ defineModel(
   "KagemushaEncryptedCreditAadV1",
   [["version", K_TYPE_U16], ["purpose", K_TYPE_CREDIT_PURPOSE], ["contextDigest", K_TYPE_FIXED32], ["issuanceOrTransitionCommitment", K_TYPE_FIXED32],
-    ["creditId", K_TYPE_FIXED32], ["amount", K_TYPE_U128]],
-  (v) => { requireVersion(v.version); if (v.amount === 0n) rejectType("KAGEMUSHA V1 encrypted-credit AAD amount must be positive"); },
+    [FIELD_CREDIT_ID, K_TYPE_FIXED32], ["amount", K_TYPE_U128]],
+  (v) => { requireVersion(v.version); if (v.amount === 0n) rejectType((TEXT_KAGEMUSHA_V1 + "encrypted-credit AAD " + TEXT_AMOUNT_MUST_BE_POSITIVE)); },
 );
 const KagemushaEncryptedCreditEnvelopeV1 = /* @__PURE__ */ defineModel(
   "KagemushaEncryptedCreditEnvelopeV1",
@@ -271,7 +313,7 @@ const KagemushaEncryptedCreditEnvelopeV1 = /* @__PURE__ */ defineModel(
   (v) => {
     requireVersion(v.version);
     requireX25519Key(v.ephemeralX25519PublicKey, "encrypted-credit ephemeral key");
-    if (v.ciphertextAndTag.length !== ENCRYPTED_CREDIT_BYTES) rejectType(`KAGEMUSHA V1 ciphertext and tag must be exactly ${ENCRYPTED_CREDIT_BYTES} bytes`);
+    if (v.ciphertextAndTag.length !== ENCRYPTED_CREDIT_BYTES) rejectType(`${TEXT_KAGEMUSHA_V1}ciphertext and tag must be exactly ${ENCRYPTED_CREDIT_BYTES} bytes`);
   },
   8,
 );
@@ -280,13 +322,13 @@ const OPERATION_KINDS = Object.freeze(["bootstrap", "mintFold", "sendSplit", "re
 const CREDIT_PURPOSES = Object.freeze(["mint", "peer"]);
 const KagemushaLifecycleBindingV1 = /* @__PURE__ */ defineModel(
   "KagemushaLifecycleBindingV1",
-  [["version", K_TYPE_U16], ["networkId", K_TYPE_NETWORK], ["protocolVersion", K_TYPE_U16], ["suiteId", K_TYPE_FIXED32], ["vkDigest", K_TYPE_FIXED32],
-    ["releaseId", K_TYPE_FIXED32], ["asset", K_TYPE_ASSET], ["assetIncarnation", K_TYPE_INCARNATION], ["scale", K_TYPE_U32],
-    ["liabilityPoolId", K_TYPE_FIXED32], ["hardwareProfileId", K_TYPE_FIXED32], ["policyEpoch", K_TYPE_U64], ["operationKind", K_TYPE_OPERATION_KIND],
-    ["requestId", K_TYPE_RAW32], ["receiverLaneCommitment", K_TYPE_RAW32], ["creditId", K_TYPE_RAW32], ["ciphertextDigest", K_TYPE_RAW32]],
+  [["version", K_TYPE_U16], [FIELD_NETWORK_ID, K_TYPE_NETWORK], ["protocolVersion", K_TYPE_U16], ["suiteId", K_TYPE_FIXED32], ["vkDigest", K_TYPE_FIXED32],
+    ["releaseId", K_TYPE_FIXED32], ["asset", K_TYPE_ASSET], [FIELD_ASSET_INCARNATION, K_TYPE_INCARNATION], ["scale", K_TYPE_U32],
+    [FIELD_LIABILITY_POOL_ID, K_TYPE_FIXED32], [FIELD_HARDWARE_PROFILE_ID, K_TYPE_FIXED32], [FIELD_POLICY_EPOCH, K_TYPE_U64], ["operationKind", K_TYPE_OPERATION_KIND],
+    ["requestId", K_TYPE_RAW32], ["receiverLaneCommitment", K_TYPE_RAW32], [FIELD_CREDIT_ID, K_TYPE_RAW32], ["ciphertextDigest", K_TYPE_RAW32]],
   (v) => {
     requireVersion(v.version);
-    if (v.protocolVersion !== 1 || v.policyEpoch === 0n) rejectType("KAGEMUSHA V1 lifecycle header is invalid");
+    if (v.protocolVersion !== 1 || v.policyEpoch === 0n) rejectType((TEXT_KAGEMUSHA_V1 + "lifecycle header" + TEXT_IS_INVALID));
     requireEqual(v.liabilityPoolId, liabilityPoolId(v.networkId, v.asset, v.assetIncarnation), "lifecycle liability pool");
     const requestFieldsAreSet = !isZero(v.requestId) && !isZero(v.receiverLaneCommitment);
     const requestFieldsAreZero = isZero(v.requestId) && isZero(v.receiverLaneCommitment);
@@ -295,36 +337,36 @@ const KagemushaLifecycleBindingV1 = /* @__PURE__ */ defineModel(
     if ((v.operationKind === "sendSplit" && !(requestFieldsAreSet && creditFieldsAreSet))
         || (v.operationKind === "mintFold" && (!requestFieldsAreZero || !creditFieldsAreSet))
         || (!new Set(["sendSplit", "mintFold"]).has(v.operationKind) && !allAreZero)) {
-      rejectType("KAGEMUSHA V1 lifecycle operation identities are invalid");
+      rejectType((TEXT_KAGEMUSHA_V1 + "lifecycle operation identities are invalid"));
     }
   },
 );
 const KagemushaPaymentRequestV1 = /* @__PURE__ */ defineModel(
   "KagemushaPaymentRequestV1",
-  [["version", K_TYPE_U16], ["releaseId", K_TYPE_FIXED32], ["networkId", K_TYPE_NETWORK], ["asset", K_TYPE_ASSET], ["assetIncarnation", K_TYPE_INCARNATION],
-    ["scale", K_TYPE_U32], ["liabilityPoolId", K_TYPE_FIXED32], ["recipient", K_TYPE_ACCOUNT], ["amount", K_TYPE_U128],
-    ["recipientEncryptionKey", K_TYPE_FIXED32],
+  [["version", K_TYPE_U16], ["releaseId", K_TYPE_FIXED32], [FIELD_NETWORK_ID, K_TYPE_NETWORK], ["asset", K_TYPE_ASSET], [FIELD_ASSET_INCARNATION, K_TYPE_INCARNATION],
+    ["scale", K_TYPE_U32], [FIELD_LIABILITY_POOL_ID, K_TYPE_FIXED32], ["recipient", K_TYPE_ACCOUNT], ["amount", K_TYPE_U128],
+    [FIELD_RECIPIENT_ENCRYPTION_KEY, K_TYPE_FIXED32],
     ["hardwareCredential", KagemushaHardwareCredentialV1], ["requestId", K_TYPE_FIXED32],
     ["issuedAtMs", K_TYPE_U64], ["expiresAtMs", K_TYPE_U64],
     ["signature", K_TYPE_SIGNATURE]],
   (v) => {
     header(v);
-    if (v.amount === 0n) rejectType("KAGEMUSHA V1 request amount must be positive");
+    if (v.amount === 0n) rejectType((TEXT_KAGEMUSHA_V1 + "request " + TEXT_AMOUNT_MUST_BE_POSITIVE));
     requireX25519Key(v.recipientEncryptionKey, "request recipient encryption key");
-    if (v.expiresAtMs <= v.issuedAtMs || v.expiresAtMs - v.issuedAtMs > 300000n) rejectRange("KAGEMUSHA V1 request validity window is invalid");
+    if (v.expiresAtMs <= v.issuedAtMs || v.expiresAtMs - v.issuedAtMs > 300000n) rejectRange((TEXT_KAGEMUSHA_V1 + "request validity window" + TEXT_IS_INVALID));
     if (!equalBytes(networkIdBytes(v.networkId), networkIdBytes(v.hardwareCredential.networkId))
-        || v.issuedAtMs < v.hardwareCredential.issuedAtMs || v.expiresAtMs > v.hardwareCredential.expiresAtMs) rejectType("KAGEMUSHA V1 request credential binding is invalid");
+        || v.issuedAtMs < v.hardwareCredential.issuedAtMs || v.expiresAtMs > v.hardwareCredential.expiresAtMs) rejectType((TEXT_KAGEMUSHA_V1 + "request credential binding" + TEXT_IS_INVALID));
   },
 );
 const KagemushaPeerCreditContextV1 = /* @__PURE__ */ defineModel(
   "KagemushaPeerCreditContextV1",
-  [["version", K_TYPE_U16], ["requestDigest", K_TYPE_FIXED32], ["amount", K_TYPE_U128],
-    ["senderBeforeCommitment", K_TYPE_FIXED32], ["senderAfterCommitment", K_TYPE_FIXED32],
-    ["preparedTransferDigest", K_TYPE_FIXED32], ["recipientEncryptionKey", K_TYPE_FIXED32]],
+  [["version", K_TYPE_U16], [FIELD_REQUEST_DIGEST, K_TYPE_FIXED32], ["amount", K_TYPE_U128],
+    [FIELD_SENDER_BEFORE_COMMITMENT, K_TYPE_FIXED32], [FIELD_SENDER_AFTER_COMMITMENT, K_TYPE_FIXED32],
+    ["preparedTransferDigest", K_TYPE_FIXED32], [FIELD_RECIPIENT_ENCRYPTION_KEY, K_TYPE_FIXED32]],
   (v) => {
     requireVersion(v.version);
     if (v.amount === 0n || equalBytes(v.senderBeforeCommitment, v.senderAfterCommitment)) {
-      rejectType("KAGEMUSHA V1 peer credit context is invalid");
+      rejectType((TEXT_KAGEMUSHA_V1 + "peer credit context" + TEXT_IS_INVALID));
     }
     requireX25519Key(v.recipientEncryptionKey, "peer credit recipient key");
   },
@@ -340,109 +382,109 @@ const KagemushaOutboxReservationV1 = /* @__PURE__ */ defineModel(
   [["reservationId", K_TYPE_FIXED32], ["operationKind", K_TYPE_OPERATION_KIND], ["reservedOutboxBytes", K_TYPE_U32], ["issuedAtMs", K_TYPE_U64], ["expiresAtMs", K_TYPE_U64]],
   (v) => {
     const minimum = v.operationKind === "sendSplit" ? 25728 : v.operationKind === "redeemSplit" ? 26112 : null;
-    if (minimum === null || v.reservedOutboxBytes < minimum || v.issuedAtMs >= v.expiresAtMs) rejectType("KAGEMUSHA V1 outbox reservation is invalid");
+    if (minimum === null || v.reservedOutboxBytes < minimum || v.issuedAtMs >= v.expiresAtMs) rejectType((TEXT_KAGEMUSHA_V1 + "outbox reservation" + TEXT_IS_INVALID));
   },
 );
 const KagemushaHardwareTerminalBodyV1 = /* @__PURE__ */ defineModel(
   "KagemushaHardwareTerminalBodyV1",
-  [["version", K_TYPE_U16], ["candidateEnvelopeDigest", K_TYPE_FIXED32], ["lifecycleBindingDigest", K_TYPE_FIXED32],
-    ["transitionNullifier", K_TYPE_FIXED32], ["outboxReservationCommitment", K_TYPE_FIXED32], ["commitEvidence", K_TYPE_COMMIT_EVIDENCE],
-    ["hardwareProfileId", K_TYPE_FIXED32], ["policyEpoch", K_TYPE_U64], ["privateSuccessorCommitment", K_TYPE_FIXED32],
+  [["version", K_TYPE_U16], [FIELD_CANDIDATE_ENVELOPE_DIGEST, K_TYPE_FIXED32], ["lifecycleBindingDigest", K_TYPE_FIXED32],
+    [FIELD_TRANSITION_NULLIFIER, K_TYPE_FIXED32], ["outboxReservationCommitment", K_TYPE_FIXED32], [FIELD_COMMIT_EVIDENCE, K_TYPE_COMMIT_EVIDENCE],
+    [FIELD_HARDWARE_PROFILE_ID, K_TYPE_FIXED32], [FIELD_POLICY_EPOCH, K_TYPE_U64], ["privateSuccessorCommitment", K_TYPE_FIXED32],
     ["privateJournalCommitment", K_TYPE_FIXED32], ["privateRecoveryCommitment", K_TYPE_FIXED32]],
-  (v) => { requireVersion(v.version); if (v.policyEpoch === 0n) rejectType("KAGEMUSHA V1 terminal body policy epoch must be positive"); },
+  (v) => { requireVersion(v.version); if (v.policyEpoch === 0n) rejectType((TEXT_KAGEMUSHA_V1 + "terminal body " + TEXT_POLICY_EPOCH_MUST_BE_POSITIVE)); },
 );
 const KagemushaCommitCertificateV1 = /* @__PURE__ */ defineModel(
   "KagemushaCommitCertificateV1",
-  [["version", K_TYPE_U16], ["certificateId", K_TYPE_FIXED32], ["candidateEnvelopeDigest", K_TYPE_FIXED32],
-    ["lifecycleBindingDigest", K_TYPE_FIXED32], ["transitionNullifier", K_TYPE_FIXED32], ["outboxReservationCommitment", K_TYPE_FIXED32],
-    ["commitEvidence", K_TYPE_COMMIT_EVIDENCE], ["hardwareProfileId", K_TYPE_FIXED32], ["policyEpoch", K_TYPE_U64],
+  [["version", K_TYPE_U16], ["certificateId", K_TYPE_FIXED32], [FIELD_CANDIDATE_ENVELOPE_DIGEST, K_TYPE_FIXED32],
+    ["lifecycleBindingDigest", K_TYPE_FIXED32], [FIELD_TRANSITION_NULLIFIER, K_TYPE_FIXED32], ["outboxReservationCommitment", K_TYPE_FIXED32],
+    [FIELD_COMMIT_EVIDENCE, K_TYPE_COMMIT_EVIDENCE], [FIELD_HARDWARE_PROFILE_ID, K_TYPE_FIXED32], [FIELD_POLICY_EPOCH, K_TYPE_U64],
     ["hardwareTerminalCommitment", K_TYPE_FIXED32]],
-  (v) => { requireVersion(v.version); if (v.policyEpoch === 0n) rejectType("KAGEMUSHA V1 commit certificate policy epoch must be positive"); },
+  (v) => { requireVersion(v.version); if (v.policyEpoch === 0n) rejectType((TEXT_KAGEMUSHA_V1 + "commit certificate " + TEXT_POLICY_EPOCH_MUST_BE_POSITIVE)); },
   8,
 );
 const KagemushaRedemptionProofV1 = /* @__PURE__ */ defineModel(
   "KagemushaRedemptionProofV1",
-  [["version", K_TYPE_U16], ["eqProtocolDigest", K_TYPE_FIXED32], ["epProtocolDigest", K_TYPE_FIXED32], ["semanticDigest", K_TYPE_FIXED32],
-    ["candidateEnvelopeDigest", K_TYPE_FIXED32], ["commitCertificateDigest", K_TYPE_FIXED32], ["eqDeferredAudit", K_TYPE_FIXED32],
-    ["epDeferredAudit", K_TYPE_FIXED32], ["eqProof", K_TYPE_VECTOR], ["epProof", K_TYPE_VECTOR], ["eqHistory", K_TYPE_VECTOR], ["epHistory", K_TYPE_VECTOR]],
+  [["version", K_TYPE_U16], [FIELD_EQ_PROTOCOL_DIGEST, K_TYPE_FIXED32], [FIELD_EP_PROTOCOL_DIGEST, K_TYPE_FIXED32], [FIELD_SEMANTIC_DIGEST, K_TYPE_FIXED32],
+    [FIELD_CANDIDATE_ENVELOPE_DIGEST, K_TYPE_FIXED32], ["commitCertificateDigest", K_TYPE_FIXED32], [FIELD_EQ_DEFERRED_AUDIT, K_TYPE_FIXED32],
+    [FIELD_EP_DEFERRED_AUDIT, K_TYPE_FIXED32], ["eqProof", K_TYPE_VECTOR], ["epProof", K_TYPE_VECTOR], ["eqHistory", K_TYPE_VECTOR], ["epHistory", K_TYPE_VECTOR]],
   validateProofVectors,
   8,
 );
 const KagemushaPaymentProofV1 = /* @__PURE__ */ defineModel(
   "KagemushaPaymentProofV1",
-  [["version", K_TYPE_U16], ["eqProtocolDigest", K_TYPE_FIXED32], ["epProtocolDigest", K_TYPE_FIXED32], ["semanticDigest", K_TYPE_FIXED32],
-    ["candidateEnvelopeDigest", K_TYPE_FIXED32], ["commitCertificateDigest", K_TYPE_FIXED32], ["eqDeferredAudit", K_TYPE_FIXED32],
-    ["epDeferredAudit", K_TYPE_FIXED32], ["eqProof", K_TYPE_VECTOR], ["epProof", K_TYPE_VECTOR], ["eqHistory", K_TYPE_VECTOR], ["epHistory", K_TYPE_VECTOR]],
+  [["version", K_TYPE_U16], [FIELD_EQ_PROTOCOL_DIGEST, K_TYPE_FIXED32], [FIELD_EP_PROTOCOL_DIGEST, K_TYPE_FIXED32], [FIELD_SEMANTIC_DIGEST, K_TYPE_FIXED32],
+    [FIELD_CANDIDATE_ENVELOPE_DIGEST, K_TYPE_FIXED32], ["commitCertificateDigest", K_TYPE_FIXED32], [FIELD_EQ_DEFERRED_AUDIT, K_TYPE_FIXED32],
+    [FIELD_EP_DEFERRED_AUDIT, K_TYPE_FIXED32], ["eqProof", K_TYPE_VECTOR], ["epProof", K_TYPE_VECTOR], ["eqHistory", K_TYPE_VECTOR], ["epHistory", K_TYPE_VECTOR]],
   validateProofVectors,
   8,
 );
 const KagemushaPaymentOutputV1 = /* @__PURE__ */ defineModel(
   "KagemushaPaymentOutputV1",
-  [["version", K_TYPE_U16], ["requestDigest", K_TYPE_FIXED32], ["amount", K_TYPE_U128],
-    ["senderBeforeCommitment", K_TYPE_FIXED32], ["senderAfterCommitment", K_TYPE_FIXED32],
-    ["transitionNullifier", K_TYPE_FIXED32], ["creditId", K_TYPE_FIXED32], ["ciphertextCommitment", K_TYPE_FIXED32],
-    ["commitEvidence", K_TYPE_COMMIT_EVIDENCE], ["committedAtMs", K_TYPE_U64]],
+  [["version", K_TYPE_U16], [FIELD_REQUEST_DIGEST, K_TYPE_FIXED32], ["amount", K_TYPE_U128],
+    [FIELD_SENDER_BEFORE_COMMITMENT, K_TYPE_FIXED32], [FIELD_SENDER_AFTER_COMMITMENT, K_TYPE_FIXED32],
+    [FIELD_TRANSITION_NULLIFIER, K_TYPE_FIXED32], [FIELD_CREDIT_ID, K_TYPE_FIXED32], ["ciphertextCommitment", K_TYPE_FIXED32],
+    [FIELD_COMMIT_EVIDENCE, K_TYPE_COMMIT_EVIDENCE], ["committedAtMs", K_TYPE_U64]],
   (v) => {
     requireVersion(v.version);
     if (v.amount === 0n || v.committedAtMs === 0n || equalBytes(v.senderBeforeCommitment, v.senderAfterCommitment)) {
-      rejectType("KAGEMUSHA V1 payment output is invalid");
+      rejectType((TEXT_KAGEMUSHA_V1 + "payment output" + TEXT_IS_INVALID));
     }
   },
 );
 const KagemushaPaymentV1 = /* @__PURE__ */ defineModel(
   "KagemushaPaymentV1",
-  [["version", K_TYPE_U16], ["output", KagemushaPaymentOutputV1], ["encryptedCredit", K_TYPE_VECTOR],
+  [["version", K_TYPE_U16], ["output", KagemushaPaymentOutputV1], [FIELD_ENCRYPTED_CREDIT, K_TYPE_VECTOR],
     ["commitCertificate", KagemushaCommitCertificateV1], ["proof", KagemushaPaymentProofV1]],
-  (v) => { requireVersion(v.version); if (v.output.version !== v.version || v.commitCertificate.version !== v.version || v.proof.version !== v.version) rejectType("KAGEMUSHA V1 payment version mismatch"); },
+  (v) => { requireVersion(v.version); if (v.output.version !== v.version || v.commitCertificate.version !== v.version || v.proof.version !== v.version) rejectType((TEXT_KAGEMUSHA_V1 + "payment " + TEXT_VERSION_MISMATCH)); },
 );
 const KagemushaInboxReceiptV1 = /* @__PURE__ */ defineModel(
-  "KagemushaInboxReceiptV1", [["version", K_TYPE_U16], ["creditId", K_TYPE_FIXED32], ["receiptCommitment", K_TYPE_FIXED32]],
+  "KagemushaInboxReceiptV1", [["version", K_TYPE_U16], [FIELD_CREDIT_ID, K_TYPE_FIXED32], ["receiptCommitment", K_TYPE_FIXED32]],
   (v) => requireVersion(v.version),
 );
 const KagemushaAcknowledgementV1 = /* @__PURE__ */ defineModel(
   "KagemushaAcknowledgementV1",
-  [["version", K_TYPE_U16], ["requestDigest", K_TYPE_FIXED32], ["paymentDigest", K_TYPE_FIXED32], ["inboxReceipt", KagemushaInboxReceiptV1], ["signature", K_TYPE_SIGNATURE]],
-  (v) => { requireVersion(v.version); if (v.inboxReceipt.version !== v.version) rejectType("KAGEMUSHA V1 acknowledgement version mismatch"); },
+  [["version", K_TYPE_U16], [FIELD_REQUEST_DIGEST, K_TYPE_FIXED32], ["paymentDigest", K_TYPE_FIXED32], ["inboxReceipt", KagemushaInboxReceiptV1], ["signature", K_TYPE_SIGNATURE]],
+  (v) => { requireVersion(v.version); if (v.inboxReceipt.version !== v.version) rejectType((TEXT_KAGEMUSHA_V1 + "acknowledgement " + TEXT_VERSION_MISMATCH)); },
   2,
 );
 
 const KagemushaMintAuthorizationContextV1 = /* @__PURE__ */ defineModel(
   "KagemushaMintAuthorizationContextV1",
   [["version", K_TYPE_U16], ["operationId", K_TYPE_FIXED32], ["releaseId", K_TYPE_FIXED32], ["suiteId", K_TYPE_FIXED32], ["vkDigest", K_TYPE_FIXED32],
-    ["artifactManifestDigest", K_TYPE_FIXED32], ["networkId", K_TYPE_NETWORK], ["asset", K_TYPE_ASSET], ["assetIncarnation", K_TYPE_INCARNATION],
-    ["scale", K_TYPE_U32], ["liabilityPoolId", K_TYPE_FIXED32], ["amount", K_TYPE_U128], ["payer", K_TYPE_ACCOUNT], ["recipient", K_TYPE_ACCOUNT],
-    ["hardwareCredentialId", K_TYPE_FIXED32], ["hardwareProfileId", K_TYPE_FIXED32], ["policyEpoch", K_TYPE_U64],
-    ["recipientCredentialCommitment", K_TYPE_FIXED32], ["creditCommitment", K_TYPE_FIXED32], ["recipientOneTimeKey", K_TYPE_FIXED32]],
+    [FIELD_ARTIFACT_MANIFEST_DIGEST, K_TYPE_FIXED32], [FIELD_NETWORK_ID, K_TYPE_NETWORK], ["asset", K_TYPE_ASSET], [FIELD_ASSET_INCARNATION, K_TYPE_INCARNATION],
+    ["scale", K_TYPE_U32], [FIELD_LIABILITY_POOL_ID, K_TYPE_FIXED32], ["amount", K_TYPE_U128], ["payer", K_TYPE_ACCOUNT], ["recipient", K_TYPE_ACCOUNT],
+    ["hardwareCredentialId", K_TYPE_FIXED32], [FIELD_HARDWARE_PROFILE_ID, K_TYPE_FIXED32], [FIELD_POLICY_EPOCH, K_TYPE_U64],
+    [FIELD_RECIPIENT_CREDENTIAL_COMMITMENT, K_TYPE_FIXED32], [FIELD_CREDIT_COMMITMENT, K_TYPE_FIXED32], ["recipientOneTimeKey", K_TYPE_FIXED32]],
   (v) => {
     header(v, true);
-    if (v.policyEpoch === 0n) rejectType("mint authorization policy epoch must be positive");
+    if (v.policyEpoch === 0n) rejectType((TEXT_MINT_AUTHORIZATION + TEXT_POLICY_EPOCH_MUST_BE_POSITIVE));
     requireX25519Key(v.recipientOneTimeKey, "mint recipient key");
-    requireEqual(v.liabilityPoolId, liabilityPoolId(v.networkId, v.asset, v.assetIncarnation), "mint authorization liability pool");
+    requireEqual(v.liabilityPoolId, liabilityPoolId(v.networkId, v.asset, v.assetIncarnation), (TEXT_MINT_AUTHORIZATION + "liability pool"));
   },
 );
 const KagemushaMintAuthorizationStatementV1 = /* @__PURE__ */ defineModel(
-  "KagemushaMintAuthorizationStatementV1",
-  [["version", K_TYPE_U16], ["context", KagemushaMintAuthorizationContextV1], ["issuanceCommitment", K_TYPE_FIXED32], ["creditId", K_TYPE_FIXED32], ["ciphertextDigest", K_TYPE_FIXED32]],
-  (v) => { requireVersion(v.version); if (v.context.version !== v.version) rejectType("mint authorization statement version mismatch"); },
+  TEXT_KAGEMUSHA_MINT_AUTHORIZATION_STATEMENT_V1,
+  [["version", K_TYPE_U16], ["context", KagemushaMintAuthorizationContextV1], [FIELD_ISSUANCE_COMMITMENT, K_TYPE_FIXED32], [FIELD_CREDIT_ID, K_TYPE_FIXED32], ["ciphertextDigest", K_TYPE_FIXED32]],
+  (v) => { requireVersion(v.version); if (v.context.version !== v.version) rejectType((TEXT_MINT_AUTHORIZATION + "statement " + TEXT_VERSION_MISMATCH)); },
 );
 const KagemushaMintAuthorizationV1 = /* @__PURE__ */ defineModel(
   "KagemushaMintAuthorizationV1",
   [["version", K_TYPE_U16], ["statement", KagemushaMintAuthorizationStatementV1], ["proof", KagemushaPairedProofV1]],
-  (v) => { requireVersion(v.version); if (v.statement.version !== v.version || v.proof.version !== v.version) rejectType("mint authorization version mismatch"); },
+  (v) => { requireVersion(v.version); if (v.statement.version !== v.version || v.proof.version !== v.version) rejectType((TEXT_MINT_AUTHORIZATION + TEXT_VERSION_MISMATCH)); },
 );
 const KagemushaMintCreditStatementV1 = /* @__PURE__ */ defineModel(
   "KagemushaMintCreditStatementV1",
-  [["version", K_TYPE_U16], ["lifecycle", KagemushaLifecycleBindingV1], ["recipientCredentialCommitment", K_TYPE_FIXED32],
+  [["version", K_TYPE_U16], ["lifecycle", KagemushaLifecycleBindingV1], [FIELD_RECIPIENT_CREDENTIAL_COMMITMENT, K_TYPE_FIXED32],
     ["authorizationContextDigest", K_TYPE_FIXED32], ["mintAuthorizationDigest", K_TYPE_FIXED32], ["amount", K_TYPE_U128],
-    ["issuanceCommitment", K_TYPE_FIXED32], ["recipient", K_TYPE_ACCOUNT], ["creditCommitment", K_TYPE_FIXED32], ["mintedAtMs", K_TYPE_U64]],
-  (v) => { requireVersion(v.version); if (v.lifecycle.version !== v.version || v.lifecycle.operationKind !== "mintFold" || v.amount === 0n || v.mintedAtMs === 0n) rejectType("KAGEMUSHA V1 mint statement is invalid"); },
+    [FIELD_ISSUANCE_COMMITMENT, K_TYPE_FIXED32], ["recipient", K_TYPE_ACCOUNT], [FIELD_CREDIT_COMMITMENT, K_TYPE_FIXED32], ["mintedAtMs", K_TYPE_U64]],
+  (v) => { requireVersion(v.version); if (v.lifecycle.version !== v.version || v.lifecycle.operationKind !== "mintFold" || v.amount === 0n || v.mintedAtMs === 0n) rejectType((TEXT_KAGEMUSHA_V1 + "mint statement" + TEXT_IS_INVALID)); },
 );
 const KagemushaMintCreditV1 = /* @__PURE__ */ defineModel(
   "KagemushaMintCreditV1",
   [["version", K_TYPE_U16], ["statement", KagemushaMintCreditStatementV1], ["proof", KagemushaPairedProofV1],
     ["finalityCertificateBinding", K_TYPE_FIXED32], ["finalityAuthorityHead", K_TYPE_FIXED32], ["finalityGenesisRosterId", K_TYPE_FIXED32],
-    ["finalityProofBindingDigest", K_TYPE_FIXED32], ["encryptedCredit", K_TYPE_VECTOR], ["artifactManifestDigest", K_TYPE_FIXED32]],
-  (v) => { requireVersion(v.version); if (v.statement.version !== v.version || v.proof.version !== v.version) rejectType("mint credit version mismatch"); },
+    ["finalityProofBindingDigest", K_TYPE_FIXED32], [FIELD_ENCRYPTED_CREDIT, K_TYPE_VECTOR], [FIELD_ARTIFACT_MANIFEST_DIGEST, K_TYPE_FIXED32]],
+  (v) => { requireVersion(v.version); if (v.statement.version !== v.version || v.proof.version !== v.version) rejectType(("mint credit " + TEXT_VERSION_MISMATCH)); },
 );
 
 // Operation 16 exposes only public canonical archives; native hardware keeps reservations,
@@ -455,10 +497,10 @@ const KagemushaDeviceMintStageCommandV1 = /* @__PURE__ */ defineModel(
 );
 const KagemushaDeviceMintStageResultV1 = /* @__PURE__ */ defineModel(
   "KagemushaDeviceMintStageResultV1",
-  [["version", K_TYPE_U16], ["disposition", K_TYPE_U8], ["creditId", K_TYPE_FIXED32]],
+  [["version", K_TYPE_U16], ["disposition", K_TYPE_U8], [FIELD_CREDIT_ID, K_TYPE_FIXED32]],
   (v) => {
     requireVersion(v.version);
-    if (v.disposition !== 0 && v.disposition !== 1) rejectType("KAGEMUSHA V1 mint-stage disposition must be 0 or 1");
+    if (v.disposition !== 0 && v.disposition !== 1) rejectType((TEXT_KAGEMUSHA_V1 + TEXT_MINT_STAGE_DISPOSITION_MUST_BE_0_OR_1));
   },
   2,
 );
@@ -467,30 +509,30 @@ const KagemushaRedemptionStatementV1 = /* @__PURE__ */ defineModel(
   "KagemushaRedemptionStatementV1",
   [["version", K_TYPE_U16], ["lifecycle", KagemushaLifecycleBindingV1], ["amount", K_TYPE_U128], ["beneficiary", K_TYPE_ACCOUNT],
     ["terminalNullifier", K_TYPE_FIXED32], ["redemptionCommitment", K_TYPE_FIXED32], ["redemptionId", K_TYPE_FIXED32],
-    ["commitEvidence", K_TYPE_COMMIT_EVIDENCE]],
+    [FIELD_COMMIT_EVIDENCE, K_TYPE_COMMIT_EVIDENCE]],
   (v) => { requireVersion(v.version); if (v.lifecycle.version !== v.version || v.lifecycle.operationKind !== "redeemSplit"
-    || v.amount === 0n) rejectType("KAGEMUSHA V1 redemption statement is invalid"); },
+    || v.amount === 0n) rejectType((TEXT_KAGEMUSHA_V1 + "redemption statement" + TEXT_IS_INVALID)); },
 );
 const KagemushaRedemptionVoucherV1 = /* @__PURE__ */ defineModel(
   "KagemushaRedemptionVoucherV1",
   [["version", K_TYPE_U16], ["statement", KagemushaRedemptionStatementV1], ["commitCertificate", KagemushaCommitCertificateV1],
-    ["proof", KagemushaRedemptionProofV1], ["artifactManifestDigest", K_TYPE_FIXED32]],
-  (v) => { requireVersion(v.version); if (v.statement.version !== v.version || v.commitCertificate.version !== v.version || v.proof.version !== v.version) rejectType("redemption voucher version mismatch"); },
+    ["proof", KagemushaRedemptionProofV1], [FIELD_ARTIFACT_MANIFEST_DIGEST, K_TYPE_FIXED32]],
+  (v) => { requireVersion(v.version); if (v.statement.version !== v.version || v.commitCertificate.version !== v.version || v.proof.version !== v.version) rejectType(("redemption voucher " + TEXT_VERSION_MISMATCH)); },
 );
 
 const KagemushaTopUpRequestV1 = /* @__PURE__ */ defineModel(
   "KagemushaTopUpRequestV1",
-  [["version", K_TYPE_U16], ["operationId", K_TYPE_FIXED32], ["issuanceCommitment", K_TYPE_FIXED32], ["creditId", K_TYPE_FIXED32],
-    ["releaseId", K_TYPE_FIXED32], ["suiteId", K_TYPE_FIXED32], ["vkDigest", K_TYPE_FIXED32], ["networkId", K_TYPE_NETWORK], ["asset", K_TYPE_ASSET],
-    ["assetIncarnation", K_TYPE_INCARNATION], ["scale", K_TYPE_U32], ["amount", K_TYPE_U128], ["liabilityPoolId", K_TYPE_FIXED32],
+  [["version", K_TYPE_U16], ["operationId", K_TYPE_FIXED32], [FIELD_ISSUANCE_COMMITMENT, K_TYPE_FIXED32], [FIELD_CREDIT_ID, K_TYPE_FIXED32],
+    ["releaseId", K_TYPE_FIXED32], ["suiteId", K_TYPE_FIXED32], ["vkDigest", K_TYPE_FIXED32], [FIELD_NETWORK_ID, K_TYPE_NETWORK], ["asset", K_TYPE_ASSET],
+    [FIELD_ASSET_INCARNATION, K_TYPE_INCARNATION], ["scale", K_TYPE_U32], ["amount", K_TYPE_U128], [FIELD_LIABILITY_POOL_ID, K_TYPE_FIXED32],
     ["payer", K_TYPE_ACCOUNT], ["recipient", K_TYPE_ACCOUNT], ["hardwareCredential", KagemushaHardwareCredentialV1],
-    ["recipientCredentialCommitment", K_TYPE_FIXED32], ["creditCommitment", K_TYPE_FIXED32], ["recipientOneTimeKey", K_TYPE_FIXED32],
-    ["encryptedCredit", K_TYPE_VECTOR], ["artifactManifestDigest", K_TYPE_FIXED32], ["mintAuthorization", { optional: KagemushaMintAuthorizationV1 }]],
+    [FIELD_RECIPIENT_CREDENTIAL_COMMITMENT, K_TYPE_FIXED32], [FIELD_CREDIT_COMMITMENT, K_TYPE_FIXED32], ["recipientOneTimeKey", K_TYPE_FIXED32],
+    [FIELD_ENCRYPTED_CREDIT, K_TYPE_VECTOR], [FIELD_ARTIFACT_MANIFEST_DIGEST, K_TYPE_FIXED32], ["mintAuthorization", { optional: KagemushaMintAuthorizationV1 }]],
   (v) => { header(v, true); requireX25519Key(v.recipientOneTimeKey, "top-up recipient key"); },
 );
 const KagemushaRedemptionRequestV1 = /* @__PURE__ */ defineModel(
   "KagemushaRedemptionRequestV1", [["version", K_TYPE_U16], ["operationId", K_TYPE_FIXED32], ["voucher", KagemushaRedemptionVoucherV1]],
-  (v) => { requireVersion(v.version); if (v.voucher.version !== v.version) rejectType("redemption request version mismatch"); },
+  (v) => { requireVersion(v.version); if (v.voucher.version !== v.version) rejectType(("redemption request " + TEXT_VERSION_MISMATCH)); },
 );
 
 function encodeTopLevel(value, Model, schema, maximum, validate) {
@@ -503,81 +545,81 @@ function decodeTopLevel(raw, Model, schema, maximum, validate) {
   return decodeExact(raw, maximum, schema, Model, (value) => encodeTopLevel(value, Model, schema, maximum, validate));
 }
 
-const encodePaymentRequest = (value) => encodeTopLevel(value, KagemushaPaymentRequestV1, SCHEMAS.request, LIMITS.paymentRequest[0], validateRequest);
-const decodePaymentRequest = (raw) => decodeTopLevel(raw, KagemushaPaymentRequestV1, SCHEMAS.request, LIMITS.paymentRequest[0], validateRequest);
-const encodeCommitCertificate = (value, lifecycle, evidence, nullifier) => encodeTopLevel(value, KagemushaCommitCertificateV1, SCHEMAS.commitCertificate, 1024,
+const encodePaymentRequest = (value) => encodeTopLevel(value, KagemushaPaymentRequestV1, K_SCHEMA_REQUEST, LIMITS.paymentRequest[0], validateRequest);
+const decodePaymentRequest = (raw) => decodeTopLevel(raw, KagemushaPaymentRequestV1, K_SCHEMA_REQUEST, LIMITS.paymentRequest[0], validateRequest);
+const encodeCommitCertificate = (value, lifecycle, evidence, nullifier) => encodeTopLevel(value, KagemushaCommitCertificateV1, K_SCHEMA_COMMIT_CERTIFICATE, 1024,
   lifecycle === undefined ? undefined : (model) => validateCommitCertificate(model, lifecycle, evidence, nullifier));
-const decodeCommitCertificate = (raw, lifecycle, evidence, nullifier) => decodeTopLevel(raw, KagemushaCommitCertificateV1, SCHEMAS.commitCertificate, 1024,
+const decodeCommitCertificate = (raw, lifecycle, evidence, nullifier) => decodeTopLevel(raw, KagemushaCommitCertificateV1, K_SCHEMA_COMMIT_CERTIFICATE, 1024,
   lifecycle === undefined ? undefined : (model) => validateCommitCertificate(model, lifecycle, evidence, nullifier));
-const encodeRedemptionProof = (value) => encodeTopLevel(value, KagemushaRedemptionProofV1, SCHEMAS.redemptionProof, 6528);
-const decodeRedemptionProof = (raw) => decodeTopLevel(raw, KagemushaRedemptionProofV1, SCHEMAS.redemptionProof, 6528);
-const encodePaymentProof = (value) => encodeTopLevel(value, KagemushaPaymentProofV1, SCHEMAS.paymentProof, 6528);
-const decodePaymentProof = (raw) => decodeTopLevel(raw, KagemushaPaymentProofV1, SCHEMAS.paymentProof, 6528);
-const encodePeerCreditContext = (value) => encodeTopLevel(value, KagemushaPeerCreditContextV1, SCHEMAS.peerCreditContext, 512);
-const decodePeerCreditContext = (raw) => decodeTopLevel(raw, KagemushaPeerCreditContextV1, SCHEMAS.peerCreditContext, 512);
-const encodePayment = (value, request) => encodeTopLevel(value, KagemushaPaymentV1, SCHEMAS.payment, LIMITS.payment[0], (model) => validatePayment(model, request));
-const decodePayment = (raw, request) => decodeTopLevel(raw, KagemushaPaymentV1, SCHEMAS.payment, LIMITS.payment[0], (model) => validatePayment(model, request));
-const encodeAcknowledgement = (value, request, payment) => encodeTopLevel(value, KagemushaAcknowledgementV1, SCHEMAS.acknowledgement, LIMITS.acknowledgement[0], (model) => validateAcknowledgement(model, request, payment));
-const decodeAcknowledgement = (raw, request, payment) => decodeTopLevel(raw, KagemushaAcknowledgementV1, SCHEMAS.acknowledgement, LIMITS.acknowledgement[0], (model) => validateAcknowledgement(model, request, payment));
-const encodeMintAuthorization = (value) => encodeTopLevel(value, KagemushaMintAuthorizationV1, SCHEMAS.mintAuthorization, 7936, validateMintAuthorization);
-const decodeMintAuthorization = (raw) => decodeTopLevel(raw, KagemushaMintAuthorizationV1, SCHEMAS.mintAuthorization, 7936, validateMintAuthorization);
-const encodeMintCredit = (value, authorization) => encodeTopLevel(value, KagemushaMintCreditV1, SCHEMAS.mintCredit, 7936, (model) => validateMintCredit(model, authorization));
-const decodeMintCredit = (raw, authorization) => decodeTopLevel(raw, KagemushaMintCreditV1, SCHEMAS.mintCredit, 7936, (model) => validateMintCredit(model, authorization));
+const encodeRedemptionProof = (value) => encodeTopLevel(value, KagemushaRedemptionProofV1, K_SCHEMA_REDEMPTION_PROOF, 6528);
+const decodeRedemptionProof = (raw) => decodeTopLevel(raw, KagemushaRedemptionProofV1, K_SCHEMA_REDEMPTION_PROOF, 6528);
+const encodePaymentProof = (value) => encodeTopLevel(value, KagemushaPaymentProofV1, K_SCHEMA_PAYMENT_PROOF, 6528);
+const decodePaymentProof = (raw) => decodeTopLevel(raw, KagemushaPaymentProofV1, K_SCHEMA_PAYMENT_PROOF, 6528);
+const encodePeerCreditContext = (value) => encodeTopLevel(value, KagemushaPeerCreditContextV1, K_SCHEMA_PEER_CREDIT_CONTEXT, 512);
+const decodePeerCreditContext = (raw) => decodeTopLevel(raw, KagemushaPeerCreditContextV1, K_SCHEMA_PEER_CREDIT_CONTEXT, 512);
+const encodePayment = (value, request) => encodeTopLevel(value, KagemushaPaymentV1, K_SCHEMA_PAYMENT, LIMITS.payment[0], (model) => validatePayment(model, request));
+const decodePayment = (raw, request) => decodeTopLevel(raw, KagemushaPaymentV1, K_SCHEMA_PAYMENT, LIMITS.payment[0], (model) => validatePayment(model, request));
+const encodeAcknowledgement = (value, request, payment) => encodeTopLevel(value, KagemushaAcknowledgementV1, K_SCHEMA_ACKNOWLEDGEMENT, LIMITS.acknowledgement[0], (model) => validateAcknowledgement(model, request, payment));
+const decodeAcknowledgement = (raw, request, payment) => decodeTopLevel(raw, KagemushaAcknowledgementV1, K_SCHEMA_ACKNOWLEDGEMENT, LIMITS.acknowledgement[0], (model) => validateAcknowledgement(model, request, payment));
+const encodeMintAuthorization = (value) => encodeTopLevel(value, KagemushaMintAuthorizationV1, K_SCHEMA_MINT_AUTHORIZATION, 7936, validateMintAuthorization);
+const decodeMintAuthorization = (raw) => decodeTopLevel(raw, KagemushaMintAuthorizationV1, K_SCHEMA_MINT_AUTHORIZATION, 7936, validateMintAuthorization);
+const encodeMintCredit = (value, authorization) => encodeTopLevel(value, KagemushaMintCreditV1, K_SCHEMA_MINT_CREDIT, 7936, (model) => validateMintCredit(model, authorization));
+const decodeMintCredit = (raw, authorization) => decodeTopLevel(raw, KagemushaMintCreditV1, K_SCHEMA_MINT_CREDIT, 7936, (model) => validateMintCredit(model, authorization));
 /** Encode a public operation-16 body. Shape checks never authorize a hardware transition. */
 function encodeDeviceMintStageCommandShape(value, canonicalMintCredit = undefined) {
   const command = canonicalMintCredit === undefined ? value : new KagemushaDeviceMintStageCommandV1({
     version: 1, canonicalAuthorization: value, canonicalMintCredit,
   });
-  return encodeTopLevel(command, KagemushaDeviceMintStageCommandV1, SCHEMAS.deviceMintStageCommand,
+  return encodeTopLevel(command, KagemushaDeviceMintStageCommandV1, K_SCHEMA_DEVICE_MINT_STAGE_COMMAND,
     DEVICE_MINT_STAGE_COMMAND_MAX_BYTES, validateDeviceMintStageCommand);
 }
 function decodeDeviceMintStageCommandShapeExact(raw) {
   return decodeTopLevel(boundedBytes(raw, DEVICE_MINT_STAGE_COMMAND_MAX_BYTES, "mint-stage command"),
-    KagemushaDeviceMintStageCommandV1, SCHEMAS.deviceMintStageCommand,
+    KagemushaDeviceMintStageCommandV1, K_SCHEMA_DEVICE_MINT_STAGE_COMMAND,
     DEVICE_MINT_STAGE_COMMAND_MAX_BYTES, validateDeviceMintStageCommand);
 }
 /** This result still requires a qualified native response authenticator before it is trusted. */
 function encodeDeviceMintStageResultShape(value, command = undefined) {
-  return encodeTopLevel(value, KagemushaDeviceMintStageResultV1, SCHEMAS.deviceMintStageResult,
+  return encodeTopLevel(value, KagemushaDeviceMintStageResultV1, K_SCHEMA_DEVICE_MINT_STAGE_RESULT,
     DEVICE_MINT_STAGE_RESULT_MAX_BYTES, command === undefined ? validateDeviceMintStageResult
       : (result) => validateDeviceMintStageResultAgainstCommand(result, command));
 }
 function decodeDeviceMintStageResultShapeExact(raw, command = undefined) {
   return decodeTopLevel(boundedBytes(raw, DEVICE_MINT_STAGE_RESULT_MAX_BYTES, "mint-stage result"),
-    KagemushaDeviceMintStageResultV1, SCHEMAS.deviceMintStageResult, DEVICE_MINT_STAGE_RESULT_MAX_BYTES,
+    KagemushaDeviceMintStageResultV1, K_SCHEMA_DEVICE_MINT_STAGE_RESULT, DEVICE_MINT_STAGE_RESULT_MAX_BYTES,
     command === undefined ? validateDeviceMintStageResult : (result) => validateDeviceMintStageResultAgainstCommand(result, command));
 }
-const encodeRedemptionVoucher = (value) => encodeTopLevel(value, KagemushaRedemptionVoucherV1, SCHEMAS.redemptionVoucher, 7936, validateRedemptionVoucher);
-const decodeRedemptionVoucher = (raw) => decodeTopLevel(raw, KagemushaRedemptionVoucherV1, SCHEMAS.redemptionVoucher, 7936, validateRedemptionVoucher);
-const encodeEncryptedCreditAad = (value) => encodeTopLevel(value, KagemushaEncryptedCreditAadV1, SCHEMAS.encryptedCreditAad, 256);
-const decodeEncryptedCreditAad = (raw) => decodeTopLevel(raw, KagemushaEncryptedCreditAadV1, SCHEMAS.encryptedCreditAad, 256);
-const encodeEncryptedCreditEnvelope = (value, recipientKey) => encodeTopLevel(value, KagemushaEncryptedCreditEnvelopeV1, SCHEMAS.encryptedCreditEnvelope, 384, (model) => validateEnvelopeRecipient(model, recipientKey));
-const decodeEncryptedCreditEnvelope = (raw, recipientKey) => decodeTopLevel(raw, KagemushaEncryptedCreditEnvelopeV1, SCHEMAS.encryptedCreditEnvelope, 384, (model) => validateEnvelopeRecipient(model, recipientKey));
+const encodeRedemptionVoucher = (value) => encodeTopLevel(value, KagemushaRedemptionVoucherV1, K_SCHEMA_REDEMPTION_VOUCHER, 7936, validateRedemptionVoucher);
+const decodeRedemptionVoucher = (raw) => decodeTopLevel(raw, KagemushaRedemptionVoucherV1, K_SCHEMA_REDEMPTION_VOUCHER, 7936, validateRedemptionVoucher);
+const encodeEncryptedCreditAad = (value) => encodeTopLevel(value, KagemushaEncryptedCreditAadV1, K_SCHEMA_ENCRYPTED_CREDIT_AAD, 256);
+const decodeEncryptedCreditAad = (raw) => decodeTopLevel(raw, KagemushaEncryptedCreditAadV1, K_SCHEMA_ENCRYPTED_CREDIT_AAD, 256);
+const encodeEncryptedCreditEnvelope = (value, recipientKey) => encodeTopLevel(value, KagemushaEncryptedCreditEnvelopeV1, K_SCHEMA_ENCRYPTED_CREDIT_ENVELOPE, 384, (model) => validateEnvelopeRecipient(model, recipientKey));
+const decodeEncryptedCreditEnvelope = (raw, recipientKey) => decodeTopLevel(raw, KagemushaEncryptedCreditEnvelopeV1, K_SCHEMA_ENCRYPTED_CREDIT_ENVELOPE, 384, (model) => validateEnvelopeRecipient(model, recipientKey));
 
 function encodeCreditOpening(value) {
-  const raw = encodeTopLevel(value, KagemushaCreditOpeningV1, SCHEMAS.creditOpening, 256);
-  if (raw.length !== CREDIT_OPENING_BYTES) rejectType("KAGEMUSHA V1 credit opening has a noncanonical fixed size");
+  const raw = encodeTopLevel(value, KagemushaCreditOpeningV1, K_SCHEMA_CREDIT_OPENING, 256);
+  if (raw.length !== CREDIT_OPENING_BYTES) rejectType((TEXT_KAGEMUSHA_V1 + TEXT_CREDIT_OPENING_HAS_A_NONCANONICAL_FIXED_SIZE));
   return raw;
 }
 
 function decodeCreditOpening(raw, creditIdValue, amount) {
-  const opening = decodeTopLevel(raw, KagemushaCreditOpeningV1, SCHEMAS.creditOpening, 256, (value) => {
-    if (creditIdValue !== undefined) requireEqual(value.creditId, fixed32(creditIdValue, "creditId"), "credit opening credit ID");
+  const opening = decodeTopLevel(raw, KagemushaCreditOpeningV1, K_SCHEMA_CREDIT_OPENING, 256, (value) => {
+    if (creditIdValue !== undefined) requireEqual(value.creditId, fixed32(creditIdValue, FIELD_CREDIT_ID), "credit opening credit ID");
     if (amount !== undefined && value.amount !== unsigned(amount, MAX_U128, "amount")) rejectType("credit opening amount does not match");
   });
-  if (bytes(raw, "credit opening").length !== CREDIT_OPENING_BYTES) rejectType("KAGEMUSHA V1 credit opening has a noncanonical fixed size");
+  if (bytes(raw, "credit opening").length !== CREDIT_OPENING_BYTES) rejectType((TEXT_KAGEMUSHA_V1 + TEXT_CREDIT_OPENING_HAS_A_NONCANONICAL_FIXED_SIZE));
   return opening;
 }
 
 function validateRequest(request) {
-  const v = rawValues(instance(request, KagemushaPaymentRequestV1, "payment request"));
+  const v = rawValues(instance(request, KagemushaPaymentRequestV1, CONTEXT_PAYMENT_REQUEST));
   requireEqual(v.liabilityPoolId, liabilityPoolId(v.networkId, v.asset, v.assetIncarnation), "request liability pool");
 }
 
 function lifecycleDigest(lifecycle) {
   return digestModel(
-    DOMAIN.lifecycleDigest,
-    SCHEMAS.lifecycle,
+    K_DOMAIN_LIFECYCLE_DIGEST,
+    K_SCHEMA_LIFECYCLE,
     instance(lifecycle, KagemushaLifecycleBindingV1, "lifecycle binding"),
     8,
   );
@@ -590,44 +632,44 @@ function commitEvidenceTranscript(evidence) {
 }
 
 function commitCertificateIdTranscript(certificate) {
-  const value = rawValues(instance(certificate, KagemushaCommitCertificateV1, "commit certificate"));
+  const value = rawValues(instance(certificate, KagemushaCommitCertificateV1, CONTEXT_COMMIT_CERTIFICATE));
   return join(u16(value.version), value.candidateEnvelopeDigest, value.lifecycleBindingDigest, value.transitionNullifier,
     value.outboxReservationCommitment, commitEvidenceTranscript(value.commitEvidence), value.hardwareProfileId,
     u64(value.policyEpoch), value.hardwareTerminalCommitment);
 }
 
 function expectedCommitCertificateId(certificate) {
-  return digestEncoded(DOMAIN.commitCertificateId, commitCertificateIdTranscript(certificate));
+  return digestEncoded(K_DOMAIN_COMMIT_CERTIFICATE_ID, commitCertificateIdTranscript(certificate));
 }
 
 function commitCertificateTranscript(certificate) {
-  const value = rawValues(instance(certificate, KagemushaCommitCertificateV1, "commit certificate"));
+  const value = rawValues(instance(certificate, KagemushaCommitCertificateV1, CONTEXT_COMMIT_CERTIFICATE));
   return join(u16(value.version), value.certificateId, value.candidateEnvelopeDigest, value.lifecycleBindingDigest,
     value.transitionNullifier, value.outboxReservationCommitment, commitEvidenceTranscript(value.commitEvidence),
     value.hardwareProfileId, u64(value.policyEpoch), value.hardwareTerminalCommitment);
 }
 
 function validateCommitCertificate(certificate, lifecycle, evidence, nullifier) {
-  const value = rawValues(instance(certificate, KagemushaCommitCertificateV1, "commit certificate"));
+  const value = rawValues(instance(certificate, KagemushaCommitCertificateV1, CONTEXT_COMMIT_CERTIFICATE));
   const boundLifecycle = instance(lifecycle, KagemushaLifecycleBindingV1, "lifecycle binding");
   const boundEvidence = normalizeType(K_TYPE_COMMIT_EVIDENCE, evidence, "commit evidence");
-  requireEqual(value.lifecycleBindingDigest, lifecycleDigest(boundLifecycle), "commit certificate lifecycle digest");
-  requireEqual(value.transitionNullifier, fixed32(nullifier, "transition nullifier"), "commit certificate transition nullifier");
-  requireEqual(encodeCommitEvidence(value.commitEvidence), encodeCommitEvidence(boundEvidence), "commit certificate evidence");
-  requireEqual(value.hardwareProfileId, boundLifecycle.hardwareProfileId, "commit certificate hardware profile");
-  if (value.policyEpoch !== boundLifecycle.policyEpoch) rejectType("commit certificate policy epoch does not match");
-  requireEqual(value.certificateId, expectedCommitCertificateId(certificate), "commit certificate ID");
+  requireEqual(value.lifecycleBindingDigest, lifecycleDigest(boundLifecycle), (TEXT_COMMIT_CERTIFICATE + "lifecycle digest"));
+  requireEqual(value.transitionNullifier, fixed32(nullifier, "transition nullifier"), (TEXT_COMMIT_CERTIFICATE + "transition nullifier"));
+  requireEqual(encodeCommitEvidence(value.commitEvidence), encodeCommitEvidence(boundEvidence), (TEXT_COMMIT_CERTIFICATE + "evidence"));
+  requireEqual(value.hardwareProfileId, boundLifecycle.hardwareProfileId, (TEXT_COMMIT_CERTIFICATE + "hardware profile"));
+  if (value.policyEpoch !== boundLifecycle.policyEpoch) rejectType((TEXT_COMMIT_CERTIFICATE + "policy epoch does not match"));
+  requireEqual(value.certificateId, expectedCommitCertificateId(certificate), (TEXT_COMMIT_CERTIFICATE + "ID"));
 }
 
 function commitCertificateDigest(certificate, lifecycle, evidence, nullifier) {
   if (lifecycle !== undefined) validateCommitCertificate(certificate, lifecycle, evidence, nullifier);
   else requireEqual(certificate.certificateId, expectedCommitCertificateId(certificate), "certificate ID");
-  return digestEncoded(DOMAIN.commitCertificateDigest, commitCertificateTranscript(certificate));
+  return digestEncoded(K_DOMAIN_COMMIT_CERTIFICATE_DIGEST, commitCertificateTranscript(certificate));
 }
 
 function validatePaymentOutput(output, request) {
   const value = rawValues(instance(output, KagemushaPaymentOutputV1, "payment output"));
-  const bound = instance(request, KagemushaPaymentRequestV1, "payment request");
+  const bound = instance(request, KagemushaPaymentRequestV1, CONTEXT_PAYMENT_REQUEST);
   const requestDigest = paymentRequestDigest(bound);
   requireEqual(value.requestDigest, requestDigest, "payment request digest");
   if (value.amount !== bound.amount) rejectType("payment amount does not match request");
@@ -646,12 +688,12 @@ function validatePayment(payment, request) {
   requireEqual(certificate.transitionNullifier, p.output.transitionNullifier, "payment certificate nullifier");
   requireEqual(commitEvidenceTranscript(certificate.commitEvidence), commitEvidenceTranscript(p.output.commitEvidence), "payment commit evidence");
   requireEqual(p.proof.candidateEnvelopeDigest, certificate.candidateEnvelopeDigest, "payment candidate digest");
-  requireEqual(p.proof.commitCertificateDigest, digestEncoded(DOMAIN.commitCertificateDigest, commitCertificateTranscript(certificate)), "payment certificate digest");
+  requireEqual(p.proof.commitCertificateDigest, digestEncoded(K_DOMAIN_COMMIT_CERTIFICATE_DIGEST, commitCertificateTranscript(certificate)), "payment certificate digest");
   requireEqual(p.proof.semanticDigest, paymentBodyDigest(p.output, p.encryptedCredit), "payment body semantic digest");
 }
 function paymentDigest(payment, request) {
   validatePayment(payment, request);
-  return digestModel(DOMAIN.paymentDigest, SCHEMAS.payment, payment);
+  return digestModel(K_DOMAIN_PAYMENT_DIGEST, K_SCHEMA_PAYMENT, payment);
 }
 
 function paymentOutputTranscript(output) {
@@ -663,16 +705,16 @@ function paymentOutputTranscript(output) {
 
 function paymentOutputDigest(output, request) {
   if (request !== undefined) validatePaymentOutput(output, request);
-  return digestEncoded(DOMAIN.statementDigest, paymentOutputTranscript(output));
+  return digestEncoded(K_DOMAIN_STATEMENT_DIGEST, paymentOutputTranscript(output));
 }
 
 function paymentBodyDigest(output, encryptedCredit) {
   decodeEncryptedCreditEnvelope(encryptedCredit);
-  return digestEncoded(DOMAIN.paymentBodyDigest, join(paymentOutputDigest(output), ciphertextDigest(encryptedCredit)));
+  return digestEncoded(K_DOMAIN_PAYMENT_BODY_DIGEST, join(paymentOutputDigest(output), ciphertextDigest(encryptedCredit)));
 }
 
 function validateAcknowledgement(acknowledgement, request, payment) {
-  const a = rawValues(instance(acknowledgement, KagemushaAcknowledgementV1, "acknowledgement"));
+  const a = rawValues(instance(acknowledgement, KagemushaAcknowledgementV1, FIELD_ACKNOWLEDGEMENT));
   const p = instance(payment, KagemushaPaymentV1, "payment");
   requireEqual(a.requestDigest, paymentRequestDigest(request), "acknowledgement request digest");
   requireEqual(a.paymentDigest, paymentDigest(p, request), "acknowledgement payment digest");
@@ -680,21 +722,21 @@ function validateAcknowledgement(acknowledgement, request, payment) {
 }
 
 function validateMintAuthorization(authorization) {
-  const a = rawValues(instance(authorization, KagemushaMintAuthorizationV1, "mint authorization"));
-  const digest = digestModel(DOMAIN.mintAuthorizationStatementDigest, SCHEMAS.mintAuthorizationStatement, a.statement);
-  requireEqual(a.proof.semanticDigest, digest, "mint authorization proof semantic digest");
+  const a = rawValues(instance(authorization, KagemushaMintAuthorizationV1, CONTEXT_MINT_AUTHORIZATION));
+  const digest = digestModel(K_DOMAIN_MINT_AUTHORIZATION_STATEMENT_DIGEST, K_SCHEMA_MINT_AUTHORIZATION_STATEMENT, a.statement);
+  requireEqual(a.proof.semanticDigest, digest, (TEXT_MINT_AUTHORIZATION + "proof semantic digest"));
 }
 
 function mintAuthorizationContextDigest(context) {
-  return digestModel(DOMAIN.mintAuthorizationContextDigest, SCHEMAS.mintAuthorizationContext, instance(context, KagemushaMintAuthorizationContextV1, "mint authorization context"));
+  return digestModel(K_DOMAIN_MINT_AUTHORIZATION_CONTEXT_DIGEST, K_SCHEMA_MINT_AUTHORIZATION_CONTEXT, instance(context, KagemushaMintAuthorizationContextV1, (TEXT_MINT_AUTHORIZATION + "context")));
 }
 
 function mintAuthorizationStatementDigest(statement) {
-  return digestModel(DOMAIN.mintAuthorizationStatementDigest, SCHEMAS.mintAuthorizationStatement, instance(statement, KagemushaMintAuthorizationStatementV1, "mint authorization statement"));
+  return digestModel(K_DOMAIN_MINT_AUTHORIZATION_STATEMENT_DIGEST, K_SCHEMA_MINT_AUTHORIZATION_STATEMENT, instance(statement, KagemushaMintAuthorizationStatementV1, (TEXT_MINT_AUTHORIZATION + "statement")));
 }
 
 function mintAuthorizationDigest(authorization) {
-  return digestModel(DOMAIN.mintAuthorizationDigest, SCHEMAS.mintAuthorization, instance(authorization, KagemushaMintAuthorizationV1, "mint authorization"));
+  return digestModel(K_DOMAIN_MINT_AUTHORIZATION_DIGEST, K_SCHEMA_MINT_AUTHORIZATION, instance(authorization, KagemushaMintAuthorizationV1, CONTEXT_MINT_AUTHORIZATION));
 }
 
 function mintCreditId(statement) {
@@ -704,19 +746,19 @@ function mintCreditId(statement) {
   // authorization proof bytes are intentionally absent from the issuance preimage.
   const contextFields = MODEL_DEFINITIONS.get(KagemushaLifecycleBindingV1).fields.slice(0, 13);
   const contextPreimage = join(...contextFields.map(([name, type]) => field(encodeType(type, lifecycle[name]))));
-  const contextDigest = digestEncoded(DOMAIN.mintLifecycleContextDigest,
-    frame("iroha.kagemusha.v1.mint-lifecycle-context-preimage", contextPreimage, 8));
+  const contextDigest = digestEncoded(K_DOMAIN_MINT_LIFECYCLE_CONTEXT_DIGEST,
+    frame((TEXT_IROHA_KAGEMUSHA_V1_2 + "mint-lifecycle-context-preimage"), contextPreimage, 8));
   const preimage = join(field(contextDigest), field(s.recipientCredentialCommitment),
     field(s.authorizationContextDigest), field(u128(s.amount)), field(s.issuanceCommitment),
     field(s.recipient.canonicalPayload()), field(s.creditCommitment));
-  return digestEncoded(DOMAIN.mintCreditId,
-    frame("iroha.kagemusha.v1.mint-credit-id-preimage", preimage, 16));
+  return digestEncoded(K_DOMAIN_MINT_CREDIT_ID,
+    frame((TEXT_IROHA_KAGEMUSHA_V1_2 + "mint-credit-id-preimage"), preimage, 16));
 }
 
 function mintCreditStatementDigest(statement) {
   const value = instance(statement, KagemushaMintCreditStatementV1, "mint statement");
   requireEqual(value.lifecycle.creditId, mintCreditId(value), "mint credit ID");
-  return digestModel(DOMAIN.mintStatementDigest, SCHEMAS.mintStatement, value);
+  return digestModel(K_DOMAIN_MINT_STATEMENT_DIGEST, K_SCHEMA_MINT_STATEMENT, value);
 }
 
 function validateMintCredit(credit, authorization) {
@@ -731,14 +773,14 @@ function validateMintCredit(credit, authorization) {
 function validateDeviceMintStageCommand(command) {
   const value = rawValues(instance(command, KagemushaDeviceMintStageCommandV1, "mint-stage command"));
   requireVersion(value.version);
-  const authorization = decodeMintAuthorization(boundedBytes(value.canonicalAuthorization, 7936, "mint authorization"));
+  const authorization = decodeMintAuthorization(boundedBytes(value.canonicalAuthorization, 7936, CONTEXT_MINT_AUTHORIZATION));
   return decodeMintCredit(boundedBytes(value.canonicalMintCredit, 7936, "mint credit"), authorization);
 }
 
 function validateDeviceMintStageResult(result) {
   const value = rawValues(instance(result, KagemushaDeviceMintStageResultV1, "mint-stage result"));
   requireVersion(value.version);
-  if (value.disposition !== 0 && value.disposition !== 1) rejectType("KAGEMUSHA V1 mint-stage disposition must be 0 or 1");
+  if (value.disposition !== 0 && value.disposition !== 1) rejectType((TEXT_KAGEMUSHA_V1 + TEXT_MINT_STAGE_DISPOSITION_MUST_BE_0_OR_1));
   fixed32(value.creditId, "mint-stage result credit ID");
 }
 
@@ -765,8 +807,8 @@ function expectedRedemptionId(statement) {
     field(encodeType(K_TYPE_FIXED32, value.redemptionCommitment)),
   );
   return digestEncoded(
-    DOMAIN.redemptionId,
-    frame("iroha.kagemusha.v1.redemption-id-preimage", preimage, 16),
+    K_DOMAIN_REDEMPTION_ID,
+    frame((TEXT_IROHA_KAGEMUSHA_V1_2 + "redemption-id-preimage"), preimage, 16),
   );
 }
 
@@ -787,8 +829,8 @@ function validateRedemptionStatement(statement) {
 function redemptionStatementDigest(statement) {
   validateRedemptionStatement(statement);
   return digestModel(
-    DOMAIN.redemptionStatementDigest,
-    SCHEMAS.redemptionStatement,
+    K_DOMAIN_REDEMPTION_STATEMENT_DIGEST,
+    K_SCHEMA_REDEMPTION_STATEMENT,
     statement,
   );
 }
@@ -810,13 +852,13 @@ function validateRedemptionVoucher(voucher) {
 
 function validateMintCreditAgainstAuthorization(credit, authorization) {
   const c = rawValues(instance(credit, KagemushaMintCreditV1, "mint credit"));
-  const a = rawValues(instance(authorization, KagemushaMintAuthorizationV1, "mint authorization"));
+  const a = rawValues(instance(authorization, KagemushaMintAuthorizationV1, CONTEXT_MINT_AUTHORIZATION));
   validateMintCredit(credit);
   validateMintAuthorization(authorization);
   const context = rawValues(a.statement.context);
   const statement = rawValues(c.statement);
-  requireEqual(statement.authorizationContextDigest, digestModel(DOMAIN.mintAuthorizationContextDigest, SCHEMAS.mintAuthorizationContext, a.statement.context), "mint authorization context digest");
-  requireEqual(statement.mintAuthorizationDigest, digestModel(DOMAIN.mintAuthorizationDigest, SCHEMAS.mintAuthorization, authorization), "mint authorization digest");
+  requireEqual(statement.authorizationContextDigest, digestModel(K_DOMAIN_MINT_AUTHORIZATION_CONTEXT_DIGEST, K_SCHEMA_MINT_AUTHORIZATION_CONTEXT, a.statement.context), (TEXT_MINT_AUTHORIZATION + "context digest"));
+  requireEqual(statement.mintAuthorizationDigest, digestModel(K_DOMAIN_MINT_AUTHORIZATION_DIGEST, K_SCHEMA_MINT_AUTHORIZATION, authorization), (TEXT_MINT_AUTHORIZATION + "digest"));
   requireEqual(statement.issuanceCommitment, a.statement.issuanceCommitment, "mint issuance commitment");
   requireEqual(statement.lifecycle.creditId, a.statement.creditId, "mint credit ID");
   requireEqual(statement.lifecycle.ciphertextDigest, a.statement.ciphertextDigest, "mint ciphertext binding");
@@ -835,19 +877,19 @@ function validateMintCreditAgainstAuthorization(credit, authorization) {
       || !equalBytes(statement.lifecycle.hardwareProfileId, context.hardwareProfileId)
       || statement.lifecycle.policyEpoch !== context.policyEpoch
       || !equalBytes(c.artifactManifestDigest, context.artifactManifestDigest)) {
-    rejectType("mint authorization context binding is invalid");
+    rejectType((TEXT_MINT_AUTHORIZATION + "context binding" + TEXT_IS_INVALID));
   }
-  requireEqual(a.statement.ciphertextDigest, ciphertextDigest(c.encryptedCredit), "mint authorization ciphertext digest");
+  requireEqual(a.statement.ciphertextDigest, ciphertextDigest(c.encryptedCredit), (TEXT_MINT_AUTHORIZATION + "ciphertext digest"));
   decodeEncryptedCreditEnvelope(c.encryptedCredit, context.recipientOneTimeKey);
   return true;
 }
 
 function encryptedCreditAadForMint(statement) {
-  const s = rawValues(instance(statement, KagemushaMintAuthorizationStatementV1, "mint authorization statement"));
+  const s = rawValues(instance(statement, KagemushaMintAuthorizationStatementV1, (TEXT_MINT_AUTHORIZATION + "statement")));
   return new KagemushaEncryptedCreditAadV1({
     version: 1,
     purpose: "mint",
-    contextDigest: digestModel(DOMAIN.mintAuthorizationContextDigest, SCHEMAS.mintAuthorizationContext, s.context),
+    contextDigest: digestModel(K_DOMAIN_MINT_AUTHORIZATION_CONTEXT_DIGEST, K_SCHEMA_MINT_AUTHORIZATION_CONTEXT, s.context),
     issuanceOrTransitionCommitment: s.issuanceCommitment,
     creditId: s.creditId,
     amount: s.context.amount,
@@ -871,7 +913,7 @@ function encryptedCreditAadForPeer(output, request) {
   const context = peerCreditContext(output, request);
   return new KagemushaEncryptedCreditAadV1({
     version: 1, purpose: "peer",
-    contextDigest: digestModel(DOMAIN.peerCreditContextDigest, SCHEMAS.peerCreditContext, context),
+    contextDigest: digestModel(K_DOMAIN_PEER_CREDIT_CONTEXT_DIGEST, K_SCHEMA_PEER_CREDIT_CONTEXT, context),
     issuanceOrTransitionCommitment: output.ciphertextCommitment,
     creditId: output.creditId, amount: output.amount,
   });
@@ -902,7 +944,7 @@ function validateTopUpRequest(request) {
       || !equalBytes(request.creditCommitment, context.creditCommitment)
       || !equalBytes(request.recipientOneTimeKey, context.recipientOneTimeKey)
       || !equalBytes(request.artifactManifestDigest, context.artifactManifestDigest)) {
-    rejectType("top-up mint authorization context binding is invalid");
+    rejectType(("top-up mint authorization context binding" + TEXT_IS_INVALID));
   }
 }
 
@@ -912,21 +954,21 @@ function validateEnvelopeRecipient(_envelope, recipientKey) {
 
 function encodeText(kind, raw) {
   const [maximumRaw, maximumText] = kindLimits(kind);
-  const payload = bounded(bytes(raw, "KAGEMUSHA V1 payload"), maximumRaw, "payload");
-  if (payload.length === 0) rejectType("KAGEMUSHA V1 payload is empty");
+  const payload = bounded(bytes(raw, (TEXT_KAGEMUSHA_V1 + "payload")), maximumRaw, "payload");
+  if (payload.length === 0) rejectType((TEXT_KAGEMUSHA_V1 + "payload is empty"));
   const text = `kgm1:${Buffer.from(payload).toString("base64url")}`;
-  if (text.length > maximumText) rejectRange("KAGEMUSHA V1 text is oversized");
+  if (text.length > maximumText) rejectRange((TEXT_KAGEMUSHA_V1 + "text is oversized"));
   return text;
 }
 
 function decodeText(kind, text) {
   const [maximumRaw, maximumText] = kindLimits(kind);
-  if (typeof text !== "string" || text.length > maximumText || !text.startsWith("kgm1:")) rejectType("KAGEMUSHA V1 text prefix or size is invalid");
+  if (typeof text !== "string" || text.length > maximumText || !text.startsWith("kgm1:")) rejectType((TEXT_KAGEMUSHA_V1 + "text prefix or size" + TEXT_IS_INVALID));
   const body = text.slice("kgm1:".length);
-  if (!/^[A-Za-z0-9_-]+$/u.test(body) || body.length % 4 === 1) rejectType("KAGEMUSHA V1 text is not canonical unpadded base64url");
+  if (!/^[A-Za-z0-9_-]+$/u.test(body) || body.length % 4 === 1) rejectType((TEXT_KAGEMUSHA_V1 + "text is not canonical unpadded base64url"));
   const raw = Uint8Array.from(Buffer.from(body, "base64url"));
   bounded(raw, maximumRaw, "payload");
-  if (encodeText(kind, raw) !== text) rejectType("KAGEMUSHA V1 text is not canonical");
+  if (encodeText(kind, raw) !== text) rejectType((TEXT_KAGEMUSHA_V1 + "text is not canonical"));
   return raw;
 }
 
@@ -939,7 +981,7 @@ function encodeTypedText(kind, value, ...bindings) {
     mintCredit: encodeMintCredit,
     redemptionVoucher: encodeRedemptionVoucher,
   };
-  if (!Object.hasOwn(encoders, kind)) rejectType("unknown KAGEMUSHA V1 payload kind");
+  if (!Object.hasOwn(encoders, kind)) rejectType(CONTEXT_UNKNOWN_KAGEMUSHA_V1_PAYLOAD_KIND);
   return encodeText(kind, encoders[kind](value, ...bindings));
 }
 
@@ -952,7 +994,7 @@ function decodeTypedText(kind, text, ...bindings) {
     mintCredit: decodeMintCredit,
     redemptionVoucher: decodeRedemptionVoucher,
   };
-  if (!Object.hasOwn(decoders, kind)) rejectType("unknown KAGEMUSHA V1 payload kind");
+  if (!Object.hasOwn(decoders, kind)) rejectType(CONTEXT_UNKNOWN_KAGEMUSHA_V1_PAYLOAD_KIND);
   return decoders[kind](decodeText(kind, text), ...bindings);
 }
 
@@ -962,19 +1004,19 @@ function encodeTopUpRequest(value) {
   return encodeTopLevel(
     request,
     KagemushaTopUpRequestV1,
-    SCHEMAS.topUpRequest,
+    K_SCHEMA_TOP_UP_REQUEST,
     TOP_UP_REQUEST_MAX_BYTES,
   );
 }
 const decodeTopUpRequest = (raw) => decodeTopLevel(
   raw,
   KagemushaTopUpRequestV1,
-  SCHEMAS.topUpRequest,
+  K_SCHEMA_TOP_UP_REQUEST,
   TOP_UP_REQUEST_MAX_BYTES,
   validateTopUpRequest,
 );
-const encodeRedemptionRequest = (value) => encodeTopLevel(value, KagemushaRedemptionRequestV1, SCHEMAS.redemptionRequest, 8192);
-const decodeRedemptionRequest = (raw) => decodeTopLevel(raw, KagemushaRedemptionRequestV1, SCHEMAS.redemptionRequest, 8192);
+const encodeRedemptionRequest = (value) => encodeTopLevel(value, KagemushaRedemptionRequestV1, K_SCHEMA_REDEMPTION_REQUEST, 8192);
+const decodeRedemptionRequest = (raw) => decodeTopLevel(raw, KagemushaRedemptionRequestV1, K_SCHEMA_REDEMPTION_REQUEST, 8192);
 
 function buildTopUpInstruction(value) {
   return Object.freeze({
@@ -1009,41 +1051,41 @@ function validateCompleteExchange(request, payment, acknowledgement) {
   const textBytes = parts.reduce((sum, value) => sum + textLength(value.length), 0);
   if (rawBytes > COMPLETE_EXCHANGE_MAX_RAW_BYTES
       || textBytes > COMPLETE_EXCHANGE_MAX_TEXT_BYTES) {
-    rejectRange("KAGEMUSHA V1 complete three-message exchange is oversized");
+    rejectRange((TEXT_KAGEMUSHA_V1 + "complete three-message exchange is oversized"));
   }
   return rawBytes;
 }
 
 function deviceKeyReference(publicKey) {
   const key = instance(publicKey, KagemushaDevicePublicKeyV1, "device public key");
-  return sha256(join(DOMAIN.deviceKeyReference, Uint8Array.of(0), key.sec1Bytes()));
+  return sha256(join(K_DOMAIN_DEVICE_KEY_REFERENCE, Uint8Array.of(0), key.sec1Bytes()));
 }
 
 function pastaStateCommitment(value) {
   const state = rawValues(instance(value, KagemushaPastaStateCommitmentV1, "Pasta state commitment"));
-  return sha256(join(DOMAIN.pastaStateCommitment, Uint8Array.of(0), state.eq, state.ep));
+  return sha256(join(K_DOMAIN_PASTA_STATE_COMMITMENT, Uint8Array.of(0), state.eq, state.ep));
 }
 
 function liabilityPoolId(networkId, asset, assetIncarnation) {
-  const network = normalizeType(K_TYPE_NETWORK, networkId, "networkId");
+  const network = normalizeType(K_TYPE_NETWORK, networkId, FIELD_NETWORK_ID);
   const definition = normalizeType(K_TYPE_ASSET, asset, "asset");
-  const incarnation = normalizeType(K_TYPE_INCARNATION, assetIncarnation, "assetIncarnation");
+  const incarnation = normalizeType(K_TYPE_INCARNATION, assetIncarnation, FIELD_ASSET_INCARNATION);
   const payload = join(field(networkIdBytes(network)), field(definition.canonicalPayload()), field(encodeType(K_TYPE_INCARNATION, incarnation)));
-  return digestEncoded(DOMAIN.liabilityPool, frame("iroha.kagemusha.v1.liability-pool-preimage", payload, 1));
+  return digestEncoded(K_DOMAIN_LIABILITY_POOL, frame((TEXT_IROHA_KAGEMUSHA_V1_2 + "liability-pool-preimage"), payload, 1));
 }
 
 function assetIdentityDigest(asset) {
   const value = normalizeType(K_TYPE_ASSET, asset, "asset");
-  return digestEncoded(DOMAIN.assetIdentity, frame("iroha_data_model::asset::id::model::AssetDefinitionId", value.canonicalPayload(), 1));
+  return digestEncoded(K_DOMAIN_ASSET_IDENTITY, frame("iroha_data_model::asset::id::model::AssetDefinitionId", value.canonicalPayload(), 1));
 }
 
 function accountIdentityDigest(account) {
   const value = normalizeType(K_TYPE_ACCOUNT, account, "account");
-  return digestEncoded(DOMAIN.accountIdentity, frame("iroha_data_model::account::model::AccountId", value.canonicalPayload(), 8));
+  return digestEncoded(K_DOMAIN_ACCOUNT_IDENTITY, frame("iroha_data_model::account::model::AccountId", value.canonicalPayload(), 8));
 }
 
 function paymentRequestUnsignedTranscript(value) {
-  const r = rawValues(instance(value, KagemushaPaymentRequestV1, "payment request"));
+  const r = rawValues(instance(value, KagemushaPaymentRequestV1, CONTEXT_PAYMENT_REQUEST));
   return join(u16(r.version), r.releaseId, networkIdBytes(r.networkId), assetIdentityDigest(r.asset),
     r.assetIncarnation.hashBytes(), u32(r.scale), r.liabilityPoolId, accountIdentityDigest(r.recipient),
     u128(r.amount), r.recipientEncryptionKey, r.hardwareCredential.credentialId,
@@ -1055,27 +1097,27 @@ function paymentRequestTranscript(value) {
 }
 
 function paymentRequestSigningBytes(value) {
-  return join(DOMAIN.requestSigning, Uint8Array.of(0), paymentRequestUnsignedTranscript(value));
+  return join(K_DOMAIN_REQUEST_SIGNING, Uint8Array.of(0), paymentRequestUnsignedTranscript(value));
 }
 function acknowledgementSigningBytes(value) {
-  const acknowledgement = rawValues(instance(value, KagemushaAcknowledgementV1, "acknowledgement"));
+  const acknowledgement = rawValues(instance(value, KagemushaAcknowledgementV1, FIELD_ACKNOWLEDGEMENT));
   const payload = join(
-    field(vector(ascii("iroha:kagemusha:v1:acknowledgement-signing"))),
+    field(vector(ascii((TEXT_IROHA_KAGEMUSHA_V1 + "acknowledgement-signing")))),
     field(u16(acknowledgement.version)), field(fixedArray(acknowledgement.requestDigest)),
     field(fixedArray(acknowledgement.paymentDigest)), field(encodeModel(acknowledgement.inboxReceipt)),
   );
-  return frame("iroha.kagemusha.v1.acknowledgement-signing-preimage", payload, 8);
+  return frame((TEXT_IROHA_KAGEMUSHA_V1_2 + "acknowledgement-signing-preimage"), payload, 8);
 }
 
 function paymentRequestDigest(value) {
   validateRequest(value);
-  return digestEncoded(DOMAIN.requestDigest, paymentRequestTranscript(value));
+  return digestEncoded(K_DOMAIN_REQUEST_DIGEST, paymentRequestTranscript(value));
 }
-function ciphertextDigest(value) { return digestEncoded(DOMAIN.ciphertextDigest, bytes(value, "encrypted credit")); }
+function ciphertextDigest(value) { return digestEncoded(K_DOMAIN_CIPHERTEXT_DIGEST, bytes(value, "encrypted credit")); }
 
 function creditId(transitionNullifier, requestDigestValue) {
-  return sha256(join(DOMAIN.creditId, Uint8Array.of(0),
-    fixed32(transitionNullifier, "transitionNullifier"), fixed32(requestDigestValue, "requestDigest")));
+  return sha256(join(K_DOMAIN_CREDIT_ID, Uint8Array.of(0),
+    fixed32(transitionNullifier, FIELD_TRANSITION_NULLIFIER), fixed32(requestDigestValue, FIELD_REQUEST_DIGEST)));
 }
 function peerCreditOpeningCommitment(
   requestDigest,
@@ -1086,13 +1128,13 @@ function peerCreditOpeningCommitment(
   recoveryNonce,
 ) {
   const exactAmount = unsigned(amount, MAX_U128, "amount");
-  if (exactAmount === 0n) rejectType("amount must be positive");
+  if (exactAmount === 0n) rejectType(TEXT_AMOUNT_MUST_BE_POSITIVE);
   return sha256(join(
-    DOMAIN.peerCreditOpeningCommitment,
+    K_DOMAIN_PEER_CREDIT_OPENING_COMMITMENT,
     Uint8Array.of(0),
     u16(1),
-    fixed32(requestDigest, "requestDigest"),
-    fixed32(recipientEncryptionKey, "recipientEncryptionKey"),
+    fixed32(requestDigest, FIELD_REQUEST_DIGEST),
+    fixed32(recipientEncryptionKey, FIELD_RECIPIENT_ENCRYPTION_KEY),
     u128(exactAmount),
     fixed32(creditCommitmentOpening, "creditCommitmentOpening"),
     fixed32(recipientBindingOpening, "recipientBindingOpening"),
@@ -1102,25 +1144,25 @@ function peerCreditOpeningCommitment(
 
 function preparedTransferDigest(request, senderBeforeCommitment, senderAfterCommitment,
   transitionNullifier, ciphertextCommitment) {
-  const bound = instance(request, KagemushaPaymentRequestV1, "payment request");
+  const bound = instance(request, KagemushaPaymentRequestV1, CONTEXT_PAYMENT_REQUEST);
   validateRequest(bound);
-  const before = fixed32(senderBeforeCommitment, "senderBeforeCommitment");
-  const after = fixed32(senderAfterCommitment, "senderAfterCommitment");
+  const before = fixed32(senderBeforeCommitment, FIELD_SENDER_BEFORE_COMMITMENT);
+  const after = fixed32(senderAfterCommitment, FIELD_SENDER_AFTER_COMMITMENT);
   if (equalBytes(before, after)) rejectType("sender state commitments must differ");
-  return digestEncoded(DOMAIN.preparedTransfer, join(u16(1), paymentRequestDigest(request),
-    u128(bound.amount), before, after, fixed32(transitionNullifier, "transitionNullifier"),
+  return digestEncoded(K_DOMAIN_PREPARED_TRANSFER, join(u16(1), paymentRequestDigest(request),
+    u128(bound.amount), before, after, fixed32(transitionNullifier, FIELD_TRANSITION_NULLIFIER),
     bound.recipientEncryptionKey, fixed32(ciphertextCommitment, "ciphertextCommitment")));
 }
 function validatePairedProofValues(v) {
-  if (equalBytes(v.guardEqCredentialAudit, v.guardEpCredentialAudit)) rejectType("KAGEMUSHA V1 proof credential audits are aliased");
+  if (equalBytes(v.guardEqCredentialAudit, v.guardEpCredentialAudit)) rejectType((TEXT_KAGEMUSHA_V1 + "proof credential audits are aliased"));
   validateProofVectors(v);
 }
 
 function validateProofVectors(v) {
   requireVersion(v.version);
-  if (equalBytes(v.eqProtocolDigest, v.epProtocolDigest) || equalBytes(v.eqDeferredAudit, v.epDeferredAudit)) rejectType("KAGEMUSHA V1 proof parity bindings are invalid");
-  if (v.eqProof.length === 0 || v.epProof.length === 0 || v.eqProof.length > 2495 || v.epProof.length > 2495 || v.eqProof.length + v.epProof.length > 4990) rejectRange("KAGEMUSHA V1 current proof bytes are out of bounds");
-  if (v.eqHistory.length !== 544 || v.epHistory.length !== 544 || isZero(v.eqHistory) || isZero(v.epHistory) || equalBytes(v.eqHistory, v.epHistory)) rejectType("KAGEMUSHA V1 history accumulators are invalid");
+  if (equalBytes(v.eqProtocolDigest, v.epProtocolDigest) || equalBytes(v.eqDeferredAudit, v.epDeferredAudit)) rejectType((TEXT_KAGEMUSHA_V1 + "proof parity bindings are invalid"));
+  if (v.eqProof.length === 0 || v.epProof.length === 0 || v.eqProof.length > 2495 || v.epProof.length > 2495 || v.eqProof.length + v.epProof.length > 4990) rejectRange((TEXT_KAGEMUSHA_V1 + "current proof bytes are out of bounds"));
+  if (v.eqHistory.length !== 544 || v.epHistory.length !== 544 || isZero(v.eqHistory) || isZero(v.epHistory) || equalBytes(v.eqHistory, v.epHistory)) rejectType((TEXT_KAGEMUSHA_V1 + "history accumulators are invalid"));
 }
 
 function encodeModel(value) {
@@ -1205,7 +1247,7 @@ function decodeIncarnation(payload, context) {
 }
 
 function encodeUnitEnum(value, variants, context) {
-  if (typeof value !== "string" || !variants.includes(value)) rejectType(`unknown KAGEMUSHA V1 ${context}`);
+  if (typeof value !== "string" || !variants.includes(value)) rejectType(`${TEXT_UNKNOWN_KAGEMUSHA_V1}${context}`);
   return u32(variants.indexOf(value));
 }
 
@@ -1218,7 +1260,7 @@ function decodeUnitEnum(payload, variants, context) {
 function encodeCommitEvidence(value) {
   if (value instanceof KagemushaTrustedCommitTimeV1) return join(u32(0), field(encodeModel(value)));
   if (value instanceof KagemushaMonotonicLeaseV1) return join(u32(1), field(encodeModel(value)));
-  rejectType("unknown KAGEMUSHA V1 commit evidence");
+  rejectType((TEXT_UNKNOWN_KAGEMUSHA_V1 + "commit evidence"));
 }
 
 function decodeCommitEvidence(payload, context) {
@@ -1276,7 +1318,7 @@ function vector(value) { const raw = bytes(value, "byte vector"); return join(u6
 function readVector(payload, context) {
   if (payload.length < 8) rejectType(`${context} is truncated`);
   const length = readUnsigned(payload.subarray(0, 8), 8, `${context}.length`);
-  if (length > BigInt(Number.MAX_SAFE_INTEGER) || Number(length) !== payload.length - 8) rejectType(`${context} length is invalid`);
+  if (length > BigInt(Number.MAX_SAFE_INTEGER) || Number(length) !== payload.length - 8) rejectType(`${context} length${TEXT_IS_INVALID}`);
   return Uint8Array.from(payload.subarray(8));
 }
 function u16(value) { const out = new Uint8Array(2); new DataView(out.buffer).setUint16(0, Number(value), true); return out; }
@@ -1298,7 +1340,7 @@ class Reader {
       if ((byte & 0x80) === 0) { if (used > 0 && byte === 0) rejectType(`${this.context}.${name} length is not minimal`); break; }
       shift += 7n;
     }
-    if (used === 10 || length > BigInt(this.value.length - this.offset)) rejectType(`${this.context}.${name} length is invalid`);
+    if (used === 10 || length > BigInt(this.value.length - this.offset)) rejectType(`${this.context}.${name} length${TEXT_IS_INVALID}`);
     const end = this.offset + Number(length); const payload = this.value.subarray(this.offset, end); this.offset = end; return payload;
   }
   eof() { if (this.offset !== this.value.length) rejectType(`${this.context} contains trailing bytes`); }
@@ -1322,8 +1364,8 @@ function normalizeType(type, value, context) {
     case K_TYPE_SIGNATURE: return value instanceof KagemushaDeviceSignatureV1 ? value : new KagemushaDeviceSignatureV1(value);
     case K_TYPE_VECTOR: return bytes(value, context);
     case K_TYPE_MINT_FRAME: return boundedBytes(value, 7936, context);
-    case K_TYPE_OPERATION_KIND: if (typeof value !== "string" || !OPERATION_KINDS.includes(value)) rejectType(`${context} is invalid`); return value;
-    case K_TYPE_CREDIT_PURPOSE: if (typeof value !== "string" || !CREDIT_PURPOSES.includes(value)) rejectType(`${context} is invalid`); return value;
+    case K_TYPE_OPERATION_KIND: if (typeof value !== "string" || !OPERATION_KINDS.includes(value)) rejectType(`${context}${TEXT_IS_INVALID}`); return value;
+    case K_TYPE_CREDIT_PURPOSE: if (typeof value !== "string" || !CREDIT_PURPOSES.includes(value)) rejectType(`${context}${TEXT_IS_INVALID}`); return value;
     case K_TYPE_COMMIT_EVIDENCE: encodeCommitEvidence(value); return value;
     default: return type.optional
       ? value === null ? null : instance(value, type.optional, context)
@@ -1332,13 +1374,13 @@ function normalizeType(type, value, context) {
 }
 
 function unsigned(value, maximum, context) { let normalized; if (typeof value === "bigint") normalized = value; else if (typeof value === "number" && Number.isSafeInteger(value)) normalized = BigInt(value); else rejectType(`${context} must be an unsigned integer`); if (normalized < 0n || normalized > maximum) rejectRange(`${context} is out of range`); return normalized; }
-function header(value, positiveAmount = false) { requireVersion(value.version); if (value.scale > 28) rejectRange("KAGEMUSHA V1 asset scale exceeds 28"); if (positiveAmount && value.amount === 0n) rejectRange("KAGEMUSHA V1 amount must be positive"); }
-function requireVersion(value) { if (value !== 1) rejectType("KAGEMUSHA V1 wire version must be 1"); }
+function header(value, positiveAmount = false) { requireVersion(value.version); if (value.scale > 28) rejectRange((TEXT_KAGEMUSHA_V1 + "asset scale exceeds 28")); if (positiveAmount && value.amount === 0n) rejectRange((TEXT_KAGEMUSHA_V1 + TEXT_AMOUNT_MUST_BE_POSITIVE)); }
+function requireVersion(value) { if (value !== 1) rejectType((TEXT_KAGEMUSHA_V1 + "wire version must be 1")); }
 function requireX25519Key(value, context) { if (value.length !== 32 || isZero(value)) rejectType(`${context} must be a nonzero 32-byte X25519 key`); }
 function bytes(value, context) { if (value instanceof ArrayBuffer) return new Uint8Array(value.slice(0)); if (ArrayBuffer.isView(value)) return Uint8Array.from(new Uint8Array(value.buffer, value.byteOffset, value.byteLength)); rejectType(`${context} must be binary data`); }
 function boundedBytes(value, maximum, context) {
   if (!(value instanceof ArrayBuffer) && !ArrayBuffer.isView(value)) rejectType(`${context} must be binary data`);
-  if (value.byteLength > maximum) rejectRange(`KAGEMUSHA V1 ${context} exceeds ${maximum} bytes`);
+  if (value.byteLength > maximum) rejectRange(`${TEXT_KAGEMUSHA_V1}${context} exceeds ${maximum} bytes`);
   return bytes(value, context);
 }
 function fixedBytes(value, width, context, nonzero = true) { const raw = bytes(value, context); if (raw.length !== width || (nonzero && isZero(raw))) rejectType(`${context} must be ${nonzero ? "one nonzero " : ""}${width}-byte value`); return raw; }
@@ -1350,20 +1392,20 @@ function join(...parts) { const arrays = parts.map((part) => bytes(part, "bytes"
 function isZero(value) { return value.every((byte) => byte === 0); }
 function equalBytes(left, right) { return left.length === right.length && left.every((byte, index) => byte === right[index]); }
 function requireEqual(actual, expected, context) { if (!equalBytes(actual, expected)) rejectType(`${context} does not match`); }
-function bounded(value, maximum, context) { if (value.length > maximum) rejectRange(`KAGEMUSHA V1 ${context} exceeds ${maximum} bytes`); return Uint8Array.from(value); }
+function bounded(value, maximum, context) { if (value.length > maximum) rejectRange(`${TEXT_KAGEMUSHA_V1}${context} exceeds ${maximum} bytes`); return Uint8Array.from(value); }
 function instance(value, Model, context) { if (!(value instanceof Model)) rejectType(`${context} must be a ${Model.name}`); return value; }
 function rawValues(value) { return MODEL_VALUES.get(value).values; }
 function cloneValue(value) { return value instanceof Uint8Array ? Uint8Array.from(value) : value; }
 function exactRecord(value, context, fields) { if (value === null || typeof value !== "object" || Array.isArray(value)) rejectType(`${context} must be an object`); const actual = Object.keys(value); const expected = new Set(fields); if (actual.length !== fields.length || actual.some((key) => !expected.has(key))) rejectType(`${context} contains missing or unknown fields`); }
-function kindLimits(kind) { if (typeof kind !== "string" || !Object.hasOwn(LIMITS, kind)) rejectType("unknown KAGEMUSHA V1 payload kind"); return LIMITS[kind]; }
+function kindLimits(kind) { if (typeof kind !== "string" || !Object.hasOwn(LIMITS, kind)) rejectType(CONTEXT_UNKNOWN_KAGEMUSHA_V1_PAYLOAD_KIND); return LIMITS[kind]; }
 function ipm1PayloadTag(kind) {
-  if (typeof kind !== "string" || !Object.hasOwn(IPM1_PAYLOAD_KINDS, kind)) rejectType("unknown KAGEMUSHA V1 IPM1 payload kind");
+  if (typeof kind !== "string" || !Object.hasOwn(IPM1_PAYLOAD_KINDS, kind)) rejectType((TEXT_UNKNOWN_KAGEMUSHA_V1 + "IPM1 payload kind"));
   return IPM1_PAYLOAD_KINDS[kind].tag;
 }
 function ipm1PayloadKindFromTag(tag) {
-  if (!Number.isInteger(tag)) rejectType("KAGEMUSHA V1 IPM1 payload tag must be an integer");
+  if (!Number.isInteger(tag)) rejectType((TEXT_KAGEMUSHA_V1 + "IPM1 payload tag must be an integer"));
   const entry = Object.entries(IPM1_PAYLOAD_KINDS).find(([, value]) => value.tag === tag);
-  if (entry === undefined) rejectType("unknown KAGEMUSHA V1 IPM1 payload tag");
+  if (entry === undefined) rejectType((TEXT_UNKNOWN_KAGEMUSHA_V1 + "IPM1 payload tag"));
   return entry[0];
 }
 

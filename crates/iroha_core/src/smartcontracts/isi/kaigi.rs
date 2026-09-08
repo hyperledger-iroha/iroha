@@ -5518,7 +5518,7 @@ mod tests {
     #[test]
     fn relay_registration_enforces_allowlist() {
         let (domain, host, _) = sample_ids();
-        let (relay_id, _) = gen_account_in(domain.clone());
+        let (relay_id, _) = gen_account_in(domain.name());
         with_state_transaction(|stx| {
             Register::domain(Domain::new(domain.clone()))
                 .execute(&ALICE_ID, stx)
@@ -5938,9 +5938,9 @@ mod tests {
     #[test]
     fn call_feedback_does_not_override_manifest_governance() {
         let (domain, host, _) = sample_ids();
-        let (relay_a, _) = gen_account_in(domain.clone());
-        let (relay_b, _) = gen_account_in(domain.clone());
-        let (relay_c, _) = gen_account_in(domain.clone());
+        let (relay_a, _) = gen_account_in(domain.name());
+        let (relay_b, _) = gen_account_in(domain.name());
+        let (relay_c, _) = gen_account_in(domain.name());
         with_state_transaction(|stx| {
             Register::domain(Domain::new(domain.clone()))
                 .execute(&ALICE_ID, stx)

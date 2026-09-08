@@ -7079,7 +7079,11 @@ fn reconcile_last_reported_block_with_kura(
     *reported = actual;
     true
 }
-/// Start the telemetry service
+/// Start the telemetry service after binding its authoritative resource collector.
+///
+/// # Errors
+/// Returns an error before spawning the actor if the collector descriptors are invalid
+/// or the registry already has a resource source. Disabled telemetry does not bind one.
 pub fn start(
     metrics: Arc<Metrics>,
     state: Arc<State>,
@@ -7089,7 +7093,11 @@ pub fn start(
     local_peer_id: PeerId,
     time_source: TimeSource,
     enabled: bool,
-) -> (Telemetry, Child) {
+) -> Result<(Telemetry, Child), iroha_telemetry::metrics::CollectorRegistrationError> {
+    #[cfg(feature = "telemetry")]
+    if enabled {
+        kura.register_resource_telemetry(&metrics)?;
+    }
     let (actor, handle) = mpsc::channel(CHANNEL_CAPACITY);
     let last_reported_block = Arc::new(RwLock::new(None));
     let sync_requested = Arc::new(AtomicBool::new(false));
@@ -7098,7 +7106,7 @@ pub fn start(
         SoranetSecureAggregator::new(PrivacyBucketConfig::default())
             .expect("valid default SoraNet privacy config"),
     );
-    (
+    Ok((
         Telemetry {
             actor,
             last_reported_block: last_reported_block.clone(),
@@ -7132,7 +7140,7 @@ pub fn start(
             ),
             OnShutdown::Abort,
         ),
-    )
+    ))
 }
 #[cfg(all(feature = "telemetry", test))]
 #[allow(clippy::disallowed_types, clippy::float_cmp)]
@@ -10470,7 +10478,8 @@ mod tests {
                 local_peer_id.clone(),
                 time_source.clone(),
                 true,
-            );
+            )
+            .expect("test telemetry resource registration");
             let network_id = state.network_id;
             let topology = Topology::new(vec![local_peer_id.clone()]);
             Self {
@@ -10569,6 +10578,30 @@ mod tests {
         assert_eq!(metrics.connected_peers.get(), 0);
     }
     #[tokio::test]
+    async fn telemetry_start_rejects_a_second_resource_owner() {
+        let system = SystemUnderTest::new();
+        let metrics = Arc::clone(&system.telemetry.metrics);
+        let events = tokio::sync::broadcast::channel(1).0;
+        let queue = Arc::new(Queue::from_config(Default::default(), events));
+        let (_peers_tx, peers_rx) = watch::channel(Default::default());
+        let (peer_key, _) = checked_keypair_with_algorithm(Algorithm::BlsNormal).into_parts();
+        let result = start(
+            metrics,
+            Arc::clone(&system.state),
+            Kura::blank_kura_for_testing(),
+            queue,
+            peers_rx,
+            PeerId::new(peer_key),
+            system.time_source.clone(),
+            true,
+        );
+        assert!(matches!(
+            result,
+            Err(iroha_telemetry::metrics::CollectorRegistrationError::AlreadyReg)
+        ));
+    }
+
+    #[tokio::test]
     async fn telemetry_disabled_skips_updates() {
         use iroha_primitives::time::TimeSource;
         use tokio::sync::watch;
@@ -10610,7 +10643,8 @@ mod tests {
             local_peer_id,
             time_source,
             false, // disabled
-        );
+        )
+        .expect("test telemetry resource registration");
         let _ = peers_tx; // keep sender alive
         // Attempt to change metrics via Telemetry API
         tel.inc_dropped_messages();
@@ -10619,6 +10653,10 @@ mod tests {
         let m = tel.metrics().await;
         assert_eq!(m.dropped_messages.get(), 0);
         assert_eq!(m.view_changes.get(), 0);
+        assert!(
+            !m.try_to_string().unwrap().contains("iroha_kura_resource_"),
+            "disabled telemetry must not fabricate an available resource source"
+        );
     }
     #[test]
     fn state_commit_write_lock_metrics_recorded() {
@@ -10863,7 +10901,8 @@ mod tests {
             local_peer_id,
             time_source,
             true,
-        );
+        )
+        .expect("test telemetry resource registration");
         let peers: HashSet<_> = vec![
             random_peer(socket_addr!(100.100.100.100:80)),
             random_peer(socket_addr!(200.100.30.1:9001)),

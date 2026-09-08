@@ -19,7 +19,7 @@ use iroha_data_model::nexus::{AxtFastpqBinding, AxtRemoteSpendClaimV1};
 
 use super::compact_protocol::{
     FixedAir,
-    shared_openings::codec::{VerifiedSharedProof, decode_and_verify_shake_committed},
+    shared_openings::codec::{VerifiedSharedProof, decode_and_verify_with_allocation_committed},
 };
 #[cfg(test)]
 use super::compact_value_domain::CompactTransferValue;
@@ -30,10 +30,7 @@ use crate::{
 
 #[cfg(test)]
 use super::{
-    compact_axt_air::AxtTransferAir,
-    compact_protocol::shared_openings::{
-        SharedVerificationWork, codec::decode_and_verify_committed,
-    },
+    compact_axt_air::AxtTransferAir, compact_protocol::shared_openings::SharedVerificationWork,
     compact_public_transfer::PublicTransferAir,
 };
 #[cfg(test)]
@@ -42,36 +39,20 @@ use crate::{
     proof::PublicIO,
 };
 
-/// Fixed verifier selected by a typed entry point, never read from proof bytes.
-/// The explicit allocation charge is caller diagnostic policy, not qualification.
+/// Explicit child decoding policy for the sole compact V1 verifier.
 #[derive(Clone, Copy)]
-pub(super) enum SharedVerifier {
-    /// Original diagnostic transcript and bounded codec.
-    #[cfg(test)]
-    Prototype,
-    /// Fixed 375-query whole-tape candidate with an explicit child decode cap.
-    ShakeCandidate {
-        max_decode_allocation_charges: usize,
-    },
+pub(super) struct SharedVerifier {
+    /// Maximum cumulative allocation charges for this complete child frame.
+    pub(super) max_decode_allocation_charges: usize,
 }
 
 impl SharedVerifier {
-    /// Fixed initial query count for one complete segment.
-    pub(super) fn queries(self) -> usize {
-        match self {
-            #[cfg(test)]
-            Self::Prototype => fastpq_isi::FASTPQ_FINAL_V1.fri.queries as usize,
-            Self::ShakeCandidate { .. } => 375,
-        }
+    /// Fixed query count; no artifact or caller policy can change geometry.
+    pub(super) const fn queries(self) -> usize {
+        375
     }
 
-    /// Whether the selected entry point requires the distinct candidate frame.
-    #[cfg(test)]
-    pub(super) const fn is_shake(self) -> bool {
-        matches!(self, Self::ShakeCandidate { .. })
-    }
-
-    /// Authenticate a frame using the selected transcript and unchanged relation.
+    /// Authenticate a frame under the sole context and unchanged complete relation.
     #[cfg(test)]
     pub(super) fn verify_frame(
         self,
@@ -82,26 +63,19 @@ impl SharedVerifier {
         Ok(self.verify_frame_committed(relation, bytes, limits)?.work())
     }
 
-    /// Return a full row commitment only with complete successful verification.
-    /// No callback can observe successful prefixes of a rejected bundle.
+    /// Publish the full row commitment only after complete successful verification.
     pub(super) fn verify_frame_committed(
         self,
         relation: &impl FixedAir,
         bytes: &[u8],
         limits: VerifyLimits,
     ) -> Result<VerifiedSharedProof> {
-        match self {
-            #[cfg(test)]
-            Self::Prototype => decode_and_verify_committed(relation, bytes, limits),
-            Self::ShakeCandidate {
-                max_decode_allocation_charges,
-            } => decode_and_verify_shake_committed(
-                relation,
-                bytes,
-                limits,
-                max_decode_allocation_charges,
-            ),
-        }
+        decode_and_verify_with_allocation_committed(
+            relation,
+            bytes,
+            limits,
+            self.max_decode_allocation_charges,
+        )
     }
 }
 
@@ -164,7 +138,9 @@ pub(super) fn verify_transfer<V: CompactTransferValue>(
         expected,
         proof_bytes,
         limits,
-        SharedVerifier::Prototype,
+        SharedVerifier {
+            max_decode_allocation_charges: 32 * 1024 * 1024,
+        },
     )
 }
 
@@ -205,7 +181,9 @@ pub(super) fn verify_axt_transfer<V: CompactTransferValue>(
         context,
         proof_bytes,
         limits,
-        SharedVerifier::Prototype,
+        SharedVerifier {
+            max_decode_allocation_charges: 32 * 1024 * 1024,
+        },
     )
 }
 
@@ -238,7 +216,7 @@ fn verify_axt_transfer_with<V: CompactTransferValue>(
 /// Verify candidate ordinary bytes under exact expected public inputs and caller limits.
 /// The prepared semantics cannot select AXT or omit its context through this path.
 #[cfg(test)]
-pub(super) fn verify_shake_transfer<V: CompactTransferValue>(
+pub(super) fn verify_transfer_with_allocation<V: CompactTransferValue>(
     prepared: &PreparedPublicTransfers<'_, V>,
     expected: &PublicIO,
     proof_bytes: &[u8],
@@ -250,7 +228,7 @@ pub(super) fn verify_shake_transfer<V: CompactTransferValue>(
         expected,
         proof_bytes,
         limits,
-        SharedVerifier::ShakeCandidate {
+        SharedVerifier {
             max_decode_allocation_charges,
         },
     )
@@ -259,7 +237,7 @@ pub(super) fn verify_shake_transfer<V: CompactTransferValue>(
 /// Verify candidate AXT bytes with every original binding, mirror and remote preimage.
 /// Successful mathematical verification grants no source-state authority or finality.
 #[cfg(test)]
-pub(super) fn verify_shake_axt_transfer<V: CompactTransferValue>(
+pub(super) fn verify_axt_transfer_with_allocation<V: CompactTransferValue>(
     prepared: &PreparedPublicTransfers<'_, V>,
     expected: &PublicIO,
     context: AxtVerificationContext<'_>,
@@ -273,7 +251,7 @@ pub(super) fn verify_shake_axt_transfer<V: CompactTransferValue>(
         context,
         proof_bytes,
         limits,
-        SharedVerifier::ShakeCandidate {
+        SharedVerifier {
             max_decode_allocation_charges,
         },
     )
@@ -323,6 +301,13 @@ fn require_profile(actual: ProofSemantics, required: ProofSemantics) -> Result<(
 
 #[cfg(test)]
 mod tests {
+    fn final_test_limits() -> crate::VerifyLimits {
+        crate::VerifyLimits {
+            max_queries: 375,
+            ..crate::VerifyLimits::default()
+        }
+    }
+
     use super::*;
     use crate::backend::compact_axt_context::tests::Fixture;
 
@@ -346,7 +331,7 @@ mod tests {
         let axt = fixture.prepare(ProofSemantics::AxtTransferClaim);
         let limits = VerifyLimits {
             max_proof_bytes: 0,
-            ..VerifyLimits::default()
+            ..final_test_limits()
         };
         // Both deliberately use the wrong prepared profile; the byte ceiling
         // still rejects first without inspecting or constructing an AIR.
@@ -386,7 +371,7 @@ mod tests {
                 max_proof_bytes: BAD_PROOF.len(),
                 max_transitions: ordinary.transitions().len(),
                 max_batch_bytes: ordinary.work().public_bytes,
-                ..VerifyLimits::default()
+                ..final_test_limits()
             },
         )
         .unwrap();
@@ -397,7 +382,7 @@ mod tests {
         let fixture = Fixture::new(false);
         let ordinary = fixture.prepare(ProofSemantics::StateTransition);
         let axt = fixture.prepare(ProofSemantics::AxtTransferClaim);
-        let limits = VerifyLimits::default();
+        let limits = final_test_limits();
         assert!(matches!(
             verify_transfer(&axt, &fixture.expected(&axt), BAD_PROOF, limits),
             Err(Error::InvalidProofSemantics { .. })
@@ -466,14 +451,14 @@ mod tests {
                     _ => unreachable!(),
                 }
                 let result = if semantics == ProofSemantics::StateTransition {
-                    verify_transfer(&prepared, &expected, BAD_PROOF, VerifyLimits::default())
+                    verify_transfer(&prepared, &expected, BAD_PROOF, final_test_limits())
                 } else {
                     verify_axt_transfer(
                         &prepared,
                         &expected,
                         context(&fixture),
                         BAD_PROOF,
-                        VerifyLimits::default(),
+                        final_test_limits(),
                     )
                 };
                 assert!(
@@ -494,7 +479,7 @@ mod tests {
         let fixture = Fixture::new(true);
         let prepared = fixture.prepare(ProofSemantics::AxtTransferClaim);
         let expected = fixture.expected(&prepared);
-        let limits = VerifyLimits::default();
+        let limits = final_test_limits();
         let mut binding = fixture.binding.clone();
         binding.source_dataspace.push(' ');
         let mut changed = context(&fixture);
@@ -558,28 +543,28 @@ mod tests {
             (
                 VerifyLimits {
                     max_transitions: 1,
-                    ..VerifyLimits::default()
+                    ..final_test_limits()
                 },
                 "max_transitions",
             ),
             (
                 VerifyLimits {
                     max_batch_bytes: 0,
-                    ..VerifyLimits::default()
+                    ..final_test_limits()
                 },
                 "max_batch_bytes",
             ),
             (
                 VerifyLimits {
                     max_air_row_values: 341,
-                    ..VerifyLimits::default()
+                    ..final_test_limits()
                 },
                 "max_air_row_values",
             ),
             (
                 VerifyLimits {
-                    max_queries: 135,
-                    ..VerifyLimits::default()
+                    max_queries: 374,
+                    ..final_test_limits()
                 },
                 "max_queries",
             ),
@@ -592,7 +577,7 @@ mod tests {
         // successful facade verification and cannot be constructed by callers.
         let work = SharedVerificationWork {
             proof_bytes: 123,
-            air_evaluations: 136,
+            air_evaluations: 375,
             ..SharedVerificationWork::default()
         };
         let result = VerifiedPublicTransfer {
@@ -708,8 +693,8 @@ mod tests {
         };
         let construction = construction_started.elapsed();
         let limits = VerifyLimits {
-            max_proof_bytes: 4 * 1024 * 1024,
-            ..VerifyLimits::default()
+            max_proof_bytes: 16 * 1024 * 1024,
+            ..final_test_limits()
         };
         let (encoded, typed_bytes, proving, conversion) = {
             let prepared = fixture.prepare(ProofSemantics::AxtTransferClaim);
@@ -725,7 +710,7 @@ mod tests {
             .unwrap();
             assert_eq!(
                 air.schema().identity,
-                "fastpq:prototype:axt-public-transfer:v1:342cols:923slots:65536rows"
+                "fastpq:compact:v1:axt-public-transfer:v1:342cols:923slots:65536rows"
             );
             assert_ne!(
                 air.schema().identity,
@@ -766,7 +751,7 @@ mod tests {
         };
         let prepared = fixture.prepare(ProofSemantics::AxtTransferClaim);
         let expected = fixture.expected(&prepared);
-        assert!(encoded.len() > VerifyLimits::default().max_proof_bytes);
+        assert!(encoded.len() > final_test_limits().max_proof_bytes);
         assert!(encoded.len() < typed_bytes);
         assert!(encoded.len() <= limits.max_proof_bytes);
         assert!(matches!(
@@ -775,7 +760,7 @@ mod tests {
                 &expected,
                 context(&fixture),
                 &encoded,
-                VerifyLimits::default(),
+                final_test_limits(),
             ),
             Err(Error::VerifierLimitExceeded {
                 limit: "max_proof_bytes",
@@ -795,8 +780,14 @@ mod tests {
         };
         let verifying = verifying_started.elapsed();
         let work = verified.work();
-        let queries = fastpq_isi::FASTPQ_FINAL_V1.fri.queries as usize;
-        assert_eq!(queries, 136);
+        let queries = 375;
+        assert_eq!(
+            SharedVerifier {
+                max_decode_allocation_charges: 64 * 1024 * 1024
+            }
+            .queries(),
+            queries
+        );
         assert_eq!(verified.public_io(), expected);
         assert_eq!(work.proof_bytes, encoded.len());
         assert_eq!(work.transcripts, 1);
@@ -926,11 +917,11 @@ mod tests {
         );
     }
 
-    fn shake_limits() -> VerifyLimits {
+    fn final_limits() -> VerifyLimits {
         VerifyLimits {
             max_proof_bytes: 4_326_227,
             max_queries: 375,
-            ..VerifyLimits::default()
+            ..final_test_limits()
         }
     }
 
@@ -941,11 +932,11 @@ mod tests {
         let axt = fixture.prepare(ProofSemantics::AxtTransferClaim);
         let zero = VerifyLimits {
             max_proof_bytes: 0,
-            ..shake_limits()
+            ..final_limits()
         };
         for result in [
-            verify_shake_transfer(&axt, &fixture.expected(&axt), BAD_PROOF, zero, 0),
-            verify_shake_axt_transfer(
+            verify_transfer_with_allocation(&axt, &fixture.expected(&axt), BAD_PROOF, zero, 0),
+            verify_axt_transfer_with_allocation(
                 &ordinary,
                 &fixture.expected(&ordinary),
                 context(&fixture),
@@ -964,16 +955,22 @@ mod tests {
             ));
         }
         assert!(matches!(
-            verify_shake_transfer(&axt, &fixture.expected(&axt), BAD_PROOF, shake_limits(), 0),
+            verify_transfer_with_allocation(
+                &axt,
+                &fixture.expected(&axt),
+                BAD_PROOF,
+                final_limits(),
+                0
+            ),
             Err(Error::InvalidProofSemantics { .. })
         ));
         assert!(matches!(
-            verify_shake_axt_transfer(
+            verify_axt_transfer_with_allocation(
                 &ordinary,
                 &fixture.expected(&ordinary),
                 context(&fixture),
                 BAD_PROOF,
-                shake_limits(),
+                final_limits(),
                 0
             ),
             Err(Error::InvalidProofSemantics { .. })
@@ -987,34 +984,34 @@ mod tests {
                 (
                     VerifyLimits {
                         max_transitions: 1,
-                        ..shake_limits()
+                        ..final_limits()
                     },
                     "max_transitions",
                 ),
                 (
                     VerifyLimits {
                         max_batch_bytes: 0,
-                        ..shake_limits()
+                        ..final_limits()
                     },
                     "max_batch_bytes",
                 ),
                 (
                     VerifyLimits {
                         max_air_row_values: 341,
-                        ..shake_limits()
+                        ..final_limits()
                     },
                     "max_air_row_values",
                 ),
                 (
                     VerifyLimits {
                         max_queries: 374,
-                        ..shake_limits()
+                        ..final_limits()
                     },
                     "max_queries",
                 ),
             ] {
                 let result = if semantics == ProofSemantics::StateTransition {
-                    verify_shake_transfer(
+                    verify_transfer_with_allocation(
                         &prepared,
                         &fixture.expected(&prepared),
                         BAD_PROOF,
@@ -1022,7 +1019,7 @@ mod tests {
                         usize::MAX,
                     )
                 } else {
-                    verify_shake_axt_transfer(
+                    verify_axt_transfer_with_allocation(
                         &prepared,
                         &fixture.expected(&prepared),
                         context(&fixture),
@@ -1037,21 +1034,15 @@ mod tests {
                 );
             }
         }
-        assert_eq!(SharedVerifier::Prototype.queries(), 136);
-        assert!(!SharedVerifier::Prototype.is_shake());
-        assert_eq!(
-            SharedVerifier::ShakeCandidate {
-                max_decode_allocation_charges: 0
-            }
-            .queries(),
-            375
-        );
-        assert!(
-            SharedVerifier::ShakeCandidate {
-                max_decode_allocation_charges: 0
-            }
-            .is_shake()
-        );
+        for max_decode_allocation_charges in [0, 1, 32 * 1024 * 1024, usize::MAX] {
+            assert_eq!(
+                SharedVerifier {
+                    max_decode_allocation_charges
+                }
+                .queries(),
+                375
+            );
+        }
     }
 
     #[test]
@@ -1075,20 +1066,20 @@ mod tests {
                     _ => unreachable!(),
                 }
                 let result = if semantics == ProofSemantics::StateTransition {
-                    verify_shake_transfer(
+                    verify_transfer_with_allocation(
                         &prepared,
                         &expected,
                         BAD_PROOF,
-                        shake_limits(),
+                        final_limits(),
                         64 * 1024 * 1024,
                     )
                 } else {
-                    verify_shake_axt_transfer(
+                    verify_axt_transfer_with_allocation(
                         &prepared,
                         &expected,
                         context(&fixture),
                         BAD_PROOF,
-                        shake_limits(),
+                        final_limits(),
                         64 * 1024 * 1024,
                     )
                 };
@@ -1103,20 +1094,20 @@ mod tests {
                 );
             }
             let result = if semantics == ProofSemantics::StateTransition {
-                verify_shake_transfer(
+                verify_transfer_with_allocation(
                     &prepared,
                     &fixture.expected(&prepared),
                     BAD_PROOF,
-                    shake_limits(),
+                    final_limits(),
                     64 * 1024 * 1024,
                 )
             } else {
-                verify_shake_axt_transfer(
+                verify_axt_transfer_with_allocation(
                     &prepared,
                     &fixture.expected(&prepared),
                     context(&fixture),
                     BAD_PROOF,
-                    shake_limits(),
+                    final_limits(),
                     64 * 1024 * 1024,
                 )
             };
@@ -1134,12 +1125,12 @@ mod tests {
         let mut bad = context(&fixture);
         bad.binding = &binding;
         assert!(matches!(
-            verify_shake_axt_transfer(
+            verify_axt_transfer_with_allocation(
                 &prepared,
                 &expected,
                 bad,
                 BAD_PROOF,
-                shake_limits(),
+                final_limits(),
                 usize::MAX
             ),
             Err(Error::InvalidAxtBinding { .. })
@@ -1156,12 +1147,12 @@ mod tests {
             }
             assert!(
                 matches!(
-                    verify_shake_axt_transfer(
+                    verify_axt_transfer_with_allocation(
                         &prepared,
                         &expected,
                         bad,
                         BAD_PROOF,
-                        shake_limits(),
+                        final_limits(),
                         usize::MAX
                     ),
                     Err(Error::InvalidAxtBinding { .. })
@@ -1172,12 +1163,12 @@ mod tests {
         let mut bad = context(&fixture);
         bad.remote_spend_claims = None;
         assert!(matches!(
-            verify_shake_axt_transfer(
+            verify_axt_transfer_with_allocation(
                 &prepared,
                 &expected,
                 bad,
                 BAD_PROOF,
-                shake_limits(),
+                final_limits(),
                 usize::MAX
             ),
             Err(Error::MissingMetadata { .. })
@@ -1187,12 +1178,12 @@ mod tests {
         let mut bad = context(&fixture);
         bad.remote_spend_claims = Some(&claims);
         assert!(matches!(
-            verify_shake_axt_transfer(
+            verify_axt_transfer_with_allocation(
                 &prepared,
                 &expected,
                 bad,
                 BAD_PROOF,
-                shake_limits(),
+                final_limits(),
                 usize::MAX
             ),
             Err(Error::InvalidAxtBinding { .. })
@@ -1201,5 +1192,5 @@ mod tests {
 }
 
 #[cfg(test)]
-#[path = "compact_shake_public_diagnostic.rs"]
-mod shake_diagnostic;
+#[path = "compact_public_diagnostic.rs"]
+mod compact_diagnostic;

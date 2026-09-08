@@ -796,7 +796,9 @@ impl Kura {
             &data_path,
         )?;
         let before_bytes = Self::sidecar_tracked_bytes(&data_path, &index_path)?;
-        let accounting_mutation = self.begin_total_disk_usage_mutation();
+        let accounting_mutation = self.begin_total_disk_usage_mutation().with_resource_paths(
+            Self::sidecar_physical_resource_paths(&data_path, &index_path),
+        );
         if !Self::append_indexed_progress_sidecar(
             &data_path,
             &index_path,

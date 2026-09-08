@@ -1,22 +1,90 @@
 from __future__ import annotations
 
 import re
+import sys
+import types
 from pathlib import Path
 
 import pytest
 
 
 ROOT = Path(__file__).resolve().parents[2]
-FROZEN_LOCK_SHA256 = (
-    "cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79"
-)
-TRACKED_ROOT_LOCK_SHA256 = (
-    "051423addf3830895e208c6276429a0e8f46c61954159b0ef913e8cfed33d3aa"
-)
+
 
 
 def read(relative: str) -> str:
     return (ROOT / relative).read_text(encoding="utf-8")
+
+
+@pytest.fixture(scope="module")
+def native_selection_guard():
+    owner = ROOT / "ci/check_privacy_sdk_guard.sh"
+    body = owner.read_text().split("<<'PY'\n", 1)[1].split("\nPY\n", 1)[0]
+    module = types.ModuleType("privacy_jvm_native_selection_contract")
+    sys.modules[module.__name__] = module
+    original_argv = sys.argv
+    try:
+        sys.argv = [str(owner), str(ROOT), ""]
+        exec(compile(body[:body.index("\nif mode:")], str(owner), "exec"), module.__dict__)
+    finally:
+        sys.argv = original_argv
+        del sys.modules[module.__name__]
+    return module
+
+
+def test_native_selection_preserves_old_suites_and_adds_canonical_consumers(native_selection_guard) -> None:
+    expected = (
+        "org.hyperledger.iroha.sdk.privacy.PrivacyNativeBridgeTest",
+        "org.hyperledger.iroha.sdk.privacy.PrivacyExact12FixtureCodecV1Test",
+        "org.hyperledger.iroha.sdk.privacy.PrivacyExact12FixtureJavaConsumerTest",
+        "org.hyperledger.iroha.sdk.core.model.zk.VerifyingKeyBackendTagTest",
+        "org.hyperledger.iroha.sdk.core.model.zk.VerifyingKeyRecordDescriptionTest",
+        "org.hyperledger.iroha.sdk.core.model.instructions.VerifyingKeyInstructionBuildersTest",
+        "org.hyperledger.iroha.sdk.core.model.instructions.ProofAttachmentTest",
+        "org.hyperledger.iroha.sdk.address.AccountAddressNativeTest",
+        "org.hyperledger.iroha.sdk.address.AccountAddressNativeUnavailableTest",
+        "org.hyperledger.iroha.sdk.address.AccountAddressTest",
+        "org.hyperledger.iroha.sdk.address.AccountIdLiteralTest",
+        "org.hyperledger.iroha.sdk.core.model.instructions.CanonicalMultisigWireParityTest",
+        "org.hyperledger.iroha.sdk.core.model.instructions.KaigiWirePayloadV1Test",
+        "org.hyperledger.iroha.sdk.core.model.instructions.KaigiInstructionValidationTest",
+        "org.hyperledger.iroha.sdk.privacy.PrivacyNativeBridgeJavaConsumerTest",
+        "org.hyperledger.iroha.sdk.privacy.ConfidentialNoteJavaConsumerTest",
+        "org.hyperledger.iroha.sdk.privacy.ZkAssetMerklePathJavaConsumerTest",
+        "org.hyperledger.iroha.sdk.privacy.PrivacyRetiredWitnessBoundaryJavaConsumerTest",
+    )
+    assert native_selection_guard.JVM_NATIVE_TEST_SELECTIONS == expected
+    errors = []
+    native_selection_guard._check_jvm_native_test_selection(read("ci/check_privacy_jvm_sdk.sh"), errors)
+    assert errors == []
+
+
+@pytest.mark.parametrize("index", range(18))
+def test_native_selection_rejects_each_omitted_old_or_new_suite(native_selection_guard, index: int) -> None:
+    name = native_selection_guard.JVM_NATIVE_TEST_SELECTIONS[index]
+    gate = read("ci/check_privacy_jvm_sdk.sh")
+    changed, count = re.subn(r"(?m)^  --tests " + re.escape(name) + r"(?: \\)?\n", "", gate)
+    assert count == 1
+    with pytest.raises(native_selection_guard.GuardFailure, match="privacy JVM native gate must execute every reviewed Exact12, canonical account and Kaigi test selection"):
+        native_selection_guard.check({"ci/check_privacy_jvm_sdk.sh": changed})
+
+
+@pytest.mark.parametrize("mutation", ("comment", "duplicate", "outside-command", "unexecuted-command"))
+def test_native_selection_rejects_nonexecuted_or_duplicate_selection(native_selection_guard, mutation: str) -> None:
+    gate = read("ci/check_privacy_jvm_sdk.sh")
+    line = "  --tests org.hyperledger.iroha.sdk.address.AccountAddressNativeTest \\\n"
+    assert gate.count(line) == 1
+    if mutation == "comment":
+        changed = gate.replace(line, "#" + line, 1)
+    elif mutation == "duplicate":
+        changed = gate.replace(line, line + line, 1)
+    elif mutation == "outside-command":
+        changed = gate.replace(line, "", 1) + "\n" + line
+    else:
+        changed = gate.replace("./gradlew --no-daemon -q :core-jvm:jar :core-jvm:test", "# ./gradlew --no-daemon -q :core-jvm:jar :core-jvm:test", 1)
+    errors = []
+    native_selection_guard._check_jvm_native_test_selection(changed, errors)
+    assert errors
 
 
 def jvm_job(workflow: str) -> str:
@@ -81,8 +149,10 @@ def require_fail_closed_tests(kotlin: str, java: str) -> None:
 
 def test_privacy_jvm_gate_builds_and_authenticates_native_abi23() -> None:
     gate = read("ci/check_privacy_jvm_sdk.sh")
-    assert f'FROZEN_CARGO_LOCK_SHA256="{FROZEN_LOCK_SHA256}"' in gate
-    assert f'TRACKED_ROOT_CARGO_LOCK_SHA256="{TRACKED_ROOT_LOCK_SHA256}"' in gate
+    assert 'source "${ROOT_DIR}/ci/privacy_sdk_cargo_lockfile.sh"' in gate
+    assert "${PRIVACY_SDK_CANONICAL_CARGO_LOCK_SHA256}" in gate
+    assert "FROZEN_CARGO_LOCK_SHA256=" not in gate
+    assert "TRACKED_ROOT_CARGO_LOCK_SHA256=" not in gate
     assert '[[ "${RUSTC_VERSION}" == rustc\\ 1.93.1\\ * ]]' in gate
     assert '"${CARGO_BIN}" build --locked -p connect_norito_bridge --lib' in gate
     assert 'export NORITO_SKIP_BINDINGS_SYNC=1' in gate
@@ -134,8 +204,8 @@ def test_csharp_lane_consumes_the_same_authenticated_native_bytes() -> None:
     assert "privacy-jvm-native-abi23-${{ github.sha }}" in job
     assert "native-sdk-abi23-csharp.json" in job
     assert job.count("check_native_sdk_abi23_artifact.py verify") == 2
-    assert FROZEN_LOCK_SHA256 in job
-    assert TRACKED_ROOT_LOCK_SHA256 in job
+    assert job.count("${PRIVACY_SDK_CANONICAL_CARGO_LOCK_SHA256}") >= 2
+    assert "source ci/privacy_sdk_cargo_lockfile.sh" in job
     assert 'install -m 600 "$input/Cargo.lock" Cargo.lock' not in job
     assert "run: ci/check_privacy_csharp_sdk.sh" in job
 
@@ -159,8 +229,8 @@ def test_javascript_lane_builds_and_executes_real_napi_abi23() -> None:
     assert 'python-version: "3.12"' in job
     assert '"1.93.1-x86_64-unknown-linux-gnu"' in job
     assert "actions/download-artifact@" in job
-    assert FROZEN_LOCK_SHA256 in job
-    assert TRACKED_ROOT_LOCK_SHA256 in job
+    assert job.count("${PRIVACY_SDK_CANONICAL_CARGO_LOCK_SHA256}") >= 2
+    assert "source ci/privacy_sdk_cargo_lockfile.sh" in job
     assert "not yet requalified" not in job
     assert "install -m 600" not in job
     assert (
@@ -170,7 +240,8 @@ def test_javascript_lane_builds_and_executes_real_napi_abi23() -> None:
     assert "run: ci/check_privacy_js_sdk.sh" in job
 
     gate = read("ci/check_privacy_js_sdk.sh")
-    assert f'FROZEN_CARGO_LOCK_SHA256="{FROZEN_LOCK_SHA256}"' in gate
+    assert "${PRIVACY_SDK_CANONICAL_CARGO_LOCK_SHA256}" in gate
+    assert 'source "${SCRIPT_DIR}/privacy_sdk_cargo_lockfile.sh"' in gate
     assert 'scripts/build-native.mjs' in gate
     assert 'scripts/copy-native.mjs' in gate
     assert gate.count('"${ABI23_CHECKER}" verify') == 2
@@ -192,7 +263,8 @@ def test_javascript_lane_builds_and_executes_real_napi_abi23() -> None:
 
 def test_python_lane_authenticates_and_executes_real_pyo3_abi23() -> None:
     gate = read("ci/check_privacy_python_sdk.sh")
-    assert f'FROZEN_CARGO_LOCK_SHA256="{FROZEN_LOCK_SHA256}"' in gate
+    assert "${PRIVACY_SDK_CANONICAL_CARGO_LOCK_SHA256}" in gate
+    assert 'source "${SCRIPT_DIR}/privacy_sdk_cargo_lockfile.sh"' in gate
     assert '"${ABI23_CHECKER}" record' in gate
     assert gate.count('"${ABI23_CHECKER}" verify') == 2
     assert '--sdk python' in gate
@@ -229,8 +301,8 @@ def test_swift_lane_rebuilds_external_xcframework_and_requires_native_abi23() ->
     assert "RUSTUP_TOOLCHAIN=1.93.1-aarch64-apple-darwin" in job
     assert "python3 -I -S" not in job
     assert "actions/download-artifact@" in job
-    assert FROZEN_LOCK_SHA256 in job
-    assert TRACKED_ROOT_LOCK_SHA256 in job
+    assert job.count("${PRIVACY_SDK_CANONICAL_CARGO_LOCK_SHA256}") >= 2
+    assert "source ci/privacy_sdk_cargo_lockfile.sh" in job
     assert "not yet requalified" not in job
     assert "install -m 600" not in job
     assert "MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT=1" in job
@@ -247,7 +319,8 @@ def test_swift_lane_rebuilds_external_xcframework_and_requires_native_abi23() ->
     assert job.count("scripts/check_mobile_sdk_artifacts.sh --apple-only") == 1
 
     gate = read("ci/check_privacy_swift_sdk.sh")
-    assert f'FROZEN_CARGO_LOCK_SHA256="{FROZEN_LOCK_SHA256}"' in gate
+    assert "${PRIVACY_SDK_CANONICAL_CARGO_LOCK_SHA256}" in gate
+    assert 'source "${ROOT_DIR}/ci/privacy_sdk_cargo_lockfile.sh"' in gate
     assert 'MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT:-}" != "1"' in gate
     assert "must remain outside the source tree" in gate
     assert "xcode-select -p" in gate
@@ -272,8 +345,8 @@ def test_kotlin_and_java_privacy_native_tests_cannot_skip_jni() -> None:
             "PrivacyNativeBridgeTest.kt"
         ),
         read(
-            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/privacy/"
-            "PrivacyNativeBridgeTest.java"
+            "kotlin/core-jvm/src/test/java/org/hyperledger/iroha/sdk/privacy/"
+            "PrivacyNativeBridgeJavaConsumerTest.java"
         ),
     )
 
@@ -301,8 +374,8 @@ def test_skip_regressions_are_hostile_negative_controls(
         "PrivacyNativeBridgeTest.kt"
     )
     java = read(
-        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/privacy/"
-        "PrivacyNativeBridgeTest.java"
+        "kotlin/core-jvm/src/test/java/org/hyperledger/iroha/sdk/privacy/"
+        "PrivacyNativeBridgeJavaConsumerTest.java"
     )
     if language == "kotlin":
         kotlin += mutation
@@ -310,3 +383,83 @@ def test_skip_regressions_are_hostile_negative_controls(
         java += mutation
     with pytest.raises(AssertionError):
         require_fail_closed_tests(kotlin, java)
+
+
+@pytest.mark.parametrize("mutation", ("path-prepend", "ambient-java", "ambient-javac", "retired-owner", "missing-class-contract", "reflection", "internal-alias"))
+def test_jvm_java_owner_and_jdk_contract_rejects_observed_regressions(native_selection_guard, mutation: str) -> None:
+    gate = read("ci/check_privacy_jvm_sdk.sh")
+    consumer = read("kotlin/core-jvm/src/test/java/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridgeJavaConsumerTest.java")
+    errors = []
+    native_selection_guard._check_jvm_java_owner_and_toolchain(gate, consumer, errors)
+    assert errors == []
+    if mutation == "path-prepend":
+        gate = gate.replace('export JAVA_HOME', 'export JAVA_HOME\nexport PATH="${JAVA_HOME}/bin:${PATH}"', 1)
+    elif mutation == "ambient-java":
+        gate = gate.replace('"${JAVA_HOME}/bin/java"', 'java')
+    elif mutation == "ambient-javac":
+        gate = gate.replace('"${JAVA_HOME}/bin/javac"', 'javac')
+    elif mutation == "missing-class-contract":
+        gate = gate.replace('scripts/check_privacy_jvm_class_contract.py', 'scripts/absent_class_contract.py')
+    elif mutation == "reflection":
+        consumer += "\n// java.lang.reflect.Method\n"
+    elif mutation == "internal-alias":
+        consumer += "\n// requireCompiledProfileCatalog(candidate)\n"
+    else:
+        consumer = consumer.replace('package org.hyperledger.iroha.sdk.privacy;', 'package org.hyperledger.iroha.android.privacy;')
+    native_selection_guard._check_jvm_java_owner_and_toolchain(gate, consumer, errors)
+    assert errors
+
+
+def test_selected_jdk_invocation_preserves_original_authenticated_path(tmp_path) -> None:
+    import os
+    import subprocess
+    jdk = tmp_path / "jdk"
+    (jdk / "bin").mkdir(parents=True)
+    (jdk / "bin/java").write_text('#!/bin/sh\nprintf "%s\\n" "$PATH"\n')
+    (jdk / "bin/java").chmod(0o700)
+    gate = read("ci/check_privacy_jvm_sdk.sh")
+    start = gate.index('JAVA_HOME="$(resolve_java_home)"')
+    end = gate.index('\ncd "${ROOT_DIR}/kotlin"', start)
+    body = gate[start:end]
+    original_path = "/authenticated-wrapper:/authenticated-toolchain:/usr/bin:/bin"
+    env = dict(os.environ, PATH=original_path, TEST_JDK=str(jdk))
+    result = subprocess.run(['/bin/bash', '-euc', 'resolve_java_home() { printf "%s\\n" "$TEST_JDK"; }\n' + body + '\n[[ "$PATH" == "$EXPECTED_PATH" ]]',], env=dict(env, EXPECTED_PATH=original_path), capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == original_path
+    failed = subprocess.run(['/bin/bash', '-euc', 'resolve_java_home() { printf "%s\\n" "$TEST_JDK"; }\n' + body.replace('export JAVA_HOME', 'export JAVA_HOME\nexport PATH="${JAVA_HOME}/bin:${PATH}"') + '\n[[ "$PATH" == "$EXPECTED_PATH" ]]'], env=dict(env, EXPECTED_PATH=original_path), capture_output=True, text=True, timeout=10)
+    assert failed.returncode != 0
+
+
+@pytest.mark.parametrize("owner_index", range(18))
+def test_confidential_retirement_rejects_every_reintroduced_java_owner(native_selection_guard, tmp_path, owner_index):
+    consumers = {
+        name: read("kotlin/core-jvm/src/test/java/org/hyperledger/iroha/sdk/privacy/" + name + "JavaConsumerTest.java")
+        for name in ("ConfidentialNote", "ZkAssetMerklePath", "PrivacyRetiredWitnessBoundary")
+    }
+    errors = []
+    native_selection_guard._check_jvm_confidential_owner_closure(tmp_path, consumers, errors)
+    assert errors == []
+    owner = native_selection_guard.RETIRED_JAVA_PRIVACY_OWNERS[owner_index]
+    path = tmp_path / "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy" / (owner + ".java")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("retired duplicate", encoding="utf-8")
+    native_selection_guard._check_jvm_confidential_owner_closure(tmp_path, consumers, errors)
+    assert errors == ["retired duplicate Java privacy owner must remain absent: " + owner]
+
+
+@pytest.mark.parametrize("name", ("ConfidentialNote", "ZkAssetMerklePath", "PrivacyRetiredWitnessBoundary"))
+@pytest.mark.parametrize("mutation", ("missing-group", "old-owner", "reflection"))
+def test_confidential_java_migration_rejects_missing_groups_and_duplicate_owners(native_selection_guard, tmp_path, name, mutation):
+    consumers = {
+        item: read("kotlin/core-jvm/src/test/java/org/hyperledger/iroha/sdk/privacy/" + item + "JavaConsumerTest.java")
+        for item in ("ConfidentialNote", "ZkAssetMerklePath", "PrivacyRetiredWitnessBoundary")
+    }
+    if mutation == "missing-group":
+        consumers[name] = consumers[name].replace("@Test", "", 1)
+    elif mutation == "old-owner":
+        consumers[name] = consumers[name].replace("org.hyperledger.iroha.sdk.privacy", "org.hyperledger.iroha.android.privacy", 1)
+    else:
+        consumers[name] += "\n// java.lang.reflect.Method"
+    errors = []
+    native_selection_guard._check_jvm_confidential_owner_closure(tmp_path, consumers, errors)
+    assert errors == ["original " + name + " Java assertions must use canonical Kotlin capabilities"]

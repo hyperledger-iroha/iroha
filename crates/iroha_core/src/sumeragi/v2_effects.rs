@@ -3659,7 +3659,7 @@ impl V2EffectExecutor<SerializedV2Runtime> {
         attestation: &AttestedLifecycleDecisionApplySuccessorOutputsV1,
         batch: &RetainedEffectBatch,
     ) -> bool {
-        attestation.mode() == LifecycleDecisionApplySuccessorOutputModeV1::SameBatchSuffix
+        attestation.mode().retains_apply_suffix()
             && self
                 .pending_lifecycle_output_admissions
                 .values()
@@ -3697,7 +3697,8 @@ impl V2EffectExecutor<SerializedV2Runtime> {
             Some(attestation) => {
                 self.lifecycle_decision_apply_successor_census_is_exact(attestation)
                     && match attestation.mode() {
-                        LifecycleDecisionApplySuccessorOutputModeV1::SameBatchSuffix => self
+                        LifecycleDecisionApplySuccessorOutputModeV1::SameBatchSuffix
+                        | LifecycleDecisionApplySuccessorOutputModeV1::DelayedAdmissionPeriodicApplySuffix { .. } => self
                             .retained_effect_batch
                             .as_ref()
                             .is_some_and(|batch| {
@@ -3742,10 +3743,7 @@ impl V2EffectExecutor<SerializedV2Runtime> {
         attestation: &AttestedLifecycleDecisionApplySuccessorOutputsV1,
     ) -> Result<bool, EffectExecutorError> {
         self.ensure_open()?;
-        if matches!(
-            attestation.mode(),
-            LifecycleDecisionApplySuccessorOutputModeV1::DelayedAdmissionPeriodicRetransmit { .. }
-        ) {
+        if !attestation.mode().retains_apply_suffix() {
             return Ok(false);
         }
         let remains_exact =
@@ -3770,10 +3768,7 @@ impl V2EffectExecutor<SerializedV2Runtime> {
         attestation: &AttestedLifecycleDecisionApplySuccessorOutputsV1,
     ) -> Result<bool, EffectExecutorError> {
         self.ensure_open()?;
-        if !matches!(
-            attestation.mode(),
-            LifecycleDecisionApplySuccessorOutputModeV1::SameBatchSuffix
-        ) {
+        if !attestation.mode().retains_apply_suffix() {
             return Ok(false);
         }
         let census_is_exact = self.lifecycle_decision_apply_successor_census_is_exact(attestation);

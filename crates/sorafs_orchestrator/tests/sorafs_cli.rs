@@ -266,7 +266,7 @@ fn make_stream_token_b64(
         &signing_key,
     )
     .expect("sign stream token fixture");
-    let bytes = to_bytes(&token).expect("encode stream token");
+    let bytes = norito::encode_canonical(&token).expect("encode stream token");
     (
         BASE64_STANDARD.encode(bytes),
         hex_encode(signing_key.verifying_key().to_bytes()),
@@ -1846,7 +1846,7 @@ fn fetch_command_rejects_insecure_local_gateway_without_output() {
         token_pk_version: 1,
     };
     let stream_token = StreamTokenV1::sign(token_body, &signing).expect("sign stream token");
-    let stream_token_bytes = to_bytes(&stream_token).expect("stream token bytes");
+    let stream_token_bytes = norito::encode_canonical(&stream_token).expect("stream token bytes");
     let stream_token_b64 = BASE64_STANDARD.encode(stream_token_bytes);
     let gateway_public_key_hex = hex_encode(signing.verifying_key().to_bytes());
     let base_url = server.base_url();

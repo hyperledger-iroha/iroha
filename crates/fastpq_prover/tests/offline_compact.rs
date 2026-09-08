@@ -195,7 +195,7 @@ fn mirrors() -> FastpqAxtPreProofMirrorsV1 {
 // A negative carrier fixture uses the exact public nominal wire identity. It
 // never manufactures a successful child, or selects an AIR through facade inputs.
 #[derive(NoritoSerialize)]
-#[norito(schema_name = "fastpq_prover::compact_candidate::ShakeOrdinaryTransferBundleV1")]
+#[norito(schema_name = "fastpq_prover::compact_v1::OrdinaryTransferBundleV1")]
 struct CandidateCarrier {
     version: u16,
     intermediate_roots: Vec<[u8; 32]>,

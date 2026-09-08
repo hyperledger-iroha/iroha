@@ -1,7 +1,8 @@
 //! Strict Torii ownership checks for the production stream-token runtime.
 use super::{
-    StreamTokenAdmissionCaptureV1, StreamTokenGatewayAdmissionQualificationV1, StreamTokenIssuer,
-    StreamTokenRuntimeSigner,
+    StreamTokenAdmissionCaptureV1, StreamTokenApprovedCustodyAnchorV1,
+    StreamTokenGatewayAdmissionQualificationV1, StreamTokenHardwareClientV1, StreamTokenIssuer,
+    StreamTokenStateObserverClientV1,
 };
 use iroha_config::parameters::actual::{SorafsTokenConfig, Torii as ToriiConfig};
 use iroha_data_model::{NetworkId, sorafs::reputation::derive_stream_token_gateway_id_v1};
@@ -61,29 +62,43 @@ pub(crate) fn preflight_admission_capture(
                 .to_owned()
         })
 }
-/// Construct the optional issuer after signer qualification.
-pub(crate) fn build_issuer(
+/// Enforce authenticated-operator issuance before constructing any hardware dependency.
+pub(crate) fn validate_issuer_operator_signatures(
     config: &SorafsTokenConfig,
     operator_signatures_enabled: bool,
-    signer: Option<Arc<dyn StreamTokenRuntimeSigner>>,
-) -> Option<Arc<StreamTokenIssuer>> {
-    assert!(
-        !config.enabled || operator_signatures_enabled,
-        "enabled stream-token issuance requires torii.operator_signatures.enabled"
-    );
-    match StreamTokenIssuer::from_config(config, signer) {
-        Ok(issuer) => issuer.map(Arc::new),
-        Err(error) => panic!("invalid SoraFS stream token configuration: {error}"),
+) -> Result<(), &'static str> {
+    if config.enabled && !operator_signatures_enabled {
+        Err("enabled stream-token issuance requires torii.operator_signatures.enabled")
+    } else {
+        Ok(())
     }
 }
 impl crate::ToriiRuntimeDeps {
-    /// Attach the qualified runtime-only signer used for stream-token issuance.
+    /// Attach the configured opaque hardware client; responses remain untrusted.
     #[must_use]
-    pub fn with_sorafs_stream_token_signer(
+    pub fn with_sorafs_stream_token_hardware_client(
         mut self,
-        signer: Arc<dyn StreamTokenRuntimeSigner>,
+        client: Arc<dyn StreamTokenHardwareClientV1>,
     ) -> Self {
-        self.sorafs_stream_token_signer = Some(signer);
+        self.sorafs_stream_token_hardware_client = Some(client);
+        self
+    }
+    /// Attach the separately configured read-only signed-observation transport.
+    #[must_use]
+    pub fn with_sorafs_stream_token_state_observer(
+        mut self,
+        observer: Arc<dyn StreamTokenStateObserverClientV1>,
+    ) -> Self {
+        self.sorafs_stream_token_state_observer = Some(observer);
+        self
+    }
+    /// Attach independent approved finalized role state, never a provider-supplied bootstrap.
+    #[must_use]
+    pub fn with_sorafs_stream_token_approved_anchor(
+        mut self,
+        anchor: StreamTokenApprovedCustodyAnchorV1,
+    ) -> Self {
+        self.sorafs_stream_token_approved_anchor = Some(anchor);
         self
     }
     /// Attach the qualified deployment-owned stream-token admission capture.
@@ -126,6 +141,7 @@ mod tests {
     fn enabled_issuer_requires_operator_signatures() {
         let mut config = SorafsTokenConfig::default();
         config.enabled = true;
-        let _ = build_issuer(&config, false, None);
+        validate_issuer_operator_signatures(&config, false)
+            .expect("enabled stream-token issuance requires torii.operator_signatures.enabled");
     }
 }

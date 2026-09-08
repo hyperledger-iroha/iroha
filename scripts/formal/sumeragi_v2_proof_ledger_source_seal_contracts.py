@@ -515,7 +515,7 @@ self.transport
         lane_path,
         lane_ack_items.get("V2LaneWorkAdapter::into_retained_merge_sidecars"),
         """
-if self.has_pending_committed_output_handoff() {
+if self.has_pending_committed_output_handoff()? {
     return Err(V2LaneWorkError::InvalidContext(
         "retained merge-sidecar handoff still owns committed lane output".to_owned(),
     ));
@@ -3454,7 +3454,7 @@ _PRODUCTION_EXACT_OUTPUT_ITEM_SHA256 = {
         "f160be0e0bcce5a09813d9b1ce971c361991bff4ac9a33469a5130bbd11b80f6"
     ),
     "autonomous_lane_output_has_durable_reconstruction_source": (
-        "0d806079c721d886405ad801b9fcb145b81387c2b9bc757534c82a4295a60e82"
+        "69bfd9d27c487fad2d01e11204e181754ed1021ce3ab5364a85f3a9e9c153b38"
     ),
     "take_attempt": "acc18d3997a0cc6fcca4926b72a63fedf5d0987ecb33c1114e93e0da3b2254d7",
     "mark_admitted": "c6e502433ef5249540446d75e0f88f665a7ffc456bf4014216f808fd123f072c",
@@ -3499,7 +3499,7 @@ _APPLIED_HEIGHT_TICKETLESS_FINALITY_STRUCT_SHA256 = {
 }
 
 _PRODUCTION_INGRESS_EFFECTS_RECONCILIATION_ITEM_SHA256 = {
-    "predecessor_remains_exact": "25b34301a52484cdc357afb8790ad65a11096a0cf45e86b2fd4f097b44d731f3",
+    "predecessor_remains_exact": "5227b69d9a76243043cbce01ba48eb7a220938f94032ab75df28879ad9c3db62",
     "released_validate_preflight": "b129214d21f293964bde4b78d22345940da76ee918487c5158d945f4b09c0721",
     "validate_body": "009ec775fb5138577ee239bd82c95ceacfb96b2079a1fba0fb902021768df3f1",
     "test_executor_owners_empty": "55afb20b7ef738199aa104e6db1f5fc1e82b524f439b7c738fef2b8a91c28dc7",
@@ -3638,10 +3638,10 @@ _APPLIED_HEIGHT_PREDECESSOR_DURABILITY_HANDOFF_TEST_SHA256 = {
         "6180ebcb3f417cf30d175305545bb980449b99f50bcf74ec300198e15bad5881"
     ),
     "applied_height_handoff_accepts_kura_applied_ordinary_historical_lane_output": (
-        "63da596c965313f6d1670a4dde34f5b4886f7dd8983ac32d8a969f57636d869f"
+        "af8c9c7aed14ad05554568535bfb3f7736fbb68b1baef3c51e54415f6ce385a9"
     ),
     "applied_height_handoff_accepts_record_backed_autonomous_historical_lane_certificate": (
-        "64d78dacb9ebb2a99b8d48aff8202bb62aedd080450360bcbccc1d57e9c9cba3"
+        "d6a2222a93ef67b78fc2dd8768ff60452afc78096599554a5adacfbd07c22e0b"
     ),
 }
 
@@ -3909,25 +3909,32 @@ Self {
     native_amx_signing_guard_limits,
 }
 """
-_PRODUCTION_RUNNER_SOURCE_RETAINED_DISPATCH_TOKENS = """
-match dispatch_lane_work_effect_from_snapshot(services, next_effect, queue_plan_sources.as_mut(),)? {
-    LaneWorkEffectDispatch::Complete => {
-        dispatched = dispatched.saturating_add(1);
-    }
-    LaneWorkEffectDispatch::SourceRetained(effect) => {
-        if effect.retries_from_native_catalog_after_source_retention() {
-            continue;
+_PRODUCTION_RUNNER_SOURCE_RETAINED_DISPATCH_TOKENS = """match dispatch_lane_work_effect_from_snapshot(
+            services,
+            next_effect,
+            queue_plan_sources.as_mut(),
+        )? {
+            LaneWorkEffectDispatch::Complete => {
+                let _ = require_peeked_lane_work_effect(lane_work.drain_effects(1).pop())?;
+                dispatched = dispatched.saturating_add(1);
+            }
+            LaneWorkEffectDispatch::SourceRetained(effect) => {
+                if effect.retries_from_native_catalog_after_source_retention() {
+                    let _ = require_peeked_lane_work_effect(lane_work.drain_effects(1).pop())?;
+                    // The compact body/peer catalog remains the source owner.
+                    // Free this bounded delivery slot so the next cadence can
+                    // rotate past a worker-saturated or silent peer.
+                    continue;
+                }
+                if !lane_work.rotate_next_effect() {
+                    return Err(V2RunnerError::Service(
+                        "lane-work scheduler could not retain a source-backpressured sidecar effect"
+                            .to_owned(),
+                    ));
+                }
+            }
         }
-        if !lane_work.requeue_effect(effect) {
-            return Err(V2RunnerError::Service(
-                "lane-work scheduler could not retain a source-backpressured sidecar effect"
-                    .to_owned(),
-            ));
-        }
-    }
-}
-apply_certified_merge_sidecar_chunk_admissions(lane_work, services, limit)?;
-"""
+        apply_certified_merge_sidecar_chunk_admissions(lane_work, services, limit)?;"""
 
 # Complete item seals for the process-local positive validation memo used by
 # execution-bearing merge candidates.  These are deliberately separate from
@@ -3937,7 +3944,7 @@ apply_certified_merge_sidecar_chunk_admissions(lane_work, services, limit)?;
 # unchanged.  Relay/drain candidates continue through the live validator.
 _PRODUCTION_MERGE_EXECUTION_CACHE_ITEM_SHA256 = {
     "V2LaneWorkAdapter::mark_global_body_locked": (
-        "fa19a22ac3e2e8027daccca4545d066928aaac5b6ab3ee0fbb529012a0fe1070"
+        "65e206bcb8a1103890de075b511c915d1f2a69dc47594fc6f7ea97eb3e6bd2eb"
     ),
     "V2LaneWorkAdapter::retain_merge_sidecars_for_global_view_guarded": (
         "1aaa08b9aae7de0256cfe72a8ef75964f0bd09ac0aeec59c826bab76481541b6"
@@ -4451,9 +4458,9 @@ _PRODUCTION_LANE_ACK_SEAM_ITEM_SHA256 = {
     "V2LaneWorkLimits::new": "be6dab607a9d6656ec34deb79c2cc0aff0e75d59731c290051e0f6dc10ba6bd5",
     "RetainedMergeSidecars::rehydrate_for_successor": "709b44e4cf845ffe76903ad4d7f61b9fa174ccc1f0a1a793d6733a37a23cd0a6",
     "V2LaneWorkAdapter::new_with_output_guard_and_transport": "017c1afe0515ff169d85bd9fd1a9ba86689ea35405952fe7647c66f42dabc8dd",
-    "V2LaneWorkAdapter::new_with_output_guard_and_transport_inner": "5b5a01ca8361803451e756564c69aef102ddc4c99996882e293a018c57c0b0c2",
+    "V2LaneWorkAdapter::new_with_output_guard_and_transport_inner": "8083f15f3b517ef913757d709bba4e4a791cdcfeeffdccaa7c38797913404e12",
     "V2LaneWorkAdapter::activate_after_lane_drain_queue_install": "638503cfcc9963213cb6146d16d82ab270016e6f5da7bbbc8b2918aea9120cb2",
-    "V2LaneWorkAdapter::into_retained_merge_sidecars": "96d1e194eda3660ccccf9b4e1860b26a4db8d9ee9fb2bad4f988e37c85627218",
+    "V2LaneWorkAdapter::into_retained_merge_sidecars": "06eaad5f62f4aaf7e8175008a511110dcb3469099716961acb6fda4c5506b40a",
     "V2LaneWorkAdapter::accept_relay_message": "87420fc8a24b8fb713af40ba5ba2f2df0efa3a04cf2893b087b2f221f34a0603",
     "V2LaneWorkAdapter::accept_certified_merge_sidecar": "8e348b518da26f91fff8840d1e5bf4016d783fef4720bc275baba90ebe14a0bd",
     "V2LaneWorkAdapter::accept_certified_merge_sidecar_request": "ed8044d26e471a3c866147d4f694819179081bcda9a0fb5129ca1b3ea4ba8741",
@@ -4476,16 +4483,16 @@ _PRODUCTION_LANE_ACK_SEAM_ITEM_SHA256 = {
     "V2LaneWorkAdapter::replace_stranded_retryable_sidecar_control": "13094aa7fc37a32648ebf74c461802e857173858f09d7c61ef0054530e340e4c",
     "V2LaneWorkAdapter::service_next_certified_merge_sidecar_materialization": "d4529f8571223adf943e5ed147663df6d0078fcb4fea3b3d94c84797eb263473",
     "V2LaneWorkAdapter::persist_anchored_sessions": "7ab8795c69064a7ed9c81c943183e539466009197e7caf12b823e51d9c3b5bc9",
-    "V2LaneWorkAdapter::hydrate_canonical_lane_artifacts": "9a40579664a5c2306d65100830e7d247a7d89b3c301492d99a635951b4ecaa56",
+    "V2LaneWorkAdapter::hydrate_canonical_lane_artifacts": "02cb63d69246bcd9dd2dab336aa688e5e4de86bebf816d682cb3866b2de7de25",
     "V2LaneWorkAdapter::next_effect": "62af9ea4c3707845b5b097a27f5cc9281b8ade4bc60db49cdbc9f1c3e2b3496a",
     "V2LaneWorkAdapter::effect_count": "3be06e0c96fdc63e06952ec83b5aa900daf39912955249ca6aad64ec50e1354a",
     "V2LaneWorkAdapter::requeue_effect": "5259377bba158615135666cb3cddf88e0fbfbdb63e55a7691ba397e34195d856",
     "V2LaneWorkAdapter::drain_effects": "478982ec7c7cec9990a70993011e34e0cf79f57fb903b3c7cbabc040052b1aba",
-    "V2LaneWorkAdapter::proposal_predecessor_is_ready_for_progress": "9a952a9ee41d5ad85c2b18ccd9ea270745f06cb4a27e49550c6eeee4189733b4",
-    "V2LaneWorkAdapter::preflight_effect_insertion": "a2b3369f2c20c49bfa9e30bb6dc2b66c466aec9e83bf6793b49a7966ea7163e0",
+    "V2LaneWorkAdapter::proposal_predecessor_is_ready_for_progress": "73835515f534dd991fc70b65067135da93b06c78271574c45361f9a71999204b",
+    "V2LaneWorkAdapter::preflight_effect_insertion": "942b6c7c9a795e6c5a4032f122def6de644ee48cbc6eddd50fb11f84952260df",
     "V2LaneWorkAdapter::push_effect": "8974bca860609c853efe07e78397cb4be80e8bf1a688831bf1c28b1807293441",
     "V2LaneWorkAdapter::schedule_retransmission": "7468d25a90d61258242527880622e74ff38143c0f75c2e7bf572c9792c9f6232",
-    "V2LaneWorkAdapter::schedule_retransmission_at": "0bda995ee82b67dd357ce7eb6556b5e80c94db96e15cfb40d89059b42539b849",
+    "V2LaneWorkAdapter::schedule_retransmission_at": "cdb6e3265a7447adab72398812a8264a87f1712a873b0be64a7e9fa325a2159e",
     "V2LaneWorkAdapter::prune_finalized_merge_sidecars": "177899971313ecd797a0b773bab37ff331226c5768efe2627345532079bd6de7",
     "V2LaneWorkAdapter::sidecar_effect_slots": "13a99e0350b8d59489cc591573adcc2b1f3f775308e9b225f1672649235699e6",
     "V2LaneWorkAdapter::next_sidecar_effect_selection": "614006f927ec384764396c8742a3b05b5a70907dddd8bcf39ed2db0aba4d8975",
@@ -4497,48 +4504,80 @@ _PRODUCTION_LANE_ACK_SEAM_ITEM_SHA256 = {
     "retryable_sidecar_server_control_has_writable_route": "4f7ac1895057d195e13c094178010703e09198a4b6824a96b75739072c1362eb",
 }
 
-_PRODUCTION_LANE_EFFECT_PREFLIGHT_EXACT_SOURCE = """
-fn preflight_effect_insertion(
-    &mut self,
-    effect: &V2LaneWorkEffect,
-) -> Result<Hash, LaneWorkEffectInsertionOutcome> {
-    let predecessor_ready = match effect {
-        V2LaneWorkEffect::PostLaneBlock { message, .. } => { self.outbound_lane_message_predecessor_is_ready(message) }
-        V2LaneWorkEffect::PostDurableLaneCertificate { certificate, .. } => { self.proposal_predecessor_is_ready_for_progress(&certificate.proposal) }
-        _ => true,
-    };
-    if !predecessor_ready { return Err(LaneWorkEffectInsertionOutcome::Rejected); }
-    if !lane_work_effect_reply_routes_have_valid_shape(effect) { return Err(LaneWorkEffectInsertionOutcome::Rejected); }
-    let key = lane_work_effect_key(effect);
-    if self.effect_keys.contains(&key) {
-        return Err(if self.effects.iter_mut()
-            .find(|queued| lane_work_effect_key(queued) == key)
-            .is_some_and(|queued| merge_lane_work_effect_reply_routes(queued, effect))
-        {
-            LaneWorkEffectInsertionOutcome::Duplicate
-        } else {
-            LaneWorkEffectInsertionOutcome::Rejected
-        },);
-    }
-    if !lane_work_effect_reply_routes_are_valid(effect) { return Err(LaneWorkEffectInsertionOutcome::Rejected); }
-    let ordinary_capacity = self.limits.effect_capacity.get();
-    let autonomous_new_view_progress = Self::is_autonomous_new_view_progress_effect(effect)
-        || self.effects.iter().any(Self::is_autonomous_new_view_progress_effect);
-    let admission_capacity = ordinary_capacity.saturating_add(usize::from(autonomous_new_view_progress));
-    if self.effects.len() >= admission_capacity { return Err(LaneWorkEffectInsertionOutcome::Rejected); }
-    Ok(key)
-}
-"""
+_PRODUCTION_LANE_EFFECT_PREFLIGHT_EXACT_SOURCE = """    fn preflight_effect_insertion(
+        &mut self,
+        effect: &V2LaneWorkEffect,
+    ) -> Result<Hash, LaneWorkEffectInsertionOutcome> {
+        let predecessor_ready = match effect {
+            V2LaneWorkEffect::PostLaneBlock { message, .. } => {
+                self.outbound_lane_message_predecessor_is_ready(message)
+            }
+            V2LaneWorkEffect::PostDurableLaneCertificate { certificate, .. } => {
+                self.durable_lane_certificate_source_is_ready(&certificate.proposal)
+            }
+            _ => Ok(true),
+        };
+        let predecessor_ready = match predecessor_ready {
+            Ok(ready) => ready,
+            Err(_) => {
+                self.output_guard.close_admission_for_restart();
+                return Err(LaneWorkEffectInsertionOutcome::Rejected);
+            }
+        };
+        if self.output_guard.restart_required() {
+            return Err(LaneWorkEffectInsertionOutcome::Rejected);
+        }
+        if !predecessor_ready {
+            return Err(LaneWorkEffectInsertionOutcome::Rejected);
+        }
+        if !lane_work_effect_reply_routes_have_valid_shape(effect) {
+            return Err(LaneWorkEffectInsertionOutcome::Rejected);
+        }
+        let key = lane_work_effect_key(effect);
+        if self.effect_keys.contains(&key) {
+            return Err(
+                if self
+                    .effects
+                    .iter_mut()
+                    .find(|queued| lane_work_effect_key(queued) == key)
+                    .is_some_and(|queued| merge_lane_work_effect_reply_routes(queued, effect))
+                {
+                    LaneWorkEffectInsertionOutcome::Duplicate
+                } else {
+                    LaneWorkEffectInsertionOutcome::Rejected
+                },
+            );
+        }
+        if !lane_work_effect_reply_routes_are_valid(effect) {
+            return Err(LaneWorkEffectInsertionOutcome::Rejected);
+        }
+        let ordinary_capacity = self.limits.effect_capacity.get();
+        let autonomous_new_view_progress = Self::is_autonomous_new_view_progress_effect(effect)
+            || self
+                .effects
+                .iter()
+                .any(Self::is_autonomous_new_view_progress_effect);
+        // Retain one bounded autonomous pacemaker occurrence beyond the
+        // ordinary lane-output bound. Without this reserve, a continuously
+        // full delivery queue can reject every due NewView fanout before it
+        // acquires retry ownership, permanently pinning the lane cursor.
+        let admission_capacity =
+            ordinary_capacity.saturating_add(usize::from(autonomous_new_view_progress));
+        if self.effects.len() >= admission_capacity {
+            return Err(LaneWorkEffectInsertionOutcome::Rejected);
+        }
+        Ok(key)
+    }"""
 
 _PRODUCTION_RUNNER_ACK_SEAM_ITEM_SHA256 = {
     "claim_runner_lifecycle_process_generation": "b64000d4de72d6fd8bb94cc4030275581abd249677a3de70881253e7c11dd8fc",
     "preflight_finalized_lane_rollover": (
-        "377bab393a67c8a10387071fa9081188bc58a180583c83a5e086768627dad344"
+        "80206d548b9f1dc3d400714a4e9b16382ad63b7b0d3bbe54960f92e99e778d86"
     ),
     # Approved together with the exact-output alias after the focused
     # non-descent and handoff mutations passed against the reconciled component.
     "rollover_finalized_height_outputs": (
-        "166ff3834f05f2d869afd0612943bc0911736e090cd6ea69900501914483aa88"
+        "fa3768e011f61c3a4d5e8e167f848c23d4d03d5b7be0bf38e7836e9c79bed034"
     ),
     "require_peeked_lane_work_effect": "bb5763cb4c16586460c17c92f9578a5431c976fb83bc512e94e84646d6e5c1da",
     "lane_work_limits": "6597822785d94c22554d152b4c403b425c7a11aab1a19059fac41368332202b2",
@@ -4550,22 +4589,22 @@ _PRODUCTION_RUNNER_ACK_SEAM_ITEM_SHA256 = {
     "apply_retired_historical_recovery_requests": "01305939d7475cf01935b15f2c66bb6a9654089bccee669a850fd5a839fe3cb0",
     "apply_retired_merge_sidecar_requests": "9ca51c80ef5198d6ab06ab076ffa7d4719972cf109c868f25437a3f59acf7539",
     "apply_obsolete_merge_sidecar_generation_hints": "44717ca91e2245b1ba30d5582531944ce6729077406cbbd81fc1564a612f9078",
-    "service_historical_recovery_tick": "9da507c57b6959b167766c376f6bfa2c3625a94e189175809755c3821d5aa0c8",
+    "service_historical_recovery_tick": "74a3691e11241708ce8302d3687271b3122b0fcc96be527edcbbd6adc5ec9bef",
     "apply_acknowledged_merge_sidecar_closes": "87b4efe9a37159d6ba9e6c6f9c992f49afcf6d3727d83e10cf54ec6c367e9dd5",
     "dispatch_lane_work_effects": "a26b7238a9a62db73e31134d6b6722ccf22577166cfead1d881f863040d4f139",
-    "dispatch_lane_work_effects_with_progress": "fe8d818dddcded043dd5cbeabe8559bf24c08a74d7d15714f0fbc9e785c27260",
+    "dispatch_lane_work_effects_with_progress": "b557590fe60e21b20603acf0133a6e6b267ba46d280e9707dbe601b6693794b6",
     "drain_finalized_lane_work_output": "361854f94116cf4f6d807283597bad898bfce88889c16ef69dfd7fd8e392f62f",
     "retain_active_owned_reply_routes": "bafe4c316b7d50e5b89bb9468dcf47271985b5f17f8277cb7c70bac5df74be87",
     "retain_active_owned_reply_routes_with_snapshot_hook": "4c941bd7f4f914f2fbe919467ac791f7c9fbeb25a663a043cc3ec3b42a263043",
     "dispatch_lane_work_effect": "a49cda3f020e0f2f577bdbd7e1c8e9b17fa529290a9115755c5665713973c278",
-    "dispatch_lane_work_effect_from_snapshot": "20b07ac620f07eca9a61e14f198473a5beb9fdf77bf5222d34f0d7338791ec47",
+    "dispatch_lane_work_effect_from_snapshot": "67eb228eb61521404de40ec97b845b307df4c81e47793ba9f8929ef753904d11",
 }
 
 _PRODUCTION_LIFECYCLE_EXACT_OUTPUT_ITEM_SHA256 = {
-    "ordinary_loop": "e208cf5dfa1fd996bc137433d953dbe0ca60238fa901c8491c6a40272c10bc16",
+    "ordinary_loop": "8237c66bbcd94c915b00ed1c9c26c70f1515b65e7c2c8a33e0cacf79d4eb8d95",
     "pending_loop": "f5a66ac1013261981500568d175c6985481de1bc1f2a9b76a73f1cd31e2590c6",
     "ordinary_finalize": "05a36cb47c73bd91e88590bfed1eb0f078a5c75915a5f314497fb89f352aa041",
-    "ordinary_active": "f6e4b3996761cd2aa9fb9ec3d7635a4f081bf2261e16fc60cd4d5e342c4b2359",
+    "ordinary_active": "0aa74369f7b8a2e6bccbdd374cd71e3815bc592355974ea74d2c7fb0c3bc1e01",
     "pending_active": "2108692d12f6804279f5835936786c85f4c667a33ddb2ab8f72c8a1d57eb7eff",
 }
 _PRODUCTION_ORDINARY_INGRESS_CONSUMER_ITEM_SHA256 = "e3adf384d9eb315ac86726a07929fb0cc6c713a7e547e484a5a70a5a4c7eaba5"
@@ -4607,7 +4646,7 @@ _LIFECYCLE_CERTIFIED_SERVE_ITEM_SHA256 = {
     "body_store:V2BodyStore::read_durable_body_for_certified_serve": "c3e4d12afaa3f18ad1d5b0865eb3a54f4ad892eff4449b9d9d5b72bfd8f26c87",
     "projection:super::ProductionLifecycleOwnerV1::settle_certified_serve_worker_completed": "77930bc25fa0078aba267238ba1f3e8016eaa28f9a2d3aa58b4199c3f3333d10",
     "projection:super::ProductionLifecycleOwnerV1::settle_producer_turn_advanced": "d15b6ada19aa19ddd64ce9a23ca4ec06518cb4eb99cfe386976f7f85bc6f3917",
-    "ordinary:run_lifecycle_active_height": "f6e4b3996761cd2aa9fb9ec3d7635a4f081bf2261e16fc60cd4d5e342c4b2359",
+    "ordinary:run_lifecycle_active_height": "0aa74369f7b8a2e6bccbdd374cd71e3815bc592355974ea74d2c7fb0c3bc1e01",
     "pending:run_pending_active_height": "2108692d12f6804279f5835936786c85f4c667a33ddb2ab8f72c8a1d57eb7eff",
     "height:drain_lifecycle_v2_ingress": "6e86bd3de1bea9a61393d81b9deb82a21d9b705ccb52d441f36e9c14b8dd2151",
     "launch:ProductionLeaderWireIngressBindingV1::bind": "a2c191a1ada7ec3b3dd00c36c4f495b1ed6c06e2527b2ca9e68b3729f8071f81",
@@ -4852,7 +4891,7 @@ _PRODUCTION_EXACT_OUTPUT_RESERVATION_ITEM_SHA256 = {
     "ProductionV2Services::can_retain_lane_work_effect_from_snapshot": "8bbf87be5675b7014d08b93630e4426ba77de26915cbfb20cb6cf817e26943ef",
 }
 _PRODUCTION_DURABLE_HISTORY_WORKER_ITEM_SHA256 = {
-    "durable_history_source_covers": "b36e5a9289ccbb8bb5fe964c93d239f15109b4832b40ce41a36696230ec301a2",
+    "durable_history_source_covers": "258c2502d05ee91ca86e2b992a651ff49b429244cfc3f110b26df5146439d2f7",
     "queue_plan_admission_reconstruction_covers": "1cd167989e8fca4abb7cf25e9bf470b7fa660a596c7afc3eeb0c819cb2c730e3",
 }
 # Typed semantic claims are the production authority which lets exact output
@@ -4950,7 +4989,7 @@ _EXACT_OUTPUT_ROLLOVER_CLAIM_IMPL_ITEMS = frozenset(
 # reconstruct lane-local output at global-height retirement.  Bind its exact
 # Kura/application source commitment and its winning/non-winning validators.
 _PRODUCTION_LANE_ROLLOVER_AUTHORITY_ITEM_SHA256 = {
-    "durable_historical_lane_output_source_hash": "d6f14857c39045bdb388095d00ad11d99be5af7aa3cd84c789569eab24148e8b",
+    "durable_historical_lane_output_source_hash": "f4b1077940c7d299656898d5087b8bcd512bbf703d65126a5cc4d453ca471c34",
     "durable_historical_lane_verification_pops": "090336f96d80a1ea90e51a2ea2cf4161aca46057c6e11c87cefeeb24c18b36ee",
     "covered_source_hash": (
         "3ac2d2397d5fe256dc01b92458007f9e63c25af50b0cff7be83c0e9e830782e8"
@@ -4971,13 +5010,13 @@ _PRODUCTION_LANE_ROLLOVER_AUTHORITY_ITEM_SHA256 = {
         "ec480ca71d859f5b27fcc31731a1bc2ebb02ee8d5002475d53d3ed14109c94c2"
     ),
     "durable_lane_rollover_authority": (
-        "a53980d94acca89b68aee28407335285078d911ab038476394e157a6ef782cb7"
+        "3656a93162632594cb03b0c07b24bd210236b418a88c211d7c54e3869a564717"
     ),
     "serve_durable_lane_certificate": (
         "bcab2428b4a2d43dd23989bebe917077e84b069c4e120808f6b25ce4503ce52f"
     ),
     "reconstruct_durable_lane_certificate": (
-        "229bc98b62691be671374442c767ceba685f07a49612bd6f662cb67eddf236f1"
+        "345ca55b09a570e46728dbae478a5d7e6745d41ea764ed075202e0b0d1d5e0e3"
     ),
     "reply_routes_are_live_for_peer": (
         "cdca18bef9df99c77e3698622c9cf6941dd249967bb587f60e9fd381a4f8b235"
@@ -5033,18 +5072,18 @@ _PRODUCTION_EXACT_OUTPUT_RUNNER_ITEM_SHA256 = {
     "select_blocked_ordinary_lane_local_ingress": "cf0b52b8280f229dae97589635f302efc2699477e95fc8655514193d193af94f",
     "drain_blocked_ordinary_lane_local_ingress": "8dfeff4b021eccf527f9be785d0a7573f3bfc2d837844cdae3474ec663559657",
     "preflight_finalized_lane_rollover": (
-        "377bab393a67c8a10387071fa9081188bc58a180583c83a5e086768627dad344"
+        "80206d548b9f1dc3d400714a4e9b16382ad63b7b0d3bbe54960f92e99e778d86"
     ),
     # Bound after the exact-output handoff mutation survived refreshing this
     # helper's own token digest.
     "rollover_finalized_height_outputs": (
-        "166ff3834f05f2d869afd0612943bc0911736e090cd6ea69900501914483aa88"
+        "fa3768e011f61c3a4d5e8e167f848c23d4d03d5b7be0bf38e7836e9c79bed034"
     ),
     "dispatch_lane_work_effects": "a26b7238a9a62db73e31134d6b6722ccf22577166cfead1d881f863040d4f139",
-    "dispatch_lane_work_effects_with_progress": "fe8d818dddcded043dd5cbeabe8559bf24c08a74d7d15714f0fbc9e785c27260",
+    "dispatch_lane_work_effects_with_progress": "b557590fe60e21b20603acf0133a6e6b267ba46d280e9707dbe601b6693794b6",
     "drain_finalized_lane_work_output": "361854f94116cf4f6d807283597bad898bfce88889c16ef69dfd7fd8e392f62f",
     "dispatch_lane_work_effect": "a49cda3f020e0f2f577bdbd7e1c8e9b17fa529290a9115755c5665713973c278",
-    "dispatch_lane_work_effect_from_snapshot": "20b07ac620f07eca9a61e14f198473a5beb9fdf77bf5222d34f0d7338791ec47",
+    "dispatch_lane_work_effect_from_snapshot": "67eb228eb61521404de40ec97b845b307df4c81e47793ba9f8929ef753904d11",
 }
 
 _PRODUCTION_BLOCKED_ORDINARY_LANE_LOCAL_HEIGHT_ITEM_SHA256 = {
@@ -5340,7 +5379,7 @@ _PRODUCTION_EXACT_OUTPUT_INGRESS_SEAM_ITEM_SHA256 = {
         "112bfa93dd0a1b7de78b2c35d25e0b5ce32ba441575980e781b93db4ce302ce8"
     ),
     "worker::sweep_buffered_payload_chunk_lifecycles": (
-        "04d1c1e43bd4c41a0061d7585580907e6d8e4a1d5a2403c06bda1234b3ee51f7"
+        "683af7bc2783a7f73009e106c6b002a1af7a98d52dab75158c16a1fc275f9a9f"
     ),
     "worker::replay_buffered_chunks": (
         "1259249ed54174dfcecffbacb6e2f70b3a5fbf31e59bd088f6160d3148648920"

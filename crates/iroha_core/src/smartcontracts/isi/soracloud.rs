@@ -16612,7 +16612,7 @@ fn validate_soracloud_fhe_full_bootstrap_release_audit_package_for_evaluation_ke
     expected_release_audit_package_digest: Hash,
     trusted_reviewer_id: &str,
     trusted_reviewer_public_key: &PublicKey,
-    required_refresh_mode: Option<BfvRefreshTranscriptModeV1>,
+    required_refresh_mode: BfvRefreshTranscriptModeV1,
 ) -> Result<(), InstructionExecutionError> {
     let bootstrap_key = evaluation_keys
         .bootstrap_key
@@ -16677,32 +16677,20 @@ fn validate_soracloud_fhe_full_bootstrap_release_audit_refresh_transcript_v1(
     params: &BfvParameters,
     evaluation_keys: &BfvEvaluationKeyBundle,
     transcript: &BfvEvaluationKeyRefreshTranscriptV1,
-    required_refresh_mode: Option<BfvRefreshTranscriptModeV1>,
+    required_refresh_mode: BfvRefreshTranscriptModeV1,
 ) -> Result<(), InstructionExecutionError> {
-    let validate_mode = |mode| {
-        let mode_label = match mode {
-            BfvRefreshTranscriptModeV1::ExactLift => "exact-lift",
-            BfvRefreshTranscriptModeV1::BoundedNoise => "bounded-noise",
-        };
-        transcript
-            .digest_for_evaluation_keys_with_mode(params, evaluation_keys, mode)
-            .map(|_| ())
-            .map_err(|err| {
-                format!("{context} refresh transcript failed {mode_label} validation: {err}")
-            })
+    let mode_label = match required_refresh_mode {
+        BfvRefreshTranscriptModeV1::ExactLift => "exact-lift",
+        BfvRefreshTranscriptModeV1::BoundedNoise => "bounded-noise",
     };
-    if let Some(mode) = required_refresh_mode {
-        return validate_mode(mode).map_err(invalid_parameter);
-    }
-    match validate_mode(BfvRefreshTranscriptModeV1::ExactLift) {
-        Ok(()) => Ok(()),
-        Err(exact_err) => match validate_mode(BfvRefreshTranscriptModeV1::BoundedNoise) {
-            Ok(()) => Ok(()),
-            Err(bounded_err) => Err(invalid_parameter(format!(
-                "{context} refresh transcript must validate in exact-lift or bounded-noise mode: exact-lift: {exact_err}; bounded-noise: {bounded_err}"
-            ))),
-        },
-    }
+    transcript
+        .digest_for_evaluation_keys_with_mode(params, evaluation_keys, required_refresh_mode)
+        .map(|_| ())
+        .map_err(|err| {
+            invalid_parameter(format!(
+                "{context} refresh transcript failed {mode_label} validation: {err}"
+            ))
+        })
 }
 /// Derive and prove the Soracloud FHE full-bootstrap material statement for evaluation keys.
 ///
@@ -17023,9 +17011,7 @@ pub fn prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_with_relea
         expected_release_audit_package_digest,
         trusted_reviewer_id,
         trusted_reviewer_public_key,
-        Some(refresh_transcript_mode_for_ciphertext_bound_mode(
-            bound_mode,
-        )),
+        refresh_transcript_mode_for_ciphertext_bound_mode(bound_mode),
     )?;
     validate_soracloud_fhe_full_bootstrap_release_audited_execution_output_v1(
         params,

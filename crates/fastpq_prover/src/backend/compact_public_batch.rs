@@ -11,7 +11,8 @@
 //!
 //! TODO: Integrate and qualify the complete canonical outer bundle, cumulative
 //! proof/decoder budgets, authenticated caller and aggregate soundness argument.
-//! The 136-query profile and production replay/default limits are unchanged.
+//! The offline engine fixes375 queries; production replay and default limits
+//! remain unmodified pending a complete qualified artifact cutover.
 
 use norito::{NoritoSerialize, codec::Encode};
 
@@ -55,7 +56,7 @@ impl Default for BatchContextLimits {
 }
 
 #[derive(NoritoSerialize)]
-#[norito(schema_name = "fastpq_prover::compact_prototype::OrdinaryTransferBatchContextV1")]
+#[norito(schema_name = "fastpq_prover::compact_v1::OrdinaryTransferBatchContextV1")]
 struct BoundBatchContext {
     version: u16,
     segment_count: u32,
@@ -64,7 +65,7 @@ struct BoundBatchContext {
 }
 
 #[derive(NoritoSerialize)]
-#[norito(schema_name = "fastpq_prover::compact_prototype::OrdinaryTransferSegmentContextV1")]
+#[norito(schema_name = "fastpq_prover::compact_v1::OrdinaryTransferSegmentContextV1")]
 struct BoundSegmentContext {
     version: u16,
     segment_count: u32,

@@ -12163,11 +12163,22 @@ fn load_state_journals(
             ),
         };
     }
-    let accounting_mutation = kura.begin_total_disk_usage_mutation();
     let query_index_path = QueryIndexJournal::journal_path(&store_root);
+    let query_projection_checkpoint_path =
+        QueryProjectionCheckpointJournal::journal_path(&store_root);
+    let accounting_mutation = kura
+        .begin_total_disk_usage_mutation()
+        .with_resource_paths(vec![
+            query_index_path.clone(),
+            query_index_path.with_extension("norito.tmp"),
+            query_projection_checkpoint_path.clone(),
+            query_projection_checkpoint_path.with_extension("norito.tmp"),
+        ]);
+    let mut journals_loaded = true;
     let mut query_index = match QueryIndexJournal::load(query_index_path.clone()) {
         Ok(journal) => journal,
         Err(err) => {
+            journals_loaded = false;
             warn!(
                 ?err,
                 path = %query_index_path.display(),
@@ -12179,12 +12190,11 @@ fn load_state_journals(
     if let Some(status) = canonical_query_index_status {
         query_index.set_latest(status.indexed_height, status.indexed_block_hash);
     }
-    let query_projection_checkpoint_path =
-        QueryProjectionCheckpointJournal::journal_path(&store_root);
     let query_projection_checkpoint =
         match QueryProjectionCheckpointJournal::load(query_projection_checkpoint_path.clone()) {
             Ok(journal) => journal,
             Err(err) => {
+                journals_loaded = false;
                 warn!(
                     ?err,
                     path = %query_projection_checkpoint_path.display(),
@@ -12193,9 +12203,14 @@ fn load_state_journals(
                 QueryProjectionCheckpointJournal::new(query_projection_checkpoint_path)
             }
         };
-    // Loading a valid temp journal can replace and remove files. Dropping an unpublished
-    // mutation invalidates both caches before the synchronous stable scan republishes them.
-    drop(accounting_mutation);
+    // A successful recovery publishes exact marker deltas while preserving the existing
+    // disk-cache invalidation before its stable rescan. A failed loader leaves resource
+    // accounting unavailable even when State can continue with a process-local journal.
+    if journals_loaded {
+        accounting_mutation.finish_resources_before_disk_rescan();
+    } else {
+        drop(accounting_mutation);
+    }
     if !kura.emergency_fast_startup_enabled()
         && let Err(err) = kura.refresh_disk_usage_bytes()
     {
@@ -27260,21 +27275,33 @@ impl State {
             (Some(main), Some(tmp)) => Some(main.saturating_add(tmp)),
             _ => None,
         };
-        let accounting_mutation = self.kura.begin_total_disk_usage_mutation();
-        if let Err(err) = self.query_index_journal.read().persist() {
-            warn!(
-                ?err,
-                path = %path.display(),
-                "failed to persist query index journal"
-            );
-        }
+        let accounting_mutation = self
+            .kura
+            .begin_total_disk_usage_mutation()
+            .with_resource_paths(vec![path.to_path_buf(), tmp_path.clone()]);
+        let persistence_succeeded = match self.query_index_journal.read().persist() {
+            Ok(()) => true,
+            Err(err) => {
+                warn!(
+                    ?err,
+                    path = %path.display(),
+                    "failed to persist query index journal"
+                );
+                false
+            }
+        };
         let after_bytes = match (measure_bytes(path), measure_bytes(&tmp_path)) {
             (Some(main), Some(tmp)) => Some(main.saturating_add(tmp)),
             _ => None,
         };
         if let (Some(before_bytes), Some(after_bytes)) = (before_bytes, after_bytes) {
             self.kura.update_disk_usage_delta(before_bytes, after_bytes);
-            accounting_mutation.finish();
+            if persistence_succeeded {
+                accounting_mutation.finish();
+            } else {
+                // A measurable residue is not a completed journal publication.
+                drop(accounting_mutation);
+            }
         } else {
             drop(accounting_mutation);
             if let Err(err) = self.kura.refresh_disk_usage_bytes() {
@@ -27328,21 +27355,33 @@ impl State {
             (Some(main), Some(tmp)) => Some(main.saturating_add(tmp)),
             _ => None,
         };
-        let accounting_mutation = self.kura.begin_total_disk_usage_mutation();
-        if let Err(err) = journal.persist() {
-            warn!(
-                ?err,
-                path = %path.display(),
-                "failed to persist query projection checkpoint journal"
-            );
-        }
+        let accounting_mutation = self
+            .kura
+            .begin_total_disk_usage_mutation()
+            .with_resource_paths(vec![path.clone(), tmp_path.clone()]);
+        let persistence_succeeded = match journal.persist() {
+            Ok(()) => true,
+            Err(err) => {
+                warn!(
+                    ?err,
+                    path = %path.display(),
+                    "failed to persist query projection checkpoint journal"
+                );
+                false
+            }
+        };
         let after_bytes = match (measure_bytes(&path), measure_bytes(&tmp_path)) {
             (Some(main), Some(tmp)) => Some(main.saturating_add(tmp)),
             _ => None,
         };
         if let (Some(before_bytes), Some(after_bytes)) = (before_bytes, after_bytes) {
             self.kura.update_disk_usage_delta(before_bytes, after_bytes);
-            accounting_mutation.finish();
+            if persistence_succeeded {
+                accounting_mutation.finish();
+            } else {
+                // A measurable residue is not a completed journal publication.
+                drop(accounting_mutation);
+            }
         } else {
             drop(accounting_mutation);
             if let Err(err) = self.kura.refresh_disk_usage_bytes() {
@@ -29382,6 +29421,7 @@ impl State {
             blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
             lane_history_retention:
                 iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
+            fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
             replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
             debug_output_new_blocks: false,
             merge_ledger_cache_capacity:
@@ -57148,6 +57188,7 @@ mod tiered_snapshot_diff_tests {
             fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
             lane_history_retention:
                 iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
+            fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
             replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
         };
         let kura =

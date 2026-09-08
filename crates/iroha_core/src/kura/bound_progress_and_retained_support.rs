@@ -498,23 +498,6 @@ struct TotalDiskUsageAccountingState {
     generation: u64,
     mutations_in_flight: usize,
 }
-/// In-flight filesystem mutation registered with Kura's total-usage seqlock.
-#[must_use]
-pub(crate) struct TotalDiskUsageMutation<'a> {
-    kura: &'a Kura,
-    published: bool,
-}
-impl TotalDiskUsageMutation<'_> {
-    /// Mark the mutation's cache delta as completely published.
-    pub(crate) fn finish(mut self) {
-        self.published = true;
-    }
-}
-impl Drop for TotalDiskUsageMutation<'_> {
-    fn drop(&mut self) {
-        self.kura.finish_total_disk_usage_mutation(self.published);
-    }
-}
 /// Move-only ownership of the exact opened safety-WAL directory for one live Kura.
 ///
 /// Only [`Kura`] can mint this authority. Production consensus consumes it

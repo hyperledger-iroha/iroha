@@ -39,6 +39,7 @@ ANDROID_TARGETS = (
 COMMON_ROOT_INPUTS = (
     "Cargo.toml",
     "Cargo.lock",
+    "ci/privacy_sdk_cargo_lockfile.sh",
     "rust-toolchain.toml",
     "rust-toolchain",
     ".cargo",
@@ -112,6 +113,7 @@ ROOT_INPUTS = tuple(
     dict.fromkeys(COMMON_ROOT_INPUTS + APPLE_ROOT_INPUTS + ANDROID_ROOT_INPUTS)
 )
 SNAPSHOT_SCHEMA = "iroha.norito-bridge-source-seal.v1"
+CANONICAL_CARGO_LOCK_OWNER = "ci/privacy_sdk_cargo_lockfile.sh"
 SWIFT_NATIVE_BRIDGE_PATH = "IrohaSwift/Sources/IrohaSwift/NativeBridge.swift"
 SWIFT_NATIVE_BRIDGE_HASH_KEYS = frozenset(
     {
@@ -215,35 +217,89 @@ def source_seal_home() -> pathlib.Path:
     return pathlib.Path.home().resolve(strict=True)
 
 
+def canonical_cargo_lock_sha256(root: pathlib.Path) -> str:
+    """Read the sole reviewed graph declaration without executing shell source."""
+    path = root / CANONICAL_CARGO_LOCK_OWNER
+    _, contents = _read_canonical_regular_bytes(
+        path, "canonical Cargo graph owner", allow_executable=True,
+    )
+    try:
+        source = contents.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise RuntimeError("canonical Cargo graph owner must be UTF-8") from error
+    declaration = "readonly PRIVACY_SDK_CANONICAL_CARGO_LOCK_SHA256=\\\n"
+    if len(re.findall(r"(?m)^[ \t]*readonly[ \t]+PRIVACY_SDK_CANONICAL_CARGO_LOCK_SHA256=", source)) != 1:
+        raise RuntimeError("exactly one canonical Cargo graph declaration is required")
+    matches = re.findall(r'^' + re.escape(declaration) + r'"([0-9a-f]{64})"$', source, re.MULTILINE)
+    if len(matches) != 1:
+        raise RuntimeError("canonical Cargo graph declaration must contain one exact lowercase SHA-256")
+    return matches[0]
+
+
 def selected_lockfile_path(
     root: pathlib.Path, configured: pathlib.Path | None = None
 ) -> pathlib.Path:
-    """Return the canonical, non-symbolic root Cargo lock used by the build."""
+    """Authenticate the caller's explicit root or reviewed external build lock."""
 
-    candidate = root / "Cargo.lock"
-    if configured is not None and configured != candidate:
-        raise RuntimeError(
-            f"source sealing requires the explicit root Cargo lock: {candidate}"
-        )
-    if not candidate.is_absolute():
-        raise RuntimeError("selected Cargo lock path must be absolute")
-    canonical_spelling = pathlib.Path(os.path.abspath(candidate))
-    if candidate != canonical_spelling:
-        raise RuntimeError("selected Cargo lock path must be canonical")
-    try:
-        metadata = candidate.lstat()
-        resolved = candidate.resolve(strict=True)
-    except OSError as error:
-        raise RuntimeError(
-            "selected Cargo lock must be a non-symbolic regular file"
-        ) from error
-    if (
-        resolved != candidate
-        or stat.S_ISLNK(metadata.st_mode)
-        or not stat.S_ISREG(metadata.st_mode)
-    ):
-        raise RuntimeError("selected Cargo lock must be a non-symbolic regular file")
+    if configured is None:
+        raise RuntimeError("an explicit --lockfile-path selection is required")
+    candidate = configured
+    lockfile_identity(candidate)
+    root_lock = root / "Cargo.lock"
+    lockfile_identity(root_lock)
+    if candidate != root_lock:
+        if root == candidate or root in candidate.parents:
+            raise RuntimeError("alternate Cargo lock must be outside the source root")
+        expected = canonical_cargo_lock_sha256(root)
+        if lockfile_identity(root_lock)[-1] != expected:
+            raise RuntimeError("root source Cargo lock does not match the canonical reviewed graph")
+        if lockfile_identity(candidate)[-1] != expected:
+            raise RuntimeError("external Cargo lock does not match the canonical reviewed graph")
     return candidate
+
+
+def _read_canonical_regular_bytes(
+    candidate: pathlib.Path, label: str, *, allow_executable: bool = False,
+) -> tuple[tuple[object, ...], bytes]:
+    """Bind the bytes read to the same canonical pathname and open descriptor."""
+    if not candidate.is_absolute() or candidate != pathlib.Path(os.path.abspath(candidate)):
+        raise RuntimeError(f"{label} path must be absolute and canonical")
+    maximum = 16 * 1024 * 1024
+    def identity(value: os.stat_result) -> tuple[object, ...]:
+        return (value.st_dev, value.st_ino, value.st_mode, value.st_nlink,
+                value.st_size, value.st_mtime_ns, value.st_ctime_ns)
+    try:
+        initial = candidate.lstat()
+        if candidate.resolve(strict=True) != candidate or not stat.S_ISREG(initial.st_mode):
+            raise RuntimeError(f"{label} must be a non-symbolic regular file")
+        # NONBLOCK prevents a regular-file-to-FIFO race from blocking admission.
+        flags = (os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+                 | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+        with os.fdopen(os.open(candidate, flags), "rb") as stream:
+            before = os.fstat(stream.fileno())
+            if not stat.S_ISREG(before.st_mode):
+                raise RuntimeError(f"{label} must be a non-symbolic regular file")
+            if identity(initial) != identity(before):
+                raise RuntimeError(f"{label} changed while being authenticated")
+            if before.st_nlink != 1 or (not allow_executable and before.st_mode & 0o111):
+                raise RuntimeError(f"{label} must be singly linked and non-executable")
+            if not 0 < before.st_size <= maximum:
+                raise RuntimeError(f"{label} must contain between 1 byte and 16 MiB")
+            contents = stream.read(maximum + 1)
+            after = os.fstat(stream.fileno())
+            current = candidate.lstat()
+            if (identity(before) != identity(after) or identity(before) != identity(current)
+                    or len(contents) != before.st_size or candidate.resolve(strict=True) != candidate):
+                raise RuntimeError(f"{label} changed while being authenticated")
+    except OSError as error:
+        raise RuntimeError(f"{label} must be a non-symbolic regular file") from error
+    return identity(after), contents
+
+
+def lockfile_identity(candidate: pathlib.Path) -> tuple[object, ...]:
+    """Read a canonical lock while binding its inode, metadata and exact bytes."""
+    identity, contents = _read_canonical_regular_bytes(candidate, "selected Cargo lock")
+    return (*identity, hashlib.sha256(contents).hexdigest())
 
 
 def source_seal_environment(
@@ -377,6 +433,7 @@ def metadata(
     lockfile_path: pathlib.Path | None = None,
 ) -> dict[str, object]:
     lockfile = selected_lockfile_path(root, lockfile_path)
+    lock_identity_before = lockfile_identity(lockfile)
     cargo, rustc, rustdoc, git = source_seal_tools()
     rustc.authenticate()
     rustdoc.authenticate()
@@ -409,6 +466,8 @@ def metadata(
     finally:
         rustc.authenticate()
         rustdoc.authenticate()
+        if lockfile_identity(lockfile) != lock_identity_before:
+            raise RuntimeError("selected Cargo lock changed during metadata authentication")
     return json.loads(output)
 
 
@@ -501,7 +560,7 @@ def seal_inputs(
     existing = [
         value
         for value in candidates
-        if (value == "Cargo.lock" and lockfile.is_file()) or (root / value).exists()
+        if (root / value).exists()
     ]
     return sorted(existing)
 
@@ -542,7 +601,7 @@ def listed_files(
     for relative in ROOT_INPUTS:
         if relative not in input_set:
             continue
-        source = lockfile if relative == "Cargo.lock" else root / relative
+        source = root / relative
         if source.is_symlink():
             raise RuntimeError(f"explicit source-seal input is symlinked: {relative}")
         if source.is_file():
@@ -550,7 +609,7 @@ def listed_files(
 
     present = []
     for relative in listed:
-        source = lockfile if relative == "Cargo.lock" else root / relative
+        source = root / relative
         try:
             source.lstat()
         except FileNotFoundError:
@@ -655,7 +714,7 @@ def fingerprint(
     lockfile = selected_lockfile_path(root, lockfile_path)
     digest = hashlib.sha256()
     for relative in listed_files(root, inputs, lockfile):
-        source = lockfile if relative == "Cargo.lock" else root / relative
+        source = root / relative
         if source.is_symlink():
             raise RuntimeError(f"source-seal input is symlinked: {relative}")
         if not source.is_file():
@@ -667,6 +726,10 @@ def fingerprint(
         digest.update(b"\0")
         digest.update(contents)
         digest.update(b"\0")
+    # Fixed domain separator binds the selected build graph independently of
+    # root Cargo.lock. Host-specific external path spelling is not serialized.
+    digest.update(b"\0selected-cargo-lock-sha256\0")
+    digest.update(bytes.fromhex(str(lockfile_identity(lockfile)[-1])))
     return digest.hexdigest()
 
 
@@ -676,11 +739,8 @@ def status(
     lockfile_path: pathlib.Path | None = None,
 ) -> str:
     lockfile = selected_lockfile_path(root, lockfile_path)
-    status_inputs = [
-        relative
-        for relative in inputs
-        if relative != "Cargo.lock" or lockfile == root / "Cargo.lock"
-    ]
+    # Root Cargo.lock remains an independently authenticated source input.
+    status_inputs = inputs
     cargo, rustc, rustdoc, git = source_seal_tools()
     output = run(
         root,
@@ -718,6 +778,7 @@ def snapshot(
     """Return the canonical source state consumed by one platform build."""
 
     lockfile = selected_lockfile_path(root, lockfile_path)
+    lock_identity_before = lockfile_identity(lockfile)
     inputs = seal_inputs(root, platform, lockfile)
     source_commit_before = source_commit(root)
     source_status_before = status(root, inputs, lockfile)
@@ -725,6 +786,8 @@ def snapshot(
     source_fingerprint_after = fingerprint(root, inputs, lockfile)
     source_status_after = status(root, inputs, lockfile)
     source_commit_after = source_commit(root)
+    if lockfile_identity(lockfile) != lock_identity_before:
+        raise RuntimeError("selected Cargo lock changed while authenticating the source snapshot")
     if source_commit_before != source_commit_after:
         raise RuntimeError(
             f"{platform} NoritoBridge source commit changed while authenticating "
@@ -797,6 +860,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--lockfile-path",
         type=pathlib.Path,
+        required=True,
         help="Absolute canonical Cargo lock consumed by metadata and fingerprinting.",
     )
     return parser.parse_args()

@@ -40,7 +40,7 @@ use crate::{
 const IDENTITY: &str = <u64 as CompactTransferValue>::AXT_BATCH_IDENTITY;
 
 #[derive(NoritoSerialize)]
-#[norito(schema_name = "fastpq_prover::compact_prototype::AxtTransferBatchContextV1")]
+#[norito(schema_name = "fastpq_prover::compact_v1::AxtTransferBatchContextV1")]
 struct BoundAxtBatchContext {
     version: u16,
     segment_count: u32,
@@ -52,7 +52,7 @@ struct BoundAxtBatchContext {
 }
 
 #[derive(NoritoSerialize)]
-#[norito(schema_name = "fastpq_prover::compact_prototype::AxtTransferSegmentContextV1")]
+#[norito(schema_name = "fastpq_prover::compact_v1::AxtTransferSegmentContextV1")]
 struct BoundAxtSegmentContext {
     version: u16,
     segment_count: u32,

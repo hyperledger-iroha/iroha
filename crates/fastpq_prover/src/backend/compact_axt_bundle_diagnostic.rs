@@ -189,7 +189,7 @@ fn complete_two_delta_axt_bundle_verifies_after_private_witnesses_are_dropped() 
             let relation = batch.segment(ordinal).unwrap();
             assert_eq!(
                 relation.schema().identity,
-                "fastpq:prototype:axt-transfer-bundle-segment:v1:342cols:923slots:65536rows"
+                "fastpq:compact:v1:axt-transfer-bundle-segment:v1:342cols:923slots:65536rows"
             );
             let started = std::time::Instant::now();
             let proof = compact_protocol::prove(&relation, &columns).unwrap();

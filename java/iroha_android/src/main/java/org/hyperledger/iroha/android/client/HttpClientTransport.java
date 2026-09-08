@@ -79,8 +79,8 @@ import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
 import org.hyperledger.iroha.android.sorafs.GatewayFetchRequest;
 import org.hyperledger.iroha.android.sorafs.GatewayFetchSummary;
 import org.hyperledger.iroha.android.sorafs.SorafsGatewayClient;
-import org.hyperledger.iroha.android.privacy.PrivacyNativeBridge;
-import org.hyperledger.iroha.android.privacy.PrivacyProtocolIdV1;
+import org.hyperledger.iroha.sdk.privacy.PrivacyNativeBridge;
+import org.hyperledger.iroha.sdk.privacy.PrivacyProtocolIdV1;
 import org.hyperledger.iroha.android.telemetry.DeviceProfile;
 import org.hyperledger.iroha.android.telemetry.DeviceProfileProvider;
 import org.hyperledger.iroha.android.telemetry.NetworkContext;
@@ -498,8 +498,7 @@ public final class HttpClientTransport implements IrohaClient {
             manifest ->
                 PrivacyExact12CapabilityAdmissionV1.requireExact12CapabilityTupleV1(
                     manifest,
-                    org.hyperledger.iroha.sdk.privacy.PrivacyProtocolIdV1.fromCanonicalLabel(
-                        protocolId.canonicalLabel())));
+                    protocolId));
   }
 
   /** Fetch and strictly decode exact-lane SCCP capability discovery. */

@@ -1515,7 +1515,6 @@ macro_rules! kura_historical_autonomous_recovery_methods {
                 &provisional_path,
             )?;
             let bytes = historical_autonomous_recovery_record_bytes(record);
-            let accounting_mutation = self.begin_total_disk_usage_mutation();
             let _geometry_guard = self.lane_geometry_lock.lock();
             let entry = self.lane_storage_entry(descriptor.lane_id)?;
             self.require_active_lane_artifact(&entry, descriptor)?;
@@ -1529,6 +1528,7 @@ macro_rules! kura_historical_autonomous_recovery_methods {
                 record.recovery_id,
             );
             let _sidecar_guard = self.sidecar_lock.lock();
+            let accounting_mutation = self.begin_total_disk_usage_mutation().with_resource_paths(vec![path.clone()]);
             if self.canonical_sidecar_directory(&directory)?.is_none() {
                 let parent = directory.parent().ok_or_else(|| {
                     Self::invalid_historical_autonomous_recovery(

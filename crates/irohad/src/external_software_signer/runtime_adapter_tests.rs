@@ -2,13 +2,12 @@ use super::{
     ExternalSoftwareSignerAdapterErrorV1, ExternalSoftwareSignerBackendsV1,
     ExternalSoftwareSignerBillingStatementAdapterV1, ExternalSoftwareSignerEvidenceViewerAdapterV1,
     ExternalSoftwareSignerGovernanceDagAdapterV1, ExternalSoftwareSignerPopIssuerAdapterV1,
-    ExternalSoftwareSignerPotrProviderAdapterV1, ExternalSoftwareSignerStreamTokenAdapterV1,
-    SignerKeyAlgorithmV1, SignerPurposeBindingV1, SignerRoleV1, SoftwareSignerClientV1,
-    SoftwareSignerProvisioningV1, SoftwareSignerServiceV1, SoftwareSignerWrappingKeyV1,
+    ExternalSoftwareSignerPotrProviderAdapterV1, SignerKeyAlgorithmV1, SignerPurposeBindingV1,
+    SignerRoleV1, SoftwareSignerClientV1, SoftwareSignerProvisioningV1, SoftwareSignerServiceV1,
+    SoftwareSignerWrappingKeyV1,
 };
 use iroha_crypto::{Algorithm, KeyPair};
-use iroha_torii::sorafs::{PotrProviderSignerV1 as _, StreamTokenRuntimeSigner as _};
-use sorafs_manifest::StreamTokenBodyV1;
+use iroha_torii::sorafs::PotrProviderSignerV1 as _;
 use sorafs_node::{
     GovernanceDagRuntimeSigner as _, evidence_viewer::EvidenceViewerReceiptSignerV1 as _,
     hedging_billing_service::BillingStatementRuntimeSigner as _,
@@ -35,7 +34,6 @@ fn direct_signer(
         SignerRoleV1::PotrProvider => "potr",
         SignerRoleV1::BillingStatement => "billing",
         SignerRoleV1::EvidenceViewer => "evidence-viewer",
-        SignerRoleV1::StreamToken => "stream-token",
         SignerRoleV1::PopCredentials => "pop-credentials",
         _ => panic!("unsupported direct adapter fixture role"),
     };
@@ -275,34 +273,6 @@ fn typed_adapters_bind_identity_algorithm_and_exact_purpose() {
             .is_err(),
         "digest-only evidence bytes must not substitute for a checkpoint anchor"
     );
-    let (_parent, stream_service) = direct_signer(
-        SignerRoleV1::StreamToken,
-        SignerPurposeBindingV1::StreamToken,
-        SignerKeyAlgorithmV1::Ed25519,
-    );
-    let stream =
-        ExternalSoftwareSignerStreamTokenAdapterV1::try_new(direct_client(&stream_service))
-            .expect("exact stream-token adapter");
-    let stream_payload = StreamTokenBodyV1 {
-        token_id: "11".repeat(16),
-        manifest_cid: vec![0x61; 32],
-        provider_id: [0x62; 32],
-        profile_handle: "sorafs.standard".to_owned(),
-        max_streams: 1,
-        ttl_epoch: 1_060,
-        rate_limit_bytes: 1_024,
-        issued_at: 1_000,
-        requests_per_minute: 1,
-        token_pk_version: 1,
-    }
-    .signing_payload_bytes()
-    .expect("stream-token signing payload");
-    stream
-        .sign(&stream_payload)
-        .expect("sign canonical stream-token payload");
-    let mut malformed_stream_payload = stream_payload;
-    malformed_stream_payload.push(0);
-    assert!(stream.sign(&malformed_stream_payload).is_err());
     let issuer_id = "pop-issuer-primary".to_owned();
     let (_parent, pop_service) = direct_signer(
         SignerRoleV1::PopCredentials,

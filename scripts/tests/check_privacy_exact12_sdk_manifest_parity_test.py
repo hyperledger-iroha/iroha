@@ -636,7 +636,6 @@ def test_jvm_cutover_hostile_source_regressions_fail_closed(
         for path in (
             MODULE._JVM_MODEL,
             MODULE._JVM_KOTLIN_BRIDGE,
-            MODULE._JVM_JAVA_BRIDGE,
             MODULE._JVM_KOTLIN_TRANSPORT,
             MODULE._JVM_JAVA_TRANSPORT,
             MODULE._JVM_KOTLIN_INSTRUCTION,
@@ -701,3 +700,34 @@ def test_unapproved_c_privacy_export_is_rejected(tmp_path: Path) -> None:
     header.write_text(header.read_text() + "\nvoid iroha_privacy_unapproved_v1(void);\n", encoding="utf-8")
     with pytest.raises(MODULE.AuditError, match="C ABI23.*exact approved six"):
         MODULE._require_exact_abi23(root)
+
+
+@pytest.mark.parametrize("mutation", ("java-owner", "android-export", "kotlin-validator", "java-transport-owner", "java-id-owner"))
+def test_jvm_canonical_owner_regressions_fail_source_parity(tmp_path, monkeypatch, mutation):
+    sources = {
+        path: (ROOT / path).read_text(encoding="utf-8")
+        for path in (
+            MODULE._JVM_MODEL, MODULE._JVM_KOTLIN_BRIDGE,
+            MODULE._JVM_KOTLIN_TRANSPORT, MODULE._JVM_JAVA_TRANSPORT,
+            MODULE._JVM_KOTLIN_INSTRUCTION, MODULE._JVM_KOTLIN_TRANSACTION_ADAPTER,
+            MODULE._JVM_JAVA_INSTRUCTION, MODULE._JVM_JAVA_TRANSACTION_ADAPTER,
+            MODULE._RUST_BRIDGE_PLATFORM_JNI_PARTS[1],
+        )
+    }
+    bridge = MODULE._rust_bridge_source(ROOT)
+    monkeypatch.setattr(MODULE, "_read", lambda _root, path: sources.get(path, ""))
+    monkeypatch.setattr(MODULE, "_rust_bridge_source", lambda _root: bridge)
+    assert all(MODULE._jvm_cutover_gates(tmp_path).values())
+    failed_gate = "native_canonical_manifest_validation"
+    if mutation == "java-owner":
+        _write(tmp_path / MODULE._RETIRED_JVM_JAVA_BRIDGE, "retired owner")
+    elif mutation == "android-export":
+        bridge += "\nJava_org_hyperledger_iroha_android_privacy_PrivacyNativeBridge_nativeBridgeAbiVersion"
+    elif mutation == "kotlin-validator":
+        key = MODULE._JVM_KOTLIN_BRIDGE
+        sources[key] = sources[key].replace("nativeValidateExact12CapabilityManifestForNetworkV1", "uncheckedManifest")
+    else:
+        failed_gate = "transaction_admission_guard"
+        key = MODULE._JVM_JAVA_TRANSPORT if mutation == "java-transport-owner" else MODULE._JVM_JAVA_INSTRUCTION
+        sources[key] = sources[key].replace("org.hyperledger.iroha.sdk.privacy.", "org.hyperledger.iroha.android.privacy.")
+    assert MODULE._jvm_cutover_gates(tmp_path)[failed_gate] is False

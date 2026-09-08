@@ -14500,7 +14500,7 @@ fn validate_prepared_storage_payload(
         return Err("payload PoR root does not match the canonical manifest".to_owned());
     }
     let stats = CarStreamingWriter::new(plan)
-        .write_from_reader(&mut payload.as_ref(), &mut io::sink())
+        .write_from_reader(&mut &payload[..], &mut io::sink())
         .map_err(format_car_error)?;
     if stats.root_cids.as_slice() != [manifest.root_cid.clone()]
         || stats.dag_codec != manifest.dag_codec.0

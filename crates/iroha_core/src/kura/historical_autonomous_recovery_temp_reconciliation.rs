@@ -893,7 +893,9 @@ impl Kura {
         // preserves physical bytes, while exact-duplicate cleanup can remove a
         // complete inode; the next capacity/read request therefore performs one
         // authoritative rescan rather than applying a guessed logical delta.
-        let _accounting_mutation = self.begin_total_disk_usage_mutation();
+        let mut accounting_mutation = self
+            .begin_total_disk_usage_mutation()
+            .with_resource_children(inventory.temporary_indices.len());
         let _geometry_guard = self.lane_geometry_lock.lock();
         let _sidecar_guard = self.sidecar_lock.lock();
         for index in &inventory.temporary_indices {
@@ -906,16 +908,20 @@ impl Kura {
                 .stable_by_path
                 .get(&temporary.stable_path)
                 .map(|index| &inventory.artifacts[*index]);
+            let resource_child = accounting_mutation
+                .resource_child(vec![temporary.path.clone(), temporary.stable_path.clone()]);
             self.reconcile_one_historical_autonomous_recovery_publication_temporary_locked(
                 temporary,
                 expected_stable,
             )?;
+            resource_child.finish();
         }
         drop(_sidecar_guard);
         drop(_geometry_guard);
         let _ = self.historical_autonomous_lane_recovery_records_bounded_under_prune_guard(
             HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS,
         )?;
+        accounting_mutation.finish_resources_before_disk_rescan();
         self.note_committed_lane_status_change();
         Ok(())
     }

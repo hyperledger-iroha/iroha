@@ -854,7 +854,7 @@ fn ready_validate_apply_publishes_at_actor_global_child_coordinates() {
     let handle = std::thread::Builder::new()
         .name("ready-validate-apply-actor-global-child".to_owned())
         .stack_size(32 * 1024 * 1024)
-        .spawn(|| ready_validate_apply_actor_global_child_fixture(false, false, false))
+        .spawn(|| ready_validate_apply_actor_global_child_fixture(false, false, false, false))
         .expect("spawn Ready Validate Apply actor-global child fixture");
     if let Err(payload) = handle.join() {
         std::panic::resume_unwind(payload);
@@ -867,7 +867,7 @@ fn ready_validate_apply_rejects_a_tampered_body_frame_before_publication() {
     let handle = std::thread::Builder::new()
         .name("ready-validate-apply-tampered-body-frame".to_owned())
         .stack_size(32 * 1024 * 1024)
-        .spawn(|| ready_validate_apply_actor_global_child_fixture(true, false, false))
+        .spawn(|| ready_validate_apply_actor_global_child_fixture(true, false, false, false))
         .expect("spawn tampered Ready Validate Apply body-frame fixture");
     if let Err(payload) = handle.join() {
         std::panic::resume_unwind(payload);
@@ -880,7 +880,7 @@ fn lifecycle_decision_apply_live_recovered_substitution_matrix_is_inert() {
     let handle = std::thread::Builder::new()
         .name("lifecycle-apply-live-recovered-substitution".to_owned())
         .stack_size(32 * 1024 * 1024)
-        .spawn(|| ready_validate_apply_actor_global_child_fixture(false, true, false))
+        .spawn(|| ready_validate_apply_actor_global_child_fixture(false, true, false, false))
         .expect("spawn lifecycle Decision Apply lineage substitution fixture");
     if let Err(payload) = handle.join() {
         std::panic::resume_unwind(payload);
@@ -893,8 +893,21 @@ fn observer_apply_defers_missing_pre_apply_commit_qc_to_delayed_successor() {
     let handle = std::thread::Builder::new()
         .name("observer-apply-delayed-successor".to_owned())
         .stack_size(32 * 1024 * 1024)
-        .spawn(|| ready_validate_apply_actor_global_child_fixture(false, false, true))
+        .spawn(|| ready_validate_apply_actor_global_child_fixture(false, false, true, false))
         .expect("spawn observer Apply parked-predecessor fixture");
+    if let Err(payload) = handle.join() {
+        std::panic::resume_unwind(payload);
+    }
+}
+
+#[cfg(feature = "bls")]
+#[test]
+fn validator_apply_drains_exact_suffix_after_delayed_commit_qc_admission() {
+    let handle = std::thread::Builder::new()
+        .name("validator-apply-delayed-successor".to_owned())
+        .stack_size(32 * 1024 * 1024)
+        .spawn(|| ready_validate_apply_actor_global_child_fixture(false, false, false, true))
+        .expect("spawn validator Apply delayed two-effect fixture");
     if let Err(payload) = handle.join() {
         std::panic::resume_unwind(payload);
     }
@@ -919,6 +932,7 @@ fn ready_validate_apply_actor_global_child_fixture(
     tamper_apply_frame: bool,
     exercise_lineage_matrix: bool,
     exercise_observer_predecessor: bool,
+    exercise_validator_predecessor: bool,
 ) {
     let marker = 0xE0;
     let ReadyDurableValidateFixture {
@@ -1400,8 +1414,10 @@ fn ready_validate_apply_actor_global_child_fixture(
     );
 
     let mut observer_output_ordinal = None;
-    if exercise_observer_predecessor {
-        executor.enter_observer_completion_mode_for_test();
+    if exercise_observer_predecessor || exercise_validator_predecessor {
+        if exercise_observer_predecessor {
+            executor.enter_observer_completion_mode_for_test();
+        }
 
         let mut foreign_decision = decision.clone();
         foreign_decision.subject.payload_hash = Hash::new(b"foreign observer CommitQC");
@@ -1477,24 +1493,78 @@ fn ready_validate_apply_actor_global_child_fixture(
         let broadcast = AdapterEffect::Broadcast(wire::ConsensusMessageV2::new(
             wire::ConsensusMessageV2Payload::QuorumCertificate(decision.clone()),
         ));
-        let ownership = bind_adapter_effect_batch_ownership(
-            core::slice::from_ref(&broadcast),
-            vec![RuntimeEffectOwnership::periodic_retransmit_for_test(
+        let (ownership, retained_apply) = if exercise_validator_predecessor {
+            let apply = AdapterEffect::Apply {
                 tag,
-                local_prediction,
-            )],
-        )
-        .expect("bind exact pre-Apply periodic CommitQC Broadcast")
-        .pop()
-        .expect("one periodic Broadcast retains one owner");
+                subject,
+                certificate: decision.clone(),
+            };
+            let effects = vec![broadcast.clone(), apply.clone()];
+            let mut ownership = bind_adapter_effect_batch_ownership(
+                &effects,
+                (0..2)
+                    .map(|_| {
+                        RuntimeEffectOwnership::periodic_retransmit_for_test(tag, local_prediction)
+                    })
+                    .collect(),
+            )
+            .expect("bind the real validator-shaped periodic Broadcast/Apply batch");
+            let apply_ownership = ownership.pop().expect("the second effect owns Apply");
+            let broadcast_ownership = ownership.pop().expect("the first effect owns Broadcast");
+            (broadcast_ownership, Some((apply, apply_ownership)))
+        } else {
+            let ownership = bind_adapter_effect_batch_ownership(
+                core::slice::from_ref(&broadcast),
+                vec![RuntimeEffectOwnership::periodic_retransmit_for_test(
+                    tag,
+                    local_prediction,
+                )],
+            )
+            .expect("bind exact pre-Apply periodic CommitQC Broadcast")
+            .pop()
+            .expect("one periodic Broadcast retains one owner");
+            (ownership, None)
+        };
         let pending = PendingLifecycleOutputAdmissionV1::seal_exact(broadcast, ownership)
             .unwrap_or_else(|_| panic!("seal exact pre-Apply periodic output"));
+        assert_eq!(
+            pending.binds_periodic_retransmit_apply_prefix(),
+            exercise_validator_predecessor
+        );
+        assert_eq!(
+            pending.binds_single_periodic_retransmit_broadcast(),
+            exercise_observer_predecessor
+        );
+        let malformed_effects = vec![pending.effect.clone(); 3];
+        let malformed_owners = bind_adapter_effect_batch_ownership(
+            &malformed_effects,
+            (0..3)
+                .map(|_| {
+                    RuntimeEffectOwnership::periodic_retransmit_for_test(tag, local_prediction)
+                })
+                .collect(),
+        )
+        .expect("bind a real but unsupported three-Broadcast periodic batch");
+        for (effect, ownership) in malformed_effects.into_iter().zip(malformed_owners) {
+            let malformed = PendingLifecycleOutputAdmissionV1::seal_exact(effect, ownership)
+                .unwrap_or_else(|_| panic!("seal unsupported periodic batch shape"));
+            assert!(!malformed.binds_periodic_retransmit_apply_prefix());
+            assert!(!malformed.binds_single_periodic_retransmit_broadcast());
+        }
         assert_eq!(
             pending.lifecycle_owner().lifecycle_ordinal(),
             local_prediction
         );
         let fence = executor.lifecycle_reducer_fence_observation();
         assert!(executor.install_pending_lifecycle_output_for_test(pending));
+        if let Some(suffix) = retained_apply.as_ref() {
+            executor.set_retained_effect_suffix_for_test(vec![suffix.clone()]);
+            assert!(
+                executor
+                    .ready_to_finish_blockers()
+                    .contains(&"retained-effect-batch")
+            );
+        }
         assert_eq!(
             owner.classify_completion_ready_work(fence),
             super::super::ProductionCompletionReadyWorkV1::CompletionIo
@@ -1551,6 +1621,73 @@ fn ready_validate_apply_actor_global_child_fixture(
                 .collect::<Vec<_>>(),
             vec![child_ordinal, output_ordinal]
         );
+        if exercise_observer_predecessor {
+            let attestation = owner
+                .attest_ready_live_decision_apply_runtime_predecessor(
+                    child_ordinal,
+                    executor.pending_lifecycle_output_admission_census(),
+                )
+                .expect("attest unchanged single-effect observer output")
+                .expect("observer output remains the adjacent successor");
+            assert_eq!(attestation.mode(),
+                super::LifecycleDecisionApplySuccessorOutputModeV1::DelayedAdmissionPeriodicRetransmit {
+                    runtime_ordinal: local_prediction,
+                });
+        }
+        if let Some(suffix) = retained_apply.as_ref() {
+            let attestation = owner
+                .attest_ready_live_decision_apply_runtime_predecessor(
+                    child_ordinal,
+                    executor.pending_lifecycle_output_admission_census(),
+                )
+                .expect("attest the delayed validator suffix")
+                .expect("exact two-effect output remains the adjacent successor");
+            assert_eq!(attestation.mode(),
+                super::LifecycleDecisionApplySuccessorOutputModeV1::DelayedAdmissionPeriodicApplySuffix {
+                    runtime_ordinal: local_prediction,
+                });
+            assert!(
+                executor
+                    .lifecycle_decision_apply_dispatch_available(Some(&attestation))
+                    .expect("exact delayed suffix permits bounded Apply dispatch")
+            );
+            let mut foreign_apply = suffix.0.clone();
+            if let AdapterEffect::Apply { subject, .. } = &mut foreign_apply {
+                subject.payload_hash = Hash::new(b"foreign retained Apply suffix");
+            }
+            let foreign_owner = bind_adapter_effect_batch_ownership(
+                core::slice::from_ref(&suffix.0),
+                vec![RuntimeEffectOwnership::periodic_retransmit_for_test(
+                    tag,
+                    local_prediction,
+                )],
+            )
+            .expect("bind a foreign one-effect occurrence")
+            .pop()
+            .expect("foreign occurrence owns one effect");
+            for wrong_suffix in [
+                Vec::new(),
+                vec![suffix.clone(), suffix.clone()],
+                vec![(foreign_apply, suffix.1.clone())],
+                vec![(suffix.0.clone(), foreign_owner)],
+            ] {
+                executor.set_retained_effect_suffix_for_test(wrong_suffix);
+                assert!(
+                    !executor
+                        .lifecycle_decision_apply_dispatch_available(Some(&attestation))
+                        .expect("malformed delayed suffix remains queue-inert")
+                );
+                assert_eq!(planner_io.queued_lifecycle_decision_apply_count(), 0);
+                assert!(owner.coordinator.active_lease.is_none());
+                assert!(!output_guard.restart_required());
+            }
+            executor.set_retained_effect_suffix_for_test(vec![suffix.clone()]);
+            assert!(
+                executor
+                    .lifecycle_decision_apply_dispatch_available(Some(&attestation))
+                    .expect("restoring the exact suffix restores dispatch eligibility")
+            );
+        }
         observer_output_ordinal = Some(output_ordinal);
         let original_output_digest = *output_record
             .physical_slots
@@ -1631,6 +1768,14 @@ fn ready_validate_apply_actor_global_child_fixture(
         }
     );
     assert_eq!(planner_io.queued_lifecycle_decision_apply_count(), 1);
+    if exercise_validator_predecessor {
+        assert!(
+            !executor
+                .ready_to_finish_blockers()
+                .contains(&"retained-effect-batch"),
+            "the exact Apply suffix retires only after worker queue publication"
+        );
+    }
     assert_eq!(
         executor.live_lifecycle_decision_apply_key_for_test(),
         Some(barrier_key)

@@ -470,10 +470,10 @@ mod tests {
 
     #[test]
     fn shake_parent_adapter_authenticates_sparse_frontiers_and_terminal_with_exact_work() {
-        use crate::backend::compact_shake_candidate::{Context, Oracle};
-        let context = Context::new(b"complete public context for shared SHAKE adapter").unwrap();
+        use crate::backend::compact_v1::{Context, Oracle};
+        let context = Context::new(b"complete public context for shared six-lane adapter").unwrap();
         let wrong_context =
-            Context::new(b"changed complete public context for shared SHAKE adapter").unwrap();
+            Context::new(b"changed complete public context for shared six-lane adapter").unwrap();
         for (round, count, bytes, indices) in [
             (15, 8_usize, 64, vec![0, 3, 7]),
             (16, 4, 64, vec![1, 2]),

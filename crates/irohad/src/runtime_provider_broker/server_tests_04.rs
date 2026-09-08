@@ -731,7 +731,8 @@ fn reputation_runtime_bindings_and_observations_are_exactly_slot_shaped() {
             "{slot:?}"
         );
         let mut role_confused = binding;
-        role_confused.stream_token_signer_public_key = Some(TEST_SIGNER_KEY);
+        role_confused.stream_token_hardware_binding =
+            token_signer_binding().stream_token_hardware_binding;
         assert_eq!(
             validate_wire_binding(&role_confused),
             Err(BrokerError::BindingMismatch),

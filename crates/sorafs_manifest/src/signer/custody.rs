@@ -529,7 +529,9 @@ fn valid_hardware_handle(value: &str) -> bool {
         })
 }
 
-fn validate_binding(binding: &SignerCustodyBindingV1) -> Result<(), SignerCustodyErrorV1> {
+pub(super) fn validate_binding(
+    binding: &SignerCustodyBindingV1,
+) -> Result<(), SignerCustodyErrorV1> {
     if iroha_primitives::chain_id::validate_chain_id(&binding.chain_id).is_err()
         || binding.network_id == [0; 32]
         || !valid_hardware_handle(&binding.runtime_handle)

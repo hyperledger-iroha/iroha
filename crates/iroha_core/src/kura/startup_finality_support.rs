@@ -276,11 +276,24 @@ struct V2StartupReplaySidecarsAtHeight {
 }
 #[derive(Debug)]
 pub(crate) struct V2StartupFinalityVerificationInventory {
+    resident:
+        resident_inventory_lifetimes::VerificationLease<V2StartupFinalityVerificationInventoryData>,
+}
+impl std::ops::Deref for V2StartupFinalityVerificationInventory {
+    type Target = V2StartupFinalityVerificationInventoryData;
+    fn deref(&self) -> &Self::Target {
+        &self.resident
+    }
+}
+/// Indexed state owned by one exact authenticated startup allocation.
+#[derive(Debug)]
+pub(crate) struct V2StartupFinalityVerificationInventoryData {
+    replay_associations: AssociationCount,
     boundary: ExactReplayBoundary,
     canonical_storage: StableCanonicalBlockStoreMetadata,
     finality_directory: StableSidecarDirectoryMetadata,
     retained_directory: StableSidecarDirectoryMetadata,
-    auxiliary_sidecars: BTreeMap<PathBuf, StableSidecarDirectoryInventory>,
+    auxiliary_sidecars: NestedMap<PathBuf, StableSidecarDirectoryInventory>,
     /// Exact subset of `auxiliary_sidecars` derived from the active lane catalog.
     lane_auxiliary_directories: BTreeSet<PathBuf>,
     hash_only_heights: BTreeSet<u64>,
@@ -322,9 +335,7 @@ impl V2StartupReplayStorageBinding {
         }
     }
     /// Return the bounded durable count and tip trusted by emergency Fast startup.
-    pub(crate) fn emergency_fast_boundary(
-        &self,
-    ) -> Option<(u64, Option<HashOf<BlockHeader>>)> {
+    pub(crate) fn emergency_fast_boundary(&self) -> Option<(u64, Option<HashOf<BlockHeader>>)> {
         match self {
             Self::Strict(_) => None,
             Self::EmergencyFast(binding) => Some((binding.count, binding.tip_hash)),

@@ -1332,7 +1332,7 @@ fn sample_bfv_evaluation_key_bundle() -> BfvEvaluationKeyBundle {
                 &params,
                 &public_key,
                 "bootstrap-test-key",
-                2,
+                1,
                 b"soracloud-fhe-bootstrap-key",
             )
             .expect("bootstrap key"),

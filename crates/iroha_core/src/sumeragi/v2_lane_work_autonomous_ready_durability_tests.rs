@@ -2674,6 +2674,43 @@ fn generic_fanout_cannot_publish_an_autonomous_producer_payload() {
     );
 }
 #[test]
+fn autonomous_fixture_binds_final_lane_context_before_opening_signing_guards() {
+    for mode in [wire::ConsensusMode::Permissioned, wire::ConsensusMode::Npos] {
+        for author in [false, true] {
+            let (mut adapter, keys) = autonomous_test_fixture(mode, author);
+            let context = adapter.context.clone();
+            assert!(adapter.voting_enabled);
+            assert!(adapter.native_signing_guard.is_some());
+            assert!(adapter.merge_signing_guard.is_some());
+            assert!(adapter.lane_drain_signing_guard.is_some());
+            prepare_autonomous_test_lane(&mut adapter, &keys, LaneId::new(1), DataSpaceId::new(7));
+            assert_eq!(
+                adapter.context.id(),
+                context.id(),
+                "lane setup must not rewrite a context after its voting journals open"
+            );
+            assert_autonomous_test_role(
+                &adapter,
+                &keys,
+                LaneId::new(1),
+                DataSpaceId::new(7),
+                author,
+            );
+            let restart = LaneAdapterRestartParts::capture(&adapter);
+            drop(adapter);
+            let recovered = restart
+                .reopen(context.clone(), true)
+                .expect("exact final context reopens every durable voting journal");
+            assert_eq!(recovered.context.id(), context.id());
+            assert!(recovered.voting_enabled);
+            assert!(recovered.native_signing_guard.is_some());
+            assert!(recovered.merge_signing_guard.is_some());
+            assert!(recovered.lane_drain_signing_guard.is_some());
+        }
+    }
+}
+
+#[test]
 fn autonomous_restart_hydrates_durable_hint_free_payload_and_queue_owner() {
     let (mut adapter, keys) = autonomous_test_fixture(wire::ConsensusMode::Permissioned, true);
     let lane_id = LaneId::new(1);
@@ -5609,15 +5646,26 @@ fn recovered_autonomous_certificate_repairs_ready_before_certified_publication()
     );
     let alternative_commit = lane_qc_for_phase(&proposal, &keys[1..], CertPhase::Commit);
     adapter.lane_sessions = LaneBlockSessionCache::new(1);
-    {
+    let canonical_key_bindings = {
         let mut world = adapter.state.world.block();
+        let mut retained = Vec::new();
         for key in &keys {
-            world
+            let public_key = key.public_key().to_string();
+            let bindings = world
                 .consensus_keys_by_pk
-                .insert(key.public_key().to_string(), Vec::new());
+                .get(&public_key)
+                .cloned()
+                .expect("fixture has canonical committee key bindings");
+            assert!(
+                !bindings.is_empty(),
+                "canonical committee binding is populated"
+            );
+            retained.push((public_key.clone(), bindings));
+            world.consensus_keys_by_pk.insert(public_key, Vec::new());
         }
         world.commit();
-    }
+        retained
+    };
     assert_eq!(
         validate_lane_block_qc_aggregate(
             &alternative_commit,
@@ -5634,6 +5682,35 @@ fn recovered_autonomous_certificate_repairs_ready_before_certified_publication()
         .expect("classify autonomous output against ordinary historical durability"),
         None,
         "autonomous recovery must use its immutable record rather than ordinary certificate-and-application authority"
+    );
+    // Durable READY can supply historical PoPs, but it cannot replace the
+    // canonical authority required to authenticate a finalized carrier's route.
+    let missing_authority = adapter
+        .canonical_finalized_autonomous_payload_for_vote_body(
+            &proposal.vote_body(CertPhase::Prepare),
+        )
+        .expect_err("durable READY does not authorize an erased canonical committee");
+    assert!(missing_authority.contains("committee cannot be resolved"));
+    {
+        let mut world = adapter.state.world.block();
+        for (public_key, bindings) in canonical_key_bindings {
+            world.consensus_keys_by_pk.insert(public_key, bindings);
+        }
+        world.commit();
+    }
+    assert_eq!(
+        adapter
+            .state
+            .resolve_lane_committee_at_height(
+                crate::state::LaneAuthorityRoute::new(
+                    proposal.descriptor.lane_id,
+                    proposal.descriptor.dataspace_id
+                ),
+                proposal.descriptor.proposal_height,
+            )
+            .expect("restore exact canonical authorization before certificate replay")
+            .validators(),
+        proposal.descriptor.validator_set.as_slice(),
     );
     let alternative_prepare_votes = keys[1..]
         .iter()

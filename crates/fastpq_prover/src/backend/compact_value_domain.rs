@@ -47,13 +47,13 @@ pub(super) trait CompactTransferValue: sealed::Sealed + Sized {
 impl CompactTransferValue for u64 {
     const QUANTITY_CONTEXT: bool = false;
     const TRANSFER_IDENTITY: &'static str =
-        "fastpq:prototype:public-transfer:v1:342cols:923slots:65536rows";
+        "fastpq:compact:v1:public-transfer:v1:342cols:923slots:65536rows";
     const AXT_IDENTITY: &'static str =
-        "fastpq:prototype:axt-public-transfer:v1:342cols:923slots:65536rows";
+        "fastpq:compact:v1:axt-public-transfer:v1:342cols:923slots:65536rows";
     const BATCH_IDENTITY: &'static str =
-        "fastpq:prototype:ordinary-transfer-bundle-segment:v1:342cols:923slots:65536rows";
+        "fastpq:compact:v1:ordinary-transfer-bundle-segment:v1:342cols:923slots:65536rows";
     const AXT_BATCH_IDENTITY: &'static str =
-        "fastpq:prototype:axt-transfer-bundle-segment:v1:342cols:923slots:65536rows";
+        "fastpq:compact:v1:axt-transfer-bundle-segment:v1:342cols:923slots:65536rows";
 
     fn prepare<'a>(
         rows: &'a [StateTransition],
@@ -69,13 +69,13 @@ impl CompactTransferValue for u64 {
 impl CompactTransferValue for FastpqQuantityUnits {
     const QUANTITY_CONTEXT: bool = true;
     const TRANSFER_IDENTITY: &'static str =
-        "fastpq:prototype:quantity-public-transfer:v1:342cols:923slots:65536rows";
+        "fastpq:compact:v1:quantity-public-transfer:v1:342cols:923slots:65536rows";
     const AXT_IDENTITY: &'static str =
-        "fastpq:prototype:quantity-axt-public-transfer:v1:342cols:923slots:65536rows";
+        "fastpq:compact:v1:quantity-axt-public-transfer:v1:342cols:923slots:65536rows";
     const BATCH_IDENTITY: &'static str =
-        "fastpq:prototype:quantity-ordinary-transfer-bundle-segment:v1:342cols:923slots:65536rows";
+        "fastpq:compact:v1:quantity-ordinary-transfer-bundle-segment:v1:342cols:923slots:65536rows";
     const AXT_BATCH_IDENTITY: &'static str =
-        "fastpq:prototype:quantity-axt-transfer-bundle-segment:v1:342cols:923slots:65536rows";
+        "fastpq:compact:v1:quantity-axt-transfer-bundle-segment:v1:342cols:923slots:65536rows";
 
     fn prepare<'a>(
         rows: &'a [StateTransition],

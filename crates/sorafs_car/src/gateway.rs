@@ -1415,18 +1415,15 @@ fn decode_stream_token(value: &str) -> Result<StreamTokenV1, StreamTokenDecodeEr
     }
     let limits = norito::DecodeLimits::new(
         STREAM_TOKEN_MAX_WIRE_BYTES_V1,
-        STREAM_TOKEN_MAX_WIRE_BYTES_V1,
+        bytes.len(),
         STREAM_TOKEN_MAX_WIRE_BYTES_V1.saturating_mul(2),
         STREAM_TOKEN_MAX_WIRE_BYTES_V1.saturating_mul(4),
         32,
     );
-    let token: StreamTokenV1 = norito::decode_from_bytes_with_limits(&bytes, limits)
-        .map_err(StreamTokenDecodeError::InvalidPayload)?;
-    let canonical = norito::to_bytes(&token).map_err(StreamTokenDecodeError::InvalidPayload)?;
-    if canonical != bytes {
-        return Err(StreamTokenDecodeError::NonCanonicalPayload);
-    }
-    Ok(token)
+    norito::decode_canonical_with_limits(&bytes, limits).map_err(|error| match error {
+        norito::Error::NonCanonicalEncoding => StreamTokenDecodeError::NonCanonicalPayload,
+        other => StreamTokenDecodeError::InvalidPayload(other),
+    })
 }
 /// Errors emitted while constructing the gateway fetcher.
 #[derive(Debug, Error)]
@@ -1935,7 +1932,7 @@ mod tests {
             .as_secs();
         StreamTokenV1::sign(
             StreamTokenBodyV1 {
-                token_id: "01J9TK3GR0XM6YQF7WQXA9Z2SF".to_string(),
+                token_id: "0123456789abcdef0123456789abcdef".to_string(),
                 manifest_cid: hex::decode(manifest_cid_hex).expect("cid hex"),
                 provider_id: {
                     let mut bytes = [0u8; 32];
@@ -1955,7 +1952,7 @@ mod tests {
         .expect("sign sample stream token")
     }
     fn encode_token_b64(token: &StreamTokenV1) -> String {
-        let bytes = norito::to_bytes(token).expect("encode token");
+        let bytes = norito::encode_canonical(token).expect("encode token");
         STANDARD.encode(bytes)
     }
     fn plan_for_payload(payload: &[u8]) -> CarBuildPlan {
@@ -2503,7 +2500,7 @@ mod tests {
             decode_stream_token(&format!(" {encoded}")),
             Err(StreamTokenDecodeError::NonCanonicalBase64)
         ));
-        let mut trailing_payload = norito::to_bytes(&token).expect("canonical token");
+        let mut trailing_payload = norito::encode_canonical(&token).expect("canonical token");
         trailing_payload.push(0xA5);
         assert!(matches!(
             decode_stream_token(&STANDARD.encode(trailing_payload)),
@@ -3370,4 +3367,5 @@ mod tests {
             other => panic!("unexpected attempt failure: {other:?}"),
         }
     }
+    include!("gateway/canonical_token_tests.rs");
 }

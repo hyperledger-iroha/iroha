@@ -7772,7 +7772,8 @@
             "self.finality_completion.is_none()",
             "self.runtime.queued_commands() == 0",
             "self.runtime.lifecycle_decision_apply_dispatch_available()",
-            "&& successor_debt_is_exact"
+            "&& successor_debt_is_exact",
+            "LifecycleDecisionApplySuccessorOutputModeV1::DelayedAdmissionPeriodicApplySuffix"
           ]
         },
         {
@@ -7799,7 +7800,11 @@
             "runtime_ordinal < self.dispatch_key().lifecycle_ordinal()",
             ".exactly_binds_periodic_retransmit_broadcast(&pending.effect)",
             "certificate == self.live_apply.certificate()",
-            "certificate.phase == wire::GlobalPhase::Commit"
+            "certificate.phase == wire::GlobalPhase::Commit",
+            "LifecycleDecisionApplySuccessorOutputModeV1::DelayedAdmissionPeriodicApplySuffix {",
+            "self.mode.retains_apply_suffix()",
+            "pending.binds_periodic_retransmit_apply_prefix()",
+            "pending.binds_single_periodic_retransmit_broadcast()"
           ]
         },
         {
@@ -7824,7 +7829,11 @@
             "LifecycleDecisionApplyPendingOutputCensusV1::GenericSettlementPending(",
             "LifecycleDecisionApplyPendingOutputCensusV1::Successor(",
             "LifecycleDecisionApplySuccessorOutputModeV1::SameBatchSuffix",
-            "LifecycleDecisionApplySuccessorOutputModeV1::DelayedAdmissionPeriodicRetransmit {"
+            "LifecycleDecisionApplySuccessorOutputModeV1::DelayedAdmissionPeriodicRetransmit {",
+            "pending_output.binds_periodic_retransmit_apply_prefix()",
+            "pending_output.binds_single_periodic_retransmit_broadcast()",
+            "LifecycleDecisionApplySuccessorOutputModeV1::DelayedAdmissionPeriodicApplySuffix {",
+            "LifecycleDecisionApplyPendingOutputCensusErrorV1::InvalidDelayedPeriodicBatchShape"
           ]
         },
         {
@@ -7837,7 +7846,8 @@
             ".next()",
             "batch.effects.len() == 1",
             "attestation.exactly_matches_retransmit_apply(&owned.effect)",
-            "pending_output.exactly_precedes_periodic_retransmit_apply("
+            "pending_output.exactly_precedes_periodic_retransmit_apply(",
+            "attestation.mode().retains_apply_suffix()"
           ]
         },
         {
@@ -9455,6 +9465,82 @@
             "state_block.staged_merge_entry()",
             "execution_commitment_from_validated_block",
             "replayed_execution_commitment != finality.commit_qc.execution_commitment"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_runtime_effect_ownership_core_impl.rs",
+          "kind": "method",
+          "symbol": "RuntimeEffectOwnership::binds_periodic_retransmit_apply_prefix",
+          "required_tokens": [
+            "self.exactly_binds_periodic_retransmit_broadcast(effect)",
+            "self.binding.effect_count == 2",
+            "self.binding.effect_position == 1",
+            "self.binding.candidate_count == 1",
+            "self.binding.candidate_position == 0"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_runtime_effect_ownership_core_impl.rs",
+          "kind": "method",
+          "symbol": "RuntimeEffectOwnership::binds_single_periodic_retransmit_broadcast",
+          "required_tokens": [
+            "self.exactly_binds_periodic_retransmit_broadcast(effect)",
+            "self.binding.effect_count == 1",
+            "self.binding.effect_position == 1",
+            "self.binding.candidate_count == 0",
+            "self.binding.candidate_position == 0"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_pre_admission.rs",
+          "kind": "method",
+          "symbol": "PendingLifecycleOutputAdmissionV1::binds_periodic_retransmit_apply_prefix",
+          "required_tokens": [
+            "self.ownership",
+            ".binds_periodic_retransmit_apply_prefix(&self.effect)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_pre_admission.rs",
+          "kind": "method",
+          "symbol": "PendingLifecycleOutputAdmissionV1::binds_single_periodic_retransmit_broadcast",
+          "required_tokens": [
+            "self.ownership",
+            ".binds_single_periodic_retransmit_broadcast(&self.effect)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_output.rs",
+          "kind": "method",
+          "symbol": "LifecycleDecisionApplySuccessorOutputModeV1::retains_apply_suffix",
+          "required_tokens": [
+            "Self::SameBatchSuffix | Self::DelayedAdmissionPeriodicApplySuffix { .. }"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/tests/v2_lifecycle_work_registry_validate_apply_cases.rs",
+          "kind": "fn",
+          "symbol": "validator_apply_drains_exact_suffix_after_delayed_commit_qc_admission",
+          "required_tokens": [
+            "ready_validate_apply_actor_global_child_fixture(false, false, false, true)",
+            "handle.join()",
+            "std::panic::resume_unwind(payload)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_runner.rs",
+          "kind": "fn",
+          "symbol": "advance_executor",
+          "required_tokens": [
+            ".settle_pending_lifecycle_output_admissions(lifecycle_owner, services)?",
+            "attest_ready_live_decision_apply_runtime_predecessor(",
+            "LifecycleDecisionApplySuccessorOutputModeV1::DelayedAdmissionPeriodicApplySuffix { .. }",
+            "&& executor.lifecycle_decision_apply_dispatch_available(Some(&attestation))?",
+            "(None, true)",
+            "executor.lifecycle_decision_apply_runtime_predecessor_drain_available(",
+            "(Some(attestation), false)",
+            "if executor.has_pending_lifecycle_output_admissions()",
+            "AdvanceExecutorYieldCauseV1::DelayedLifecycleOutputAdmitted"
           ]
         }
       ]

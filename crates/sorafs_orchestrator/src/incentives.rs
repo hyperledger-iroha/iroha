@@ -22,7 +22,7 @@ use soranet_incentives::{
 };
 use std::{
     fs::{File, OpenOptions},
-    io::{self, BufRead, BufReader, Write},
+    io::{self, BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
     str::FromStr,
     sync::{Arc, Mutex},
@@ -430,107 +430,7 @@ impl<'a> MetricsLogOutcome<'a> {
         }
     }
 }
-#[derive(Debug, Error)]
-pub enum MetricsLogError {
-    #[error("failed to create metrics log directory {path:?}: {source}")]
-    CreateDir { path: PathBuf, source: io::Error },
-    #[error("failed to open metrics log at {path:?}: {source}")]
-    Open { path: PathBuf, source: io::Error },
-    #[error("failed to write metrics log at {path:?}: {source}")]
-    Write { path: PathBuf, source: io::Error },
-    #[error("failed to encode relay metrics entry: {0}")]
-    Encode(#[from] norito::Error),
-    #[error("failed to decode metrics log at {path:?}: {source}")]
-    Decode {
-        path: PathBuf,
-        source: norito::Error,
-    },
-    #[error("failed to read metrics log at {path:?}: {source}")]
-    Read { path: PathBuf, source: io::Error },
-}
-#[derive(Debug)]
-struct MetricsLog {
-    path: PathBuf,
-    writer: Mutex<File>,
-}
-impl MetricsLog {
-    fn open(path: PathBuf) -> Result<Self, MetricsLogError> {
-        if let Some(parent) = path.parent()
-            && !parent.as_os_str().is_empty()
-        {
-            std::fs::create_dir_all(parent).map_err(|source| MetricsLogError::CreateDir {
-                path: parent.to_path_buf(),
-                source,
-            })?;
-        }
-        let file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)
-            .map_err(|source| MetricsLogError::Open {
-                path: path.clone(),
-                source,
-            })?;
-        Ok(Self {
-            path,
-            writer: Mutex::new(file),
-        })
-    }
-    fn append(&self, entry: &RelayEpochMetricsV1) -> Result<(), MetricsLogError> {
-        let (payload, flags) = norito::codec::encode_with_header_flags(entry);
-        let framed =
-            norito::core::frame_bare_with_header_flags::<RelayEpochMetricsV1>(&payload, flags)?;
-        let mut guard = self.writer.lock().expect("metrics log mutex poisoned");
-        guard
-            .write_all(&framed)
-            .map_err(|source| MetricsLogError::Write {
-                path: self.path.clone(),
-                source,
-            })?;
-        guard.flush().map_err(|source| MetricsLogError::Write {
-            path: self.path.clone(),
-            source,
-        })?;
-        Ok(())
-    }
-}
-/// Read all relay metrics entries stored in a Norito log.
-pub fn read_metrics_log(
-    path: impl AsRef<Path>,
-) -> Result<Vec<RelayEpochMetricsV1>, MetricsLogError> {
-    let path = path.as_ref();
-    if !path.exists() {
-        return Ok(Vec::new());
-    }
-    let file = File::open(path).map_err(|source| MetricsLogError::Open {
-        path: path.to_path_buf(),
-        source,
-    })?;
-    let mut reader = BufReader::new(file);
-    let mut entries = Vec::new();
-    loop {
-        {
-            let buffer = reader.fill_buf().map_err(|source| MetricsLogError::Read {
-                path: path.to_path_buf(),
-                source,
-            })?;
-            if buffer.is_empty() {
-                break;
-            }
-        }
-        match norito::deserialize_stream::<_, RelayEpochMetricsV1>(&mut reader) {
-            Ok(entry) => entries.push(entry),
-            Err(norito::Error::Io(err)) if err.kind() == io::ErrorKind::UnexpectedEof => break,
-            Err(source) => {
-                return Err(MetricsLogError::Decode {
-                    path: path.to_path_buf(),
-                    source,
-                });
-            }
-        }
-    }
-    Ok(entries)
-}
+include!("incentives/metrics_log.rs");
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -764,7 +664,7 @@ mod tests {
             sample_account(),
             Metadata::default(),
         );
-        let records = read_metrics_log(&log_path).expect("read metrics log");
+        let records = read_metrics_log(&log_path, log_test_limits()).expect("read metrics log");
         assert_eq!(records.len(), 2);
         let decision_key = Name::from_str("reward_decision").expect("name");
         assert_eq!(
@@ -787,4 +687,5 @@ mod tests {
             Some(&Json::new("epoch-1"))
         );
     }
+    include!("incentives/metrics_log_tests.rs");
 }

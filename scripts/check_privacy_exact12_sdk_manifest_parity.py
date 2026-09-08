@@ -146,7 +146,6 @@ SDK_CONTRACTS = (
         ),
         (
             "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridge.kt",
-            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/PrivacyNativeBridge.java",
             *_RUST_BRIDGE_SOURCE_FILES,
         ),
         (
@@ -236,7 +235,7 @@ _JVM_MODEL = (
 _JVM_KOTLIN_BRIDGE = (
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridge.kt"
 )
-_JVM_JAVA_BRIDGE = (
+_RETIRED_JVM_JAVA_BRIDGE = (
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/"
     "PrivacyNativeBridge.java"
 )
@@ -736,7 +735,6 @@ def _jvm_cutover_gates(root: Path) -> dict[str, bool]:
 
     model = _read(root, _JVM_MODEL)
     kotlin_bridge = _read(root, _JVM_KOTLIN_BRIDGE)
-    java_bridge = _read(root, _JVM_JAVA_BRIDGE)
     rust_bridge = _rust_bridge_source(root)
     rust_manifest_admission = _read(root, _RUST_BRIDGE_PLATFORM_JNI_PARTS[1])
     kotlin_transport = _read(root, _JVM_KOTLIN_TRANSPORT)
@@ -783,15 +781,13 @@ def _jvm_cutover_gates(root: Path) -> dict[str, bool]:
             "nativeValidateExact12CapabilityManifestForNetworkV1" in kotlin_bridge,
             "nativeInspectExact12CapabilityManifest" in kotlin_bridge,
             "check(nativeAvailable)" in kotlin_bridge,
-            "nativeValidateExact12CapabilityManifest" in java_bridge,
-            "if (!NATIVE_AVAILABLE)" in java_bridge,
+            not (root / _RETIRED_JVM_JAVA_BRIDGE).exists(),
             "if !validate_privacy_capability_archive_v1(archive).is_valid()"
             in rust_manifest_admission,
             "PrivacyExact12CapabilityManifestV1>(archive)" in rust_bridge,
             "Java_org_hyperledger_iroha_sdk_privacy_PrivacyNativeBridge_"
             "nativeValidateExact12CapabilityManifestForNetworkV1" in rust_bridge,
-            "Java_org_hyperledger_iroha_android_privacy_PrivacyNativeBridge_"
-            "nativeValidateExact12CapabilityManifestForNetworkV1" in rust_bridge,
+            "Java_org_hyperledger_iroha_android_privacy_PrivacyNativeBridge_" not in rust_bridge,
         )
     )
     exact_tuple_match = all(
@@ -813,8 +809,9 @@ def _jvm_cutover_gates(root: Path) -> dict[str, bool]:
             "PrivacyNativeBridge.requireExact12SubmitProofConstruction(" in model,
             "nativeRequireExact12CapabilityTupleForNetworkV1" in kotlin_bridge,
             "nativeValidateExact12SubmitProofConstructionForNetworkV1" in kotlin_bridge,
-            "nativeRequireExact12CapabilityTuple" in java_bridge,
-            "nativeValidateExact12SubmitProofConstruction" in java_bridge,
+            "import org.hyperledger.iroha.sdk.privacy.PrivacyProtocolIdV1;" in java_instruction,
+            "import org.hyperledger.iroha.sdk.privacy.PrivacyNativeBridge;" in java_transport,
+            "import org.hyperledger.iroha.sdk.privacy.PrivacyProtocolIdV1;" in java_transport,
             "fromPrivacyExact12WirePayload" in kotlin_instruction,
             "requirePrivacyExact12ConstructionAdmission" in kotlin_instruction,
             "value.requirePrivacyExact12ConstructionAdmission()" in kotlin_adapter,

@@ -2,7 +2,7 @@
 
 This ledger records the implementation and qualification work for the final V1
 privacy stack. It is not an audit certificate or permission to activate an
-unqualified protocol. Source observations below were checked on 2026-09-06–07 in a
+unqualified protocol. Source observations below were checked on 2026-09-06–08 in a
 shared working tree; they do not identify a sealed release candidate.
 
 ## Final interface contracts
@@ -73,7 +73,7 @@ implementation markers must not be substituted for the qualification record in
 | Component | Completion criterion still required |
 | --- | --- |
 | Generic native STARK | Current Binding and Explicit paths reconstruct the complete public trace/composition roots and enforce a zero terminal value. A future hidden-trace AIR still needs a verified initial degree/proximity argument; binary fold consistency alone is insufficient. Standalone public-padding verification remains unavailable, and BFV/Soracloud callers must complete explicit material replay. |
-| FASTPQ | Resolve the single verifier architecture: a justified bounded-opening quotient/degree proof or an explicit full-replay artifact. Complete protocol-specific qROM analysis and independently reproduce the permutation and six-lane construction. |
+| FASTPQ | The sole offline compact V1 owner now compiles with six-lane commitments, complete typed context and fixed field tapes; accepted compact SHAKE/prototype selectors are removed. Complete actual full-domain proofs and fresh artifacts, replace the production replay representation, and finish the bounded-opening AIR/FRI and witness-privacy arguments within unchanged production proof limits. Complete protocol-specific qROM analysis and independent permutation/construction reproduction. |
 | AXT | Both Core execution pipelines now commit exact ordered canonical transaction wires; missing block-owned commitments cannot be synthesized from transcript identities. Anchor-bound proof verification checks ordered wire membership, exact public roots and context, and mandatory expiry. Consensus witness roots and transfer-batch trees still commit subsets, which cannot substitute for full persisted WSV roots. Complete successful-execution/transfer binding, rooted state witnesses, immutable anchor resolution and durable spend nonces. |
 | BFV/Soracloud and MKHE | Full BFV-RNS and one atomic 40-limb source/materialization/packing/cross-field/padding verifier, full-size/eight-party KAT, resource measurements and governed noise/qROM evidence. Unavailable stages cannot issue receipts. |
 | Confidential assets and private settlement | Regenerated canonical proofs/keys, authority/amount/conservation adversaries, complete SDK routes and deployment evidence described by the owning settlement/asset specifications. |
@@ -290,33 +290,93 @@ Its unchanged executable SHA256 is
 The frozen official addon and package tests remain pending. None of these
 results attests deployment, relay transport or release readiness.
 
-The FASTPQ balance-key migration passes 181 focused model/prover tests, including
+The pre-merge FASTPQ balance-key migration passed 181 focused model/prover tests, including
 four account display discriminants crossed with all ten Norito layouts. The
 sole `FastpqBalanceKeyV1` canonical frame replaces display-text key material;
 it binds the full asset identity and account controller. All 11 Core integration
-tests pass. The regenerated raw64 proof independently replays successfully;
-its 1,138,854 bytes have SHA256
-`46f4011476733460bf772e25fc11d0c8edfbc889aabf2647e503f8ca88b5e5b9`.
-It exceeds the production 512-KiB cap and qualifies only its diagnostic budget.
+tests passed on that earlier source. The merged raw64 transcript now verifies
+and regenerates identical bytes in its focused replay test; its 1,831,049 bytes
+have SHA256 `bd53a7c7bcfdf4a1529e92e7466636b588f8a99dbce786b5241d900a76a76de2`.
+It exceeds both the production 512-KiB cap and the AXT 1-MiB cap; its 2-MiB
+diagnostic budget does not qualify production admission.
 The coupled JSON CLI, Torii recovery batch producer and Core persisted-proof
 writer now use the sole canonical public model frames and bounded encoders;
-these subsequent corrections await the next capture.
+these corrections now pass the rebuilt JSON CLI's seven tests and Core's 116
+selected FASTPQ tests. Torii recovery now passes all seven tests: its repaired
+pagination fixture first proves that an unanchored sidecar is rejected, then
+stores the exact canonical block before checking pagination and byte budgets.
+The combined retry passes after the 14 CLI compilation repairs, with all 8,714
+captured inputs unchanged. The current FASTPQ integration target passes 20 tests
+with four diagnostic cases ignored; its separate raw transcript replay passes.
 
-A fresh independent Python/Metal diagnostic compiles the unchanged production
+The earlier merged public `offline_compact` verifier used SHAKE256 despite its
+48-byte carrier. The current six-lane owner replaces that implementation and its
+prototype selectors; the current build and execution evidence below supersede
+that source finding. Production ingress still rejects compact frames, and
+offline mathematical verification supplies no authenticated ledger authority.
+Resource limits, witness privacy and independent security review remain open.
+The original affected-source inventory is retained in ignored
+`target/privacy-release-evidence/2026-09-07-recovery/merged-privacy-audit/fastpq-hash-cutover-open.json`.
+The current compact preflight requires at least 375 complete 342-field rows and
+375 pairs of Fp4 mixed/quotient values. Their raw values alone require
+`375 * (342 * 8 + 2 * 32) = 1,050,000` bytes, exceeding even the AXT 1-MiB cap
+before indices, frames, roots, frontiers or FRI data. The six-lane hash cutover
+therefore cannot by itself close the production proof-size requirement.
+
+A fresh merged-source independent Python/Metal diagnostic compiles the production
 six-lane kernel and passes all 204 output words across 23 canonical frames,
 four arithmetic boundary frames and seven invalid descriptors on the M1 Ultra.
 Twelve extra dispatched threads preserve the 96-byte output guard. Source
 hashes remain unchanged throughout the run; input, shader, compiler, executable,
 output and log hashes are retained under
-`target/privacy-release-evidence/2026-09-07-recovery/metal-current/`.
+`target/privacy-release-evidence/2026-09-07-recovery/metal-merged-20260908/`.
 The evidence manifest SHA256 is
-`f74b0b8ad86200efbcfb5047dea269069325530c12938b86aa1f7750f099769f`.
-Separately, the captured Metal-enabled Rust prover passes 68 device/runtime
+`7ac3687cf29d14f4d6ce194f30630006fe9eb6bfd217a4a618d68dbe5b1b6c5b`.
+This run corrects the old diagnostic's repeated field tag: three multi-field
+cases in `metal-current/` proved arbitrary-wordstream parity, not canonical
+framing. The original evidence is retained with an explicit correction record;
+the new encoder uses tag `12 + field_index` and checks the complete reference KAT.
+Separately, the pre-merge captured Metal-enabled Rust prover passed 68 device/runtime
 tests: ten digest tests, two native Merkle tests and 56 Metal runtime tests,
 including staging, allocation, cleanup and injected failures. The executable
 SHA256 is `dd5b547358846978f03ea350afd9105173a5ce80abf2942f6a70ac1678490b2c`.
 Neither selection qualifies a complete GPU proof, CUDA hardware or the release
 qualification workflow.
+
+The merged native capture also passes all three Core Kaigi integration tests
+and all 21 Rust JS-host Kaigi tests, including real proofs and the 31/25-row
+mutation controls. The Kaigi unit suite now passes all 97 tests after four
+sample-account calls use the domain's name as the single-label seed; domain
+state and all existing assertions are retained. Its earlier typed capacity-error
+assertion also passes. All 29 restored Torii
+MCP security tests and both Rust JNI account-controller tests pass. These are
+Rust bridge tests; installed JNI and addon packages remain unqualified.
+Two explicitly enabled Metal continuation tests execute the actual device on
+heterogeneous frames and independent reference vectors; both pass. Every run
+retains unchanged source and binary hashes under
+`target/privacy-release-evidence/2026-09-07-recovery/core-retry-5/`;
+the repaired Kaigi and Torii results are in `core-retry-6/`. The latter combined
+build passes in 135 seconds with no source drift; the 97-test and seven-test
+runs finish in 279 seconds and 17 seconds, respectively. Previous failed
+captures remain available and do not count as passes.
+
+The seventh combined capture passes in 136.49 seconds with all 8,715 inputs
+unchanged. Core FASTPQ passes 116 tests in 19.83 seconds and Torii passes seven
+in 9.12 seconds against the rebuilt storage code; both retain unchanged source
+and binary hashes. SoraFS passes 95 focused and 1,468 ordinary tests, followed
+by both explicitly enabled real local Kubo tests. These cover canonical PoR
+outbox publication and authenticated IPNS pin recovery, with test-only signer
+providers; they do not qualify regional deployment or hardware custody.
+All five storage accounting regressions pass on the eighth capture, which builds
+in 86.52 seconds with no source drift. Its only two Rust changes correct fixture
+setup: establish configured lane markers before publishing the baseline and bind
+the signed payload's exact incarnation before publishing its catalog journal.
+Real authority checks and all assertions remain intact; the failed seventh-run
+records are preserved. The JavaScript extraction passes 167 focused tests, 19
+bundle tests, nine SoraFS archive tests and two native-absence tests. Bundle and
+lint gates pass, all 91 browser exports remain present, and the instruction-builder
+source budget is reduced from 5,803 to its current 5,353 lines. These structural
+and absence results do not qualify an installed native addon.
 
 The captured four-validator harness compiles, but its first runtime attempt
 stopped before peer startup on a stale X509 status expectation: the current
@@ -325,3 +385,187 @@ geometry, rather than `EngineUnavailable`. This is not governance availability
 or four-validator execution evidence. The per-profile assertions now track
 that exact diagnostic and the harness uses explicit 32-MiB parent and worker
 stacks; those revisions still await compilation and execution.
+
+## Current compact execution evidence
+
+The 2026-09-08 coordinated locked/offline build passes all 16 selected test
+artifacts without source drift. All 27 exact pre-proof checks pass, covering
+fixed geometry, six-lane context/tape known answers, canonical coordinates,
+permanent sampler abort, explicit decode budgets and unchanged AIR equations.
+The primitive library passes 60 tests (one timing diagnostic ignored), and the
+ordinary offline-consumer target passes all eight tests. These are scoped local
+runs, not a complete workspace or release qualification.
+
+The actual ordinary and AXT full-domain quantity-transfer proof tests both pass.
+Retained proofs contain 3,994,619 and 4,015,551 bytes; proving takes 295.71 and
+329.91 seconds, bounded verification 23.84 and 22.82 seconds, and each run peaks
+at about 2.49 GB resident memory. Both verify 375 AIR openings and one terminal
+degree check after private data is dropped; altered quantities, authority,
+identity, truncation and allocation limits are rejected. Source and executable
+hashes remain unchanged. The actual ordinary two-segment bundle also passes
+with a separately retained 7,986,384-byte artifact: proving takes 608.46 seconds,
+verification 43.84 seconds, and peak resident memory is 2.57 GB. Both child
+transcripts, 750 AIR openings and two terminal degree checks are verified under
+the bundle's own identity. The separate AXT bundle passes with 8,011,999 bytes,
+560.55 seconds proving, 45.99 seconds verifying and 2.57 GB peak resident memory.
+It checks its own two transcripts, 750 AIR openings and two terminal degree
+checks. Fresh transport fixtures remain pending; single proofs cannot substitute
+for bundle-bound artifacts.
+The complete-row format exceeds the 512 KiB production and 1 MiB AXT limits:
+even the necessary raw row openings account for 1,050,000 bytes. The default
+32 MiB decode allocation budget is unchanged; a synthetic largest-shape test
+uses an explicit 64 MiB diagnostic scope and proves default-budget rejection.
+Neither that scope nor mathematical profile checks authorize production use.
+
+The three mathematical checker entry points now share 28 exact executable,
+specification and implementation inputs, with pre/post equality and seven
+changed/omitted-input controls. Typed, all 128 bundle-size and historical theorem
+checks pass privately; the live typed check reproduces the identical report.
+Independent comparison preserves the reviewed arithmetic. These are conditional
+model calculations and source provenance, not concrete cryptographic qualification.
+
+Four saved-proof regression tests now pass in 136.85 seconds, checking each
+retained single/bundle hash, canonical frame, ordered roots and exact work. They
+also require precise rejection at the unchanged production byte/allocation
+limits. Their individually emitted binary comes from the failed expanded
+SoraFS build; the overall compilation failure remains recorded separately.
+
+The final ordinary and AXT context owners each pass 1,635 actual Metal hash
+comparisons, including all six lanes, every oracle level and all 931 field-tape
+blocks. Three descriptor, thread-isolation and cleanup controls also pass.
+The M1 Ultra runs take 9.63 and 15.00 seconds with 28.9 and 29.9 MB peak RSS.
+Inputs are deterministic full-width payloads under the real statement contexts;
+these are hash parity tests, not complete GPU proof or privacy qualification.
+Both source and executable remain unchanged during execution. Evidence is in
+`core-retry-14/retained-kats-result.json` and
+`core-retry-15/compact-metal-result.json` under the recovery evidence directory.
+
+The new [Kaigi lifecycle gate](kaigi_four_validator_lifecycle_v1.md) submits real
+governed-key, authorization and usage instructions to four validators and checks
+typed rejection, retained participation and two cold restarts. It is implemented
+but the network harness and ordinary daemon still await a successful composed
+build and execution. The retained Core fixture test passes with both governed
+keys, all five generated authorization/usage proofs, and the malformed-envelope
+control. This is local verifier evidence, not a deployment result.
+## Subsequent composed checks, 2026-09-08
+
+Combined retry 18 ends with two denied trait-object casts in a Torii test fixture
+after 702.22 seconds. All 8,809 captured native inputs remain unchanged, and 27
+test artifacts plus six ordinary runtime companions are retained. The narrow
+cast correction is applied but has not yet compiled. The captured Core/config
+selection passes 197 tests and fails 11 resource-accounting cases; all failures
+remain recorded for correction. This is not a successful combined build.
+
+The same capture passes all 11 Metadata tests, including canonical roundtrips,
+duplicate rejection and modeled tree-allocation admission. All 20 composed
+incentives tests pass. The real Kaigi fixture test passes in 94.57 seconds.
+Each selection retains its exact original and copied executable hashes and
+unchanged captured source. Evidence is under `core-retry-18/`, the SoraFS
+`hardware-stream-token-native-retry18/` directory, and the multilane
+`core-kura-direct-208-retry18-v2/` directory. Subsequent source changes require
+fresh affected native execution.
+
+The applied JVM correction migrates the old bridge test into a Java consumer of
+the canonical Kotlin API, checks exact compiled JNI declarations without SDK
+reflection, and uses explicit JDK tools without replacing the authenticated
+Cargo environment. Its 126 source/negative controls pass in 65.74 seconds.
+The earlier frozen native phase built JNI and passed 129 Kotlin-selected tests
+plus seven retained Java tests, but the whole phase failed on the retired Java
+consumer and cleanup environment. Those failures remain failures. Source guards
+and Java compilation cannot replace the fresh complete native qualification.
+
+A private, unregistered scalar-PCS reference slice passes 13 arithmetic/transcript
+tests plus 11 unchanged field tests and 36 independent Fp4 vectors. The bounded
+mathematical review reproduces the sealed audit and dual-basis controls. Full
+partial-word AIR/PCS composition, malformed unopened leaves, masked AIR degree,
+generic-witness privacy, native codec/resources and concrete hash qualification
+remain open. The reference slice is not a shipping verifier or an alternate V1
+proof path, and its projected byte counts are not measured production proofs.
+
+
+Combined retry 19 ends with the daemon's denied inline-state size lint after
+523.54 seconds, with all 8,812 inputs unchanged. Its Core/configuration selection
+passes 206 tests and fails two signed-snapshot finalizer cases at static-policy
+authentication; its Manifest selection passes 957 and fails two independent
+wire-oracle cases. Those original failures and artifacts remain immutable.
+
+Retry 20 passes that daemon lint boundary and stops at newly reached CLI, daemon
+test and integration-client compilation errors after 141.65 seconds. All 8,820
+native source inputs remain unchanged; 32 test binaries and seven ordinary
+companions are retained. The individually emitted Core binary passes both
+corrected signed-snapshot finalizer tests and the existing wrong-signature
+negative. The other 206 Core/configuration results remain retry-19 evidence.
+The selected BFV audited-prover test fails before the modified mode helper because
+its shared bootstrap fixture still requested two refresh rounds against the
+mandatory limit of one. The reviewed paired fixture correction is applied, and
+both direct mode-helper tests pass in retry 21 alongside two Kaigi reason/proof
+controls. The original audited full-execution fixture still requires production
+qualification; the direct controls do not exercise a complete bootstrap.
+
+The full Manifest selection now passes all 959 tests, including every corrected
+prepared-window oracle and missing-field negative. Torii's complete 33-test
+hardware-token selection also passes. Original and retained binaries and the full
+captured source stay unchanged throughout these executions. See `core-retry-20/`,
+`core-retry-20/core-policy-tests/`, and the
+[SoraFS checkpoint](sorafs/v1_closure_ledger.md). These 992 executions retain
+retry-20 provenance; matching later binary hashes are not new test executions.
+
+Retry 21 passes the complete selected native build, retaining 37 test binaries
+and seven companions with all 8,821 source inputs unchanged. Its CLI cohort
+finishes 41 passed and 16 failed; the daemon stream-token cohort finishes 57
+passed and five failed. The reviewed retry-22 correction fixes the unique Clap
+group, actual metadata-value sizing and canonical decoder allocation policy,
+valid gateway-role acceptance, blocking socket fixture and issuer trust interval.
+Retry 22's same selected build passes in 35.51 seconds, with all 8,821 inputs
+unchanged and all 44 executables retained. Its exact CLI selection passes all
+61 tests, including four additive workload boundaries; its exact daemon
+stream-token selection passes all 62 tests, including all five earlier failures
+and twelve new gateway mutations inside the original positive. Earlier failures
+remain retained under their own attempts.
+
+The ordinary shipping-feature daemon also builds successfully from that same
+retry-22 source in 31.76 seconds, without nonshipping verifier helpers. The first
+Kaigi attempt in retry 21 fails before any daemon launches because the test
+repeats Alice's baseline read permission. After removing only that duplicate,
+the retry-22 exact ignored lifecycle test starts four validators but fails the
+test-owned genesis startup deadline after 267.04 seconds. Nodes exchange Timeout
+and Prepare certificates, but block one does not commit; no Kaigi lifecycle
+transaction executes. The source, harness and daemon bytes remain unchanged,
+and 256 private peer artifacts are retained with hashes. The production cause
+remains under investigation; no timeout, quorum or RS16 requirement is waived.
+See `core-retry-22/`, `daemon-retry-22/` and
+`deployment/kaigi-r22-runtime/failure-review.json` in the recovery evidence.
+Neither the successful unit cohorts nor this failed network run qualify deployment.
+
+The applied JVM owner-retirement packet removes duplicate Java privacy owners
+and nineteen duplicate Android privacy JNI exports, retaining canonical Kotlin
+consumers and all original assertions. Its 176 live source controls pass; the
+previous failed frozen native phase still requires a fresh final-source replay.
+The reviewed orphan confidential-witness producer retirement is also applied.
+Independent controls verify compiled Swift test-source discovery, fail-closed
+directory traversal and all shipping Swift source targets. Legacy encoder
+assertions remain in test-only fixtures. A new isolated capture contains 19,462
+source entries; all 284 source controls pass with zero capture drift. Its original
+Cargo provisioning verifies, and the complete prepared JNI phase builds a fresh
+native library and passes the exact eighteen-class Kotlin/Java selection's 152
+JUnit tests plus seven Java proof-attachment consumer tests. The standalone Java
+utility separately passes all fifteen groups with assertions enabled. All 159
+JUnit cases have zero failures, errors or skips. Independent inspection binds
+all 2,531 shipping JAR classes to the actual class-contract output, verifies
+JDK-8 class versions and excludes retired producers and test-only fixtures.
+The frozen source and original provisioning/launcher/lock inputs remain intact;
+135 retained review artifacts include the native library, JAR and all twenty
+JUnit XML reports. See `sdk20-jvm-postvalidation-review/review-capsule.json`.
+All six original release gates remain unmet: two reject dirty source and four
+lack qualified manifests. Full Swift, physical Android and signed-source release
+qualification remain open; these host JNI executions do not establish them.
+
+The private PCS fold and full quadratic-sumcheck operators pass an independent
+recompile and all 36 arithmetic/field tests. Their coefficient and Boolean bases,
+complete canonical words and terminal arithmetic are reviewed; authenticated
+openings, full masked AIR, source/compiler mapping and a private-witness simulator
+remain unfinished. A separate conditional partial-word state argument and finite
+adversarial controls now make the outer AIR-to-PCS handoff explicit. Neither
+private packet is registered as a proof-acceptance or fallback path. BFV review
+confirms that exact/refresh owners still require a full chain-native replacement;
+the applied internal mandatory-mode cleanup removes only a dead retry branch.

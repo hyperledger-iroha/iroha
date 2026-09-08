@@ -33,8 +33,6 @@ pub enum SoftwareSignerPurposeV1 {
     EvidenceCheckpointAnchor = 9,
     /// Domain-separated evidence compaction-archive digest.
     EvidenceCompactionArchive = 10,
-    /// Canonical domain-prefixed stream-token body.
-    StreamToken = 11,
     /// Domain-separated `PoP` credential digest.
     PopCredential = 12,
     /// Domain-separated `PoP` commitment-root digest.
@@ -60,7 +58,6 @@ impl SoftwareSignerPurposeV1 {
             | Self::EvidenceCheckpointStoreRecord
             | Self::EvidenceCheckpointAnchor
             | Self::EvidenceCompactionArchive => SignerRoleV1::EvidenceViewer,
-            Self::StreamToken => SignerRoleV1::StreamToken,
             Self::PopCredential | Self::PopCommitmentRoot | Self::PopRevocationList => {
                 SignerRoleV1::PopCredentials
             }
@@ -216,27 +213,10 @@ fn validate_message(
                     .is_ok()
                 })
         }
-        SoftwareSignerPurposeV1::StreamToken => validate_stream_token_payload(message),
     }
 }
 fn exact_nonzero_digest(bytes: &[u8]) -> bool {
     bytes.len() == 32 && bytes.iter().any(|byte| *byte != 0)
-}
-fn validate_stream_token_payload(payload: &[u8]) -> bool {
-    let Some(body_bytes) = payload
-        .strip_prefix(sorafs_manifest::token::STREAM_TOKEN_SIGNATURE_DOMAIN_V1)
-        .filter(|bytes| !bytes.is_empty())
-    else {
-        return false;
-    };
-    let Ok(body) = norito::decode_canonical::<sorafs_manifest::StreamTokenBodyV1>(body_bytes)
-    else {
-        return false;
-    };
-    iroha_torii::sorafs::token::validate_token_body(&body).is_ok()
-        && body
-            .signing_payload_bytes()
-            .is_ok_and(|bytes| bytes == payload)
 }
 fn governance_publisher(binding: &SoftwareSignerPublicBindingV1) -> Option<&[u8]> {
     match &binding.purpose_binding {

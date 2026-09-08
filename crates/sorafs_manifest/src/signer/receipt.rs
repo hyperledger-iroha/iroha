@@ -6,22 +6,29 @@
 //! Aggregate inventory/schema validation belongs to the release artifact owner; this boundary
 //! authenticates the exact independently reviewed bytes without JSON reserialization.
 
+#[cfg(test)]
+use super::protocol::{
+    SignerKeyOperationPurposeV1, signer_operation_message_digest_v1,
+    signer_operation_signatures_digest_v1,
+};
 use super::{
     custody::{
         SignerCustodyAnchorV1, SignerCustodyBindingV1, SignerCustodyErrorV1, SignerCustodyTrustV1,
         SignerCustodyUseContextV1, VerifiedSignerCustodyV1, verify_signer_custody_use_v1,
     },
     protocol::{
-        SIGNER_RELEASE_MANIFEST_MAX_BYTES_V1, SignerKeyAlgorithmV1, SignerKeyOperationPurposeV1,
-        SignerOperationActionV1, SignerOperationAuditHeadV1, SignerOperationCommitmentV1,
-        SignerOperationCustodyV1, SignerOperationIntentV1, SignerOperationReservationV1,
-        SignerOperationSignatureV1, SignerPurposeBindingV1, SignerRoleV1, digest_canonical,
-        digest_parts, signer_operation_message_digest_v1, signer_operation_signatures_digest_v1,
+        SIGNER_RELEASE_MANIFEST_MAX_BYTES_V1, SignerKeyAlgorithmV1, SignerOperationActionV1,
+        SignerOperationAuditHeadV1, SignerOperationCommitmentV1, SignerOperationCustodyV1,
+        SignerOperationIntentV1, SignerOperationReservationV1, SignerOperationSignatureV1,
+        SignerPurposeBindingV1, SignerRoleV1, digest_canonical, digest_parts,
     },
 };
+#[cfg(test)]
 use iroha_crypto::Signature;
 use norito::codec::{Decode, Encode};
 use std::fmt;
+
+pub(super) mod shared;
 
 /// Complete canonical receipt bound, checked before any allocation from a candidate.
 pub const SIGNER_RELEASE_MANIFEST_RECEIPT_MAX_BYTES_V1: usize = 64 * 1024;
@@ -192,6 +199,18 @@ pub struct SignerReleaseManifestReceiptV1 {
     /// Exactly four signatures: raw manifest, audit, provenance, final response.
     pub signatures: Vec<SignerOperationSignatureV1>,
 }
+impl SignerReleaseManifestReceiptV1 {
+    /// Borrow only common operation coordinates; the release owner retains its exact request.
+    fn operation_view(&self) -> shared::SignerOperationReceiptViewV1<'_> {
+        shared::SignerOperationReceiptViewV1 {
+            operation_id: self.request.operation_id,
+            original_custody: self.request.original_custody,
+            reservation: self.reservation,
+            provenance: &self.provenance,
+            commitment: &self.commitment,
+        }
+    }
+}
 impl fmt::Debug for SignerReleaseManifestReceiptV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -323,22 +342,7 @@ pub fn signer_release_manifest_response_digest_v1(
     provenance: &SignerOperationProvenanceV1,
     first_signatures: &[SignerOperationSignatureV1],
 ) -> Result<[u8; 32], SignerReceiptErrorV1> {
-    if first_signatures.len() != 3
-        || first_signatures
-            .iter()
-            .zip([
-                SignerKeyOperationPurposeV1::RolePayload,
-                SignerKeyOperationPurposeV1::AuditRecord,
-                SignerKeyOperationPurposeV1::Provenance,
-            ])
-            .any(|(signature, purpose)| {
-                signature.purpose != purpose || signature.signature.len() != 64
-            })
-    {
-        return Err(SignerReceiptErrorV1::InvalidSignature);
-    }
-    let signatures_digest = signer_operation_signatures_digest_v1(first_signatures)
-        .map_err(|_| SignerReceiptErrorV1::InvalidSignature)?;
+    let signatures_digest = shared::first_three_signatures_digest(first_signatures)?;
     digest_canonical(
         b"iroha.sorafs.signer.release-manifest.response.v1",
         &(*request, *provenance, signatures_digest),
@@ -401,9 +405,8 @@ pub fn verify_release_manifest_signer_receipt_v1(
         .intent
         .digest()
         .map_err(|_| SignerReceiptErrorV1::InvalidReceipt)?;
-    validate_completion(
+    receipt.operation_view().validate_completion(
         completion,
-        &receipt,
         intent_digest,
         signatures_digest,
         &custody,
@@ -458,111 +461,15 @@ pub fn validate_release_manifest_signatures_v1(
         receipt.reservation,
         detached_signature,
     )?;
-    if receipt.commitment.audit != audit
-        || receipt.provenance.original_custody != request.original_custody
-        || receipt.provenance.intent_digest != intent_digest
-        || receipt.provenance.reservation != receipt.reservation
-        || receipt.provenance.audit != audit
-        || receipt.provenance.signing_anchor.state_digest
-            != request.original_custody.control_state_digest
-        || !anchor_descends(
-            receipt.provenance.signing_anchor,
-            custody.statement().anchor,
-        )
-        || !anchor_descends(custody.current_anchor(), receipt.provenance.signing_anchor)
-    {
-        return Err(SignerReceiptErrorV1::InvalidReceipt);
-    }
-    if receipt.signatures.len() != 4 || receipt.signatures[0].signature != detached_signature {
-        return Err(SignerReceiptErrorV1::InvalidSignature);
-    }
-    if signer_release_manifest_response_digest_v1(
-        &request,
-        &receipt.provenance,
-        &receipt.signatures[..3],
-    )? != receipt.commitment.response_digest
+    let operation = receipt.operation_view();
+    operation.validate_provenance(intent_digest, audit, custody)?;
+    let signatures = shared::exact_four_signatures(&receipt.signatures, detached_signature)?;
+    if signer_release_manifest_response_digest_v1(&request, &receipt.provenance, &signatures[..3])?
+        != receipt.commitment.response_digest
     {
         return Err(SignerReceiptErrorV1::InvalidSignature);
     }
-    let audit_message = audit.signing_message();
-    let provenance_message = receipt.provenance.signing_message()?;
-    let response_message = receipt.commitment.response_signing_message();
-    for (signature, (purpose, message)) in receipt.signatures.iter().zip([
-        (SignerKeyOperationPurposeV1::RolePayload, manifest),
-        (
-            SignerKeyOperationPurposeV1::AuditRecord,
-            audit_message.as_slice(),
-        ),
-        (
-            SignerKeyOperationPurposeV1::Provenance,
-            provenance_message.as_slice(),
-        ),
-        (
-            SignerKeyOperationPurposeV1::Response,
-            response_message.as_slice(),
-        ),
-    ]) {
-        if signature.purpose != purpose
-            || signature.signature.len() != 64
-            || signature.message_digest != signer_operation_message_digest_v1(message)
-        {
-            return Err(SignerReceiptErrorV1::InvalidSignature);
-        }
-        let parsed = Signature::try_from_bytes(&signature.signature)
-            .map_err(|_| SignerReceiptErrorV1::InvalidSignature)?;
-        parsed
-            .verify(&custody.statement().binding.public_key, message)
-            .map_err(|_| SignerReceiptErrorV1::InvalidSignature)?;
-    }
-    let signatures_digest = signer_operation_signatures_digest_v1(&receipt.signatures)
-        .map_err(|_| SignerReceiptErrorV1::InvalidSignature)?;
-    Ok(signatures_digest)
-}
-
-fn anchor_descends(current: SignerCustodyAnchorV1, previous: SignerCustodyAnchorV1) -> bool {
-    current.height != 0
-        && current.block_hash != [0; 32]
-        && current.state_digest != [0; 32]
-        && current.height >= previous.height
-        && (current.height != previous.height || current == previous)
-}
-
-fn validate_completion(
-    completed: &SignerCompletedOperationV1,
-    receipt: &SignerReleaseManifestReceiptV1,
-    intent_digest: [u8; 32],
-    signatures_digest: [u8; 32],
-    custody: &VerifiedSignerCustodyV1,
-    current: &SignerCustodyUseContextV1,
-) -> Result<(), SignerReceiptErrorV1> {
-    let reservation = receipt.reservation;
-    let anchor = completed.anchor;
-    let signing_anchor = receipt.provenance.signing_anchor;
-    if completed.operation_id != receipt.request.operation_id
-        || completed.intent_digest != intent_digest
-        || completed.original_custody != receipt.request.original_custody
-        || completed.reservation != reservation
-        || completed.commitment != receipt.commitment
-        || completed.signatures_digest != signatures_digest
-        || reservation.reservation_id == [0; 32]
-        || reservation.fence == 0
-        || reservation.expires_at_unix_ms > custody.statement().expires_at_unix_ms
-        || completed.completed_at_unix_ms < custody.statement().issued_at_unix_ms
-        || completed.completed_at_unix_ms > current.now_unix_ms
-        || completed.completed_at_unix_ms >= reservation.expires_at_unix_ms
-        || reservation.expires_at_unix_ms - completed.completed_at_unix_ms > 60_000
-        || anchor.height < signing_anchor.height
-        || anchor.block_hash == [0; 32]
-        || anchor.operation_state_digest == [0; 32]
-        || (anchor.height == signing_anchor.height
-            && anchor.block_hash != signing_anchor.block_hash)
-        || anchor.height > current.current_anchor.height
-        || (anchor.height == current.current_anchor.height
-            && anchor.block_hash != current.current_anchor.block_hash)
-    {
-        return Err(SignerReceiptErrorV1::CompletionMismatch);
-    }
-    Ok(())
+    operation.validate_signatures(signatures, manifest, audit, custody)
 }
 
 #[cfg(test)]

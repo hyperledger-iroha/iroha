@@ -1,5 +1,9 @@
 import { isCanonicalKotodamaIdentifier } from "./kotodamaIdentifiers.js";
 
+const TEXT_IS_NOT_ONE_COMPLETE_CANONICAL_PREFIX_TYPE_TREE = "is not one complete canonical prefix type tree";
+const TEXT_IS_NOT_A_V1_ENTRYPOINT_VALUE_TYPE_NODE = "is not a V1 entrypoint value-type node";
+
+
 const MAX_ENTRYPOINT_TYPE_NODES_V1 = 256;
 const MAX_ENTRYPOINT_TYPE_DEPTH_V1 = 256;
 const MIN_ENTRYPOINT_LIST_CAPACITY_V1 = 1;
@@ -105,7 +109,7 @@ function childCount(node, context) {
     case "Leaf":
       return 0;
     default:
-      fail(`${context}.kind`, "is not a V1 entrypoint value-type node");
+      fail(`${context}.kind`, TEXT_IS_NOT_A_V1_ENTRYPOINT_VALUE_TYPE_NODE);
   }
 }
 
@@ -172,7 +176,7 @@ function validateNode(node, context) {
       break;
     }
     default:
-      fail(`${context}.kind`, "is not a V1 entrypoint value-type node");
+      fail(`${context}.kind`, TEXT_IS_NOT_A_V1_ENTRYPOINT_VALUE_TYPE_NODE);
   }
 }
 
@@ -205,7 +209,7 @@ export function analyzeEntrypointValueTypeV1(value, context = "entrypoint value 
     if (index !== 0) {
       const parent = frames[frames.length - 1];
       if (parent === undefined || parent.remaining === 0) {
-        fail(`${context}.nodes`, "is not one complete canonical prefix type tree");
+        fail(`${context}.nodes`, TEXT_IS_NOT_ONE_COMPLETE_CANONICAL_PREFIX_TYPE_TREE);
       }
       parent.remaining -= 1;
       suppressWords = parent.suppressWords;
@@ -232,7 +236,7 @@ export function analyzeEntrypointValueTypeV1(value, context = "entrypoint value 
     frames.pop();
   }
   if (frames.length !== 0) {
-    fail(`${context}.nodes`, "is not one complete canonical prefix type tree");
+    fail(`${context}.nodes`, TEXT_IS_NOT_ONE_COMPLETE_CANONICAL_PREFIX_TYPE_TREE);
   }
 
   const rendered = [];
@@ -303,7 +307,7 @@ export function analyzeEntrypointValueTypeV1(value, context = "entrypoint value 
     rendered.push(result);
   }
   if (rendered.length !== 1) {
-    fail(`${context}.nodes`, "is not one complete canonical prefix type tree");
+    fail(`${context}.nodes`, TEXT_IS_NOT_ONE_COMPLETE_CANONICAL_PREFIX_TYPE_TREE);
   }
   return {
     nodeCount: value.nodes.length,

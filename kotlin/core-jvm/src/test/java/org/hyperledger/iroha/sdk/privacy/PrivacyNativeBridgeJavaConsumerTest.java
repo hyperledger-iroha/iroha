@@ -1,12 +1,11 @@
 package org.hyperledger.iroha.sdk.privacy;
 
-import static org.junit.jupiter.api.Assertions.assertTrue;
-
-import org.junit.jupiter.api.Test;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
+import org.junit.jupiter.api.Test;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
@@ -15,8 +14,11 @@ import java.util.Collections;
 import java.util.List;
 import java.util.stream.Collectors;
 
-/** Java callers exercise the canonical Kotlin bridge against the shared native fixtures. */
+/** Original Java bridge assertions against the sole Kotlin privacy owner. */
 public final class PrivacyNativeBridgeJavaConsumerTest {
+  // Internal require-archive rejection uses the identical truncations in the selected
+  // Kotlin friend tests. Native descriptors and retired methods are checked from
+  // compiled class bytes by scripts/check_privacy_jvm_class_contract.py.
   private static final List<List<String>> MATRIX = loadExact12Matrix();
   private static final List<List<String>> PROTOCOL_ROWS = rows("protocol");
   private static final List<List<String>> TYPED_ENVELOPE_ROWS = rows("typed-envelope");
@@ -53,40 +55,37 @@ public final class PrivacyNativeBridgeJavaConsumerTest {
           PrivacyEngineIdV1.NATIVE_GOLDILOCKS_POSEIDON_X7_STARK_FRI_6X64_V1,
           PrivacyEngineIdV1.NATIVE_GOLDILOCKS_POSEIDON_X7_STARK_FRI_6X64_V1);
 
-
-
-
   @Test
-  void exactClosedRegistryIsStable() {
-    assertTrue(PrivacyNativeBridge.REQUIRED_BRIDGE_ABI_VERSION == 23);
-    assertTrue(PrivacyNativeBridge.protocolsV1().size() == 12);
-    assertTrue(PrivacyProtocolIdV1.ZK_ACE_PQ_AUTHORIZATION_V1.ordinal() == 0);
-    assertTrue(PrivacyProtocolIdV1.VEGA_EXISTING_CREDENTIAL_ZK_V1.ordinal() == 4);
-    assertTrue(PrivacyProtocolIdV1.IROHA_ZK_X509_STARK_P256_V1.ordinal() == 5);
-    assertTrue(PrivacyProtocolIdV1.IROHA_JINDO_POLYNOMIAL_COMMITMENT_V1.ordinal() == 6);
-    assertTrue(PrivacyProtocolIdV1.PQ_MASP_STARK_V1.ordinal() == 11);
-    assertTrue(PrivacyProofSystemIdV1.STARK_FRI_POSEIDON_X7_GOLDILOCKS_6X64_V1.ordinal() == 0);
-    assertTrue(PrivacyProofSystemIdV1.STARK_FRI_POSEIDON_X7_GOLDILOCKS_6X64_V1
+  public void exactClosedRegistryIsStable() {
+    assert PrivacyNativeBridge.REQUIRED_BRIDGE_ABI_VERSION == 23;
+    assert PrivacyNativeBridge.protocolsV1().size() == 12;
+    assert PrivacyProtocolIdV1.ZK_ACE_PQ_AUTHORIZATION_V1.ordinal() == 0;
+    assert PrivacyProtocolIdV1.VEGA_EXISTING_CREDENTIAL_ZK_V1.ordinal() == 4;
+    assert PrivacyProtocolIdV1.IROHA_ZK_X509_STARK_P256_V1.ordinal() == 5;
+    assert PrivacyProtocolIdV1.IROHA_JINDO_POLYNOMIAL_COMMITMENT_V1.ordinal() == 6;
+    assert PrivacyProtocolIdV1.PQ_MASP_STARK_V1.ordinal() == 11;
+    assert PrivacyProofSystemIdV1.STARK_FRI_POSEIDON_X7_GOLDILOCKS_6X64_V1.ordinal() == 0;
+    assert PrivacyProofSystemIdV1.STARK_FRI_POSEIDON_X7_GOLDILOCKS_6X64_V1
         .getCanonicalLabel()
-        .equals("stark-fri-poseidon-x7-goldilocks-6x64-v1"));
-    assertTrue(PrivacyEngineIdV1.NATIVE_GOLDILOCKS_POSEIDON_X7_STARK_FRI_6X64_V1.ordinal() == 0);
-    assertTrue(PrivacyEngineIdV1.NATIVE_GOLDILOCKS_POSEIDON_X7_STARK_FRI_6X64_V1
+        .equals("stark-fri-poseidon-x7-goldilocks-6x64-v1");
+    assert PrivacyEngineIdV1.NATIVE_GOLDILOCKS_POSEIDON_X7_STARK_FRI_6X64_V1.ordinal() == 0;
+    assert PrivacyEngineIdV1.NATIVE_GOLDILOCKS_POSEIDON_X7_STARK_FRI_6X64_V1
         .getCanonicalLabel()
-        .equals("native-goldilocks-poseidon-x7-stark-fri-6x64-v1"));
+        .equals("native-goldilocks-poseidon-x7-stark-fri-6x64-v1");
     for (int index = 0; index < EXPECTED.size(); index++) {
       final String label = EXPECTED.get(index);
       final PrivacyProtocolIdV1 protocol = PrivacyNativeBridge.protocolsV1().get(index);
-      assertTrue(protocol.getCanonicalLabel().equals(label));
-      assertTrue(PrivacyProtocolIdV1.fromCanonicalLabel(label) == protocol);
-      assertTrue(protocol.getExpectedProofSystem() == EXPECTED_PROOF_SYSTEMS.get(index));
-      assertTrue(protocol.getExpectedEngine() == EXPECTED_ENGINES.get(index));
+      assert protocol.getCanonicalLabel().equals(label);
+      assert PrivacyProtocolIdV1.fromCanonicalLabel(label) == protocol;
+      assert protocol.getExpectedProofSystem() == EXPECTED_PROOF_SYSTEMS.get(index);
+      assert protocol.getExpectedEngine() == EXPECTED_ENGINES.get(index);
     }
     assertThrows(() -> PrivacyNativeBridge.protocolsV1().clear());
   }
 
   @Test
-  void sharedExact12MatrixBindsRoutesAndTypedEnvelopeDigests() {
-    assertTrue(MATRIX.stream()
+  public void sharedExact12MatrixBindsRoutesAndTypedEnvelopeDigests() {
+    assert MATRIX.stream()
         .allMatch(
             row ->
                 Arrays.asList(
@@ -95,39 +94,39 @@ public final class PrivacyNativeBridgeJavaConsumerTest {
                         "protocol",
                         "typed-envelope",
                         "retired")
-                    .contains(row.get(0))));
-    assertTrue(rows("matrix-version").equals(Arrays.asList(Arrays.asList("matrix-version", "1"))));
-    assertTrue(PROTOCOL_ROWS.size() == 12);
+                    .contains(row.get(0)));
+    assert rows("matrix-version").equals(Arrays.asList(Arrays.asList("matrix-version", "1")));
+    assert PROTOCOL_ROWS.size() == 12;
     for (int index = 0; index < PROTOCOL_ROWS.size(); index++) {
-      assertTrue(PROTOCOL_ROWS.get(index).size() == 5);
-      assertTrue(PROTOCOL_ROWS.get(index).get(1).equals(Integer.toString(index)));
+      assert PROTOCOL_ROWS.get(index).size() == 5;
+      assert PROTOCOL_ROWS.get(index).get(1).equals(Integer.toString(index));
     }
-    assertTrue(EXPECTED.stream().distinct().count() == 12);
+    assert EXPECTED.stream().distinct().count() == 12;
     final StringBuilder registryPreimage = new StringBuilder();
     EXPECTED.forEach(value -> registryPreimage.append(value).append('\n'));
-    assertTrue(rows("registry-sha256")
-        .equals(Arrays.asList(Arrays.asList("registry-sha256", sha256Hex(registryPreimage.toString())))));
-    assertTrue(TYPED_ENVELOPE_ROWS.stream()
+    assert rows("registry-sha256")
+        .equals(Arrays.asList(Arrays.asList("registry-sha256", sha256Hex(registryPreimage.toString()))));
+    assert TYPED_ENVELOPE_ROWS.stream()
         .map(row -> row.subList(1, 4))
         .collect(Collectors.toList())
         .equals(
             PROTOCOL_ROWS.stream()
                 .map(row -> row.subList(2, 5))
-                .collect(Collectors.toList())));
-    assertTrue(TYPED_ENVELOPE_ROWS.size() == 12);
+                .collect(Collectors.toList()));
+    assert TYPED_ENVELOPE_ROWS.size() == 12;
     for (final List<String> row : TYPED_ENVELOPE_ROWS) {
-      assertTrue(row.size() == 6);
+      assert row.size() == 6;
       for (final String digest : row.subList(4, 6)) {
-        assertTrue(digest.matches("[0-9a-f]{64}"));
-        assertTrue(!digest.equals("0000000000000000000000000000000000000000000000000000000000000000"));
+        assert digest.matches("[0-9a-f]{64}");
+        assert !digest.equals(String.join("", Collections.nCopies(64, "0")));
       }
     }
-    assertTrue(RETIRED.stream().distinct().count() == RETIRED.size());
-    assertTrue(RETIRED.stream().noneMatch(EXPECTED::contains));
+    assert RETIRED.stream().distinct().count() == RETIRED.size();
+    assert RETIRED.stream().noneMatch(EXPECTED::contains);
   }
 
   @Test
-  void aliasesAndNonCanonicalSpellingsAreRejected() {
+  public void aliasesAndNonCanonicalSpellingsAreRejected() {
     final List<String> rejectedLabels = new ArrayList<>(RETIRED);
     rejectedLabels.addAll(
         Arrays.asList(
@@ -148,7 +147,7 @@ public final class PrivacyNativeBridgeJavaConsumerTest {
   }
 
   private static List<List<String>> loadExact12Matrix() {
-    Path cursor = java.nio.file.Paths.get("").toAbsolutePath().normalize();
+    Path cursor = Paths.get("").toAbsolutePath().normalize();
     Path fixture = null;
     while (cursor != null) {
       final Path candidate = cursor.resolve("fixtures/privacy/exact12_v1.tsv");
@@ -197,37 +196,36 @@ public final class PrivacyNativeBridgeJavaConsumerTest {
   }
 
   @Test
-  void sharedTypedValidatorStatusContractIsStable() {
-    assertTrue(PrivacyNativeBridge.COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES == 256 * 1024);
-    assertTrue(PrivacyNativeBridge.EXACT12_FIXTURE_BUNDLE_MAX_BYTES == 2 * 1024 * 1024);
+  public void sharedTypedValidatorStatusContractIsStable() {
+    assert PrivacyNativeBridge.COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES == 256 * 1024;
+    assert PrivacyNativeBridge.EXACT12_FIXTURE_BUNDLE_MAX_BYTES == 2 * 1024 * 1024;
     final PrivacyNativeBridge.CompiledProfileCatalogValidationStatusV1[] statuses =
         PrivacyNativeBridge.CompiledProfileCatalogValidationStatusV1.values();
-    assertTrue(statuses.length == 9);
+    assert statuses.length == 9;
     for (int index = 0; index < statuses.length; index++) {
-      assertTrue(statuses[index].getCode() == index);
+      assert statuses[index].getCode() == index;
     }
-    // Native descriptors and retired method absence are checked from bytecode by the JNI guard.
     final PrivacyNativeBridge.Exact12FixtureValidationStatusV1[] fixtureStatuses =
         PrivacyNativeBridge.Exact12FixtureValidationStatusV1.values();
-    assertTrue(fixtureStatuses.length == 9);
+    assert fixtureStatuses.length == 9;
     for (int index = 0; index < fixtureStatuses.length; index++) {
-      assertTrue(fixtureStatuses[index].getCode() == index);
+      assert fixtureStatuses[index].getCode() == index;
     }
   }
 
   @Test
-  void compiledProfileCatalogPreflightRejectsNullEmptyAndOversizeWithoutNativeCalls() {
-    assertTrue(PrivacyNativeBridge.validateCompiledProfileCatalogV1(null)
-        == PrivacyNativeBridge.CompiledProfileCatalogValidationStatusV1.NULL_POINTER);
-    assertTrue(PrivacyNativeBridge.validateCompiledProfileCatalogV1(new byte[0])
-        == PrivacyNativeBridge.CompiledProfileCatalogValidationStatusV1.EMPTY);
-    assertTrue(PrivacyNativeBridge.validateCompiledProfileCatalogV1(
+  public void compiledProfileCatalogPreflightRejectsNullEmptyAndOversizeWithoutNativeCalls() {
+    assert PrivacyNativeBridge.validateCompiledProfileCatalogV1(null)
+        == PrivacyNativeBridge.CompiledProfileCatalogValidationStatusV1.NULL_POINTER;
+    assert PrivacyNativeBridge.validateCompiledProfileCatalogV1(new byte[0])
+        == PrivacyNativeBridge.CompiledProfileCatalogValidationStatusV1.EMPTY;
+    assert PrivacyNativeBridge.validateCompiledProfileCatalogV1(
             new byte[PrivacyNativeBridge.COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES + 1])
-        == PrivacyNativeBridge.CompiledProfileCatalogValidationStatusV1.ARCHIVE_TOO_LARGE);
+        == PrivacyNativeBridge.CompiledProfileCatalogValidationStatusV1.ARCHIVE_TOO_LARGE;
   }
 
   @Test
-  void compiledProfileCatalogRoundTripsAndRejectsAdversarialBytesThroughNativeAbi23() {
+  public void compiledProfileCatalogRoundTripsAndRejectsAdversarialBytesThroughNativeAbi23() {
     final boolean available = PrivacyNativeBridge.isNativeAvailable();
     if (!available) {
       throw new AssertionError(
@@ -235,18 +233,18 @@ public final class PrivacyNativeBridgeJavaConsumerTest {
     }
 
     final byte[] canonical = PrivacyNativeBridge.compiledProfileCatalogV1();
-    assertTrue(canonical.length > 0);
-    assertTrue(canonical.length <= PrivacyNativeBridge.COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES);
-    assertTrue(PrivacyNativeBridge.validateCompiledProfileCatalogV1(canonical)
-        == PrivacyNativeBridge.CompiledProfileCatalogValidationStatusV1.VALID);
-    assertTrue(Arrays.equals(canonical, PrivacyNativeBridge.compiledProfileCatalogV1()));
+    assert canonical.length > 0;
+    assert canonical.length <= PrivacyNativeBridge.COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES;
+    assert PrivacyNativeBridge.validateCompiledProfileCatalogV1(canonical)
+        == PrivacyNativeBridge.CompiledProfileCatalogValidationStatusV1.VALID;
+    assert Arrays.equals(canonical, PrivacyNativeBridge.compiledProfileCatalogV1());
     final org.hyperledger.iroha.sdk.privacy.PrivacyCompiledProfileCatalogV1 typed =
         PrivacyNativeBridge.compiledProfileCatalogTypedV1();
-    assertTrue(typed.protocols.size() == 12);
-    assertTrue(Arrays.equals(
+    assert typed.protocols.size() == 12;
+    assert Arrays.equals(
         canonical,
         org.hyperledger.iroha.sdk.privacy.PrivacyCompiledProfileCatalogCodecV1.encodeCanonical(
-            typed)));
+            typed));
 
     final byte[][] truncated = {
       Arrays.copyOfRange(canonical, 0, canonical.length - 1),
@@ -254,36 +252,35 @@ public final class PrivacyNativeBridgeJavaConsumerTest {
       Arrays.copyOfRange(canonical, 0, canonical.length / 2)
     };
     for (final byte[] candidate : truncated) {
-      assertTrue(PrivacyNativeBridge.validateCompiledProfileCatalogV1(candidate)
-          != PrivacyNativeBridge.CompiledProfileCatalogValidationStatusV1.VALID);
-      // The corresponding internal require helper is covered by PrivacyNativeBridgeTest.
+      assert PrivacyNativeBridge.validateCompiledProfileCatalogV1(candidate)
+          != PrivacyNativeBridge.CompiledProfileCatalogValidationStatusV1.VALID;
     }
 
     final byte[] trailing = Arrays.copyOf(canonical, canonical.length + 1);
-    assertTrue(PrivacyNativeBridge.validateCompiledProfileCatalogV1(trailing)
-        != PrivacyNativeBridge.CompiledProfileCatalogValidationStatusV1.VALID);
+    assert PrivacyNativeBridge.validateCompiledProfileCatalogV1(trailing)
+        != PrivacyNativeBridge.CompiledProfileCatalogValidationStatusV1.VALID;
     final int[] mutationIndices = {0, canonical.length / 2, canonical.length - 1};
     for (final int index : mutationIndices) {
       final byte[] mutated = Arrays.copyOf(canonical, canonical.length);
       mutated[index] ^= (byte) 0x80;
-      assertTrue(PrivacyNativeBridge.validateCompiledProfileCatalogV1(mutated)
-          != PrivacyNativeBridge.CompiledProfileCatalogValidationStatusV1.VALID);
+      assert PrivacyNativeBridge.validateCompiledProfileCatalogV1(mutated)
+          != PrivacyNativeBridge.CompiledProfileCatalogValidationStatusV1.VALID;
     }
   }
 
   @Test
-  void exact12FixturePreflightRejectsNullEmptyAndOversizeWithoutNativeCalls() {
-    assertTrue(PrivacyNativeBridge.validateExact12FixtureBundleV1(null)
-        == PrivacyNativeBridge.Exact12FixtureValidationStatusV1.NULL_POINTER);
-    assertTrue(PrivacyNativeBridge.validateExact12FixtureBundleV1(new byte[0])
-        == PrivacyNativeBridge.Exact12FixtureValidationStatusV1.EMPTY);
-    assertTrue(PrivacyNativeBridge.validateExact12FixtureBundleV1(
+  public void exact12FixturePreflightRejectsNullEmptyAndOversizeWithoutNativeCalls() {
+    assert PrivacyNativeBridge.validateExact12FixtureBundleV1(null)
+        == PrivacyNativeBridge.Exact12FixtureValidationStatusV1.NULL_POINTER;
+    assert PrivacyNativeBridge.validateExact12FixtureBundleV1(new byte[0])
+        == PrivacyNativeBridge.Exact12FixtureValidationStatusV1.EMPTY;
+    assert PrivacyNativeBridge.validateExact12FixtureBundleV1(
             new byte[PrivacyNativeBridge.EXACT12_FIXTURE_BUNDLE_MAX_BYTES + 1])
-        == PrivacyNativeBridge.Exact12FixtureValidationStatusV1.ARCHIVE_TOO_LARGE);
+        == PrivacyNativeBridge.Exact12FixtureValidationStatusV1.ARCHIVE_TOO_LARGE;
   }
 
   @Test
-  void exact12FixtureBundleRoundTripsAndRejectsAdversarialBytesThroughNativeAbi23() {
+  public void exact12FixtureBundleRoundTripsAndRejectsAdversarialBytesThroughNativeAbi23() {
     final boolean available = PrivacyNativeBridge.isNativeAvailable();
     if (!available) {
       throw new AssertionError(
@@ -292,14 +289,14 @@ public final class PrivacyNativeBridgeJavaConsumerTest {
 
     final byte[] fetched = PrivacyNativeBridge.exact12FixtureBundleV1();
     final byte[] canonical = Arrays.copyOf(fetched, fetched.length);
-    assertTrue(canonical.length > 0);
-    assertTrue(canonical.length <= PrivacyNativeBridge.EXACT12_FIXTURE_BUNDLE_MAX_BYTES);
-    assertTrue(PrivacyNativeBridge.validateExact12FixtureBundleV1(canonical)
-        == PrivacyNativeBridge.Exact12FixtureValidationStatusV1.VALID);
-    assertTrue(Arrays.equals(canonical, PrivacyNativeBridge.exact12FixtureBundleV1()));
+    assert canonical.length > 0;
+    assert canonical.length <= PrivacyNativeBridge.EXACT12_FIXTURE_BUNDLE_MAX_BYTES;
+    assert PrivacyNativeBridge.validateExact12FixtureBundleV1(canonical)
+        == PrivacyNativeBridge.Exact12FixtureValidationStatusV1.VALID;
+    assert Arrays.equals(canonical, PrivacyNativeBridge.exact12FixtureBundleV1());
 
     fetched[0] ^= (byte) 0xff;
-    assertTrue(Arrays.equals(canonical, PrivacyNativeBridge.exact12FixtureBundleV1()));
+    assert Arrays.equals(canonical, PrivacyNativeBridge.exact12FixtureBundleV1());
 
     final byte[][] truncated = {
       Arrays.copyOfRange(canonical, 0, canonical.length - 1),
@@ -307,29 +304,26 @@ public final class PrivacyNativeBridgeJavaConsumerTest {
       Arrays.copyOfRange(canonical, 0, canonical.length / 2)
     };
     for (final byte[] candidate : truncated) {
-      assertTrue(PrivacyNativeBridge.validateExact12FixtureBundleV1(candidate)
-          != PrivacyNativeBridge.Exact12FixtureValidationStatusV1.VALID);
-      // The corresponding internal require helper is covered by PrivacyNativeBridgeTest.
+      assert PrivacyNativeBridge.validateExact12FixtureBundleV1(candidate)
+          != PrivacyNativeBridge.Exact12FixtureValidationStatusV1.VALID;
     }
 
     final byte[] trailing = Arrays.copyOf(canonical, canonical.length + 1);
-    assertTrue(PrivacyNativeBridge.validateExact12FixtureBundleV1(trailing)
-        != PrivacyNativeBridge.Exact12FixtureValidationStatusV1.VALID);
+    assert PrivacyNativeBridge.validateExact12FixtureBundleV1(trailing)
+        != PrivacyNativeBridge.Exact12FixtureValidationStatusV1.VALID;
 
     final int[] mutationIndices = {0, canonical.length / 2, canonical.length - 1};
     for (final int index : mutationIndices) {
       final byte[] mutated = Arrays.copyOf(canonical, canonical.length);
       mutated[index] ^= (byte) 0x80;
-      assertTrue(PrivacyNativeBridge.validateExact12FixtureBundleV1(mutated)
-          != PrivacyNativeBridge.Exact12FixtureValidationStatusV1.VALID);
+      assert PrivacyNativeBridge.validateExact12FixtureBundleV1(mutated)
+          != PrivacyNativeBridge.Exact12FixtureValidationStatusV1.VALID;
     }
 
-    assertTrue(PrivacyNativeBridge.validateExact12FixtureBundleV1(
+    assert PrivacyNativeBridge.validateExact12FixtureBundleV1(
             PrivacyNativeBridge.compiledProfileCatalogV1())
-        != PrivacyNativeBridge.Exact12FixtureValidationStatusV1.VALID);
+        != PrivacyNativeBridge.Exact12FixtureValidationStatusV1.VALID;
   }
-
-
 
   private static void assertThrows(final Runnable runnable) {
     try {

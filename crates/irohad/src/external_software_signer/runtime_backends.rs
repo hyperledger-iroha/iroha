@@ -5,12 +5,10 @@ use super::{
         ExternalSoftwareSignerBillingStatementAdapterV1,
         ExternalSoftwareSignerEvidenceViewerAdapterV1,
         ExternalSoftwareSignerGovernanceDagAdapterV1, ExternalSoftwareSignerPotrGatewayAdapterV1,
-        ExternalSoftwareSignerPotrProviderAdapterV1, ExternalSoftwareSignerStreamTokenAdapterV1,
+        ExternalSoftwareSignerPotrProviderAdapterV1,
     },
 };
-use iroha_torii::sorafs::{
-    PotrGatewaySignerV1 as _, PotrProviderSignerV1 as _, StreamTokenRuntimeSigner as _,
-};
+use iroha_torii::sorafs::{PotrGatewaySignerV1 as _, PotrProviderSignerV1 as _};
 use sorafs_node::{
     GovernanceDagRuntimeSigner as _, evidence_viewer::EvidenceViewerReceiptSignerV1 as _,
 };
@@ -25,7 +23,6 @@ pub struct ExternalSoftwareSignerBackendsV1 {
     potr_provider: Option<Arc<ExternalSoftwareSignerPotrProviderAdapterV1>>,
     billing_statement: Option<Arc<ExternalSoftwareSignerBillingStatementAdapterV1>>,
     evidence_viewer: Option<Arc<ExternalSoftwareSignerEvidenceViewerAdapterV1>>,
-    stream_token: Option<Arc<ExternalSoftwareSignerStreamTokenAdapterV1>>,
     pop_registry:
         Option<Arc<dyn iroha_torii::sorafs::pop_api::PopCredentialRuntimeProviderRegistryV1>>,
 }
@@ -41,7 +38,6 @@ impl ExternalSoftwareSignerBackendsV1 {
             potr_provider: None,
             billing_statement: None,
             evidence_viewer: None,
-            stream_token: None,
             pop_registry: None,
         }
     }
@@ -122,16 +118,6 @@ impl ExternalSoftwareSignerBackendsV1 {
     ) -> Result<(), ExternalSoftwareSignerAdapterErrorV1> {
         insert_once(&mut self.evidence_viewer, signer)
     }
-    /// Insert the sole stream-token signer.
-    ///
-    /// # Errors
-    /// Returns a role mismatch when the slot is already populated.
-    pub fn insert_stream_token(
-        &mut self,
-        signer: Arc<ExternalSoftwareSignerStreamTokenAdapterV1>,
-    ) -> Result<(), ExternalSoftwareSignerAdapterErrorV1> {
-        insert_once(&mut self.stream_token, signer)
-    }
     /// Insert the approved decorated `PoP` provider registry.
     ///
     /// # Errors
@@ -177,9 +163,6 @@ impl ExternalSoftwareSignerBackendsV1 {
         if let Some(signer) = self.evidence_viewer {
             backends = backends.with_evidence_viewer_receipt_signer(signer);
         }
-        if let Some(signer) = self.stream_token {
-            backends = backends.with_stream_token_signer(signer);
-        }
         if let Some(registry) = self.pop_registry {
             backends = backends.with_pop_credential_provider_registry(registry);
         }
@@ -194,7 +177,7 @@ impl ExternalSoftwareSignerBackendsV1 {
         bindings: &crate::IrohaRuntimeProviderBindingsV1,
     ) -> Result<(), crate::IrohaRuntimeProviderRegistryErrorV1> {
         let mut requested_native = [false; 4];
-        let mut requested_typed = [false; 7];
+        let mut requested_typed = [false; 6];
         for configured in bindings.iter() {
             use crate::IrohaRuntimeProviderSlotV1 as Slot;
             match configured.slot() {
@@ -276,14 +259,6 @@ impl ExternalSoftwareSignerBackendsV1 {
                     }
                     requested_typed[4] = true;
                 }
-                Slot::StreamTokenSigner => {
-                    let resolved = self.stream_token.as_deref().ok_or(registry_incomplete())?;
-                    exact_public_binding(configured, resolved.signer_binding())?;
-                    if configured.stream_token_signer_public_key() != Some(resolved.public_key()) {
-                        return Err(registry_mismatch());
-                    }
-                    requested_typed[5] = true;
-                }
                 Slot::PopCredentialProviderRegistry => {
                     let resolved = self.pop_registry.as_deref().ok_or(registry_incomplete())?;
                     let qualification =
@@ -294,7 +269,7 @@ impl ExternalSoftwareSignerBackendsV1 {
                     {
                         return Err(registry_mismatch());
                     }
-                    requested_typed[6] = true;
+                    requested_typed[5] = true;
                 }
                 _ => return Err(registry_incomplete()),
             }
@@ -306,7 +281,6 @@ impl ExternalSoftwareSignerBackendsV1 {
             self.potr_provider.is_some(),
             self.billing_statement.is_some(),
             self.evidence_viewer.is_some(),
-            self.stream_token.is_some(),
             self.pop_registry.is_some(),
         ];
         if requested_native != supplied_native || requested_typed != supplied_typed {

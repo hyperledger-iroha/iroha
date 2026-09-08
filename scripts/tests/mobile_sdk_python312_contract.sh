@@ -176,7 +176,7 @@ expect_failure_containing \
   "MOBILE_SDK_APPLE_CARGO_LOCK_PATH is not part of the first-release artifact contract" \
   env \
     MOBILE_SDK_APPLE_CARGO_LOCK_PATH="$ROOT_DIR/Cargo.lock" \
-    /bin/bash "$MOBILE_CHECKER" --root "$ROOT_DIR" --apple-only
+    /bin/bash "$MOBILE_CHECKER" --root "$ROOT_DIR" --lockfile-path "$ROOT_DIR/Cargo.lock" --apple-only
 
 mkdir -p "$TEST_ROOT/hostile-path" "$TEST_ROOT/forged-sdk"
 ln -s "$PYTHON312" "$TEST_ROOT/python312-link"

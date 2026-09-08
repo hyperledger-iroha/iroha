@@ -5450,7 +5450,7 @@ impl PinnedEndpoint {
                 "IPFS query is not canonical or bounded".to_owned(),
             ));
         }
-        {
+        if !canonical_query.is_empty() {
             let mut pairs = url.query_pairs_mut();
             for (key, value) in canonical_query {
                 pairs.append_pair(key, value);

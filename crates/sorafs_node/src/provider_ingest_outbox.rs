@@ -4,8 +4,6 @@
 //! signer material. It retains the immutable ledger binding, source-delivery crash state, and the
 //! exact signed completion transaction required for reconciliation.
 
-mod completion_codec;
-
 use crate::provider_ingest_runtime::{
     ProviderIngestVerifiedMusubiBundleReceiptV1, StoredProviderIngestVerifiedMusubiBundleReceiptV1,
 };
@@ -1255,34 +1253,6 @@ impl DeliveryRecord for StoredCompletionDeliveryV1 {
         self.signed_transaction = transaction;
     }
 }
-/// Pointer-sized completion storage that preserves the prior canonical codec.
-///
-/// Norito's generic `Box<T>` codec adds owned-value framing, so forwarding the
-/// inner codec explicitly keeps the durable checkpoint bytes unchanged.
-#[repr(transparent)]
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct BoxedStoredCompletionDeliveryV1(Box<StoredCompletionDeliveryV1>);
-impl BoxedStoredCompletionDeliveryV1 {
-    fn new(completion: StoredCompletionDeliveryV1) -> Self {
-        Self(Box::new(completion))
-    }
-}
-impl AsRef<StoredCompletionDeliveryV1> for BoxedStoredCompletionDeliveryV1 {
-    fn as_ref(&self) -> &StoredCompletionDeliveryV1 {
-        self.0.as_ref()
-    }
-}
-impl std::ops::Deref for BoxedStoredCompletionDeliveryV1 {
-    type Target = StoredCompletionDeliveryV1;
-    fn deref(&self) -> &Self::Target {
-        self.0.as_ref()
-    }
-}
-impl std::ops::DerefMut for BoxedStoredCompletionDeliveryV1 {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self.0.as_mut()
-    }
-}
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 enum StoredProviderIngestStateV1 {
     PendingSource,
@@ -1299,7 +1269,7 @@ enum StoredProviderIngestStateV1 {
     LocalStored {
         manifest_id: String,
         musubi_bundle: Option<Box<StoredProviderIngestVerifiedMusubiBundleReceiptV1>>,
-        completion: BoxedStoredCompletionDeliveryV1,
+        completion: Box<StoredCompletionDeliveryV1>,
     },
 }
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
@@ -2751,7 +2721,7 @@ impl ProviderIngestOutbox {
         candidate.active[position].state = StoredProviderIngestStateV1::LocalStored {
             manifest_id,
             musubi_bundle,
-            completion: BoxedStoredCompletionDeliveryV1::new(StoredCompletionDeliveryV1::default()),
+            completion: Box::default(),
         };
         self.persist_candidate(&mut state, candidate)
     }
@@ -6323,17 +6293,7 @@ mod tests {
             max_status_page_size: 4,
         }
     }
-    #[test]
-    fn boxed_completion_codec_preserves_prior_bytes() {
-        let completion = StoredCompletionDeliveryV1::default();
-        let boxed = BoxedStoredCompletionDeliveryV1::new(completion.clone());
-        let expected = norito::to_bytes(&completion).expect("encode prior completion layout");
-        let actual = norito::to_bytes(&boxed).expect("encode boxed completion layout");
-        assert_eq!(actual, expected);
-        let decoded: BoxedStoredCompletionDeliveryV1 =
-            norito::decode_from_bytes(&actual).expect("decode boxed completion layout");
-        assert_eq!(decoded.as_ref(), &completion);
-    }
+    include!("provider_ingest_outbox/tests/canonical_completion.rs");
     fn checkpoint_path(directory: &TempDir) -> PathBuf {
         fs::canonicalize(directory.path())
             .expect("canonical tempdir")

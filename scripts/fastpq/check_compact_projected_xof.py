@@ -55,10 +55,28 @@ def projection_controls():
                         "abort_tapes":counts[None],"preimages_per_root":successful[0]})
     return reports
 
-def raw_bound(q,overhead,h_count=12):
+def historical_binary_tapes(q):
+    """Original theorem's binary-XOF model only; no current protocol selector."""
+    rejection=F(2**32-1,2**64)
+    field_abort=sum(F(comb(k+6,7))*rejection**7 for k in B.FIELD_COUNTS)
+    candidates=q
+    while B.HONEST_ATTEMPTS*(field_abort+F(comb(candidates,q-1))*F(q-1,B.L)**(candidates-q+1))>=B.TARGET:
+        candidates+=1
+    sizes=[384,64*1374,64*3698,64*14]+[640]*17+[8*((19*candidates+7)//8)]
+    assert len(sizes)==22
+    return sizes
+
+
+def historical_xof_work(q):
+    """Count whole binary-XOF calls in this original model, not field blocks."""
     work=B.counters(q)
-    _,sizes,_,_=B.tapes(q)
-    Q=B.ADVERSARY+work["verifier_calls"]
+    return {**work,"whole_G_messages":22,"raw_XOF_calls":work["H_calls"]+22}
+
+
+def raw_bound(q,overhead,h_count=12):
+    work=historical_xof_work(q)
+    sizes=historical_binary_tapes(q)
+    Q=B.ADVERSARY+work["raw_XOF_calls"]
     T=overhead*Q
     delta=max(F(3*(T-1),B.P**6),
               max(e+F(T-1,2**z) for e,z in zip(B.errors(q),sizes)))
@@ -86,8 +104,12 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output",type=Path,default=ROOT/"target/fastpq-production-validation/compact-projected-xof-certificate.json")
     args=parser.parse_args()
+    before=B.source_hashes()
+    provenance=B.source_snapshot_controls()
     contracts=B.check_source_contracts()
-    Q=2**32+B.counters(375)["verifier_calls"]
+    assert historical_binary_tapes(375)[-1]==953*8
+    assert sum(historical_binary_tapes(375))//8==43049
+    Q=2**32+historical_xof_work(375)["raw_XOF_calls"]
     full_prover_H=3*(2*B.L-1)+sum(2*2**d-1 for d in range(2,19))+2+21
     assert full_prover_H==4194299
     rows=[]
@@ -109,20 +131,20 @@ def main():
     scenarios=[raw_bound(370,1),raw_bound(371,1),raw_bound(374,2),raw_bound(375,2),raw_bound(375,1,16)]
     assert [x["passes"] for x in scenarios]==[False,True,False,True,True]
     assert 54*6*(2**32)**2*B.errors(370)[-1]>B.TARGET
-    hashes=B.source_hashes()
-    for path in ["specs/fastpq_compact_projected_xof.md", "scripts/fastpq/check_compact_typed_profile.py",
-                 "crates/iroha_crypto/Cargo.toml"]:
-        hashes[path]=sha256((ROOT/path).read_bytes()).hexdigest()
+    toy_controls=projection_controls()
+    hashes=B.assert_source_snapshot(before)
     report={
-        "scope":"projected ideal raw-XOF lemma controls; no concrete SHAKE qualification",
+        "scope":"Historical projected ideal raw-XOF theorem controls; no current H/G selector or concrete qualification",
         "status":"pass","H_candidate_comparisons":rows,
         "oracle_interface_only_hybrid_is_not_a_raw_XOF_security_reduction":True,
         "projected_lemma_additive_abort_soundness_error":0,
         "concrete_SHAKE_instantiation_error":"unquantified; requires explicit joint assumption/review",
         "honest_full_prover_H_calls_projection":full_prover_H,
         "raw_binary_query_scenarios":scenarios,
-        "toy_uniform_projection_controls":projection_controls(),
+        "toy_uniform_projection_controls":toy_controls,
         "sources":hashes,"source_contracts":contracts,
+        "source_before_sha256":before,"source_after_sha256":hashes,
+        "source_snapshot_controls":provenance,
         "checker_sha256":sha256(Path(__file__).read_bytes()).hexdigest(),
     }
     output=args.output

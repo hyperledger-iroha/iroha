@@ -138,6 +138,9 @@ fn sample_inrou_published_artifact() -> SoraPublishedInrouGuestImageArtifactV1 {
     }
 }
 include!("soracloud_initial_fixture_tests.rs");
+#[cfg(feature = "zk-stark")]
+#[path = "soracloud_required_refresh_mode_tests.rs"]
+mod required_refresh_mode_tests;
 macro_rules! permissioned_soracloud_state {
     ($kura:ident, $state:ident) => {
         let $kura = Kura::blank_kura_for_testing();
@@ -461,7 +464,7 @@ fn sample_bfv_refresh_transcript() -> BfvEvaluationKeyRefreshTranscriptV1 {
         }],
         bootstrap_transcript: Some(BfvBootstrapRefreshTranscriptV1 {
             key_id: "bootstrap-test-key".to_string(),
-            max_refresh_rounds: 2,
+            max_refresh_rounds: 1,
             seed: b"soracloud-fhe-bootstrap-key".to_vec(),
         }),
     }
@@ -643,11 +646,50 @@ fn sample_fhe_payload(input: &[u8], seed: &[u8]) -> Vec<u8> {
     let public_parameters = BfvIdentifierPublicParameters {
         parameters: params,
         public_key,
-        max_input_bytes: 8,
+        max_input_bytes: iroha_crypto::fhe_bfv::RAM_LFE_BFV_IDENTIFIER_MAX_INPUT_BYTES,
     };
     let ciphertext =
         encrypt_identifier_from_seed(&public_parameters, input, seed).expect("encrypt");
     norito::encode_canonical(&ciphertext).expect("encode ciphertext")
+}
+#[test]
+fn sample_fhe_payload_uses_fixed_first_release_identifier_width() {
+    let params = ram_lfe_bfv_parameters_v1();
+    let (secret_key, public_key, _) =
+        keygen_from_seed(&params, b"soracloud-fhe-test-keygen").expect("fixture keygen");
+    let public_parameters = BfvIdentifierPublicParameters {
+        parameters: params,
+        public_key,
+        max_input_bytes: iroha_crypto::fhe_bfv::RAM_LFE_BFV_IDENTIFIER_MAX_INPUT_BYTES,
+    };
+    let maximum = vec![u8::MAX; usize::from(public_parameters.max_input_bytes)];
+    for input in [b"".as_slice(), b"abc".as_slice(), maximum.as_slice()] {
+        let encoded = sample_fhe_payload(input, b"soracloud-fixed-identifier-width");
+        let ciphertext =
+            decode_soracloud_fhe_envelope(&encoded).expect("canonical fixture envelope");
+        assert_eq!(ciphertext.slots.len(), RAM_LFE_BFV_IDENTIFIER_SLOT_COUNT);
+        assert_eq!(
+            norito::encode_canonical(&ciphertext).expect("canonical reencoding"),
+            encoded
+        );
+        assert_eq!(
+            decrypt_identifier(&public_parameters, &secret_key, &ciphertext)
+                .expect("decrypt fixture envelope"),
+            input
+        );
+    }
+    let oversized = vec![0; usize::from(public_parameters.max_input_bytes) + 1];
+    let error = encrypt_identifier_from_seed(
+        &public_parameters,
+        &oversized,
+        b"soracloud-fixed-identifier-width-too-long",
+    )
+    .expect_err("the fixture profile must reject a sixty-fourth input byte");
+    assert!(matches!(
+        error,
+        iroha_crypto::fhe_bfv::BfvError::InputTooLong { max_input_bytes }
+            if max_input_bytes == public_parameters.max_input_bytes
+    ));
 }
 fn structurally_truncated_fhe_payload() -> Vec<u8> {
     let canonical = norito::encode_canonical(&BfvIdentifierCiphertext { slots: Vec::new() })

@@ -9,7 +9,7 @@
 //! account provisioning, and persisted key-image replay.
 use eyre::{Result, WrapErr as _, ensure, eyre};
 use futures_util::TryStreamExt as _;
-use integration_tests::sandbox;
+use integration_tests::{sandbox, sync::rebind_blocking_client};
 use iroha::blocking::Client;
 use iroha_core::{
     privacy::PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1,
@@ -74,7 +74,7 @@ use iroha_data_model::{
     },
 };
 use iroha_executor_data_model::permission::governance::CanEnactGovernance;
-use iroha_test_network::{NetworkBuilder, init_instruction_registry};
+use iroha_test_network::{NetworkBuilder, init_instruction_registry, read_on_dedicated_thread};
 use iroha_test_samples::gen_account_in;
 use p256::ecdsa::{
     Signature as P256Signature, SigningKey as P256SigningKey, signature::hazmat::PrehashSigner as _,
@@ -194,10 +194,15 @@ struct VegaFixture {
     witness_material: VegaPrivacyActionWitnessMaterialV1,
     device_signing_key: P256SigningKey,
 }
-fn bounded_client(mut client: Client) -> Client {
-    client.transaction_status_timeout = SUBMISSION_TIMEOUT;
-    client.torii_request_timeout = Duration::from_secs(30);
-    client
+fn bounded_client(client: Client) -> Client {
+    rebind_blocking_client(&client, |client| {
+        client.transaction_status_timeout = SUBMISSION_TIMEOUT;
+        client.torii_request_timeout = Duration::from_secs(30);
+    })
+}
+async fn privacy_capabilities(client: &Client) -> Result<PrivacyExact12CapabilityManifestV1> {
+    let client = client.clone();
+    read_on_dedicated_thread(move || client.client().get_privacy_capabilities()).await
 }
 fn no_fee() -> FeePaymentIntent {
     FeePaymentIntent::authority(Vec::new(), None)
@@ -268,6 +273,7 @@ fn assert_exact_protocol_row(
 async fn canonical_genesis_hash(client: &Client) -> Result<[u8; 32]> {
     let genesis = timeout(CANONICAL_GENESIS_FETCH_TIMEOUT, async {
         let mut blocks = client
+            .client()
             .listen_for_blocks(NonZeroU64::MIN)
             .await
             .wrap_err("subscribe to canonical block replay from genesis")?;
@@ -290,9 +296,9 @@ async fn canonical_genesis_hash(client: &Client) -> Result<[u8; 32]> {
     ensure!(hash != [0; 32], "canonical genesis hash must be non-zero");
     Ok(hash)
 }
-fn next_incoming_height(client: &Client) -> Result<u64> {
-    client
-        .get_privacy_capabilities()
+async fn next_incoming_height(client: &Client) -> Result<u64> {
+    privacy_capabilities(&client)
+        .await
         .wrap_err("query committed height before governed transaction")?
         .committed_height
         .checked_add(1)
@@ -319,11 +325,10 @@ async fn submit_instruction(
     let instruction = instruction.into();
     timeout(
         SUBMISSION_TIMEOUT,
-        tokio::task::spawn_blocking(move || client.submit(instruction, no_fee())),
+        read_on_dedicated_thread(move || client.submit(instruction, no_fee())),
     )
     .await
     .map_err(|_| eyre!("{context}: instruction submission exceeded {SUBMISSION_TIMEOUT:?}"))?
-    .map_err(|error| eyre!("{context}: submission task failed: {error}"))?
     .wrap_err_with(|| context.to_owned())
 }
 async fn submit_signed_transaction(
@@ -335,11 +340,12 @@ async fn submit_signed_transaction(
     let transaction = transaction.clone();
     timeout(
         SUBMISSION_TIMEOUT,
-        tokio::task::spawn_blocking(move || client.submit_transaction_and_wait(&transaction)),
+        client
+            .account_client()
+            .submit_transaction_and_wait(&transaction),
     )
     .await
     .map_err(|_| eyre!("{context}: signed transaction exceeded {SUBMISSION_TIMEOUT:?}"))?
-    .map_err(|error| eyre!("{context}: submission task failed: {error}"))?
     .wrap_err_with(|| context.to_owned())
 }
 async fn wait_for_all_peer_activations(
@@ -359,7 +365,7 @@ async fn wait_for_all_peer_activations(
         last_observed.clear();
         for (index, peer) in network.peers().iter().enumerate() {
             let client = bounded_client(peer.client());
-            match client.get_privacy_capabilities() {
+            match privacy_capabilities(&client).await {
                 Ok(snapshot) => {
                     if snapshot.committed_height < minimum_height {
                         last_observed.push(format!(
@@ -409,8 +415,8 @@ async fn wait_for_all_peer_activations(
     }
 }
 async fn advance_to_exact_height(client: &Client, target_height: u64, label: &str) -> Result<()> {
-    let start = client
-        .get_privacy_capabilities()
+    let start = privacy_capabilities(&client)
+        .await
         .wrap_err("query height before deterministic activation advance")?
         .committed_height;
     ensure!(
@@ -433,8 +439,8 @@ async fn advance_to_exact_height(client: &Client, target_height: u64, label: &st
             .await?;
         }
     }
-    let observed = client
-        .get_privacy_capabilities()
+    let observed = privacy_capabilities(&client)
+        .await
         .wrap_err("query height after deterministic activation advance")?
         .committed_height;
     ensure!(
@@ -443,42 +449,49 @@ async fn advance_to_exact_height(client: &Client, target_height: u64, label: &st
     );
     Ok(())
 }
-fn exact_applied_transaction_visible(
+async fn exact_applied_transaction_visible(
     client: &Client,
     transaction: &SignedTransaction,
 ) -> Result<bool> {
-    let signed_hash = transaction.hash();
-    let Some(status) = client
-        .get_transaction_status_response_local(signed_hash)
-        .wrap_err("query exact peer-local transaction status")?
-    else {
-        return Ok(false);
-    };
-    match (status.status.kind.as_str(), status.resolved_from.as_str()) {
-        ("Applied", "state") => {}
-        ("Rejected" | "Expired", "state") => {
-            return Err(eyre!(
-                "canonical privacy transaction reached terminal {} status",
-                status.status.kind
-            ));
+    let client = client.clone();
+    let transaction = transaction.clone();
+    read_on_dedicated_thread(move || {
+        let signed_hash = transaction.hash();
+        let Some(status) = client
+            .client()
+            .get_transaction_status_response_local(signed_hash)
+            .wrap_err("query exact peer-local transaction status")?
+        else {
+            return Ok(false);
+        };
+        match (status.status.kind.as_str(), status.resolved_from.as_str()) {
+            ("Applied", "state") => {}
+            ("Rejected" | "Expired", "state") => {
+                return Err(eyre!(
+                    "canonical privacy transaction reached terminal {} status",
+                    status.status.kind
+                ));
+            }
+            _ => return Ok(false),
         }
-        _ => return Ok(false),
-    }
-    let expected_hash = transaction.hash_as_entrypoint();
-    let expected_entrypoint = TransactionEntrypoint::External(transaction.clone());
-    let details = client
-        .get_successful_transaction_details(expected_hash)
-        .wrap_err("query exact successful transaction details")?;
-    let committed = &details.transaction;
-    ensure!(
-        committed.entrypoint() == &expected_entrypoint,
-        "entrypoint hash matched different transaction bytes"
-    );
-    ensure!(
-        committed.result().0.is_ok(),
-        "canonical privacy transaction is visible but finalized as rejected"
-    );
-    Ok(true)
+        let expected_hash = transaction.hash_as_entrypoint();
+        let expected_entrypoint = TransactionEntrypoint::External(transaction.clone());
+        let details = client
+            .client()
+            .get_successful_transaction_details(expected_hash)
+            .wrap_err("query exact successful transaction details")?;
+        let committed = &details.transaction;
+        ensure!(
+            committed.entrypoint() == &expected_entrypoint,
+            "entrypoint hash matched different transaction bytes"
+        );
+        ensure!(
+            committed.result().0.is_ok(),
+            "canonical privacy transaction is visible but finalized as rejected"
+        );
+        Ok(true)
+    })
+    .await
 }
 async fn wait_for_transactions_on_peers(
     clients: &[Client],
@@ -492,7 +505,7 @@ async fn wait_for_transactions_on_peers(
         last_observed.clear();
         for (peer_index, client) in clients.iter().enumerate() {
             for (label, transaction) in transactions {
-                match exact_applied_transaction_visible(client, transaction) {
+                match exact_applied_transaction_visible(client, transaction).await {
                     Ok(true) => {
                         visible += 1;
                         last_observed.push(format!(
@@ -521,16 +534,18 @@ async fn wait_for_transactions_on_peers(
         sleep(POLL_INTERVAL).await;
     }
 }
-fn assert_zk_ams_account_state(
+async fn assert_zk_ams_account_state(
     client: &Client,
     provisioned_account: &AccountId,
     rejected_accounts: &[&AccountId],
     context: &str,
 ) -> Result<()> {
-    let accounts = client
-        .query(FindAccounts)
-        .execute_all()
-        .wrap_err_with(|| format!("{context}: query accounts"))?;
+    let read_client = client.clone();
+    let accounts = read_on_dedicated_thread(move || {
+        Ok(read_client.client().query(FindAccounts).execute_all()?)
+    })
+    .await
+    .wrap_err_with(|| format!("{context}: query accounts"))?;
     let provisioned = accounts
         .iter()
         .filter(|account| &account.id == provisioned_account)
@@ -575,7 +590,9 @@ async fn wait_for_zk_ams_account_state_on_peers(
                 provisioned_account,
                 rejected_accounts,
                 context,
-            ) {
+            )
+            .await
+            {
                 Ok(()) => {
                     exact += 1;
                     last_observed.push(format!("peer {peer_index}: exact ZK-AMS account state"));
@@ -698,8 +715,8 @@ fn zk_ams_transaction_context(
     nonce: u32,
 ) -> ZkAmsPrivacyActionTransactionContextV1 {
     ZkAmsPrivacyActionTransactionContextV1 {
-        network_id: client.network_id,
-        authority: client.account.clone(),
+        network_id: client.client().network_id,
+        authority: client.client().account.clone(),
         creation_time,
         time_to_live: Some(ACTION_TTL),
         nonce: NonZeroU32::new(nonce),
@@ -734,7 +751,7 @@ fn build_transaction_from_envelope(
         .wrap_err("validate final ZK-AMS transaction intent")?;
     let signed = TransactionBuilder::from_payload(payload)
         .wrap_err("re-open final ZK-AMS payload for signing")?
-        .try_sign(client.key_pair.private_key())
+        .try_sign(client.client().key_pair.private_key())
         .wrap_err("sign final ZK-AMS transaction")?;
     signed
         .verify_signature()
@@ -1259,8 +1276,8 @@ fn build_vega_action(
         .map_err(|_| eyre!("Vega trusted timestamp exceeded u64"))?;
     let fixture = vega_fixture(trusted_timestamp_ms, challenge_byte)?;
     let context = VegaPrivacyActionTransactionContextV1 {
-        network_id: client.network_id,
-        authority: client.account.clone(),
+        network_id: client.client().network_id,
+        authority: client.client().account.clone(),
         creation_time,
         time_to_live: Some(ACTION_TTL),
         nonce: NonZeroU32::new(nonce),
@@ -1275,7 +1292,7 @@ fn build_vega_action(
         &fixture.device_signing_key,
         canonical_genesis_hash,
         trusted_timestamp_ms,
-        client.key_pair.private_key(),
+        client.client().key_pair.private_key(),
         &mut rng,
     )
     .map_err(|error| eyre!("build canonical signed Vega action: {error}"))?;
@@ -1303,7 +1320,7 @@ fn independently_resigned_stale_intent(
         Some(NonZeroU32::new(nonce).ok_or_else(|| eyre!("stale-intent nonce must be non-zero"))?);
     let stale = TransactionBuilder::from_payload(payload)
         .wrap_err("re-open stale-intent payload")?
-        .try_sign(client.key_pair.private_key())
+        .try_sign(client.client().key_pair.private_key())
         .wrap_err("independently sign stale-intent payload")?;
     stale
         .verify_signature()
@@ -1378,7 +1395,7 @@ fn independently_resigned_governance_tamper(
     );
     let tampered = TransactionBuilder::from_payload(payload)
         .wrap_err("re-open governance-tampered payload")?
-        .try_sign(client.key_pair.private_key())
+        .try_sign(client.client().key_pair.private_key())
         .wrap_err("independently sign governance-tampered payload")?;
     tampered
         .verify_signature()
@@ -1424,7 +1441,7 @@ fn independently_resigned_vega_proof_corruption(
     );
     let corrupt = TransactionBuilder::from_payload(payload)
         .wrap_err("re-open proof-corrupted Vega payload")?
-        .try_sign(client.key_pair.private_key())
+        .try_sign(client.client().key_pair.private_key())
         .wrap_err("independently sign proof-corrupted Vega payload")?;
     corrupt
         .verify_signature()
@@ -1503,7 +1520,10 @@ async fn canonical_zk_ams_and_vega_actions_survive_four_validator_activation_rep
         let vega_snapshot: PrivacyCompiledProfileSnapshotV1 = vega_compiled.into();
         submit_instruction(
             &client,
-            Grant::account_permission(Permission::from(CanEnactGovernance), client.account.clone()),
+            Grant::account_permission(
+                Permission::from(CanEnactGovernance),
+                client.client().account.clone(),
+            ),
             "grant CanEnactGovernance",
         )
         .await?;
@@ -1511,7 +1531,7 @@ async fn canonical_zk_ams_and_vega_actions_survive_four_validator_activation_rep
             (ZK_AMS_PROTOCOL, zk_compiled, zk_snapshot),
             (VEGA_PROTOCOL, vega_compiled, vega_snapshot),
         ] {
-            let incoming = next_incoming_height(&client)?;
+            let incoming = next_incoming_height(&client).await?;
             let mut mismatched = proposed_activation(
                 compiled,
                 incoming,
@@ -1546,8 +1566,8 @@ async fn canonical_zk_ams_and_vega_actions_survive_four_validator_activation_rep
             )
             .await?;
             assert_exact_protocol_row(
-                &client
-                    .get_privacy_capabilities()
+                &privacy_capabilities(&client)
+                    .await
                     .wrap_err("query local row after activation mismatch")?,
                 protocol,
                 snapshot,
@@ -1555,7 +1575,7 @@ async fn canonical_zk_ams_and_vega_actions_survive_four_validator_activation_rep
                 "local mismatch row",
             )?;
         }
-        let zk_registration_height = next_incoming_height(&client)?;
+        let zk_registration_height = next_incoming_height(&client).await?;
         let expected_vega_registration_height = zk_registration_height
             .checked_add(1)
             .ok_or_else(|| eyre!("Vega registration height overflowed"))?;
@@ -1570,7 +1590,7 @@ async fn canonical_zk_ams_and_vega_actions_survive_four_validator_activation_rep
             "register exact compiled ZK-AMS activation",
         )
         .await?;
-        let vega_registration_height = next_incoming_height(&client)?;
+        let vega_registration_height = next_incoming_height(&client).await?;
         ensure!(
             vega_registration_height == expected_vega_registration_height,
             "Vega proposal landed at {vega_registration_height}, expected \
@@ -1780,10 +1800,12 @@ async fn canonical_zk_ams_and_vega_actions_survive_four_validator_activation_rep
                 && replay_account != restart_replay_account,
             "ZK-AMS provisioning and replay targets must be distinct"
         );
-        let accounts_before_provision = client
-            .query(FindAccounts)
-            .execute_all()
-            .wrap_err("query accounts before ZK-AMS provisioning")?;
+        let read_client = client.clone();
+        let accounts_before_provision = read_on_dedicated_thread(move || {
+            Ok(read_client.client().query(FindAccounts).execute_all()?)
+        })
+        .await
+        .wrap_err("query accounts before ZK-AMS provisioning")?;
         for account_id in [
             &provisioned_account,
             &replay_account,
@@ -1933,8 +1955,8 @@ async fn canonical_zk_ams_and_vega_actions_survive_four_validator_activation_rep
                 "submitted {label} transaction hash differs from signed bytes"
             );
         }
-        let finalized_height = client
-            .get_privacy_capabilities()
+        let finalized_height = privacy_capabilities(&client)
+            .await
             .wrap_err("query height after ZK-AMS admission/provision and Vega finality")?
             .committed_height;
         let healthy_clients = network
@@ -1973,8 +1995,8 @@ async fn canonical_zk_ams_and_vega_actions_survive_four_validator_activation_rep
         )
         .await?;
         ensure!(
-            client
-                .get_privacy_capabilities()
+            privacy_capabilities(&client)
+                .await
                 .wrap_err("query height after independent ZK-AMS key-image replay")?
                 .committed_height
                 == finalized_height,
@@ -1993,17 +2015,23 @@ async fn canonical_zk_ams_and_vega_actions_survive_four_validator_activation_rep
             ("ZK-AMS provision", &zk_provision.transaction),
             ("Vega", &vega_final),
         ] {
-            let replay_error = client
-                .submit_transaction(transaction)
-                .expect_err("exact finalized privacy transaction replay was accepted");
+            let replay_error = timeout(
+                SUBMISSION_TIMEOUT,
+                client.account_client().submit_transaction(transaction),
+            )
+            .await
+            .map_err(|_| {
+                eyre!("exact {label} privacy replay submission exceeded {SUBMISSION_TIMEOUT:?}")
+            })?
+            .expect_err("exact finalized privacy transaction replay was accepted");
             ensure!(
                 is_exact_replay_error(&replay_error),
                 "exact {label} replay rejected for wrong reason: {replay_error:?}"
             );
         }
         ensure!(
-            client
-                .get_privacy_capabilities()
+            privacy_capabilities(&client)
+                .await
                 .wrap_err("query height after exact replay rejections")?
                 .committed_height
                 == finalized_height,
@@ -2061,8 +2089,8 @@ async fn canonical_zk_ams_and_vega_actions_survive_four_validator_activation_rep
         )
         .await?;
         ensure!(
-            restarted_client
-                .get_privacy_capabilities()
+            privacy_capabilities(&restarted_client)
+                .await
                 .wrap_err("query restarted height after persisted key-image replay")?
                 .committed_height
                 == finalized_height,
@@ -2140,12 +2168,12 @@ async fn canonical_vega_action_survives_four_validator_activation_replay_and_res
             &client,
             Grant::account_permission(
                 Permission::from(CanEnactGovernance),
-                client.account.clone(),
+                client.client().account.clone(),
             ),
             "grant CanEnactGovernance for Vega",
         )
         .await?;
-        let mismatch_height = next_incoming_height(&client)?;
+        let mismatch_height = next_incoming_height(&client).await?;
         let mut mismatched = proposed_activation(
             compiled,
             mismatch_height,
@@ -2169,7 +2197,7 @@ async fn canonical_vega_action_survives_four_validator_activation_replay_and_res
             error_chain_contains(&mismatch_error, "does not match compiled native profile"),
             "Vega compiled-digest rejection had wrong reason: {mismatch_error:?}"
         );
-        let registration_height = next_incoming_height(&client)?;
+        let registration_height = next_incoming_height(&client).await?;
         let activation_height = registration_height
             .checked_add(PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1)
             .ok_or_else(|| eyre!("Vega activation height overflowed"))?;
@@ -2305,8 +2333,7 @@ async fn canonical_vega_action_survives_four_validator_activation_replay_and_res
             *submitted.as_ref() == *final_action.hash().as_ref(),
             "submitted Vega transaction hash differs from signed bytes"
         );
-        let finalized_height = client
-            .get_privacy_capabilities()
+        let finalized_height = privacy_capabilities(&client).await
             .wrap_err("query height after Vega finality")?
             .committed_height;
         let healthy_clients = network
@@ -2322,8 +2349,7 @@ async fn canonical_vega_action_survives_four_validator_activation_replay_and_res
             "healthy-validator Vega finality",
         )
         .await?;
-        let replay_error = client
-            .submit_transaction(&final_action)
+        let replay_error = timeout(SUBMISSION_TIMEOUT, client.account_client().submit_transaction(&final_action)).await.map_err(|_| eyre!("exact Vega replay submission exceeded {SUBMISSION_TIMEOUT:?}"))?
             .expect_err("exact finalized Vega transaction replay was accepted");
         ensure!(
             is_exact_replay_error(&replay_error),

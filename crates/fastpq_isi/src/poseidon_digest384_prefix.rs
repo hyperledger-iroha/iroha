@@ -6,7 +6,7 @@
 //! remain independent and unchanged. No digest coordinate, lane separation,
 //! field delimiter, or integer byte encoding is changed.
 
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 use crate::{
     poseidon::{FIELD_MODULUS, MDS, RATE, STATE_WIDTH},
@@ -201,6 +201,133 @@ impl<'a> GoldilocksDigest384DomainPrefixV1<'a> {
     }
 }
 
+/// Owned immutable byte fields and complete numeric suffix of a canonical digest domain.
+///
+/// Arc-backed fields permit independent prefixes to share a complete public context
+/// without replacing it by a digest or making a copy for every role or tree level.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GoldilocksDigest384OwnedDomainV1 {
+    /// Exact final catalog identity.
+    pub catalog: Arc<[u8]>,
+    /// Exact canonical native-STARK protocol identity.
+    pub protocol: Arc<[u8]>,
+    /// Complete canonical profile descriptor, including any caller-bound context.
+    pub profile: Arc<[u8]>,
+    /// Tree, oracle or transcript role.
+    pub role: Arc<[u8]>,
+    /// Protocol phase within the role.
+    pub phase: Arc<[u8]>,
+    /// Exact tree level, or zero for non-tree roles.
+    pub level: u64,
+    /// Default index used by the prefix's non-overriding hash method.
+    pub index: u64,
+    /// Exact transcript or challenge counter.
+    pub counter: u64,
+}
+
+impl GoldilocksDigest384OwnedDomainV1 {
+    /// Borrow the exact canonical domain without allocation or metadata substitution.
+    #[must_use]
+    pub fn as_borrowed(&self) -> GoldilocksDigestDomainV1<'_> {
+        GoldilocksDigestDomainV1 {
+            catalog: &self.catalog,
+            protocol: &self.protocol,
+            profile: &self.profile,
+            role: &self.role,
+            phase: &self.phase,
+            level: self.level,
+            index: self.index,
+            counter: self.counter,
+        }
+    }
+}
+
+/// Owned reusable snapshot of the one canonical six-lane domain-prefix implementation.
+///
+/// Construction delegates to [`GoldilocksDigest384DomainPrefixV1::new`]. Every
+/// operation resumes through that same prefix implementation; no independent
+/// permutation, framing algorithm, lane parameter owner or mutable cache is added.
+/// Clones share the immutable snapshot and all complete domain byte fields.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GoldilocksDigest384OwnedDomainPrefixV1 {
+    inner: Arc<OwnedDomainPrefix>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct OwnedDomainPrefix {
+    lane_states: [[u64; STATE_WIDTH]; GOLDILOCKS_DIGEST384_LANES_V1],
+    pending: [u64; RATE],
+    pending_len: usize,
+    domain: GoldilocksDigest384OwnedDomainV1,
+}
+
+impl GoldilocksDigest384OwnedDomainPrefixV1 {
+    /// Absorb the complete owned domain through tag 7 using the canonical owner.
+    ///
+    /// Returns `None` for the same oversized domain fields as the borrowed owner.
+    #[must_use]
+    pub fn new(domain: GoldilocksDigest384OwnedDomainV1) -> Option<Self> {
+        let prefix = GoldilocksDigest384DomainPrefixV1::new(domain.as_borrowed())?;
+        let lane_states = prefix.lane_states;
+        let pending = prefix.pending;
+        let pending_len = prefix.pending_len;
+        Some(Self {
+            inner: Arc::new(OwnedDomainPrefix {
+                lane_states,
+                pending,
+                pending_len,
+                domain,
+            }),
+        })
+    }
+
+    /// Retain access to the complete immutable context and every original domain field.
+    #[must_use]
+    pub fn domain(&self) -> GoldilocksDigestDomainV1<'_> {
+        self.inner.domain.as_borrowed()
+    }
+
+    /// Hash exact ordered fields at the original index with canonical framing bounds.
+    #[must_use]
+    pub fn hash(&self, fields: &[&[u8]]) -> Option<GoldilocksDigest384V1> {
+        self.borrowed_prefix().hash(fields)
+    }
+
+    /// Override only the full-width index while reusing the complete immutable prefix.
+    #[must_use]
+    pub fn hash_at(&self, index: u64, fields: &[&[u8]]) -> Option<GoldilocksDigest384V1> {
+        self.borrowed_prefix().hash_at(index, fields)
+    }
+
+    /// Construct the unchanged canonical stream using the complete owned domain.
+    ///
+    /// This delegates to the existing stream handoff, including its framing limits
+    /// and atomic-error behavior; it does not introduce another stream permutation.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same framing-limit error as the borrowed prefix's stream handoff.
+    pub fn last_field_stream_at(
+        &self,
+        index: u64,
+        prefix_fields: &[&[u8]],
+        final_field_len: usize,
+    ) -> Result<GoldilocksDigest384LastFieldStreamV1, GoldilocksDigest384LastFieldStreamErrorV1>
+    {
+        self.borrowed_prefix()
+            .last_field_stream_at(index, prefix_fields, final_field_len)
+    }
+
+    fn borrowed_prefix(&self) -> GoldilocksDigest384DomainPrefixV1<'_> {
+        GoldilocksDigest384DomainPrefixV1 {
+            lane_states: self.inner.lane_states,
+            pending: self.inner.pending,
+            pending_len: self.inner.pending_len,
+            domain: self.domain(),
+        }
+    }
+}
+
 /// Private execution state for the exact public canonical lane parameters.
 struct CachedLane {
     state: [u64; STATE_WIDTH],
@@ -382,6 +509,232 @@ mod tests {
         }
         assert_eq!(actual.lane_prefix_v1(GOLDILOCKS_DIGEST384_LANES_V1), None);
         assert_eq!(actual.lane_prefix_v1(usize::MAX), None);
+    }
+
+    fn owned_domain(domain: GoldilocksDigestDomainV1<'_>) -> GoldilocksDigest384OwnedDomainV1 {
+        GoldilocksDigest384OwnedDomainV1 {
+            catalog: Arc::from(domain.catalog),
+            protocol: Arc::from(domain.protocol),
+            profile: Arc::from(domain.profile),
+            role: Arc::from(domain.role),
+            phase: Arc::from(domain.phase),
+            level: domain.level,
+            index: domain.index,
+            counter: domain.counter,
+        }
+    }
+
+    #[test]
+    fn owned_prefix_matches_independent_oracle_at_both_rate_positions_and_full_integers() {
+        fn assert_worker_safe<T: Clone + Send + Sync>() {}
+        assert_worker_safe::<GoldilocksDigest384OwnedDomainPrefixV1>();
+        let mut positions = [false; RATE];
+        for length in 0..=15 {
+            let profile = bytes(length, 813);
+            // Vary all three integer fields across field and machine boundaries.
+            for (level, counter) in [
+                (0, u64::MAX),
+                (FIELD_MODULUS - 1, FIELD_MODULUS),
+                (FIELD_MODULUS, FIELD_MODULUS - 1),
+                (u64::MAX, 0),
+            ] {
+                let selected = GoldilocksDigestDomainV1 {
+                    profile: &profile,
+                    level,
+                    counter,
+                    ..domain()
+                };
+                let borrowed = GoldilocksDigest384DomainPrefixV1::new(selected).unwrap();
+                let cache =
+                    GoldilocksDigest384OwnedDomainPrefixV1::new(owned_domain(selected)).unwrap();
+                positions[cache.inner.pending_len] = true;
+                assert_eq!(cache.domain(), selected);
+                assert_eq!(cache.borrowed_prefix(), borrowed);
+                let original = cache.clone();
+                for index in [0, 1, FIELD_MODULUS - 1, FIELD_MODULUS, u64::MAX] {
+                    let indexed = GoldilocksDigestDomainV1 { index, ..selected };
+                    for fields in [
+                        Vec::<&[u8]>::new(),
+                        vec![b"".as_slice()],
+                        vec![b"".as_slice(), b"".as_slice()],
+                        vec![
+                            b"1234567".as_slice(),
+                            b"".as_slice(),
+                            b"abcdefgh".as_slice(),
+                        ],
+                    ] {
+                        let expected = hash_bytes_384_v1(indexed, &fields);
+                        assert_eq!(cache.hash_at(index, &fields), expected);
+                        assert_eq!(borrowed.hash_at(index, &fields), expected);
+                    }
+                }
+                assert_eq!(
+                    cache.hash(&[b"default index"]),
+                    hash_bytes_384_v1(selected, &[b"default index"])
+                );
+                assert_ne!(cache.hash(&[]), cache.hash(&[b""]));
+                assert_eq!(cache, original);
+                assert!(Arc::ptr_eq(&cache.inner, &original.inner));
+            }
+        }
+        assert!(positions.into_iter().all(|seen| seen));
+    }
+
+    #[test]
+    fn owned_prefix_streams_match_independent_snapshots_chunking_and_zero_fields() {
+        let mut positions = [false; RATE];
+        for length in 0..=15 {
+            let profile = bytes(length, 59);
+            let selected = GoldilocksDigestDomainV1 {
+                profile: &profile,
+                index: u64::MAX,
+                ..domain()
+            };
+            let cache =
+                GoldilocksDigest384OwnedDomainPrefixV1::new(owned_domain(selected)).unwrap();
+            positions[cache.inner.pending_len] = true;
+            for prefixes in [
+                Vec::<&[u8]>::new(),
+                vec![b"".as_slice()],
+                vec![b"1234567".as_slice(), b"abcdefgh".as_slice()],
+            ] {
+                for final_len in [0, 1, 6, 7, 8, 14, 15, 48] {
+                    let payload = bytes(final_len, 201);
+                    let fields: Vec<&[u8]> = prefixes
+                        .iter()
+                        .copied()
+                        .chain([payload.as_slice()])
+                        .collect();
+                    let expected = hash_bytes_384_v1(selected, &fields).unwrap();
+                    for chunk_size in [1, 7, 8, 13] {
+                        let mut stream = cache
+                            .last_field_stream_at(selected.index, &prefixes, final_len)
+                            .unwrap();
+                        let mut independent = GoldilocksDigest384LastFieldStreamV1::new(
+                            selected, &prefixes, final_len,
+                        )
+                        .unwrap();
+                        assert_stream_eq(&stream, &independent);
+                        for chunk in payload.chunks(chunk_size) {
+                            stream.update(chunk).unwrap();
+                            independent.update(chunk).unwrap();
+                            assert_stream_eq(&stream, &independent);
+                        }
+                        assert_eq!(stream.finalize().unwrap(), expected);
+                        assert_eq!(independent.finalize().unwrap(), expected);
+                        assert_eq!(cache.hash(&fields), Some(expected));
+                    }
+                }
+            }
+        }
+        assert!(positions.into_iter().all(|seen| seen));
+    }
+
+    #[test]
+    fn owned_prefix_retains_long_context_once_and_survives_concurrent_reuse() {
+        let profile: Arc<[u8]> = Arc::from(bytes(256 * 1024, 103));
+        let mut descriptor = owned_domain(domain());
+        descriptor.profile = profile.clone();
+        let cache = GoldilocksDigest384OwnedDomainPrefixV1::new(descriptor).unwrap();
+        assert!(Arc::ptr_eq(&profile, &cache.inner.domain.profile));
+        assert_eq!(Arc::strong_count(&profile), 2);
+        // Two one-shot long-context oracles suffice; each worker reuses both.
+        let cases = [0, u64::MAX].map(|index| {
+            (
+                index,
+                hash_bytes_384_v1(
+                    GoldilocksDigestDomainV1 {
+                        index,
+                        ..cache.domain()
+                    },
+                    &[b"", b"complete body"],
+                )
+                .unwrap(),
+            )
+        });
+        let saved = cache.clone();
+        drop(profile);
+        assert_eq!(Arc::strong_count(&cache.inner.domain.profile), 1);
+        std::thread::scope(|scope| {
+            for _ in 0..8 {
+                let worker = cache.clone();
+                let cases = &cases;
+                scope.spawn(move || {
+                    for _ in 0..4 {
+                        for &(index, expected) in cases {
+                            assert_eq!(
+                                worker.hash_at(index, &[b"", b"complete body"]),
+                                Some(expected)
+                            );
+                        }
+                    }
+                });
+            }
+        });
+        assert!(Arc::ptr_eq(&cache.inner, &saved.inner));
+        assert_eq!(cache, saved);
+        let mut changed = cache.inner.domain.clone();
+        let mut changed_bytes = changed.profile.to_vec();
+        *changed_bytes.last_mut().unwrap() ^= 1;
+        changed.profile = Arc::from(changed_bytes);
+        let different = GoldilocksDigest384OwnedDomainPrefixV1::new(changed).unwrap();
+        assert_ne!(
+            cache.hash(&[b"complete body"]),
+            different.hash(&[b"complete body"])
+        );
+    }
+
+    #[test]
+    fn owned_prefix_stream_errors_preserve_snapshot_and_preallocation_bounds() {
+        let cache = GoldilocksDigest384OwnedDomainPrefixV1::new(owned_domain(domain())).unwrap();
+        let mut stream = cache.last_field_stream_at(u64::MAX, &[b""], 8).unwrap();
+        let pristine = stream;
+        assert_eq!(
+            stream.update(&[0; 9]),
+            Err(GoldilocksDigest384LastFieldStreamErrorV1::InputOverrun {
+                expected: 8,
+                received: 0,
+                additional: 9
+            })
+        );
+        assert_stream_eq(&stream, &pristine);
+        stream.update(b"123456").unwrap();
+        let partial = stream;
+        assert_eq!(
+            stream.update(b"789"),
+            Err(GoldilocksDigest384LastFieldStreamErrorV1::InputOverrun {
+                expected: 8,
+                received: 6,
+                additional: 3
+            })
+        );
+        assert_stream_eq(&stream, &partial);
+        assert_eq!(
+            stream.finalize(),
+            Err(GoldilocksDigest384LastFieldStreamErrorV1::InputUnderrun {
+                expected: 8,
+                received: 6
+            })
+        );
+        stream.update(b"78").unwrap();
+        assert_eq!(
+            Some(stream.finalize().unwrap()),
+            cache.hash_at(u64::MAX, &[b"", b"12345678"])
+        );
+        if let Some(too_long) = MAX_FRAMED_FIELD_BYTES_V1.checked_add(1) {
+            assert_eq!(
+                cache.last_field_stream_at(0, &[], too_long).unwrap_err(),
+                GoldilocksDigest384LastFieldStreamErrorV1::FramingLimitExceeded
+            );
+        }
+        let boundary = cache
+            .last_field_stream_at(0, &[], MAX_FRAMED_FIELD_BYTES_V1)
+            .unwrap();
+        assert_eq!(boundary.remaining_len(), MAX_FRAMED_FIELD_BYTES_V1);
+        assert_eq!(
+            cache.hash(&[b"after errors"]),
+            hash_bytes_384_v1(domain(), &[b"after errors"])
+        );
     }
 
     #[test]

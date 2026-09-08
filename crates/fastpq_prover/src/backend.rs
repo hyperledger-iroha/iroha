@@ -71,12 +71,12 @@ mod compact_quantity_diagnostic;
 #[cfg(test)]
 #[path = "backend/compact_quantity_tests.rs"]
 mod compact_quantity_tests;
-#[path = "backend/compact_shake_candidate.rs"]
-mod compact_shake_candidate;
 #[path = "backend/compact_smt_quotient.rs"]
 mod compact_smt_quotient;
 #[path = "backend/compact_transfer_air.rs"]
 mod compact_transfer_air;
+#[path = "backend/compact_v1.rs"]
+mod compact_v1;
 #[path = "backend/compact_value_domain.rs"]
 mod compact_value_domain;
 #[cfg(test)]

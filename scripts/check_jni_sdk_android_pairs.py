@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Freeze the paired Kotlin/JVM and Java/Android JNI wrapper inventory."""
+"""Freeze retained JNI pairs and the sole Kotlin privacy export inventory."""
 
 from __future__ import annotations
 
@@ -16,8 +16,8 @@ SDK_PREFIX = "Java_org_hyperledger_iroha_sdk_"
 ANDROID_PREFIX = "Java_org_hyperledger_iroha_android_"
 MACRO_NAME = "jni_sdk_android_pairs"
 EXPECTED_MACRO_DIGEST = "75234f8e3dfcdaa54347f628fd7fb7118de18003baed0e3c37750cd283db2468"
-EXPECTED_ABI_DIGEST = "643f8f611c8aaf1a3080a6366658a1c70da309ef8525b1b7eb1aa3393cba1319"
-EXPECTED_ATTRIBUTE_DIGEST = "d974d4296dd43d3c8adde6996c75901f620afd273655471f794827948e3e28bd"
+EXPECTED_ABI_DIGEST = "36617136d19caf55a1691b0941d1866cdc55c71f784f1236a6892da27ed4f035"
+EXPECTED_ATTRIBUTE_DIGEST = "6aa31e82aa04e1a9c12492b349e81606dedd52bcf7f91415c57faafb144e3fae"
 
 EXPECTED_METHODS = {
     "crypto_NativeSignerBridge": (
@@ -72,6 +72,37 @@ EXPECTED_SUFFIXES = tuple(
 )
 
 
+EXPECTED_SDK_ONLY_SUFFIXES = tuple(
+    "privacy_PrivacyNativeBridge_" + method
+    for method in EXPECTED_METHODS["privacy_PrivacyNativeBridge"]
+)
+EXPECTED_PAIR_SUFFIXES = tuple(
+    suffix for suffix in EXPECTED_SUFFIXES if suffix not in EXPECTED_SDK_ONLY_SUFFIXES
+)
+CONFIDENTIAL_PRIVACY_METHODS = (
+    "nativeConfidentialDerivationContractRevisionV3",
+    "nativeDefaultConfidentialDiversifierV3",
+    "nativeDeriveConfidentialDiversifierV3",
+    "nativeDeriveConfidentialOwnerTagV3",
+    "nativeDeriveConfidentialAssetTagV3",
+    "nativeDeriveConfidentialNetworkTagV3",
+    "nativeDeriveConfidentialNoteCommitmentV3",
+    "nativeDeriveConfidentialNullifierV3",
+    "nativeDeriveConfidentialMerklePathV3",
+    "nativeVerifyConfidentialMerklePathV3",
+)
+SDK_ONLY_MARKER = "// Canonical privacy JNI exports are owned only by the Kotlin SDK.\n"
+
+
+def audit_confidential_source(source: str) -> None:
+    """Require the exact sole Kotlin confidential JNI declaration inventory."""
+    if "Java_org_hyperledger_iroha_android_privacy_PrivacyNativeBridge_" in source:
+        raise AuditError("retired Android confidential privacy JNI owner is present")
+    names = re.findall(r"Java_org_hyperledger_iroha_sdk_privacy_PrivacyNativeBridge_([A-Za-z0-9_]+)", source)
+    if tuple(names) != CONFIDENTIAL_PRIVACY_METHODS:
+        raise AuditError("canonical confidential privacy JNI inventory changed")
+
+
 class AuditError(ValueError):
     """Raised when the paired JNI source contract is no longer exact."""
 
@@ -81,6 +112,7 @@ class AuditResult:
     """Summary of the authenticated paired-wrapper inventory."""
 
     pair_count: int
+    sdk_only_count: int
     abi_digest: str
     attribute_digest: str
 
@@ -283,12 +315,12 @@ def audit_source(source: str) -> AuditResult:
         )
         cursor = body_close + 1
 
-    if tuple(observed_suffixes) != EXPECTED_SUFFIXES:
+    if tuple(observed_suffixes) != EXPECTED_PAIR_SUFFIXES:
         raise AuditError(
             "paired JNI export inventory changed: expected "
-            f"{len(EXPECTED_SUFFIXES)} ordered pairs, found {len(observed_suffixes)}"
+            f"{len(EXPECTED_PAIR_SUFFIXES)} ordered pairs, found {len(observed_suffixes)}"
         )
-    for suffix in EXPECTED_SUFFIXES:
+    for suffix in EXPECTED_PAIR_SUFFIXES:
         sdk_name = SDK_PREFIX + suffix
         android_name = ANDROID_PREFIX + suffix
         if source.count(sdk_name) != 1 or source.count(android_name) != 1:
@@ -296,6 +328,28 @@ def audit_source(source: str) -> AuditResult:
         direct_android = f'pub unsafe extern "system" fn {android_name}('
         if direct_android in source:
             raise AuditError(f"Android wrapper escaped the exact pair macro: {android_name}")
+    if source.count(SDK_ONLY_MARKER) != 1:
+        raise AuditError("canonical SDK-only privacy inventory changed")
+    if ANDROID_PREFIX + "privacy_PrivacyNativeBridge_" in source:
+        raise AuditError("retired Android privacy JNI owner is present")
+    cursor = source.index(SDK_ONLY_MARKER) + len(SDK_ONLY_MARKER)
+    for suffix in EXPECTED_SDK_ONLY_SUFFIXES:
+        sdk_item = source.find('pub unsafe extern "system" fn ', cursor)
+        if sdk_item < 0:
+            raise AuditError("canonical SDK-only privacy inventory changed")
+        sdk_attributes = _attribute_text(source[cursor:sdk_item], "SDK")
+        if sdk_attributes.count("#[unsafe(no_mangle)]\n") != 1:
+            raise AuditError("SDK privacy wrapper must retain exactly one unsafe no_mangle attribute")
+        sdk_name = SDK_PREFIX + suffix
+        declaration = 'pub unsafe extern "system" fn ' + sdk_name + '('
+        if not source.startswith(declaration, sdk_item) or source.count(sdk_name) != 1:
+            raise AuditError("canonical SDK-only privacy inventory changed")
+        body_open = source.find("{", sdk_item + len(declaration))
+        body_close = _matching_brace(source, body_open)
+        function_item = source[sdk_item:body_close + 1]
+        abi_records.append(suffix + "\0" + function_item.replace(sdk_name, "__JNI_EXPORT__", 1))
+        attribute_records.append(suffix + "\0" + sdk_attributes)
+        cursor = body_close + 1
     abi_digest = hashlib.sha256("\0\0".join(sorted(abi_records)).encode()).hexdigest()
     if abi_digest != EXPECTED_ABI_DIGEST:
         raise AuditError(
@@ -310,7 +364,7 @@ def audit_source(source: str) -> AuditResult:
             "paired JNI documentation/attribute contract changed: "
             f"expected {EXPECTED_ATTRIBUTE_DIGEST}, found {attribute_digest}"
         )
-    return AuditResult(len(observed_suffixes), abi_digest, attribute_digest)
+    return AuditResult(len(observed_suffixes), len(EXPECTED_SDK_ONLY_SUFFIXES), abi_digest, attribute_digest)
 
 
 def main() -> int:
@@ -320,12 +374,16 @@ def main() -> int:
         if JNI_SOURCE.is_symlink() or not JNI_SOURCE.is_file():
             raise AuditError(f"JNI source is unavailable: {JNI_SOURCE}")
         result = audit_source(JNI_SOURCE.read_text(encoding="utf-8"))
+        confidential_source = JNI_SOURCE.parents[1] / "confidential_note_ffi.rs"
+        if confidential_source.is_symlink() or not confidential_source.is_file():
+            raise AuditError("confidential JNI source is unavailable")
+        audit_confidential_source(confidential_source.read_text(encoding="utf-8"))
     except (AuditError, OSError, UnicodeError) as error:
         print(f"JNI SDK/Android pair guard failed: {error}", file=sys.stderr)
         return 1
     print(
         "JNI SDK/Android pair guard passed: "
-        f"pairs={result.pair_count} abi_sha256={result.abi_digest} "
+        f"pairs={result.pair_count} privacy_sdk_only={result.sdk_only_count} abi_sha256={result.abi_digest} "
         f"attributes_sha256={result.attribute_digest}"
     )
     return 0

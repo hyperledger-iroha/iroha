@@ -4,9 +4,9 @@
 //! needs a durable notion of the latest query snapshot that survived restarts.
 //! This journal stores the latest indexed block height and hash under the Kura
 //! root so aggregate responses can report a stable snapshot marker.
+use super::journal_io::{journal_parent, open_journal_parent};
 use iroha_crypto::HashOf;
 use iroha_data_model::block::BlockHeader;
-use iroha_logger::warn;
 use norito::{
     codec::{Decode, Encode},
     decode_from_bytes, to_bytes,
@@ -80,11 +80,45 @@ pub struct QueryIndexJournal {
     path: PathBuf,
     status: QueryIndexStatus,
 }
+/// Closed deterministic recovery failures used only by real-file regression fixtures.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PromotionFailure {
+    /// The initial rename fails while the main destination is absent.
+    InitialRename,
+    /// Removing an existing destination after a failed rename fails.
+    RemoveExisting,
+    /// The second rename fails after removing the destination.
+    RetryRename,
+    /// Opening the parent directory after promotion fails.
+    OpenParent,
+    /// Synchronizing the parent directory after promotion fails.
+    SyncParent,
+    /// Fail only the first rename, then execute every real fallback operation.
+    InitialRenameForSuccessfulFallback,
+}
+
+/// Every recovery failure boundary in deterministic fixture order.
+#[cfg(test)]
+pub(crate) const PROMOTION_FAILURES: [PromotionFailure; 5] = [
+    PromotionFailure::InitialRename,
+    PromotionFailure::RemoveExisting,
+    PromotionFailure::RetryRename,
+    PromotionFailure::OpenParent,
+    PromotionFailure::SyncParent,
+];
+
+#[cfg(test)]
+std::thread_local! {
+    static PROMOTION_FAILURE: std::cell::Cell<Option<PromotionFailure>> = const { std::cell::Cell::new(None) };
+}
+
 impl QueryIndexJournal {
     /// Filename used to persist query index status next to the block store.
     pub const JOURNAL_FILE: &'static str = "query-index-status.norito";
     const JOURNAL_VERSION: u32 = 1;
-    const JOURNAL_MAX_BYTES: u64 = 4 * 1024;
+    /// Maximum encoded bytes in one persisted status marker.
+    pub(crate) const JOURNAL_MAX_BYTES: u64 = 4 * 1024;
     /// Build the canonical journal path under the provided root.
     #[must_use]
     pub fn journal_path(root: &Path) -> PathBuf {
@@ -135,7 +169,7 @@ impl QueryIndexJournal {
         };
         journal.status = persisted.status;
         if read_path != path {
-            Self::promote_temp_journal(&read_path, &path);
+            Self::promote_temp_journal(&read_path, &path)?;
         }
         Ok(journal)
     }
@@ -191,41 +225,109 @@ impl QueryIndexJournal {
     fn temp_path(path: &Path) -> PathBuf {
         path.with_extension("norito.tmp")
     }
-    fn promote_temp_journal(from: &Path, to: &Path) {
-        if let Err(err) = fs::rename(from, to) {
-            if to.exists() {
-                if let Err(remove_err) = fs::remove_file(to) {
-                    warn!(
-                        ?remove_err,
-                        path = %to.display(),
-                        "failed to remove query index journal before promotion"
-                    );
-                    return;
-                }
-                if let Err(err) = fs::rename(from, to) {
-                    warn!(
-                        ?err,
-                        from = %from.display(),
-                        to = %to.display(),
-                        "failed to promote query index journal temp file after removal"
-                    );
-                    return;
-                }
-            } else {
-                warn!(
-                    ?err,
-                    from = %from.display(),
-                    to = %to.display(),
-                    "failed to promote query index journal temp file"
-                );
-                return;
+    fn promote_temp_journal(from: &Path, to: &Path) -> Result<(), QueryIndexJournalError> {
+        let rename = (|| {
+            #[cfg(test)]
+            Self::fail_promotion_step_for_tests(PromotionFailure::InitialRename)?;
+            fs::rename(from, to)
+        })();
+        if let Err(source) = rename {
+            if !to.exists() {
+                return Err(QueryIndexJournalError::Write {
+                    path: to.to_path_buf(),
+                    source,
+                });
             }
+            // Platforms that cannot replace an existing destination must complete
+            // both fallback operations before this recovery can report success.
+            (|| {
+                #[cfg(test)]
+                Self::fail_promotion_step_for_tests(PromotionFailure::RemoveExisting)?;
+                fs::remove_file(to)
+            })()
+            .map_err(|source| QueryIndexJournalError::Write {
+                path: to.to_path_buf(),
+                source,
+            })?;
+            (|| {
+                #[cfg(test)]
+                Self::fail_promotion_step_for_tests(PromotionFailure::RetryRename)?;
+                fs::rename(from, to)
+            })()
+            .map_err(|source| QueryIndexJournalError::Write {
+                path: to.to_path_buf(),
+                source,
+            })?;
         }
-        if let Some(parent) = to.parent() {
-            if let Ok(dir) = fs::File::open(parent) {
-                let _ = dir.sync_all();
+        {
+            let parent = journal_parent(to);
+            let dir = (|| {
+                #[cfg(test)]
+                Self::fail_promotion_step_for_tests(PromotionFailure::OpenParent)?;
+                open_journal_parent(to)
+            })()
+            .map_err(|source| QueryIndexJournalError::Write {
+                path: parent.to_path_buf(),
+                source,
+            })?;
+            (|| {
+                #[cfg(test)]
+                Self::fail_promotion_step_for_tests(PromotionFailure::SyncParent)?;
+                dir.sync_all()
+            })()
+            .map_err(|source| QueryIndexJournalError::Write {
+                path: parent.to_path_buf(),
+                source,
+            })?;
+        }
+        Ok(())
+    }
+
+    /// Inject exactly one recovery failure; fallback cases also reject the first rename.
+    #[cfg(test)]
+    pub(crate) fn fail_next_promotion_for_tests(failure: PromotionFailure) {
+        PROMOTION_FAILURE.with(|slot| {
+            assert!(
+                slot.replace(Some(failure)).is_none(),
+                "unconsumed journal promotion fault"
+            );
+        });
+    }
+
+    /// Report whether the exact injected recovery boundary has not yet executed.
+    #[cfg(test)]
+    pub(crate) fn promotion_failure_pending_for_tests() -> bool {
+        PROMOTION_FAILURE.with(|slot| slot.get().is_some())
+    }
+
+    #[cfg(test)]
+    fn fail_promotion_step_for_tests(step: PromotionFailure) -> std::io::Result<()> {
+        let failed = PROMOTION_FAILURE.with(|slot| {
+            let Some(failure) = slot.get() else {
+                return false;
+            };
+            if failure == PromotionFailure::InitialRenameForSuccessfulFallback
+                && step == PromotionFailure::InitialRename
+            {
+                slot.set(None);
+                return true;
             }
+            if failure == step {
+                slot.set(None);
+                return true;
+            }
+            step == PromotionFailure::InitialRename
+                && matches!(
+                    failure,
+                    PromotionFailure::RemoveExisting | PromotionFailure::RetryRename
+                )
+        });
+        if failed {
+            return Err(std::io::Error::other(format!(
+                "injected query journal promotion {step:?}"
+            )));
         }
+        Ok(())
     }
     /// Return the current in-memory snapshot.
     #[must_use]
@@ -256,7 +358,8 @@ impl QueryIndexJournal {
         };
         let bytes = to_bytes(&payload).map_err(QueryIndexJournalError::Encode)?;
         let tmp_path = Self::temp_path(&self.path);
-        if let Some(parent) = self.path.parent() {
+        {
+            let parent = journal_parent(&self.path);
             fs::create_dir_all(parent).map_err(|source| QueryIndexJournalError::Write {
                 path: self.path.clone(),
                 source,
@@ -283,10 +386,13 @@ impl QueryIndexJournal {
             path: self.path.clone(),
             source,
         })?;
-        if let Some(parent) = self.path.parent() {
-            let dir = fs::File::open(parent).map_err(|source| QueryIndexJournalError::Write {
-                path: parent.to_path_buf(),
-                source,
+        {
+            let parent = journal_parent(&self.path);
+            let dir = open_journal_parent(&self.path).map_err(|source| {
+                QueryIndexJournalError::Write {
+                    path: parent.to_path_buf(),
+                    source,
+                }
             })?;
             dir.sync_all()
                 .map_err(|source| QueryIndexJournalError::Write {
@@ -357,5 +463,142 @@ mod tests {
             error.to_string().contains("byte limit"),
             "unexpected error: {error}"
         );
+    }
+
+    #[test]
+    fn index_status_load_propagates_every_promotion_failure_before_success() {
+        for failure in PROMOTION_FAILURES {
+            let directory = tempfile::tempdir().unwrap();
+            let path = directory.path().join(QueryIndexJournal::JOURNAL_FILE);
+            let temporary = path.with_extension("norito.tmp");
+            let main = PersistedQueryIndexStatus {
+                version: QueryIndexJournal::JOURNAL_VERSION,
+                status: QueryIndexStatus {
+                    indexed_height: 1,
+                    indexed_block_hash: None,
+                },
+            };
+            let recovered = PersistedQueryIndexStatus {
+                version: QueryIndexJournal::JOURNAL_VERSION,
+                status: QueryIndexStatus {
+                    indexed_height: 7,
+                    indexed_block_hash: Some(sample_hash(0x31)),
+                },
+            };
+            let main_bytes = to_bytes(&main).unwrap();
+            let recovered_bytes = to_bytes(&recovered).unwrap();
+            if failure != PromotionFailure::InitialRename {
+                fs::write(&path, &main_bytes).unwrap();
+            }
+            fs::write(&temporary, &recovered_bytes).unwrap();
+            QueryIndexJournal::fail_next_promotion_for_tests(failure);
+            let error = QueryIndexJournal::load(&path)
+                .expect_err("injected recovery must not report success");
+            assert!(
+                matches!(error, QueryIndexJournalError::Write { source, .. }
+                if source.to_string() == format!("injected query journal promotion {failure:?}")),
+                "{failure:?}"
+            );
+            assert!(
+                !QueryIndexJournal::promotion_failure_pending_for_tests(),
+                "{failure:?}"
+            );
+            match failure {
+                PromotionFailure::InitialRename | PromotionFailure::RetryRename => {
+                    assert!(!path.exists());
+                    assert_eq!(fs::read(&temporary).unwrap(), recovered_bytes);
+                }
+                PromotionFailure::RemoveExisting => {
+                    assert_eq!(fs::read(&path).unwrap(), main_bytes);
+                    assert_eq!(fs::read(&temporary).unwrap(), recovered_bytes);
+                }
+                PromotionFailure::OpenParent | PromotionFailure::SyncParent => {
+                    assert_eq!(fs::read(&path).unwrap(), recovered_bytes);
+                    assert!(!temporary.exists());
+                }
+                PromotionFailure::InitialRenameForSuccessfulFallback => {
+                    unreachable!("success-only fallback must not appear in PROMOTION_FAILURES");
+                }
+            }
+            assert_eq!(
+                QueryIndexJournal::load(&path).unwrap().snapshot(),
+                recovered.status
+            );
+        }
+    }
+
+    #[test]
+    fn index_status_load_completes_successful_replacement_fallback() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join(QueryIndexJournal::JOURNAL_FILE);
+        let temporary = path.with_extension("norito.tmp");
+        let recovered = PersistedQueryIndexStatus {
+            version: QueryIndexJournal::JOURNAL_VERSION,
+            status: QueryIndexStatus {
+                indexed_height: 37,
+                indexed_block_hash: Some(sample_hash(0x47)),
+            },
+        };
+        let bytes = to_bytes(&recovered).unwrap();
+        fs::write(&path, b"old destination replaced by valid staged journal").unwrap();
+        fs::write(&temporary, &bytes).unwrap();
+        QueryIndexJournal::fail_next_promotion_for_tests(
+            PromotionFailure::InitialRenameForSuccessfulFallback,
+        );
+        let loaded = QueryIndexJournal::load(&path).unwrap();
+        assert!(!QueryIndexJournal::promotion_failure_pending_for_tests());
+        assert_eq!(loaded.snapshot(), recovered.status);
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+        assert!(!temporary.exists());
+        assert_eq!(
+            QueryIndexJournal::load(&path).unwrap().snapshot(),
+            recovered.status
+        );
+    }
+
+    #[test]
+    fn index_status_relative_filename_recovery_and_persist_keep_directory_durability() {
+        // A unique current-directory file permits a true bare filename without
+        // mutating the process-wide current directory or sharing fixed names.
+        let main_guard = tempfile::Builder::new()
+            .prefix(".iroha-query-journal-")
+            .suffix(".norito")
+            .tempfile_in(".")
+            .unwrap()
+            .into_temp_path();
+        let path = PathBuf::from(main_guard.file_name().unwrap());
+        let temporary = path.with_extension("norito.tmp");
+        let recovered = PersistedQueryIndexStatus {
+            version: QueryIndexJournal::JOURNAL_VERSION,
+            status: QueryIndexStatus {
+                indexed_height: 37,
+                indexed_block_hash: Some(sample_hash(0x47)),
+            },
+        };
+        let bytes = to_bytes(&recovered).unwrap();
+        let temporary_guard = {
+            let mut file = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&temporary)
+                .unwrap();
+            let guard = tempfile::TempPath::try_from_path(temporary.clone()).unwrap();
+            file.write_all(&bytes).unwrap();
+            file.sync_all().unwrap();
+            guard
+        };
+        let loaded = QueryIndexJournal::load(&path).unwrap();
+        assert_eq!(loaded.snapshot(), recovered.status);
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+        assert!(!temporary.exists());
+        loaded.persist().unwrap();
+        assert_eq!(
+            QueryIndexJournal::load(&path).unwrap().snapshot(),
+            recovered.status
+        );
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+        assert!(!temporary.exists());
+        drop(temporary_guard);
+        drop(main_guard);
     }
 }

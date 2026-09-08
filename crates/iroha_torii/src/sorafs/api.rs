@@ -26073,7 +26073,10 @@ pub(crate) async fn handle_post_sorafs_storage_token_authenticated(
                     response
                 }
                 StreamTokenIssuerError::RuntimeSignerUnavailable
-                | StreamTokenIssuerError::RuntimeSignerQualificationChanged => {
+                | StreamTokenIssuerError::HardwareEvidenceInvalid
+                | StreamTokenIssuerError::HardwareStateChanged
+                | StreamTokenIssuerError::HardwareFinalityUnavailable
+                | StreamTokenIssuerError::HardwareClockRollback => {
                     error!("stream token runtime signer unavailable");
                     let mut response = json_error(
                         StatusCode::SERVICE_UNAVAILABLE,
@@ -29904,7 +29907,7 @@ mod app_api_tests {
     use axum::{body, http::Uri};
     use ed25519_dalek::{Signer as _, SigningKey};
     use iroha_config::parameters::actual::{
-        SorafsGovernanceDagService, SorafsGovernanceDagServiceView, SorafsTokenConfig,
+        SorafsGovernanceDagService, SorafsGovernanceDagServiceView,
     };
     use sorafs_car::{
         CarBuildPlan, CarWriter,
@@ -31852,12 +31855,12 @@ mod advert_tests {
     use crate::{
         build_sorafs_gateway_security, mk_app_state_for_tests, sorafs,
         sorafs::{
-            StreamTokenIssuer, StreamTokenRuntimeSigner, StreamTokenRuntimeSignerProbeErrorV1,
-            StreamTokenRuntimeSignerQualificationV1, StreamTokenSigningError,
+            StreamTokenIssuer,
             registry::{
                 RegistryCreditLedgerEntry, RegistryDeclaration, RegistryDispute,
                 RegistryFeeLedgerEntry,
             },
+            token::hardware_test_support::{ObserverFault, SignedFixture, TestSignerMode},
         },
         tests_runtime_handlers::{mk_app_state_for_tests_with_world, signed_network_app_headers},
         utils::extractors::JsonOnly,
@@ -31875,7 +31878,7 @@ mod advert_tests {
     use ed25519_dalek::{Signer, SigningKey};
     use http_body_util::BodyExt;
     use iroha_config::parameters::actual::{
-        SorafsGovernanceDagService, SorafsGovernanceDagServiceView, SorafsTokenConfig,
+        SorafsGovernanceDagService, SorafsGovernanceDagServiceView,
     };
     use iroha_core::{
         kura::Kura,
@@ -38831,89 +38834,32 @@ mod advert_tests {
         WrongSignature,
         QualificationDrift,
     }
-    struct ApiTestStreamTokenSigner {
-        signing_key: SigningKey,
-        mode: ApiTestStreamTokenSignerMode,
-        qualification_calls: std::sync::atomic::AtomicUsize,
-    }
-    impl ApiTestStreamTokenSigner {
-        const HANDLE: &'static str = "provider:prod/stream-token/api-tests";
-        fn new(mode: ApiTestStreamTokenSignerMode) -> Self {
-            Self {
-                signing_key: SigningKey::from_bytes(&[0x51; 32]),
-                mode,
-                qualification_calls: std::sync::atomic::AtomicUsize::new(0),
-            }
-        }
-    }
-    impl StreamTokenRuntimeSigner for ApiTestStreamTokenSigner {
-        fn handle(&self) -> &str {
-            Self::HANDLE
-        }
-        fn public_key(&self) -> [u8; 32] {
-            self.signing_key.verifying_key().to_bytes()
-        }
-        fn qualification(
-            &self,
-        ) -> Result<StreamTokenRuntimeSignerQualificationV1, StreamTokenRuntimeSignerProbeErrorV1>
-        {
-            let call = self
-                .qualification_calls
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            Ok(StreamTokenRuntimeSignerQualificationV1::new(
-                if matches!(self.mode, ApiTestStreamTokenSignerMode::QualificationDrift)
-                    && call >= 3
-                {
-                    5
-                } else {
-                    4
-                },
-                [0xb4; 32],
-            ))
-        }
-        fn sign(
-            &self,
-            signing_payload: &[u8],
-        ) -> Result<[u8; ed25519_dalek::SIGNATURE_LENGTH], StreamTokenSigningError> {
-            match self.mode {
-                ApiTestStreamTokenSignerMode::Sign => {
-                    Ok(self.signing_key.sign(signing_payload).to_bytes())
-                }
-                ApiTestStreamTokenSignerMode::Unavailable => {
-                    Err(StreamTokenSigningError::Unavailable)
-                }
-                ApiTestStreamTokenSignerMode::Refused => Err(StreamTokenSigningError::Refused),
-                ApiTestStreamTokenSignerMode::WrongSignature => {
-                    Ok(SigningKey::from_bytes(&[0x52; 32])
-                        .sign(signing_payload)
-                        .to_bytes())
-                }
-                ApiTestStreamTokenSignerMode::QualificationDrift => {
-                    Ok(self.signing_key.sign(signing_payload).to_bytes())
-                }
-            }
-        }
-    }
     fn stream_token_issuer_for_tests_with_mode(
         mode: ApiTestStreamTokenSignerMode,
+        provider: [u8; 32],
+        key_revision: u64,
     ) -> StreamTokenIssuer {
-        let signer = Arc::new(ApiTestStreamTokenSigner::new(mode));
-        let cfg = iroha_config::parameters::actual::SorafsTokenConfig {
-            enabled: true,
-            signer_handle: Some(ApiTestStreamTokenSigner::HANDLE.to_owned()),
-            signer_public_key: Some(signer.public_key()),
-            signer_revision: Some(4),
-            signer_policy_digest: Some([0xb4; 32]),
-            default_requests_per_minute: 3,
-            ..iroha_config::parameters::actual::SorafsTokenConfig::default()
+        let transport_mode = match mode {
+            ApiTestStreamTokenSignerMode::Unavailable => TestSignerMode::Unavailable,
+            ApiTestStreamTokenSignerMode::Refused => TestSignerMode::Refused,
+            ApiTestStreamTokenSignerMode::WrongSignature => TestSignerMode::WrongKey,
+            _ => TestSignerMode::Sign,
         };
-        let runtime_signer: Arc<dyn StreamTokenRuntimeSigner> = signer;
-        StreamTokenIssuer::from_config(&cfg, Some(runtime_signer))
-            .expect("valid config")
-            .expect("issuer enabled")
+        let signer = SignedFixture::for_api(provider, key_revision, transport_mode);
+        if matches!(mode, ApiTestStreamTokenSignerMode::QualificationDrift) {
+            // Replace the retired mutable revision probe with signed revocation after commit.
+            signer
+                .faults
+                .lock()
+                .unwrap()
+                .insert(3, ObserverFault::SignerRevoked);
+        }
+        signer
+            .issuer()
+            .expect("independent signed hardware custody startup")
     }
-    fn stream_token_issuer_for_tests() -> StreamTokenIssuer {
-        stream_token_issuer_for_tests_with_mode(ApiTestStreamTokenSignerMode::Sign)
+    fn stream_token_issuer_for_tests(provider: [u8; 32]) -> StreamTokenIssuer {
+        stream_token_issuer_for_tests_with_mode(ApiTestStreamTokenSignerMode::Sign, provider, 1)
     }
     fn test_stream_token_operator()
     -> Option<Extension<crate::operator_signatures::AuthenticatedOperatorPublicKey>> {
@@ -38949,7 +38895,7 @@ mod advert_tests {
             manifest.chunking.namespace, manifest.chunking.name, manifest.chunking.semver
         );
         seed_capacity_declaration(&node, [0x66; 32], &chunker_handle);
-        let issuer = stream_token_issuer_for_tests();
+        let issuer = stream_token_issuer_for_tests([0x66; 32]);
         inner.sorafs_node = node;
         inner.stream_token_issuer = Some(Arc::new(issuer));
         (Arc::new(inner), temp_dir, manifest_id)
@@ -39057,7 +39003,7 @@ mod advert_tests {
         app.sorafs_gateway_config = gateway_config;
         refresh_api_test_gateway_security(&mut app);
 
-        let issuer = stream_token_issuer_for_tests();
+        let issuer = stream_token_issuer_for_tests(fixture.provider_id());
         let verifying_key_hex = hex::encode(issuer.verifying_key_bytes());
         app.stream_token_issuer = Some(Arc::new(issuer));
 
@@ -39252,21 +39198,7 @@ mod advert_tests {
         // Tests exercise manifest envelope gating explicitly; disable by default here
         // so individual cases can opt in to stricter enforcement.
         app.sorafs_gateway_config.require_manifest_envelope = false;
-        let signer = Arc::new(ApiTestStreamTokenSigner::new(signer_mode));
-        let token_config = SorafsTokenConfig {
-            enabled: true,
-            signer_handle: Some(ApiTestStreamTokenSigner::HANDLE.to_owned()),
-            signer_public_key: Some(signer.public_key()),
-            signer_revision: Some(4),
-            signer_policy_digest: Some([0xb4; 32]),
-            key_version: 7,
-            default_requests_per_minute: 3,
-            ..SorafsTokenConfig::default()
-        };
-        let runtime_signer: Arc<dyn StreamTokenRuntimeSigner> = signer;
-        let issuer = StreamTokenIssuer::from_config(&token_config, Some(runtime_signer))
-            .expect("token config valid")
-            .expect("stream token issuer enabled");
+        let issuer = stream_token_issuer_for_tests_with_mode(signer_mode, provider_id, 7);
         let issuer = Arc::new(issuer);
         let verifying_key_hex = hex::encode(issuer.verifying_key_bytes());
         app.stream_token_issuer = Some(issuer);

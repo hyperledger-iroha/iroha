@@ -6,23 +6,17 @@ build or frozen digest change. The baseline typed ideal-H compiler argument is
 Baseline 54-target arithmetic is in
 [fastpq_compact_typed_profile.md](fastpq_compact_typed_profile.md).
 
-**Recommendation for the next compact prototype:** use separately framed
-SHAKE256 inputs for both compact commitment/chaining H and whole-message G,
-with bounded rejection into the existing canonical six-field/48-byte root
-container. Keep the frozen legacy digest implementation and its bytes intact;
-the new compact profile/algorithm identity must distinguish the new hashes.
-This removes dependence on the unsupported bespoke six-lane-combiner claim.
-It replaces that assumption with an explicit SHAKE256 ideal-XOF assumption;
-it does not make concrete SHAKE mathematically random or discharge independent
-cryptographic review.
+This is a conditional analysis of a retired SHAKE experiment. The current
+[compact V1 implementation](fastpq_compact_v1_framing.md) uses the canonical
+six-lane construction for H and field-native G blocks, and accepts no SHAKE
+selector. The projected-XOF assumption and calculations below are retained only
+as the premises of this mathematical analysis; they are not instructions to
+change the current implementation or evidence for its concrete security.
 
 [The FIPS 202 primary record](https://csrc.nist.gov/pubs/fips/202/final) specifies
 SHAKE256 and currently records a planned revision. Standardization is not a
 qROM indifferentiability theorem for the fixed Keccak permutation. No concrete
-quantum instantiation error is set to zero here. The local
-`crates/iroha_crypto/Cargo.toml` already depends on sha3, and its source already
-uses Shake256 in FHE and handshake code; a shared helper needs no new crate or
-lockfile change.
+quantum instantiation error is set to zero here. This record does not authorize a SHAKE H/G path in the final V1 implementation.
 
 ## 1. H must not be modeled as perfectly uniform merely by conditioning
 
@@ -297,24 +291,26 @@ indifferentiability preprint. Separately verifying the projections does not
 make H and G independent when their source framing aliases; injective typed
 framing is a required input to the idealization.
 
-Keeping the current six-lane digest for compact H leaves both its bespoke
-combiner qualification and the G/SHAKE assumption outstanding. Moving the
-new compact profile to jointly framed SHAKE H/G gives one standard primitive
-to review and a direct raw-oracle theorem route. It does not alter the legacy
-digest, and it does not by itself establish concrete security, zero knowledge,
-knowledge extraction, or public-state authority.
-
-After independent review of this lemma, a bounded reusable SHAKE helper and
-typed compact-specific H wrapper can be staged in existing crates. Require
-known-answer/domain-collision tests, canonical decode and abort propagation,
-CPU/hardware byte parity, full witness-dropped proof verification and revised
-wire/allocation/runtime evidence before admission. A concrete security review
-must approve the final joint SHAKE assumption and resource model.
+The retired experiment used jointly framed SHAKE H/G under an explicit joint
+ideal-XOF assumption. That design decision and its concrete residual are not the
+current six-lane design. The mathematical projections above remain conditional
+statements about their declared raw-XOF model; they establish neither concrete
+six-lane security nor zero knowledge, extraction or public-state authority.
 
 ## Reproduction
 
-Run `python3 scripts/fastpq/check_compact_projected_xof.py` from the repository
-root. It accepts `--output PATH` and uses the tracked exact profile arithmetic
-module, source geometry/layout checks and source hashes. It needs no retained
-proof, paper, target-only note or network access. These are conditional
-arithmetic and finite distribution controls, not a SHAKE security certificate.
+The original theorem-model reproduction command is
+`python3 scripts/fastpq/check_compact_projected_xof.py --output PATH`. This checker
+owns its historical binary tape lengths, rejection law and whole-XOF-call counts;
+it does not import the current field-product tape arithmetic. Its original raw
+bound scenarios and projection controls remain separate from the current
+source-coupled field-profile and bundle checkers. Shared algebra/tree/wire helpers
+and explicit current-source shape checks are provenance and arithmetic controls,
+not an implementation mapping from this retired model to the current digest.
+These results are not a SHAKE or six-lane security certificate.
+
+The checker entry points share one explicit input inventory, including both
+profile checkers, the historical theorem checker, the imported geometry helper,
+and the adaptive-context specification. Each captures that inventory before and
+after its calculation and rejects drift. Changed-file and omitted-input controls
+run against disposable copies; hashes establish provenance, not semantic proof.

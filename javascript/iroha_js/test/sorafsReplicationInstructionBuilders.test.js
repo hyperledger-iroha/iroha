@@ -82,7 +82,7 @@ function replaceUnique(buffer, needle, replacement) {
   replacement.copy(buffer, offset);
 }
 
-test("SoraFS replication instruction builders emit canonical native field names", () => {
+test("SoraFS issue instructions bind the canonical Rust order fixture", () => {
   const summary = validateSorafsReplicationOrderPayloadV1(ORDER_PAYLOAD, ORDER_ID);
   assert.equal(summary.manifestDigestHex, "42".repeat(32));
   assert.equal(
@@ -143,6 +143,13 @@ test("SoraFS replication instruction builders emit canonical native field names"
     musubiIssue,
   );
 
+  assert.deepEqual(
+    noritoDecodeInstruction(noritoEncodeInstruction(issue)),
+    issue,
+  );
+});
+
+test("SoraFS completion instructions preserve canonical authority and finalized anchors", () => {
   const complete = buildCompleteReplicationOrderInstruction(completionOptions());
   assert.deepEqual(complete, {
     CompleteReplicationOrder: {
@@ -169,7 +176,9 @@ test("SoraFS replication instruction builders emit canonical native field names"
     noritoDecodeInstruction(noritoEncodeInstruction(complete)),
     complete,
   );
+});
 
+test("SoraFS expiry instructions preserve canonical order identity and epoch", () => {
   const expire = buildExpireReplicationOrderInstruction({
     orderId: ORDER_ID,
     expirationEpoch: 29,
@@ -177,10 +186,6 @@ test("SoraFS replication instruction builders emit canonical native field names"
   assert.deepEqual(
     noritoDecodeInstruction(noritoEncodeInstruction(expire)),
     expire,
-  );
-  assert.deepEqual(
-    noritoDecodeInstruction(noritoEncodeInstruction(issue)),
-    issue,
   );
 });
 
@@ -413,3 +418,44 @@ test("IssueReplicationOrder rejects noncanonical and semantically invalid Norito
     /deadline_at must be greater than issued_at/,
   );
 });
+
+for (const [label, mutate, message] of [
+  [
+    "zero assignment provider",
+    (bytes) => replaceUnique(bytes, Buffer.alloc(32, 0x10), Buffer.alloc(32)),
+    "ReplicationOrderV1.assignments[0].provider_id must not be zero",
+  ],
+  [
+    "noncanonical assignment lane",
+    (bytes) => replaceUnique(bytes, Buffer.from("lane-primary"), Buffer.from("Lane-primary")),
+    "ReplicationOrderV1.assignments[0].lane must be a canonical lane label",
+  ],
+  [
+    "zero SLA deadline",
+    (bytes) => replaceUnique(bytes, Buffer.from([0x80, 0x51, 0x01, 0x00]), Buffer.alloc(4)),
+    "ReplicationOrderV1.sla.ingest_deadline_secs must be greater than zero",
+  ],
+  [
+    "out-of-range SLA percentage",
+    (bytes) => replaceUnique(bytes, Buffer.from([0xac, 0x84, 0x01, 0x00]), Buffer.from([0xa1, 0x86, 0x01, 0x00])),
+    "ReplicationOrderV1.sla percentage thresholds must be in 1..=100000",
+  ],
+  [
+    "noncanonical metadata key",
+    (bytes) => replaceUnique(bytes, Buffer.from("governance.ticket"), Buffer.from("Governance.ticket")),
+    "ReplicationOrderV1.metadata[0].key must be a canonical metadata key",
+  ],
+  [
+    "control character in metadata value",
+    (bytes) => replaceUnique(bytes, Buffer.from("ticket-sorafs-0001"), Buffer.from("\x01icket-sorafs-0001")),
+    "ReplicationOrderV1.metadata[0].value must be canonical and at most 4096 bytes",
+  ],
+]) {
+  test(`SoraFS archive validator rejects ${label} with canonical framing`, () => {
+    const payload = Buffer.from(mutatePayload(mutate), "base64");
+    assert.throws(() => validateSorafsReplicationOrderPayloadV1(payload, ORDER_ID), {
+      name: "TypeError",
+      message,
+    });
+  });
+}

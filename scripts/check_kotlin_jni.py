@@ -88,6 +88,90 @@ def native_operations(class_file) -> tuple[dict[str, object], ...]:
     return tuple(operations)
 
 
+def validate_retired_privacy_witness_classes(classes: dict[str, object]) -> None:
+    """Reject orphan archive owners and historical test fixtures in compiled main outputs."""
+    for owner, class_file in classes.items():
+        if "PrivacyConfidential" in owner or "PrivacyConfidentialWitness" in (class_file.source_file or ""):
+            raise AuditError(f"retired confidential witness or test fixture in main classes: {owner}")
+
+
+def validate_privacy_api(classes: dict[str, object]) -> None:
+    """Check the shared privacy method contract from class metadata, never reflection."""
+    validate_retired_privacy_witness_classes(classes)
+    privacy_name = SDK_PACKAGE + "privacy/PrivacyNativeBridge"
+    if privacy_name not in classes:
+        raise AuditError(f"required SDK class is missing: {privacy_name}")
+    privacy = classes[privacy_name]
+    for name, descriptor in (
+        ("nativeValidateCompiledProfileCatalog", "([B)I"),
+        ("nativeExact12FixtureBundle", "()[B"),
+        ("nativeValidateExact12FixtureBundle", "([B)I"),
+        ("nativeValidateExact12CapabilityManifestForNetworkV1", "([B[B)I"),
+        ("nativeRequireExact12CapabilityTupleForNetworkV1", "([BI[B)Z"),
+        ("nativeValidateExact12SubmitProofConstructionForNetworkV1", "([BI[B[B)Z"),
+    ):
+        matches = [method for method in privacy.methods if method.name == name]
+        if len(matches) != 1 or matches[0].descriptor != descriptor or not matches[0].native or not matches[0].static:
+            raise AuditError(f"privacy operation must retain its native declaration: {name}{descriptor}")
+    for owner, class_file in classes.items():
+        if owner in (privacy_name, privacy_name + "$Companion"):
+            for method in class_file.methods:
+                if any(fragment in method.name for fragment in ("ProofRequest", "BuildProof", "VerifyProof")) or method.name in ("buildProof", "verifyProof"):
+                    raise AuditError(f"unqualified generic privacy proof method: {owner}.{method.name}")
+                if method.name in (
+                    "nativeValidateExact12CapabilityManifest",
+                    "nativeRequireExact12CapabilityTuple",
+                    "nativeValidateExact12SubmitProofConstruction",
+                ):
+                    raise AuditError(f"retired privacy method lacks network binding: {owner}.{method.name}")
+
+
+def audit_privacy_classfiles(root: Path) -> dict[str, object]:
+    """Inspect the privacy API and seal main classes for absence of retired witness fixtures."""
+    root = root.resolve(strict=True)
+    classes = {}
+    records = []
+    for suffix in ("", "$Companion"):
+        name = SDK_PACKAGE + "privacy/PrivacyNativeBridge" + suffix
+        path = root / (name + ".class")
+        if path.is_symlink() or not path.is_file() or not path.resolve(strict=True).is_relative_to(root):
+            raise AuditError(f"invalid compiled privacy owner: {path}")
+        with path.open("rb") as stream:
+            raw = stream.read(JVM.MAX_CLASS_BYTES + 1)
+        declaration = JVM.parse_class(raw)
+        if declaration.name != name or declaration.major != 52 or declaration.source_file != "PrivacyNativeBridge.kt":
+            raise AuditError(f"privacy class must be the canonical Kotlin JDK8 owner: {path}")
+        classes[name] = declaration
+        records.append({"path": str(path), "sha256": hashlib.sha256(raw).hexdigest(), "class": name})
+    paths = []
+    for path in root.rglob("*"):
+        if path.is_symlink():
+            raise AuditError(f"class output contains a symlink: {path}")
+        if path.suffix == ".class":
+            if not path.is_file():
+                raise AuditError(f"class input is not a regular file: {path}")
+            paths.append(path)
+            if len(paths) > MAX_CLASS_FILES:
+                raise AuditError("compiled class inventory exceeds the entry limit")
+    for path in sorted(paths):
+        name = path.relative_to(root).as_posix()[:-6]
+        if name in classes:
+            continue
+        with path.open("rb") as stream:
+            raw = stream.read(JVM.MAX_CLASS_BYTES + 1)
+        declaration = JVM.parse_class(raw)
+        if declaration.name != name:
+            raise AuditError(f"class path and declared owner differ: {path}")
+        classes[name] = declaration
+        records.append({"path": str(path), "sha256": hashlib.sha256(raw).hexdigest(), "class": name})
+    validate_privacy_api(classes)
+    if set(paths) != set(root.rglob("*.class")):
+        raise AuditError("compiled main class inventory changed while inspected")
+    if any(hashlib.sha256(Path(record["path"]).read_bytes()).hexdigest() != record["sha256"] for record in records):
+        raise AuditError("compiled privacy classes changed while inspected")
+    return {"scope": "compiled privacy API metadata only", "native_executed": False, "release_qualified": False, "classes": records}
+
+
 def validate_release_api(classes: dict[str, object]) -> None:
     """Retain fail-closed privacy and explicit signing context API assertions."""
     privacy_name = SDK_PACKAGE + "privacy/PrivacyNativeBridge"
@@ -99,20 +183,8 @@ def validate_release_api(classes: dict[str, object]) -> None:
     if any(method.name == "<init>" and method.descriptor == "()V"
            and method.flags & JVM.ACC_PUBLIC for method in classes[codec_name].methods):
         raise AuditError("codec adapter construction requires explicit chain context")
-    privacy = classes[privacy_name]
-    for name, descriptor in (
-        ("nativeValidateCompiledProfileCatalog", "([B)I"),
-        ("nativeExact12FixtureBundle", "()[B"),
-        ("nativeValidateExact12FixtureBundle", "([B)I"),
-    ):
-        matches = [method for method in privacy.methods if method.name == name]
-        if len(matches) != 1 or matches[0].descriptor != descriptor or not matches[0].native or not matches[0].static:
-            raise AuditError(f"privacy operation must retain its native declaration: {name}{descriptor}")
+    validate_privacy_api(classes)
     for owner, class_file in classes.items():
-        if owner in (privacy_name, privacy_name + "$Companion"):
-            for method in class_file.methods:
-                if any(fragment in method.name for fragment in ("ProofRequest", "BuildProof", "VerifyProof")) or method.name in ("buildProof", "verifyProof"):
-                    raise AuditError(f"unqualified generic privacy proof method: {owner}.{method.name}")
         if owner in (signer_name, signer_name + "$Companion"):
             for method in class_file.methods:
                 if method.name in {

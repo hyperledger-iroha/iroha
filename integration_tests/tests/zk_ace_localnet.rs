@@ -4,7 +4,7 @@
 use eyre::{Result, WrapErr as _, ensure, eyre};
 use integration_tests::sandbox;
 use iroha::{
-    blocking::Client,
+    client::Client,
     data_model::{
         asset::AssetBalanceScope,
         metadata::Metadata,
@@ -134,7 +134,7 @@ fn zk_ace_privacy_transfer_fails_closed_taira_localnet() -> Result<()> {
     else {
         return Ok(());
     };
-    let mut client = network.client();
+    let mut client = network.client().client().clone();
     client.add_transaction_nonce = true;
 
     let row = client

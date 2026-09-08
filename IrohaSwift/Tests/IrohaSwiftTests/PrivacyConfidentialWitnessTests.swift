@@ -5,25 +5,25 @@ import XCTest
 final class PrivacyConfidentialWitnessTests: XCTestCase {
     func testTypedTransferWitnessEncodesWithoutGenericProofRequest() throws {
         let witness = try transferWitness()
-        let archive = try PrivacyConfidentialWitnessCodecs.encodeTransferWitness(witness)
+        let archive = try RetiredPrivacyConfidentialWitnessCodecs.encodeTransferWitness(witness)
         XCTAssertGreaterThan(archive.count, NoritoHeader.encodedLength)
         XCTAssertEqual(
             Array(archive[6..<22]),
             Array(noritoSchemaHash(
-                forTypeName: PrivacyConfidentialWitnessCodecs.privacyConfidentialWitnessV1WireName
+                forTypeName: RetiredPrivacyConfidentialWitnessCodecs.privacyConfidentialWitnessV1WireName
             ))
         )
     }
 
     func testTypedUnshieldWitnessEncodes() throws {
         let witness = try unshieldWitness()
-        let archive = try PrivacyConfidentialWitnessCodecs.encodeUnshieldWitness(witness)
+        let archive = try RetiredPrivacyConfidentialWitnessCodecs.encodeUnshieldWitness(witness)
         XCTAssertGreaterThan(archive.count, NoritoHeader.encodedLength)
     }
 
     func testTransferWitnessRejectsPublicAmountAndMissingOutput() throws {
         let input = try note()
-        let publicAmount = try PrivacyConfidentialWitnessV1(
+        let publicAmount = try RetiredPrivacyConfidentialWitnessV1(
             networkId: TestNetworkIds.canonical,
             assetDefinitionId: "xor#taira",
             spendKey: bytes(1),
@@ -35,14 +35,14 @@ final class PrivacyConfidentialWitnessTests: XCTestCase {
             rootHint: bytes(3)
         )
         XCTAssertThrowsError(
-            try PrivacyConfidentialWitnessCodecs.encodeTransferWitness(publicAmount)
+            try RetiredPrivacyConfidentialWitnessCodecs.encodeTransferWitness(publicAmount)
         )
     }
 
     func testWitnessRejectsDuplicateLeafAndRho() throws {
         let input = try note()
         XCTAssertThrowsError(
-            try PrivacyConfidentialWitnessV1(
+            try RetiredPrivacyConfidentialWitnessV1(
                 networkId: TestNetworkIds.canonical,
                 assetDefinitionId: "xor#taira",
                 spendKey: bytes(1),
@@ -58,7 +58,7 @@ final class PrivacyConfidentialWitnessTests: XCTestCase {
 
     func testWitnessRejectsNonCanonicalNumbersAndWrongDigestLengths() {
         XCTAssertEqual(
-            try PrivacyConfidentialWitnessCodecs.canonicalPublicAmount(
+            try RetiredPrivacyConfidentialWitnessCodecs.canonicalPublicAmount(
                 "0",
                 field: "publicAmount"
             ),
@@ -66,14 +66,14 @@ final class PrivacyConfidentialWitnessTests: XCTestCase {
         )
         for value in ["00", "01", "-1"] {
             XCTAssertThrowsError(
-                try PrivacyConfidentialWitnessCodecs.canonicalPublicAmount(
+                try RetiredPrivacyConfidentialWitnessCodecs.canonicalPublicAmount(
                     value,
                     field: "publicAmount"
                 )
             )
         }
         XCTAssertThrowsError(
-            try PrivacyConfidentialNoteWitnessV1(
+            try RetiredPrivacyConfidentialNoteWitnessV1(
                 amount: "01",
                 rho: bytes(4),
                 diversifier: bytes(5),
@@ -81,7 +81,7 @@ final class PrivacyConfidentialWitnessTests: XCTestCase {
             )
         )
         XCTAssertThrowsError(
-            try PrivacyConfidentialNoteWitnessV1(
+            try RetiredPrivacyConfidentialNoteWitnessV1(
                 amount: "1",
                 rho: Data(repeating: 4, count: 31),
                 diversifier: bytes(5),
@@ -90,8 +90,16 @@ final class PrivacyConfidentialWitnessTests: XCTestCase {
         )
     }
 
-    private func transferWitness() throws -> PrivacyConfidentialWitnessV1 {
-        try PrivacyConfidentialWitnessV1(
+    func testRetiredWitnessArchivesAreRejectedByCurrentTypedCarrier() throws {
+        let transfer = try RetiredPrivacyConfidentialWitnessCodecs.encodeTransferWitness(transferWitness())
+        let unshield = try RetiredPrivacyConfidentialWitnessCodecs.encodeUnshieldWitness(unshieldWitness())
+        for archive in [transfer, unshield] {
+            XCTAssertThrowsError(try PrivacyExact12FixtureCodecV1.decodeCanonicalArchive(archive))
+        }
+    }
+
+    private func transferWitness() throws -> RetiredPrivacyConfidentialWitnessV1 {
+        try RetiredPrivacyConfidentialWitnessV1(
             networkId: TestNetworkIds.canonical,
             assetDefinitionId: "xor#taira",
             spendKey: bytes(1),
@@ -104,8 +112,8 @@ final class PrivacyConfidentialWitnessTests: XCTestCase {
         )
     }
 
-    private func unshieldWitness() throws -> PrivacyConfidentialWitnessV1 {
-        try PrivacyConfidentialWitnessV1(
+    private func unshieldWitness() throws -> RetiredPrivacyConfidentialWitnessV1 {
+        try RetiredPrivacyConfidentialWitnessV1(
             networkId: TestNetworkIds.canonical,
             assetDefinitionId: "xor#taira",
             spendKey: bytes(1),
@@ -113,7 +121,7 @@ final class PrivacyConfidentialWitnessTests: XCTestCase {
             inputs: [try note()],
             transferOutputs: [],
             unshieldChange: [
-                try PrivacyConfidentialUnshieldChangeWitnessV1(
+                try RetiredPrivacyConfidentialUnshieldChangeWitnessV1(
                     amount: "2",
                     rho: bytes(7)
                 ),
@@ -123,8 +131,8 @@ final class PrivacyConfidentialWitnessTests: XCTestCase {
         )
     }
 
-    private func note() throws -> PrivacyConfidentialNoteWitnessV1 {
-        try PrivacyConfidentialNoteWitnessV1(
+    private func note() throws -> RetiredPrivacyConfidentialNoteWitnessV1 {
+        try RetiredPrivacyConfidentialNoteWitnessV1(
             amount: "5",
             rho: bytes(4),
             diversifier: bytes(5),
@@ -132,8 +140,8 @@ final class PrivacyConfidentialWitnessTests: XCTestCase {
         )
     }
 
-    private func output() throws -> PrivacyConfidentialTransferOutputWitnessV1 {
-        try PrivacyConfidentialTransferOutputWitnessV1(
+    private func output() throws -> RetiredPrivacyConfidentialTransferOutputWitnessV1 {
+        try RetiredPrivacyConfidentialTransferOutputWitnessV1(
             amount: "5",
             rho: bytes(6),
             ownerTag: bytes(7)

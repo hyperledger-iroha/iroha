@@ -1,4 +1,4 @@
-//! Public AXT transfer context for the unadmitted compact protocol prototype.
+//! Public AXT transfer context for the unadmitted compact V1 protocol.
 //!
 //! The complete canonical binding, exact pre-proof metadata mirrors and remote
 //! spend preimages wrap the typed public-transfer statement before challenges.
@@ -39,7 +39,7 @@ use crate::{
 };
 
 #[derive(NoritoSerialize)]
-#[norito(schema_name = "fastpq_prover::compact_prototype::AxtTransferContextV1")]
+#[norito(schema_name = "fastpq_prover::compact_v1::AxtTransferContextV1")]
 #[cfg(test)]
 struct BoundContext {
     version: u16,

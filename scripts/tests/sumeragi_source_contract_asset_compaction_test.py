@@ -43,8 +43,8 @@ BASELINE_RUST_LINES = (
 MAX_POSTIMAGE_RUST_LINES = (
     ORIGINAL_POSTIMAGE_RUST_LINES + CURRENT_SOURCE_COVERAGE_GROWTH_RUST_LINES
 )
-EXPECTED_ASSET_LENGTH = 629_411
-EXPECTED_ASSET_SHA256 = "423628c7691416f6d027f20a3f9d531d23f02f0c59ebf4ecdaf2655b0c241db1"
+EXPECTED_ASSET_LENGTH = 632_354
+EXPECTED_ASSET_SHA256 = "81b9fa2543e4c14b9348d473a442b0f0f037133ed3b9bb5f0d784204bc1e9c09"
 EXPECTED_CASE_IDS_SHA256 = "77db5140892b9c541a0e4e08b0b70648210765ebce8a828514ca1cc006427284"
 
 HOST_PREIMAGE_SHA256 = {
@@ -103,7 +103,7 @@ MIGRATED_CASE_SHA256 = {
     "stored_replay_store_coalescing_and_cleanup_are_owner_closed": "e0db04d44cf4862461ae89234c7d82361bb1b25491017f0a7869dec1a287c872",
     "ready_validate_execution_surface_is_closed_borrow_bound_and_scheduler_owned": "03b7d7a3a9843536bca8c686937561c0c12eea4281e9850de7ee7c841cf6ac48",
     "certified_pipeline_replay_evidence_is_retained_by_every_closed_carrier": "dc5a58896a12211ec735952b05a411112a8fda45ed60923b1b5f114913a14a12",
-    "nonqueue_replica_release_is_fifo_proved_move_only_and_restart_closed": "3ea2517742f7aba7784c565472645a2ba05964f209b88ce1b4c23ae82414a8b8",
+    "nonqueue_replica_release_is_fifo_proved_move_only_and_restart_closed": "b6afba431c1205460d1601e0dd68f6688a9ca93bce808b88d9ab30733cb81f13",
 }
 
 

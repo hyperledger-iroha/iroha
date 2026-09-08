@@ -6,9 +6,11 @@ test_build_source_seal() {
   local bridge_build="$TMP_DIR/source-seal-bridge-build"
   local bridge_output="$TMP_DIR/source-seal-bridge-output"
   local exact_rustc exact_rustdoc
-  mkdir -p "$root/scripts" "$root/IrohaSwift" \
+  mkdir -p "$root/scripts" "$root/ci" "$root/IrohaSwift" \
     "$root/crates/connect_norito_bridge/src" \
     "$root/crates/unrelated/src" "$cargo_target" "$bridge_build" "$bridge_output"
+  cp "$SCRIPT_DIR/../ci/privacy_sdk_cargo_lockfile.sh" \
+    "$root/ci/privacy_sdk_cargo_lockfile.sh"
   cp "$SCRIPT_DIR/build_norito_xcframework.sh" \
     "$root/scripts/build_norito_xcframework.sh"
   cp "$SCRIPT_DIR/check_mobile_sdk_artifact_pin_commit.py" \
@@ -55,7 +57,7 @@ test_build_source_seal() {
   export RUSTDOC="$exact_rustdoc"
 
   NORITO_BRIDGE_SOURCE_SEAL_TEST_ONLY=1 \
-    bash "$root/scripts/build_norito_xcframework.sh"
+    bash "$root/scripts/build_norito_xcframework.sh" --lockfile-path "$root/Cargo.lock"
 
   local invalid_rustup_output
   local invalid_rustup
@@ -66,7 +68,7 @@ test_build_source_seal() {
   for invalid_rustup in "" rustup "$rustup_link" "$rustup_noncanonical"; do
     if invalid_rustup_output="$(MOBILE_SDK_RUSTUP_BINARY="$invalid_rustup" \
         NORITO_BRIDGE_SOURCE_SEAL_TEST_ONLY=1 \
-        bash "$root/scripts/build_norito_xcframework.sh" 2>&1)"; then
+        bash "$root/scripts/build_norito_xcframework.sh" --lockfile-path "$root/Cargo.lock" 2>&1)"; then
       fail "expected Apple builder to reject rustup override: $invalid_rustup"
     fi
     case "$invalid_rustup_output" in
@@ -82,13 +84,13 @@ test_build_source_seal() {
   if invalid_lock_output="$(NORITO_BRIDGE_SOURCE_SEAL_TEST_ONLY=1 \
       bash "$root/scripts/build_norito_xcframework.sh" \
         --lockfile-path "$root/private-lock/Cargo.lock" 2>&1)"; then
-    fail "expected Apple builder to reject the retired alternate-lock interface"
+    fail "expected Apple builder to reject an unreviewed source-contained alternate lock"
   fi
   case "$invalid_lock_output" in
-    *"Unknown argument: --lockfile-path"*) ;;
+    *"External Cargo.lock must match the canonical reviewed graph"*) ;;
     *)
       printf '%s\n' "$invalid_lock_output" >&2
-      fail "retired alternate-lock failure was not explicit"
+      fail "unreviewed alternate-lock failure was not explicit"
       ;;
   esac
 
@@ -112,7 +114,7 @@ test_build_source_seal() {
     GIT_INDEX_FILE="$root/forged-index" \
     GIT_CONFIG_GLOBAL="$root/forged-git-config" \
     NORITO_BRIDGE_SOURCE_SEAL_TEST_ONLY=1 \
-    /bin/bash "$root/scripts/build_norito_xcframework.sh"
+    /bin/bash "$root/scripts/build_norito_xcframework.sh" --lockfile-path "$root/Cargo.lock"
   [[ ! -e "$hostile_marker" ]] \
     || fail "Apple builder trusted a hostile ambient PATH tool"
 
@@ -120,12 +122,12 @@ test_build_source_seal() {
   # otherwise identical native slices appear mixed-source.
   NORITO_BRIDGE_SOURCE_SEAL_TEST_ONLY=1 \
     NORITO_BRIDGE_SOURCE_SEAL_TEST_MUTATE=crates/unrelated/src/lib.rs \
-    bash "$root/scripts/build_norito_xcframework.sh"
+    bash "$root/scripts/build_norito_xcframework.sh" --lockfile-path "$root/Cargo.lock"
 
   local output
   if output="$(NORITO_BRIDGE_SOURCE_SEAL_TEST_ONLY=1 \
       NORITO_BRIDGE_SOURCE_SEAL_TEST_MUTATE=Cargo.toml \
-      bash "$root/scripts/build_norito_xcframework.sh" 2>&1)"; then
+      bash "$root/scripts/build_norito_xcframework.sh" --lockfile-path "$root/Cargo.lock" 2>&1)"; then
     printf '%s\n' "$output" >&2
     fail "expected source seal to reject an in-build source mutation"
   fi
@@ -154,7 +156,7 @@ test_build_source_seal() {
   set +e
   (
     cd "$foreign_caller"
-    /bin/bash "$root/scripts/build_norito_xcframework.sh" >/dev/null 2>&1
+    /bin/bash "$root/scripts/build_norito_xcframework.sh" --lockfile-path "$root/Cargo.lock" >/dev/null 2>&1
   )
   helper_status=$?
   set -e

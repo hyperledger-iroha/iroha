@@ -7,7 +7,7 @@ if [ "$#" -ne 1 ]; then
 fi
 role="$1"
 case "$role" in
-  proof-outcome|repair|reserve|orderbook|governance-dag|potr-gateway|potr-provider|billing|evidence-viewer|stream-token|pop-credentials) ;;
+  proof-outcome|repair|reserve|orderbook|governance-dag|potr-gateway|potr-provider|billing|evidence-viewer|pop-credentials) ;;
   *) echo "unsupported signer role" >&2; exit 64 ;;
 esac
 

@@ -12,7 +12,9 @@ export {
   validateNoritoFrame,
 } from "./norito.js";
 
-export { inspectCanonicalTransactionPayloadBindings } from "./transactionCodec.js";
+export {
+  _inspectOrdinaryCanonicalTransactionPayloadBindings as inspectCanonicalTransactionPayloadBindings,
+} from "./transactionCodec.js";
 export { normalizeGovernanceProposalWireV1 } from "./governanceProposalV1.js";
 
 export {

@@ -469,7 +469,23 @@ def _load_generation_validator():
     return module
 
 
-def _validate_generation(snapshot: Path, *, allow_dirty_source: bool = False):
+def _load_source_lock_owner():
+    """Reuse the canonical source-seal authority for the entire archive operation."""
+    sys.dont_write_bytecode = True
+    path = Path(__file__).resolve(strict=True).with_name("norito_bridge_source_seal.py")
+    metadata = path.lstat()
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+        fail("source lock owner must be a non-symbolic regular file")
+    spec = importlib.util.spec_from_file_location("norito_bridge_archive_source_lock", path)
+    if spec is None or spec.loader is None:
+        fail("unable to load the source lock owner")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _validate_generation(snapshot: Path, *, lockfile_path: Path, allow_dirty_source: bool = False):
     validator = _load_generation_validator()
     manifest_path = snapshot / MANIFEST_NAME
     manifest_link = snapshot.parent / MANIFEST_NAME
@@ -478,6 +494,7 @@ def _validate_generation(snapshot: Path, *, allow_dirty_source: bool = False):
         os.symlink(expected_link_target, manifest_link)
         validator.validate(
             root=Path(__file__).resolve(strict=True).parent.parent,
+            lockfile_path=lockfile_path,
             xcframework=snapshot,
             manifest_path=manifest_path,
             manifest_link=manifest_link,
@@ -786,6 +803,7 @@ def archive_xcframework(
     output_raw: str,
     scratch_raw: str,
     *,
+    lockfile_path: Path,
     allow_dirty_source: bool = False,
 ) -> tuple[str, int]:
     repository_root = _repository_root()
@@ -822,6 +840,12 @@ def archive_xcframework(
             "outside the archive output directory"
         )
     _, _, stamp = _source_date_epoch()
+    lock_owner = _load_source_lock_owner()
+    try:
+        selected_lock = lock_owner.selected_lockfile_path(repository_root, lockfile_path)
+        lock_identity = lock_owner.lockfile_identity(selected_lock)
+    except RuntimeError as error:
+        fail(str(error))
 
     temporary_archive: TemporaryArchive | None = None
     with _archive_lock(artifact_root) as archive_lock:
@@ -835,7 +859,7 @@ def archive_xcframework(
                 file=sys.stderr,
             )
             validator = _validate_generation(
-                snapshot, allow_dirty_source=allow_dirty_source
+                snapshot, lockfile_path=selected_lock, allow_dirty_source=allow_dirty_source
             )
             _validate_native_binaries(snapshot, validator)
             temporary_archive = _write_archive(
@@ -845,6 +869,8 @@ def archive_xcframework(
                 digests,
             )
             archive_lock.assert_held()
+            if lock_owner.lockfile_identity(selected_lock) != lock_identity:
+                fail("selected Cargo lock changed before archive publication")
             _atomic_publish(
                 temporary_archive,
                 output,
@@ -871,6 +897,7 @@ def _parse_args() -> argparse.Namespace:
         )
     )
     parser.add_argument("--xcframework", required=True)
+    parser.add_argument("--lockfile-path", required=True, type=Path)
     parser.add_argument("--output", required=True)
     parser.add_argument("--scratch-dir", required=True)
     parser.add_argument(
@@ -894,6 +921,7 @@ def main() -> None:
         args.xcframework,
         args.output,
         args.scratch_dir,
+        lockfile_path=args.lockfile_path,
         allow_dirty_source=args.allow_dirty_source,
     )
     print(f"[norito-bridge-archive] sha256={digest} bytes={size} path={args.output}")

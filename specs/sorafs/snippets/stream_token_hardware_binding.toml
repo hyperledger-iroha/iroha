@@ -1,0 +1,50 @@
+# Public configuration template, not deployment qualification or working trust defaults.
+# Replace every placeholder and zero generation/interval with independently reviewed values.
+# Never put a private key, seed, credential, session or device PIN in this file.
+[sorafs.storage]
+enabled = true
+provider_id_hex = "<reviewed-nonzero-64-lowercase-hex-provider-id>"
+
+[sorafs.storage.stream_tokens]
+enabled = true
+admission_provider_handle = "sealed-cas:prod/stream-token/admission/v1"
+admission_provider_revision = 0 # Required reviewed nonzero admission generation.
+admission_provider_policy_digest_hex = "<reviewed-nonzero-64-lowercase-hex-policy-digest>"
+default_ttl_secs = 900
+default_max_streams = 8
+default_rate_limit_bytes = 104857600
+default_requests_per_minute = 60
+
+[sorafs.storage.stream_tokens.hardware]
+runtime_handle = "hsm://sorafs/stream-token/primary"
+key_handle = "hsm://sorafs/stream-token/key-generation"
+service_id = "stream-signing-service"
+administrator_id = "stream-signing-admin"
+public_key_hex = "<independently-approved-64-lowercase-hex-signer-key>"
+key_revision = 0 # Sole token key generation: required 1..=u32::MAX.
+policy_revision = 0
+policy_digest_hex = "<reviewed-nonzero-64-lowercase-hex-signer-policy>"
+
+[sorafs.storage.stream_tokens.hardware.attester]
+service_id = "hardware-custody-certifier"
+administrator_id = "hardware-custody-admin"
+public_key_hex = "<independently-approved-64-lowercase-hex-attestation-key>"
+key_revision = 0
+policy_revision = 0
+policy_digest_hex = "<reviewed-nonzero-64-lowercase-hex-attestation-policy>"
+active_from_unix_ms = 0 # Required reviewed inclusive start.
+active_until_unix_ms = 0 # Required reviewed exclusive end.
+max_validity_ms = 86400000
+max_anchor_age_ms = 300000
+
+[sorafs.storage.stream_tokens.hardware.observer]
+runtime_handle = "observer:prod/sorafs/stream-token"
+service_id = "finality-observer-service"
+administrator_id = "finality-observer-admin"
+public_key_hex = "<independently-approved-64-lowercase-hex-observer-key>"
+key_revision = 0
+policy_revision = 0
+policy_digest_hex = "<reviewed-nonzero-64-lowercase-hex-observer-policy>"
+active_from_unix_ms = 0 # Required reviewed inclusive start.
+active_until_unix_ms = 0 # Required reviewed exclusive end.
+max_state_age_ms = 300000

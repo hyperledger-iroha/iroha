@@ -110,6 +110,19 @@ const JOURNAL_IDENTITY_DISPLACED_FILE_NAME: &str =
     "lane_geometry_journal.norito.identity-displaced";
 const MARKER_FILE_NAME: &str = ".lane-incarnation.norito";
 const MARKER_TEMP_FILE_NAME: &str = ".lane-incarnation.norito.tmp";
+/// Exact geometry marker formats for the shared physical resource observer.
+pub(super) fn resource_evidence_file_kind(name: &str) -> Option<(u64, bool)> {
+    match name {
+        JOURNAL_FILE_NAME => Some((MAX_GEOMETRY_JOURNAL_BYTES, false)),
+        JOURNAL_TEMP_FILE_NAME | JOURNAL_RESTORE_TEMP_FILE_NAME => {
+            Some((MAX_GEOMETRY_JOURNAL_BYTES, true))
+        }
+        MARKER_FILE_NAME => Some((MAX_LANE_MARKER_BYTES, false)),
+        MARKER_TEMP_FILE_NAME => Some((MAX_LANE_MARKER_BYTES, true)),
+        _ => None,
+    }
+}
+
 const TRANSITION_DOMAIN: &[u8] = b"iroha:kura:lane-geometry-transition:v3\0";
 const CATALOG_DOMAIN: &[u8] = b"iroha:kura:lane-geometry-catalog:v1\0";
 const CHECKPOINT_DOMAIN: &[u8] = b"iroha:kura:lane-geometry-checkpoint:v3\0";
@@ -7378,7 +7391,7 @@ impl Kura {
                     "active primary block store disappeared before relabel",
                 ));
             }
-            store.flush_pending_fsync(true)?;
+            self.flush_pending_fsync_with_resources(store, true)?;
             store.drop_cached_handles();
         }
         let mut merge_log = active_merge.then(|| self.merge_log.lock());
@@ -8414,7 +8427,9 @@ impl Kura {
         // The archive root and its quarantine name are both below the counted retired-geometry
         // tree. Register the entire rename/deletion window so a concurrent usage scan cannot
         // publish a pre-quarantine snapshot after the archive has been removed.
-        let accounting_mutation = self.begin_total_disk_usage_mutation();
+        let accounting_mutation = self
+            .begin_total_disk_usage_mutation()
+            .with_resource_tree_move(&root, &quarantine);
         let deletion_root = if root_exists {
             let (_, identity) =
                 self.authenticate_geometry_archive(&root, pending, merge_releases)?;
@@ -11278,6 +11293,12 @@ impl Kura {
         // accounting generation so a scan spanning the move retries instead of publishing a
         // mixed directory snapshot.
         let accounting_mutation = self.begin_total_disk_usage_mutation();
+        let accounting_mutation = if directory {
+            accounting_mutation.with_resource_tree_move(source, target)
+        } else {
+            accounting_mutation
+                .with_resource_paths(vec![source.to_path_buf(), target.to_path_buf()])
+        };
         bootstrap_ensure_geometry_directory(&self.store_root, target_parent)?;
         self.validate_path_kind(target_parent, true)?;
         self.sync_geometry_parent(Some(target_parent))?;
@@ -11431,7 +11452,9 @@ impl Kura {
         };
         let historical_byte_limit = self.historical_autonomous_recovery_aggregate_byte_limit();
         let before = Self::block_store_bytes_with_historical_limit(&blocks, historical_byte_limit)?;
-        let accounting_mutation = self.begin_total_disk_usage_mutation();
+        let accounting_mutation = self
+            .begin_total_disk_usage_mutation()
+            .with_startup_resource_tree(&blocks);
         let mut store = BlockStore::new(&blocks);
         store.create_files_if_they_do_not_exist()?;
         create_dir_all_with_context(&Self::lane_artifact_dir(&blocks))?;
@@ -11446,7 +11469,9 @@ impl Kura {
         }
         if !self.validate_path_kind(&merge, false)? {
             let before = Self::file_len_or_zero(&merge)?;
-            let accounting_mutation = self.begin_total_disk_usage_mutation();
+            let accounting_mutation = self
+                .begin_total_disk_usage_mutation()
+                .with_resource_paths(vec![merge.clone()]);
             if let Some(parent) = merge.parent() {
                 create_dir_all_with_context(parent)?;
             }
@@ -11975,6 +12000,9 @@ impl Kura {
             ));
         }
         self.require_geometry_path_identity(temp, false, identity)?;
+        let accounting_mutation = self
+            .begin_total_disk_usage_mutation()
+            .with_resource_paths(vec![temp.to_path_buf()]);
         fs::remove_file(temp).map_err(|error| Error::IO(error, temp.to_path_buf()))?;
         self.sync_geometry_parent(temp.parent())?;
         if self.validate_path_kind(temp, false)? {
@@ -11986,6 +12014,7 @@ impl Kura {
                 temp.to_path_buf(),
             ));
         }
+        accounting_mutation.finish_resources_before_disk_rescan();
         Ok(())
     }
     fn geometry_bindings(
@@ -12808,7 +12837,9 @@ impl Kura {
     }
     fn remove_accounted_geometry_file(&self, path: &Path) -> Result<()> {
         let before = Self::file_len_or_zero(path)?;
-        let accounting_mutation = self.begin_total_disk_usage_mutation();
+        let accounting_mutation = self
+            .begin_total_disk_usage_mutation()
+            .with_resource_paths(vec![path.to_path_buf()]);
         fs::remove_file(path).map_err(|error| Error::IO(error, path.to_path_buf()))?;
         self.sync_geometry_parent(path.parent())?;
         self.update_disk_usage_delta(before, 0);
@@ -12869,7 +12900,9 @@ impl Kura {
         // The temp creation/write and target replacement are one accounting mutation. Counting
         // both sibling names makes exact recovery of a preexisting, authenticated temp possible
         // without transiently under-reporting either enforced or total usage.
-        let accounting_mutation = self.begin_total_disk_usage_mutation();
+        let accounting_mutation = self
+            .begin_total_disk_usage_mutation()
+            .with_resource_paths(vec![path.to_path_buf(), temp.to_path_buf()]);
         if let Some(parent) = path.parent() {
             create_dir_all_with_context(parent)?;
             self.validate_path_kind(parent, true)?;
@@ -13325,4 +13358,5 @@ mod tests {
     include!("lane_geometry_tests/01_retirement_and_recovery.rs");
     include!("lane_geometry_tests/02_geometry_moves_and_journal.rs");
     include!("lane_geometry_tests/03_gc_and_startup.rs");
+    include!("lane_geometry_tests/04_physical_resource_accounting.rs");
 }

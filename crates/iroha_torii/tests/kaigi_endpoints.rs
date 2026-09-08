@@ -194,6 +194,7 @@ fn build_app() -> (
         time_source,
         false,
     )
+    .expect("test telemetry resource registration")
     .0;
     let operator_key_pair = cfg.common.key_pair.clone();
     let da_receipt_signer = operator_key_pair.clone();
