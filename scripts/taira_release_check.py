@@ -131,6 +131,11 @@ STAGES = (
         "taira_public_reset::host::tests::preflight_dispatches_five_read_only_hosts_without_runtime_custody",
     )),
     ("candidate qualification before edge cutover", (
+        "taira_public_reset::host::tests::public_reset_convergence_waits_for_first_commit_without_accepting_pending_proof",
+        "taira_public_reset::host::tests::public_reset_convergence_rejects_fatal_identity_during_startup",
+        "taira_public_reset::host::tests::public_reset_convergence_deadline_reports_last_public_progress",
+        "taira_public_reset::host::tests::public_reset_convergence_rejects_omitted_nullable_status_fields",
+        "taira_public_reset::host::tests::convergence_wave_receipt_rejects_unknown_first_release_fields",
         "taira_public_reset::executor_model::tests::candidate_qualification_completes_before_public_cutover",
         "taira_public_reset::executor_model::tests::candidate_failure_never_exposes_the_public_edge",
         "taira_public_reset::executor_model::tests::candidate_probe_origins_reject_cross_host_or_substituted_sockets",

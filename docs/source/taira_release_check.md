@@ -59,6 +59,10 @@ daemon within the original deadline, without submitting another manager job.
 Changed launcher commands remain immediate failures.
 The active journaled restart path also waits for four actual Torii backends before
 onboarding, using the deadline captured before its one restart submission.
+Convergence treats a valid zero-height commit frontier as pending within that
+deadline; identity mismatches and restart requirements fail immediately. Tests
+keep pending startup status out of retained proof and preserve public progress
+fields in deadline errors.
 Candidate tests exercise the real HTTP producer and strict host receipt consumer,
 direct signed probe origins, private signer descriptor lifetime, ordered recovery
 and failure before edge cutover. Stopped-owner tests preserve the slot lock while

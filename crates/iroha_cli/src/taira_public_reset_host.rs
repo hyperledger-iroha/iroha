@@ -14822,6 +14822,11 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
     }
 
     fn convergence(&mut self, timeout_secs: u64, wave: usize, recovery_only: bool) -> Result<()> {
+        if self.runtime.validator_client_configs.len() != 4 {
+            return Err(eyre!(
+                "convergence requires four retained validator client configs"
+            ));
+        }
         if !recovery_only {
             require_forward_lease_budget(self.admitted, timeout_secs)?;
         }
@@ -14874,6 +14879,7 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
             false
         };
         let deadline = Instant::now() + Duration::from_secs(timeout_secs);
+        let mut last_observations = vec!["not yet sampled".to_owned(); 4];
         loop {
             let mut reports = Vec::with_capacity(4);
             let mut common = None;
@@ -14881,8 +14887,9 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
             for index in 0..self.runtime.validator_client_configs.len() {
                 let remaining = deadline.saturating_duration_since(Instant::now());
                 if remaining.is_zero() {
-                    return Err(eyre!(
-                        "four-validator convergence did not reach one atomic checkpoint"
+                    return Err(convergence_deadline_error(
+                        &self.admitted.inventory.validators,
+                        &last_observations,
                     ));
                 }
                 let (config_args, inherited_files, _candidate_custody) =
@@ -14915,17 +14922,27 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
                 )?;
                 let output = output?;
                 let value = parse_json_report(&output, "validator convergence status")?;
-                let observed = validate_convergence_status(
-                    &value,
-                    &self.admitted.inventory.validators[index],
-                )?;
-                if common
-                    .as_ref()
-                    .is_some_and(|expected| expected != &observed)
-                {
-                    agrees = false;
-                } else if common.is_none() {
-                    common = Some(observed);
+                let observed =
+                    observe_convergence_status(&value, &self.admitted.inventory.validators[index])
+                        .wrap_err_with(|| {
+                            format!(
+                                "validator {} convergence status rejected",
+                                self.admitted.inventory.validators[index].slug,
+                            )
+                        })?;
+                last_observations[index] = observed.progress;
+                match observed.checkpoint {
+                    Some(observed) => {
+                        if common
+                            .as_ref()
+                            .is_some_and(|expected| expected != &observed)
+                        {
+                            agrees = false;
+                        } else if common.is_none() {
+                            common = Some(observed);
+                        }
+                    }
+                    None => agrees = false,
                 }
                 reports.push(value);
             }
@@ -14969,8 +14986,9 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
                 }
             }
             if Instant::now() >= deadline {
-                return Err(eyre!(
-                    "four-validator convergence did not reach one successor checkpoint"
+                return Err(convergence_deadline_error(
+                    &self.admitted.inventory.validators,
+                    &last_observations,
                 ));
             }
             let remaining = deadline.saturating_duration_since(Instant::now());
@@ -17220,20 +17238,54 @@ fn validate_exact_inrou_check_report_with_scope(
     Ok(evidence)
 }
 
-/// Decode and validate one exact first-release Sumeragi V2 status report.
-///
-/// The typed JSON contract requires every current field, including explicit
-/// `null` for absent optional evidence. The public-reset coordinator therefore
-/// never accepts an older sparse status projection as convergence evidence.
-fn validate_convergence_status(
+#[derive(Debug)]
+struct ConvergenceStatusObservation {
+    checkpoint: Option<(u64, String, String, String)>,
+    progress: String,
+}
+
+fn convergence_deadline_error(validators: &[ValidatorV1], observations: &[String]) -> eyre::Report {
+    let progress = validators
+        .iter()
+        .zip(observations)
+        .map(|(validator, observation)| format!("{}: {observation}", validator.slug))
+        .collect::<Vec<_>>()
+        .join("; ");
+    eyre!(
+        "four-validator convergence did not reach one successor committed checkpoint before its deadline; latest observations: {progress}"
+    )
+}
+
+/// Validate identity immediately while allowing the exact pre-first-commit startup state.
+fn observe_convergence_status(
     value: &norito::json::Value,
     expected: &ValidatorV1,
-) -> Result<(u64, String, String, String)> {
+) -> Result<ConvergenceStatusObservation> {
     let status: SumeragiV2Status = json::from_value(value.clone())
         .wrap_err("Sumeragi status is not exact canonical V1 JSON")?;
+    if status.protocol_version != 4 {
+        return Err(eyre!(
+            "Sumeragi status protocol_version differs: expected 4, observed {}",
+            status.protocol_version,
+        ));
+    }
     status
         .validate()
         .map_err(|error| eyre!("Sumeragi status invariants failed: {error:?}"))?;
+    let progress = format!(
+        "height={}, view={}, phase={:?}, body_state={:?}, last_committed_height={}, pending_persistence_id={:?}",
+        status.height,
+        status.view,
+        status.phase,
+        status.body_state,
+        status.last_committed_height,
+        status.pending_persistence_id,
+    );
+    if status.restart_required {
+        return Err(eyre!(
+            "Sumeragi status restart_required is true; {progress}"
+        ));
+    }
     let expected_node = expected
         .node_fingerprint
         .parse::<iroha_crypto::Hash>()
@@ -17246,19 +17298,56 @@ fn validate_convergence_status(
         .config_fingerprint
         .parse::<iroha_crypto::Hash>()
         .wrap_err("signed config fingerprint is invalid")?;
-    if status.protocol_version != 4
-        || status.restart_required
-        || status.node_fingerprint != expected_node
-        || status.build_fingerprint != expected_build
-        || status.config_fingerprint != expected_config
-        || status.height_context.validator_count != 4
-        || status.height_context.quorum.min_signers != 3
-        || status.height_context.quorum.total_power != 4
-        || status.last_committed_height == 0
-    {
-        return Err(eyre!(
-            "Sumeragi status differs from the signed four-validator runtime identity"
-        ));
+    for (field, actual, expected) in [
+        ("node_fingerprint", status.node_fingerprint, expected_node),
+        (
+            "build_fingerprint",
+            status.build_fingerprint,
+            expected_build,
+        ),
+        (
+            "config_fingerprint",
+            status.config_fingerprint,
+            expected_config,
+        ),
+    ] {
+        if actual != expected {
+            return Err(eyre!(
+                "Sumeragi status {field} differs: expected {expected}, observed {actual}; {progress}"
+            ));
+        }
+    }
+    for (field, actual, expected) in [
+        (
+            "height_context.validator_count",
+            u64::from(status.height_context.validator_count),
+            4,
+        ),
+        (
+            "height_context.quorum.min_signers",
+            u64::from(status.height_context.quorum.min_signers),
+            3,
+        ),
+        (
+            "height_context.quorum.total_power",
+            status.height_context.quorum.total_power,
+            4,
+        ),
+    ] {
+        if actual != expected {
+            return Err(eyre!(
+                "Sumeragi status {field} differs: expected {expected}, observed {actual}; {progress}"
+            ));
+        }
+    }
+    // The typed validator already proves a zero frontier has neither a subject
+    // nor a CommitQC. This is normal before genesis commits, and must be polled
+    // within the existing convergence deadline rather than reported as drift.
+    if status.last_committed_height == 0 {
+        return Ok(ConvergenceStatusObservation {
+            checkpoint: None,
+            progress,
+        });
     }
     let subject = status
         .last_committed_subject
@@ -17288,7 +17377,24 @@ fn validate_convergence_status(
         .ok_or_else(|| eyre!("committed block hash is not canonical JSON"))?
         .to_owned();
     let commit = json::to_json(&commit).wrap_err("failed to canonicalize CommitQC evidence")?;
-    Ok((status.last_committed_height, context, block, commit))
+    Ok(ConvergenceStatusObservation {
+        checkpoint: Some((status.last_committed_height, context, block, commit)),
+        progress,
+    })
+}
+
+/// Require a completed checkpoint for retained proof, including every nullable field.
+fn validate_convergence_status(
+    value: &norito::json::Value,
+    expected: &ValidatorV1,
+) -> Result<(u64, String, String, String)> {
+    let observed = observe_convergence_status(value, expected)?;
+    observed.checkpoint.ok_or_else(|| {
+        eyre!(
+            "Sumeragi status is awaiting its first authenticated commit; {}",
+            observed.progress,
+        )
+    })
 }
 
 fn validate_convergence_wave(
@@ -19111,6 +19217,119 @@ mod tests {
                 && diagnostic.contains(&format!("missing field `{field}`")),
             "unexpected sparse-status error for `{field}`: {diagnostic}"
         );
+    }
+
+    fn startup_convergence_status_fixture() -> (ValidatorV1, norito::json::Value) {
+        let (validator, canonical) = canonical_convergence_status_fixture();
+        let mut status: SumeragiV2Status = json::from_value(canonical).expect("typed fixture");
+        status.height = 1;
+        status.last_committed_height = 0;
+        status.last_committed_subject = None;
+        status.last_commit_qc = None;
+        status.liveness = Default::default();
+        status
+            .validate()
+            .expect("authoritative startup state is valid");
+        (validator, json::to_value(&status).expect("startup status"))
+    }
+
+    #[test]
+    fn public_reset_convergence_waits_for_first_commit_without_accepting_pending_proof() {
+        let (validator, startup) = startup_convergence_status_fixture();
+        let (_, committed) = canonical_convergence_status_fixture();
+        let observations = [&startup, &committed]
+            .into_iter()
+            .map(|value| observe_convergence_status(value, &validator))
+            .collect::<Result<Vec<_>>>()
+            .expect("valid startup must allow sampling the subsequent committed checkpoint");
+        assert!(observations[0].checkpoint.is_none());
+        assert_eq!(observations[1].checkpoint.as_ref().unwrap().0, 7);
+        let error = validate_convergence_status(&startup, &validator)
+            .expect_err("pending observation is never retained convergence proof");
+        assert!(format!("{error:#}").contains("awaiting its first authenticated commit"));
+        validate_convergence_status(&committed, &validator).expect("strict committed proof");
+
+        let mut impossible = committed.clone();
+        *impossible.get_mut("last_committed_height").unwrap() = 0_u64.into();
+        assert!(
+            observe_convergence_status(&impossible, &validator).is_err(),
+            "a zero frontier carrying a QC cannot become a pending observation"
+        );
+        let mut unauthenticated = startup;
+        *unauthenticated.get_mut("height").unwrap() = 2_u64.into();
+        *unauthenticated.get_mut("last_committed_height").unwrap() = 1_u64.into();
+        assert!(
+            observe_convergence_status(&unauthenticated, &validator).is_err(),
+            "only the zero startup frontier may wait without its authenticated QC"
+        );
+    }
+
+    #[test]
+    fn public_reset_convergence_rejects_fatal_identity_during_startup() {
+        let (validator, startup) = startup_convergence_status_fixture();
+        for (field, replacement) in [
+            ("protocol_version", norito::json::Value::from(3_u64)),
+            ("restart_required", true.into()),
+            (
+                "node_fingerprint",
+                Hash::new(b"wrong public node").to_string().into(),
+            ),
+            (
+                "build_fingerprint",
+                Hash::new(b"wrong public build").to_string().into(),
+            ),
+            (
+                "config_fingerprint",
+                Hash::new(b"wrong public config").to_string().into(),
+            ),
+        ] {
+            let mut changed = startup.clone();
+            *changed.get_mut(field).unwrap() = replacement;
+            let error = observe_convergence_status(&changed, &validator)
+                .expect_err("fatal identity cannot be retried as startup");
+            assert!(
+                format!("{error:#}").contains(field),
+                "missing diagnostic for {field}: {error:#}"
+            );
+        }
+        let mut wrong_roster = startup;
+        *wrong_roster
+            .pointer_mut("/height_context/validator_count")
+            .unwrap() = 7_u64.into();
+        *wrong_roster
+            .pointer_mut("/height_context/quorum/min_signers")
+            .unwrap() = 5_u64.into();
+        *wrong_roster
+            .pointer_mut("/height_context/quorum/total_power")
+            .unwrap() = 7_u64.into();
+        let error = observe_convergence_status(&wrong_roster, &validator)
+            .expect_err("another valid committee remains fatal before first commit");
+        assert!(
+            format!("{error:#}")
+                .contains("height_context.validator_count differs: expected 4, observed 7")
+        );
+    }
+
+    #[test]
+    fn public_reset_convergence_deadline_reports_last_public_progress() {
+        let (validator, startup) = startup_convergence_status_fixture();
+        let observation = observe_convergence_status(&startup, &validator).expect("startup");
+        let error = convergence_deadline_error(&[validator.clone()], &[observation.progress]);
+        let diagnostic = format!("{error:#}");
+        for field in [
+            validator.slug.as_str(),
+            "height=1",
+            "view=0",
+            "phase=AwaitingProposal",
+            "body_state=Missing",
+            "last_committed_height=0",
+            "pending_persistence_id=None",
+        ] {
+            assert!(
+                diagnostic.contains(field),
+                "missing retained diagnostic {field}"
+            );
+        }
     }
 
     #[test]
