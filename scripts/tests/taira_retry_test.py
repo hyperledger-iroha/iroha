@@ -1535,7 +1535,7 @@ class RetiredPublicPruneTests(unittest.TestCase):
         self.stack.enter_context(mock.patch.object(retry, '_retire_read_public', side_effect=private_record))
         self.stack.enter_context(mock.patch.object(retry, '_retire_retained_state'))
         self.stack.enter_context(mock.patch.object(retry, '_retire_live_references', return_value={'passed': True}))
-        self.trim = self.stack.enter_context(mock.patch.object(retry.subprocess, 'run', return_value=SimpleNamespace(returncode=0)))
+        self.reclaim = self.stack.enter_context(mock.patch.object(retry.subprocess, 'run', return_value=SimpleNamespace(returncode=0)))
         self.guard = {'fresh_write': lambda path,data,mode: self.file(path,data,mode), 'sync_directory': lambda path: None}
 
     def file(self, path, data, mode):
@@ -1560,7 +1560,44 @@ class RetiredPublicPruneTests(unittest.TestCase):
         self.assertTrue(all(not path.exists() for path in self.targets))
         self.assertTrue(all(path.read_bytes() == data for path,data in preserved.items()))
         self.assertTrue(all(path.stat().st_ino == inode for path,inode in directory_ids.items()))
-        self.assertEqual(self.trim.call_count, 2)
+        self.assertEqual(self.reclaim.call_count, 4)
+
+    def test_closed_public_prune_flushes_freed_blocks_before_bounded_trim(self):
+        def native_reclaim(argv, **kwargs):
+            self.assertTrue(all(not path.exists() for path in self.targets))
+            self.assertEqual(kwargs, {'capture_output': True, 'timeout': 60, 'check': False})
+            return SimpleNamespace(returncode=0)
+        self.reclaim.side_effect = native_reclaim
+        with mock.patch.object(retry.os.path, 'ismount', side_effect=lambda path: path == self.runtime):
+            self.prune()
+            self.prune()
+        self.assertEqual([call.args[0] for call in self.reclaim.call_args_list], [
+            ['/usr/bin/sync', '-f', str(self.runtime)],
+            ['/usr/sbin/fstrim', str(self.runtime)],
+            ['/usr/bin/sync', '-f', str(self.runtime)],
+            ['/usr/sbin/fstrim', str(self.runtime)],
+        ])
+
+    def test_closed_public_prune_flush_failure_stops_trim_and_resumes(self):
+        self.reclaim.return_value = SimpleNamespace(returncode=1)
+        with self.assertRaisesRegex(retry._retire_RebindError, 'filesystem flush failed'):
+            self.prune()
+        self.assertEqual(self.reclaim.call_count, 1)
+        self.assertEqual(self.reclaim.call_args.args[0][:2], ['/usr/bin/sync', '-f'])
+        self.assertTrue(all(not path.exists() for path in self.targets))
+        self.reclaim.reset_mock()
+        self.reclaim.return_value = SimpleNamespace(returncode=0)
+        self.assertEqual(self.prune()['file_count'], 53)
+        self.assertEqual([call.args[0][0] for call in self.reclaim.call_args_list],
+                         ['/usr/bin/sync', '/usr/sbin/fstrim'])
+
+    def test_closed_public_prune_flush_timeout_stops_trim(self):
+        self.reclaim.side_effect = subprocess.TimeoutExpired(['/usr/bin/sync'], 60)
+        with self.assertRaises(subprocess.TimeoutExpired):
+            self.prune()
+        self.assertEqual(self.reclaim.call_count, 1)
+        self.assertEqual(self.reclaim.call_args.args[0][:2], ['/usr/bin/sync', '-f'])
+        self.assertEqual(self.reclaim.call_args.kwargs['timeout'], 60)
 
     def test_closed_public_prune_resumes_an_interrupted_unlink_and_trim(self):
         original = Path.unlink; count = 0
@@ -1572,9 +1609,10 @@ class RetiredPublicPruneTests(unittest.TestCase):
         with mock.patch.object(Path, 'unlink', interrupted), self.assertRaises(OSError): self.prune()
         self.assertTrue((self.work / 'public-prune-intent.json').exists())
         self.assertFalse((self.work / 'public-prune-completed.json').exists())
-        self.trim.return_value = SimpleNamespace(returncode=1)
+        self.reclaim.side_effect = lambda argv, **kwargs: SimpleNamespace(
+            returncode=1 if argv[0] == '/usr/sbin/fstrim' else 0)
         with self.assertRaisesRegex(retry._retire_RebindError, 'trim failed'): self.prune()
-        self.trim.return_value = SimpleNamespace(returncode=0)
+        self.reclaim.side_effect = None
         self.assertEqual(self.prune()['file_count'], 53)
 
     def test_closed_public_prune_rejects_forged_manifest_and_unpublished_retirement(self):
@@ -1649,10 +1687,10 @@ class RetiredPublicPruneTests(unittest.TestCase):
         self.assertEqual(first, self.result)
         self.assertEqual(second, self.result)
         self.assertTrue(all(not path.exists() for path in self.targets))
-        self.assertEqual(self.trim.call_count, 2)
+        self.assertEqual(self.reclaim.call_count, 4)
 
     def test_closed_public_prune_rejects_replacement_after_persisted_intent(self):
-        self.trim.return_value = SimpleNamespace(returncode=1)
+        self.reclaim.return_value = SimpleNamespace(returncode=1)
         with self.assertRaises(retry._retire_RebindError): self.prune()
         self.file(self.targets[0], b'public executable', 0o755)
         with self.assertRaisesRegex(retry._retire_RebindError, 'appeared or changed'): self.prune()

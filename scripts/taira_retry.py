@@ -1687,12 +1687,17 @@ def _retire_prune_public(g, context, result):
                      "allocated_bytes_removed": sum(row["allocated_bytes"] for row in intent["files"]),
                      "directories_inputs_metadata_and_private_state_preserved": True}
         _retire_event(g, "public-prune-completed", completed)
-        # Trim is repeated on resume because a crash may follow unlink but precede
-        # discard. The next guest and backing capacity observations remain decisive.
+        # Flush and trim are repeated on resume because a crash may follow unlink
+        # but precede discard. Directory fsync alone does not settle filesystem
+        # block reclamation before FITRIM, which can otherwise discard zero bytes.
+        # The next guest and backing capacity observations remain decisive.
         mount = RETIRE_RUNTIME
         while not os.path.ismount(mount):
             _retire_need(mount != mount.parent, "retired runtime mountpoint is unavailable")
             mount = mount.parent
+        flush = subprocess.run(["/usr/bin/sync", "-f", str(mount)],
+                               capture_output=True, timeout=60, check=False)
+        _retire_need(flush.returncode == 0, "retired public payload filesystem flush failed")
         trim = subprocess.run(["/usr/sbin/fstrim", str(mount)],
                               capture_output=True, timeout=60, check=False)
         _retire_need(trim.returncode == 0, "retired public payload trim failed")

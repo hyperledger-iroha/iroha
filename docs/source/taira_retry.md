@@ -123,8 +123,11 @@ configs, directories, unrelated manifests, storage metadata and native history
 remain intact. Unadmitted partial ingestion data is preserved. An owner-only
 intent makes interrupted unlink and trim operations resumable.
 
-After pruning and filesystem trim, fresh guest and physical backing observations
-must admit the full next-deployment peak before assembly or apply. Retirement
+After pruning, native `sync -f` flushes the runtime filesystem before `fstrim`
+requests discard of freed blocks. Each command has a 60-second timeout. Both
+operations repeat on resume, and either failure stops the attempt. Fresh guest
+and physical backing observations must admit the full next-deployment peak
+before assembly or apply. Retirement
 admission cannot authorize deployment. The command checks the guest again before
 assembly, authorization and apply; it neither reserves space nor credits
 anticipated cleanup. During native apply,
