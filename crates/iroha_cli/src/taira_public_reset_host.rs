@@ -5599,7 +5599,9 @@ fn execute_host_action(
             let release = Path::new(&validator.service_root)
                 .join("releases")
                 .join(&admitted.inventory.revision.commit);
-            attest_validator_process(admitted, validator, &release, true)?;
+            wait_for_validator_process(admitted.action_deadline, || {
+                observe_validator_process(admitted, validator, &release, true)
+            })?;
             Ok((0, 0, "validator started".to_owned()))
         }
         HostAction::Restart => {
@@ -5611,7 +5613,9 @@ fn execute_host_action(
             let release = Path::new(&validator.service_root)
                 .join("releases")
                 .join(&admitted.inventory.revision.commit);
-            attest_validator_process(admitted, validator, &release, true)?;
+            wait_for_validator_process(admitted.action_deadline, || {
+                observe_validator_process(admitted, validator, &release, true)
+            })?;
             Ok((0, 0, "validator restarted".to_owned()))
         }
         HostAction::EdgeCutover => {
@@ -8265,12 +8269,53 @@ fn validate_loaded_unit_evidence(bytes: &[u8], expected_fragment: &Path) -> Resu
     Ok(())
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum ValidatorProcessReadiness {
+    Attested,
+    LauncherPending,
+}
+
+fn wait_for_validator_process(
+    deadline: Instant,
+    mut observe: impl FnMut() -> Result<ValidatorProcessReadiness>,
+) -> Result<()> {
+    // Manager submission is deliberately outside this loop for both Start and Restart.
+    loop {
+        if Instant::now() >= deadline {
+            return Err(eyre!("validator process attestation deadline elapsed"));
+        }
+        if observe()? == ValidatorProcessReadiness::Attested {
+            if Instant::now() >= deadline {
+                return Err(eyre!("validator process attestation deadline elapsed"));
+            }
+            return Ok(());
+        }
+        std::thread::sleep(
+            PROCESS_POLL_INTERVAL.min(deadline.saturating_duration_since(Instant::now())),
+        );
+    }
+}
+
 fn attest_validator_process(
     admitted: &HostAdmission,
     validator: &ValidatorV1,
     release_root: &Path,
     fresh_state: bool,
 ) -> Result<()> {
+    match observe_validator_process(admitted, validator, release_root, fresh_state)? {
+        ValidatorProcessReadiness::Attested => Ok(()),
+        ValidatorProcessReadiness::LauncherPending => Err(eyre!(
+            "validator MainPID still executes its signed launcher"
+        )),
+    }
+}
+
+fn observe_validator_process(
+    admitted: &HostAdmission,
+    validator: &ValidatorV1,
+    release_root: &Path,
+    fresh_state: bool,
+) -> Result<ValidatorProcessReadiness> {
     ensure_action_deadline(admitted)?;
     attest_loaded_systemd_unit(validator, admitted.action_deadline)?;
     if validated_current_release_target(admitted)? != release_root {
@@ -8296,10 +8341,48 @@ fn attest_validator_process(
         .ok_or_else(|| eyre!("validator unit has no exact positive MainPID"))?;
     let proc_root = PathBuf::from(format!("/proc/{pid}"));
     let expected_executable = release_root.join("bin/iroha3d_taira");
-    if fs::read_link(proc_root.join("exe"))? != expected_executable {
-        return Err(eyre!(
-            "validator MainPID does not execute the selected release"
-        ));
+    let executable = fs::read_link(proc_root.join("exe"))?;
+    if executable != expected_executable {
+        let launcher = fs::canonicalize("/usr/bin/python3")?;
+        if executable != launcher {
+            return Err(eyre!(
+                "validator MainPID does not execute the selected release"
+            ));
+        }
+        super::validate_fixed_executable(&launcher, "validator Python launcher")?;
+        let cmdline = fs::read(proc_root.join("cmdline"))?;
+        // The launcher can exec the daemon between the exe and argv reads. Only
+        // that exact transition may defer the complete attestation to the next poll.
+        let executable_after = fs::read_link(proc_root.join("exe"))?;
+        if executable_after != expected_executable {
+            if executable_after != launcher {
+                return Err(eyre!(
+                    "validator launcher changed to an unexpected executable"
+                ));
+            }
+            let fragment = Path::new("/etc/systemd/system").join(&validator.systemd_unit);
+            let unit = fs::read(&fragment)?;
+            if sha256_hex(&unit) != validator.systemd_unit_sha256 {
+                return Err(eyre!("validator launcher unit changed after attestation"));
+            }
+            validate_validator_launcher_argv(&cmdline, &unit)?;
+        }
+        let pid_after = run_host_command(
+            SYSTEMCTL,
+            &[
+                "show",
+                "--property=MainPID",
+                "--value",
+                &validator.systemd_unit,
+            ],
+            admitted.action_deadline,
+        )?;
+        if pid_after != pid_bytes {
+            return Err(eyre!(
+                "validator MainPID changed during launcher attestation"
+            ));
+        }
+        return Ok(ValidatorProcessReadiness::LauncherPending);
     }
     let cmdline = fs::read(proc_root.join("cmdline"))?;
     if cmdline.is_empty() || cmdline.len() > 8 * 1024 || !cmdline.ends_with(&[0]) {
@@ -8372,6 +8455,45 @@ fn attest_validator_process(
     if pid_after != pid_bytes {
         return Err(eyre!(
             "validator MainPID changed during process attestation"
+        ));
+    }
+    Ok(ValidatorProcessReadiness::Attested)
+}
+
+fn validate_validator_launcher_argv(cmdline: &[u8], unit: &[u8]) -> Result<()> {
+    if cmdline.is_empty() || cmdline.len() > 64 * 1024 || !cmdline.ends_with(&[0]) {
+        return Err(eyre!(
+            "validator launcher cmdline is outside the exact bound"
+        ));
+    }
+    let arguments = cmdline[..cmdline.len() - 1]
+        .split(|byte| *byte == 0)
+        .collect::<Vec<_>>();
+    if arguments.len() != 3 || arguments[0] != b"/usr/bin/python3" || arguments[1] != b"-c" {
+        return Err(eyre!(
+            "validator launcher argv is not the signed inline Python command"
+        ));
+    }
+    let code = std::str::from_utf8(arguments[2])?;
+    if code.is_empty() {
+        return Err(eyre!("validator launcher has no inline command"));
+    }
+    // Match the signed fragment's canonical systemd escaping, not arbitrary Python.
+    let encoded = code
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+        .replace('\t', "\\t")
+        .replace('%', "%%")
+        .replace('$', "$$");
+    let expected = format!("ExecStart=/usr/bin/python3 -c \"{encoded}\"");
+    if !std::str::from_utf8(unit)?
+        .lines()
+        .any(|line| line == expected)
+    {
+        return Err(eyre!(
+            "validator launcher argv differs from the exact signed unit"
         ));
     }
     Ok(())
@@ -20969,6 +21091,75 @@ time.sleep(30)
         let edge = build_recovery_intent(&inventory, ExecutionStep::EdgeVerify)
             .expect("edge recovery intent");
         assert_eq!(edge.mutations.len(), 3);
+    }
+
+    #[test]
+    fn validator_process_readiness_waits_for_launcher_then_daemon() {
+        let unit = b"[Service]\nExecStart=/usr/bin/python3 -c \"import os\\nos.execv(\\\"daemon\\\", [\\\"daemon\\\"])\"\n";
+        let launcher = b"/usr/bin/python3\0-c\0import os\nos.execv(\"daemon\", [\"daemon\"])\0";
+        let mut observations = 0;
+        wait_for_validator_process(Instant::now() + Duration::from_secs(1), || {
+            observations += 1;
+            if observations == 1 {
+                validate_validator_launcher_argv(launcher, unit)?;
+                Ok(ValidatorProcessReadiness::LauncherPending)
+            } else {
+                Ok(ValidatorProcessReadiness::Attested)
+            }
+        })
+        .expect("the signed launcher must be followed by complete daemon attestation");
+        assert_eq!(observations, 2);
+    }
+
+    #[test]
+    fn validator_process_readiness_preserves_original_deadline() {
+        let mut observations = 0;
+        wait_for_validator_process(Instant::now(), || {
+            observations += 1;
+            Ok(ValidatorProcessReadiness::Attested)
+        })
+        .expect_err("an elapsed deadline must not invoke the observer");
+        assert_eq!(observations, 0);
+
+        let deadline = Instant::now() + Duration::from_secs(1);
+        wait_for_validator_process(deadline, || {
+            observations += 1;
+            // Force this observation to exhaust the original deadline instead of
+            // depending on how many polling ticks the scheduler grants the test.
+            std::thread::sleep(deadline.saturating_duration_since(Instant::now()));
+            Ok(ValidatorProcessReadiness::LauncherPending)
+        })
+        .expect_err("a launcher cannot extend the existing action deadline");
+        assert_eq!(observations, 1);
+        wait_for_validator_process(deadline, || {
+            observations += 1;
+            Ok(ValidatorProcessReadiness::Attested)
+        })
+        .expect_err("reentry cannot renew the elapsed deadline or perform more work");
+        assert_eq!(observations, 1);
+        // Both callers submit their durable manager operation before entering
+        // this observer-only loop; pending observations cannot resubmit it.
+    }
+
+    #[test]
+    fn validator_process_readiness_rejects_changed_launcher_immediately() {
+        let unit = b"[Service]\nExecStart=/usr/bin/python3 -c \"signed_command()\"\n";
+        let mut observations = 0;
+        wait_for_validator_process(Instant::now() + Duration::from_secs(1), || {
+            observations += 1;
+            validate_validator_launcher_argv(b"/usr/bin/python3\0-c\0changed_command()\0", unit)?;
+            Ok(ValidatorProcessReadiness::LauncherPending)
+        })
+        .expect_err("a different Python command must fail without polling");
+        assert_eq!(observations, 1);
+        for argv in [
+            b"/usr/bin/python3\0script.py\0".as_slice(),
+            b"/usr/bin/python3\0-c\0\0".as_slice(),
+            b"/tmp/python3\0-c\0signed_command()\0".as_slice(),
+            b"/usr/bin/python3\0-c\0signed_command()\0extra\0".as_slice(),
+        ] {
+            assert!(validate_validator_launcher_argv(argv, unit).is_err());
+        }
     }
 
     fn manager_intent_fixture() -> ManagerIntentV1 {

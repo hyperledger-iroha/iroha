@@ -70,6 +70,9 @@ STAGES = (
         "taira_public_reset::host::tests::manager_evidence_requires_exact_numeric_exit_code_and_status",
         "taira_public_reset::host::tests::manager_evidence_keeps_unexecuted_and_running_operations_pending",
         "taira_public_reset::host::tests::validator_restart_evidence_requires_running_service_and_settled_job",
+        "taira_public_reset::host::tests::validator_process_readiness_waits_for_launcher_then_daemon",
+        "taira_public_reset::host::tests::validator_process_readiness_preserves_original_deadline",
+        "taira_public_reset::host::tests::validator_process_readiness_rejects_changed_launcher_immediately",
     )),
     ("read-only host preflight", (
         "taira_public_reset::host::tests::preflight_dispatches_five_read_only_hosts_without_runtime_custody",
