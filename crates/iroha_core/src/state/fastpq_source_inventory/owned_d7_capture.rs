@@ -1,4 +1,4 @@
-//! Prepare complete local D7 facts without inserting a write or publishing capture state.
+//! Test-only qualification of complete local D7 facts without publishing capture state.
 //!
 //! Caller-supplied construction caps are explicit local inputs. This seam does not choose
 //! production defaults, authenticate a source policy, or bypass proposal/mandatory-work

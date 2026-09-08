@@ -23629,11 +23629,11 @@ mod tests {
             .expect("temporary storage and shared leases have separate budgets");
         let mut wrong_resources = resources.clone();
         wrong_resources.ephemeral_storage_bytes = shared.max_total_bytes;
-        validate_taira_inrou_canary_storage(&wrong_resources, &bundle.service)
+        let _ = validate_taira_inrou_canary_storage(&wrong_resources, &bundle.service)
             .expect_err("shared volume capacity must not replace the temporary budget");
         let mut wrong_service = bundle.service.clone();
         wrong_service.lease_volumes[1].max_total_bytes = resources.ephemeral_storage_bytes;
-        validate_taira_inrou_canary_storage(resources, &wrong_service)
+        let _ = validate_taira_inrou_canary_storage(resources, &wrong_service)
             .expect_err("temporary capacity must not replace the shared volume budget");
     }
     #[test]

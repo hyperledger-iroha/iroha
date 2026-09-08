@@ -360,7 +360,7 @@ fn private_path_only_changes_survive_first_repeat_and_ordered_capture_extraction
                 .fastpq_witness_context
                 .as_ref()
                 .unwrap()
-                .source_inventory
+                ._source_inventory
                 .as_ref()
                 .unwrap(),
             &owned,

@@ -2,7 +2,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![cfg(feature = "app_api")]
 use axum::{
-    Router,
     body::Body,
     extract::connect_info::ConnectInfo,
     http::{Request, StatusCode},

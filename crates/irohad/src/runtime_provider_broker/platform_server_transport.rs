@@ -1,3 +1,4 @@
+include!("platform_source_deadline.rs");
 const BROKER_SESSION_THREAD_STACK_BYTES_V1: usize = 4 * 1024 * 1024;
 
 fn broker_error_status(error: BrokerError) -> Option<(u8, bool)> {

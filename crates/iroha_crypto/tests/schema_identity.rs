@@ -3,8 +3,7 @@
 use iroha_crypto::{Hash, HashOf, Signature, SignatureOf};
 use norito::schema::identity::frame_hash;
 use norito::{
-    DeserializePayload, NoritoDeserialize, NoritoSchema, NoritoSerialize, SerializePayload,
-    core::Header, json,
+    DeserializePayload, NoritoDeserialize, NoritoSchema, NoritoSerialize, core::Header, json,
 };
 
 #[derive(NoritoSchema)]

@@ -320,9 +320,6 @@ fn install_policy_registry_fixture(
         .get_mut()
         .set_parameter(Parameter::Custom(registry.clone().into_custom_parameter()));
 }
-fn block_hash(bytes: [u8; 32]) -> HashOf<BlockHeader> {
-    HashOf::from_untyped_unchecked(Hash::prehashed(bytes))
-}
 fn minimal_bound_contract_artifact() -> (
     Vec<u8>,
     iroha_data_model::smart_contract::manifest::ContractManifest,

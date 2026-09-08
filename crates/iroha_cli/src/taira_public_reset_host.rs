@@ -21577,7 +21577,7 @@ time.sleep(30)
     #[test]
     fn validator_process_readiness_preserves_original_deadline() {
         let mut observations = 0;
-        wait_for_validator_process(Instant::now(), || {
+        let _ = wait_for_validator_process(Instant::now(), || {
             observations += 1;
             Ok(ValidatorProcessReadiness::Attested)
         })
@@ -21585,7 +21585,7 @@ time.sleep(30)
         assert_eq!(observations, 0);
 
         let deadline = Instant::now() + Duration::from_secs(1);
-        wait_for_validator_process(deadline, || {
+        let _ = wait_for_validator_process(deadline, || {
             observations += 1;
             // Force this observation to exhaust the original deadline instead of
             // depending on how many polling ticks the scheduler grants the test.
@@ -21594,7 +21594,7 @@ time.sleep(30)
         })
         .expect_err("a launcher cannot extend the existing action deadline");
         assert_eq!(observations, 1);
-        wait_for_validator_process(deadline, || {
+        let _ = wait_for_validator_process(deadline, || {
             observations += 1;
             Ok(ValidatorProcessReadiness::Attested)
         })
@@ -21608,7 +21608,7 @@ time.sleep(30)
     fn validator_process_readiness_rejects_changed_launcher_immediately() {
         let unit = b"[Service]\nExecStart=/usr/bin/python3 -c \"signed_command()\"\n";
         let mut observations = 0;
-        wait_for_validator_process(Instant::now() + Duration::from_secs(1), || {
+        let _ = wait_for_validator_process(Instant::now() + Duration::from_secs(1), || {
             observations += 1;
             validate_validator_launcher_argv(b"/usr/bin/python3\0-c\0changed_command()\0", unit)?;
             Ok(ValidatorProcessReadiness::LauncherPending)

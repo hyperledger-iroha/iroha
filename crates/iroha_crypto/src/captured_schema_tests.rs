@@ -2,7 +2,7 @@
 
 use std::sync::OnceLock;
 
-use norito::{NoritoDeserialize, NoritoSchema, NoritoSerialize, SerializePayload, json::Value};
+use norito::{NoritoDeserialize, NoritoSchema, NoritoSerialize, json::Value};
 
 fn captured(nominal: &str) -> &'static Value {
     static FIXTURE: OnceLock<Vec<Value>> = OnceLock::new();

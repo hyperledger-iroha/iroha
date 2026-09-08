@@ -131,7 +131,9 @@ use std::os::unix::ffi::OsStrExt as _;
 #[cfg(target_os = "linux")]
 use std::os::unix::fs::FileTypeExt as _;
 #[cfg(unix)]
-use std::os::unix::fs::{MetadataExt as _, PermissionsExt};
+use std::os::unix::fs::MetadataExt as _;
+#[cfg(all(test, unix))]
+use std::os::unix::fs::PermissionsExt;
 #[cfg(target_os = "linux")]
 use std::os::unix::net::UnixStream;
 #[cfg(target_os = "linux")]
@@ -19450,21 +19452,6 @@ fn ensure_inrou_entrypoint_present_at(
         );
     }
     Ok(())
-}
-fn is_resolved_executable(candidate: &Path) -> bool {
-    if !candidate.is_file() {
-        return false;
-    }
-    #[cfg(unix)]
-    {
-        return fs::metadata(candidate)
-            .ok()
-            .is_some_and(|metadata| metadata.permissions().mode() & 0o111 != 0);
-    }
-    #[cfg(not(unix))]
-    {
-        true
-    }
 }
 fn probe_hosted_http_health(
     listen_base_url: &str,

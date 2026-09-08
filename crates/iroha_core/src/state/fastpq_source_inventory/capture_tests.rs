@@ -120,7 +120,7 @@ fn sealed_empty_and_transferred_inventory_capture_without_reconstruction() {
         if with_transfer {
             let context = block.fastpq_witness_context.as_ref().unwrap();
             assert!(Arc::ptr_eq(
-                context.source_inventory.as_ref().unwrap(),
+                context._source_inventory.as_ref().unwrap(),
                 &owned
             ));
             assert_eq!(context.tx_set_hash, Some(owned.tx_set_hash()));

@@ -20,7 +20,9 @@ use crate::{
 };
 
 mod content_verification;
-pub(crate) mod owned_d7_capture;
+// Qualification support until authenticated policy and mandatory-work accounting own D7 capture.
+#[cfg(test)]
+mod owned_d7_capture;
 mod public_seal;
 use public_seal::{SourceTranscriptSeal, seal_public_transcripts};
 
