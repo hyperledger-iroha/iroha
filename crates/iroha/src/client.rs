@@ -5650,6 +5650,9 @@ fn validate_faucet_transaction_identity(
 
 /// Authenticate an exact prepared onboarding transaction without constructing a client.
 ///
+/// Expired bindings remain verifiable for durable recovery, but the signed transaction's
+/// lifetime must fit within its binding deadline. Submission separately requires an active binding.
+///
 /// # Errors
 /// Returns an error for any substituted request, receipt, binding, wire, signature, network,
 /// authority, fee intent, metadata, or instruction sequence.
@@ -5720,11 +5723,15 @@ pub fn verify_account_onboarding_prepared_transaction_v1(
         AccountOnboardingPreparedTransactionV1::OPERATION,
         &prepared.semantic_hash_hex,
     )?;
+    if transaction.metadata() != &expected_metadata {
+        return Err(eyre!(
+            "prepared onboarding transaction metadata differs from its exact binding and operation"
+        ));
+    }
     if transaction.network_id() != Some(&expected_network_id)
         || transaction.authority() != &receipt.body.authority
         || transaction.payload().fee_payment != prepared.fee_payment
         || !expected_fee_payment.has_same_payer_and_gas_bound(&prepared.fee_payment)
-        || transaction.metadata() != &expected_metadata
         || instructions.is_empty()
         || !instructions_are_ordered_subset(instructions.as_ref(), &planned_instructions)
     {
@@ -5736,6 +5743,10 @@ pub fn verify_account_onboarding_prepared_transaction_v1(
 }
 
 /// Authenticate an exact prepared faucet transaction without constructing a client.
+///
+/// Requires the canonical V1 faucet claim marker and exact operation metadata. Expired bindings
+/// remain verifiable for durable recovery only when the signed lifetime fits within the deadline;
+/// submission separately requires an active binding.
 ///
 /// # Errors
 /// Returns an error for any substituted claim, binding, wire, signature, network, authority,
@@ -5795,11 +5806,15 @@ pub fn verify_account_faucet_prepared_transaction_v1(
         AccountFaucetPreparedTransactionV1::OPERATION,
         &prepared.semantic_hash_hex,
     )?;
+    if transaction.metadata() != &expected_metadata {
+        return Err(eyre!(
+            "prepared faucet transaction metadata differs from its exact binding and operation"
+        ));
+    }
     if transaction.network_id() != Some(&expected_network_id)
         || transaction.authority() != policy.faucet_authority()
         || transaction.payload().fee_payment != prepared.fee_payment
         || !expected_fee_payment.has_same_payer_and_gas_bound(&prepared.fee_payment)
-        || transaction.metadata() != &expected_metadata
     {
         return Err(eyre!(
             "prepared faucet transaction network, authority, or fee intent was substituted"
@@ -27133,22 +27148,15 @@ mod tests {
             signed_transaction_wire_sha256,
         )
         .expect("decode original prepared fixture transaction");
-        let Executable::Instructions(instructions) = original.instructions() else {
-            panic!("prepared fixture transaction must contain direct instructions");
-        };
-        TransactionBuilder::new(
-            *original
-                .network_id()
-                .expect("prepared fixture transaction network"),
-            original.authority().clone(),
-            fee_payment.clone(),
-        )
-        .with_metadata(
-            expected_prepared_transaction_metadata(binding, operation, semantic_hash_hex)
-                .expect("prepared fixture metadata"),
-        )
-        .with_instructions(instructions.as_ref().to_vec())
-        .sign(signer.private_key())
+        // Rebinding must preserve the signed lifetime, nonce, and all other payload fields.
+        TransactionBuilder::from_payload(original.payload().clone())
+            .expect("rebuild prepared fixture payload")
+            .with_fee_payment_intent(fee_payment.clone())
+            .with_metadata(
+                expected_prepared_transaction_metadata(binding, operation, semantic_hash_hex)
+                    .expect("prepared fixture metadata"),
+            )
+            .sign(signer.private_key())
     }
     fn replace_onboarding_prepared_binding(
         prepared: &mut AccountOnboardingPreparedTransactionV1,
@@ -27166,10 +27174,17 @@ mod tests {
             &prepared.semantic_hash_hex,
             &signer,
         );
+        prepared.binding = binding;
+        replace_onboarding_prepared_transaction(prepared, &transaction, &signer);
+    }
+    fn replace_onboarding_prepared_transaction(
+        prepared: &mut AccountOnboardingPreparedTransactionV1,
+        transaction: &SignedTransaction,
+        signer: &KeyPair,
+    ) {
         let wire = transaction
             .encode_wire_v1()
             .expect("encode rebound onboarding transaction");
-        prepared.binding = binding;
         prepared.transaction_hash_hex = hex::encode(transaction.hash().as_ref());
         prepared.signed_transaction_wire_sha256 = hex::encode(Sha256::digest(&wire));
         prepared.signed_transaction_wire_hex = hex::encode(wire);
@@ -27197,10 +27212,17 @@ mod tests {
             &prepared.semantic_hash_hex,
             &signer,
         );
+        prepared.binding = binding;
+        replace_faucet_prepared_transaction(prepared, &transaction, &signer);
+    }
+    fn replace_faucet_prepared_transaction(
+        prepared: &mut AccountFaucetPreparedTransactionV1,
+        transaction: &SignedTransaction,
+        signer: &KeyPair,
+    ) {
         let wire = transaction
             .encode_wire_v1()
             .expect("encode rebound faucet transaction");
-        prepared.binding = binding;
         prepared.transaction_hash_hex = hex::encode(transaction.hash().as_ref());
         prepared.signed_transaction_wire_sha256 = hex::encode(Sha256::digest(&wire));
         prepared.signed_transaction_wire_hex = hex::encode(wire);
@@ -27211,6 +27233,31 @@ mod tests {
             iroha_torii_shared::prepared_transaction::prepared_signature_digest_v1(&transcript);
         prepared.server_signature = Signature::try_new(signer.private_key(), digest.as_ref())
             .expect("sign rebound faucet envelope");
+    }
+    fn expired_prepared_transaction_fixture(
+        binding: &mut PreparedOperationBindingV1,
+        signed_transaction_wire_hex: &str,
+        signer: &KeyPair,
+    ) -> SignedTransaction {
+        let wire = hex::decode(signed_transaction_wire_hex).expect("fixture transaction wire");
+        let transaction =
+            SignedTransaction::decode_all_versioned(&wire).expect("decode fixture transaction");
+        // Move the complete signed lifetime into the past, preserving its positive TTL.
+        let creation = Duration::from_millis(1);
+        let expiry = creation + transaction.time_to_live().expect("fixture TTL");
+        binding.execution_expires_at_unix_ms =
+            expiry.as_millis().try_into().expect("fixture expiry");
+        let metadata = expected_prepared_transaction_metadata(
+            binding,
+            &binding.kind,
+            &binding.semantic_hash_hex,
+        )
+        .expect("expired fixture metadata");
+        let mut builder = TransactionBuilder::from_payload(transaction.payload().clone())
+            .expect("rebuild expired fixture payload")
+            .with_metadata(metadata);
+        builder.set_creation_time(creation);
+        builder.sign(signer.private_key())
     }
     fn alias_renewal_request_fixture(client: &Client) -> AliasLeaseRenewPlanRequestV1 {
         let alias = ResolvedAccountAliasV1::new(
@@ -28767,6 +28814,124 @@ mod tests {
     }
 
     #[test]
+    fn faucet_prepared_verifier_requires_exact_claim_marker_metadata() {
+        use iroha_data_model::transaction::{
+            FAUCET_CLAIM_MARKER_VERSION_METADATA_KEY, FAUCET_CLAIM_MARKER_VERSION_V1,
+        };
+
+        let mut client = client_with_base_url(base_url());
+        let faucet = faucet_prepared_signature_fixture(&mut client);
+        let policy = faucet_policy_fixture();
+        let fee_payment = prepared_fee_payment_fixture();
+        let original = client
+            .verify_account_faucet_prepared_transaction(
+                &faucet,
+                &faucet.claim,
+                &faucet.binding,
+                &fee_payment,
+                &policy,
+            )
+            .expect("canonical faucet marker metadata must verify");
+        let signer = KeyPair::try_from_seed(vec![0x61; 32], Algorithm::Ed25519)
+            .expect("faucet fixture signer");
+        let marker_key: Name = FAUCET_CLAIM_MARKER_VERSION_METADATA_KEY
+            .parse()
+            .expect("faucet marker key");
+        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+
+        for (label, marker, extra_field) in [
+            ("missing marker", None, false),
+            ("zero marker", Some(Json::new(0_u64)), false),
+            (
+                "unsupported marker",
+                Some(Json::new(FAUCET_CLAIM_MARKER_VERSION_V1 + 1)),
+                false,
+            ),
+            ("string marker", Some(Json::new("1")), false),
+            (
+                "extra metadata",
+                Some(Json::new(FAUCET_CLAIM_MARKER_VERSION_V1)),
+                true,
+            ),
+        ] {
+            let mut metadata = original.metadata().clone();
+            metadata.remove(&marker_key);
+            if let Some(marker) = marker {
+                metadata.insert(marker_key.clone(), marker);
+            }
+            if extra_field {
+                metadata.insert("extra".parse().expect("metadata key"), Json::new(true));
+            }
+            let transaction = TransactionBuilder::from_payload(original.payload().clone())
+                .expect("rebuild faucet payload")
+                .with_metadata(metadata)
+                .sign(signer.private_key());
+            let mut substituted = faucet.clone();
+            replace_faucet_prepared_transaction(&mut substituted, &transaction, &signer);
+            let error = with_mock_http(
+                respond_with(&snapshots, empty_response(StatusCode::ACCEPTED)),
+                |transport| {
+                    client
+                        .clone()
+                        .with_test_http_transport(transport.clone())
+                        .post_prepared_account_faucet(&substituted, &fee_payment, &policy)
+                        .expect_err(label)
+                },
+            );
+            assert_eq!(
+                error.to_string(),
+                "prepared faucet transaction metadata differs from its exact binding and operation",
+                "{label}"
+            );
+        }
+        assert!(snapshots.lock().expect("snapshot store").is_empty());
+    }
+
+    #[test]
+    fn onboarding_prepared_verifier_rejects_faucet_claim_marker_metadata() {
+        let mut client = client_with_base_url(base_url());
+        let mut onboarding = onboarding_prepared_signature_fixture(&mut client);
+        let request = onboarding.receipt.body.request.clone();
+        let fee_payment = prepared_fee_payment_fixture();
+        let original = client
+            .verify_account_onboarding_prepared_transaction(
+                &request,
+                &onboarding,
+                &onboarding.receipt,
+                &onboarding.binding,
+                &fee_payment,
+            )
+            .expect("canonical onboarding metadata must verify");
+        let mut metadata = original.metadata().clone();
+        metadata.insert(
+            iroha_data_model::transaction::FAUCET_CLAIM_MARKER_VERSION_METADATA_KEY
+                .parse()
+                .expect("faucet marker key"),
+            Json::new(iroha_data_model::transaction::FAUCET_CLAIM_MARKER_VERSION_V1),
+        );
+        let signer = KeyPair::try_from_seed(vec![0x51; 32], Algorithm::Ed25519)
+            .expect("onboarding fixture signer");
+        let transaction = TransactionBuilder::from_payload(original.payload().clone())
+            .expect("rebuild onboarding payload")
+            .with_metadata(metadata)
+            .sign(signer.private_key());
+        replace_onboarding_prepared_transaction(&mut onboarding, &transaction, &signer);
+        let error = client
+            .verify_account_onboarding_prepared_transaction(
+                &request,
+                &onboarding,
+                &onboarding.receipt,
+                &onboarding.binding,
+                &fee_payment,
+            )
+            .expect_err("onboarding must reject faucet-only metadata");
+        assert_eq!(
+            error.to_string(),
+            "prepared onboarding transaction metadata differs from its exact binding and operation"
+        );
+    }
+
+    #[test]
     fn prepared_transaction_verifiers_reject_malformed_actual_fee_intents() {
         let mut client = client_with_base_url(base_url());
         let mut faucet = faucet_prepared_signature_fixture(&mut client);
@@ -29062,9 +29227,19 @@ mod tests {
     fn expired_prepared_bindings_verify_durably_but_never_dispatch_submit_http() {
         let mut client = client_with_base_url(base_url());
         let mut onboarding = onboarding_prepared_signature_fixture(&mut client);
-        let mut expired_onboarding_binding = onboarding.binding.clone();
-        expired_onboarding_binding.execution_expires_at_unix_ms = 1;
-        replace_onboarding_prepared_binding(&mut onboarding, expired_onboarding_binding.clone());
+        let onboarding_signer = KeyPair::try_from_seed(vec![0x51; 32], Algorithm::Ed25519)
+            .expect("onboarding fixture signer");
+        let expired_onboarding = expired_prepared_transaction_fixture(
+            &mut onboarding.binding,
+            &onboarding.signed_transaction_wire_hex,
+            &onboarding_signer,
+        );
+        replace_onboarding_prepared_transaction(
+            &mut onboarding,
+            &expired_onboarding,
+            &onboarding_signer,
+        );
+        let expired_onboarding_binding = onboarding.binding.clone();
         let request = onboarding.receipt.body.request.clone();
         client
             .verify_account_onboarding_prepared_transaction(
@@ -29103,12 +29278,34 @@ mod tests {
                 .is_empty(),
             "expired onboarding submit must not dispatch HTTP"
         );
+        let mut invalid_onboarding_binding = expired_onboarding_binding;
+        invalid_onboarding_binding.execution_expires_at_unix_ms -= 1;
+        replace_onboarding_prepared_binding(&mut onboarding, invalid_onboarding_binding.clone());
+        assert_eq!(
+            client
+                .verify_account_onboarding_prepared_transaction(
+                    &request,
+                    &onboarding,
+                    &onboarding.receipt,
+                    &invalid_onboarding_binding,
+                    &onboarding.fee_payment,
+                )
+                .expect_err("durable verification must enforce the signed onboarding lifetime")
+                .to_string(),
+            "prepared transaction outlives its operation deadline"
+        );
 
         let mut faucet = faucet_prepared_signature_fixture(&mut client);
         let faucet_policy = faucet_policy_fixture();
-        let mut expired_faucet_binding = faucet.binding.clone();
-        expired_faucet_binding.execution_expires_at_unix_ms = 1;
-        replace_faucet_prepared_binding(&mut faucet, expired_faucet_binding.clone());
+        let faucet_signer = KeyPair::try_from_seed(vec![0x61; 32], Algorithm::Ed25519)
+            .expect("faucet fixture signer");
+        let expired_faucet = expired_prepared_transaction_fixture(
+            &mut faucet.binding,
+            &faucet.signed_transaction_wire_hex,
+            &faucet_signer,
+        );
+        replace_faucet_prepared_transaction(&mut faucet, &expired_faucet, &faucet_signer);
+        let expired_faucet_binding = faucet.binding.clone();
         client
             .verify_account_faucet_prepared_transaction(
                 &faucet,
@@ -29137,6 +29334,22 @@ mod tests {
                 .expect("faucet snapshot store")
                 .is_empty(),
             "expired faucet submit must not dispatch HTTP"
+        );
+        let mut invalid_faucet_binding = expired_faucet_binding;
+        invalid_faucet_binding.execution_expires_at_unix_ms -= 1;
+        replace_faucet_prepared_binding(&mut faucet, invalid_faucet_binding.clone());
+        assert_eq!(
+            client
+                .verify_account_faucet_prepared_transaction(
+                    &faucet,
+                    &faucet.claim,
+                    &invalid_faucet_binding,
+                    &faucet.fee_payment,
+                    &faucet_policy,
+                )
+                .expect_err("durable verification must enforce the signed faucet lifetime")
+                .to_string(),
+            "prepared transaction outlives its operation deadline"
         );
     }
     #[test]

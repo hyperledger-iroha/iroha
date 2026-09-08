@@ -1,4 +1,67 @@
 #[test]
+fn payment_requires_registered_production_qualification_before_effects() {
+    let bootstrap = valid_bootstrap_instruction();
+    let payment = valid_payment_instruction();
+    let state = state_with_activation(active_lifecycle());
+    let mut block = state.block(test_header());
+    {
+        let mut transaction = block.transaction();
+        grant_governance(&mut transaction);
+        bootstrap
+            .execute(&ALICE_ID, &mut transaction)
+            .expect("native bootstrap is available before production qualification");
+        transaction.apply();
+    }
+    let mut transaction = block.transaction();
+    let snapshot = |transaction: &StateTransaction<'_, '_>| {
+        (
+            transaction
+                .world
+                .privacy_pgc_pool_invariants
+                .iter()
+                .map(|(key, value)| (*key, *value))
+                .collect::<Vec<_>>(),
+            transaction
+                .world
+                .privacy_pgc_accounts
+                .iter()
+                .map(|(key, value)| (*key, *value))
+                .collect::<Vec<_>>(),
+            transaction
+                .world
+                .privacy_roots
+                .iter()
+                .map(|(key, value)| (*key, *value))
+                .collect::<Vec<_>>(),
+            transaction
+                .world
+                .privacy_root_heads
+                .iter()
+                .map(|(key, value)| (*key, *value))
+                .collect::<Vec<_>>(),
+            transaction.privacy_budget_for_testing(),
+        )
+    };
+    let before = snapshot(&transaction);
+    assert!(
+        transaction
+            .world
+            .privacy_exact12_qualification
+            .get()
+            .is_none()
+    );
+    bind_payment_instruction(&mut transaction, &payment);
+    let error = payment
+        .execute(&ALICE_ID, &mut transaction)
+        .expect_err("an active compiled profile cannot authorize production execution");
+    assert_eq!(
+        smart_contract_parameter_message(&error),
+        "privacy Exact12 production qualification is not registered"
+    );
+    assert_eq!(snapshot(&transaction), before);
+}
+
+#[test]
 fn payment_rejects_missing_stale_substituted_and_consumed_intent_before_effects() {
     let bootstrap = valid_bootstrap_instruction();
     let payment = valid_payment_instruction();
@@ -143,9 +206,9 @@ fn tampered_pgc_payment_proof_preserves_every_state_map_and_budget() {
         .collect::<Vec<_>>();
     let budget_before = transaction.privacy_budget_for_testing();
     bind_payment_instruction(&mut transaction, &payment);
-    let error = payment
-        .execute(&ALICE_ID, &mut transaction)
-        .expect_err("one-bit proof mutation");
+    let error =
+        execute_privacy_proof_after_admission_for_test(payment, &ALICE_ID, &mut transaction)
+            .expect_err("one-bit proof mutation");
     assert_eq!(
         smart_contract_parameter_message(&error),
         "privacy proof admission rejected: native Anonymous-PGC verification failed: \
@@ -238,10 +301,12 @@ fn verified_pgc_payment_replaces_complete_table_atomically_and_replay_rejects() 
             .expect("first account")
             .encrypted_balance();
         bind_payment_instruction(&mut transaction, &payment);
-        payment
-            .clone()
-            .execute(&ALICE_ID, &mut transaction)
-            .expect("complete native payment");
+        execute_privacy_proof_after_admission_for_test(
+            payment.clone(),
+            &ALICE_ID,
+            &mut transaction,
+        )
+        .expect("complete native payment");
         assert_eq!(privacy_map_counts(&transaction), (1, 16, 2, 1));
         assert_eq!(
             transaction
@@ -342,9 +407,9 @@ fn verified_pgc_payment_replaces_complete_table_atomically_and_replay_rejects() 
     );
     let counts_before = privacy_map_counts(&transaction);
     bind_payment_instruction(&mut transaction, &payment);
-    let error = payment
-        .execute(&ALICE_ID, &mut transaction)
-        .expect_err("stale payment replay");
+    let error =
+        execute_privacy_proof_after_admission_for_test(payment, &ALICE_ID, &mut transaction)
+            .expect_err("stale payment replay");
     assert!(
         smart_contract_parameter_message(&error).contains("StaleHead"),
         "unexpected replay rejection: {error:?}"

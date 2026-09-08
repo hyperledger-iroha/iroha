@@ -265,6 +265,7 @@ def test_queue_plan_startup_model_requires_current_source_declarations(
         'decode_exact_queue_plan_pending_signed_alias_member_marker',
         'decode_exact_queue_plan_signed_alias_terminal_marker',
         'prevalidate_queue_plan_pending_route_rosters',
+        'queue_plan_admission_registry_value_in_view',
         'queue_plan_binding_application_evidence_in_view',
         'queue_plan_binding_application_state',
         'queue_plan_binding_application_state_in_storage',
@@ -327,6 +328,71 @@ def test_queue_plan_pending_membership_contract_accepts_current_production(
         tmp_path, module, models
     )
     assert errors == (), errors
+
+
+def test_queue_plan_exact_membership_contract_rejects_whole_roster_scan(
+    tmp_path: Path,
+) -> None:
+    """A valid exact lookup must stay independent of unrelated route siblings."""
+    module = load_checker()
+    models = copy_queue_plan_pending_membership_fixture(tmp_path, module)
+    path = tmp_path / module.QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE
+    replace_once_after(
+        path,
+        "fn queue_plan_pending_exact_route_member_state_in_storage(",
+        "        let mut present = 0usize;",
+        "        Self::prevalidate_queue_plan_pending_route_rosters(\n"
+        "            storage, obligation.routes.iter().copied(),\n"
+        "        )?;\n"
+        "        let mut present = 0usize;",
+    )
+    errors = validate_queue_plan_pending_membership_fixture(tmp_path, module, models)
+    assert any("without scanning route rosters" in error for error in errors), errors
+
+
+@pytest.mark.parametrize(
+    "condition",
+    (
+        "if storage.get(&terminal_key).is_some()",
+        "if outer_committed && storage.get(&terminal_key).is_some()",
+    ),
+)
+def test_queue_plan_exact_binding_contract_rejects_terminal_marker_bypass(
+    tmp_path: Path, condition: str,
+) -> None:
+    """Pending and directly applied exact owners reject stray terminal aliases."""
+    module = load_checker()
+    models = copy_queue_plan_pending_membership_fixture(tmp_path, module)
+    path = tmp_path / module.QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE
+    replace_once_after(
+        path, "fn queue_plan_binding_application_state_in_storage(",
+        condition, "if false",
+    )
+    errors = validate_queue_plan_pending_membership_fixture(tmp_path, module, models)
+    assert any(
+        "queue_plan_binding_application_state_in_storage" in error
+        and condition in error for error in errors
+    ), errors
+
+
+def test_queue_plan_idempotent_staging_contract_requires_roster_prevalidation(
+    tmp_path: Path,
+) -> None:
+    """Read-side bounded lookup never substitutes for a mutation preflight."""
+    module = load_checker()
+    models = copy_queue_plan_pending_membership_fixture(tmp_path, module)
+    path = tmp_path / module.QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE
+    replace_once_after(
+        path, "fn stage_queue_plan_pending_obligation_marker_in_storage(",
+        "Self::prevalidate_queue_plan_pending_route_rosters(",
+        "Self::unchecked_route_rosters(",
+    )
+    errors = validate_queue_plan_pending_membership_fixture(tmp_path, module, models)
+    assert any(
+        "stage_queue_plan_pending_obligation_marker_in_storage" in error
+        and "prevalidate_queue_plan_pending_route_rosters" in error
+        for error in errors
+    ), errors
 
 
 def test_queue_plan_pending_membership_contract_rejects_bound_drift(

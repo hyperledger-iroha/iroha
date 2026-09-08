@@ -180,8 +180,7 @@ fn fcmp_submit_rejections_and_transaction_drop_preserve_exact_proof_managed_stat
             baseline = proof_managed_state_snapshot(&transaction, config_key);
             let valid = SubmitPrivacyProofV1::new(fixture.envelope.clone());
             bind_submit_privacy_instruction(&mut transaction, &valid);
-            valid
-                .execute(&ALICE_ID, &mut transaction)
+            execute_privacy_proof_after_admission_for_test(valid, &ALICE_ID, &mut transaction)
                 .expect("valid native FCMP++ submission");
             let staged = proof_managed_state_snapshot(&transaction, config_key);
             assert_ne!(

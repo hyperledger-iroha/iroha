@@ -88,7 +88,8 @@ use iroha_data_model::{
         IrohaIvmPrivateNoteStarkStatementV1, PRIVACY_ZK_ACE_MAX_POLICIES_V1,
         PqMaspStarkStatementV1, PrivacyCommitmentV1, PrivacyConsensusPolicyTighteningV1,
         PrivacyFcmpInputPublicV1, PrivacyFcmpOutputTupleV1, PrivacyFcmpTreeRootV1,
-        PrivacyNamespaceV1, PrivacyNullifierV1, PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1,
+        PrivacyNamespaceV1, PrivacyNullifierV1, PrivacyProofEnvelopeV1,
+        PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1,
         PrivacyProtocolLimitsTighteningV1, PrivacyRootManagementV1, PrivacyRootPublicationV1,
         PrivacyRootRoleV1, PrivacyStatementDigestV1, PrivacyStatementV1,
         PrivacyValueBalanceDirectionV1, PrivacyVegaIssuerRecordV1, PrivacyZkAcePolicyLifecycleV1,
@@ -3572,9 +3573,45 @@ impl Execute for SubmitPrivacyProofV1 {
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        let transaction_intent_digest = self.envelope.statement.context().transaction_intent_digest;
-        let signed_submission_hash = crate::privacy::privacy_signed_submission_hash_v1(&self)
-            .map_err(|error| {
+        let submission = PreparedPrivacySubmissionV1::prepare(self, state_transaction)?;
+        let activation = *resolve_qualified_privacy_activation_v1(
+            state_transaction
+                .world
+                .privacy_exact12_qualification
+                .get()
+                .as_ref(),
+            &state_transaction.world.privacy_activations,
+            submission.envelope.protocol_id,
+            state_transaction.block_height(),
+        )
+        .map_err(invalid_privacy_parameter)?
+        .activation();
+        submission.execute_after_admission(authority, state_transaction, activation)
+    }
+}
+
+/// Exact signed submission with its transaction binding consumed and resource limits checked.
+///
+/// Preparation does not attest production qualification. The public instruction handler must
+/// resolve the registered Exact12 qualification before entering native proof/state execution.
+struct PreparedPrivacySubmissionV1 {
+    envelope: PrivacyProofEnvelopeV1,
+    encoded_action_bytes: u64,
+    expected_action_index: u32,
+}
+
+impl PreparedPrivacySubmissionV1 {
+    fn prepare(
+        instruction: SubmitPrivacyProofV1,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<Self, Error> {
+        let transaction_intent_digest = instruction
+            .envelope
+            .statement
+            .context()
+            .transaction_intent_digest;
+        let signed_submission_hash =
+            crate::privacy::privacy_signed_submission_hash_v1(&instruction).map_err(|error| {
                 Error::InvariantViolation(
                     format!("privacy submission canonical encoding failed: {error}").into(),
                 )
@@ -3589,7 +3626,7 @@ impl Execute for SubmitPrivacyProofV1 {
                     "privacy transaction-intent binding rejected: {error}"
                 ))
             })?;
-        let encoded_action_bytes = norito::to_bytes(&self.envelope)
+        let encoded_action_bytes = norito::to_bytes(&instruction.envelope)
             .ok()
             .and_then(|bytes| u64::try_from(bytes.len()).ok())
             .ok_or_else(|| {
@@ -3597,18 +3634,22 @@ impl Execute for SubmitPrivacyProofV1 {
             })?;
         let expected_action_index = state_transaction.next_privacy_action_index();
         state_transaction.preflight_privacy_action(expected_action_index, encoded_action_bytes)?;
-        let activation = *resolve_qualified_privacy_activation_v1(
-            state_transaction
-                .world
-                .privacy_exact12_qualification
-                .get()
-                .as_ref(),
-            &state_transaction.world.privacy_activations,
-            self.envelope.protocol_id,
-            state_transaction.block_height(),
-        )
-        .map_err(invalid_privacy_parameter)?
-        .activation();
+        Ok(Self {
+            envelope: instruction.envelope,
+            encoded_action_bytes,
+            expected_action_index,
+        })
+    }
+
+    /// Verify the native proof and stage its complete effects after production admission.
+    fn execute_after_admission(
+        self,
+        authority: &AccountId,
+        state_transaction: &mut StateTransaction<'_, '_>,
+        activation: PrivacyProtocolActivationRecordV1,
+    ) -> Result<(), Error> {
+        let expected_action_index = self.expected_action_index;
+        let encoded_action_bytes = self.encoded_action_bytes;
         let genesis_hash = state_transaction
             .block_hashes()
             .first()
@@ -6306,7 +6347,33 @@ mod tests {
     ) {
         bind_submit_privacy_instruction(transaction, instruction);
     }
+    fn execute_privacy_proof_after_admission_for_test(
+        instruction: SubmitPrivacyProofV1,
+        authority: &AccountId,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        // Exercise the same intent binding, resource preflight, native verifier, and state
+        // transition as Execute. This component fixture supplies an exact compiled activation;
+        // it does not construct or claim the separate Exact12 deployment qualification.
+        let submission = PreparedPrivacySubmissionV1::prepare(instruction, state_transaction)?;
+        let activation = *state_transaction
+            .world
+            .privacy_activations
+            .get(&PrivacyActivationKeyV1::new(
+                submission.envelope.protocol_id,
+            ))
+            .expect("proof execution fixture has its exact protocol activation");
+        assert_eq!(activation.protocol_id, submission.envelope.protocol_id);
+        validate_compiled_privacy_activation_v1(&activation)
+            .expect("proof execution fixture has exact compiled cryptographic bindings");
+        submission.execute_after_admission(authority, state_transaction, activation)
+    }
     fn install_synthetic_privacy_genesis_hash(state: &mut State, genesis_hash: [u8; 32]) {
+        assert_eq!(
+            state.network_id.as_bytes(),
+            &genesis_hash,
+            "privacy fixtures must bind their runtime network identity to the committed genesis"
+        );
         // These protocol fixtures retain a synthetic committed genesis hash without a Kura block.
         // Hydrate the genuinely empty DA projection first so block construction never asks the
         // blank store for that synthetic body.
@@ -6327,11 +6394,12 @@ mod tests {
             PrivacyActivationKeyV1::new(PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1),
             activation,
         );
-        let mut state = State::new_with_chain_for_testing(
+        let mut state = State::new_with_chain_and_network_id_for_testing(
             world,
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
             TEST_CHAIN_ID.into(),
+            test_network_id(),
         );
         install_synthetic_privacy_genesis_hash(&mut state, TEST_GENESIS_HASH);
         state
@@ -6460,11 +6528,12 @@ mod tests {
         world
             .privacy_activations
             .insert(PrivacyActivationKeyV1::new(protocol_id), activation);
-        let mut state = State::new_with_chain_for_testing(
+        let mut state = State::new_with_chain_and_network_id_for_testing(
             world,
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
             TEST_CHAIN_ID.into(),
+            test_network_id(),
         );
         install_synthetic_privacy_genesis_hash(&mut state, TEST_GENESIS_HASH);
         state
@@ -6604,11 +6673,12 @@ mod tests {
         )
         .build(&ALICE_ID);
         let world = World::with([domain], [alice], [asset_definition]);
-        let mut state = State::new_with_chain_for_testing(
+        let mut state = State::new_with_chain_and_network_id_for_testing(
             world,
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
             TEST_CHAIN_ID.into(),
+            test_network_id(),
         );
         install_synthetic_privacy_genesis_hash(&mut state, TEST_GENESIS_HASH);
         state
@@ -6820,9 +6890,9 @@ mod tests {
     ) {
         let before = proof_managed_state_snapshot(transaction, config_key);
         bind_submit_privacy_instruction(transaction, &instruction);
-        let error = instruction
-            .execute(&ALICE_ID, transaction)
-            .expect_err("adversarial proof-managed submission must reject");
+        let error =
+            execute_privacy_proof_after_admission_for_test(instruction, &ALICE_ID, transaction)
+                .expect_err("adversarial proof-managed submission must reject");
         assert!(
             format!("{error:?}").contains(expected_error),
             "unexpected proof-managed rejection: {error:?}"
@@ -6874,11 +6944,12 @@ mod tests {
         )
         .build(&ALICE_ID);
         let world = World::with([domain], [alice], [asset_definition]);
-        let mut state = State::new_with_chain_for_testing(
+        let mut state = State::new_with_chain_and_network_id_for_testing(
             world,
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
             TEST_CHAIN_ID.into(),
+            test_network_id(),
         );
         install_synthetic_privacy_genesis_hash(&mut state, TEST_GENESIS_HASH);
         let mut block = state.block(test_header());
@@ -7464,8 +7535,9 @@ mod tests {
                 RotatePrivacyBootleLanternIssuerPolicyV1::new(revoked.record_digest, post_terminal)
                     .execute(&ALICE_ID, &mut transaction)
                     .expect_err("revoked lineage is terminal");
-            assert!(
-                smart_contract_parameter_message(&error).contains("already revoked"),
+            assert_eq!(
+                smart_contract_parameter_message(&error),
+                "Bootle/Lantern issuer-policy rotation rejected: Bootle/Lantern issuer policy is already terminal-revoked",
                 "{error:?}"
             );
             assert_eq!(
@@ -7660,8 +7732,7 @@ mod tests {
             .execute(&ALICE_ID, &mut transaction)
             .expect_err("exhausted transaction action budget");
         assert!(
-            error
-                .to_string()
+            smart_contract_parameter_message(&error)
                 .contains("action count per transaction exceeded"),
             "{error}"
         );
@@ -8143,7 +8214,7 @@ mod tests {
                 .execute(&ALICE_ID, &mut transaction)
                 .expect_err("a pending schedule cannot be overwritten");
         assert!(
-            error.to_string().contains("already has a pending"),
+            smart_contract_parameter_message(&error).contains("already has a pending"),
             "{error}"
         );
         assert_eq!(
@@ -8265,7 +8336,7 @@ mod tests {
         .execute(&ALICE_ID, &mut transaction)
         .expect_err("a pending protocol schedule cannot be overwritten");
         assert!(
-            error.to_string().contains("already has a pending"),
+            smart_contract_parameter_message(&error).contains("already has a pending"),
             "{error}"
         );
         assert_eq!(
@@ -8305,7 +8376,8 @@ mod tests {
                 .execute(&ALICE_ID, &mut transaction)
                 .expect_err("inactive or future activation");
             assert!(
-                error.to_string().contains("before") || error.to_string().contains("not effective"),
+                smart_contract_parameter_message(&error).contains("before")
+                    || smart_contract_parameter_message(&error).contains("not effective"),
                 "{error}"
             );
             assert_empty_and_unbudgeted(&transaction);
@@ -8329,7 +8401,10 @@ mod tests {
         let error = oversized
             .execute(&ALICE_ID, &mut transaction)
             .expect_err("oversized bootstrap proof");
-        assert!(error.to_string().contains("exceeding maximum"), "{error}");
+        assert!(
+            smart_contract_parameter_message(&error).contains("exceeding maximum"),
+            "{error:?}"
+        );
         assert_empty_and_unbudgeted(&transaction);
         let state = state_with_activation(active_lifecycle());
         let mut block = state.block(test_header());
@@ -8343,8 +8418,7 @@ mod tests {
             .execute(&ALICE_ID, &mut transaction)
             .expect_err("exhausted action budget");
         assert!(
-            error
-                .to_string()
+            smart_contract_parameter_message(&error)
                 .contains("action count per transaction exceeded"),
             "{error}"
         );
@@ -8362,7 +8436,10 @@ mod tests {
         let error = altered_root
             .execute(&ALICE_ID, &mut transaction)
             .expect_err("altered public bootstrap root");
-        assert!(error.to_string().contains("root does not match"), "{error}");
+        assert!(
+            smart_contract_parameter_message(&error).contains("root does not match"),
+            "{error:?}"
+        );
         assert_empty_and_unbudgeted(&transaction);
         let mut altered_supply = valid_bootstrap_instruction();
         altered_supply.bootstrap.total_supply += 1;
@@ -8373,7 +8450,10 @@ mod tests {
         let error = altered_supply
             .execute(&ALICE_ID, &mut transaction)
             .expect_err("altered public aggregate supply");
-        assert!(error.to_string().contains("root does not match"), "{error}");
+        assert!(
+            smart_contract_parameter_message(&error).contains("root does not match"),
+            "{error:?}"
+        );
         assert_empty_and_unbudgeted(&transaction);
         let mut altered_proof = valid_bootstrap_instruction();
         let middle = altered_proof.proof.bytes.len() / 2;
@@ -8386,7 +8466,7 @@ mod tests {
             .execute(&ALICE_ID, &mut transaction)
             .expect_err("altered native proof");
         assert!(
-            error.to_string().contains("proof verification failed"),
+            smart_contract_parameter_message(&error).contains("proof verification failed"),
             "{error}"
         );
         assert_empty_and_unbudgeted(&transaction);
