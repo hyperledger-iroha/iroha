@@ -144,6 +144,7 @@ STAGES = (
         "taira_public_reset::host::tests::prepared_candidate_write_cannot_be_reinterpreted_as_public_evidence",
         "taira_public_reset::host::tests::inrou_restart_evidence_binds_ordered_host_and_exact_guest_transition",
         "taira_public_reset::host::tests::prepared_inrou_report_rejects_every_missing_or_extra_v1_field",
+        "taira_public_reset::host::tests::readiness_http_server_waits_for_request_bytes_after_accept",
         "taira_public_reset::host::tests::journaled_restart_waits_for_four_http_backends_before_onboarding",
         "taira_public_reset::host::tests::journaled_restart_readiness_preserves_its_pre_restart_deadline",
         "taira_public_reset::host::tests::journaled_restart_readiness_stops_on_expired_authorization_or_ambiguous_restart",

@@ -17789,6 +17789,11 @@ mod tests {
                         Err(error) => panic!("readiness accept failed: {error}"),
                     }
                 };
+                // Darwin may inherit the listener's nonblocking flag on accept. The
+                // bounded request reader must wait for HTTP bytes after TCP accept.
+                stream
+                    .set_nonblocking(false)
+                    .expect("blocking request stream");
                 stream
                     .set_read_timeout(Some(Duration::from_secs(2)))
                     .expect("read deadline");
@@ -17805,6 +17810,30 @@ mod tests {
             count
         });
         (origin, worker)
+    }
+
+    #[test]
+    fn readiness_http_server_waits_for_request_bytes_after_accept() {
+        let (origin, worker) = readiness_http_server(vec![200]);
+        let address = origin
+            .strip_prefix("http://")
+            .unwrap()
+            .trim_end_matches('/');
+        let mut client = std::net::TcpStream::connect(address).expect("connect before HTTP bytes");
+        client
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .expect("response deadline");
+        // Give the worker time to accept an empty socket before sending the request.
+        std::thread::sleep(Duration::from_millis(50));
+        client
+            .write_all(b"GET /status HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            .expect("send delayed request");
+        let mut response = String::new();
+        client
+            .read_to_string(&mut response)
+            .expect("read delayed response");
+        assert!(response.starts_with("HTTP/1.1 200 Test\r\n"));
+        assert_eq!(worker.join().expect("readiness server"), 1);
     }
 
     #[test]
