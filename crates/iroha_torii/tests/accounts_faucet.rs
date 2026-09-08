@@ -1131,12 +1131,17 @@ async fn accounts_faucet_rejects_missing_pow_when_required() {
             ),
             json_entry("claim", incomplete),
         ]);
+        let mut request = faucet_post_request(
+            "/v1/accounts/faucet/prepare",
+            norito::json::to_json(&body).expect("serialize malformed faucet request"),
+        );
+        request.headers_mut().insert(
+            axum::http::header::ACCEPT,
+            axum::http::HeaderValue::from_static("application/json"),
+        );
         let resp = app
             .clone()
-            .oneshot(faucet_post_request(
-                "/v1/accounts/faucet/prepare",
-                norito::json::to_json(&body).expect("serialize malformed faucet request"),
-            ))
+            .oneshot(request)
             .await
             .expect("malformed faucet response");
         let resp = expect_status(resp, StatusCode::BAD_REQUEST).await;

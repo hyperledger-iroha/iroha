@@ -22,9 +22,11 @@ use iroha_data_model::{
     account::{AccountAddress, AccountId},
     asset::{AssetDefinitionId, AssetId},
     domain::DomainId,
-    isi::register::RegisterPeerWithPop,
+    isi::{
+        ActivatePublicLaneValidator, RegisterPublicLaneValidator, register::RegisterPeerWithPop,
+    },
     level::Level,
-    nexus::{DataSpaceId, LaneId, PublicLaneValidatorRecord, PublicLaneValidatorStatus},
+    nexus::{DataSpaceId, LaneId},
     peer::PeerId,
     permission::Permission,
     prelude::{Account, Asset, AssetDefinition, Domain, Log},
@@ -187,28 +189,37 @@ fn build_onboarding_test_context_at(
         let account_id = AccountId::new(key_pair.public_key().clone());
         Account::new(account_id.clone()).build(&account_id)
     }));
-    let mut world = World::with_assets([domain], accounts, [fee_definition], [fee_asset], []);
-    // Route authority requires the same four live BLS validators and PoP-bound keys
-    // as consensus; a bare peer row is insufficient for a current-state response.
-    for key_pair in &validator_keys {
-        let validator = AccountId::new(key_pair.public_key().clone());
-        world.public_lane_validators_mut_for_testing().insert(
-            (LaneId::SINGLE, validator.clone()),
-            PublicLaneValidatorRecord {
-                lane_id: LaneId::SINGLE,
-                validator: validator.clone(),
-                peer_id: PeerId::new(key_pair.public_key().clone()),
-                stake_account: validator,
-                total_stake: Quantity::from(1_000_u32),
-                self_stake: Quantity::from(1_000_u32),
-                metadata: Default::default(),
-                status: PublicLaneValidatorStatus::Active,
-                activation_height: 1,
-                deactivation_height: None,
-                last_reward_epoch: None,
-            },
-        );
-    }
+    let staking = iroha_config::parameters::actual::NexusStaking::default();
+    let stake_asset_id: AssetDefinitionId = staking.stake_asset_id.parse().expect("stake asset");
+    let stake_domain = Domain::new(DomainId::try_new("nexus", "universal").expect("stake domain"))
+        .build(&authority_id);
+    let stake_definition = AssetDefinition::numeric(
+        stake_asset_id.clone(),
+        "Staked XOR".to_owned(),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        None,
+    )
+    .build(&authority_id);
+    let escrow_id =
+        AccountId::parse_encoded(&staking.stake_escrow_account_id).expect("canonical stake escrow");
+    accounts.push(Account::new(escrow_id.clone()).build(&escrow_id));
+    let mut assets = vec![fee_asset];
+    assets.extend(validator_keys.iter().map(|key_pair| {
+        Asset::new(
+            AssetId::new(
+                stake_asset_id.clone(),
+                AccountId::new(key_pair.public_key().clone()),
+            ),
+            Quantity::from(1_000_u32),
+        )
+    }));
+    let mut world = World::with_assets(
+        [domain, stake_domain],
+        accounts,
+        [fee_definition, stake_definition],
+        assets,
+        [],
+    );
     install_account_alias_policy(&mut world, &authority_id, &fee_asset_id);
     install_universal_parent_lease(&mut world, &authority_id);
     world.account_permissions_mut_for_testing().insert(
@@ -260,6 +271,25 @@ fn build_onboarding_test_context_at(
             )
             .execute(&authority_id, &mut transaction)
             .expect("register fixture peer and its live consensus key");
+            let validator = AccountId::new(key_pair.public_key().clone());
+            // Use the genesis instructions so validator rows, bonded shares, escrow,
+            // and quantity-ledger mutations are committed as one consistent state.
+            RegisterPublicLaneValidator {
+                lane_id: LaneId::SINGLE,
+                validator: validator.clone(),
+                peer_id: PeerId::new(key_pair.public_key().clone()),
+                stake_account: validator.clone(),
+                initial_stake: Quantity::from(1_000_u32),
+                metadata: Default::default(),
+            }
+            .execute(&authority_id, &mut transaction)
+            .expect("register and bond fixture validator");
+            ActivatePublicLaneValidator {
+                lane_id: LaneId::SINGLE,
+                validator,
+            }
+            .execute(&authority_id, &mut transaction)
+            .expect("activate fixture validator at genesis");
         }
         transaction.apply();
     }
