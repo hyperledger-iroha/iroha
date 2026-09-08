@@ -214,7 +214,8 @@ where
 ///
 /// Serialized with a stable wire wrapper so predicate payloads remain consistent
 /// while still carrying runtime filter data.
-#[derive(Debug)]
+#[derive(Debug, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::query::dsl::CompoundPredicate")]
 pub struct CompoundPredicate<T> {
     payload: Option<Arc<dyn Any + Send + Sync + 'static>>,
     marker: PhantomData<T>,
@@ -552,22 +553,22 @@ impl CompoundPredicateWireRef<'_> {
         4_usize.checked_add(outer)?.checked_add(payload)
     }
 }
-impl norito::core::NoritoSerialize for CompoundPredicateWireRef<'_> {
+
+impl norito::core::SerializePayload for CompoundPredicateWireRef<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
-        let mut field = norito::core::DeriveSmallBuf::new();
         match self {
-            Self::Pass => norito::core::NoritoSerialize::serialize(&0_u32, writer),
+            Self::Pass => norito::core::SerializePayload::serialize(&0_u32, writer),
             Self::Json(raw) => {
-                norito::core::NoritoSerialize::serialize(&1_u32, writer)?;
+                norito::core::SerializePayload::serialize(&1_u32, writer)?;
                 if norito::core::use_packed_struct() {
-                    norito::core::NoritoSerialize::serialize(raw, writer)
+                    norito::core::SerializePayload::serialize(raw, writer)
                 } else {
-                    norito::core::write_len_prefixed(writer, raw, &mut field)
+                    norito::core::write_len_prefixed(writer, raw)
                 }
             }
             Self::TxPredicate(tree) => {
-                norito::core::NoritoSerialize::serialize(&2_u32, writer)?;
-                norito::core::write_len_prefixed(writer, *tree, &mut field)
+                norito::core::SerializePayload::serialize(&2_u32, writer)?;
+                norito::core::write_len_prefixed(writer, *tree)
             }
         }
     }
@@ -575,11 +576,11 @@ impl norito::core::NoritoSerialize for CompoundPredicateWireRef<'_> {
         match self {
             Self::Pass => Some(4),
             Self::Json(raw) => {
-                let payload = norito::core::NoritoSerialize::encoded_len_hint(raw)?;
+                let payload = norito::core::SerializePayload::encoded_len_hint(raw)?;
                 Self::encoded_variant_len(payload, true)
             }
             Self::TxPredicate(tree) => {
-                let payload = norito::core::NoritoSerialize::encoded_len_hint(*tree)?;
+                let payload = norito::core::SerializePayload::encoded_len_hint(*tree)?;
                 Self::encoded_variant_len(payload, false)
             }
         }
@@ -588,25 +589,26 @@ impl norito::core::NoritoSerialize for CompoundPredicateWireRef<'_> {
         match self {
             Self::Pass => Some(4),
             Self::Json(raw) => {
-                let payload = norito::core::NoritoSerialize::encoded_len_exact(raw)?;
+                let payload = norito::core::SerializePayload::encoded_len_exact(raw)?;
                 Self::encoded_variant_len(payload, true)
             }
             Self::TxPredicate(tree) => {
-                let payload = norito::core::NoritoSerialize::encoded_len_exact(*tree)?;
+                let payload = norito::core::SerializePayload::encoded_len_exact(*tree)?;
                 Self::encoded_variant_len(payload, false)
             }
         }
     }
 }
-impl<T> norito::core::NoritoSerialize for CompoundPredicate<T> {
+impl<T> norito::core::NoritoSerialize for CompoundPredicate<T> {}
+impl<T> norito::core::SerializePayload for CompoundPredicate<T> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
-        norito::core::NoritoSerialize::serialize(&self.wire_ref(), writer)
+        norito::core::SerializePayload::serialize(&self.wire_ref(), writer)
     }
     fn encoded_len_hint(&self) -> Option<usize> {
-        norito::core::NoritoSerialize::encoded_len_hint(&self.wire_ref())
+        norito::core::SerializePayload::encoded_len_hint(&self.wire_ref())
     }
     fn encoded_len_exact(&self) -> Option<usize> {
-        norito::core::NoritoSerialize::encoded_len_exact(&self.wire_ref())
+        norito::core::SerializePayload::encoded_len_exact(&self.wire_ref())
     }
 }
 impl<'de, T: 'static> norito::core::NoritoDeserialize<'de> for CompoundPredicate<T> {
@@ -889,7 +891,8 @@ impl<T> HasPredicateAtom for T {
 }
 impl<T> EvaluatePredicate<T> for () {}
 /// Lightweight selector tuple returned by stubbed DSL builders.
-#[derive(Debug, PartialEq, Eq, Decode, Encode)]
+#[derive(Debug, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::query::dsl::SelectorTuple")]
 pub struct SelectorTuple<T>(
     #[cfg(feature = "ids_projection")] SelectorMode,
     PhantomData<T>,
@@ -915,7 +918,8 @@ impl<'a, T> norito::core::DecodeFromSlice<'a> for SelectorTuple<T> {
 }
 /// Experimental selector mode to prototype basic projections.
 #[cfg(feature = "ids_projection")]
-#[derive(Debug, Clone, Copy, Decode, Encode, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Decode, Encode, PartialEq, Eq, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::query::dsl::SelectorMode")]
 /// Controls how selector tuples project data when the experimental ids projection feature is enabled.
 pub enum SelectorMode {
     /// Request the full object for each row.
@@ -1071,16 +1075,16 @@ mod codec_tests {
     };
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, MerkleProof};
     use iroha_primitives::json::Json;
-    use norito::NoritoSerialize;
+    use norito::SerializePayload;
     use std::time::Duration;
-    fn bare_bytes_with_flags(value: &dyn NoritoSerialize, flags: u8) -> Vec<u8> {
+    fn bare_bytes_with_flags(value: &dyn SerializePayload, flags: u8) -> Vec<u8> {
         let _flags = norito::core::DecodeFlagsGuard::enter(flags);
         let mut bytes = Vec::new();
         let mut encoder = norito::core::Encoder::for_buffer(&mut bytes);
         value.serialize(&mut encoder).expect("encode bare value");
         bytes
     }
-    fn bare_bytes(value: &dyn NoritoSerialize) -> Vec<u8> {
+    fn bare_bytes(value: &dyn SerializePayload) -> Vec<u8> {
         bare_bytes_with_flags(value, norito::core::default_encode_flags())
     }
     fn assert_wire_lengths_match_active_layout<T: 'static>(predicate: &CompoundPredicate<T>) {
@@ -2136,7 +2140,7 @@ mod checked_json_tests {
         );
         assert_exact(&SelectorTuple::<crate::domain::Domain>::default());
         #[cfg(feature = "ids_projection")]
-        assert_exact(&SelectorMode::IdsOnly);
+        assert_exact(&SelectorTuple::<crate::domain::Domain>::ids_only());
     }
 }
 /// Prelude re-export for the lightweight query DSL.

@@ -1301,9 +1301,12 @@ fn validate_read_only_projection(path: &Path, content: &[u8]) -> color_eyre::Res
         // UID. Confidentiality remains enforced by the owner-only 0700,
         // single-link projection directories that contain these immutable
         // 0444 files.
-        fchmod(&file, Mode::from_raw_mode(CONTAINER_PROJECTION_FILE_MODE))
-            .map_err(std::io::Error::from)
-            .wrap_err_with(|| format!("protect prepared runtime projection {}", path.display()))?;
+        fchmod(
+            &file,
+            Mode::from_raw_mode(CONTAINER_PROJECTION_FILE_MODE.into()),
+        )
+        .map_err(std::io::Error::from)
+        .wrap_err_with(|| format!("protect prepared runtime projection {}", path.display()))?;
         file.sync_all()
             .wrap_err_with(|| format!("sync prepared runtime projection {}", path.display()))?;
         let protected = file.metadata().wrap_err_with(|| {
@@ -1346,7 +1349,7 @@ fn publish_read_only_projection(path: &Path, content: &[u8]) -> color_eyre::Resu
         use rustix::fs::{Mode, fchmod};
         fchmod(
             temporary.as_file(),
-            Mode::from_raw_mode(CONTAINER_PROJECTION_FILE_MODE),
+            Mode::from_raw_mode(CONTAINER_PROJECTION_FILE_MODE.into()),
         )
         .map_err(std::io::Error::from)
         .wrap_err("protect staged prepared runtime projection")?;
@@ -3937,13 +3940,9 @@ mod tests {
                 GenesisTopologyEntry::new(PeerId::new(validator.public_key().clone()), pop)
             })
             .collect::<Vec<_>>();
-        let authority_topology = topology.iter().map(|entry| entry.peer.clone()).collect();
-        let manifest = crate::genesis::complete_test_genesis_builder_for_peers(
-            GenesisBuilder::new_without_executor(
-                ChainId::from("resultless-prepared-bundle"),
-                PathBuf::from("."),
-            ),
-            authority_topology,
+        let manifest = GenesisBuilder::new_without_executor(
+            ChainId::from("resultless-prepared-bundle"),
+            PathBuf::from("."),
         )
         .set_topology_for_test(topology)
         .build_raw()

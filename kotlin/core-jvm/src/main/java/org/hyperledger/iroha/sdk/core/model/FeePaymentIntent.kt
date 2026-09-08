@@ -54,7 +54,7 @@ class FeeSponsorProgramId(
     }
 
     private val sponsorIdentity =
-        AccountAddress.parseEncodedIgnoringCurveSupport(sponsor, null).canonicalBytes
+        AccountAddress.parseEncoded(sponsor, null).canonicalBytes
 
     /** Canonical `sponsor/program` selector used by Torii routes. */
     fun literal(): String = "$sponsor/$name"

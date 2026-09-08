@@ -2479,6 +2479,9 @@ impl ProductionV2Services {
                 }
             }
         }
+        if self.orphan_chunks.is_empty() {
+            self.orphan_lifecycle_sweep_cursor = None;
+        }
         first_error.map_or(Ok(retired), Err)
     }
     /// Replay all chunks whose proposal manifests have now opened sessions.

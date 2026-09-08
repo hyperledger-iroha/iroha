@@ -24,8 +24,6 @@ use super::{
         PreparedCertifiedFetchCompletion,
     },
 };
-#[cfg(test)]
-use crate::sumeragi::v2_runtime::PendingRuntimeEffectBinding;
 use crate::sumeragi::{
     FairV2Ingress, FairV2IngressClass, FairV2IngressDequeueDisposition,
     FairV2IngressLeaderWireToken, FairV2IngressOwnershipEvidence, FairV2IngressQueueGateVerdict,
@@ -45,9 +43,9 @@ use crate::sumeragi::{
         check_production_historical_body_pipeline_transition,
     },
     v2_effects::{
-        CertifiedResponsePriorityCandidate, CertifiedResponsePriorityProbe, EffectExecutorError,
-        EffectRuntime, EffectTransportError, EffectWorkId,
-        RecoveredDecisionFetchResponseCandidateV1, V2EffectExecutor, v2_ingress_head_can_drain,
+        CertifiedResponsePriorityCandidate, CertifiedResponsePriorityProbe, EffectRuntime,
+        EffectTransportError, EffectWorkId, RecoveredDecisionFetchResponseCandidateV1,
+        V2EffectExecutor,
     },
     v2_runtime::SerializedV2Runtime,
     v2_transport::V2TransportError,
@@ -57,6 +55,8 @@ use crate::sumeragi::{
         ProductionV2Services,
     },
 };
+#[cfg(test)]
+use crate::sumeragi::{v2_effects::EffectExecutorError, v2_runtime::PendingRuntimeEffectBinding};
 use iroha_crypto::HashOf;
 use iroha_data_model::block::consensus_v2 as wire;
 use std::{
@@ -123,7 +123,8 @@ pub(crate) enum LifecycleIngressSelectorError {
         /// Typed executor validation failure.
         error: Box<EffectTransportError>,
     },
-    /// The reducer-owned terminal snapshot could not be read before selection.
+    /// The test-only discovery facade could not read the reducer-owned terminal snapshot.
+    #[cfg(test)]
     ExecutorState(Box<EffectExecutorError>),
     /// The complete occurrence key set or cardinality was not representable.
     InvalidCensus,
@@ -159,6 +160,7 @@ impl LifecycleIngressSelectorError {
             Self::ExecutorAuthority { ordinal, error } => {
                 format!("executor authority failed for physical occurrence {ordinal:?}: {error}")
             }
+            #[cfg(test)]
             Self::ExecutorState(error) => {
                 format!("executor terminal state could not be read: {error:?}")
             }
@@ -3363,9 +3365,9 @@ impl<R: crate::sumeragi::v2_effects::EffectRuntime> V2EffectExecutor<R> {
     }
     /// Prepare one opaque complete selector census from an exact queue target.
     ///
-    /// This is the sole crate-visible mint. It returns borrow-free census state,
-    /// never rank authority; Phase A or Phase B must consume and revalidate it.
-    #[cfg_attr(not(test), allow(dead_code))]
+    /// Ordinary and recovered Fetch completions use this exact-target mint.
+    /// It returns borrow-free census state, never rank authority; the consuming
+    /// persistence or completion transaction must revalidate it before dequeue.
     pub(crate) fn prepare_lifecycle_ingress_selector(
         &self,
         ingress: &FairV2Ingress,
@@ -3388,53 +3390,50 @@ impl<R: crate::sumeragi::v2_effects::EffectRuntime> V2EffectExecutor<R> {
             .map_err(|_| LifecycleIngressSelectorError::QueueCutCapture)?;
         self.classify_selected_certified_response_priority(&cut)
     }
-    /// Select the next fair authenticated recovered Decision-Fetch response.
+    /// Exercise recovered-response discovery through the live fair-turn boundaries.
     ///
-    /// The queue runs the same strict-then-dependency source/lane selection as
-    /// ordinary checked dequeue under its service lock. The executor supplies
-    /// the ordinary head-drain predicate and then authenticates the complete
-    /// frozen census. An ordinary, obsolete, or foreign-context winner returns
-    /// `None` for pass-through; no later recovered response may leapfrog it.
-    /// Neither selection nor classification claims, dequeues, or publishes
-    /// worker capacity.
-    // The production lifecycle Ingress turn is the sole consumer of this
-    // queue-owned selector; ordinary winners retain the same fair cut.
-    #[cfg_attr(not(test), allow(dead_code))]
+    /// Focused executor fixtures compose the production turn cut, context
+    /// narrowing, and selected-family classifier without launching an I/O worker.
+    /// This test-only facade never grants runner, dequeue, or scheduling authority.
+    #[cfg(test)]
     pub(crate) fn prepare_next_recovered_decision_fetch_ingress_selector(
         &self,
         ingress: &FairV2Ingress,
     ) -> Result<Option<PreparedLifecycleIngressSelector>, LifecycleIngressSelectorError> {
+        use super::ingress_position::FairIngressTurnContextCut;
+
         let terminal_subject = self
             .lifecycle_terminal_subject()
             .map_err(|error| LifecycleIngressSelectorError::ExecutorState(Box::new(error)))?;
         let Some(cut) = ingress
-            .capture_next_lifecycle_queue_cut(|occurrence| {
-                v2_ingress_head_can_drain(occurrence.inbound(), self, terminal_subject)
+            .capture_next_ingress_turn_cut(|occurrence| {
+                crate::sumeragi::v2_effects::v2_ingress_head_can_drain(
+                    occurrence.inbound(),
+                    self,
+                    terminal_subject,
+                )
             })
             .map_err(|_| LifecycleIngressSelectorError::QueueCutCapture)?
         else {
             return Ok(None);
         };
-        let prepared = self.capture_lifecycle_ingress_selector(cut)?;
-        if prepared.queue_witness.selected_disposition() != FairV2IngressDequeueDisposition::Admit
-            || !matches!(
-                prepared.io_target,
-                PreparedLifecycleIngressIoTarget::RecoveredDecisionFetchBodyPersistence
-            )
-        {
+        if cut.selected_disposition() == FairV2IngressDequeueDisposition::RetireObsolete {
             return Ok(None);
         }
-        if prepared
-            .selected_claimed_response_family()
-            .ok()
-            .and_then(|family| family.candidate.recovered())
-            .is_none()
+        let cut = match cut
+            .narrow_to_lifecycle(lifecycle_context_from_wire(self.context()))
+            .map_err(|_| LifecycleIngressSelectorError::QueueCutCapture)?
         {
-            return Err(LifecycleIngressSelectorError::CandidateRevalidationDrift {
-                ordinal: prepared.selected_identity().physical_admission_ordinal(),
-            });
+            FairIngressTurnContextCut::Ordinary(_) => return Ok(None),
+            FairIngressTurnContextCut::Lifecycle(cut) => cut,
+        };
+        match self.classify_selected_certified_response_priority(&cut)? {
+            SelectedCertifiedResponsePriorityV1::RecoveredClaimed => self
+                .prepare_recovered_decision_fetch_from_selected_cut(cut)
+                .map(Some),
+            SelectedCertifiedResponsePriorityV1::DefinitelyNonPriority
+            | SelectedCertifiedResponsePriorityV1::OrdinaryClaimed => Ok(None),
         }
-        Ok(Some(prepared))
     }
     /// Classify the exact selected certified-response occurrence without mutation.
     ///

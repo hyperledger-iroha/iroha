@@ -379,7 +379,7 @@ case "$surface" in
     assert_pytest_count "$python_transcript" "$observed_test_count"
     ;;
   javascript)
-    observed_test_count=88
+    observed_test_count=90
     if ! command -v node >/dev/null 2>&1; then
       echo "Node.js is required for Sumeragi v2 JavaScript diagnostics" >&2
       exit 1
@@ -440,8 +440,8 @@ case "$surface" in
       run_and_capture "$javascript_transcript" \
         env IROHA_JS_SUMERAGI_DIAGNOSTICS_TORII_CLIENT="$javascript_client" \
         node --test --test-reporter=tap "$javascript_test"
-      assert_node_tap "$javascript_transcript" 44
-      printf 'sumeragi-v2-sdk-diagnostics-run surface=javascript variant=%s tests=44 skipped=0\n' \
+      assert_node_tap "$javascript_transcript" 45
+      printf 'sumeragi-v2-sdk-diagnostics-run surface=javascript variant=%s tests=45 skipped=0\n' \
         "$javascript_variant"
     done
     ;;
@@ -517,7 +517,7 @@ PY
       org.hyperledger.iroha.sdk.client.SumeragiHttpTransportContractTest
     ;;
   java)
-    observed_test_count=48
+    observed_test_count=59
     java_home="$(resolve_java_home)"
     readonly java_home
     readonly gradle_build_root="${temporary_root}/gradle-build"
@@ -542,7 +542,8 @@ PY
       --tests org.hyperledger.iroha.sdk.consensus.SumeragiDiagnosticsModelsTests \
       --tests org.hyperledger.iroha.sdk.consensus.SumeragiDiagnosticsParsingTests \
       --tests org.hyperledger.iroha.sdk.consensus.SumeragiStatusModelsTests \
-      --tests org.hyperledger.iroha.sdk.consensus.SumeragiDiagnosticsJavaConsumerTest
+      --tests org.hyperledger.iroha.sdk.consensus.SumeragiDiagnosticsJavaConsumerTest \
+      --tests org.hyperledger.iroha.sdk.consensus.SumeragiV2WireOwnershipTest
     assert_gradle_reports \
       "$gradle_build_root" "$observed_test_count" \
       org.hyperledger.iroha.sdk.client.SumeragiHttpTransportTests \
@@ -550,7 +551,8 @@ PY
       org.hyperledger.iroha.sdk.consensus.SumeragiDiagnosticsModelsTests \
       org.hyperledger.iroha.sdk.consensus.SumeragiDiagnosticsParsingTests \
       org.hyperledger.iroha.sdk.consensus.SumeragiStatusModelsTests \
-      org.hyperledger.iroha.sdk.consensus.SumeragiDiagnosticsJavaConsumerTest
+      org.hyperledger.iroha.sdk.consensus.SumeragiDiagnosticsJavaConsumerTest \
+      org.hyperledger.iroha.sdk.consensus.SumeragiV2WireOwnershipTest
     ;;
 esac
 

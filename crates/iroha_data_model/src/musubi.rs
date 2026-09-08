@@ -459,7 +459,7 @@ impl io::Write for Blake3Writer<'_> {
         Ok(())
     }
 }
-fn domain_hash_value<T: norito::core::NoritoSerialize>(domain: &[u8], value: &T) -> [u8; 32] {
+fn domain_hash_value<T: norito::SerializePayload>(domain: &[u8], value: &T) -> [u8; 32] {
     let encoded_len = norito::codec::encode_adaptive_into(value, &mut io::sink())
         .expect("Musubi canonical hash preflight must serialize");
     let mut hasher = blake3::Hasher::new();
@@ -1341,7 +1341,7 @@ fn tilde_core_is_compatible(base: &MusubiVersionV1, candidate: &MusubiVersionV1)
     candidate.major == base.major && candidate.minor == base.minor
 }
 macro_rules! digest_type {
-    ($name:ident, $doc:literal) => {
+    ($name:ident, $schema_name:literal, $doc:literal) => {
         #[doc = $doc]
         #[derive(
             Clone,
@@ -1356,7 +1356,9 @@ macro_rules! digest_type {
             Encode,
             Decode,
             IntoSchema,
+            norito::NoritoSchema,
         )]
+        #[norito_schema(name = $schema_name)]
         #[repr(transparent)]
         #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
         pub struct $name(
@@ -1384,49 +1386,64 @@ macro_rules! digest_type {
 }
 digest_type!(
     ArchiveId,
+    "iroha_data_model::musubi::ArchiveId",
     "Domain-separated identity of a canonical Musubi archive commitment."
 );
 digest_type!(
     MusubiContentDigestV1,
+    "iroha_data_model::musubi::MusubiContentDigestV1",
     "BLAKE3-256 content commitment used by Musubi V1."
 );
 digest_type!(
     MusubiReleaseDigestV1,
+    "iroha_data_model::musubi::MusubiReleaseDigestV1",
     "Domain-separated digest of an immutable release manifest."
 );
 digest_type!(
     MusubiSemanticReleaseDigestV1,
+    "iroha_data_model::musubi::MusubiSemanticReleaseDigestV1",
     "Domain-separated digest of an archive-independent semantic release manifest."
 );
 digest_type!(
     MusubiVerificationLockDigestV1,
+    "iroha_data_model::musubi::MusubiVerificationLockDigestV1",
     "Digest of a normalized exact verification lock."
 );
 digest_type!(
     MusubiNamespaceBindingDigestV1,
+    "iroha_data_model::musubi::MusubiNamespaceBindingDigestV1",
     "Digest of an immutable namespace binding."
 );
 digest_type!(
     MusubiArchiveLocationIdV1,
+    "iroha_data_model::musubi::MusubiArchiveLocationIdV1",
     "Stable identity of an archive location record."
 );
 digest_type!(
     MusubiProviderBundleAttestationDigestV1,
+    "iroha_data_model::musubi::MusubiProviderBundleAttestationDigestV1",
     "Domain-separated digest of one complete provider bundle attestation."
 );
 digest_type!(
     MusubiProviderBundleAttestationSetDigestV1,
+    "iroha_data_model::musubi::MusubiProviderBundleAttestationSetDigestV1",
     "Domain-separated digest of one sorted provider bundle-attestation set."
 );
 digest_type!(
     MusubiInviteIdV1,
+    "iroha_data_model::musubi::MusubiInviteIdV1",
     "Stable identity of a package governance invitation."
 );
 digest_type!(
     MusubiGovernanceActionDigestV1,
+    "iroha_data_model::musubi::MusubiGovernanceActionDigestV1",
     "Digest binding an enacted Parliament action."
 );
-digest_type!(MusubiQueryHashV1, "Digest of canonical query parameters.");
+digest_type!(
+    MusubiQueryHashV1,
+    "iroha_data_model::musubi::MusubiQueryHashV1",
+    "Digest of canonical query parameters."
+);
 /// Complete source-archive commitment whose domain-separated Norito hash is [`ArchiveId`].
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -2146,11 +2163,22 @@ pub enum MusubiDependencyKindV1 {
     Development,
 }
 macro_rules! bounded_text_type {
-    ($name:ident, $maximum:expr, $doc:literal, $error:literal) => {
+    ($name:ident, $schema_name:literal, $maximum:expr, $doc:literal, $error:literal) => {
         #[doc = $doc]
         #[derive(
-            Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema,
+            Clone,
+            Debug,
+            PartialEq,
+            Eq,
+            PartialOrd,
+            Ord,
+            Hash,
+            Encode,
+            Decode,
+            IntoSchema,
+            norito::NoritoSchema,
         )]
+        #[norito_schema(name = $schema_name)]
         #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
         pub struct $name(String);
         impl $name {
@@ -2196,18 +2224,21 @@ macro_rules! bounded_text_type {
 }
 bounded_text_type!(
     MusubiDescriptionV1,
+    "iroha_data_model::musubi::MusubiDescriptionV1",
     4_096,
     "Bounded immutable release or mutable package description.",
     "Musubi description is empty, noncanonical, or exceeds 4096 bytes"
 );
 bounded_text_type!(
     MusubiDocumentRefV1,
+    "iroha_data_model::musubi::MusubiDocumentRefV1",
     2_048,
     "Bounded readme, license, or repository reference.",
     "Musubi document reference is empty, noncanonical, or exceeds 2048 bytes"
 );
 bounded_text_type!(
     MusubiReasonV1,
+    "iroha_data_model::musubi::MusubiReasonV1",
     1_024,
     "Bounded governance, yank, or takedown reason.",
     "Musubi reason is empty, noncanonical, or exceeds 1024 bytes"

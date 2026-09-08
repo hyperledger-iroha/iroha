@@ -283,6 +283,18 @@ pub struct KeygenCircuitResourceProfile {
     pub compress_selectors: bool,
 }
 
+/// Exact alternative selector encodings for one synthesized assembly.
+///
+/// Both inventories refer to the same constraint system and selector activations. Computing
+/// them does not materialize selector field polynomials or construct either key.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct KeygenSelectorProfiles {
+    /// Inventory after compression using the actual synthesized selector overlap.
+    pub compressed: KeygenCircuitResourceProfile,
+    /// Inventory after direct one-for-one selector conversion, without selector bitmaps.
+    pub direct: KeygenCircuitResourceProfile,
+}
+
 fn keygen_circuit_resource_profile<F: Field>(
     domain_rows: usize,
     cs: &ConstraintSystem<F>,
@@ -548,6 +560,54 @@ where
     Ok((vk, extracted))
 }
 
+/// Generate a verifier key with caller-selected encoding after one synthesis.
+///
+/// The callback receives both exact selector inventories before any key polynomials are
+/// constructed. It returns the compression choice and extracted data, or rejects construction.
+/// On success, the circuit is dropped before key expansion. Existing fixed-choice APIs retain
+/// their original behavior; this API does not impose an encoding policy or resource limit.
+pub fn keygen_vk_consuming_with_selector_choice<
+    'params,
+    C,
+    P,
+    ConcreteCircuit,
+    Extracted,
+    ExtractError,
+    Extractor,
+>(
+    params: &P,
+    circuit: ConcreteCircuit,
+    extractor: Extractor,
+) -> Result<(VerifyingKey<C>, Extracted), KeygenWithExtractorError<ExtractError>>
+where
+    C: CurveAffine,
+    C::Scalar: FromUniformBytes<64>,
+    P: Params<'params, C> + Sync,
+    ConcreteCircuit: Circuit<C::Scalar>,
+    Extractor:
+        FnOnce(&ConcreteCircuit, KeygenSelectorProfiles) -> Result<(bool, Extracted), ExtractError>,
+{
+    let (cs, assembly, generated_domain) =
+        synthesize_keygen_assembly::<C, _, _>(params, None, &circuit)
+            .map_err(KeygenWithExtractorError::Keygen)?;
+    let profiles = KeygenSelectorProfiles {
+        compressed: keygen_circuit_resource_profile(params.n() as usize, &cs, &assembly, true),
+        direct: keygen_circuit_resource_profile(params.n() as usize, &cs, &assembly, false),
+    };
+    let (compress_selectors, extracted) =
+        extractor(&circuit, profiles).map_err(KeygenWithExtractorError::Extractor)?;
+    drop(circuit);
+    // The synthesized assembly is the only live owner needed below. On
+    // Darwin, promptly purge pages freed with the much larger virtual circuit
+    // graph before allocating permutation and MSM scratch.
+    release_allocator_slack();
+
+    let domain = generated_domain.expect("verifier-key generation constructs a domain");
+    let vk = keygen_vk_from_assembly(params, domain, cs, assembly, compress_selectors);
+    release_allocator_slack();
+    Ok((vk, extracted))
+}
+
 /// Generate a `ProvingKey` from a `VerifyingKey` and an instance of `Circuit`.
 pub fn keygen_pk<'params, C, P, ConcreteCircuit>(
     params: &P,
@@ -687,6 +747,56 @@ where
     let profile =
         keygen_circuit_resource_profile(params.n() as usize, &cs, &assembly, compress_selectors);
     let extracted = extractor(&circuit, profile).map_err(KeygenWithExtractorError::Extractor)?;
+    drop(circuit);
+    release_allocator_slack();
+    let pk = keygen_pk_from_assembly(
+        params,
+        None,
+        generated_domain,
+        cs,
+        assembly,
+        compress_selectors,
+    );
+    release_allocator_slack();
+    Ok((pk, extracted))
+}
+
+/// Generate a combined proving/verifying key with caller-selected encoding after one synthesis.
+///
+/// The callback receives both exact selector inventories before any key polynomials are
+/// constructed. It returns the compression choice and extracted data, or rejects construction.
+/// On success, the circuit is dropped before key expansion. Existing fixed-choice APIs retain
+/// their original behavior; this API does not impose an encoding policy or resource limit.
+pub fn keygen_pk2_consuming_with_selector_choice<
+    'params,
+    C,
+    P,
+    ConcreteCircuit,
+    Extracted,
+    ExtractError,
+    Extractor,
+>(
+    params: &P,
+    circuit: ConcreteCircuit,
+    extractor: Extractor,
+) -> Result<(ProvingKey<C>, Extracted), KeygenWithExtractorError<ExtractError>>
+where
+    C: CurveAffine,
+    C::Scalar: FromUniformBytes<64>,
+    P: Params<'params, C> + Sync,
+    ConcreteCircuit: Circuit<C::Scalar>,
+    Extractor:
+        FnOnce(&ConcreteCircuit, KeygenSelectorProfiles) -> Result<(bool, Extracted), ExtractError>,
+{
+    let (cs, assembly, generated_domain) =
+        synthesize_keygen_assembly::<C, _, _>(params, None, &circuit)
+            .map_err(KeygenWithExtractorError::Keygen)?;
+    let profiles = KeygenSelectorProfiles {
+        compressed: keygen_circuit_resource_profile(params.n() as usize, &cs, &assembly, true),
+        direct: keygen_circuit_resource_profile(params.n() as usize, &cs, &assembly, false),
+    };
+    let (compress_selectors, extracted) =
+        extractor(&circuit, profiles).map_err(KeygenWithExtractorError::Extractor)?;
     drop(circuit);
     release_allocator_slack();
     let pk = keygen_pk_from_assembly(

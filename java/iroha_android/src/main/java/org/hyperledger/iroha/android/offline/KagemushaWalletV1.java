@@ -33,10 +33,20 @@ public final class KagemushaWalletV1 {
   }
 
   /** Open only when the complete non-forking native hardware contract is present. */
-  public static KagemushaWalletV1 open(final KagemushaHardwareProviderV1 provider) {
+  public static KagemushaWalletV1 open(
+      final KagemushaHardwareProviderV1 provider, final Runnable authorizeBootstrap) {
+    Objects.requireNonNull(authorizeBootstrap, "authorizeBootstrap");
     return new KagemushaWalletV1(
         org.hyperledger.iroha.sdk.offline.KagemushaWalletV1.open(
-            Objects.requireNonNull(provider, "provider")));
+            Objects.requireNonNull(provider, "provider"), () -> {
+              authorizeBootstrap.run();
+              return kotlin.Unit.INSTANCE;
+            }));
+  }
+
+  /** Call only after the exact result is durable in the application transcript. */
+  public void acknowledgeDurableResult(final byte[] operationId, final byte[] canonicalResult) {
+    delegate.acknowledgeDurableResult(operationId.clone(), canonicalResult.clone());
   }
 
   public KagemushaHardwareCredentialV1 hardwareCredential() {

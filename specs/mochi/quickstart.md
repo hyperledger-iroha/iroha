@@ -93,6 +93,15 @@ scripts/mochi_local_sandbox.sh mcp-add-command
 The helper uses `python3` for path/JSON handling and detached process launch. Set
 `MOCHI_PYTHON=/absolute/path/to/python3` to select a specific validated interpreter.
 
+`env` and the GUI's copyable app snippet expose only public connection metadata and
+`IROHA_ENV_FILE`, the path to the generated private `.env.local`. The shell helper
+requires that file to be a regular owner-owned 0600 file with one link, and checks
+its metadata without reading its contents. Load it through your application's
+private dotenv configuration loader. For a Node application, use
+`node --env-file="$IROHA_ENV_FILE" app.js`; the existing generated connection
+sample then receives the signer through `process.env` inside the application.
+Keep this file private; do not source it in a traced shell or print its contents.
+
 `up` launches `cargo run -p mochi-ui --features gui --bin mochi -- sandbox serve` in a detached process group, waits for
 `/status` readiness, runs a local smoke transaction, validates local MCP, writes
 `<workspace>/.mochi/sandbox/<profile>/session.json`, and refreshes `.env.local` plus

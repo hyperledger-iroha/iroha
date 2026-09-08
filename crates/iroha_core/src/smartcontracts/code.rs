@@ -73,7 +73,7 @@ impl ContractSubjectBinding {
         }
     }
     /// Seed an already-active binding while constructing an internally consistent fixture.
-    #[cfg(any(test, feature = "iroha-core-tests"))]
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn with_active_code_hash(mut self, code_hash: Hash) -> Self {
         self.lifecycle.active_code_hash = Some(code_hash);

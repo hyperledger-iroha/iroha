@@ -109,6 +109,7 @@ struct FixtureConfigLoadError;
 include!("fixtures/soranet_transport_identity_tests.rs");
 fn load_config_from_fixtures(path: impl AsRef<Path>) -> Result<Config, FixtureConfigLoadError> {
     let config = ConfigReader::new()
+        .without_env()
         .read_toml_with_extends(fixtures_dir().join(path))
         .change_context(FixtureConfigLoadError)?
         .read_and_complete::<UserConfig>()
@@ -146,14 +147,13 @@ fn quic_datagram_buffers_default_to_one_mib() {
             >= defaults::network::QUIC_DATAGRAM_MAX_PAYLOAD_BYTES.get()
     );
 }
-/// This test not only asserts that the minimal set of fields is enough;
-/// it also gives an insight into every single default value
+/// Assert that minimal fixture fields suffice and snapshot the redacted debug view
+/// of the parsed configuration and its defaults, independent of process environment.
 #[test]
 #[allow(clippy::too_many_lines)]
 fn minimal_config_snapshot() {
     let config = load_config_from_fixtures("minimal_with_trusted_peers.toml")
         .expect("config should be valid");
-    // Snapshot updated to include new Sumeragi fields and other defaults
     expect_file!["fixtures/minimal_config_snapshot.txt"].assert_debug_eq(&config);
 }
 #[test]
@@ -1688,6 +1688,44 @@ fn full_config_parses_fine() {
     );
 }
 #[test]
+fn taira_storage_profile_matches_the_complete_preseed_budget() {
+    let config_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("workspace root")
+        .join("configs/soranexus/taira/config.toml");
+    let raw = fs::read_to_string(config_path).expect("read Taira profile");
+    let doc: TomlValue = toml::from_str(&raw).expect("parse Taira profile");
+    let storage = &doc["nexus"]["storage"];
+    assert_eq!(
+        storage["local_budget_bytes"].as_integer(),
+        Some(i64::try_from(defaults::taira::NEXUS_STORAGE_BUDGET_BYTES).unwrap())
+    );
+    assert_eq!(
+        storage["max_wsv_memory_bytes"].as_integer(),
+        Some(i64::try_from(defaults::taira::NEXUS_MAX_WSV_MEMORY_BYTES).unwrap())
+    );
+    for (name, expected) in [
+        ("kura_blocks_bps", defaults::taira::NEXUS_KURA_BLOCKS_BPS),
+        (
+            "wsv_snapshots_bps",
+            defaults::taira::NEXUS_WSV_SNAPSHOTS_BPS,
+        ),
+        ("sorafs_bps", defaults::taira::NEXUS_SORAFS_BPS),
+    ] {
+        assert_eq!(
+            storage["disk_budget_weights"][name].as_integer(),
+            Some(i64::from(expected))
+        );
+    }
+    assert_eq!(doc["sorafs"]["storage"]["enabled"].as_bool(), Some(false));
+    assert_eq!(
+        doc["sorafs"]["storage"]["max_capacity_bytes"].as_integer(),
+        Some(i64::try_from(defaults::taira::SORAFS_STORAGE_CAP_BYTES).unwrap())
+    );
+}
+
+#[test]
 #[allow(clippy::too_many_lines)]
 fn taira_config_enables_untrusted_cid_hosting() {
     const TAIRA_VALIDATOR_COUNT: i64 = 4;
@@ -2015,14 +2053,14 @@ fn taira_config_enables_untrusted_cid_hosting() {
         runtime
             .get("hydration_concurrency")
             .and_then(TomlValue::as_integer),
-        Some(4),
+        Some(i64::try_from(defaults::taira::HYDRATION_CONCURRENCY).unwrap()),
         "Taira must pin the first-release artifact hydration worker bound"
     );
     assert_eq!(
         runtime
             .get("prepared_runtime_cache_capacity")
             .and_then(TomlValue::as_integer),
-        Some(4),
+        Some(i64::try_from(defaults::taira::PREPARED_RUNTIME_CACHE_CAPACITY).unwrap()),
         "Taira must pin the independent first-release prepared-runtime cache bound"
     );
     let inrou = runtime
@@ -2037,9 +2075,22 @@ fn taira_config_enables_untrusted_cid_hosting() {
     for (field, expected) in [
         ("portable_vm_uid", 70_000),
         ("portable_vm_gid", 70_000),
-        ("max_cpu_millis", 8_000),
-        ("max_memory_bytes", 8 * 1024 * 1024 * 1024),
-        ("max_storage_bytes", 64 * 1024 * 1024 * 1024),
+        (
+            "guest_image_max_bytes",
+            i64::try_from(defaults::taira::INROU_GUEST_IMAGE_MAX_BYTES).unwrap(),
+        ),
+        (
+            "max_cpu_millis",
+            i64::from(defaults::taira::INROU_MAX_CPU_MILLIS),
+        ),
+        (
+            "max_memory_bytes",
+            i64::try_from(defaults::taira::INROU_MAX_MEMORY_BYTES).unwrap(),
+        ),
+        (
+            "max_storage_bytes",
+            i64::try_from(defaults::taira::INROU_MAX_STORAGE_BYTES).unwrap(),
+        ),
     ] {
         assert_eq!(
             inrou.get(field).and_then(TomlValue::as_integer),

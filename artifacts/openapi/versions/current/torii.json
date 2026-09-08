@@ -112,6 +112,30 @@
         ],
         "type": "object"
       },
+      "AccountAliasLeaseListResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "account_id": {
+            "type": "string"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AccountAliasLease"
+            },
+            "type": "array"
+          },
+          "total": {
+            "format": "uint64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "account_id",
+          "total",
+          "items"
+        ],
+        "type": "object"
+      },
       "AccountAliasName": {
         "additionalProperties": false,
         "description": "Canonical component form of one account alias. The domain slot is mandatory and null only for a dataspace-root alias.",
@@ -23672,7 +23696,7 @@
             "$ref": "#/components/schemas/NativeAmxParticipantLaneBlockProposal"
           },
           "participant_settlement": {
-            "$ref": "#/components/schemas/NativeAmxParticipantSettlementCommitment"
+            "$ref": "#/components/schemas/NativeAmxParticipantSettlement"
           },
           "participant_settlement_hash": {
             "$ref": "#/components/schemas/Hash"
@@ -23851,116 +23875,105 @@
         ],
         "type": "object"
       },
-      "NativeAmxParticipantSettlementCommitment": {
+      "NativeAmxParticipantSettlement": {
         "additionalProperties": false,
-        "description": "Exact bounded zero-effect participant settlement. Group ordering, timestamp equality, current-source membership, and tx_count equality require semantic validation.",
+        "description": "Nonrecursive Native AMX participant control commitment. Source IDs are unique and retain candidate order; this type has no economic or nested fields.",
         "properties": {
-          "block_height": {
-            "format": "uint64",
-            "minimum": 1,
-            "type": "integer"
-          },
-          "dataspace_id": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
           "lane_id": {
             "format": "uint32",
             "maximum": 4294967295,
             "minimum": 0,
             "type": "integer"
           },
+          "dataspace_id": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
           "lane_incarnation": {
-            "$ref": "#/components/schemas/Hash"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Hash"
+              },
+              {
+                "not": {
+                  "pattern": "^hash:0{63}1#"
+                }
+              }
+            ]
           },
-          "nexus_fee_receipts": {
-            "maxItems": 0,
-            "type": "array"
+          "participant_lane_block_height": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 1,
+            "type": "integer"
           },
-          "receipts": {
+          "authority_context_height": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "previous_native_settlement_hash": {
+            "description": "Required Native control history link; null for the first Native control. Ordinary lane blocks may interleave.",
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/Hash"
+                  },
+                  {
+                    "not": {
+                      "pattern": "^hash:0{63}1#"
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          "source_ids": {
             "items": {
-              "$ref": "#/components/schemas/NativeAmxParticipantSettlementReceipt"
+              "pattern": "^(?!0{64}$)[0-9A-F]{64}$",
+              "type": "string"
             },
-            "maxItems": 4096,
             "minItems": 1,
-            "type": "array",
-            "uniqueItems": true
-          },
-          "swap_metadata": {
-            "type": "null"
-          },
-          "total_local_amount": {
-            "const": "0"
-          },
-          "total_xor_after_haircut": {
-            "const": "0"
-          },
-          "total_xor_due": {
-            "const": "0"
-          },
-          "total_xor_variance": {
-            "const": "0"
-          },
-          "tx_count": {
-            "format": "uint64",
-            "maximum": 4096,
-            "minimum": 1,
-            "type": "integer"
+            "maxItems": 4096,
+            "uniqueItems": true,
+            "type": "array"
           }
         },
         "required": [
-          "block_height",
           "lane_id",
-          "lane_incarnation",
           "dataspace_id",
-          "tx_count",
-          "total_local_amount",
-          "total_xor_due",
-          "total_xor_after_haircut",
-          "total_xor_variance",
-          "swap_metadata",
-          "receipts",
-          "nexus_fee_receipts"
+          "lane_incarnation",
+          "participant_lane_block_height",
+          "authority_context_height",
+          "previous_native_settlement_hash",
+          "source_ids"
         ],
-        "type": "object"
-      },
-      "NativeAmxParticipantSettlementReceipt": {
-        "additionalProperties": false,
-        "description": "One zero-effect source member in a grouped control-only Native AMX participant settlement.",
-        "properties": {
-          "local_amount": {
-            "const": "0"
-          },
-          "source_id": {
-            "description": "Ordered Native AMX participant source id as canonical uppercase 32-byte Norito JSON hex.",
-            "pattern": "^[0-9A-F]{64}$",
-            "type": "string"
-          },
-          "timestamp_ms": {
-            "format": "uint64",
-            "minimum": 1,
-            "type": "integer"
-          },
-          "xor_after_haircut": {
-            "const": "0"
-          },
-          "xor_due": {
-            "const": "0"
-          },
-          "xor_variance": {
-            "const": "0"
+        "type": "object",
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "participant_lane_block_height": {
+                  "const": 1
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "previous_native_settlement_hash": {
+                  "type": "null"
+                }
+              }
+            }
           }
-        },
-        "required": [
-          "source_id",
-          "local_amount",
-          "xor_due",
-          "xor_after_haircut",
-          "xor_variance",
-          "timestamp_ms"
-        ],
-        "type": "object"
+        ]
       },
       "NativeAmxPhase": {
         "additionalProperties": false,
@@ -41619,6 +41632,79 @@
         ],
         "type": "object"
       },
+      "SorafsPopMembershipProofBase64urlV1": {
+        "description": "One exact uncompressed canonical V1 PopMembershipProofV1 Norito frame, encoded as canonical unpadded URL-safe base64. The decoded frame is nonempty and at most 131072 bytes; alternate frames, padding, nonzero unused base64 bits, and oversized decoded payloads are rejected.",
+        "maxLength": 174763,
+        "minLength": 1,
+        "pattern": "^(?:[A-Za-z0-9_-]{4})*(?:[A-Za-z0-9_-][AQgw]|[A-Za-z0-9_-]{2}[AEIMQUYcgkosw048])?$(?![\\s\\S])",
+        "type": "string",
+        "x-iroha-max-decoded-bytes": 131072
+      },
+      "SorafsPopMembershipRequestV1": {
+        "additionalProperties": false,
+        "description": "Generate a proof from local wallet custody. All four fields are required and included in the exact action authorization. The presentation binding authenticates the intended recipient or action independently of the challenge/context nullifier domain.",
+        "properties": {
+          "challenge_digest_hex": {
+            "$ref": "#/components/schemas/SorafsPopNonzeroHex32V1"
+          },
+          "credential_commitment_hex": {
+            "$ref": "#/components/schemas/SorafsPopNonzeroHex32V1"
+          },
+          "presentation_binding_digest_hex": {
+            "$ref": "#/components/schemas/SorafsPopNonzeroHex32V1"
+          },
+          "verifier_context": {
+            "$ref": "#/components/schemas/SorafsPopVerifierContextV1"
+          }
+        },
+        "required": [
+          "credential_commitment_hex",
+          "challenge_digest_hex",
+          "verifier_context",
+          "presentation_binding_digest_hex"
+        ],
+        "type": "object"
+      },
+      "SorafsPopNonzeroHex32V1": {
+        "description": "One nonzero 32-byte value as exactly 64 lowercase hexadecimal characters without a prefix. The all-zero value is rejected.",
+        "maxLength": 64,
+        "minLength": 64,
+        "pattern": "^(?!0{64}$)[0-9a-f]{64}$",
+        "type": "string"
+      },
+      "SorafsPopVerifierContextV1": {
+        "description": "Nonempty verifier context of at most 256 UTF-8 bytes, with no control characters or leading/trailing Unicode whitespace. This context and the challenge define the shared nullifier domain; the presentation binding is independent.",
+        "maxLength": 256,
+        "minLength": 1,
+        "pattern": "^[^\\u0000-\\u0020\\u007f-\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000](?:[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\u0000-\\u0020\\u007f-\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000])?$(?![\\s\\S])",
+        "type": "string",
+        "x-iroha-max-bytes": 256
+      },
+      "SorafsPopVerifyMembershipRequestV1": {
+        "additionalProperties": false,
+        "description": "Verify a canonical proof for the exact challenge, context, and recipient or action binding, then atomically consume its shared nullifier. All four fields are required and authenticated; changing the binding cannot retarget a proof or its authorization.",
+        "properties": {
+          "canonical_proof_base64url": {
+            "$ref": "#/components/schemas/SorafsPopMembershipProofBase64urlV1"
+          },
+          "challenge_digest_hex": {
+            "$ref": "#/components/schemas/SorafsPopNonzeroHex32V1"
+          },
+          "presentation_binding_digest_hex": {
+            "$ref": "#/components/schemas/SorafsPopNonzeroHex32V1"
+          },
+          "verifier_context": {
+            "$ref": "#/components/schemas/SorafsPopVerifierContextV1"
+          }
+        },
+        "required": [
+          "canonical_proof_base64url",
+          "challenge_digest_hex",
+          "verifier_context",
+          "presentation_binding_digest_hex"
+        ],
+        "type": "object"
+      },
       "SorafsPorProofV1": {
         "additionalProperties": false,
         "description": "Closed canonical PoR witness. The runtime additionally checks offset/length relationships, projected indices, every Merkle digest, and the derived root before emitting the row.",
@@ -51299,6 +51385,12 @@
         "tags": [
           "Accounts"
         ],
+        "x-iroha-route-auth": {
+          "admission": "public",
+          "authentication": "torii_default",
+          "schemaVersion": 1,
+          "stableRouteId": "application.accounts_capabilities_get"
+        },
         "x-iroha-tool-effect": "read"
       }
     },
@@ -53392,6 +53484,107 @@
           "authentication": "optional_canonical_account_signature",
           "schemaVersion": 1,
           "stableRouteId": "application.accounts_by_account_id_get"
+        },
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/accounts/{account_id}/aliases": {
+      "get": {
+        "description": "List the caller-visible active and retained alias leases bound to one canonical account. The request must be signed by an account with permission to resolve every returned alias.",
+        "operationId": "accountAliasLeases",
+        "parameters": [
+          {
+            "description": "Canonical I105 account identifier or on-chain alias `name@domain.dataspace` / `name@dataspace`.",
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountAliasLeaseListResponse"
+                }
+              }
+            },
+            "description": "Canonical alias leases visible to the authenticated caller.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The account selector or stored alias binding is not canonical.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The authenticated account cannot resolve the requested account's aliases.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
+        "summary": "List canonical account alias leases.",
+        "tags": [
+          "Accounts"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "authenticated_account",
+          "authentication": "canonical_account_signature",
+          "schemaVersion": 1,
+          "stableRouteId": "application.accounts_by_account_id_aliases_get"
         },
         "x-iroha-tool-effect": "read"
       }
@@ -83468,6 +83661,336 @@
         "x-iroha-tool-effect": "read"
       }
     },
+    "/v1/sccp/replay/{boundary}/{source_profile}/{route_id}/{asset_key}/{revision}/root": {
+      "get": {
+        "description": "Return one canonical Norito replay-root response only after Torii has authenticated the complete three-replica checkpoint inventory against its current Core and Kura head.",
+        "operationId": "sccpReplayRoot",
+        "parameters": [
+          {
+            "description": "Exact public SORA replay boundary.",
+            "in": "path",
+            "name": "boundary",
+            "required": true,
+            "schema": {
+              "enum": [
+                "sora-outbound-lock",
+                "sora-inbound-release"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "description": "Canonical external SCCP network profile key.",
+            "in": "path",
+            "name": "source_profile",
+            "required": true,
+            "schema": {
+              "maxLength": 64,
+              "minLength": 1,
+              "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Canonical governed SCCP route identifier.",
+            "in": "path",
+            "name": "route_id",
+            "required": true,
+            "schema": {
+              "maxLength": 64,
+              "minLength": 1,
+              "pattern": "^[a-z0-9](?:[a-z0-9_-]*[a-z0-9])?$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Canonical governed SCCP asset key.",
+            "in": "path",
+            "name": "asset_key",
+            "required": true,
+            "schema": {
+              "maxLength": 64,
+              "minLength": 1,
+              "pattern": "^[a-z0-9](?:[a-z0-9_-]*[a-z0-9])?$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Nonzero immutable governed route revision.",
+            "in": "path",
+            "name": "revision",
+            "required": true,
+            "schema": {
+              "format": "uint32",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/x-norito": {
+                "schema": {
+                  "description": "Canonical Norito `SccpReplayRootResponseV1` bytes.",
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Authenticated signed replay-root evidence.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Replay proofs are always served without storage by intermediaries.",
+                "required": true,
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The replay accumulator path is not canonical."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The authenticated inventory contains no matching accumulator."
+          },
+          "406": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Requested content type is not acceptable; supported: application/x-norito."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Locally retained replay evidence failed integrity validation."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The replay archive is disabled or has no authenticated current projection."
+          }
+        },
+        "security": [
+          {},
+          {
+            "IrohaApiToken": []
+          }
+        ],
+        "summary": "Fetch an authenticated SCCP replay root.",
+        "tags": [
+          "Bridge"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "public",
+          "authentication": "torii_default",
+          "schemaVersion": 1,
+          "stableRouteId": "sccp.replay.root.read"
+        },
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/sccp/replay/{boundary}/{source_profile}/{route_id}/{asset_key}/{revision}/witness/{replay_key}": {
+      "get": {
+        "description": "Return one canonical Norito replay membership or non-membership witness and the authenticated signed root from the same locally rebuilt replay head.",
+        "operationId": "sccpReplayWitness",
+        "parameters": [
+          {
+            "description": "Exact public SORA replay boundary.",
+            "in": "path",
+            "name": "boundary",
+            "required": true,
+            "schema": {
+              "enum": [
+                "sora-outbound-lock",
+                "sora-inbound-release"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "description": "Canonical external SCCP network profile key.",
+            "in": "path",
+            "name": "source_profile",
+            "required": true,
+            "schema": {
+              "maxLength": 64,
+              "minLength": 1,
+              "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Canonical governed SCCP route identifier.",
+            "in": "path",
+            "name": "route_id",
+            "required": true,
+            "schema": {
+              "maxLength": 64,
+              "minLength": 1,
+              "pattern": "^[a-z0-9](?:[a-z0-9_-]*[a-z0-9])?$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Canonical governed SCCP asset key.",
+            "in": "path",
+            "name": "asset_key",
+            "required": true,
+            "schema": {
+              "maxLength": 64,
+              "minLength": 1,
+              "pattern": "^[a-z0-9](?:[a-z0-9_-]*[a-z0-9])?$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Nonzero immutable governed route revision.",
+            "in": "path",
+            "name": "revision",
+            "required": true,
+            "schema": {
+              "format": "uint32",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Exact lowercase 32-byte replay key. The all-zero key requests an ordinary non-membership proof.",
+            "in": "path",
+            "name": "replay_key",
+            "required": true,
+            "schema": {
+              "maxLength": 64,
+              "minLength": 64,
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/x-norito": {
+                "schema": {
+                  "description": "Canonical Norito `SccpReplayWitnessResponseV1` bytes.",
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Authenticated replay root and canonical witness.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Replay proofs are always served without storage by intermediaries.",
+                "required": true,
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The replay accumulator path or replay key is not canonical."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The authenticated inventory contains no matching accumulator."
+          },
+          "406": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Requested content type is not acceptable; supported: application/x-norito."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Locally retained replay evidence failed integrity validation."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The replay archive is disabled or has no authenticated current projection."
+          }
+        },
+        "security": [
+          {},
+          {
+            "IrohaApiToken": []
+          }
+        ],
+        "summary": "Fetch an authenticated SCCP replay witness.",
+        "tags": [
+          "Bridge"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "public",
+          "authentication": "torii_default",
+          "schemaVersion": 1,
+          "stableRouteId": "sccp.replay.witness.read"
+        },
+        "x-iroha-tool-effect": "read"
+      }
+    },
     "/v1/sccp/routes/{source_profile}/{route_id}/{asset_key}/{revision}/sora-outbound-material": {
       "get": {
         "description": "Resolves one exact enabled typed route and returns only the separately registered IVM contract artifact whose SHA-256 matches the route policy. The referenced verifier key must be active; caller-selected bytecode, verifier keys, gas limits, and query parameters are never accepted.",
@@ -101887,7 +102410,7 @@
     },
     "/v1/sorafs/pop/verify": {
       "post": {
-        "description": "Verify exact canonical proof bytes against the finalized signed roots and atomically consume the proof nullifier to prevent replay.",
+        "description": "Verify exact canonical proof bytes for the required presentation_binding_digest_hex recipient or action binding, challenge, and bounded verifier context against finalized signed roots. Authorization binds all request fields. Atomically consume the shared challenge/context nullifier to prevent replay across presentation bindings.",
         "parameters": [
           {
             "description": "Required `PopV1 <base64url-no-pad>` opaque credential. The deployment authenticator cryptographically binds authorization to the exact PoP action and canonical request body.",
@@ -101903,7 +102426,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/JsonValue"
+                "$ref": "#/components/schemas/SorafsPopVerifyMembershipRequestV1"
               }
             }
           },
@@ -102083,7 +102606,7 @@
     },
     "/v1/sorafs/pop/wallet/prove": {
       "post": {
-        "description": "Generate a public Halo2 membership proof from local encrypted wallet custody for an exact challenge and bounded verifier context.",
+        "description": "Generate a public Halo2 membership proof from local encrypted wallet custody for an exact challenge, bounded verifier context, and required presentation_binding_digest_hex recipient or action binding. Authorization binds all request fields. The presentation binding is independent of the shared challenge/context nullifier domain.",
         "parameters": [
           {
             "description": "Required `PopV1 <base64url-no-pad>` opaque credential. The deployment authenticator cryptographically binds authorization to the exact PoP action and canonical request body.",
@@ -102099,7 +102622,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/JsonValue"
+                "$ref": "#/components/schemas/SorafsPopMembershipRequestV1"
               }
             }
           },

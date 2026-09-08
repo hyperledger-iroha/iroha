@@ -417,8 +417,8 @@ impl ReputationJournalSealedCheckpointRecordV1 {
     ) -> Result<Vec<u8>, ReputationRuntimeError> {
         self.validate(checkpoint_max_bytes)?;
         let maximum = journal_sealed_checkpoint_max_bytes(checkpoint_max_bytes)?;
-        let bytes =
-            norito::to_bytes(self).map_err(|_| ReputationRuntimeError::CanonicalEncoding)?;
+        let bytes = norito::encode_canonical(self)
+            .map_err(|_| ReputationRuntimeError::CanonicalEncoding)?;
         if bytes.is_empty() || u64::try_from(bytes.len()).unwrap_or(u64::MAX) > maximum {
             return Err(ReputationRuntimeError::InvalidSealedCheckpoint);
         }
@@ -442,7 +442,8 @@ impl ReputationJournalSealedCheckpointRecordV1 {
         let record =
             decode_from_bytes_with_limits::<Self>(bytes, runtime_decode_limits(bytes.len())?)
                 .map_err(|_| ReputationRuntimeError::InvalidSealedCheckpoint)?;
-        if norito::to_bytes(&record).map_err(|_| ReputationRuntimeError::CanonicalEncoding)?
+        if norito::encode_canonical(&record)
+            .map_err(|_| ReputationRuntimeError::CanonicalEncoding)?
             != bytes
         {
             return Err(ReputationRuntimeError::InvalidSealedCheckpoint);
@@ -3814,7 +3815,7 @@ impl JournalCheckpointEvictionProbe {
     fn encoded_frame_len(&self) -> Result<usize, ReputationRuntimeError> {
         // This avoids materializing the final output Vec for a probe. Norito's
         // field serializers may still use their normal staging allocations.
-        norito::core::encoded_frame_len(&self.checkpoint)
+        norito::canonical_frame_len(&self.checkpoint)
             .map_err(|_| ReputationRuntimeError::CanonicalEncoding)
     }
 }
@@ -3907,7 +3908,7 @@ fn encode_bounded_journal_checkpoint(
     checkpoint_max_bytes: u64,
 ) -> Result<(ReputationJournalProducerCheckpointV1, Vec<u8>), ReputationRuntimeError> {
     validate_journal_checkpoint_structure(&candidate, policy, policy_digest)?;
-    let original_encoded_len = norito::core::encoded_frame_len(&candidate)
+    let original_encoded_len = norito::canonical_frame_len(&candidate)
         .map_err(|_| ReputationRuntimeError::CanonicalEncoding)?;
     let eviction_plan = stream_token_admission_eviction_plan(&candidate);
     let search = smallest_stream_token_admission_eviction_prefix(
@@ -3927,14 +3928,14 @@ fn encode_bounded_journal_checkpoint(
     let encoded_len = if search.prefix == 0 {
         original_encoded_len
     } else {
-        norito::core::encoded_frame_len(&candidate)
+        norito::canonical_frame_len(&candidate)
             .map_err(|_| ReputationRuntimeError::CanonicalEncoding)?
     };
     if !checkpoint_frame_fits(encoded_len, checkpoint_max_bytes) {
         return Err(ReputationRuntimeError::CheckpointTooLarge);
     }
-    let encoded =
-        norito::to_bytes(&candidate).map_err(|_| ReputationRuntimeError::CanonicalEncoding)?;
+    let encoded = norito::encode_canonical(&candidate)
+        .map_err(|_| ReputationRuntimeError::CanonicalEncoding)?;
     if encoded.len() != encoded_len || !checkpoint_frame_fits(encoded.len(), checkpoint_max_bytes) {
         return Err(ReputationRuntimeError::CanonicalEncoding);
     }
@@ -4053,8 +4054,8 @@ fn stream_token_admission_digest(
     // identity. A retry of the same nonce-bound request may be observed later,
     // but must return the first durable event (whose original timestamp remains
     // authoritative) rather than manufacture another gateway sequence.
-    let status_bytes =
-        norito::to_bytes(&outcome.status).map_err(|_| ReputationRuntimeError::CanonicalEncoding)?;
+    let status_bytes = norito::encode_canonical(&outcome.status)
+        .map_err(|_| ReputationRuntimeError::CanonicalEncoding)?;
     let status_len =
         u64::try_from(status_bytes.len()).map_err(|_| ReputationRuntimeError::CanonicalEncoding)?;
     let mut hasher = blake3::Hasher::new();
@@ -7220,8 +7221,8 @@ fn encode_bounded_publication_checkpoint(
 ) -> Result<(ReputationPublicationCheckpointV1, Vec<u8>), ReputationRuntimeError> {
     loop {
         validate_publication_checkpoint(&candidate, policy, policy_digest, trust_policy)?;
-        let encoded =
-            norito::to_bytes(&candidate).map_err(|_| ReputationRuntimeError::CanonicalEncoding)?;
+        let encoded = norito::encode_canonical(&candidate)
+            .map_err(|_| ReputationRuntimeError::CanonicalEncoding)?;
         if u64::try_from(encoded.len()).unwrap_or(u64::MAX) <= checkpoint_max_bytes {
             return Ok((candidate, encoded));
         }
@@ -8056,7 +8057,9 @@ where
     let limits = runtime_decode_limits(bytes.len())?;
     let value: T = decode_from_bytes_with_limits(bytes, limits)
         .map_err(|_| ReputationRuntimeError::InvalidCheckpoint)?;
-    if norito::to_bytes(&value).map_err(|_| ReputationRuntimeError::CanonicalEncoding)? != bytes {
+    if norito::encode_canonical(&value).map_err(|_| ReputationRuntimeError::CanonicalEncoding)?
+        != bytes
+    {
         return Err(ReputationRuntimeError::InvalidCheckpoint);
     }
     Ok(value)
@@ -8122,7 +8125,8 @@ fn hash_canonical<T: norito::NoritoSerialize>(
     domain: &'static [u8],
     value: &T,
 ) -> Result<[u8; 32], ReputationRuntimeError> {
-    let bytes = norito::to_bytes(value).map_err(|_| ReputationRuntimeError::CanonicalEncoding)?;
+    let bytes =
+        norito::encode_canonical(value).map_err(|_| ReputationRuntimeError::CanonicalEncoding)?;
     domain_digest(domain, &bytes)
 }
 fn domain_digest(domain: &'static [u8], bytes: &[u8]) -> Result<[u8; 32], ReputationRuntimeError> {
@@ -8141,6 +8145,7 @@ fn valid_ed25519_verifying_key(bytes: [u8; 32]) -> bool {
 }
 #[cfg(test)]
 mod tests {
+    use super::super::tests::{canonical_test_frame, supported_layouts};
     use super::*;
     use ed25519_dalek::{Signer, SigningKey};
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
@@ -8162,6 +8167,7 @@ mod tests {
     use sorafs_manifest::{GOVERNANCE_DAG_HEAD_VERSION_V1, GovernanceSignatureAlgorithm};
     use std::{collections::VecDeque, fs, path::Path};
     use tempfile::TempDir;
+    include!("runtime/canonical_boundary_tests.rs");
     const FINALIZED_AT_MS: u64 = 1_800_000_010_000;
     fn test_network_id() -> NetworkId {
         NetworkId::from_genesis_hash(
@@ -12011,190 +12017,7 @@ mod tests {
             Err(ReputationRuntimeError::AuthorityPolicyLineage)
         ));
     }
-    #[test]
-    fn policy_rotation_rebinds_only_ready_rows_and_preserves_ambiguous_bytes() {
-        let temp = TempDir::new().expect("tempdir");
-        let first_policy = journal_authority_policy();
-        let first_activation = FINALIZED_AT_MS - 1_000;
-        let outbox = Arc::new(
-            ReputationJournalProducerOutboxV1::open(
-                temp.path(),
-                strict_policy(first_policy.clone(), "producer policy"),
-            )
-            .expect("outbox"),
-        );
-        let first_cursor = finalized_cursor(10, [0xC1; 32], FINALIZED_AT_MS + 100);
-        outbox
-            .synchronize_authority_policy(
-                authority_record(first_policy.clone(), first_activation),
-                first_cursor,
-            )
-            .expect("initialize policy");
-        let producer = por_producer(Arc::clone(&outbox));
-        let first_id = por_event_id(&producer, 7, verified_por(0x41), "first");
-        let second_id = por_event_id(&producer, 8, verified_por(0x42), "second");
-        let post_activation = shifted_por(0x43, 200, true);
-        let post_activation_id = por_event_id(
-            &producer,
-            9,
-            post_activation,
-            "post-activation source queued before observing rotation",
-        );
-        let ambiguous = outbox
-            .begin_submission(first_id, finalized_id(10, [0xC1; 32]))
-            .expect("capture first bytes");
-        let mut successor = first_policy.clone();
-        successor.revision = 2;
-        successor.predecessor_policy_digest =
-            Some(first_policy.canonical_digest().expect("first digest"));
-        successor.por_recorder_authority = account(0x51);
-        let successor_activation = FINALIZED_AT_MS + 150;
-        let successor_record = authority_record(successor.clone(), successor_activation);
-        assert_eq!(
-            outbox
-                .synchronize_authority_policy(
-                    successor_record.clone(),
-                    finalized_cursor(11, [0xC2; 32], FINALIZED_AT_MS + 200),
-                )
-                .expect("rotate"),
-            ReputationJournalPolicySyncOutcomeV1::Rotated { rebound_ready: 1 }
-        );
-        let late_historical_id = por_event_id(
-            &producer,
-            11,
-            verified_por(0x45),
-            "first-seen historical source after rotation",
-        );
-        let boundary_source = shifted_por(0x46, successor_activation - FINALIZED_AT_MS, true);
-        let boundary_id = por_event_id(
-            &producer,
-            12,
-            boundary_source,
-            "successor activation boundary",
-        );
-        let (late_policy_digest, late_authority, boundary_policy_digest, boundary_authority) = {
-            let state = outbox.state.lock().expect("outbox state");
-            let late = state
-                .checkpoint
-                .pending
-                .iter()
-                .find(|delivery| delivery.entry.event_id == late_historical_id)
-                .expect("late historical row");
-            let boundary = state
-                .checkpoint
-                .pending
-                .iter()
-                .find(|delivery| delivery.entry.event_id == boundary_id)
-                .expect("boundary row");
-            (
-                late.entry.authority_policy_digest,
-                late.entry.recorded_by.clone(),
-                boundary.entry.authority_policy_digest,
-                boundary.entry.recorded_by.clone(),
-            )
-        };
-        assert_eq!(
-            late_policy_digest,
-            first_policy.canonical_digest().expect("first digest")
-        );
-        assert_eq!(late_authority, first_policy.por_recorder_authority);
-        assert_eq!(boundary_policy_digest, successor_record.policy_digest);
-        assert_eq!(boundary_authority, successor.por_recorder_authority);
-        let predating_delta = FINALIZED_AT_MS - first_activation + 1;
-        let predating_source = shifted_por(0x47, predating_delta, false);
-        assert!(matches!(
-            producer.enqueue_terminal(provider(13), predating_source),
-            Err(ReputationRuntimeError::InvalidAuthorityPolicy)
-        ));
-        let pending = outbox.pending(8).expect("pending");
-        assert!(
-            pending.iter().any(|row| {
-                row.event_id == ambiguous.event_id
-                    && row.state == ReputationJournalDeliveryStateV1::Ambiguous
-            }),
-            "ambiguous exact bytes must remain immutable across rotation"
-        );
-        assert!(
-            pending.iter().any(|row| row.event_id == second_id),
-            "source material from before activation must retain its historical policy"
-        );
-        assert!(
-            pending.iter().all(|row| row.event_id != post_activation_id),
-            "a never-exposed Ready row sourced after activation must be rebound"
-        );
-        assert_eq!(
-            producer
-                .enqueue_terminal(provider(7), verified_por(0x41))
-                .expect("retained source replay resolves before current-policy construction"),
-            ReputationJournalEnqueueOutcomeV1::ExactReplay { event_id: first_id }
-        );
-        let mut substituted_source = verified_por(0x41);
-        substituted_source.decided_at_unix_ms =
-            substituted_source.decided_at_unix_ms.saturating_add(1);
-        assert!(matches!(
-            producer.enqueue_terminal(provider(7), substituted_source),
-            Err(ReputationRuntimeError::JournalSourceConflict)
-        ));
-        reconcile_empty(&outbox, 12, [0xC3; 32], FINALIZED_AT_MS.saturating_add(300));
-        outbox
-            .mark_finalized_absent(first_id, finalized_id(12, [0xC3; 32]), [0xC4; 32])
-            .expect("prove old append absent");
-        let rebound = outbox
-            .begin_submission_against_active_policy(
-                first_id,
-                successor_record.policy_digest,
-                finalized_id(12, [0xC3; 32]),
-                FINALIZED_AT_MS.saturating_add(300),
-            )
-            .expect("retry source-time-valid historical bytes");
-        assert_eq!(rebound.event_id, first_id);
-        assert_eq!(rebound.authority, first_policy.por_recorder_authority);
-        let not_yet_finalized_source = shifted_por(0x44, 400, true);
-        let future_event_id = por_event_id(
-            &producer,
-            10,
-            not_yet_finalized_source,
-            "retain source awaiting a sufficiently new finalized view",
-        );
-        assert!(matches!(
-            outbox.begin_submission_against_active_policy(
-                future_event_id,
-                successor_record.policy_digest,
-                finalized_id(12, [0xC3; 32]),
-                FINALIZED_AT_MS.saturating_add(300),
-            ),
-            Err(ReputationRuntimeError::JournalSourceNotFinalized)
-        ));
-        drop(producer);
-        drop(outbox);
-        assert_bad_reopen(temp.path(), first_policy.clone(), "stale producer policy");
-        let mut substituted_successor = successor.clone();
-        substituted_successor.por_recorder_authority = account(0x52);
-        assert_bad_reopen(
-            temp.path(),
-            substituted_successor,
-            "substituted producer policy",
-        );
-        let mut skipped_successor = successor.clone();
-        skipped_successor.revision = skipped_successor.revision.saturating_add(1);
-        skipped_successor.predecessor_policy_digest =
-            Some(successor.canonical_digest().expect("successor digest"));
-        assert_bad_reopen(temp.path(), skipped_successor, "skipped producer policy");
-        let restored = Arc::new(
-            ReputationJournalProducerOutboxV1::open(
-                temp.path(),
-                strict_policy(successor, "producer policy"),
-            )
-            .expect("restore rotated producer checkpoint"),
-        );
-        let restored_producer = por_producer(restored);
-        assert_eq!(
-            restored_producer
-                .enqueue_terminal(provider(7), verified_por(0x41))
-                .expect("exact retained replay after restart"),
-            ReputationJournalEnqueueOutcomeV1::ExactReplay { event_id: first_id }
-        );
-    }
+    include!("runtime/policy_rotation_tests.rs");
     #[test]
     fn durable_journal_scan_rejects_same_height_fork() {
         let temp = TempDir::new().expect("tempdir");
@@ -12316,212 +12139,6 @@ mod tests {
                 store_calls_before
             );
         }
-    }
-    #[test]
-    fn journal_checkpoint_byte_ceiling_binary_search_preserves_exact_replay_tombstones() {
-        let mut policy = producer_policy();
-        policy.max_attempts = 1;
-        policy.checkpoint_max_bytes = REPUTATION_RUNTIME_MIN_CHECKPOINT_BYTES_V1;
-        let policy_digest = policy.digest().expect("producer policy digest");
-        let (_temp, outbox) = initialized_outbox(policy.clone());
-        let authority_policy = policy.authority_policy.clone();
-        let observed_outcome = verified_por(0x31);
-        let observed_entry = ReputationJournalEntryV1::try_new(
-            provider(6),
-            authority_policy
-                .canonical_digest()
-                .expect("authority policy digest"),
-            authority_policy.por_recorder_authority,
-            observed_outcome.decided_at_unix_ms,
-            None,
-            ReputationJournalPayloadV1::PorTerminal(observed_outcome),
-        )
-        .expect("observed journal entry");
-        outbox
-            .reconcile_finalized_journal_page(terminal_page(
-                10,
-                [0xD3; 32],
-                FINALIZED_AT_MS.saturating_add(100),
-                vec![finalized_event(1, 10, [0xD3; 32], 0, observed_entry)],
-            ))
-            .expect("retain observed tombstone");
-        let token_producer = token_producer(Arc::clone(&outbox));
-        let mut head_event_id = ReputationJournalEventIdV1::ZERO;
-        for sequence in 1_u8..=17 {
-            let mut token = counted_token(0x97, sequence);
-            token.binding.gateway_sequence = u64::from(sequence);
-            head_event_id = admission_event_id(
-                &token_producer,
-                token,
-                "token admission",
-                "unexpected token admission",
-            );
-        }
-        let por_producer = por_producer(Arc::clone(&outbox));
-        let completed_event_id =
-            por_event_id(&por_producer, 7, verified_por(0x32), "local PoR row");
-        outbox
-            .begin_submission(completed_event_id, finalized_id(10, [0xD3; 32]))
-            .expect("begin local PoR submission");
-        outbox
-            .acknowledge_committed(completed_event_id, committed_identity(2, 11, [0xD4; 32], 0))
-            .expect("retain completed tombstone");
-        let dead_letter_event_id =
-            por_event_id(&por_producer, 8, verified_por(0x33), "dead-letter PoR row");
-        outbox
-            .begin_submission(dead_letter_event_id, finalized_id(11, [0xD4; 32]))
-            .expect("begin terminal PoR submission");
-        assert!(matches!(
-            outbox
-                .record_not_submitted(dead_letter_event_id, [0xE3; 32])
-                .expect("dead-letter failed PoR"),
-            ReputationJournalDeliveryOutcomeV1::DeadLettered { attempts: 1 }
-        ));
-        let original = outbox
-            .state
-            .lock()
-            .expect("producer state")
-            .checkpoint
-            .clone();
-        assert_eq!(original.observed.len(), 1);
-        assert_eq!(original.completed.len(), 1);
-        assert_eq!(original.dead_letters.len(), 1);
-        assert_eq!(original.stream_token_gateway_admissions.len(), 17);
-        let original_pending = original.pending.clone();
-        let original_completed = original.completed.clone();
-        let original_observed = original.observed.clone();
-        let original_dead_letters = original.dead_letters.clone();
-        let original_heads = original.stream_token_gateway_heads.clone();
-        // Derive the minimal fitting prefix independently from the production
-        // search, plan, and eviction helpers. The fixture fixes sequences
-        // 1..=16 as evictable oldest-to-newest and sequence 17 as the head.
-        const EXPECTED_PREFIX: usize = 9;
-        let expected_eviction_order = (1_u64..17)
-            .map(|sequence| {
-                original
-                    .stream_token_gateway_admissions
-                    .iter()
-                    .find(|admission| admission.binding.gateway_sequence == sequence)
-                    .expect("hard-coded non-head admission")
-                    .event_id
-            })
-            .collect::<Vec<_>>();
-        let mut iterative = original.clone();
-        let mut iterative_lengths = vec![
-            norito::core::encoded_frame_len(&iterative).expect("measure original checkpoint frame"),
-        ];
-        let mut expected = None;
-        for (index, event_id) in expected_eviction_order.iter().copied().enumerate() {
-            let position = iterative
-                .stream_token_gateway_admissions
-                .iter()
-                .position(|admission| admission.event_id == event_id)
-                .expect("hard-coded admission remains");
-            iterative.stream_token_gateway_admissions.remove(position);
-            iterative_lengths.push(
-                norito::core::encoded_frame_len(&iterative)
-                    .expect("measure iterative checkpoint frame"),
-            );
-            if index + 1 == EXPECTED_PREFIX {
-                expected = Some(iterative.clone());
-            }
-        }
-        assert_eq!(iterative.stream_token_gateway_admissions.len(), 1);
-        assert!(
-            iterative_lengths
-                .windows(2)
-                .all(|adjacent| adjacent[0] > adjacent[1]),
-            "each complete admission removal must strictly reduce the frame"
-        );
-        let expected = expected.expect("capture independently compacted checkpoint");
-        let ceiling =
-            u64::try_from(iterative_lengths[EXPECTED_PREFIX]).expect("fixture length fits u64");
-        assert!(
-            u64::try_from(iterative_lengths[EXPECTED_PREFIX - 1]).expect("fixture length fits u64")
-                > ceiling,
-            "the preceding prefix must remain over the selected ceiling"
-        );
-        let eviction_plan = stream_token_admission_eviction_plan(&original);
-        assert_eq!(eviction_plan, expected_eviction_order);
-        let search = smallest_stream_token_admission_eviction_prefix(
-            &original,
-            &eviction_plan,
-            ceiling,
-            iterative_lengths[0],
-        )
-        .expect("find smallest fitting admission prefix");
-        assert_eq!(search.prefix, EXPECTED_PREFIX);
-        let mut ceiling_log2 = 0;
-        let mut covered = 1;
-        while covered < eviction_plan.len() {
-            covered *= 2;
-            ceiling_log2 += 1;
-        }
-        assert!(
-            search.probes <= ceiling_log2 + 1,
-            "full-plan qualification plus binary search must be logarithmic"
-        );
-        let (bounded, bounded_bytes) =
-            encode_bounded_journal_checkpoint(original.clone(), &policy, policy_digest, ceiling)
-                .expect("evict the independently minimal admission prefix");
-        assert_eq!(bounded, expected);
-        assert_eq!(
-            bounded_bytes.len(),
-            norito::core::encoded_frame_len(&bounded).expect("measure exact bounded frame")
-        );
-        assert_eq!(
-            bounded_bytes,
-            norito::to_bytes(&expected).expect("encode exact expected checkpoint")
-        );
-        assert_eq!(bounded.pending, original_pending);
-        assert_eq!(bounded.completed, original_completed);
-        assert_eq!(bounded.observed, original_observed);
-        assert_eq!(bounded.dead_letters, original_dead_letters);
-        assert_eq!(bounded.stream_token_gateway_heads, original_heads);
-        let head = bounded
-            .stream_token_gateway_heads
-            .first()
-            .expect("gateway head");
-        assert_eq!(head.event_id, head_event_id);
-        assert!(
-            bounded
-                .stream_token_gateway_admissions
-                .iter()
-                .any(|admission| admission.binding == head.binding
-                    && admission.event_id == head.event_id),
-            "the canonical head admission must remain pinned"
-        );
-        assert_eq!(
-            decode_journal_checkpoint(&bounded_bytes, &policy, policy_digest)
-                .expect("decode bounded checkpoint"),
-            bounded
-        );
-        let irreducible = iterative;
-        let mut irreducible_probe = irreducible.clone();
-        assert!(!evict_oldest_non_head_stream_token_admission(
-            &mut irreducible_probe
-        ));
-        assert_eq!(irreducible.pending, original_pending);
-        assert_eq!(irreducible.completed, original_completed);
-        assert_eq!(irreducible.observed, original_observed);
-        assert_eq!(irreducible.dead_letters, original_dead_letters);
-        assert_eq!(irreducible.stream_token_gateway_heads, original_heads);
-        let irreducible_ceiling = u64::try_from(
-            norito::core::encoded_frame_len(&irreducible).expect("measure irreducible checkpoint"),
-        )
-        .expect("fixture length fits u64")
-        .saturating_sub(1);
-        assert!(matches!(
-            encode_bounded_journal_checkpoint(
-                original.clone(),
-                &policy,
-                policy_digest,
-                irreducible_ceiling,
-            ),
-            Err(ReputationRuntimeError::CheckpointTooLarge)
-        ));
-        assert_eq!(original.completed, original_completed);
-        assert_eq!(original.observed, original_observed);
     }
     mod publication_admission;
     #[test]
@@ -12718,129 +12335,6 @@ mod tests {
             oversized.validate(policy_digest),
             Err(ReputationRuntimeError::InvalidCheckpoint)
         ));
-    }
-    #[test]
-    fn committed_snapshot_history_is_bounded_ordered_and_restart_safe() {
-        let trust = trust_policy();
-        let policy = publication_policy(&trust);
-        let policy_digest = policy.digest().expect("publication policy digest");
-        let mut checkpoint = ReputationPublicationCheckpointV1::empty(policy_digest);
-        let mut previous_snapshot_id = None;
-        let mut previous_governance_readback = None;
-        for offset in 0_u8..3 {
-            let snapshot_id = [0xC0 + offset; 16];
-            let signed = signed_snapshot(
-                &trust,
-                snapshot_id,
-                previous_snapshot_id,
-                FINALIZED_AT_MS / 1_000 + u64::from(offset),
-            );
-            let material_digest = [0xD0 + offset; 32];
-            let signed_result_digest = signed_result_digest(&signed).expect("signed result digest");
-            let sequence = u64::from(offset) + 1;
-            let (acknowledgement, governance_readback) = readback_after(
-                &policy,
-                sequence,
-                material_digest,
-                signed_result_digest,
-                &signed,
-                previous_governance_readback.as_ref(),
-            );
-            let current_governance_readback = governance_readback
-                .reconstruct_readback(&signed)
-                .expect("reconstruct Governance DAG readback");
-            let committed = ReputationCommittedSnapshotV1 {
-                sequence,
-                material_digest,
-                signed_result_digest,
-                signed_result: signed,
-                governance_acknowledgement: acknowledgement,
-            };
-            checkpoint
-                .commit_authoritative_with_retention_limit(
-                    committed,
-                    &policy,
-                    &trust,
-                    governance_readback,
-                    2,
-                )
-                .expect("commit bounded authoritative snapshot");
-            previous_snapshot_id = Some(snapshot_id);
-            previous_governance_readback = Some(current_governance_readback);
-        }
-        assert_eq!(checkpoint.committed_snapshots.len(), 2);
-        assert_eq!(checkpoint.committed_governance_readbacks.len(), 2);
-        assert_eq!(
-            checkpoint
-                .committed_snapshots
-                .iter()
-                .map(|committed| committed.signed_result.snapshot.snapshot_id)
-                .collect::<Vec<_>>(),
-            vec![[0xC1; 16], [0xC2; 16]]
-        );
-        assert_eq!(
-            checkpoint
-                .committed_read
-                .events
-                .iter()
-                .map(|event| event.sequence)
-                .collect::<Vec<_>>(),
-            vec![2, 3]
-        );
-        assert_eq!(
-            checkpoint
-                .committed_read
-                .latest
-                .as_ref()
-                .map(|committed| committed.signed_result.snapshot.snapshot_id),
-            Some([0xC2; 16])
-        );
-        assert!(
-            checkpoint
-                .committed_snapshots
-                .iter()
-                .all(|committed| committed.signed_result.snapshot.snapshot_id != [0xC0; 16]),
-            "the oldest identifier must be unavailable after bounded eviction"
-        );
-        validate_publication_checkpoint(&checkpoint, &policy, policy_digest, &trust)
-            .expect("validate bounded history");
-        let mut expected_byte_bounded = checkpoint.clone();
-        assert!(expected_byte_bounded.evict_oldest_committed());
-        let expected_byte_bounded_bytes =
-            norito::to_bytes(&expected_byte_bounded).expect("encode one retained snapshot");
-        let byte_ceiling =
-            u64::try_from(expected_byte_bounded_bytes.len()).expect("fixture length fits u64");
-        let (byte_bounded, byte_bounded_bytes) = encode_bounded_publication_checkpoint(
-            checkpoint.clone(),
-            &policy,
-            policy_digest,
-            &trust,
-            byte_ceiling,
-        )
-        .expect("evict the oldest snapshot to meet the byte ceiling");
-        assert_eq!(byte_bounded, expected_byte_bounded);
-        assert_eq!(byte_bounded_bytes, expected_byte_bounded_bytes);
-        assert_eq!(
-            decode_publication_checkpoint(&byte_bounded_bytes, &policy, policy_digest, &trust,)
-                .expect("restore byte-bounded history"),
-            expected_byte_bounded
-        );
-        assert!(matches!(
-            encode_bounded_publication_checkpoint(
-                checkpoint.clone(),
-                &policy,
-                policy_digest,
-                &trust,
-                byte_ceiling - 1,
-            ),
-            Err(ReputationRuntimeError::CheckpointTooLarge)
-        ));
-        let canonical = norito::to_bytes(&checkpoint).expect("encode bounded history");
-        assert_eq!(
-            decode_publication_checkpoint(&canonical, &policy, policy_digest, &trust)
-                .expect("restore bounded history"),
-            checkpoint
-        );
     }
     #[test]
     fn canonical_checkpoint_rejects_forged_snapshot_signature() {

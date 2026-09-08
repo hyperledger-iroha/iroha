@@ -4,6 +4,16 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
 
 ## [Unreleased]
 
+- Added the browser `game` entry point for canonical generic game-session
+  manifests, opaque inputs, signed checkpoints, invitation admission and native
+  execution-proof outcomes. Browser transaction signing admits only the closed
+  generic instruction registry. The separate `race` entry point contains the
+  first compiled SORA CARS application's value codecs and public prover payload;
+  no native racing instruction aliases are exported.
+  Execution envelopes and typed settlement payloads have a four MiB corridor,
+  including local wallet payload validation and signed hashing; ordinary payload
+  limits remain unchanged. The RaceV1 inner STARK is bounded at three MiB.
+
 - Replaced every mutable process-global native/Norito override with immutable
   runtime contexts. Production entrypoints share one verified, snapshotted
   native surface; Torii clients and source-level test facades can carry isolated

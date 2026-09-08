@@ -153,7 +153,7 @@ class NexusAppClientTest {
             metadata = obj(transfer, "metadata").mapValues { (_, value) -> value as String },
         )
         for (account in listOf(authority, destination, sourceAssetId.substringAfter('#').substringBefore('#'))) {
-            val parsed = AccountAddress.parseEncodedIgnoringCurveSupport(account, chainDiscriminant)
+            val parsed = AccountAddress.parseEncoded(account, chainDiscriminant)
             assertEquals(account, parsed.toI105(chainDiscriminant))
         }
         val client = NexusAppClient(
@@ -194,7 +194,7 @@ class NexusAppClientTest {
         val sourceAssetId = string(transfer, "source_asset_id")
         val signingPublicKey = hexToBytes(string(approval, "signing_public_key_hex"))
         val wrongChainDestination = AccountAddress
-            .parseEncodedIgnoringCurveSupport(destination, fixtureChain)
+            .parseEncoded(destination, fixtureChain)
             .toI105(fixtureChain + 1)
         val client = NexusAppClient(
             config = NexusAppConfig(
@@ -231,7 +231,7 @@ class NexusAppClientTest {
         assertEquals("invalid_account_id", scopeError.code)
 
         val wrongChainAuthority = AccountAddress
-            .parseEncodedIgnoringCurveSupport(authority, fixtureChain)
+            .parseEncoded(authority, fixtureChain)
             .toI105(fixtureChain + 1)
         val approvalClient = NexusAppClient(
             config = NexusAppConfig(

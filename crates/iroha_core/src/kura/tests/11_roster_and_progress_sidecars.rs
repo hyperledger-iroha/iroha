@@ -2143,7 +2143,16 @@ fn application_receipt_snapshot_preserves_sparse_entries() {
         .as_ref()
         .clone();
         attach_ok_results_to_block(&mut first);
+        let signature = SignatureOf::try_from_hash(
+            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key(),
+            first.header().hash(),
+        )
+        .expect("sign the complete result-bearing fixture header");
+        first
+            .replace_signatures([BlockSignature::new(0, signature)].into_iter().collect())
+            .expect("install the final fixture header signature");
         let first = Arc::new(first);
+        *generator.blocks.last_mut().expect("generated parent") = Arc::clone(&first);
         let mut second = dummy_block_with_lane_payload_ownership_from_generator(
             &mut generator,
             lane_id,
@@ -2152,10 +2161,17 @@ fn application_receipt_snapshot_preserves_sparse_entries() {
         )
         .as_ref()
         .clone();
-        if include_current_receipt {
-            attach_ok_results_to_block(&mut second);
-        }
+        attach_ok_results_to_block(&mut second);
+        let signature = SignatureOf::try_from_hash(
+            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key(),
+            second.header().hash(),
+        )
+        .expect("sign the complete result-bearing fixture header");
+        second
+            .replace_signatures([BlockSignature::new(0, signature)].into_iter().collect())
+            .expect("install the final fixture header signature");
         let second = Arc::new(second);
+        *generator.blocks.last_mut().expect("generated parent") = Arc::clone(&second);
         let mut third = dummy_block_with_lane_payload_ownership_from_generator(
             &mut generator,
             lane_id,
@@ -2165,7 +2181,16 @@ fn application_receipt_snapshot_preserves_sparse_entries() {
         .as_ref()
         .clone();
         attach_ok_results_to_block(&mut third);
+        let signature = SignatureOf::try_from_hash(
+            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key(),
+            third.header().hash(),
+        )
+        .expect("sign the complete result-bearing fixture header");
+        third
+            .replace_signatures([BlockSignature::new(0, signature)].into_iter().collect())
+            .expect("install the final fixture header signature");
         let third = Arc::new(third);
+        *generator.blocks.last_mut().expect("generated parent") = Arc::clone(&third);
         let proposal = |block: &SignedBlock| {
             lane_block_proposal_from_ownership(
                 block
@@ -2186,6 +2211,12 @@ fn application_receipt_snapshot_preserves_sparse_entries() {
             .expect("store second lane block");
         kura.store_block(Arc::clone(&third))
             .expect("store third lane block");
+        for height in 1..=3 {
+            finalize_chain_through_for_eviction(
+                &kura,
+                NonZeroUsize::new(height).expect("positive height"),
+            );
+        }
         kura.persist_lane_block_application_receipt(&first_proposal)
             .expect("persist first canonical receipt");
         if include_current_receipt {
@@ -2268,7 +2299,9 @@ fn application_receipt_snapshot_preserves_sparse_entries() {
         assert!(
             structural
                 .iter()
-                .filter(|receipt| receipt.format == LaneBlockApplicationReceiptArtifactFormat::Current)
+                .filter(
+                    |receipt| receipt.format == LaneBlockApplicationReceiptArtifactFormat::Current
+                )
                 .all(|receipt| kura
                     .lane_block_application_receipt_matches_available_evidence(receipt, true)),
             "every structurally captured receipt must retain its canonical evidence"

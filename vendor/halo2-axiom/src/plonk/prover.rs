@@ -138,6 +138,11 @@ where
         pub advice_blinds: Vec<Blind<C::Scalar>>,
     }
 
+    struct PendingAdviceSingle<C: CurveAffine> {
+        advice_polys: Vec<Option<Polynomial<C::Scalar, LagrangeCoeff>>>,
+        advice_blinds: Vec<Blind<C::Scalar>>,
+    }
+
     struct WitnessCollection<'params, 'a, 'b, Scheme, P, C, E, R, T>
     where
         Scheme: CommitmentScheme<Curve = C>,
@@ -148,14 +153,15 @@ where
         T: TranscriptWrite<C, E>,
     {
         params: &'params Scheme::ParamsProver,
+        domain: &'b EvaluationDomain<C::Scalar>,
         current_phase: sealed::Phase,
         last_phase: sealed::Phase,
         phases_complete: bool,
-        advice: Vec<Polynomial<Assigned<C::Scalar>, LagrangeCoeff>>,
+        advice: Vec<OwnedAdviceColumn<C::Scalar>>,
         challenges: &'b mut HashMap<usize, C::Scalar>,
         instances: &'b [&'a [C::Scalar]],
         usable_rows: RangeTo<usize>,
-        advice_single: AdviceSingle<C, LagrangeCoeff>,
+        advice_single: PendingAdviceSingle<C>,
         instance_single: &'b InstanceSingle<C>,
         rng: &'b mut R,
         transcript: &'b mut &'a mut T,
@@ -168,7 +174,7 @@ where
     impl<'params, 'a, 'b, F, Scheme, P, C, E, R, T> Assignment<F>
         for WitnessCollection<'params, 'a, 'b, Scheme, P, C, E, R, T>
     where
-        F: Field,
+        F: WithSmallOrderMulGroup<3>,
         Scheme: CommitmentScheme<Curve = C>,
         P: Prover<'params, Scheme>,
         C: CurveAffine<ScalarExt = F>,
@@ -239,7 +245,7 @@ where
                 .advice
                 .get_mut(column.index())
                 .expect("Not enough advice columns")
-                .get_mut(row)
+                .get_mut_returning_reference(row)
                 .expect("Not enough rows");
             // We can get another 3-4% decrease in witness gen time by using the following unsafe code, but this skips all array bound checks so we should use it only if the performance gain is really necessary:
             /*
@@ -254,6 +260,27 @@ where
                 .expect("No Value::unknown() in advice column allowed during create_proof");
             let immutable_raw_ptr = advice_get_mut as *const Assigned<F>;
             Value::known(unsafe { &*immutable_raw_ptr })
+        }
+
+        fn assign_advice_discarding_value(
+            &mut self,
+            column: Column<Advice>,
+            row: usize,
+            to: Value<Assigned<F>>,
+        ) {
+            debug_assert!(
+                self.usable_rows.contains(&row),
+                "{:?}",
+                Error::not_enough_rows_available(self.params.k())
+            );
+            let value = to
+                .assign()
+                .expect("No Value::unknown() in advice column allowed during create_proof");
+            self.advice
+                .get_mut(column.index())
+                .expect("Not enough advice columns")
+                .assign_discarding_value(row, value)
+                .expect("Not enough rows");
         }
 
         fn assign_fixed(&mut self, _: Column<Fixed>, _: usize, _: Assigned<F>) {
@@ -342,14 +369,17 @@ where
                 }
             }
             // Commit the advice columns in the current phase
-            let mut advice_values = batch_invert_assigned(
-                self.column_indices
-                    .get(phase)
-                    .expect("The API only supports 3 phases right now")
-                    .iter()
-                    .map(|column_index| &self.advice[*column_index][..])
-                    .collect(),
-            );
+            // Transfer columns whose assignment API exposed no references. Referenced columns
+            // retain their backing storage across phase boundaries, exactly as the consuming
+            // prover already requires. The cached proving key remains borrowed and reusable.
+            let phase_column_indices = self
+                .column_indices
+                .get(phase)
+                .expect("The API only supports 3 phases right now");
+            let mut advice_values = Vec::with_capacity(phase_column_indices.len());
+            for &column_index in phase_column_indices {
+                advice_values.push(self.advice[column_index].take_polynomial(self.domain));
+            }
             // Add blinding factors to advice columns
             for advice_values in &mut advice_values {
                 for cell in &mut advice_values[self.unusable_rows_start..] {
@@ -385,7 +415,7 @@ where
                 .zip(advice_values)
                 .zip(blinds)
             {
-                self.advice_single.advice_polys[*column_index] = advice_poly;
+                self.advice_single.advice_polys[*column_index] = Some(advice_poly);
                 self.advice_single.advice_blinds[*column_index] = blind;
             }
             for challenge_index in self.challenge_indices[phase].iter() {
@@ -420,7 +450,8 @@ where
     #[cfg(feature = "profile")]
     let phase1_time = start_timer!(|| "Phase 1: Witness assignment and MSM commitments");
     let (advice, challenges) = {
-        let mut advice = Vec::with_capacity(instances.len());
+        let mut advice: Vec<AdviceSingle<Scheme::Curve, LagrangeCoeff>> =
+            Vec::with_capacity(instances.len());
         let mut challenges = HashMap::<usize, Scheme::Scalar>::with_capacity(meta.num_challenges);
 
         let unusable_rows_start = params.n() as usize - (meta.blinding_factors() + 1);
@@ -441,10 +472,13 @@ where
         {
             let mut witness: WitnessCollection<Scheme, P, _, E, _, _> = WitnessCollection {
                 params,
+                domain,
                 current_phase: phases[0],
                 last_phase: *phases.last().expect("at least the first advice phase"),
                 phases_complete: false,
-                advice: vec![domain.empty_lagrange_assigned(); meta.num_advice_columns],
+                advice: (0..meta.num_advice_columns)
+                    .map(|_| OwnedAdviceColumn::new(params.n() as usize))
+                    .collect(),
                 instances,
                 challenges: &mut challenges,
                 // The prover will not be allowed to assign values to advice
@@ -452,8 +486,8 @@ where
                 // number of blinding factors and an extra row for use in the
                 // permutation argument.
                 usable_rows: ..unusable_rows_start,
-                advice_single: AdviceSingle::<Scheme::Curve, LagrangeCoeff> {
-                    advice_polys: vec![domain.empty_lagrange(); meta.num_advice_columns],
+                advice_single: PendingAdviceSingle::<Scheme::Curve> {
+                    advice_polys: vec![None; meta.num_advice_columns],
                     advice_blinds: vec![Blind::default(); meta.num_advice_columns],
                 },
                 instance_single,
@@ -487,7 +521,17 @@ where
                     witness.next_phase();
                 }
             }
-            advice.push(witness.advice_single);
+            let PendingAdviceSingle {
+                advice_polys,
+                advice_blinds,
+            } = witness.advice_single;
+            advice.push(AdviceSingle {
+                advice_polys: advice_polys
+                    .into_iter()
+                    .map(|poly| poly.expect("every advice column is committed exactly once"))
+                    .collect(),
+                advice_blinds,
+            });
         }
 
         assert_eq!(challenges.len(), meta.num_challenges);
@@ -1591,7 +1635,7 @@ where
     let fft_time = start_timer!(|| "Calculate advice polys (fft)");
 
     // Calculate the advice polys
-    let advice: Vec<AdviceSingle<Scheme::Curve, Coeff>> = advice
+    let mut advice: Vec<AdviceSingle<Scheme::Curve, Coeff>> = advice
         .into_iter()
         .map(
             |AdviceSingle {
@@ -1614,12 +1658,12 @@ where
     #[cfg(feature = "profile")]
     let phase4_time = start_timer!(|| "Phase 4: Evaluate h(X)");
     // Evaluate the h(X) polynomial
-    let h_poly = pk.ev.evaluate_h(
+    let (h_poly, restored_advice) = pk.ev.evaluate_h_consuming_advice(
         &pk,
-        &advice
-            .iter()
-            .map(|a| a.advice_polys.as_slice())
-            .collect::<Vec<_>>(),
+        advice
+            .iter_mut()
+            .map(|a| std::mem::take(&mut a.advice_polys))
+            .collect(),
         &instance
             .iter()
             .map(|i| i.instance_polys.as_slice())
@@ -1633,6 +1677,10 @@ where
         &permutations,
         true,
     );
+    assert_eq!(restored_advice.len(), advice.len());
+    for (single, restored) in advice.iter_mut().zip(restored_advice) {
+        single.advice_polys = restored;
+    }
     // The quotient is the final user of this proving-only preprocessing. Keep
     // the verifier key, queried fixed/sigma polynomials, and committed witness
     // polynomials intact for evaluation and multi-open, but release the three
@@ -2503,3 +2551,14 @@ fn three_phase_proof_commits_the_final_phase_exactly_once() {
         "a fourth phase transition must be rejected before duplicate commitment"
     );
 }
+
+#[cfg(test)]
+#[path = "borrowed_advice_reference.rs"]
+mod borrowed_advice_reference;
+#[cfg(test)]
+#[path = "borrowed_advice_tests.rs"]
+mod borrowed_advice_tests;
+
+#[cfg(test)]
+#[path = "borrowed_advice_v1_cell_tests.rs"]
+mod borrowed_advice_v1_cell_tests;

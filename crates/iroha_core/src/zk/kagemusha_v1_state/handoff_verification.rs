@@ -390,7 +390,7 @@ fn validate_artifact_bindings(
 fn canonical_sizes(
     evidence: KagemushaHandoffEvidenceV1<'_>,
 ) -> Result<KagemushaHandoffEvidenceSizesV1, KagemushaRecursionErrorV1> {
-    fn encoded_len<T: norito::codec::Encode>(
+    fn encoded_len<T: norito::NoritoSerialize>(
         value: &T,
     ) -> Result<usize, KagemushaRecursionErrorV1> {
         norito::encode_canonical(value)
@@ -790,7 +790,17 @@ mod tests {
     fn two_handoff_fixture() -> (KagemushaRecursionArtifactsV1, OwnedHandoff, OwnedHandoff) {
         let artifacts = artifacts();
         let template = incoming_payment_fixture(0x41, 9, 7, 11, 128, 128);
-        let request_b = template.request;
+        let mut request_b = template.request;
+        // The generic incoming-payment fixture uses its own release. This handoff must
+        // select the fixture artifact release and authenticate that exact request again.
+        request_b.release_id = artifacts.release_id;
+        request_b.signature = sign(
+            &p256_signing_key(7),
+            &request_b
+                .canonical_signing_bytes()
+                .expect("release-bound request signing bytes"),
+        );
+        request_b.validate_shape().expect("release-bound request");
         let lane_a = digest(0x61);
         let lane_b = request_b.hardware_credential.lane_commitment;
         let key_a = p256_signing_key(9);
@@ -908,6 +918,19 @@ mod tests {
         assert!(
             verify_kagemusha_handoff_evidence_v1(&verifier, artifacts, first.evidence()).is_err()
         );
+        assert_eq!(verifier.state_calls.get(), 0);
+        assert_eq!(verifier.payment_calls.get(), 0);
+    }
+
+    #[test]
+    fn rejects_release_substitution_before_cryptographic_dispatch() {
+        let (mut artifacts, first, _) = two_handoff_fixture();
+        artifacts.release_id[0] ^= 1;
+        let verifier = RecordingVerifier::default();
+        assert!(matches!(
+            verify_kagemusha_handoff_evidence_v1(&verifier, artifacts, first.evidence()),
+            Err(KagemushaRecursionErrorV1::ArtifactSubstitution)
+        ));
         assert_eq!(verifier.state_calls.get(), 0);
         assert_eq!(verifier.payment_calls.get(), 0);
     }

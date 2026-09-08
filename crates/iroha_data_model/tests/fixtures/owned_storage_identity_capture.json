@@ -1,0 +1,46 @@
+{
+  "scope": "Pre-declaration development capture; selected inputs and observed executable identity only. This is not a release seal or a complete build/environment reconstruction.",
+  "fixture": {
+    "path": "owned_storage_identity_frames.json",
+    "bytes": 1167413,
+    "sha256": "93a70352e47926baf33b0e64b016d20fa17c1a94885095394acb526ea964b156"
+  },
+  "selected_inputs": {
+    "path": "owned_storage_identity_capture_inputs.json",
+    "count": 999,
+    "sha256": "f88b9d6182a5a68be784ce40e65c5b615991963edaefe8de1c0c631e60c853c0",
+    "changed_during_capture": [],
+    "coverage": "Recorded Rust sources, selected fixtures, root Cargo.toml, Cargo.lock and rust-toolchain.toml. Package manifests, all transitive inputs and the full compiler environment were not sealed."
+  },
+  "execution": {
+    "artifact": "target/cargo-fast/root-stack-fix/debug/deps/iroha_data_model-72afff554129b552",
+    "artifact_sha256": "a077a239e9824fbacc3e3a5493e8686370e7bf9acd2252adb731937dbf9d556e",
+    "RUST_MIN_STACK": "unset",
+    "passed": 3,
+    "failed": 0,
+    "ignored": 0,
+    "tests": [
+      "common::owned_identity_tests::owned_storage_identity_pre_declaration_capture",
+      "isi::tests::instruction_box_direct_serialize_matches_tuple_wire_layout",
+      "query::trait_object_tests::query_box_streaming_wire_is_canonical_for_supported_sequence_layouts"
+    ],
+    "log_sha256": "f77e162ebfad618bcb9fd9e4aca678960a2e4ab3915e194984eb214314bfcefb"
+  },
+  "capture_harness": {
+    "path": "crates/iroha_data_model/src/common/owned_identity_tests.rs",
+    "sha256": "eff644638c54cfcfce4d7ce47acf91a653dc74d42e11a32fcd9f22006433acc4",
+    "method": "Before declaring Owned<T>, AccountDetails, NftData or RwaData identities, record compiler type names, active serialize/deserialize schema hashes, exact bare payloads, advertised flags, complete frames and JSON. Root projections are recorded separately from nominal container identities. The temporary writer was then removed; the permanent test reads the frozen fixture."
+  },
+  "declarations_absent_at_capture": [
+    "Owned<T>",
+    "AccountDetails",
+    "NftData",
+    "RwaData"
+  ],
+  "layout_correction_included": "Nested tuples inherit explicit enclosing flags, including zero. Metadata entries stream using canonical length-prefixed fields and advertise checked packed offsets. Earlier malformed captures are not accepted fixtures.",
+  "limitations": [
+    "The artifact and full execution log are local ignored build outputs; their observed digests are retained here.",
+    "This manifest records selected pre-declaration file hashes, not their source bytes. It cannot by itself reconstruct the dirty working tree.",
+    "No complete feature matrix, cross-platform, release, build-memory or native qualification is claimed."
+  ]
+}

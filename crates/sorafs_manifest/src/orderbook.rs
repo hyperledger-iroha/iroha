@@ -1084,13 +1084,15 @@ pub struct SettlementReceiptV1 {
     pub settlement_signature: OrderbookSignatureV1,
 }
 mod borrowed_norito {
-    use norito::core::NoritoSerialize;
+    use norito::core::{NoritoSerialize, SerializePayload};
     /// Borrowed value that delegates canonical Norito serialization.
     pub(super) struct Value<'a, T>(pub(super) &'a T);
     impl<T: NoritoSerialize> NoritoSerialize for Value<'_, T> {
         fn schema_hash() -> [u8; 16] {
             T::schema_hash()
         }
+    }
+    impl<T: NoritoSerialize> SerializePayload for Value<'_, T> {
         fn serialize(
             &self,
             writer: &mut norito::core::Encoder<'_>,
@@ -1120,6 +1122,8 @@ mod borrowed_norito {
         fn schema_hash() -> [u8; 16] {
             <std::vec::Vec<T>>::schema_hash()
         }
+    }
+    impl<T: NoritoSerialize> SerializePayload for Vec<'_, T> {
         fn serialize(
             &self,
             writer: &mut norito::core::Encoder<'_>,
@@ -1163,6 +1167,8 @@ impl norito::core::NoritoSerialize for OrderbookSignatureSigningViewV1<'_> {
     fn schema_hash() -> [u8; 16] {
         OrderbookSignatureV1::schema_hash()
     }
+}
+impl norito::core::SerializePayload for OrderbookSignatureSigningViewV1<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         self.0.serialize(writer)
     }
@@ -1215,6 +1221,8 @@ impl norito::core::NoritoSerialize for OrderRequestSigningViewV1<'_> {
     fn schema_hash() -> [u8; 16] {
         OrderRequestV1::schema_hash()
     }
+}
+impl norito::core::SerializePayload for OrderRequestSigningViewV1<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         self.0.serialize(writer)
     }
@@ -1251,6 +1259,8 @@ impl norito::core::NoritoSerialize for OrderCancelSigningViewV1<'_> {
     fn schema_hash() -> [u8; 16] {
         OrderCancelV1::schema_hash()
     }
+}
+impl norito::core::SerializePayload for OrderCancelSigningViewV1<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         self.0.serialize(writer)
     }
@@ -1301,6 +1311,8 @@ impl norito::core::NoritoSerialize for SettlementReceiptSigningViewV1<'_> {
     fn schema_hash() -> [u8; 16] {
         SettlementReceiptV1::schema_hash()
     }
+}
+impl norito::core::SerializePayload for SettlementReceiptSigningViewV1<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         self.0.serialize(writer)
     }
@@ -1483,7 +1495,7 @@ fn orderbook_signature_digest<T: norito::core::NoritoSerialize>(
     }
     let mut hasher = Hasher::new();
     hasher.update(domain);
-    norito::core::write_frame_to_writer(payload, &mut Blake3Writer(&mut hasher)).map_err(
+    norito::core::write_canonical_to_writer(payload, &mut Blake3Writer(&mut hasher)).map_err(
         |err| OrderbookValidationError::SignaturePayloadEncoding {
             reason: err.to_string(),
         },
@@ -1494,6 +1506,8 @@ fn preflight_orderbook_payload_len<T: norito::core::NoritoSerialize>(
     payload: &T,
     maximum: usize,
 ) -> Result<usize, OrderbookValidationError> {
+    let _canonical_flags =
+        norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
     if let Some(length) = payload.encoded_len_exact()
         && length > maximum
     {
@@ -1924,7 +1938,7 @@ pub enum OrderbookValidationError {
 mod tests {
     use super::*;
     use ed25519_dalek::SigningKey;
-    use norito::core::NoritoSerialize as _;
+    use norito::core::{NoritoSerialize as _, SerializePayload as _};
     use std::collections::{BTreeMap, BTreeSet};
     const SMALL_ORDER_R: [u8; 32] = [
         1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -1959,7 +1973,7 @@ mod tests {
     }
     fn encode_frame_with_flags<T: norito::core::NoritoSerialize>(value: &T, flags: u8) -> Vec<u8> {
         let _guard = norito::core::DecodeFlagsGuard::enter(flags);
-        norito::to_bytes(value).expect("serialize explicit canonical frame")
+        norito::to_bytes(value).expect("serialize explicit layout frame")
     }
     fn supported_layouts() -> [u8; 8] {
         use norito::core::header_flags::{COMPACT_LEN, FIELD_BITSET, PACKED_SEQ, PACKED_STRUCT};
@@ -1974,11 +1988,11 @@ mod tests {
             PACKED_SEQ | PACKED_STRUCT | COMPACT_LEN | FIELD_BITSET,
         ]
     }
-    fn historical_signature_digest<T: norito::core::NoritoSerialize>(
+    fn canonical_owned_signature_digest<T: norito::core::NoritoSerialize>(
         domain: &[u8],
         value: &T,
     ) -> [u8; 32] {
-        let bytes = norito::to_bytes(value).expect("encode historical signature preimage");
+        let bytes = norito::encode_canonical(value).expect("encode canonical signature preimage");
         let mut hasher = Hasher::new();
         hasher.update(domain);
         hasher.update(&bytes);
@@ -2480,16 +2494,23 @@ mod tests {
     #[test]
     fn settlement_receipt_size_preflight_accepts_boundary_and_rejects_one_over() {
         let receipt = receipt();
-        let exact = norito::core::encoded_payload_len(&receipt)
-            .expect("settlement receipt canonical length must be countable");
-        assert_eq!(preflight_orderbook_payload_len(&receipt, exact), Ok(exact));
-        assert_eq!(
-            preflight_orderbook_payload_len(&receipt, exact.saturating_sub(1)),
-            Err(OrderbookValidationError::PayloadTooLarge {
-                length: exact,
-                maximum: exact.saturating_sub(1),
-            })
-        );
+        let exact = {
+            let _guard =
+                norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+            norito::core::encoded_payload_len(&receipt)
+                .expect("settlement receipt canonical length must be countable")
+        };
+        for flags in supported_layouts() {
+            let _guard = norito::core::DecodeFlagsGuard::enter(flags);
+            assert_eq!(preflight_orderbook_payload_len(&receipt, exact), Ok(exact));
+            assert_eq!(
+                preflight_orderbook_payload_len(&receipt, exact.saturating_sub(1)),
+                Err(OrderbookValidationError::PayloadTooLarge {
+                    length: exact,
+                    maximum: exact.saturating_sub(1),
+                })
+            );
+        }
         let mut oversized = receipt;
         oversized.settlement_signature.signature =
             vec![9; ORDERBOOK_PAYLOAD_MAX_CANONICAL_BYTES_V1];
@@ -2509,7 +2530,7 @@ mod tests {
         ));
     }
     #[test]
-    fn borrowed_order_and_cancel_signing_views_preserve_historical_frames_and_digests() {
+    fn borrowed_order_and_cancel_signing_views_match_canonical_owned_digests() {
         let order = sign_order(order(), 0x11);
         let mut owned_order = order.clone();
         owned_order.signature.signature.clear();
@@ -2532,12 +2553,15 @@ mod tests {
             let _guard = norito::core::DecodeFlagsGuard::enter(flags);
             assert_eq!(
                 order_request_signature_digest_v1(&order).expect("stream order digest"),
-                historical_signature_digest(ORDERBOOK_ORDER_SIGNATURE_DOMAIN_V1, &owned_order,),
+                canonical_owned_signature_digest(ORDERBOOK_ORDER_SIGNATURE_DOMAIN_V1, &owned_order,),
                 "streamed order digest changed for flags 0x{flags:02x}"
             );
             assert_eq!(
                 order_cancel_signature_digest_v1(&cancel).expect("stream cancellation digest"),
-                historical_signature_digest(ORDERBOOK_CANCEL_SIGNATURE_DOMAIN_V1, &owned_cancel,),
+                canonical_owned_signature_digest(
+                    ORDERBOOK_CANCEL_SIGNATURE_DOMAIN_V1,
+                    &owned_cancel,
+                ),
                 "streamed cancellation digest changed for flags 0x{flags:02x}"
             );
         }
@@ -2553,8 +2577,8 @@ mod tests {
             SettlementReceiptV1::schema_hash()
         );
         assert_eq!(
-            norito::to_bytes(&borrowed).expect("encode borrowed signing view"),
-            norito::to_bytes(&owned).expect("encode historical owned signing payload")
+            norito::encode_canonical(&borrowed).expect("encode borrowed signing view"),
+            norito::encode_canonical(&owned).expect("encode canonical owned signing payload")
         );
         for flags in supported_layouts() {
             let owned_bytes = encode_bare_with_flags(&owned, flags);
@@ -2582,7 +2606,7 @@ mod tests {
             assert_eq!(
                 settlement_receipt_signature_digest_v1(&receipt)
                     .expect("digest borrowed settlement signing view"),
-                historical_signature_digest(SETTLEMENT_RECEIPT_SIGNATURE_DOMAIN_V1, &owned),
+                canonical_owned_signature_digest(SETTLEMENT_RECEIPT_SIGNATURE_DOMAIN_V1, &owned),
                 "settlement signature digest changed for flags 0x{flags:02x}"
             );
         }
@@ -2634,6 +2658,52 @@ mod tests {
             verify_settlement_receipt_signature_v1(&signed_receipt),
             Ok(())
         );
+    }
+    #[test]
+    fn signatures_verify_across_all_ambient_layouts() {
+        let key = signing_key(0x45);
+        let reference_order = sign_order_request_ed25519_v1(order(), &key).unwrap();
+        let reference_cancel = sign_order_cancel_ed25519_v1(cancel(), &key).unwrap();
+        let reference_receipt = sign_settlement_receipt_ed25519_v1(receipt(), &key).unwrap();
+        for signing_flags in supported_layouts() {
+            let _signing_guard = norito::core::DecodeFlagsGuard::enter(signing_flags);
+            let signed_order = sign_order_request_ed25519_v1(order(), &key).unwrap();
+            let signed_cancel = sign_order_cancel_ed25519_v1(cancel(), &key).unwrap();
+            let signed_receipt = sign_settlement_receipt_ed25519_v1(receipt(), &key).unwrap();
+            assert_eq!(signed_order, reference_order);
+            assert_eq!(signed_cancel, reference_cancel);
+            assert_eq!(signed_receipt, reference_receipt);
+            for verification_flags in supported_layouts() {
+                let _verification_guard = norito::core::DecodeFlagsGuard::enter(verification_flags);
+                assert_eq!(verify_order_request_signature_v1(&signed_order), Ok(()));
+                assert_eq!(verify_order_cancel_signature_v1(&signed_cancel), Ok(()));
+                assert_eq!(
+                    verify_settlement_receipt_signature_v1(&signed_receipt),
+                    Ok(())
+                );
+            }
+        }
+    }
+    #[test]
+    fn noncanonical_layout_signature_has_no_fallback() {
+        let key = signing_key(0x46);
+        let mut signed = sign_order_request_ed25519_v1(order(), &key).unwrap();
+        let mut unsigned = signed.clone();
+        unsigned.signature.signature.clear();
+        let alternate = encode_frame_with_flags(&unsigned, 0);
+        assert_ne!(alternate, norito::encode_canonical(&unsigned).unwrap());
+        let mut hasher = Hasher::new();
+        hasher.update(ORDERBOOK_ORDER_SIGNATURE_DOMAIN_V1);
+        hasher.update(&alternate);
+        signed.signature.signature = key.sign(hasher.finalize().as_bytes()).to_bytes().to_vec();
+        for flags in supported_layouts() {
+            let _guard = norito::core::DecodeFlagsGuard::enter(flags);
+            assert_eq!(signed.validate(), Ok(()));
+            assert!(matches!(
+                verify_order_request_signature_v1(&signed),
+                Err(OrderbookValidationError::SignatureVerification { .. })
+            ));
+        }
     }
     #[test]
     fn verify_order_signature_accepts_valid_payload_and_rejects_tamper() {
@@ -3479,11 +3549,31 @@ mod tests {
         );
     }
     #[test]
-    fn bounded_decoder_rejects_noncanonical_trailing_bytes() {
+    fn bounded_decoder_rejects_trailing_and_truncated_frames() {
         let mut encoded = norito::to_bytes(&order()).expect("encode order");
         encoded.push(0);
+        for bytes in [&encoded[..], &encoded[..encoded.len() - 2]] {
+            assert_eq!(
+                decode_order_request_v1(bytes),
+                Err(OrderbookPayloadDecodeError::Decode {
+                    reason: norito::Error::LengthMismatch.to_string(),
+                })
+            );
+        }
+    }
+    #[test]
+    fn bounded_decoder_rejects_validly_framed_alternate_layout() {
+        let request = order();
+        let canonical = norito::encode_canonical(&request).expect("canonical order");
+        let _layout = norito::core::DecodeFlagsGuard::enter(0);
+        let alternate = norito::to_bytes(&request).expect("alternate-layout order");
+        assert_ne!(alternate, canonical);
         assert_eq!(
-            decode_order_request_v1(&encoded),
+            norito::decode_from_bytes::<OrderRequestV1>(&alternate).expect("valid alternate frame"),
+            request
+        );
+        assert_eq!(
+            decode_order_request_v1(&alternate),
             Err(OrderbookPayloadDecodeError::NonCanonicalEncoding)
         );
     }

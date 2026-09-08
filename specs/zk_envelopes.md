@@ -188,7 +188,7 @@ Wire types (as implemented in `iroha_core::zk_stark`)
   - `version: u16` — format version, currently 1
   - `n_log2: u8` — log2 of evaluation domain size
   - `blowup_log2: u8` — log2 blowup before FRI folding (e.g., 3 for 8×)
-  - `fold_arity: u8` — FRI arity (power-of-two; current backend supports 2)
+  - `fold_arity: u8` — exactly 2 for the sole V1 binary FRI profile
   - `queries: u16` — expected query count (must match `proof.queries.len()`)
   - `merkle_arity: u8` — Merkle branching factor (binary only in v1)
   - `domain_tag: String` — domain separator baked into the transcript/sampler
@@ -238,9 +238,9 @@ Wire types (as implemented in `iroha_core::zk_stark`)
   - `transcript_label: String`
 
 Limits and validation
-- Bounds enforced by the raw native verifier: `n_log2 ≤ 24`, `queries ≤ 64`,
+- Bounds enforced by the raw native verifier: `1 ≤ n_log2 ≤ 24`, `queries ≤ 64`,
   `layers ≤ 32`, `merkle depth ≤ 32`, `aux_terms ≤ 64`, `domain_tag` length ≤
-  64 bytes. `merkle_arity` and `fold_arity` must both be `2`. Canonical ledger
+  96 bytes (the full lowercase-hex encoding of a six-lane statement digest). `merkle_arity` and `fold_arity` must both be `2`. Canonical ledger
   verifier keys require blowup 8 and at least 64 queries; the current exact
   profile fixes the verifier maximum to the same 64-query value.
 - Query sampling and per-round challenges are domain-separated by `domain_tag`,
@@ -255,6 +255,8 @@ Verifier behavior (native STARK)
   - Treats each layer as bit-reversed evaluation order, derives `x` from the
     bit-reversed pair index, and checks
     `z == (y0 + y1)/2 + r_k * (y0 - y1)/(2x)` in the field.
+  - Authenticates the final folded value under the terminal root and requires
+    it to be the zero Fp4 element.
 - If `comp_root` is present on a raw generic STARK envelope, verifies the
   composition leaf/path and checks it matches
   `constant + z_coeff * z_final + Σ coeff_i * value_i`. Auxiliary terms must appear
@@ -272,10 +274,11 @@ Verifier behavior (native STARK)
   separately qualified degree argument.
 - `OpenVerifyEnvelope` STARK verification rejects inner `comp_root`/`comp_values`
   sidecars. The high-level verifier reconstructs the V1 binding-AIR digest from
-  backend, circuit id, VK hash, schema descriptor, and public input columns, and
-  ZK-ACE wrappers reconstruct the ZK-ACE AIR/public-input digests from the outer
-  public-input payload. The ZK-ACE engine currently rejects proving,
-  verification, and activation as unavailable pending commitment remediation.
+  backend, circuit id, VK hash, schema descriptor, and public input columns.
+  ZK-ACE uses its dedicated typed `SubmitPrivacyProofV1` relation and DEEP/FRI
+  verifier; generic Binding AIR cannot target that relation. Local ZK-ACE proving
+  and verification are implemented, while governed production activation remains
+  unavailable pending independent cryptographic qualification.
 - Validation: query indices derive from the transcript label + params + roots; the verifier
   rejects mismatched `j`, missing folds, bad roots/paths, non-canonical field encodings,
   selector-bearing retired layouts, and mismatched query-count headers. Depth/size caps
@@ -308,13 +311,12 @@ Verifier behavior (native STARK)
 	  `VerifyingKeyBox.backend` must exactly match the `ProofBox.backend` /
 	  `verify_backend` label.
 	  Consensus `verify_backend("stark/fri/*", ...)` admission requires this payload
-	  to satisfy the ledger-grade production FRI floors; PoC-sized domain/query
+	  to satisfy the canonical admission FRI floors; smaller domain/query
 	  settings are rejected before wrapper verification.
 - The verifier enforces that the outer wrapper metadata is bound into the inner STARK
   envelope (via `domain_tag`), that the inner envelope parameters match the VK payload,
-  that the transcript label matches the canonical wrapper AIR domain
-  (`IROHA-STARK-AIR-V1` or `IROHA-STARK-ZK-ACE-AIR-V1`), and that the AIR public
-  digest matches the verifier-reconstructed generic binding or ZK-ACE statement.
+  that the transcript label is exactly `IROHA-STARK-AIR-V1`, and that the AIR
+  public digest matches the verifier-reconstructed generic binding statement.
 - Runtime STARK guardrails require the outer `OpenVerifyEnvelope`, decode
   `StarkFriOpenProofV1` before verifier dispatch, and reject malformed outer or
   wrapper bytes, unsupported wrapper versions, and empty native STARK envelope
@@ -382,15 +384,14 @@ Verifier behavior (native STARK)
   profile-specific STARK backends reject decoded circuit ids that advertise a
   different STARK profile or the generic `stark/fri:` prefix.
 - Generic STARK `OpenVerifyEnvelope` construction and verification reserve the
-  ZK-ACE and BFV full-bootstrap circuit ids for their dedicated wrappers. BFV
+  ZK-ACE and BFV full-bootstrap circuit ids for their dedicated verifier paths. BFV
   full-bootstrap native AIR proofs must use the BFV-specific full-material
   verifier path. The public-padding-only entry points reject unconditionally:
   sampled public rows do not establish low degree for hidden trace columns.
-  Generic
-  preverification rejects metadata-valid OpenVerify wrappers that advertise
-  noncanonical ZK-ACE colon/slash aliases or the BFV full-bootstrap circuit id,
-  including backend-prefixed colon/slash aliases, before deduplication. The
-  canonical ZK-ACE id remains reserved for the ZK-ACE-specific wrapper. The BFV
+  Generic preverification rejects metadata-valid OpenVerify wrappers that
+  advertise either reserved circuit id, including backend-prefixed colon/slash
+  spellings, before deduplication. The canonical ZK-ACE id is accepted only by
+  the dedicated typed privacy relation. The BFV
   wrapper accepts only the base native AIR transcript label or canonical
   unpadded retry suffixes emitted by the prover, and rejects generic
   `comp_root`/`comp_values` sidecars instead of accepting auxiliary composition

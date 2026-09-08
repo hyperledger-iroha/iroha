@@ -1,0 +1,5 @@
+seiyaku CodeReadbackFixture {
+    view fn inspect() -> int {
+        return 7;
+    }
+}

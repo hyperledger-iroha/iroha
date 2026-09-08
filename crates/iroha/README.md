@@ -15,6 +15,11 @@ for setup, configuration, and client examples.
 * Submit one or several Iroha Special Instructions (ISI) as a Transaction to Iroha Peer
 * Request data based on Iroha Queries from a Peer
 
+Transaction finality waits require state-resolved `Applied` status. Temporary
+HTTP 429 responses repeat only the status read, respecting Torii's delta-seconds
+`Retry-After` and the original wait deadline. They never resubmit the transaction;
+an exhausted deadline retains the last backpressure diagnostic.
+
 ## Setup
 
 **Requirements:** install

@@ -241,7 +241,7 @@ export function isCanonicalKotodamaDynamicAccessBaseKey(value) {
   return isCanonicalKotodamaStateDeclarationIdentifier(value.slice("state:".length));
 }
 
-/** Return whether a dynamic-access bound policy is exactly `take` or `range`. */
+/** Return whether a dynamic-access bound policy is exactly `take` or `page`. */
 export function isKotodamaV1DynamicAccessBoundKind(value) {
   return (
     typeof value === "string" &&

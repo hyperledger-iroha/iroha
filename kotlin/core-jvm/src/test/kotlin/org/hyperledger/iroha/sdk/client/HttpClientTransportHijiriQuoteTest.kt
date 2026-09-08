@@ -82,7 +82,7 @@ class HttpClientTransportHijiriQuoteTest {
             sent.headers[CanonicalRequestSigner.HEADER_NONCE]?.single(),
         )
         assertEquals(
-            AccountAddress.parseEncodedIgnoringCurveSupport(signatoryAccountId, null).canonicalHex(),
+            AccountAddress.parseEncoded(signatoryAccountId, null).canonicalHex(),
             sent.headers[CanonicalRequestSigner.HEADER_ACCOUNT]?.single(),
         )
         val signature = Base64.getDecoder().decode(

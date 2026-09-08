@@ -849,3 +849,193 @@ fn enter_view_effect_cannot_substitute_an_equal_reference_certificate() {
     assert!(!refinement::accepts(projection));
     assert!(!before.transition_refines(&event, &after, &effects));
 }
+
+#[test]
+fn repeated_historical_prepare_cannot_occupy_the_current_prepare_slot() {
+    let (mut live, acknowledgement) = pending_timeout_install(None);
+    live.step(acknowledgement)
+        .expect("enter view one through the production gate");
+    let old = certificate(
+        &live.context,
+        0,
+        Phase::Prepare,
+        Subject::repeat(0xd1),
+        0xd2,
+    );
+    let observed = live
+        .step(Event::QuorumCertificateReceived {
+            tag: live.current_tag(),
+            certificate: old.clone(),
+        })
+        .expect("a newly learned historical high remains observable");
+    let id = observed
+        .effects()
+        .iter()
+        .find_map(|effect| match effect {
+            Effect::Persist { entry, .. } => {
+                assert!(
+                    matches!(entry.record(), WalRecord::ObservePrepare(record) if record == &old)
+                );
+                Some(entry.id())
+            }
+            _ => None,
+        })
+        .expect("historical high must cross an exact WAL boundary");
+    live.step(Event::Persisted {
+        tag: live.current_tag(),
+        id,
+    })
+    .expect("persist historical high without retaining current body work");
+    assert!(live.pending_prepare.is_empty());
+    assert_eq!(live.durable.highest_prepare(), Some(&old));
+
+    // Authentication may return different signature evidence for the same
+    // statement. Neither exact replay nor alternate evidence recreates work.
+    let mut replay_changed_state = false;
+    let mut replay_was_non_duplicate = false;
+    for replay in [
+        old.clone(),
+        certificate(&live.context, 0, Phase::Prepare, old.subject(), 0xd3),
+        old.clone(),
+    ] {
+        let before = live.clone();
+        let outcome = live
+            .step(Event::QuorumCertificateReceived {
+                tag: live.current_tag(),
+                certificate: replay,
+            })
+            .expect("old durable high retransmissions remain ordinary duplicates");
+        replay_was_non_duplicate |=
+            outcome.disposition() != StepDisposition::Ignored(IgnoreReason::Duplicate);
+        assert!(outcome.effects().is_empty());
+        replay_changed_state |= live != before;
+    }
+    let retransmitted = live
+        .step(Event::RetransmitElapsed {
+            tag: live.current_tag(),
+        })
+        .expect("historical evidence remains available for dissemination");
+    assert!(retransmitted.effects().iter().any(|effect| matches!(
+        effect,
+        Effect::Broadcast(ConsensusMessageV2::QuorumCertificate(record)) if record == &old
+    )));
+    let obsolete_pending_count = live.pending_prepare.len();
+
+    let current = certificate(
+        &live.context,
+        1,
+        Phase::Prepare,
+        Subject::repeat(0xd4),
+        0xd5,
+    );
+    let outcome = live
+        .step(Event::QuorumCertificateReceived {
+            tag: live.current_tag(),
+            certificate: current.clone(),
+        })
+        .expect("the next current QC keeps the verified one-pending-Prepare bound");
+    assert!(!replay_was_non_duplicate);
+    assert!(!replay_changed_state);
+    assert_eq!(obsolete_pending_count, 0);
+    assert_eq!(live.pending_prepare.len(), 1);
+    assert_eq!(
+        live.pending_prepare.get(&current.reference()),
+        Some(&current)
+    );
+    assert!(outcome.effects().iter().any(|effect| matches!(
+        effect, Effect::Persist { entry, .. }
+            if matches!(entry.record(), WalRecord::ObservePrepare(record) if record == &current)
+    )));
+}
+
+#[test]
+fn historical_prepare_admission_keeps_new_highs_and_rejects_conflicts() {
+    let mut live = reducer();
+    let timeout = timeout_certificate(&live.context, 2, None);
+    let staged = live
+        .step(Event::TimeoutCertificateReceived {
+            tag: live.current_tag(),
+            certificate: timeout,
+        })
+        .expect("stage a quorum-authenticated jump to view three");
+    let [Effect::Persist { entry, .. }] = staged.effects() else {
+        panic!("timeout install must have exactly one persistence owner");
+    };
+    live.step(Event::Persisted {
+        tag: live.current_tag(),
+        id: entry.id(),
+    })
+    .expect("install view three");
+    for view in 0..=1 {
+        let high = certificate(
+            &live.context,
+            view,
+            Phase::Prepare,
+            Subject::repeat(0xe1),
+            0xe2,
+        );
+        let staged = live
+            .step(Event::QuorumCertificateReceived {
+                tag: live.current_tag(),
+                certificate: high.clone(),
+            })
+            .expect("each strictly newer historical high remains admissible");
+        let [Effect::Persist { entry, .. }] = staged.effects() else {
+            panic!("historical high must have exactly one persistence owner");
+        };
+        assert!(matches!(entry.record(), WalRecord::ObservePrepare(record) if record == &high));
+        live.step(Event::Persisted {
+            tag: live.current_tag(),
+            id: entry.id(),
+        })
+        .expect("durably retain the newer historical high");
+        assert_eq!(live.durable.highest_prepare(), Some(&high));
+        assert!(live.pending_prepare.is_empty());
+        assert!(live.body_work.is_empty());
+    }
+    let before = live.clone();
+    let conflicting = certificate(
+        &live.context,
+        1,
+        Phase::Prepare,
+        Subject::repeat(0xe3),
+        0xe4,
+    );
+    assert_eq!(
+        live.step(Event::QuorumCertificateReceived {
+            tag: live.current_tag(),
+            certificate: conflicting,
+        }),
+        Err(ReducerError::ConflictingPrepareCertificates)
+    );
+    assert_eq!(live, before);
+}
+
+#[test]
+fn refinement_failure_preserves_the_rejected_predicates_for_adapter_logging() {
+    let mut invalid = reducer();
+    // An impossible third pool is deliberately injected below the public
+    // boundary. The public step must reject it without installing any change,
+    // and the adapter must receive the exact failing invariant predicates.
+    for view in 0..3 {
+        invalid
+            .timeout_votes
+            .insert(Round::new(invalid.context.height(), view), BTreeMap::new());
+    }
+    let before = invalid.clone();
+    let error = invalid
+        .step(Event::RetransmitElapsed {
+            tag: invalid.current_tag(),
+        })
+        .expect_err("the verified volatile bound remains fail-closed");
+    let rendered = error.to_string();
+    let ReducerError::RefinementViolation(failure) = error else {
+        panic!("the failure must retain its refinement classification");
+    };
+    assert!(matches!(*failure, RefinementFailure::Transition { .. }));
+    assert!(rendered.contains("volatile_before_well_formed: false"));
+    assert!(rendered.contains("volatile_after_well_formed: false"));
+    assert!(rendered.contains("timeout_vote_pools: 3"));
+    assert!(rendered.contains("event_kind: 7"));
+    assert_eq!(invalid, before);
+}

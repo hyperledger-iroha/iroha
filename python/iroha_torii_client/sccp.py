@@ -511,6 +511,8 @@ def _replay_principal(value: Any, label: str) -> Tuple[int, bytes]:
         payload = _binary(record["canonical_bytes"], f"{label}.canonical_bytes")
         if not payload or len(payload) > 0xFFFF:
             raise ValueError(f"{label}.canonical_bytes has an invalid length")
+        from ._account_id import _native_account_codec
+        _native_account_codec()._validate_sccp_account_id_v1(payload)
         return 0, payload
     if kind in ("evm", "tron"):
         _exact_fields(record, frozenset({"kind", "address"}), label)

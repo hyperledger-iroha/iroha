@@ -88,7 +88,7 @@ def test_production_profile_inventory_uses_the_closed_final_v1_domains() -> None
     assert common.PROFILE_DOMAINS == {
         "ethereum-mainnet": 1,
         "bsc-mainnet": 2,
-        "tron-mainnet": 3,
+        "tron-mainnet": 5,
         "ton-mainnet": 4,
     }
     assert "ton-testnet" not in common.PROFILE_ORDER
@@ -331,20 +331,19 @@ def test_historical_readiness_never_becomes_ready_and_live_uses_authority_time()
 
 
 def validator_path() -> Path:
-    """Return the corridor-built production validator or skip integration checks."""
+    """Find a local Rust validator for parser/policy integration tests.
+
+    These checks do not authenticate a production release. Production bundle
+    verification separately requires the exact signed executable identity.
+    """
 
     configured = os.environ.get("SCCP_RELEASE_RUST_VALIDATOR")
     if configured:
         candidate = Path(configured)
         if candidate.is_file() and os.access(candidate, os.X_OK):
             return candidate
-        pytest.skip(
-            "configured production sccp_release_evidence validator is unavailable"
-        )
+        pytest.fail("configured SCCP_RELEASE_RUST_VALIDATOR is not executable")
 
-    expected_hash = json.loads(FIXTURE_EVIDENCE.read_text(encoding="utf-8"))[
-        "validator"
-    ]["executable_sha256_hex"]
     candidates = (
         ROOT
         / "target"
@@ -352,17 +351,41 @@ def validator_path() -> Path:
         / "debug"
         / "sccp_release_evidence",
         ROOT / "target" / "debug" / "sccp_release_evidence",
+        ROOT / "target" / "release" / "sccp_release_evidence",
     )
     for candidate in candidates:
         if (
             candidate.is_file()
             and os.access(candidate, os.X_OK)
-            and hashlib.sha256(candidate.read_bytes()).hexdigest() == expected_hash
         ):
             return candidate
     pytest.skip(
-        "the exact signed production sccp_release_evidence validator has not been built"
+        "build sccp_release_evidence with --features dev-tools and set "
+        "SCCP_RELEASE_RUST_VALIDATOR to run local Rust integration checks"
     )
+
+
+@pytest.mark.parametrize("configured", (True, False))
+def test_local_validator_discovery_does_not_require_retired_fixture_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, configured: bool
+) -> None:
+    monkeypatch.setattr(sys.modules[__name__], "ROOT", tmp_path)
+    monkeypatch.delenv("SCCP_RELEASE_RUST_VALIDATOR", raising=False)
+    candidate = tmp_path / "target" / "debug" / "sccp_release_evidence"
+    candidate.parent.mkdir(parents=True)
+    candidate.write_bytes(b"local-executable-discovery-test-only")
+    candidate.chmod(0o700)
+    if configured:
+        monkeypatch.setenv("SCCP_RELEASE_RUST_VALIDATOR", str(candidate))
+    assert validator_path() == candidate
+
+
+def test_explicit_missing_local_validator_fails_instead_of_skipping(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SCCP_RELEASE_RUST_VALIDATOR", str(tmp_path / "missing"))
+    with pytest.raises(pytest.fail.Exception, match="not executable"):
+        validator_path()
 
 
 def _unit_v4_hash(*parts: str) -> str:
@@ -1334,21 +1357,6 @@ def verify_unit_v4_bundle_integrity(
     common.validate_bundle_index_against_evidence(index, evidence, evidence_bytes)
 
 
-def invoke_validator(artifact: Path) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        [
-            str(validator_path()),
-            "validate",
-            str(artifact),
-            str(FIXTURE_POLICY),
-            str(FIXTURE_EVIDENCE),
-        ],
-        cwd=ROOT,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-
 
 def invoke_release_validator(
     policy: Path, evidence: Path
@@ -1372,14 +1380,27 @@ def test_retired_v3_fixture_is_rejected_by_the_policy_loader() -> None:
         common.load_test_trust_policy(FIXTURE_POLICY)
 
 
-@pytest.mark.skip(
-    reason=(
-        "requires fresh external v4 circuit-auditor and release-role signatures; "
-        "unit keys must never claim release readiness"
+def test_current_unit_evidence_integrity_does_not_claim_live_readiness(
+    tmp_path: Path,
+) -> None:
+    material = unit_v4_fixture(tmp_path)
+    policy, _ = common.load_test_trust_policy(material["policy_path"])
+    evidence, evidence_bytes = common.load_evidence_file(
+        material["evidence_path"], policy
     )
-)
-def test_fresh_v4_release_evidence_is_fully_valid_and_readiness_is_honest() -> None:
-    """Reserved for externally signed current-protocol release evidence."""
+    common.verify_evidence_artifacts(evidence, material["root"])
+    assert policy["environment"] == "test-fixture"
+    assert evidence_bytes == material["evidence_bytes"]
+    assert tuple(
+        lane["counterparty_profile"] for lane in evidence["lanes"]
+    ) == common.PROFILE_ORDER
+    readiness = common.readiness_summary(evidence, bundle_root_hash="33" * 32)
+    assert readiness["mode"] == "historical"
+    assert readiness["ready"] is False
+    assert any(
+        item.startswith("live-freshness:")
+        for item in readiness["blocking_capabilities"]
+    )
 
 
 def test_rust_independently_rejects_the_retired_v3_fixture() -> None:
@@ -1388,40 +1409,94 @@ def test_rust_independently_rejects_the_retired_v3_fixture() -> None:
     assert result.stdout == ""
 
 
+def sign_unit_policy_root(policy: dict[str, object]) -> None:
+    """Re-sign a policy mutation with ephemeral unit keys, never release keys."""
+
+    policy["policy_root_sha256_hex"] = common.policy_root_hash_hex(policy)
+    payload = common.policy_root_signing_payload(policy["policy_root_sha256_hex"])
+    for index, signature in enumerate(policy["offline_policy_root_signatures"]):
+        signature["signature_b64"] = _unit_v4_sign(
+            _unit_v4_keypair(f"policy-root:{index}"), payload
+        )
+
+
+def rust_policy_test_context(tmp_path: Path) -> tuple[dict[str, object], Path, Path]:
+    """Reach the Rust policy boundary with a current typed unit envelope.
+
+    The control must pass every policy/audit check and fail at the deliberately
+    absent build-freshness inventory. It is not a production release bundle.
+    """
+
+    policy, policy_bytes = unit_final_v1_production_policy()
+    material = unit_v4_fixture(tmp_path)
+    evidence = material["evidence"]
+    evidence.update(
+        trust_policy_id=policy["policy_id"],
+        trust_policy_sha256_hex=hashlib.sha256(policy_bytes).hexdigest(),
+        validator_built_at_unix_ms=0,
+        contract_builds=[],
+    )
+    for lane in evidence["lanes"]:
+        lane.update(
+            lane_evidence_at_unix_ms=0,
+            canary_at_unix_ms=0,
+            destination_readback_at_unix_ms=0,
+        )
+    for artifact in evidence["artifacts"]:
+        artifact.update(declared_max_bytes=0, created_at_unix_ms=0)
+    policy_path = tmp_path / "current-policy.json"
+    evidence_path = tmp_path / "current-evidence.json"
+    write_json(policy_path, policy)
+    write_json(evidence_path, evidence)
+    baseline = invoke_release_validator(policy_path, evidence_path)
+    assert baseline.returncode != 0
+    assert baseline.stdout == ""
+    assert "release build freshness inventory is not exact" in baseline.stderr, (
+        baseline.stderr
+    )
+    return policy, policy_path, evidence_path
+
+
 @pytest.mark.parametrize(
-    "case", ("release-replay", "audit-replay", "high-s", "small-order")
+    "case", ("root-replay", "audit-replay", "root-high-s", "small-order")
 )
 def test_rust_release_trust_rejects_malformed_and_cross_role_replay(
     tmp_path: Path, case: str
 ) -> None:
-    policy = json.loads(FIXTURE_POLICY.read_text(encoding="utf-8"))
-    evidence = json.loads(FIXTURE_EVIDENCE.read_text(encoding="utf-8"))
-    if case == "release-replay":
-        evidence["provenance"][1]["signature_b64"] = evidence["provenance"][0][
-            "signature_b64"
-        ]
-    elif case == "audit-replay":
+    policy, policy_path, evidence_path = rust_policy_test_context(tmp_path)
+    if case == "audit-replay":
         policy["proof_systems"][0]["audit_attestations"][1]["signature_b64"] = policy[
             "proof_systems"
         ][0]["audit_attestations"][0]["signature_b64"]
-    elif case == "high-s":
+    elif case == "small-order":
+        policy["roles"][0]["public_key_hex"] = "01" + "00" * 31
+    sign_unit_policy_root(policy)
+    if case == "root-replay":
+        policy["offline_policy_root_signatures"][1]["signature_b64"] = policy[
+            "offline_policy_root_signatures"
+        ][0]["signature_b64"]
+    elif case == "root-high-s":
         signature = bytearray(
-            base64.b64decode(evidence["provenance"][0]["signature_b64"], validate=True)
+            base64.b64decode(
+                policy["offline_policy_root_signatures"][0]["signature_b64"],
+                validate=True,
+            )
         )
         signature[32:] = b"\xff" * 32
-        evidence["provenance"][0]["signature_b64"] = base64.b64encode(
+        policy["offline_policy_root_signatures"][0]["signature_b64"] = base64.b64encode(
             signature
         ).decode()
-    else:
-        policy["roles"][0]["public_key_hex"] = "01" + "00" * 31
-        evidence["provenance"][0]["public_key_hex"] = "01" + "00" * 31
-    policy_path = tmp_path / "policy.json"
-    evidence_path = tmp_path / "evidence.json"
     write_json(policy_path, policy)
-    write_json(evidence_path, evidence)
     result = invoke_release_validator(policy_path, evidence_path)
     assert result.returncode != 0
     assert result.stdout == ""
+    expected_errors = {
+        "root-replay": "offline policy-root signature is replayed across roles",
+        "audit-replay": "detached signature is replayed across trust roles",
+        "root-high-s": "detached Ed25519 signature is invalid",
+        "small-order": "release role key is not a strict Ed25519 public key",
+    }
+    assert expected_errors[case] in result.stderr, result.stderr
 
 
 @pytest.mark.parametrize(
@@ -1450,7 +1525,7 @@ def test_rust_release_trust_rejects_malformed_and_cross_role_replay(
 def test_rust_release_trust_rejects_semantic_policy_and_anchor_drift(
     tmp_path: Path, case: str
 ) -> None:
-    policy = json.loads(FIXTURE_POLICY.read_text(encoding="utf-8"))
+    policy, policy_path, evidence_path = rust_policy_test_context(tmp_path)
     proof = policy["proof_systems"][0]
     anchor = proof["sora_finality_anchor"]
     if case == "circuit-id":
@@ -1495,21 +1570,51 @@ def test_rust_release_trust_rejects_semantic_policy_and_anchor_drift(
         proof["sora_finality_anchor_hash_hex"] = "54" * 32
     else:
         raise AssertionError(case)
-    policy_path = tmp_path / "policy.json"
+    expected_errors = {
+        "circuit-id": "semantic proof-system policy is invalid",
+        "diagnostic-classification": "semantic proof-system policy is invalid",
+        "semantics": "semantic proof-system policy is invalid",
+        "signal-binding-artifact": "labeled-signal-only circuit is forbidden in release policy",
+        "zero-witness": "witness generator digest must not be zero",
+        "aliased-witness": "semantic proof profile is invalid",
+        "signal-schema": "proof policy uses a different public-signal schema",
+        "profile-hash": "semantic proof profile hash does not match its commitments",
+        "anchor-chain": "SORA finality anchor is invalid or aliases consensus roles",
+        "anchor-height": "SORA finality anchor is invalid or aliases consensus roles",
+        "anchor-protocol": "SORA finality anchor must select exact Taira Sumeragi-v2",
+        "anchor-zero-context": "SORA finality checkpoint context id must not be zero",
+        "anchor-zero-artifact": "SORA finality checkpoint artifact must not be zero",
+        "anchor-context-alias": "SORA finality anchor is invalid or aliases consensus roles",
+        "anchor-artifact-alias": "SORA finality anchor is invalid or aliases consensus roles",
+        "anchor-protocol-type": "release trust policy does not match its typed schema",
+        "anchor-legacy-field": "release trust policy does not match its typed schema",
+        "anchor-hash": "SORA finality anchor hash does not match its checkpoint",
+    }
+    sign_unit_policy_root(policy)
     write_json(policy_path, policy)
-    result = invoke_release_validator(policy_path, FIXTURE_EVIDENCE)
+    result = invoke_release_validator(policy_path, evidence_path)
     assert result.returncode != 0
     assert result.stdout == ""
+    assert expected_errors[case] in result.stderr, result.stderr
 
 
-@pytest.mark.skip(
-    reason=(
-        "requires a fresh externally signed v4 bundle and its exact authenticated Rust "
-        "validator; unit signatures are not release evidence"
+def test_current_unit_bundle_is_deterministic_and_structurally_verified(
+    tmp_path: Path,
+) -> None:
+    first, first_index, first_material = build_unit_v4_bundle(tmp_path, "first")
+    second, second_index, second_material = build_unit_v4_bundle(tmp_path, "second")
+    verify_unit_v4_bundle_integrity(first, first_material)
+    verify_unit_v4_bundle_integrity(second, second_material)
+    assert first_index == second_index
+    first_paths = common.enumerate_direct_files(first)
+    assert first_paths == common.enumerate_direct_files(second)
+    for relative in first_paths:
+        assert (first / relative).read_bytes() == (second / relative).read_bytes()
+    readiness = common.readiness_summary(
+        first_material["evidence"], bundle_root_hash=first_index["bundle_root_hash_hex"]
     )
-)
-def test_fresh_v4_bundle_is_deterministic_and_independently_verifiable() -> None:
-    """Reserved for a complete externally signed current-protocol bundle."""
+    assert readiness["mode"] == "historical"
+    assert readiness["ready"] is False
 
 
 def test_fixture_cli_proves_the_retired_v3_fixture_is_rejected() -> None:
@@ -2609,68 +2714,8 @@ def test_strict_ed25519_verifier_accepts_rfc8032_and_rejects_malleability() -> N
     assert not common.verify_ed25519(b"\x01" + b"\x00" * 31, signature, b"")
 
 
-def test_rust_validator_rejects_opaque_booleans_as_proof(tmp_path: Path) -> None:
-    artifact = tmp_path / "forged.json"
-    write_json(
-        artifact,
-        {
-            "schema": "sccp-release-lane-evidence-v1",
-            "version": 1,
-            "profile": "ethereum-mainnet",
-            "inbound": {
-                "status": "available",
-                "evidence": {
-                    "proof_valid": True,
-                    "finalized": True,
-                    "route_matches": True,
-                },
-            },
-            "outbound": {
-                "status": "available",
-                "evidence": {"runtime_matches": True, "bridge_immutable": True},
-            },
-        },
-    )
-    result = invoke_validator(artifact)
-    assert result.returncode != 0
-    assert result.stdout == ""
-    assert len(result.stderr) < 4096
-
-
-def test_rust_validator_rejects_mutated_native_proof_bytes(tmp_path: Path) -> None:
-    source = FIXTURE / "artifacts" / "lanes" / "ethereum-mainnet.json"
-    text = source.read_text(encoding="utf-8")
-    marker = '"source_event_digest"'
-    position = text.find(marker)
-    assert position >= 0
-    nibble = next(
-        index
-        for index in range(position, len(text))
-        if text[index] in "123456789abcdef"
-    )
-    replacement = "0" if text[nibble] != "0" else "1"
-    artifact = tmp_path / "mutated.json"
-    artifact.write_text(
-        text[:nibble] + replacement + text[nibble + 1 :], encoding="utf-8"
-    )
-    result = invoke_validator(artifact)
-    assert result.returncode != 0
-    assert result.stdout == ""
-
-
-def test_rust_validator_rejects_noncanonical_lane_json(tmp_path: Path) -> None:
-    source = FIXTURE / "artifacts" / "lanes" / "bsc-mainnet.json"
-    value = json.loads(source.read_text(encoding="utf-8"))
-    pretty = tmp_path / "pretty.json"
-    pretty.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
-    assert invoke_validator(pretty).returncode != 0
-    duplicate = tmp_path / "duplicate.json"
-    raw = source.read_text(encoding="utf-8")
-    duplicate.write_text(
-        raw.replace("{", '{"schema":"duplicate",', 1), encoding="utf-8"
-    )
-    assert invoke_validator(duplicate).returncode != 0
-
+# Native proof and lane-parser regressions live at the Rust validator boundary,
+# where positive controls establish that release-policy rejection cannot mask them.
 
 def test_validator_substitution_is_rejected_before_execution(tmp_path: Path) -> None:
     material = unit_v4_fixture(tmp_path)

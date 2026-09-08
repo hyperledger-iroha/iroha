@@ -975,6 +975,7 @@ mod tests {
                     iroha_config::parameters::defaults::network::MAX_FRAME_BYTES_PEER_GOSSIP.get(),
                 max_frame_bytes_health:
                     iroha_config::parameters::defaults::network::MAX_FRAME_BYTES_HEALTH.get(),
+                max_frame_bytes_connect: iroha_config::parameters::defaults::network::MAX_FRAME_BYTES_CONNECT.get(),
                 max_frame_bytes_other:
                     iroha_config::parameters::defaults::network::MAX_FRAME_BYTES_OTHER.get(),
                 quic_max_idle_timeout: None,
@@ -1642,8 +1643,8 @@ mod tests {
                     iroha_config::parameters::defaults::confidential::POSEIDON_PARAMS_ID,
                 pedersen_params_id:
                     iroha_config::parameters::defaults::confidential::PEDERSEN_PARAMS_ID,
-                kaigi_roster_join_vk: None,
-                kaigi_roster_leave_vk: None,
+                kaigi_authorization_vk: None,
+
                 kaigi_usage_vk: None,
                 max_proof_size_bytes:
                     iroha_config::parameters::defaults::confidential::MAX_PROOF_SIZE_BYTES,

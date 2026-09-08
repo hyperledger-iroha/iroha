@@ -1,5 +1,57 @@
 # Executed lexically in check_sumeragi_v2_proof_ledger.py; do not import directly.
 
+def _recovered_fetch_canonical_selector_owner_errors(
+    selector_source: str, ingress_source: str, driver_source: str,
+) -> list[str]:
+    """Keep the live fair-turn owners separate from the executor test facade."""
+    errors: list[str] = []
+    for label, source, name, attributes in (
+        ("selector", selector_source, "classify_selected_certified_response_priority", ()),
+        ("selector", selector_source, "prepare_recovered_decision_fetch_from_selected_cut", ()),
+        ("ingress", ingress_source, "capture_next_ingress_turn_cut", ()),
+        ("ingress", ingress_source, "narrow_to_lifecycle", ("#[allow(clippy::result_large_err)]",)),
+        ("driver", driver_source, "drive_ingress_turn", ("#[cfg_attr(not(test), allow(dead_code))]",)),
+    ):
+        items = rust_items(source, name)
+        expected_context = (rust_code_tokens(
+            "impl<R: crate::sumeragi::v2_effects::EffectRuntime> V2EffectExecutor<R>"
+            if label == "selector" else
+            "impl FairV2Ingress" if name == "capture_next_ingress_turn_cut" else
+            "impl<'a> FairIngressTurnCut<'a>" if name == "narrow_to_lifecycle" else
+            "impl LaunchedProductionLifecycleV1"
+        ),)
+        if label == "driver":
+            items = tuple(item for item in items if item.brace_context == expected_context)
+        if len(items) != 1 or items[0].brace_context != expected_context or tuple(
+            rust_code_tokens(attribute) for attribute in items[0].attributes
+        ) != tuple(rust_code_tokens(attribute) for attribute in attributes):
+            errors.append(
+                f"recovered Fetch canonical {label} owner {name} must be one production item"
+            )
+    facades = rust_items(
+        selector_source, "prepare_next_recovered_decision_fetch_ingress_selector"
+    )
+    test_gate = rust_code_tokens("#[cfg(test)]")
+    if len(facades) != 1 or facades[0].brace_context != (rust_code_tokens(
+        "impl<R: crate::sumeragi::v2_effects::EffectRuntime> V2EffectExecutor<R>"
+    ),) or tuple(
+        rust_code_tokens(attribute) for attribute in facades[0].attributes
+    ) != (test_gate,):
+        errors.append(
+            "recovered Fetch executor fixture facade must remain exactly cfg(test)"
+        )
+    ingress_tokens = rust_code_tokens(ingress_source)
+    for retired in (
+        "fn capture_next_lifecycle_queue_cut(",
+        "fn capture_lifecycle_queue_cut_for(",
+        "fn select_next_admissible_ordinal(",
+        "enum LifecycleQueueCutTarget",
+    ):
+        if _token_sequence_count(ingress_tokens, rust_code_tokens(retired)):
+            errors.append(f"retired recovered Fetch queue owner remains: {retired}")
+    return errors
+
+
 def _lifecycle_turn_driver_ordinary_ingress_source_fidelity_errors(repo_root: Path) -> list[str]:
     """Pin the queue-owned ordinary/Serve ingress turn prerequisite."""
 
@@ -1350,6 +1402,10 @@ pub(super) struct LockedPreparedFairIngressExactDequeue<'a> {
         ),
     )
 
+    errors.extend(_recovered_fetch_canonical_selector_owner_errors(
+        sources["selector"], sources["ingress"], sources["driver"],
+    ))
+
     ordinary_capture = item("ingress", "capture_next_ingress_turn_cut")
     require_tokens(
         "ingress",
@@ -2362,7 +2418,7 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
             "select_blocked_ordinary_lane_local_ingress(receiver, permit)?",
             "inbound.message().is_lane_local()",
             "return Err(V2RunnerError::Service(",
-            "lane_work.accept_lane_message_with_ingress_ownership(inbound, active_view)",
+            "lane_work.accept_lane_message_with_ingress_ownership(inbound, active_view)?",
             "Ok(true)",
         ),
     )
@@ -2402,34 +2458,8 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
         ),
     )
     decided_serve = item("runner", "commit_certified_serve")
-    require_order(
-        "runner",
-        decided_serve,
-        "terminal certified Serve guarded durable response",
-        (
-            "self.take_inbound()?",
-            "self.take_bound_leader_wire()?",
-            "message.validate_version()",
-            "ConsensusMessageV2Payload::CertifiedBodyRequest(request)",
-            "scope.permits_height(request.round.height, self.executor.context().height)",
-            "if !scope.permits_subject(request.subject, self.decided_subject)",
-            "mark_leader_wire_volatile(self.receiver, &ingress_ownership)?",
-            "return Ok(())",
-            "let Some(reply_routes) = reply_routes",
-            "reply_routes.semantic_target() != &sender",
-            "let response_peer = sender.clone()",
-            "let terminal_ownership = ingress_ownership.clone()",
-            "serve_block_sync_while_guarded(",
-            "block_sync_server.serve_historical_body(kura, request, &sender, local_key)",
-            "post_durable_history_response_on_reply_routes_with_permit(",
-            "response_peer",
-            "reply_routes",
-            "ingress_ownership",
-            "response",
-            "permit",
-            "finalize_bound_block_sync_serve(",
-            "|| mark_leader_wire_volatile(self.receiver, &terminal_ownership)",
-        ),
+    _require_decided_certified_serve_source_contracts(
+        paths["runner"], decided_serve, errors,
     )
     decided_drain = item("runner", "drain_decided_lane_recovery_ingress")
     require_order(

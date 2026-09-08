@@ -253,13 +253,14 @@ fn adapter_effect_binding_is_exact_route_neutral_and_three_bounded() {
         payload_hash: Hash::new(b"conflicting diagnostic payload"),
         ..first_vote.subject
     };
-    second_vote.execution_commitment = wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
-        Hash::new(b"conflicting diagnostic parent state"),
-        Hash::new(b"conflicting diagnostic post state"),
-        Hash::new(b"conflicting diagnostic ordinary writes"),
-        1,
-        Hash::new(b"conflicting diagnostic executed block"),
-    );
+    second_vote.execution_commitment =
+        wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+            Hash::new(b"conflicting diagnostic parent state"),
+            Hash::new(b"conflicting diagnostic post state"),
+            Hash::new(b"conflicting diagnostic ordinary writes"),
+            1,
+            Hash::new(b"conflicting diagnostic executed block"),
+        );
     second_vote.signature = vec![0xB2; 96];
     let diagnostic = AdapterEffect::ReportEquivocation {
         evidence: AdapterEquivocationEvidence::vote_for_test(
@@ -691,14 +692,15 @@ fn fetch_authority_relation_is_monotonic_and_recognizes_stale_carriers() {
         Some(RuntimeFetchAuthorityRelation::Stale)
     );
     let mut changed_commitment = prepare;
-    changed_commitment.execution_commitment =
-        Some(wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+    changed_commitment.execution_commitment = Some(
+        wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
             Hash::new(b"foreign fetch parent state"),
             Hash::new(b"foreign fetch post state"),
             Hash::new(b"foreign fetch writes"),
             1,
             Hash::new(b"foreign fetch block"),
-        ));
+        ),
+    );
     assert_eq!(
         prepare.fetch_authority_relation_to(changed_commitment),
         None,
@@ -736,13 +738,15 @@ fn candidate_statement_binds_manifest_by_exact_consensus_coordinates() {
         manifest.round,
         Some(manifest.subject),
         Some(wire::GlobalPhase::Commit),
-        Some(wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
-            Hash::new(b"manifest parent state"),
-            Hash::new(b"manifest post state"),
-            Hash::new(b"manifest writes"),
-            1,
-            Hash::new(b"manifest executed block"),
-        )),
+        Some(
+            wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+                Hash::new(b"manifest parent state"),
+                Hash::new(b"manifest post state"),
+                Hash::new(b"manifest writes"),
+                1,
+                Hash::new(b"manifest executed block"),
+            ),
+        ),
     );
     assert!(statement.binds_exact_body_manifest(&manifest));
     let certified_round = wire::ConsensusRound {
@@ -1301,7 +1305,7 @@ fn bind_deferred_lifecycle_owner_for_test(
     );
     owner
 }
-fn bind_local_deferred_lifecycle_for_test(
+pub(in crate::sumeragi) fn bind_local_deferred_lifecycle_for_test(
     runtime: &mut SerializedV2Runtime<SumeragiV2Adapter>,
     deferred_admission_ordinal: u128,
     semantic_identity: &[u8],
@@ -1379,6 +1383,7 @@ fn preowned_leader_wire_ownerships_with_dequeue_mode(
     messages: &[(wire::ConsensusMessageV2, PeerId)],
     lifecycle_ordinals: RuntimeLifecycleOrdinalSource,
     push_all_before_dequeue: bool,
+    wal_adapter: Option<(&SumeragiV2Adapter, &std::path::Path, [u8; 32])>,
 ) -> (
     TempDir,
     Arc<super::super::FairV2Ingress>,
@@ -1393,7 +1398,9 @@ fn preowned_leader_wire_ownerships_with_dequeue_mode(
             64,
             512 * 1024 * 1024,
             64 * 1024 * 1024,
-            super::super::CERTIFIED_FENCE_ESCAPE_RESERVE_BYTES,
+            super::super::fair_v2_ingress_required_certified_fence_escape_bytes(
+                context.roster.len(),
+            ),
             8 * 1024 * 1024,
             transport_completion_byte_reserve,
             usize::MAX,
@@ -1418,28 +1425,26 @@ fn preowned_leader_wire_ownerships_with_dequeue_mode(
             context.da_layout.max_chunk_count,
         )
         .expect("finite preowned leader-wire capacity");
-    let recovery_authority =
-        super::super::serviced_candidate_store::LeaderWireRecoveryAuthority::from_replayed_adapter(
-            context.id(),
-            context.height,
-            [0xE7; 32],
-            0,
-            false,
-        );
-    let (gate, restore) =
-        super::super::serviced_candidate_store::LeaderWireLifecycleStoreGate::open(
-            &directory.path().join("leader-wire-preowned.wal"),
-            context.id(),
-            context.height,
-            [0xE7; 32],
-            roster.iter().cloned().collect(),
-            capacity,
-            context.da_layout.max_chunk_count,
-            recovery_authority,
-            &[],
-            &[],
+    let (gate, restore) = if let Some((adapter, wal_path, owner)) = wal_adapter {
+        assert_eq!(adapter.wire_context(), context);
+        let authority = adapter.leader_wire_recovery_authority().expect("actual replayed consumer");
+        assert!(authority.matches_geometry(context.id(), context.height, owner));
+        super::super::serviced_candidate_store::LeaderWireLifecycleStoreGate::open_with_safety_wal_authority(
+            adapter.mint_leader_wire_store_authority(wal_path).expect("exact runtime safety-WAL sibling"),
+            context.id(), context.height, owner, roster.iter().cloned().collect(), capacity,
+            context.da_layout.max_chunk_count, authority, &[], &[],
         )
-        .expect("open preowned leader-wire gate");
+    } else {
+        // Isolated store-geometry fixtures have no reducer. Runtime transition
+        // regressions below always supply their actual open safety WAL.
+        let authority = super::super::serviced_candidate_store::LeaderWireRecoveryAuthority::from_replayed_adapter(
+            context.id(), context.height, [0xE7; 32], 0, false);
+        super::super::serviced_candidate_store::LeaderWireLifecycleStoreGate::open(
+            &directory.path().join("leader-wire-preowned.wal"), context.id(), context.height,
+            [0xE7; 32], roster.iter().cloned().collect(), capacity,
+            context.da_layout.max_chunk_count, authority, &[], &[],
+        )
+    }.expect("open preowned leader-wire gate");
     ingress
         .bind_leader_wire_lifecycle_gate(
             Arc::clone(&gate),
@@ -1452,13 +1457,17 @@ fn preowned_leader_wire_ownerships_with_dequeue_mode(
     ingress.open().expect("open preowned fair ingress");
     if push_all_before_dequeue {
         for (message, semantic_origin) in messages {
-            assert!(matches!(
-                ingress.try_push(InboundBlockMessage::from_authenticated_peer(
-                    BlockMessage::V2(message.clone()),
-                    semantic_origin.clone(),
-                )),
-                Ok(super::super::FairV2IngressPushDisposition::Enqueued)
+            let admission = ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+                BlockMessage::V2(message.clone()),
+                semantic_origin.clone(),
             ));
+            assert!(
+                matches!(
+                    &admission,
+                    Ok(super::super::FairV2IngressPushDisposition::Enqueued)
+                ),
+                "preowned exact wire admission failed: {admission:?}"
+            );
         }
     }
     let ownerships = messages
@@ -1466,13 +1475,17 @@ fn preowned_leader_wire_ownerships_with_dequeue_mode(
         .enumerate()
         .map(|(message_index, (message, semantic_origin))| {
             if !push_all_before_dequeue {
-                assert!(matches!(
-                    ingress.try_push(InboundBlockMessage::from_authenticated_peer(
-                        BlockMessage::V2(message.clone()),
-                        semantic_origin.clone(),
-                    )),
-                    Ok(super::super::FairV2IngressPushDisposition::Enqueued)
+                let admission = ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+                    BlockMessage::V2(message.clone()),
+                    semantic_origin.clone(),
                 ));
+                assert!(
+                    matches!(
+                        &admission,
+                        Ok(super::super::FairV2IngressPushDisposition::Enqueued)
+                    ),
+                    "preowned exact wire admission failed: {admission:?}"
+                );
             }
             let mut admitted = ingress
                 .try_recv()
@@ -1536,7 +1549,13 @@ pub(in crate::sumeragi) fn preowned_leader_wire_ownerships(
     Arc<super::super::FairV2Ingress>,
     Vec<FairV2IngressOwnershipEvidence>,
 ) {
-    preowned_leader_wire_ownerships_with_dequeue_mode(context, messages, lifecycle_ordinals, false)
+    preowned_leader_wire_ownerships_with_dequeue_mode(
+        context,
+        messages,
+        lifecycle_ordinals,
+        false,
+        None,
+    )
 }
 fn preowned_leader_wire_ownerships_at_shared_cut(
     context: &wire::HeightContext,
@@ -1547,7 +1566,35 @@ fn preowned_leader_wire_ownerships_at_shared_cut(
     Arc<super::super::FairV2Ingress>,
     Vec<FairV2IngressOwnershipEvidence>,
 ) {
-    preowned_leader_wire_ownerships_with_dequeue_mode(context, messages, lifecycle_ordinals, true)
+    preowned_leader_wire_ownerships_with_dequeue_mode(
+        context,
+        messages,
+        lifecycle_ordinals,
+        true,
+        None,
+    )
+}
+fn preowned_runtime_wal_ownerships(
+    runtime: &SerializedV2Runtime<SumeragiV2Adapter>,
+    runtime_directory: &TempDir,
+    messages: &[(wire::ConsensusMessageV2, PeerId)],
+    push_all_before_dequeue: bool,
+) -> (
+    TempDir,
+    Arc<super::super::FairV2Ingress>,
+    Vec<FairV2IngressOwnershipEvidence>,
+) {
+    preowned_leader_wire_ownerships_with_dequeue_mode(
+        runtime.driver.wire_context(),
+        messages,
+        runtime.ingress.lifecycle_ordinals.clone(),
+        push_all_before_dequeue,
+        Some((
+            &runtime.driver,
+            &runtime_directory.path().join("runtime-ingress-safety.wal"),
+            Hash::new(b"runtime ingress node").into(),
+        )),
+    )
 }
 struct LeaderWireProposalFixture {
     ingress: Arc<super::super::FairV2Ingress>,
@@ -1572,7 +1619,9 @@ fn leader_wire_proposal_fixture(
             64,
             512 * 1024 * 1024,
             64 * 1024 * 1024,
-            super::super::CERTIFIED_FENCE_ESCAPE_RESERVE_BYTES,
+            super::super::fair_v2_ingress_required_certified_fence_escape_bytes(
+                context.roster.len(),
+            ),
             8 * 1024 * 1024,
             8 * 1024 * 1024,
             usize::MAX,

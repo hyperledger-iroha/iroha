@@ -41,7 +41,8 @@ use super::{
     KAGEMUSHA_IPA_POSEIDON_WIDTH_V1 as PASTA_IPA_POSEIDON_WIDTH_V1,
     KAGEMUSHA_PARITY_PROOF_MAX_BYTES_V1, KagemushaArtifactByteResolverV1, KagemushaArtifactErrorV1,
     KagemushaAuthenticatedArtifactSetV1, KagemushaEpAccumulatorV1, KagemushaEqAccumulatorV1,
-    KagemushaParityVerificationRequestV1, KagemushaPastaParityV1, KagemushaRecursiveVerifierV1,
+    KagemushaParityVerificationRequestV1, KagemushaPastaParityV1,
+    KagemushaProviderRootCircuitParamsV1, KagemushaRecursiveVerifierV1,
     KagemushaStateProofVerificationRequestV1, KagemushaTerminalAuthorizationPublicInputsV1,
     composite::{KagemushaRecursiveStateEpCircuitV1, KagemushaRecursiveStateEqCircuitV1},
     decide_kagemusha_ep_accumulator_v1, decide_kagemusha_eq_accumulator_v1,
@@ -233,11 +234,20 @@ fn validate_kagemusha_base_circuit_params_with_instance_columns_at_k_v1(
 }
 
 fn validate_authenticated_guard_protocol_binding_v1(
+    eq_num_instance: &[usize],
+    ep_num_instance: &[usize],
     actual_eq: [u8; 32],
     actual_ep: [u8; 32],
     expected_eq: [u8; 32],
     expected_ep: [u8; 32],
 ) -> Result<(), String> {
+    if eq_num_instance != [GUARD_RECURSIVE_PUBLIC_INSTANCE_COUNT_V1]
+        || ep_num_instance != [GUARD_RECURSIVE_PUBLIC_INSTANCE_COUNT_V1]
+    {
+        return Err(
+            "Kagemusha GuardBundle protocol omits proof-bound credential digests".to_owned(),
+        );
+    }
     if actual_eq != expected_eq || actual_ep != expected_ep {
         return Err("Kagemusha GuardBundle compiled protocol release mismatch".to_owned());
     }
@@ -247,7 +257,7 @@ fn validate_authenticated_guard_protocol_binding_v1(
 /// Exact `halo2-base` layouts for authenticated outer and private recursive proof roles.
 ///
 /// These values are covered by [`Self::canonical_digest`], which must equal the release
-/// manifest's authenticated profile digest. They are explicit because processed Halo2 keys do
+/// receipt's authenticated native-layout digest. They are explicit because processed Halo2 keys do
 /// not safely self-describe a circuit configuration.
 #[derive(Clone, Debug)]
 pub struct KagemushaRecursiveVerifierProfileV1 {
@@ -394,7 +404,7 @@ impl KagemushaRecursiveVerifierProfileV1 {
         let digest = self
             .canonical_digest()
             .map_err(KagemushaArtifactErrorV1::InvalidRelease)?;
-        if digest != artifacts.recursion_artifacts().profile_digest {
+        if digest != artifacts.native_profile_digest() {
             return Err(KagemushaArtifactErrorV1::InvalidRelease(
                 "recursive circuit profile digest mismatch".to_owned(),
             ));
@@ -481,18 +491,25 @@ impl KagemushaRecursiveVerifierProfileV1 {
     }
 }
 
-/// Release-authenticated accepting verifier for the paired recursive state relation.
+/// Release-authenticated proof material with fail-closed device monetary acceptance.
 ///
 /// Construction authenticates every key byte, validates the circuit profile, recompiles all
 /// protocols, and checks the state protocol identities recorded by the release. Verification
 /// then supplies the exact Guard protocol identities derived from the authenticated Guard keys.
+/// State/payment/terminal acceptance remains unavailable until the actual recursive credential
+/// relation binds its provider-policy root to governed authority. Raw proof diagnostics and the
+/// independent consensus-backed mint-finality verifier do not establish device authority.
 pub struct KagemushaAuthenticatedRecursiveVerifierV1 {
     eq_parameters: halo2_proofs::poly::ipa::commitment::ParamsIPA<EqAffine>,
     ep_parameters: halo2_proofs::poly::ipa::commitment::ParamsIPA<EpAffine>,
+    inner_eq_state_protocol: snark_verifier::verifier::plonk::PlonkProtocol<EqAffine>,
+    inner_ep_state_protocol: snark_verifier::verifier::plonk::PlonkProtocol<EpAffine>,
+    state_checkpoint_artifacts: super::KagemushaRecursionArtifactsV1,
+    provider_policy_root: [u8; 32],
+    eq_guard_protocol: snark_verifier::verifier::plonk::PlonkProtocol<EqAffine>,
+    ep_guard_protocol: snark_verifier::verifier::plonk::PlonkProtocol<EpAffine>,
     eq_state_protocol: snark_verifier::verifier::plonk::PlonkProtocol<EqAffine>,
     ep_state_protocol: snark_verifier::verifier::plonk::PlonkProtocol<EpAffine>,
-    eq_terminal_authorization_protocol: snark_verifier::verifier::plonk::PlonkProtocol<EqAffine>,
-    ep_terminal_authorization_protocol: snark_verifier::verifier::plonk::PlonkProtocol<EpAffine>,
     eq_commit_wrapper_protocol: snark_verifier::verifier::plonk::PlonkProtocol<EqAffine>,
     ep_commit_wrapper_protocol: snark_verifier::verifier::plonk::PlonkProtocol<EpAffine>,
     eq_mint_authorization_protocol: snark_verifier::verifier::plonk::PlonkProtocol<EqAffine>,
@@ -540,6 +557,7 @@ impl KagemushaAuthenticatedRecursiveVerifierV1 {
     {
         profile.validate_against_artifacts(artifacts)?;
         let recursion = artifacts.recursion_artifacts();
+        let provider_policy_root = artifacts.provider_policy_root();
         let eq_parameters = artifacts.load_eq_params()?;
         let ep_parameters = artifacts.load_ep_params()?;
         let inner_eq_state_vk = read_eq_inner_state_vk(
@@ -571,12 +589,14 @@ impl KagemushaAuthenticatedRecursiveVerifierV1 {
                 .resolve(KagemushaArtifactRoleV1::GuardBundleVkEq)?
                 .as_ref(),
             profile.guard_eq,
+            provider_policy_root,
         )?;
         let ep_guard_vk = read_ep_guard_vk(
             artifacts
                 .resolve(KagemushaArtifactRoleV1::GuardBundleVkEp)?
                 .as_ref(),
             profile.guard_ep,
+            provider_policy_root,
         )?;
         let eq_terminal_authorization_vk = read_eq_terminal_authorization_vk(
             artifacts
@@ -607,12 +627,14 @@ impl KagemushaAuthenticatedRecursiveVerifierV1 {
                 .resolve(KagemushaArtifactRoleV1::MintAuthorizationVkEq)?
                 .as_ref(),
             profile.mint_authorization_eq,
+            provider_policy_root,
         )?;
         let ep_mint_authorization_vk = read_ep_mint_authorization_vk(
             artifacts
                 .resolve(KagemushaArtifactRoleV1::MintAuthorizationVkEp)?
                 .as_ref(),
             profile.mint_authorization_ep,
+            provider_policy_root,
         )?;
         let eq_mint_vk = read_eq_mint_vk(
             artifacts
@@ -697,6 +719,8 @@ impl KagemushaAuthenticatedRecursiveVerifierV1 {
             .guard_bundle_protocol_digest(KagemushaPastaParityV1::Ep)
             .map_err(|error| KagemushaArtifactErrorV1::InvalidRelease(error.to_string()))?;
         validate_authenticated_guard_protocol_binding_v1(
+            &eq_guard_protocol.num_instance,
+            &ep_guard_protocol.num_instance,
             guard_eq_protocol_digest,
             guard_ep_protocol_digest,
             expected_guard_eq_protocol_digest,
@@ -859,10 +883,14 @@ impl KagemushaAuthenticatedRecursiveVerifierV1 {
         let verifier = Self {
             eq_parameters,
             ep_parameters,
+            inner_eq_state_protocol,
+            inner_ep_state_protocol,
+            state_checkpoint_artifacts: recursion,
+            provider_policy_root,
+            eq_guard_protocol,
+            ep_guard_protocol,
             eq_state_protocol,
             ep_state_protocol,
-            eq_terminal_authorization_protocol,
-            ep_terminal_authorization_protocol,
             eq_commit_wrapper_protocol,
             ep_commit_wrapper_protocol,
             eq_mint_authorization_protocol,
@@ -894,6 +922,61 @@ impl KagemushaAuthenticatedRecursiveVerifierV1 {
             commit_wrapper_ep_binding: recursion.commit_wrapper_verifying_key_ep,
         };
         Ok(verifier)
+    }
+
+    /// Borrow only immutable, release-authenticated material for private State restoration.
+    pub(super) fn state_checkpoint_material(
+        &self,
+    ) -> super::state_checkpoint::KagemushaStateCheckpointVerifierMaterialV1<'_> {
+        use super::state_checkpoint::{
+            KagemushaStateCheckpointBindingV1, KagemushaStateCheckpointVerifierMaterialV1,
+        };
+        KagemushaStateCheckpointVerifierMaterialV1 {
+            eq_parameters: &self.eq_parameters,
+            ep_parameters: &self.ep_parameters,
+            inner_eq_protocol: &self.inner_eq_state_protocol,
+            inner_ep_protocol: &self.inner_ep_state_protocol,
+            outer_eq_protocol: &self.eq_state_protocol,
+            outer_ep_protocol: &self.ep_state_protocol,
+            binding: KagemushaStateCheckpointBindingV1 {
+                release_id: self.release_id,
+                suite_id: self.suite_id,
+                vk_set_digest: self.vk_set_digest,
+                artifact_manifest_digest: self.artifact_manifest_digest,
+                inner_eq_protocol_digest: self.inner_eq_protocol_digest,
+                inner_ep_protocol_digest: self.inner_ep_protocol_digest,
+                outer_eq_protocol_digest: self.eq_protocol_digest,
+                outer_ep_protocol_digest: self.ep_protocol_digest,
+            },
+            artifacts: self.state_checkpoint_artifacts,
+        }
+    }
+
+    /// Borrow only the immutable Guard protocols authenticated by this release loader.
+    pub(super) fn guard_verifier_material(
+        &self,
+    ) -> super::guard_verifier::KagemushaGuardVerifierMaterialV1<'_> {
+        use super::guard_verifier::{
+            KagemushaGuardVerifierBindingV1, KagemushaGuardVerifierMaterialV1,
+        };
+        KagemushaGuardVerifierMaterialV1 {
+            eq_parameters: &self.eq_parameters,
+            ep_parameters: &self.ep_parameters,
+            eq_protocol: &self.eq_guard_protocol,
+            ep_protocol: &self.ep_guard_protocol,
+            binding: KagemushaGuardVerifierBindingV1 {
+                release_id: self.release_id,
+                suite_id: self.suite_id,
+                vk_set_digest: self.vk_set_digest,
+                artifact_manifest_digest: self.artifact_manifest_digest,
+                eq_protocol_digest: self.guard_eq_protocol_digest,
+                ep_protocol_digest: self.guard_ep_protocol_digest,
+            },
+            canonical_empty_effect_digest: self
+                .state_checkpoint_artifacts
+                .canonical_empty_effect_digest,
+            provider_policy_root: self.provider_policy_root,
+        }
     }
 
     /// Return the actual Eq state protocol identity derived from its authenticated key.
@@ -977,6 +1060,7 @@ impl KagemushaAuthenticatedRecursiveVerifierV1 {
         &self,
         authorization: &KagemushaMintAuthorizationV1,
     ) -> Result<(), String> {
+        require_authenticated_provider_policy_authority_v1()?;
         authorization
             .validate_shape()
             .map_err(|error| error.to_string())?;
@@ -1133,6 +1217,7 @@ impl KagemushaAuthenticatedRecursiveVerifierV1 {
         request: &KagemushaPaymentRequestV1,
         payment: &KagemushaPaymentV1,
     ) -> Result<(), String> {
+        require_authenticated_provider_policy_authority_v1()?;
         payment
             .validate_shape_against(request)
             .map_err(|error| error.to_string())?;
@@ -1191,6 +1276,7 @@ impl KagemushaAuthenticatedRecursiveVerifierV1 {
         &self,
         request: &KagemushaParityVerificationRequestV1<'_>,
     ) -> Result<(), String> {
+        require_authenticated_provider_policy_authority_v1()?;
         if request.public_output.lifecycle.release_id != self.release_id
             || request.public_output.lifecycle.suite_id != self.suite_id
             || request.public_output.lifecycle.vk_digest != self.vk_set_digest
@@ -1257,6 +1343,7 @@ impl KagemushaRecursiveVerifierV1 for KagemushaAuthenticatedRecursiveVerifierV1 
         &self,
         request: &KagemushaStateProofVerificationRequestV1<'_>,
     ) -> Result<(), String> {
+        require_authenticated_provider_policy_authority_v1()?;
         if request.public_inputs.commit_wrapper_eq_protocol_digest
             != self.commit_wrapper_eq_protocol_digest
             || request.public_inputs.commit_wrapper_ep_protocol_digest
@@ -1367,6 +1454,13 @@ impl KagemushaRecursiveVerifierV1 for KagemushaAuthenticatedRecursiveVerifierV1 
     }
 }
 
+/// A host-selected root cannot repair an unanchored private recursive credential relation.
+fn require_authenticated_provider_policy_authority_v1() -> Result<(), String> {
+    // TODO: Remove this gate only after the authenticated provider-policy root is constrained in
+    // the actual credential/Guard/State/terminal proof chain and checked by the native verifier.
+    Err(super::KagemushaGuardVerificationErrorV1::ProviderPolicyAuthorityUnavailable.to_string())
+}
+
 fn append_base_params(bytes: &mut Vec<u8>, params: &BaseCircuitParams) -> Result<(), String> {
     append_usize(bytes, params.k)?;
     append_usize_slice(bytes, &params.num_advice_per_phase)?;
@@ -1446,15 +1540,31 @@ fn read_ep_inner_state_vk(
 fn read_eq_guard_vk(
     bytes: &[u8],
     params: BaseCircuitParams,
+    provider_policy_root: [u8; 32],
 ) -> Result<VerifyingKey<EqAffine>, KagemushaArtifactErrorV1> {
-    read_eq_recursive_vk::<KagemushaGuardBundleEqCircuitV1>(bytes, params, "GuardBundle")
+    let params = KagemushaProviderRootCircuitParamsV1::new(params, provider_policy_root)
+        .map_err(KagemushaArtifactErrorV1::InvalidRelease)?;
+    read_recursive_vk_checked::<EqAffine, KagemushaGuardBundleEqCircuitV1>(
+        bytes,
+        params,
+        KAGEMUSHA_HALO2_K_V1,
+        "Eq provider-root-bound GuardBundle",
+    )
 }
 
 fn read_ep_guard_vk(
     bytes: &[u8],
     params: BaseCircuitParams,
+    provider_policy_root: [u8; 32],
 ) -> Result<VerifyingKey<EpAffine>, KagemushaArtifactErrorV1> {
-    read_ep_recursive_vk::<KagemushaGuardBundleEpCircuitV1>(bytes, params, "GuardBundle")
+    let params = KagemushaProviderRootCircuitParamsV1::new(params, provider_policy_root)
+        .map_err(KagemushaArtifactErrorV1::InvalidRelease)?;
+    read_recursive_vk_checked::<EpAffine, KagemushaGuardBundleEpCircuitV1>(
+        bytes,
+        params,
+        KAGEMUSHA_HALO2_K_V1,
+        "Ep provider-root-bound GuardBundle",
+    )
 }
 
 fn read_eq_terminal_authorization_vk(
@@ -1496,22 +1606,30 @@ fn read_ep_commit_wrapper_vk(
 fn read_eq_mint_authorization_vk(
     bytes: &[u8],
     params: BaseCircuitParams,
+    provider_policy_root: [u8; 32],
 ) -> Result<VerifyingKey<EqAffine>, KagemushaArtifactErrorV1> {
-    read_eq_recursive_vk::<KagemushaMintAuthorizationTransportEqCircuitV1>(
+    let params = KagemushaProviderRootCircuitParamsV1::new(params, provider_policy_root)
+        .map_err(KagemushaArtifactErrorV1::InvalidRelease)?;
+    read_recursive_vk_checked::<EqAffine, KagemushaMintAuthorizationTransportEqCircuitV1>(
         bytes,
         params,
-        "mint authorization",
+        KAGEMUSHA_HALO2_K_V1,
+        "Eq provider-root-bound mint authorization",
     )
 }
 
 fn read_ep_mint_authorization_vk(
     bytes: &[u8],
     params: BaseCircuitParams,
+    provider_policy_root: [u8; 32],
 ) -> Result<VerifyingKey<EpAffine>, KagemushaArtifactErrorV1> {
-    read_ep_recursive_vk::<KagemushaMintAuthorizationTransportEpCircuitV1>(
+    let params = KagemushaProviderRootCircuitParamsV1::new(params, provider_policy_root)
+        .map_err(KagemushaArtifactErrorV1::InvalidRelease)?;
+    read_recursive_vk_checked::<EpAffine, KagemushaMintAuthorizationTransportEpCircuitV1>(
         bytes,
         params,
-        "mint authorization",
+        KAGEMUSHA_HALO2_K_V1,
+        "Ep provider-root-bound mint authorization",
     )
 }
 
@@ -1628,6 +1746,66 @@ mod checked_loader_tests {
     use iroha_data_model::kagemusha::KagemushaArtifactBindingV1;
 
     use super::*;
+
+    #[test]
+    fn native_guard_protocol_requires_both_credential_slots_and_exact_release_identity() {
+        assert_eq!(GUARD_RECURSIVE_PUBLIC_INSTANCE_COUNT_V1, 44);
+        let validate = |eq: &[usize], ep: &[usize], eq_digest, ep_digest| {
+            validate_authenticated_guard_protocol_binding_v1(
+                eq, ep, eq_digest, ep_digest, [1; 32], [2; 32],
+            )
+        };
+        assert!(validate(&[44], &[44], [1; 32], [2; 32]).is_ok());
+        for shape in [
+            vec![40],
+            vec![42],
+            vec![46],
+            vec![],
+            vec![22, 22],
+            vec![44, 0],
+        ] {
+            assert!(validate(&shape, &[44], [1; 32], [2; 32]).is_err());
+            assert!(validate(&[44], &shape, [1; 32], [2; 32]).is_err());
+        }
+        assert!(validate(&[44], &[44], [3; 32], [2; 32]).is_err());
+        assert!(validate(&[44], &[44], [1; 32], [3; 32]).is_err());
+        assert!(validate(&[44], &[44], [2; 32], [1; 32]).is_err());
+    }
+
+    #[test]
+    fn native_monetary_entrypoints_fail_closed_before_caller_proof_or_policy_values() {
+        let source = include_str!("native_backend.rs");
+        // These are the four provider-dependent accepting paths, including recipient mint
+        // authorization. Each must reject before caller input is read; independent finalized
+        // reserve authority does not claim device-provider authority and remains separate.
+        for declaration in [
+            "    pub fn verify_mint_authorization(",
+            "    pub fn verify_payment_and_decide(",
+            "    fn verify_terminal_authorization_request(",
+            "    fn verify_state_proof_and_decide(",
+        ] {
+            let method = source
+                .split_once(declaration)
+                .expect("monetary entrypoint")
+                .1;
+            let body = method
+                .split_once(") -> Result<(), String> {")
+                .expect("method body")
+                .1;
+            assert!(
+                body.trim_start()
+                    .starts_with("require_authenticated_provider_policy_authority_v1()?;")
+            );
+        }
+        // Even well-shaped, nonzero canonical scalar/root choices never become gate inputs.
+        for scalar in [Fp::from(1), Fp::from(2), Fp::from(3)] {
+            assert_ne!(crate::zk::kagemusha_v1_poseidon::encode(scalar), [0; 32]);
+            assert_eq!(
+                require_authenticated_provider_policy_authority_v1(),
+                Err(super::super::KagemushaGuardVerificationErrorV1::ProviderPolicyAuthorityUnavailable.to_string())
+            );
+        }
+    }
 
     fn base_params() -> BaseCircuitParams {
         BaseCircuitParams {
@@ -1964,6 +2142,36 @@ mod checked_loader_tests {
         assert_eq!(reads.load(Ordering::SeqCst), 0);
     }
 
+    #[test]
+    fn checked_profile_uses_native_identity_and_matches_python_golden() {
+        let profile = profile();
+        let digest = profile.canonical_digest().expect("valid native layout");
+        assert_eq!(
+            hex::encode(digest),
+            "4cafcb7a8658d0cd082f187fe33ba042930fb846c9caa7462887675bf71721cf"
+        );
+        let reads = Arc::new(AtomicUsize::new(0));
+        // This fixture tests digest selection and preflight only. The data-model release tests
+        // separately authenticate this receipt field through the complete threshold signature.
+        let artifacts = KagemushaAuthenticatedArtifactSetV1::for_stream_tests(
+            CountingResolver(Arc::clone(&reads)),
+            KagemushaArtifactBindingV1 {
+                role: KagemushaArtifactRoleV1::StateVkEq,
+                sha256: digest,
+                byte_len: 4,
+            },
+        );
+        assert_ne!(artifacts.recursion_artifacts().profile_digest, digest);
+        assert_eq!(artifacts.native_profile_digest(), digest);
+        profile
+            .validate_against_artifacts(&artifacts)
+            .expect("exact native layout");
+        let mut changed = profile;
+        changed.inner_state_eq.num_fixed += 1;
+        assert!(changed.validate_against_artifacts(&artifacts).is_err());
+        assert_eq!(reads.load(Ordering::SeqCst), 0);
+    }
+
     #[cfg(feature = "zk-halo2-ipa")]
     #[test]
     fn checked_profile_generation_rejects_phase_holes_before_artifact_reads() {
@@ -2181,13 +2389,13 @@ mod checked_loader_tests {
             .unwrap()
             .to_bytes(SerdeFormat::Processed);
         for result in [
-            read_eq_mint_authorization_vk(&eq_bytes, base_params()),
+            read_eq_mint_authorization_vk(&eq_bytes, base_params(), [0x31; 32]),
             read_eq_mint_vk(&eq_bytes, base_params()),
         ] {
             assert!(result.is_err());
         }
         for result in [
-            read_ep_mint_authorization_vk(&ep_bytes, base_params()),
+            read_ep_mint_authorization_vk(&ep_bytes, base_params(), [0x31; 32]),
             read_ep_mint_vk(&ep_bytes, base_params()),
         ] {
             assert!(result.is_err());

@@ -1,0 +1,422 @@
+[
+  {
+    "instruction": {
+      "Kaigi": {
+        "CreateKaigi": {
+          "call": {
+            "id": {
+              "domain_id": "wonderland.sora",
+              "call_name": "final-scalar-wire"
+            },
+            "host": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+            "title": null,
+            "description": null,
+            "max_participants": null,
+            "gas_rate_per_minute": 0,
+            "metadata": {},
+            "scheduled_start_ms": null,
+            "billing_account": null,
+            "privacy_mode": {
+              "mode": "ZkRosterV1",
+              "state": null
+            },
+            "room_policy": {
+              "policy": "Authenticated",
+              "state": null
+            },
+            "relay_manifest": null
+          },
+          "commitment": {
+            "commitment": [
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18
+            ]
+          },
+          "nullifier": {
+            "digest": [
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36
+            ]
+          },
+          "roster_root": "hash:3131313131313131313131313131313131313131313131313131313131313131#AA50",
+          "proof": "qrs="
+        }
+      }
+    },
+    "wire_base64": "TlJUMAAAhip9dwddTSP/bBJh2wJ4EQB1AQAAAAAAAC39veA2K4+nAikoaXJvaGEuaW5zdHJ1Y3Rpb24udjE6OmthaWdpOjpDcmVhdGVLYWlnackCQQEAAAAAAABOUlQwAACMbuoqUgG+4kPqGcsI5QoIABkBAAAAAAAA7G2YNkLzJjQCnwEmEgsKd29uZGVybGFuZAUEc29yYRIRZmluYWwtc2NhbGFyLXdpcmVPAAAAAEohAAAAAAAAAAEAAc4BfwGkAWwBnQHOAX4BpAGxASUB4gHjAWsB2wFjAeoBMwEHAT4BdQGQAawBkgGBAWoB4QHoAWEBtwEEAYsBAwEAAQABAAgAAAAAAAAAAAgAAAAAAAAAAAEAAQAEAQAAAAQBAAAAAQAjASEgEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhIjASEgJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQiASAxMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMQwBCgIAAAAAAAAAqrs="
+  },
+  {
+    "instruction": {
+      "Kaigi": {
+        "JoinKaigi": {
+          "call_id": {
+            "domain_id": "wonderland.sora",
+            "call_name": "final-scalar-wire"
+          },
+          "participant": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+          "commitment": {
+            "commitment": [
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18
+            ]
+          },
+          "nullifier": {
+            "digest": [
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36
+            ]
+          },
+          "roster_root": "hash:3131313131313131313131313131313131313131313131313131313131313131#AA50",
+          "proof": "qrs="
+        }
+      }
+    },
+    "wire_base64": "TlJUMAAAhip9dwddTSP/bBJh2wJ4EQBJAQAAAAAAACKP0d0RMFKaAicmaXJvaGEuaW5zdHJ1Y3Rpb24udjE6OmthaWdpOjpKb2luS2FpZ2mfAhcBAAAAAAAATlJUMAAAeDFW1p2u2Fy1vHW5D4pWVwDvAAAAAAAAANVTzipWxJ6kAiYSCwp3b25kZXJsYW5kBQRzb3JhEhFmaW5hbC1zY2FsYXItd2lyZU8AAAAASiEAAAAAAAAAAQABzgF/AaQBbAGdAc4BfgGkAbEBJQHiAeMBawHbAWMB6gEzAQcBPgF1AZABrAGSAYEBagHhAegBYQG3AQQBiwEDIwEhIBISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISIwEhICQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkIgEgMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTEMAQoCAAAAAAAAAKq7"
+  },
+  {
+    "instruction": {
+      "Kaigi": {
+        "LeaveKaigi": {
+          "call_id": {
+            "domain_id": "wonderland.sora",
+            "call_name": "final-scalar-wire"
+          },
+          "participant": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+          "commitment": {
+            "commitment": [
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18
+            ]
+          },
+          "nullifier": {
+            "digest": [
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36
+            ]
+          },
+          "roster_root": "hash:3131313131313131313131313131313131313131313131313131313131313131#AA50",
+          "proof": "qrs="
+        }
+      }
+    },
+    "wire_base64": "TlJUMAAAhip9dwddTSP/bBJh2wJ4EQBKAQAAAAAAAAy/bFygc5eaAignaXJvaGEuaW5zdHJ1Y3Rpb24udjE6OmthaWdpOjpMZWF2ZUthaWdpnwIXAQAAAAAAAE5SVDAAAL5cyVmXmjMkBdE0t5k7X94A7wAAAAAAAADVU84qVsSepAImEgsKd29uZGVybGFuZAUEc29yYRIRZmluYWwtc2NhbGFyLXdpcmVPAAAAAEohAAAAAAAAAAEAAc4BfwGkAWwBnQHOAX4BpAGxASUB4gHjAWsB2wFjAeoBMwEHAT4BdQGQAawBkgGBAWoB4QHoAWEBtwEEAYsBAyMBISASEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEiMBISAkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCIBIDExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExDAEKAgAAAAAAAACquw=="
+  },
+  {
+    "instruction": {
+      "Kaigi": {
+        "EndKaigi": {
+          "call_id": {
+            "domain_id": "wonderland.sora",
+            "call_name": "final-scalar-wire"
+          },
+          "ended_at_ms": 42,
+          "commitment": {
+            "commitment": [
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18,
+              18
+            ]
+          },
+          "nullifier": {
+            "digest": [
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36,
+              36
+            ]
+          },
+          "roster_root": "hash:3131313131313131313131313131313131313131313131313131313131313131#AA50",
+          "proof": "qrs="
+        }
+      }
+    },
+    "wire_base64": "TlJUMAAAhip9dwddTSP/bBJh2wJ4EQADAQAAAAAAAAVY3NYzuLP4AiYlaXJvaGEuaW5zdHJ1Y3Rpb24udjE6OmthaWdpOjpFbmRLYWlnadoB0gAAAAAAAABOUlQwAADDJInVP08ORj32UE3dzpt7AKoAAAAAAAAA1r58DHJn0CQCJhILCndvbmRlcmxhbmQFBHNvcmESEWZpbmFsLXNjYWxhci13aXJlCgEIKgAAAAAAAAAjASEgEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhIjASEgJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQiASAxMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMQwBCgIAAAAAAAAAqrs="
+  },
+  {
+    "instruction": {
+      "Kaigi": {
+        "RecordKaigiUsage": {
+          "call_id": {
+            "domain_id": "wonderland.sora",
+            "call_name": "final-scalar-wire"
+          },
+          "duration_ms": 60000,
+          "billed_gas": 100,
+          "usage_commitment": [
+            54,
+            54,
+            54,
+            54,
+            54,
+            54,
+            54,
+            54,
+            54,
+            54,
+            54,
+            54,
+            54,
+            54,
+            54,
+            54,
+            54,
+            54,
+            54,
+            54,
+            54,
+            54,
+            54,
+            54,
+            54,
+            54,
+            54,
+            54,
+            54,
+            54,
+            54,
+            54
+          ],
+          "proof": "q80="
+        }
+      }
+    },
+    "wire_base64": "TlJUMAAAhip9dwddTSP/bBJh2wJ4EQDKAAAAAAAAAMrUg+hAg7q3Ai4taXJvaGEuaW5zdHJ1Y3Rpb24udjE6OmthaWdpOjpSZWNvcmRLYWlnaVVzYWdlmQGRAAAAAAAAAE5SVDAAAK8edZIKc+XLyijmFgf1kf8AaQAAAAAAAADe74y+PDlNVwImEgsKd29uZGVybGFuZAUEc29yYRIRZmluYWwtc2NhbGFyLXdpcmUIYOoAAAAAAAAIZAAAAAAAAAAiASA2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NgwBCgIAAAAAAAAAq80="
+  }
+]

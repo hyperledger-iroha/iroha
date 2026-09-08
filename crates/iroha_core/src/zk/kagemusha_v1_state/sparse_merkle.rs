@@ -40,14 +40,6 @@ pub(super) struct PreparedConsumedCreditInsertV1 {
 }
 
 impl PreparedConsumedCreditInsertV1 {
-    pub(super) fn starting_root(&self) -> KagemushaPastaStateCommitmentV1 {
-        self.starting_root
-    }
-
-    pub(super) fn final_root(&self) -> KagemushaPastaStateCommitmentV1 {
-        self.witness.successor_root
-    }
-
     pub(super) fn witness(&self) -> &ConsumedCreditInsertWitnessV1 {
         &self.witness
     }
@@ -115,6 +107,7 @@ impl ExactConsumedCreditIndex {
             .unwrap_or(self.empty_at_depth[0])
     }
 
+    #[cfg(test)]
     pub(super) fn len(&self) -> usize {
         self.records.len()
     }

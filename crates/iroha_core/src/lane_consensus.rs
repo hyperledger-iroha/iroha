@@ -2802,6 +2802,9 @@ pub(crate) enum LaneBlockSessionError {
     /// a different QC already exists for the same proposal phase
     #[error("conflicting lane block QC")]
     ConflictingQc,
+    /// the complete required recovery set cannot fit the ordinary cache bound
+    #[error("required lane recovery proposals exceed session capacity")]
+    RecoveryCapacityExceeded,
 }
 /// Bounded in-memory cache for standalone lane-block consensus sessions.
 ///
@@ -2833,7 +2836,17 @@ impl LaneBlockSessionCache {
             order: VecDeque::new(),
         }
     }
+    /// Apply test pressure through normal eviction while retaining every protected owner.
+    #[cfg(test)]
+    pub(crate) fn set_unprotected_capacity_for_testing(
+        &mut self,
+        capacity: std::num::NonZeroUsize,
+    ) {
+        self.capacity = capacity.get();
+        self.evict();
+    }
     /// Number of cached sessions.
+    #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
         self.sessions.len()
     }
@@ -2854,6 +2867,39 @@ impl LaneBlockSessionCache {
                     .keys()
                     .map(|(slot, _)| (slot.lane_id, slot.lane_block_height)),
             )
+            .collect()
+    }
+    /// Project one exact vote body per retained session in stable key order.
+    ///
+    /// This includes proposal-only and proposal-less vote/QC owners so callers
+    /// can resolve their actual global carrier heights without scanning history.
+    /// Orphan signer locks have no vote body; [`Self::rollover_slots`] includes
+    /// their coordinates for independent durable-proposal lookup.
+    pub(crate) fn retained_vote_bodies(&self) -> Vec<LaneBlockVoteBodyV1> {
+        self.sessions
+            .values()
+            .filter_map(|session| {
+                session
+                    .proposal
+                    .as_ref()
+                    .map(|proposal| proposal.vote_body(CertPhase::Prepare))
+                    .or_else(|| session.prepare_qc.as_ref().map(|qc| qc.body.clone()))
+                    .or_else(|| session.commit_qc.as_ref().map(|qc| qc.body.clone()))
+                    .or_else(|| {
+                        session
+                            .prepare_votes
+                            .values()
+                            .next()
+                            .map(|vote| vote.body.clone())
+                    })
+                    .or_else(|| {
+                        session
+                            .commit_votes
+                            .values()
+                            .next()
+                            .map(|vote| vote.body.clone())
+                    })
+            })
             .collect()
     }
     /// Return proposal hashes that still have replay ownership in the cache.
@@ -2953,6 +2999,7 @@ impl LaneBlockSessionCache {
     }
     /// Return whether the proposal's consensus identity is cached, ignoring its
     /// advisory global-block recovery hint.
+    #[cfg(test)]
     pub(crate) fn contains_proposal_identity(&self, proposal: &LaneBlockProposalV1) -> bool {
         let key = LaneBlockSessionKey::from_proposal(proposal);
         self.sessions
@@ -3263,6 +3310,23 @@ impl LaneBlockSessionCache {
         }
         requests
     }
+    /// Inspect complete sessions without consuming their pending handoff state.
+    ///
+    /// Consumers must authenticate every fallible local dependency before the
+    /// matching drain transfers these retained certificate owners.
+    pub(crate) fn pending_committed_sessions(&self) -> Vec<CommittedLaneBlockSession> {
+        self.sessions
+            .values()
+            .filter(|session| session.pending_committed_session_drain)
+            .filter_map(|session| {
+                Some(CommittedLaneBlockSession {
+                    proposal: session.proposal.clone()?,
+                    prepare_qc: session.prepare_qc.clone()?,
+                    commit_qc: session.commit_qc.clone()?,
+                })
+            })
+            .collect()
+    }
     /// Drain up to `limit` sessions whose proposal, prepare QC, and commit QC are all cached.
     ///
     /// This is intentionally separate from [`Self::drain_newly_sealed_qcs_matching`]:
@@ -3407,6 +3471,155 @@ impl LaneBlockSessionCache {
         self.rebuild_indices_after_session_retain();
         before.saturating_sub(self.sessions.len())
     }
+    /// Reject quorum evidence conflicting with each selected canonical slot.
+    ///
+    /// The caller owns slot selection. Both rollover and applied retirement use
+    /// this complete, read-only preflight before changing sessions or locks.
+    fn preflight_canonical_evidence<'a>(
+        &self,
+        canonical_proposal: impl Fn(LaneBlockCommitSlotKey) -> Option<&'a LaneBlockProposalV1>,
+    ) -> Result<(), LaneBlockSessionError> {
+        // A drained session can leave independent signer locks behind. Only
+        // exact-route signers from the canonical committee contribute a quorum.
+        let mut conflicting_lock_quorums =
+            BTreeMap::<(LaneBlockCommitSlotKey, Hash), BTreeSet<PeerId>>::new();
+        for ((slot, signer), locked_proposal_hash) in &self.commit_vote_locks {
+            let Some(canonical) = canonical_proposal(*slot) else {
+                continue;
+            };
+            let descriptor = &canonical.descriptor;
+            if descriptor.lane_id != slot.lane_id
+                || descriptor.dataspace_id != slot.dataspace_id
+                || descriptor.lane_incarnation != slot.lane_incarnation
+                || descriptor.lane_block_height != slot.lane_block_height
+                || canonical.proposal_hash == *locked_proposal_hash
+                || descriptor.validator_set.binary_search(signer).is_err()
+            {
+                continue;
+            }
+            conflicting_lock_quorums
+                .entry((*slot, *locked_proposal_hash))
+                .or_default()
+                .insert(signer.clone());
+        }
+        if conflicting_lock_quorums.iter().any(|((slot, _), signers)| {
+            canonical_proposal(*slot).is_some_and(|canonical| {
+                usize::try_from(canonical.descriptor.min_quorum)
+                    .is_ok_and(|quorum| signers.len() >= quorum)
+            })
+        }) {
+            return Err(LaneBlockSessionError::ConflictingProposal);
+        }
+        for (key, session) in &self.sessions {
+            let slot = LaneBlockCommitSlotKey {
+                lane_id: key.lane_id,
+                dataspace_id: key.dataspace_id,
+                lane_incarnation: key.lane_incarnation,
+                lane_block_height: key.lane_block_height,
+            };
+            let Some(canonical) = canonical_proposal(slot) else {
+                continue;
+            };
+            let proposal_conflicts = session
+                .proposal
+                .as_ref()
+                .is_some_and(|proposal| !proposal.same_consensus_identity(canonical));
+            let certified_body_conflicts = session
+                .prepare_qc
+                .as_ref()
+                .is_some_and(|qc| validate_qc_matches_proposal(qc, canonical).is_err())
+                || session
+                    .commit_qc
+                    .as_ref()
+                    .is_some_and(|qc| validate_qc_matches_proposal(qc, canonical).is_err());
+            if session_has_quorum_certificate(session)
+                && (LaneBlockSessionKey::from_proposal(canonical) != *key
+                    || proposal_conflicts
+                    || certified_body_conflicts)
+            {
+                return Err(LaneBlockSessionError::ConflictingProposal);
+            }
+        }
+        Ok(())
+    }
+    /// Retire cache evidence for exact canonically applied proposals.
+    ///
+    /// The caller must authenticate each canonical proposal and its economic
+    /// application before calling. This operation validates the complete input
+    /// set and rejects conflicting quorum evidence before any mutation. Only
+    /// selected lane/dataspace/incarnation/height slots and their signer locks
+    /// are retired; unresolved and unselected owners retain their exact state,
+    /// recency, and capacity. The result counts removed sessions plus locks.
+    pub(crate) fn retire_applied_proposals(
+        &mut self,
+        proposals: &[LaneBlockProposalV1],
+    ) -> Result<usize, LaneBlockSessionError> {
+        let mut canonical = BTreeMap::new();
+        for proposal in proposals {
+            validate_lane_block_proposal(proposal)
+                .map_err(LaneBlockSessionError::InvalidProposal)?;
+            let descriptor = &proposal.descriptor;
+            let slot = LaneBlockCommitSlotKey {
+                lane_id: descriptor.lane_id,
+                dataspace_id: descriptor.dataspace_id,
+                lane_incarnation: descriptor.lane_incarnation,
+                lane_block_height: descriptor.lane_block_height,
+            };
+            if canonical
+                .insert(slot, proposal)
+                .is_some_and(|existing| existing != proposal)
+            {
+                return Err(LaneBlockSessionError::ConflictingProposal);
+            }
+        }
+        if canonical.is_empty() {
+            return Ok(0);
+        }
+        self.preflight_canonical_evidence(|slot| canonical.get(&slot).copied())?;
+        let before = self
+            .sessions
+            .len()
+            .saturating_add(self.commit_vote_locks.len());
+        self.sessions.retain(|key, _| {
+            !canonical.contains_key(&LaneBlockCommitSlotKey {
+                lane_id: key.lane_id,
+                dataspace_id: key.dataspace_id,
+                lane_incarnation: key.lane_incarnation,
+                lane_block_height: key.lane_block_height,
+            })
+        });
+        self.commit_vote_locks
+            .retain(|(slot, _), _| !canonical.contains_key(slot));
+        self.slot_proposals.retain(|slot, _| {
+            !canonical.contains_key(&LaneBlockCommitSlotKey {
+                lane_id: slot.lane_id,
+                dataspace_id: slot.dataspace_id,
+                lane_incarnation: slot.lane_incarnation,
+                lane_block_height: slot.lane_block_height,
+            })
+        });
+        let retained_sessions = &self.sessions;
+        self.order.retain(|key| retained_sessions.contains_key(key));
+        // Preserve the selected owner of every unrelated shared-payload claim.
+        // A complete rebuild could move that claim between retained views.
+        self.entrypoint_claims
+            .retain(|_, key| retained_sessions.contains_key(key));
+        for (key, session) in retained_sessions {
+            let Some(proposal) = &session.proposal else {
+                continue;
+            };
+            for entrypoint_hash in &proposal.descriptor.accepted_transaction_hashes {
+                self.entrypoint_claims
+                    .entry(*entrypoint_hash)
+                    .or_insert(*key);
+            }
+        }
+        let after = self
+            .sessions
+            .len()
+            .saturating_add(self.commit_vote_locks.len());
+        Ok(before.saturating_sub(after))
+    }
     /// Retain only exact, canonical, unfinalized evidence across a global-height rollover.
     ///
     /// `canonical_proposal` resolves the one Kura-anchored proposal for a lane-local
@@ -3500,15 +3713,7 @@ impl LaneBlockSessionCache {
                 },
             )
             .collect::<BTreeMap<_, _>>();
-        // A committed session may already have left the replay map while its
-        // independent signer locks remain. Reconstruct enough of that durable
-        // safety evidence to reject a conflicting canonical identity before
-        // pruning, normalizing, or publishing any cache state. Counting only
-        // signers in the canonical committee prevents stale or foreign-route
-        // locks from manufacturing a conflict for this slot.
-        let mut conflicting_lock_quorums =
-            BTreeMap::<(LaneBlockCommitSlotKey, Hash), BTreeSet<PeerId>>::new();
-        for ((slot, signer), locked_proposal_hash) in &self.commit_vote_locks {
+        self.preflight_canonical_evidence(|slot| {
             let evidence_slot = (
                 slot.lane_id,
                 slot.dataspace_id,
@@ -3516,40 +3721,12 @@ impl LaneBlockSessionCache {
                 slot.lane_block_height,
             );
             if active_slots.get(&evidence_slot) != Some(&true) {
-                continue;
+                return None;
             }
-            let Some(canonical) = canonical_proposals
-                .get(&(slot.lane_id, slot.lane_block_height))
-                .and_then(Option::as_ref)
-            else {
-                continue;
-            };
-            let descriptor = &canonical.descriptor;
-            if descriptor.lane_id != slot.lane_id
-                || descriptor.dataspace_id != slot.dataspace_id
-                || descriptor.lane_incarnation != slot.lane_incarnation
-                || descriptor.lane_block_height != slot.lane_block_height
-                || canonical.proposal_hash == *locked_proposal_hash
-                || descriptor.validator_set.binary_search(signer).is_err()
-            {
-                continue;
-            }
-            conflicting_lock_quorums
-                .entry((*slot, *locked_proposal_hash))
-                .or_default()
-                .insert(signer.clone());
-        }
-        if conflicting_lock_quorums.iter().any(|((slot, _), signers)| {
             canonical_proposals
                 .get(&(slot.lane_id, slot.lane_block_height))
                 .and_then(Option::as_ref)
-                .is_some_and(|canonical| {
-                    usize::try_from(canonical.descriptor.min_quorum)
-                        .is_ok_and(|quorum| signers.len() >= quorum)
-                })
-        }) {
-            return Err(LaneBlockSessionError::ConflictingProposal);
-        }
+        })?;
         let mut retained_sessions = BTreeMap::new();
         for (key, session) in &self.sessions {
             let evidence_slot = (
@@ -3572,19 +3749,6 @@ impl LaneBlockSessionCache {
                 .proposal
                 .as_ref()
                 .is_some_and(|proposal| !proposal.same_consensus_identity(canonical));
-            let certified_body_conflicts = session
-                .prepare_qc
-                .as_ref()
-                .is_some_and(|qc| validate_qc_matches_proposal(qc, canonical).is_err())
-                || session
-                    .commit_qc
-                    .as_ref()
-                    .is_some_and(|qc| validate_qc_matches_proposal(qc, canonical).is_err());
-            if session_has_quorum_certificate(session)
-                && (canonical_key != *key || proposal_conflicts || certified_body_conflicts)
-            {
-                return Err(LaneBlockSessionError::ConflictingProposal);
-            }
             if unfinalized_slots.get(&evidence_slot) != Some(&true) {
                 continue;
             }
@@ -3961,6 +4125,71 @@ impl LaneBlockSessionCache {
     ) -> Result<LaneBlockSessionInsertOutcome, LaneBlockSessionError> {
         self.insert_trusted_proposal_replacing_uncommitted_conflict(proposal)
     }
+    /// Install a complete, bounded set of canonical recovery proposals atomically.
+    ///
+    /// Every replacement is checked against the original quorum evidence before
+    /// insertion can evict an unrelated PrepareQC. Required existing sessions
+    /// become recent before missing sessions are inserted, so ordinary eviction
+    /// cannot discard a required historical source. Unrelated live Commit
+    /// evidence keeps its independent eviction protection and does not consume
+    /// required-set capacity.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error without changing the cache if a proposal is invalid,
+    /// conflicts with a retained quorum, or the required set exceeds capacity.
+    pub(crate) fn insert_recovered_proposals(
+        &mut self,
+        proposals: &[LaneBlockProposalV1],
+    ) -> Result<(), LaneBlockSessionError> {
+        let mut required = BTreeMap::new();
+        let mut required_slots = BTreeMap::new();
+        let mut ordered_required = Vec::new();
+        for proposal in proposals {
+            self.preflight_trusted_proposal_replacement(proposal)?;
+            let key = LaneBlockSessionKey::from_proposal(proposal);
+            let slot = LaneBlockSlotKey::from_session_key(key);
+            match required.insert(key, proposal) {
+                Some(previous) if previous != proposal => {
+                    return Err(LaneBlockSessionError::ConflictingProposal);
+                }
+                Some(_) => {}
+                None => ordered_required.push(proposal),
+            }
+            if required_slots
+                .insert(slot, key.proposal_hash)
+                .is_some_and(|previous| previous != key.proposal_hash)
+            {
+                return Err(LaneBlockSessionError::ConflictingProposal);
+            }
+            if required.len() > self.capacity {
+                return Err(LaneBlockSessionError::RecoveryCapacityExceeded);
+            }
+        }
+        let mut next = self.clone();
+        for proposal in &ordered_required {
+            let key = LaneBlockSessionKey::from_proposal(proposal);
+            if next.sessions.contains_key(&key) {
+                next.touch(key);
+            }
+        }
+        for proposal in ordered_required {
+            next.insert_trusted_proposal_replacing_uncommitted_conflict(proposal.clone())?;
+            // Exact duplicates return before touching the single-item cache.
+            // Normalize the complete batch's recency in caller order as well.
+            next.touch(LaneBlockSessionKey::from_proposal(proposal));
+        }
+        if required.iter().any(|(key, proposal)| {
+            next.sessions
+                .get(key)
+                .and_then(|session| session.proposal.as_ref())
+                != Some(*proposal)
+        }) {
+            return Err(LaneBlockSessionError::RecoveryCapacityExceeded);
+        }
+        *self = next;
+        Ok(())
+    }
     /// Replace losing local proposal work before the global body is locked.
     ///
     /// This has the same quorum-preserving conflict rule as durable recovery,
@@ -3978,7 +4207,7 @@ impl LaneBlockSessionCache {
         &mut self,
         proposal: LaneBlockProposalV1,
     ) -> Result<LaneBlockSessionInsertOutcome, LaneBlockSessionError> {
-        validate_lane_block_proposal(&proposal).map_err(LaneBlockSessionError::InvalidProposal)?;
+        self.preflight_trusted_proposal_replacement(&proposal)?;
         let key = LaneBlockSessionKey::from_proposal(&proposal);
         let slot_key = LaneBlockSlotKey::from_session_key(key);
         if let Some(existing) = self
@@ -4001,22 +4230,35 @@ impl LaneBlockSessionCache {
         if let Some(existing_hash) = self.slot_proposals.get(&slot_key).copied()
             && existing_hash != key.proposal_hash
         {
-            let existing_key = LaneBlockSessionKey {
-                lane_id: key.lane_id,
-                dataspace_id: key.dataspace_id,
-                lane_incarnation: key.lane_incarnation,
-                lane_block_height: key.lane_block_height,
-                lane_block_view: key.lane_block_view,
-                proposal_hash: existing_hash,
-            };
-            if let Some(existing_session) = self.sessions.get(&existing_key)
-                && session_has_quorum_certificate(existing_session)
-            {
-                return Err(LaneBlockSessionError::ConflictingProposal);
-            }
             self.remove_slot_conflict(slot_key, existing_hash);
         }
         self.insert_proposal(proposal)
+    }
+    fn preflight_trusted_proposal_replacement(
+        &self,
+        proposal: &LaneBlockProposalV1,
+    ) -> Result<(), LaneBlockSessionError> {
+        validate_lane_block_proposal(proposal).map_err(LaneBlockSessionError::InvalidProposal)?;
+        let key = LaneBlockSessionKey::from_proposal(proposal);
+        let first = LaneBlockSessionKey {
+            proposal_hash: Hash::prehashed([0; Hash::LENGTH]),
+            ..key
+        };
+        let last = LaneBlockSessionKey {
+            proposal_hash: Hash::prehashed([u8::MAX; Hash::LENGTH]),
+            ..key
+        };
+        if self
+            .sessions
+            .range(first..=last)
+            .any(|(retained_key, session)| {
+                retained_key.proposal_hash != key.proposal_hash
+                    && session_has_quorum_certificate(session)
+            })
+        {
+            return Err(LaneBlockSessionError::ConflictingProposal);
+        }
+        Ok(())
     }
     /// Insert a standalone lane-block vote.
     pub(crate) fn insert_vote(
@@ -4474,7 +4716,13 @@ fn session_proposal_height(session: &LaneBlockSession) -> Option<u64> {
         })
         .or_else(|| session.commit_qc.as_ref().map(|qc| qc.body.proposal_height))
 }
-fn validate_vote_matches_proposal(
+/// Match a vote to the exact proposal and authenticate paired READY committee PoPs.
+///
+/// Callers must separately validate the lane vote's BLS signature and require
+/// the READY body expected from the exact executable payload. This helper binds
+/// the vote body and signer to the proposal, and validates any paired READY
+/// signature, proposal fields, complete validator roster, and proofs of possession.
+pub(crate) fn validate_vote_matches_proposal(
     vote: &LaneBlockVoteV1,
     proposal: &LaneBlockProposalV1,
 ) -> Result<(), LaneBlockSessionError> {
@@ -7983,11 +8231,22 @@ mod tests {
             cache.drain_newly_sealed_qcs().is_empty(),
             "inbound QCs must not become transport broadcast work"
         );
+        let before_handoff = cache.clone();
+        let pending = cache.pending_committed_sessions();
+        assert_eq!(
+            cache, before_handoff,
+            "preflight must not consume a pending handoff"
+        );
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].proposal, proposal);
+        assert_eq!(pending[0].prepare_qc, prepare_qc);
+        assert_eq!(pending[0].commit_qc, commit_qc);
         let committed = cache.drain_committed_sessions();
         assert_eq!(committed.len(), 1);
         assert_eq!(committed[0].proposal, proposal);
         assert_eq!(committed[0].prepare_qc, prepare_qc);
         assert_eq!(committed[0].commit_qc, commit_qc);
+        assert!(cache.pending_committed_sessions().is_empty());
         assert!(cache.drain_committed_sessions().is_empty());
     }
     #[test]
@@ -9059,6 +9318,50 @@ mod tests {
                 .is_empty(),
             "proposal reconciliation must drop orphan votes whose body drifted"
         );
+    }
+    #[test]
+    fn lane_block_session_cache_capacity_reduction_preserves_protected_owners() {
+        let (keys, validator_set) = lane_block_validator_fixture(4);
+        let protected = lane_block_proposal_at_height(&validator_set, 13);
+        let old = lane_block_proposal_at_height(&validator_set, 14);
+        let recent = lane_block_proposal_at_height(&validator_set, 15);
+        let protected_key = LaneBlockSessionKey::from_proposal(&protected);
+        let old_key = LaneBlockSessionKey::from_proposal(&old);
+        let recent_key = LaneBlockSessionKey::from_proposal(&recent);
+        let mut cache = LaneBlockSessionCache::new(3);
+        assert_proposal_insert(&mut cache, protected.clone(), Inserted);
+        let prepare_body = protected.vote_body(CertPhase::Prepare);
+        let prepare_quorum =
+            usize::try_from(protected.descriptor.min_quorum).expect("fixture quorum fits usize");
+        for key in &keys[..prepare_quorum] {
+            assert_vote_insert(&mut cache, &signed_vote(&prepare_body, key), Inserted);
+        }
+        assert!(
+            cache
+                .get(&protected_key)
+                .expect("protected session")
+                .prepare_qc
+                .is_some(),
+            "Commit requires the exact Prepare quorum"
+        );
+        let commit_vote = signed_vote(&protected.vote_body(CertPhase::Commit), &keys[0]);
+        assert_vote_insert(&mut cache, &commit_vote, Inserted);
+        assert_proposal_insert(&mut cache, old, Inserted);
+        assert_proposal_insert(&mut cache, recent, Inserted);
+        let protected_before = cache
+            .get(&protected_key)
+            .expect("protected session")
+            .clone();
+        let locks_before = cache.commit_vote_locks.clone();
+        cache.set_unprotected_capacity_for_testing(
+            std::num::NonZeroUsize::new(1).expect("one slot"),
+        );
+        assert_eq!(cache.capacity, 1);
+        assert_eq!(cache.len(), 2);
+        assert!(cache.get(&old_key).is_none());
+        assert!(cache.get(&recent_key).is_some());
+        assert_eq!(cache.get(&protected_key), Some(&protected_before));
+        assert_eq!(cache.commit_vote_locks, locks_before);
     }
     #[test]
     fn lane_block_session_cache_enforces_capacity() {

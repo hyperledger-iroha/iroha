@@ -23,7 +23,7 @@ export {
   requireKagemushaSubmissionResponseV1,
 } from "./kagemushaToriiV1.js";
 
-export { Kagemusha } from "./kagemusha.js";
+export { _encodeRedemptionRequestV1 } from "./kagemusha.js";
 
 export {
   normalizeSccpCapabilities,

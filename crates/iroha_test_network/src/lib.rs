@@ -2,6 +2,7 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 mod config;
 mod consensus_message_control;
+mod dedicated_read;
 pub mod fslock_ports;
 pub mod genesis_support;
 use color_eyre::eyre::{Context, Report, Result, eyre};
@@ -14,6 +15,7 @@ pub use consensus_message_control::{
     PrivateSettlementRouteControlCommand, PrivateSettlementRouteControlPhase,
 };
 use core::{fmt, future::Future, time::Duration};
+pub use dedicated_read::read_on_dedicated_thread;
 use fslock::LockFile;
 use fslock_ports::AllocatedPort;
 use futures::{prelude::*, stream::FuturesUnordered};
@@ -21,7 +23,7 @@ use iroha::data_model::block::consensus_v2::{
     MAX_VALIDATORS_PER_HEIGHT, MIN_VALIDATORS_PER_HEIGHT, QuorumCertificateRef, SumeragiV2Status,
     is_valid_committee_size,
 };
-use iroha::{client::Client, data_model::prelude::*};
+use iroha::{blocking::Client, client::Client as AsyncClient, data_model::prelude::*};
 use iroha_config::base::{
     ParameterOrigin,
     env::MockEnv,
@@ -304,15 +306,18 @@ pub fn account_alias_setup_instruction(
 fn domain_alias_record_visible_to_client(client: &Client, domain: &DomainId) -> Result<bool> {
     let domain_label = domain.to_string();
     match client
+        .client()
         .sns()
         .get_name(iroha::sns::SnsNamespacePath::Domain, &domain_label)
     {
-        Ok(record) if record.owner == client.account && record.status == NameStatus::Active => {
+        Ok(record)
+            if record.owner == client.client().account && record.status == NameStatus::Active =>
+        {
             Ok(true)
         }
         Ok(record) => Err(eyre!(
             "domain `{domain}` requires an active SNS lease owned by `{}`; found owner `{}` with status {:?}",
-            client.account,
+            client.client().account,
             record.owner,
             record.status
         )),
@@ -320,14 +325,14 @@ fn domain_alias_record_visible_to_client(client: &Client, domain: &DomainId) -> 
     }
 }
 fn domain_setup_ready_to_client(client: &Client, domain: &DomainId) -> Result<bool> {
-    let domain_exists = match client.query(FindDomains::new()).execute_all() {
+    let domain_exists = match client.client().query(FindDomains::new()).execute_all() {
         Ok(domains) => match domains.into_iter().find(|existing| existing.id() == domain) {
-            Some(existing) if existing.owned_by() == &client.account => true,
+            Some(existing) if existing.owned_by() == &client.client().account => true,
             Some(existing) => {
                 return Err(eyre!(
                     "domain `{domain}` is owned by `{}`, not setup authority `{}`",
                     existing.owned_by(),
-                    client.account
+                    client.client().account
                 ));
             }
             None => false,
@@ -338,7 +343,7 @@ fn domain_setup_ready_to_client(client: &Client, domain: &DomainId) -> Result<bo
                 debug!(
                     err = %report,
                     %domain,
-                    torii_url = %client.torii_url,
+                    torii_url = %client.client().torii_url,
                     "transient domain visibility query failed while checking SNS lease readiness"
                 );
                 false
@@ -371,8 +376,8 @@ pub fn ensure_domain_setup_in_dataspace(
     if domain_setup_ready_to_client(client, domain)? {
         return Ok(());
     }
-    match client.submit_blocking(
-        test_domain_setup_instruction(domain, dataspace_id, &client.account)?,
+    match client.submit(
+        test_domain_setup_instruction(domain, dataspace_id, &client.client().account)?,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     ) {
         Ok(_) => {
@@ -409,7 +414,7 @@ pub fn ensure_domain_setup_for_network(network: &Network, domain: &DomainId) -> 
         if !wait_for_domain_setup(client, domain)? {
             return Err(eyre!(
                 "domain `{domain}` declarative setup was not visible to peer `{}` within {:?}",
-                client.torii_url,
+                client.client().torii_url,
                 TEST_SNS_LEASE_VISIBILITY_TIMEOUT
             ));
         }
@@ -431,7 +436,7 @@ pub fn submit_ensure_domain_for_network(
     client: &Client,
     domain: NewDomain,
 ) -> Result<()> {
-    if client.account != network.client().account {
+    if client.client().account != network.client().client().account {
         return Err(eyre!(
             "network domain setup must be submitted by the network client authority"
         ));
@@ -9123,29 +9128,10 @@ impl NetworkPeer {
                             let warn_gate = warn_gate.clone();
                             let http_seen = Arc::clone(&http_seen);
                             async move {
-                                let status = match spawn_blocking(move || client.get_status()).await
-                                {
-                                    Ok(status) => status,
-                                    Err(join_error) => {
-                                        let err = Report::new(join_error)
-                                            .wrap_err("get status join failed");
-                                        NetworkPeer::record_probe_error(&startup_probe, &err);
-                                        log_status_warning(
-                                            &warn_gate,
-                                            || warn!(
-                                                error = %err,
-                                                debug = ?err,
-                                                "get status failed"
-                                            ),
-                                            || debug!(
-                                                error = %err,
-                                                debug = ?err,
-                                                "get status failed"
-                                            ),
-                                        );
-                                        return Err(err);
-                                    }
-                                };
+                                let status = read_on_dedicated_thread(move || {
+                                    client.client().get_status()
+                                })
+                                .await;
                                 match status {
                                     Ok(status) => {
                                         let _ =
@@ -9312,27 +9298,16 @@ impl NetworkPeer {
                                     if !is_running.load(Ordering::Relaxed) {
                                         break;
                                     }
-                                    let poll_result = tokio::select! {
-                                        result = spawn_blocking({
+                                    let status = tokio::select! {
+                                        result = read_on_dedicated_thread({
                                             let client = poll_client.clone();
-                                            move || client.get_status()
+                                            move || client.client().get_status()
                                         }) => result,
                                         changed = fatal_rx.changed() => {
                                             if changed.is_ok() && *fatal_rx.borrow() {
                                                 debug!("fatal notify received during status poll");
                                             }
                                             return;
-                                        }
-                                    };
-                                    let status = match poll_result {
-                                        Ok(result) => result,
-                                        Err(err) => {
-                                            if warn_gate.should_warn() {
-                                                warn!(error = %err, debug = ?err, "fallback status poll join error");
-                                            } else {
-                                                debug!(error = %err, debug = ?err, "fallback status poll join error");
-                                            }
-                                            continue;
                                         }
                                     };
                                     let status = match status {
@@ -9937,9 +9912,9 @@ impl NetworkPeer {
             .expect("peer client config should be valid")
             .parse()
             .expect("peer client config should be valid");
-        let mut client = Client::new(config);
+        let mut client = AsyncClient::new(config);
         client.set_operator_key_pair(self.key_pair.clone());
-        client
+        Client::from_client(client).expect("peer blocking client runtime should initialize")
     }
     /// Client for Alice. ([`Self::client_for`] + [`Signatory::Alice`])
     pub fn client(&self) -> Client {
@@ -9947,9 +9922,7 @@ impl NetworkPeer {
     }
     pub async fn status(&self) -> Result<Status> {
         let client = self.client();
-        let result = spawn_blocking(move || client.get_status())
-            .await
-            .expect("should not panic");
+        let result = read_on_dedicated_thread(move || client.client().get_status()).await;
         match &result {
             Ok(status) => self.record_status_success(status),
             Err(error) => self.record_status_failure(error),
@@ -9958,9 +9931,7 @@ impl NetworkPeer {
     }
     async fn sumeragi_v2_startup_snapshot(&self) -> Result<PeerSumeragiV2Snapshot> {
         let client = self.client();
-        let result = spawn_blocking(move || client.get_sumeragi_status())
-            .await
-            .expect("should not panic");
+        let result = read_on_dedicated_thread(move || client.client().get_sumeragi_status()).await;
         match result {
             Ok(status) => Ok(Self::record_probe_sumeragi_v2_status(
                 &self.startup_probe,
@@ -16021,11 +15992,15 @@ mod tests {
             .expect("network has peers")
             .api_address();
         let client = network.client();
+        let async_client = client.client();
         let expected_host = expected.host_str();
-        assert_eq!(client.network_id, network.network_id());
-        assert_eq!(client.torii_url.host_str(), Some(expected_host.as_ref()));
+        assert_eq!(async_client.network_id, network.network_id());
         assert_eq!(
-            client.torii_url.port_or_known_default(),
+            async_client.torii_url.host_str(),
+            Some(expected_host.as_ref())
+        );
+        assert_eq!(
+            async_client.torii_url.port_or_known_default(),
             Some(expected.port())
         );
     }

@@ -52,7 +52,7 @@ const TEST_POLICY_SCHEMA: &str = "sccp-release-test-trust-policy-final-v1";
 const RELEASE_EVIDENCE_SCHEMA: &str = "sccp-release-evidence-final-v1";
 const VALIDATOR_PROTOCOL_VERSION: u8 = 1;
 const PRODUCTION_VALIDATOR_FEATURES: [&str; 1] = ["dev-tools"];
-#[cfg(any(test, feature = "test-fixtures"))]
+#[cfg(feature = "test-fixtures")]
 const MAX_INPUT_BYTES: u64 = 40 * 1024 * 1024;
 const MAX_LANE_INPUT_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_RELEASE_POLICY_BYTES: u64 = 64 * 1024;
@@ -4374,7 +4374,7 @@ fn print_validator_identity() -> Result<(), String> {
     println!("{json}");
     Ok(())
 }
-#[cfg(any(test, feature = "test-fixtures"))]
+#[cfg(feature = "test-fixtures")]
 fn emit_ethereum_fixture() -> Result<(), String> {
     let (proof, governed_source_identity, governed_trust_anchor) =
         iroha_sccp::sccp_native_ethereum_transfer_inbound_test_fixture_v1();
@@ -4515,7 +4515,7 @@ fn run() -> Result<(), String> {
         "validate-release" => run_validate_release(&mut args),
         "validate-semantic-proof" => run_validate_semantic_proof(&mut args),
         "validate" => run_validate_lane(&mut args),
-        #[cfg(any(test, feature = "test-fixtures"))]
+        #[cfg(feature = "test-fixtures")]
         "emit-ethereum-fixture" => {
             if args.next().is_some() {
                 return Err("emit-ethereum-fixture accepts no arguments".to_owned());
@@ -4754,6 +4754,295 @@ mod tests {
             assert!(decode_lower_hex::<2>(invalid, "value").is_err());
         }
     }
+    #[cfg(not(feature = "test-fixtures"))]
+    fn unit_signature_base64(bytes: &[u8]) -> String {
+        const ALPHABET: &[u8; 64] =
+            b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let mut encoded = String::new();
+        for chunk in bytes.chunks(3) {
+            let word = (u32::from(chunk[0]) << 16)
+                | (u32::from(*chunk.get(1).unwrap_or(&0)) << 8)
+                | u32::from(*chunk.get(2).unwrap_or(&0));
+            for index in 0..4 {
+                encoded.push(if index <= chunk.len() {
+                    char::from(ALPHABET[((word >> (18 - 6 * index)) & 63) as usize])
+                } else {
+                    '='
+                });
+            }
+        }
+        encoded
+    }
+    #[cfg(not(feature = "test-fixtures"))]
+    fn unit_signature(key: &iroha_crypto::KeyPair, payload: &[u8]) -> String {
+        let signature = iroha_crypto::Signature::try_new(key.private_key(), payload)
+            .expect("in-memory unit signature must succeed");
+        unit_signature_base64(signature.payload())
+    }
+    #[cfg(not(feature = "test-fixtures"))]
+    fn unit_canonical_json<T: norito::json::JsonSerialize>(value: &T) -> Vec<u8> {
+        let value = norito::json::to_value(value).expect("unit value must encode");
+        format!("{}\n", norito::json::to_json(&value).unwrap()).into_bytes()
+    }
+    #[cfg(not(feature = "test-fixtures"))]
+    fn unit_signed_release_context() -> (ReleaseTrustPolicyV1, ReleaseEvidenceSignaturesV1) {
+        // These keys and placeholders exist only inside the test harness. The
+        // complete signature path is tested in TestFixture mode; none of this
+        // material satisfies production release admission.
+        let keys: Vec<_> = (1..=9)
+            .map(|seed| {
+                iroha_crypto::KeyPair::try_from_seed(
+                    vec![seed; 32],
+                    iroha_crypto::Algorithm::Ed25519,
+                )
+                .expect("unit key must derive")
+            })
+            .collect();
+        let public_key = |index: usize| lowercase_hex(keys[index].public_key().to_bytes().1);
+        let digest = |profile: &str, role: &str| {
+            lowercase_hex(&sha256(format!("unit-release:{profile}:{role}").as_bytes()))
+        };
+        let mut policy = retired_policy_with_current_destination_build_shape();
+        policy.schema = TEST_POLICY_SCHEMA.to_owned();
+        policy.policy_id = "unit-current-release-policy".to_owned();
+        policy.roles = RELEASE_ROLES
+            .iter()
+            .enumerate()
+            .map(|(index, role)| TrustedReleaseRoleV1 {
+                role: (*role).to_owned(),
+                signer_id: format!("unit-release-{index}"),
+                public_key_hex: public_key(index),
+            })
+            .collect();
+        policy.destination_attestors = RELEASE_PROFILES
+            .iter()
+            .enumerate()
+            .map(|(index, profile)| TrustedDestinationAttestorV1 {
+                counterparty_profile: (*profile).to_owned(),
+                attestor_id: format!("unit-attestor-{index}"),
+                public_key_hex: public_key(index + 2),
+            })
+            .collect();
+        policy.circuit_auditors = CIRCUIT_AUDIT_ROLES
+            .iter()
+            .enumerate()
+            .map(|(index, role)| TrustedCircuitAuditorV1 {
+                role: (*role).to_owned(),
+                auditor_id: format!("unit-auditor-{index}"),
+                public_key_hex: public_key(index + 6),
+            })
+            .collect();
+        let template = policy.proof_systems[0].clone();
+        policy.proof_systems = RELEASE_PROFILES
+            .iter()
+            .enumerate()
+            .map(|(index, profile)| {
+                let mut proof = template.clone();
+                proof.counterparty_profile = (*profile).to_owned();
+                proof.circuit_id = RELEASE_CIRCUIT_IDS[index].to_owned();
+                proof.proof_curve = RELEASE_PROOF_CURVES[index].to_owned();
+                proof.circuit_artifact_sha256_hex = digest(profile, "circuit");
+                proof.witness_generator_sha256_hex = digest(profile, "witness");
+                proof.public_signal_schema_hash_hex =
+                    lowercase_hex(&match proof.proof_curve.as_str() {
+                        "bn254" => sccp_groth16_bn254_public_signal_schema_hash_v1(),
+                        "bls12-381" => sccp_groth16_bls12381_public_signal_schema_hash_v1(),
+                        _ => unreachable!("exact release curve"),
+                    });
+                let circuit_commitment =
+                    require_hash(&proof.circuit_artifact_sha256_hex, "unit circuit").unwrap();
+                let witness_generator_commitment =
+                    require_hash(&proof.witness_generator_sha256_hex, "unit witness").unwrap();
+                let public_signal_schema_hash =
+                    require_hash(&proof.public_signal_schema_hash_hex, "unit schema").unwrap();
+                let semantic_profile = if proof.proof_curve == "bn254" {
+                    SccpSemanticProofProfileV1::SoraTairaFinalityInclusionGroth16Bn254(
+                        SccpGroth16Bn254SemanticCircuitV1 {
+                            version: 1,
+                            circuit_commitment,
+                            witness_generator_commitment,
+                            public_signal_schema_hash,
+                        },
+                    )
+                } else {
+                    SccpSemanticProofProfileV1::SoraTairaFinalityInclusionGroth16Bls12381(
+                        SccpGroth16Bls12381SemanticCircuitV1 {
+                            version: 1,
+                            circuit_commitment,
+                            witness_generator_commitment,
+                            public_signal_schema_hash,
+                        },
+                    )
+                };
+                proof.semantic_proof_profile_hash_hex =
+                    lowercase_hex(&sccp_semantic_proof_profile_hash_v1(semantic_profile).unwrap());
+                proof.sora_finality_anchor.protocol_version = SUMERAGI_V2_PROTOCOL_VERSION;
+                proof.sora_finality_anchor.checkpoint_block_hash_hex =
+                    digest(profile, "checkpoint-block");
+                proof.sora_finality_anchor.checkpoint_context_id_hex =
+                    digest(profile, "checkpoint-context");
+                proof
+                    .sora_finality_anchor
+                    .checkpoint_finality_artifact_hash_hex = digest(profile, "checkpoint-artifact");
+                proof.sora_finality_anchor_hash_hex = lowercase_hex(
+                    &validate_sora_finality_anchor_policy(&proof.sora_finality_anchor)
+                        .unwrap()
+                        .anchor_hash,
+                );
+                proof.verifier_key_hash_hex = digest(profile, "verifier-key");
+                proof.verifying_key_sha256_hex = digest(profile, "verifying-key");
+                proof.prover_build_sha256_hex = digest(profile, "prover");
+                proof.toolchain_lock_sha256_hex = digest(profile, "toolchain");
+                let mut build = norito::json::to_value(&proof.destination_build).unwrap();
+                for (role, value) in build.as_object_mut().unwrap() {
+                    *value = norito::json::Value::String(digest(profile, role));
+                }
+                proof.destination_build =
+                    norito::json::from_str(&norito::json::to_json(&build).unwrap()).unwrap();
+                let unsigned = value_without_field(
+                    norito::json::to_value(&proof).unwrap(),
+                    "audit_attestations",
+                    "unit proof",
+                )
+                .unwrap();
+                let unsigned_json = norito::json::to_json(&unsigned).unwrap();
+                proof.audit_attestations = policy
+                    .circuit_auditors
+                    .iter()
+                    .enumerate()
+                    .map(|(audit_index, auditor)| {
+                        let report_sha256_hex =
+                            digest(profile, &format!("audit-report-{audit_index}"));
+                        let mut payload = CIRCUIT_AUDIT_DOMAIN.to_vec();
+                        payload.extend_from_slice(unsigned_json.as_bytes());
+                        payload.extend_from_slice(
+                            &require_hash(&report_sha256_hex, "unit report").unwrap(),
+                        );
+                        CircuitAuditAttestationV1 {
+                            role: auditor.role.clone(),
+                            auditor_id: auditor.auditor_id.clone(),
+                            algorithm: "ed25519".to_owned(),
+                            public_key_hex: auditor.public_key_hex.clone(),
+                            report_sha256_hex,
+                            signature_b64: unit_signature(&keys[audit_index + 6], &payload),
+                            completed_at_unix_ms: 0,
+                            unresolved_findings: Some(UnresolvedAuditFindingsV1 {
+                                critical: 0,
+                                high: 0,
+                                medium: 0,
+                            }),
+                        }
+                    })
+                    .collect();
+                proof
+            })
+            .collect();
+        let mut evidence = release_evidence_envelope();
+        evidence.trust_policy_id = policy.policy_id.clone();
+        evidence.trust_policy_sha256_hex = lowercase_hex(&sha256(&unit_canonical_json(&policy)));
+        let unsigned = value_without_field(
+            norito::json::to_value(&evidence).unwrap(),
+            "provenance",
+            "unit evidence",
+        )
+        .unwrap();
+        let mut payload = RELEASE_SIGNING_DOMAIN.to_vec();
+        payload.extend_from_slice(norito::json::to_json(&unsigned).unwrap().as_bytes());
+        evidence.provenance = policy
+            .roles
+            .iter()
+            .enumerate()
+            .map(|(index, role)| ReleaseProvenanceV1 {
+                role: role.role.clone(),
+                signer_id: role.signer_id.clone(),
+                algorithm: "ed25519".to_owned(),
+                public_key_hex: role.public_key_hex.clone(),
+                signature_b64: unit_signature(&keys[index], &payload),
+            })
+            .collect();
+        (policy, evidence)
+    }
+    #[test]
+    #[cfg(not(feature = "test-fixtures"))]
+    fn current_typed_release_context_rejects_signature_replay_and_malleability_at_the_signature_gate()
+     {
+        let (policy, evidence) = unit_signed_release_context();
+        let policy_bytes = unit_canonical_json(&policy);
+        let evidence_bytes = unit_canonical_json(&evidence);
+        let (_, _, baseline) = validate_release_context(
+            &policy_bytes,
+            &evidence_bytes,
+            ReleaseEnvironment::TestFixture,
+        )
+        .expect("current typed unit context must verify every audit and release signature");
+        assert_eq!(baseline.release_signatures_verified, 2);
+        assert_eq!(baseline.circuit_audit_signatures_verified, 12);
+        assert_eq!(baseline.destination_attestors_validated, 4);
+        assert_eq!(baseline.environment, "test-fixture");
+        assert_eq!(
+            validate_release_context(
+                &policy_bytes,
+                &evidence_bytes,
+                ReleaseEnvironment::Production
+            )
+            .unwrap_err(),
+            "release trust policy has the wrong schema, mode, or cardinality"
+        );
+
+        let mut replayed = evidence.clone();
+        replayed.provenance[1].signature_b64 = replayed.provenance[0].signature_b64.clone();
+        assert_eq!(
+            validate_release_context(
+                &policy_bytes,
+                &unit_canonical_json(&replayed),
+                ReleaseEnvironment::TestFixture
+            )
+            .unwrap_err(),
+            "release signature is replayed across trust roles"
+        );
+
+        let mut malleable = evidence.clone();
+        let mut signature =
+            decode_signature_base64(&malleable.provenance[0].signature_b64).unwrap();
+        signature[32..].fill(0xff);
+        malleable.provenance[0].signature_b64 = unit_signature_base64(&signature);
+        assert_eq!(
+            validate_release_context(
+                &policy_bytes,
+                &unit_canonical_json(&malleable),
+                ReleaseEnvironment::TestFixture
+            )
+            .unwrap_err(),
+            "detached Ed25519 signature is invalid"
+        );
+
+        let mut audit_replay = policy.clone();
+        audit_replay.proof_systems[0].audit_attestations[1].signature_b64 =
+            audit_replay.proof_systems[0].audit_attestations[0]
+                .signature_b64
+                .clone();
+        assert_eq!(
+            validate_release_context(
+                &unit_canonical_json(&audit_replay),
+                &evidence_bytes,
+                ReleaseEnvironment::TestFixture
+            )
+            .unwrap_err(),
+            "detached signature is replayed across trust roles"
+        );
+
+        let mut small_order = policy;
+        small_order.roles[0].public_key_hex = format!("01{}", "00".repeat(31));
+        assert_eq!(
+            validate_release_context(
+                &unit_canonical_json(&small_order),
+                &evidence_bytes,
+                ReleaseEnvironment::TestFixture
+            )
+            .unwrap_err(),
+            "release role key is not a strict Ed25519 public key"
+        );
+    }
     #[test]
     fn release_signature_decoder_and_crypto_reject_noncanonical_material() {
         let key = decode_lower_hex::<32>(
@@ -4961,6 +5250,115 @@ mod tests {
             let canonical = norito::json::to_json(&lane)
                 .expect("typed release fixture must have canonical Norito JSON");
             assert_eq!(format!("{canonical}\n"), fixture);
+        }
+    }
+    fn current_unavailable_lane(profile: SccpNetworkV1) -> ReleaseLaneEvidenceV1 {
+        ReleaseLaneEvidenceV1 {
+            schema: INPUT_SCHEMA.to_owned(),
+            version: 1,
+            profile,
+            inbound: ReleaseInboundEvidenceV1::Unavailable(UnavailableDirectionV1 {
+                reason: exact_unavailable_reason(profile)
+                    .unwrap_or("no-canonical-native-proof-in-unit-test")
+                    .to_owned(),
+            }),
+            outbound: ReleaseOutboundEvidenceV1::Unavailable(UnavailableDirectionV1 {
+                reason: OUTBOUND_UNAVAILABLE_REASON.to_owned(),
+            }),
+        }
+    }
+    #[test]
+    fn current_typed_lane_parser_rejects_opaque_proof_booleans() {
+        for profile in RELEASE_PROFILES {
+            let baseline =
+                current_unavailable_lane(SccpNetworkV1::from_profile_key(profile).unwrap());
+            let canonical = format!("{}\n", norito::json::to_json(&baseline).unwrap());
+            parse_release_lane_input(canonical.as_bytes())
+                .expect("current typed lane must pass its actual parser");
+            for direction in ["inbound", "outbound"] {
+                let mut candidate = norito::json::to_value(&baseline).unwrap();
+                *candidate.get_mut(direction).unwrap() = norito::json::parse_value(
+                    r#"{"status":"available","evidence":{"proof_valid":true,"finalized":true,"route_matches":true}}"#,
+                ).unwrap();
+                let bytes = format!("{}\n", norito::json::to_json(&candidate).unwrap());
+                assert_eq!(
+                    parse_release_lane_input(bytes.as_bytes()).unwrap_err(),
+                    "input is not strict SCCP release-lane Norito JSON"
+                );
+            }
+        }
+    }
+    #[test]
+    fn current_typed_lane_parser_rejects_layout_and_duplicate_field_drift() {
+        let baseline = current_unavailable_lane(SccpNetworkV1::BscMainnet);
+        let json = norito::json::to_json(&baseline).unwrap();
+        let canonical = format!("{json}\n");
+        parse_release_lane_input(canonical.as_bytes())
+            .expect("current typed lane must pass its actual parser");
+        for altered in [format!(" {canonical}"), json, format!("{canonical}\n")] {
+            assert_eq!(
+                parse_release_lane_input(altered.as_bytes()).unwrap_err(),
+                "input must equal its canonical Norito JSON encoding plus one LF"
+            );
+        }
+        let duplicate = canonical.replacen('{', "{\"schema\":\"duplicate\",", 1);
+        assert_eq!(
+            parse_release_lane_input(duplicate.as_bytes()).unwrap_err(),
+            "input is not strict SCCP release-lane Norito JSON"
+        );
+    }
+    #[test]
+    #[cfg(feature = "test-fixtures")]
+    fn current_native_lane_rejects_mutated_event_digest_value_after_positive_verification() {
+        let (proof, governed_source_identity, governed_trust_anchor) =
+            iroha_sccp::sccp_native_ethereum_transfer_inbound_test_fixture_v1();
+        let mut lane = current_unavailable_lane(SccpNetworkV1::EthereumMainnet);
+        lane.inbound = ReleaseInboundEvidenceV1::Available(Box::new(AvailableInboundEvidenceV1 {
+            proof,
+            governed_source_identity,
+            governed_trust_anchor,
+        }));
+        let canonical = format!("{}\n", norito::json::to_json(&lane).unwrap());
+        let baseline = validate_input(
+            canonical.as_bytes(),
+            "unit-unused-attestor",
+            [1; 32],
+            &approved_proof_system(),
+        )
+        .expect("current Ethereum native proof must verify before mutation");
+        assert_eq!(baseline.inbound_status, "verified");
+        assert_eq!(baseline.outbound_status, "unavailable");
+        for mirror_native_digest in [false, true] {
+            let mut candidate = lane.clone();
+            let ReleaseInboundEvidenceV1::Available(available) = &mut candidate.inbound else {
+                unreachable!("positive native proof is available")
+            };
+            available.proof.source.source_event_digest[0] ^= 1;
+            if mirror_native_digest {
+                let iroha_sccp::SccpNativeSourceProofV1::EthereumBeacon(native) =
+                    &mut available.proof.source.proof
+                else {
+                    unreachable!("Ethereum fixture has its Ethereum native proof")
+                };
+                native.source_event_digest = available.proof.source.source_event_digest;
+            }
+            let mutated = format!("{}\n", norito::json::to_json(&candidate).unwrap());
+            parse_release_lane_input(mutated.as_bytes())
+                .expect("value mutation must retain the current typed canonical lane schema");
+            assert_eq!(
+                validate_input(
+                    mutated.as_bytes(),
+                    "unit-unused-attestor",
+                    [1; 32],
+                    &approved_proof_system()
+                )
+                .unwrap_err(),
+                if mirror_native_digest {
+                    "native inbound proof failed: exact-lane SCCP source-event digest mismatch"
+                } else {
+                    "native inbound proof failed: native proof backend or network mismatch"
+                }
+            );
         }
     }
     fn retired_policy_with_current_destination_build_shape() -> ReleaseTrustPolicyV1 {
@@ -6192,7 +6590,6 @@ mod tests {
             validator_output_lock_sha256: [37; 32],
         }
     }
-    #[cfg(not(feature = "test-fixtures"))]
     fn release_evidence_envelope() -> ReleaseEvidenceSignaturesV1 {
         let lanes = RELEASE_PROFILES
             .iter()
@@ -6257,24 +6654,6 @@ mod tests {
             provenance: Vec::new(),
             validator_built_at_unix_ms: 0,
             contract_builds: Vec::new(),
-        }
-    }
-    #[cfg(not(feature = "test-fixtures"))]
-    fn release_envelope_test_policy() -> ReleaseTrustPolicyV1 {
-        ReleaseTrustPolicyV1 {
-            schema: TEST_POLICY_SCHEMA.to_owned(),
-            environment: "test-fixture".to_owned(),
-            policy_id: "external-policy-v1".to_owned(),
-            roles: Vec::new(),
-            destination_attestors: Vec::new(),
-            circuit_auditors: Vec::new(),
-            proof_systems: Vec::new(),
-            issued_at_unix_ms: 0,
-            expires_at_unix_ms: 0,
-            policy_root_sha256_hex: String::new(),
-            offline_policy_root_signers: Vec::new(),
-            offline_policy_root_signatures: Vec::new(),
-            freshness_authorities: Vec::new(),
         }
     }
     #[test]
@@ -6637,17 +7016,16 @@ mod tests {
     #[test]
     #[cfg(not(feature = "test-fixtures"))]
     fn release_envelope_binds_exact_profiles_inventory_and_corridor() {
-        let evidence = release_evidence_envelope();
-        let policy = release_envelope_test_policy();
+        let (policy, evidence) = unit_signed_release_context();
         validate_release_evidence_envelope(&evidence, &policy, ReleaseEnvironment::TestFixture)
             .unwrap();
         validate_release_hub(&evidence).unwrap();
-        let mut nexus = release_evidence_envelope();
+        let mut nexus = evidence.clone();
         nexus.hub_profile = "sora-nexus".to_owned();
         nexus.hub_chain_id = "00000000-0000-0000-0000-000000000753".to_owned();
         assert!(validate_release_hub(&nexus).is_err());
         for mutation in 0..=8 {
-            let mut candidate = release_evidence_envelope();
+            let mut candidate = evidence.clone();
             match mutation {
                 0 => candidate.lanes[0].counterparty_profile = "solana-mainnet-beta".to_owned(),
                 1 => candidate.lanes[0].counterparty_domain = 3,

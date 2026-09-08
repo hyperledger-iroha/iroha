@@ -29,6 +29,9 @@ public enum ConnectCloseCode: UInt16, Sendable {
 
 /// Factory used by `ConnectClient` so tests can inject a deterministic WebSocket task.
 public struct ConnectWebSocketFactory: Sendable {
+    /// Bounded whole-message transport for a four-MiB execution transaction and V1 framing.
+    public static let executionProofV1MaximumMessageBytes = 4 * 1024 * 1024 + 4096
+
     private let makeTask: @Sendable (URLRequest) -> ConnectWebSocketTask
 
     public init(makeTask: @escaping @Sendable (URLRequest) -> ConnectWebSocketTask) {
@@ -48,13 +51,25 @@ public struct ConnectWebSocketFactory: Sendable {
             URLSessionConnectWebSocketTask(session: session, request: request)
         }
     }
+
+    /// Opt in only after the node and wallet are qualified for native execution-proof signing.
+    /// Ordinary `urlSession` factories preserve the platform's existing default.
+    public static func urlSessionForExecutionProofs(session: URLSession = .shared) -> ConnectWebSocketFactory {
+        ConnectWebSocketFactory { request in
+            URLSessionConnectWebSocketTask(session: session, request: request,
+                                          maximumMessageSize: executionProofV1MaximumMessageBytes)
+        }
+    }
 }
 
 final class URLSessionConnectWebSocketTask: ConnectWebSocketTask {
-    private let task: URLSessionWebSocketTask
+    let task: URLSessionWebSocketTask
 
-    init(session: URLSession, request: URLRequest) {
+    init(session: URLSession, request: URLRequest, maximumMessageSize: Int? = nil) {
         task = session.webSocketTask(with: request)
+        if let maximumMessageSize {
+            task.maximumMessageSize = maximumMessageSize
+        }
     }
 
     func resume() {

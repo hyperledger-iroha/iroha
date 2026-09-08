@@ -297,6 +297,7 @@ isi! {
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
     #[norito(deny_unknown_fields)]
+    #[norito_schema(name = "iroha_data_model::isi::bridge::SubmitBridgeProof")]
     pub struct SubmitBridgeProof {
         /// Typed bridge proof payload and its payload-owned verifier binding.
         pub proof: crate::bridge::BridgeProof,
@@ -334,6 +335,7 @@ isi! {
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
     #[norito(deny_unknown_fields)]
+    #[norito_schema(name = "iroha_data_model::isi::bridge::RecordBridgeReceipt")]
     pub struct RecordBridgeReceipt {
         /// Bridge receipt payload to record.
         pub receipt: crate::bridge::BridgeReceipt,
@@ -356,6 +358,7 @@ isi! {
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
     #[norito(deny_unknown_fields)]
+    #[norito_schema(name = "iroha_data_model::isi::bridge::ApplySccpRouteGovernance")]
     pub struct ApplySccpRouteGovernance {
         /// Complete closed governance action.
         pub action: SccpRouteGovernanceActionV1,
@@ -381,6 +384,7 @@ isi! {
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
     #[norito(deny_unknown_fields)]
+    #[norito_schema(name = "iroha_data_model::isi::bridge::SubmitSccpTonBreakerObservationV1")]
     pub struct SubmitSccpTonBreakerObservationV1 {
         /// Exact governed TonMainnet route revision being observed.
         pub route_key: crate::bridge::SccpRouteKeyV1,
@@ -511,6 +515,7 @@ isi! {
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
     #[norito(deny_unknown_fields)]
+    #[norito_schema(name = "iroha_data_model::isi::bridge::RecordSccpMessage")]
     pub struct RecordSccpMessage {
         /// Exact governed lane and destination binding for this outbound message.
         pub context: crate::bridge::SccpOutboundMessageContextV1,

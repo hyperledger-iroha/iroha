@@ -72,9 +72,9 @@ async fn npos_happy_path_enforces_da_and_metrics_bounds() -> eyre::Result<()> {
         return Ok(());
     };
     let client = network.client();
-    let status = client.get_status()?;
+    let status = client.client().get_status()?;
     for idx in status.blocks..BLOCK_TARGET {
-        client.submit_blocking(
+        client.submit(
             Log::new(Level::INFO, format!("npos happy seed {idx}")),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )?;
@@ -82,26 +82,26 @@ async fn npos_happy_path_enforces_da_and_metrics_bounds() -> eyre::Result<()> {
     network
         .ensure_blocks_with(|height| height.total >= BLOCK_TARGET)
         .await?;
-    let status = client.get_status()?;
+    let status = client.client().get_status()?;
     ensure!(
         status.blocks >= BLOCK_TARGET,
         "expected at least {BLOCK_TARGET} blocks, observed {}",
         status.blocks
     );
-    let v2 = client.get_sumeragi_status()?;
+    let v2 = client.client().get_sumeragi_status()?;
     v2.validate()
         .map_err(|err| eyre!("invalid canonical v2 status: {err}"))?;
     ensure!(
         v2.last_committed_height >= BLOCK_TARGET && v2.last_committed_subject.is_some(),
         "NPoS happy path must expose the committed v2 subject at or above height {BLOCK_TARGET}"
     );
-    let diagnostics = client.get_sumeragi_diagnostics()?;
+    let diagnostics = client.client().get_sumeragi_diagnostics()?;
     ensure!(
         diagnostics.npos.is_some(),
         "NPoS happy path must expose NPoS diagnostics"
     );
     let http = integration_tests::http::client();
-    let torii = client.torii_url.clone();
+    let torii = client.client().torii_url.clone();
     let metrics_url = torii.join("metrics").wrap_err("compose metrics URL")?;
     ensure_metrics_within_bounds(&http, &metrics_url, BG_QUEUE_DEPTH_BUDGET).await?;
     network.shutdown().await;
@@ -137,7 +137,11 @@ async fn npos_large_da_payload_commits_with_consistent_v2_subject() -> eyre::Res
         .await?;
     for peer in network.peers() {
         ensure!(
-            peer.client().get_sumeragi_diagnostics()?.npos.is_some(),
+            peer.client()
+                .client()
+                .get_sumeragi_diagnostics()?
+                .npos
+                .is_some(),
             "{} did not activate the NPoS consensus diagnostics",
             peer.mnemonic()
         );

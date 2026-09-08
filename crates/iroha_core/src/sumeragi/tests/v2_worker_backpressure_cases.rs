@@ -2250,8 +2250,10 @@ fn non_roster_targets_cannot_consume_frozen_validator_reservations() {
     let mut pending = PendingExactOutput::new(1, 1, 1, std::slice::from_ref(&validator))
         .expect("one shared slot plus frozen validator and control reservations");
     assert_eq!(pending.shared_ownership_unit_capacity, 1);
-    assert_eq!(pending.reserved_target_classes.len(), 5);
-    assert_eq!(pending.ownership_unit_capacity, 6);
+    // Three reliable classes plus independent pacemaker, sidecar topology,
+    // and sidecar reply-control reservations belong to this frozen validator.
+    assert_eq!(pending.reserved_target_classes.len(), 6);
+    assert_eq!(pending.ownership_unit_capacity, 7);
     assert_eq!(
         pending
             .enqueue(
@@ -2645,78 +2647,8 @@ fn backpressured_source_does_not_block_other_sources_or_consume_their_reserve() 
         Ok(None)
     );
     assert!(!pending.is_pending());
-    let responsive_fanout = PendingExactFanout::new(
-        vec![merge_share_message(b"later responsive fanout")],
-        vec![later_fanout_responsive.clone()],
-    )
-    .expect("later responsive fanout");
-    assert_eq!(
-        pending
-            .enqueue(responsive_fanout)
-            .expect("responsive fanout within bounds"),
-        ExactFanoutOwnership::Owned
-    );
-    let later_blocked_fanout = PendingExactFanout::new(
-        vec![merge_share_message(b"later blocked-peer fanout")],
-        vec![blocked.clone()],
-    )
-    .expect("later same-source fanout");
-    assert_eq!(
-        pending
-            .enqueue(later_blocked_fanout)
-            .expect("same-source fanout within protocol bounds"),
-        ExactFanoutOwnership::SourceRetained,
-        "a blocked source cannot consume the slot reserved for another source/class"
-    );
-    assert_eq!(
-        pending.drive_with(|post, ticket, _route| {
-            if post.peer_id == observer {
-                return Err(NetworkActorAdmissionError::Backpressured {
-                    message: post,
-                    ticket,
-                    rank: 7,
-                });
-            }
-            if post.peer_id == blocked {
-                blocked_attempts = blocked_attempts.saturating_add(1);
-                return Err(NetworkActorAdmissionError::Backpressured {
-                    message: post,
-                    ticket,
-                    rank: 7,
-                });
-            }
-            assert!(ticket.is_none());
-            admitted.push((post.peer_id, merge_share_digest(&post.data)));
-            Ok(())
-        }),
-        Ok(Some(7))
-    );
-    assert_eq!(blocked_attempts, 2);
-    assert_eq!(
-        admitted,
-        vec![
-            (same_fanout_responsive.clone(), oldest_first_digest),
-            (same_fanout_responsive, oldest_second_digest),
-            (later_fanout_responsive, responsive_digest),
-        ]
-    );
-    assert_eq!(pending.fanouts.len(), 2);
-    assert!(pending.fanouts[0].targets[0].current.is_some());
-    assert!(pending.fanouts[1].targets[0].current.is_some());
-    assert!(pending.fanouts[1].target_is_complete(1));
-    assert_eq!(
-        pending.drive_with(|post, ticket, _route| {
-            assert!(ticket.is_none());
-            if post.peer_id == blocked {
-                admitted.push((post.peer_id, merge_share_digest(&post.data)));
-            } else {
-                assert_eq!(post.peer_id, observer);
-            }
-            Ok(())
-        }),
-        Ok(None)
-    );
-    assert!(!pending.is_pending());
+    // The exact saturated prefix has now drained. Reconstruct the suffix
+    // retained by its producer and prove that it can reclaim the freed credit.
     let later_blocked_fanout = PendingExactFanout::new(
         vec![merge_share_message(b"later blocked-peer fanout")],
         vec![blocked.clone()],

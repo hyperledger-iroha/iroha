@@ -48,6 +48,8 @@ use std::{format, str::FromStr, string::String, vec::Vec};
     all(feature = "ffi_export", not(feature = "ffi_import")),
     ffi_type(opaque)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::rwa::RwaId")]
 pub struct RwaId {
     /// Domain that scopes the lot identifier.
     pub domain: DomainId,
@@ -133,6 +135,8 @@ pub struct RwaControlPolicy {
     all(feature = "ffi_export", not(feature = "ffi_import")),
     ffi_type(opaque)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::rwa::Rwa")]
 pub struct Rwa {
     /// Canonical identifier of the lot.
     pub id: RwaId,
@@ -207,6 +211,8 @@ pub type RwaEntry<'world> = Ref<'world, RwaId, RwaValue>;
 #[derive(Clone, norito::NoritoSerialize, norito::NoritoDeserialize)]
 #[cfg_attr(feature = "json", derive(DeriveFast, DeriveJsonSer, DeriveJsonDe))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::rwa::RwaData")]
 pub struct RwaData {
     /// Current lot quantity.
     pub quantity: Quantity,

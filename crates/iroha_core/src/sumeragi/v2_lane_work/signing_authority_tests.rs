@@ -19,7 +19,11 @@ fn ordinary_lane_signing_fixture() -> (V2LaneWorkAdapter, Vec<KeyPair>, LaneBloc
             .validator_set
             .contains(&adapter.local_peer)
     );
-    assert!(adapter.proposal_predecessor_is_ready_for_progress(&proposal));
+    assert!(
+        adapter
+            .proposal_predecessor_is_ready_for_progress(&proposal)
+            .expect("read exact predecessor readiness")
+    );
     (adapter, keys, proposal)
 }
 

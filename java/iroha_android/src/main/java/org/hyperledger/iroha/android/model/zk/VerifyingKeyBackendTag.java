@@ -42,7 +42,7 @@ public enum VerifyingKeyBackendTag {
   public static final Set<String> VERIFIER_BACKEND_REGISTRY_LABELS_V1 =
       immutableSet(
           "halo2/ipa",
-          "halo2/pasta/kaigi-roster-v1",
+          "halo2/pasta/kaigi-authorization-v1",
           "halo2/pasta/kaigi-usage-v1",
           "halo2/pasta/ivm-execution-v1",
           "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
@@ -55,7 +55,7 @@ public enum VerifyingKeyBackendTag {
 
   private static final Set<String> PRODUCTION_NATIVE_HALO2_PASTA_BACKENDS =
       immutableSet(
-          "halo2/pasta/kaigi-roster-v1",
+          "halo2/pasta/kaigi-authorization-v1",
           "halo2/pasta/kaigi-usage-v1",
           "halo2/pasta/ivm-execution-v1",
           "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",

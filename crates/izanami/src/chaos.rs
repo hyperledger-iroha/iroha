@@ -13,8 +13,9 @@ use color_eyre::{
     Result,
     eyre::{WrapErr, eyre},
 };
-use iroha::client::{
-    Client, PreparedTransactionPayload, TransactionWaitOptions, TransactionWaitOutcome,
+use iroha::{
+    blocking::Client,
+    client::{PreparedTransactionPayload, TransactionWaitOptions, TransactionWaitOutcome},
 };
 use iroha_config::kura::FsyncMode;
 use iroha_crypto::{ExposedPrivateKey, KeyPair};
@@ -1435,7 +1436,7 @@ impl IngressEndpointPool {
                 .client_for(&signer.id, signer.key_pair.private_key().clone()),
             mode,
             self.submit_request_timeout,
-        );
+        )?;
         if let Ok(mut guard) = self.submit_client_cache.lock() {
             guard.insert(cache_key, client.clone());
         }
@@ -2862,7 +2863,7 @@ async fn sample_sumeragi_leader_target(
         let mut last_error = None;
         for (sampled_from_peer_index, peer) in peers.iter().cloned().enumerate() {
             let client = peer.client();
-            match client.get_sumeragi_leader_json() {
+            match client.client().get_sumeragi_leader_json() {
                 Ok(value) => {
                     let Some(peer_index) = parse_sumeragi_leader_index(value) else {
                         last_error = Some(format!(
@@ -3710,15 +3711,34 @@ impl IzanamiRunner {
                         }
                     };
                     let metadata = submission_metadata(submission_counter.as_ref());
-                    let transaction = client.build_transaction_from_items(
-                        plan.instructions.clone(),
-                        iroha_data_model::transaction::FeePaymentIntent::authority(
-                            Vec::new(),
-                            None,
-                        ),
-                        metadata,
-                    );
-                    let payload = Client::prepare_transaction_payload(&transaction);
+                    let transaction = match {
+                        let account = client.account_client();
+                        account
+                            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                                plan.instructions.clone(),
+                                iroha_data_model::transaction::FeePaymentIntent::authority(
+                                    Vec::new(),
+                                    None,
+                                ),
+                                metadata,
+                            ))
+                            .and_then(|payload| account.sign_transaction(payload))
+                    } {
+                        Ok(transaction) => transaction,
+                        Err(err) => {
+                            metrics.record_prebuilt_tx_build_failure();
+                            warn!(
+                                target: "izanami::prebuild",
+                                ?err,
+                                worker_idx,
+                                endpoint_idx,
+                                "failed to build prebuilt transaction"
+                            );
+                            continue;
+                        }
+                    };
+                    let payload =
+                        iroha::client::PreparedTransactionPayload::from_transaction(&transaction);
                     let next_index = built_count.fetch_add(1, Ordering::Relaxed);
                     if next_index >= buffer_capacity as u64 {
                         break;
@@ -4263,21 +4283,21 @@ async fn wait_for_submission_capacity(
     true
 }
 fn tune_ingress_client(
-    mut client: Client,
+    client: Client,
     mode: SubmissionConfirmationMode,
     request_timeout: Duration,
-) -> Client {
-    client.torii_request_timeout = request_timeout;
+) -> Result<Client> {
+    let mut inner = client.client().clone();
+    inner.torii_request_timeout = request_timeout;
     if matches!(mode, SubmissionConfirmationMode::AcceptedByIngress) {
-        client
+        inner
             .headers
             .insert("Prefer".to_owned(), "return=minimal".to_owned());
     }
     if matches!(mode, SubmissionConfirmationMode::BlockingApplied) {
-        client.transaction_status_timeout =
-            Duration::from_millis(IZANAMI_INGRESS_STATUS_TIMEOUT_MS);
+        inner.transaction_status_timeout = Duration::from_millis(IZANAMI_INGRESS_STATUS_TIMEOUT_MS);
     }
-    client
+    Client::from_client(inner).wrap_err("failed to bind tuned ingress client")
 }
 async fn await_worker_shutdown_with_timeout(
     handles: Vec<JoinHandle<()>>,
@@ -4641,11 +4661,12 @@ async fn sample_sumeragi_status_digest(
     spawn_blocking(move || {
         let mut last_error = None;
         for peer in peers {
-            let mut client = peer.client();
-            client.set_operator_key_pair(sumeragi_phase_operator_keypair());
-            client.torii_request_timeout =
-                bounded_sumeragi_status_sample_request_timeout(client.torii_request_timeout);
-            match client.get_sumeragi_status_json() {
+            let client = peer.client();
+            let mut inner = client.client().clone();
+            inner.set_operator_key_pair(sumeragi_phase_operator_keypair());
+            inner.torii_request_timeout =
+                bounded_sumeragi_status_sample_request_timeout(inner.torii_request_timeout);
+            match inner.get_sumeragi_status_json() {
                 Ok(json) => {
                     let mut digest = SumeragiStatusDigest::from_json(&json);
                     digest.apply_json_extras(&json);
@@ -5711,7 +5732,7 @@ fn evaluate_burn_precheck<E>(result: Result<Option<u32>, E>, burn_amount: u32) -
     }
 }
 fn query_trigger_repetitions(client: &Client, trigger_id: &TriggerId) -> Result<Option<u32>> {
-    let iter = client.query(FindTriggers::new()).execute()?;
+    let iter = client.client().query(FindTriggers::new()).execute()?;
     for trigger in iter {
         let trigger = trigger?;
         if trigger.id() == trigger_id {
@@ -5979,7 +6000,8 @@ async fn submit_prebuilt_plan(
                                                 SubmissionConfirmationMode::AcceptedByIngress,
                                             )?;
                                         client
-                                            .submit_prepared_transaction_payload_async(&payload)
+                                            .account_client()
+                                            .submit_prepared_transaction_payload(&payload)
                                             .await
                                     }
                                 },
@@ -6119,9 +6141,8 @@ async fn submit_prebuilt_batch(
                                     SubmissionConfirmationMode::AcceptedByIngress,
                                 )?;
                                 client
-                                    .submit_prepared_transaction_payload_batch_async(
-                                        payloads.as_slice(),
-                                    )
+                                    .account_client()
+                                    .submit_prepared_transaction_payload_batch(payloads.as_slice())
                                     .await
                             }
                         },
@@ -6467,17 +6488,24 @@ async fn submit_plan(
                                             let metadata = submission_metadata(
                                                 submission_counter_for_submit.as_ref(),
                                             );
-                                            let transaction = client.build_transaction_from_items(
+                                            let transaction ={
+    let account = client
+                                                .account_client();
+    account
+        .prepare_transaction(iroha::client::AccountTransactionDraft::new(
                                                 instructions_for_submit,
                                                 iroha_data_model::transaction::FeePaymentIntent::authority(
                                                     Vec::new(),
                                                     None,
                                                 ),
                                                 metadata,
-                                            );
+                                            ))
+        .and_then(|payload| account.sign_transaction(payload))
+}?;
                                             let hash = transaction.hash();
                                             client
-                                                .submit_transaction_async(&transaction)
+                                                .account_client()
+                                                .submit_transaction(&transaction)
                                                 .await
                                                 .map(|_| hash)
                                         }
@@ -6527,17 +6555,22 @@ async fn submit_plan(
                                         ),
                                         SubmissionConfirmationMode::AcceptedByIngress,
                                         ingress_pool_for_submit.submit_request_timeout,
-                                    );
+                                    )?;
                                     let metadata =
                                         submission_metadata(submission_counter_for_submit.as_ref());
-                                    let transaction = client.build_transaction_from_items(
+                                    let transaction = {
+                                        let account = client.account_client();
+                                        account
+        .prepare_transaction(iroha::client::AccountTransactionDraft::new(
                                         instructions_for_submit.clone(),
                                         iroha_data_model::transaction::FeePaymentIntent::authority(
                                             Vec::new(),
                                             None,
                                         ),
                                         metadata,
-                                    );
+                                    ))
+        .and_then(|payload| account.sign_transaction(payload))
+                                    }?;
                                     let hash = transaction.hash();
                                     client.submit_transaction(&transaction).map(|_| hash)
                                 },
@@ -6636,7 +6669,7 @@ async fn query_trigger_repetitions_on_endpoint(
                 peer.client_for(&signer.id, signer.key_pair.private_key().clone()),
                 SubmissionConfirmationMode::AcceptedByIngress,
                 ingress_pool.submit_request_timeout,
-            );
+            )?;
             query_trigger_repetitions(&client, &trigger_id)
         }) {
             Ok(result) => Ok((endpoint_idx, result)),
@@ -6656,7 +6689,7 @@ async fn query_trigger_repetitions_on_endpoint(
                             peer.client_for(&signer.id, signer.key_pair.private_key().clone()),
                             SubmissionConfirmationMode::AcceptedByIngress,
                             ingress_pool.submit_request_timeout,
-                        );
+                        )?;
                         query_trigger_repetitions(&client, &trigger_id)
                     },
                 )
@@ -6683,7 +6716,7 @@ fn submit_repeatable_trigger_plan_on_endpoint(
             peer.client_for(&signer.id, signer.key_pair.private_key().clone()),
             SubmissionConfirmationMode::AcceptedByIngress,
             ingress_pool.submit_request_timeout,
-        );
+        )?;
         let metadata = submission_metadata(submission_counter);
         client
             .submit_all_with_metadata(
@@ -6889,9 +6922,10 @@ fn wait_for_transaction_applied_with_failover(
                         peer.client_for(&signer.id, signer.key_pair.private_key().clone()),
                         SubmissionConfirmationMode::AcceptedByIngress,
                         ingress_pool.submit_request_timeout,
-                    );
-                    let Some(response) =
-                        client.get_transaction_status_response_global(hash.clone())?
+                    )?;
+                    let Some(response) = client
+                        .client()
+                        .get_transaction_status_response_global(hash.clone())?
                     else {
                         return Ok(None);
                     };
@@ -8920,7 +8954,7 @@ mod tests {
                 let attempt = attempts.fetch_add(1, Ordering::Relaxed);
                 if attempt == 0 {
                     Err(eyre!(
-                        "no ingress endpoints available for operation `submit_all_blocking_with_metadata`"
+                        "no ingress endpoints available for operation `submit_all_with_metadata`"
                     ))
                 } else {
                     Ok(())
@@ -9060,9 +9094,7 @@ mod tests {
     }
     #[test]
     fn ingress_queue_timeout_retryable_for_no_endpoint_backpressure() {
-        let err = eyre!(
-            "no ingress endpoints available for operation `submit_all_blocking_with_metadata`"
-        );
+        let err = eyre!("no ingress endpoints available for operation `submit_all_with_metadata`");
         assert!(
             is_ingress_queue_timeout_retryable(&err),
             "no-endpoint ingress backpressure should be retryable for submit helper"

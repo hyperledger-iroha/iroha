@@ -2445,6 +2445,7 @@ impl LaneQueueReservationJournal {
         self.append_durable(&LaneQueueReservationJournalFrameV1::PutBatch(records))
     }
     /// Durably release one exact reservation.
+    #[cfg(test)]
     pub(super) fn release(&mut self, key: LaneQueueReservationKeyV1) -> io::Result<()> {
         self.release_batch(vec![key])
     }

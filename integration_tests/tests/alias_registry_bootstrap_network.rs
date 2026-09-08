@@ -7,6 +7,7 @@
 //! No unchecked blocks, fabricated certificates, injected WSV or storage reset
 //! may substitute for the original persisted history and Strict daemon replay.
 use std::{
+    borrow::Cow,
     collections::{BTreeMap, BTreeSet},
     fs,
     mem::size_of,
@@ -19,7 +20,7 @@ use std::{
 use eyre::{Result, WrapErr as _, ensure, eyre};
 use futures_util::future::try_join_all;
 use integration_tests::sandbox;
-use iroha::{client::Client, sns::SnsNamespacePath};
+use iroha::{blocking::Client, sns::SnsNamespacePath};
 use iroha_config::{
     base::WithOrigin,
     kura::FsyncMode,
@@ -74,7 +75,6 @@ use iroha_test_network::{
     init_instruction_registry, resolve_release_prebuilt_binary,
 };
 use iroha_test_samples::{BOB_ID, BOB_KEYPAIR};
-use norito::codec::Encode as _;
 use sha2::{Digest as _, Sha256};
 use tokio::time::{Instant, sleep, timeout};
 use toml::{Table, Value as TomlValue};
@@ -172,25 +172,34 @@ fn custom_genesis_post_topology(topology: &[PeerId]) -> Vec<Vec<InstructionBox>>
     vec![bootstrap, default_lane_validators]
 }
 
-fn bounded_client(mut client: Client) -> Client {
-    client.transaction_status_timeout = SUBMISSION_TIMEOUT;
-    client.transaction_ttl = Some(TRANSACTION_TTL);
-    client.torii_request_timeout = Duration::from_secs(20);
-    client
+fn bounded_client(client: Client) -> Client {
+    integration_tests::sync::rebind_blocking_client(&client, |client| {
+        client.transaction_status_timeout = SUBMISSION_TIMEOUT;
+        client.transaction_ttl = Some(TRANSACTION_TTL);
+        client.torii_request_timeout = Duration::from_secs(20);
+    })
 }
 
 async fn read<T: Send + 'static>(
     operation: impl FnOnce() -> Result<T> + Send + 'static,
 ) -> Result<T> {
-    timeout(READ_TIMEOUT, tokio::task::spawn_blocking(operation))
-        .await
-        .wrap_err("bounded fixture read timed out")?
-        .wrap_err("fixture read task failed")?
+    timeout(
+        READ_TIMEOUT,
+        iroha_test_network::read_on_dedicated_thread(operation),
+    )
+    .await
+    .wrap_err("bounded fixture read timed out")?
+    .wrap_err("fixture read task failed")
 }
 
 async fn height(client: &Client) -> Result<u64> {
     let client = client.clone();
-    read(move || Ok(client.get_status()?.blocks)).await
+    read(move || Ok(client.client().get_status()?.blocks)).await
+}
+
+async fn lane_lifecycle_status(client: &Client) -> Result<LaneLifecycleStatusV1> {
+    let client = client.clone();
+    read(move || client.client().get_lane_lifecycle_status()).await
 }
 
 async fn common_retained_prefix(clients: &[Client]) -> Result<u64> {
@@ -211,7 +220,7 @@ async fn observe_catalog_expansion(
 ) -> Result<LaneLifecycleStatusV1> {
     let lane_client = client.clone();
     let lanes = read(move || {
-        let status = lane_client.get_lane_lifecycle_status()?;
+        let status = lane_client.client().get_lane_lifecycle_status()?;
         ensure!(
             status.validate()? == LaneCatalog::default(),
             "dataspace-only expansion changed the original lane catalog"
@@ -224,6 +233,7 @@ async fn observe_catalog_expansion(
     // Status telemetry instead projects lane-backed dataspaces, so it cannot
     // prove this deliberately lane-free catalog addition.
     let url = client
+        .client()
         .torii_url
         .join("v1/sns/names/account-alias/catalog-probe@mibank.bpng")?;
     let mut response = reqwest::Client::builder()
@@ -255,15 +265,15 @@ async fn observe_catalog_expansion(
 }
 
 async fn submit(client: &Client, transaction: SignedTransaction) -> Result<SignedTransaction> {
-    let submitter = client.clone();
-    let signed = transaction.clone();
     timeout(
         SUBMISSION_TASK_TIMEOUT,
-        tokio::task::spawn_blocking(move || submitter.submit_transaction_blocking(&signed)),
+        client
+            .account_client()
+            .submit_transaction_and_wait(&transaction),
     )
     .await
     .wrap_err("native transaction did not reach terminal status in time")?
-    .wrap_err("native submission task failed")??;
+    .wrap_err("native submission failed")?;
     Ok(transaction)
 }
 
@@ -417,21 +427,21 @@ fn validator_bindings(
             .get("type")
             .and_then(norito::json::Value::as_str)
             .ok_or_else(|| eyre!("lane validator item omitted status.type"))?;
-        let validator = item
-            .get("validator")
-            .and_then(norito::json::Value::as_str)
-            .ok_or_else(|| eyre!("lane validator item omitted validator"))?
-            .parse()?;
+        let validator = AccountId::parse_encoded(
+            item.get("validator")
+                .and_then(norito::json::Value::as_str)
+                .ok_or_else(|| eyre!("lane validator item omitted validator"))?,
+        )?;
         let peer = item
             .get("peer_id")
             .and_then(norito::json::Value::as_str)
             .ok_or_else(|| eyre!("lane validator item omitted peer_id"))?
             .parse()?;
-        let stake_account: AccountId = item
-            .get("stake_account")
-            .and_then(norito::json::Value::as_str)
-            .ok_or_else(|| eyre!("lane validator item omitted stake_account"))?
-            .parse()?;
+        let stake_account = AccountId::parse_encoded(
+            item.get("stake_account")
+                .and_then(norito::json::Value::as_str)
+                .ok_or_else(|| eyre!("lane validator item omitted stake_account"))?,
+        )?;
         ensure!(
             stake_account == validator
                 && item
@@ -500,7 +510,9 @@ async fn wait_for_exact_bpng_pending_registrations(
         let query_client = client.clone();
         let expected_stake = expected_stake.clone();
         let observed = read(move || {
-            let snapshot = query_client.get_public_lane_validators(BPNG_FIXTURE_LANE)?;
+            let snapshot = query_client
+                .client()
+                .get_public_lane_validators(BPNG_FIXTURE_LANE)?;
             validator_bindings(&snapshot, &expected_stake)
         })
         .await;
@@ -545,7 +557,9 @@ async fn wait_for_exact_bpng_validators(
             let client = client.clone();
             let expected_stake = expected_stake.clone();
             match read(move || {
-                let snapshot = client.get_public_lane_validators(BPNG_FIXTURE_LANE)?;
+                let snapshot = client
+                    .client()
+                    .get_public_lane_validators(BPNG_FIXTURE_LANE)?;
                 validator_bindings(&snapshot, &expected_stake)
             })
             .await
@@ -577,11 +591,17 @@ async fn wait_for_exact_bpng_validators(
 }
 
 fn transaction(client: &Client, instruction: impl Into<InstructionBox>) -> SignedTransaction {
-    client.build_transaction(
-        [instruction.into()],
-        FeePaymentIntent::authority(Vec::new(), None),
-        Metadata::default(),
-    )
+    {
+        let account = client.account_client();
+        account
+            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                [instruction.into()],
+                FeePaymentIntent::authority(Vec::new(), None),
+                Metadata::default(),
+            ))
+            .and_then(|payload| account.sign_transaction(payload))
+    }
+    .expect("build integration-test transaction")
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -863,7 +883,10 @@ async fn acquire(
     let planning_client = payer.clone();
     let literal = literal.to_owned();
     let (signed, expectation) = read(move || {
-        let policy = planning_client.sns().get_policy(namespace.suffix_id())?;
+        let policy = planning_client
+            .client()
+            .sns()
+            .get_policy(namespace.suffix_id())?;
         ensure!(
             policy.fund_splitter_account != *BOB_ID,
             "fixture payer must differ from native lease collector"
@@ -883,7 +906,7 @@ async fn acquire(
                 valid_until_ms,
             },
         )]);
-        let plan = planning_client.plan_alias_setup(&request)?;
+        let plan = planning_client.client().plan_alias_setup(&request)?;
         ensure!(
             plan.body.blockers.is_empty() && plan.body.resources.len() == 1,
             "native planner did not produce one executable resource"
@@ -901,16 +924,24 @@ async fn acquire(
             !quote.exact_amount.is_zero(),
             "SNS acquisition must charge a real lease payment"
         );
-        let instructions = planning_client.verify_alias_setup_plan_for_request(&request, &plan)?;
+        let instructions = planning_client
+            .client()
+            .verify_alias_setup_plan_for_request(&request, &plan)?;
         ensure!(
             instructions.len() == 1,
             "one native EnsureAlias instruction expected"
         );
-        let signed = planning_client.build_transaction(
-            instructions,
-            FeePaymentIntent::authority(Vec::new(), None),
-            Metadata::default(),
-        );
+        let signed = {
+            let account = planning_client.account_client();
+            account
+                .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                    instructions,
+                    FeePaymentIntent::authority(Vec::new(), None),
+                    Metadata::default(),
+                ))
+                .and_then(|payload| account.sign_transaction(payload))
+        }
+        .expect("build integration-test transaction");
         Ok((
             signed,
             LeaseExpectation {
@@ -933,7 +964,7 @@ fn balances(client: &Client, leases: &[LeaseExpectation]) -> Result<BTreeMap<Ass
             selected.insert(AssetId::of(definition.clone(), owner), Quantity::zero());
         }
     }
-    for asset in client.query(FindAssets::new()).execute_all()? {
+    for asset in client.client().query(FindAssets::new()).execute_all()? {
         if let Some(amount) = selected.get_mut(asset.id()) {
             *amount = asset.value().clone();
         }
@@ -983,7 +1014,7 @@ fn ledger_snapshot(
     grant: &AliasDataspaceBootstrapGrantV1,
     transactions: &[SignedTransaction],
 ) -> Result<LedgerSnapshot> {
-    let parameters: Parameters = client.query_single(FindParameters::new())?;
+    let parameters: Parameters = client.client().query_single(FindParameters::new())?;
     let custom = parameters
         .custom()
         .get(&AliasRegistryRoutingActivationV1::parameter_id())
@@ -1003,10 +1034,15 @@ fn ledger_snapshot(
     let mut leases = Vec::new();
     for expected in expectations {
         ensure!(
-            client.sns().get_policy(expected.namespace.suffix_id())? == expected.policy,
+            client
+                .client()
+                .sns()
+                .get_policy(expected.namespace.suffix_id())?
+                == expected.policy,
             "native suffix policy drifted"
         );
         let record = client
+            .client()
             .sns()
             .get_name(expected.namespace, &expected.literal)?;
         let selector = NameSelectorV1::new(expected.namespace.suffix_id(), &expected.literal)?;
@@ -1039,7 +1075,7 @@ fn ledger_snapshot(
         leases.push(record);
     }
     let mut domains = BTreeMap::new();
-    for domain in client.query(FindDomains::new()).execute_all()? {
+    for domain in client.client().query(FindDomains::new()).execute_all()? {
         if [
             DomainId::try_new("history", "universal")?,
             DomainId::try_new("mibank", "bpng")?,
@@ -1054,7 +1090,10 @@ fn ledger_snapshot(
         }
     }
     ensure!(domains.len() == 2, "both native domains must be present");
-    let committed = client.query(FindTransactions::new()).execute_all()?;
+    let committed = client
+        .client()
+        .query(FindTransactions::new())
+        .execute_all()?;
     for transaction in transactions {
         let matching = committed
             .iter()
@@ -1117,7 +1156,9 @@ fn assert_bpng_ownership(
     expected_validators: &[PeerId],
     transaction: &SignedTransaction,
 ) -> Result<()> {
-    ownership.validate_replay_material()?;
+    ownership
+        .validate_replay_material()
+        .map_err(|error| eyre!("invalid BPNG lane ownership replay material: {error}"))?;
     let transaction_hash = Hash::from(transaction.hash());
     ensure!(
         ownership.lane_id == BPNG_FIXTURE_LANE
@@ -1152,7 +1193,7 @@ async fn wait_for_bpng_frontier(
         for client in clients {
             let client = client.clone();
             let observed = read(move || {
-                let diagnostics = client.get_sumeragi_diagnostics()?;
+                let diagnostics = client.client().get_sumeragi_diagnostics()?;
                 let ownerships = diagnostics
                     .lane_payload_ownerships
                     .iter()
@@ -1224,13 +1265,19 @@ async fn wait_for_bpng_frontier(
     }
 }
 
-fn assert_bpng_metadata(
+async fn assert_bpng_metadata(
     client: &Client,
     predecessor_key: &Name,
     predecessor_value: &Json,
     successor: Option<(&Name, &Json)>,
 ) -> Result<()> {
-    let domain = client.query_single(FindDomainById::new(DomainId::try_new("mibank", "bpng")?))?;
+    let client = client.clone();
+    let domain = read(move || {
+        client
+            .client()
+            .query_single(FindDomainById::new(DomainId::try_new("mibank", "bpng")?))
+    })
+    .await?;
     ensure!(
         domain.metadata().get(predecessor_key) == Some(predecessor_value),
         "pre-restart BPNG state is absent"
@@ -1600,7 +1647,9 @@ fn inspect_certified_bpng_lane_evidence(
                     .find(|ownership| ownership_matches_descriptor(ownership, descriptor))
             })
             .ok_or_else(|| eyre!("retained Kura carrier omitted certified BPNG ownership"))?;
-        ownership.validate_replay_material()?;
+        ownership.validate_replay_material().map_err(|error| {
+            eyre!("invalid retained Kura BPNG ownership replay material: {error}")
+        })?;
         previous_height = descriptor.lane_block_height;
         previous_descriptor = Some(descriptor.descriptor_hash);
         indexed_end = end;
@@ -1998,7 +2047,8 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
     npos.finality_margin_blocks = 2;
     npos.evidence_horizon_blocks = 16;
     npos.slashing_delay_blocks = 8;
-    npos.validate()?;
+    npos.validate()
+        .map_err(|error| eyre!("invalid four-validator NPoS fixture parameters: {error}"))?;
     let builder = NetworkBuilder::new()
         .with_peers(VALIDATOR_COUNT)
         .with_base_seed(NETWORK_SEED)
@@ -2018,22 +2068,19 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
         )))
         .with_block_cadence(Duration::from_secs(1))
         .with_config_layer(|layer| {
+            // Fees are fixed in the original network and retained on restart.
+            // Keep one fluent borrow of the configuration writer.
             layer
                 .write(["snapshot", "mode"], "disabled")
                 .write(["kura", "init_mode"], "strict")
                 .write(
                     ["nexus", "storage", "local_budget_bytes"],
                     1_073_741_824_i64,
-                );
-            // Fixed in the ORIGINAL network, never changed during restart.
-            for field in [
-                "base_fee",
-                "per_byte_fee",
-                "per_instruction_fee",
-                "per_gas_unit_fee",
-            ] {
-                layer.write(["nexus", "fees", field], "0");
-            }
+                )
+                .write(["nexus", "fees", "base_fee"], "0")
+                .write(["nexus", "fees", "per_byte_fee"], "0")
+                .write(["nexus", "fees", "per_instruction_fee"], "0")
+                .write(["nexus", "fees", "per_gas_unit_fee"], "0");
         });
     let network = timeout(
         NETWORK_TIMEOUT,
@@ -2129,7 +2176,7 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
     );
     let read_client = authority.clone();
     let baseline_leases = read(move || {
-        let params: Parameters = read_client.query_single(FindParameters::new())?;
+        let params: Parameters = read_client.client().query_single(FindParameters::new())?;
         ensure!(
             !params
                 .custom()
@@ -2142,7 +2189,10 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
                 Ok(LeaseExpectation {
                     namespace,
                     literal: String::new(),
-                    policy: read_client.sns().get_policy(namespace.suffix_id())?,
+                    policy: read_client
+                        .client()
+                        .sns()
+                        .get_policy(namespace.suffix_id())?,
                     amount: Quantity::zero(),
                 })
             })
@@ -2294,13 +2344,17 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
     }
     // Preserve every original layer, including fees, lane authority and signed
     // genesis. The one new layer adds only the canonical BPNG catalog identity.
-    let mut layers = network
+    let mut layers: Vec<Cow<'static, Table>> = network
         .config_layers()
-        .map(|layer| layer.into_owned())
+        .map(|layer| Cow::Owned(layer.into_owned()))
         .collect::<Vec<_>>();
-    layers.push(dataspace_only_restart_layer(&grant));
+    layers.push(Cow::Owned(dataspace_only_restart_layer(&grant)));
     try_join_all(network.peers().iter().map(|peer| async {
-        timeout(NETWORK_TIMEOUT, peer.start_checked(layers.iter(), None)).await??;
+        timeout(
+            NETWORK_TIMEOUT,
+            peer.start_checked(layers.iter().map(Cow::Borrowed), None),
+        )
+        .await??;
         Ok::<_, eyre::Report>(())
     }))
     .await?;
@@ -2326,7 +2380,7 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
         );
     }
 
-    let original_lifecycle = authority.get_lane_lifecycle_status()?;
+    let original_lifecycle = lane_lifecycle_status(authority).await?;
     ensure!(
         original_lifecycle.validate()? == LaneCatalog::default(),
         "dataspace-only restart must not create a lane"
@@ -2353,7 +2407,7 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
     transactions.push(lifecycle);
     let lifecycle_deadline = Instant::now() + CONVERGENCE_TIMEOUT;
     let lifecycle_status = loop {
-        let status = authority.get_lane_lifecycle_status()?;
+        let status = lane_lifecycle_status(authority).await?;
         if let Ok(incarnation) = assert_bpng_lifecycle_status(&status, &original_lifecycle) {
             break (status, incarnation);
         }
@@ -2365,7 +2419,7 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
     };
     let bpng_incarnation = lifecycle_status.1;
     for client in &clients {
-        let status = client.get_lane_lifecycle_status()?;
+        let status = lane_lifecycle_status(client).await?;
         ensure!(
             status == lifecycle_status.0
                 && assert_bpng_lifecycle_status(&status, &original_lifecycle)? == bpng_incarnation,
@@ -2449,9 +2503,16 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
         "BPNG pending set or its exact boundary changed before the governed sweep"
     );
     let sweep_validator = AccountId::new(validator_keypairs[0].public_key().clone());
-    let sweep_permissions = validator_clients[0]
-        .query(FindPermissionsByAccountId::new(sweep_validator.clone()))
-        .execute_all()?;
+    let sweep_reader = validator_clients[0].clone();
+    let sweep_authority = sweep_validator.clone();
+    let sweep_permissions = read(move || {
+        sweep_reader
+            .client()
+            .query(FindPermissionsByAccountId::new(sweep_authority))
+            .execute_all()
+            .map_err(Into::into)
+    })
+    .await?;
     ensure!(
         sweep_permissions
             .iter()
@@ -2498,7 +2559,7 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
     .await?;
     transactions.push(predecessor.clone());
     for client in &clients {
-        assert_bpng_metadata(client, &predecessor_key, &predecessor_value, None)?;
+        assert_bpng_metadata(client, &predecessor_key, &predecessor_value, None).await?;
     }
     let before_second_restart =
         wait_for_snapshot(authority, &leases, activation, &grant, &transactions, None).await?;
@@ -2560,7 +2621,11 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
     // Restart two deliberately reuses the same dataspace-only operator layer.
     // Lane 8 must come exclusively from the signed lifecycle replay.
     try_join_all(network.peers().iter().map(|peer| async {
-        timeout(NETWORK_TIMEOUT, peer.start_checked(layers.iter(), None)).await??;
+        timeout(
+            NETWORK_TIMEOUT,
+            peer.start_checked(layers.iter().map(Cow::Borrowed), None),
+        )
+        .await??;
         Ok::<_, eyre::Report>(())
     }))
     .await?;
@@ -2574,7 +2639,7 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
             Some(&before_second_restart),
         )
         .await?;
-        let status = client.get_lane_lifecycle_status()?;
+        let status = lane_lifecycle_status(client).await?;
         ensure!(
             status == lifecycle_status.0
                 && assert_bpng_lifecycle_status(&status, &original_lifecycle)? == bpng_incarnation,
@@ -2584,7 +2649,7 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
             height(client).await? >= u64::try_from(retained.retained.blocks.len())?,
             "strict restart did not recover the BPNG predecessor carrier"
         );
-        assert_bpng_metadata(client, &predecessor_key, &predecessor_value, None)?;
+        assert_bpng_metadata(client, &predecessor_key, &predecessor_value, None).await?;
     }
     wait_for_exact_bpng_validators(&clients, &expected_validator_bindings, &stake).await?;
     ensure!(
@@ -2637,7 +2702,8 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
             &predecessor_key,
             &predecessor_value,
             Some((&successor_key, &successor_value)),
-        )?;
+        )
+        .await?;
     }
     let after_successor =
         wait_for_snapshot(authority, &leases, activation, &grant, &transactions, None).await?;

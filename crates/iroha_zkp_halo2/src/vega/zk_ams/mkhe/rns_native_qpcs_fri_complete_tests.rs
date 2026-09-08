@@ -626,8 +626,17 @@ fn complete_fri_closure_authenticates_every_layer_and_remains_non_authorizing() 
     assert!(!source.contains("terminal_bytes"));
     let composite = include_str!("rns_native_composite_verifier.rs");
     assert!(composite.contains("authenticate_rns_native_qpcs_fri_complete_v1"));
-    assert!(composite.contains("retained RLWE/source residual"));
-    assert!(composite.contains(
+    let standalone = composite
+        .split("fn verify_rns_relation_qpcs_production_v1(")
+        .nth(1)
+        .expect("standalone qPCS boundary")
+        .split("fn authenticate_rns_relation_qpcs_production_v1")
+        .next()
+        .expect("standalone qPCS boundary body");
+    assert!(standalone.contains(
+        "let _qpcs = authenticate_rns_relation_qpcs_production_v1(transcript, section)?;"
+    ));
+    assert!(standalone.contains(
         "StageUnavailable(\n            ZkAmsMkheRnsNativeVerificationStageV1::RnsRelationQpcs"
     ));
 }

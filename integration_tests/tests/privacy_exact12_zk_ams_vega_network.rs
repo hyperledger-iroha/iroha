@@ -10,7 +10,7 @@
 use eyre::{Result, WrapErr as _, ensure, eyre};
 use futures_util::TryStreamExt as _;
 use integration_tests::sandbox;
-use iroha::client::Client;
+use iroha::blocking::Client;
 use iroha_core::{
     privacy::PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1,
     privacy_engines::{
@@ -268,7 +268,7 @@ fn assert_exact_protocol_row(
 async fn canonical_genesis_hash(client: &Client) -> Result<[u8; 32]> {
     let genesis = timeout(CANONICAL_GENESIS_FETCH_TIMEOUT, async {
         let mut blocks = client
-            .listen_for_blocks_async(NonZeroU64::MIN)
+            .listen_for_blocks(NonZeroU64::MIN)
             .await
             .wrap_err("subscribe to canonical block replay from genesis")?;
         blocks
@@ -319,7 +319,7 @@ async fn submit_instruction(
     let instruction = instruction.into();
     timeout(
         SUBMISSION_TIMEOUT,
-        tokio::task::spawn_blocking(move || client.submit_blocking(instruction, no_fee())),
+        tokio::task::spawn_blocking(move || client.submit(instruction, no_fee())),
     )
     .await
     .map_err(|_| eyre!("{context}: instruction submission exceeded {SUBMISSION_TIMEOUT:?}"))?
@@ -335,7 +335,7 @@ async fn submit_signed_transaction(
     let transaction = transaction.clone();
     timeout(
         SUBMISSION_TIMEOUT,
-        tokio::task::spawn_blocking(move || client.submit_transaction_blocking(&transaction)),
+        tokio::task::spawn_blocking(move || client.submit_transaction_and_wait(&transaction)),
     )
     .await
     .map_err(|_| eyre!("{context}: signed transaction exceeded {SUBMISSION_TIMEOUT:?}"))?

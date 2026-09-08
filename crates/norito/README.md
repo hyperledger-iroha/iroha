@@ -194,7 +194,7 @@ Decode helpers return structured errors instead of panicking in common malformed
 - `LengthMismatch` — premature EOF or inconsistent length accounting
 - `ChecksumMismatch` — CRC64 does not match payload
 - `SchemaMismatch` — schema hash differs from the expected type
-- `NestingDepthExceeded` — a recursive owned value exceeds the deterministic 256-level decode bound
+- `NestingDepthExceeded` — a recursive owned value exceeds the deterministic 32-level codec bound
 - `InvalidUtf8`, `InvalidTag`, `InvalidNonZero` — malformed value encodings
 - `DecodePanic` — panics inside `try_deserialize` are caught and mapped to this error
 
@@ -336,9 +336,9 @@ opt-in per type, so every nested closed-schema type must also use the option.
 Norito's `from_slice`/`from_str` JSON helpers reject duplicate object keys at
 every depth before typed deserialization; tagged-enum `tag` and `content`
 duplicates are also rejected by the direct parser path. Recursive typed
-`Box<T>` values are limited to 256 levels. Typed `from_str`/`from_slice`
+`Box<T>` values are limited to 32 levels. Typed `from_str`/`from_slice`
 decoding operates directly and does not allocate an intermediate JSON tree.
-Explicit dynamic JSON `Value` parsing has its own 256-level structural ceiling,
+Explicit dynamic JSON `Value` parsing has a 33-level structural ceiling,
 so hostile input cannot recurse without bound during construction or drop.
 
 ## Telemetry (adaptive encoders and compression)
@@ -509,7 +509,7 @@ Norito derives now implement an optional `encoded_len_hint(&self) -> Option<usiz
 
 ## Exact Encoded Length
 
-For faster serialization without reallocations, Norito adds `encoded_len_exact(&self) -> Option<usize>` on `NoritoSerialize`:
+`SerializePayload` owns bare serialization and the `encoded_len_exact(&self) -> Option<usize>` sizing hint. `NoritoSerialize` adds the typed frame contract. Erased writers accept `dyn SerializePayload`; borrowed field adapters can derive `SerializePayload` without acquiring a frame identity. Framed encoders require `NoritoSerialize`:
 
 - Returns the precise number of bytes that `serialize()` will write for the value (payload only).
 - Implemented for primitives, strings/`&str`/`Box<str>`, `Option<T>`, `Result<T,E>`, arrays `[T; N]`, and `Vec<T>` (packed‑seq), and is derived for structs/enums by summing field exact sizes plus their per‑field length prefixes.

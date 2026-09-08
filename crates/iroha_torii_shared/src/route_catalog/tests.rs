@@ -127,6 +127,7 @@ mod tests {
             application_api::EXPLORER_ACCOUNTS_BY_ACCOUNT_ID_GET,
             application_api::EXPLORER_ACCOUNTS_BY_ACCOUNT_ID_QR_GET,
             application_api::EXPLORER_DOMAINS_BY_DOMAIN_ID_GET,
+            application_api::OFFLINE_ASSET_REGISTRATION_GET,
             application_api::EXPLORER_ASSET_DEFINITIONS_BY_DEFINITION_ID_GET,
             application_api::EXPLORER_ASSET_DEFINITIONS_BY_DEFINITION_ID_ECONOMETRICS_GET,
             application_api::EXPLORER_ASSET_DEFINITIONS_BY_DEFINITION_ID_SNAPSHOT_GET,
@@ -656,8 +657,16 @@ mod tests {
             assert!(!route.projections().mcp());
             assert_eq!(route.route_match(), RouteMatch::Exact);
             assert_eq!(route.path_normalization(), PathNormalization::Strict);
-            assert!(route.implicit_head());
             assert!(route.cors_options());
+            assert_eq!(
+                RouteCatalog::new(&[route]).implicit_routes(EnabledFeatures::none()),
+                vec![ImplicitRouteDescriptor {
+                    parent_route_id: expected_id,
+                    path: expected_path,
+                    kind: ImplicitRouteKind::CorsOptions,
+                }],
+                "SCCP replay routes declare only CORS OPTIONS as implicit behavior"
+            );
         }
     }
     #[test]

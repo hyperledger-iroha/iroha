@@ -2,7 +2,7 @@
 #[cfg(feature = "bench-internal")]
 use criterion::Criterion;
 #[cfg(feature = "bench-internal")]
-use norito::{self, CompressionConfig, NoritoDeserialize, NoritoSerialize};
+use norito::{self, CompressionConfig, NoritoDeserialize, NoritoSerialize, SerializePayload};
 #[cfg(feature = "bench-internal")]
 #[derive(Clone, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]

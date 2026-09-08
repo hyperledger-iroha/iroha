@@ -113,7 +113,7 @@ use ivm::{
 use mv::storage::StorageReadOnly;
 use norito::{
     NoritoDeserialize,
-    core::{DecodeFromSlice, Header, NoritoSerialize},
+    core::{DecodeFromSlice, Header, NoritoSerialize, SerializePayload},
     json,
     streaming::CapabilityFlags,
 };
@@ -8299,7 +8299,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     fn norito_encoded_len_exact<T: NoritoSerialize>(value: &T) -> Option<u64> {
         let _canonical_flags =
             norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
-        let payload_len = NoritoSerialize::encoded_len_exact(value)?;
+        let payload_len = SerializePayload::encoded_len_exact(value)?;
         let header_len = Header::SIZE;
         let align = norito::core::archived_payload_align::<T>();
         let padding = if align <= 1 {
@@ -9517,7 +9517,19 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                     "AXT handle issuer signature is invalid",
                 );
                 ivm::VMError::PermissionDenied
-            })
+            })?;
+        // TODO: Wire the finalized source-state anchor and fresh exact-spend issuer
+        // authorization into runtime admission. The reusable handle signature covers
+        // a capability and budget, but does not authenticate the selected intent,
+        // proof, effective amount, or the proof's source roots and transaction set.
+        // A valid caller-generated proof cannot supply those missing trusted facts.
+        self.record_axt_reject(
+            AxtRejectReason::Proof,
+            Some(dsid),
+            Some(usage.handle.target_lane),
+            crate::fastpq::AXT_UNANCHORED_REMOTE_SPEND_REJECTION,
+        );
+        Err(ivm::VMError::PermissionDenied)
     }
     #[allow(clippy::too_many_lines)]
     fn enforce_axt_policy(&mut self, usage: &axt::HandleUsage) -> Result<(), ivm::VMError> {
@@ -10477,6 +10489,20 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         };
         let gas = Self::axt_commit_gas(state);
         ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
+        // Fail closed for already-recorded handles as well as new USE calls. Do this
+        // before taking the active envelope or staging any persistent budget writes.
+        if let Some(usage) = state.handles().first() {
+            let dsid = usage.intent.asset_dsid;
+            let lane = usage.handle.target_lane;
+            self.clear_axt_reject();
+            self.record_axt_reject(
+                AxtRejectReason::Proof,
+                Some(dsid),
+                Some(lane),
+                crate::fastpq::AXT_UNANCHORED_REMOTE_SPEND_REJECTION,
+            );
+            return Err(ivm::VMError::PermissionDenied);
+        }
         self.clear_axt_reject();
         let state = self
             .axt_state
@@ -15098,6 +15124,7 @@ seiyaku PrivilegedBinding {
         );
     }
     include!("host/axt_persistent_budget_tests.rs");
+    include!("host/axt_unanchored_admission_tests.rs");
     #[test]
     fn axt_replay_ledger_from_state_rejects_reuse() {
         let dsid = DataSpaceId::new(21);
@@ -20104,13 +20131,15 @@ seiyaku OpaqueInstructionSubmission {
                 );
             transcripts[0].poseidon_preimage_digest = Some(poseidon_preimage_digest);
             batch.push(fastpq_prover::StateTransition::new(
-                format!("asset/{asset_definition}/{from_account}").into_bytes(),
+                iroha_data_model::fastpq::transfer_balance_key(&asset_definition, &from_account)
+                    .expect("canonical balance key"),
                 10_u64.to_le_bytes().to_vec(),
                 9_u64.to_le_bytes().to_vec(),
                 fastpq_prover::OperationKind::Transfer,
             ));
             batch.push(fastpq_prover::StateTransition::new(
-                format!("asset/{asset_definition}/{to_account}").into_bytes(),
+                iroha_data_model::fastpq::transfer_balance_key(&asset_definition, &to_account)
+                    .expect("canonical balance key"),
                 5_u64.to_le_bytes().to_vec(),
                 6_u64.to_le_bytes().to_vec(),
                 fastpq_prover::OperationKind::Transfer,

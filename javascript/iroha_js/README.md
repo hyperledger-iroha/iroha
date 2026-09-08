@@ -116,12 +116,14 @@ that binary-only state. Remove that unverified leftover and rerun
 The registry tarball intentionally contains no platform-specific `.node`
 binary, Cargo workspace, install hook, or implicit downloader. Consequently,
 `npm run build:native` is a source-checkout command, not a supported operation
-inside a clean registry installation. Registry consumers can use the portable
-browser exports (`/browser`, `/transaction-codec`, `/canonical-request`,
-`/ivm-artifact`, `/smart-contract-deployment`, `/connect-browser`, and
-`/nexus-app`) and the
-Node Ed25519 fallback without a native host. Applications that need native-only
-APIs must
+inside a clean registry installation. Registry consumers can load the portable browser exports and use operations
+that do not admit accounts, such as artifact hashing and unauthenticated
+transport. Account construction, I105/raw account decoding, controller/key
+admission, and account-dependent signing or deployment require the canonical
+Rust owner. Every browser account-admission entry point throws the explicit
+native-unavailable error before reading its input; there is no browser account
+parser. The same public exports and TypeScript types remain available. Node
+applications that use native APIs must
 provide a separately built and checksum-verified host through
 `IROHA_JS_NATIVE_DIR` before the first native-dependent call. The verified host
 surface is then captured as an immutable runtime dependency; later environment
@@ -332,7 +334,7 @@ cryptographic-review, and artifact-publication gates.
 
 ## Native Privacy Bridge
 
-The first-release native surface exposes local build metadata only:
+The first-release native catalog surface exposes local build metadata:
 `isPrivacyNativeAvailable()` and `privacyCompiledProfileCatalogV1()`. The
 latter returns this binary's canonical Norito
 `PrivacyCompiledProfileCatalogV1` archive. It intentionally contains no
@@ -340,14 +342,51 @@ committed height, consensus policy, activation, or readiness projection and
 cannot authorize a network operation. Import
 `getPrivacyExact12CapabilityManifestV1` from
 `@iroha/iroha-js/privacy-capabilities` to fetch Torii's canonical Norito
-manifest through the Node/N-API client. The authenticated ABI23 binding applies
+manifest through the Node/N-API client with an HTTPS origin and immutable
+`LocalSigningContext`. Explicit custom fetch implementations are trusted transport
+dependencies and must preserve HTTPS authentication, response URL, and redirect semantics.
+Public archive decoding is inspection-only; copying or re-decoding transport
+bytes loses admission authority. The authenticated ABI23 binding applies
 the bounded canonical decoder; transaction construction must then call
 `requirePrivacyExact12CapabilityAdmissionV1`, which requires committed Active
 state, registered production qualification, and byte-exact equality with the
-selected local compiled-profile row. There is no browser, JSON snapshot, or
+selected local compiled-profile row and deployment network. The admission result
+retains that exact network and Torii origin. There is no browser, JSON snapshot, or
 mock authorization fallback. The generic
 request/build/verify dispatcher and its free-form algorithm aliases do not
 exist; proving is exposed only by protocol-specific typed APIs.
+
+`buildKaigiAuthorizationProofV1()` consumes a mutable, canonical nonzero Pasta
+Fp blinding and returns raw 32-byte commitment, nullifier, authorization, and
+pre-roster-root buffers plus the canonical proof envelope. Its required context
+is a typed deployment `NetworkId`, canonical call domain/name, full original host
+and participant `AccountId` values, an exact `bigint` participation sequence,
+one of `hostCreate`, `join`, `leave`, or `hostEnd`, and the exact pre-state root.
+The blinding buffer is cleared on success and rejection; callers must keep any
+separate copies under their own secret-lifetime policy. This API requires the
+native prover, which verifies the generated envelope through the canonical Core
+backend before returning it. Browser calls clear a supplied mutable blinding
+and fail closed.
+
+`buildKaigiUsageProofV1()` proves billing with that same host opening. Supply the
+typed `networkId`, canonical `callId` and original `hostId`, exact current
+`preRosterRoot`, the ledger's `segmentIndex` as an integer from zero through
+`2^32 - 1`, positive `durationMs` and unsigned `billedGas` as `bigint` u64 values,
+the stored raw `hostCommitment`, and mutable `blinding` bytes. It rejects an
+opening that does not match the stored host C before proving, and returns
+`{ hostCommitment, usageCommitment, preRosterRoot, proof }` only after Core verifies
+the final 25-row usage relation. The supplied blinding is cleared on every call.
+Use `usageCommitment` and `proof` in `buildRecordKaigiUsageInstruction` with those
+same public metrics. Native authorization and usage cache only each fixed
+circuit's public proving material; caller secrets remain owned by the invocation.
+
+Pass `{ commitment: result.commitment }` and `{ digest: result.nullifier }` into
+the matching Kaigi instruction builder. These values use raw canonical Pasta
+field bytes, including in the Norito JSON byte-array representation. The signed
+transaction identifies the participant; a proof binds its opening to the
+retained original account and current action, while ledger validation enforces
+membership and rekey lineage. Local proof construction alone does not establish
+network admission or production qualification.
 
 Private Kaigi entrypoint builders require a caller-supplied `feeSpend` produced
 by a production confidential wallet or prover. The JavaScript SDK does not
@@ -383,13 +422,14 @@ import { noritoEncodeInstruction } from "@iroha/iroha-js/norito";
 import { generateKeyPair } from "@iroha/iroha-js/crypto";
 ```
 
-### Browser-safe external transaction signing
+### External transaction signing
 
-Use `@iroha/iroha-js/transaction-codec` when a browser wallet needs to build
-and finalize a canonical transparent transfer without loading the native Node
-binding. This deliberately narrow surface supports one `Transfer::Asset`
-instruction, single-key Ed25519 I105 authorities, canonical asset identifiers,
-and accounts sharing one Taira-style network prefix/chain discriminant.
+Use `@iroha/iroha-js/transaction-codec` in a Node runtime with the verified
+native account owner to build and finalize canonical transparent transfers.
+The browser bundle exposes the same API, but account admission is unavailable
+and account-dependent operations throw. This surface supports one
+`Transfer::Asset` instruction, single-key Ed25519 I105 authorities, canonical
+asset identifiers, and accounts sharing one network prefix/chain discriminant.
 Every ordinary transaction carries a nominal `NetworkId`: the exact marked
 32-byte genesis-header hash, rendered as a canonical checksummed Iroha hash
 literal. Human-readable `chain`, `chainId`, and `chain_id` transaction fields
@@ -559,16 +599,17 @@ const mixed = buildExecutableBatchTransaction({
 });
 ```
 
-For external browser signing, pass the same ordered `entries` shape to
+For external signing with the native account owner, pass the same ordered `entries` shape to
 `buildBrowserExecutableBatchPayload`, then use
 `validateBrowserExecutableBatchSignable` and
 `finalizeBrowserExecutableBatchTransaction`. Keep using `buildTransaction` or
 `buildBrowserInstructionTransactionPayload` for instruction-only transactions;
 those APIs use the canonical `Executable::Instructions` wire tag.
 
-The `@iroha/iroha-js/nexus-app` export is also a browser-only dependency graph:
-it uses the browser codec and strict browser Ed25519 verifier by default and
-contains no native binding or `node:` imports. Supplying `toriiBaseUrl` gives
+The `@iroha/iroha-js/nexus-app` browser export contains no native binding or
+`node:` imports. It retains bounded transport and hashing; transaction building,
+Connect account admission, and account-dependent finalization require the Node
+runtime with the native account owner. Supplying `toriiBaseUrl` gives
 the facade a bounded Fetch-based pipeline submit/status client; applications
 may instead inject `toriiClient` and `transactionCodec`. Torii response bodies
 are capped at 64 KiB, submission requests time out after 15 seconds, polling
@@ -578,7 +619,7 @@ headers, response-body reads/cancellation, and asynchronous status callbacks.
 Requests omit ambient credentials and referrers and reject redirects.
 
 The built-in Connect path keeps session proof keys separate from transaction
-signing keys. Browser Connect verifies the approval proof and returns its
+signing keys. With the native account owner, Connect verifies the approval proof and returns its
 `accountId`, 32-byte X25519 `walletPublicKey`, and 64-byte `signature`.
 `walletPublicKey` authenticates the Connect session proof; it is not the
 Ed25519 transaction key. Each approval consumer receives an immutable wrapper
@@ -902,10 +943,10 @@ const keys = Crypto.generateKeyPair();
 > derived keys share the same handling guarantees.
 
 ```js
-import { AccountAddress } from "@iroha/iroha-js";
+import { AccountAddress, generateKeyPair } from "@iroha/iroha-js";
 
 const address = AccountAddress.fromAccount({
-  publicKey: new Uint8Array(32),
+  publicKey: generateKeyPair().publicKey,
 });
 console.log(address.canonicalHex());
 console.log(address.toI105(753));
@@ -916,13 +957,18 @@ console.log(formats.i105);
 console.log(formats.i105Warning);
 ```
 
-Every V1 controller family is deterministic and always available in the
-address codec: `ed25519`, `secp256k1`, `ml-dsa`,
+Every V1 controller family is deterministic and available through the verified
+native address codec: `ed25519`, `secp256k1`, `ml-dsa`,
 `gost3410-2012-256-paramset-a`, `gost3410-2012-256-paramset-b`,
 `gost3410-2012-256-paramset-c`, `gost3410-2012-512-paramset-a`,
 `gost3410-2012-512-paramset-b`, `sm2`, `bls_normal`, and `bls_small`.
 There is no process-wide curve toggle. Pass exactly one of these canonical
 labels; aliases and case-folded spellings are rejected before encoding.
+Every constructor, canonical-byte decoder, and I105 parser requires cryptographic
+admission by the Rust codec. Missing or stale native bindings fail closed, including
+in browser builds; byte lengths alone never admit account identities. I105 input
+must be exact, without surrounding whitespace. Constructor inputs are copied into
+private state so later caller mutation cannot replace an admitted controller.
 
 > ℹ️ When showing addresses in wallets, explorers, or SDK samples, follow the
 > single-format UX checklist captured in
@@ -1983,6 +2029,10 @@ applications live on `GET /v1/sumeragi/diagnostics`; they are parsed by the
 separate `getSumeragiDiagnosticsTyped()` helper and are not consensus
 authority. The general `GET /status` API remains another distinct
 operational-health snapshot.
+
+Parsed Native AMX participant settlements own frozen receipt arrays and receipt
+entries. Mutating the input payload cannot change a settlement after its hash
+has been checked against the Prepare and Commit certificates.
 
 All Sumeragi status helpers accept the standard `{signal}` option:
 
@@ -4842,3 +4892,70 @@ const torii = new ToriiClient(config?.torii?.address ?? "http://localhost:8080",
   timeoutMs: clientConfig.timeoutMs,
 });
 ```
+
+### Native game sessions and compiled application adapters
+
+The browser `@iroha/iroha-js/game` entry point provides canonical codecs and local
+transaction instruction construction for generic `GameManifestV1` sessions:
+`buildGameInstructionV1`, `encodeGameValueV1`, `decodeGameValueV1` and
+`gameMessageHashV1`. Admission, opaque bounded inputs, jointly signed checkpoints,
+consensus recovery and proof-derived outcomes are application-independent. The
+closed browser instruction registry rejects unknown instructions; native racing
+instruction aliases are not supported.
+
+`buildJoinGameSessionV1` requires the exact terms shown for wallet approval:
+
+```js
+import { buildJoinGameSessionV1 } from "@iroha/iroha-js/game";
+
+const instruction = buildJoinGameSessionV1({
+  session_id: reviewedSession.session_id,
+  input_key: inputPublicKey,
+  application_data: applicationData,
+  invitation_signature: null,
+  expected_manifest_hash: reviewedSession.manifest_hash,
+  expected_asset_definition: reviewedSession.asset_definition,
+  expected_stake: reviewedSession.stake,
+});
+```
+
+Keep `reviewedSession` as a detached snapshot of the displayed terms. Polling
+must not silently replace its manifest, asset or amount before signing. The
+native instruction compares all three expected terms with consensus state before
+funding; zero-stake sessions explicitly sign `expected_stake: "0"`. Missing
+preconditions and the original undeployed four-field encoding are rejected.
+When a transaction also deposits an NFT, its `StakeGameItemV1` must identify the
+same session and expected manifest. The transaction's explicit wallet fee limit
+is separate from the stake and item deposit.
+
+The separate `@iroha/iroha-js/race` entry point encodes the first compiled SORA CARS
+adapter's tracks, integer state, results, public replay and native prover payload.
+It maps six control words to twelve opaque input bytes and computes the generic
+transcript and state commitment domains. These application helpers never hold a
+wallet key. Wallet signing continues through Connect with locally constructed
+Norito bytes and local signature verification.
+
+`EXECUTION_PROOF_MAX_ENVELOPE_BYTES_V1` pins the four MiB complete execution
+envelope and typed settlement payload bound. The RaceV1 inner STARK is separately
+limited to three MiB. Browser transaction construction, signable validation and
+signed hashing admit larger payloads only for one canonical
+`VerifyExecutionProofV1` or `SettleGameSessionV1`; unrelated transactions retain
+their one MiB bound, and larger mixed or executable-batch payloads are rejected.
+Transport and wallet implementations must independently support the resulting
+frame size before a network release can enable these proofs.
+
+`validateConnectTransactionTransportStatus(status, payloadLength)` from
+`@iroha/iroha-js/connect-browser` checks the endpoint-reported Connect WebSocket
+and session-buffer bounds against the complete transaction plus the current
+216-byte V1 encrypted-frame overhead. It does not authenticate the endpoint or
+the wallet. Native deployments can explicitly apply
+`configs/soranexus/execution-proof-transport.toml`; its dedicated reliable Connect
+P2P topic preserves the Health frame bound. Applications should additionally
+require `/v1/games/capabilities.execution_transport_ready === true` before accepting
+new stakes, separately from proof-profile qualification. These readiness hints
+must never become consensus admission conditions.
+
+See `test/fixtures/game-v1-codec.json` for generic wire and gameplay digest vectors,
+and `test/fixtures/race-v1-codec.json` for compiled application value vectors.
+Qualification and authenticated block finality are separate from codec round trips
+or endpoint-reported transaction status.

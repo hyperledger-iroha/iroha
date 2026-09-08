@@ -45,6 +45,13 @@ def test_parse_args_rejects_retired_objective_flag(
         ("scripts/tests/check_guard_test.py", True),
         ("javascript/client.test.js", True),
         ("crates/core/examples/query.rs", True),
+        ("pytests/scripts/release_corridor_cases.py", True),
+        ("pytests/scripts/shared_support.py", True),
+        ("IrohaSwift/Tests/IrohaSwiftTests/ClientTests.swift", True),
+        ("crates/core/src/lane_geometry_tests/support.rs", True),
+        ("crates/core/src/state_tests/recovery.rs", True),
+        ("scripts/pytest_tools.py", False),
+        ("crates/core/src/latest_state/recovery.rs", False),
     ],
 )
 def test_test_path_classification(path: str, expected: bool) -> None:
@@ -72,6 +79,23 @@ def test_evaluate_enforces_new_file_limits() -> None:
     ]
 
 
+@pytest.mark.parametrize(
+    "path",
+    (
+        "pytests/scripts/release_corridor_cases.py",
+        "IrohaSwift/Tests/IrohaSwiftTests/ClientTests.swift",
+        "crates/core/src/lane_geometry_tests/support.rs",
+    ),
+)
+def test_split_test_helpers_retain_the_test_budget(path: str) -> None:
+    """Moving assertions into a helper cannot grant the production allowance."""
+    assert MODULE.evaluate({path: 3_000}, budget()) == []
+    findings = MODULE.evaluate({path: 3_001}, budget())
+    assert [(finding.path, finding.message) for finding in findings] == [
+        (path, "3001 lines exceeds the 3000-line test limit"),
+    ]
+
+
 def test_evaluate_requires_exact_ratcheting_baselines() -> None:
     source = "crates/core/src/state.rs"
     baseline = budget(**{source: 12_000})
@@ -83,6 +107,67 @@ def test_evaluate_requires_exact_ratcheting_baselines() -> None:
     assert "refresh the baseline to ratchet it down" in MODULE.evaluate(
         {source: 11_999}, baseline
     )[0].message
+
+
+@pytest.mark.parametrize(
+    ("path", "reviewed_limit"),
+    (
+        ("crates/sorafs_car/src/lib.rs", 9_141),
+        ("crates/sorafs_node/src/store.rs", 8_672),
+        ("crates/sorafs_node/src/transparency.rs", 8_134),
+        ("crates/sorafs_orchestrator/src/bin/sorafs_cli.rs", 21_365),
+        ("crates/sorafs_orchestrator/src/lib.rs", 9_608),
+        ("crates/sorafs_orchestrator/tests/sorafs_cli.rs", 4_787),
+        ("scripts/check_sorafs_production_readiness.py", 7_028),
+        ("scripts/tests/check_sorafs_production_readiness_test.py", 17_654),
+        ("scripts/tests/check_sorafs_rollout_gate_contract_test.py", 28_844),
+        ("xtask/src/sorafs.rs", 7_763),
+    ),
+)
+def test_sorafs_source_caps_reject_growth_after_reviewed_reductions(
+    path: str, reviewed_limit: int,
+) -> None:
+    """Removed source cannot be reclaimed by raising an existing SoraFS ratchet."""
+    candidate = MODULE.load_budget(MODULE_PATH.parents[1] / "ci/source_file_budget.json")
+    effective_limit = candidate.exceptions.get(path, MODULE.limit_for(path, candidate))
+    assert effective_limit <= reviewed_limit
+    scoped_budget = MODULE.Budget(
+        production_limit=candidate.production_limit,
+        test_limit=candidate.test_limit,
+        excluded_prefixes=candidate.excluded_prefixes,
+        exceptions={path: effective_limit} if path in candidate.exceptions else {},
+    )
+
+    findings = MODULE.evaluate({path: reviewed_limit + 1}, scoped_budget)
+    assert len(findings) == 1
+    assert findings[0].path == path
+    assert "grew from baseline" in findings[0].message or "exceeds" in findings[0].message
+
+
+@pytest.mark.parametrize(
+    ("path", "limit"),
+    (
+        ("crates/sorafs_car/src/bin/sorafs_fetch.rs", 5_000),
+        ("crates/sorafs_car/src/bin/sorafs_fetch/tests.rs", 3_000),
+    ),
+)
+def test_fetch_cli_modules_obey_default_caps_without_exceptions(path: str, limit: int) -> None:
+    """The owned test module removes the fetch CLI's oversized-source exception."""
+    candidate = MODULE.load_budget(MODULE_PATH.parents[1] / "ci/source_file_budget.json")
+    assert path not in candidate.exceptions
+    assert MODULE.limit_for(path, candidate) == limit
+    scoped_budget = MODULE.Budget(
+        production_limit=candidate.production_limit,
+        test_limit=candidate.test_limit,
+        excluded_prefixes=candidate.excluded_prefixes,
+        exceptions={},
+    )
+    source = MODULE_PATH.parents[1] / path
+    assert MODULE.evaluate({path: len(source.read_bytes().splitlines())}, scoped_budget) == []
+    findings = MODULE.evaluate({path: limit + 1}, scoped_budget)
+    assert len(findings) == 1
+    assert findings[0].path == path
+    assert "exceeds" in findings[0].message
 
 
 @pytest.mark.parametrize("oversized", [False, True])
@@ -176,7 +261,7 @@ def test_load_budget_validates_and_normalizes(tmp_path: Path) -> None:
     ("field", "value", "message"),
     [
         ("schema_version", 1, "schema_version must be 2"),
-        ("aggregate_rust", {"ceiling": 4_540_000}, "keys must be exactly"),
+        ("aggregate_rust", {"ceiling": 1}, "keys must be exactly"),
         ("limits", {"production": True, "test": 3_000}, "non-negative integer"),
         ("limits", {"production": 0, "test": 3_000}, "greater than zero"),
         ("limits", {"production": 5_000, "test": 3_000, "total": 1}, "only production and test"),
@@ -283,3 +368,28 @@ def test_collect_counts_includes_unstaged_and_untracked_sources(tmp_path: Path) 
     assert MODULE.collect_counts(
         tmp_path, MODULE.tracked_paths(tmp_path), ("vendor/",)
     ) == {"new.rs": 1, "tracked.rs": 2}
+
+
+def test_root_scratch_ignore_does_not_hide_nested_security_tests(tmp_path: Path) -> None:
+    """Repository ignore rules retain nested tests in build and budget inventories."""
+    MODULE.subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    (tmp_path / ".gitignore").write_bytes(
+        (MODULE_PATH.parents[1] / ".gitignore").read_bytes()
+    )
+    (tmp_path / "security_probe.rs").write_text("//! Scratch.\n", encoding="utf-8")
+    relative = (
+        "crates/iroha_torii/src/mcp/catalog_and_policy_tests/security_and_registry.rs"
+    )
+    source = tmp_path / relative
+    source.parent.mkdir(parents=True)
+    source.write_text("//! Measured test source.\n" * 3_001, encoding="utf-8")
+
+    paths = MODULE.tracked_paths(tmp_path)
+    assert relative in paths
+    assert "security_probe.rs" not in paths
+    counts = MODULE.collect_counts(tmp_path, paths, ())
+    assert counts == {relative: 3_001}
+    findings = MODULE.evaluate(counts, budget())
+    assert [(finding.path, finding.message) for finding in findings] == [
+        (relative, "3001 lines exceeds the 3000-line test limit"),
+    ]

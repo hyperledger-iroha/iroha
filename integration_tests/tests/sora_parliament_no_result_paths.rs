@@ -25,7 +25,7 @@ pub(super) async fn exercise_public_finding_no_result_retries_and_restore(
         attempt_sequence: 0,
     };
     let attempt_id = create.governance_attempt_id();
-    client.submit_all_blocking(
+    client.submit_all(
         [
             InstructionBox::from(ProposeDeployContract {
                 contract_address: contract_address.clone(),
@@ -287,7 +287,7 @@ pub(super) async fn exercise_public_finding_no_result_retries_and_restore(
         attempt_sequence: 1,
     };
     let retry_id = retry.governance_attempt_id();
-    client.submit_blocking(retry, fee())?;
+    client.submit(retry, fee())?;
     let retry_height = current_height(client)?;
     network.ensure_blocks(retry_height).await?;
     let retry_state = read_attempt(client, retry_id)?;
@@ -597,7 +597,7 @@ pub(super) async fn exercise_public_finding_no_result_retries_and_restore(
         attempt_sequence: 2,
     };
     let second_retry_id = second_retry.governance_attempt_id();
-    client.submit_blocking(second_retry, fee())?;
+    client.submit(second_retry, fee())?;
     let second_retry_height = current_height(client)?;
     network.ensure_blocks(second_retry_height).await?;
     let second_retry_state = read_attempt(client, second_retry_id)?;

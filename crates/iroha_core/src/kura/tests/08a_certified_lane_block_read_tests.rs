@@ -19,6 +19,12 @@ fn certified_lane_block_persists_under_lane_segment_and_reloads() {
             .is_err(),
         "a certified session must not define an uninitialized lane incarnation",
     );
+    publish_initial_configured_lane_geometry_for_test(
+        &kura,
+        &lane_config,
+        &BTreeMap::from([(lane_id, session.proposal.descriptor.lane_incarnation)]),
+    );
+    kura.replace_lane_storage_entries_for_test(&lane_config);
     kura.install_lane_incarnation_marker_for_test(
         lane_entry,
         session.proposal.descriptor.lane_incarnation,
@@ -58,9 +64,25 @@ fn certified_lane_block_persists_under_lane_segment_and_reloads() {
         index_path.is_file(),
         "certified lane block index file missing"
     );
+    let mut incarnations = BTreeMap::new();
+    let mut activations = BTreeMap::new();
+    for entry in lane_config.entries() {
+        let (incarnation, activation) = kura
+            .active_lane_incarnation_marker(entry)
+            .expect("retain exact State fixture geometry before restart");
+        incarnations.insert(entry.lane_id, incarnation);
+        activations.insert(entry.lane_id, activation);
+    }
     drop(kura);
     let (reloaded, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
         .expect("reopen kura");
+    assert!(
+        reloaded.lane_storage_entry(lane_id).is_err(),
+        "secondary storage remains inactive until exact catalog recovery"
+    );
+    reloaded
+        .recover_lane_geometry_journal(&lane_config, &incarnations, &activations)
+        .expect("recover the retained State fixture geometry before secondary reads");
     assert_eq!(
         reloaded.read_certified_lane_block_artifact(lane_id, lane_block_height),
         Some(artifact)
@@ -100,9 +122,25 @@ fn latest_certified_frontier_reloads_and_repairs_a_missing_progress_pair() {
         kura.read_certified_lane_block_artifact(lane_id, 3),
         Some(expected.clone())
     );
+    let mut incarnations = BTreeMap::new();
+    let mut activations = BTreeMap::new();
+    for entry in lane_config.entries() {
+        let (incarnation, activation) = kura
+            .active_lane_incarnation_marker(entry)
+            .expect("retain exact State fixture geometry before restart");
+        incarnations.insert(entry.lane_id, incarnation);
+        activations.insert(entry.lane_id, activation);
+    }
     drop(kura);
     let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
         .expect("reopen Kura");
+    assert!(
+        reopened.lane_storage_entry(lane_id).is_err(),
+        "secondary storage remains inactive until exact catalog recovery"
+    );
+    reopened
+        .recover_lane_geometry_journal(&lane_config, &incarnations, &activations)
+        .expect("recover the retained State fixture geometry before secondary reads");
     assert_eq!(
         reopened.latest_certified_lane_block_frontier(lane_id),
         Some(expected)
@@ -201,7 +239,8 @@ fn latest_certified_matching_reuses_attested_frontier_before_history_scan() {
             drop(sidecar_guard);
             drop(geometry_guard);
             true
-        }),
+        })
+        .expect("authenticate certified storage"),
         Some(expected.clone()),
         "matching must return the attested frontier without validating historical sidecars"
     );
@@ -365,9 +404,51 @@ fn latest_certified_frontier_reset_authority_crosses_height_and_repairs_crash() 
             .is_err(),
         "fault must interrupt after the lower post-reset frontier wins but before pair replacement"
     );
+    let mut incarnations = BTreeMap::new();
+    let mut activations = BTreeMap::new();
+    for entry in lane_config.entries() {
+        let (incarnation, activation) = kura
+            .active_lane_incarnation_marker(entry)
+            .expect("retain exact State fixture geometry before restart");
+        incarnations.insert(entry.lane_id, incarnation);
+        activations.insert(entry.lane_id, activation);
+    }
     drop(kura);
     let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
         .expect("reopen after frontier crash");
+    assert!(
+        reopened.lane_storage_entry(lane_id).is_err(),
+        "secondary storage remains inactive until exact catalog recovery"
+    );
+    reopened
+        .recover_lane_geometry_journal(&lane_config, &incarnations, &activations)
+        .expect("recover the retained State fixture geometry before secondary reads");
+    let (data_path, index_path) =
+        Kura::certified_lane_block_paths_for_entry(lane_entry, temp_dir.path());
+    let (frontier_path, _) =
+        Kura::latest_certified_lane_block_frontier_paths_for_entry(lane_entry, temp_dir.path());
+    let intent_path = Kura::bound_progress_append_intent_path(&index_path);
+    let snapshot = || {
+        [
+            fs::read(&data_path).expect("pending append data"),
+            fs::read(&index_path).expect("pending append index"),
+            fs::read(&frontier_path).expect("pending append frontier"),
+            fs::read(&intent_path).expect("pending append intent"),
+        ]
+    };
+    let before_passive_reads = snapshot();
+    assert!(
+        reopened
+            .preflight_latest_certified_lane_block_frontier_with_authority(lane_id, &authority)
+            .is_err(),
+        "passive planning cannot recover the append journal"
+    );
+    assert!(
+        reopened
+            .read_certified_lane_block_artifact_read_only(lane_id, 1)
+            .is_err()
+    );
+    assert_eq!(snapshot(), before_passive_reads);
     assert_eq!(
         reopened.latest_certified_lane_block_frontier_with_authority(lane_id, &authority,),
         Some(expected.clone()),
@@ -416,15 +497,40 @@ fn read_only_certified_frontier_preflight_plans_reused_slot_without_mutation() {
         .expect("persist pre-reset occupied slot");
     kura.persist_committed_lane_block_session(&old_tip, &old_tip_pops)
         .expect("persist high pre-reset tip");
-    fail_next_bound_progress_append_data_sync_for_tests();
-    assert!(
-        kura.persist_committed_lane_block_session_with_authority(&fresh, &fresh_pops, &authority,)
-            .is_err(),
-        "fixture must leave the fresh frontier over the stale ordinary slot"
-    );
+    // Model the crash boundary after frontier durability, before the ordinary
+    // append intent exists. A data-sync failure instead leaves a pending append
+    // journal, which passive preflight must reject until its writer recovers it.
+    {
+        let _prune = kura.prune_lock.lock();
+        let _canonical = kura.canonical_chain_lock.lock();
+        let _geometry = kura.lane_geometry_lock.lock();
+        let _sidecar = kura.sidecar_lock.lock();
+        Kura::validate_certified_lane_block_artifact(&expected)
+            .expect("fixture uses a fully valid native certificate");
+        assert!(
+            kura.publish_latest_certified_lane_block_frontier_locked(
+                lane_entry,
+                &expected,
+                Some(&authority),
+            )
+            .expect("publish only the State-authorized frontier crash image")
+        );
+    }
+    let mut incarnations = BTreeMap::new();
+    let mut activations = BTreeMap::new();
+    for entry in lane_config.entries() {
+        let (incarnation, activation) = kura
+            .active_lane_incarnation_marker(entry)
+            .expect("retain exact fixture geometry before restart");
+        incarnations.insert(entry.lane_id, incarnation);
+        activations.insert(entry.lane_id, activation);
+    }
     drop(kura);
     let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
         .expect("reopen after frontier crash");
+    reopened
+        .recover_lane_geometry_journal(&lane_config, &incarnations, &activations)
+        .expect("recover the retained geometry before testing certificate barriers");
     let (data_path, index_path) =
         Kura::certified_lane_block_paths_for_entry(lane_entry, temp_dir.path());
     let (frontier_path, build_path) =
@@ -622,6 +728,12 @@ fn certified_lane_block_strict_retry_reissues_every_barrier() {
         let expected = CertifiedLaneBlockArtifact::new(session.clone(), signer_pops.clone());
         let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
             .expect("init Kura");
+        publish_initial_configured_lane_geometry_for_test(
+            &kura,
+            &lane_config,
+            &BTreeMap::from([(lane_id, session.proposal.descriptor.lane_incarnation)]),
+        );
+        kura.replace_lane_storage_entries_for_test(&lane_config);
         kura.install_lane_incarnation_marker_for_test(
             lane_entry,
             session.proposal.descriptor.lane_incarnation,
@@ -648,9 +760,20 @@ fn certified_lane_block_strict_retry_reissues_every_barrier() {
         let first_data_len = fs::metadata(&data_path)
             .expect("certified lane data metadata")
             .len();
+        let mut incarnations = BTreeMap::new();
+        let mut activations = BTreeMap::new();
+        for entry in lane_config.entries() {
+            let (incarnation, activation) = kura
+                .active_lane_incarnation_marker(entry)
+                .expect("retain exact fixture geometry before restart");
+            incarnations.insert(entry.lane_id, incarnation);
+            activations.insert(entry.lane_id, activation);
+        }
         drop(kura);
         let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
             .expect("reopen Kura after fault");
+        kura.recover_lane_geometry_journal(&lane_config, &incarnations, &activations)
+            .expect("recover the retained geometry before testing certificate barriers");
         failure.inject();
         assert_eq!(
             kura.read_certified_lane_block_artifact(lane_id, lane_block_height),
@@ -707,6 +830,7 @@ fn certified_lane_block_rejects_foreign_active_dataspace() {
     );
     let latest = kura
         .latest_certified_lane_block_artifact_for_dataspace(lane_id, lane_entry.dataspace_id)
+        .expect("authenticate certified storage")
         .expect("latest certified active lane block");
     assert_eq!(latest.proposal, active.proposal);
     assert_eq!(latest.proposal.descriptor.lane_block_height, 2);
@@ -748,6 +872,7 @@ fn certified_lane_block_artifacts_for_dataspace_replays_ordered_active_backlog()
     assert_eq!(active[1].proposal, second.proposal);
     let latest = kura
         .latest_certified_lane_block_artifact_for_dataspace(lane_id, lane_entry.dataspace_id)
+        .expect("authenticate certified storage")
         .expect("latest certified active lane block");
     assert_eq!(latest.proposal, second.proposal);
     let first_from_two = kura
@@ -776,6 +901,7 @@ fn certified_lane_block_artifacts_for_dataspace_replays_ordered_active_backlog()
             artifact.proposal.descriptor.dataspace_id == lane_entry.dataspace_id
                 && artifact.proposal.descriptor.lane_block_height < 2
         })
+        .expect("authenticate certified storage")
         .expect("reverse scan should continue past rejected newer sidecars");
     assert_eq!(reverse_filtered.proposal, first.proposal);
     let bounded_latest =
@@ -952,5 +1078,193 @@ fn consensus_certificate_read_rejects_occupied_corruption_without_repair() {
             fs::read(index_path).expect("retained index")
         ),
         before
+    );
+}
+
+#[test]
+fn certified_frontier_recovery_preserves_occupied_corruption() {
+    let (temp_dir, config, lane_config) = two_lane_storage_fixture();
+    let lane_id = LaneId::from(1);
+    let lane = lane_config.entry(lane_id).expect("configured lane");
+    let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
+    let (session, pops) =
+        sample_committed_lane_block_session_for_kura(lane_id, lane.dataspace_id, 1);
+    let expected = CertifiedLaneBlockArtifact::new(session.clone(), pops.clone());
+    let authority = crate::state::CertifiedLaneBlockPersistenceAuthority::for_test(
+        lane_id,
+        lane.dataspace_id,
+        session.proposal.descriptor.lane_incarnation,
+        None,
+    );
+    assert_eq!(
+        kura.preflight_latest_certified_lane_block_frontier_with_authority(lane_id, &authority)
+            .expect("empty certified namespace"),
+        None,
+    );
+    kura.persist_committed_lane_block_session(&session, &pops)
+        .expect("publish actual certificate and frontier");
+    assert_eq!(
+        kura.latest_certified_lane_block_artifact_matching(lane_id, |_| true)
+            .expect("authenticate certified storage"),
+        Some(expected.clone()),
+        "warm the actual frontier and pair attestations",
+    );
+    let (data_path, index_path) = Kura::certified_lane_block_paths_for_entry(lane, temp_dir.path());
+    let (frontier_path, _) =
+        Kura::latest_certified_lane_block_frontier_paths_for_entry(lane, temp_dir.path());
+    let healthy_data = fs::read(&data_path).expect("read exact certified bytes");
+    fs::write(&data_path, vec![0xA5; healthy_data.len()])
+        .expect("damage occupied payload without changing indexed geometry");
+    let snapshot = || {
+        [
+            fs::read(&data_path).expect("read certificate data"),
+            fs::read(&index_path).expect("read certificate index"),
+            fs::read(&frontier_path).expect("read certificate frontier"),
+        ]
+    };
+    let damaged = snapshot();
+    assert!(
+        kura.preflight_latest_certified_lane_block_frontier_with_authority(lane_id, &authority)
+            .is_err(),
+        "occupied corruption cannot become a planned missing-pair repair",
+    );
+    assert_eq!(snapshot(), damaged);
+    assert!(
+        kura.latest_certified_lane_block_artifact_matching(lane_id, |_| true)
+            .is_err(),
+        "a latest-frontier observation cannot recover over corrupted occupied bytes",
+    );
+    assert_eq!(snapshot(), damaged);
+    assert!(
+        kura.persist_committed_lane_block_session(&session, &pops)
+            .is_err(),
+        "an exact certificate retry cannot replace corrupted occupied bytes",
+    );
+    assert_eq!(snapshot(), damaged);
+    // Without covering frontier authority, malformed occupied bytes must not
+    // authorize mutable autonomous evidence as an uncertified slot.
+    let healthy_frontier = fs::read(&frontier_path).expect("retain frontier control");
+    fs::remove_file(&frontier_path).expect("remove covering frontier for predicate control");
+    {
+        let _geometry = kura.lane_geometry_lock.lock();
+        let _sidecar = kura.sidecar_lock.lock();
+        assert!(
+            kura.autonomous_lane_slot_is_certified_locked(lane, 1)
+                .is_err()
+        );
+    }
+    fs::write(&frontier_path, healthy_frontier).expect("restore fixture frontier");
+    assert_eq!(snapshot(), damaged);
+
+    // Genuine missing-pair recovery remains owned by the exact retained frontier.
+    fs::write(&data_path, healthy_data).expect("restore fixture evidence");
+    fs::remove_file(&data_path).expect("remove complete data pair for recovery control");
+    fs::remove_file(&index_path).expect("remove complete index pair for recovery control");
+    assert_eq!(
+        kura.preflight_latest_certified_lane_block_frontier_with_authority(lane_id, &authority)
+            .expect("plan genuine missing pair"),
+        Some((expected.clone(), true)),
+    );
+    assert_eq!(
+        kura.latest_certified_lane_block_artifact_matching(lane_id, |_| true)
+            .expect("read independently authenticated frontier without repair"),
+        Some(expected.clone()),
+    );
+    assert!(!data_path.exists() && !index_path.exists());
+    kura.persist_committed_lane_block_session(&session, &pops)
+        .expect("recover a genuinely missing pair from its exact frontier");
+    assert_eq!(
+        kura.read_lane_completion_certificate(lane_id, 1)
+            .expect("strict recovered certificate read"),
+        Some(expected),
+    );
+}
+
+#[test]
+fn certified_latest_rejects_damaged_mandatory_frontier_without_history_fallback() {
+    let (temp_dir, config, lane_config) = two_lane_storage_fixture();
+    let lane_id = LaneId::from(1);
+    let lane = lane_config.entry(lane_id).expect("configured lane");
+    let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
+    assert!(
+        kura.latest_certified_lane_block_artifact_matching(lane_id, |_| true)
+            .expect("genuine empty namespace")
+            .is_none()
+    );
+    let (session, pops) =
+        sample_committed_lane_block_session_for_kura(lane_id, lane.dataspace_id, 1);
+    kura.persist_committed_lane_block_session(&session, &pops)
+        .expect("publish real certificate");
+    let expected = kura
+        .latest_certified_lane_block_artifact_matching(lane_id, |_| true)
+        .expect("warm latest read")
+        .expect("published frontier");
+    let (frontier_path, _) =
+        Kura::latest_certified_lane_block_frontier_paths_for_entry(lane, temp_dir.path());
+    let (data_path, index_path) = Kura::certified_lane_block_paths_for_entry(lane, temp_dir.path());
+    let healthy = fs::read(&frontier_path).expect("read frontier");
+    let snapshot = || {
+        [
+            fs::read(&frontier_path).expect("frontier evidence"),
+            fs::read(&data_path).expect("pair data"),
+            fs::read(&index_path).expect("pair index"),
+        ]
+    };
+    fs::write(&frontier_path, vec![0xA5; healthy.len()]).expect("damage mandatory frontier");
+    let damaged = snapshot();
+    assert!(
+        kura.latest_certified_lane_block_artifact_matching(lane_id, |_| true)
+            .is_err()
+    );
+    assert_eq!(
+        snapshot(),
+        damaged,
+        "valid indexed history cannot replace mandatory frontier authority"
+    );
+    fs::write(&frontier_path, healthy).expect("restore fixture frontier");
+    assert_eq!(
+        kura.latest_certified_lane_block_artifact_matching(lane_id, |_| true)
+            .expect("restored independent evidence"),
+        Some(expected)
+    );
+    assert!(
+        kura.latest_certified_lane_block_artifact_matching(lane_id, |_| {
+            let mut changed = fs::read(&frontier_path).expect("read during predicate");
+            changed.push(0);
+            fs::write(&frontier_path, changed)
+                .expect("change frontier after initial authentication");
+            true
+        })
+        .is_err(),
+        "post-predicate revalidation must reject actual frontier substitution"
+    );
+}
+
+#[test]
+fn certified_latest_scan_exhaustion_cannot_prove_absence() {
+    let (_temp_dir, config, lane_config) = two_lane_storage_fixture();
+    let lane_id = LaneId::from(1);
+    let lane = lane_config.entry(lane_id).expect("configured lane");
+    let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
+    for height in [
+        1,
+        u64::try_from(CONSENSUS_SIDECAR_MATCH_SCAN_BUDGET).expect("scan bound") + 1,
+    ] {
+        let (session, pops) =
+            sample_committed_lane_block_session_for_kura(lane_id, lane.dataspace_id, height);
+        kura.persist_committed_lane_block_session(&session, &pops)
+            .expect("publish bounded-history control");
+    }
+    assert!(
+        kura.latest_certified_lane_block_artifact_matching(lane_id, |_| true)
+            .expect("exact latest frontier does not require historical traversal")
+            .is_some()
+    );
+    assert!(
+        kura.latest_certified_lane_block_artifact_matching(lane_id, |artifact| {
+            artifact.proposal.descriptor.lane_block_height == 1
+        })
+        .is_err(),
+        "a bounded miss must not authorize an apparently empty lane"
     );
 }

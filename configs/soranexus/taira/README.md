@@ -30,7 +30,7 @@ profile. It validates every base configuration, then the compiled
 required `--bind-validator-config-dir`, atomically binds each peer to the
 complete first-release Inrou backend: one
 PortableVM with exact CPU, memory, writable-storage, and egress budgets plus a
-separate 10 GiB immutable guest-image materialization bound. It
+separate 1600 MiB immutable guest-image materialization bound. It
 starts the peers and waits for all four nodes to become ready, which also proves
 that each daemon passed the artifact-free Inrou startup-boundary probe. That
 probe exercises the production machine type and host CPU under KVM, private
@@ -74,13 +74,67 @@ Provision the four canonical same-host identity slots before running it:
 - `iroha-inrou-2`, uid/gid `70002`
 - `iroha-inrou-3`, uid/gid `70003`
 
-Public validators run on separate hosts and use slot 0. These accounts are
-locked execution identities only; the command does not provision accounts or
-persist deployment credentials.
+The first-release Taira profile is shared by Kagami, Inrou staging and the
+runtime launcher. Each validator permits one Inrou replica with 750 millicores
+and 512 MiB guest RAM, plus mandatory 250-millicore/256-MiB VMM overhead.
+Hydration and prepared-runtime caches each have capacity one. The canonical
+canary has a 1536 MiB root volume, 16 MiB temporary filesystem and 64 MiB app-data
+volume; its durable state is bounded to 1024 bytes. The verified Debian asset
+helper must normalize the freshly extracted ext4 filesystem to exactly 1536 MiB.
+It uses official e2fsprogs on a private unmounted copy, checks the filesystem before
+and after resizing, and verifies its actual block count before truncating the file.
+No forced resize or unnormalized fallback is accepted. The pinned kernel and initrd
+plus normalized rootfs total 1,651,772,096 bytes, within the 1600 MiB immutable image
+ceiling; staging still checks the actual prepared bytes. Official HTTPS checksum consistency and the
+independently reviewed repository archive digest remain mandatory. A failed preparation removes the stale
+`env.sh` success entry point and does not publish the failed normalized copy.
+Each validator has a 4 GiB Nexus disk budget: 1 GiB for Kura, 512 MiB for
+snapshots and 2.5 GiB for SoraFS, plus an explicit 256 MiB encoded WSV memory
+budget. SoraFS retains both the 1600 MiB guest ceiling and the 512 MiB compressed
+bundle ceiling, leaving 448 MiB for discovery, manifests and storage metadata.
+The shared policy requires at least 64 MiB of that headroom. The startup probe
+derives matching QEMU and cgroup geometry from the selected host CPU/RAM ceiling,
+including VMM overhead.
+
+The signed validator units must bound each validator process to 1000 millicores
+and 2 GiB RAM separately from its Inrou worker. Four validators and workers plus
+1000 millicores/2 GiB for the guest OS require 9 CPUs and 13 GiB RAM; a 16 GiB
+Linux guest leaves 3 GiB additional guest headroom. These are allocation bounds,
+not performance qualification or a physical RAM reservation. Full disk budgeting
+must include all four root volumes, all four immutable image copies, app-data
+and Nexus caps (28.5 GiB combined at the admitted guest-image ceiling), guest OS,
+signed release/upload artifacts, preparation copies, staging and filesystem
+overhead. The 16 MiB temporary filesystem per replica is RAM-backed. Size the
+physically backed guest disk from the exact admitted canary, all retained copies
+and full runtime/Nexus growth allowances. A 64 GiB disk provides headroom; a
+smaller disk requires measured free bytes and artifact sizes demonstrating that
+all owners fit with an explicit operating reserve before native preparation.
+The retained original assets plus workspace, local-stage and host-stage guest
+copies are additional to the 28.5 GiB runtime allowance.
+Expand and qualify the actual guest only through the reviewed deployment
+procedure; never use compressed size or sparse current usage as the permitted
+full growth budget.
+
+Public-reset V1 supports exactly one Linux/AArch64 host running all four
+validators and the edge. Inventory admission rejects a dedicated edge or any
+validator on a different authenticated SSH host-key identity before opening
+deployment credentials or materializing artifacts. The host dispatcher applies
+the same admission before accessing guards or mutating host state. This single
+host holds the common lock and durable progress record for all mutation phase
+boundaries; distributed placement is not an admitted architecture.
+
+Provision all four locked execution identities on that host and assign distinct
+canonical slots to the validators. Each of the five role endpoints retains its
+own exact DNS alias and guarded service/state roots, uses root on SSH port 22,
+and pins the same actual ssh-ed25519 host key through its exact known-hosts line.
+Distinct DNS aliases do not establish independent hosts. Never invent host-key
+identities or copy a host private key to make separate machines appear cohosted.
+These accounts are execution identities only; the command does not provision
+accounts or persist deployment credentials.
 
 ### Prepare the fixed Inrou host runtime
 
-On each native AArch64 Linux validator, install packages that provide direct,
+On each native AArch64 Linux validator, install packages that provide
 root-owned, single-link executables at these exact paths:
 
 - `/usr/bin/qemu-system-aarch64`
@@ -90,8 +144,13 @@ root-owned, single-link executables at these exact paths:
 - `/usr/bin/nsenter`
 - `/usr/bin/socat`
 
-The QEMU and `setpriv` ELF interpreters and dynamic-library closure must also be
-root-custodied and non-writable by group/other. Create the fixed parent once,
+QEMU, `setpriv`, `ldd`, `bwrap`, and `nsenter` must be direct files. The `socat`
+entry may resolve through package-managed symlinks. The QEMU and `setpriv` ELF
+interpreters and dynamic-library closure may use merged `/usr` and alternatives
+links; every traversed link and directory must remain root-custodied, and the
+resolved files must be singly linked and non-writable by group/other. The
+packager copies their bytes to the exact paths requested by the executables;
+its output and destination contain no symlinks. Create the fixed parent once,
 then run the packager from the `optimizations` checkout as root:
 
 ```bash
@@ -106,8 +165,7 @@ canonical absolute `--qemu`, `--setpriv`, and `--ldd` paths; this Taira AArch64
 posture uses the defaults.
 
 The daemon startup boundary additionally requires direct root-custodied
-`/usr/bin/qemu-img`, root-custodied `mke2fs` at `/usr/sbin/mke2fs` or
-`/sbin/mke2fs`, one root-custodied `iptables` executable at
+`/usr/bin/qemu-img`, one root-custodied `iptables` executable at
 `/usr/sbin/iptables`, `/sbin/iptables`, `/usr/bin/iptables`, or `/bin/iptables`,
 `/dev/kvm` with API version 12, and unified cgroup v2 with the `cpu`, `io`,
 `memory`, and `pids` controllers available. Kernel namespace, QEMU user-network
@@ -116,23 +174,30 @@ exercised by the bounded startup probe; `up` fails closed if any is unavailable.
 This artifact-free probe does not boot a guest or verify the workload loopback
 bridge.
 
-New non-root Inrou lease volumes use the first-release canonical ext4 profile:
-their byte budgets must be positive multiples of 128 MiB. The daemon ignores
-host `mke2fs.conf` policy, supplies the complete format geometry and feature
-set explicitly, derives a stable UUID from the service revision, volume kind,
-storage class, and authoritative generation, and validates that exact
-superblock contract before publishing or reusing a disk.
+The daemon creates non-root Inrou lease disks at the admitted exact byte length
+and binds them to the service placement and authoritative generation. On first
+initialization, the guest checks the device and filesystem signature, formats a
+blank device as ext4 with the expected deterministic UUID, and verifies its mount
+identity and hardened options. The current runtime does not impose a 128 MiB
+volume multiple or a host-side fixed ext4 feature profile. The selected 64 MiB
+app-data volume must pass actual guest format, write and restart qualification.
 
 Every successful run must prove a real guest launch, four placements, and the
 public route. Prepare verified AArch64 assets, generate the exact deploy
 workspace with the same-revision compiled CLI, and pass that workspace to the
 devnet:
 
-The asset preparer requires `gpgv` or `gpg` plus a trusted Debian archive or
-cloud-image keyring. Install `debian-archive-keyring`, set
-`DEBIAN_ARCHIVE_KEYRING`, or pass `--debian-keyring`; a missing
-`SHA512SUMS.sign` is fatal, and the archive must match both the authenticated
-Debian sums and the repository-pinned SHA512.
+The asset preparer uses the fixed official HTTPS URL for the repository-pinned
+Debian build. It permits only the observed single HTTPS redirect to
+`laotzu.ftp.acc.umu.se` at the identical path; source overrides, other mirror routes,
+credentials, query/fragment changes and redirect loops are rejected. The repository
+SHA512 archive pin is the authority: the official `SHA512SUMS` must contain exactly one
+matching entry, and the downloaded archive must match the same pin before any
+extraction. Debian's current cloud-image pipeline does not publish detached
+signatures; no GPG keyring or signature fallback is used. See the
+[official cloud-image verification guidance](https://cloud.debian.org/images/cloud/)
+and [Debian's signing clarification](https://lists.debian.org/debian-cloud/2022/08/msg00010.html).
+The independently signed Taira release and owner authorization remain required.
 
 ```bash
 TAIRA_RUST_TARGET="$(rustc -vV | sed -n 's/^host: //p')"
@@ -310,6 +375,63 @@ target/release/iroha taira public-reset preflight \
   --known-hosts /private/runtime/taira-public-reset/known_hosts
 ```
 
+Before preflight, use the same compiled CLI to create the inventory and owner
+signature locally. `assemble` accepts an existing `InventoryV1` draft with explicit
+approved endpoints and host pins, target occupancy, previous/next genesis anchors,
+source/artifact paths, onboarding request, faucet/fee intent, nonce and timeouts.
+It fills derived hashes, sizes, modes, source/stage identities and validator
+fingerprints from the actual files, then runs the existing admission checks.
+Generate its source manifest with `iroha taira public-reset source-manifest
+--source-root DIR` from the exact clean `optimizations` checkout. Taira's signed
+genesis must use NPoS; each supplied validator config must bind that actual genesis
+and its declared peer. Prepare the deploy-mode Inrou stage before assembly, since
+staging binds the final validator config bytes.
+
+Both commands below require the same local file arguments. Paths are illustrative;
+use the approved release's actual inputs and an existing mode-0700 output directory.
+The four client configs and four systemd units must be in validator order.
+
+```bash
+reset_local_inputs=(
+  --runtime-client-config /private/runtime/taira-public-reset/client.toml
+  --validator-client-config /private/runtime/taira-public-reset/client1.toml
+    /private/runtime/taira-public-reset/client2.toml
+    /private/runtime/taira-public-reset/client3.toml
+    /private/runtime/taira-public-reset/client4.toml
+  --onboarding-token /private/runtime/taira-public-reset/onboarding-token
+  --inrou-stage-dir /private/runtime/taira-public-reset/inrou-stage
+  --validator-unit /private/runtime/taira-public-reset/validator1.service
+    /private/runtime/taira-public-reset/validator2.service
+    /private/runtime/taira-public-reset/validator3.service
+    /private/runtime/taira-public-reset/validator4.service
+  --edge-unit /private/runtime/taira-public-reset/edge.service
+  --known-hosts /private/runtime/taira-public-reset/known_hosts
+)
+target/release/iroha taira public-reset assemble \
+  --inventory-draft /private/runtime/taira-public-reset/inventory-draft.json \
+  "${reset_local_inputs[@]}" \
+  --output /private/runtime/taira-public-reset/inventory.json
+target/release/iroha taira public-reset authorize \
+  --inventory /private/runtime/taira-public-reset/inventory.json \
+  "${reset_local_inputs[@]}" \
+  --trusted-public-key /private/runtime/taira-public-reset/trusted-public-key.json \
+  --signing-key-fd 3 \
+  --output /private/runtime/taira-public-reset/authorization.json \
+  3< /private/runtime/taira-public-reset/owner-signing-key
+```
+
+Review the assembled inventory before authorizing it. `authorize` revalidates the
+complete local inputs and signs the retained inventory file bytes; editing or
+reformatting that file invalidates the signature. The independently trusted
+`TrustedKeyV1` must match the inherited Ed25519 key. The key file must be a direct
+owner-private single-link regular file (0400 or 0600), at most 512 bytes, containing
+its Iroha private-key string with at most one trailing newline. No authority key is
+generated or returned. Outputs are created as private files without replacement;
+use fresh paths instead of overwriting prior inputs. Authorization lasts at most
+15 minutes for admission, with the separate bounded execution lease computed by
+the existing coordinator. Run read-only host preflight promptly after signing;
+`apply` performs the live deployment changes.
+
 `InventoryV1` must contain `canary_onboarding_request`; it is not optional and
 has no derived-at-runtime fallback. The value must be the exact canonical
 `AccountOnboardingPlanRequestV1`: version 1, the canonical domainless
@@ -328,14 +450,54 @@ accepted only when their signer, transfer asset, amount, fee closure, and
 instruction bytes all match these independently admitted values; no value is
 learned from the envelope being authenticated.
 
-`iroha taira public-reset preflight` performs local fail-closed admission;
+`iroha taira public-reset preflight` admits the signed local inputs and then
+contacts all four validators and the edge through their exact pinned SSH endpoints
+for read-only host admission. Run it from the Linux controller before `apply`.
+It requires no canary signing config, onboarding token or runtime stage, and
+creates no journal, host lease, lock, progress or durable receipt. Each host check
+uses the signed install timeout. A failed host check fails the command and names
+the target. `apply` repeats host preflight to detect changes since that check.
 `iroha taira public-reset apply` is the live mutating operation. Apply requires
-explicit owner-private, runtime-only authorization, SSH, and canary inputs. It
-is permitted only after the identical artifact closure passes the disposable
-four-validator corridor and each admitted host already has the trusted compiled
-dispatcher and reset guard provisioned independently of the candidate. Never
+explicit owner-private, runtime-only authorization, SSH, and canary inputs. Each
+admitted host must already have the trusted compiled dispatcher and reset guard
+provisioned independently of the candidate. The public coordinator requires the
+actual cohort's exact durable Inrou preseed qualifications before startup, then
+runs public canary and restart proofs. The disposable `local-release` devnet is a
+separate development test command; it is not public-reset admission evidence or
+a prerequisite to a fresh public reset. Never
 persist those inputs in the repository, let the candidate bootstrap its own
 host authority, or introduce a Python alias or parallel V1 schema.
+
+The signed inventory requires an explicit `initial_state` on each validator
+and edge. Its canonical JSON is `{"state":"vacant","value":null}` or an object
+with `"state":"admitted_release"` and the release record in `"value"`. Both
+fields are required; vacant state accepts only `null` content. Unknown fields,
+unknown discriminators, and retired rollback shapes are rejected. There is no
+implicit predecessor or legacy rollback field. An admitted release binds its
+actual prior commit, canonical `releases/<commit>` directory, and exact artifact
+hashes. A vacant
+target still requires independent trusted dispatcher/guard provisioning,
+Linux/AArch64, and validator KVM API 12; it requires no running predecessor.
+The network's `previous_genesis_hash` remains the actual public reset anchor,
+including when the admitted Linux target namespaces are new.
+
+Vacant targets require an absent `current` selector, an empty root-owned 0700
+state directory, an empty release namespace, and the exact signed systemd
+unit loaded without drop-ins or pending reload. The edge additionally binds
+`systemd_unit_sha256` for `/etc/systemd/system/nginx.service` and requires an
+absent Taira route. The dispatcher checks inactive service/job/PID state,
+empty cgroup membership, and bounded process/file/mount-namespace references
+before accepting vacancy. Service, state, guard, and first-edge route roots
+must share the filesystem used for atomic rollback quarantine.
+
+The canonical plan starts all validators, stages and activates the edge, then
+runs public convergence, canaries, and restart proofs. First edge activation
+uses a durable start operation. A failed first installation stops its service,
+restores the exact original empty state inode, removes only its admitted
+selector, and atomically retains its candidate release/configuration in the
+private authorization rollback namespace. It never starts a fictitious prior
+release or deletes unproven state. Failure to prove ownership or shutdown
+retains the evidence and leaves rollback incomplete.
 
 The rendered validator configuration must replace the dedicated
 `REPLACE_WITH_TAIRA_CANARY_ONBOARDING_*` fields with one credential scoped to

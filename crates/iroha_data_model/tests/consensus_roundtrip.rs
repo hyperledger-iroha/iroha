@@ -100,11 +100,6 @@ fn sample_bytes(seed: u8, len: usize) -> Vec<u8> {
         })
         .collect()
 }
-fn checked_random_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
-    KeyPair::try_random_with_algorithm(algorithm).unwrap_or_else(|err| {
-        panic!("{algorithm:?} consensus fixture key generation should succeed: {err}")
-    })
-}
 fn checked_bls_peer_id_from_seed(seed: u8) -> PeerId {
     let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
         .expect("derive checked BLS consensus fixture keypair");
@@ -155,11 +150,6 @@ impl DeterministicRng {
             };
             usize::try_from(sample).expect("sample must fit into usize for testing")
         }
-    }
-    fn range_inclusive(&mut self, min: usize, max: usize) -> usize {
-        debug_assert!(min <= max);
-        let span = max - min;
-        min + self.up_to(span)
     }
     fn array32(&mut self) -> [u8; 32] {
         let mut bytes = [0u8; 32];

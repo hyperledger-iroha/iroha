@@ -1188,7 +1188,7 @@ test("compiler manifest boundary rejects unknown, inconsistent, and unbounded da
           dynamic_writes: [],
         };
       },
-      /bound_kind must be exactly take or range/u,
+      /bound_kind must be exactly take or page/u,
     ]),
     ["duplicate kotoba language", ({ manifest }) => {
       manifest.kotoba = [{

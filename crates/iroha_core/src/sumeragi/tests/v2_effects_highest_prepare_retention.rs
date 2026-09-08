@@ -456,6 +456,7 @@ fn lockless_enter_view_detaches_highest_prepare_store_and_keeps_its_owner() {
         97_020,
     );
     assert!(executor.pending_stores[&store_id].consumer.is_some());
+    let immutable_task = executor.pending_stores[&store_id].task.clone();
 
     consume_highest_prepare_enter_view(
         &mut executor,
@@ -474,16 +475,30 @@ fn lockless_enter_view_detaches_highest_prepare_store_and_keeps_its_owner() {
         Some(RemoteProposalReplayStageV1::Store { work_id, .. })
             if *work_id == store_id
     ));
-    assert_eq!(
-        executor
-            .body_pipeline_owners
-            .get(&high_key)
-            .map(|owner| owner.tag),
-        Some(tag(1)),
-        "the detached Store keeps its exact physical pipeline owner",
+    assert_eq!(executor.pending_stores[&store_id].task, immutable_task);
+    assert!(
+        !executor.body_pipeline_owners.contains_key(&high_key),
+        "the detached task retains persistence authority, not a superseded reducer consumer",
     );
     assert!(services.cancelled_stores.is_empty());
     assert_eq!(executor.remote_proposal_replay.len(), 1);
+    let completion = services.execute_store(store_id);
+    let receipt = completion.receipt().clone();
+    assert_eq!(
+        executor
+            .complete_body_store(completion, &mut services)
+            .expect("the detached highest-Prepare task keeps its real Store completion"),
+        CompletionDisposition::Accepted,
+    );
+    assert!(executor.pending_stores.is_empty());
+    assert_eq!(executor.pending_store_bytes, 0);
+    assert!(executor.runtime.completions.is_empty());
+    assert!(matches!(
+        executor.remote_proposal_replay.get(&high_key),
+        Some(RemoteProposalReplayStageV1::Stored { ownership, .. })
+            if ownership == immutable_task.ownership()
+    ));
+    assert_eq!(executor.durable_bodies.get(&high_key), Some(&receipt));
     assert!(!executor.status().fail_closed);
 }
 

@@ -5,9 +5,9 @@ use crate::{
     isi::{
         InstructionRegistry, account_recovery, alias_setup, asset_alias, asset_transfer_control,
         bridge, confidential, consensus_keys, content, contract_alias, defi, endorsement, escrow,
-        identifier, kaigi, ministry, musubi, nexus, oracle, privacy, ram_lfe, repo,
-        runtime_upgrade, rwa, settlement, smart_contract_code, social, soracloud, soradns, sorafs,
-        space_directory,
+        game, identifier, kaigi, ministry, musubi, nexus, nft_market, oracle, privacy, ram_lfe,
+        repo, runtime_upgrade, rwa, settlement, smart_contract_code, social, soracloud, soradns,
+        sorafs, space_directory,
         transparent::{
             AddSignatory, InvalidInstruction, RemoveAssetKeyValue, RemoveSignatory,
             SetAccountQuorum, SetAssetKeyValue,
@@ -330,11 +330,11 @@ mod tests {
     }
     #[test]
     fn source_has_one_bounded_typed_codec_registration_inventory() {
-        const EXPECTED_SOURCE_TYPED_CODEC_REGISTRARS: usize = 351;
+        const EXPECTED_SOURCE_TYPED_CODEC_REGISTRARS: usize = 368;
         #[cfg(feature = "governance")]
-        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 351;
+        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 368;
         #[cfg(not(feature = "governance"))]
-        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 334;
+        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 351;
         let registry_source = include_str!("registry.rs");
         let production = registry_source
             .split("\n#[cfg(test)]\nmod tests")
@@ -384,9 +384,9 @@ mod tests {
         use sha2::{Digest, Sha256};
         #[cfg(feature = "governance")]
         const EXPECTED_WITH_GOVERNANCE_SHA256: &str =
-            "5eac6c5cdf846c53a6372745194b23e342242a0c004debe5461fedb5160a0853";
+            "f4bca9c05bb1b892095b482645a17fcd2ed1a66fabb2b8b8b5bbf94f0c9d17c1";
         const EXPECTED_WITHOUT_GOVERNANCE_SHA256: &str =
-            "4cd2566dc4f63942e1e52b751a1b097747793e32dab67d24bde9420902177abd";
+            "7c4f0146543058a218725b0e12173aa3f137e9544c8697f81712c90013b985e8";
         let assignment_digest = |entries: Vec<&wire_ids::BuiltInWireId>| {
             let mut assignments = entries
                 .into_iter()
@@ -1134,7 +1134,7 @@ mod tests {
         );
     }
     #[test]
-    fn instruction_registry_rejects_cross_family_payloads_through_type_name_aliases() {
+    fn instruction_registry_rejects_cross_family_payloads_under_removed_type_names() {
         let register_box = RegisterBox::Domain(Register::domain(Domain::new(domain_id())));
         let repo_box = repo::RepoInstructionBox::MarginCall(repo::RepoMarginCallIsi::new(
             "registry_repo_cross_type_name"
@@ -1149,21 +1149,38 @@ mod tests {
             settlement_leg(account(0xDA), account(0xD9), 111),
             settlement::SettlementPlan::default(),
         ));
-        assert_default_registry_rejects_framed_payload(
-            std::any::type_name::<MintBox>(),
-            &framed_instruction_payload(&register_box),
-            std::any::type_name::<RegisterBox>(),
-        );
-        assert_default_registry_rejects_framed_payload(
-            std::any::type_name::<settlement::SettlementInstructionBox>(),
-            &framed_instruction_payload(&repo_box),
-            std::any::type_name::<repo::RepoInstructionBox>(),
-        );
-        assert_default_registry_rejects_framed_payload(
-            std::any::type_name::<repo::RepoInstructionBox>(),
-            &framed_instruction_payload(&settlement_box),
-            std::any::type_name::<settlement::SettlementInstructionBox>(),
-        );
+        let registry = default();
+        for (wire_id, type_name, framed, source) in [
+            (
+                MintBox::WIRE_ID,
+                std::any::type_name::<MintBox>(),
+                framed_instruction_payload(&register_box),
+                std::any::type_name::<RegisterBox>(),
+            ),
+            (
+                settlement::SettlementInstructionBox::WIRE_ID,
+                std::any::type_name::<settlement::SettlementInstructionBox>(),
+                framed_instruction_payload(&repo_box),
+                std::any::type_name::<repo::RepoInstructionBox>(),
+            ),
+            (
+                repo::RepoInstructionBox::WIRE_ID,
+                std::any::type_name::<repo::RepoInstructionBox>(),
+                framed_instruction_payload(&settlement_box),
+                std::any::type_name::<settlement::SettlementInstructionBox>(),
+            ),
+        ] {
+            assert_eq!(
+                registry.wire_id(type_name),
+                Some(wire_id),
+                "{type_name} encodes with its canonical wire identifier"
+            );
+            assert!(
+                registry.decode(type_name, &framed).is_none(),
+                "retired type-name alias must not resolve: {type_name}"
+            );
+            assert_default_registry_rejects_framed_payload(wire_id, &framed, source);
+        }
     }
     #[test]
     fn instruction_registry_rejects_invalid_box_variant_tags() {

@@ -34,8 +34,12 @@ fn get_status_does_not_retry_as_json_after_decode_failure() {
             }
         }
     };
-    let error = with_mock_http(responder, || client_with_base_url(base_url()).get_status())
-        .expect_err("malformed negotiated status response must fail without retry");
+    let error = with_mock_http(responder, |mock_transport| {
+        client_with_base_url(base_url())
+            .with_test_http_transport(mock_transport.clone())
+            .get_status()
+    })
+    .expect_err("malformed negotiated status response must fail without retry");
     assert!(error.to_string().contains("failed to decode status Norito"));
     let snapshots = snapshots.lock().expect("snapshot lock");
     assert_eq!(snapshots.len(), 1);
@@ -54,8 +58,13 @@ fn get_status_norito_only_rejects_json_without_retry() {
     let response = mk_response(StatusCode::OK, body, Some(APPLICATION_JSON));
     let mut client = client_with_base_url(base_url());
     client.set_wire_format_preference(WireFormatPreference::NoritoOnly);
-    let error = with_mock_http(respond_with(&snapshots, response), || client.get_status())
-        .expect_err("NoritoOnly must reject a JSON response");
+    let error = with_mock_http(respond_with(&snapshots, response), |mock_transport| {
+        let client = client
+            .clone()
+            .with_test_http_transport(mock_transport.clone());
+        client.get_status()
+    })
+    .expect_err("NoritoOnly must reject a JSON response");
     assert!(error.to_string().contains("violates NoritoOnly"));
     let snapshots = snapshots.lock().expect("snapshot lock");
     assert_eq!(snapshots.len(), 1);

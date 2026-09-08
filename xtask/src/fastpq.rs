@@ -1,7 +1,7 @@
 use crate::workspace_root;
 use blake3::hash as blake3_hash;
 use eyre::{Context, Result, bail, ensure, eyre};
-use iroha_crypto::{Algorithm, KeyPair, PrivateKey, Signature};
+use iroha_crypto::{Algorithm, KeyPair, PrivateKey, PublicKey, Signature};
 use norito::{
     derive::{JsonDeserialize, JsonSerialize},
     json as serde_json,
@@ -70,12 +70,12 @@ pub fn default_stage_profile_dir() -> PathBuf {
         .join("fastpq_stage_profiles")
         .join(timestamp)
 }
-#[derive(Serialize, JsonSerialize)]
+#[derive(Serialize, JsonSerialize, JsonDeserialize)]
 struct BenchHashes {
     blake3_hex: String,
     sha256_hex: String,
 }
-#[derive(Serialize, Default, JsonSerialize)]
+#[derive(Serialize, Default, JsonSerialize, JsonDeserialize)]
 struct BenchMetadata {
     generated_at: Option<String>,
     host: Option<String>,
@@ -84,7 +84,7 @@ struct BenchMetadata {
     command: Option<String>,
     notes: Option<String>,
 }
-#[derive(Serialize, JsonSerialize)]
+#[derive(Serialize, JsonSerialize, JsonDeserialize)]
 struct BenchEntry {
     label: String,
     path: String,
@@ -104,7 +104,7 @@ struct BenchEntry {
     metadata: BenchMetadata,
     hashes: BenchHashes,
 }
-#[derive(Serialize, Default, JsonSerialize)]
+#[derive(Serialize, Default, JsonSerialize, JsonDeserialize)]
 struct PoseidonMicrobenchSample {
     mean_ms: Option<f64>,
     min_ms: Option<f64>,
@@ -131,19 +131,19 @@ impl PoseidonMicrobenchSample {
             && self.states_per_lane.is_none()
     }
 }
-#[derive(Serialize, Default, JsonSerialize)]
+#[derive(Serialize, Default, JsonSerialize, JsonDeserialize)]
 struct PoseidonMicrobenchSummary {
     default: Option<PoseidonMicrobenchSample>,
     scalar_lane: Option<PoseidonMicrobenchSample>,
     speedup_vs_scalar: Option<f64>,
 }
-#[derive(Serialize, JsonSerialize)]
+#[derive(Serialize, JsonSerialize, JsonDeserialize)]
 struct ConstraintSummary {
     require_rows: Option<u64>,
     max_operation_ms: BTreeMap<String, f64>,
     min_operation_speedup: BTreeMap<String, f64>,
 }
-#[derive(Serialize, JsonSerialize)]
+#[derive(Serialize, JsonSerialize, JsonDeserialize)]
 struct BenchManifestPayload {
     version: u32,
     generated_unix_ms: u64,
@@ -151,13 +151,13 @@ struct BenchManifestPayload {
     benches: Vec<BenchEntry>,
     constraints: ConstraintSummary,
 }
-#[derive(Serialize, JsonSerialize)]
+#[derive(Serialize, JsonSerialize, JsonDeserialize)]
 struct SignatureEnvelope {
     algorithm: String,
     public_key_hex: String,
     signature_hex: String,
 }
-#[derive(Serialize, JsonSerialize)]
+#[derive(Serialize, JsonSerialize, JsonDeserialize)]
 struct SignedBenchManifest {
     payload: BenchManifestPayload,
     signature: Option<SignatureEnvelope>,
@@ -608,6 +608,47 @@ fn sign_manifest(payload: &[u8], key_path: &Path) -> Result<SignatureEnvelope> {
         public_key_hex: hex::encode(public_bytes),
         signature_hex: hex::encode(signature.payload()),
     })
+}
+
+/// Authenticate a benchmark manifest with an independently supplied Ed25519 key.
+///
+/// The manifest's claimed public key is never a trust anchor. Re-encoding the
+/// typed payload with Norito reproduces the exact compact preimage used by
+/// `write_bench_manifest`, including its field order and floating-point format.
+pub fn verify_bench_manifest(manifest_path: &Path, trusted_public_key_hex: &str) -> Result<()> {
+    let content = fs::read(manifest_path)
+        .with_context(|| format!("read benchmark manifest {}", manifest_path.display()))?;
+    let signed: SignedBenchManifest =
+        json::from_slice(&content).context("decode signed benchmark manifest")?;
+    ensure!(
+        signed.payload.version == 1,
+        "unsupported benchmark manifest version"
+    );
+    let envelope = signed
+        .signature
+        .ok_or_else(|| eyre!("benchmark manifest requires a release signature"))?;
+    ensure!(
+        envelope.algorithm == "ed25519",
+        "benchmark manifest must use Ed25519"
+    );
+    let trusted_key = PublicKey::from_hex(Algorithm::Ed25519, trusted_public_key_hex)
+        .context("parse independently trusted FASTPQ release public key")?;
+    let claimed_key = PublicKey::from_hex(Algorithm::Ed25519, &envelope.public_key_hex)
+        .context("parse manifest signer public key")?;
+    ensure!(
+        claimed_key == trusted_key,
+        "benchmark manifest signer is not the trusted release key"
+    );
+    let signature = Signature::try_from_bytes(
+        &hex::decode(&envelope.signature_hex).context("decode benchmark manifest signature")?,
+    )
+    .map_err(|err| eyre!("invalid benchmark manifest signature: {err}"))?;
+    let preimage =
+        json::to_vec(&signed.payload).context("encode benchmark manifest signature preimage")?;
+    signature
+        .verify(&trusted_key, &preimage)
+        .map_err(|err| eyre!("benchmark manifest signature verification failed: {err}"))?;
+    Ok(())
 }
 fn display_path(path: &Path) -> String {
     if let Ok(rel) = path.strip_prefix(workspace_root()) {
@@ -1466,6 +1507,81 @@ mod tests {
         .expect("FastPQ manifest signature is non-empty and nonzero")
         .verify(expected_key_pair.public_key(), b"bench manifest")
         .expect("checked manifest signature verifies");
+    }
+
+    fn signed_manifest_fixture(temp: &TempDir) -> (PathBuf, String) {
+        let private_hex = hex::encode([0x55u8; 32]);
+        let private_path = temp.path().join("fixture-signing.key");
+        fs::write(&private_path, &private_hex).expect("write fixture signing key");
+        let key_pair: KeyPair = PrivateKey::from_hex(Algorithm::Ed25519, &private_hex)
+            .expect("fixture key")
+            .into();
+        let (_, public_bytes) = key_pair.public_key().try_to_bytes().expect("public bytes");
+        let output = temp.path().join("signed-manifest.json");
+        write_bench_manifest(BenchManifestOptions {
+            benches: vec![BenchInput {
+                label: "metal".into(),
+                path: write_bundle(temp, "capture.json", 20_000),
+            }],
+            output: output.clone(),
+            signing_key: Some(private_path),
+            require_rows: Some(20_000),
+            max_operation_ms: BTreeMap::from([("lde".into(), 950.0)]),
+            ..BenchManifestOptions::default()
+        })
+        .expect("write signed manifest");
+        (output, hex::encode(public_bytes))
+    }
+
+    #[test]
+    fn verify_bench_manifest_authenticates_the_generated_compact_preimage() {
+        let temp = TempDir::new().expect("tempdir");
+        let (path, trusted) = signed_manifest_fixture(&temp);
+        verify_bench_manifest(&path, &trusted).expect("trusted signature verifies");
+    }
+
+    #[test]
+    fn verify_bench_manifest_rejects_untrusted_signers_and_payload_tampering() {
+        let temp = TempDir::new().expect("tempdir");
+        let (path, trusted) = signed_manifest_fixture(&temp);
+        let other: KeyPair = PrivateKey::from_hex(Algorithm::Ed25519, &hex::encode([0x66u8; 32]))
+            .expect("other key")
+            .into();
+        let (_, other_bytes) = other
+            .public_key()
+            .try_to_bytes()
+            .expect("other public bytes");
+        let error =
+            verify_bench_manifest(&path, &hex::encode(other_bytes)).expect_err("wrong trust root");
+        assert!(error.to_string().contains("not the trusted release key"));
+        let mut manifest: SignedBenchManifest =
+            json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        manifest.payload.constraints.require_rows = Some(1);
+        fs::write(&path, json::to_vec(&manifest).unwrap()).unwrap();
+        let error = verify_bench_manifest(&path, &trusted).expect_err("modified signed payload");
+        assert!(error.to_string().contains("signature verification failed"));
+    }
+
+    #[test]
+    fn verify_bench_manifest_rejects_missing_malformed_or_wrong_algorithm_signatures() {
+        let temp = TempDir::new().expect("tempdir");
+        let (path, trusted) = signed_manifest_fixture(&temp);
+        let original = fs::read(&path).unwrap();
+        for invalid in ["missing", "algorithm", "malformed", "corrupt"] {
+            let mut manifest: SignedBenchManifest = json::from_slice(&original).unwrap();
+            match invalid {
+                "missing" => manifest.signature = None,
+                "algorithm" => manifest.signature.as_mut().unwrap().algorithm = "unknown".into(),
+                "malformed" => manifest.signature.as_mut().unwrap().signature_hex = "zz".into(),
+                "corrupt" => manifest.signature.as_mut().unwrap().signature_hex = "11".repeat(64),
+                _ => unreachable!(),
+            }
+            fs::write(&path, json::to_vec(&manifest).unwrap()).unwrap();
+            assert!(
+                verify_bench_manifest(&path, &trusted).is_err(),
+                "must reject {invalid}"
+            );
+        }
     }
     #[test]
     fn build_stage_summary_extracts_stats() {

@@ -29,9 +29,9 @@ use url::Url;
 
 use self::private_settlement_online_auditor::{
     PrivateSettlementAuditorBusinessPolicyV1, coordinate_private_settlement_online_auditor_v1,
-    load_private_settlement_audit_policy_v1,
-    load_private_settlement_auditor_business_policy_v1, load_private_settlement_auditor_secret_v1,
-    load_private_settlement_committee_authority_v1, load_private_settlement_pool_governance_v1,
+    load_private_settlement_audit_policy_v1, load_private_settlement_auditor_business_policy_v1,
+    load_private_settlement_auditor_secret_v1, load_private_settlement_committee_authority_v1,
+    load_private_settlement_pool_governance_v1,
 };
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
@@ -413,9 +413,11 @@ fn private_settlement<C: RunContext>(
             let request = PrivateSettlementAuditorCapsuleRequestV1 {
                 audit_policy: load_private_settlement_audit_policy_v1(&args.audit_policy)?,
             };
-            context.print_data(
-                &client.private_settlement_auditor_capsule_v1(payload_digest, &request, &role_key)?,
-            )
+            context.print_data(&client.private_settlement_auditor_capsule_v1(
+                payload_digest,
+                &request,
+                &role_key,
+            )?)
         }
         PrivateSettlementCommand::AuditApproval(args) => {
             let role_key = private_settlement_operator_key(context)?;
@@ -451,9 +453,7 @@ fn private_settlement<C: RunContext>(
                 &decryption_secrets,
                 &role_key,
             )
-            .map_err(|_| {
-                eyre!("private-settlement auditor decryption-key keyring is invalid")
-            })?;
+            .map_err(|_| eyre!("private-settlement auditor decryption-key keyring is invalid"))?;
             let request_signer = BorrowedKeyPairIdentityRequestSignerV1::new(&role_key);
             let evaluator = PrivateSettlementAuditDecisionPolicyV1 {
                 decision: args.decision,
@@ -720,21 +720,34 @@ fn format_validator_summary(payload: &Value) -> Result<String> {
         let r_val = rhs.get("validator").and_then(Value::as_str).unwrap_or("");
         l_val.cmp(r_val)
     });
+    let rows: Vec<_> = entries.into_iter().map(build_validator_row).collect();
+    // Heights and status details must remain readable even at the u64 boundary.
+    let status_width = rows
+        .iter()
+        .map(|row| row.status.len())
+        .max()
+        .unwrap_or(0)
+        .max(18);
+    let tenure_width = rows
+        .iter()
+        .map(|row| row.tenure.len())
+        .max()
+        .unwrap_or(0)
+        .max(22);
     let mut output = String::new();
     writeln!(
         &mut output,
-        "{:<36}  {:<24}  {:<18}  {:<22}  {:<20}  {:<11}",
+        "{:<36}  {:<24}  {:<status_width$}  {:<tenure_width$}  {:<20}  {:<11}",
         "VALIDATOR", "PEER_ID", "STATUS", "TENURE", "STAKE", "LAST_REWARD"
     )?;
-    for entry in entries {
-        let row = build_validator_row(entry);
+    for row in rows {
         writeln!(
             &mut output,
-            "{:<36}  {:<24}  {:<18}  {:<22}  {:<20}  {:<11}",
+            "{:<36}  {:<24}  {:<status_width$}  {:<tenure_width$}  {:<20}  {:<11}",
             truncate_field(&row.validator, 36),
             truncate_field(&row.peer_id, 24),
-            truncate_field(&row.status, 18),
-            truncate_field(&row.tenure, 22),
+            row.status,
+            row.tenure,
             truncate_field(&row.stake, 20),
             truncate_field(&row.last_reward, 11),
         )?;
@@ -859,7 +872,7 @@ fn validator_status_label(status: Option<&Value>) -> String {
             || "Slashed".to_string(),
             |id| format!("Slashed({})", truncate_field(id, 14)),
         ),
-        other => other.to_string(),
+        other => truncate_field(other, 18),
     }
 }
 fn tenure_label(entry: &Map) -> String {
@@ -1130,6 +1143,29 @@ mod tests {
         assert!(summary.contains("Pending(height 3601)"));
         assert!(summary.contains("heights [3601, 7201)"));
         assert!(summary.contains("1000 (self 800)"));
+    }
+    #[test]
+    fn validator_summary_preserves_full_height_boundaries() {
+        let activation_height = u64::MAX - 1;
+        let deactivation_height = u64::MAX;
+        let payload = norito::json!({
+            "items": [{
+                "status": {"type": "PendingActivation", "activates_at_height": activation_height},
+                "activation_height": activation_height,
+                "deactivation_height": deactivation_height,
+            }],
+        });
+        let summary = format_validator_summary(&payload).expect("format maximum-height summary");
+        assert!(summary.contains(&format!("Pending(height {})", u64::MAX - 1)));
+        assert!(summary.contains(&format!("heights [{}, {})", u64::MAX - 1, u64::MAX)));
+    }
+    #[test]
+    fn validator_summary_bounds_unknown_status_width() {
+        let status = "x".repeat(1024);
+        let payload = norito::json!({"items": [{"status": {"type": status}}]});
+        let summary = format_validator_summary(&payload).expect("format unknown status summary");
+        assert!(summary.contains(&truncate_field(&status, 18)));
+        assert!(summary.lines().all(|line| line.len() < 200));
     }
     #[test]
     fn stake_summary_marks_pending_unbonds() {

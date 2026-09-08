@@ -1,6 +1,7 @@
 //! Allocation and wire-parity checks for exact-length nested serialization.
 use norito::core::{
-    DecodeFlagsGuard, Encoder, Error, NoritoSerialize, header_flags, serialize_to_buffer,
+    DecodeFlagsGuard, Encoder, Error, NoritoSerialize, SerializePayload, header_flags,
+    serialize_to_buffer,
 };
 use norito::{decode_canonical, encode_canonical, verify_exact_frame};
 use std::{
@@ -71,21 +72,23 @@ fn large_allocations_during(threshold: usize, operation: impl FnOnce()) -> usize
     LARGE_ALLOCATIONS.with(Cell::get)
 }
 struct ExactBlob(Vec<u8>);
-impl NoritoSerialize for ExactBlob {
+impl NoritoSerialize for ExactBlob {}
+impl SerializePayload for ExactBlob {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
-        NoritoSerialize::serialize(&self.0, writer)
+        SerializePayload::serialize(&self.0, writer)
     }
     fn encoded_len_hint(&self) -> Option<usize> {
-        NoritoSerialize::encoded_len_hint(&self.0)
+        SerializePayload::encoded_len_hint(&self.0)
     }
     fn encoded_len_exact(&self) -> Option<usize> {
-        NoritoSerialize::encoded_len_exact(&self.0)
+        SerializePayload::encoded_len_exact(&self.0)
     }
 }
 struct UnknownBlob(Vec<u8>);
-impl NoritoSerialize for UnknownBlob {
+impl NoritoSerialize for UnknownBlob {}
+impl SerializePayload for UnknownBlob {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
-        NoritoSerialize::serialize(&self.0, writer)
+        SerializePayload::serialize(&self.0, writer)
     }
 }
 #[derive(NoritoSerialize)]
@@ -112,7 +115,7 @@ enum ExactEnum {
 enum UnknownEnum {
     Payload(UnknownBlob),
 }
-fn bare_bytes(value: &dyn NoritoSerialize, flags: u8) -> Vec<u8> {
+fn bare_bytes(value: &dyn SerializePayload, flags: u8) -> Vec<u8> {
     let _guard = DecodeFlagsGuard::enter(flags);
     let mut bytes = Vec::new();
     serialize_to_buffer(value, &mut bytes).expect("serialize test value");
@@ -166,14 +169,14 @@ fn large_exact_nested_box_streams_without_temporary_allocation() {
         },
     });
     let _guard = DecodeFlagsGuard::enter(flags);
-    let exact_len = NoritoSerialize::encoded_len_exact(&value).expect("exact boxed length");
+    let exact_len = SerializePayload::encoded_len_exact(&value).expect("exact boxed length");
     let mut output = Vec::with_capacity(exact_len);
     // Initialize thread-local state and the serializer before measuring.
     let mut warm = Vec::with_capacity(exact_len);
     serialize_to_buffer(&value, &mut warm).expect("warm exact serialization");
     drop(warm);
     let allocations = allocations_during(|| {
-        assert_eq!(NoritoSerialize::encoded_len_exact(&value), Some(exact_len));
+        assert_eq!(SerializePayload::encoded_len_exact(&value), Some(exact_len));
         serialize_to_buffer(&value, &mut output).expect("stream exact boxed value");
     });
     assert_eq!(output.len(), exact_len);

@@ -294,6 +294,13 @@ fn configured_catalog_preflight_rejects_existing_journal_without_baseline() {
     assert_catalog_paths_absent(dir.path(), &configured_b);
 }
 fn populate_store(dir: &TempDir, count: usize) {
+    let config = kura_config_for_dir(dir, BLOCKS_IN_MEMORY);
+    let (kura, _) = test_kura_with_default_lane_markers(&config, &RuntimeLaneConfig::default());
+    let _ = store_dummy_block_arcs(&kura, count);
+}
+
+// BlockStore-only tests deliberately exercise journals without opening a node.
+fn populate_raw_block_store(dir: &TempDir, count: usize) {
     let blocks_dir = primary_blocks_dir(dir);
     let mut block_store = BlockStore::new(&blocks_dir);
     block_store.create_files_if_they_do_not_exist().unwrap();
@@ -392,6 +399,7 @@ fn unknown_hash_has_no_body_status_or_durable_payload_len() {
     );
 }
 fn store_dummy_block_arcs(kura: &Kura, count: usize) -> Vec<Arc<SignedBlock>> {
+    establish_dummy_store_primary_anchor(kura);
     let mut generator = DummyBlocks::new();
     let blocks: Vec<_> = (0..count).map(|_| generator.next()).collect();
     for block in &blocks {
@@ -399,6 +407,35 @@ fn store_dummy_block_arcs(kura: &Kura, count: usize) -> Vec<Arc<SignedBlock>> {
             .expect("store dummy block through durable Kura path");
     }
     blocks
+}
+
+fn establish_dummy_store_primary_anchor(kura: &Kura) {
+    let Some(baseline) = kura
+        .configured_lane_catalog_baseline()
+        .expect("read dummy store's configured baseline")
+    else {
+        // The isolated blank constructor is not a persistent startup fixture.
+        return;
+    };
+    let primary = kura
+        .lane_storage_entry(LaneId::SINGLE)
+        .expect("dummy store has canonical primary storage");
+    let incarnation = Hash::new(
+        format!(
+            "kura-lane-incarnation:{}:{}",
+            primary.lane_id.as_u32(),
+            primary.dataspace_id.as_u64()
+        )
+        .as_bytes(),
+    );
+    kura.install_lane_incarnation_marker_if_missing_for_test(&primary, incarnation, 0)
+        .expect("initialize missing dummy primary marker");
+    let (incarnation, activation) = kura
+        .active_lane_incarnation_marker(&primary)
+        .expect("authenticate existing dummy primary marker");
+    assert_eq!(activation, 0, "the physical primary is active at genesis");
+    kura.establish_or_verify_configured_primary_geometry_anchor(&primary, incarnation, baseline)
+        .expect("bind dummy blocks to the durable configured primary");
 }
 fn finalize_chain_through_for_eviction(kura: &Kura, height: NonZeroUsize) {
     let target_height = u64::try_from(height.get()).expect("fixture height fits u64");
@@ -456,7 +493,7 @@ fn advertise_required_replicas(kura: &Kura, height: NonZeroUsize) -> (HashOf<Blo
     metadata
 }
 fn sample_merge_entry(epoch: u64) -> MergeLedgerEntry {
-    let mut lane_validators = (0..4)
+    let mut lane_validators = (1_u8..=4)
         .map(|seed| {
             PeerId::new(
                 iroha_crypto::KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
@@ -869,23 +906,20 @@ fn pending_certified_merge_work_binds_routing_legs_to_exact_active_incarnation()
         payload_block_hint: None,
     };
     participant_proposal.proposal_hash = participant_proposal.computed_proposal_hash();
-    let participant_settlement = NativeAmxParticipantSettlement {
-        block_height: participant_proposal.descriptor.lane_block_height,
-        lane_id: target_lane,
-        lane_incarnation: retired_incarnation,
-        dataspace_id: target_dataspace,
-        tx_count: 0,
-        total_local_amount: "0".parse().expect("valid settlement quantity"),
-        total_xor_due: "0".parse().expect("valid settlement quantity"),
-        total_xor_after_haircut: "0".parse().expect("valid settlement quantity"),
-        total_xor_variance: "0".parse().expect("valid settlement quantity"),
-        swap_metadata: None,
-        receipts: Vec::new(),
-        nexus_fee_receipts: Vec::new(),
-    };
-    let participant_settlement_hash =
-        compute_native_amx_participant_settlement_hash(&participant_settlement)
-            .expect("fixture participant settlement hash");
+    let participant_settlement =
+        iroha_data_model::block::consensus::NativeAmxParticipantSettlement::try_new(
+            target_lane,
+            target_dataspace,
+            retired_incarnation,
+            participant_proposal.descriptor.lane_block_height,
+            participant_proposal.descriptor.proposal_height,
+            None,
+            vec![[0x73; Hash::LENGTH]],
+        )
+        .expect("valid Native participant control");
+    let participant_settlement_hash = participant_settlement
+        .computed_hash()
+        .expect("participant settlement hashes");
     let participant_validator_set = Vec::<PeerId>::new();
     let participant_validator_set_hash = HashOf::new(&participant_validator_set);
     let source_id = [0x73; Hash::LENGTH];
@@ -918,7 +952,7 @@ fn pending_certified_merge_work_binds_routing_legs_to_exact_active_incarnation()
         participant_lane_block_height: participant_proposal.descriptor.lane_block_height,
         participant_lane_block_view: participant_proposal.descriptor.lane_block_view,
         participant_proposal_hash: participant_proposal.proposal_hash,
-        participant_settlement_commitment: participant_settlement_hash,
+        participant_settlement_commitment: Hash::from(participant_settlement_hash),
         participant_validator_set_hash,
         participant_validator_count: 0,
         participant_min_quorum: 0,
@@ -1896,6 +1930,13 @@ fn merge_ledger_entries_persist_across_restart() {
     let (kura, _) =
         Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
             .expect("init kura");
+    // Bind the configured initial incarnation before this fixture writes
+    // durable blocks or recovery sidecars into the primary store.
+    publish_initial_configured_lane_geometry_for_test(
+        &kura,
+        &RuntimeLaneConfig::default(),
+        &BTreeMap::new(),
+    );
     let mut blocks = DummyBlocks::new();
     let parent = blocks.next();
     let mut entry1 = sample_merge_entry(1);
@@ -1997,7 +2038,10 @@ fn merge_frontier_startup_requires_geometry_only_after_committed_execution() {
     let dir = TempDir::new().expect("tempdir");
     let config = kura_config_for_dir(&dir, nonzero!(2_usize));
     let lane_config = RuntimeLaneConfig::default();
-    let (fresh, _) = Kura::new_fresh_single_lane(&config, &lane_config).expect("open fresh Kura");
+    let configured_catalog = LaneCatalog::default();
+    let (fresh, _) =
+        Kura::new_with_configured_lane_catalog(&config, &lane_config, &configured_catalog)
+            .expect("open a fresh authenticated configured route");
     let entry = fresh
         .lane_storage_entry(LaneId::SINGLE)
         .expect("fresh primary lane storage entry");
@@ -2009,7 +2053,6 @@ fn merge_frontier_startup_requires_geometry_only_after_committed_execution() {
         "a fresh single-lane route starts without execution geometry"
     );
     drop(fresh);
-    let configured_catalog = LaneCatalog::default();
     let (kura, _) =
         Kura::new_with_configured_lane_catalog(&config, &lane_config, &configured_catalog)
             .expect("a fresh route without frontier or execution may reopen");
@@ -2040,9 +2083,11 @@ fn merge_frontier_startup_requires_geometry_only_after_committed_execution() {
         matches!(
             &error,
             Error::IO(source, path)
-                if source.kind() == ErrorKind::NotFound && path == &marker_path
+                if source.kind() == ErrorKind::InvalidData
+                    && source.to_string() == "unbound configured primary block store is not empty"
+                    && path == &marker_path.parent().expect("primary store directory").join("blocks.data")
         ),
-        "startup must identify the missing lane-incarnation geometry: {error}"
+        "startup must reject committed bytes whose primary incarnation marker is missing: {error}"
     );
 }
 #[test]
@@ -2492,6 +2537,13 @@ fn finality_authenticated_carrier_survives_body_removal_and_restart() {
     let (kura, _) =
         Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
             .expect("initialize Kura");
+    // Bind the configured initial incarnation before this fixture writes
+    // durable blocks or recovery sidecars into the primary store.
+    publish_initial_configured_lane_geometry_for_test(
+        &kura,
+        &RuntimeLaneConfig::default(),
+        &BTreeMap::new(),
+    );
     let mut blocks = DummyBlocks::new();
     let genesis = blocks.next();
     let mut entry = sample_merge_entry(1);
@@ -2555,11 +2607,12 @@ fn bodyless_finalized_execution_carrier_rebuilds_merge_entrypoint_index() {
     let entrypoint = indexed_log_entrypoint([0x71; 32], [0x72; 32]);
     let entrypoint_hash = entrypoint.hash();
     let mut entry = merge_entry_with_indexed_entrypoint(entrypoint);
-    let genesis: SignedBlock = BlockBuilder::new(Vec::<AcceptedTransaction<'static>>::new())
+    let mut genesis: SignedBlock = BlockBuilder::new(Vec::<AcceptedTransaction<'static>>::new())
         .chain(0, None)
         .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key())
         .unpack(|_| {})
         .into();
+    attach_ok_results_to_block(&mut genesis);
     let genesis = Arc::new(genesis);
     let mut raw_carrier: SignedBlock =
         BlockBuilder::new(Vec::<AcceptedTransaction<'static>>::new())
@@ -2589,18 +2642,22 @@ fn bodyless_finalized_execution_carrier_rebuilds_merge_entrypoint_index() {
     let lane_entry = kura
         .lane_storage_entry(descriptor.lane_id)
         .expect("index fixture targets an active lane");
-    kura.install_lane_incarnation_marker_for_test(&lane_entry, descriptor.lane_incarnation, 0)
-        .expect("install index fixture lane incarnation");
+    publish_initial_configured_lane_geometry_for_test(
+        &kura,
+        &RuntimeLaneConfig::default(),
+        &BTreeMap::from([(lane_entry.lane_id, descriptor.lane_incarnation)]),
+    );
     let carrier = bind_merge_entry_to_carrier(Arc::new(raw_carrier), &mut entry);
     let carrier_hash = carrier.hash();
     kura.store_block(genesis).expect("store carrier parent");
     kura.store_block_with_merge_entry(Arc::clone(&carrier), &entry)
         .expect("store execution carrier");
-    let tail: SignedBlock = BlockBuilder::new(Vec::<AcceptedTransaction<'static>>::new())
+    let mut tail: SignedBlock = BlockBuilder::new(Vec::<AcceptedTransaction<'static>>::new())
         .chain(0, Some(carrier.as_ref()))
         .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key())
         .unpack(|_| {})
         .into();
+    attach_ok_results_to_block(&mut tail);
     kura.store_block(Arc::new(tail))
         .expect("store eviction tail");
     let _ = persist_v2_finality_chain_through(&kura, nonzero!(2_usize));
@@ -2756,4 +2813,85 @@ fn carrier_point_lookup_fails_closed_after_sidecar_corruption() {
         kura.merge_carrier_for_entry(entry_hash),
         Err(Error::MergeCarrierConflict(_)) | Err(Error::NoritoFrame(_))
     ));
+}
+
+#[test]
+fn canonical_transaction_index_keeps_empty_and_nonempty_resultless_bodies_incomplete() {
+    for entry_count in [0, 1] {
+        for attach_results in [false, true] {
+            let dir = TempDir::new().expect("temporary canonical index store");
+            let config = kura_config_for_dir(&dir, nonzero!(2_usize));
+            let (kura, _) = Kura::open_test_kura_with_configured_lane_config(
+                &config,
+                &RuntimeLaneConfig::default(),
+            )
+            .expect("open canonical index store");
+            let transactions = (0..entry_count)
+                .map(|_| {
+                    let transaction = TransactionBuilder::new(
+                        test_network_id(b"resultless-canonical-index"),
+                        SAMPLE_GENESIS_ACCOUNT_ID.clone(),
+                        iroha_data_model::transaction::FeePaymentIntent::authority(
+                            Vec::new(),
+                            None,
+                        ),
+                    )
+                    .with_instructions([Log::new(
+                        Level::INFO,
+                        "resultless index control".to_owned(),
+                    )])
+                    .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
+                    AcceptedTransaction::new_unchecked(Cow::Owned(transaction))
+                })
+                .collect::<Vec<_>>();
+            let mut block: SignedBlock = BlockBuilder::new(transactions)
+                .chain(0, None)
+                .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key())
+                .unpack(|_| {})
+                .into();
+            assert!(!block.has_results());
+            if attach_results {
+                attach_ok_results_to_block(&mut block);
+            }
+            assert_eq!(
+                kura.lane_artifact_required_bytes_for_block(&block, None)
+                    .expect("budget raw and executed ordinary bodies without inventing a manifest"),
+                0,
+            );
+            let expected_wire = block.encode_wire().expect("encode exact index test body");
+            let probe = block
+                .entrypoints_cloned()
+                .next()
+                .map(|entry| entry.hash())
+                .unwrap_or_else(|| {
+                    HashOf::from_untyped_unchecked(Hash::new(b"absent index probe"))
+                });
+            let block = Arc::new(block);
+            kura.store_block(Arc::clone(&block))
+                .expect("store canonical body without panicking in the derived index");
+            assert_eq!(
+                kura.canonical_block_wire_bytes_for_testing(nonzero!(1_usize))
+                    .expect("read actual durable canonical body"),
+                expected_wire,
+            );
+            assert_eq!(
+                kura.get_durable_block_hash(nonzero!(1_usize)),
+                Some(block.hash())
+            );
+            let index = kura.transaction_entrypoint_index.lock();
+            assert_eq!(index.complete, attach_results);
+            assert_eq!(
+                index
+                    .incomplete_kaigi_signal_heights
+                    .contains(&nonzero!(1_usize)),
+                !attach_results,
+            );
+            drop(index);
+            assert_eq!(
+                kura.get_block_heights_by_entrypoint_hash(probe).is_some(),
+                attach_results,
+                "resultless bodies cannot authorize an empty complete lookup",
+            );
+        }
+    }
 }

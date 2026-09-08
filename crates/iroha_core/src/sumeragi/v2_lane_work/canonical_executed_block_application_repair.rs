@@ -395,12 +395,18 @@ impl CanonicalExecutedBlockRecovery {
     pub(crate) fn effect_count(&self) -> usize {
         self.effects.len()
     }
+    /// Inspect the selected source without transferring its retry ownership.
+    pub(crate) fn next_effect(&self) -> Option<V2LaneWorkEffect> {
+        let _permit = self.output_guard.acquire()?;
+        self.effects.front().cloned()
+    }
     /// Drain at most `limit` recovery-only transport effects.
     pub(crate) fn drain_effects(&mut self, limit: usize) -> Vec<V2LaneWorkEffect> {
         let count = limit.min(self.effects.len());
         self.effects.drain(..count).collect()
     }
     /// Restore one source-owned effect after downstream backpressure.
+    #[cfg(test)]
     pub(crate) fn requeue_effect(&mut self, effect: V2LaneWorkEffect) -> bool {
         if self.effects.len() >= self.limits.effect_capacity.get() {
             return false;
@@ -1082,7 +1088,7 @@ pub(crate) fn plan_lane_application_evidence_repair(
         ));
     }
     let native_markers = state
-        .native_amx_participant_frontiers_pending_durable_evidence_snapshot_cached()
+        .native_amx_participant_frontiers_pending_durable_evidence_snapshot()
         .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
     if native_markers.len() > limits.session_capacity.get() {
         return Err(V2LaneWorkError::Persistence(
@@ -1125,7 +1131,8 @@ pub(crate) fn plan_lane_application_evidence_repair(
             || state.committed_block_hash_at_height(hint.proposal_height)
                 != Some(hint.proposal_block_hash)
             || !state
-                .certified_lane_block_predecessor_is_applied_or_snapshot_anchored_cached(proposal)
+                .certified_lane_block_predecessor_is_applied_or_snapshot_anchored(proposal)
+                .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?
         {
             return Err(V2LaneWorkError::Persistence(format!(
                 "ordinary certified lane {} changed before receipt preflight",
@@ -1336,9 +1343,11 @@ pub(crate) fn apply_lane_application_evidence_repair(
             .preflight_lane_block_application_receipt_repair(&repair.session.proposal)
             .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
         if current != LaneBlockApplicationReceiptRepairPreflight::Ready(repair.receipt.clone())
-            || !state.certified_lane_block_predecessor_is_applied_or_snapshot_anchored_cached(
-                &repair.session.proposal,
-            )
+            || !state
+                .certified_lane_block_predecessor_is_applied_or_snapshot_anchored(
+                    &repair.session.proposal,
+                )
+                .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?
         {
             return Err(V2LaneWorkError::Persistence(
                 "ordinary lane receipt changed after all-item startup preflight".to_owned(),
@@ -1442,7 +1451,7 @@ pub(crate) fn apply_lane_application_evidence_repair(
         summary.native_routes = summary.native_routes.saturating_add(repaired_routes);
     }
     let unresolved_native = state
-        .native_amx_participant_frontiers_pending_durable_evidence_snapshot_cached()
+        .native_amx_participant_frontiers_pending_durable_evidence_snapshot()
         .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
     if plan
         .native_carriers

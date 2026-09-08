@@ -13,6 +13,8 @@ use std::{format, string::String, vec, vec::Vec};
 pub mod escrow;
 mod events;
 mod filters;
+/// Generic game session transition events.
+pub mod game;
 #[cfg(feature = "governance")]
 pub mod governance;
 pub mod musubi;

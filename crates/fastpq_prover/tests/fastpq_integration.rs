@@ -4,9 +4,13 @@
 mod backend_regression;
 #[path = "common/mod.rs"]
 mod common;
+#[path = "offline_compact.rs"]
+mod offline_compact;
 #[path = "poseidon_manifest_consistency.rs"]
 mod poseidon_manifest_consistency;
 #[path = "realistic_flows.rs"]
 mod realistic_flows;
+#[path = "resource_profile.rs"]
+mod resource_profile;
 #[path = "trace_commitment.rs"]
 mod trace_commitment;

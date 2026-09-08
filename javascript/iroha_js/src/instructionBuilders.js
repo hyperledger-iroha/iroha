@@ -1,4 +1,5 @@
 import { normalizeContractErrorTypeV1, normalizeContractErrorTypesV1, validateManifestErrorTypeBindingsV1 } from "./contractErrorTypes.js";
+import { kaigiScalarBytesV1 } from "./kaigiScalarV1.js";
 import { Buffer } from "buffer";
 import { blake2b256 } from "./blake2b.js";
 import { KAIGI_MAX_PARTICIPANTS_V1 } from "./commonLiterals.js";
@@ -66,6 +67,17 @@ import {
   parseHashLiteralToBuffer,
 } from "./instructionBuilderPrimitives.js";
 
+// Alias the immutable public diagnostic codes without changing their values.
+const V_CODE_INVALID_OBJECT = ValidationErrorCode.INVALID_OBJECT;
+const V_CODE_INVALID_NUMERIC = ValidationErrorCode.INVALID_NUMERIC;
+const V_CODE_VALUE_OUT_OF_RANGE = ValidationErrorCode.VALUE_OUT_OF_RANGE;
+const V_CODE_INVALID_JSON_VALUE = ValidationErrorCode.INVALID_JSON_VALUE;
+const V_CODE_MISSING_FIELD = ValidationErrorCode.MISSING_FIELD;
+const V_CODE_INVALID_ACCOUNT_ID = ValidationErrorCode.INVALID_ACCOUNT_ID;
+const V_CODE_INVALID_HEX = ValidationErrorCode.INVALID_HEX;
+const V_CODE_INVALID_STRING = ValidationErrorCode.INVALID_STRING;
+const V_CODE_INVALID_MULTIHASH = ValidationErrorCode.INVALID_MULTIHASH;
+
 const MAX_SAFE_INTEGER = Number.MAX_SAFE_INTEGER;
 const MAX_SAFE_INTEGER_BIGINT = BigInt(MAX_SAFE_INTEGER);
 const UINT64_MAX_BIGINT = 0xffff_ffff_ffff_ffffn;
@@ -119,7 +131,7 @@ function rejectValidationFeeSnakeCaseInputs(source, context) {
   ]) {
     if (Object.prototype.hasOwnProperty.call(source, snakeName)) {
       fail(
-        ValidationErrorCode.INVALID_OBJECT,
+        V_CODE_INVALID_OBJECT,
         `${context} uses unsupported snake_case validation fee field ${snakeName}; use ${camelName}`,
         `${context}.${snakeName}`,
       );
@@ -131,7 +143,7 @@ function readSingleAlias(source, aliases, name, description) {
   const present = aliases.filter((key) => Object.prototype.hasOwnProperty.call(source, key));
   if (present.length > 1) {
     fail(
-      ValidationErrorCode.INVALID_OBJECT,
+      V_CODE_INVALID_OBJECT,
       `${name} must not include multiple ${description} aliases: ${present.join(", ")}`,
       name,
     );
@@ -154,7 +166,7 @@ function asQuantity(value, name) {
       return new KotodamaQuantity(value, 0).toString();
     }
     fail(
-      ValidationErrorCode.INVALID_NUMERIC,
+      V_CODE_INVALID_NUMERIC,
       `${name} must be a KotodamaQuantity, canonical quantity string, or bigint; JavaScript numbers are not lossless quantity inputs`,
       name,
     );
@@ -162,7 +174,7 @@ function asQuantity(value, name) {
     if (!(error instanceof NumericV1Error)) throw error;
     const rangeFailure = error.code === "mantissa_overflow" || error.code === "invalid_scale";
     fail(
-      rangeFailure ? ValidationErrorCode.VALUE_OUT_OF_RANGE : ValidationErrorCode.INVALID_NUMERIC,
+      rangeFailure ? V_CODE_VALUE_OUT_OF_RANGE : V_CODE_INVALID_NUMERIC,
       `${name} must be a canonical non-negative Kotodama V1 quantity (${error.code})`,
       name,
     );
@@ -173,7 +185,7 @@ function asPositiveQuantity(value, name) {
   const canonical = asQuantity(value, name);
   if (NumericV1.decodeQuantityJson(canonical).mantissa <= 0n) {
     fail(
-      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      V_CODE_VALUE_OUT_OF_RANGE,
       `${name} must be greater than zero`,
       name,
     );
@@ -187,7 +199,7 @@ function normalizeAssetLockId(value, name) {
   const lockIdBytes = Buffer.from(lockId, "utf8");
   if (lockIdBytes.length > CANCEL_ASSET_LOCK_MAX_LOCK_ID_UTF8_BYTES_V1) {
     fail(
-      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      V_CODE_VALUE_OUT_OF_RANGE,
       `${name} must be at most ${CANCEL_ASSET_LOCK_MAX_LOCK_ID_UTF8_BYTES_V1} UTF-8 bytes`,
       name,
     );
@@ -198,11 +210,11 @@ function normalizeAssetLockId(value, name) {
 function asU128JsonNumber(value, name) {
   if (typeof value === "number") {
     if (!Number.isFinite(value) || !Number.isInteger(value) || value < 0) {
-      fail(ValidationErrorCode.INVALID_NUMERIC, `${name} must be a non-negative integer`, name);
+      fail(V_CODE_INVALID_NUMERIC, `${name} must be a non-negative integer`, name);
     }
     if (!Number.isSafeInteger(value)) {
       fail(
-        ValidationErrorCode.VALUE_OUT_OF_RANGE,
+        V_CODE_VALUE_OUT_OF_RANGE,
         `${name} must be between 0 and ${MAX_SAFE_INTEGER} (inclusive) for deterministic JSON encoding`,
         name,
       );
@@ -212,7 +224,7 @@ function asU128JsonNumber(value, name) {
   if (typeof value === "bigint") {
     if (value < 0n || value > MAX_SAFE_INTEGER_BIGINT) {
       fail(
-        ValidationErrorCode.VALUE_OUT_OF_RANGE,
+        V_CODE_VALUE_OUT_OF_RANGE,
         `${name} must be between 0 and ${MAX_SAFE_INTEGER} (inclusive) for deterministic JSON encoding`,
         name,
       );
@@ -221,29 +233,29 @@ function asU128JsonNumber(value, name) {
   }
   if (typeof value === "string") {
     if (!/^[0-9]+$/.test(value)) {
-      fail(ValidationErrorCode.INVALID_NUMERIC, `${name} must be a non-negative integer string`, name);
+      fail(V_CODE_INVALID_NUMERIC, `${name} must be a non-negative integer string`, name);
     }
     const numeric = BigInt(value);
     if (numeric > MAX_SAFE_INTEGER_BIGINT) {
       fail(
-        ValidationErrorCode.VALUE_OUT_OF_RANGE,
+        V_CODE_VALUE_OUT_OF_RANGE,
         `${name} exceeds the maximum JSON-safe integer (${MAX_SAFE_INTEGER}); supply a smaller value`,
         name,
       );
     }
     return Number(numeric);
   }
-  fail(ValidationErrorCode.INVALID_NUMERIC, `${name} must be a non-negative integer`, name);
+  fail(V_CODE_INVALID_NUMERIC, `${name} must be a non-negative integer`, name);
 }
 
 function asPositiveInteger(value, name) {
   if (typeof value === "bigint") {
     if (value <= 0n) {
-      fail(ValidationErrorCode.VALUE_OUT_OF_RANGE, `${name} must be greater than zero`, name);
+      fail(V_CODE_VALUE_OUT_OF_RANGE, `${name} must be greater than zero`, name);
     }
     if (value > MAX_SAFE_INTEGER_BIGINT) {
       fail(
-        ValidationErrorCode.VALUE_OUT_OF_RANGE,
+        V_CODE_VALUE_OUT_OF_RANGE,
         `${name} exceeds JavaScript safe integer range`,
         name,
       );
@@ -252,11 +264,11 @@ function asPositiveInteger(value, name) {
   }
   if (typeof value === "number") {
     if (!Number.isInteger(value) || value <= 0) {
-      fail(ValidationErrorCode.INVALID_NUMERIC, `${name} must be a positive integer`, name);
+      fail(V_CODE_INVALID_NUMERIC, `${name} must be a positive integer`, name);
     }
     if (!Number.isSafeInteger(value)) {
       fail(
-        ValidationErrorCode.VALUE_OUT_OF_RANGE,
+        V_CODE_VALUE_OUT_OF_RANGE,
         `${name} exceeds JavaScript safe integer range`,
         name,
       );
@@ -265,28 +277,28 @@ function asPositiveInteger(value, name) {
   }
   if (typeof value === "string") {
     if (!/^[1-9]\d*$/.test(value)) {
-      fail(ValidationErrorCode.INVALID_NUMERIC, `${name} must be a positive integer`, name);
+      fail(V_CODE_INVALID_NUMERIC, `${name} must be a positive integer`, name);
     }
     const numeric = BigInt(value);
     if (numeric > MAX_SAFE_INTEGER_BIGINT) {
       fail(
-        ValidationErrorCode.VALUE_OUT_OF_RANGE,
+        V_CODE_VALUE_OUT_OF_RANGE,
         `${name} exceeds JavaScript safe integer range`,
         name,
       );
     }
     return Number(numeric);
   }
-  fail(ValidationErrorCode.INVALID_NUMERIC, `${name} must be a positive integer`, name);
+  fail(V_CODE_INVALID_NUMERIC, `${name} must be a positive integer`, name);
 }
 
 function assertPlainObject(value, name) {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    fail(ValidationErrorCode.INVALID_OBJECT, `${name} must be a plain object`, name);
+    fail(V_CODE_INVALID_OBJECT, `${name} must be a plain object`, name);
   }
   const prototype = Object.getPrototypeOf(value);
   if (prototype !== Object.prototype && prototype !== null) {
-    fail(ValidationErrorCode.INVALID_OBJECT, `${name} must be a plain object`, name);
+    fail(V_CODE_INVALID_OBJECT, `${name} must be a plain object`, name);
   }
   return value;
 }
@@ -318,7 +330,7 @@ function rejectGovernancePrivateKeyFieldsDeep(value, context) {
       const field = typeof key === "string" ? key : key.toString();
       if (typeof key === "string" && GOVERNANCE_PRIVATE_KEY_FIELDS.has(key)) {
         fail(
-          ValidationErrorCode.INVALID_OBJECT,
+          V_CODE_INVALID_OBJECT,
           `${path} does not accept private-key field ${key}; sign the transaction locally`,
           `${path}.${key}`,
         );
@@ -341,7 +353,7 @@ function normalizeJsonValue(value, path) {
   }
   if (typeof value === "number") {
     if (!Number.isFinite(value)) {
-      fail(ValidationErrorCode.INVALID_JSON_VALUE, `${path} must not contain non-finite numbers`, path);
+      fail(V_CODE_INVALID_JSON_VALUE, `${path} must not contain non-finite numbers`, path);
     }
     return value;
   }
@@ -357,14 +369,14 @@ function normalizeJsonValue(value, path) {
     const result = {};
     for (const [key, nested] of Object.entries(value)) {
       if (typeof key !== "string" || key.length === 0) {
-        fail(ValidationErrorCode.INVALID_JSON_VALUE, `${path} keys must be non-empty strings`, path);
+        fail(V_CODE_INVALID_JSON_VALUE, `${path} keys must be non-empty strings`, path);
       }
       result[key] = normalizeJsonValue(nested, `${path}.${key}`);
     }
     return result;
   }
   fail(
-    ValidationErrorCode.INVALID_JSON_VALUE,
+    V_CODE_INVALID_JSON_VALUE,
     `${path} contains unsupported value type: ${typeof value}`,
     path,
   );
@@ -383,7 +395,7 @@ function normalizeBooleanFlag(value, name) {
     return false;
   }
   if (typeof value !== "boolean") {
-    fail(ValidationErrorCode.INVALID_OBJECT, `${name} must be a boolean`, name);
+    fail(V_CODE_INVALID_OBJECT, `${name} must be a boolean`, name);
   }
   return value;
 }
@@ -395,7 +407,7 @@ function normalizeJsonObjectLike(value, name) {
       parsed = JSON.parse(value);
     } catch (error) {
       fail(
-        ValidationErrorCode.INVALID_OBJECT,
+        V_CODE_INVALID_OBJECT,
         `${name} must be a plain object or JSON object string`,
         name,
       );
@@ -417,7 +429,7 @@ function normalizeRwaParentRefs(value, path) {
     return [];
   }
   if (!Array.isArray(value)) {
-    fail(ValidationErrorCode.INVALID_OBJECT, `${path} must be an array`, path);
+    fail(V_CODE_INVALID_OBJECT, `${path} must be an array`, path);
   }
   return value.map((entry, index) => {
     const source = normalizeJsonObjectLike(entry, `${path}[${index}]`);
@@ -436,14 +448,14 @@ function normalizeRwaControlPolicy(value, path) {
   const controllerRolesInput = source.controllerRoles ?? source.controller_roles ?? [];
   if (!Array.isArray(controllerAccountsInput)) {
     fail(
-      ValidationErrorCode.INVALID_OBJECT,
+      V_CODE_INVALID_OBJECT,
       `${path}.controllerAccounts must be an array`,
       `${path}.controllerAccounts`,
     );
   }
   if (!Array.isArray(controllerRolesInput)) {
     fail(
-      ValidationErrorCode.INVALID_OBJECT,
+      V_CODE_INVALID_OBJECT,
       `${path}.controllerRoles must be an array`,
       `${path}.controllerRoles`,
     );
@@ -519,7 +531,7 @@ function normalizeMultisigSpecPayload(spec, path) {
   const quorum = source.quorum ?? source.quorumRaw;
   if (quorum === undefined || quorum === null) {
     fail(
-      ValidationErrorCode.MISSING_FIELD,
+      V_CODE_MISSING_FIELD,
       `${path}.quorum is required`,
       `${path}.quorum`,
     );
@@ -533,7 +545,7 @@ function normalizeMultisigSpecPayload(spec, path) {
     source.transactionTtl;
   if (ttl === undefined || ttl === null) {
     fail(
-      ValidationErrorCode.MISSING_FIELD,
+      V_CODE_MISSING_FIELD,
       `${path}.transaction_ttl_ms is required`,
       `${path}.transaction_ttl_ms`,
     );
@@ -548,7 +560,7 @@ function normalizeMultisigSpecPayload(spec, path) {
   const entries = Object.entries(signatories);
   if (entries.length === 0) {
     fail(
-      ValidationErrorCode.MISSING_FIELD,
+      V_CODE_MISSING_FIELD,
       `${path}.signatories must contain at least one entry`,
       `${path}.signatories`,
     );
@@ -562,22 +574,22 @@ function normalizeMultisigSpecPayload(spec, path) {
 function normalizeSafeIntegerJson(value, name, { allowNegative = false } = {}) {
   if (typeof value === "bigint") {
     if ((!allowNegative && value < 0n) || value < BigInt(Number.MIN_SAFE_INTEGER)) {
-      fail(ValidationErrorCode.VALUE_OUT_OF_RANGE, `${name} must fit in JavaScript's safe integer range`, name);
+      fail(V_CODE_VALUE_OUT_OF_RANGE, `${name} must fit in JavaScript's safe integer range`, name);
     }
     if (value > MAX_SAFE_INTEGER_BIGINT) {
-      fail(ValidationErrorCode.VALUE_OUT_OF_RANGE, `${name} must fit in JavaScript's safe integer range`, name);
+      fail(V_CODE_VALUE_OUT_OF_RANGE, `${name} must fit in JavaScript's safe integer range`, name);
     }
     return Number(value);
   }
   if (typeof value === "number") {
     if (!Number.isFinite(value) || !Number.isInteger(value)) {
-      fail(ValidationErrorCode.INVALID_NUMERIC, `${name} must be an integer`, name);
+      fail(V_CODE_INVALID_NUMERIC, `${name} must be an integer`, name);
     }
     if (!allowNegative && value < 0) {
-      fail(ValidationErrorCode.VALUE_OUT_OF_RANGE, `${name} must be non-negative`, name);
+      fail(V_CODE_VALUE_OUT_OF_RANGE, `${name} must be non-negative`, name);
     }
     if (!Number.isSafeInteger(value)) {
-      fail(ValidationErrorCode.VALUE_OUT_OF_RANGE, `${name} must fit in JavaScript's safe integer range`, name);
+      fail(V_CODE_VALUE_OUT_OF_RANGE, `${name} must fit in JavaScript's safe integer range`, name);
     }
     return value;
   }
@@ -585,18 +597,18 @@ function normalizeSafeIntegerJson(value, name, { allowNegative = false } = {}) {
     const trimmed = value.trim();
     const pattern = allowNegative ? /^-?\d+$/ : /^\d+$/;
     if (!pattern.test(trimmed)) {
-      fail(ValidationErrorCode.INVALID_NUMERIC, `${name} must be an integer literal`, name);
+      fail(V_CODE_INVALID_NUMERIC, `${name} must be an integer literal`, name);
     }
     const numeric = BigInt(trimmed);
     if ((!allowNegative && numeric < 0n) || numeric < BigInt(Number.MIN_SAFE_INTEGER)) {
-      fail(ValidationErrorCode.VALUE_OUT_OF_RANGE, `${name} must fit in JavaScript's safe integer range`, name);
+      fail(V_CODE_VALUE_OUT_OF_RANGE, `${name} must fit in JavaScript's safe integer range`, name);
     }
     if (numeric > MAX_SAFE_INTEGER_BIGINT) {
-      fail(ValidationErrorCode.VALUE_OUT_OF_RANGE, `${name} must fit in JavaScript's safe integer range`, name);
+      fail(V_CODE_VALUE_OUT_OF_RANGE, `${name} must fit in JavaScript's safe integer range`, name);
     }
     return Number(numeric);
   }
-  fail(ValidationErrorCode.INVALID_NUMERIC, `${name} must be an integer`, name);
+  fail(V_CODE_INVALID_NUMERIC, `${name} must be an integer`, name);
 }
 
 function normalizeExecuteTriggerBuilderInput(triggerOrOptions, args, context = "executeTrigger") {
@@ -658,21 +670,21 @@ function normalizeMultisigExecuteTriggerOptions(options, context) {
   if (normalized.strictSignerCheck) {
     if (!normalized.multisigSpec) {
       fail(
-        ValidationErrorCode.INVALID_OBJECT,
+        V_CODE_INVALID_OBJECT,
         `${context}.multisigSpec is required when strictSignerCheck is true`,
         `${context}.multisigSpec`,
       );
     }
     if (!normalized.signerAccountId) {
       fail(
-        ValidationErrorCode.INVALID_ACCOUNT_ID,
+        V_CODE_INVALID_ACCOUNT_ID,
         `${context}.signerAccountId is required when strictSignerCheck is true`,
         `${context}.signerAccountId`,
       );
     }
     if (!isMultisigSignerAuthorized(normalized.multisigSpec, normalized.signerAccountId)) {
       fail(
-        ValidationErrorCode.INVALID_ACCOUNT_ID,
+        V_CODE_INVALID_ACCOUNT_ID,
         `${context}.signerAccountId is not present in multisigSpec.signatories`,
         `${context}.signerAccountId`,
       );
@@ -691,7 +703,7 @@ function normalizeMultisigAccountSelectorInput(source, context) {
     source.multisig_account_alias !== undefined;
   if ((hasAccountId ? 1 : 0) + (hasAlias ? 1 : 0) !== 1) {
     fail(
-      ValidationErrorCode.INVALID_OBJECT,
+      V_CODE_INVALID_OBJECT,
       `${context} requires exactly one of multisigAccountId or multisigAccountAlias`,
       context,
     );
@@ -729,7 +741,7 @@ function rejectInlinePrivateKeyForMultisigRequest(source, context) {
   const fields = Object.keys(source).filter((field) => retired.has(field));
   if (fields.length !== 0) {
     fail(
-      ValidationErrorCode.INVALID_OBJECT,
+      V_CODE_INVALID_OBJECT,
       `${context} does not accept private-key fields (${fields.join(", ")}); sign the returned transaction draft locally`,
       `${context}.privateKey`,
     );
@@ -740,7 +752,7 @@ function normalizeOptionalHexString(value, name) {
   const literal = assertString(value, name);
   const compact = literal.replace(/^0x/i, "");
   if (!/^[0-9A-Fa-f]{64}$/.test(compact)) {
-    fail(ValidationErrorCode.INVALID_HEX, `${name} must be a 32-byte hex string`, name);
+    fail(V_CODE_INVALID_HEX, `${name} must be a 32-byte hex string`, name);
   }
   return compact.toLowerCase();
 }
@@ -748,18 +760,18 @@ function normalizeOptionalHexString(value, name) {
 function normalizeOptionalExactBase64String(value, name) {
   const literal = assertString(value, name);
   if (literal.length === 0 || literal.trim() !== literal || /\s/u.test(literal)) {
-    fail(ValidationErrorCode.INVALID_STRING, `${name} must be exact standard-base64`, name);
+    fail(V_CODE_INVALID_STRING, `${name} must be exact standard-base64`, name);
   }
   if (!/^[A-Za-z0-9+/]*={0,2}$/u.test(literal) || literal.length % 4 !== 0) {
-    fail(ValidationErrorCode.INVALID_STRING, `${name} must be exact standard-base64`, name);
+    fail(V_CODE_INVALID_STRING, `${name} must be exact standard-base64`, name);
   }
   try {
     const decoded = Buffer.from(literal, "base64");
     if (decoded.length === 0 || decoded.toString("base64") !== literal) {
-      fail(ValidationErrorCode.INVALID_STRING, `${name} must be exact standard-base64`, name);
+      fail(V_CODE_INVALID_STRING, `${name} must be exact standard-base64`, name);
     }
   } catch (error) {
-    fail(ValidationErrorCode.INVALID_STRING, `${name} must be exact standard-base64`, name);
+    fail(V_CODE_INVALID_STRING, `${name} must be exact standard-base64`, name);
   }
   return literal;
 }
@@ -767,11 +779,11 @@ function normalizeOptionalExactBase64String(value, name) {
 function asNonNegativeInteger(value, name) {
   if (typeof value === "bigint") {
     if (value < 0n) {
-      fail(ValidationErrorCode.VALUE_OUT_OF_RANGE, `${name} must be greater than or equal to zero`, name);
+      fail(V_CODE_VALUE_OUT_OF_RANGE, `${name} must be greater than or equal to zero`, name);
     }
     if (value > MAX_SAFE_INTEGER_BIGINT) {
       fail(
-        ValidationErrorCode.VALUE_OUT_OF_RANGE,
+        V_CODE_VALUE_OUT_OF_RANGE,
         `${name} exceeds JavaScript safe integer range`,
         name,
       );
@@ -781,11 +793,11 @@ function asNonNegativeInteger(value, name) {
   }
   if (typeof value === "number") {
     if (!Number.isInteger(value) || value < 0) {
-      fail(ValidationErrorCode.INVALID_NUMERIC, `${name} must be a non-negative integer`, name);
+      fail(V_CODE_INVALID_NUMERIC, `${name} must be a non-negative integer`, name);
     }
     if (!Number.isSafeInteger(value)) {
       fail(
-        ValidationErrorCode.VALUE_OUT_OF_RANGE,
+        V_CODE_VALUE_OUT_OF_RANGE,
         `${name} exceeds JavaScript safe integer range`,
         name,
       );
@@ -794,19 +806,19 @@ function asNonNegativeInteger(value, name) {
   }
   if (typeof value === "string") {
     if (!/^(?:0|[1-9]\d*)$/.test(value)) {
-      fail(ValidationErrorCode.INVALID_NUMERIC, `${name} must be a non-negative integer`, name);
+      fail(V_CODE_INVALID_NUMERIC, `${name} must be a non-negative integer`, name);
     }
     const numeric = BigInt(value);
     if (numeric > MAX_SAFE_INTEGER_BIGINT) {
       fail(
-        ValidationErrorCode.VALUE_OUT_OF_RANGE,
+        V_CODE_VALUE_OUT_OF_RANGE,
         `${name} exceeds JavaScript safe integer range`,
         name,
       );
     }
     return Number(numeric);
   }
-  fail(ValidationErrorCode.INVALID_NUMERIC, `${name} must be a non-negative integer`, name);
+  fail(V_CODE_INVALID_NUMERIC, `${name} must be a non-negative integer`, name);
 }
 
 function asKaigiU64(value, name) {
@@ -819,7 +831,7 @@ function asPositiveKaigiU64(value, name) {
   const normalized = asKaigiU64(value, name);
   if (normalized === 0) {
     fail(
-      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      V_CODE_VALUE_OUT_OF_RANGE,
       `${name} must be greater than zero`,
       name,
     );
@@ -832,7 +844,7 @@ function asKaigiParticipantLimit(value, name) {
   const numeric = BigInt(canonical);
   if (numeric === 0n || numeric > BigInt(KAIGI_MAX_PARTICIPANTS_V1)) {
     fail(
-      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      V_CODE_VALUE_OUT_OF_RANGE,
       `${name} must be an integer between 1 and ${KAIGI_MAX_PARTICIPANTS_V1}`,
       name,
     );
@@ -844,7 +856,7 @@ function asByte(value, name) {
   const numeric = asNonNegativeInteger(value, name);
   if (numeric > 0xff) {
     fail(
-      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      V_CODE_VALUE_OUT_OF_RANGE,
       `${name} must be an integer between 0 and 255`,
       name,
     );
@@ -856,7 +868,7 @@ function asNonZeroByte(value, name) {
   const numeric = asByte(value, name);
   if (numeric === 0) {
     fail(
-      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      V_CODE_VALUE_OUT_OF_RANGE,
       `${name} must be an integer between 1 and 255`,
       name,
     );
@@ -881,7 +893,7 @@ function toBinaryBuffer(value, name) {
     return Buffer.from(normalizeByteArray(Array.from(value), name));
   }
   fail(
-    ValidationErrorCode.INVALID_OBJECT,
+    V_CODE_INVALID_OBJECT,
     `${name} must be a Buffer, ArrayBuffer view, or byte array`,
     name,
   );
@@ -895,7 +907,7 @@ function normalizeHash(value, name) {
     }
     if (!/^[0-9A-Fa-f]{64}$/.test(trimmed)) {
       fail(
-        ValidationErrorCode.INVALID_HEX,
+        V_CODE_INVALID_HEX,
         `${name} must be a 64-character hexadecimal string or hash literal`,
         name,
       );
@@ -904,7 +916,7 @@ function normalizeHash(value, name) {
   }
   const buffer = toBinaryBuffer(value, name);
   if (buffer.length !== 32) {
-    fail(ValidationErrorCode.INVALID_HEX, `${name} must be 32 bytes`, name);
+    fail(V_CODE_INVALID_HEX, `${name} must be 32 bytes`, name);
   }
   return canonicalHashLiteral(buffer);
 }
@@ -946,12 +958,12 @@ function normalizeKeyedHashInput(value, name) {
 
 function normalizeFixedBytes(value, name, length = 32) {
   if (value === undefined || value === null) {
-    fail(ValidationErrorCode.INVALID_OBJECT, `${name} is required`, name);
+    fail(V_CODE_INVALID_OBJECT, `${name} is required`, name);
   }
   if (Array.isArray(value)) {
     if (value.length !== length) {
       fail(
-        ValidationErrorCode.VALUE_OUT_OF_RANGE,
+        V_CODE_VALUE_OUT_OF_RANGE,
         `${name} must contain exactly ${length} elements`,
         name,
       );
@@ -959,7 +971,7 @@ function normalizeFixedBytes(value, name, length = 32) {
     return value.map((byte, index) => {
       if (!Number.isInteger(byte) || byte < 0 || byte > 0xff) {
         fail(
-          ValidationErrorCode.VALUE_OUT_OF_RANGE,
+          V_CODE_VALUE_OUT_OF_RANGE,
           `${name}[${index}] must be an integer between 0 and 255`,
           `${name}[${index}]`,
         );
@@ -972,7 +984,7 @@ function normalizeFixedBytes(value, name, length = 32) {
   if (typeof value === "string") {
     const trimmed = value.trim();
     if (trimmed.length === 0) {
-      fail(ValidationErrorCode.INVALID_STRING, `${name} must be a non-empty string`, name);
+      fail(V_CODE_INVALID_STRING, `${name} must be a non-empty string`, name);
     }
     if (trimmed.startsWith("hash:")) {
       buffer = parseHashLiteralToBuffer(trimmed, name);
@@ -987,7 +999,7 @@ function normalizeFixedBytes(value, name, length = 32) {
 
   if (buffer.length !== length) {
     fail(
-      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      V_CODE_VALUE_OUT_OF_RANGE,
       `${name} must be ${length} bytes; received ${buffer.length}`,
       name,
     );
@@ -1005,16 +1017,16 @@ function normalizeOptionalFixedBytes(value, name, length = 32) {
 
 function normalizeByteArray(value, name) {
   if (value === undefined || value === null) {
-    fail(ValidationErrorCode.INVALID_OBJECT, `${name} is required`, name);
+    fail(V_CODE_INVALID_OBJECT, `${name} is required`, name);
   }
   if (Array.isArray(value)) {
     if (value.length === 0) {
-      fail(ValidationErrorCode.INVALID_STRING, `${name} must be a non-empty byte array`, name);
+      fail(V_CODE_INVALID_STRING, `${name} must be a non-empty byte array`, name);
     }
     return value.map((byte, index) => {
       if (!Number.isInteger(byte) || byte < 0 || byte > 0xff) {
         fail(
-          ValidationErrorCode.VALUE_OUT_OF_RANGE,
+          V_CODE_VALUE_OUT_OF_RANGE,
           `${name}[${index}] must be an integer between 0 and 255`,
           `${name}[${index}]`,
         );
@@ -1024,7 +1036,7 @@ function normalizeByteArray(value, name) {
   }
   if (Buffer.isBuffer(value)) {
     if (value.length === 0) {
-      fail(ValidationErrorCode.INVALID_STRING, `${name} must be a non-empty byte array`, name);
+      fail(V_CODE_INVALID_STRING, `${name} must be a non-empty byte array`, name);
     }
     return Array.from(value.values());
   }
@@ -1034,7 +1046,7 @@ function normalizeByteArray(value, name) {
   }
   const buffer = toBinaryBuffer(value, name);
   if (buffer.length === 0) {
-    fail(ValidationErrorCode.INVALID_STRING, `${name} must be a non-empty byte array`, name);
+    fail(V_CODE_INVALID_STRING, `${name} must be a non-empty byte array`, name);
   }
   return Array.from(buffer.values());
 }
@@ -1044,7 +1056,7 @@ function normalizeHexHashString(value, name) {
     const trimmed = value.trim();
     if (!/^[0-9A-Fa-f]{64}$/.test(trimmed)) {
       fail(
-        ValidationErrorCode.INVALID_HEX,
+        V_CODE_INVALID_HEX,
         `${name} must be a 64-character hexadecimal string`,
         name,
       );
@@ -1053,7 +1065,7 @@ function normalizeHexHashString(value, name) {
   }
   const buffer = toBinaryBuffer(value, name);
   if (buffer.length !== 32) {
-    fail(ValidationErrorCode.INVALID_HEX, `${name} must be 32 bytes`, name);
+    fail(V_CODE_INVALID_HEX, `${name} must be 32 bytes`, name);
   }
   return Buffer.from(buffer).toString("hex");
 }
@@ -1069,7 +1081,7 @@ function normalizeGovernanceHex32(value, name) {
     const scheme = literal.slice(0, separator);
     if (scheme.length === 0 || scheme.toLowerCase() !== "blake2b32") {
       fail(
-        ValidationErrorCode.INVALID_HEX,
+        V_CODE_INVALID_HEX,
         `${name} must use the optional blake2b32: scheme`,
         name,
       );
@@ -1081,7 +1093,7 @@ function normalizeGovernanceHex32(value, name) {
   }
   if (body.length !== 64 || !/^[0-9A-Fa-f]{64}$/u.test(body)) {
     fail(
-      ValidationErrorCode.INVALID_HEX,
+      V_CODE_INVALID_HEX,
       `${name} must be exactly 32-byte hexadecimal with no whitespace`,
       name,
     );
@@ -1096,7 +1108,7 @@ function normalizeGovernanceU64(value, name) {
   } else if (typeof value === "number") {
     if (!Number.isSafeInteger(value) || value < 0) {
       fail(
-        ValidationErrorCode.INVALID_NUMERIC,
+        V_CODE_INVALID_NUMERIC,
         `${name} must be a lossless unsigned 64-bit integer`,
         name,
       );
@@ -1105,7 +1117,7 @@ function normalizeGovernanceU64(value, name) {
   } else if (typeof value === "string") {
     if (!/^(?:0|[1-9][0-9]*)$/u.test(value)) {
       fail(
-        ValidationErrorCode.INVALID_NUMERIC,
+        V_CODE_INVALID_NUMERIC,
         `${name} must be a canonical unsigned 64-bit integer`,
         name,
       );
@@ -1113,14 +1125,14 @@ function normalizeGovernanceU64(value, name) {
     integer = BigInt(value);
   } else {
     fail(
-      ValidationErrorCode.INVALID_NUMERIC,
+      V_CODE_INVALID_NUMERIC,
       `${name} must be a lossless unsigned 64-bit integer`,
       name,
     );
   }
   if (integer < 0n || integer > UINT64_MAX_BIGINT) {
     fail(
-      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      V_CODE_VALUE_OUT_OF_RANGE,
       `${name} must be at most ${UINT64_MAX_BIGINT.toString(10)}`,
       name,
     );
@@ -1135,12 +1147,12 @@ function normalizeVerifyingKeyId(value, name) {
   if (typeof value === "string") {
     const raw = value;
     if (raw.trim().length === 0) {
-      fail(ValidationErrorCode.INVALID_STRING, `${name} must be a non-empty string`, name);
+      fail(V_CODE_INVALID_STRING, `${name} must be a non-empty string`, name);
     }
     const parts = raw.split(":");
     if (parts.length !== 2 || parts[0].length === 0 || parts[1].length === 0) {
       fail(
-        ValidationErrorCode.INVALID_STRING,
+        V_CODE_INVALID_STRING,
         `${name} must be in 'backend:name' format`,
         name,
       );
@@ -1154,7 +1166,7 @@ function normalizeVerifyingKeyId(value, name) {
       keyName.trim() !== keyName
     ) {
       fail(
-        ValidationErrorCode.INVALID_STRING,
+        V_CODE_INVALID_STRING,
         `${name} must be in clean 'backend:name' format`,
         name,
       );
@@ -1169,7 +1181,7 @@ function normalizeVerifyingKeyId(value, name) {
   for (const field of Object.keys(object)) {
     if (!allowedFields.has(field)) {
       fail(
-        ValidationErrorCode.INVALID_OBJECT,
+        V_CODE_INVALID_OBJECT,
         `${name}.${field} is not supported`,
         `${name}.${field}`,
       );
@@ -1207,7 +1219,7 @@ function normalizeConfidentialPolicyMode(value, name) {
       return "Convertible";
     default:
       fail(
-        ValidationErrorCode.INVALID_STRING,
+        V_CODE_INVALID_STRING,
         `${name} must be TransparentOnly, ShieldedOnly, or Convertible`,
         name,
       );
@@ -1227,7 +1239,7 @@ function normalizeProofAttachment(value, name) {
   for (const field of Object.keys(source)) {
     if (!allowedFields.has(field)) {
       fail(
-        ValidationErrorCode.INVALID_OBJECT,
+        V_CODE_INVALID_OBJECT,
         `${name}.${field} is not supported by the canonical ProofAttachment input`,
         `${name}.${field}`,
       );
@@ -1239,7 +1251,7 @@ function normalizeProofAttachment(value, name) {
 
   if (!Object.prototype.hasOwnProperty.call(source, "verifyingKeyRef")) {
     fail(
-      ValidationErrorCode.INVALID_OBJECT,
+      V_CODE_INVALID_OBJECT,
       `${name} must include verifyingKeyRef`,
       name,
     );
@@ -1257,7 +1269,7 @@ function normalizeProofAttachment(value, name) {
   );
   if (payload.vk_ref.backend !== backend) {
     fail(
-      ValidationErrorCode.INVALID_OBJECT,
+      V_CODE_INVALID_OBJECT,
       `${name}.verifyingKeyRef.backend must match ${name}.backend`,
       `${name}.verifyingKeyRef.backend`,
     );
@@ -1283,7 +1295,7 @@ function normalizeProofAttachment(value, name) {
     expected[31] |= 1;
     if (!envelopeHash.every((byte, index) => byte === expected[index])) {
       fail(
-        ValidationErrorCode.INVALID_OBJECT,
+        V_CODE_INVALID_OBJECT,
         `${name}.envelopeHash must match the proof bytes`,
         `${name}.envelopeHash`,
       );
@@ -1304,7 +1316,7 @@ function normalizeProofAttachment(value, name) {
     );
     if (commitmentId > 0xffff) {
       fail(
-        ValidationErrorCode.VALUE_OUT_OF_RANGE,
+        V_CODE_VALUE_OUT_OF_RANGE,
         `${name}.lanePrivacy.commitmentId must fit within a u16`,
         `${name}.lanePrivacy.commitmentId`,
       );
@@ -1329,7 +1341,7 @@ function normalizeProofAttachment(value, name) {
     );
     if (leafIndex > UINT32_MAX) {
       fail(
-        ValidationErrorCode.VALUE_OUT_OF_RANGE,
+        V_CODE_VALUE_OUT_OF_RANGE,
         `${name}.lanePrivacy.merkle.leafIndex must fit within a u32`,
         `${name}.lanePrivacy.merkle.leafIndex`,
       );
@@ -1337,7 +1349,7 @@ function normalizeProofAttachment(value, name) {
     const rawAudit = merklePayload.auditPath;
     if (!Array.isArray(rawAudit)) {
       fail(
-        ValidationErrorCode.INVALID_OBJECT,
+        V_CODE_INVALID_OBJECT,
         `${name}.lanePrivacy.merkle.auditPath must be an array`,
         `${name}.lanePrivacy.merkle.auditPath`,
       );
@@ -1347,7 +1359,7 @@ function normalizeProofAttachment(value, name) {
       rawAudit.length > LANE_PRIVACY_MERKLE_MAX_DEPTH
     ) {
       fail(
-        ValidationErrorCode.INVALID_OBJECT,
+        V_CODE_INVALID_OBJECT,
         `${name}.lanePrivacy.merkle.auditPath must contain 1..=${LANE_PRIVACY_MERKLE_MAX_DEPTH} siblings`,
         `${name}.lanePrivacy.merkle.auditPath`,
       );
@@ -1355,7 +1367,7 @@ function normalizeProofAttachment(value, name) {
     const auditPath = rawAudit.map((entry, index) => {
       if (entry === null || entry === undefined) {
         fail(
-          ValidationErrorCode.INVALID_OBJECT,
+          V_CODE_INVALID_OBJECT,
           `${name}.lanePrivacy.merkle.auditPath[${index}] must contain a sibling`,
           `${name}.lanePrivacy.merkle.auditPath[${index}]`,
         );
@@ -1370,7 +1382,7 @@ function normalizeProofAttachment(value, name) {
     });
     if (!laneMerkleLeafIndexFitsDepth(leafIndex, auditPath.length)) {
       fail(
-        ValidationErrorCode.VALUE_OUT_OF_RANGE,
+        V_CODE_VALUE_OUT_OF_RANGE,
         `${name}.lanePrivacy.merkle.leafIndex is impossible for the Merkle path depth`,
         `${name}.lanePrivacy.merkle.leafIndex`,
       );
@@ -1395,7 +1407,7 @@ function normalizeProofAttachment(value, name) {
 function normalizePortableProofIdField(value, name) {
   if (!isPortableVerifyingKeyIdField(value)) {
     fail(
-      ValidationErrorCode.INVALID_STRING,
+      V_CODE_INVALID_STRING,
       `${name} must use the exact portable verifier-key registry grammar`,
       name,
     );
@@ -1419,7 +1431,7 @@ function assertOnlyProofObjectKeys(value, expectedKeys, name) {
     expectedKeys.some((key) => !Object.prototype.hasOwnProperty.call(value, key))
   ) {
     fail(
-      ValidationErrorCode.INVALID_OBJECT,
+      V_CODE_INVALID_OBJECT,
       `${name} must contain exactly ${expectedKeys.join(", ")}`,
       name,
     );
@@ -1438,7 +1450,7 @@ function normalizeBoundedProofBytes(value, backend, name) {
       decodedLength = canonicalBase64DecodedLength(value, name);
     } catch {
       fail(
-        ValidationErrorCode.INVALID_STRING,
+        V_CODE_INVALID_STRING,
         `${name} must be canonical standard base64`,
         name,
       );
@@ -1449,7 +1461,7 @@ function normalizeBoundedProofBytes(value, backend, name) {
     const decoded = Buffer.from(value, "base64");
     if (decoded.toString("base64") !== value) {
       fail(
-        ValidationErrorCode.INVALID_STRING,
+        V_CODE_INVALID_STRING,
         `${name} must be canonical standard base64`,
         name,
       );
@@ -1480,7 +1492,7 @@ function proofBinaryByteLength(value) {
 
 function failProofBoxBudget(name) {
   fail(
-    ValidationErrorCode.VALUE_OUT_OF_RANGE,
+    V_CODE_VALUE_OUT_OF_RANGE,
     `${name} exceeds the complete ${PROOF_BOX_MAX_ENCODED_BYTES}-byte ProofBox limit`,
     name,
   );
@@ -1489,7 +1501,7 @@ function failProofBoxBudget(name) {
 function assertNonZeroProofDigest(bytes, name) {
   if (bytes.every((byte) => byte === 0)) {
     fail(
-      ValidationErrorCode.INVALID_OBJECT,
+      V_CODE_INVALID_OBJECT,
       `${name} must be non-zero`,
       name,
     );
@@ -1500,7 +1512,7 @@ function normalizeU32(value, name) {
   const numeric = asNonNegativeInteger(value, name);
   if (numeric > UINT32_MAX) {
     fail(
-      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      V_CODE_VALUE_OUT_OF_RANGE,
       `${name} must fit in an unsigned 32-bit integer`,
       name,
     );
@@ -1512,7 +1524,7 @@ function normalizePositiveU32(value, name) {
   const numeric = asPositiveInteger(value, name);
   if (numeric > UINT32_MAX) {
     fail(
-      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      V_CODE_VALUE_OUT_OF_RANGE,
       `${name} must fit in an unsigned 32-bit integer`,
       name,
     );
@@ -1530,7 +1542,7 @@ function normalizeAccessSetHints(value, context) {
       return [];
     }
     if (!Array.isArray(keys)) {
-      fail(ValidationErrorCode.INVALID_OBJECT, `${name} must be an array of strings`, name);
+      fail(V_CODE_INVALID_OBJECT, `${name} must be an array of strings`, name);
     }
     return keys.map((entry, index) =>
       assertString(entry, `${name}[${index}]`),
@@ -1541,7 +1553,7 @@ function normalizeAccessSetHints(value, context) {
       return [];
     }
     if (!Array.isArray(entries)) {
-      fail(ValidationErrorCode.INVALID_OBJECT, `${name} must be an array of dynamic access hints`, name);
+      fail(V_CODE_INVALID_OBJECT, `${name} must be an array of dynamic access hints`, name);
     }
     return entries.map((entry, index) => {
       const hint = assertPlainObject(entry, `${name}[${index}]`);
@@ -1557,14 +1569,14 @@ function normalizeAccessSetHints(value, context) {
       );
       if (maxKeys === 0) {
         fail(
-          ValidationErrorCode.VALUE_OUT_OF_RANGE,
+          V_CODE_VALUE_OUT_OF_RANGE,
           `${hintName}.maxKeys must be positive`,
           `${hintName}.maxKeys`,
         );
       }
       if (maxKeys > KOTODAMA_V1_DYNAMIC_ACCESS_MAX_KEYS) {
         fail(
-          ValidationErrorCode.VALUE_OUT_OF_RANGE,
+          V_CODE_VALUE_OUT_OF_RANGE,
           `${hintName}.maxKeys must be at most ${KOTODAMA_V1_DYNAMIC_ACCESS_MAX_KEYS}`,
           `${hintName}.maxKeys`,
         );
@@ -1580,7 +1592,7 @@ function normalizeAccessSetHints(value, context) {
       );
       if (!isKotodamaV1StateMapKeyTypeName(keyType)) {
         fail(
-          ValidationErrorCode.INVALID_STRING,
+          V_CODE_INVALID_STRING,
           `${hintName}.keyType must be an exact Kotodama V1 StateMap key scalar`,
           `${hintName}.keyType`,
         );
@@ -1596,7 +1608,7 @@ function normalizeAccessSetHints(value, context) {
       );
       if (!isCanonicalKotodamaDynamicAccessBaseKey(baseKey)) {
         fail(
-          ValidationErrorCode.INVALID_STRING,
+          V_CODE_INVALID_STRING,
           `${hintName}.baseKey must be state: plus one canonical state declaration identifier`,
           `${hintName}.baseKey`,
         );
@@ -1612,7 +1624,7 @@ function normalizeAccessSetHints(value, context) {
       );
       if (!isKotodamaV1DynamicAccessBoundKind(boundKind)) {
         fail(
-          ValidationErrorCode.INVALID_STRING,
+          V_CODE_INVALID_STRING,
           `${hintName}.boundKind must be exactly take or page`,
           `${hintName}.boundKind`,
         );
@@ -1669,7 +1681,7 @@ function validateManifestDynamicAccessHintStateMaps(manifest) {
       ]);
       if (seen.has(identity)) {
         fail(
-          ValidationErrorCode.INVALID_OBJECT,
+          V_CODE_INVALID_OBJECT,
           `${hintName} duplicates an earlier dynamic access hint`,
           hintName,
         );
@@ -1679,14 +1691,14 @@ function validateManifestDynamicAccessHintStateMaps(manifest) {
       const expectedKeyType = stateMaps.get(stateName);
       if (expectedKeyType === undefined) {
         fail(
-          ValidationErrorCode.INVALID_OBJECT,
+          V_CODE_INVALID_OBJECT,
           `${hintName}.baseKey must reference a declared top-level StateMap`,
           `${hintName}.baseKey`,
         );
       }
       if (hint.key_type !== expectedKeyType) {
         fail(
-          ValidationErrorCode.INVALID_OBJECT,
+          V_CODE_INVALID_OBJECT,
           `${hintName}.keyType ${hint.key_type} does not match declared StateMap key type ${expectedKeyType}`,
           `${hintName}.keyType`,
         );
@@ -1704,7 +1716,7 @@ function selectEqualManifestAlias(source, snakeCase, camelCase, name) {
     !Object.is(source[snakeCase], source[camelCase])
   ) {
     fail(
-      ValidationErrorCode.INVALID_OBJECT,
+      V_CODE_INVALID_OBJECT,
       `${name} contains conflicting ${snakeCase}/${camelCase} aliases`,
       name,
     );
@@ -1719,7 +1731,7 @@ function decodeBase64Strict(value, name) {
   const compact = value.replace(/\s+/g, "");
   if (compact.length === 0) {
     fail(
-      ValidationErrorCode.INVALID_STRING,
+      V_CODE_INVALID_STRING,
       `${name} must be a non-empty base64 string`,
       name,
     );
@@ -1731,14 +1743,14 @@ function decodeBase64Strict(value, name) {
     const head = compact.slice(0, paddingIndex);
     const padding = compact.slice(paddingIndex);
     if (!/^[0-9A-Za-z+/]*$/.test(head) || !/^={1,2}$/.test(padding)) {
-      fail(ValidationErrorCode.INVALID_STRING, `${name} must be a valid base64 string`, name);
+      fail(V_CODE_INVALID_STRING, `${name} must be a valid base64 string`, name);
     }
     if (compact.length % 4 !== 0) {
-      fail(ValidationErrorCode.INVALID_STRING, `${name} must be a valid base64 string`, name);
+      fail(V_CODE_INVALID_STRING, `${name} must be a valid base64 string`, name);
     }
   } else {
     if (!/^[0-9A-Za-z+/]+$/.test(compact) || compact.length % 4 === 1) {
-      fail(ValidationErrorCode.INVALID_STRING, `${name} must be a valid base64 string`, name);
+      fail(V_CODE_INVALID_STRING, `${name} must be a valid base64 string`, name);
     }
     const padLength = (4 - (compact.length % 4)) % 4;
     padded = compact + "=".repeat(padLength);
@@ -1746,7 +1758,7 @@ function decodeBase64Strict(value, name) {
 
   const decoded = Buffer.from(padded, "base64");
   if (decoded.toString("base64") !== padded) {
-    fail(ValidationErrorCode.INVALID_STRING, `${name} must be a valid base64 string`, name);
+    fail(V_CODE_INVALID_STRING, `${name} must be a valid base64 string`, name);
   }
   return decoded;
 }
@@ -1757,7 +1769,7 @@ function normalizeBase64(value, name) {
   }
   const buffer = toBinaryBuffer(value, name);
   if (buffer.length === 0) {
-    fail(ValidationErrorCode.INVALID_STRING, `${name} must be a non-empty base64 string`, name);
+    fail(V_CODE_INVALID_STRING, `${name} must be a non-empty base64 string`, name);
   }
   return buffer.toString("base64");
 }
@@ -1776,14 +1788,14 @@ function normalizeKaigiHpkePublicKey(value, name) {
       : toBinaryBuffer(value, name);
   if (key.length === 0) {
     fail(
-      ValidationErrorCode.INVALID_STRING,
+      V_CODE_INVALID_STRING,
       `${name} must be a non-empty HPKE public key`,
       name,
     );
   }
   if (key.length > KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1) {
     fail(
-      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      V_CODE_VALUE_OUT_OF_RANGE,
       `${name} must not exceed ${KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1} decoded bytes`,
       name,
     );
@@ -1796,7 +1808,7 @@ function normalizeKaigiId(value, name) {
     const trimmed = value.trim();
     if (trimmed.length === 0 || !trimmed.includes(":")) {
       fail(
-        ValidationErrorCode.INVALID_STRING,
+        V_CODE_INVALID_STRING,
         `${name} must be in 'domain:callName' format`,
         name,
       );
@@ -1822,7 +1834,7 @@ function normalizeCanonicalKaigiId(value, name) {
   const domainSegments = normalized.domain_id.split(".");
   if (domainSegments.length !== 2 || domainSegments.some((segment) => segment.length === 0)) {
     fail(
-      ValidationErrorCode.INVALID_STRING,
+      V_CODE_INVALID_STRING,
       `${name}.domain_id must use the exact domain.dataspace form`,
       `${name}.domain_id`,
     );
@@ -1834,7 +1846,7 @@ function normalizeCanonicalKaigiId(value, name) {
       .join(".");
   } catch {
     fail(
-      ValidationErrorCode.INVALID_STRING,
+      V_CODE_INVALID_STRING,
       `${name}.domain_id must be a valid domain.dataspace identifier`,
       `${name}.domain_id`,
     );
@@ -1848,7 +1860,7 @@ function normalizeCanonicalKaigiId(value, name) {
     /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u.test(callName)
   ) {
     fail(
-      ValidationErrorCode.INVALID_STRING,
+      V_CODE_INVALID_STRING,
       `${name}.call_name must be a canonical Iroha Name`,
       `${name}.call_name`,
     );
@@ -1879,21 +1891,21 @@ function normalizeKaigiRelayManifest(value, context) {
   const hopsValue = manifest.hops;
   if (!Array.isArray(hopsValue)) {
     fail(
-      ValidationErrorCode.INVALID_OBJECT,
+      V_CODE_INVALID_OBJECT,
       `${context}.hops must be an array`,
       `${context}.hops`,
     );
   }
   if (hopsValue.length < 3) {
     fail(
-      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      V_CODE_VALUE_OUT_OF_RANGE,
       `${context}.hops must include at least three relay hops`,
       `${context}.hops`,
     );
   }
   if (hopsValue.length > KAIGI_RELAY_MANIFEST_MAX_HOPS_V1) {
     fail(
-      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      V_CODE_VALUE_OUT_OF_RANGE,
       `${context}.hops must not exceed ${KAIGI_RELAY_MANIFEST_MAX_HOPS_V1} relay hops`,
       `${context}.hops`,
     );
@@ -1901,7 +1913,7 @@ function normalizeKaigiRelayManifest(value, context) {
   for (let index = 0; index < hopsValue.length; index += 1) {
     if (!Object.prototype.hasOwnProperty.call(hopsValue, index)) {
       fail(
-        ValidationErrorCode.INVALID_OBJECT,
+        V_CODE_INVALID_OBJECT,
         `${context}.hops must be a dense array`,
         `${context}.hops[${index}]`,
       );
@@ -1915,7 +1927,7 @@ function normalizeKaigiRelayManifest(value, context) {
     const relayId = hops[index].relay_id;
     if (seenRelayIds.has(relayId)) {
       fail(
-        ValidationErrorCode.INVALID_OBJECT,
+        V_CODE_INVALID_OBJECT,
         `${context}.hops must not contain duplicate relays`,
         `${context}.hops[${index}].relayId`,
       );
@@ -1933,7 +1945,7 @@ function normalizePrivacyMode(value) {
     const modeValue = value.mode ?? value.Mode ?? value.privacyMode ?? value.state;
     if (value.state !== undefined && value.state !== null) {
       fail(
-        ValidationErrorCode.INVALID_OBJECT,
+        V_CODE_INVALID_OBJECT,
         "privacyMode.state must be null because Kaigi privacy modes are unit variants",
         "privacyMode.state",
       );
@@ -1966,7 +1978,7 @@ function normalizePrivacyModeTag(value) {
     return "ZkRosterV1";
   }
   fail(
-    ValidationErrorCode.INVALID_STRING,
+    V_CODE_INVALID_STRING,
     "privacyMode must be either 'Transparent' or 'ZkRosterV1'",
   );
 }
@@ -1977,7 +1989,7 @@ function normalizeRoomPolicy(value) {
       value.policy ?? value.Policy ?? value.roomPolicy ?? value.state;
     if (value.state !== undefined && value.state !== null) {
       fail(
-        ValidationErrorCode.INVALID_OBJECT,
+        V_CODE_INVALID_OBJECT,
         "roomPolicy.state must be null because Kaigi room policies are unit variants",
         "roomPolicy.state",
       );
@@ -2014,9 +2026,20 @@ function normalizeRoomPolicyTag(value) {
     return "Authenticated";
   }
   fail(
-    ValidationErrorCode.INVALID_STRING,
+    V_CODE_INVALID_STRING,
     "roomPolicy must be either 'Public' or 'Authenticated'",
   );
+}
+
+function normalizeOptionalKaigiScalarV1(value, context) {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  try {
+    return Array.from(kaigiScalarBytesV1(value, context));
+  } catch (error) {
+    fail(V_CODE_INVALID_OBJECT, error.message, context);
+  }
 }
 
 function normalizeKaigiParticipantCommitment(value, context) {
@@ -2024,21 +2047,14 @@ function normalizeKaigiParticipantCommitment(value, context) {
     return null;
   }
   const commitment = assertPlainObject(value, context);
-  const alias = commitment.alias_tag ?? commitment.aliasTag ?? null;
-  if (alias !== null && alias !== undefined) {
-    fail(
-      ValidationErrorCode.INVALID_STRING,
-      `${context}.aliasTag is off-chain only and must be omitted`,
-      `${context}.aliasTag`,
-    );
+  if (Object.keys(commitment).length !== 1 || !("commitment" in commitment)) {
+    fail(V_CODE_INVALID_OBJECT, `${context} requires only commitment`, context);
   }
-  return {
-    commitment: normalizeHash(
-      commitment.commitment,
-      `${context}.commitment`,
-    ),
-    alias_tag: null,
-  };
+  const scalar = normalizeOptionalKaigiScalarV1(commitment.commitment, `${context}.commitment`);
+  if (scalar === null) {
+    fail(V_CODE_INVALID_OBJECT, `${context}.commitment is required`, context);
+  }
+  return { commitment: scalar };
 }
 
 function normalizeKaigiParticipantNullifier(value, context) {
@@ -2046,38 +2062,14 @@ function normalizeKaigiParticipantNullifier(value, context) {
     return null;
   }
   const nullifier = assertPlainObject(value, context);
-  const digest = nullifier.digest ?? nullifier.hash ?? nullifier.value;
-  const timestampFields = ["issued_at_ms", "issuedAtMs", "issuedAt"];
-  let issuedAtMs;
-  for (const field of timestampFields) {
-    if (!Object.prototype.hasOwnProperty.call(nullifier, field)) {
-      continue;
-    }
-    const fieldValue = nullifier[field];
-    if (fieldValue === undefined || fieldValue === null) {
-      continue;
-    }
-    const normalized = asNonNegativeInteger(fieldValue, `${context}.${field}`);
-    if (normalized !== 0) {
-      fail(
-        ValidationErrorCode.VALUE_OUT_OF_RANGE,
-        `${context}.issuedAtMs is off-chain only and must be zero`,
-        `${context}.${field}`,
-      );
-    }
-    issuedAtMs = 0;
+  if (Object.keys(nullifier).length !== 1 || !("digest" in nullifier)) {
+    fail(V_CODE_INVALID_OBJECT, `${context} requires only digest`, context);
   }
-  if (issuedAtMs === undefined) {
-    fail(
-      ValidationErrorCode.INVALID_NUMERIC,
-      `${context}.issuedAtMs must be zero`,
-      `${context}.issuedAtMs`,
-    );
+  const digest = normalizeOptionalKaigiScalarV1(nullifier.digest, `${context}.digest`);
+  if (digest === null) {
+    fail(V_CODE_INVALID_OBJECT, `${context}.digest is required`, context);
   }
-  return {
-    digest: normalizeHash(digest, `${context}.digest`),
-    issued_at_ms: issuedAtMs,
-  };
+  return { digest };
 }
 
 function normalizeNewKaigi(options) {
@@ -2196,21 +2188,6 @@ function normalizeJoinOrLeaveInput(type, options) {
     ),
     proof: normalizeOptionalBase64(source.proof, `${type}.proof`),
   };
-  if (
-    type === "leaveKaigi" &&
-    (
-      normalized.commitment !== null ||
-      normalized.nullifier !== null ||
-      normalized.roster_root !== null ||
-      normalized.proof !== null
-    )
-  ) {
-    fail(
-      ValidationErrorCode.INVALID_OBJECT,
-      "leaveKaigi privacy artifacts are reserved and must be omitted in V1",
-      "leaveKaigi",
-    );
-  }
   return normalized;
 }
 
@@ -2254,7 +2231,7 @@ function normalizeKaigiUsageInput(options) {
       source.billed_gas ?? source.billedGas ?? source.gas ?? 0,
       "recordKaigiUsage.billedGas",
     ),
-    usage_commitment: normalizeOptionalHash(
+    usage_commitment: normalizeOptionalKaigiScalarV1(
       source.usage_commitment ?? source.usageCommitment,
       "recordKaigiUsage.usageCommitment",
     ),
@@ -2320,7 +2297,7 @@ function normalizeUnregisterRelayInput(options) {
 function normalizeKaigiRelayHealthStatus(value, name) {
   if (value !== "Healthy" && value !== "Degraded" && value !== "Unavailable") {
     fail(
-      ValidationErrorCode.INVALID_STRING,
+      V_CODE_INVALID_STRING,
       `${name} must be exactly "Healthy", "Degraded", or "Unavailable"`,
       name,
     );
@@ -2333,7 +2310,7 @@ function normalizeKaigiRelayHealthNotes(value, name) {
     return null;
   }
   if (typeof value !== "string") {
-    fail(ValidationErrorCode.INVALID_STRING, `${name} must be a string`, name);
+    fail(V_CODE_INVALID_STRING, `${name} must be a string`, name);
   }
   assertWellFormedUtf16(value, name);
   let scalarCount = 0;
@@ -2341,7 +2318,7 @@ function normalizeKaigiRelayHealthNotes(value, name) {
     scalarCount += 1;
     if (scalarCount > 512) {
       fail(
-        ValidationErrorCode.VALUE_OUT_OF_RANGE,
+        V_CODE_VALUE_OUT_OF_RANGE,
         `${name} must not exceed 512 Unicode scalar values`,
         name,
       );
@@ -2380,7 +2357,7 @@ function normalizeManifestTypeDeclarationIdentifier(value, name) {
   const identifier = assertString(value, name);
   if (!isCanonicalKotodamaIdentifier(identifier, { typeDeclaration: true })) {
     fail(
-      ValidationErrorCode.INVALID_STRING,
+      V_CODE_INVALID_STRING,
       `${name} must be a canonical Kotodama V1 type declaration identifier`,
       name,
     );
@@ -2392,7 +2369,7 @@ function normalizeManifestStateTypeName(value, name) {
   const typeName = assertString(value, name);
   if (!isCanonicalKotodamaStateTypeName(typeName)) {
     fail(
-      ValidationErrorCode.INVALID_STRING,
+      V_CODE_INVALID_STRING,
       `${name} must be a canonical Kotodama V1 state type`,
       name,
     );
@@ -2407,7 +2384,7 @@ function normalizeManifestFeaturesBitmap(value, name) {
   const normalized = asNonNegativeInteger(value, name);
   if (normalized > 3) {
     fail(
-      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      V_CODE_VALUE_OUT_OF_RANGE,
       `${name} contains unsupported Kotodama V1 feature bits`,
       name,
     );
@@ -2475,7 +2452,7 @@ function normalizeContractManifest(manifest) {
 function normalizeContractKotobaEntries(value, name) {
   if (!Array.isArray(value)) {
     fail(
-      ValidationErrorCode.INVALID_OBJECT,
+      V_CODE_INVALID_OBJECT,
       `${name} must be an array of translation entries`,
       name,
     );
@@ -2498,7 +2475,7 @@ function normalizeContractKotobaEntries(value, name) {
 function normalizeContractKotobaTranslations(value, name) {
   if (!Array.isArray(value)) {
     fail(
-      ValidationErrorCode.INVALID_OBJECT,
+      V_CODE_INVALID_OBJECT,
       `${name} must be an array of translations`,
       name,
     );
@@ -2523,7 +2500,7 @@ function decodeManifestVarint(buffer, startIndex, context) {
     if ((byte & 0x80n) === 0n) {
       if (value > BigInt(Number.MAX_SAFE_INTEGER)) {
         fail(
-          ValidationErrorCode.INVALID_MULTIHASH,
+          V_CODE_INVALID_MULTIHASH,
           `${context} contains an oversized multihash varint`,
           context,
         );
@@ -2533,14 +2510,14 @@ function decodeManifestVarint(buffer, startIndex, context) {
     shift += 7n;
     if (shift > 63n) {
       fail(
-        ValidationErrorCode.INVALID_MULTIHASH,
+        V_CODE_INVALID_MULTIHASH,
         `${context} contains an invalid multihash varint`,
         context,
       );
     }
   }
   fail(
-    ValidationErrorCode.INVALID_MULTIHASH,
+    V_CODE_INVALID_MULTIHASH,
     `${context} contains a truncated multihash varint`,
     context,
   );
@@ -2562,7 +2539,7 @@ function normalizeManifestPublicKeyLiteral(value, name) {
   const payload = bytes.subarray(digestLength.nextIndex);
   if (payload.length !== digestLength.value) {
     fail(
-      ValidationErrorCode.INVALID_MULTIHASH,
+      V_CODE_INVALID_MULTIHASH,
       `${name} multihash payload length does not match its digest header`,
       name,
     );
@@ -2570,7 +2547,7 @@ function normalizeManifestPublicKeyLiteral(value, name) {
   const entry = getCurveEntryByPublicKeyMulticodec(functionCode.value);
   if (!entry) {
     fail(
-      ValidationErrorCode.INVALID_MULTIHASH,
+      V_CODE_INVALID_MULTIHASH,
       `${name} uses unsupported multihash code 0x${functionCode.value.toString(16)}`,
       name,
     );
@@ -2581,7 +2558,7 @@ function normalizeManifestPublicKeyLiteral(value, name) {
     !(prefixedAlgorithm === "mldsa" && entry.algorithm === "ml-dsa")
   ) {
     fail(
-      ValidationErrorCode.INVALID_MULTIHASH,
+      V_CODE_INVALID_MULTIHASH,
       `${name} algorithm prefix does not match the multihash payload`,
       name,
     );
@@ -2608,7 +2585,7 @@ function normalizeManifestSignatureLiteral(value, name) {
   }
   if (body.length === 0 || body.length % 2 !== 0 || !/^[0-9A-Fa-f]+$/u.test(body)) {
     fail(
-      ValidationErrorCode.INVALID_HEX,
+      V_CODE_INVALID_HEX,
       `${name} must be an even-length hexadecimal string`,
       name,
     );
@@ -2616,7 +2593,7 @@ function normalizeManifestSignatureLiteral(value, name) {
   const canonical = body.toUpperCase();
   if (/^0+$/u.test(canonical)) {
     fail(
-      ValidationErrorCode.INVALID_HEX,
+      V_CODE_INVALID_HEX,
       `${name} must not be all zero`,
       name,
     );
@@ -2638,7 +2615,7 @@ function normalizeEntrypoints(value, name) {
   }
   if (!Array.isArray(value)) {
     fail(
-      ValidationErrorCode.INVALID_OBJECT,
+      V_CODE_INVALID_OBJECT,
       `${name} must be an array of entrypoint descriptors`,
       name,
     );
@@ -2654,7 +2631,7 @@ function normalizeEntrypoint(entry, name) {
   const entrypointName = assertString(source.name, `${name}.name`).trim();
   if (!entrypointName) {
     fail(
-      ValidationErrorCode.INVALID_STRING,
+      V_CODE_INVALID_STRING,
       `${name}.name must be a non-empty string`,
       `${name}.name`,
     );
@@ -2730,7 +2707,7 @@ function validateEntrypointSchemaBindings(
       paramNames.has(param.name)
     ) {
       fail(
-        ValidationErrorCode.INVALID_STRING,
+        V_CODE_INVALID_STRING,
         `${name}.params[${index}].name must be unique and canonical`,
         `${name}.params[${index}].name`,
       );
@@ -2740,14 +2717,14 @@ function validateEntrypointSchemaBindings(
   if (params.length === 0) {
     if (argumentSchema !== null) {
       fail(
-        ValidationErrorCode.INVALID_OBJECT,
+        V_CODE_INVALID_OBJECT,
         `${name}.argument_schema must be null without parameters`,
         `${name}.argument_schema`,
       );
     }
   } else if (argumentSchema === null) {
     fail(
-      ValidationErrorCode.INVALID_OBJECT,
+      V_CODE_INVALID_OBJECT,
       `${name}.argument_schema is required for declared parameters`,
       `${name}.argument_schema`,
     );
@@ -2758,7 +2735,7 @@ function validateEntrypointSchemaBindings(
       argumentSchema.fields.length !== params.length
     ) {
       fail(
-        ValidationErrorCode.INVALID_OBJECT,
+        V_CODE_INVALID_OBJECT,
         `${name}.argument_schema.fields must exactly match 1..13 declared parameters`,
         `${name}.argument_schema.fields`,
       );
@@ -2771,7 +2748,7 @@ function validateEntrypointSchemaBindings(
         fieldNames.has(field.name)
       ) {
         fail(
-          ValidationErrorCode.INVALID_STRING,
+          V_CODE_INVALID_STRING,
           `${name}.argument_schema.fields[${index}].name must be unique and canonical`,
           `${name}.argument_schema.fields[${index}].name`,
         );
@@ -2787,7 +2764,7 @@ function validateEntrypointSchemaBindings(
         analysis.canonicalName !== params[index].type_name
       ) {
         fail(
-          ValidationErrorCode.INVALID_OBJECT,
+          V_CODE_INVALID_OBJECT,
           `${name}.argument_schema.fields[${index}] does not match its declared parameter`,
           `${name}.argument_schema.fields[${index}]`,
         );
@@ -2795,7 +2772,7 @@ function validateEntrypointSchemaBindings(
     });
     if (argumentWords > 13) {
       fail(
-        ValidationErrorCode.VALUE_OUT_OF_RANGE,
+        V_CODE_VALUE_OUT_OF_RANGE,
         `${name}.argument_schema exceeds the V1 13-word argument window`,
         `${name}.argument_schema`,
       );
@@ -2803,7 +2780,7 @@ function validateEntrypointSchemaBindings(
   }
   if (returnType === null || returnSchema === null) {
     fail(
-      ValidationErrorCode.INVALID_OBJECT,
+      V_CODE_INVALID_OBJECT,
       `${name}.return_type and return_schema must be present together`,
       name,
     );
@@ -2815,14 +2792,14 @@ function validateEntrypointSchemaBindings(
     );
     if (analysis.canonicalName !== returnType) {
       fail(
-        ValidationErrorCode.INVALID_OBJECT,
+        V_CODE_INVALID_OBJECT,
         `${name}.return_schema does not match return_type`,
         `${name}.return_schema`,
       );
     }
     if (analysis.wordCount > 13) {
       fail(
-        ValidationErrorCode.VALUE_OUT_OF_RANGE,
+        V_CODE_VALUE_OUT_OF_RANGE,
         `${name}.return_schema exceeds the V1 13-word return window`,
         `${name}.return_schema`,
       );
@@ -2849,7 +2826,7 @@ function normalizeEntrypointKind(value, name) {
       return { kind: "Kaizen", value: null };
     default:
       fail(
-        ValidationErrorCode.INVALID_STRING,
+        V_CODE_INVALID_STRING,
         `${name} must be one of 'Kotoage', 'View', 'Hajimari', or 'Kaizen'`,
         name,
       );
@@ -2862,7 +2839,7 @@ function normalizeOptionalManifestString(value, name) {
   }
   const normalized = assertString(value, name).trim();
   if (normalized.length === 0) {
-    fail(ValidationErrorCode.INVALID_STRING, `${name} must not be empty`, name);
+    fail(V_CODE_INVALID_STRING, `${name} must not be empty`, name);
   }
   return normalized;
 }
@@ -2872,7 +2849,7 @@ function normalizeOptionalManifestBoolean(value, name) {
     return null;
   }
   if (typeof value !== "boolean") {
-    fail(ValidationErrorCode.INVALID_OBJECT, `${name} must be a boolean`, name);
+    fail(V_CODE_INVALID_OBJECT, `${name} must be a boolean`, name);
   }
   return value;
 }
@@ -2882,13 +2859,13 @@ function normalizeManifestStringArray(value, name) {
     return [];
   }
   if (!Array.isArray(value)) {
-    fail(ValidationErrorCode.INVALID_OBJECT, `${name} must be an array`, name);
+    fail(V_CODE_INVALID_OBJECT, `${name} must be an array`, name);
   }
   return value.map((entry, index) => {
     const normalized = assertString(entry, `${name}[${index}]`).trim();
     if (normalized.length === 0) {
       fail(
-        ValidationErrorCode.INVALID_STRING,
+        V_CODE_INVALID_STRING,
         `${name}[${index}] must not be empty`,
         `${name}[${index}]`,
       );
@@ -2902,7 +2879,7 @@ function normalizeEntrypointParams(value, name) {
     return [];
   }
   if (!Array.isArray(value)) {
-    fail(ValidationErrorCode.INVALID_OBJECT, `${name} must be an array`, name);
+    fail(V_CODE_INVALID_OBJECT, `${name} must be an array`, name);
   }
   return value.map((param, index) => {
     const source = assertPlainObject(param, `${name}[${index}]`);
@@ -2924,7 +2901,7 @@ function normalizeEntrypointParams(value, name) {
 function normalizeRequiredManifestString(value, name) {
   const normalized = assertString(value, name).trim();
   if (normalized.length === 0) {
-    fail(ValidationErrorCode.INVALID_STRING, `${name} must not be empty`, name);
+    fail(V_CODE_INVALID_STRING, `${name} must not be empty`, name);
   }
   return normalized;
 }
@@ -2935,7 +2912,7 @@ function normalizeEntrypointArgumentSchema(value, name) {
   }
   const source = assertPlainObject(value, name);
   if (!Array.isArray(source.fields)) {
-    fail(ValidationErrorCode.INVALID_OBJECT, `${name}.fields must be an array`, name);
+    fail(V_CODE_INVALID_OBJECT, `${name}.fields must be an array`, name);
   }
   return {
     fields: source.fields.map((field, index) => {
@@ -2964,7 +2941,7 @@ function normalizeEntrypointValueType(value, name) {
 function normalizeRequiredEntrypointValueType(value, name) {
   const source = assertPlainObject(value, name);
   if (!Array.isArray(source.nodes)) {
-    fail(ValidationErrorCode.INVALID_OBJECT, `${name}.nodes must be an array`, name);
+    fail(V_CODE_INVALID_OBJECT, `${name}.nodes must be an array`, name);
   }
   const normalized = {
     nodes: source.nodes.map((node, index) =>
@@ -3001,7 +2978,7 @@ function normalizeEntrypointValueTypeNode(value, name) {
       const keys = Object.keys(list);
       if (keys.length !== 1 || keys[0] !== "capacity") {
         fail(
-          ValidationErrorCode.INVALID_OBJECT,
+          V_CODE_INVALID_OBJECT,
           `${name}.value must contain only capacity; the element subtree follows in the enclosing node tape`,
           `${name}.value`,
         );
@@ -3009,7 +2986,7 @@ function normalizeEntrypointValueTypeNode(value, name) {
       const capacity = asByte(list.capacity, `${name}.value.capacity`);
       if (capacity < 1 || capacity > 64) {
         fail(
-          ValidationErrorCode.VALUE_OUT_OF_RANGE,
+          V_CODE_VALUE_OUT_OF_RANGE,
           `${name}.value.capacity must be in 1..64`,
           `${name}.value.capacity`,
         );
@@ -3028,7 +3005,7 @@ function normalizeEntrypointValueTypeNode(value, name) {
       };
     default:
       fail(
-        ValidationErrorCode.INVALID_STRING,
+        V_CODE_INVALID_STRING,
         `${name}.kind is not a V1 entrypoint value-type node`,
         `${name}.kind`,
       );
@@ -3056,7 +3033,7 @@ function normalizeEntrypointValueKind(value, name) {
   ]);
   if (!allowed.has(kind)) {
     fail(
-      ValidationErrorCode.INVALID_STRING,
+      V_CODE_INVALID_STRING,
       `${name}.kind is not a V1 entrypoint value kind`,
       `${name}.kind`,
     );
@@ -3068,14 +3045,14 @@ function normalizeEntrypointValueKind(value, name) {
 function normalizeU16(value, name) {
   const normalized = asNonNegativeInteger(value, name);
   if (normalized > 0xffff) {
-    fail(ValidationErrorCode.VALUE_OUT_OF_RANGE, `${name} must fit in u16`, name);
+    fail(V_CODE_VALUE_OUT_OF_RANGE, `${name} must fit in u16`, name);
   }
   return normalized;
 }
 
 function requireManifestNull(value, name) {
   if (value !== undefined && value !== null) {
-    fail(ValidationErrorCode.INVALID_OBJECT, `${name} must be null`, name);
+    fail(V_CODE_INVALID_OBJECT, `${name} must be null`, name);
   }
 }
 
@@ -3084,7 +3061,7 @@ function normalizeManifestStates(value, name) {
     return null;
   }
   if (!Array.isArray(value)) {
-    fail(ValidationErrorCode.INVALID_OBJECT, `${name} must be an array`, name);
+    fail(V_CODE_INVALID_OBJECT, `${name} must be an array`, name);
   }
   const names = new Set();
   return value.map((state, index) => {
@@ -3095,7 +3072,7 @@ function normalizeManifestStates(value, name) {
     );
     if (names.has(stateName)) {
       fail(
-        ValidationErrorCode.INVALID_OBJECT,
+        V_CODE_INVALID_OBJECT,
         `${name} contains duplicate state name ${stateName}`,
         name,
       );
@@ -3125,7 +3102,7 @@ function normalizeManifestTriggers(value, name) {
     return [];
   }
   if (!Array.isArray(value)) {
-    fail(ValidationErrorCode.INVALID_OBJECT, `${name} must be an array`, name);
+    fail(V_CODE_INVALID_OBJECT, `${name} must be an array`, name);
   }
   return value.map((trigger, index) => {
     const source = assertPlainObject(trigger, `${name}[${index}]`);
@@ -3136,7 +3113,7 @@ function normalizeManifestTriggers(value, name) {
     const metadata = source.metadata ?? {};
     if (metadata === null || typeof metadata !== "object" || Array.isArray(metadata)) {
       fail(
-        ValidationErrorCode.INVALID_OBJECT,
+        V_CODE_INVALID_OBJECT,
         `${name}[${index}].metadata must be an object`,
         `${name}[${index}].metadata`,
       );
@@ -3175,7 +3152,7 @@ function normalizeManifestTriggerRepeats(value, name) {
   const keys = Object.keys(source);
   if (keys.length !== 1) {
     fail(
-      ValidationErrorCode.INVALID_OBJECT,
+      V_CODE_INVALID_OBJECT,
       `${name} must contain exactly one repeat variant`,
       name,
     );
@@ -3188,7 +3165,7 @@ function normalizeManifestTriggerRepeats(value, name) {
     const count = asNonNegativeInteger(source.Exactly, `${name}.Exactly`);
     if (count > 0xffff_ffff) {
       fail(
-        ValidationErrorCode.VALUE_OUT_OF_RANGE,
+        V_CODE_VALUE_OUT_OF_RANGE,
         `${name}.Exactly must fit in u32`,
         `${name}.Exactly`,
       );
@@ -3196,7 +3173,7 @@ function normalizeManifestTriggerRepeats(value, name) {
     return { Exactly: count };
   }
   fail(
-    ValidationErrorCode.INVALID_STRING,
+    V_CODE_INVALID_STRING,
     `${name} must be Indefinitely or Exactly`,
     name,
   );
@@ -3260,7 +3237,7 @@ function normalizeZkBallotPublicInputs(value, name) {
   const hasAnyLockHint = hasOwner || hasAmount || hasDuration;
   if (hasAnyLockHint && !(hasOwner && hasAmount && hasDuration)) {
     fail(
-      ValidationErrorCode.INVALID_OBJECT,
+      V_CODE_INVALID_OBJECT,
       `${name} must include owner, amount, and duration_blocks when providing lock hints`,
       name,
     );
@@ -3273,7 +3250,7 @@ function normalizeGovernanceBallotDirection(value, name) {
     return value;
   }
   fail(
-    ValidationErrorCode.INVALID_STRING,
+    V_CODE_INVALID_STRING,
     `${name} must be exactly Aye, Nay, or Abstain`,
     name,
   );
@@ -3286,7 +3263,7 @@ function normalizeDirection(value, name) {
   if (typeof value === "number") {
     const byte = asByte(value, name);
     if (byte > 2) {
-      fail(ValidationErrorCode.VALUE_OUT_OF_RANGE, `${name} must be between 0 and 2`, name);
+      fail(V_CODE_VALUE_OUT_OF_RANGE, `${name} must be between 0 and 2`, name);
     }
     return byte;
   }
@@ -3301,7 +3278,7 @@ function normalizeDirection(value, name) {
     return 2;
   }
   fail(
-    ValidationErrorCode.INVALID_STRING,
+    V_CODE_INVALID_STRING,
     `${name} must be 0, 1, 2 or a recognized direction string`,
     name,
   );
@@ -3310,14 +3287,14 @@ function normalizeDirection(value, name) {
 function normalizeSorafsReplicationIdentifier(value, name) {
   if (typeof value !== "string" || !/^[0-9a-f]{64}$/u.test(value)) {
     fail(
-      ValidationErrorCode.INVALID_HEX,
+      V_CODE_INVALID_HEX,
       `${name} must contain exactly 64 lowercase hexadecimal characters`,
       name,
     );
   }
   if (/^0{64}$/u.test(value)) {
     fail(
-      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      V_CODE_VALUE_OUT_OF_RANGE,
       `${name} must not be the zero identifier`,
       name,
     );
@@ -3328,7 +3305,7 @@ function normalizeSorafsReplicationIdentifier(value, name) {
 function normalizeSorafsProviderOwner(value, name) {
   if (typeof value !== "string" || value.trim() !== value) {
     fail(
-      ValidationErrorCode.INVALID_ACCOUNT_ID,
+      V_CODE_INVALID_ACCOUNT_ID,
       `${name} must be an exact canonical I105 account id`,
       name,
     );
@@ -3336,7 +3313,7 @@ function normalizeSorafsProviderOwner(value, name) {
   const normalized = normalizeAccountId(value, name);
   if (normalized !== value) {
     fail(
-      ValidationErrorCode.INVALID_ACCOUNT_ID,
+      V_CODE_INVALID_ACCOUNT_ID,
       `${name} must be an exact canonical I105 account id`,
       name,
     );
@@ -3356,14 +3333,14 @@ function normalizeProviderIngestCompletionSignerPolicy(value, name) {
   if (revision === 1) {
     if (predecessorDigest !== null) {
       fail(
-        ValidationErrorCode.INVALID_OBJECT,
+        V_CODE_INVALID_OBJECT,
         `${name}.predecessorDigest must be null at revision 1`,
         `${name}.predecessorDigest`,
       );
     }
   } else if (predecessorDigest === null) {
     fail(
-      ValidationErrorCode.INVALID_OBJECT,
+      V_CODE_INVALID_OBJECT,
       `${name}.predecessorDigest is required after revision 1`,
       `${name}.predecessorDigest`,
     );
@@ -3421,7 +3398,7 @@ function normalizeSorafsReplicationPayload(value, name) {
     value.length > SORAFS_REPLICATION_ORDER_MAX_PAYLOAD_BASE64_CHARS_V1
   ) {
     fail(
-      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      V_CODE_VALUE_OUT_OF_RANGE,
       `${name} encoded form exceeds the ${SORAFS_REPLICATION_ORDER_MAX_PAYLOAD_BYTES_V1}-byte decoded limit`,
       name,
     );
@@ -3431,7 +3408,7 @@ function normalizeSorafsReplicationPayload(value, name) {
   const decodedLength = decoded.length;
   if (decodedLength > SORAFS_REPLICATION_ORDER_MAX_PAYLOAD_BYTES_V1) {
     fail(
-      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      V_CODE_VALUE_OUT_OF_RANGE,
       `${name} exceeds the ${SORAFS_REPLICATION_ORDER_MAX_PAYLOAD_BYTES_V1}-byte decoded limit`,
       name,
     );
@@ -3471,7 +3448,7 @@ export function buildIssueReplicationOrderInstruction(options) {
   );
   if (deadlineEpoch <= issuedEpoch) {
     fail(
-      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      V_CODE_VALUE_OUT_OF_RANGE,
       "issueReplicationOrder.deadlineEpoch must be greater than issuedEpoch",
       "issueReplicationOrder.deadlineEpoch",
     );
@@ -3620,7 +3597,7 @@ export function buildCancelAssetLockInstruction(options) {
 function normalizeAssetTransferAvailability(value, name) {
   if (value !== "Enabled" && value !== "Disabled") {
     fail(
-      ValidationErrorCode.INVALID_STRING,
+      V_CODE_INVALID_STRING,
       `${name} must be exactly "Enabled" or "Disabled"`,
       name,
     );
@@ -3632,7 +3609,7 @@ function normalizeAssetTransferAvailabilityReason(value, name) {
   const reason = assertExactNonBlankString(value, name);
   if (/[\u0000-\u001f\u007f-\u009f]/u.test(reason)) {
     fail(
-      ValidationErrorCode.INVALID_STRING,
+      V_CODE_INVALID_STRING,
       `${name} must not contain control characters`,
       name,
     );
@@ -3753,7 +3730,7 @@ export function buildSetAssetTransferBlacklistInstruction(options) {
   );
   if (typeof source.blacklisted !== "boolean") {
     fail(
-      ValidationErrorCode.INVALID_OBJECT,
+      V_CODE_INVALID_OBJECT,
       "setAssetTransferBlacklist.blacklisted must be a boolean",
       "setAssetTransferBlacklist.blacklisted",
     );
@@ -3785,7 +3762,7 @@ function normalizeAssetTransferControlWindow(value, name) {
     !Object.prototype.hasOwnProperty.call(ASSET_TRANSFER_CONTROL_WINDOW, value)
   ) {
     fail(
-      ValidationErrorCode.INVALID_STRING,
+      V_CODE_INVALID_STRING,
       `${name} must be exactly "DAY", "WEEK", or "MONTH"`,
       name,
     );
@@ -3833,7 +3810,7 @@ export function buildSetAssetTransferControlInstruction(options) {
   );
   if (!Array.isArray(source.limits)) {
     fail(
-      ValidationErrorCode.INVALID_OBJECT,
+      V_CODE_INVALID_OBJECT,
       "setAssetTransferControl.limits must be an array",
       "setAssetTransferControl.limits",
     );
@@ -3841,7 +3818,7 @@ export function buildSetAssetTransferControlInstruction(options) {
   for (let index = 0; index < source.limits.length; index += 1) {
     if (!Object.prototype.hasOwnProperty.call(source.limits, index)) {
       fail(
-        ValidationErrorCode.INVALID_OBJECT,
+        V_CODE_INVALID_OBJECT,
         "setAssetTransferControl.limits must not contain holes",
         "setAssetTransferControl.limits",
       );
@@ -3854,7 +3831,7 @@ export function buildSetAssetTransferControlInstruction(options) {
     assertAllowedFields(item, new Set(["window", "capAmount"]), name);
     if (!Object.prototype.hasOwnProperty.call(item, "capAmount")) {
       fail(
-        ValidationErrorCode.INVALID_OBJECT,
+        V_CODE_INVALID_OBJECT,
         `${name}.capAmount is required; use null to clear the window`,
         `${name}.capAmount`,
       );
@@ -3865,7 +3842,7 @@ export function buildSetAssetTransferControlInstruction(options) {
     );
     if (windows.has(window.wire)) {
       fail(
-        ValidationErrorCode.INVALID_OBJECT,
+        V_CODE_INVALID_OBJECT,
         `${name}.window duplicates ${item.window}`,
         `${name}.window`,
       );
@@ -4620,7 +4597,7 @@ export function buildMultisigTriggerArgs(preset, input = {}) {
     return payload;
   }
   fail(
-    ValidationErrorCode.INVALID_STRING,
+    V_CODE_INVALID_STRING,
     'preset must be either "lifecycle" or "lookup"',
     "preset",
   );
@@ -4772,7 +4749,7 @@ function normalizeMultisigProposeInstructionInput(value, context) {
     const trimmed = value.trim();
     if (!trimmed) {
       fail(
-        ValidationErrorCode.INVALID_OBJECT,
+        V_CODE_INVALID_OBJECT,
         `${context} must be a JSON instruction object or native Norito instruction payload input`,
         context,
       );
@@ -4799,7 +4776,7 @@ function rejectRetiredFeeRequestFields(source, context) {
   ]) {
     if (Object.prototype.hasOwnProperty.call(source, field)) {
       fail(
-        ValidationErrorCode.INVALID_OBJECT,
+        V_CODE_INVALID_OBJECT,
         `${context}.${field} is retired; use feePayment`,
         `${context}.${field}`,
       );
@@ -4813,7 +4790,7 @@ function normalizeFeePaymentRequest(value, context, { requireGasLimit = false } 
   const payer = assertExactNonBlankString(intent.payer, `${context}.payer`);
   if (payer !== "authority" && payer !== "sponsor") {
     fail(
-      ValidationErrorCode.INVALID_OBJECT,
+      V_CODE_INVALID_OBJECT,
       `${context}.payer must be authority or sponsor`,
       `${context}.payer`,
     );
@@ -4827,7 +4804,7 @@ function normalizeFeePaymentRequest(value, context, { requireGasLimit = false } 
   assertAllowedFields(rawValue, allowedValueFields, `${context}.value`);
   if (!Array.isArray(rawValue.charge_limits)) {
     fail(
-      ValidationErrorCode.INVALID_OBJECT,
+      V_CODE_INVALID_OBJECT,
       `${context}.value.charge_limits must be an array`,
       `${context}.value.charge_limits`,
     );
@@ -4836,7 +4813,7 @@ function normalizeFeePaymentRequest(value, context, { requireGasLimit = false } 
   const chargeLimits = Array.from(rawValue.charge_limits, (entry, index) => {
     if (!Object.prototype.hasOwnProperty.call(rawValue.charge_limits, index)) {
       fail(
-        ValidationErrorCode.INVALID_OBJECT,
+        V_CODE_INVALID_OBJECT,
         `${context}.value.charge_limits must not contain holes`,
         `${context}.value.charge_limits[${index}]`,
       );
@@ -4861,14 +4838,14 @@ function normalizeFeePaymentRequest(value, context, { requireGasLimit = false } 
     const kindIndex = kind === "nexus" ? 0 : kind === "pipeline_gas" ? 1 : -1;
     if (kindIndex < 0 || taggedKind.value !== null) {
       fail(
-        ValidationErrorCode.INVALID_OBJECT,
+        V_CODE_INVALID_OBJECT,
         `${itemContext}.kind must be the canonical nexus or pipeline_gas tagged unit`,
         `${itemContext}.kind`,
       );
     }
     if (kindIndex <= previousKind) {
       fail(
-        ValidationErrorCode.INVALID_OBJECT,
+        V_CODE_INVALID_OBJECT,
         `${context}.value.charge_limits must be unique and ordered nexus before pipeline_gas`,
         `${context}.value.charge_limits`,
       );
@@ -4877,7 +4854,7 @@ function normalizeFeePaymentRequest(value, context, { requireGasLimit = false } 
     const maxAmount = asQuantity(item.max_amount, `${itemContext}.max_amount`);
     if (NumericV1.decodeQuantityJson(maxAmount).mantissa <= 0n) {
       fail(
-        ValidationErrorCode.INVALID_NUMERIC,
+        V_CODE_INVALID_NUMERIC,
         `${itemContext}.max_amount must be greater than zero`,
         `${itemContext}.max_amount`,
       );
@@ -4897,7 +4874,7 @@ function normalizeFeePaymentRequest(value, context, { requireGasLimit = false } 
       : asPositiveInteger(rawValue.gas_limit, `${context}.value.gas_limit`);
   if (requireGasLimit && gasLimit === null) {
     fail(
-      ValidationErrorCode.INVALID_OBJECT,
+      V_CODE_INVALID_OBJECT,
       `${context}.value.gas_limit is required for contract execution`,
       `${context}.value.gas_limit`,
     );
@@ -4923,7 +4900,7 @@ function normalizeFeePaymentRequest(value, context, { requireGasLimit = false } 
     );
     if (name.normalize("NFC") !== name || /[\s@#$\/]/u.test(name)) {
       fail(
-        ValidationErrorCode.INVALID_STRING,
+        V_CODE_INVALID_STRING,
         `${context}.value.program_id.name must be a canonical Iroha Name`,
         `${context}.value.program_id.name`,
       );
@@ -4950,7 +4927,7 @@ export function buildMultisigProposeRequest(options) {
   const instructions = source.instructions;
   if (!Array.isArray(instructions) || instructions.length === 0) {
     fail(
-      ValidationErrorCode.INVALID_OBJECT,
+      V_CODE_INVALID_OBJECT,
       "multisigPropose.instructions must be a non-empty array",
       "multisigPropose.instructions",
     );
@@ -5005,35 +4982,35 @@ export function buildMultisigProposeRequest(options) {
     validationFeeTransferEntryIndex !== undefined && validationFeeTransferEntryIndex !== null;
   if (hasValidationFeePolicyVersion !== hasValidationFeePolicyHash) {
     fail(
-      ValidationErrorCode.INVALID_OBJECT,
+      V_CODE_INVALID_OBJECT,
       "multisigPropose validation fee policy version and hash must be provided together",
       "multisigPropose.validationFeePolicy",
     );
   }
   if (!hasValidationFeePolicyVersion && hasValidationFeeHijiriFeeQuoteHash) {
     fail(
-      ValidationErrorCode.INVALID_OBJECT,
+      V_CODE_INVALID_OBJECT,
       "multisigPropose Hijiri fee quote hash requires policy metadata",
       "multisigPropose.validationFeeHijiriFeeQuoteHash",
     );
   }
   if (!hasValidationFeePolicyVersion && hasValidationFeeInstructionIndex) {
     fail(
-      ValidationErrorCode.INVALID_OBJECT,
+      V_CODE_INVALID_OBJECT,
       "multisigPropose validation fee instruction index requires policy metadata",
       "multisigPropose.validationFeeInstructionIndex",
     );
   }
   if (!hasValidationFeePolicyVersion && hasValidationFeeTransferEntryIndex) {
     fail(
-      ValidationErrorCode.INVALID_OBJECT,
+      V_CODE_INVALID_OBJECT,
       "multisigPropose validation fee transfer entry index requires policy metadata",
       "multisigPropose.validationFeeTransferEntryIndex",
     );
   }
   if (hasValidationFeeTransferEntryIndex && !hasValidationFeeInstructionIndex) {
     fail(
-      ValidationErrorCode.INVALID_OBJECT,
+      V_CODE_INVALID_OBJECT,
       "multisigPropose validation fee transfer entry index requires instruction index",
       "multisigPropose.validationFeeTransferEntryIndex",
     );
@@ -5156,7 +5133,7 @@ function normalizeContractTargetSelectorInput(source, context) {
   const hasContractAlias = contractAlias !== undefined && contractAlias !== null;
   if (hasContractAddress === hasContractAlias) {
     fail(
-      ValidationErrorCode.INVALID_OBJECT,
+      V_CODE_INVALID_OBJECT,
       `${context} requires exactly one of contractAddress or contractAlias`,
       context,
     );
@@ -5232,7 +5209,7 @@ export function buildMultisigContractCallApproveRequest(options) {
   }
   if (!payload.proposal_id && !payload.instructions_hash) {
     fail(
-      ValidationErrorCode.INVALID_OBJECT,
+      V_CODE_INVALID_OBJECT,
       "multisigContractCallApprove requires proposalId or instructionsHash",
       "multisigContractCallApprove",
     );
@@ -5413,7 +5390,7 @@ export function buildProposeDeployContractInstruction(options) {
   for (const field of ["contractAddress", "codeHash", "abiHash"]) {
     if (!Object.prototype.hasOwnProperty.call(source, field)) {
       fail(
-        ValidationErrorCode.INVALID_OBJECT,
+        V_CODE_INVALID_OBJECT,
         `proposeDeployContract.${field} is required`,
         `proposeDeployContract.${field}`,
       );
@@ -5424,7 +5401,7 @@ export function buildProposeDeployContractInstruction(options) {
     : 1;
   if (abiVersion !== 1) {
     fail(
-      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      V_CODE_VALUE_OUT_OF_RANGE,
       "abiVersion must be exactly 1",
       "abiVersion",
     );
@@ -5491,7 +5468,7 @@ export function buildCastZkBallotInstruction(options) {
   for (const field of ["electionId", "proof"]) {
     if (!Object.prototype.hasOwnProperty.call(source, field)) {
       fail(
-        ValidationErrorCode.INVALID_OBJECT,
+        V_CODE_INVALID_OBJECT,
         `castZkBallot.${field} is required`,
         `castZkBallot.${field}`,
       );
@@ -5629,7 +5606,7 @@ export function buildSubmitAgendaProposalInstruction(options) {
 export function buildRegisterSmartContractCodeInstruction(options) {
   if (!options || typeof options !== "object") {
     fail(
-      ValidationErrorCode.INVALID_OBJECT,
+      V_CODE_INVALID_OBJECT,
       "buildRegisterSmartContractCodeInstruction options must be an object",
     );
   }
@@ -5653,14 +5630,14 @@ export function buildRegisterSmartContractCodeInstruction(options) {
 export function buildRegisterSmartContractBytesInstruction(options) {
   if (!options || typeof options !== "object") {
     fail(
-      ValidationErrorCode.INVALID_OBJECT,
+      V_CODE_INVALID_OBJECT,
       "buildRegisterSmartContractBytesInstruction options must be an object",
     );
   }
   const code = normalizeBase64(options.code, "registerSmartContractBytes.code");
   if (code.length === 0) {
     fail(
-      ValidationErrorCode.INVALID_STRING,
+      V_CODE_INVALID_STRING,
       "registerSmartContractBytes.code must be a non-empty base64 string",
       "registerSmartContractBytes.code",
     );
@@ -5686,7 +5663,7 @@ function normalizeCanonicalU64(value, name) {
   } else if (typeof value === "number") {
     if (!Number.isSafeInteger(value)) {
       fail(
-        ValidationErrorCode.INVALID_NUMERIC,
+        V_CODE_INVALID_NUMERIC,
         `${name} must be a safe unsigned integer, bigint, or canonical decimal string`,
         name,
       );
@@ -5696,14 +5673,14 @@ function normalizeCanonicalU64(value, name) {
     normalized = BigInt(value);
   } else {
     fail(
-      ValidationErrorCode.INVALID_NUMERIC,
+      V_CODE_INVALID_NUMERIC,
       `${name} must be an unsigned integer, bigint, or canonical decimal string`,
       name,
     );
   }
   if (normalized < 0n || normalized > U64_MAX_VALUE) {
     fail(
-      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      V_CODE_VALUE_OUT_OF_RANGE,
       `${name} must fit in an unsigned 64-bit integer`,
       name,
     );
@@ -5715,7 +5692,7 @@ function normalizeSmartContractExactString(value, name) {
   const literal = assertString(value, name);
   if (literal.length === 0 || literal.trim() !== literal || /[\u0000-\u001F\u007F]/u.test(literal)) {
     fail(
-      ValidationErrorCode.INVALID_STRING,
+      V_CODE_INVALID_STRING,
       `${name} must be a non-empty exact string without control characters`,
       name,
     );
@@ -5733,7 +5710,7 @@ function normalizeSmartContractChunk(value, name) {
   }
   if (buffer.length === 0 || buffer.length > SMART_CONTRACT_CODE_CHUNK_BYTES) {
     fail(
-      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      V_CODE_VALUE_OUT_OF_RANGE,
       `${name} must contain 1..=${SMART_CONTRACT_CODE_CHUNK_BYTES} bytes`,
       name,
     );
@@ -5761,7 +5738,7 @@ export function buildUploadSmartContractCodeChunkInstruction(options) {
   );
   if (chunkIndex >= chunkCount) {
     fail(
-      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      V_CODE_VALUE_OUT_OF_RANGE,
       "uploadSmartContractCodeChunk.chunkIndex must be less than chunkCount",
       "uploadSmartContractCodeChunk.chunkIndex",
     );
@@ -5776,7 +5753,7 @@ export function buildUploadSmartContractCodeChunkInstruction(options) {
     BigInt(SMART_CONTRACT_CODE_CHUNK_BYTES);
   if (totalSizeBigInt === 0n || expectedChunkCount !== BigInt(chunkCount)) {
     fail(
-      ValidationErrorCode.INVALID_NUMERIC,
+      V_CODE_INVALID_NUMERIC,
       "uploadSmartContractCodeChunk.chunkCount must equal ceil(totalSize / 65536)",
       "uploadSmartContractCodeChunk.chunkCount",
     );
@@ -5788,7 +5765,7 @@ export function buildUploadSmartContractCodeChunkInstruction(options) {
       : SMART_CONTRACT_CODE_CHUNK_BYTES;
   if (chunkBytes !== expectedChunkBytes) {
     fail(
-      ValidationErrorCode.INVALID_NUMERIC,
+      V_CODE_INVALID_NUMERIC,
       `uploadSmartContractCodeChunk.chunk must contain exactly ${expectedChunkBytes} bytes for this descriptor`,
       "uploadSmartContractCodeChunk.chunk",
     );
@@ -5823,7 +5800,7 @@ export function buildFinalizeSmartContractCodeUploadInstruction(options) {
     BigInt(SMART_CONTRACT_CODE_CHUNK_BYTES);
   if (BigInt(totalSize) === 0n || expectedChunkCount !== BigInt(chunkCount)) {
     fail(
-      ValidationErrorCode.INVALID_NUMERIC,
+      V_CODE_INVALID_NUMERIC,
       "finalizeSmartContractCodeUpload.chunkCount must equal ceil(totalSize / 65536)",
       "finalizeSmartContractCodeUpload.chunkCount",
     );
@@ -6108,7 +6085,7 @@ export function buildFinalizeElectionInstruction(options) {
   const tallyInput = Array.isArray(source.tally) ? source.tally : [];
   if (tallyInput.length === 0) {
     fail(
-      ValidationErrorCode.INVALID_OBJECT,
+      V_CODE_INVALID_OBJECT,
       "finalizeElection.tally must contain at least one entry",
     );
   }

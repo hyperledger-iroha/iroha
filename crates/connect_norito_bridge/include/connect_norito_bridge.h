@@ -586,13 +586,14 @@ int32_t connect_norito_kagemusha_device_capabilities_v1(
 int32_t connect_norito_kagemusha_device_execute_v1(
     const uint8_t* command, size_t command_len,
     uint8_t* output, size_t output_capacity, size_t* output_len);
-// Verifies a successful response's exact 64-byte low-S P-256 authenticator.
+// Verifies the exact command/response binding in the 64-byte low-S P-256 authenticator.
 // The three digest/key lengths are exact. For operation 1 the device key must
 // be NULL/zero and is bootstrapped from the validated qualification payload;
 // later operations require the accepted 65-byte uncompressed SEC1 device key.
 // Release-catalog membership remains a wallet-session responsibility.
-int32_t connect_norito_kagemusha_device_response_authenticator_v1_verify(
+int32_t connect_norito_kagemusha_device_command_response_v1_verify(
     const uint8_t* response, size_t response_len,
+    const uint8_t* canonical_command, size_t canonical_command_len,
     uint8_t expected_operation,
     const uint8_t* expected_request_id, size_t expected_request_id_len,
     const uint8_t* hardware_policy_id, size_t hardware_policy_id_len,

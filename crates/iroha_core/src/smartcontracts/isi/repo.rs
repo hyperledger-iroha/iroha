@@ -30,7 +30,7 @@ pub(in crate::smartcontracts::isi) struct VerifiedRepoNumericPair {
     legs: [(AssetId, AssetId, Quantity); 2],
 }
 impl VerifiedRepoNumericPair {
-    fn new<T: norito::codec::Encode>(
+    fn new<T: norito::NoritoSerialize>(
         authority: AccountId,
         binding: &T,
         legs: [(AssetId, AssetId, Quantity); 2],

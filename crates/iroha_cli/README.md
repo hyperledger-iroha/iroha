@@ -30,12 +30,32 @@ the current installation instructions.
 The CLI will attempt to detect your system language for messages. Use `--language <CODE>` to override this selection.
 For automation, prefer `--output-format json --machine` to suppress startup chatter and fail fast when `client.toml` is missing.
 
+Validator summaries retain complete activation heights and tenure bounds.
+Space Directory and ZK JSON inputs use Norito's shared JSON nesting limit
+(`MAX_JSON_VALUE_NESTING_DEPTH`, currently 33 including the root value).
+Local contract durable-state fixtures require exact NFC path spelling and
+reject duplicate decoded JSON keys.
+
 Use `iroha taira doctor` for read-only public-testnet diagnostics. Authorized
 public reset writes belong to the durable `iroha taira public-reset apply`
-coordinator. Its low-level `write-canary` child accepts exactly one ordered
+coordinator. Retry the same apply command with the same inventory and authorization;
+the durable journal selects recovery inputs for the interrupted phase. Its low-level `write-canary` child accepts exactly one ordered
 operation and one prepare, retained-envelope submit, or read-only recovery
 action; it is not a one-shot operator command. Keep onboarding tokens and all
 signing inputs in owner-only runtime files outside the repository.
+
+Reset input validation checks the complete action timeout budget before scanning
+artifacts or reading signing custody. Prepared Inrou stage files use mode0600;
+retained runtime snapshots use mode0400. Both remain owner-only, direct,
+singly linked files, with unchanged content verification.
+
+Automation that already retains a private client file uses `--config-fd <FD>`
+with `--config-source-path <absolute-original-path>`. The descriptor is read
+directly, without environment overrides; the source path provides provenance
+and the base for relative paths and is never reopened. Descriptors must be
+read-only, owner-private regular files. Onboarding prepare/submit similarly
+accepts `--onboarding-token-fd <FD>` instead of `--onboarding-token-file`.
+Do not pass descriptor pseudo-paths through the ordinary file options.
 
 Public node onboarding is deliberately a single future surface:
 `iroha taira join --data-dir <owner-only-directory>`. It will consume the
@@ -83,6 +103,22 @@ private_key = "..."
 For a custom network, set `[account].chain_discriminant` explicitly instead.
 The corresponding environment overrides are `ACCOUNT_PROFILE` and
 `ACCOUNT_CHAIN_DISCRIMINANT`.
+
+The CLI owns two optional filesystem settings that are deliberately absent from
+the reusable Rust SDK configuration:
+
+```toml
+[connect]
+queue_root = "/var/lib/iroha/connect"
+
+[soracloud]
+http_witness_file = "/run/iroha/canonical-request-witness.json"
+```
+
+`connect.queue_root` defaults to `~/.iroha/connect`. Soracloud mutation commands
+load the witness through a bounded, change-detecting reader and validate its
+schema, account, exact network request hash, and signer set before sending it.
+Configured relative paths resolve from the directory containing the client TOML file.
 
 ### Transaction waits
 

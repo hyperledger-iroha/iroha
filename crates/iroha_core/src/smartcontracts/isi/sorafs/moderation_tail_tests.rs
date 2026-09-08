@@ -1,3 +1,4 @@
+include!("moderation_snapshot_fixture_tests.rs");
 // Same-scope moderation regressions extracted to keep the parent source budget bounded.
 #[test]
 fn sortition_anchor_is_strictly_post_deadline_stable_and_delay_safe() {
@@ -23,9 +24,7 @@ fn sortition_anchor_is_strictly_post_deadline_stable_and_delay_safe() {
         })
         .expect_err("sortition at the exact registration deadline must fail");
     assert!(
-        error
-            .to_string()
-            .contains("registration must close before sortition"),
+        parameter_error_message(&error).contains("registration must close before sortition"),
         "unexpected exact-deadline rejection: {error:?}"
     );
     assert!(fixture.appeal().sortition_anchor.is_none());
@@ -62,8 +61,7 @@ fn sortition_anchor_is_strictly_post_deadline_stable_and_delay_safe() {
         })
         .expect_err("sortition cannot execute in the block that pins its anchor");
     assert!(
-        error
-            .to_string()
+        parameter_error_message(&error)
             .contains("must execute after its pinned anchor block commits"),
         "unexpected same-anchor-block rejection: {error:?}"
     );
@@ -122,11 +120,9 @@ fn sortition_anchor_is_strictly_post_deadline_stable_and_delay_safe() {
                 .execute(&manager, transaction)
             })
             .expect_err("stale or substituted caller anchors must fail closed");
-        assert!(
-            error
-                .to_string()
-                .contains("does not match the consensus-pinned first post-registration block"),
-            "unexpected substituted-anchor rejection: {error:?}"
+        assert_eq!(
+            parameter_error_message(&error),
+            "moderation sortition randomness anchor does not match the consensus-pinned first post-registration block"
         );
         assert_eq!(fixture.appeal().sortition_anchor, Some(anchor));
     }
@@ -169,18 +165,23 @@ fn restored_sortition_anchor_is_bound_to_exact_committed_history() {
         .expect("commit exact-deadline block");
     let anchor = fixture.pin_sortition_anchor();
     let mut committed_hashes = vec![
-        iroha_crypto::HashOf::new(&header(1, 1_000_000)),
-        iroha_crypto::HashOf::new(&header(2, 1_001_000)),
-        iroha_crypto::HashOf::new(&header(3, 1_003_000)),
-        iroha_crypto::HashOf::new(&header(4, 1_004_000)),
+        header(1, 1_000_000).hash(),
+        header(2, 1_001_000).hash(),
+        header(3, 1_003_000).hash(),
+        header(4, 1_004_000).hash(),
     ];
+    assert_eq!(committed_hashes[3].as_ref(), &anchor.block_hash);
+    assert_eq!(
+        fixture.state.view().latest_block_hash(),
+        Some(committed_hashes[3])
+    );
     validate_persisted_moderation_anchor_history_v1(
         fixture.state.view().world(),
         &committed_hashes,
     )
     .expect("restored anchor matches the exact committed hash journal");
 
-    committed_hashes[3] = iroha_crypto::HashOf::new(&header(4, 1_004_001));
+    committed_hashes[3] = header(4, 1_004_001).hash();
     let error = validate_persisted_moderation_anchor_history_v1(
         fixture.state.view().world(),
         &committed_hashes,
@@ -209,13 +210,31 @@ fn restored_sortition_anchor_is_bound_to_exact_committed_history() {
 #[test]
 fn soft_fork_replacement_repins_the_reverted_anchor_block() -> Result<(), InstructionExecutionError>
 {
-    let mut fixture = PanelFixture::new();
-    fixture.submit(1, 0, 1);
+    let mut fixture = panel_fixture_with_kura();
+    let intake = panel_intake(&fixture.appellant, "panel-case", 1, 0, 1, 0x91);
+    let appellant = fixture.appellant_id();
+    run_panel_kura_block(&mut fixture, 1_001_000, |transaction| {
+        SubmitSorafsModerationAppeal::new(intake).execute(&appellant, transaction)
+    })
+    .expect("submit panel appeal in a persisted block");
+    run_panel_kura_block(&mut fixture, 1_003_000, |_| Ok(())).expect("commit exact-deadline block");
+    run_panel_kura_block(&mut fixture, 1_004_000, |_| Ok(()))
+        .expect("persist the first post-registration anchor block");
+    let original_anchor = fixture
+        .appeal()
+        .sortition_anchor
+        .expect("committed maintenance pinned the original anchor");
     fixture
-        .run(1_003_000, |_| Ok(()))
-        .expect("commit exact-deadline block");
-    let original_anchor = fixture.pin_sortition_anchor();
-    let replacement_header = header(original_anchor.block_height, 1_004_500);
+        .state
+        .ensure_da_indexes_hydrated()
+        .expect("hydrate the complete canonical block prefix before rewind");
+    let mut replacement_header = fixture
+        .state
+        .view()
+        .latest_block()
+        .expect("persisted original anchor block")
+        .header();
+    replacement_header.creation_time_ms = 1_004_500;
     let replacement_hash = *replacement_header.hash().as_ref();
     assert_ne!(replacement_hash, original_anchor.block_hash);
 
@@ -280,7 +299,7 @@ fn same_deadline_anchor_schedule_is_canonical_bounded_and_pins_together() {
         },
     )
     .expect_err("the hard schedule bound must reject one more appeal");
-    assert!(error.to_string().contains("reached the hard bound"));
+    assert!(parameter_error_message(&error).contains("reached the hard bound"));
     let mut noncanonical = bounded.clone();
     noncanonical.entries.swap(0, 1);
     let error = validate_sortition_anchor_schedule(&noncanonical)
@@ -302,7 +321,12 @@ fn same_deadline_anchor_schedule_is_canonical_bounded_and_pins_together() {
         .expect("maximum-width identifiers remain structurally canonical");
     let error = encode_sortition_anchor_schedule(&byte_oversized)
         .expect_err("encoded schedule byte ceiling must be enforced before persistence");
-    assert!(error.to_string().contains("encoded state exceeds"));
+    assert_eq!(
+        parameter_error_message(&error),
+        format!(
+            "moderation sortition-anchor schedule encoded state exceeds {STATE_MAX_BYTES} bytes"
+        )
+    );
 
     let mut fixture = PanelFixture::new();
     fixture.submit(1, 0, 1);
@@ -367,7 +391,7 @@ fn private_pop_proof_sortition_and_activation_reject_adversarial_inputs() {
     let appeal = fixture.appeal();
     let juror = fixture.juror_id();
     let outsider = fixture.outsider_id();
-    let mut wrong_root = proof_for_appeal(&appeal);
+    let mut wrong_root = proof_for_appeal(&appeal, &juror);
     wrong_root.commitment_root[0] ^= 1;
     assert!(
         fixture
@@ -383,7 +407,7 @@ fn private_pop_proof_sortition_and_activation_reject_adversarial_inputs() {
     );
     assert_eq!(fixture.appeal().eligible_jurors.len(), 0);
     fixture.register_juror();
-    let proof = proof_for_appeal(&fixture.appeal());
+    let proof = proof_for_appeal(&fixture.appeal(), &juror);
     assert!(
         fixture
             .run(1_002_001, |transaction| {
@@ -770,7 +794,7 @@ fn primary_no_show_uses_next_unique_waitlist_juror_atomically() {
             proof_digest: [0xA1; 32],
             nullifier: [0xB1; 32],
             pop_snapshot_digest: appeal.pop_snapshot_digest,
-            credential_expires_at_epoch: 2_000,
+            credential_expires_at_epoch: shared_pop_material().credential.expires_at_epoch,
             registered_at_unix_ms: 1_002_000,
         },
         ModerationJurorEligibilityRecordV1 {
@@ -781,7 +805,7 @@ fn primary_no_show_uses_next_unique_waitlist_juror_atomically() {
             proof_digest: [0xA2; 32],
             nullifier: [0xB2; 32],
             pop_snapshot_digest: appeal.pop_snapshot_digest,
-            credential_expires_at_epoch: 2_000,
+            credential_expires_at_epoch: shared_pop_material().credential.expires_at_epoch,
             registered_at_unix_ms: 1_002_000,
         },
     ];
@@ -913,8 +937,8 @@ fn later_pop_revocation_rotation_does_not_rewrite_or_brick_admitted_snapshot() {
                 .execute(&manager, transaction)
         })
         .unwrap();
-    let proof = proof_for_appeal(&fixture.appeal());
     let juror = fixture.juror_id();
+    let proof = proof_for_appeal(&fixture.appeal(), &juror);
     fixture
         .run(1_002_000, |transaction| {
             RegisterSorafsModerationJurorEligibility::new(
@@ -1007,7 +1031,7 @@ fn committed_event_pages_resolve_final_hashes_and_enforce_exact_cursors() {
     assert_eq!(first.events[1].event_index, 0);
     assert_eq!(
         first.events[1].block_hash,
-        *iroha_crypto::HashOf::new(&header(2, 1_500)).as_ref()
+        *header(2, 1_500).hash().as_ref()
     );
     assert!(first.has_more);
     let continuation = first.next_after.expect("continuation cursor");
@@ -1050,94 +1074,6 @@ fn committed_event_pages_resolve_final_hashes_and_enforce_exact_cursors() {
     );
 }
 #[test]
-fn snapshot_rebuilds_complete_chain_projection_in_logical_order() {
-    let mut fixture = PanelFixture::new();
-    let appellant = fixture.appellant_id();
-    let z_intake = panel_intake(&fixture.appellant, "z-case", 1, 0, 1, 0x91);
-    fixture
-        .run(1_001_000, |transaction| {
-            SubmitSorafsModerationAppeal::new(z_intake).execute(&appellant, transaction)
-        })
-        .expect("submit z appeal");
-    let mut a_intake = panel_intake(&fixture.appellant, "a-case", 1, 0, 1, 0x92);
-    a_intake.proof_token_digest = [0x35; 32];
-    fixture
-        .run(1_001_001, |transaction| {
-            SubmitSorafsModerationAppeal::new(a_intake).execute(&appellant, transaction)
-        })
-        .expect("submit a appeal");
-    let view = fixture.state.view();
-    let snapshot = FindSorafsModerationSnapshot::new(8, 16)
-        .execute(&view)
-        .expect("rebuild complete finalized moderation snapshot");
-    assert_eq!(snapshot.finalized_height, 3);
-    assert_eq!(
-        snapshot.finalized_at_unix_ms,
-        view.latest_block()
-            .expect("exact finalized block")
-            .header()
-            .creation_time_ms
-    );
-    assert_eq!(
-        snapshot
-            .appeals
-            .iter()
-            .map(|appeal| appeal.appeal.intake.case_id.as_str())
-            .collect::<Vec<_>>(),
-        vec!["a-case", "z-case"]
-    );
-    assert!(snapshot.cases.is_empty());
-    assert_eq!(snapshot.events.len(), 3);
-    assert_eq!(
-        snapshot
-            .events
-            .iter()
-            .map(|event| event.sequence)
-            .collect::<Vec<_>>(),
-        vec![1, 2, 3]
-    );
-    assert!(
-        FindSorafsModerationSnapshot::new(1, 16)
-            .execute(&view)
-            .is_err(),
-        "a complete snapshot must fail instead of truncating cases"
-    );
-    let appeal = snapshot.appeals[0].appeal.clone();
-    drop(view);
-    fixture.state.world.smart_contract_state.insert(
-        digest_key(APPEAL_STATE_KEY_PREFIX, [0xEE; 32]),
-        encode_state(&appeal, "corrupt duplicate appeal").expect("encode corrupt fixture"),
-    );
-    assert!(
-        FindSorafsModerationSnapshot::new(8, 16)
-            .execute(&fixture.state.view())
-            .is_err(),
-        "a mismatched persisted key must fail the complete projection"
-    );
-}
-#[test]
-fn snapshot_includes_all_eligibility_and_latest_typed_events() {
-    let mut fixture = PanelFixture::new();
-    fixture.submit(1, 0, 1);
-    fixture.register_juror();
-    fixture.finalize_single_juror_sortition();
-    let snapshot = FindSorafsModerationSnapshot::new(8, 16)
-        .execute(&fixture.state.view())
-        .expect("rebuild eligibility-bearing moderation snapshot");
-    assert_eq!(snapshot.appeals.len(), 1);
-    assert_eq!(snapshot.appeals[0].eligibility.len(), 1);
-    assert_eq!(snapshot.appeals[0].eligibility[0].juror, fixture.juror_id());
-    assert_eq!(snapshot.events.len(), 4);
-    assert_eq!(
-        snapshot.events.last().map(|event| event.event.kind),
-        Some(SorafsModerationLedgerEventKind::SortitionFinalized)
-    );
-    assert_eq!(
-        snapshot.events.last().map(|event| event.block_height),
-        Some(4)
-    );
-}
-#[test]
 fn journal_rejects_missing_committed_parent_and_orphan_records() {
     let manager_pair = keypair(0xA1);
     let manager = account(&manager_pair);
@@ -1167,7 +1103,7 @@ fn journal_rejects_missing_committed_parent_and_orphan_records() {
             .revision,
         1
     );
-    state.push_block_hash_for_testing(iroha_crypto::HashOf::new(&header(1, OPENED_AT)));
+    state.push_block_hash_for_testing(header(1, OPENED_AT).hash());
     let (head, terminal) = {
         let view = state.view();
         let head = read_event_journal_head(view.world())

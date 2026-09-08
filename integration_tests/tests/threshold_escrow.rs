@@ -4,7 +4,8 @@ use base64::Engine as _;
 use eyre::{Result, eyre};
 use integration_tests::sandbox;
 use iroha::{
-    client::{Client, QueryError},
+    blocking::Client,
+    client::QueryError,
     data_model::{
         ValidationFail,
         account::Account,
@@ -146,9 +147,14 @@ async fn call_contract_expect_status(
         .get("tx_hash_hex")
         .and_then(norito::json::Value::as_str)
         .ok_or_else(|| eyre!("{stage}: missing tx_hash_hex in response: {response:?}"))?;
-    let observed =
-        wait_for_tx_terminal_status(http, &client.torii_url, tx_hash_hex, TX_TIMEOUT, stage)
-            .await?;
+    let observed = wait_for_tx_terminal_status(
+        http,
+        &client.client().torii_url,
+        tx_hash_hex,
+        TX_TIMEOUT,
+        stage,
+    )
+    .await?;
     if observed.0 != expected_status {
         return Err(eyre!(
             "{stage}: expected `{expected_status}`, observed `{}` for tx `{tx_hash_hex}`; payload={}",
@@ -168,7 +174,7 @@ async fn submit_contract_call_json(
     payload: Option<&norito::json::Value>,
     stage: &str,
 ) -> Result<norito::json::Value> {
-    let url = client.torii_url.join("v1/contracts/call")?;
+    let url = client.client().torii_url.join("v1/contracts/call")?;
     let deadline = Instant::now() + CONTRACT_CALL_ADMISSION_TIMEOUT;
     loop {
         let mut body = norito::json::Map::new();
@@ -367,7 +373,10 @@ where
         .map_err(|err| eyre!("decode {label} fallback inner payload: {err}"))
 }
 fn asset_value(client: &Client, asset_id: &AssetId) -> Result<Option<Quantity>> {
-    match client.query_single(FindAssetById::new(asset_id.clone())) {
+    match client
+        .client()
+        .query_single(FindAssetById::new(asset_id.clone()))
+    {
         Ok(asset) => Ok(Some(asset.value().clone())),
         Err(QueryError::Validation(ValidationFail::QueryFailed(
             QueryExecutionFail::Find(FindError::Asset(_)) | QueryExecutionFail::NotFound,
@@ -376,7 +385,10 @@ fn asset_value(client: &Client, asset_id: &AssetId) -> Result<Option<Quantity>> 
     }
 }
 fn account_exists(client: &Client, account_id: &AccountId) -> Result<bool> {
-    match client.query_single(FindAccountById::new(account_id.clone())) {
+    match client
+        .client()
+        .query_single(FindAccountById::new(account_id.clone()))
+    {
         Ok(_) => Ok(true),
         Err(QueryError::Validation(ValidationFail::QueryFailed(
             QueryExecutionFail::Find(FindError::Account(_)) | QueryExecutionFail::NotFound,
@@ -388,7 +400,10 @@ fn asset_definition_exists(
     client: &Client,
     asset_definition_id: &AssetDefinitionId,
 ) -> Result<bool> {
-    match client.query_single(FindAssetDefinitionById::new(asset_definition_id.clone())) {
+    match client
+        .client()
+        .query_single(FindAssetDefinitionById::new(asset_definition_id.clone()))
+    {
         Ok(_) => Ok(true),
         Err(QueryError::Validation(ValidationFail::QueryFailed(
             QueryExecutionFail::Find(FindError::AssetDefinition(_)) | QueryExecutionFail::NotFound,
@@ -429,7 +444,7 @@ async fn setup_ledger_for_sample(
     tokio::task::spawn_blocking({
         let client = client.clone();
         move || {
-            client.submit_all_blocking(
+            client.submit_all(
                 instructions,
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
@@ -448,13 +463,13 @@ async fn setup_ledger_for_sample(
                 ALICE_ID.clone(),
             );
             let tx = TransactionBuilder::new(
-                client.network_id,
+                client.client().network_id,
                 BOB_ID.clone(),
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
             .with_instructions([grant_transfer])
             .sign(BOB_KEYPAIR.private_key());
-            client.submit_transaction_blocking(&tx)
+            client.submit_transaction_and_wait(&tx)
         }
     })
     .await
@@ -517,7 +532,7 @@ async fn threshold_escrow_releases_when_fully_funded() -> Result<()> {
     .await?;
     let opened_state = contract_state_values(
         &http,
-        &client.torii_url,
+        &client.client().torii_url,
         &contract_address,
         &threshold_state_paths(),
     )
@@ -581,7 +596,7 @@ async fn threshold_escrow_releases_when_fully_funded() -> Result<()> {
     assert_eq!(asset_value(&client, &recipient_asset)?, None);
     let partial_state = contract_state_values(
         &http,
-        &client.torii_url,
+        &client.client().torii_url,
         &contract_address,
         &[
             "funded_amount_value",
@@ -642,7 +657,7 @@ async fn threshold_escrow_releases_when_fully_funded() -> Result<()> {
     .await?;
     let early_release_state = contract_state_values(
         &http,
-        &client.torii_url,
+        &client.client().torii_url,
         &contract_address,
         &["funded_amount_value", "is_open", "is_released"],
     )
@@ -670,7 +685,7 @@ async fn threshold_escrow_releases_when_fully_funded() -> Result<()> {
     .await?;
     let funded_state = contract_state_values(
         &http,
-        &client.torii_url,
+        &client.client().torii_url,
         &contract_address,
         &["funded_amount_value", "is_open"],
     )
@@ -702,7 +717,7 @@ async fn threshold_escrow_releases_when_fully_funded() -> Result<()> {
     .await?;
     let released_state = contract_state_values(
         &http,
-        &client.torii_url,
+        &client.client().torii_url,
         &contract_address,
         &[
             "funded_amount_value",
@@ -861,7 +876,7 @@ async fn threshold_escrow_refunds_when_unresolved() -> Result<()> {
     .await?;
     let refunded_state = contract_state_values(
         &http,
-        &client.torii_url,
+        &client.client().torii_url,
         &contract_address,
         &[
             "funded_amount_value",

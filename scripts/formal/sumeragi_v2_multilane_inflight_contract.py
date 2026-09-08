@@ -51,6 +51,8 @@ INFLIGHT_LAYOUT_REQUIRED_INVARIANTS = (
     "MLPostCarrierCommitCleanupOrder",
     "MLReleasePrefixesRecoverable",
     "MLReleaseStageOrder",
+    "MLDirectReleaseRequiresAbsentKura",
+    "MLTerminalDispositionExclusive",
     "MLQueuePlanV1SelectedConjunctionBound4096",
 )
 INFLIGHT_LAYOUT_REQUIRED_ACTIONS = (
@@ -81,12 +83,44 @@ INFLIGHT_LAYOUT_REQUIRED_ACTIONS = (
     "RestoreReleasedFifo",
     "ForgetReservationRelease",
     "RepairPostCarrierEvidence",
+    "ObserveReplicaQueueRelease",
 )
 INFLIGHT_COMPOSED_TLA_ALIGNMENT_TOKENS = (
+    'ObserveReplicaQueueRelease(disposition) ==\n  /\\ disposition \\in ReplicaQueueReleaseStates\n  /\\ decision.releaseOwner \\in Validators \\ {Producer}\n  /\\ queue.plan = "SelectedConjunction"\n  /\\ queue.reservation = "Live"\n  /\\ release.kuraRetired\n  /\\ release.pendingPrefix = queue.selectedCount\n  /\\ release.releasedPrefix = 0\n  /\\ ~release.fifoRestored\n  /\\ queue\' = [queue EXCEPT !.reservation = disposition]\n  /\\ UNCHANGED <<ownership, payloadBinding, carrier, session, history, decision,\n                 release>>',
+    '  \\/ \\E disposition \\in ReplicaQueueReleaseStates:\n       ObserveReplicaQueueRelease(disposition)',
     "Its three-validator states embed into the 1..128-validator fixed-width\n"
     "Rust/Verus `ProductionInFlightFirstReleaseStateProjection` and transition\n"
     "kernel.",
     "ReadyQuorum == 3",
+    'ActivateKura(p) ==\n'
+    '  /\\ p \\in Validators\n'
+    '  /\\ p \\notin session.crashed\n'
+    '  /\\ p \\in session.bodies\n'
+    '  /\\ (queue.reservation = "Live" \\/ Mode = "KuraBeforeReservation")\n'
+    "  /\\ payloadBinding' =\n"
+    '       IF Mode = "KuraWithoutPayloadBinding"\n'
+    '       THEN payloadBinding\n'
+    '       ELSE [payloadBinding EXCEPT ![p] = BindingA]\n'
+    "  /\\ carrier' =\n"
+    '       [carrier EXCEPT !.kuraActive = @ \\union {p}]\n'
+    '  /\\ UNCHANGED <<ownership, queue, session, history, decision,\n'
+    '                 release>>',
+    'MLValidatorCarrierOwnership ==\n'
+    '  /\\ ownership[Producer] = "ProducerSelected"\n'
+    '  /\\ \\A p \\in Validators \\ {Producer}:\n'
+    '       ownership[p] = "ReplicatedCarrier"\n'
+    '  /\\ LET authenticated == {p \\in Validators: payloadBinding[p] = BindingA}\n'
+    '     IN\n'
+    '       /\\ carrier.kuraActive \\subseteq authenticated\n'
+    '       /\\ carrier.inputDurable \\subseteq authenticated\n'
+    '       /\\ session.readyAuthorized \\subseteq authenticated\n'
+    '       /\\ history.everInputDurable \\subseteq authenticated\n'
+    '       /\\ history.everReadyAuthorized \\subseteq authenticated\n'
+    '       /\\ history.readySigned \\subseteq authenticated\n'
+    '       /\\ decision.laneCommitOwner # "None" =>\n'
+    '            decision.laneCommitOwner \\in authenticated\n'
+    '       /\\ decision.releaseOwner # "None" =>\n'
+    '            decision.releaseOwner \\in authenticated',
     "CanonicalKeyPrefix(keys, bound) ==\n"
     "  /\\ keys \\subseteq PrefixThrough(bound)\n"
     "  /\\ keys = PrefixThrough(Cardinality(keys))",
@@ -103,6 +137,8 @@ INFLIGHT_COMPOSED_TLA_ALIGNMENT_TOKENS = (
     "ReleaseReservationDirect ==\n"
     "  /\\ queue.plan = \"SelectedConjunction\"\n"
     "  /\\ ((queue.reservation = \"Live\"\n"
+    "       /\\ (carrier.kuraActive = {}\n"
+    "           \\/ Mode = \"DirectReleaseWithActiveKura\")\n"
     "       /\\ decision.laneCommitOwner = \"None\"\n"
     "       /\\ decision.releaseOwner = \"None\")",
     "      \\/ (queue.reservation \\in {\"Live\", \"DirectReleased\"}\n"
@@ -134,6 +170,18 @@ INFLIGHT_COMPOSED_TLA_ALIGNMENT_TOKENS = (
     "          !.producerAlive = IF p = Producer THEN TRUE ELSE @]",
     "queue.reservation = \"DirectReleased\" =>\n"
     "       release.fifoRestored",
+    "MLDirectReleaseRequiresAbsentKura ==\n"
+    "  queue.reservation = \"DirectReleased\" /\\ ~release.kuraRetired =>\n"
+    "    carrier.kuraActive = {}",
+    "MLTerminalDispositionExclusive ==\n"
+    "  /\\ ~(CommitTerminal /\\ ReleaseTerminal)\n"
+    "  /\\ queue.reservation\n"
+    "       \\in (PreparedReleaseStates \\union ReplicaQueueReleaseStates\n"
+    "            \\union {\"DirectReleased\"}) =>\n"
+    "       /\\ decision.laneCommitOwner = \"None\"\n"
+    "       /\\ ~decision.wsvCommitted\n"
+    "       /\\ decision.applicationCount = 0\n"
+    "       /\\ decision.appliedBy = \"None\"",
 )
 INFLIGHT_LAYOUT_MUTATIONS = (
     (
@@ -223,6 +271,18 @@ INFLIGHT_LAYOUT_MUTATIONS = (
     (
         "inflight_first_release_oversize_selected_queue_plan_bug.cfg",
         "MLQueuePlanV1SelectedConjunctionBound4096",
+    ),
+    (
+        "inflight_first_release_direct_release_with_active_kura_bug.cfg",
+        "MLDirectReleaseRequiresAbsentKura",
+    ),
+    (
+        "inflight_first_release_direct_release_commit_conflict_bug.cfg",
+        "MLTerminalDispositionExclusive",
+    ),
+    (
+        "inflight_first_release_kura_without_payload_binding_bug.cfg",
+        "MLValidatorCarrierOwnership",
     ),
 )
 INFLIGHT_LAYOUT_FORBIDDEN_TOKENS = (
@@ -454,6 +514,40 @@ INFLIGHT_LAYOUT_FORBIDDEN_SOURCE_CHECKS = (
     ),
 )
 INFLIGHT_LAYOUT_PRODUCTION_BINDINGS = (
+    (
+        'crates/iroha_core/src/sumeragi/v2_lane_work.rs',
+        "fn",
+        "persist_nonqueue_autonomous_payload_with_custody",
+        (
+            'process_generation.local_peer_id() != local_peer',
+            'key_pair.public_key() != local_peer.public_key()',
+            'process_generation.network_id() != payload.network_id',
+            'lane_queue_reservation_group_binding_from_ordered_keys(payload.reservation_keys.iter())',
+            'let binding = AutonomousLifecycleAttemptBindingV1::from_payload(',
+            'let (_, local_actor) = binding.local_validator_identity();',
+            'let producer = binding.producer_actor_projection();',
+            'validator_count == 0 || validator_count > 128',
+            'payload_binding_a: producer,',
+            'binding_a: canonical_lane_queue_reservation_group_identity_projection(reservation_group),',
+            'carrier: ProductionInFlightFirstReleaseCarrierProjection::default(),',
+            'bodies: producer | local_actor,',
+            'let mut after_activate = before_activate;\n    after_activate.payload_binding_a |= local_actor;\n    after_activate.carrier.kura_active |= local_actor;',
+            'action: IN_FLIGHT_FIRST_RELEASE_ACTION_ACTIVATE_KURA,\n            actor: local_actor,\n            target: 0,\n            before: before_activate,\n            after: after_activate,',
+            'let activate_projection = *checked_activate.accepted_projection();',
+            'let authorization = authorize(binding.clone(), checked_activate)?;',
+            '.classify_autonomous_payload_custody_for_persistence(payload, authorization)',
+            'AutonomousLifecycleCursorPhaseV1::prepared(\n            process_generation.generation(),\n            activate_projection,',
+            '.finalize(prepared_signature, &descriptor.validator_set)',
+            'AutonomousLifecycleCursorPhaseV1::live(process_generation.generation(), after_activate)',
+            '.finalize(live_signature, &descriptor.validator_set)',
+            '.autonomous_lifecycle_bootstrap_signing_preimage_with_payload_custody(',
+            'let bootstrap_signature = sign_lifecycle_preimage(&bootstrap_preimage)?;',
+            '.persist_autonomous_lifecycle_bootstrap_with_payload_custody(\n            process_generation,\n            payload,\n            binding,\n            prepared_activate,\n            live_activate.clone(),\n            bootstrap_signature,\n            authorization,',
+            '.authenticate_autonomous_lifecycle_bootstrap_recovery_from_durable_custody(',
+            '.complete_autonomous_lifecycle_bootstrap(bootstrap_permit)',
+            'completion.takeover_required() || completion.cursor() != &live_activate',
+        ),
+    ),
     (
         "crates/iroha_core/src/lane_consensus.rs",
         "struct",
@@ -1247,6 +1341,44 @@ INFLIGHT_LAYOUT_PRODUCTION_BINDINGS = (
         "macro",
         "production_in_flight_first_release_state_body",
         (
+            '(carrier.kura_active & !state.payload_binding_a) == 0u128',
+            '(carrier.execution_input_durable & !state.payload_binding_a) == 0u128',
+            '(session.ready_authorized & !state.payload_binding_a) == 0u128',
+            '(history.ever_execution_input_durable & !state.payload_binding_a) == 0u128',
+            '(history.ever_ready_authorized & !state.payload_binding_a) == 0u128',
+            '(history.ready_signed & !state.payload_binding_a) == 0u128',
+            '(decision.lane_commit_owner & !state.payload_binding_a) == 0u128',
+            '(decision.release_owner & !state.payload_binding_a) == 0u128',
+            '&& if queue.reservation_state\n'
+            '                == refinement_tag_value!(IN_FLIGHT_FIRST_RELEASE_RESERVATION_DIRECT_RELEASED)\n'
+            '                && !release.kura_retired\n'
+            '            {\n'
+            '                carrier.kura_active == 0u128\n'
+            '            } else {\n'
+            '                true\n'
+            '            }',
+            '&& if queue.reservation_state\n'
+            '                == refinement_tag_value!(IN_FLIGHT_FIRST_RELEASE_RESERVATION_RELEASE_PREPARED)\n'
+            '                || queue.reservation_state\n'
+            '                    == refinement_tag_value!(IN_FLIGHT_FIRST_RELEASE_RESERVATION_RELEASE_COMPLETED)\n'
+            '                || queue.reservation_state\n'
+            '                    == refinement_tag_value!(IN_FLIGHT_FIRST_RELEASE_RESERVATION_RELEASE_FORGOTTEN)\n'
+            '                || queue.reservation_state\n'
+            '                    == refinement_tag_value!(IN_FLIGHT_FIRST_RELEASE_RESERVATION_DIRECT_RELEASED)\n'
+            '                || queue.reservation_state\n'
+            '                    == refinement_tag_value!(IN_FLIGHT_FIRST_RELEASE_RESERVATION_REPLICA_QUEUE_ABSENT)\n'
+            '                || queue.reservation_state\n'
+            '                    == refinement_tag_value!(\n'
+            '                        IN_FLIGHT_FIRST_RELEASE_RESERVATION_REPLICA_QUEUE_FIFO_PRESERVED\n'
+            '                    )\n'
+            '            {\n'
+            '                decision.lane_commit_owner == 0u128\n'
+            '                    && !decision.wsv_committed\n'
+            '                    && decision.application_count == 0u8\n'
+            '                    && decision.applied_by == 0u128\n'
+            '            } else {\n'
+            '                true\n'
+            '            }',
             "in_flight_first_release_validator_mask_body!(state.validator_count)",
             "in_flight_first_release_ready_quorum_body!(state.validator_count)",
             "state.validator_count >= 1u8",
@@ -1281,6 +1413,35 @@ INFLIGHT_LAYOUT_PRODUCTION_BINDINGS = (
         "macro",
         "production_in_flight_first_release_transition_body",
         (
+            '&& if projection.action\n'
+            '                == refinement_tag_value!(IN_FLIGHT_FIRST_RELEASE_ACTION_ACTIVATE_KURA)\n'
+            '            {\n'
+            '                after.payload_binding_a == (before.payload_binding_a | projection.actor)\n'
+            '            } else {\n'
+            '                after.payload_binding_a == before.payload_binding_a\n'
+            '            }',
+            '&& ((projection.actor == 0u128\n'
+            '                        && before.queue.reservation_state\n'
+            '                            == refinement_tag_value!(IN_FLIGHT_FIRST_RELEASE_RESERVATION_LIVE)\n'
+            '                        && before.carrier.kura_active == 0u128\n'
+            '                        && before.decision.lane_commit_owner == 0u128\n'
+            '                        && before.decision.release_owner == 0u128)\n'
+            '                        || (in_flight_first_release_single_validator_body!(\n'
+            '                            projection.actor,\n'
+            '                            validator_mask\n'
+            '                        ) && projection.actor == before.decision.release_owner\n'
+            '                            && projection.actor != before.producer\n'
+            '                            && before.release.kura_retired\n'
+            '                            && before.release.pending_prefix == before.queue.selected_count\n'
+            '                            && (before.queue.reservation_state\n'
+            '                                == refinement_tag_value!(\n'
+            '                                    IN_FLIGHT_FIRST_RELEASE_RESERVATION_LIVE\n'
+            '                                )\n'
+            '                                || (before.queue.reservation_state\n'
+            '                                    == refinement_tag_value!(\n'
+            '                                        IN_FLIGHT_FIRST_RELEASE_RESERVATION_DIRECT_RELEASED\n'
+            '                                    )\n'
+            '                                    && before.release.fifo_restored))))',
             "production_in_flight_first_release_state_body!(before)",
             "production_in_flight_first_release_state_body!(after)",
             "IN_FLIGHT_FIRST_RELEASE_ACTION_SELECT_QUEUE_PLAN_V1",
@@ -3142,6 +3303,36 @@ INFLIGHT_LAYOUT_PRODUCTION_BINDINGS = (
 )
 INFLIGHT_LAYOUT_ORDERED_SOURCE_CHECKS = (
     (
+        'crates/iroha_core/src/sumeragi/v2_lane_work.rs',
+        "fn",
+        "persist_nonqueue_autonomous_payload_with_custody",
+        (
+            'AutonomousLifecycleAttemptBindingV1::from_payload(',
+            'let (_, local_actor) = binding.local_validator_identity();',
+            'let producer = binding.producer_actor_projection();',
+            'let before_activate = ProductionInFlightFirstReleaseStateProjection {',
+            'payload_binding_a: producer,',
+            'after_activate.payload_binding_a |= local_actor;',
+            'after_activate.carrier.kura_active |= local_actor;',
+            'let checked_activate = check_production_in_flight_first_release_transition(',
+            'let activate_projection = *checked_activate.accepted_projection();',
+            'let authorization = authorize(binding.clone(), checked_activate)?;',
+            '.classify_autonomous_payload_custody_for_persistence(payload, authorization)',
+            'let prepared_unsigned = AutonomousLifecycleCursorUnsignedV1::new(',
+            'let prepared_signature = sign_lifecycle_preimage(',
+            '.finalize(prepared_signature, &descriptor.validator_set)',
+            'let live_unsigned = AutonomousLifecycleCursorUnsignedV1::new(',
+            'let live_signature = sign_lifecycle_preimage(',
+            '.finalize(live_signature, &descriptor.validator_set)',
+            '.autonomous_lifecycle_bootstrap_signing_preimage_with_payload_custody(',
+            'let bootstrap_signature = sign_lifecycle_preimage(&bootstrap_preimage)?;',
+            '.persist_autonomous_lifecycle_bootstrap_with_payload_custody(',
+            '.authenticate_autonomous_lifecycle_bootstrap_recovery_from_durable_custody(',
+            '.complete_autonomous_lifecycle_bootstrap(bootstrap_permit)',
+            'completion.takeover_required() || completion.cursor() != &live_activate',
+        ),
+    ),
+    (
         "crates/iroha_core/src/queue/reservation_journal.rs",
         "struct",
         "CheckedReplayStateShape",
@@ -4395,6 +4586,11 @@ INFLIGHT_LAYOUT_SOURCE_CHECKS = (
     (
         "pytests/scripts/sumeragi_v2_multilane_models_test.py",
         (
+            'def test_inflight_direct_release_and_binding_repair_rejects_semantic_weakening(',
+            'def test_inflight_repair_mutation_registration_rejects_wrong_mode_and_omission(',
+            'def test_inflight_nonqueue_kura_activation_rejects_unowned_projection(',
+            'def test_inflight_nonqueue_kura_activation_rejects_authority_order_drift(',
+            'def test_inflight_repair_apalache_registration_retains_bound_and_tlc_ownership(',
             "def test_inflight_layout_contract_accepts_current_production(",
             "def test_inflight_composed_contract_rejects_rehydrate_without_kura_ownership(",
             "def test_inflight_composed_contract_rejects_rehydrate_action_tag_drift(",

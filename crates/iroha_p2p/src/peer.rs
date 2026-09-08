@@ -3535,6 +3535,7 @@ pub mod handles {
                 | crate::network::message::Topic::PeerGossip
                 | crate::network::message::Topic::TrustGossip
                 | crate::network::message::Topic::Health
+                | crate::network::message::Topic::Connect
                 | crate::network::message::Topic::Other
                     if matches!(priority, crate::network::message::Priority::High) =>
                 {
@@ -3546,7 +3547,9 @@ pub mod handles {
                 crate::network::message::Topic::PeerGossip
                 | crate::network::message::Topic::TrustGossip => &self.senders.lo_peer_gossip,
                 crate::network::message::Topic::Health => &self.senders.lo_health,
-                crate::network::message::Topic::Other => &self.senders.lo_other,
+                crate::network::message::Topic::Connect | crate::network::message::Topic::Other => {
+                    &self.senders.lo_other
+                }
             }
         }
     }
@@ -12446,7 +12449,7 @@ mod run {
                 "a remote message cannot self-promote a low topic"
             );
         }
-        fn framed_message<T: Encode>(value: &T) -> Vec<u8> {
+        fn framed_message<T: ncore::NoritoSerialize>(value: &T) -> Vec<u8> {
             ncore::to_bytes(value).expect("encode framed message")
         }
         fn encrypted_frame(plaintext: &[u8], key_byte: u8) -> Vec<u8> {

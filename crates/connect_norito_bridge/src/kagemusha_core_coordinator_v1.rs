@@ -1,12 +1,18 @@
 //! Strict native frame contract for a qualified KAGEMUSHA Core coordinator.
 //!
-//! This module defines framing and inventory only. The generic bridge does not
-//! synthesize a coordinator, monetary result, storage handle, or hardware
-//! authority. Its exported open/invoke functions therefore validate their
-//! inputs and fail closed until a qualified platform build supplies the
-//! authenticated durable coordinator.
+//! This module defines bounded framing, inventory and canonical public archive bindings.
+//! The generic bridge does not synthesize a coordinator, monetary result, storage handle,
+//! or hardware authority. Its exported open/invoke functions validate these inputs and
+//! fail closed until a qualified platform build supplies the authenticated durable coordinator.
 
+pub(crate) mod archive_boundary;
 mod archives;
+mod enrolled_open;
+mod enrolled_session;
+mod initial_enrollment;
+mod native_deadline;
+mod session_registry;
+pub(crate) mod startup_qualification;
 pub use crate::kagemusha_device_bridge_v1::sender_payload::{
     SenderPreparationSelectorV1 as KagemushaCoreSenderPreparationSelectorV1,
     SenderWalletContextV1 as KagemushaCoreSenderWalletContextV1,
@@ -19,7 +25,7 @@ pub use archives::{
 
 use iroha_data_model::kagemusha::{
     KAGEMUSHA_HARDWARE_REQUIRED_CAPABILITIES_V1, KagemushaArtifactRoleV1,
-    KagemushaQualifiedHelperCircuitV1, KagemushaQualifiedRelationV1,
+    KagemushaDeviceSignatureV1, KagemushaQualifiedHelperCircuitV1, KagemushaQualifiedRelationV1,
 };
 use std::sync::{Arc, OnceLock};
 
@@ -97,11 +103,13 @@ pub enum KagemushaCoreCoordinatorMethodV1 {
     RecoverTerminalEnvelope = 9,
     /// Release an outbox tombstone after a closed terminal receipt.
     ReleaseOutbox = 10,
+    /// Begin a transient read using a native-generated observation challenge.
+    BeginObservation = 11,
 }
 
 impl KagemushaCoreCoordinatorMethodV1 {
     /// All coordinator methods in canonical code order.
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 11] = [
         Self::ReserveOperationId,
         Self::AcceptQualification,
         Self::AcceptAuthenticatedReply,
@@ -112,6 +120,7 @@ impl KagemushaCoreCoordinatorMethodV1 {
         Self::RecoverSender,
         Self::RecoverTerminalEnvelope,
         Self::ReleaseOutbox,
+        Self::BeginObservation,
     ];
 
     /// Parse one closed coordinator method code.
@@ -128,6 +137,7 @@ impl KagemushaCoreCoordinatorMethodV1 {
             8 => Some(Self::RecoverSender),
             9 => Some(Self::RecoverTerminalEnvelope),
             10 => Some(Self::ReleaseOutbox),
+            11 => Some(Self::BeginObservation),
             _ => None,
         }
     }
@@ -307,8 +317,10 @@ pub fn kagemusha_core_coordinator_decode_request_v1(
     decode_frame(frame, KAGEMUSHA_CORE_COORDINATOR_MAX_REQUEST_BYTES_V1)
 }
 
-/// Validate method-specific request bindings before dispatching to a platform backend.
+/// Validate method-specific transport shapes and selectors.
 ///
+/// C/JNI dispatch additionally applies the private typed archive boundary. Passing this
+/// transport-only validator does not make opaque payload fields canonical or authenticated.
 /// BeginSenderTransition field zero is always the caller-persisted nonzero operation ID.
 /// RecoverSender fields zero and one are respectively the closed selector and selected nonzero ID.
 /// All integer discriminants use canonical little-endian `u32` fields, matching both signed apps.
@@ -321,8 +333,18 @@ pub fn kagemusha_core_coordinator_validate_method_request_v1(
         KagemushaCoreCoordinatorMethodV1::ReserveOperationId => {
             require_field_count(&fields, 3)?;
             require_device_operation_field(fields.first())?;
+            if is_observation_operation_v1(require_u32_field(fields.first())?) {
+                return Err(KagemushaCoreCoordinatorFrameErrorV1::Field);
+            }
             require_nonzero_digest_field(fields.get(1))?;
             require_nonempty_field(fields.get(2))
+        }
+        KagemushaCoreCoordinatorMethodV1::BeginObservation => {
+            require_field_count(&fields, 2)?;
+            if !is_observation_operation_v1(require_u32_field(fields.first())?) {
+                return Err(KagemushaCoreCoordinatorFrameErrorV1::Field);
+            }
+            require_nonempty_field(fields.get(1))
         }
         KagemushaCoreCoordinatorMethodV1::AcceptQualification => {
             require_field_count(&fields, 6)?;
@@ -330,12 +352,13 @@ pub fn kagemusha_core_coordinator_validate_method_request_v1(
             require_nonzero_digest_field(fields.get(5))
         }
         KagemushaCoreCoordinatorMethodV1::AcceptAuthenticatedReply => {
-            require_field_count(&fields, 9)?;
+            require_field_count(&fields, 10)?;
             require_device_operation_field(fields.first())?;
             require_nonzero_digest_field(fields.get(1))?;
             require_nonempty_field(fields.get(2))?;
             require_nonempty_field(fields.get(3))?;
-            require_qualification_fields(&fields, 4)
+            require_device_signature_field(fields.get(4))?;
+            require_qualification_fields(&fields, 5)
         }
         KagemushaCoreCoordinatorMethodV1::BeginSenderTransition => {
             require_nonzero_digest_field(fields.first())?;
@@ -481,6 +504,10 @@ fn require_device_operation_field(
     Ok(())
 }
 
+pub(crate) const fn is_observation_operation_v1(operation: u32) -> bool {
+    matches!(operation, 1 | 13 | 18 | 21)
+}
+
 fn require_sender_kind_field(
     field: Option<&Vec<u8>>,
 ) -> Result<(), KagemushaCoreCoordinatorFrameErrorV1> {
@@ -531,6 +558,15 @@ fn require_nonzero_digest_field(
     Ok(())
 }
 
+fn require_device_signature_field(
+    field: Option<&Vec<u8>>,
+) -> Result<(), KagemushaCoreCoordinatorFrameErrorV1> {
+    let field = field.ok_or(KagemushaCoreCoordinatorFrameErrorV1::Field)?;
+    KagemushaDeviceSignatureV1::from_raw_bytes(field)
+        .map(|_| ())
+        .map_err(|_| KagemushaCoreCoordinatorFrameErrorV1::Field)
+}
+
 /// Encode qualified-provider response fields into the exact bounded frame.
 pub fn kagemusha_core_coordinator_encode_response_v1(
     fields: &[Vec<u8>],
@@ -545,7 +581,7 @@ pub fn kagemusha_core_coordinator_decode_response_v1(
     decode_frame(frame, KAGEMUSHA_CORE_COORDINATOR_MAX_RESPONSE_BYTES_V1)
 }
 
-/// Validate the exact response shape for one already validated method request.
+/// Validate the exact transport response shape for one already validated method request.
 ///
 /// The request is included so the boundary can reject operation-ID, terminal-ID,
 /// and installed-envelope substitution before any backend output reaches C or JNI.
@@ -562,6 +598,10 @@ pub fn kagemusha_core_coordinator_validate_method_response_v1(
             require_field_count(&response, 1)?;
             require_nonzero_digest_field(response.first())?;
             require_equal_fields(response.first(), request.get(1))
+        }
+        KagemushaCoreCoordinatorMethodV1::BeginObservation => {
+            require_field_count(&response, 1)?;
+            require_nonzero_digest_field(response.first())
         }
         KagemushaCoreCoordinatorMethodV1::AcceptQualification
         | KagemushaCoreCoordinatorMethodV1::AcceptAuthenticatedReply => {
@@ -754,6 +794,7 @@ mod tests {
                 digest(0x33),
                 b"canonical-command".to_vec(),
                 b"canonical-reply".to_vec(),
+                vec![1; 64],
             ],
             qualification_fields(),
         );
@@ -841,6 +882,37 @@ mod tests {
                 "release-redeem",
                 redeem_release_request_fields(),
             ),
+            (
+                KagemushaCoreCoordinatorMethodV1::BeginObservation,
+                "observation-credential",
+                observation_request_fields(1),
+            ),
+            (
+                KagemushaCoreCoordinatorMethodV1::BeginObservation,
+                "observation-time",
+                observation_request_fields(13),
+            ),
+            (
+                KagemushaCoreCoordinatorMethodV1::BeginObservation,
+                "observation-watermark",
+                observation_request_fields(18),
+            ),
+            (
+                KagemushaCoreCoordinatorMethodV1::BeginObservation,
+                "observation-wallet",
+                observation_request_fields(21),
+            ),
+        ]
+    }
+
+    fn observation_request_fields(operation: u8) -> Vec<Vec<u8>> {
+        let command = crate::kagemusha_device_bridge_v1::canonical_stock_command_for_tests(
+            KagemushaDeviceLifecycleOperationV1::from_code(operation).unwrap(),
+        )
+        .unwrap();
+        vec![
+            u32_field(u32::from(operation)),
+            command[crate::kagemusha_device_bridge_v1::COMMAND_HEADER_BYTES_V1..].to_vec(),
         ]
     }
 
@@ -850,6 +922,7 @@ mod tests {
     ) -> Vec<Vec<u8>> {
         match method {
             KagemushaCoreCoordinatorMethodV1::ReserveOperationId => vec![request[1].clone()],
+            KagemushaCoreCoordinatorMethodV1::BeginObservation => vec![digest(0x65)],
             KagemushaCoreCoordinatorMethodV1::AcceptQualification
             | KagemushaCoreCoordinatorMethodV1::AcceptAuthenticatedReply => Vec::new(),
             KagemushaCoreCoordinatorMethodV1::BeginSenderTransition => {
@@ -911,7 +984,7 @@ mod tests {
                     .is_none()
             );
         }
-        assert_eq!(fixtures.len(), 14);
+        assert_eq!(fixtures.len(), 18);
         for (method, name, request_fields) in mobile_request_cases() {
             let (actual_method, request, response) =
                 fixtures.get(name).expect("shared method case");
@@ -952,6 +1025,14 @@ mod tests {
         );
     }
 
+    fn canonical_sender_reservation_binding() -> Vec<u8> {
+        let fixture: norito::json::Value = norito::json::from_str(include_str!(
+            "../../../fixtures/offline/kagemusha_sender_reservation_v1.json"
+        ))
+        .unwrap();
+        hex::decode(fixture["redeem_binding_hex"].as_str().unwrap()).unwrap()
+    }
+
     struct TestBackend {
         invokes: AtomicUsize,
         response: Mutex<TestResponse>,
@@ -976,7 +1057,11 @@ mod tests {
                     assert_eq!(method, KagemushaCoreCoordinatorMethodV1::ReserveOperationId);
                     assert_eq!(
                         kagemusha_core_coordinator_decode_request_v1(request_frame),
-                        Ok(vec![u32_field(1), digest(0x51), b"input".to_vec()])
+                        Ok(vec![
+                            u32_field(5),
+                            digest(0x51),
+                            canonical_sender_reservation_binding()
+                        ])
                     );
                     kagemusha_core_coordinator_encode_response_v1(&[digest(0x51)])
                         .map_err(|_| KagemushaCoreCoordinatorBackendErrorV1::Rejected)
@@ -990,10 +1075,10 @@ mod tests {
                         ),
                         Ok(())
                     );
-                    let mut fields = mobile_response_fields(
-                        method,
-                        &kagemusha_core_coordinator_decode_request_v1(request_frame)
-                            .expect("request"),
+                    let (expected_request, mut fields) = archive_boundary::tests::release_fields();
+                    assert_eq!(
+                        kagemusha_core_coordinator_decode_request_v1(request_frame).unwrap(),
+                        expected_request
                     );
                     if matches!(mode, TestResponse::ReleaseSubstituted) {
                         fields[3] = b"another-installed-envelope".to_vec();
@@ -1035,7 +1120,7 @@ mod tests {
         );
         assert_eq!(
             KagemushaCoreCoordinatorMethodV1::ALL.map(KagemushaCoreCoordinatorMethodV1::code),
-            [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+            [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
         );
         for method in KagemushaCoreCoordinatorMethodV1::ALL {
             assert_eq!(
@@ -1043,7 +1128,7 @@ mod tests {
                 Some(method)
             );
         }
-        for unknown in [0, 11, u8::MAX] {
+        for unknown in [0, 12, u8::MAX] {
             assert_eq!(KagemushaCoreCoordinatorMethodV1::from_code(unknown), None);
         }
     }
@@ -1182,7 +1267,7 @@ mod tests {
 
     #[test]
     fn signed_android_and_ios_requests_have_one_exact_method_matrix() {
-        let expected_counts = [3, 6, 9, 8, 9, 2, 2, 5, 8, 2, 10, 11];
+        let expected_counts = [3, 6, 10, 8, 9, 2, 2, 5, 8, 2, 10, 11, 2, 2, 2, 2];
         let cases = mobile_request_cases();
         assert_eq!(
             cases
@@ -1260,6 +1345,86 @@ mod tests {
     }
 
     #[test]
+    fn observations_have_no_caller_nonce_and_require_one_nonzero_native_challenge() {
+        let method = KagemushaCoreCoordinatorMethodV1::BeginObservation;
+        for operation in [1, 13, 18, 21] {
+            let fields = observation_request_fields(operation);
+            let request = kagemusha_core_coordinator_encode_request_v1(&fields).unwrap();
+            archive_boundary::validate_request(method, &request).unwrap();
+            for nonce in [digest(0x65), digest(0x66)] {
+                let response = kagemusha_core_coordinator_encode_response_v1(&[nonce]).unwrap();
+                archive_boundary::validate_response(method, &request, &response).unwrap();
+            }
+            for invalid in [
+                vec![],
+                vec![vec![0; 32]],
+                vec![vec![1; 31]],
+                vec![digest(1), digest(2)],
+            ] {
+                let response = kagemusha_core_coordinator_encode_response_v1(&invalid).unwrap();
+                assert!(archive_boundary::validate_response(method, &request, &response).is_err());
+            }
+            let old_reservation = kagemusha_core_coordinator_encode_request_v1(&[
+                fields[0].clone(),
+                digest(0x65),
+                fields[1].clone(),
+            ])
+            .unwrap();
+            assert!(archive_boundary::validate_request(method, &old_reservation).is_err());
+            assert!(
+                archive_boundary::validate_request(
+                    KagemushaCoreCoordinatorMethodV1::ReserveOperationId,
+                    &old_reservation,
+                )
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn authenticated_reply_retains_exact_signature_and_rejects_retired_projection() {
+        let (method, _, fields) = mobile_request_cases()
+            .into_iter()
+            .find(|(method, _, _)| {
+                *method == KagemushaCoreCoordinatorMethodV1::AcceptAuthenticatedReply
+            })
+            .unwrap();
+        let frame = kagemusha_core_coordinator_encode_request_v1(&fields).unwrap();
+        assert_eq!(
+            kagemusha_core_coordinator_validate_method_request_v1(method, &frame),
+            Ok(())
+        );
+        assert_eq!(
+            kagemusha_core_coordinator_decode_request_v1(&frame).unwrap()[4],
+            fields[4]
+        );
+        // These are signature-shape fixtures only. The qualified backend must verify the
+        // actual signed transcript under its admitted session key before accepting the reply.
+        let mut retired = fields.clone();
+        retired.remove(4);
+        let retired = kagemusha_core_coordinator_encode_request_v1(&retired).unwrap();
+        assert_eq!(
+            kagemusha_core_coordinator_validate_method_request_v1(method, &retired),
+            Err(KagemushaCoreCoordinatorFrameErrorV1::Field)
+        );
+        for invalid_signature in [
+            vec![],
+            vec![1; 63],
+            vec![1; 65],
+            vec![0; 64],
+            vec![0xff; 64],
+        ] {
+            let mut invalid = fields.clone();
+            invalid[4] = invalid_signature;
+            let invalid = kagemusha_core_coordinator_encode_request_v1(&invalid).unwrap();
+            assert_eq!(
+                kagemusha_core_coordinator_validate_method_request_v1(method, &invalid),
+                Err(KagemushaCoreCoordinatorFrameErrorV1::Field)
+            );
+        }
+    }
+
+    #[test]
     fn signed_app_discriminants_and_sender_variants_are_closed() {
         for operation in 1..=22_u32 {
             let fields = vec![u32_field(operation), digest(0x51), b"binding".to_vec()];
@@ -1269,7 +1434,11 @@ mod tests {
                     KagemushaCoreCoordinatorMethodV1::ReserveOperationId,
                     &frame,
                 ),
-                Ok(())
+                if is_observation_operation_v1(operation) {
+                    Err(KagemushaCoreCoordinatorFrameErrorV1::Field)
+                } else {
+                    Ok(())
+                }
             );
         }
         for invalid in [vec![1], u32_field(0), u32_field(23), vec![1, 0, 1, 0]] {
@@ -1544,7 +1713,7 @@ mod tests {
             unsafe {
                 crate::connect_norito_kagemusha_core_coordinator_invoke_v1(
                     1,
-                    11,
+                    12,
                     request.as_ptr(),
                     request.len(),
                     &mut output_ptr,
@@ -1585,6 +1754,35 @@ mod tests {
         );
         assert_eq!(handle, 0);
 
+        // Transport-shaped opaque selectors must fail before either dispatch or unavailable.
+        let mut preparation_fields = vec![b"opaque-preparation".to_vec(), b"reply".to_vec()];
+        let mut output_ptr = core::ptr::null_mut();
+        let mut output_len = usize::MAX;
+        for expected in [
+            crate::ERR_KAGEMUSHA_V1,
+            crate::ERR_KAGEMUSHA_DEVICE_UNAVAILABLE_V1,
+        ] {
+            let request =
+                kagemusha_core_coordinator_encode_request_v1(&preparation_fields).unwrap();
+            assert_eq!(
+                unsafe {
+                    crate::connect_norito_kagemusha_core_coordinator_invoke_v1(
+                        7,
+                        KagemushaCoreCoordinatorMethodV1::ProvePreparedSenderTransition.code(),
+                        request.as_ptr(),
+                        request.len(),
+                        &mut output_ptr,
+                        &mut output_len,
+                    )
+                },
+                expected
+            );
+            assert!(output_ptr.is_null());
+            assert_eq!(output_len, 0);
+            let (_, canonical_release) = archive_boundary::tests::release_fields();
+            preparation_fields[0] = canonical_release[1].clone();
+        }
+
         let backend = Arc::new(TestBackend {
             invokes: AtomicUsize::new(0),
             response: Mutex::new(TestResponse::ReserveValid),
@@ -1611,9 +1809,9 @@ mod tests {
         assert_eq!(handle, 7);
 
         let request = kagemusha_core_coordinator_encode_request_v1(&[
-            u32_field(1),
+            u32_field(5),
             digest(0x51),
-            b"input".to_vec(),
+            canonical_sender_reservation_binding(),
         ])
         .expect("canonical request");
         let mut output_ptr = core::ptr::null_mut();
@@ -1707,7 +1905,7 @@ mod tests {
         assert!(output_ptr.is_null());
         assert_eq!(output_len, 0);
 
-        let release_fields = send_release_request_fields();
+        let (release_fields, release_response) = archive_boundary::tests::release_fields();
         let release = kagemusha_core_coordinator_encode_request_v1(&release_fields)
             .expect("canonical release request");
         *backend.response.lock().expect("response mode") = TestResponse::ReleaseValid;
@@ -1728,10 +1926,7 @@ mod tests {
         crate::connect_norito_free(output_ptr);
         assert_eq!(
             kagemusha_core_coordinator_decode_response_v1(&output),
-            Ok(mobile_response_fields(
-                KagemushaCoreCoordinatorMethodV1::ReleaseOutbox,
-                &release_fields,
-            ))
+            Ok(release_response)
         );
 
         for mode in [

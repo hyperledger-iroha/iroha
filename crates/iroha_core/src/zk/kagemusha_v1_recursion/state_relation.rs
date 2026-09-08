@@ -940,7 +940,6 @@ pub(super) struct KagemushaAssignedStateRelationV1<F: KagemushaPoseidonFieldV1> 
     pub(super) journal_revision_before: AssignedValue<F>,
     pub(super) journal_revision_after: AssignedValue<F>,
     pub(super) transition_effect_digest: [AssignedValue<F>; 2],
-    pub(super) mint_finality_semantic_digest: [AssignedValue<F>; 2],
     pub(super) mint_finality_proof_binding_digest: [AssignedValue<F>; 2],
     pub(super) peer_credit_id: [AssignedValue<F>; 2],
     pub(super) recipient_encryption_key_binding: [AssignedValue<F>; 2],
@@ -1803,7 +1802,7 @@ where
     ];
     debug_assert_eq!(public.len(), PUBLIC_INSTANCE_COUNT);
     builder.assigned_instances = vec![public];
-    builder.calculate_params(Some(MINIMUM_UNUSABLE_ROWS));
+    super::base_packing::finalize_base_params_v1(&mut builder, MINIMUM_UNUSABLE_ROWS)?;
     Ok((
         builder,
         KagemushaAssignedStateRelationV1 {
@@ -1817,7 +1816,6 @@ where
             journal_revision_before,
             journal_revision_after,
             transition_effect_digest,
-            mint_finality_semantic_digest,
             mint_finality_proof_binding_digest,
             peer_credit_id,
             recipient_encryption_key_binding,

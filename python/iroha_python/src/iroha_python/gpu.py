@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Optional, Sequence, Tuple
 
-from ._native import load_crypto_extension
+from iroha_native import load_crypto_extension
 
 _crypto = load_crypto_extension()
 

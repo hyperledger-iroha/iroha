@@ -9,7 +9,6 @@ use futures_util::{
 };
 use integration_tests::sandbox;
 use iroha::{
-    client::Client,
     crypto::{Algorithm, HashOf, KeyPair},
     data_model::{
         Level,
@@ -250,7 +249,7 @@ fn realistic_30tps_snapshot_settings(rotating_fault: bool) -> (&'static str, u64
     }
 }
 async fn submit_route_probe_with_retry(
-    client: &iroha::client::Client,
+    client: &iroha::blocking::Client,
     message: &str,
     timeout: Duration,
     context: &str,
@@ -443,7 +442,7 @@ async fn submit_logs(
     start_idx: u64,
     tx_count: u64,
     network: &Network,
-    submit_clients: &[iroha::client::Client],
+    submit_clients: &[iroha::blocking::Client],
     submit_batch: u64,
     submit_parallelism: usize,
     queue_soft_limit: u64,
@@ -504,7 +503,7 @@ struct TransferLoadAccount {
 #[derive(Clone)]
 struct TransferSubmitAccount {
     id: AccountId,
-    clients: Vec<iroha::client::Client>,
+    clients: Vec<iroha::blocking::Client>,
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Realistic30TpsLoadKind {
@@ -544,7 +543,7 @@ struct RamLfeEmailLoadAccount {
 #[derive(Clone)]
 struct RamLfeEmailSubmitAccount {
     id: AccountId,
-    clients: Vec<iroha::client::Client>,
+    clients: Vec<iroha::blocking::Client>,
     uaid: UniversalAccountId,
 }
 #[derive(Clone)]
@@ -622,7 +621,7 @@ async fn fund_realistic_npos_transfer_fee_accounts(
     task::spawn_blocking(move || -> Result<()> {
         for (chunk_index, instructions) in instruction_chunks.into_iter().enumerate() {
             client
-                .submit_all_blocking(
+                .submit_all(
                     instructions,
                     iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 )
@@ -923,7 +922,7 @@ fn realistic_submit_accept_quorum(client_count: usize, tolerated_faults: usize) 
     tolerated_faults.saturating_add(1).min(client_count).max(1)
 }
 fn submit_prepared_to_accept_quorum(
-    clients: &[iroha::client::Client],
+    clients: &[iroha::blocking::Client],
     payload: &iroha::client::PreparedTransactionPayload,
     required_accepts: usize,
 ) -> Result<()> {
@@ -1008,9 +1007,15 @@ async fn submit_ram_lfe_emails_paced(
                 receipt,
             }
             .into();
-            let transaction = submit_account.clients[0]
-                .build_transaction_from_items([instruction], iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None), realistic_load_metadata(index));
-            let payload = Client::prepare_transaction_payload(&transaction);
+            let transaction ={
+    let account = submit_account.clients[0]
+                .account_client();
+    account
+        .prepare_transaction(iroha::client::AccountTransactionDraft::new([instruction], iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None), realistic_load_metadata(index)))
+        .and_then(|payload| account.sign_transaction(payload))
+}.expect("build integration-test transaction");
+            let payload =
+                iroha::client::PreparedTransactionPayload::from_transaction(&transaction);
             submit_prepared_to_accept_quorum(
                 &submit_account.clients,
                 &payload,
@@ -1086,9 +1091,15 @@ async fn submit_transfers_paced(
                 destination_id.clone(),
             )
             .into();
-            let transaction = source_account.clients[0]
-                .build_transaction_from_items([instruction], iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None), realistic_load_metadata(index));
-            let payload = Client::prepare_transaction_payload(&transaction);
+            let transaction ={
+    let account = source_account.clients[0]
+                .account_client();
+    account
+        .prepare_transaction(iroha::client::AccountTransactionDraft::new([instruction], iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None), realistic_load_metadata(index)))
+        .and_then(|payload| account.sign_transaction(payload))
+}.expect("build integration-test transaction");
+            let payload =
+                iroha::client::PreparedTransactionPayload::from_transaction(&transaction);
             submit_prepared_to_accept_quorum(
                 &source_account.clients,
                 &payload,
@@ -1116,7 +1127,7 @@ async fn submit_transfers_paced(
     Ok(submit_start.elapsed())
 }
 fn verify_realistic_transfer_balances(
-    client: &iroha::client::Client,
+    client: &iroha::blocking::Client,
     asset_definition_id: &AssetDefinitionId,
     accounts: &[TransferLoadAccount],
     tx_count: u64,
@@ -1132,10 +1143,12 @@ fn verify_realistic_transfer_balances(
         rng_seed,
     );
     for (account, expected_balance) in accounts.iter().zip(expected) {
-        let asset = client.query_single(FindAssetById::new(AssetId::new(
-            asset_definition_id.clone(),
-            account.id.clone(),
-        )))?;
+        let asset = client
+            .client()
+            .query_single(FindAssetById::new(AssetId::new(
+                asset_definition_id.clone(),
+                account.id.clone(),
+            )))?;
         ensure!(
             *asset.value() == Quantity::from(expected_balance),
             "unexpected final transfer balance for {}: expected {}, got {:?}",
@@ -1147,7 +1160,7 @@ fn verify_realistic_transfer_balances(
     Ok(())
 }
 fn verify_realistic_ram_lfe_email_claim_counts(
-    client: &iroha::client::Client,
+    client: &iroha::blocking::Client,
     accounts: &[RamLfeEmailLoadAccount],
     tx_count: u64,
     rng_seed: u64,
@@ -1155,7 +1168,9 @@ fn verify_realistic_ram_lfe_email_claim_counts(
     let expected =
         expected_realistic_ram_lfe_email_claim_counts(accounts.len(), tx_count, rng_seed);
     for (account, expected_count) in accounts.iter().zip(expected) {
-        let stored_account = client.query_single(FindAccountById::new(account.id.clone()))?;
+        let stored_account = client
+            .client()
+            .query_single(FindAccountById::new(account.id.clone()))?;
         ensure!(
             stored_account.uaid() == Some(&account.uaid),
             "unexpected UAID for RAM-LFE email account {}",
@@ -3650,7 +3665,7 @@ async fn sumeragi_status_json_endpoint_decodes_to_wire_end_to_end() -> Result<()
             );
         }
         let status_client = peer.client();
-        let payload = task::spawn_blocking(move || status_client.get_sumeragi_status_json())
+        let payload = task::spawn_blocking(move || status_client.client().get_sumeragi_status_json())
             .await
             .wrap_err("join operator-signed Sumeragi status JSON request")?
             .wrap_err("fetch and decode operator-signed Sumeragi status JSON payload")?;
@@ -5289,7 +5304,7 @@ async fn collect_sumeragi_statuses(
 ) -> Result<Vec<SumeragiDiagnosticsStatus>> {
     try_join_all(network.peers().iter().map(|peer| async move {
         let client = peer.client();
-        let handle = task::spawn_blocking(move || client.get_sumeragi_diagnostics());
+        let handle = task::spawn_blocking(move || client.client().get_sumeragi_diagnostics());
         if let Ok(joined) = tokio::time::timeout(status_timeout, handle).await {
             joined
                 .map_err(|err| {

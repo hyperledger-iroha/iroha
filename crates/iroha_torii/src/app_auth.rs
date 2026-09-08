@@ -800,17 +800,18 @@ impl norito::core::NoritoSerialize for BorrowedCanonicalRequestAccountId<'_> {
     fn schema_hash() -> [u8; 16] {
         <AccountId as norito::core::NoritoSerialize>::schema_hash()
     }
-
+}
+impl norito::core::SerializePayload for BorrowedCanonicalRequestAccountId<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
-        norito::core::NoritoSerialize::serialize(self.0, writer)
+        norito::core::SerializePayload::serialize(self.0, writer)
     }
 
     fn encoded_len_hint(&self) -> Option<usize> {
-        norito::core::NoritoSerialize::encoded_len_hint(self.0)
+        norito::core::SerializePayload::encoded_len_hint(self.0)
     }
 
     fn encoded_len_exact(&self) -> Option<usize> {
-        norito::core::NoritoSerialize::encoded_len_exact(self.0)
+        norito::core::SerializePayload::encoded_len_exact(self.0)
     }
 }
 
@@ -833,17 +834,18 @@ struct BoundedCanonicalRequestWitnessSignaturesV1(
 /// Wire-identical detached signature wrapper with a pre-allocation byte cap.
 struct BoundedCanonicalRequestSignatureV1(Signature);
 
-impl norito::core::NoritoSerialize for BoundedCanonicalRequestSignatureV1 {
+impl norito::core::NoritoSerialize for BoundedCanonicalRequestSignatureV1 {}
+impl norito::core::SerializePayload for BoundedCanonicalRequestSignatureV1 {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
-        norito::core::NoritoSerialize::serialize(&self.0, writer)
+        norito::core::SerializePayload::serialize(&self.0, writer)
     }
 
     fn encoded_len_hint(&self) -> Option<usize> {
-        norito::core::NoritoSerialize::encoded_len_hint(&self.0)
+        norito::core::SerializePayload::encoded_len_hint(&self.0)
     }
 
     fn encoded_len_exact(&self) -> Option<usize> {
-        norito::core::NoritoSerialize::encoded_len_exact(&self.0)
+        norito::core::SerializePayload::encoded_len_exact(&self.0)
     }
 }
 
@@ -895,17 +897,18 @@ impl From<BoundedCanonicalRequestSignatureWitnessWireV1> for CanonicalRequestSig
     }
 }
 
-impl norito::core::NoritoSerialize for BoundedCanonicalRequestWitnessSignaturesV1 {
+impl norito::core::NoritoSerialize for BoundedCanonicalRequestWitnessSignaturesV1 {}
+impl norito::core::SerializePayload for BoundedCanonicalRequestWitnessSignaturesV1 {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
-        norito::core::NoritoSerialize::serialize(&self.0, writer)
+        norito::core::SerializePayload::serialize(&self.0, writer)
     }
 
     fn encoded_len_hint(&self) -> Option<usize> {
-        norito::core::NoritoSerialize::encoded_len_hint(&self.0)
+        norito::core::SerializePayload::encoded_len_hint(&self.0)
     }
 
     fn encoded_len_exact(&self) -> Option<usize> {
-        norito::core::NoritoSerialize::encoded_len_exact(&self.0)
+        norito::core::SerializePayload::encoded_len_exact(&self.0)
     }
 }
 
@@ -959,20 +962,21 @@ mod bounded_nonce_wire {
         fn schema_hash() -> [u8; 16] {
             <std::string::String as norito::core::NoritoSerialize>::schema_hash()
         }
-
+    }
+    impl norito::core::SerializePayload for String {
         fn serialize(
             &self,
             writer: &mut norito::core::Encoder<'_>,
         ) -> Result<(), norito::core::Error> {
-            norito::core::NoritoSerialize::serialize(&self.0, writer)
+            norito::core::SerializePayload::serialize(&self.0, writer)
         }
 
         fn encoded_len_hint(&self) -> Option<usize> {
-            norito::core::NoritoSerialize::encoded_len_hint(&self.0)
+            norito::core::SerializePayload::encoded_len_hint(&self.0)
         }
 
         fn encoded_len_exact(&self) -> Option<usize> {
-            norito::core::NoritoSerialize::encoded_len_exact(&self.0)
+            norito::core::SerializePayload::encoded_len_exact(&self.0)
         }
     }
 
@@ -1044,17 +1048,18 @@ impl norito::core::NoritoSerialize for BoundedCanonicalRequestWitnessV1 {
     fn schema_hash() -> [u8; 16] {
         <CanonicalRequestWitnessV1 as norito::core::NoritoSerialize>::schema_hash()
     }
-
+}
+impl norito::core::SerializePayload for BoundedCanonicalRequestWitnessV1 {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
-        norito::core::NoritoSerialize::serialize(&self.0, writer)
+        norito::core::SerializePayload::serialize(&self.0, writer)
     }
 
     fn encoded_len_hint(&self) -> Option<usize> {
-        norito::core::NoritoSerialize::encoded_len_hint(&self.0)
+        norito::core::SerializePayload::encoded_len_hint(&self.0)
     }
 
     fn encoded_len_exact(&self) -> Option<usize> {
-        norito::core::NoritoSerialize::encoded_len_exact(&self.0)
+        norito::core::SerializePayload::encoded_len_exact(&self.0)
     }
 }
 
@@ -3102,7 +3107,7 @@ mod tests {
         fn encode_bare<T: norito::core::NoritoSerialize>(value: &T) -> Vec<u8> {
             let mut bytes = Vec::new();
             let mut encoder = norito::core::Encoder::for_buffer(&mut bytes);
-            norito::core::NoritoSerialize::serialize(value, &mut encoder)
+            norito::core::SerializePayload::serialize(value, &mut encoder)
                 .expect("serialize bare witness payload");
             bytes
         }

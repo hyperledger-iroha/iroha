@@ -12,6 +12,7 @@ import ast
 import base64
 import binascii
 import hashlib
+import importlib.util
 import re
 import sys
 from dataclasses import dataclass
@@ -19,6 +20,16 @@ from pathlib import Path
 
 root = Path(sys.argv[1])
 mode = sys.argv[2]
+
+# The manifest parity auditor owns the approved C privacy inventory.
+parity_spec = importlib.util.spec_from_file_location(
+    "privacy_exact12_sdk_manifest_guard", root / "scripts/check_privacy_exact12_sdk_manifest_parity.py"
+)
+if parity_spec is None or parity_spec.loader is None:
+    raise RuntimeError("canonical privacy ABI inventory is unavailable")
+MANIFEST_PARITY = importlib.util.module_from_spec(parity_spec)
+sys.modules[parity_spec.name] = MANIFEST_PARITY
+parity_spec.loader.exec_module(MANIFEST_PARITY)
 
 MATRIX_RELATIVE = "fixtures/privacy/exact12_v1.tsv"
 MATRIX_BYTES = (root / MATRIX_RELATIVE).read_bytes()
@@ -908,10 +919,10 @@ def _check_cargo_workflow(
         ),
     }
     native_lane_job_digests = {
-        "privacy_swift_sdk_parse": "90dbb6330f5cbbf3fddd1852502eb012296bcc5f2a95445ea5a76f1ed8ef63c3",
+        "privacy_swift_sdk_parse": "6ffb6eb5a14697eb1e75f0d64fb30958ec04c2df018b4811f208853952090f77",
         "privacy_jvm_sdk_tests": "16847be930e1e9bd7dfbe3ba69677cabcce248f74eaf446ba984727bcdc468a5",
-        "privacy_csharp_sdk_tests": "caf330b5c28eccf599ad7795ef193f03cbf18ca469d75a1cb61045ccb8f6984f",
-        "privacy_javascript_sdk_tests": "190f432023c002e05b3799c533988232b1827d35b77e4a982d6eb39e68833c95",
+        "privacy_csharp_sdk_tests": "124f324f0f1b4bc8eb57a14343d3cef5c4c51b639d034f1ae3ab387905ff9a8f",
+        "privacy_javascript_sdk_tests": "a5c385c0182d4322d032032309f24fc60070b53de6b890125385b5c6bdea8d6a",
     }
 
     require(
@@ -1475,7 +1486,6 @@ def check(overrides: dict[str, str] | None = None) -> None:
     )
 
     for relative in (
-        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/PrivacyExact12FixtureCodecV1.java",
         "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyExact12FixtureCodecV1.kt",
     ):
         source = read(relative, overrides)
@@ -1485,6 +1495,18 @@ def check(overrides: dict[str, str] | None = None) -> None:
             "exact-12 fixture archive exactly once",
             errors,
         )
+
+    for name in ("PrivacyExact12FixtureCodecV1", "PrivacyExact12FixtureBundleV1", "PrivacyExact12TypedFixtureRowV1"):
+        require(
+            not (root / "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy" / (name + ".java")).exists(),
+            "Java Exact12 fixture implementations must remain retired; Kotlin owns their complete codec and model",
+            errors,
+        )
+    require(
+        (root / "kotlin/core-jvm/src/test/java/org/hyperledger/iroha/sdk/privacy/PrivacyExact12FixtureJavaConsumerTest.java").is_file(),
+        "Java Exact12 fixture assertions must target the canonical Kotlin API",
+        errors,
+    )
 
     for relative, source, markers in (
         (
@@ -1873,14 +1895,7 @@ def check(overrides: dict[str, str] | None = None) -> None:
         "crates/connect_norito_bridge/include/connect_norito_bridge.h", overrides
     )
     require(
-        set(re.findall(r"\b(iroha_privacy_[a-z0-9_]+)\s*\(", c_header))
-        == {
-            "iroha_privacy_compiled_profile_catalog_v1",
-            "iroha_privacy_validate_compiled_profile_catalog_v1",
-            "iroha_privacy_exact12_fixture_bundle_v1",
-            "iroha_privacy_validate_exact12_fixture_bundle_v1",
-            "iroha_privacy_free_buffer",
-        },
+        MANIFEST_PARITY._header_exports(c_header) == MANIFEST_PARITY.APPROVED_PRIVACY_EXPORTS,
         "C privacy ABI must contain only local compiled-profile catalog, exact-12 conformance, typed validators, and zeroizing free",
         errors,
     )
@@ -2003,6 +2018,7 @@ def check(overrides: dict[str, str] | None = None) -> None:
         "python/iroha_python/tests/package_import_fallback_test.py", overrides
     )
     python_pyproject_source = read("python/iroha_python/pyproject.toml", overrides)
+    python_native_pyproject_source = read("python/iroha_native/pyproject.toml", overrides)
     workflow = _check_cargo_workflow(workflow_source, errors)
     required_workflow_paths = (
         ".gitignore",
@@ -2038,6 +2054,12 @@ def check(overrides: dict[str, str] | None = None) -> None:
         "crates/sorafs_orchestrator/**",
         "ci/verify_privacy_python_wheel.py",
         "python/iroha_python/pyproject.toml",
+        "python/iroha_native/pyproject.toml",
+        "python/iroha_native/src/**",
+        "python/iroha_native/src/**/*.py",
+        "python/iroha_native/src/**/*.so",
+        "python/iroha_native/src/**/*.dylib",
+        "python/iroha_native/src/**/*.pyd",
         "python/iroha_python/iroha_python_rs/build.rs",
         "python/iroha_python/iroha_python_rs/src/**",
         "python/iroha_python/requirements-ci.lock",
@@ -2313,13 +2335,16 @@ def check(overrides: dict[str, str] | None = None) -> None:
         and "PIP_GENERATED_DIST_INFO_FILES"
         in python_wheel_verifier_source
         and "bytecode cache directory" in python_wheel_verifier_source
-        and "iroha_python/__init__.py" in python_wheel_verifier_source
-        and "iroha_python._crypto" in python_wheel_verifier_source
+        and 'WheelOwner("iroha_native", "iroha-native", True)' in python_wheel_verifier_source
+        and 'WheelOwner("iroha_python", "iroha-python", False)' in python_wheel_verifier_source
+        and "SDK_WHEEL_SEAL" in python_sdk_guard_source
+        and "pure SDK wheel must not contain a native module" in python_wheel_verifier_source
+        and "iroha_native._crypto" in python_wheel_verifier_source
         and "Python.framework" in python_wheel_verifier_source
         and "libpython" in python_wheel_verifier_source
         and '[str(otool), "-L", str(native_path)]'
         in python_wheel_verifier_source,
-        "privacy Python SDK gate must install exactly one sealed wheel and verify its package, native bytes, and Darwin links",
+        "privacy Python SDK gate must authenticate both sealed owners, package trees, native bytes, and Darwin links",
         errors,
     )
     require(
@@ -2337,7 +2362,7 @@ def check(overrides: dict[str, str] | None = None) -> None:
     )
     require(
         all(
-            marker in python_pyproject_source
+            marker in python_native_pyproject_source
             for marker in (
                 '"src/**/*.so"',
                 '"src/**/*.dylib"',
@@ -2347,7 +2372,15 @@ def check(overrides: dict[str, str] | None = None) -> None:
                 '"src/**/*.pyo"',
             )
         ),
-        "privacy Python wheel policy must exclude checkout-native and bytecode artifacts from mixed-project inputs",
+        "privacy Python native wheel policy must exclude checkout-native and bytecode artifacts from mixed-project inputs",
+        errors,
+    )
+    require(
+        'build-backend = "setuptools.build_meta"' in python_pyproject_source
+        and '"iroha-native==0.0.1"' in python_pyproject_source
+        and '[tool.setuptools.exclude-package-data]' in python_pyproject_source
+        and all(pattern in python_pyproject_source for pattern in ('"*.so"', '"*.dylib"', '"*.pyd"', '"*.pyc"', '"*.pyo"')),
+        "privacy pure SDK wheel must require the sole native owner and exclude native/bytecode files",
         errors,
     )
     for rejected_environment_name in (
@@ -2394,7 +2427,7 @@ def check(overrides: dict[str, str] | None = None) -> None:
         and "IROHA_PYTHON_TEST_INSTALLED_PACKAGE" in python_conftest_source
         and "site.getsitepackages()" in python_conftest_source
         and "sysconfig.get_paths()" in python_conftest_source
-        and "iroha_python._crypto" in python_conftest_source
+        and "iroha_native._crypto" in python_conftest_source
         and "PathFinder.find_spec" in python_conftest_source
         and "ExtensionFileLoader" in python_conftest_source
         and "loader_state" in python_conftest_source

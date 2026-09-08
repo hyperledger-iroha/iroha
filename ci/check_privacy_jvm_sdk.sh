@@ -7,7 +7,7 @@ PYTHON_BIN="${PRIVACY_JVM_SDK_PYTHON_BIN:-python3}"
 CARGO_BIN="${PRIVACY_JVM_SDK_CARGO_BIN:-cargo}"
 RUSTC_BIN="${PRIVACY_JVM_SDK_RUSTC_BIN:-rustc}"
 FROZEN_CARGO_LOCK_SHA256="cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79"
-TRACKED_ROOT_CARGO_LOCK_SHA256="d5b8bf5efbdc3ce2a8b1c0d2d75e1c5d1a343a072f836cfb76205bc6ea4cf15f"
+TRACKED_ROOT_CARGO_LOCK_SHA256="051423addf3830895e208c6276429a0e8f46c61954159b0ef913e8cfed33d3aa"
 ABI23_CHECKER="${ROOT_DIR}/scripts/check_native_sdk_abi23_artifact.py"
 JAVA_OUT="$(mktemp -d "${TMPDIR:-/tmp}/iroha-privacy-java-sdk-test.XXXXXX")"
 NATIVE_BUILD_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/iroha-privacy-jvm-native.XXXXXX")"
@@ -180,6 +180,7 @@ cd "${ROOT_DIR}/kotlin"
 ./gradlew --no-daemon -q :core-jvm:jar :core-jvm:test \
   --tests org.hyperledger.iroha.sdk.privacy.PrivacyNativeBridgeTest \
   --tests org.hyperledger.iroha.sdk.privacy.PrivacyExact12FixtureCodecV1Test \
+  --tests org.hyperledger.iroha.sdk.privacy.PrivacyExact12FixtureJavaConsumerTest \
   --tests org.hyperledger.iroha.sdk.core.model.zk.VerifyingKeyBackendTagTest \
   --tests org.hyperledger.iroha.sdk.core.model.zk.VerifyingKeyRecordDescriptionTest \
   --tests org.hyperledger.iroha.sdk.core.model.instructions.VerifyingKeyInstructionBuildersTest \
@@ -187,7 +188,6 @@ cd "${ROOT_DIR}/kotlin"
 
 cd "${ROOT_DIR}/java/iroha_android"
 ./gradlew --no-daemon -q :core:test \
-  --tests org.hyperledger.iroha.android.privacy.PrivacyExact12FixtureCodecV1Tests \
   --tests org.hyperledger.iroha.android.model.instructions.ProofAttachmentModelTests \
   --tests org.hyperledger.iroha.android.norito.ProofAttachmentNoritoTests
 

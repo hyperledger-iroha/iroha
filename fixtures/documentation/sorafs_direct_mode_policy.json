@@ -15,5 +15,5 @@
   },
   "telemetry_region": "regulated-eu",
   "max_providers": 2,
-  "transport_policy": "direct_only"
+  "transport_policy": "direct-only"
 }

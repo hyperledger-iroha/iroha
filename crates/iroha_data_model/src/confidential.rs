@@ -727,7 +727,8 @@ impl Default for ConfidentialMemoEnvelopeV1 {
     }
 }
 
-impl norito::NoritoSerialize for ConfidentialMemoEnvelopeV1 {
+impl norito::NoritoSerialize for ConfidentialMemoEnvelopeV1 {}
+impl norito::SerializePayload for ConfidentialMemoEnvelopeV1 {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), NoritoError> {
         writer.write_all(&self.encode_wire()?)?;
         Ok(())

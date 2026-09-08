@@ -111,6 +111,11 @@ from scripts.tests.sorafs_rollout_gate_source_support import (
     read_source as read,
 )
 from scripts.tests.state_source_bundle import read_rust_source_bundle
+from scripts.tests.sorafs_ledger_sdk_contracts import (
+    assert_repair_chain_authority_is_closed_and_live_evidence_stays_open_in_docs,
+    assert_reserve_rent_chain_authoritative_contract_stays_open_until_evidence,
+    assert_reputation_docs_track_projector_hard_cut_and_remaining_runtime_work,
+)
 
 
 SCRIPTS_DIR = Path(__file__).resolve().parents[1]
@@ -386,7 +391,11 @@ FINGERPRINT_FIELD_ALLOWED_NAMES = frozenset(
     }
 )
 EXTERNAL_SOURCE_CANARY_EXAMPLE_NAMES = frozenset(
-    {"sorafs_reference_sdk_release_supply_chain_canary.args.example"}
+    {
+        "sorafs_reference_sdk_release_supply_chain_canary.args.example",
+        "sorafs_reference_sdk_signed_manifest_canary.args.example",
+        "sorafs_reference_sdk_release_signed_manifest_canary.args.example",
+    }
 )
 RUNNER_PLAN_CONSTANT_NAMES = (
     "PLAN_FIELDS",
@@ -517,6 +526,7 @@ ACTIVE_SORAFS_TODO_SCAN_ROOTS = (
 ACTIVE_SORAFS_TODO_DISCOVERY_ROOTS = (
     REPO_ROOT / "crates",
     REPO_ROOT / "python" / "iroha_python" / "src",
+    REPO_ROOT / "python" / "iroha_torii_client",
     REPO_ROOT / "javascript" / "iroha_js" / "src",
     REPO_ROOT / "java" / "iroha_android" / "src" / "main" / "java",
     REPO_ROOT / "kotlin" / "core-jvm" / "src" / "main" / "java",
@@ -2732,6 +2742,9 @@ def test_external_source_canary_examples_have_dedicated_source_validation() -> N
     assert "test_builds_complete_supply_chain_canary" in source_tests
     assert "test_supply_chain_source_errors_fail_before_write" in source_tests
     assert "test_supply_chain_rejects_wrong_verification_public_key" in source_tests
+    assert "test_signed_manifest_requires_independent_sources_before_write" in source_tests
+    assert "test_signed_manifest_rejects_caller_asserted_hardware_backend_before_write" in source_tests
+    assert "test_response_file_cannot_bypass_signed_manifest_source_authentication" in source_tests
 
 
 def test_canary_argfile_examples_build_reviewed_artifacts(
@@ -5324,6 +5337,7 @@ def test_rollout_runner_dry_run_plan_uses_reviewed_top_level_keys() -> None:
         "deployment_context",
         "evidence_contract",
         "supply_chain_source",
+        "signed_manifest_source",
         "topology_qualification",
         "steps",
     }
@@ -7918,14 +7932,12 @@ def test_sorafs_reference_ffi_header_gate_uses_no_follow_io() -> None:
         (header_gate, "sorafs-reference-header"),
         (bridge_gate, "connect-norito-header"),
     ):
-        assert f'''if ! command -v "${{CC:-cc}}" >/dev/null 2>&1; then
-  echo "[{label}] required C compiler not found: ${{CC:-cc}}" >&2
-  exit 1
-fi''' in gate
-        assert f'''if ! command -v "${{CXX:-c++}}" >/dev/null 2>&1; then
-  echo "[{label}] required C++ compiler not found: ${{CXX:-c++}}" >&2
-  exit 1
-fi''' in gate
+        normalized_gate = "\n".join(line.strip() for line in gate.splitlines())
+        for compiler, language in (("CC:-cc", "C"), ("CXX:-c++", "C++")):
+            assert f'''if ! command -v "${{{compiler}}}" >/dev/null 2>&1; then
+echo "[{label}] required {language} compiler not found: ${{{compiler}}}" >&2
+exit 1
+fi''' in normalized_gate
         assert "skipping c" not in gate.lower()
 
 
@@ -8253,6 +8265,12 @@ def test_sorafs_cli_release_gate_runs_helper_adversarial_tests() -> None:
         "python3 scripts/check_source_file_budget.py"
     )
     assert "scripts/tests/check_build_efficiency_provenance_test.py" in release_gate
+    assert "scripts/tests/sorafs_reference_sdk_receipt_verifier_test.py" in release_gate
+    assert "scripts/tests/sorafs_ledger_sdk_contracts.py" in release_workflow
+    assert all(path in release_workflow for path in (
+        "scripts/sorafs_reference_sdk_receipt_verifier.py",
+        "scripts/tests/sorafs_reference_sdk_receipt_verifier_test.py",
+    ))
     assert all(
         path in release_workflow
         for path in (
@@ -8268,7 +8286,7 @@ def test_sorafs_cli_release_gate_runs_helper_adversarial_tests() -> None:
     assert release_workflow.count("fetch-depth: 0") == 1
     assert "python3 -m pytest -q \\" in release_gate
     assert "scripts/tests/release_sorafs_cli_test.py" in release_gate and "scripts/tests/package_sorafs_cli_candidate_test.py" in release_gate and "def _validate_version_map(" in candidate_packager and "canonical SemVer" in candidate_packager and all(name in candidate_packager_test for name in ("test_candidate_packager_rejects_version_map_mismatch_without_outputs", "test_candidate_packager_rejects_noncanonical_semver_without_outputs"))
-    assert "scripts/tests/build_sorafs_foundational_prerequisite_test.py" in release_gate and "scripts/tests/check_sorafs_production_promotion_bundle_test.py" in release_gate and all(path in release_workflow for path in (".gitignore", "Cargo.lock", "ci/source_file_budget.json", "scripts/check_source_file_budget.py", "scripts/tests/sorafs_foundational_receipt_test_support.py", "crates/iroha/src/client/repair.rs", "scripts/check_sorafs_release_version_map.py", "scripts/tests/check_sorafs_release_version_map_test.py", "crates/irohad/Cargo.toml", "crates/irohad/src/lib.rs", "crates/irohad/src/main.rs", "crates/irohad/src/sorafs_provider_ingest_runtime.rs", "crates/irohad/src/sorafs_provider_ingest_runtime/**", "crates/sorafs_node/**", "crates/iroha_config/**", "crates/iroha_crypto/**", "crates/iroha_data_model/**", "scripts/tests/check_sorafs_provider_ingest_runtime_contract_test.py", "scripts/check_sorafs_production_promotion_bundle.py", "scripts/tests/check_sorafs_production_promotion_bundle_test.py")) and all(marker in release_gate for marker in ("cargo_lock_sha256()", 'expected_cargo_lock_sha256="$(cargo_lock_sha256)"', 'if [[ "$(cargo_lock_sha256)" != "${expected_cargo_lock_sha256}" ]]')) and "mod quarantine_restart;" in provider_ingest_parent and re.search(r'#\[tokio::test\]\s*(?:#\[expect\(\s*clippy::too_many_lines,\s*reason\s*=\s*"[^"]*"\s*\)\]\s*)?async fn post_admission_quarantine_survives_restart_with_shared_chunks\(\)', provider_ingest_test) and all(marker in provider_ingest_contract for marker in ("QUARANTINE_RESTART_SHA256", "test_quarantine_restart_proof_is_frozen_connected_and_unignored"))
+    assert "scripts/tests/build_sorafs_foundational_prerequisite_test.py" in release_gate and "scripts/tests/check_sorafs_production_promotion_bundle_test.py" in release_gate and all(path in release_workflow for path in (".gitignore", "Cargo.lock", "ci/source_file_budget.json", "scripts/check_source_file_budget.py", "scripts/tests/sorafs_foundational_receipt_test_support.py", "crates/iroha/src/client/repair.rs", "scripts/check_sorafs_release_version_map.py", "scripts/tests/check_sorafs_release_version_map_test.py", "crates/irohad/Cargo.toml", "crates/irohad/src/lib.rs", "crates/irohad/src/main.rs", "crates/irohad/src/sorafs_provider_ingest_runtime.rs", "crates/irohad/src/sorafs_provider_ingest_runtime/**", "crates/sorafs_node/**", "crates/iroha_config/**", "crates/iroha_crypto/**", "crates/iroha_data_model/**", "scripts/tests/check_sorafs_provider_ingest_runtime_contract_test.py", "scripts/check_sorafs_production_promotion_bundle.py", "scripts/tests/check_sorafs_production_promotion_bundle_test.py")) and all(marker in release_gate for marker in ("cargo_lock_sha256()", 'expected_cargo_lock_sha256="$(cargo_lock_sha256)"', 'if [[ "$(cargo_lock_sha256)" != "${expected_cargo_lock_sha256}" ]]')) and "mod quarantine_restart;" in provider_ingest_parent and re.search(r'#\[tokio::test\]\s*(?:#\[expect\(\s*clippy::too_many_lines,\s*reason\s*=\s*"[^"]*"\s*\)\]\s*)?async fn post_admission_quarantine_survives_restart_with_shared_chunks\(\)', provider_ingest_test) and all(marker in provider_ingest_contract for marker in ("_assert_quarantine_restart_contract", "test_quarantine_restart_proof_is_connected_and_preserves_recovery_invariants", "test_quarantine_contract_rejects_weakened_or_disconnected_proof", "test_quarantine_contract_ignores_layout_but_rejects_comment_and_module_substitutes"))
     assert "scripts/tests/generate_sorafs_cli_release_manifest_test.py" in release_gate and "def _validate_version_map(" in manifest and "canonical SemVer" in manifest and all(name in manifest_test for name in ("test_manifest_rejects_embedded_version_map_mismatch", "test_manifest_rejects_noncanonical_semver"))
     assert "scripts/tests/package_sorafs_validate_release_test.py" in release_gate
     assert "python/iroha_python/scripts/release_smoke.sh" in release_gate
@@ -14656,7 +14674,15 @@ def test_sorafs_node_plan_docs_track_current_storage_routes() -> None:
         if matched_unsupported:
             unsupported[str(path.relative_to(REPO_ROOT))] = matched_unsupported
 
-    missing_openapi = [route for route in required_routes if f'"{route}"' not in openapi]
+    operator_catalog = read(REPO_ROOT / "crates" / "iroha_torii_shared" / "src" / "route_catalog.rs")
+    router = read(REPO_ROOT / "crates" / "iroha_torii" / "src" / "lib.rs")
+    assert 'operator_local_get("sorafs.storage_state.read", "/v1/sorafs/storage/state")' in operator_catalog
+    assert "STORAGE_STATE => limited_operator_get(sorafs::api::handle_get_sorafs_storage_state," in router
+    assert '"/v1/sorafs/storage/state"' not in openapi
+    missing_openapi = [
+        route for route in required_routes
+        if route != "/v1/sorafs/storage/state" and f'"{route}"' not in openapi
+    ]
 
     assert missing_routes == {}
     assert stale == {}
@@ -17592,54 +17618,7 @@ def test_unshipped_moderation_panel_parent_service_surface_is_not_exposed() -> N
 
 
 def test_reputation_docs_track_projector_hard_cut_and_remaining_runtime_work() -> None:
-    source = read(SORAFS_REPUTATION_PLAN)
-    normalized = re.sub(r"\s+", " ", source)
-    assert "mod reputation_journal;" in read(IROHA_CLIENT_RS)
-    reputation_client = read(IROHA_CLIENT_RS.parent / "client" / "reputation_journal.rs")
-    assert reputation_client.count("pub fn try_build_sorafs_reputation_journal_") == 3
-    assert reputation_client.count("pub fn query_sorafs_reputation_journal_") == 3
-    assert all(marker in reputation_client for marker in ("pub fn try_build_sorafs_reputation_journal_authority_policy_transaction(", "pub fn try_build_sorafs_reputation_journal_por_entry_transaction(", "pub fn try_build_sorafs_reputation_journal_stream_token_entry_transaction(", "pub fn query_sorafs_reputation_journal_authority_policy(", "pub fn query_sorafs_reputation_journal_event_by_source_id(", "pub fn query_sorafs_reputation_journal_events(", "entry.source_kind() != expected_kind", "entry.recorded_by != client.account", "event.validate(response_cursor)", "page.events.len() > usize::try_from(limit)", "after.is_none() && page.events.first().is_some_and(|event| event.sequence != 1)", "page.validate_after(after)", "transaction_builders_sign_exact_typed_instruction", "transaction_builders_reject_invalid_family_and_authority_before_signing", "typed_queries_are_authenticated_and_preserve_exact_fields", "unpinned_source_query_rejects_malformed_event_response", "event_page_query_rejects_responses_outside_request_bounds", "query_validation_rejects_bad_inputs_without_http"))
-    required_open = (
-        "SFM-3 has two local foundations: the deterministic reputation V1 snapshot/proof core and a native committed input journal.",
-        "This is source implementation, not a readiness claim.",
-        "Torii's local-authoritative snapshot POST and the matching CLI publication command are removed. Latest, provider, weights, and event reads now consume only the fresh committed-derived projection after signed snapshot validation and authenticated Governance DAG readback. Snapshot-id reads resolve the exact authenticated snapshot from the durable immutable suffix capped at 1,024 entries and the publication-checkpoint byte ceiling; unknown or evicted ids return `404`.",
-        "Capacity-dispute registration appends `Opened` atomically with the canonical dispute record, and `ResolveSorafsCapacityDispute` atomically updates that record and appends the exact revision-two `Resolved` event.",
-        "The standard daemon owns the compact Kura-authenticated historical archive/query and captures it at the V2 commit boundary.",
-        "Scoring engine (`reputation_engine`) | Aggregates finalized projections, runs the fixed-point EigenTrust-style algorithm, applies policy penalties, and generates canonical snapshot material. | Runs on the configured supervised interval and writes only the bounded durable checkpoint/outbox; publication becomes visible through the authenticated Governance DAG and committed-derived projection.",
-        "Snapshot publisher (`reputation_publisher`) | Independently threshold-signs exact projector outbox material, publishes it to the Governance DAG/committed projection, and acknowledges the canonical result. | The supervised keyless worker is wired; production threshold-signer and authenticated DAG publication/readback adapters remain open.",
-        "API gateway (`sorafs_reputation_api`) | Exposes authenticated read-only REST, SSE, and WebSocket committed projections. | The obsolete local POST is removed. Exact empty-body GETs require the signature quartet or exact witness. Latest/provider/weights/event reads use the ready committed projection; snapshot-id reads return the exact retained authenticated snapshot or `404` after bounded eviction, and the runtime cannot start in production until all required injected adapters exist.",
-        "Strict non-secret `iroha_config` policy construction and the supervised finalized-query/threshold-signing/publication worker are implemented.",
-        "The immutable historical query is no longer injectable: the daemon opens the explicitly bounded archive, performs zero-gap reconciliation against the authenticated Kura tip, preserves the activation floor when first enabled on a nonempty chain, and constructs the query from that archive.",
-        "`IrohaRuntimeDeps` requires an externally authenticated journal-transaction submitter. The queue-backed validator-key submitter, the unsound current-head state adapter, and both fallbacks were removed.",
-        "Missing, null/test-marked, or identity-substituted threshold-signer and Governance DAG adapters fail startup. The finalized query is daemon-owned and archive-backed rather than injectable.",
-        "The threshold-signer boundary pins its production handle to the canonical trust-policy digest, which covers policy identity/version, quorum, the ordered Ed25519 public-key set, and revocations; startup and every signing call revalidate the binding before and after use, and every returned envelope is verified against the same policy.",
-        "Governance DAG provider qualification now binds both the configured publisher peer identity and exact Ed25519 public key, so a same-key different-peer adapter fails before the reputation checkpoint opens.",
-        "Daemon startup applies the runtime's complete exact-request bootstrap-view validator—anchor identity and chain/height, authority-policy activation time, canonical continuation, non-zero bounded request limit, and exact finalized cursor—before opening the reputation checkpoint.",
-        "The same archive is threaded through Sumeragi and durably captures each fresh height after Kura finality and the WSV checkpoint but before `StateBlock::commit`; a capture failure requires committed recovery.",
-        "Open under `V1-BLOCK-REPUTATION-RUNTIME-01`: `ReputationThresholdSignerClientV1` and `ReputationGovernanceDagClientV1` adapters; concrete stream-token callback-owner wiring; genuine qualification of the configured PoR replay archive and external threshold software-signing service; current DAG head/inclusion proof; integrated Rust validation; and reviewed four-peer rotation, recovery, retry, and failover evidence remain outstanding. No ledger page, credential, signature, or acknowledgement may be synthesized as a fallback.",
-        "Production rollout:",
-        "L1 remains open until the exact four-validator deployment supplies genuine immutable finalized-query, external threshold-signing, authenticated Governance DAG publication/readback/head-inclusion, PoR/token callback, restart/failover, live transport, and rollout evidence, including authenticated CLI collection or equivalent direct artifacts.",
-        "Supply external threshold signer and authenticated Governance DAG publication/readback/head-inclusion adapters to the already-supervised runtime.",
-        "Deploy the supervised publisher and API against the committed projection, exercise exact retained snapshot-id lookup and bounded eviction, and run four-peer end-to-end tests with orchestrator/indexer consumers.",
-        "Capture live run evidence for snapshot freshness, ingest lag, low-score handling, SSE/WebSocket event delivery, and routing/incentive consumption",
-        "Publish governance-approved weights with the governed `weights_digest_hex` carried by publish/latest rollout evidence, then archive the first production snapshot `.to`/JSON artifacts and proof replay evidence.",
-        "Exercise rollback/stale-snapshot procedures before routing or incentives rely",
-    )
-    missing = [phrase for phrase in required_open if phrase not in normalized]
-    stale_missing_adapter_claims = (
-        "concrete production query and journal-delivery adapters remain open",
-        "there is no non-test concrete implementation of those three adapters",
-        "add the fixed-view active-policy reader and durable queue-backed",
-        "deploy genuine finalized-query, threshold-signing",
-        "remaining GET family still reads the old retained snapshot model",
-        "standard-daemon committed read wiring remains open",
-        "snapshot-id route remains latest-only",
-        "snapshot-id route still retains only the latest snapshot",
-        "Resolve the latest-only snapshot-id route",
-        "`StateReputationFinalizedQueryV1`",
-    )
-    assert missing == []
-    assert not any(phrase in normalized for phrase in stale_missing_adapter_claims)
+    assert_reputation_docs_track_projector_hard_cut_and_remaining_runtime_work()
 
 
 def test_reputation_bootstrap_view_uses_full_exact_request_validation() -> None:
@@ -19575,36 +19554,7 @@ def test_unshipped_potr_live_rollout_surface_is_not_exposed() -> None:
 
 
 def test_repair_chain_authority_is_closed_and_live_evidence_stays_open_in_docs() -> None:
-    source = read(SORAFS_REPAIR_PLAN)
-    normalized = re.sub(r"\s+", " ", source)
-
-    required_open = (
-        "Every command route accepts exactly one caller-signed `SignedTransaction` containing the route-specific native repair instruction and forwards it through strict durable transaction ingress. Reads return finalized ledger projections; obsolete local status-by-manifest, SSE, and WebSocket authority routes are not shipped.",
-        "The former local `RepairManager`, `FileRepairStore`, repair checkpoint, mutation/event history, scheduler, and compatibility APIs have been deleted.",
-        "The storage executor accepts only a fully validated native task read at an exact finalized cursor and requires the current lease owner, generation, revision, provider binding, and expiry before any storage I/O.",
-        "GC and reconciliation consume one complete, bounded task projection collected from a single immutable finalized query view; a truncated, drifting, malformed, or unbound projection fails closed.",
-        "Use the rollout gate only after exact-live-lease execution and restart reconciliation have been proved in the reviewed deployment",
-        "The checker recognizes `sorafs.repair.*` SF-8b rollout schemas for auditor roster, failure capture, signed auditor API, worker lifecycle, event streams, governance handoff, observability, and governance approval evidence.",
-        "raw PoR/PoTR evidence, raw repair payloads, signed auditor requests, response bodies, signed transactions, secrets, and ledgers are absent",
-        "matches a valid auditor-roster artifact, and worker lifecycle / event stream / governance handoff artifacts carry an `evidence_bundle_digest_hex` that matches a valid PoR/PoTR failure-capture artifact",
-        "governance approval artifacts carry a `handoff_digest_hex` that matches a valid governance handoff artifact",
-        "The SF-8b rollout evidence gate, collection planner, operator argfile templates, and focused tests are implemented for payload-free deployed evidence review",
-        "The competing local repair authority and GC/reconciliation checkpoint dependencies are removed.",
-        "Remaining rollout work is genuine four-validator evidence for a production PoR/PoTR failure, one cross-peer lease and terminal outcome, escalation/appeal, restart reconciliation, and governance handoff, followed by the SF-8b rollout evidence gate.",
-    )
-    assert [phrase for phrase in required_open if phrase not in normalized] == []
-    client = read(IROHA_CLIENT_RS) + read(IROHA_CLIENT_RS.parent / "client" / "repair.rs")
-    shared_page_validation = read(IROHA_CLIENT_RS.parent / "client" / "reserve.rs")
-    assert [marker for marker in ("mod repair;", "repair::validate_transaction_route(route, transaction)?;", "response.status() != StatusCode::OK", 'get_all("content-type")', "Some(APPLICATION_JSON)", "wrapper.len() != 2", 'Some("finalized_chain")', "RepairFinalizedStatusV1", "RepairLedgerTaskPageV1", "RepairFinalizedTaskV1", "RepairFinalizedEventPageV1", "validate_finalized_cursor", "validate_event_successor", "previous.event_index.checked_add(1)", "super::reserve::validate_id_page(", "page.has_more != page.next_after.is_some()", "REPAIR_DEFAULT_PAGE_LIMIT_V1: u32 = 50", "limit.unwrap_or(REPAIR_DEFAULT_PAGE_LIMIT_V1)", "repair::validate_status_response(response, finalized)", "repair::validate_tasks_response(response, filter)", "repair::validate_task_response(response, &ticket_id.0, finalized)", "repair::validate_events_response(response, filter)", "repair_route_validation_accepts_every_exact_instruction", "repair_route_validation_rejects_mismatch_and_wrong_action_before_http", "repair_route_validation_rejects_non_native_and_non_singleton_before_http", "repair_read_response_binding_accepts_exact_typed_wrappers", "repair_read_response_binding_rejects_wrapper_finality_and_ticket_mismatches", "repair_task_page_response_binding_rejects_bounds_order_and_bad_continuations", "repair_task_page_response_binding_rejects_omitted_limit_over_torii_default", "repair_event_page_response_binding_rejects_bounds_order_and_bad_continuations", "repair_event_page_response_binding_rejects_omitted_limit_over_torii_default", "repair_event_page_response_binding_rejects_noncanonical_block_index_successors", "repair_read_response_binding_preserves_every_non_ok_response", "repair_read_methods_validate_every_successful_response_after_send") if marker not in client] == []
-    assert [
-        marker
-        for marker in (
-            "pub(super) fn validate_id_page",
-            "if has_more != next_after.is_some()",
-            "records.last().map(&id) != Some(next)",
-        )
-        if marker not in shared_page_validation
-    ] == []
+    assert_repair_chain_authority_is_closed_and_live_evidence_stays_open_in_docs()
 
 
 def test_repair_docs_keep_rollout_contract_markers() -> None:
@@ -20103,7 +20053,7 @@ def test_reference_sdk_release_distribution_work_stays_open_in_docs() -> None:
         "Aggregate promotion also rechecks the lane-proven reference SDK release digest relationships: manifest-bound artifact fingerprints must match `valid_release_manifest_digests`, and policy-bound artifact fingerprints must match `valid_policy_digests`, and governance-approval release-key fingerprints must match `valid_release_key_fingerprints` before final promotion can report ready.",
         "The reference SDK release gate fail-closes when more than one valid release manifest, policy, or release key anchor appears, and clears the mixed `valid_release_manifest_digests`, `valid_policy_digests`, or `valid_release_key_fingerprints` set before aggregate promotion can report ready.",
         "Release-manifest, policy, and release-key binding failures are recorded on the offending artifact before required-kind validity is computed, so the JSON summary matches the fail-closed release decision.",
-        "digests, an explicit `authenticated_external_signer` provider, exact `software` backend, and positive revision, governance approval policy and `--public-key-fingerprint-hex` inputs",
+        "Signed-manifest policy, key, hardware backend, positive revisions, and finalized operation anchors are derived only from a freshly verified native hardware receipt. Governance approval separately requires policy and `--public-key-fingerprint-hex` inputs",
         "Run the packaging helper for the supported release targets and publish signed release manifests outside the repository using governed release keys",
         "Ship/publish downstream SDK binding packages and release artifacts for the local JavaScript, Python, Kotlin/JVM, Java Android, Swift, and C# wrappers",
         "Archive live operator smoke evidence for the published `sorafs-validate` archives and cookbook replay before declaring SF-11 fully released",
@@ -20257,9 +20207,12 @@ def test_reference_sdk_release_distribution_work_stays_open_in_docs() -> None:
         "test_all_release_key_bound_artifacts_reject_signed_manifest_key_mismatch"
         in checker_test
     )
-    assert "test_multiple_valid_release_manifest_anchors_fail_closed" in checker_test
-    assert "test_multiple_valid_policy_anchors_fail_closed" in checker_test
-    assert "test_multiple_valid_release_key_anchors_fail_closed" in checker_test
+    assert "test_multiple_unauthenticated_release_manifest_anchors_fail_closed" in checker_test
+    assert "test_multiple_unauthenticated_policy_anchors_fail_closed" in checker_test
+    assert "test_multiple_unauthenticated_release_key_anchors_fail_closed" in checker_test
+    assert "test_active_digest_selection_rejects_multiple_values_in_isolation" in checker_test
+    assert "test_binding_helper_preserves_exact_digest_comparison_without_claiming_custody" in checker_test
+    assert "test_selecting_one_kind_cannot_remove_signed_manifest_authentication" in checker_test
 
 
 def test_reference_sdk_docs_do_not_reopen_implemented_guides() -> None:
@@ -20286,14 +20239,17 @@ def test_reference_sdk_release_canary_builder_is_checked_in() -> None:
     assert "REQUIRED_RELEASE_TARGETS" in builder
     assert "REQUIRED_DOWNSTREAM_PACKAGES" in builder
     assert "RELEASE_MANIFEST_BOUND_KINDS" in builder
-    assert "ALLOWED_MANIFEST_SIGNATURE_ALGORITHMS" in builder
-    assert "def validate_signature_algorithm(" in builder
+    assert "authenticate_signed_manifest_sources(" in builder
+    assert "--signed-manifest-source-context" in builder
+    assert "--signed-manifest-source-context-sha256" in builder
+    assert "def validate_signature_algorithm(" not in builder
+    assert '"signer_response_verified": True' not in builder
     assert (
         builder.count('"public_key_fingerprint_hex": args.public_key_fingerprint_hex')
-        >= 2
+        == 1
     )
     assert "--public-key-fingerprint-hex" in builder
-    assert "test_generated_canaries_pass_full_reference_sdk_release_gate" in builder_tests
+    assert "test_generated_canaries_cannot_pass_without_authenticated_signed_manifest" in builder_tests
     assert (
         "test_signed_manifest_rejects_unsupported_signature_algorithm_before_write"
         in builder_tests
@@ -20335,7 +20291,7 @@ def test_reference_sdk_release_canary_builder_is_checked_in() -> None:
     assert (
         SCRIPTS_DIR
         / "examples"
-        / "sorafs_reference_sdk_signed_manifest_canary.args.example"
+        / "sorafs_reference_sdk_release_signed_manifest_canary.args.example"
     ).is_file()
 
 
@@ -23255,7 +23211,7 @@ def test_evidence_viewer_runtime_services_are_documented_as_shipped_code() -> No
         "The SFM-4b3 reference implementation is present in `sorafs_node` and Torii.",
         "The generic moderation operator role is insufficient.",
         "Sessions have a hard maximum lifetime of 15 minutes.",
-        "Challenge values, grants, WebAuthn assertions, credential identifiers, signing keys, KMS credentials, and evidence bytes never enter the checkpoint or logs.",
+        "Challenge values, grants, WebAuthn assertions, credential identifiers, signing keys, custody-provider credentials, and evidence bytes never enter the checkpoint or logs.",
         "The service persists a public Ed25519-signed checkpoint anchor containing the canonical checkpoint digest, retained receipt count, and exact receipt-chain head.",
         "A missing installation must durably create this signed genesis anchor before the service becomes available.",
         "`sorafs.storage.evidence_viewer`",
@@ -23795,8 +23751,8 @@ def test_commit_reveal_client_cli_use_only_native_transaction_mutations() -> Non
 
     required_client = (
         "pub enum SorafsModerationCommandRoute",
-        "try_build_sorafs_moderation_transaction",
-        "post_sorafs_moderation_transaction", "mod moderation;", "moderation::validate_transaction_route(route, transaction)?;",
+        "AccountTransactionDraft::new", "account.sign_transaction(payload)",
+        "post_sorafs_moderation_transaction", "mod moderation;", "moderation::validate_transaction_route,",
         '.header("Content-Type", APPLICATION_NORITO)',
         "TransactionResponseHandler::handle(&response)", "moderation_route_validation_rejects_non_native_and_non_singleton_before_http",
     )
@@ -24142,7 +24098,7 @@ def test_commit_reveal_authoritative_ledger_foundation_is_pinned() -> None:
     assert "pub struct CanManageSorafsModeration" in executor_permission
     for adversarial_test in (
         "duplicate_wrong_authority_phase_and_mismatched_reveal_are_atomic",
-        "pending_and_accepted_challenges_block_reveal_and_close_without_penalties",
+        "accepted_challenge_blocks_reveal_and_closes_without_penalties",
         "rejected_challenge_unblocks_reveals_and_tied_quorum_is_contested",
         "missed_quorum_persists_distinct_no_show_penalties",
         "bounds_permissions_and_counter_overflow_reject_without_partial_case",
@@ -24151,7 +24107,7 @@ def test_commit_reveal_authoritative_ledger_foundation_is_pinned() -> None:
         "insufficient_pool_and_no_show_failover_exhaustion_are_terminal",
         "primary_no_show_uses_next_unique_waitlist_juror_atomically",
         "later_pop_revocation_rotation_does_not_rewrite_or_brick_admitted_snapshot",
-        "unresolved_challenge_expires_fail_safe_without_deadlock_or_no_show_penalties",
+        "unresolved_challenge_expires_permissionlessly_and_fails_open",
         "genesis_moderation_permission_bypass_matches_executor_policy",
     ):
         assert f"fn {adversarial_test}" in core
@@ -25908,8 +25864,10 @@ def test_gateway_compliance_observability_uses_emitted_bounded_metrics() -> None
         "torii_sorafs_gateway_compliance_serving_catalog_valid_until_seconds",
         "torii_sorafs_gateway_compliance_ready",
     )
+    assert "$metrics.$kind(stringify!($field), $($argument),+)" in metrics_source
+    assert "$metrics.$kind(stringify!($field))" in metrics_source
     for metric_name in metric_names:
-        assert f'"{metric_name}"' in metrics_source
+        assert f"pub {metric_name}:" in metrics_source
         assert f'"{metric_name}"' in checker
         assert metric_name in dashboard
         assert metric_name in docs
@@ -27604,23 +27562,7 @@ def test_sorafs_production_readiness_aggregate_covers_every_lane_checker() -> No
 
 
 def test_reserve_rent_chain_authoritative_contract_stays_open_until_evidence() -> None:
-    source = read(SORAFS_RESERVE_RENT_PLAN)
-    normalized = re.sub(r"\s+", " ", source)
-
-    required_contract = (
-        "SoraFS V1 treats the native reserve ledger as the only authority",
-        "they do not own an independent reserve balance or lifecycle state",
-        "the supervised Torii reserve worker",
-        "Pre-release reserve state encoded without the V1 settlement anchor is not compatible.",
-        "Validator or Torii wall clocks never participate.",
-        "The former process-local reserve lifecycle scheduler, lifecycle/movement routes, local reserve checkpoint, and CLI adapters are removed from the V1 surface.",
-        "Production consumers use finalized typed queries",
-        "Reputation, orderbook, compliance, and transparency consumers must use these committed projections",
-        "The reserve lane is release-ready only when these tests, the full workspace and SDK gates, the four-validator deployment exercise, security review, disaster recovery rehearsal, and signed aggregate readiness evidence all pass.",
-    )
-    assert [phrase for phrase in required_contract if phrase not in normalized] == []
-    client = read(IROHA_CLIENT_RS) + read(IROHA_CLIENT_RS.parent / "client" / "reserve.rs") + read(IROHA_CLIENT_RS.parent / "http_default.rs")
-    assert all(marker in client for marker in ("mod reserve;", "reserve::validate_transaction_route(route, transaction)?;", "finalized_json_request(", '"Accept-Encoding", "identity"', ".max_response_bytes(RESERVE_JSON_RESPONSE_MAX_BYTES_V1)", "reserve_route_validation_accepts_every_exact_instruction", "reserve_route_validation_rejects_wrong_kind_and_identifiers_before_http", "reserve_route_validation_rejects_wrong_type_non_native_and_non_singleton_before_http", "reserve_read_response_binding_accepts_exact_typed_records_and_pages", "reserve_event_response_binding_accepts_exact_successors", "reserve_page_response_binding_separates_json_transport_and_norito_bounds", "reserve_read_response_binding_rejects_media_wrapper_finality_and_detail_mismatch", "reserve_read_response_binding_rejects_typed_semantic_mutants", "reserve_page_response_binding_rejects_bounds_order_exclusivity_and_continuation", "reserve_event_response_binding_rejects_gaps_finality_and_bad_continuations", "reserve_malformed_filters_fail_before_http_and_non_ok_is_unchanged", "reserve_read_requests_pin_identity_json_and_transport_bound", "owned_http_client_does_not_follow_signed_body_redirects", "owned_async_http_client_does_not_follow_signed_body_redirects"))
+    assert_reserve_rent_chain_authoritative_contract_stays_open_until_evidence()
 
 
 def test_reserve_rent_docs_do_not_reopen_process_local_authority() -> None:

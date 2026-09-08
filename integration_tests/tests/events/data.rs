@@ -4,7 +4,7 @@ use eyre::{Result, WrapErr, eyre};
 use futures_util::StreamExt;
 use integration_tests::{sandbox, sync::get_status_with_retry_async};
 use iroha::{
-    client::Client,
+    blocking::Client,
     data_model::{
         asset::{AssetDefinitionId, AssetId},
         events::{
@@ -93,7 +93,7 @@ async fn transaction_execution_should_produce_events(
     let baseline_non_empty = status.blocks_non_empty;
     let mut events_stream = tokio::time::timeout(
         network.sync_timeout(),
-        client.listen_for_events_async([DataEventFilter::Domain(
+        client.client().listen_for_events([DataEventFilter::Domain(
             DomainEventFilter::new().for_events(DomainEventSet::Created),
         )]),
     )
@@ -102,7 +102,12 @@ async fn transaction_execution_should_produce_events(
     let result = async {
         {
             let client = client.clone();
-            let tx = client.build_transaction(executable, iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None), <_>::default());
+            let tx ={
+    let account = client.account_client();
+    account
+        .prepare_transaction(iroha::client::AccountTransactionDraft::new(executable, iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None), <_>::default()))
+        .and_then(|payload| account.sign_transaction(payload))
+}.expect("build integration-test transaction");
             let submit_result = spawn_blocking(move || client.submit_transaction(&tx)).await?;
             if let Err(err) = submit_result {
                 if is_tx_confirmation_timeout(&err) {
@@ -193,7 +198,7 @@ async fn produce_multiple_events_scenario(network: &Network) -> Result<()> {
     let account_event_set = AccountEventSet::RoleGranted | AccountEventSet::RoleRevoked;
     let mut events_stream = tokio::time::timeout(
         network.sync_timeout(),
-        network.client().listen_for_events_async([
+        network.client().client().listen_for_events([
             DataEventFilter::Role(
                 RoleEventFilter::new()
                     .for_role(role_id.clone())
@@ -216,7 +221,7 @@ async fn produce_multiple_events_scenario(network: &Network) -> Result<()> {
     {
         let client = network.client();
         spawn_blocking(move || {
-            client.submit_all_blocking::<InstructionBox>(
+            client.submit_all::<InstructionBox>(
                 [
                     register_role.into(),
                     grant_role.into(),

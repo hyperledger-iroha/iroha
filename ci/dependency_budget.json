@@ -333,12 +333,12 @@
       "service_runtime": [
         "iroha_musubi_service"
       ],
+      "storage_client": [
+        "iroha_storage_client"
+      ],
       "storage_runtime": [
         "sorafs_car",
         "sorafs_orchestrator"
-      ],
-      "storage_client": [
-        "iroha_storage_client"
       ],
       "telemetry_runtime": [
         "iroha_telemetry"
@@ -347,7 +347,7 @@
     "schema_version": 1
   },
   "baseline": {
-    "manifest_fingerprint": "sha256:8bb51b76cc06f36dd51c984b6d290975c481395e212889bf31f36c3c28eeb6e8",
+    "manifest_fingerprint": "sha256:e7c55381280e4210afa7d42de61b06f01f3fcd3ddb96331000381d54af3b4722",
     "refresh_command": "python3 scripts/check_dependency_budget.py --config ci/dependency_budget.json --write-baseline"
   },
   "denied_required_packages": [
@@ -374,18 +374,18 @@
     "iroha-cli-shipping": {
       "include_root_dev_dependencies": false,
       "limits": {
-        "declared_dependency_edges": 765,
-        "declared_external_dependency_edges": 533,
+        "declared_dependency_edges": 783,
+        "declared_external_dependency_edges": 542,
         "declared_external_packages": 181,
-        "declared_local_packages": 58,
+        "declared_local_packages": 59,
         "declared_path_packages": 3,
-        "declared_workspace_packages": 55,
-        "required_dependency_edges": 630,
-        "required_external_dependency_edges": 428,
+        "declared_workspace_packages": 56,
+        "required_dependency_edges": 648,
+        "required_external_dependency_edges": 437,
         "required_external_packages": 145,
-        "required_local_packages": 51,
+        "required_local_packages": 52,
         "required_path_packages": 3,
-        "required_workspace_packages": 48
+        "required_workspace_packages": 49
       },
       "roots": [
         "iroha_cli"
@@ -414,18 +414,18 @@
     "iroha-sdk-shipping": {
       "include_root_dev_dependencies": false,
       "limits": {
-        "declared_dependency_edges": 489,
-        "declared_external_dependency_edges": 360,
-        "declared_external_packages": 136,
-        "declared_local_packages": 44,
+        "declared_dependency_edges": 360,
+        "declared_external_dependency_edges": 278,
+        "declared_external_packages": 116,
+        "declared_local_packages": 35,
         "declared_path_packages": 2,
-        "declared_workspace_packages": 42,
-        "required_dependency_edges": 352,
-        "required_external_dependency_edges": 257,
-        "required_external_packages": 98,
-        "required_local_packages": 35,
+        "declared_workspace_packages": 33,
+        "required_dependency_edges": 269,
+        "required_external_dependency_edges": 204,
+        "required_external_packages": 87,
+        "required_local_packages": 28,
         "required_path_packages": 2,
-        "required_workspace_packages": 33
+        "required_workspace_packages": 26
       },
       "roots": [
         "iroha"
@@ -434,13 +434,13 @@
     "iroha3d-shipping": {
       "include_root_dev_dependencies": false,
       "limits": {
-        "declared_dependency_edges": 818,
+        "declared_dependency_edges": 819,
         "declared_external_dependency_edges": 558,
         "declared_external_packages": 185,
         "declared_local_packages": 60,
         "declared_path_packages": 3,
         "declared_workspace_packages": 57,
-        "required_dependency_edges": 668,
+        "required_dependency_edges": 669,
         "required_external_dependency_edges": 450,
         "required_external_packages": 148,
         "required_local_packages": 52,
@@ -454,18 +454,18 @@
     "workspace-all-targets": {
       "include_root_dev_dependencies": true,
       "limits": {
-        "declared_dependency_edges": 1630,
-        "declared_external_dependency_edges": 1023,
+        "declared_dependency_edges": 1670,
+        "declared_external_dependency_edges": 1041,
         "declared_external_packages": 230,
-        "declared_local_packages": 102,
+        "declared_local_packages": 104,
         "declared_path_packages": 3,
-        "declared_workspace_packages": 99,
-        "required_dependency_edges": 1498,
-        "required_external_dependency_edges": 924,
+        "declared_workspace_packages": 101,
+        "required_dependency_edges": 1538,
+        "required_external_dependency_edges": 942,
         "required_external_packages": 194,
-        "required_local_packages": 102,
+        "required_local_packages": 104,
         "required_path_packages": 3,
-        "required_workspace_packages": 99
+        "required_workspace_packages": 101
       },
       "roots": [
         "*"

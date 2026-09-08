@@ -19,7 +19,7 @@ use core::{
 use derive_more::{Debug, Display};
 use iroha_schema::{Ident, IntoSchema, MetaMap, TypeId};
 use norito::{
-    NoritoDeserialize, NoritoSerialize, core as ncore,
+    NoritoDeserialize, NoritoSerialize, SerializePayload, core as ncore,
     json::{self, JsonDeserialize, JsonSerialize},
 };
 use std::{
@@ -281,9 +281,10 @@ impl JsonDeserialize for ConstString {
         parser.parse_string().map(Into::into)
     }
 }
-impl NoritoSerialize for ConstString {
+impl NoritoSerialize for ConstString {}
+impl SerializePayload for ConstString {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
-        <&str as NoritoSerialize>::serialize(&self.as_ref(), writer)
+        <&str as SerializePayload>::serialize(&self.as_ref(), writer)
     }
 }
 impl<'a> NoritoDeserialize<'a> for ConstString {
@@ -486,7 +487,10 @@ impl TryFrom<String> for InlinedString {
     type Error = String;
     #[inline]
     fn try_from(value: String) -> Result<Self, Self::Error> {
-        Self::try_from(value.as_str()).map_or_else(|_| Err(value.clone()), Ok)
+        match Self::try_from(value.as_str()) {
+            Ok(inlined) => Ok(inlined),
+            Err(_) => Err(value),
+        }
     }
 }
 #[cfg(test)]
@@ -531,6 +535,20 @@ mod tests {
                 assert_eq!(&*const_string, &*string);
             });
         }
+
+        #[test]
+        fn rejected_inline_owned_string_retains_its_original_allocation() {
+            let value = "x".repeat(MAX_INLINED_STRING_LEN + 1);
+            let pointer = value.as_ptr();
+            let capacity = value.capacity();
+            let Err(rejected) = InlinedString::try_from(value) else {
+                panic!("oversized string must be returned for boxed storage");
+            };
+            assert_eq!(rejected.as_ptr(), pointer);
+            assert_eq!(rejected.capacity(), capacity);
+            assert_eq!(rejected, "x".repeat(MAX_INLINED_STRING_LEN + 1));
+        }
+
         // Conversion from `String` should preserve the value.
         #[test]
         fn const_string_from_string() {

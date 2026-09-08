@@ -1,6 +1,6 @@
 //! Configuration tools related to Kura specifically.
 use norito::{
-    NoritoDeserialize, NoritoSerialize,
+    NoritoDeserialize, NoritoSerialize, SerializePayload,
     core::{self as ncore, Archived},
     json::{self, JsonDeserialize, JsonSerialize},
 };
@@ -48,10 +48,11 @@ impl JsonDeserialize for InitMode {
         })
     }
 }
-impl NoritoSerialize for InitMode {
+impl NoritoSerialize for InitMode {}
+impl SerializePayload for InitMode {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
         let text = self.to_string();
-        <String as NoritoSerialize>::serialize(&text, writer)
+        <String as SerializePayload>::serialize(&text, writer)
     }
     fn encoded_len_hint(&self) -> Option<usize> {
         Some(self.to_string().len())
@@ -94,10 +95,11 @@ impl JsonDeserialize for FsyncMode {
         })
     }
 }
-impl NoritoSerialize for FsyncMode {
+impl NoritoSerialize for FsyncMode {}
+impl SerializePayload for FsyncMode {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
         let text = self.to_string();
-        <String as NoritoSerialize>::serialize(&text, writer)
+        <String as SerializePayload>::serialize(&text, writer)
     }
     fn encoded_len_hint(&self) -> Option<usize> {
         Some(self.to_string().len())

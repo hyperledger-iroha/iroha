@@ -26,16 +26,35 @@ pub(crate) struct ProductionInFlightFirstReleaseTransitionWitnessV1 {
     pub(crate) source_identity: ProductionDigest256Projection,
 }
 
+// The sole reviewed TLA+ source identity for runtime and Verus witnesses.
+// This expression uses the digest projection in its expansion context, so the
+// executable owner and ghost mirror share bytes without sharing Rust types.
+// The formal preflight authenticates this declaration against the TLA+ file.
+macro_rules! production_in_flight_first_release_source_identity_body {
+    () => {
+        ProductionDigest256Projection {
+            word0: 0xf4d30d3227a52943u64,
+            word1: 0x38ff8af3a4abb2ffu64,
+            word2: 0x75a46bd118a682e0u64,
+            word3: 0x5689f396ded5a7f7u64,
+        }
+    };
+}
+
 macro_rules! production_in_flight_first_release_witness_binding_body {
     ($projection:expr, $witness:expr) => {{
         $witness.schema_version == 1u16
             && $witness.action == $projection.action
             && $witness.actor == $projection.actor
             && $witness.target == $projection.target
-            && $witness.source_identity.word0 == 0x2a743bb211d4b36fu64
-            && $witness.source_identity.word1 == 0x587cdd65bffc84c9u64
-            && $witness.source_identity.word2 == 0xe822a45b2c7c7115u64
-            && $witness.source_identity.word3 == 0x0a0ae281fb6f8598u64
+            && $witness.source_identity.word0
+                == production_in_flight_first_release_source_identity_body!().word0
+            && $witness.source_identity.word1
+                == production_in_flight_first_release_source_identity_body!().word1
+            && $witness.source_identity.word2
+                == production_in_flight_first_release_source_identity_body!().word2
+            && $witness.source_identity.word3
+                == production_in_flight_first_release_source_identity_body!().word3
     }};
 }
 

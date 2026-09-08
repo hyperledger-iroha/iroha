@@ -1,5 +1,7 @@
-#[test]
-fn merge_execution_rejects_every_malformed_fastpq_bundle_shape() {
+state_test!(consensus_stack merge_execution_rejects_every_malformed_fastpq_bundle_shape
+    merge_execution_rejects_every_malformed_fastpq_bundle_shape_on_consensus_stack();
+);
+fn merge_execution_rejects_every_malformed_fastpq_bundle_shape_on_consensus_stack() {
     let (state, entry, _) = autonomous_merge_transfer_commit_authorization_fixture();
     let batch = entry
         .execution_batch

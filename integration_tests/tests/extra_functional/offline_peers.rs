@@ -57,7 +57,7 @@ async fn genesis_block_is_committed_with_some_offline_peers() -> Result<()> {
         .expect("there are two running peers")
         .client();
     spawn_blocking(move || -> Result<()> {
-        let assets = client.query(FindAssets::new()).execute_all()?;
+        let assets = client.client().query(FindAssets::new()).execute_all()?;
         let asset = assets
             .iter()
             .find(|asset| *asset.id().account() == alice_id && *asset.id().definition() == roses)
@@ -97,7 +97,7 @@ async fn register_offline_peer() -> Result<()> {
     // Wait for some time to allow peers to connect
     let client = network.client();
     spawn_blocking(move || {
-        client.submit_blocking(
+        client.submit(
             register_peer,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -125,7 +125,7 @@ async fn check_status(network: &Network, expected_peers: u64) -> Result<()> {
         let mut all_ok = true;
         for peer in network.peers() {
             let client = peer.client();
-            let status = match spawn_blocking(move || client.get_status()).await {
+            let status = match spawn_blocking(move || client.client().get_status()).await {
                 Ok(Ok(status)) => status,
                 Ok(Err(err)) => {
                     last_err = Some(err);

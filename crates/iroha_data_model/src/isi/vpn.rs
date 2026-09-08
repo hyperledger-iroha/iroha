@@ -1,6 +1,7 @@
 use super::*;
 isi! {
     /// Open a ledger-managed `SoraNet` VPN lease from one operator-signed quote.
+    #[norito_schema(name = "iroha_data_model::isi::vpn::OpenVpnLeaseEscrow")]
     pub struct OpenVpnLeaseEscrow {
         /// Complete operator-authored policy and its canonical signature.
         pub quote: crate::soranet::vpn::VpnSignedQuoteV1,
@@ -15,6 +16,7 @@ impl OpenVpnLeaseEscrow {
 }
 isi! {
     /// Settle a `SoraNet` VPN lease with a relay receipt and client voucher.
+    #[norito_schema(name = "iroha_data_model::isi::vpn::SettleVpnLease")]
     pub struct SettleVpnLease {
         /// Lease identifier opened by [`OpenVpnLeaseEscrow`].
         #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -42,6 +44,7 @@ impl SettleVpnLease {
 }
 isi! {
     /// Refund an expired `SoraNet` VPN lease after the relay settlement grace window.
+    #[norito_schema(name = "iroha_data_model::isi::vpn::RefundExpiredVpnLease")]
     pub struct RefundExpiredVpnLease {
         /// Lease identifier opened by [`OpenVpnLeaseEscrow`].
         #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]

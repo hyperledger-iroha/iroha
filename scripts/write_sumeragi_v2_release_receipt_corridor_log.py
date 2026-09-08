@@ -1518,9 +1518,10 @@ def _corridor_legs(
             (
                 "preflight-formal-launcher",
                 "pytest",
-                27,
+                55,
                 "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest "
-                "-q -p no:cacheprovider pytests/scripts/sumeragi_v2_formal_release_test.py",
+                "-q -p no:cacheprovider pytests/scripts/sumeragi_v2_formal_release_test.py "
+                "scripts/tests/sumeragi_v2_tlc_artifacts_test.py",
             ),
         )
     )

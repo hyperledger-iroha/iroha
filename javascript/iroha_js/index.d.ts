@@ -2371,10 +2371,9 @@ export type ToriiVerifyingKeyStatus = "Proposed" | "Active" | "Withdrawn";
 /** Exact verifier-registry labels admitted by the native Rust dispatcher. */
 export type ToriiVerifierBackendLabelV1 =
   | "halo2/ipa"
-  | "halo2/pasta/kaigi-roster-v1"
+  | "halo2/pasta/kaigi-authorization-v1"
   | "halo2/pasta/kaigi-usage-v1"
   | "halo2/pasta/ivm-execution-v1"
-  | "halo2/pasta/kagemusha-v1-mint-fold-merkle16-axiom-poseidon-v1"
   | "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3"
   | "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3"
   | "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4"
@@ -3963,7 +3962,8 @@ type CryptoRuntimeNamespaceExport =
   | "SM2_PRIVATE_KEY_LENGTH"
   | "SM2_PUBLIC_KEY_LENGTH"
   | "SM2_SIGNATURE_LENGTH"
-  | "buildKaigiRosterJoinProof"
+  | "buildKaigiAuthorizationProofV1"
+  | "buildKaigiUsageProofV1"
   | "deriveConfidentialDiversifierV2"
   | "deriveConfidentialKeyset"
   | "deriveConfidentialKeysetFromHex"
@@ -4664,6 +4664,7 @@ export interface ToriiLaneSwapMetadata {
   epsilon_bps: number;
   twap_window_seconds: number;
   liquidity_profile: ToriiLaneLiquidityProfile;
+  /** Canonical signed Numeric string with a 512-bit mantissa and scale at most 28. */
   twap_local_per_xor: string;
   volatility_class: ToriiLaneVolatilityClass;
 }
@@ -4778,19 +4779,15 @@ export interface ToriiNativeAmxParticipantLaneBlockProposal {
   payload_block_hint: null;
 }
 
+/** Seven-field nonrecursive participant control commitment in candidate order. */
 export interface ToriiNativeAmxParticipantSettlement {
-  block_height: ToriiU64;
-  lane_id: number;
-  lane_incarnation: string;
-  dataspace_id: ToriiU64;
-  tx_count: ToriiU64;
-  total_local_amount: string;
-  total_xor_due: string;
-  total_xor_after_haircut: string;
-  total_xor_variance: string;
-  swap_metadata: null;
-  receipts: ReadonlyArray<ToriiLaneSettlementReceipt>;
-  nexus_fee_receipts: readonly [];
+  readonly lane_id: number;
+  readonly dataspace_id: ToriiU64;
+  readonly lane_incarnation: string;
+  readonly participant_lane_block_height: ToriiU64;
+  readonly authority_context_height: ToriiU64;
+  readonly previous_native_settlement_hash: string | null;
+  readonly source_ids: ReadonlyArray<ToriiNativeAmxSourceId>;
 }
 
 export interface ToriiNativeAmxLeg {
@@ -7314,21 +7311,52 @@ export interface ConfidentialReceiveAddressV2 {
   diversifierHex: string;
 }
 
-export interface KaigiRosterJoinProof {
-  commitment: Buffer;
-  nullifier: Buffer;
-  rosterRoot: Buffer;
-  proof: Buffer;
-  commitmentHex: string;
-  nullifierHex: string;
-  rosterRootHex: string;
-  proofBase64: string;
+/** Public outputs of the exact final V1 Kaigi authorization relation. */
+export interface KaigiAuthorizationProofV1 {
+  readonly commitment: Buffer;
+  readonly nullifier: Buffer;
+  readonly authorization: Buffer;
+  readonly preRosterRoot: Buffer;
+  readonly proof: Buffer;
 }
 
-export interface KaigiRosterJoinProofOptions {
-  seed: ArrayBufferView | ArrayBuffer | Buffer;
-  rosterRootHex?: string | null;
-  roster_root_hex?: string | null;
+export interface KaigiAuthorizationProofOptionsV1 {
+  networkId: NetworkId;
+  callId: { domainId: string; callName: string };
+  hostId: string;
+  /** Retained original participant identity, or original host for host actions. */
+  subjectId: string;
+  participationSequence: bigint;
+  action: "hostCreate" | "join" | "leave" | "hostEnd";
+  preRosterRoot: Uint8Array;
+  /** Mutable canonical nonzero Pasta Fp bytes, consumed and cleared on every call. */
+  blinding: Uint8Array;
+}
+
+/** Public outputs of the exact final V1 host usage relation. */
+export interface KaigiUsageProofV1 {
+  readonly hostCommitment: Buffer;
+  readonly usageCommitment: Buffer;
+  readonly preRosterRoot: Buffer;
+  readonly proof: Buffer;
+}
+
+export interface KaigiUsageProofOptionsV1 {
+  networkId: NetworkId;
+  callId: { domainId: string; callName: string };
+  /** Retained original host account identity. */
+  hostId: string;
+  preRosterRoot: Uint8Array;
+  /** Exact integer from zero through 2^32 - 1. */
+  segmentIndex: number;
+  /** Exact positive u64 duration. */
+  durationMs: bigint;
+  /** Exact unsigned u64 gas charge. */
+  billedGas: bigint;
+  /** Stored raw canonical host C established by HostCreate. */
+  hostCommitment: Uint8Array;
+  /** Original host opening; mutable canonical nonzero Fp bytes, consumed and cleared. */
+  blinding: Uint8Array;
 }
 
 export interface RegisterDomainInput {
@@ -8089,15 +8117,13 @@ export declare const KAIGI_RELAY_MANIFEST_MAX_HOPS_V1: 8;
 export declare const KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1: 4096;
 
 export interface KaigiParticipantCommitmentInput {
-  commitment: ArrayBufferView | ArrayBuffer | Buffer | string;
-  /** Clear aliases are off-chain only; native ledger instructions require null/omission. */
-  aliasTag?: null;
+  /** Exact canonical Pasta Fp bytes, without a hash marker. */
+  commitment: Uint8Array | readonly number[];
 }
 
 export interface KaigiParticipantNullifierInput {
-  digest: ArrayBufferView | ArrayBuffer | Buffer | string;
-  /** Clear issuance time is off-chain only; native ledger instructions require zero. */
-  issuedAtMs: 0;
+  /** Exact canonical Pasta Fp bytes, without a hash marker. */
+  digest: Uint8Array | readonly number[];
 }
 
 export type KaigiRoomPolicyValue = {
@@ -8144,18 +8170,7 @@ export interface JoinKaigiInput {
   proof?: ArrayBufferView | ArrayBuffer | Buffer | string | null;
 }
 
-export interface LeaveKaigiInput {
-  callId: KaigiIdLike;
-  participant: string;
-  /** Privacy-mode departure is off-chain only in V1. */
-  commitment?: null;
-  /** Privacy-mode departure is off-chain only in V1. */
-  nullifier?: null;
-  /** Privacy-mode departure is off-chain only in V1. */
-  rosterRoot?: null;
-  /** Privacy-mode departure is off-chain only in V1. */
-  proof?: null;
-}
+export interface LeaveKaigiInput extends JoinKaigiInput {}
 
 export interface EndKaigiInput {
   callId: KaigiIdLike;
@@ -8170,7 +8185,7 @@ export interface RecordKaigiUsageInput {
   callId: KaigiIdLike;
   durationMs: NumericLike;
   billedGas?: NumericLike;
-  usageCommitment?: ArrayBufferView | ArrayBuffer | Buffer | string | null;
+  usageCommitment?: Uint8Array | readonly number[] | null;
   proof?: ArrayBufferView | ArrayBuffer | Buffer | string | null;
 }
 
@@ -12336,9 +12351,13 @@ export function verifySm2(
   distid?: string,
 ): boolean;
 
-export function buildKaigiRosterJoinProof(
-  options: KaigiRosterJoinProofOptions,
-): never;
+export function buildKaigiAuthorizationProofV1(
+  options: KaigiAuthorizationProofOptionsV1,
+): KaigiAuthorizationProofV1;
+
+export function buildKaigiUsageProofV1(
+  options: KaigiUsageProofOptionsV1,
+): KaigiUsageProofV1;
 
 export function signEd25519(
   message: ArrayBufferView | ArrayBuffer | Buffer | string,

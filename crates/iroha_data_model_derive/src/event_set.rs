@@ -4,7 +4,7 @@ use darling::{FromDeriveInput, FromVariant};
 use manyhow::Emitter;
 use proc_macro2::TokenStream;
 use quote::{ToTokens, quote};
-use syn::{DeriveInput, Variant};
+use syn::{DeriveInput, LitStr, Variant};
 enum FieldsStyle {
     Unit,
     Unnamed,
@@ -67,6 +67,7 @@ struct EventSetEnum {
     vis: syn::Visibility,
     event_enum_ident: syn::Ident,
     set_ident: syn::Ident,
+    schema_name: LitStr,
     variants: Vec<EventSetVariant>,
 }
 impl FromDeriveInput for EventSetEnum {
@@ -78,6 +79,9 @@ impl FromDeriveInput for EventSetEnum {
             generics,
             data,
         } = &input;
+        let schema_name =
+            crate::utils::required_child_schema_name(input, "event_set", "EventSet", "event set")
+                .map_err(darling::Error::from)?;
         let mut accumulator = darling::error::Accumulator::default();
         if !generics.params.is_empty() {
             accumulator.push(darling::Error::custom(
@@ -100,6 +104,7 @@ impl FromDeriveInput for EventSetEnum {
             vis: vis.clone(),
             event_enum_ident: event_ident.clone(),
             set_ident: syn::Ident::new(&format!("{event_ident}Set"), event_ident.span()),
+            schema_name,
             variants,
         })
     }
@@ -111,6 +116,7 @@ impl ToTokens for EventSetEnum {
             vis,
             event_enum_ident,
             set_ident,
+            schema_name,
             variants,
         } = self;
         let flag_raw_values = variants
@@ -184,9 +190,11 @@ impl ToTokens for EventSetEnum {
                 // but it's the easiest way to make sure those traits are implemented
                 norito::codec::Decode,
                 norito::codec::Encode,
+                norito::NoritoSchema,
                 iroha_schema::TypeId,
             )]
             #[repr(transparent)]
+            #[norito_schema(name = #schema_name)]
             #[doc = #doc]
             #vis struct #set_ident(u32);
             // we want to imitate an enum here, so not using the SCREAMING_SNAKE_CASE here
@@ -379,5 +387,59 @@ pub fn impl_event_set_derive(emitter: &mut Emitter, input: &syn::DeriveInput) ->
     };
     quote! {
         #enum_
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use syn::parse_quote;
+
+    #[test]
+    fn generated_set_declares_its_own_identity_once() {
+        let input = parse_quote! {
+            #[norito_schema(name = "fixture::Parent")]
+            #[event_set(schema_name = "fixture::Child")]
+            pub enum Parent { Unit, Nested(AnotherEvent), Named { value: u32 } }
+        };
+        let model = EventSetEnum::from_derive_input(&input).expect("event declaration");
+        let file: syn::File = syn::parse2(model.into_token_stream()).expect("generated Rust");
+        let child = file
+            .items
+            .iter()
+            .find_map(|item| match item {
+                syn::Item::Struct(child) if child.ident == "ParentSet" => Some(child),
+                _ => None,
+            })
+            .expect("generated set");
+        let identities: Vec<_> = child
+            .attrs
+            .iter()
+            .filter(|attribute| attribute.path().is_ident("norito_schema"))
+            .collect();
+        assert_eq!(identities.len(), 1);
+        assert!(
+            identities[0]
+                .to_token_stream()
+                .to_string()
+                .contains("fixture::Child")
+        );
+        let generated = child.to_token_stream().to_string();
+        assert!(!generated.contains("fixture::Parent"));
+        assert_eq!(generated.matches("NoritoSchema").count(), 1);
+        assert_eq!(generated.matches("codec :: Encode").count(), 1);
+        assert_eq!(generated.matches("codec :: Decode").count(), 1);
+    }
+
+    #[test]
+    fn set_generation_rejects_missing_child_identity() {
+        let input = parse_quote! {
+            #[norito_schema(name = "fixture::Parent")]
+            enum Parent { Unit }
+        };
+        let error = EventSetEnum::from_derive_input(&input)
+            .err()
+            .expect("identity required");
+        assert!(error.to_string().contains("EventSet requires #[event_set"));
     }
 }

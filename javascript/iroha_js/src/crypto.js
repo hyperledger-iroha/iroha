@@ -736,22 +736,158 @@ function verifySm2WithRuntime(
   );
 }
 
+const KAIGI_AUTHORIZATION_ACTIONS_V1 = new Set(["hostCreate", "join", "leave", "hostEnd"]);
+const KAIGI_AUTHORIZATION_OPTION_KEYS_V1 = new Set([
+  "networkId", "callId", "hostId", "subjectId", "participationSequence", "action", "preRosterRoot", "blinding",
+]);
+const KAIGI_PASTA_FP_MODULUS_V1 = BigInt("0x40000000000000000000000000000000224698fc094cf91b992d30ed00000001");
+const clearKaigiBlindingV1 = Uint8Array.prototype.fill;
+const kaigiTypedArrayPrototypeV1 = Object.getPrototypeOf(Uint8Array.prototype);
+const kaigiBufferGetterV1 = Object.getOwnPropertyDescriptor(kaigiTypedArrayPrototypeV1, "buffer").get;
+const kaigiByteLengthGetterV1 = Object.getOwnPropertyDescriptor(kaigiTypedArrayPrototypeV1, "byteLength").get;
+const KaigiSharedArrayBufferV1 = globalThis.SharedArrayBuffer;
+
+
+function kaigiBytesV1(value, name, length = 32) {
+  if (!(value instanceof Uint8Array) || value.byteLength !== length) {
+    throw new TypeError(`${name} must be a ${length}-byte Uint8Array`);
+  }
+  return Buffer.from(value);
+}
+
+function kaigiScalarV1(value, name) {
+  const bytes = kaigiBytesV1(value, name);
+  let scalar = 0n;
+  for (let index = 31; index >= 0; index -= 1) scalar = (scalar << 8n) | BigInt(bytes[index]);
+  if (scalar >= KAIGI_PASTA_FP_MODULUS_V1) {
+    throw new TypeError(`${name} must be canonical Pasta Fp bytes`);
+  }
+  return bytes;
+}
+
+function buildKaigiAuthorizationProofV1WithRuntime(nativeRuntime, options) {
+  const blinding = options?.blinding;
+  if (!(blinding instanceof Uint8Array)) {
+    throw new TypeError("blinding must be a mutable 32-byte Uint8Array");
+  }
+  try {
+    if (!options || typeof options !== "object" || Array.isArray(options)) {
+      throw new TypeError("buildKaigiAuthorizationProofV1 options must be an object");
+    }
+    for (const key of Object.keys(options)) {
+      if (!KAIGI_AUTHORIZATION_OPTION_KEYS_V1.has(key)) throw new TypeError(`unknown Kaigi authorization option: ${key}`);
+    }
+    if (Reflect.apply(kaigiByteLengthGetterV1, blinding, []) !== 32 ||
+        (KaigiSharedArrayBufferV1 !== undefined && Reflect.apply(kaigiBufferGetterV1, blinding, []) instanceof KaigiSharedArrayBufferV1)) {
+      throw new TypeError("blinding must be a private mutable 32-byte Uint8Array");
+    }
+    const network = networkIdBytes(options.networkId);
+    const call = options.callId;
+    if (!call || typeof call !== "object" || Array.isArray(call) ||
+        Object.keys(call).some((key) => key !== "domainId" && key !== "callName")) {
+      throw new TypeError("callId must contain exactly domainId and callName");
+    }
+    const domainId = call.domainId;
+    const callName = call.callName;
+    const hostId = options.hostId;
+    const subjectId = options.subjectId;
+    const action = options.action;
+    for (const [name, value] of [["callId.domainId", domainId], ["callId.callName", callName], ["hostId", hostId], ["subjectId", subjectId]]) {
+      if (typeof value !== "string" || value.length === 0 || value.trim() !== value) throw new TypeError(`${name} must be canonical nonempty text`);
+    }
+    const sequence = options.participationSequence;
+    if (typeof sequence !== "bigint" || sequence < 0n || sequence > 0xffff_ffff_ffff_ffffn) {
+      throw new TypeError("participationSequence must be an unsigned 64-bit bigint");
+    }
+    if (!KAIGI_AUTHORIZATION_ACTIONS_V1.has(action)) throw new TypeError("unknown Kaigi authorization action");
+    const root = kaigiBytesV1(options.preRosterRoot, "preRosterRoot");
+    const native = resolveNativeRuntimeBinding(nativeRuntime);
+    if (typeof native.buildKaigiAuthorizationProofV1 !== "function") throw new Error("Native binding does not expose buildKaigiAuthorizationProofV1");
+    const raw = native.buildKaigiAuthorizationProofV1(network, domainId, callName, hostId,
+      subjectId, sequence, action, root, blinding);
+    const proofBytes = raw.proof;
+    const result = {
+      commitment: kaigiScalarV1(raw.commitment, "commitment"),
+      nullifier: kaigiScalarV1(raw.nullifier, "nullifier"),
+      authorization: kaigiScalarV1(raw.authorization, "authorization"),
+      preRosterRoot: kaigiBytesV1(raw.preRosterRoot, "preRosterRoot"),
+      proof: kaigiBytesV1(proofBytes, "proof", proofBytes?.byteLength),
+    };
+    if (result.proof.length === 0 || !result.preRosterRoot.equals(root)) throw new Error("Native Kaigi proof returned an empty proof or different pre-state root");
+    return Object.freeze(result);
+  } finally {
+    Reflect.apply(clearKaigiBlindingV1, blinding, [0]);
+  }
+}
+
 /**
- * Reject roster proof construction while `ZkRosterV1` lacks signed-participant binding.
- * @param {{seed: ArrayBufferView | ArrayBuffer | Buffer, rosterRootHex?: string | null}} options
- * @returns {never}
+ * Prove one final Kaigi V1 action against its exact network, identities and pre-state.
+ * The supplied mutable blinding is consumed and cleared on success or failure.
  */
-export function buildKaigiRosterJoinProof(options) {
-  if (!options || typeof options !== "object" || Array.isArray(options)) {
-    throw new TypeError("buildKaigiRosterJoinProof options must be an object");
+export function buildKaigiAuthorizationProofV1(options) {
+  return buildKaigiAuthorizationProofV1WithRuntime(defaultNativeRuntime, options);
+}
+
+const KAIGI_USAGE_OPTION_KEYS_V1 = new Set([
+  "networkId", "callId", "hostId", "preRosterRoot", "segmentIndex", "durationMs", "billedGas", "hostCommitment", "blinding",
+]);
+
+function buildKaigiUsageProofV1WithRuntime(nativeRuntime, options) {
+  const blinding = options?.blinding;
+  if (!(blinding instanceof Uint8Array)) throw new TypeError("blinding must be a mutable 32-byte Uint8Array");
+  try {
+    if (!options || typeof options !== "object" || Array.isArray(options)) throw new TypeError("buildKaigiUsageProofV1 options must be an object");
+    for (const key of Object.keys(options)) {
+      if (!KAIGI_USAGE_OPTION_KEYS_V1.has(key)) throw new TypeError(`unknown Kaigi usage option: ${key}`);
+    }
+    if (Reflect.apply(kaigiByteLengthGetterV1, blinding, []) !== 32 ||
+        (KaigiSharedArrayBufferV1 !== undefined && Reflect.apply(kaigiBufferGetterV1, blinding, []) instanceof KaigiSharedArrayBufferV1)) {
+      throw new TypeError("blinding must be a private mutable 32-byte Uint8Array");
+    }
+    const network = networkIdBytes(options.networkId);
+    const call = options.callId;
+    if (!call || typeof call !== "object" || Array.isArray(call) ||
+        Object.keys(call).some((key) => key !== "domainId" && key !== "callName")) {
+      throw new TypeError("callId must contain exactly domainId and callName");
+    }
+    const { domainId, callName } = call;
+    const hostId = options.hostId;
+    for (const [name, value] of [["callId.domainId", domainId], ["callId.callName", callName], ["hostId", hostId]]) {
+      if (typeof value !== "string" || value.length === 0 || value.trim() !== value) throw new TypeError(`${name} must be canonical nonempty text`);
+    }
+    const segment = options.segmentIndex;
+    if (!Number.isInteger(segment) || segment < 0 || segment > 0xffff_ffff) throw new TypeError("segmentIndex must be an unsigned 32-bit integer");
+    const duration = options.durationMs;
+    const gas = options.billedGas;
+    for (const [name, value] of [["durationMs", duration], ["billedGas", gas]]) {
+      if (typeof value !== "bigint" || value < 0n || value > 0xffff_ffff_ffff_ffffn) throw new TypeError(`${name} must be an unsigned 64-bit bigint`);
+    }
+    if (duration === 0n) throw new TypeError("durationMs must be positive");
+    const root = kaigiBytesV1(options.preRosterRoot, "preRosterRoot");
+    const hostCommitment = kaigiScalarV1(options.hostCommitment, "hostCommitment");
+    const native = resolveNativeRuntimeBinding(nativeRuntime);
+    if (typeof native.buildKaigiUsageProofV1 !== "function") throw new Error("Native binding does not expose buildKaigiUsageProofV1");
+    const raw = native.buildKaigiUsageProofV1(network, domainId, callName, hostId, root,
+      segment, duration, gas, hostCommitment, blinding);
+    const proofBytes = raw.proof;
+    const result = {
+      hostCommitment: kaigiScalarV1(raw.hostCommitment, "hostCommitment"),
+      usageCommitment: kaigiScalarV1(raw.usageCommitment, "usageCommitment"),
+      preRosterRoot: kaigiBytesV1(raw.preRosterRoot, "preRosterRoot"),
+      proof: kaigiBytesV1(proofBytes, "proof", proofBytes?.byteLength),
+    };
+    if (result.proof.length === 0 || !result.preRosterRoot.equals(root) || !result.hostCommitment.equals(hostCommitment)) {
+      throw new Error("Native Kaigi usage proof returned an empty proof, different pre-state root or different host commitment");
+    }
+    return Object.freeze(result);
+  } finally {
+    Reflect.apply(clearKaigiBlindingV1, blinding, [0]);
   }
-  const seed = toBuffer(options.seed, "seed");
-  if (seed.length === 0) {
-    throw new Error("seed must not be empty");
-  }
-  throw new Error(
-    "Kaigi ZkRosterV1 proof construction is unavailable until the circuit binds the signed participant authority",
-  );
+}
+
+/** Prove a usage segment with the opening of stored host C; consume and clear blinding. */
+export function buildKaigiUsageProofV1(options) {
+  return buildKaigiUsageProofV1WithRuntime(defaultNativeRuntime, options);
 }
 
 /**
@@ -1142,7 +1278,8 @@ function sm2FixtureFromSeedWithRuntime(nativeRuntime, distid, seed, message) {
 /** @internal Source-level runtime facade; intentionally absent from package exports. */
 export function _createCryptoApi(nativeRuntime) {
   return Object.freeze({
-    buildKaigiRosterJoinProof,
+    buildKaigiAuthorizationProofV1: (options) => buildKaigiAuthorizationProofV1WithRuntime(nativeRuntime, options),
+    buildKaigiUsageProofV1: (options) => buildKaigiUsageProofV1WithRuntime(nativeRuntime, options),
     supportedCryptoAlgorithms: () =>
       supportedCryptoAlgorithmsWithRuntime(nativeRuntime),
     generateKeyPair: (options = {}) =>

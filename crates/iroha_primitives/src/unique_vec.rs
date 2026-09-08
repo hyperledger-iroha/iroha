@@ -7,7 +7,7 @@ use core::borrow::Borrow;
 use derive_more::{AsRef, Deref};
 use iroha_schema::IntoSchema;
 use norito::{
-    NoritoDeserialize, NoritoSerialize, core as ncore,
+    NoritoDeserialize, NoritoSerialize, SerializePayload, core as ncore,
     json::{self, JsonDeserialize, JsonSerialize},
 };
 use std::vec::Vec;
@@ -120,7 +120,8 @@ impl<'ve, T: PartialEq> IntoIterator for &'ve UniqueVec<T> {
         self.0.iter()
     }
 }
-impl<T: NoritoSerialize> NoritoSerialize for UniqueVec<T> {
+impl<T: NoritoSerialize> NoritoSerialize for UniqueVec<T> {}
+impl<T: SerializePayload> SerializePayload for UniqueVec<T> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
         self.0.serialize(writer)
     }

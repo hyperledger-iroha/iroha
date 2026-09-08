@@ -5,7 +5,7 @@
 
 use iroha_crypto::{Signature, SignatureOf};
 use iroha_data_model::block::{BlockHeader, BlockSignature, header::wire::BlockSignatureWire};
-use norito::core::{DecodeFlagsGuard, Encoder, NoritoSerialize, header_flags};
+use norito::core::{DecodeFlagsGuard, Encoder, NoritoSerialize, SerializePayload, header_flags};
 use std::{
     alloc::{GlobalAlloc, Layout, System},
     cell::Cell,
@@ -53,7 +53,7 @@ fn allocations_during(operation: impl FnOnce()) -> usize {
     TRACKING.with(|tracking| tracking.set(false));
     ALLOCATIONS.with(Cell::get)
 }
-fn bare_bytes(value: &dyn NoritoSerialize, flags: u8) -> Vec<u8> {
+fn bare_bytes(value: &dyn SerializePayload, flags: u8) -> Vec<u8> {
     let _guard = DecodeFlagsGuard::enter(flags);
     let exact = value
         .encoded_len_exact()
@@ -66,9 +66,10 @@ fn bare_bytes(value: &dyn NoritoSerialize, flags: u8) -> Vec<u8> {
 }
 #[test]
 fn borrowed_block_signature_codec_preserves_tuple_wire_bytes() {
-    const FLAGS: [u8; 5] = [
+    const FLAGS: [u8; 6] = [
         0,
         header_flags::COMPACT_LEN,
+        header_flags::PACKED_SEQ,
         header_flags::PACKED_SEQ | header_flags::COMPACT_LEN,
         header_flags::PACKED_STRUCT | header_flags::COMPACT_LEN,
         header_flags::PACKED_SEQ
@@ -103,7 +104,7 @@ fn borrowed_block_signature_codec_preserves_tuple_wire_bytes() {
         }
     }
 }
-fn assert_preallocated_serialization_does_not_allocate(value: &dyn NoritoSerialize) {
+fn assert_preallocated_serialization_does_not_allocate(value: &dyn SerializePayload) {
     let flags = header_flags::COMPACT_LEN;
     let _guard = DecodeFlagsGuard::enter(flags);
     let exact = value

@@ -241,13 +241,60 @@ fn ordinary_struct_fields_use_counted_length_streaming() {
         &data.fields,
         &input.attrs,
         None,
-    ));
+     true));
     assert_eq!(expansion.matches("write_len_prefixed(").count(), 2);
     assert!(!expansion.contains("write_len_prefixed_exact("));
     assert!(expansion.contains("EncodeValueDepthGuard::enter()"));
 }
 #[test]
-fn packed_struct_codegen_counts_then_streams_without_field_payload_buffers() {
+fn generated_serializers_use_two_argument_field_writers_without_scratch_buffers() {
+    let inputs: [DeriveInput; 3] = [
+        syn::parse_quote! {
+            struct Named {
+                payload: Opaque,
+                bytes: [u8; 16],
+                count: u64,
+                note: String,
+            }
+        },
+        syn::parse_quote! { struct Tuple(Opaque, [u8; 16], u64, String); },
+        syn::parse_quote! {
+            enum Message {
+                Tuple(Opaque, [u8; 16], u64, String),
+                Named { payload: Opaque, bytes: [u8; 16], count: u64, note: String },
+            }
+        },
+    ];
+    for input in inputs {
+        let expansion = compact(match &input.data {
+            Data::Struct(data) => derive_struct_serialize(
+                &input.ident,
+                &input.generics,
+                &data.fields,
+                &input.attrs,
+                None,
+             true),
+            Data::Enum(data) => {
+                derive_enum_serialize(&input.ident, &input.generics, data, &input.attrs, None, true)
+            }
+            Data::Union(_) => unreachable!("test inputs are structs or enums"),
+        });
+        assert!(expansion.contains("write_len_prefixed(writer,"));
+        for forbidden in ["SmallBuf", "__norito_tmp", "__buf", "Vec::new()"] {
+            assert!(
+                !expansion.contains(forbidden),
+                "{name} must not emit retired field scratch storage: {forbidden}",
+                name = input.ident,
+            );
+        }
+        for field_call in expansion.split("write_len_prefixed(").skip(1) {
+            let arguments = field_call.split_once(')').expect("field call closes").0;
+            assert_eq!(arguments.split(',').count(), 2, "{arguments}");
+        }
+    }
+}
+#[test]
+fn packed_struct_codegen_delegates_measurement_and_streaming_to_one_owner() {
     let input: DeriveInput = syn::parse_quote! {
         struct Envelope {
             named: Vec<u8>,
@@ -263,11 +310,75 @@ fn packed_struct_codegen_counts_then_streams_without_field_payload_buffers() {
         &data.fields,
         &input.attrs,
         None,
-    ));
-    assert!(expansion.contains("encoded_payload_len("));
-    assert!(expansion.contains("serialize_to_writer_exact("));
+     true));
+    assert_eq!(expansion.matches("write_packed_fields(").count(), 2);
+    assert_eq!(
+        expansion.matches("PackedField::Value(&self.named)").count(),
+        2
+    );
+    assert_eq!(
+        expansion.matches("PackedField::Value(&self.other)").count(),
+        2
+    );
+    assert!(!expansion.contains("encoded_payload_len("));
+    assert!(!expansion.contains("serialize_to_writer_exact("));
     assert!(!expansion.contains("serialize_to_buffer("));
     assert!(!expansion.contains("__field_bufs"));
+    assert!(!expansion.contains("__field_lens"));
+}
+#[test]
+fn packed_struct_descriptors_preserve_raw_arrays_and_omit_skipped_fields() {
+    let input: DeriveInput = syn::parse_quote! {
+        struct Envelope {
+            raw: [u8; 32],
+            nested: Payload,
+            #[norito(skip)]
+            ignored: Cache,
+        }
+    };
+    let Data::Struct(data) = &input.data else {
+        unreachable!();
+    };
+    let expansion = compact(derive_struct_serialize(
+        &input.ident,
+        &input.generics,
+        &data.fields,
+        &input.attrs,
+        None,
+     true));
+    assert_eq!(
+        expansion.matches("PackedField::Bytes(&self.raw)").count(),
+        2
+    );
+    assert_eq!(
+        expansion
+            .matches("PackedField::Value(&self.nested)")
+            .count(),
+        2
+    );
+    assert!(!expansion.contains("PackedField::Value(&self.raw)"));
+    assert!(!expansion.contains("&self.ignored"));
+    assert!(expansion.contains("Some(&[2u8])"));
+}
+#[test]
+fn packed_tuple_descriptors_keep_field_order() {
+    let input: DeriveInput = syn::parse_quote! {
+        struct Envelope(Payload, [u8; 8], u16);
+    };
+    let Data::Struct(data) = &input.data else {
+        unreachable!();
+    };
+    let expansion = compact(derive_struct_serialize(
+        &input.ident,
+        &input.generics,
+        &data.fields,
+        &input.attrs,
+        None,
+     true));
+    assert_eq!(
+        expansion.matches("&[norito::core::PackedField::Value(&self.0),norito::core::PackedField::Bytes(&self.1),norito::core::PackedField::Value(&self.2)]").count(),
+        2,
+    );
 }
 #[test]
 fn ordinary_enum_fields_use_counted_length_streaming() {
@@ -286,7 +397,7 @@ fn ordinary_enum_fields_use_counted_length_streaming() {
         data,
         &input.attrs,
         None,
-    ));
+     true));
     assert!(expansion.matches("write_len_prefixed(").count() >= 2);
     assert!(!expansion.contains("write_len_prefixed_exact("));
     assert!(expansion.contains("EncodeValueDepthGuard::enter()"));
@@ -308,7 +419,7 @@ fn enum_byte_array_lengths_use_the_raw_wire_width() {
         data,
         &input.attrs,
         None,
-    ));
+     true));
     assert_eq!(
         expansion.matches("core::mem::size_of_val(field0)").count(),
         3,

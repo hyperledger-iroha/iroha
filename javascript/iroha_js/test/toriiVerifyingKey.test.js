@@ -407,6 +407,8 @@ test("verifying key read paths reject unsupported production backends before fet
     },
   });
   for (const backend of [
+    "halo2/pasta/kaigi-roster-v1",
+    "halo2/pasta/kagemusha-v1-mint-fold-merkle16-axiom-poseidon-v1",
     " halo2/ipa",
     "halo2/ipa ",
     "\thalo2/ipa",
@@ -1116,10 +1118,9 @@ test("registerVerifyingKey accepts current production backend labels", async () 
   });
   const backends = [
     "halo2/ipa",
-    "halo2/pasta/kaigi-roster-v1",
+    "halo2/pasta/kaigi-authorization-v1",
     "halo2/pasta/kaigi-usage-v1",
     "halo2/pasta/ivm-execution-v1",
-    "halo2/pasta/kagemusha-v1-mint-fold-merkle16-axiom-poseidon-v1",
     "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
     "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
     "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",
@@ -1154,7 +1155,6 @@ test("updateVerifyingKey accepts current production backend labels", async () =>
   const backends = [
     "halo2/ipa",
     "halo2/pasta/ivm-execution-v1",
-    "halo2/pasta/kagemusha-v1-mint-fold-merkle16-axiom-poseidon-v1",
     "stark/fri/poseidon-x7-goldilocks-6x64-v1",
   ];
   for (const [index, backend] of backends.entries()) {
@@ -1326,6 +1326,10 @@ test("verifying key registration rejects unsupported production backends before 
   });
   const base = sampleVerifyingKeyRegisterPayload();
   const cases = [
+    ["register retired Kaigi roster", () => client.registerVerifyingKey({ ...base, backend: "halo2/pasta/kaigi-roster-v1" })],
+    ["update retired Kaigi roster", () => client.updateVerifyingKey({ ...base, backend: "halo2/pasta/kaigi-roster-v1" })],
+    ["register unsupported KAGEMUSHA fold", () => client.registerVerifyingKey({ ...base, backend: "halo2/pasta/kagemusha-v1-mint-fold-merkle16-axiom-poseidon-v1" })],
+    ["update unsupported KAGEMUSHA fold", () => client.updateVerifyingKey({ ...base, backend: "halo2/pasta/kagemusha-v1-mint-fold-merkle16-axiom-poseidon-v1" })],
     ["register unknown native", () => client.registerVerifyingKey({ ...base, backend: "halo2/unknown-native-v1" })],
     ["register unknown IPA suffix", () => client.registerVerifyingKey({ ...base, backend: "halo2/ipa:unknown-native-v1" })],
     ["register retired IPA cycle alias", () => client.registerVerifyingKey({ ...base, backend: "halo2/ipa-pasta-cycle-v1" })],

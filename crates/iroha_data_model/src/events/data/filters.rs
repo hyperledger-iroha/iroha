@@ -16,56 +16,84 @@ mod model {
         Debug, Clone, PartialEq, Eq, PartialOrd, Ord, FromVariant, Decode, Encode, IntoSchema,
     )]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    /// Canonical data-event selectors. Capability-specific variants keep their assigned wire tags.
     pub enum DataEventFilter {
         /// Matches any data events ([`DataEvent`])
+        #[codec(index = 0)]
         Any,
         /// Matches [`PeerEvent`]s
+        #[codec(index = 1)]
         Peer(PeerEventFilter),
         /// Matches [`DomainEvent`]s
+        #[codec(index = 2)]
         Domain(DomainEventFilter),
         /// Matches [`AccountEvent`]s
+        #[codec(index = 3)]
         Account(AccountEventFilter),
         /// Matches [`AssetEvent`]s
+        #[codec(index = 4)]
         Asset(AssetEventFilter),
         /// Matches [`AssetDefinitionEvent`]s
+        #[codec(index = 5)]
         AssetDefinition(AssetDefinitionEventFilter),
         /// Matches [`NftEvent`]s
+        #[codec(index = 6)]
         Nft(NftEventFilter),
         /// Matches [`RwaEvent`]s
+        #[codec(index = 7)]
         Rwa(RwaEventFilter),
         /// Matches [`TriggerEvent`]s
+        #[codec(index = 8)]
         Trigger(TriggerEventFilter),
         /// Matches [`RoleEvent`]s
+        #[codec(index = 9)]
         Role(RoleEventFilter),
         /// Matches [`ConfigurationEvent`]s
+        #[codec(index = 10)]
         Configuration(ConfigurationEventFilter),
         /// Matches [`ExecutorEvent`]s
+        #[codec(index = 11)]
         Executor(ExecutorEventFilter),
         /// Matches proof verification events
+        #[codec(index = 12)]
         Proof(ProofEventFilter),
         /// Matches verifying key registry lifecycle events
+        #[codec(index = 13)]
         VerifyingKey(VerifyingKeyEventFilter),
         /// Matches runtime upgrade lifecycle events
+        #[codec(index = 14)]
         RuntimeUpgrade(RuntimeUpgradeEventFilter),
         /// Matches resolver directory governance events
+        #[codec(index = 15)]
         Soradns(SoradnsDirectoryEventFilter),
         /// Matches `SoraFS` gateway compliance events
+        #[codec(index = 16)]
         Sorafs(SorafsGatewayEventFilter),
         /// Matches Musubi package-registry and archive lifecycle events
+        #[codec(index = 17)]
         Musubi(MusubiEventFilter),
         /// Matches Space Directory manifest lifecycle events
+        #[codec(index = 18)]
         SpaceDirectory(SpaceDirectoryEventFilter),
         /// Matches native asset escrow lifecycle events
+        #[codec(index = 19)]
         Escrow(EscrowEventFilter),
         /// Matches oracle feed lifecycle events
+        #[codec(index = 20)]
         Oracle(OracleEventFilter),
         /// Matches viral incentive lifecycle events
+        #[codec(index = 21)]
         Social(SocialEventFilter),
         /// Matches [`BridgeEvent`]s
+        #[codec(index = 22)]
         Bridge(BridgeEventFilter),
         /// Matches governance lifecycle events
         #[cfg(feature = "governance")]
+        #[codec(index = 23)]
         Governance(GovernanceEventFilter),
+        /// Native race events, optionally restricted to one race identifier.
+        #[codec(index = 24)]
+        GameSession(Option<iroha_crypto::Hash>),
     }
     /// An event filter for [`super::proof::ProofEvent`] values.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
@@ -1501,7 +1529,8 @@ impl DataEventFilter {
                 updated |= replace_selector(&mut filter.seller_matcher);
                 updated |= replace_selector(&mut filter.buyer_matcher);
             }
-            Self::Any
+            Self::GameSession(_)
+            | Self::Any
             | Self::Peer(_)
             | Self::Domain(_)
             | Self::AssetDefinition(_)
@@ -1603,6 +1632,9 @@ impl EventFilter for DataEventFilter {
             (DataEventFilter::SpaceDirectory(filter), DataEvent::SpaceDirectory(space_event)) => {
                 filter.matches(space_event)
             }
+            (DataEventFilter::GameSession(id), DataEvent::GameSession(event)) => {
+                id.as_ref().is_none_or(|id| id == &event.session_id)
+            }
             (DataEventFilter::Escrow(filter), DataEvent::Escrow(escrow_event)) => {
                 filter.matches(escrow_event)
             }
@@ -1676,9 +1708,9 @@ pub mod prelude {
         AccountEventFilter, AssetDefinitionEventFilter, AssetEventFilter, BridgeEventFilter,
         ConfigurationEventFilter, DataEventFilter, DomainEventFilter, EscrowEventFilter,
         ExecutorEventFilter, MusubiEventFilter, NftEventFilter, OracleEventFilter, PeerEventFilter,
-        ProofEventFilter, RoleEventFilter, RwaEventFilter, SocialEventFilter,
-        SoradnsDirectoryEventFilter, SorafsGatewayEventFilter, TriggerEventFilter,
-        VerifyingKeyEventFilter,
+        ProofEventFilter, RoleEventFilter, RuntimeUpgradeEventFilter, RwaEventFilter,
+        SocialEventFilter, SoradnsDirectoryEventFilter, SorafsGatewayEventFilter,
+        SpaceDirectoryEventFilter, TriggerEventFilter, VerifyingKeyEventFilter,
     };
 }
 #[cfg(test)]
@@ -2395,3 +2427,6 @@ mod bridge_filters_model {
         }
     }
 }
+
+#[cfg(test)]
+mod tag_tests;

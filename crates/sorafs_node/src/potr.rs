@@ -6,6 +6,7 @@
 //! their exactly-once source identity and must return the canonical proof-outcome operation or
 //! repair-task identity. A substituted acknowledgement is never checkpointed, so a crash or
 //! rejected acknowledgement remains safe to replay.
+use crate::durable_transaction_forwarder::{CheckpointStoreError, CheckpointWriterGuard};
 use crate::proof_outcome_forwarder::{ProofOutcomeOutboxError, potr_proof_outcome_operation_id_v1};
 use iroha_data_model::sorafs::moderation_ledger::sorafs_repair_task_id_v1;
 use norito::derive::{NoritoDeserialize, NoritoSerialize};
@@ -49,7 +50,6 @@ pub const POTR_RECEIPT_MAX_CANONICAL_BYTES_V1: usize = 64 * 1024;
 pub const POTR_EXPORT_MAX_RECORDS_V1: usize = 1_000;
 const CHECKPOINT_LOCK_FILE_NAME: &str = "potr-receipts-state.lock";
 static CHECKPOINT_TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
-static CHECKPOINT_PROCESS_LOCK: Mutex<()> = Mutex::new(());
 /// Exact finalized provider-admission policy accepted for one PoTR receipt.
 ///
 /// The binding is persisted with the final signed receipt before any ledger or repair handoff.
@@ -930,7 +930,7 @@ impl PotrCheckpointStore {
         max_records: usize,
     ) -> Result<(Option<PotrTrackerCheckpointV1>, Option<[u8; 32]>), PotrTrackerError> {
         self.verify_root_identity()?;
-        let _writer = CheckpointWriterGuard::acquire(&self.lock_path)?;
+        let _writer = acquire_checkpoint_writer(&self.lock_path)?;
         self.verify_root_identity()?;
         let Some(bytes) = read_checkpoint_bytes(&self.checkpoint_path, self.checkpoint_max_bytes)?
         else {
@@ -975,7 +975,7 @@ impl PotrCheckpointStore {
             });
         }
         self.verify_root_identity()?;
-        let _writer = CheckpointWriterGuard::acquire(&self.lock_path)?;
+        let _writer = acquire_checkpoint_writer(&self.lock_path)?;
         self.verify_root_identity()?;
         let current = read_checkpoint_bytes(&self.checkpoint_path, self.checkpoint_max_bytes)?;
         self.verify_root_identity()?;
@@ -1092,95 +1092,12 @@ fn state_directory_identity_from_metadata(
         "PoTR durable state is unsupported on this platform".to_owned(),
     ))
 }
-struct CheckpointWriterGuard {
-    _process_guard: std::sync::MutexGuard<'static, ()>,
-    _file: File,
-}
-impl CheckpointWriterGuard {
-    fn acquire(path: &Path) -> Result<Self, PotrTrackerError> {
-        let process_guard = CHECKPOINT_PROCESS_LOCK
-            .try_lock()
-            .map_err(|_| PotrTrackerError::CheckpointBusy)?;
-        let before_open = match fs::symlink_metadata(path) {
-            Ok(metadata) => {
-                validate_regular_file_metadata(path, &metadata, u64::MAX, true)?;
-                Some(metadata)
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-            Err(error) => {
-                return Err(PotrTrackerError::CheckpointIo(format!(
-                    "inspect PoTR checkpoint writer lock: {error}"
-                )));
-            }
-        };
-        let mut options = OpenOptions::new();
-        options.read(true).write(true).create(true);
-        #[cfg(unix)]
-        options.mode(0o600);
-        configure_direct_file_open(&mut options)?;
-        let file = options.open(path).map_err(|error| {
-            PotrTrackerError::CheckpointIo(format!("open PoTR checkpoint writer lock: {error}"))
-        })?;
-        let opened = file.metadata().map_err(|error| {
-            PotrTrackerError::CheckpointIo(format!(
-                "inspect opened PoTR checkpoint writer lock: {error}"
-            ))
-        })?;
-        validate_regular_file_metadata(path, &opened, u64::MAX, true)?;
-        if before_open
-            .as_ref()
-            .is_some_and(|before| !file_metadata_unchanged(before, &opened))
-        {
-            return Err(PotrTrackerError::CheckpointIo(
-                "PoTR checkpoint writer lock changed while opening".to_owned(),
-            ));
-        }
-        let linked = fs::symlink_metadata(path).map_err(|error| {
-            PotrTrackerError::CheckpointIo(format!(
-                "reinspect PoTR checkpoint writer lock: {error}"
-            ))
-        })?;
-        validate_regular_file_metadata(path, &linked, u64::MAX, true)?;
-        if !file_metadata_unchanged(&opened, &linked) {
-            return Err(PotrTrackerError::CheckpointIo(
-                "PoTR checkpoint writer lock path changed while opening".to_owned(),
-            ));
-        }
-        match file.try_lock() {
-            Ok(()) => {}
-            Err(fs::TryLockError::WouldBlock) => {
-                return Err(PotrTrackerError::CheckpointBusy);
-            }
-            Err(fs::TryLockError::Error(error)) => {
-                return Err(PotrTrackerError::CheckpointIo(format!(
-                    "lock PoTR checkpoint writer: {error}"
-                )));
-            }
-        }
-        let locked_file = file.metadata().map_err(|error| {
-            PotrTrackerError::CheckpointIo(format!(
-                "reinspect locked PoTR checkpoint writer handle: {error}"
-            ))
-        })?;
-        let locked_path = fs::symlink_metadata(path).map_err(|error| {
-            PotrTrackerError::CheckpointIo(format!(
-                "reinspect locked PoTR checkpoint writer path: {error}"
-            ))
-        })?;
-        validate_regular_file_metadata(path, &locked_file, u64::MAX, true)?;
-        validate_regular_file_metadata(path, &locked_path, u64::MAX, true)?;
-        if !file_metadata_unchanged(&opened, &locked_file)
-            || !file_metadata_unchanged(&opened, &locked_path)
-        {
-            return Err(PotrTrackerError::CheckpointIo(
-                "PoTR checkpoint writer lock changed while locking".to_owned(),
-            ));
-        }
-        Ok(Self {
-            _process_guard: process_guard,
-            _file: file,
-        })
-    }
+fn acquire_checkpoint_writer(path: &Path) -> Result<CheckpointWriterGuard, PotrTrackerError> {
+    CheckpointWriterGuard::acquire(path).map_err(|error| match error {
+        CheckpointStoreError::Busy => PotrTrackerError::CheckpointBusy,
+        CheckpointStoreError::RuntimePoisoned => PotrTrackerError::RuntimePoisoned,
+        other => PotrTrackerError::CheckpointIo(format!("acquire PoTR checkpoint writer: {other}")),
+    })
 }
 fn ensure_private_state_directory(path: &Path) -> Result<(), PotrTrackerError> {
     match fs::symlink_metadata(path) {
@@ -1814,6 +1731,41 @@ mod tests {
         thread,
     };
     use tempfile::TempDir;
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn checkpoint_writer_allows_independent_roots_and_rejects_same_identity() {
+        let first_root = TempDir::new().expect("first checkpoint root");
+        let second_root = TempDir::new().expect("second checkpoint root");
+        let first_path = first_root
+            .path()
+            .canonicalize()
+            .unwrap()
+            .join(CHECKPOINT_LOCK_FILE_NAME);
+        let second_path = second_root
+            .path()
+            .canonicalize()
+            .unwrap()
+            .join(CHECKPOINT_LOCK_FILE_NAME);
+        let first = acquire_checkpoint_writer(&first_path).expect("first writer");
+        let _second = acquire_checkpoint_writer(&second_path)
+            .expect("an independent checkpoint root must not contend");
+        assert!(matches!(
+            acquire_checkpoint_writer(&first_path),
+            Err(PotrTrackerError::CheckpointBusy)
+        ));
+        let alias = first_path
+            .parent()
+            .unwrap()
+            .join(".")
+            .join(CHECKPOINT_LOCK_FILE_NAME);
+        assert!(matches!(
+            acquire_checkpoint_writer(&alias),
+            Err(PotrTrackerError::CheckpointBusy)
+        ));
+        drop(first);
+        drop(acquire_checkpoint_writer(&first_path).expect("released identity is reusable"));
+    }
     const PROVIDER_ID: [u8; 32] = [0x22; 32];
     const MANIFEST_DIGEST: [u8; 32] = [0x11; 32];
     type ProofOutcome = (PotrReceiptV1, [u8; 32], [u8; 32]);
@@ -2586,6 +2538,39 @@ mod tests {
         );
     }
     #[test]
+    fn checkpoint_writers_are_independent_per_directory_and_fence_path_aliases() {
+        let first = TempDir::new().expect("first state root");
+        let second = TempDir::new().expect("second state root");
+        private_potr_directory(first.path());
+        private_potr_directory(second.path());
+        let first_lock = first.path().join(CHECKPOINT_LOCK_FILE_NAME);
+        let held = acquire_checkpoint_writer(&first_lock).expect("hold first writer");
+        let independent = PotrTracker::open(
+            second.path(),
+            8,
+            POTR_TRACKER_DEFAULT_CHECKPOINT_MAX_BYTES_V1,
+        )
+        .expect("an unrelated held writer must not block this store");
+        let alias = first.path().join(".").join(CHECKPOINT_LOCK_FILE_NAME);
+        for path in [&first_lock, &alias] {
+            assert!(matches!(
+                acquire_checkpoint_writer(path),
+                Err(PotrTrackerError::CheckpointBusy)
+            ));
+        }
+        assert!(matches!(
+            PotrTracker::open(
+                first.path(),
+                8,
+                POTR_TRACKER_DEFAULT_CHECKPOINT_MAX_BYTES_V1
+            ),
+            Err(PotrTrackerError::CheckpointBusy)
+        ));
+        drop(held);
+        drop(acquire_checkpoint_writer(&alias).expect("released alias is available"));
+        drop(independent);
+    }
+    #[test]
     fn admission_rotation_floor_survives_restart_and_rejects_rollback_and_replay_substitution() {
         let (admission, gateway_key, provider_key) = governed_fixture();
         let gateway_public = gateway_public_key(&gateway_key);
@@ -2765,11 +2750,11 @@ mod tests {
         let directory = TempDir::new().expect("temporary directory");
         private_potr_directory(directory.path());
         let lock_path = directory.path().join(CHECKPOINT_LOCK_FILE_NAME);
-        drop(CheckpointWriterGuard::acquire(&lock_path).expect("create lock file"));
+        drop(acquire_checkpoint_writer(&lock_path).expect("create lock file"));
         let alias = directory.path().join("potr-lock-alias");
         fs::hard_link(&lock_path, &alias).expect("lock hard link");
         assert!(matches!(
-            CheckpointWriterGuard::acquire(&lock_path),
+            acquire_checkpoint_writer(&lock_path),
             Err(PotrTrackerError::CheckpointIo(_))
         ));
     }
@@ -2802,11 +2787,11 @@ mod tests {
         let lock_file = options.open(&lock_path).expect("open lock file");
         lock_file.try_lock().expect("own operating-system lock");
         assert!(matches!(
-            CheckpointWriterGuard::acquire(&lock_path),
+            acquire_checkpoint_writer(&lock_path),
             Err(PotrTrackerError::CheckpointBusy)
         ));
         drop(lock_file);
-        drop(CheckpointWriterGuard::acquire(&lock_path).expect("lock becomes available"));
+        drop(acquire_checkpoint_writer(&lock_path).expect("lock becomes available"));
     }
     #[cfg(any(unix, windows))]
     #[test]
@@ -2855,7 +2840,7 @@ mod tests {
         let lock_path = lock_directory.path().join(CHECKPOINT_LOCK_FILE_NAME);
         symlink(&outside_lock, &lock_path).expect("lock symlink");
         assert!(matches!(
-            CheckpointWriterGuard::acquire(&lock_path),
+            acquire_checkpoint_writer(&lock_path),
             Err(PotrTrackerError::CheckpointIo(_))
         ));
         assert_hardlinked_potr_checkpoint_is_rejected();

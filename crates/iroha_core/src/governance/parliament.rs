@@ -572,32 +572,32 @@ impl ParliamentPulseSlotV1 {
     }
 
     fn from_canonical_json_key(encoded: &str) -> Result<Self, norito::json::Error> {
+        // A fixed-size session hash and a u64 height never require key-sized scratch.
+        if !(66..=85).contains(&encoded.len()) {
+            return Err(norito::json::Error::Message(
+                "Parliament pulse-slot key must contain 64 session digits and 1–20 height digits"
+                    .into(),
+            ));
+        }
         let (session_hex, height_text) = encoded.split_once(':').ok_or_else(|| {
             norito::json::Error::Message(
                 "Parliament pulse-slot key must contain one session/height separator".into(),
             )
         })?;
-        let session_bytes: [u8; 32] = hex::decode(session_hex)
-            .map_err(|error| {
-                norito::json::Error::Message(format!(
-                    "invalid Parliament pulse-slot session hex: {error}"
-                ))
-            })?
-            .try_into()
-            .map_err(|_| {
-                norito::json::Error::Message(
-                    "Parliament pulse-slot session must contain exactly 32 bytes".into(),
-                )
-            })?;
+        let beacon_session_id =
+            <BeaconSessionId as norito::json::JsonObjectKeyOwned>::from_json_key_text(session_hex)?;
+        if height_text.is_empty()
+            || !height_text.bytes().all(|byte| byte.is_ascii_digit())
+            || (height_text.len() > 1 && height_text.starts_with('0'))
+        {
+            return Err(norito::json::Error::Message(
+                "Parliament pulse-slot height must use canonical decimal".into(),
+            ));
+        }
         let height = height_text.parse::<u64>().map_err(|error| {
             norito::json::Error::Message(format!("invalid Parliament pulse-slot height: {error}"))
         })?;
-        if session_hex != hex::encode(session_bytes) || height_text != height.to_string() {
-            return Err(norito::json::Error::Message(
-                "Parliament pulse-slot key must use canonical lowercase hex and decimal".into(),
-            ));
-        }
-        Ok(Self::new(BeaconSessionId::new(session_bytes), height))
+        Ok(Self::new(beacon_session_id, height))
     }
 }
 
@@ -621,8 +621,20 @@ impl norito::json::JsonDeserialize for ParliamentPulseSlotV1 {
         let encoded = <String as norito::json::JsonDeserialize>::json_deserialize(parser)?;
         Self::from_canonical_json_key(&encoded)
     }
+}
 
-    fn json_from_map_key(key: &str) -> Result<Self, norito::json::Error> {
+impl norito::json::JsonObjectKey for ParliamentPulseSlotV1 {
+    fn visit_json_key_text<E>(
+        &self,
+        mut visitor: impl FnMut(&str) -> Result<(), E>,
+    ) -> Result<(), E> {
+        norito::json::JsonObjectKey::visit_json_key_text(&self.beacon_session_id, &mut visitor)?;
+        visitor(":")?;
+        norito::json::JsonObjectKey::visit_json_key_text(&self.height, visitor)
+    }
+}
+impl norito::json::JsonObjectKeyOwned for ParliamentPulseSlotV1 {
+    fn from_json_key_text(key: &str) -> Result<Self, norito::json::Error> {
         Self::from_canonical_json_key(key)
     }
 }
@@ -1769,6 +1781,7 @@ impl ParliamentAttemptStateV1 {
 
     /// Return whether this attempt references `member` through a currently
     /// live draw or an immutable sealed Parliament seat.
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn references_parliament_member(&self, member: &AccountId) -> bool {
         self.parliament_member_reference_sets_v1()
@@ -1777,6 +1790,7 @@ impl ParliamentAttemptStateV1 {
     }
 
     /// Return whether an active attempt still retains `member`'s citizenship bond.
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn retains_citizenship_bond(&self, member: &AccountId) -> bool {
         self.parliament_member_reference_sets_v1()
@@ -1806,6 +1820,35 @@ impl ParliamentAttemptStateV1 {
     #[must_use]
     pub fn required_bodies(&self) -> &[RequiredParliamentBodyV1] {
         &self.required_bodies
+    }
+
+    /// Admit the payloadless initial-sortition intent exactly once after qualification.
+    ///
+    /// A caller cannot use this intent to redraw a failed or already consumed
+    /// generation. Explicit retries retain their ordinary predecessor, slot,
+    /// eligibility and proposal-wide randomness-budget checks.
+    pub(crate) fn ensure_initial_sortition_ready_v1(
+        &self,
+        governance_attempt_id: GovernanceAttemptId,
+    ) -> Result<(), ParliamentReducerErrorV1> {
+        self.ensure_active(governance_attempt_id)?;
+        let first = self
+            .required_bodies
+            .first()
+            .ok_or(ParliamentReducerErrorV1::InvalidRequiredBodyPipeline)?;
+        self.ensure_stage(stage_for_body(first.body))?;
+        if !self.elections.is_empty()
+            || !self.sortition_capacity_failures.is_empty()
+            || !self.used_pulse_ids.is_empty()
+            || !self.used_pulse_slots.is_empty()
+            || !self.bodies.is_empty()
+            || !self.body_bindings.is_empty()
+        {
+            return Err(ParliamentReducerErrorV1::InvalidLifecycleTransition(
+                ParliamentReducerEntityV1::BodyElection,
+            ));
+        }
+        Ok(())
     }
 
     /// Validate immutable attempt bindings against their retained typed proposal.
@@ -2093,6 +2136,7 @@ impl ParliamentAttemptStateV1 {
     /// Timed ballots request their frozen release slot from registration until
     /// they either consume the pulse or become terminal, so an otherwise valid
     /// arbitrary release height is visible to consensus before it arrives.
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn requires_beacon_pulse_at(
         &self,
@@ -2122,7 +2166,7 @@ impl ParliamentAttemptStateV1 {
     /// Return every live beacon slot currently required by this attempt.
     ///
     /// The deduplicated set is used to maintain the world-level consensus
-    /// index; point queries should use [`Self::requires_beacon_pulse_at`].
+    /// index used by point queries.
     #[must_use]
     pub(crate) fn required_beacon_pulse_slots_v1(&self) -> BTreeSet<(BeaconSessionId, u64)> {
         if self.attempt.status != GovernanceAttemptStatusV1::Active {
@@ -2184,6 +2228,7 @@ impl ParliamentAttemptStateV1 {
     /// This hot-path lookup short-circuits over the authoritative records rather
     /// than allocating the deduplicated set used for index construction.
     #[must_use]
+    #[cfg(test)]
     pub(crate) fn classifies_beacon_pulse_unavailable_at(
         &self,
         beacon_session_id: BeaconSessionId,

@@ -149,12 +149,12 @@ async fn execute_torii_fanout_space_directory_manifest_payloads_resolved_routes(
         .await;
         if response.status() == StatusCode::NOT_FOUND {
             diagnostics.record_skipped_response(&response);
-            last_not_found = Some(response);
+            last_not_found = Some(summarize_skipped_torii_route_response(response));
             continue;
         }
         if torii_response_has_reject_code(&response, "route_unavailable") {
             diagnostics.record_skipped_response(&response);
-            last_route_unavailable = Some(response);
+            last_route_unavailable = Some(summarize_skipped_torii_route_response(response));
             continue;
         }
         if !response.status().is_success() {

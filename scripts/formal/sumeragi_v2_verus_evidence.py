@@ -31,9 +31,10 @@ from compute_workspace_source_manifest import workspace_source_manifest  # noqa:
 SCHEMA_VERSION = 2
 EXPECTED_VERUS_VERSION = "0.2026.05.31.5dd6d83"
 EXPECTED_DEPENDENCY_VERIFIED = 1690
-# The local proof expansion adds 31 roots to the historical 126-root source;
-# the proposal-origin closure adds one independent root.
-EXPECTED_ROOT_VERIFIED = 172
+# Reviewed against the pinned verifier's retained transcript and complete
+# compiled proof closure: 114 proofs + 40 executable bodies + 63 derived Clone
+# bodies + 4 recursive-spec termination obligations. This is an exact count.
+EXPECTED_ROOT_VERIFIED = 221
 EXPECTED_LOG_PATH = "formal/sumeragi_v2/verus.log"
 EXPECTED_INVOCATION = (
     "bash",
@@ -111,6 +112,12 @@ REQUIRED_SOURCE_PATHS = (
     "scripts/formal/sumeragi_v2_harness.lock",
     "scripts/run_sumeragi_v2_formal_release.sh",
     "scripts/verify_sumeragi_v2.sh",
+    "crates/iroha_core/src/sumeragi/v2_core.rs",
+    "crates/iroha_core/src/sumeragi/v2_core/refinement/post_carrier_transition.rs",
+    "crates/iroha_sumeragi_core/src/verus_proofs/in_flight_first_release_proofs.rs",
+    "crates/iroha_core/src/queue.rs",
+    "crates/iroha_core/src/kura/autonomous_release_authority.rs",
+    "crates/iroha_core/src/kura/autonomous_merge_bundle_support.rs",
 )
 
 EXPECTED_VERIFY_COMMAND_SOURCE = "\\\n".join(

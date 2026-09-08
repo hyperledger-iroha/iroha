@@ -52,7 +52,7 @@ use ivm_abi::{
     },
 };
 use norito::{
-    core::{Header, NoritoDeserialize, NoritoSerialize},
+    core::{Header, NoritoDeserialize, SerializePayload},
     decode_from_bytes,
 };
 use sha2::{Digest as Sha2Digest, Sha256};
@@ -1547,7 +1547,7 @@ fn state_scan_page_payload_bound_from_parts(
 fn state_key_encoded_len_from_text(key: &str) -> Result<usize, VMError> {
     let _canonical_flags =
         norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
-    <&str as NoritoSerialize>::encoded_len_exact(&key).ok_or(VMError::NoritoInvalid)
+    <&str as SerializePayload>::encoded_len_exact(&key).ok_or(VMError::NoritoInvalid)
 }
 /// Compute the exact encoded-element total and framed page bound after adding
 /// one canonical durable-state key to a selected page.

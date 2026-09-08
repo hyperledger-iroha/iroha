@@ -2,7 +2,7 @@
 //! Verify NPoS liveness with revision-4 equal-vote, full-committee consensus.
 use eyre::{Result, WrapErr, ensure, eyre};
 use integration_tests::sandbox;
-use iroha::client::Client;
+use iroha::blocking::Client;
 use iroha::data_model::{
     Level,
     isi::{Log, SetParameter},
@@ -60,7 +60,7 @@ fn npos_network_produces_blocks() -> Result<()> {
         // choose a connected submit peer on each attempt to avoid queue-timeout flakiness
         // right after startup on slower grouped runs.
         let probe_client = network.client();
-        let status_before = probe_client.get_status()?;
+        let status_before = probe_client.client().get_status()?;
         let target_height = status_before.blocks + 5;
         let observed_heights = rt
             .block_on(async {
@@ -358,7 +358,12 @@ async fn submit_peer_indices_for_network(network: &Network, probe: &Client) -> V
     let peer_count = network.peers().len();
     let (status, sumeragi) = tokio::task::spawn_blocking({
         let client = probe.clone();
-        move || (client.get_status(), client.get_sumeragi_status())
+        move || {
+            (
+                client.client().get_status(),
+                client.client().get_sumeragi_status(),
+            )
+        }
     })
     .await
     .map(|(status, sumeragi)| (status.ok(), sumeragi.ok()))
@@ -394,11 +399,20 @@ async fn submit_seed_log(network: &Network, probe: &Client, message: String) -> 
         let client = probe.clone();
         let message = message.clone();
         move || {
-            client.build_transaction_from_items(
-                [Log::new(Level::INFO, message)],
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-                Metadata::default(),
-            )
+            {
+                let account = client.account_client();
+                account
+                    .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                        [Log::new(Level::INFO, message)],
+                        iroha_data_model::transaction::FeePaymentIntent::authority(
+                            Vec::new(),
+                            None,
+                        ),
+                        Metadata::default(),
+                    ))
+                    .and_then(|payload| account.sign_transaction(payload))
+            }
+            .expect("build integration-test transaction")
         }
     })
     .await
@@ -438,7 +452,7 @@ async fn drive_network_to_height(
     let mut last_error = None;
     let mut next_height = tokio::task::spawn_blocking({
         let client = probe.clone();
-        move || client.get_status()
+        move || client.client().get_status()
     })
     .await
     .ok()

@@ -37,11 +37,13 @@ async fn multiple_blocks_created() -> Result<()> {
         .iter()
         .min_by_key(|peer| peer.public_key().to_string())
         .expect("at least one peer");
-    let mut submit_client = leader.client();
-    submit_client.transaction_status_timeout = sync_timeout;
-    submit_client.transaction_ttl = Some(sync_timeout + Duration::from_secs(5));
+    let submit_client =
+        integration_tests::sync::rebind_blocking_client(&leader.client(), |client| {
+            client.transaction_status_timeout = sync_timeout;
+            client.transaction_ttl = Some(sync_timeout + Duration::from_secs(5));
+        });
     let domain_id: DomainId = DomainId::try_new("domain", "universal")?;
-    let create_domain = domain_setup_instruction(&domain_id, &submit_client.account)?;
+    let create_domain = domain_setup_instruction(&domain_id, &submit_client.client().account)?;
     let (account_id, _account_keypair) = gen_account_in("domain");
     let create_account = Register::account(Account::new(account_id.clone()));
     let asset_definition_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
@@ -59,17 +61,23 @@ async fn multiple_blocks_created() -> Result<()> {
     });
     {
         let client = submit_client.clone();
-        let tx = client.clone().build_transaction(
-            [
-                create_domain,
-                InstructionBox::from(create_account),
-                InstructionBox::from(create_asset),
-            ],
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-            <_>::default(),
-        );
+        let tx = {
+            let account = client.account_client();
+            account
+                .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                    [
+                        create_domain,
+                        InstructionBox::from(create_account),
+                        InstructionBox::from(create_asset),
+                    ],
+                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                    <_>::default(),
+                ))
+                .and_then(|payload| account.sign_transaction(payload))
+        }
+        .expect("build integration-test transaction");
         let submit_res: eyre::Result<()> =
-            spawn_blocking(move || client.submit_transaction_blocking(&tx).map(|_| ()))
+            spawn_blocking(move || client.submit_transaction_and_wait(&tx).map(|_| ()))
                 .await
                 .map_err(eyre::Report::from)?;
         if sandbox::handle_result(submit_res, stringify!(multiple_blocks_created))?.is_none() {
@@ -106,16 +114,25 @@ async fn multiple_blocks_created() -> Result<()> {
                 .expect("there is quite a room to choose from");
             total += value;
             let client = submit_client.clone();
-            let tx = client.build_transaction(
-                [Mint::asset_quantity(
-                    u64::try_from(value).expect("generated quantity fits u64"),
-                    AssetId::new(asset_definition_id.clone(), account_id.clone()),
-                )],
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-                <_>::default(),
-            );
+            let tx = {
+                let account = client.account_client();
+                account
+                    .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                        [Mint::asset_quantity(
+                            u64::try_from(value).expect("generated quantity fits u64"),
+                            AssetId::new(asset_definition_id.clone(), account_id.clone()),
+                        )],
+                        iroha_data_model::transaction::FeePaymentIntent::authority(
+                            Vec::new(),
+                            None,
+                        ),
+                        <_>::default(),
+                    ))
+                    .and_then(|payload| account.sign_transaction(payload))
+            }
+            .expect("build integration-test transaction");
             submit_handles.push(spawn_blocking(move || {
-                client.submit_transaction_blocking(&tx).map(|_| ())
+                client.submit_transaction_and_wait(&tx).map(|_| ())
             }));
         }
         for handle in submit_handles {
@@ -154,7 +171,7 @@ async fn multiple_blocks_created() -> Result<()> {
             let account_id = account_id.clone();
             let definition = asset_definition_id.clone();
             let assets: Vec<Asset> = match sandbox::handle_result(
-                spawn_blocking(move || client.query(FindAssets::new()).execute_all())
+                spawn_blocking(move || client.client().query(FindAssets::new()).execute_all())
                     .await?
                     .map_err(eyre::Report::from),
                 stringify!(multiple_blocks_created),

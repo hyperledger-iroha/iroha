@@ -18,6 +18,12 @@ use zeroize::{Zeroize, Zeroizing};
 mod backend;
 #[path = "mldsa_primitives.rs"]
 mod mldsa_primitives;
+#[path = "mldsa_sign.rs"]
+mod signer;
+#[path = "mldsa_verify.rs"]
+mod verifier;
+pub use signer::sign_mldsa65_detached;
+pub use verifier::verify_mldsa65_detached;
 /// Maximum context length accepted by FIPS 204 ML-DSA signing and verification.
 pub const ML_DSA_CONTEXT_MAX_LEN: usize = 255;
 /// Supported ML-DSA parameter sets.
@@ -479,7 +485,7 @@ pub fn verify_mldsa(
                 .map_err(|err| MlDsaError::bad_encoding("ML-DSA-44 public key", err))?;
             let sig = mldsa44::DetachedSignature::from_bytes(signature)
                 .map_err(|err| MlDsaError::bad_encoding("ML-DSA-44 signature", err))?;
-            mldsa44::verify_detached_signature_ctx(&sig, message, context, &pk)
+            verifier::verify44_ctx(&sig, message, context, &pk)
                 .map_err(MlDsaError::VerificationFailed)
         }
         MlDsaSuite::MlDsa65 => {
@@ -487,7 +493,7 @@ pub fn verify_mldsa(
                 .map_err(|err| MlDsaError::bad_encoding("ML-DSA-65 public key", err))?;
             let sig = mldsa65::DetachedSignature::from_bytes(signature)
                 .map_err(|err| MlDsaError::bad_encoding("ML-DSA-65 signature", err))?;
-            mldsa65::verify_detached_signature_ctx(&sig, message, context, &pk)
+            verifier::verify65_ctx(&sig, message, context, &pk)
                 .map_err(MlDsaError::VerificationFailed)
         }
         MlDsaSuite::MlDsa87 => {
@@ -495,7 +501,7 @@ pub fn verify_mldsa(
                 .map_err(|err| MlDsaError::bad_encoding("ML-DSA-87 public key", err))?;
             let sig = mldsa87::DetachedSignature::from_bytes(signature)
                 .map_err(|err| MlDsaError::bad_encoding("ML-DSA-87 signature", err))?;
-            mldsa87::verify_detached_signature_ctx(&sig, message, context, &pk)
+            verifier::verify87_ctx(&sig, message, context, &pk)
                 .map_err(MlDsaError::VerificationFailed)
         }
     }

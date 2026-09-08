@@ -19,7 +19,7 @@ These guidelines apply to the `integration_tests/` crate.
 - Feature flags:
   - `telemetry` (default) enables metrics assertions.
   - `fault_injection` opens hooks used by adversarial Sumeragi tests.
-  - `norito_streaming_fec` pulls in Reed–Solomon helpers for FEC regression coverage.
+  - Norito FEC parity/recovery regression coverage runs unconditionally in `nexus_and_streaming` using local GF(256) helpers.
   - `js_host_parity` mirrors Kotodama host tests inside JS targets.
 - Some tests require optional data:
   - Set `IROHA_TEST_PREBUILD_DEFAULT_EXECUTOR=1` before building if you need the default executor sample in `fixtures/ivm`.

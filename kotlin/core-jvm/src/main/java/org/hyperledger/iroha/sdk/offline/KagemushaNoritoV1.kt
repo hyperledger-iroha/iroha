@@ -29,6 +29,13 @@ object KagemushaNoritoV1 {
     /** Maximum canonical bytes for the request embedded in `TopUpKagemushaV1`. */
     const val MAXIMUM_TOP_UP_REQUEST_BYTES: Int = 16 * 1024
 
+    /** Maximum canonical bytes in the untrusted enrolled-open owner selector. */
+    const val MAXIMUM_ENROLLED_OPEN_SELECTOR_BYTES: Int = 16 * 1024
+
+    private const val ENROLLED_OPEN_SELECTOR_SCHEMA = "iroha.kagemusha.v1.enrolled-open-selector"
+    private const val RETAIL_ENROLLMENT_OWNER_SCHEMA = "iroha.kagemusha.v1.retail-enrollment-owner"
+    private val RETAIL_ENROLLMENT_ID_DOMAIN = ascii("iroha:kagemusha:v1:retail-enrollment-identity")
+
     private const val MODEL = "iroha_data_model::kagemusha::kagemusha_v1::"
     private const val AGGREGATE_SCHEMA = MODEL + "KagemushaAggregateStateCommitmentV1"
     private const val PASTA_STATE_SCHEMA = MODEL + "KagemushaPastaStateCommitmentV1"
@@ -96,6 +103,30 @@ object KagemushaNoritoV1 {
     private val COMMIT_CERTIFICATE_DIGEST_DOMAIN = ascii("iroha:kagemusha:v1:commit-certificate")
     private val ENCRYPTED_CREDIT_SALT_LABEL = ascii("iroha:kagemusha:v1:credit-envelope-salt\u0000")
     private val ENCRYPTED_CREDIT_INFO_LABEL = ascii("iroha:kagemusha:v1:credit-envelope-key\u0000")
+
+    /** Derive untrusted correlation identity from the complete canonical owner archive. */
+    @JvmStatic
+    fun retailEnrollmentIdentityShape(owner: KagemushaRetailEnrollmentOwnerV1): ByteArray =
+        digestEncoded(RETAIL_ENROLLMENT_ID_DOMAIN, bounded(
+            raw(owner, RETAIL_ENROLLMENT_OWNER_SCHEMA, RETAIL_ENROLLMENT_OWNER_ADAPTER),
+            MAXIMUM_ENROLLED_OPEN_SELECTOR_BYTES,
+        ))
+
+    /** Encode bounded lookup data; no issuer decision or hardware state is authenticated. */
+    @JvmStatic
+    fun encodeEnrolledOpenSelectorShape(value: KagemushaEnrolledOpenSelectorV1): ByteArray {
+        require(value.enrollmentId().contentEquals(retailEnrollmentIdentityShape(value.owner))) {
+            "enrolled-open selector identity does not match its complete owner"
+        }
+        return bounded(raw(value, ENROLLED_OPEN_SELECTOR_SCHEMA, ENROLLED_OPEN_SELECTOR_ADAPTER),
+            MAXIMUM_ENROLLED_OPEN_SELECTOR_BYTES)
+    }
+
+    /** Decode solely the exact current canonical selector without granting authority. */
+    @JvmStatic
+    fun decodeEnrolledOpenSelectorShapeExact(bytes: ByteArray): KagemushaEnrolledOpenSelectorV1 =
+        decodeExact(bytes, MAXIMUM_ENROLLED_OPEN_SELECTOR_BYTES, ENROLLED_OPEN_SELECTOR_SCHEMA,
+            ENROLLED_OPEN_SELECTOR_ADAPTER, ::encodeEnrolledOpenSelectorShape)
 
     /** Encode exact bounded aggregate-state metadata after shape checks. */
     @JvmStatic
@@ -1935,10 +1966,53 @@ object KagemushaNoritoV1 {
         override fun decode(decoder: NoritoDecoder): T = decode.invoke(decoder)
     }
 
+    private val RETAIL_ENROLLMENT_RUNTIME_ADAPTER = adapter<KagemushaRetailEnrollmentRuntimeV1>(
+        encode = { e, value ->
+            nestedField(e, NoritoAdapters.stringAdapter(), value.fiId)
+            field(e) { u64Field(it, value.ledgerDataspaceId) }
+            nestedField(e, NoritoAdapters.stringAdapter(), value.authenticationNamespace)
+            networkField(e, value.networkId)
+            assetField(e, value.asset)
+            incarnationField(e, value.assetIncarnation)
+            u32Field(e, value.scale)
+        },
+        decode = { d ->
+            val fiId = readNested(d, NoritoAdapters.stringAdapter())
+            val dataspace = readField(d)
+            val dataspaceId = readU64(dataspace)
+            require(dataspace.remaining() == 0) { "trailing ledger dataspace bytes" }
+            KagemushaRetailEnrollmentRuntimeV1(fiId, dataspaceId,
+                readNested(d, NoritoAdapters.stringAdapter()), readNetwork(d), readAsset(d),
+                readIncarnation(d), readU32(d))
+        },
+    )
+
+    internal val RETAIL_ENROLLMENT_OWNER_ADAPTER = adapter<KagemushaRetailEnrollmentOwnerV1>(
+        encode = { e, value ->
+            accountField(e, value.accountId)
+            nestedField(e, RETAIL_ENROLLMENT_RUNTIME_ADAPTER, value.runtime)
+            bytes32Field(e, value.laneId())
+        },
+        decode = { d -> KagemushaRetailEnrollmentOwnerV1(readAccount(d),
+            readNested(d, RETAIL_ENROLLMENT_RUNTIME_ADAPTER), readFixed32(d)) },
+    )
+
+    private val ENROLLED_OPEN_SELECTOR_ADAPTER = adapter<KagemushaEnrolledOpenSelectorV1>(
+        encode = { e, value ->
+            u16Field(e, value.version)
+            nestedField(e, RETAIL_ENROLLMENT_OWNER_ADAPTER, value.owner)
+            raw32Field(e, value.enrollmentId())
+        },
+        decode = { d -> KagemushaEnrolledOpenSelectorV1(readU16(d),
+            readNested(d, RETAIL_ENROLLMENT_OWNER_ADAPTER), readRaw32(d)) },
+    )
+
     private fun <T> raw(value: T, schema: String, adapter: TypeAdapter<T>): ByteArray =
         encodeCanonical(value, schema, adapter, canonicalAlignment(schema))
 
     internal fun canonicalAlignment(schema: String): Int = when (schema) {
+        ENROLLED_OPEN_SELECTOR_SCHEMA,
+        RETAIL_ENROLLMENT_OWNER_SCHEMA,
         PEER_CREDIT_CONTEXT_SCHEMA,
         LIFECYCLE_SCHEMA,
         COMMIT_CERTIFICATE_SCHEMA,

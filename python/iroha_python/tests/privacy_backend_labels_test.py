@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import re
+from pathlib import Path
+
 import pytest
 
 from iroha_python._privacy_backends import (
@@ -12,21 +15,93 @@ from iroha_python._privacy_backends import (
 )
 
 
+def _registry_literals(path: str, marker: str, end: str) -> frozenset[str]:
+    root = Path(__file__).resolve().parents[3]
+    source = (root / path).read_text("utf-8")
+    assert source.count(marker) == 1, (path, marker)
+    body = source.split(marker, 1)[1].split(end, 1)[0]
+    labels = re.findall(r'"((?:halo2|stark)/[^"\n]*)"', body)
+    assert labels and len(labels) == len(set(labels)), (path, labels)
+    return frozenset(labels)
+
+
+@pytest.mark.parametrize(
+    "path,marker,end,subset",
+    [
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/zk/VerifyingKeyBackendTag.kt",
+            "val VERIFIER_BACKEND_REGISTRY_LABELS_V1:", "),\n        )", "all",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/zk/VerifyingKeyBackendTag.java",
+            "public static final Set<String> VERIFIER_BACKEND_REGISTRY_LABELS_V1 =", ");", "all",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/zk/VerifyingKeyBackendTag.java",
+            "private static final Set<String> PRODUCTION_NATIVE_HALO2_PASTA_BACKENDS =", ");", "pasta",
+        ),
+        (
+            "csharp/src/Hyperledger.Iroha.Sdk/Zk/VerifierBackendRegistryLabels.cs",
+            "private static readonly string[] SupportedLabels =", "];", "all",
+        ),
+        (
+            "csharp/src/Hyperledger.Iroha.Sdk/Zk/VerifyingKeyBackendTag.cs",
+            "private static readonly HashSet<string> ProductionNativeHalo2PastaBackends =", "};", "pasta",
+        ),
+        (
+            "IrohaSwift/Sources/IrohaSwift/VerifyingKeyBackendTag.swift",
+            "private static let productionNativeHalo2PastaBackends: Set<String> =", "]", "pasta",
+        ),
+        (
+            "IrohaSwift/Sources/IrohaSwift/VerifyingKeyBackendTag.swift",
+            "private static let productionLabels: Set<String> =", "]", "all",
+        ),
+        (
+            "javascript/iroha_js/src/verifyingKeyClient.js",
+            "const PRODUCTION_VERIFY_BACKEND_LABELS_V1 =", "]);", "all",
+        ),
+        (
+            "javascript/iroha_js/src/toriiClient.js",
+            "const PRODUCTION_VERIFY_BACKEND_LABELS_V1 =", "]);", "all",
+        ),
+        (
+            "javascript/iroha_js/index.d.ts",
+            "export type ToriiVerifierBackendLabelV1 =", ";", "all",
+        ),
+    ],
+)
+def test_each_sdk_registry_mirror_matches_the_exact_rust_owner(
+    path: str, marker: str, end: str, subset: str
+) -> None:
+    # Registry acceptance is source parity, not production qualification.
+    canonical = _registry_literals(
+        "crates/iroha_data_model/src/zk.rs",
+        "pub const ZK_VERIFIER_BACKEND_REGISTRY_LABELS_V1:",
+        "];",
+    )
+    assert len(canonical) == 8
+    assert _VERIFIER_BACKEND_REGISTRY_LABELS_V1 == canonical
+    expected = (
+        frozenset(label for label in canonical if label.startswith("halo2/pasta/"))
+        if subset == "pasta" else canonical
+    )
+    assert _registry_literals(path, marker, end) == expected, path
+
+
 def test_privacy_verifier_registry_is_closed_exact_and_engine_typed() -> None:
     expected = frozenset(
         {
             "halo2/ipa",
-            "halo2/pasta/kaigi-roster-v1",
+            "halo2/pasta/kaigi-authorization-v1",
             "halo2/pasta/kaigi-usage-v1",
             "halo2/pasta/ivm-execution-v1",
-            "halo2/pasta/kagemusha-v1-mint-fold-merkle16-axiom-poseidon-v1",
             "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
             "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
             "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",
             "stark/fri/poseidon-x7-goldilocks-6x64-v1",
         }
     )
-    assert len(expected) == 9
+    assert len(expected) == 8
     assert _VERIFIER_BACKEND_REGISTRY_LABELS_V1 == expected
     for backend in expected:
         expected_tag = "halo2-ipa-pasta" if backend.startswith("halo2/") else "stark"
@@ -41,6 +116,8 @@ def test_privacy_verifier_registry_is_closed_exact_and_engine_typed() -> None:
 def test_privacy_verifier_registry_rejects_aliases_retired_and_hostile_labels() -> None:
     unsupported = (
         "",
+        "halo2/pasta/kaigi-roster-v1",
+        "halo2/pasta/kagemusha-v1-mint-fold-merkle16-axiom-poseidon-v1",
         "unknown/privacy/backend",
         "halo2/unknown-native-v1",
         "halo2/ipa:unknown-native-v1",

@@ -22,7 +22,7 @@ pub enum Command {
 }
 impl Run for Command {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let connect_root = context.config().connect_queue_root.clone();
+        let connect_root = context.connect_queue_root();
         run(self, &connect_root, context)
     }
 }
@@ -40,7 +40,7 @@ pub mod queue {
     }
     impl Run for Command {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-            let connect_root = context.config().connect_queue_root.clone();
+            let connect_root = context.connect_queue_root();
             run(self, &connect_root, context)
         }
     }
@@ -70,7 +70,7 @@ pub mod queue {
         /// Path to an explicit snapshot JSON file (defaults to `<root>/<sid>/state.json`).
         #[arg(long)]
         pub snapshot: Option<PathBuf>,
-        /// Root directory containing Connect queue state (defaults to `connect.queue.root` or `~/.iroha/connect`).
+        /// Root directory containing Connect queue state (defaults to `connect.queue_root` or `~/.iroha/connect`).
         #[arg(long)]
         pub root: Option<PathBuf>,
         /// Include metrics summary derived from `metrics.ndjson`.
@@ -329,38 +329,61 @@ pub mod queue {
         Quarantined,
         Disabled,
     }
-    impl fmt::Display for ConnectQueueState {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            f.write_str(match self {
+    impl ConnectQueueState {
+        const fn json_label(self) -> &'static str {
+            match self {
                 Self::Healthy => "healthy",
                 Self::Throttled => "throttled",
                 Self::Quarantined => "quarantined",
                 Self::Disabled => "disabled",
-            })
+            }
+        }
+        fn from_json_label(value: &str) -> Option<Self> {
+            match value {
+                "healthy" => Some(Self::Healthy),
+                "throttled" => Some(Self::Throttled),
+                "quarantined" => Some(Self::Quarantined),
+                "disabled" => Some(Self::Disabled),
+                _ => None,
+            }
+        }
+    }
+    impl fmt::Display for ConnectQueueState {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str(self.json_label())
         }
     }
     impl json::JsonSerialize for ConnectQueueState {
         fn json_serialize(&self, out: &mut String) {
-            let value = match self {
-                Self::Healthy => "healthy",
-                Self::Throttled => "throttled",
-                Self::Quarantined => "quarantined",
-                Self::Disabled => "disabled",
-            };
-            json::write_json_string(value, out);
+            json::write_json_string(self.json_label(), out);
+        }
+        fn json_serialize_to(
+            &self,
+            out: &mut dyn json::JsonWriteSink,
+        ) -> Result<(), json::BoundedJsonError> {
+            json::write_json_string_to(self.json_label(), out)
         }
     }
     impl json::JsonDeserialize for ConnectQueueState {
         fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
             let start = parser.position();
             let raw = String::json_deserialize(parser)?;
-            match raw.as_str() {
-                "healthy" => Ok(Self::Healthy),
-                "throttled" => Ok(Self::Throttled),
-                "quarantined" => Ok(Self::Quarantined),
-                "disabled" => Ok(Self::Disabled),
-                _ => Err(queue_state_parse_error(parser, start)),
-            }
+            Self::from_json_label(&raw).ok_or_else(|| queue_state_parse_error(parser, start))
+        }
+    }
+    impl json::JsonObjectKey for ConnectQueueState {
+        fn visit_json_key_text<E>(
+            &self,
+            mut visitor: impl FnMut(&str) -> Result<(), E>,
+        ) -> Result<(), E> {
+            visitor(self.json_label())
+        }
+    }
+    impl json::JsonObjectKeyOwned for ConnectQueueState {
+        fn from_json_key_text(key: &str) -> Result<Self, json::Error> {
+            Self::from_json_label(key).ok_or_else(|| json::Error::UnknownField {
+                field: key.to_owned(),
+            })
         }
     }
     fn queue_state_parse_error(parser: &json::Parser<'_>, start: usize) -> json::Error {
@@ -626,6 +649,61 @@ pub mod queue {
                 let decoded: ConnectQueueState =
                     json::from_str(&json_text).expect("deserialize state");
                 assert_eq!(decoded, state);
+            }
+        }
+        #[test]
+        fn connect_queue_metrics_state_keys_roundtrip_through_current_norito() {
+            let totals = BTreeMap::from([
+                (ConnectQueueState::Healthy, 7),
+                (ConnectQueueState::Throttled, 3),
+                (ConnectQueueState::Quarantined, 2),
+                (ConnectQueueState::Disabled, 1),
+            ]);
+            let summary = ConnectQueueMetricsSummary {
+                samples_total: 13,
+                state_totals: totals.clone(),
+                last_sample_ms: Some(42),
+            };
+            let encoded = json::to_json(&summary).expect("encode actual queue metrics");
+            let decoded: ConnectQueueMetricsSummary =
+                json::from_str(&encoded).expect("decode actual queue metrics");
+            assert_eq!(decoded.samples_total, 13);
+            assert_eq!(decoded.state_totals, totals);
+            assert_eq!(decoded.last_sample_ms, Some(42));
+            for state in totals.keys() {
+                assert!(encoded.contains(&format!("\"{state}\":")));
+            }
+            assert_eq!(
+                json::to_json_bounded(&summary, encoded.len()).unwrap(),
+                encoded
+            );
+            assert!(json::to_json_bounded(&summary, encoded.len() - 1).is_err());
+        }
+        #[test]
+        fn connect_queue_keys_reject_aliases_and_unknown_states() {
+            for key in ["Healthy", "HEALTHY", "healthy ", "connected", "0", ""] {
+                let map = format!("{{\"{key}\":1}}");
+                assert!(
+                    json::from_str::<BTreeMap<ConnectQueueState, usize>>(&map).is_err(),
+                    "accepted {key:?}"
+                );
+                assert!(json::from_str::<ConnectQueueState>(&format!("\"{key}\"")).is_err());
+            }
+        }
+        #[test]
+        fn connect_queue_state_supports_exact_bounded_scalar_encoding() {
+            for state in [
+                ConnectQueueState::Healthy,
+                ConnectQueueState::Throttled,
+                ConnectQueueState::Quarantined,
+                ConnectQueueState::Disabled,
+            ] {
+                let encoded = json::to_json(&state).unwrap();
+                assert_eq!(
+                    json::to_json_bounded(&state, encoded.len()).unwrap(),
+                    encoded
+                );
+                assert!(json::to_json_bounded(&state, encoded.len() - 1).is_err());
             }
         }
         #[test]

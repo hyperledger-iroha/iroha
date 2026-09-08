@@ -433,7 +433,7 @@ mod torii_tx_history_tests {
                 .parse(&mut emitter)
                 .is_none()
             );
-            emitter
+            let _ = emitter
                 .into_result()
                 .expect_err("whitespace-only HMAC secret must be rejected");
         }
@@ -474,7 +474,7 @@ mod torii_tx_history_tests {
         for jwt in cases {
             let mut emitter = Emitter::new();
             assert!(jwt.parse(&mut emitter).is_none());
-            emitter
+            let _ = emitter
                 .into_result()
                 .expect_err("contradictory or empty JWT inputs must fail closed");
         }
@@ -497,7 +497,7 @@ mod torii_tx_history_tests {
             };
             let mut emitter = Emitter::new();
             assert!(jwt.parse(&mut emitter).is_none());
-            emitter
+            let _ = emitter
                 .into_result()
                 .expect_err("noncanonical claim constraint must fail closed");
         }

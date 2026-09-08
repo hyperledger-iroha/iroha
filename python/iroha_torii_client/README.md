@@ -1,5 +1,13 @@
 # Iroha Torii client
 
+Anonymous HTTP operations do not require a native extension. Account construction,
+parsing, governance identity checks, and SCCP Sora-account principals require the
+matching `iroha-native` wheel on Python 3.10 or newer. Install
+`iroha-torii-client[native]` for those operations. The Rust owner validates all
+eleven key algorithms, complete weighted multisig policies, exact I105 literals,
+and canonical SCCP AccountId bytes. Missing native support is an explicit error;
+there is no structural identity fallback or dependency on the full Python SDK.
+
 Use the public Taira profile instead of copying its origin, address
 discriminant, Digital Shekel, and XOR metadata. The deployment's exact
 genesis-derived `NetworkId` remains caller-supplied because public resets can
@@ -412,3 +420,9 @@ After dispatch, catch `SorafsOrderbookSubmissionAmbiguousError`, reconcile its
 payload-free `expected_identity` against finalized state, and never resubmit
 automatically. The full `iroha_python.ToriiClient` supplies this native provider
 and derives the expected network from its local signing context.
+
+Account identity construction, canonical parsing, and controller checks require the
+separate `iroha-native` wheel (`pip install iroha-torii-client[native]`). These
+operations use its ABI-23 Rust owner for all eleven curves and full weighted
+multisig policies. Missing native validation is an explicit error; anonymous HTTP
+transport can operate without loading the native package.

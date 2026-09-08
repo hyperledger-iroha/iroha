@@ -155,7 +155,6 @@ pub(crate) use refinement::{
     check_production_decision_recovery_transition, check_production_effect_to_candidate_transition,
     check_production_historical_body_pipeline_transition,
     check_production_historical_certificate_transition,
-    check_production_in_flight_first_release_observe_replica_queue_release_transition,
     check_production_in_flight_reservation_transition,
     check_production_ingress_reservation_materialization_transition,
     check_production_ingress_transition, check_production_leader_wire_admission_transition,
@@ -181,18 +180,6 @@ pub use refinement::{
 };
 /// Schema of the production-reachable first-release transition witness.
 pub(crate) const PRODUCTION_IN_FLIGHT_FIRST_RELEASE_TRANSITION_WITNESS_VERSION: u16 = 1;
-/// SHA-256 identity of the reviewed TLA+ action source for witness schema V1.
-///
-/// The formal source checker recomputes this value from
-/// `SumeragiV2InFlightFirstRelease.tla`; changing the model without deliberately
-/// advancing this identity fails the source-bound formal preflight.
-pub(crate) const PRODUCTION_IN_FLIGHT_FIRST_RELEASE_TLA_SOURCE_SHA256:
-    ProductionDigest256Projection = ProductionDigest256Projection {
-    word0: 0x2a74_3bb2_11d4_b36f,
-    word1: 0x587c_dd65_bffc_84c9,
-    word2: 0xe822_a45b_2c7c_7115,
-    word3: 0x0a0a_e281_fb6f_8598,
-};
 /// Explicit classification accepted by the production trace replay reducer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ProductionInFlightFirstReleaseReplayStepV1 {
@@ -296,7 +283,7 @@ fn production_in_flight_first_release_transition_witness_v1(
         target: projection.target,
         before_state_digest: production_in_flight_first_release_state_digest_v1(projection.before),
         after_state_digest: production_in_flight_first_release_state_digest_v1(projection.after),
-        source_identity: PRODUCTION_IN_FLIGHT_FIRST_RELEASE_TLA_SOURCE_SHA256,
+        source_identity: production_in_flight_first_release_source_identity_body!(),
     }
 }
 /// Independently authenticate one V1 witness against its exact projection.
@@ -347,7 +334,7 @@ pub(crate) fn check_production_in_flight_first_release_replay_step_v1(
     authenticate_production_in_flight_first_release_transition_witness_v1(projection, witness)
         .then(|| checked.with_first_release_witness(witness))
 }
-/// Check and witness any of the 27 first-release production actions.
+/// Check and witness every first-release production action.
 #[must_use]
 pub(crate) fn check_production_in_flight_first_release_transition(
     projection: ProductionInFlightFirstReleaseTransitionProjection,
@@ -372,6 +359,19 @@ fn witness_derived_first_release_transition(
     checked: CheckedProductionTransition<ProductionInFlightFirstReleaseTransitionProjection>,
 ) -> Option<CheckedProductionTransition<ProductionInFlightFirstReleaseTransitionProjection>> {
     check_production_in_flight_first_release_transition(checked.into_projection())
+}
+/// Derive, check, and witness an exact nonproducer replica Queue disposition.
+#[must_use]
+pub(crate) fn check_production_in_flight_first_release_observe_replica_queue_release_transition(
+    before: ProductionInFlightFirstReleaseStateProjection,
+    exact_ordinary_fifo_preserved: bool,
+) -> Option<CheckedProductionTransition<ProductionInFlightFirstReleaseTransitionProjection>> {
+    witness_derived_first_release_transition(
+        refinement::check_production_in_flight_first_release_observe_replica_queue_release_transition(
+            before,
+            exact_ordinary_fifo_preserved,
+        )?,
+    )
 }
 /// Derive, check, and witness `FanoutFromProducer`.
 #[must_use]
@@ -478,3 +478,7 @@ pub(crate) use wal::{
 pub(crate) use wal::{SAFETY_WAL_FILE_MAGIC, SAFETY_WAL_FORMAT_VERSION};
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod witness_replay_tests;
+#[cfg(test)]
+mod witness_tests;

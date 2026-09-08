@@ -98,7 +98,8 @@ impl V2LaneWorkAdapter {
                         break;
                     }
                 }
-                PendingQueuePlanAdmissionDisposition::Future => {}
+                PendingQueuePlanAdmissionDisposition::Future
+                | PendingQueuePlanAdmissionDisposition::DeferredCarrier => {}
             }
         }
         if !local_is_leader && count != 0 && completed {

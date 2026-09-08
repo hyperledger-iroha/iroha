@@ -1,4 +1,7 @@
 //! Governance DAG node schemas used for audit publishing.
+
+mod canonical_payload_codec;
+
 use crate::{
     capacity::ReplicationOrderV1,
     deal::{DealSettlementV1, XorQuantity},
@@ -24,7 +27,7 @@ use crate::{
 use blake3::Hasher;
 use ed25519_dalek::{PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH};
 use iroha_crypto::{Algorithm, PublicKey};
-use norito::core::NoritoSerialize as _;
+use norito::core::SerializePayload as _;
 use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
 use soranet_pq::MlDsaSuite;
 use std::collections::{BTreeMap, BTreeSet};
@@ -2320,25 +2323,18 @@ where
         SORAFS_GOVERNANCE_EXTERNAL_PAYLOAD_MAX_BYTES_V1.saturating_mul(4),
         128,
     );
-    let decoded = norito::decode_from_bytes_with_limits::<T>(bytes, limits).map_err(|err| {
-        GovernanceExternalPayloadValidationError::TypedPayloadDecode {
-            payload_kind: payload_kind.to_owned(),
-            reason: err.to_string(),
-        }
-    })?;
-    let canonical = norito::to_bytes(&decoded).map_err(|err| {
-        GovernanceExternalPayloadValidationError::TypedPayloadEncode {
-            payload_kind: payload_kind.to_owned(),
-            reason: err.to_string(),
-        }
-    })?;
-    if canonical != bytes {
-        return Err(
+    let decoded = norito::decode_canonical_with_limits::<T>(bytes, limits).map_err(|err| {
+        if matches!(err, norito::Error::NonCanonicalEncoding) {
             GovernanceExternalPayloadValidationError::NonCanonicalEncodedPayload {
                 payload_kind: payload_kind.to_owned(),
-            },
-        );
-    }
+            }
+        } else {
+            GovernanceExternalPayloadValidationError::TypedPayloadDecode {
+                payload_kind: payload_kind.to_owned(),
+                reason: err.to_string(),
+            }
+        }
+    })?;
     validate(&decoded).map_err(|reason| {
         GovernanceExternalPayloadValidationError::InvalidTypedPayload {
             payload_kind: payload_kind.to_owned(),
@@ -2678,6 +2674,8 @@ fn preflight_governance_source_payload_len(
     payload: &GovernanceLogPayloadV1,
     maximum: usize,
 ) -> Result<usize, GovernanceLogValidationError> {
+    let _canonical_flags =
+        norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
     let found = payload
         .encoded_len_exact()
         .ok_or(GovernanceLogValidationError::CanonicalPayloadLengthUnavailable)?;
@@ -2921,13 +2919,15 @@ fn validate_receipt_hex(
     Ok(())
 }
 mod borrowed_norito {
-    use norito::core::NoritoSerialize;
+    use norito::core::{NoritoSerialize, SerializePayload};
     /// Borrowed value that delegates canonical Norito serialization.
     pub(super) struct Value<'a, T>(pub(super) &'a T);
     impl<T: NoritoSerialize> NoritoSerialize for Value<'_, T> {
         fn schema_hash() -> [u8; 16] {
             T::schema_hash()
         }
+    }
+    impl<T: NoritoSerialize> SerializePayload for Value<'_, T> {
         fn serialize(
             &self,
             writer: &mut norito::core::Encoder<'_>,
@@ -2941,48 +2941,14 @@ mod borrowed_norito {
             self.0.encoded_len_exact()
         }
     }
-    /// Borrowed optional value with the exact owned `Option<T>` wire representation.
-    pub(super) struct ValueOption<'a, T>(pub(super) std::option::Option<&'a T>);
-    impl<T: NoritoSerialize> NoritoSerialize for ValueOption<'_, T> {
-        fn schema_hash() -> [u8; 16] {
-            <std::option::Option<T>>::schema_hash()
-        }
-        fn serialize(
-            &self,
-            writer: &mut norito::core::Encoder<'_>,
-        ) -> Result<(), norito::core::Error> {
-            match self.0 {
-                Some(value) => {
-                    writer.write_all(&[1])?;
-                    let value = Value(value);
-                    let mut temporary = norito::core::DeriveSmallBuf::new();
-                    norito::core::write_len_prefixed(writer, &value, &mut temporary)?;
-                }
-                None => writer.write_all(&[0])?,
-            }
-            Ok(())
-        }
-        fn encoded_len_hint(&self) -> std::option::Option<usize> {
-            self.encoded_len_exact()
-        }
-        fn encoded_len_exact(&self) -> std::option::Option<usize> {
-            match self.0 {
-                Some(value) => {
-                    let payload = value.encoded_len_exact()?;
-                    1_usize
-                        .checked_add(norito::core::len_prefix_len(payload))?
-                        .checked_add(payload)
-                }
-                None => Some(1),
-            }
-        }
-    }
     /// Borrowed byte slice with the exact owned `Vec<u8>` wire representation.
     pub(super) struct Vec<'a>(pub(super) &'a [u8]);
     impl NoritoSerialize for Vec<'_> {
         fn schema_hash() -> [u8; 16] {
             <std::vec::Vec<u8>>::schema_hash()
         }
+    }
+    impl SerializePayload for Vec<'_> {
         fn serialize(
             &self,
             writer: &mut norito::core::Encoder<'_>,
@@ -3009,6 +2975,8 @@ mod borrowed_norito {
         fn schema_hash() -> [u8; 16] {
             <std::option::Option<std::vec::Vec<u8>>>::schema_hash()
         }
+    }
+    impl SerializePayload for Option<'_> {
         fn serialize(
             &self,
             writer: &mut norito::core::Encoder<'_>,
@@ -3017,8 +2985,7 @@ mod borrowed_norito {
                 Some(bytes) => {
                     writer.write_all(&[1])?;
                     let value = Vec(bytes);
-                    let mut temporary = norito::core::DeriveSmallBuf::new();
-                    norito::core::write_len_prefixed(writer, &value, &mut temporary)?;
+                    norito::core::write_len_prefixed(writer, &value)?;
                 }
                 None => writer.write_all(&[0])?,
             }
@@ -3055,24 +3022,11 @@ struct GovernanceLogNodeCidPayloadViewWireV1<'a> {
     prev_cid: borrowed_norito::Option<'a>,
     timestamp: u64,
     publisher_peer_id: borrowed_norito::Vec<'a>,
-    submission_provenance: borrowed_norito::ValueOption<'a, GovernanceDagSubmissionProvenanceV1>,
+    // Retain Option's self-delimiting packed-field layout without copying the value.
+    submission_provenance: Option<borrowed_norito::Value<'a, GovernanceDagSubmissionProvenanceV1>>,
     payload: borrowed_norito::Value<'a, GovernanceLogPayloadV1>,
 }
 struct GovernanceLogNodeCidPayloadViewV1<'a>(GovernanceLogNodeCidPayloadViewWireV1<'a>);
-impl norito::core::NoritoSerialize for GovernanceLogNodeCidPayloadViewV1<'_> {
-    fn schema_hash() -> [u8; 16] {
-        GovernanceLogNodeCidPayloadV1::schema_hash()
-    }
-    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
-        self.0.serialize(writer)
-    }
-    fn encoded_len_hint(&self) -> Option<usize> {
-        self.0.encoded_len_hint()
-    }
-    fn encoded_len_exact(&self) -> Option<usize> {
-        self.0.encoded_len_exact()
-    }
-}
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 struct GovernanceDagBlockCidPayloadV1 {
     version: u8,
@@ -3092,20 +3046,6 @@ struct GovernanceDagBlockCidPayloadViewWireV1<'a> {
     node: borrowed_norito::Value<'a, GovernanceLogNodeV1>,
 }
 struct GovernanceDagBlockCidPayloadViewV1<'a>(GovernanceDagBlockCidPayloadViewWireV1<'a>);
-impl norito::core::NoritoSerialize for GovernanceDagBlockCidPayloadViewV1<'_> {
-    fn schema_hash() -> [u8; 16] {
-        GovernanceDagBlockCidPayloadV1::schema_hash()
-    }
-    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
-        self.0.serialize(writer)
-    }
-    fn encoded_len_hint(&self) -> Option<usize> {
-        self.0.encoded_len_hint()
-    }
-    fn encoded_len_exact(&self) -> Option<usize> {
-        self.0.encoded_len_exact()
-    }
-}
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 struct GovernanceDagBlockSignaturePayloadV1 {
     version: u8,
@@ -3129,33 +3069,6 @@ struct GovernanceDagBlockSignaturePayloadViewWireV1<'a> {
 struct GovernanceDagBlockSignaturePayloadViewV1<'a>(
     GovernanceDagBlockSignaturePayloadViewWireV1<'a>,
 );
-impl<'a> From<&'a GovernanceDagBlockV1> for GovernanceDagBlockSignaturePayloadViewV1<'a> {
-    fn from(block: &'a GovernanceDagBlockV1) -> Self {
-        Self(GovernanceDagBlockSignaturePayloadViewWireV1 {
-            version: block.version,
-            block_cid: borrowed_norito::Vec(&block.block_cid),
-            prev_block_cid: borrowed_norito::Option(block.prev_block_cid.as_deref()),
-            sequence: block.sequence,
-            timestamp: block.timestamp,
-            publisher_peer_id: borrowed_norito::Vec(&block.publisher_peer_id),
-            node: borrowed_norito::Value(&block.node),
-        })
-    }
-}
-impl norito::core::NoritoSerialize for GovernanceDagBlockSignaturePayloadViewV1<'_> {
-    fn schema_hash() -> [u8; 16] {
-        GovernanceDagBlockSignaturePayloadV1::schema_hash()
-    }
-    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
-        self.0.serialize(writer)
-    }
-    fn encoded_len_hint(&self) -> Option<usize> {
-        self.0.encoded_len_hint()
-    }
-    fn encoded_len_exact(&self) -> Option<usize> {
-        self.0.encoded_len_exact()
-    }
-}
 #[cfg(test)]
 impl From<&GovernanceDagBlockV1> for GovernanceDagBlockSignaturePayloadV1 {
     fn from(block: &GovernanceDagBlockV1) -> Self {
@@ -3181,6 +3094,9 @@ fn validate_governance_dag_signing_payload_len(length: usize) -> Result<(), nori
 fn encode_governance_dag_signing_payload<T: norito::NoritoSerialize>(
     value: &T,
 ) -> Result<Vec<u8>, norito::core::Error> {
+    // Size checks and signatures/CIDs use one V1 layout even inside a foreign decode guard.
+    let _canonical_flags =
+        norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
     let length = value.encoded_len_exact().ok_or_else(|| {
         norito::core::Error::Message(
             "Governance DAG canonical signing payload has no allocation-free exact size".to_owned(),
@@ -3195,6 +3111,8 @@ fn encode_governance_dag_frame<T: norito::NoritoSerialize>(
     value: &T,
     payload_length: usize,
 ) -> Result<Vec<u8>, norito::core::Error> {
+    let _canonical_flags =
+        norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
     let capacity = payload_length
         .checked_add(norito::core::Header::SIZE)
         .and_then(|length| length.checked_add(64))
@@ -3236,8 +3154,10 @@ pub struct GovernanceDagBlockV1 {
 impl GovernanceDagBlockV1 {
     /// Returns the bounded canonical header-bearing Norito block bytes.
     pub fn canonical_bytes(&self) -> Result<Vec<u8>, norito::core::Error> {
+        let _canonical_flags =
+            norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
         let length =
-            <Self as norito::NoritoSerialize>::encoded_len_exact(self).ok_or_else(|| {
+            <Self as norito::SerializePayload>::encoded_len_exact(self).ok_or_else(|| {
                 norito::core::Error::Message(
                     "Governance DAG canonical block has no allocation-free exact size".to_owned(),
                 )
@@ -3351,6 +3271,8 @@ fn preflight_governance_dag_block_len(
     block: &GovernanceDagBlockV1,
     maximum: usize,
 ) -> Result<usize, GovernanceDagBlockValidationError> {
+    let _canonical_flags =
+        norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
     let found = block
         .encoded_len_exact()
         .ok_or(GovernanceDagBlockValidationError::CanonicalLengthUnavailable)?;
@@ -3400,32 +3322,6 @@ struct GovernanceDagHeadSignaturePayloadViewWireV1<'a> {
     checkpoint_cid: borrowed_norito::Option<'a>,
 }
 struct GovernanceDagHeadSignaturePayloadViewV1<'a>(GovernanceDagHeadSignaturePayloadViewWireV1<'a>);
-impl<'a> From<&'a GovernanceDagHeadV1> for GovernanceDagHeadSignaturePayloadViewV1<'a> {
-    fn from(head: &'a GovernanceDagHeadV1) -> Self {
-        Self(GovernanceDagHeadSignaturePayloadViewWireV1 {
-            version: head.version,
-            head_block_cid: borrowed_norito::Vec(&head.head_block_cid),
-            block_count: head.block_count,
-            generated_at: head.generated_at,
-            publisher_peer_id: borrowed_norito::Vec(&head.publisher_peer_id),
-            checkpoint_cid: borrowed_norito::Option(head.checkpoint_cid.as_deref()),
-        })
-    }
-}
-impl norito::core::NoritoSerialize for GovernanceDagHeadSignaturePayloadViewV1<'_> {
-    fn schema_hash() -> [u8; 16] {
-        GovernanceDagHeadSignaturePayloadV1::schema_hash()
-    }
-    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
-        self.0.serialize(writer)
-    }
-    fn encoded_len_hint(&self) -> Option<usize> {
-        self.0.encoded_len_hint()
-    }
-    fn encoded_len_exact(&self) -> Option<usize> {
-        self.0.encoded_len_exact()
-    }
-}
 #[cfg(test)]
 impl From<&GovernanceDagHeadV1> for GovernanceDagHeadSignaturePayloadV1 {
     fn from(head: &GovernanceDagHeadV1) -> Self {
@@ -3584,37 +3480,10 @@ struct GovernanceLogSignaturePayloadViewWireV1<'a> {
     prev_cid: borrowed_norito::Option<'a>,
     timestamp: u64,
     publisher_peer_id: borrowed_norito::Vec<'a>,
-    submission_provenance: borrowed_norito::Value<'a, Option<GovernanceDagSubmissionProvenanceV1>>,
+    submission_provenance: Option<borrowed_norito::Value<'a, GovernanceDagSubmissionProvenanceV1>>,
     payload: borrowed_norito::Value<'a, GovernanceLogPayloadV1>,
 }
 struct GovernanceLogSignaturePayloadViewV1<'a>(GovernanceLogSignaturePayloadViewWireV1<'a>);
-impl<'a> From<&'a GovernanceLogNodeV1> for GovernanceLogSignaturePayloadViewV1<'a> {
-    fn from(node: &'a GovernanceLogNodeV1) -> Self {
-        Self(GovernanceLogSignaturePayloadViewWireV1 {
-            version: node.version,
-            node_cid: borrowed_norito::Vec(&node.node_cid),
-            prev_cid: borrowed_norito::Option(node.prev_cid.as_deref()),
-            timestamp: node.timestamp,
-            publisher_peer_id: borrowed_norito::Vec(&node.publisher_peer_id),
-            submission_provenance: borrowed_norito::Value(&node.submission_provenance),
-            payload: borrowed_norito::Value(&node.payload),
-        })
-    }
-}
-impl norito::core::NoritoSerialize for GovernanceLogSignaturePayloadViewV1<'_> {
-    fn schema_hash() -> [u8; 16] {
-        GovernanceLogSignaturePayloadV1::schema_hash()
-    }
-    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
-        self.0.serialize(writer)
-    }
-    fn encoded_len_hint(&self) -> Option<usize> {
-        self.0.encoded_len_hint()
-    }
-    fn encoded_len_exact(&self) -> Option<usize> {
-        self.0.encoded_len_exact()
-    }
-}
 #[cfg(test)]
 impl From<&GovernanceLogNodeV1> for GovernanceLogSignaturePayloadV1 {
     fn from(node: &GovernanceLogNodeV1) -> Self {
@@ -3734,6 +3603,8 @@ fn preflight_governance_log_node_len(
     node: &GovernanceLogNodeV1,
     maximum: usize,
 ) -> Result<usize, GovernanceLogValidationError> {
+    let _canonical_flags =
+        norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
     let found = node
         .encoded_len_exact()
         .ok_or(GovernanceLogValidationError::CanonicalNodeLengthUnavailable)?;
@@ -3755,7 +3626,7 @@ pub fn governance_log_node_cid_v1(
         prev_cid: borrowed_norito::Option(prev_cid),
         timestamp,
         publisher_peer_id: borrowed_norito::Vec(publisher_peer_id),
-        submission_provenance: borrowed_norito::ValueOption(submission_provenance),
+        submission_provenance: submission_provenance.map(borrowed_norito::Value),
         payload: borrowed_norito::Value(payload),
     });
     let payload_bytes = encode_governance_dag_signing_payload(&payload)?;
@@ -5625,9 +5496,10 @@ mod tests {
                     prev_cid: borrowed_norito::Option(node.prev_cid.as_deref()),
                     timestamp: node.timestamp,
                     publisher_peer_id: borrowed_norito::Vec(&node.publisher_peer_id),
-                    submission_provenance: borrowed_norito::ValueOption(
-                        node.submission_provenance.as_ref(),
-                    ),
+                    submission_provenance: node
+                        .submission_provenance
+                        .as_ref()
+                        .map(borrowed_norito::Value),
                     payload: borrowed_norito::Value(&node.payload),
                 });
             assert_borrowed_wire_exact(
@@ -5715,21 +5587,24 @@ mod tests {
                 "{label} streamed canonical block changed"
             );
             for flags in supported_layouts() {
-                let owned_node_cid_frame = encode_frame_with_flags(&owned_node_cid, flags);
+                let owned_node_cid_frame = norito::encode_canonical(&owned_node_cid)
+                    .expect("encode fixed-layout node CID frame");
                 let mut node_hasher = Hasher::new();
                 node_hasher.update(GOVERNANCE_LOG_NODE_CID_DOMAIN_V1);
                 node_hasher.update(&owned_node_cid_frame);
                 let expected_node_cid = node_hasher.finalize().as_bytes().to_vec();
-                let owned_node_signature_frame =
-                    encode_frame_with_flags(&owned_node_signature, flags);
-                let owned_block_cid_frame = encode_frame_with_flags(&owned_block_cid, flags);
+                let owned_node_signature_frame = norito::encode_canonical(&owned_node_signature)
+                    .expect("encode fixed-layout node signature frame");
+                let owned_block_cid_frame = norito::encode_canonical(&owned_block_cid)
+                    .expect("encode fixed-layout block CID frame");
                 let mut block_hasher = Hasher::new();
                 block_hasher.update(GOVERNANCE_DAG_BLOCK_CID_DOMAIN_V1);
                 block_hasher.update(&owned_block_cid_frame);
                 let expected_block_cid = block_hasher.finalize().as_bytes().to_vec();
-                let owned_block_signature_frame =
-                    encode_frame_with_flags(&owned_block_signature, flags);
-                let owned_block_frame = encode_frame_with_flags(block, flags);
+                let owned_block_signature_frame = norito::encode_canonical(&owned_block_signature)
+                    .expect("encode fixed-layout block signature frame");
+                let owned_block_frame =
+                    norito::encode_canonical(block).expect("encode fixed-layout block frame");
                 let _guard = norito::core::DecodeFlagsGuard::enter(flags);
                 assert_eq!(
                     node.recompute_node_cid()
@@ -5764,9 +5639,16 @@ mod tests {
                     owned_block_frame,
                     "{label} streamed block frame changed for flags 0x{flags:02x}"
                 );
+                node.validate()
+                    .expect("node validation ignores ambient layout");
+                node.verify_publisher_signature()
+                    .expect("node signature verifies independently of ambient layout");
+                block
+                    .validate()
+                    .expect("block CID and signatures verify independently of ambient layout");
             }
         }
-        let heads = [
+        let mut heads = [
             GovernanceDagHeadV1 {
                 version: GOVERNANCE_DAG_HEAD_VERSION_V1,
                 head_block_cid: child.block_cid.clone(),
@@ -5786,6 +5668,9 @@ mod tests {
                 head_signature: empty_ed25519_signature(),
             },
         ];
+        for head in &mut heads {
+            sign_governance_head(head, &[0xC7; 32]);
+        }
         for (index, head) in heads.iter().enumerate() {
             let owned = GovernanceDagHeadSignaturePayloadV1::from(head);
             let borrowed = GovernanceDagHeadSignaturePayloadViewV1::from(head);
@@ -5801,7 +5686,8 @@ mod tests {
                 "head signature frame {index} changed"
             );
             for flags in supported_layouts() {
-                let owned_frame = encode_frame_with_flags(&owned, flags);
+                let owned_frame = norito::encode_canonical(&owned)
+                    .expect("encode fixed-layout head signature frame");
                 let _guard = norito::core::DecodeFlagsGuard::enter(flags);
                 assert_eq!(
                     head.signature_payload_bytes()
@@ -5809,6 +5695,8 @@ mod tests {
                     owned_frame,
                     "head signature frame {index} changed for flags 0x{flags:02x}"
                 );
+                head.verify_head_signature()
+                    .expect("head signature verifies independently of ambient layout");
             }
         }
     }
@@ -5916,16 +5804,15 @@ mod tests {
             publisher_peer_id: b"12D3KooWGovernancePeer".to_vec(),
             submission_provenance: None,
             payload: GovernanceLogPayloadV1::ProviderAdvert(advert),
-            publisher_signature: GovernanceLogSignatureV1 {
-                algorithm: GovernanceSignatureAlgorithm::Dilithium3,
-                public_key: vec![11; 64],
-                signature: vec![12; 160],
-            },
+            publisher_signature: empty_ed25519_signature(),
         };
         node.node_cid = node
             .recompute_node_cid()
             .expect("derive governance log node CID");
-        assert!(node.validate().is_ok());
+        sign_governance_node_mldsa(&mut node, &[0x12; 32]);
+        node.validate().expect("valid signed governance node");
+        node.verify_publisher_signature()
+            .expect("fixture ML-DSA governance signature verifies");
     }
     #[test]
     fn governance_signing_payload_limit_dominates_largest_embedded_envelope() {
@@ -5950,7 +5837,8 @@ mod tests {
     #[test]
     fn governance_signing_payload_requires_allocation_free_exact_size() {
         struct InexactSigningPayload;
-        impl norito::NoritoSerialize for InexactSigningPayload {
+        impl norito::NoritoSerialize for InexactSigningPayload {}
+        impl norito::SerializePayload for InexactSigningPayload {
             fn serialize(
                 &self,
                 writer: &mut norito::core::Encoder<'_>,
@@ -5970,7 +5858,8 @@ mod tests {
     #[test]
     fn governance_signing_payload_rejects_oversize_before_serialize_or_allocate() {
         struct OversizedSigningPayload;
-        impl norito::NoritoSerialize for OversizedSigningPayload {
+        impl norito::NoritoSerialize for OversizedSigningPayload {}
+        impl norito::SerializePayload for OversizedSigningPayload {
             fn serialize(
                 &self,
                 _writer: &mut norito::core::Encoder<'_>,
@@ -7244,13 +7133,20 @@ mod tests {
         ));
     }
     #[test]
-    fn external_payload_rejects_noncanonical_compressed_encoding() {
+    fn external_payload_canonical_validation_ignores_enclosing_layout() {
+        let payload = sample_external_payload();
+        for flags in crate::canonical_test_support::supported_layouts() {
+            let _layout = norito::core::DecodeFlagsGuard::enter(flags);
+            payload.validate().expect("canonical external publication");
+            assert_eq!(norito::core::get_decode_flags(), flags);
+        }
+    }
+    #[test]
+    fn external_payload_rejects_noncanonical_compression_tag() {
         let mut payload = sample_external_payload();
         let publication: ModerationLedgerCyclePublicationV1 =
             norito::decode_from_bytes(&payload.encoded_payload).expect("decode publication");
-        let compressed =
-            norito::to_compressed_bytes(&publication, Some(norito::CompressionConfig::default()))
-                .expect("compress publication");
+        let compressed = crate::canonical_test_support::with_compression_tag(&publication);
         assert_ne!(compressed, payload.encoded_payload);
         payload.encoded_len = compressed.len() as u64;
         payload.encoded_blake3 = *blake3::hash(&compressed).as_bytes();

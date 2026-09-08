@@ -344,11 +344,12 @@ impl Kura {
         {
             let block_data = self.block_data.lock();
             self.ensure_prune_recovery_not_required()?;
-            let complete_entries = block_data.dense_entries().ok_or(
-                Error::EmergencyFastAuxiliaryUnavailable {
-                    subsystem: "canonical mutation",
-                },
-            )?;
+            let complete_entries =
+                block_data
+                    .dense_entries()
+                    .ok_or(Error::EmergencyFastAuxiliaryUnavailable {
+                        subsystem: "canonical mutation",
+                    })?;
             Self::validate_next_or_existing_block(
                 complete_entries,
                 actual_height,
@@ -369,20 +370,13 @@ impl Kura {
                 self.persist_lane_payload_ownership_artifacts_for_block(block)?;
                 self.set_block_height_index_entry(actual_height_usize, block_hash);
                 if let Some(entry) = merge_entry {
-                    self.set_transaction_entrypoint_index_entry_with_merge(
-                        actual_height_usize,
-                        block,
-                        None,
-                        chain_len,
-                        false,
-                    );
                     self.append_committed_merge_entry_for_block_if_missing(block, entry)?;
-                    self.ensure_post_wsv_lane_artifact_budget_reservation_pre_finality_under_prune_and_canonical_guards(
-                        entry, block,
+                    self.complete_existing_merge_carrier_retry_under_prune_and_canonical_guards(
+                        block, entry, chain_len,
                     )
                     .map_err(|error| {
                         self.committed_recovery_failure(
-                            "post-WSV lane artifact budget reservation",
+                            "existing merge carrier retry publication",
                             &error,
                         )
                     })?;
@@ -423,11 +417,12 @@ impl Kura {
         let write_guard = self.lock_block_store_for_write();
         let mut block_data = self.block_data.lock();
         self.ensure_prune_recovery_not_required()?;
-        let complete_entries = block_data.dense_entries().ok_or(
-            Error::EmergencyFastAuxiliaryUnavailable {
-                subsystem: "canonical mutation",
-            },
-        )?;
+        let complete_entries =
+            block_data
+                .dense_entries()
+                .ok_or(Error::EmergencyFastAuxiliaryUnavailable {
+                    subsystem: "canonical mutation",
+                })?;
         Self::validate_next_or_existing_block(
             complete_entries,
             actual_height,
@@ -444,22 +439,19 @@ impl Kura {
             if let Some(batch) = lane_artifacts.take() {
                 batch.commit();
             }
+            // The canonical-chain guard still excludes another block mutation.
+            // Release the physical writer before geometry/sidecar publication,
+            // preserving the same lock order as the first exact-retry branch.
+            drop(write_guard);
             self.set_block_height_index_entry(actual_height_usize, block_hash);
             if let Some(entry) = merge_entry {
-                self.set_transaction_entrypoint_index_entry_with_merge(
-                    actual_height_usize,
-                    block,
-                    None,
-                    chain_len,
-                    false,
-                );
                 self.append_committed_merge_entry_for_block_if_missing(block, entry)?;
-                self.ensure_post_wsv_lane_artifact_budget_reservation_pre_finality_under_prune_and_canonical_guards(
-                    entry, block,
+                self.complete_existing_merge_carrier_retry_under_prune_and_canonical_guards(
+                    block, entry, chain_len,
                 )
                 .map_err(|error| {
                     self.committed_recovery_failure(
-                        "post-WSV lane artifact budget reservation",
+                        "existing merge carrier retry publication",
                         &error,
                     )
                 })?;
@@ -571,6 +563,32 @@ impl Kura {
             ?block_hash,
             "stored block durably in Kura"
         );
+        Ok(())
+    }
+    /// Complete an exact durable retry without demoting a finalized carrier to
+    /// the unfinished-tip query projection. The caller has checked the complete
+    /// canonical body, compact reference, log frame and sparse carrier binding.
+    fn complete_existing_merge_carrier_retry_under_prune_and_canonical_guards(
+        &self,
+        block: &SignedBlock,
+        entry: &MergeLedgerEntry,
+        chain_len: usize,
+    ) -> Result<()> {
+        let (_, publication) = self.ensure_post_wsv_lane_artifact_budget_reservation_with_publication_under_prune_and_canonical_guards(
+            entry, block,
+        )?;
+        let finalized = publication == AuthenticatedMergeCarrierPublication::Finalized;
+        // The returned publication class is derived from the same exact
+        // authenticated carrier that reserved the envelope, so no second
+        // finality/body read or BLS validation is required before indexing.
+        self.set_transaction_entrypoint_index_entry_with_merge(
+            usize::try_from(block.header().height().get())?,
+            block,
+            finalized.then_some(entry),
+            chain_len,
+            finalized,
+        );
+        self.remove_committed_pending_merge_entry_best_effort(entry.canonical_hash());
         Ok(())
     }
     fn validate_next_or_existing_block(

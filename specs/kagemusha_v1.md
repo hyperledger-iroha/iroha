@@ -178,7 +178,14 @@ reserve = total finalized top-ups - total finalized redemptions
 A top-up atomically debits online funds, credits that reserve, records an
 idempotent operation, and emits one unique device-bound mint credit with
 circuit-verifiable block finality. Peer transfers and local folds never change
-the reserve.
+the reserve. For a new top-up, the certified reserve commit time must satisfy
+`credential.issued_at_ms <= committed_at_ms < credential.expires_at_ms` and
+`profile.valid_from_ms <= committed_at_ms < profile.expires_at_ms`. The block
+executor supplies this time; a client timestamp or current host clock cannot
+replace it. An exact committed retry reauthenticates the original receipt at
+its original certified time and returns it unchanged, including after later
+credential or profile expiry. Invalid new times cannot allocate reserve custody,
+create a reserve operation or change its accounting indexes.
 
 A redemption verifies the recursive aggregate state and hardware voucher,
 consumes one unique terminal nullifier, debits the reserve, and credits the

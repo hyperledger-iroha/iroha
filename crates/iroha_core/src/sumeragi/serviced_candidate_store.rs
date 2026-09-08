@@ -10,7 +10,7 @@
 //! that state.
 use super::{
     FairV2IngressLeaderWireIdentity, FairV2IngressLeaderWirePhase, FairV2IngressLeaderWireSlot,
-    FairV2IngressLeaderWireSourceClass, FairV2IngressLeaderWireToken,
+    FairV2IngressLeaderWireToken,
     safety_wal::{SafetyWalLeaderWireStoreAuthority, SafetyWalServicedCandidateStoreAuthority},
     v2_body_store::DurableBodyReceipt,
     v2_core::{
@@ -491,8 +491,8 @@ pub(crate) enum LeaderWireLifecycleStatus {
     Runtime,
     /// Same-process consumer departure without restart-stable evidence.
     ///
-    /// Exact retries coalesce while this process is alive. Restart always
-    /// reopens the same identity and ordinals as selector-dormant Dormant.
+    /// Exact retries coalesce in this consumer epoch. A WAL-backed new
+    /// consumer or restart reopens the original token and ordinals.
     VolatileTerminal,
     /// Independently verified durable evidence suppresses resurrection.
     Terminal,
@@ -1366,9 +1366,9 @@ impl LeaderWireLifecycleStoreGate {
             .map_err(|_| "leader-wire lifecycle store lock was poisoned".to_owned())?;
         Ok(!state.recovery_authority.admits_ingress_identity(identity))
     }
-    /// Apply a live, WAL-authorized recovery cut and retire its exact dormant set.
+    /// Apply a WAL-authorized cut to its exact carrierless retirement/retry set.
     ///
-    /// Fair ingress supplies the complete mirrored dormant set while holding
+    /// Fair ingress supplies the complete mirrored carrierless set while holding
     /// its own lock. Requiring exact equality makes durable publication and
     /// the volatile mirror one transaction: neither side can silently drop a
     /// carrier-owning Ingress/Runtime record or disagree about which dormant
@@ -1723,8 +1723,8 @@ impl LeaderWireLifecycleStoreGate {
     }
     /// Publish a same-process tombstone without claiming restart-stable proof.
     ///
-    /// This state coalesces exact retransmission until process exit. Restore
-    /// always rewrites it to Dormant with the same immutable ordinals.
+    /// Reopen immediately if the actual WAL already installed a new consumer;
+    /// otherwise coalesce until a later eligible WAL transition or restart.
     pub(crate) fn mark_volatile_terminal(
         &self,
         runtime: &LeaderWireLifecycleRuntimeReceipt,

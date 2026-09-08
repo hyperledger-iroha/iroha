@@ -25,8 +25,11 @@ use std::{fs::File, path::Path};
 // For base64 Engine trait (decode)
 use crate::{Run, RunContext, json_utils, quote_and_sign_transaction};
 use base64::Engine as _;
-use iroha::client::{Client, ZkProofsFilter};
 use iroha::data_model::prelude::{Executable, InstructionBox};
+use iroha::{
+    blocking::Client as BlockingClient,
+    client::{Client, ZkProofsFilter},
+};
 use iroha_crypto::Hash as CryptoHash;
 use iroha_zkp_halo2::OpenVerifyEnvelope as Halo2Envelope;
 // Proof/attachment tooling shares the first-release CLI's 64 MiB local-input
@@ -39,6 +42,7 @@ const ZK_CLI_JSON_MAX_SEQUENCE_ELEMENTS_V1: usize = 65_536;
 const ZK_CLI_JSON_MAX_TOTAL_ELEMENTS_V1: usize = 4 * ZK_CLI_JSON_MAX_SEQUENCE_ELEMENTS_V1;
 const ZK_CLI_MAX_DECODE_ALLOCATION_BYTES_V1: usize = 128 * 1024 * 1024;
 const ZK_CLI_MAX_NESTING_DEPTH_V1: usize = 64;
+const ZK_CLI_JSON_MAX_NESTING_DEPTH_V1: usize = norito::json::MAX_JSON_VALUE_NESTING_DEPTH;
 // Binary `Vec<u8>` fields account their byte length as sequence elements, so
 // the binary limit must admit one complete proof-sized byte field. JSON arrays
 // use the much smaller graph limit below.
@@ -54,7 +58,7 @@ const ZK_CLI_JSON_DECODE_LIMITS_V1: norito::DecodeLimits = norito::DecodeLimits:
     ZK_CLI_INPUT_MAX_BYTES_V1,
     ZK_CLI_JSON_MAX_TOTAL_ELEMENTS_V1,
     ZK_CLI_MAX_DECODE_ALLOCATION_BYTES_V1,
-    ZK_CLI_MAX_NESTING_DEPTH_V1,
+    ZK_CLI_JSON_MAX_NESTING_DEPTH_V1,
 );
 fn read_zk_file_bounded(path: &Path, max_bytes: usize, label: &str) -> Result<Vec<u8>> {
     let mut file =
@@ -160,8 +164,10 @@ impl Command {
 }
 impl Run for RootsArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let client: Client = context.client_from_config();
-        let value = client.get_zk_roots_json(&self.asset_id, self.max)?;
+        let client = BlockingClient::from_client(context.client_from_config())?;
+        let value = client
+            .client()
+            .get_zk_roots_json(&self.asset_id, self.max)?;
         context.print_data(&value)?;
         Ok(())
     }
@@ -177,16 +183,16 @@ pub struct VerifyBatchArgs {
 }
 impl Run for VerifyBatchArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let client: Client = context.client_from_config();
+        let client = BlockingClient::from_client(context.client_from_config())?;
         if let Some(p) = self.norito {
             let body = read_zk_file_bounded(&p, ZK_CLI_INPUT_MAX_BYTES_V1, "ZK verify batch")?;
-            let value = client.post_zk_verify_batch_norito(&body)?;
+            let value = client.client().post_zk_verify_batch_norito(&body)?;
             context.print_data(&value)?;
             return Ok(());
         }
         if let Some(p) = self.json {
             let v: norito::json::Value = decode_zk_json_file(&p, "ZK verify batch")?;
-            let value = client.post_zk_verify_batch_json(&v)?;
+            let value = client.client().post_zk_verify_batch_json(&v)?;
             context.print_data(&value)?;
             return Ok(());
         }
@@ -349,8 +355,13 @@ impl Run for ProofGetArgs {
 pub struct ProofRetentionArgs {}
 impl Run for ProofRetentionArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let client: Client = context.client_from_config();
-        let status = client.get_proof_retention_status()?;
+        let operator_key_pair = context
+            .operator_key_pair()
+            .cloned()
+            .ok_or_else(|| eyre::eyre!("proof retention requires an operator signing key"))?;
+        let client = BlockingClient::from_client(context.client_from_config())?;
+        let operator = client.operator_client(operator_key_pair)?;
+        let status = operator.get_proof_retention_status()?;
         context.print_data(&status)?;
         Ok(())
     }
@@ -1291,8 +1302,8 @@ mod tests {
         let exact = directory.path().join("exact.json");
         let exact_body = format!(
             "{}0{}",
-            "[".repeat(ZK_CLI_MAX_NESTING_DEPTH_V1 - 1),
-            "]".repeat(ZK_CLI_MAX_NESTING_DEPTH_V1 - 1)
+            "[".repeat(ZK_CLI_JSON_MAX_NESTING_DEPTH_V1 - 1),
+            "]".repeat(ZK_CLI_JSON_MAX_NESTING_DEPTH_V1 - 1)
         );
         std::fs::write(&exact, exact_body).expect("write exact-depth JSON");
         let _: norito::json::Value =
@@ -1300,8 +1311,8 @@ mod tests {
         let over = directory.path().join("over.json");
         let over_body = format!(
             "{}0{}",
-            "[".repeat(ZK_CLI_MAX_NESTING_DEPTH_V1),
-            "]".repeat(ZK_CLI_MAX_NESTING_DEPTH_V1)
+            "[".repeat(ZK_CLI_JSON_MAX_NESTING_DEPTH_V1),
+            "]".repeat(ZK_CLI_JSON_MAX_NESTING_DEPTH_V1)
         );
         std::fs::write(&over, over_body).expect("write over-depth JSON");
         let error = decode_zk_json_file::<norito::json::Value>(&over, "fixture")
@@ -1428,7 +1439,7 @@ enum VkSubmissionOperation {
     Update,
 }
 fn signed_vk_register_transaction(
-    client: &Client,
+    client: &BlockingClient,
     metadata: iroha::data_model::prelude::Metadata,
     prepared: PreparedVkSubmission,
     fee_payment: iroha_data_model::transaction::FeePaymentIntent,
@@ -1446,7 +1457,7 @@ fn signed_vk_register_transaction(
         .wrap_err("failed to quote and sign VK register transaction")
 }
 fn signed_vk_update_transaction(
-    client: &Client,
+    client: &BlockingClient,
     metadata: iroha::data_model::prelude::Metadata,
     prepared: PreparedVkSubmission,
     fee_payment: iroha_data_model::transaction::FeePaymentIntent,
@@ -1627,7 +1638,7 @@ fn load_vk_submission(
 }
 impl Run for VkRegisterArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let client: Client = context.client_from_config();
+        let client = BlockingClient::from_client(context.client_from_config())?;
         let prepared = load_vk_submission(&self.json, VkSubmissionOperation::Register)?;
         let metadata = context.transaction_metadata().cloned().unwrap_or_default();
         let fee_payment = context.transaction_fee_payment()?;
@@ -1650,7 +1661,7 @@ pub struct VkUpdateArgs {
 }
 impl Run for VkUpdateArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let client: Client = context.client_from_config();
+        let client = BlockingClient::from_client(context.client_from_config())?;
         let prepared = load_vk_submission(&self.json, VkSubmissionOperation::Update)?;
         let metadata = context.transaction_metadata().cloned().unwrap_or_default();
         let fee_payment = context.transaction_fee_payment()?;

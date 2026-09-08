@@ -12,7 +12,7 @@ use iroha_data_model::kagemusha::{
     KagemushaPaymentRequestV1, KagemushaPaymentV1,
 };
 use norito::{
-    DecodeLimits, NoritoDeserialize, NoritoSerialize,
+    DecodeLimits, NoritoDeserialize, NoritoSerialize, SerializePayload,
     codec::{Decode, Encode},
 };
 

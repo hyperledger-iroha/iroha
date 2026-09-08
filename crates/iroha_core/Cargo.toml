@@ -114,8 +114,6 @@ fastpq-gpu = ["fastpq_prover/fastpq-gpu"]
 bench = []
 # Enable IDs-only query projections
 ids_projection = ["iroha_data_model/ids_projection"]
-# Enable deterministic mock verifier for Kaigi privacy-mode tests.
-kaigi_privacy_mocks = []
 # ZK verifier feature flags ship enabled by default.
 zk-halo2 = ["dep:kaigi_zk"]
 zk-stark = []
@@ -194,6 +192,7 @@ iroha_torii_shared = { workspace = true }
 iroha_executor_data_model = { workspace = true }
 ivm = { workspace = true }
 fastpq_prover = { path = "../fastpq_prover" }
+fastpq_isi = { path = "../fastpq_isi" }
 mv = { workspace = true }
 iroha_schema = { workspace = true }
 sorafs_manifest = { path = "../sorafs_manifest", default-features = false }
@@ -357,6 +356,12 @@ required-features = ["iroha-core-tests"]
 name = "alias_registry_routing"
 path = "tests/alias_registry_routing.rs"
 required-features = ["iroha-core-tests"]
+
+# Real Kaigi IPA proofs remain an explicit focused target under the ZK test features.
+[[test]]
+name = "kaigi_privacy"
+path = "tests/kaigi_privacy.rs"
+required-features = ["zk-tests", "zk-halo2", "halo2-dev-tests"]
 
 # Grouped integration-test harnesses keep `cargo test` from linking one binary per tests/*.rs file.
 

@@ -50,68 +50,89 @@ where
 mod tests {
     use super::*;
 
-    const TYPE_NAME_CONSUMERS: [&str; 12] = [
-        include_str!("bridge.rs"),
-        include_str!("ministry.rs"),
-        include_str!("kaigi.rs"),
-        include_str!("social.rs"),
-        include_str!("space_directory.rs"),
-        include_str!("governance.rs"),
-        include_str!("oracle.rs"),
-        include_str!("escrow.rs"),
-        include_str!("sorafs.rs"),
-        include_str!("verifying_keys.rs"),
-        include_str!("vpn.rs"),
-        include_str!("smart_contract_code.rs"),
+    const TYPE_NAME_CONSUMERS: [(&str, &str); 12] = [
+        ("bridge.rs", include_str!("bridge.rs")),
+        ("ministry.rs", include_str!("ministry.rs")),
+        ("kaigi.rs", include_str!("kaigi.rs")),
+        ("social.rs", include_str!("social.rs")),
+        ("space_directory.rs", include_str!("space_directory.rs")),
+        ("governance.rs", include_str!("governance.rs")),
+        ("oracle.rs", include_str!("oracle.rs")),
+        ("escrow.rs", include_str!("escrow.rs")),
+        ("sorafs.rs", include_str!("sorafs.rs")),
+        ("verifying_keys.rs", include_str!("verifying_keys.rs")),
+        ("vpn.rs", include_str!("vpn.rs")),
+        (
+            "smart_contract_code.rs",
+            include_str!("smart_contract_code.rs"),
+        ),
     ];
-    const EXPLICIT_WIRE_ID_CONSUMERS: [&str; 14] = [
-        include_str!("asset_alias.rs"),
-        include_str!("ram_lfe.rs"),
-        include_str!("endorsement.rs"),
-        include_str!("asset_transfer_control.rs"),
-        include_str!("identifier.rs"),
-        include_str!("consensus_keys.rs"),
-        include_str!("nexus.rs"),
-        include_str!("account_recovery.rs"),
-        include_str!("rwa.rs"),
-        include_str!("zk.rs"),
-        include_str!("settlement.rs"),
-        include_str!("staking.rs"),
-        include_str!("soracloud.rs"),
-        include_str!("repo.rs"),
+    const EXPLICIT_WIRE_ID_CONSUMERS: [(&str, &str); 14] = [
+        ("asset_alias.rs", include_str!("asset_alias.rs")),
+        ("ram_lfe.rs", include_str!("ram_lfe.rs")),
+        ("endorsement.rs", include_str!("endorsement.rs")),
+        (
+            "asset_transfer_control.rs",
+            include_str!("asset_transfer_control.rs"),
+        ),
+        ("identifier.rs", include_str!("identifier.rs")),
+        ("consensus_keys.rs", include_str!("consensus_keys.rs")),
+        ("nexus.rs", include_str!("nexus.rs")),
+        ("account_recovery.rs", include_str!("account_recovery.rs")),
+        ("rwa.rs", include_str!("rwa.rs")),
+        ("zk.rs", include_str!("zk.rs")),
+        ("settlement.rs", include_str!("settlement.rs")),
+        ("staking.rs", include_str!("staking.rs")),
+        ("soracloud.rs", include_str!("soracloud.rs")),
+        ("repo.rs", include_str!("repo.rs")),
     ];
-    const SLICE_ONLY_CONSUMERS: [&str; 3] = [
-        include_str!("musubi.rs"),
-        include_str!("contract_alias.rs"),
-        include_str!("alias_setup.rs"),
+    const SLICE_ONLY_CONSUMERS: [(&str, &str); 3] = [
+        ("musubi.rs", include_str!("musubi.rs")),
+        ("contract_alias.rs", include_str!("contract_alias.rs")),
+        ("alias_setup.rs", include_str!("alias_setup.rs")),
     ];
 
     #[test]
     fn shared_instruction_test_helper_inventory_is_exact() {
-        let mut slice_calls = 0;
-        let mut registry_calls = 0;
-        for source in TYPE_NAME_CONSUMERS {
+        let mut owners = std::collections::BTreeSet::new();
+        for (owner, source) in TYPE_NAME_CONSUMERS {
+            assert!(owners.insert(owner), "duplicate helper owner: {owner}");
             assert!(!source.contains("fn assert_slice_roundtrip"));
             assert!(!source.contains("fn assert_registry_decodes"));
             assert!(
                 source
                     .contains("assert_registry_decodes_registered_type as assert_registry_decodes")
             );
-            slice_calls += source.matches("assert_slice_roundtrip(").count();
-            registry_calls += source.matches("assert_registry_decodes(").count();
+            assert!(
+                source.contains("assert_slice_roundtrip("),
+                "{owner} must use the shared slice helper"
+            );
+            assert!(
+                source.contains("assert_registry_decodes("),
+                "{owner} must use the shared registry helper"
+            );
         }
-        for source in EXPLICIT_WIRE_ID_CONSUMERS {
+        for (owner, source) in EXPLICIT_WIRE_ID_CONSUMERS {
+            assert!(owners.insert(owner), "duplicate helper owner: {owner}");
             assert!(!source.contains("fn assert_slice_roundtrip"));
             assert!(!source.contains("fn assert_registry_decodes"));
-            slice_calls += source.matches("assert_slice_roundtrip(").count();
-            registry_calls += source.matches("assert_registry_decodes(").count();
+            assert!(
+                source.contains("assert_slice_roundtrip("),
+                "{owner} must use the shared slice helper"
+            );
+            assert!(
+                source.contains("assert_registry_decodes("),
+                "{owner} must use the shared registry helper"
+            );
         }
-        for source in SLICE_ONLY_CONSUMERS {
+        for (owner, source) in SLICE_ONLY_CONSUMERS {
+            assert!(owners.insert(owner), "duplicate helper owner: {owner}");
             assert!(!source.contains("fn assert_slice_roundtrip"));
-            slice_calls += source.matches("assert_slice_roundtrip(").count();
+            assert!(
+                source.contains("assert_slice_roundtrip("),
+                "{owner} must use the shared slice helper"
+            );
         }
-        assert_eq!(slice_calls, 243);
-        assert_eq!(registry_calls, 183);
         assert!(include_str!("register.rs").contains("fn assert_slice_roundtrip"));
         assert!(include_str!("privacy.rs").contains("fn assert_slice_roundtrip"));
         assert!(include_str!("defi.rs").contains("fn assert_registry_decodes"));

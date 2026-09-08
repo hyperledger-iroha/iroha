@@ -34,8 +34,10 @@ use crate::{
     },
 };
 use iroha::{
+    blocking::Client,
     client::{
-        Client, PublicMusubiQueryPathV1, PublicMusubiQueryResultV1, post_public_musubi_query_v1,
+        FeeQuoteRequest, PublicMusubiQueryPathV1, PublicMusubiQueryResultV1,
+        post_public_musubi_query_v1,
     },
     config::Config,
 };
@@ -262,18 +264,20 @@ impl RegistryReadClientV1 {
     /// match the canonical single-signature account, the timeout is outside the one-minute bound,
     /// a legacy witness header is configured, or the chain discriminant is zero.
     pub fn new(
-        mut client: Client,
+        client: Client,
         timeout: Duration,
         account_chain_discriminant: u16,
     ) -> Result<Self, RegistryErrorV1> {
-        if !matches!(client.torii_url.scheme(), "http" | "https")
-            || !client.torii_url.username().is_empty()
-            || client.torii_url.password().is_some()
+        if !matches!(client.client().torii_url.scheme(), "http" | "https")
+            || !client.client().torii_url.username().is_empty()
+            || client.client().torii_url.password().is_some()
             || timeout == Duration::ZERO
             || timeout > Duration::from_secs(60)
             || account_chain_discriminant == 0
-            || client.account.controller.single_signatory() != Some(client.key_pair.public_key())
+            || client.client().account.controller.single_signatory()
+                != Some(client.client().key_pair.public_key())
             || client
+                .client()
                 .headers
                 .keys()
                 .any(|name| name.eq_ignore_ascii_case("X-Iroha-Witness"))
@@ -283,7 +287,9 @@ impl RegistryReadClientV1 {
                 "MUSUBI_REGISTRY_PUBLIC_CONFIG_INVALID",
             ));
         }
-        client.torii_request_timeout = timeout;
+        let mut async_client = client.client().clone();
+        async_client.torii_request_timeout = timeout;
+        let client = Client::from_client(async_client).map_err(|_| invalid_public_config())?;
         Ok(Self {
             client,
             timeout,
@@ -317,7 +323,7 @@ private_key = "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9
         )
         .map_err(|_| invalid_public_config())?;
         Self::new(
-            Client::new(configuration),
+            Client::new(configuration).map_err(|_| invalid_public_config())?,
             timeout,
             account_chain_discriminant,
         )
@@ -374,15 +380,15 @@ private_key = "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9
         let timeout = configuration.torii_request_timeout;
         let account_chain_discriminant = configuration.account_chain_discriminant;
         Self::new(
-            Client::new(configuration),
+            Client::new(configuration).map_err(|_| invalid_public_config())?,
             timeout,
             account_chain_discriminant,
         )
     }
     /// Return the configured authenticated endpoint without exposing signer material.
     #[must_use]
-    pub const fn torii_url(&self) -> &Url {
-        &self.client.torii_url
+    pub fn torii_url(&self) -> &Url {
+        &self.client.client().torii_url
     }
     /// Return the validated I105 account chain discriminant used by the request signer.
     #[must_use]
@@ -730,7 +736,7 @@ private_key = "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9
         R: JsonDeserialize,
     {
         let _chain_discriminant = ChainDiscriminantGuard::enter(self.account_chain_discriminant);
-        let response = post_public_musubi_query_v1(&self.client, path, query, self.timeout)
+        let response = post_public_musubi_query_v1(self.client.client(), path, query, self.timeout)
             .map_err(|_| {
                 RegistryErrorV1::new(
                     RegistryFailureClassV1::Retryable,
@@ -758,7 +764,7 @@ impl fmt::Debug for RegistrySigningClientV1 {
         let _chain_discriminant = ChainDiscriminantGuard::enter(self.account_chain_discriminant);
         formatter
             .debug_struct("RegistrySigningClientV1")
-            .field("authority", &self.client.account)
+            .field("authority", &self.client.client().account)
             .field(
                 "account_chain_discriminant",
                 &self.account_chain_discriminant,
@@ -770,13 +776,13 @@ impl RegistrySigningClientV1 {
     /// Return the exact genesis-derived identity from the trusted signing configuration.
     #[must_use]
     pub(crate) fn network_id(&self) -> NetworkId {
-        self.client.network_id
+        self.client.client().network_id
     }
     /// Clone an authenticated registry reader from this exact signing configuration.
     pub(crate) fn authenticated_reader(&self) -> Result<RegistryReadClientV1, RegistryErrorV1> {
         RegistryReadClientV1::new(
             self.client.clone(),
-            self.client.torii_request_timeout,
+            self.client.client().torii_request_timeout,
             self.account_chain_discriminant,
         )
     }
@@ -793,7 +799,7 @@ impl RegistrySigningClientV1 {
                 "MUSUBI_REGISTRY_SIGNING_CONFIG_INVALID",
             )
         })?;
-        Ok(Self::from_configuration(configuration))
+        Self::from_configuration(configuration)
     }
     #[cfg(test)]
     pub(crate) fn load_with_publication_config(
@@ -807,7 +813,7 @@ impl RegistrySigningClientV1 {
                     "MUSUBI_REGISTRY_SIGNING_CONFIG_INVALID",
                 )
             })?;
-        Ok((Self::from_configuration(configuration), publication))
+        Ok((Self::from_configuration(configuration)?, publication))
     }
     pub(crate) fn load_with_publication_config_bytes(
         path: &Path,
@@ -820,24 +826,31 @@ impl RegistrySigningClientV1 {
                     "MUSUBI_REGISTRY_SIGNING_CONFIG_INVALID",
                 )
             })?;
-        Ok((Self::from_configuration(configuration), publication))
+        Ok((Self::from_configuration(configuration)?, publication))
     }
-    fn from_configuration(configuration: Config) -> Self {
+    fn from_configuration(mut configuration: Config) -> Result<Self, RegistryErrorV1> {
         let account_chain_discriminant = configuration.account_chain_discriminant;
-        let mut client = {
+        configuration.torii_request_timeout = configuration
+            .torii_request_timeout
+            .min(Duration::from_secs(60));
+        let client = {
             let _chain_discriminant = ChainDiscriminantGuard::enter(account_chain_discriminant);
-            Client::new(configuration)
+            Client::new(configuration).map_err(|_| {
+                RegistryErrorV1::new(
+                    RegistryFailureClassV1::Permanent,
+                    "MUSUBI_REGISTRY_SIGNING_CONFIG_INVALID",
+                )
+            })?
         };
-        client.torii_request_timeout = client.torii_request_timeout.min(Duration::from_secs(60));
-        Self {
+        Ok(Self {
             client,
             account_chain_discriminant,
-        }
+        })
     }
     /// Return the configured mutation authority.
     #[must_use]
-    pub const fn authority(&self) -> &iroha_data_model::account::AccountId {
-        &self.client.account
+    pub fn authority(&self) -> &iroha_data_model::account::AccountId {
+        &self.client.client().account
     }
     /// Return the validated I105 account chain discriminant used by this signer.
     #[must_use]
@@ -861,7 +874,7 @@ impl RegistrySigningClientV1 {
         iroha_musubi_service::MusubiPublicationRuntimeTransportErrorV1,
     > {
         iroha_musubi_service::AuthenticatedMusubiPublicationRuntimeClientV1::from_iroha_client(
-            &self.client,
+            self.client.client(),
             timeout,
         )
     }
@@ -984,11 +997,12 @@ impl RegistrySigningClientV1 {
         let _chain_discriminant = ChainDiscriminantGuard::enter(self.account_chain_discriminant);
         let instruction: InstructionBox = instruction.into();
         self.client
-            .try_build_transaction_payload_from_items(
+            .account_client()
+            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
                 [instruction],
                 FeePaymentIntent::authority(Vec::new(), None),
                 Metadata::default(),
-            )
+            ))
             .map_err(|_| {
                 RegistryErrorV1::new(
                     RegistryFailureClassV1::Permanent,
@@ -1003,14 +1017,34 @@ impl RegistrySigningClientV1 {
     /// Returns an error when fee quotation or local signing of the exact payload fails.
     pub fn quote_and_sign_v1(
         &self,
-        payload: TransactionPayload,
+        mut payload: TransactionPayload,
     ) -> Result<SignedTransaction, RegistryErrorV1> {
         let _chain_discriminant = ChainDiscriminantGuard::enter(self.account_chain_discriminant);
-        self.client
-            .quote_and_sign_transaction_payload(payload)
+        let quote = self
+            .client
+            .quote_fees(FeeQuoteRequest::AccountSignature { payload: &payload })
             .map_err(|_| {
                 RegistryErrorV1::new(
                     RegistryFailureClassV1::Retryable,
+                    "MUSUBI_REGISTRY_TRANSACTION_QUOTE_OR_SIGN_FAILED",
+                )
+            })?;
+        if !payload
+            .fee_payment
+            .has_same_payer_and_gas_bound(&quote.intent)
+        {
+            return Err(RegistryErrorV1::new(
+                RegistryFailureClassV1::Permanent,
+                "MUSUBI_REGISTRY_TRANSACTION_QUOTE_BINDING_FAILED",
+            ));
+        }
+        payload.fee_payment = quote.intent;
+        self.client
+            .account_client()
+            .sign_transaction(payload)
+            .map_err(|_| {
+                RegistryErrorV1::new(
+                    RegistryFailureClassV1::Permanent,
                     "MUSUBI_REGISTRY_TRANSACTION_QUOTE_OR_SIGN_FAILED",
                 )
             })
@@ -1027,7 +1061,7 @@ impl RegistrySigningClientV1 {
         let _chain_discriminant = ChainDiscriminantGuard::enter(self.account_chain_discriminant);
         let hash = self
             .client
-            .submit_transaction_blocking(transaction)
+            .submit_transaction_and_wait(transaction)
             .map_err(|_| {
                 RegistryErrorV1::new(
                     RegistryFailureClassV1::Retryable,
@@ -1043,6 +1077,7 @@ impl RegistrySigningClientV1 {
         let _chain_discriminant = ChainDiscriminantGuard::enter(self.account_chain_discriminant);
         let response = self
             .client
+            .client()
             .get_transaction_status_response(transaction.hash())
             .map_err(|_| {
                 RegistryErrorV1::new(
@@ -2937,8 +2972,9 @@ private_key = "{}"
             RegistryTransactionStateV1::Pending
         );
         server.join().expect("cached rejection server");
+        let cached_applied_hash = transaction_hash.clone();
         let cached_applied = norito::json::to_vec(&norito::json!({
-            "hash": transaction_hash.clone(),
+            "hash": cached_applied_hash,
             "status": { "kind": "Applied", "block_height": 44 },
             "scope": "global",
             "resolved_from": "cache",
@@ -4028,8 +4064,8 @@ private_key = "{}"
         let reconstructed = envelope
             .reconstruct_signed_transaction(&request)
             .expect("reconstructed exact release transaction");
-        let submitted = Client::prepare_transaction_payload(&signed);
-        let replayed = Client::prepare_transaction_payload(&reconstructed);
+        let submitted = iroha::client::PreparedTransactionPayload::from_transaction(&signed);
+        let replayed = iroha::client::PreparedTransactionPayload::from_transaction(&reconstructed);
         assert_eq!(replayed.hash(), submitted.hash());
         assert_eq!(replayed.as_bytes(), submitted.as_bytes());
     }

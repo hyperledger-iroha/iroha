@@ -17,11 +17,14 @@ fn provider_vrf_submission_requires_exact_non_inert_ed25519_material() {
             maximum: exact - 1,
         })
     );
-    let encoded = norito::to_bytes(&submission).expect("encode VRF submission");
-    assert_eq!(
-        decode_provider_vrf_submission_v1(&encoded).expect("bounded VRF decoder"),
-        submission
-    );
+    let encoded = norito::encode_canonical(&submission).expect("encode VRF submission");
+    for flags in supported_layouts() {
+        let _context = norito::core::DecodeFlagsGuard::enter(flags);
+        assert_eq!(
+            decode_provider_vrf_submission_v1(&encoded).expect("bounded VRF decoder"),
+            submission
+        );
+    }
     assert!(
         decode_provider_vrf_submission_v1(&vec![
             0;
@@ -46,6 +49,9 @@ fn provider_vrf_submission_requires_exact_non_inert_ed25519_material() {
             }
         )
     );
+    assert!(
+        decode_provider_vrf_submission_v1(&norito::encode_canonical(&short_key).unwrap()).is_err()
+    );
     let mut overlong_signature = submission.clone();
     overlong_signature.signature.signature.push(10);
     assert_eq!(
@@ -57,6 +63,11 @@ fn provider_vrf_submission_requires_exact_non_inert_ed25519_material() {
             }
         )
     );
+    assert!(matches!(
+        decode_provider_vrf_submission_v1(&norito::encode_canonical(&overlong_signature).unwrap()),
+        Err(norito::core::Error::SequenceLengthExceeded { length, limit })
+            if length == (SIGNATURE_LENGTH + 1) as u64 && limit == SIGNATURE_LENGTH as u64
+    ));
     let mut inert = submission.clone();
     inert.signature.public_key.fill(0);
     assert_eq!(

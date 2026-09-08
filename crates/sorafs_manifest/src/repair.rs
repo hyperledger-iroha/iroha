@@ -1098,11 +1098,12 @@ fn canonical_audit_payload_digest<T: norito::core::NoritoSerialize>(
     payload_name: &'static str,
     payload: &T,
 ) -> Result<[u8; 32], RepairValidationError> {
-    let bytes =
-        norito::to_bytes(payload).map_err(|err| RepairValidationError::AuditPayloadEncoding {
+    let bytes = norito::encode_canonical(payload).map_err(|err| {
+        RepairValidationError::AuditPayloadEncoding {
             payload: payload_name,
             reason: err.to_string(),
-        })?;
+        }
+    })?;
     Ok(*blake3::hash(&bytes).as_bytes())
 }
 fn validate_audit_header(
@@ -1609,6 +1610,19 @@ mod tests {
         let decoded = RepairAuditEventV1::decode(&mut input).expect("decode repair audit event");
         assert_eq!(decoded, event);
         decoded.validate().expect("validate repair audit event");
+        for flags in crate::canonical_test_support::supported_layouts() {
+            let _ambient = norito::core::DecodeFlagsGuard::enter(flags);
+            assert_eq!(
+                repair_audit_payload_digest_v1(&event.payload).expect("canonical audit identity"),
+                event.header.payload_digest
+            );
+            event
+                .validate()
+                .expect("audit remains valid under every layout");
+            let mut substituted = event.clone();
+            substituted.payload.message = Some("substituted".into());
+            assert!(substituted.validate().is_err());
+        }
     }
     #[test]
     fn gc_audit_event_roundtrips() {
@@ -1637,6 +1651,19 @@ mod tests {
         let decoded = GcAuditEventV1::decode(&mut input).expect("decode gc audit event");
         assert_eq!(decoded, event);
         decoded.validate().expect("validate GC audit event");
+        for flags in crate::canonical_test_support::supported_layouts() {
+            let _ambient = norito::core::DecodeFlagsGuard::enter(flags);
+            assert_eq!(
+                gc_audit_payload_digest_v1(&event.payload).expect("canonical GC audit identity"),
+                event.header.payload_digest
+            );
+            event
+                .validate()
+                .expect("GC audit remains valid under every layout");
+            let mut substituted = event.clone();
+            substituted.payload.freed_bytes += 1;
+            assert!(substituted.validate().is_err());
+        }
     }
     #[test]
     fn repair_audit_event_rejects_header_tampering() {

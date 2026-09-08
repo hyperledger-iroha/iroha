@@ -41217,7 +41217,11 @@ mod advert_tests {
     async fn storage_restart_recovers_manifest_metadata() {
         use sorafs_node::config::StorageConfig;
         let temp_dir = tempfile::tempdir().expect("create temp dir");
-        let storage_root = temp_dir.path().join("storage");
+        let storage_root = temp_dir
+            .path()
+            .canonicalize()
+            .expect("canonical restart fixture directory")
+            .join("storage");
         let cfg = StorageConfig::builder()
             .enabled(true)
             .data_dir(storage_root.clone())

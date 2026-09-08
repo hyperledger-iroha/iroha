@@ -4,10 +4,11 @@
 //! synthesis has established the virtual-to-physical cell map, five Table8
 //! lanes realize those relations. Source bytes and digest words are
 //! copy-constrained across the two layouts.
+#[cfg(test)]
+use super::pasta_sha256_table8::IV;
 use super::pasta_sha256_table8::{
-    AssignedBlockWord, AssignedByte, BLOCK_BYTE_SIZE, DIGEST_SIZE, IV, PaddedByte,
-    Sha256Instructions, TABLE8_SPREAD_TABLE_ROWS, Table8Chip, Table8Config,
-    canonical_padding_suffix,
+    AssignedBlockWord, AssignedByte, BLOCK_BYTE_SIZE, DIGEST_SIZE, PaddedByte, Sha256Instructions,
+    TABLE8_SPREAD_TABLE_ROWS, Table8Chip, Table8Config, canonical_padding_suffix,
 };
 use ff::PrimeField;
 use halo2_base::{
@@ -20,7 +21,9 @@ use halo2_base::{
     utils::{BigPrimeField, ScalarField, fe_to_biguint},
     virtual_region::copy_constraints::{CopyConstraintManager, SharedCopyConstraintManager},
 };
-use sha2::{Digest as _, Sha256, compress256, digest::generic_array::GenericArray};
+use sha2::{Digest as _, Sha256};
+#[cfg(test)]
+use sha2::{compress256, digest::generic_array::GenericArray};
 /// Independent Table8 lanes fixed by the V1 circuit identity.
 pub(crate) const PASTA_SHA256_LANES_V1: usize = 5;
 // Table8 uses about 2,267 rows per compression block. Keep a small explicit
@@ -311,6 +314,7 @@ where
     /// The return value uses the same eight big-endian u32 words as `digest_constrained`.
     /// Domain separators and any application length framing belong in `message`; this method
     /// neither changes an application hash nor introduces an application-specific length cap.
+    #[cfg(test)]
     pub(super) fn digest_bounded_constrained(
         &mut self,
         ctx: &mut Context<F>,
@@ -518,7 +522,7 @@ where
     /// relation.  Reject them here instead of silently treating their capacity padding as an
     /// ordinary message.  The current mint-authority certificate queue contains ordinary jobs
     /// only, so this is a fail-closed protocol invariant rather than a history or count limit.
-    pub(crate) fn claim_jobs(&self) -> Result<Vec<PastaSha256ClaimJobV1<'_, F>>, String> {
+    pub(super) fn claim_jobs(&self) -> Result<Vec<PastaSha256ClaimJobV1<'_, F>>, String> {
         self.jobs
             .iter()
             .enumerate()
@@ -586,7 +590,7 @@ where
         self
     }
     #[cfg(test)]
-    fn with_output_word_xor(mut self, job: usize, word: usize, xor: u32) -> Self {
+    pub(crate) fn with_output_word_xor(mut self, job: usize, word: usize, xor: u32) -> Self {
         self.output_word_xor = Some((job, word, xor));
         self
     }

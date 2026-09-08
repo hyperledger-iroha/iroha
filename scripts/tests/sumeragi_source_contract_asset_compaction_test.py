@@ -22,18 +22,24 @@ MINIMUM_NET_REDUCTION = 2_161
 # uncompacted tests with only the same 31-line growth.
 ORIGINAL_PREIMAGE_RUST_LINES = 5_779
 ORIGINAL_POSTIMAGE_RUST_LINES = 3_618
-# The 55th case adds three SourceId mappings (11 lines), two exact include
-# expansions (6 lines), and one static macro test (3 lines). The inventory
-# substitutions add no lines. Account for only this hash-pinned 20-line growth
-# on both sides; the original 2,161-line reduction floor remains unchanged.
+# The actual WAL consumer now lives in its own already-existing source module.
+# Its closed source-provider enum, parser and resolver add exactly three Rust
+# lines. Credit those same three lines to both compared forms; retain the
+# original historical measurements and net-reduction floor unchanged.
+MIGRATED_SOURCE_COVERAGE_GROWTH_RUST_LINES = 31
+WAL_CONSUMER_SOURCE_COVERAGE_GROWTH_RUST_LINES = 3
+# The merged owner fixes add a 22-line inline-storage regression and 20 lines
+# for the complete adapter source projection plus bounded fixture runner.
+# Account for that independent coverage equally in both compared forms.
+OWNER_FIX_COVERAGE_GROWTH_RUST_LINES = 42
+# The 55th retirement case adds three source mappings, two include expansions,
+# and one macro test (20 lines), independently of the owner-fix coverage.
 SUPERSEDED_BODY_RETIREMENT_COVERAGE_GROWTH_RUST_LINES = 20
-# The replayed leader-wire guard follows its existing production owner through
-# one exact SourceId enum/parse/source mapping (3 lines). This fixes a stale
-# HEAD-era inline-factory assertion; keep the original reduction floor intact.
-REPLAYED_LEADER_WIRE_SOURCE_OWNER_GROWTH_RUST_LINES = 3
 CURRENT_SOURCE_COVERAGE_GROWTH_RUST_LINES = (
-    31 + SUPERSEDED_BODY_RETIREMENT_COVERAGE_GROWTH_RUST_LINES
-    + REPLAYED_LEADER_WIRE_SOURCE_OWNER_GROWTH_RUST_LINES
+    MIGRATED_SOURCE_COVERAGE_GROWTH_RUST_LINES
+    + WAL_CONSUMER_SOURCE_COVERAGE_GROWTH_RUST_LINES
+    + OWNER_FIX_COVERAGE_GROWTH_RUST_LINES
+    + SUPERSEDED_BODY_RETIREMENT_COVERAGE_GROWTH_RUST_LINES
 )
 BASELINE_RUST_LINES = (
     ORIGINAL_PREIMAGE_RUST_LINES + CURRENT_SOURCE_COVERAGE_GROWTH_RUST_LINES
@@ -41,8 +47,8 @@ BASELINE_RUST_LINES = (
 MAX_POSTIMAGE_RUST_LINES = (
     ORIGINAL_POSTIMAGE_RUST_LINES + CURRENT_SOURCE_COVERAGE_GROWTH_RUST_LINES
 )
-EXPECTED_ASSET_LENGTH = 638_599
-EXPECTED_ASSET_SHA256 = "e31e530b815652f62358aaf2ec49a13c0d09e1fec67d288c31f56fef7be4a725"
+EXPECTED_ASSET_LENGTH = 647_895
+EXPECTED_ASSET_SHA256 = "2972e85bfa99a41ae907ed29d7e7d70e3ddcc62feb98386182accef6b9116da8"
 EXPECTED_CASE_IDS_SHA256 = "56f95aaddfabd9dd1c08286c64f0e8fe2814c308ad86046342622ff42d85a2df"
 
 HOST_PREIMAGE_SHA256 = {
@@ -52,12 +58,20 @@ HOST_PREIMAGE_SHA256 = {
     "crates/iroha_core/src/sumeragi/tests/v2_lifecycle_work_registry_replay_evidence_cases.rs": "5af2c411d6d1c7d5579004760e8c9ae0b48f2335e1468f456f72e0d614dede6b",
     "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator_support.rs": "0afc9993189c5d118e5da3e9d1b37376687bfd316c66512b1605913b1a1908f4",
 }
-HOST_POSTIMAGE_SHA256 = {
+COMPACTED_HOST_POSTIMAGE_SHA256 = {
     "crates/iroha_core/src/sumeragi/tests/v2_adapter_05_direct_lifecycle_recovered_wal_seal_case.rs": "5b3988299c7873cb3cd0cf70f4007007d570cbb324c7c9adbf237ef4fbc6afda",
     "crates/iroha_core/src/sumeragi/tests/v2_lifecycle_replay_authority_cases.rs": "d380501e4efd09374acdfc2b7729bd095c7499a4d0dfdde355ef2296fa8de23d",
     "crates/iroha_core/src/sumeragi/tests/v2_lifecycle_work_registry_exact_registry_cases.rs": "d83e903bd0d2307896a2cc53ffb8c36aaf01cce3cb9178f88221009f44fe284c",
     "crates/iroha_core/src/sumeragi/tests/v2_lifecycle_work_registry_replay_evidence_cases.rs": "c6427c6b098be208556e08222f31507d024f5c63524fb43a5e5c7822b65711e7",
     "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator_support.rs": "41b23f0be77e4bcf5dda8374b27013a7daee201edccf043504ce7217a4fdab45",
+}
+
+# Preserve the original compacted host hashes as historical evidence. Pin the
+# current source provider, bounded runner and inline-storage regression separately.
+HOST_POSTIMAGE_SHA256 = {
+    **COMPACTED_HOST_POSTIMAGE_SHA256,
+    "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator_support.rs": "a99c34af832a7407a1e704fff6f9302550988685ad5c166727bf29dba73c5f2e",
+    "crates/iroha_core/src/sumeragi/tests/v2_lifecycle_work_registry_exact_registry_cases.rs": "0b1e3fae6fcf6a915b75013b880f952aba8034d3d938585d24c2952431fd8fcc",
 }
 
 MIGRATED_TESTS = {
@@ -81,30 +95,29 @@ MIGRATED_TESTS = {
     ),
 }
 
-# Reviewed refresh: remote Proposal keeps its four lock semantics at the actual
-# factory and adds ten exact delegation/frontier checks. Live publication keeps
-# its validate/persist/expose semantics at the actual runtime/service owner and
-# adds four checks; no Rust lines are added. Registry adds one exact cancellation
-# import assertion while changing its group census from seven to eight.
+# The merged remote-Proposal guards retain exact adapter context/owner and runtime
+# publication checks together with the current durable CommitIntent consumer.
+# The FIFO case retains the authenticated physical ordering checks from both
+# branches. Pin the combined cases; the 55th case still owns body retirement.
 NEW_CASE_CONTRACT_COUNTS = {
-    "remote_proposal_replay_pre_admission_is_closed_exact_and_live": 161,
+    "remote_proposal_replay_pre_admission_is_closed_exact_and_live": 174,
     "registry_remains_inert_and_scheduler_free": 89,
     "superseded_certified_body_retirement_is_exact_and_durably_sealed": 90,
     "recovered_wal_vote_sign_seal_is_move_only_exact_and_owner_wired": 338,
     "stored_replay_store_coalescing_and_cleanup_are_owner_closed": 306,
     "ready_validate_execution_surface_is_closed_borrow_bound_and_scheduler_owned": 196,
     "certified_pipeline_replay_evidence_is_retained_by_every_closed_carrier": 35,
-    "nonqueue_replica_release_is_fifo_proved_move_only_and_restart_closed": 84,
+    "nonqueue_replica_release_is_fifo_proved_move_only_and_restart_closed": 92,
 }
 MIGRATED_CASE_SHA256 = {
-    "remote_proposal_replay_pre_admission_is_closed_exact_and_live": "4fddf294a38afcdf7e170d56c2fc62faa7265b17ca3e636d1ef7ef300dd88ef0",
+    "remote_proposal_replay_pre_admission_is_closed_exact_and_live": "f68343bea21598a841c338813841e7f43b578a6593b3920f66a74767a212b7ce",
     "registry_remains_inert_and_scheduler_free": "941a48e2f28cc22d3167c86a9a9cd58a9e96e4a1d956537a28aa5527109183fe",
     "superseded_certified_body_retirement_is_exact_and_durably_sealed": "bca10f8cce321aba00188cfa24e3b78dd5aebb7fed15d6124bcd51bc6b144d3f",
     "recovered_wal_vote_sign_seal_is_move_only_exact_and_owner_wired": "7e61f7612fa106e3a3649ba8720b172f5d1ec4e901f35c4cf310038b46ba521e",
     "stored_replay_store_coalescing_and_cleanup_are_owner_closed": "e0db04d44cf4862461ae89234c7d82361bb1b25491017f0a7869dec1a287c872",
     "ready_validate_execution_surface_is_closed_borrow_bound_and_scheduler_owned": "03b7d7a3a9843536bca8c686937561c0c12eea4281e9850de7ee7c841cf6ac48",
     "certified_pipeline_replay_evidence_is_retained_by_every_closed_carrier": "dc5a58896a12211ec735952b05a411112a8fda45ed60923b1b5f114913a14a12",
-    "nonqueue_replica_release_is_fifo_proved_move_only_and_restart_closed": "cae5d89f501d9d07fb0410956c84abd120cd298322183260eb0c0b45f7d8b497",
+    "nonqueue_replica_release_is_fifo_proved_move_only_and_restart_closed": "b6afba431c1205460d1601e0dd68f6688a9ca93bce808b88d9ab30733cb81f13",
 }
 
 
@@ -150,6 +163,188 @@ def parse_cases(asset: str) -> tuple[tuple[str, tuple[str, ...]], ...]:
     if current_id is not None:
         raise AssertionError(f"unclosed case {current_id}")
     return tuple(cases)
+
+
+# These are the narrow production regions whose guards moved during the current
+# owner reconciliation. Use their exact source providers, without source globbing
+# or depending on a compiled Core test executable.
+BOUNDARY_CASE_REGIONS = {
+    "remote_proposal_replay_pre_admission_is_closed_exact_and_live": (
+        "leader_wire_replay_lock_authority",
+        "actual_consumer_factory",
+        "actual_consumer_publication",
+        "leader_wire_live_runtime_cut",
+        "leader_wire_live_lock_authority",
+        "leader_wire_exact_entered_view",
+    ),
+    "certified_serve_replay_pair_is_opaque_exact_and_fixed_admission_only": (
+        "terminal_next_sign_pair",
+    ),
+    "selected_certified_response_priority_is_closed_and_exactly_routed": (
+        "recovered_response_preparation",
+    ),
+    "nonqueue_replica_release_is_fifo_proved_move_only_and_restart_closed": (
+        "physical_fifo_proof",
+    ),
+}
+BOUNDARY_SOURCE_PATHS = {
+    "adapter": "crates/iroha_core/src/sumeragi/v2.rs",
+    "effects": "crates/iroha_core/src/sumeragi/v2_effects.rs",
+    "leader_wire_consumer": "crates/iroha_core/src/sumeragi/v2_leader_wire_consumer.rs",
+    "worker": "crates/iroha_core/src/sumeragi/v2_worker/effect_services_impl.rs",
+    "registry": "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_validate_recovery_census_impl.rs",
+    "turn_driver": "crates/iroha_core/src/sumeragi/v2_lifecycle_turn_driver.rs",
+    "queue": "crates/iroha_core/src/queue.rs",
+}
+BOUNDARY_MUTATIONS = (
+    (
+        "physical global FIFO inversion",
+        "queue",
+        "previous_global_fifo_ordinal.is_some_and(|previous| previous >= order.ordinal)",
+        "false",
+    ),
+    (
+        "missing paired Sign terminal authentication",
+        "registry",
+        "!broadcast\n                            .paired_next_sign_matches_terminal_record(coordinator, &exact_ledger)",
+        "false",
+    ),
+    (
+        "recovered queue refresh retry",
+        "turn_driver",
+        "ProductionLifecycleIngressSelectionV1::RecoveredDecisionFetchPreparationRetry,\n                                );",
+        "ProductionLifecycleIngressSelectionV1::RestartRequired,\n                                );",
+    ),
+    (
+        "actual adapter factory delegation",
+        "adapter",
+        "LeaderWireRecoveryAuthority::from_adapter(self)",
+        "LeaderWireRecoveryAuthority::from_replayed_adapter(self)",
+    ),
+    (
+        "actual locked proposal round",
+        "leader_wire_consumer",
+        "adapter.registry.round_to_wire(certificate.proposal_round())",
+        "adapter.registry.round_to_wire(certificate.round())",
+    ),
+    (
+        "historical CommitIntent authority",
+        "leader_wire_consumer",
+        "durable.commit_intent_for_lock(locked).is_some()",
+        "true",
+    ),
+    (
+        "exact WAL persistence frontier",
+        "leader_wire_consumer",
+        "wal_id: durable.last_id()",
+        "wal_id: reducer::PersistenceId::new(0)",
+    ),
+    (
+        "monotonic consumer publication",
+        "worker",
+        "if !next.monotonically_extends(self.leader_wire_recovery_authority)",
+        "if false",
+    ),
+    (
+        "persist before exposing consumer authority",
+        "worker",
+        "self.leader_wire_ingress\n            .advance_leader_wire_recovery_cut(next)?;\n        self.leader_wire_recovery_authority = next;",
+        "self.leader_wire_recovery_authority = next;\n        self.leader_wire_ingress\n            .advance_leader_wire_recovery_cut(next)?;",
+    ),
+    (
+        "entered-view exact consumer tag",
+        "leader_wire_consumer",
+        "self.consumer_tag == tag && self.protected_lock == protected_lock",
+        "true && self.protected_lock == protected_lock",
+    ),
+    (
+        "entered-view exact protected lock",
+        "leader_wire_consumer",
+        "self.consumer_tag == tag && self.protected_lock == protected_lock",
+        "self.consumer_tag == tag && true",
+    ),
+    (
+        "entered-view exact consumer and lock",
+        "worker",
+        ".matches_entered_view(tag, protected_lock)",
+        ".matches_entered_view(tag, None)",
+    ),
+)
+
+
+def boundary_contract_failures(
+    cases: dict[str, tuple[str, ...]], sources: dict[str, str]
+) -> list[str]:
+    """Evaluate only the relocated guards against real or adversely changed sources.
+
+    Region, count and order behavior matches the Rust runner. Restricting this
+    check to explicit regions lets negative controls expose lost ownership
+    guards without treating an unrelated source-contract failure as rejection.
+    """
+
+    def unescape(value: str) -> str:
+        return re.sub(
+            r"\\([\\nrtp])",
+            lambda match: {"\\": "\\", "n": "\n", "r": "\r", "t": "\t", "p": "|"}[match[1]],
+            value,
+        )
+
+    failures: list[str] = []
+    for case_id, region_ids in BOUNDARY_CASE_REGIONS.items():
+        rows = [
+            [unescape(field) for field in row.split("|")]
+            for row in cases[case_id][1:-1]
+            if row.split("|", 2)[1] in region_ids
+        ]
+        regions: dict[str, list[str]] = {}
+        for row in rows:
+            if row[0] != "region":
+                continue
+            _, region, source_id, start_mode, start_token, end_mode, end_token = row
+            source = sources[source_id]
+            try:
+                if start_mode == "last":
+                    end = len(source) if end_mode == "end" else source.index(end_token)
+                    start = source.rindex(start_token, 0, end)
+                else:
+                    start = (
+                        0 if start_mode == "begin" else source.index(start_token)
+                        + (len(start_token) if start_mode == "after" else 0)
+                    )
+                    end = len(source) if end_mode == "end" else source.index(end_token, start)
+                regions.setdefault(region, []).append(source[start:end])
+            except ValueError:
+                failures.append(f"{case_id}/{region}: missing region delimiter")
+        for row in rows:
+            tag, region, *fields = row
+            if tag == "region":
+                continue
+            parts = regions.get(region, [])
+            valid = bool(parts)
+            if tag == "required":
+                valid &= any(fields[0] in part for part in parts)
+            elif tag == "forbidden":
+                valid &= all(fields[0] not in part for part in parts)
+            elif tag == "count":
+                valid &= sum(part.count(fields[0]) for part in parts) == int(fields[1])
+            elif tag == "order":
+                if len(fields) != int(fields[0]) + 2:
+                    raise AssertionError(f"malformed order row: {row}")
+                remaining = "\n".join(parts)
+                for anchor in fields[1:-1]:
+                    offset = remaining.find(anchor)
+                    if offset < 0:
+                        valid = False
+                        break
+                    remaining = remaining[offset + len(anchor):]
+            else:
+                raise AssertionError(f"unsupported boundary row: {row}")
+            if not valid:
+                failures.append(f"{case_id}/{region}: {fields[-1]}")
+        for region in region_ids:
+            if not any(row[0] != "region" and row[1] == region for row in rows):
+                failures.append(f"{case_id}/{region}: lost all relocated guards")
+    return failures
 
 
 class SumeragiSourceContractAssetCompactionTest(unittest.TestCase):
@@ -219,6 +414,26 @@ class SumeragiSourceContractAssetCompactionTest(unittest.TestCase):
             "LeaderWireConsumer",
         ):
             self.assertIn(source_id, support)
+        self.assertIn('"leader_wire_consumer" => Self::LeaderWireConsumer', support)
+        self.assertIn(
+            'SourceId::LeaderWireConsumer => include_str!("v2_leader_wire_consumer.rs").to_owned()',
+            support,
+        )
+        cases = dict(parse_cases(ASSET_PATH.read_text(encoding="utf-8")))
+        sources = {
+            source_id: (ROOT / relative_path).read_text(encoding="utf-8")
+            for source_id, relative_path in BOUNDARY_SOURCE_PATHS.items()
+        }
+        self.assertEqual(boundary_contract_failures(cases, sources), [])
+        for label, source_id, before, after in BOUNDARY_MUTATIONS:
+            with self.subTest(boundary=label):
+                self.assertEqual(sources[source_id].count(before), 1, label)
+                mutated = dict(sources)
+                mutated[source_id] = sources[source_id].replace(before, after, 1)
+                self.assertTrue(
+                    boundary_contract_failures(cases, mutated),
+                    f"source contracts accepted removal of {label}",
+                )
 
 
 if __name__ == "__main__":

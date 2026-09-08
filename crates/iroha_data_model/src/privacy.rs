@@ -579,7 +579,8 @@ impl Default for PrivacyProofWireMagicV1 {
     }
 }
 
-impl norito::core::NoritoSerialize for PrivacyProofWireMagicV1 {
+impl norito::core::NoritoSerialize for PrivacyProofWireMagicV1 {}
+impl norito::core::SerializePayload for PrivacyProofWireMagicV1 {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         writer.write_all(&self.0)?;
         Ok(())
@@ -720,7 +721,8 @@ impl AsRef<[u8; fastpq_isi::GOLDILOCKS_DIGEST384_BYTES_V1]> for GoldilocksDigest
     }
 }
 
-impl norito::core::NoritoSerialize for GoldilocksDigest384V1 {
+impl norito::core::NoritoSerialize for GoldilocksDigest384V1 {}
+impl norito::core::SerializePayload for GoldilocksDigest384V1 {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         writer.write_all(&self.0)?;
         Ok(())
@@ -794,8 +796,10 @@ impl norito::json::JsonDeserialize for GoldilocksDigest384V1 {
 }
 
 macro_rules! define_zk_ace_digest384 {
-    ($(#[$meta:meta])* $name:ident) => {
+    ($(#[$meta:meta])* $name:ident, $schema_name:literal) => {
         $(#[$meta])*
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(name = $schema_name)]
         #[derive(
             Clone,
             Copy,
@@ -858,11 +862,13 @@ macro_rules! define_zk_ace_digest384 {
         }
 
         impl norito::core::NoritoSerialize for $name {
+}
+impl norito::core::SerializePayload for $name {
             fn serialize(
                 &self,
                 writer: &mut norito::core::Encoder<'_>,
             ) -> Result<(), norito::core::Error> {
-                norito::core::NoritoSerialize::serialize(&self.0, writer)
+                norito::core::SerializePayload::serialize(&self.0, writer)
             }
 
             fn encoded_len_hint(&self) -> Option<usize> {
@@ -924,11 +930,13 @@ macro_rules! define_zk_ace_digest384 {
 
 define_zk_ace_digest384!(
     /// Canonical six-lane identity commitment used only by ZK-ACE.
-    PrivacyZkAceIdentityCommitmentV1
+    PrivacyZkAceIdentityCommitmentV1,
+    "iroha_data_model::privacy::PrivacyZkAceIdentityCommitmentV1"
 );
 define_zk_ace_digest384!(
     /// Canonical six-lane replay nullifier used only by ZK-ACE.
-    PrivacyZkAceReplayNullifierV1
+    PrivacyZkAceReplayNullifierV1,
+    "iroha_data_model::privacy::PrivacyZkAceReplayNullifierV1"
 );
 
 /// Pinned six-word commitment to [`PRIVACY_EXACT12_CATALOG_PREIMAGE_V1`].
@@ -1001,9 +1009,10 @@ impl Default for PrivacyExact12CatalogCommitmentV1 {
     }
 }
 
-impl norito::core::NoritoSerialize for PrivacyExact12CatalogCommitmentV1 {
+impl norito::core::NoritoSerialize for PrivacyExact12CatalogCommitmentV1 {}
+impl norito::core::SerializePayload for PrivacyExact12CatalogCommitmentV1 {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
-        norito::core::NoritoSerialize::serialize(&self.0, writer)
+        norito::core::SerializePayload::serialize(&self.0, writer)
     }
 
     fn encoded_len_hint(&self) -> Option<usize> {
@@ -1076,8 +1085,10 @@ impl norito::json::JsonDeserialize for PrivacyExact12CatalogCommitmentV1 {
 }
 
 macro_rules! define_privacy_digest {
-    ($(#[$meta:meta])* $name:ident) => {
+    ($(#[$meta:meta])* $name:ident, $schema_name:literal) => {
         $(#[$meta])*
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(name = $schema_name)]
         #[derive(
             Clone,
             Copy,
@@ -1143,192 +1154,239 @@ macro_rules! define_privacy_digest {
 }
 define_privacy_digest!(
     /// Digest of the governed public parameter set for a protocol.
-    PrivacyParameterDigestV1
+    PrivacyParameterDigestV1,
+    "iroha_data_model::privacy::PrivacyParameterDigestV1"
 );
 define_privacy_digest!(
     /// Digest of the exact native verifier key or verifier artifact.
-    PrivacyVerifierDigestV1
+    PrivacyVerifierDigestV1,
+    "iroha_data_model::privacy::PrivacyVerifierDigestV1"
 );
 define_privacy_digest!(
     /// Digest of the canonical public-statement schema.
-    PrivacyStatementSchemaDigestV1
+    PrivacyStatementSchemaDigestV1,
+    "iroha_data_model::privacy::PrivacyStatementSchemaDigestV1"
 );
 define_privacy_digest!(
     /// Digest of the exact native engine manifest.
-    PrivacyEngineManifestDigestV1
+    PrivacyEngineManifestDigestV1,
+    "iroha_data_model::privacy::PrivacyEngineManifestDigestV1"
 );
 define_privacy_digest!(
     /// Self-digest of one canonical committed Exact12 capability manifest.
-    PrivacyExact12CapabilityManifestDigestV1
+    PrivacyExact12CapabilityManifestDigestV1,
+    "iroha_data_model::privacy::PrivacyExact12CapabilityManifestDigestV1"
 );
 define_privacy_digest!(
     /// Digest of one final protocol security-reduction artifact.
-    PrivacySecurityReductionDigestV1
+    PrivacySecurityReductionDigestV1,
+    "iroha_data_model::privacy::PrivacySecurityReductionDigestV1"
 );
 define_privacy_digest!(
     /// Digest of one independently reviewed final protocol security claim.
-    PrivacySecurityClaimDigestV1
+    PrivacySecurityClaimDigestV1,
+    "iroha_data_model::privacy::PrivacySecurityClaimDigestV1"
 );
 define_privacy_digest!(
     /// Digest of the portable final Exact12 release manifest.
-    PrivacyExact12ReleaseManifestDigestV1
+    PrivacyExact12ReleaseManifestDigestV1,
+    "iroha_data_model::privacy::PrivacyExact12ReleaseManifestDigestV1"
 );
 define_privacy_digest!(
     /// Digest of the network-bound four-validator deployment qualification.
-    PrivacyExact12DeploymentQualificationDigestV1
+    PrivacyExact12DeploymentQualificationDigestV1,
+    "iroha_data_model::privacy::PrivacyExact12DeploymentQualificationDigestV1"
 );
 define_privacy_digest!(
     /// Digest of the complete independent audit and disposition bundle.
-    PrivacyAuditBundleDigestV1
+    PrivacyAuditBundleDigestV1,
+    "iroha_data_model::privacy::PrivacyAuditBundleDigestV1"
 );
 define_privacy_digest!(
     /// Digest of one immutable source, build, proof, SDK, hardware, audit, or deployment artifact.
-    PrivacyReleaseArtifactDigestV1
+    PrivacyReleaseArtifactDigestV1,
+    "iroha_data_model::privacy::PrivacyReleaseArtifactDigestV1"
 );
 define_privacy_digest!(
     /// Digest of a canonical protocol-specific public statement.
-    PrivacyStatementDigestV1
+    PrivacyStatementDigestV1,
+    "iroha_data_model::privacy::PrivacyStatementDigestV1"
 );
 define_privacy_digest!(
     /// Digest of the canonical transaction-intent projection bound by a privacy statement.
-    PrivacyTransactionIntentDigestV1
+    PrivacyTransactionIntentDigestV1,
+    "iroha_data_model::privacy::PrivacyTransactionIntentDigestV1"
 );
 define_privacy_digest!(
     /// Digest of the canonical chain, genesis, action, and governed-artifact binding
     /// consumed by a native privacy prover or verifier.
-    PrivacyNativeConsensusBindingDigestV1
+    PrivacyNativeConsensusBindingDigestV1,
+    "iroha_data_model::privacy::PrivacyNativeConsensusBindingDigestV1"
 );
 define_privacy_digest!(
     /// Digest of a canonical governance root publication.
-    PrivacyRootPublicationDigestV1
+    PrivacyRootPublicationDigestV1,
+    "iroha_data_model::privacy::PrivacyRootPublicationDigestV1"
 );
 define_privacy_digest!(
     /// Digest of one canonical governed Orchard pool bootstrap.
-    PrivacyOrchardPoolBootstrapDigestV1
+    PrivacyOrchardPoolBootstrapDigestV1,
+    "iroha_data_model::privacy::PrivacyOrchardPoolBootstrapDigestV1"
 );
 define_privacy_digest!(
     /// Digest of one canonical governed FCMP++, private-IVM, or PQ-MASP pool bootstrap.
-    PrivacyProofManagedPoolBootstrapDigestV1
+    PrivacyProofManagedPoolBootstrapDigestV1,
+    "iroha_data_model::privacy::PrivacyProofManagedPoolBootstrapDigestV1"
 );
 define_privacy_digest!(
     /// Ledger-only identifier of one complete canonical FCMP++ `(O, I, C)` output tuple.
-    PrivacyFcmpOutputIdV1
+    PrivacyFcmpOutputIdV1,
+    "iroha_data_model::privacy::PrivacyFcmpOutputIdV1"
 );
 define_privacy_digest!(
     /// Typed FCMP++ linkability key image `L` used by the durable replay registry.
-    PrivacyFcmpKeyImageV1
+    PrivacyFcmpKeyImageV1,
+    "iroha_data_model::privacy::PrivacyFcmpKeyImageV1"
 );
 define_privacy_digest!(
     /// Digest of a canonical PGC account bootstrap payload.
-    PrivacyPgcAccountBootstrapDigestV1
+    PrivacyPgcAccountBootstrapDigestV1,
+    "iroha_data_model::privacy::PrivacyPgcAccountBootstrapDigestV1"
 );
 define_privacy_digest!(
     /// Digest of exact canonical Anonymous PGC bootstrap proof bytes.
-    PrivacyPgcBootstrapProofDigestV1
+    PrivacyPgcBootstrapProofDigestV1,
+    "iroha_data_model::privacy::PrivacyPgcBootstrapProofDigestV1"
 );
 define_privacy_digest!(
     /// Fixed identifier of a governed privacy parameter set.
-    PrivacyParameterIdV1
+    PrivacyParameterIdV1,
+    "iroha_data_model::privacy::PrivacyParameterIdV1"
 );
 define_privacy_digest!(
     /// Canonical replay-prevention nullifier emitted by a privacy action.
-    PrivacyNullifierV1
+    PrivacyNullifierV1,
+    "iroha_data_model::privacy::PrivacyNullifierV1"
 );
 define_privacy_digest!(
     /// Canonical output or account commitment emitted by a privacy action.
-    PrivacyCommitmentV1
+    PrivacyCommitmentV1,
+    "iroha_data_model::privacy::PrivacyCommitmentV1"
 );
 define_privacy_digest!(
     /// Fixed identifier of a privacy pool or accumulator namespace.
-    PrivacyPoolIdV1
+    PrivacyPoolIdV1,
+    "iroha_data_model::privacy::PrivacyPoolIdV1"
 );
 define_privacy_digest!(
     /// Fixed identifier of a ZK-AMS admitted-identity registry.
-    PrivacyZkAmsRegistryIdV1
+    PrivacyZkAmsRegistryIdV1,
+    "iroha_data_model::privacy::PrivacyZkAmsRegistryIdV1"
 );
 define_privacy_digest!(
     /// Fixed identifier of a governed privacy policy.
-    PrivacyPolicyIdV1
+    PrivacyPolicyIdV1,
+    "iroha_data_model::privacy::PrivacyPolicyIdV1"
 );
 define_privacy_digest!(
     /// Digest of the governed contents of a privacy policy.
-    PrivacyPolicyDigestV1
+    PrivacyPolicyDigestV1,
+    "iroha_data_model::privacy::PrivacyPolicyDigestV1"
 );
 define_privacy_digest!(
     /// Self-digest of one complete authoritative ZK-ACE policy record.
-    PrivacyZkAcePolicyRecordDigestV1
+    PrivacyZkAcePolicyRecordDigestV1,
+    "iroha_data_model::privacy::PrivacyZkAcePolicyRecordDigestV1"
 );
 define_privacy_digest!(
     /// Digest of one canonical committed Bootle/Lantern issuer-policy record.
-    PrivacyBootleLanternIssuerPolicyDigestV1
+    PrivacyBootleLanternIssuerPolicyDigestV1,
+    "iroha_data_model::privacy::PrivacyBootleLanternIssuerPolicyDigestV1"
 );
 define_privacy_digest!(
     /// Fixed identifier of a credential or certificate issuer.
-    PrivacyIssuerIdV1
+    PrivacyIssuerIdV1,
+    "iroha_data_model::privacy::PrivacyIssuerIdV1"
 );
 define_privacy_digest!(
     /// Digest of one canonically encoded credential attribute.
-    PrivacyAttributeDigestV1
+    PrivacyAttributeDigestV1,
+    "iroha_data_model::privacy::PrivacyAttributeDigestV1"
 );
 define_privacy_digest!(
     /// Reader or wallet challenge bound into a credential presentation.
-    PrivacyChallengeV1
+    PrivacyChallengeV1,
+    "iroha_data_model::privacy::PrivacyChallengeV1"
 );
 define_privacy_digest!(
     /// Digest of an ISO 18013-5 session transcript.
-    PrivacySessionTranscriptDigestV1
+    PrivacySessionTranscriptDigestV1,
+    "iroha_data_model::privacy::PrivacySessionTranscriptDigestV1"
 );
 define_privacy_digest!(
     /// Public SHA-256 device-authentication digest `H_dev` in Vega Figure 9.
-    PrivacyVegaDeviceAuthenticationDigestV1
+    PrivacyVegaDeviceAuthenticationDigestV1,
+    "iroha_data_model::privacy::PrivacyVegaDeviceAuthenticationDigestV1"
 );
 define_privacy_digest!(
     /// Self-digest of one complete authoritative Vega issuer-key/policy revision.
-    PrivacyVegaIssuerRecordDigestV1
+    PrivacyVegaIssuerRecordDigestV1,
+    "iroha_data_model::privacy::PrivacyVegaIssuerRecordDigestV1"
 );
 define_privacy_digest!(
     /// Fixed cryptographic recipient identity used by an encrypted output.
-    PrivacyRecipientIdV1
+    PrivacyRecipientIdV1,
+    "iroha_data_model::privacy::PrivacyRecipientIdV1"
 );
 define_privacy_digest!(
     /// Fixed ephemeral public encryption key used by an encrypted output.
-    PrivacyEncryptionKeyV1
+    PrivacyEncryptionKeyV1,
+    "iroha_data_model::privacy::PrivacyEncryptionKeyV1"
 );
 define_privacy_digest!(
     /// Fixed identifier of a private IVM program.
-    PrivacyProgramIdV1
+    PrivacyProgramIdV1,
+    "iroha_data_model::privacy::PrivacyProgramIdV1"
 );
 define_privacy_digest!(
     /// Digest of the exact private IVM action selected by a statement.
-    PrivacyActionDigestV1
+    PrivacyActionDigestV1,
+    "iroha_data_model::privacy::PrivacyActionDigestV1"
 );
 define_privacy_digest!(
     /// Digest of a certificate subject public key.
-    PrivacyCertificateKeyDigestV1
+    PrivacyCertificateKeyDigestV1,
+    "iroha_data_model::privacy::PrivacyCertificateKeyDigestV1"
 );
 define_privacy_digest!(
     /// Digest of one canonical ordered RFC 5280 P-256/SHA-256 trust store.
-    PrivacyX509TrustStoreDigestV1
+    PrivacyX509TrustStoreDigestV1,
+    "iroha_data_model::privacy::PrivacyX509TrustStoreDigestV1"
 );
 define_privacy_digest!(
     /// Self-digest of one immutable authoritative X.509 trust-anchor revision.
-    PrivacyZkX509TrustAnchorRecordDigestV1
+    PrivacyZkX509TrustAnchorRecordDigestV1,
+    "iroha_data_model::privacy::PrivacyZkX509TrustAnchorRecordDigestV1"
 );
 define_privacy_digest!(
     /// Self-digest of one immutable authoritative X.509 certificate-policy revision.
-    PrivacyZkX509CertificatePolicyRecordDigestV1
+    PrivacyZkX509CertificatePolicyRecordDigestV1,
+    "iroha_data_model::privacy::PrivacyZkX509CertificatePolicyRecordDigestV1"
 );
 define_privacy_digest!(
     /// Domain-framed SHA-256 digest of one exact signed DER certificate-revocation list.
-    PrivacyX509CrlDerDigestV1
+    PrivacyX509CrlDerDigestV1,
+    "iroha_data_model::privacy::PrivacyX509CrlDerDigestV1"
 );
 define_privacy_digest!(
     /// Domain-framed SHA-256 digest of the exact SPKI that signs one governed CRL lineage.
-    PrivacyX509CrlIssuerSpkiDigestV1
+    PrivacyX509CrlIssuerSpkiDigestV1,
+    "iroha_data_model::privacy::PrivacyX509CrlIssuerSpkiDigestV1"
 );
 define_privacy_digest!(
     /// Self-digest of one immutable authoritative signed-CRL revision.
-    PrivacyZkX509CrlRecordDigestV1
+    PrivacyZkX509CrlRecordDigestV1,
+    "iroha_data_model::privacy::PrivacyZkX509CrlRecordDigestV1"
 );
 impl PrivacyX509CrlDerDigestV1 {
     /// Hash the complete exact signed DER CRL with the canonical X.509 frame.
@@ -1352,43 +1410,54 @@ impl PrivacyX509CrlIssuerSpkiDigestV1 {
 }
 define_privacy_digest!(
     /// Canonical commitment-tree or accumulator root.
-    PrivacyRootV1
+    PrivacyRootV1,
+    "iroha_data_model::privacy::PrivacyRootV1"
 );
 define_privacy_digest!(
     /// Digest of a post-quantum transaction authorization key.
-    PrivacyAuthorizationKeyDigestV1
+    PrivacyAuthorizationKeyDigestV1,
+    "iroha_data_model::privacy::PrivacyAuthorizationKeyDigestV1"
 );
 define_privacy_digest!(
     /// Digest of a post-quantum note-encryption key.
-    PrivacyNoteEncryptionKeyDigestV1
+    PrivacyNoteEncryptionKeyDigestV1,
+    "iroha_data_model::privacy::PrivacyNoteEncryptionKeyDigestV1"
 );
 define_privacy_digest!(
     /// Fixed 32-byte digest of one canonical Personhood Credential in ZK-AMS.
-    PrivacyZkAmsPhcHashV1
+    PrivacyZkAmsPhcHashV1,
+    "iroha_data_model::privacy::PrivacyZkAmsPhcHashV1"
 );
 define_privacy_digest!(
     /// Hidden subject commitment carried by a canonical ZK-AMS credential.
-    PrivacyZkAmsSubjectCommitmentV1
+    PrivacyZkAmsSubjectCommitmentV1,
+    "iroha_data_model::privacy::PrivacyZkAmsSubjectCommitmentV1"
 );
 define_privacy_digest!(
     /// Issuer-selected nonce making one canonical ZK-AMS credential unique.
-    PrivacyZkAmsCredentialNonceV1
+    PrivacyZkAmsCredentialNonceV1,
+    "iroha_data_model::privacy::PrivacyZkAmsCredentialNonceV1"
 );
 define_privacy_digest!(
     /// Digest of an authoritative ZK-AMS issuer-policy record.
-    PrivacyZkAmsIssuerPolicyRecordDigestV1
+    PrivacyZkAmsIssuerPolicyRecordDigestV1,
+    "iroha_data_model::privacy::PrivacyZkAmsIssuerPolicyRecordDigestV1"
 );
 define_privacy_digest!(
     /// Digest of an authoritative ZK-AMS registry snapshot record.
-    PrivacyZkAmsRegistryRecordDigestV1
+    PrivacyZkAmsRegistryRecordDigestV1,
+    "iroha_data_model::privacy::PrivacyZkAmsRegistryRecordDigestV1"
 );
 define_privacy_digest!(
     /// Digest of one canonical governed ZK-AMS registry bootstrap.
-    PrivacyZkAmsRegistryBootstrapDigestV1
+    PrivacyZkAmsRegistryBootstrapDigestV1,
+    "iroha_data_model::privacy::PrivacyZkAmsRegistryBootstrapDigestV1"
 );
 macro_rules! define_ristretto255_encoding {
-    ($(#[$meta:meta])* $name:ident) => {
+    ($(#[$meta:meta])* $name:ident, $schema_name:literal) => {
         $(#[$meta])*
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(name = $schema_name)]
         #[derive(
             Clone,
             Copy,
@@ -1437,11 +1506,13 @@ macro_rules! define_ristretto255_encoding {
 }
 define_ristretto255_encoding!(
     /// Canonical compressed Ristretto255 ZK-AMS seed public key.
-    PrivacyZkAmsSeedPublicKeyV1
+    PrivacyZkAmsSeedPublicKeyV1,
+    "iroha_data_model::privacy::PrivacyZkAmsSeedPublicKeyV1"
 );
 define_ristretto255_encoding!(
     /// Canonical compressed Ristretto255 MLSAGS key image.
-    PrivacyZkAmsKeyImageV1
+    PrivacyZkAmsKeyImageV1,
+    "iroha_data_model::privacy::PrivacyZkAmsKeyImageV1"
 );
 // Keep the implementation in this public module: textual includes improve
 // navigation without changing path-derived Norito identities.
@@ -1454,7 +1525,7 @@ include!("privacy/credentials.rs");
 include!("privacy/statements.rs");
 include!("privacy/proofs.rs");
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     include!("privacy/tests/protocol_and_proofs.rs");
     include!("privacy/tests/capability_manifest.rs");
     include!("privacy/tests/release_manifest.rs");

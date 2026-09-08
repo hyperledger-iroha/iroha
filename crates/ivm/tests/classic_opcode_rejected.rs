@@ -1,3 +1,4 @@
+//! Admission and runtime rejection of retired or unassigned instruction words.
 use ivm::{IVM, VMError, encoding};
 mod common;
 use common::assemble;
@@ -40,13 +41,15 @@ fn classic_opcode_runtime_rejected_after_manual_load() {
 fn unassigned_crypto_slots_are_rejected_by_admission_and_runtime() {
     for opcode in 0x8B..=0x8F {
         let word = encoding::wide::encode_rr(opcode, 3, 1, 2);
+        // InvalidOpcode identifies the rejected word's low 16 bits on both paths.
+        let invalid_word = (word & 0xFFFF) as u16;
         let mut bytes = word.to_le_bytes().to_vec();
         bytes.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
         let program = assemble(&bytes);
         let mut admitted = IVM::new(1_000);
         assert_eq!(
             admitted.load_program(&program),
-            Err(VMError::InvalidOpcode(u16::from(opcode))),
+            Err(VMError::InvalidOpcode(invalid_word)),
             "unassigned opcode 0x{opcode:02x} passed artifact admission"
         );
 
@@ -55,7 +58,7 @@ fn unassigned_crypto_slots_are_rejected_by_admission_and_runtime() {
         raw.pc = 0;
         assert_eq!(
             raw.run(),
-            Err(VMError::InvalidOpcode(u16::from(opcode))),
+            Err(VMError::InvalidOpcode(invalid_word)),
             "unassigned opcode 0x{opcode:02x} executed after manual loading"
         );
     }

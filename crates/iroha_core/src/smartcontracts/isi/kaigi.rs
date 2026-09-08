@@ -1,9 +1,11 @@
 //! Host-side execution of Kaigi instruction family.
 use crate::{
     smartcontracts::limits,
-    state::{StateTransaction, World, WorldReadOnly},
+    state::{StateReadOnly, StateTransaction, World, WorldReadOnly},
 };
 use iroha_crypto::Hash;
+#[cfg(test)]
+use iroha_data_model::kaigi::scalar::KaigiAuthorizationScalarV1;
 use iroha_data_model::{
     HasMetadata, Identifiable,
     account::rekey::{AccountAlias, AccountRekeyTransitionProvenance},
@@ -36,14 +38,19 @@ use iroha_data_model::{
     prelude::{AccountId, Domain, DomainId, Json, Name},
     query::error::FindError,
 };
+use kaigi_zk::authorization_v1::KaigiAuthorizationActionV1;
 use mv::storage::StorageReadOnly;
-use privacy::{HostPrivacyArtifacts, PrivacyArtifacts};
+use privacy::PrivacyArtifacts;
+use privacy::authorization_v1::{
+    context_from_ledger_v1, ensure_action_capacity_v1, original_participant_v1,
+};
 use std::{
     borrow::Borrow,
     collections::{BTreeMap, BTreeSet},
     convert::TryFrom,
 };
 mod privacy;
+mod storage_reservation_v1;
 
 type KaigiAccountDependencyLocator = (u8, DomainId, Name);
 
@@ -136,13 +143,19 @@ impl ExecuteKaigiAuthorized for CreateKaigi {
             }
             state_transaction.world.account(billing_account)?;
         }
+        let key = metadata_key(template.id())?;
+        let domain_id = template.id().domain_id.clone();
+        if state_transaction
+            .world
+            .domain(&domain_id)?
+            .metadata()
+            .contains(&key)
+        {
+            return Err(Error::InvariantViolation("Kaigi already exists".into()));
+        }
         match template.privacy_mode {
             KaigiPrivacyMode::Transparent => {
                 privacy::ensure_transparent_payload(&PrivacyArtifacts {
-                    #[cfg(feature = "kaigi_privacy_mocks")]
-                    subject: authority,
-                    #[cfg(feature = "kaigi_privacy_mocks")]
-                    host: template.host(),
                     commitment: commitment.as_ref(),
                     nullifier: nullifier.as_ref(),
                     roster_root: roster_root.as_ref(),
@@ -150,35 +163,33 @@ impl ExecuteKaigiAuthorized for CreateKaigi {
                 })?;
             }
             KaigiPrivacyMode::ZkRosterV1 => {
-                let has_privacy_artifacts = commitment.is_some()
-                    || nullifier.is_some()
-                    || roster_root.is_some()
-                    || proof.is_some();
-                if has_privacy_artifacts {
-                    let host_artifacts = HostPrivacyArtifacts {
+                let expected_root = KaigiRecord::compute_roster_root(&[]);
+                ensure_action_capacity_v1(0, 0, KaigiAuthorizationActionV1::HostCreate)?;
+                let context = context_from_ledger_v1(
+                    *state_transaction.network_id(),
+                    template.id(),
+                    template.host(),
+                    template.host(),
+                    0,
+                    KaigiAuthorizationActionV1::HostCreate,
+                    &expected_root,
+                )?;
+                privacy::verify_authorization(
+                    state_transaction,
+                    &PrivacyArtifacts {
                         commitment: commitment.as_ref(),
                         nullifier: nullifier.as_ref(),
                         roster_root: roster_root.as_ref(),
                         proof: proof.as_deref(),
-                    };
-                    let expected_root = kaigi_zk::empty_roster_root_hash();
-                    privacy::verify_host_create(
-                        state_transaction,
-                        &host_artifacts,
-                        &expected_root,
-                    )?;
-                }
+                    },
+                    &context,
+                    None,
+                )?;
             }
         }
         if let Some(manifest) = template.relay_manifest() {
             validate_relay_manifest(manifest)?;
             ensure_manifest_relays_registered(state_transaction, manifest)?;
-        }
-        let key = metadata_key(template.id())?;
-        let domain_id = template.id().domain_id.clone();
-        let domain = state_transaction.world.domain_mut(&domain_id)?;
-        if domain.metadata().contains(&key) {
-            return Err(Error::InvariantViolation("Kaigi already exists".into()));
         }
         let creation_ms = state_transaction._curr_block.creation_time().as_millis();
         let created_at_ms = u64::try_from(creation_ms).map_err(|_| {
@@ -361,10 +372,6 @@ impl ExecuteKaigiAuthorized for EndKaigi {
                 match record.privacy_mode {
                     KaigiPrivacyMode::Transparent => {
                         privacy::ensure_transparent_payload(&PrivacyArtifacts {
-                            #[cfg(feature = "kaigi_privacy_mocks")]
-                            subject: authority,
-                            #[cfg(feature = "kaigi_privacy_mocks")]
-                            host: &record.host,
                             commitment: commitment.as_ref(),
                             nullifier: nullifier.as_ref(),
                             roster_root: roster_root.as_ref(),
@@ -372,45 +379,41 @@ impl ExecuteKaigiAuthorized for EndKaigi {
                         })?;
                     }
                     KaigiPrivacyMode::ZkRosterV1 => {
-                        if let Some(stored_commitment) = record.host_commitment.as_ref() {
-                            let provided_nullifier = nullifier
-                                .as_ref()
-                                .ok_or_else(|| privacy_error("privacy mode requires nullifier"))?;
-                            if record.nullifier_log.len() >= KAIGI_MAX_NULLIFIER_LOG_ENTRIES_V1 {
-                                return Err(privacy_error(format!(
-                                    "Kaigi nullifier log has reached its {KAIGI_MAX_NULLIFIER_LOG_ENTRIES_V1}-entry limit"
-                                )));
-                            }
-                            let host_artifacts = HostPrivacyArtifacts {
+                        let stored = record.host_commitment.as_ref().ok_or_else(|| {
+                            privacy_error("private call requires its original host commitment")
+                        })?;
+                        let provided_nullifier = nullifier
+                            .as_ref()
+                            .ok_or_else(|| privacy_error("privacy mode requires nullifier"))?;
+                        if record.has_nullifier(provided_nullifier) {
+                            return Err(privacy_error("nullifier already used"));
+                        }
+                        ensure_action_capacity_v1(
+                            record.nullifier_log.len(),
+                            record.roster_commitments.len(),
+                            KaigiAuthorizationActionV1::HostEnd,
+                        )?;
+                        let context = context_from_ledger_v1(
+                            *stx.network_id(),
+                            &record.id,
+                            &record.host,
+                            &record.host,
+                            0,
+                            KaigiAuthorizationActionV1::HostEnd,
+                            &record.roster_root(),
+                        )?;
+                        privacy::verify_authorization(
+                            stx,
+                            &PrivacyArtifacts {
                                 commitment: commitment.as_ref(),
                                 nullifier: Some(provided_nullifier),
                                 roster_root: roster_root.as_ref(),
                                 proof: proof.as_deref(),
-                            };
-                            let expected_root = record.roster_root();
-                            privacy::verify_host_action(
-                                stx,
-                                &host_artifacts,
-                                &expected_root,
-                                stored_commitment,
-                            )?;
-                            if record.has_nullifier(provided_nullifier) {
-                                return Err(Error::InvalidParameter(
-                                    InvalidParameterError::SmartContract(
-                                        "nullifier already used".into(),
-                                    ),
-                                ));
-                            }
-                            record.push_nullifier(provided_nullifier.clone());
-                        } else if commitment.is_some()
-                            || nullifier.is_some()
-                            || roster_root.is_some()
-                            || proof.is_some()
-                        {
-                            return Err(privacy_error(
-                                "privacy host artifacts require a stored host commitment",
-                            ));
-                        }
+                            },
+                            &context,
+                            Some(&stored.commitment),
+                        )?;
+                        record.push_nullifier(provided_nullifier.clone());
                     }
                 }
                 record.status = KaigiStatus::Ended;
@@ -498,18 +501,14 @@ impl Execute for RecordKaigiUsage {
                         if record.usage_commitments.contains(&commitment) {
                             return Err(usage_error("Kaigi usage commitment already recorded"));
                         }
-                        let segment_index = u64::from(record.segments_recorded);
-                        let expected = kaigi_zk::compute_usage_commitment_hash(
+                        privacy::verify_usage_commitment(
+                            stx,
+                            record,
                             duration_ms,
                             billed_gas,
-                            segment_index,
-                        );
-                        if expected != commitment {
-                            return Err(privacy_error(
-                                "usage commitment does not match payload parameters",
-                            ));
-                        }
-                        privacy::verify_usage_commitment(stx, proof.as_deref(), &commitment)?;
+                            proof.as_deref(),
+                            &commitment,
+                        )?;
                         record.push_usage_commitment(commitment);
                     }
                 }
@@ -1052,9 +1051,7 @@ fn store_record_with_previous_dependencies(
     validate_kaigi_record_v1(record).map_err(|message| {
         Error::InvalidParameter(InvalidParameterError::SmartContract(message))
     })?;
-    let mut stored_record = record.clone();
-    clear_ledger_visible_privacy_hints(&mut stored_record);
-    let value = Json::try_new(stored_record).map_err(|err| Error::Conversion(err.to_string()))?;
+    let value = Json::try_new(record.clone()).map_err(|err| Error::Conversion(err.to_string()))?;
     ensure_kaigi_json_size(&value, KAIGI_RECORD_MAX_JSON_BYTES_V1, "Kaigi call record").map_err(
         |message| Error::InvalidParameter(InvalidParameterError::SmartContract(message)),
     )?;
@@ -1064,6 +1061,7 @@ fn store_record_with_previous_dependencies(
         "max_metadata_value_bytes",
         limits::DEFAULT_JSON_LIMIT,
     )?;
+    storage_reservation_v1::enforce(state_transaction, record, &value)?;
     let previous_dependencies = if let Some(previous) = known_previous_dependencies {
         previous.clone()
     } else {
@@ -1116,35 +1114,6 @@ pub(crate) fn store_kaigi_record_for_testing(
     store_record(state_transaction, &domain_id, key, record)
 }
 
-fn clear_ledger_visible_privacy_hints(record: &mut KaigiRecord) {
-    if let Some(host_commitment) = record.host_commitment.as_mut() {
-        host_commitment.alias_tag = None;
-    }
-    for commitment in &mut record.roster_commitments {
-        commitment.alias_tag = None;
-    }
-    for nullifier in &mut record.nullifier_log {
-        nullifier.issued_at_ms = 0;
-    }
-}
-fn validate_stored_kaigi_privacy_hints(record: &KaigiRecord) -> Result<(), String> {
-    let retains_alias_tag = record
-        .host_commitment
-        .as_ref()
-        .is_some_and(|commitment| commitment.alias_tag.is_some())
-        || record
-            .roster_commitments
-            .iter()
-            .any(|commitment| commitment.alias_tag.is_some());
-    let retains_nullifier_timestamp = record
-        .nullifier_log
-        .iter()
-        .any(|nullifier| nullifier.issued_at_ms != 0);
-    if retains_alias_tag || retains_nullifier_timestamp {
-        return Err("stored Kaigi record retains forbidden clear privacy hints".into());
-    }
-    Ok(())
-}
 fn ensure_kaigi_json_size(value: &Json, limit: usize, label: &str) -> Result<(), String> {
     ensure_kaigi_json_len(value.as_ref().len(), limit, label)
 }
@@ -1255,6 +1224,7 @@ fn validate_kaigi_record_v1(record: &KaigiRecord) -> Result<(), String> {
                 || !record.roster_commitments.is_empty()
                 || !record.nullifier_log.is_empty()
                 || !record.usage_commitments.is_empty()
+                || !record.private_participation.entries().is_empty()
             {
                 return Err(
                     "transparent Kaigi record must not retain private roster artifacts".into(),
@@ -1262,6 +1232,47 @@ fn validate_kaigi_record_v1(record: &KaigiRecord) -> Result<(), String> {
             }
         }
         KaigiPrivacyMode::ZkRosterV1 => {
+            let host_commitment = record
+                .host_commitment
+                .as_ref()
+                .ok_or("private Kaigi record requires its original host commitment")?;
+            if record.nullifier_log.is_empty() {
+                return Err("private Kaigi record requires host-create nullifier".into());
+            }
+            if record
+                .roster_commitments
+                .iter()
+                .any(|entry| entry.commitment == host_commitment.commitment)
+                || record
+                    .private_participation
+                    .entries()
+                    .iter()
+                    .any(|entry| entry.original_account() == &record.host)
+            {
+                return Err("host must not own participant membership".into());
+            }
+            record
+                .private_participation
+                .validate_against_roster(
+                    &record
+                        .roster_commitments
+                        .iter()
+                        .map(|entry| entry.commitment)
+                        .collect::<Vec<_>>(),
+                )
+                .map_err(|error| error.to_string())?;
+            if record.status == KaigiStatus::Active
+                && record
+                    .nullifier_log
+                    .len()
+                    .checked_add(record.roster_commitments.len())
+                    .and_then(|count| count.checked_add(1))
+                    .is_none_or(|count| count > KAIGI_MAX_NULLIFIER_LOG_ENTRIES_V1)
+            {
+                return Err(
+                    "private Kaigi history must reserve every live leave and host end".into(),
+                );
+            }
             if !record.participants.is_empty() {
                 return Err(
                     "private Kaigi record must not retain transparent participant IDs".into(),
@@ -1317,11 +1328,6 @@ fn decode_stored_kaigi_record(
         ));
     }
     validate_kaigi_record_v1(&record).map_err(|message| {
-        Error::InvariantViolation(
-            format!("stored Kaigi record violates V1 constraints: {message}").into(),
-        )
-    })?;
-    validate_stored_kaigi_privacy_hints(&record).map_err(|message| {
         Error::InvariantViolation(
             format!("stored Kaigi record violates V1 constraints: {message}").into(),
         )
@@ -1401,6 +1407,13 @@ fn active_call_dependency_accounts(record: &KaigiRecord) -> BTreeSet<AccountId> 
     }
     let mut accounts = BTreeSet::from([record.host.clone()]);
     accounts.extend(record.participants.iter().cloned());
+    accounts.extend(
+        record
+            .private_participation
+            .entries()
+            .iter()
+            .map(|entry| entry.original_account().clone()),
+    );
     if let Some(manifest) = record.relay_manifest.as_ref() {
         accounts.extend(manifest.hops.iter().map(|hop| hop.relay_id.clone()));
     }
@@ -2112,6 +2125,29 @@ fn record_has_participant_in_active_lineage(
     account: &AccountId,
     graph: &PersistedKaigiRekeyGraph,
 ) -> Result<bool, Error> {
+    if record.privacy_mode == KaigiPrivacyMode::ZkRosterV1 {
+        let component = persisted_kaigi_rekey_component(&graph.neighbours, account);
+        let mut owners = record
+            .private_participation
+            .entries()
+            .iter()
+            .filter(|entry| component.contains(entry.original_account()));
+        let first = owners.next();
+        if owners.next().is_some() {
+            return Err(privacy_error(
+                "multiple retained Kaigi subjects share one account rekey lineage",
+            ));
+        }
+        return match first.filter(|entry| entry.active_commitment().is_some()) {
+            Some(entry) => accounts_share_active_lineage_with_graph(
+                state_transaction,
+                entry.original_account(),
+                account,
+                graph,
+            ),
+            None => Ok(false),
+        };
+    }
     Ok(
         !record_participant_indexes_in_active_lineage(state_transaction, record, account, graph)?
             .is_empty(),
@@ -2304,6 +2340,11 @@ where
             }
         }
     }
+    if rebuilt.len() > KAIGI_RELAY_REGISTRY_MAX_ENTRIES_V1 {
+        return Err(privacy_error(
+            "retained Kaigi relay registry exceeds the final V1 capacity",
+        ));
+    }
     Ok(rebuilt)
 }
 
@@ -2470,13 +2511,55 @@ pub(crate) fn validate_rebuilt_kaigi_account_dependencies_at(
     if actual != expected {
         return Err("Kaigi account-dependency index disagrees with authoritative metadata".into());
     }
+    for domain in world.domains_iter() {
+        for (key, value) in domain
+            .metadata()
+            .iter()
+            .filter(|(key, _)| key.as_ref().starts_with("kaigi__"))
+        {
+            let record = decode_stored_kaigi_record(domain.id(), key, value)
+                .map_err(|error| error.to_string())?;
+            validate_private_participation_lineages(world, &record)
+                .map_err(|error| error.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_private_participation_lineages(
+    world: &impl WorldReadOnly,
+    record: &KaigiRecord,
+) -> Result<(), Error> {
+    if record.status != KaigiStatus::Active || record.privacy_mode != KaigiPrivacyMode::ZkRosterV1 {
+        return Ok(());
+    }
+    let mut endpoints = BTreeSet::new();
+    for owner in std::iter::once(&record.host).chain(
+        record
+            .private_participation
+            .entries()
+            .iter()
+            .map(|entry| entry.original_account()),
+    ) {
+        // Independent components get independent work bounds. Combining all
+        // participants here would reject valid calls after unrelated rekeys.
+        let graph = persisted_kaigi_rekey_graph(world, [owner.clone()])?;
+        let endpoint =
+            resolve_persisted_kaigi_rekey_successor(world, owner, &graph)?.ok_or_else(|| {
+                privacy_error("active private Kaigi owner has no registered successor")
+            })?;
+        if !endpoints.insert(endpoint) {
+            return Err(privacy_error(
+                "private Kaigi host or retained subjects share one rekey lineage",
+            ));
+        }
+    }
     Ok(())
 }
 
 /// Rebuild the derived relay-to-domain index from authoritative domain metadata.
 ///
-/// The first-release limit is an admission constraint, not a restore constraint:
-/// valid legacy over-cap state remains loadable so relays can retire it.
+/// Restored registry membership must satisfy the same final V1 bounds as admission.
 ///
 /// # Errors
 ///
@@ -2970,32 +3053,28 @@ fn process_join(
     participant: &AccountId,
     mut commitment: Option<KaigiParticipantCommitment>,
     mut nullifier: Option<KaigiParticipantNullifier>,
-    mut roster_root: Option<iroha_crypto::Hash>,
+    roster_root: Option<iroha_crypto::Hash>,
     proof: Option<&[u8]>,
 ) -> Result<AccessGrant, Error> {
     ensure_kaigi_active(record)?;
     let authority = authorization.signed_account();
-    let rekey_graph = persisted_kaigi_rekey_graph(
-        &state_transaction.world,
-        [record.host.clone(), participant.clone(), authority.clone()],
-    )?;
-    if accounts_share_active_lineage_with_graph(
-        state_transaction,
-        &record.host,
-        participant,
-        &rekey_graph,
-    )? {
-        return Err(Error::InvalidParameter(
-            InvalidParameterError::SmartContract("host is already part of the call".into()),
-        ));
-    }
     match record.privacy_mode {
         KaigiPrivacyMode::Transparent => {
+            let rekey_graph = persisted_kaigi_rekey_graph(
+                &state_transaction.world,
+                [record.host.clone(), participant.clone(), authority.clone()],
+            )?;
+            if accounts_share_active_lineage_with_graph(
+                state_transaction,
+                &record.host,
+                participant,
+                &rekey_graph,
+            )? {
+                return Err(Error::InvalidParameter(
+                    InvalidParameterError::SmartContract("host is already part of the call".into()),
+                ));
+            }
             privacy::ensure_transparent_payload(&PrivacyArtifacts {
-                #[cfg(feature = "kaigi_privacy_mocks")]
-                subject: authority,
-                #[cfg(feature = "kaigi_privacy_mocks")]
-                host: &record.host,
                 commitment: commitment.as_ref(),
                 nullifier: nullifier.as_ref(),
                 roster_root: roster_root.as_ref(),
@@ -3035,43 +3114,29 @@ fn process_join(
             Ok(AccessGrant::Default)
         }
         KaigiPrivacyMode::ZkRosterV1 => {
-            let proof_subject = authorization.signed_account();
-            if proof_subject != participant {
-                return Err(unauthorized(
-                    "signed privacy-mode joins must be submitted by the participant",
-                ));
-            }
+            let original = original_participant_v1(
+                state_transaction,
+                &record.private_participation,
+                &record.host,
+                authority,
+                participant,
+                KaigiAuthorizationActionV1::Join,
+            )?;
+            let sequence = record
+                .private_participation
+                .prepare_join(&original)
+                .map_err(|error| privacy_error(error.to_string()))?;
             let commitment = commitment
                 .take()
                 .ok_or_else(|| privacy_error("privacy mode requires commitment"))?;
             let nullifier = nullifier
                 .take()
                 .ok_or_else(|| privacy_error("privacy mode requires nullifier"))?;
-            let proof_bytes = proof.ok_or_else(|| privacy_error("privacy mode requires proof"))?;
-            let provided_root = roster_root
-                .take()
-                .ok_or_else(|| privacy_error("privacy mode requires roster root"))?;
-            let artifacts = PrivacyArtifacts {
-                #[cfg(feature = "kaigi_privacy_mocks")]
-                subject: proof_subject,
-                #[cfg(feature = "kaigi_privacy_mocks")]
-                host: &record.host,
-                commitment: Some(&commitment),
-                nullifier: Some(&nullifier),
-                roster_root: Some(&provided_root),
-                proof: Some(proof_bytes),
-            };
-            let expected_root = record.roster_root();
-            privacy::verify_roster_join(state_transaction, &artifacts, &expected_root)?;
             if record.has_commitment(&commitment) {
-                return Err(Error::InvalidParameter(
-                    InvalidParameterError::SmartContract("commitment already registered".into()),
-                ));
+                return Err(privacy_error("commitment already registered"));
             }
             if record.has_nullifier(&nullifier) {
-                return Err(Error::InvalidParameter(
-                    InvalidParameterError::SmartContract("nullifier already used".into()),
-                ));
+                return Err(privacy_error("nullifier already used"));
             }
             let participant_limit = record
                 .max_participants
@@ -3079,15 +3144,37 @@ fn process_join(
                     usize::try_from(limit).unwrap_or(usize::MAX)
                 });
             if record.roster_commitments.len() >= participant_limit {
-                return Err(Error::InvalidParameter(
-                    InvalidParameterError::SmartContract("participant limit reached".into()),
-                ));
+                return Err(privacy_error("participant limit reached"));
             }
-            if record.nullifier_log.len() >= KAIGI_MAX_NULLIFIER_LOG_ENTRIES_V1 {
-                return Err(privacy_error(format!(
-                    "Kaigi nullifier log has reached its {KAIGI_MAX_NULLIFIER_LOG_ENTRIES_V1}-entry limit"
-                )));
-            }
+            ensure_action_capacity_v1(
+                record.nullifier_log.len(),
+                record.roster_commitments.len(),
+                KaigiAuthorizationActionV1::Join,
+            )?;
+            let context = context_from_ledger_v1(
+                *state_transaction.network_id(),
+                &record.id,
+                &record.host,
+                &original,
+                sequence,
+                KaigiAuthorizationActionV1::Join,
+                &record.roster_root(),
+            )?;
+            privacy::verify_authorization(
+                state_transaction,
+                &PrivacyArtifacts {
+                    commitment: Some(&commitment),
+                    nullifier: Some(&nullifier),
+                    roster_root: roster_root.as_ref(),
+                    proof,
+                },
+                &context,
+                None,
+            )?;
+            record
+                .private_participation
+                .commit_join(&original, sequence, commitment.commitment)
+                .map_err(|error| privacy_error(error.to_string()))?;
             record.push_commitment(commitment);
             record.push_nullifier(nullifier);
             Ok(AccessGrant::PrivacyAuthorized)
@@ -3102,21 +3189,17 @@ fn process_leave(
     participant: &AccountId,
     mut commitment: Option<KaigiParticipantCommitment>,
     mut nullifier: Option<KaigiParticipantNullifier>,
-    mut roster_root: Option<iroha_crypto::Hash>,
+    roster_root: Option<iroha_crypto::Hash>,
     proof: Option<&[u8]>,
 ) -> Result<AccessGrant, Error> {
     ensure_kaigi_active(record)?;
-    let rekey_graph = persisted_kaigi_rekey_graph(
-        &state_transaction.world,
-        [record.host.clone(), participant.clone(), authority.clone()],
-    )?;
     match record.privacy_mode {
         KaigiPrivacyMode::Transparent => {
+            let rekey_graph = persisted_kaigi_rekey_graph(
+                &state_transaction.world,
+                [record.host.clone(), participant.clone(), authority.clone()],
+            )?;
             privacy::ensure_transparent_payload(&PrivacyArtifacts {
-                #[cfg(feature = "kaigi_privacy_mocks")]
-                subject: authority,
-                #[cfg(feature = "kaigi_privacy_mocks")]
-                host: &record.host,
                 commitment: commitment.as_ref(),
                 nullifier: nullifier.as_ref(),
                 roster_root: roster_root.as_ref(),
@@ -3170,23 +3253,72 @@ fn process_leave(
             Ok(AccessGrant::Default)
         }
         KaigiPrivacyMode::ZkRosterV1 => {
-            let _ = (
+            let original = original_participant_v1(
                 state_transaction,
+                &record.private_participation,
+                &record.host,
                 authority,
                 participant,
-                commitment.take(),
-                nullifier.take(),
-                roster_root.take(),
-                proof,
-            );
-            Err(privacy_error(
-                "privacy-mode Kaigi leave is off-chain only; use local session disconnect or host end",
-            ))
+                KaigiAuthorizationActionV1::Leave,
+            )?;
+            let commitment = commitment
+                .take()
+                .ok_or_else(|| privacy_error("privacy mode requires commitment"))?;
+            let nullifier = nullifier
+                .take()
+                .ok_or_else(|| privacy_error("privacy mode requires nullifier"))?;
+            let sequence = record
+                .private_participation
+                .prepare_leave(&original, commitment.commitment)
+                .map_err(|error| privacy_error(error.to_string()))?;
+            if !record.has_commitment(&commitment) {
+                return Err(privacy_error("stored participation is absent from roster"));
+            }
+            if record.has_nullifier(&nullifier) {
+                return Err(privacy_error("nullifier already used"));
+            }
+            ensure_action_capacity_v1(
+                record.nullifier_log.len(),
+                record.roster_commitments.len(),
+                KaigiAuthorizationActionV1::Leave,
+            )?;
+            let context = context_from_ledger_v1(
+                *state_transaction.network_id(),
+                &record.id,
+                &record.host,
+                &original,
+                sequence,
+                KaigiAuthorizationActionV1::Leave,
+                &record.roster_root(),
+            )?;
+            privacy::verify_authorization(
+                state_transaction,
+                &PrivacyArtifacts {
+                    commitment: Some(&commitment),
+                    nullifier: Some(&nullifier),
+                    roster_root: roster_root.as_ref(),
+                    proof,
+                },
+                &context,
+                Some(&commitment.commitment),
+            )?;
+            record
+                .private_participation
+                .commit_leave(&original, sequence, commitment.commitment)
+                .map_err(|error| privacy_error(error.to_string()))?;
+            if !record.remove_commitment(&commitment) {
+                return Err(privacy_error(
+                    "authorized commitment disappeared from roster",
+                ));
+            }
+            record.push_nullifier(nullifier);
+            Ok(AccessGrant::PrivacyAuthorized)
         }
     }
 }
 #[cfg(test)]
 mod tests {
+    use super::privacy::proof_fixture_v1::{AuthorizationFixtureV1, authorization_fixture_v1};
     use super::*;
     use crate::{
         kura::Kura,
@@ -3289,22 +3421,24 @@ mod tests {
         );
 
         let hashes = (0..=KAIGI_MAX_NULLIFIER_LOG_ENTRIES_V1)
-            .map(|index| Hash::new(index.to_le_bytes()))
+            .map(|index| test_scalar(u64::try_from(index).unwrap()))
             .collect::<Vec<_>>();
         let (mut private, _, _) = new_record(KaigiPrivacyMode::ZkRosterV1);
         private.roster_commitments = hashes[..KAIGI_MAX_PARTICIPANTS_V1]
             .iter()
             .cloned()
-            .map(|commitment| KaigiParticipantCommitment {
-                commitment,
-                alias_tag: None,
-            })
+            .map(|commitment| KaigiParticipantCommitment { commitment })
             .collect();
         private.roster_root = KaigiRecord::compute_roster_root(&private.roster_commitments);
+        for (account, commitment) in participant_ids.iter().zip(&private.roster_commitments) {
+            private
+                .private_participation
+                .commit_join(account, 1, commitment.commitment)
+                .unwrap();
+        }
         validate_kaigi_record_v1(&private).expect("exact private roster limit is valid");
         private.roster_commitments.push(KaigiParticipantCommitment {
             commitment: hashes[KAIGI_MAX_PARTICIPANTS_V1].clone(),
-            alias_tag: None,
         });
         assert!(
             validate_kaigi_record_v1(&private)
@@ -3316,15 +3450,13 @@ mod tests {
         private.nullifier_log = hashes[..KAIGI_MAX_NULLIFIER_LOG_ENTRIES_V1]
             .iter()
             .cloned()
-            .map(|digest| KaigiParticipantNullifier {
-                digest,
-                issued_at_ms: 0,
-            })
+            .map(|digest| KaigiParticipantNullifier { digest })
             .collect();
-        validate_kaigi_record_v1(&private).expect("exact nullifier limit is valid");
+        private.status = KaigiStatus::Ended;
+        private.ended_at_ms = Some(private.created_at_ms);
+        validate_kaigi_record_v1(&private).expect("exact terminal nullifier limit is valid");
         private.nullifier_log.push(KaigiParticipantNullifier {
             digest: hashes[KAIGI_MAX_NULLIFIER_LOG_ENTRIES_V1].clone(),
-            issued_at_ms: 0,
         });
         assert!(
             validate_kaigi_record_v1(&private)
@@ -3428,7 +3560,7 @@ mod tests {
                 0 => transparent.host_commitment = Some(sample_commitment()),
                 1 => transparent.push_commitment(sample_commitment()),
                 2 => transparent.push_nullifier(sample_nullifier(0xB1)),
-                3 => transparent.push_usage_commitment(Hash::new(b"transparent usage artifact")),
+                3 => transparent.push_usage_commitment(test_scalar(55)),
                 _ => unreachable!("bounded artifact cases"),
             }
             assert!(
@@ -3496,7 +3628,7 @@ mod tests {
     }
     #[test]
     fn kaigi_record_v1_rejects_duplicate_retained_identifiers() {
-        let duplicate = Hash::new(b"duplicate Kaigi retained identifier");
+        let duplicate = test_scalar(66);
         let (mut record, _, participant) = new_record(KaigiPrivacyMode::Transparent);
         record.participants = vec![participant.clone(), participant];
         assert!(
@@ -3509,11 +3641,9 @@ mod tests {
         record.roster_commitments = vec![
             KaigiParticipantCommitment {
                 commitment: duplicate.clone(),
-                alias_tag: None,
             },
             KaigiParticipantCommitment {
                 commitment: duplicate.clone(),
-                alias_tag: None,
             },
         ];
         assert!(
@@ -3525,11 +3655,9 @@ mod tests {
         record.nullifier_log = vec![
             KaigiParticipantNullifier {
                 digest: duplicate.clone(),
-                issued_at_ms: 0,
             },
             KaigiParticipantNullifier {
                 digest: duplicate.clone(),
-                issued_at_ms: 0,
             },
         ];
         assert!(
@@ -3548,13 +3676,7 @@ mod tests {
     }
     #[test]
     fn transparent_preconditions_accept_empty_payload() {
-        #[cfg(feature = "kaigi_privacy_mocks")]
-        let (_domain, host, participant) = sample_ids();
         let artifacts = PrivacyArtifacts {
-            #[cfg(feature = "kaigi_privacy_mocks")]
-            subject: &participant,
-            #[cfg(feature = "kaigi_privacy_mocks")]
-            host: &host,
             commitment: None,
             nullifier: None,
             roster_root: None,
@@ -3564,14 +3686,8 @@ mod tests {
     }
     #[test]
     fn transparent_preconditions_reject_privacy_artifacts() {
-        #[cfg(feature = "kaigi_privacy_mocks")]
-        let (_domain, host, participant) = sample_ids();
         let commitment = sample_commitment();
         let artifacts = PrivacyArtifacts {
-            #[cfg(feature = "kaigi_privacy_mocks")]
-            subject: &participant,
-            #[cfg(feature = "kaigi_privacy_mocks")]
-            host: &host,
             commitment: Some(&commitment),
             nullifier: None,
             roster_root: None,
@@ -3586,26 +3702,35 @@ mod tests {
             other => panic!("unexpected error variant {other:?}"),
         }
     }
-    #[cfg(feature = "kaigi_privacy_mocks")]
+
     #[test]
-    fn zk_preconditions_require_mock_verifier() {
-        let (_domain, host, participant) = sample_ids();
+    fn zk_preconditions_require_the_governed_real_verifier() {
+        let (record, host, participant) = new_record(KaigiPrivacyMode::ZkRosterV1);
         let commitment = sample_commitment();
         let nullifier = sample_nullifier(0xAB);
-        let proof = [9, 9, 9];
-        let expected_root = iroha_crypto::Hash::prehashed([0u8; 32]);
-        let artifacts = PrivacyArtifacts {
-            #[cfg(feature = "kaigi_privacy_mocks")]
-            subject: &participant,
-            #[cfg(feature = "kaigi_privacy_mocks")]
-            host: &host,
-            commitment: Some(&commitment),
-            nullifier: Some(&nullifier),
-            roster_root: Some(&expected_root),
-            proof: Some(&proof),
-        };
         with_state_transaction(|stx| {
-            privacy::verify_roster_join(stx, &artifacts, &expected_root).unwrap();
+            let root = record.roster_root();
+            let context = context_from_ledger_v1(
+                *stx.network_id(),
+                &record.id,
+                &host,
+                &participant,
+                1,
+                KaigiAuthorizationActionV1::Join,
+                &root,
+            )
+            .unwrap();
+            let artifacts = PrivacyArtifacts {
+                commitment: Some(&commitment),
+                nullifier: Some(&nullifier),
+                roster_root: Some(&root),
+                proof: Some(&[9, 9, 9]),
+            };
+            assert_smart_contract_error(
+                privacy::verify_authorization(stx, &artifacts, &context, None)
+                    .expect_err("test builds must use the governed verifier"),
+                "not configured",
+            );
         });
     }
     #[test]
@@ -4180,27 +4305,60 @@ mod tests {
         record.active_account_id = accounts.last().expect("non-empty account chain").clone();
         record
     }
-    fn new_record(mode: KaigiPrivacyMode) -> (KaigiRecord, AccountId, AccountId) {
+    pub(super) fn new_record(mode: KaigiPrivacyMode) -> (KaigiRecord, AccountId, AccountId) {
         let (domain, host, participant) = sample_ids();
         let call = KaigiId::new(domain.clone(), Name::from_str("daily").unwrap());
         let mut template = NewKaigi::with_defaults(call, host.clone());
         template.privacy_mode = mode;
-        let record = KaigiRecord::from_new(&template, 1);
+        let mut record = KaigiRecord::from_new(&template, 1);
+        if mode == KaigiPrivacyMode::ZkRosterV1 {
+            record.host_commitment = Some(KaigiParticipantCommitment {
+                commitment: test_scalar(10_000),
+            });
+            record.push_nullifier(sample_nullifier(0));
+        }
         (record, host, participant)
     }
-    fn sample_commitment() -> KaigiParticipantCommitment {
+    fn test_scalar(value: u64) -> KaigiAuthorizationScalarV1 {
+        let mut bytes = [0; 32];
+        bytes[..8].copy_from_slice(&value.to_le_bytes());
+        KaigiAuthorizationScalarV1::from_le_bytes(bytes).unwrap()
+    }
+    fn install_private_create(
+        stx: &mut StateTransaction<'_, '_>,
+        template: NewKaigi,
+    ) -> AuthorizationFixtureV1 {
+        let record = KaigiRecord::from_new(&template, 0);
+        let artifacts = authorization_fixture_v1(
+            stx,
+            &record,
+            &record.host,
+            0,
+            KaigiAuthorizationActionV1::HostCreate,
+            77,
+        );
+        CreateKaigi {
+            call: template,
+            commitment: Some(artifacts.commitment),
+            nullifier: Some(artifacts.nullifier),
+            roster_root: Some(artifacts.root),
+            proof: Some(artifacts.proof.clone()),
+        }
+        .execute(&record.host, stx)
+        .expect("real private create");
+        artifacts
+    }
+    pub(super) fn sample_commitment() -> KaigiParticipantCommitment {
         KaigiParticipantCommitment {
-            commitment: iroha_crypto::Hash::prehashed([0x11; 32]),
-            alias_tag: None,
+            commitment: KaigiAuthorizationScalarV1::from_le_bytes([0x11; 32]).unwrap(),
         }
     }
-    fn sample_nullifier(tag: u8) -> KaigiParticipantNullifier {
+    pub(super) fn sample_nullifier(tag: u8) -> KaigiParticipantNullifier {
         KaigiParticipantNullifier {
-            digest: iroha_crypto::Hash::prehashed([tag; 32]),
-            issued_at_ms: 0,
+            digest: test_scalar(u64::from(tag)),
         }
     }
-    fn with_state_transaction<F>(f: F)
+    pub(super) fn with_state_transaction<F>(f: F)
     where
         F: FnMut(&mut StateTransaction<'_, '_>),
     {
@@ -4513,183 +4671,195 @@ mod tests {
         );
     }
     #[test]
-    fn record_storage_scrubs_legacy_clear_privacy_hints() {
-        let (mut record, _host, _participant) = new_record(KaigiPrivacyMode::ZkRosterV1);
-        let mut host_commitment = sample_commitment();
-        host_commitment.alias_tag = Some("host".to_owned());
-        let mut roster_commitment = sample_commitment();
-        roster_commitment.alias_tag = Some("participant".to_owned());
-        let mut nullifier = sample_nullifier(0xAA);
-        nullifier.issued_at_ms = 123;
-        record.host_commitment = Some(host_commitment);
-        record.roster_commitments.push(roster_commitment);
-        record.nullifier_log.push(nullifier);
-
-        clear_ledger_visible_privacy_hints(&mut record);
-
-        assert_eq!(
-            record
-                .host_commitment
-                .as_ref()
-                .and_then(|commitment| commitment.alias_tag.as_ref()),
-            None
-        );
-        assert!(
-            record
-                .roster_commitments
-                .iter()
-                .all(|commitment| commitment.alias_tag.is_none())
-        );
-        assert!(
-            record
-                .nullifier_log
-                .iter()
-                .all(|nullifier| nullifier.issued_at_ms == 0)
-        );
+    fn record_storage_preserves_final_scalar_bytes_without_hint_slots() {
+        let (record, _, _) = new_record(KaigiPrivacyMode::ZkRosterV1);
+        let json = norito::json::to_json(&record).unwrap();
+        assert!(!json.contains("alias_tag"));
+        assert!(!json.contains("issued_at_ms"));
+        let restored: KaigiRecord = norito::json::from_str(&json).unwrap();
+        assert_eq!(restored, record);
     }
     #[test]
-    fn retained_call_decode_rejects_clear_privacy_hints() {
-        let decode = |record: KaigiRecord| {
-            let domain = record.id.domain_id.clone();
-            let key = kaigi_metadata_key(&record.id.call_name).expect("call metadata key");
-            let value = Json::try_new(record).expect("serialize retained record");
-            decode_stored_kaigi_record(&domain, &key, &value)
-        };
-
-        let (clean, _, _) = new_record(KaigiPrivacyMode::ZkRosterV1);
-        decode(clean.clone()).expect("a scrubbed private record remains restorable");
-
-        let mut host_alias = clean.clone();
-        let mut host_commitment = sample_commitment();
-        host_commitment.alias_tag = Some("host".to_owned());
-        host_alias.host_commitment = Some(host_commitment);
-        assert_invariant_error(
-            decode(host_alias).expect_err("a retained host alias tag must fail closed"),
-            "forbidden clear privacy hints",
-        );
-
-        let mut roster_alias = clean.clone();
-        let mut roster_commitment = sample_commitment();
-        roster_commitment.alias_tag = Some("participant".to_owned());
-        roster_alias.push_commitment(roster_commitment);
-        assert_invariant_error(
-            decode(roster_alias).expect_err("a retained roster alias tag must fail closed"),
-            "forbidden clear privacy hints",
-        );
-
-        let mut timed_nullifier = clean;
-        let mut nullifier = sample_nullifier(0xAA);
-        nullifier.issued_at_ms = 1;
-        timed_nullifier.push_nullifier(nullifier);
-        assert_invariant_error(
-            decode(timed_nullifier)
-                .expect_err("a retained nullifier issuance timestamp must fail closed"),
-            "forbidden clear privacy hints",
-        );
+    fn retained_call_decode_rejects_retired_hint_fields_instead_of_scrubbing() {
+        let (record, _, _) = new_record(KaigiPrivacyMode::ZkRosterV1);
+        let key = metadata_key(&record.id).unwrap();
+        for (field, hint) in [
+            ("host_commitment", "alias_tag"),
+            ("nullifier_log", "issued_at_ms"),
+        ] {
+            let mut json = norito::json::to_value(&record).unwrap();
+            let artifact = json.as_object_mut().unwrap().get_mut(field).unwrap();
+            let object = if field == "nullifier_log" {
+                artifact.as_array_mut().unwrap()[0].as_object_mut().unwrap()
+            } else {
+                artifact.as_object_mut().unwrap()
+            };
+            object.insert(hint.into(), norito::json::Value::Null);
+            let value = Json::try_new(json).unwrap();
+            assert!(decode_stored_kaigi_record(&record.id.domain_id, &key, &value).is_err());
+        }
     }
-    #[cfg(feature = "kaigi_privacy_mocks")]
+
     #[test]
-    fn privacy_join_updates_commitments_and_leave_stays_off_chain() {
-        let (mut record, _host, participant) = new_record(KaigiPrivacyMode::ZkRosterV1);
-        let commitment = sample_commitment();
-        let join_nullifier = sample_nullifier(0xAA);
-        let join_proof = [1u8];
-        let leave_proof = [2u8];
-        with_state_transaction(|stx| {
-            let join_root = record.roster_root();
+    fn private_join_leave_and_rejoin_consume_exact_sequences_with_real_proofs() {
+        let (mut record, host, participant) = new_record(KaigiPrivacyMode::ZkRosterV1);
+        let domain = record.id.domain_id.clone();
+        with_seeded_kaigi_state_transaction(&domain, &[host, participant.clone()], |stx| {
+            let joined = authorization_fixture_v1(
+                stx,
+                &record,
+                &participant,
+                1,
+                KaigiAuthorizationActionV1::Join,
+                17,
+            );
             let grant = process_join(
                 stx,
                 &mut record,
                 KaigiAuthorization::SignedAccount(&participant),
                 &participant,
-                Some(commitment.clone()),
-                Some(join_nullifier.clone()),
-                Some(join_root),
-                Some(&join_proof),
+                Some(joined.commitment),
+                Some(joined.nullifier),
+                Some(joined.root),
+                Some(&joined.proof),
             )
-            .expect("privacy join");
+            .unwrap();
             assert_eq!(grant, AccessGrant::PrivacyAuthorized);
-            assert!(record.roster_commitments.len() == 1);
-            assert!(record.nullifier_log.len() == 1);
             assert!(record.participants.is_empty());
-            let leave_nullifier = sample_nullifier(0xBB);
-            let leave_root = record.roster_root();
-            let leave_error = process_leave(
+            assert_eq!(record.roster_commitments, vec![joined.commitment]);
+            assert!(record.has_nullifier(&joined.nullifier));
+            let before_duplicate = record.clone();
+            assert!(
+                process_join(
+                    stx,
+                    &mut record,
+                    KaigiAuthorization::SignedAccount(&participant),
+                    &participant,
+                    Some(joined.commitment),
+                    Some(joined.nullifier),
+                    Some(joined.root),
+                    Some(&joined.proof)
+                )
+                .is_err()
+            );
+            assert_eq!(record, before_duplicate);
+            let left = authorization_fixture_v1(
                 stx,
-                &mut record,
+                &record,
                 &participant,
-                &participant,
-                Some(commitment.clone()),
-                Some(leave_nullifier.clone()),
-                Some(leave_root),
-                Some(&leave_proof),
-            )
-            .expect_err("privacy leave remains off-chain in the first-release profile");
-            assert_smart_contract_error(leave_error, "off-chain only");
-            assert_eq!(record.roster_commitments.len(), 1);
-            assert_eq!(record.nullifier_log.len(), 1);
-            let retry_root = record.roster_root();
-            let err = process_join(
+                1,
+                KaigiAuthorizationActionV1::Leave,
+                17,
+            );
+            assert_eq!(joined.commitment, left.commitment);
+            assert_ne!(joined.nullifier, left.nullifier);
+            assert_eq!(
+                process_leave(
+                    stx,
+                    &mut record,
+                    &participant,
+                    &participant,
+                    Some(left.commitment),
+                    Some(left.nullifier),
+                    Some(left.root),
+                    Some(&left.proof)
+                )
+                .unwrap(),
+                AccessGrant::PrivacyAuthorized
+            );
+            assert!(record.roster_commitments.is_empty());
+            assert_eq!(
+                record
+                    .private_participation
+                    .prepare_join(&participant)
+                    .unwrap(),
+                2
+            );
+            assert!(record.has_nullifier(&left.nullifier));
+            let rejoined = authorization_fixture_v1(
                 stx,
-                &mut record,
-                KaigiAuthorization::SignedAccount(&participant),
+                &record,
                 &participant,
-                Some(commitment.clone()),
-                Some(join_nullifier.clone()),
-                Some(retry_root),
-                Some(&join_proof),
-            )
-            .expect_err("duplicate commitment rejected");
-            assert!(matches!(
-                err,
-                Error::InvalidParameter(InvalidParameterError::SmartContract(_))
-            ));
-        });
-    }
-    #[cfg(feature = "kaigi_privacy_mocks")]
-    #[test]
-    fn mock_privacy_join_respects_max_participant_limit() {
-        let (mut record, _host, participant) = new_record(KaigiPrivacyMode::ZkRosterV1);
-        record.max_participants = Some(1);
-        let first_commitment = sample_commitment();
-        let first_nullifier = sample_nullifier(0xCC);
-        let second_commitment = KaigiParticipantCommitment {
-            commitment: iroha_crypto::Hash::prehashed([0x22; 32]),
-            alias_tag: None,
-        };
-        let second_nullifier = sample_nullifier(0xDD);
-        with_state_transaction(|stx| {
-            let first_root = record.roster_root();
+                2,
+                KaigiAuthorizationActionV1::Join,
+                19,
+            );
+            assert_ne!(rejoined.commitment, joined.commitment);
             process_join(
                 stx,
                 &mut record,
                 KaigiAuthorization::SignedAccount(&participant),
                 &participant,
-                Some(first_commitment.clone()),
-                Some(first_nullifier.clone()),
-                Some(first_root),
-                Some(&[1u8]),
+                Some(rejoined.commitment),
+                Some(rejoined.nullifier),
+                Some(rejoined.root),
+                Some(&rejoined.proof),
             )
-            .expect("first join succeeds within limit");
-            let second_root = record.roster_root();
-            let err = process_join(
-                stx,
-                &mut record,
-                KaigiAuthorization::SignedAccount(&participant),
-                &participant,
-                Some(second_commitment.clone()),
-                Some(second_nullifier.clone()),
-                Some(second_root),
-                Some(&[2u8]),
-            )
-            .expect_err("privacy join beyond limit rejected");
-            match err {
-                Error::InvalidParameter(InvalidParameterError::SmartContract(msg)) => {
-                    assert_eq!(msg, "participant limit reached");
-                }
-                other => panic!("unexpected error variant {other:?}"),
-            }
+            .unwrap();
+            let before_replay = record.clone();
+            assert!(
+                process_leave(
+                    stx,
+                    &mut record,
+                    &participant,
+                    &participant,
+                    Some(left.commitment),
+                    Some(left.nullifier),
+                    Some(left.root),
+                    Some(&left.proof)
+                )
+                .is_err()
+            );
+            assert_eq!(record, before_replay);
         });
+    }
+
+    #[test]
+    fn private_join_reserves_the_configured_participant_limit() {
+        let (mut record, host, participant) = new_record(KaigiPrivacyMode::ZkRosterV1);
+        let (other, _) = gen_account_in("nexus");
+        let domain = record.id.domain_id.clone();
+        record.max_participants = Some(1);
+        with_seeded_kaigi_state_transaction(
+            &domain,
+            &[host, participant.clone(), other.clone()],
+            |stx| {
+                let joined = authorization_fixture_v1(
+                    stx,
+                    &record,
+                    &participant,
+                    1,
+                    KaigiAuthorizationActionV1::Join,
+                    17,
+                );
+                process_join(
+                    stx,
+                    &mut record,
+                    KaigiAuthorization::SignedAccount(&participant),
+                    &participant,
+                    Some(joined.commitment),
+                    Some(joined.nullifier),
+                    Some(joined.root),
+                    Some(&joined.proof),
+                )
+                .unwrap();
+                let root = record.roster_root();
+                let before = record.clone();
+                let error = process_join(
+                    stx,
+                    &mut record,
+                    KaigiAuthorization::SignedAccount(&other),
+                    &other,
+                    Some(sample_commitment()),
+                    Some(sample_nullifier(0xDD)),
+                    Some(root),
+                    Some(&[2]),
+                )
+                .unwrap_err();
+                assert_smart_contract_error(error, "participant limit reached");
+                assert_eq!(record, before);
+            },
+        );
     }
     #[test]
     fn create_kaigi_emits_roster_summary_and_manifest() {
@@ -4707,22 +4877,14 @@ mod tests {
             let mut template = NewKaigi::with_defaults(call.clone(), host.clone());
             template.privacy_mode = KaigiPrivacyMode::ZkRosterV1;
             template.relay_manifest = Some(manifest.clone());
-            CreateKaigi {
-                call: template,
-                commitment: None,
-                nullifier: None,
-                roster_root: None,
-                proof: None,
-            }
-            .execute(&host, stx)
-            .expect("create kaigi");
+            install_private_create(stx, template);
             let events = stx.world.take_external_events();
             let summary = extract_roster_summary(&events).expect("roster summary event");
             assert_eq!(summary.call, call);
             assert_eq!(summary.privacy_mode, KaigiPrivacyMode::ZkRosterV1);
             assert_eq!(summary.participant_count, 0);
             assert_eq!(summary.commitment_count, 0);
-            assert_eq!(summary.nullifier_count, 0);
+            assert_eq!(summary.nullifier_count, 1);
             let relay = extract_manifest_summary(&events).expect("relay manifest summary");
             assert_eq!(relay.call, call);
             assert_eq!(relay.hop_count, 3);
@@ -5109,139 +5271,130 @@ mod tests {
         });
     }
     #[test]
-    fn private_create_stores_host_commitment() {
-        let (domain, host, _participant) = sample_ids();
-        let call = KaigiId::new(domain.clone(), Name::from_str("private-host").unwrap());
-        let commitment = sample_commitment();
-        let nullifier = sample_nullifier(0xA1);
+    fn private_create_stores_the_real_host_commitment_and_create_nullifier() {
+        let (domain, host, _) = sample_ids();
+        let call = KaigiId::new(domain.clone(), "private-host".parse().unwrap());
         with_seeded_kaigi_state_transaction(&domain, std::slice::from_ref(&host), |stx| {
             let mut template = NewKaigi::with_defaults(call.clone(), host.clone());
             template.privacy_mode = KaigiPrivacyMode::ZkRosterV1;
-            CreateKaigi {
-                call: template,
-                commitment: Some(commitment.clone()),
-                nullifier: Some(nullifier.clone()),
-                roster_root: Some(kaigi_zk::empty_roster_root_hash()),
-                proof: Some(vec![1, 2, 3]),
-            }
-            .execute(&host, stx)
-            .expect("create privacy-mode Kaigi");
-            let key = kaigi_metadata_key(&call.call_name).expect("metadata key");
-            let domain = stx.world.domain(&call.domain_id).expect("domain");
-            let record: KaigiRecord = domain
-                .metadata()
-                .get(&key)
-                .expect("record metadata")
-                .clone()
-                .try_into_any_norito()
-                .expect("deserialize metadata");
-            assert_eq!(record.host_commitment.as_ref(), Some(&commitment));
-            assert!(record.has_nullifier(&nullifier));
+            let artifacts = install_private_create(stx, template);
+            let record = load_call_record(stx, &call);
+            assert_eq!(record.host_commitment, Some(artifacts.commitment));
+            assert!(record.has_nullifier(&artifacts.nullifier));
             assert_eq!(record.status, KaigiStatus::Active);
+            assert!(record.private_participation.entries().is_empty());
         });
     }
     #[test]
-    fn private_end_requires_host_signature_even_with_valid_host_proof() {
+    fn private_end_requires_original_host_opening_active_signature_and_unique_action() {
         let (domain, host, participant) = sample_ids();
-        let call = KaigiId::new(domain.clone(), Name::from_str("private-end").unwrap());
-        let commitment = sample_commitment();
-        let create_nullifier = sample_nullifier(0xA2);
-        let end_nullifier = sample_nullifier(0xA3);
+        let call = KaigiId::new(domain.clone(), "private-end".parse().unwrap());
         with_seeded_kaigi_state_transaction(&domain, &[host.clone(), participant.clone()], |stx| {
             let mut template = NewKaigi::with_defaults(call.clone(), host.clone());
             template.privacy_mode = KaigiPrivacyMode::ZkRosterV1;
-            CreateKaigi {
-                call: template,
-                commitment: Some(commitment.clone()),
-                nullifier: Some(create_nullifier.clone()),
-                roster_root: Some(kaigi_zk::empty_roster_root_hash()),
-                proof: Some(vec![4, 5, 6]),
-            }
-            .execute(&host, stx)
-            .expect("create privacy-mode Kaigi");
-            EndKaigi {
-                call_id: call.clone(),
-                ended_at_ms: Some(0),
-                commitment: Some(commitment.clone()),
-                nullifier: Some(create_nullifier.clone()),
-                roster_root: Some(kaigi_zk::empty_roster_root_hash()),
-                proof: Some(vec![7, 8, 9]),
-            }
-            .execute(&host, stx)
-            .expect_err("the host-create nullifier must not be reusable");
-            let copied_proof = EndKaigi {
-                call_id: call.clone(),
-                ended_at_ms: Some(0),
-                commitment: Some(commitment.clone()),
-                nullifier: Some(end_nullifier.clone()),
-                roster_root: Some(kaigi_zk::empty_roster_root_hash()),
-                proof: Some(vec![7, 8, 9]),
-            };
-            copied_proof
-                .clone()
-                .execute(&participant, stx)
-                .expect_err("a copied host proof must not authorize another signer");
-            copied_proof
-                .execute(&host, stx)
-                .expect("the signed host may end a privacy-mode Kaigi");
-            let key = kaigi_metadata_key(&call.call_name).expect("metadata key");
-            let domain = stx.world.domain(&call.domain_id).expect("domain");
-            let record: KaigiRecord = domain
-                .metadata()
-                .get(&key)
-                .expect("record metadata")
-                .clone()
-                .try_into_any_norito()
-                .expect("deserialize metadata");
-            assert_eq!(record.status, KaigiStatus::Ended);
-            assert_eq!(record.ended_at_ms, Some(0));
-            assert!(
-                record
-                    .nullifier_log
-                    .iter()
-                    .any(|entry| entry.digest == end_nullifier.digest)
+            let created = install_private_create(stx, template.clone());
+            let record = load_call_record(stx, &call);
+            let ended = authorization_fixture_v1(
+                stx,
+                &record,
+                &host,
+                0,
+                KaigiAuthorizationActionV1::HostEnd,
+                77,
             );
+            assert_eq!(created.commitment, ended.commitment);
+            assert_ne!(created.nullifier, ended.nullifier);
+            let end = EndKaigi {
+                call_id: call.clone(),
+                ended_at_ms: Some(0),
+                commitment: Some(ended.commitment),
+                nullifier: Some(ended.nullifier),
+                roster_root: Some(ended.root),
+                proof: Some(ended.proof),
+            };
+            let mut replay_create = end.clone();
+            replay_create.nullifier = Some(created.nullifier);
+            assert!(replay_create.execute(&host, stx).is_err());
+            assert!(end.clone().execute(&participant, stx).is_err());
+            assert_eq!(load_call_record(stx, &call), record);
+            end.clone().execute(&host, stx).unwrap();
+            let final_record = load_call_record(stx, &call);
+            assert_eq!(final_record.status, KaigiStatus::Ended);
+            assert_eq!(final_record.ended_at_ms, Some(0));
+            assert!(final_record.has_nullifier(&ended.nullifier));
+            assert!(end.execute(&host, stx).is_err());
+            assert!(
+                CreateKaigi {
+                    call: template,
+                    commitment: Some(created.commitment),
+                    nullifier: Some(created.nullifier),
+                    roster_root: Some(created.root),
+                    proof: Some(created.proof)
+                }
+                .execute(&host, stx)
+                .is_err()
+            );
+            assert_eq!(load_call_record(stx, &call), final_record);
+            assert!(ensure_kaigi_domain_can_unregister(stx, &domain).is_err());
         });
     }
     #[test]
-    fn signed_host_can_end_private_call_created_without_host_commitment() {
-        let (domain, host, _participant) = sample_ids();
-        let call = KaigiId::new(
-            domain.clone(),
-            Name::from_str("private-end-signed").unwrap(),
-        );
+    fn private_create_requires_every_artifact_and_has_no_signature_only_path() {
+        let (domain, host, _) = sample_ids();
+        let call = KaigiId::new(domain.clone(), "private-required".parse().unwrap());
         with_seeded_kaigi_state_transaction(&domain, std::slice::from_ref(&host), |stx| {
             let mut template = NewKaigi::with_defaults(call.clone(), host.clone());
             template.privacy_mode = KaigiPrivacyMode::ZkRosterV1;
+            let empty = KaigiRecord::from_new(&template, 0);
+            let artifacts = authorization_fixture_v1(
+                stx,
+                &empty,
+                &host,
+                0,
+                KaigiAuthorizationActionV1::HostCreate,
+                77,
+            );
+            for mask in 0_u8..15 {
+                let error = CreateKaigi {
+                    call: template.clone(),
+                    commitment: (mask & 1 != 0).then_some(artifacts.commitment),
+                    nullifier: (mask & 2 != 0).then_some(artifacts.nullifier),
+                    roster_root: (mask & 4 != 0).then_some(artifacts.root),
+                    proof: (mask & 8 != 0).then(|| artifacts.proof.clone()),
+                }
+                .execute(&host, stx)
+                .expect_err("incomplete private host authorization");
+                assert!(format!("{error:?}").contains("requires"));
+                assert!(
+                    !stx.world
+                        .domain(&domain)
+                        .unwrap()
+                        .metadata()
+                        .contains(&metadata_key(&call).unwrap())
+                );
+            }
             CreateKaigi {
                 call: template,
-                commitment: None,
-                nullifier: None,
-                roster_root: None,
-                proof: None,
+                commitment: Some(artifacts.commitment),
+                nullifier: Some(artifacts.nullifier),
+                roster_root: Some(artifacts.root),
+                proof: Some(artifacts.proof),
             }
             .execute(&host, stx)
-            .expect("create privacy-mode Kaigi without host commitment");
-            EndKaigi {
-                call_id: call.clone(),
-                ended_at_ms: Some(0),
-                commitment: None,
-                nullifier: None,
-                roster_root: None,
-                proof: None,
-            }
-            .execute(&host, stx)
-            .expect("signed host may end without optional privacy artifacts");
-            let key = kaigi_metadata_key(&call.call_name).expect("metadata key");
-            let domain = stx.world.domain(&call.domain_id).expect("domain");
-            let record: KaigiRecord = domain
-                .metadata()
-                .get(&key)
-                .expect("record metadata")
-                .clone()
-                .try_into_any_norito()
-                .expect("deserialize metadata");
-            assert_eq!(record.status, KaigiStatus::Ended);
+            .unwrap();
+            assert!(
+                EndKaigi {
+                    call_id: call.clone(),
+                    ended_at_ms: None,
+                    commitment: None,
+                    nullifier: None,
+                    roster_root: None,
+                    proof: None
+                }
+                .execute(&host, stx)
+                .is_err()
+            );
+            assert_eq!(load_call_record(stx, &call).status, KaigiStatus::Active);
         });
     }
     #[test]
@@ -6196,7 +6349,8 @@ mod tests {
                 .metadata_mut()
                 .insert(
                     rejected_key.clone(),
-                    Json::try_new(rejected).expect("serialize legacy over-cap registration"),
+                    Json::try_new(rejected)
+                        .expect("serialize deliberately invalid over-cap registration"),
                 );
             stx.world
                 .kaigi_relay_registry
@@ -6210,12 +6364,9 @@ mod tests {
                     rejected_key,
                 ),
             );
-            assert_eq!(
-                collect_kaigi_relay_registry(&stx.world)
-                    .expect("valid legacy over-cap registry remains rebuildable")
-                    .len(),
-                KAIGI_RELAY_REGISTRY_MAX_ENTRIES_V1 + 1
-            );
+            let error = collect_kaigi_relay_registry(&stx.world)
+                .expect_err("final V1 restore must reject over-cap registry");
+            assert_smart_contract_error(error, "final V1 capacity");
             assert_eq!(
                 validated_kaigi_relay_registry_count(stx).expect("validate over-cap registry"),
                 KAIGI_RELAY_REGISTRY_MAX_ENTRIES_V1 + 1
@@ -7305,45 +7456,45 @@ mod tests {
             assert!(stx.world.take_external_events().is_empty());
         });
     }
-    #[cfg(feature = "kaigi_privacy_mocks")]
+
     #[test]
-    fn mock_privacy_join_updates_commitment_summary() {
+    fn private_join_updates_commitment_summary_with_real_proof() {
         let (record, host, participant) = new_record(KaigiPrivacyMode::ZkRosterV1);
         let call = record.id.clone();
-        let domain = call.domain_id.clone();
-        let commitment = sample_commitment();
-        let join_nullifier = sample_nullifier(0xCC);
-        with_seeded_kaigi_state_transaction(&domain, &[host.clone(), participant.clone()], |stx| {
-            CreateKaigi {
-                call: NewKaigi {
-                    privacy_mode: KaigiPrivacyMode::ZkRosterV1,
-                    ..NewKaigi::with_defaults(call.clone(), host.clone())
-                },
-                commitment: None,
-                nullifier: None,
-                roster_root: None,
-                proof: None,
-            }
-            .execute(&host, stx)
-            .expect("create privacy Kaigi");
-            let join_root = load_call_record(stx, &call).roster_root();
-            stx.world.take_external_events();
-            JoinKaigi {
-                call_id: call.clone(),
-                participant: participant.clone(),
-                commitment: Some(commitment.clone()),
-                nullifier: Some(join_nullifier.clone()),
-                roster_root: Some(join_root),
-                proof: Some(vec![1_u8]),
-            }
-            .execute(&participant, stx)
-            .expect("privacy join");
-            let events = stx.world.take_external_events();
-            let summary = extract_roster_summary(&events).expect("roster summary event");
-            assert_eq!(summary.participant_count, 0);
-            assert_eq!(summary.commitment_count, 1);
-            assert_eq!(summary.nullifier_count, 1);
-        });
+        with_seeded_kaigi_state_transaction(
+            &call.domain_id,
+            &[host.clone(), participant.clone()],
+            |stx| {
+                let mut template = NewKaigi::with_defaults(call.clone(), host.clone());
+                template.privacy_mode = KaigiPrivacyMode::ZkRosterV1;
+                install_private_create(stx, template);
+                let stored = load_call_record(stx, &call);
+                let joined = authorization_fixture_v1(
+                    stx,
+                    &stored,
+                    &participant,
+                    1,
+                    KaigiAuthorizationActionV1::Join,
+                    17,
+                );
+                stx.world.take_external_events();
+                JoinKaigi {
+                    call_id: call.clone(),
+                    participant: participant.clone(),
+                    commitment: Some(joined.commitment),
+                    nullifier: Some(joined.nullifier),
+                    roster_root: Some(joined.root),
+                    proof: Some(joined.proof),
+                }
+                .execute(&participant, stx)
+                .unwrap();
+                let events = stx.world.take_external_events();
+                let summary = extract_roster_summary(&events).unwrap();
+                assert_eq!(summary.participant_count, 0);
+                assert_eq!(summary.commitment_count, 1);
+                assert_eq!(summary.nullifier_count, 2);
+            },
+        );
     }
     #[test]
     fn leave_kaigi_updates_roster_summary() {
@@ -8247,6 +8398,100 @@ mod tests {
                 assert_eq!(updated.host, host);
             },
         );
+    }
+    #[test]
+    fn private_original_owner_and_departed_dependency_survive_authenticated_rekey() {
+        let (mut record, host, original) = new_record(KaigiPrivacyMode::ZkRosterV1);
+        let (successor, _) = gen_account_in("nexus");
+        let domain = record.id.domain_id.clone();
+        let commitment = sample_commitment();
+        record
+            .private_participation
+            .commit_join(&original, 1, commitment.commitment)
+            .unwrap();
+        record.push_commitment(commitment);
+        with_seeded_kaigi_state_transaction(&domain, &[host.clone(), successor.clone()], |stx| {
+            seed_active_account_id_rekey_lineage(
+                stx,
+                "private-original-owner",
+                &original,
+                &successor,
+            );
+            validate_private_participation_lineages(&stx.world, &record).unwrap();
+            let graph = persisted_kaigi_rekey_graph(&stx.world, [successor.clone()]).unwrap();
+            assert!(
+                record_has_participant_in_active_lineage(stx, &record, &successor, &graph).unwrap()
+            );
+            assert_eq!(
+                original_participant_v1(
+                    stx,
+                    &record.private_participation,
+                    &host,
+                    &successor,
+                    &successor,
+                    KaigiAuthorizationActionV1::Leave
+                )
+                .unwrap(),
+                original
+            );
+            assert!(
+                original_participant_v1(
+                    stx,
+                    &record.private_participation,
+                    &host,
+                    &successor,
+                    &original,
+                    KaigiAuthorizationActionV1::Leave
+                )
+                .is_err()
+            );
+            record
+                .private_participation
+                .commit_leave(&original, 1, commitment.commitment)
+                .unwrap();
+            assert!(record.remove_commitment(&commitment));
+            assert!(active_call_dependency_accounts(&record).contains(&original));
+            assert!(
+                !record_has_participant_in_active_lineage(stx, &record, &successor, &graph)
+                    .unwrap()
+            );
+            assert_eq!(
+                original_participant_v1(
+                    stx,
+                    &record.private_participation,
+                    &host,
+                    &successor,
+                    &successor,
+                    KaigiAuthorizationActionV1::Join
+                )
+                .unwrap(),
+                original
+            );
+            assert_eq!(
+                record
+                    .private_participation
+                    .prepare_join(&original)
+                    .unwrap(),
+                2
+            );
+            let mut duplicate = record.clone();
+            let other = KaigiParticipantCommitment {
+                commitment: test_scalar(31),
+            };
+            duplicate
+                .private_participation
+                .commit_join(&successor, 1, other.commitment)
+                .unwrap();
+            duplicate.push_commitment(other);
+            assert!(validate_private_participation_lineages(&stx.world, &duplicate).is_err());
+            assert!(
+                record_has_participant_in_active_lineage(stx, &duplicate, &successor, &graph)
+                    .is_err()
+            );
+            record.status = KaigiStatus::Ended;
+            record.ended_at_ms = Some(record.created_at_ms);
+            assert!(active_call_dependency_accounts(&record).is_empty());
+        });
     }
     #[test]
     fn participant_lookup_rejects_multiple_ids_from_one_rekey_component_atomically() {

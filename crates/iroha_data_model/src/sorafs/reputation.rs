@@ -327,7 +327,7 @@ impl ReputationFinalizedArchiveRetentionRequestV1 {
             self.predecessor_request_digest,
             self.compact_through,
         );
-        let bytes = norito::to_bytes(&material)
+        let bytes = norito::encode_canonical(&material)
             .map_err(|_| ReputationFinalizedArchiveRetentionRequestErrorV1::CanonicalEncoding)?;
         Ok(domain_digest(
             REPUTATION_FINALIZED_ARCHIVE_RETENTION_REQUEST_DIGEST_DOMAIN_V1,
@@ -2674,10 +2674,20 @@ fn canonical_frame_len<T: norito::core::NoritoSerialize>(
     norito::core::encoded_frame_len(value)
 }
 struct ReputationJournalEventIdSource<'a>(&'a ReputationJournalEntryV1);
+impl norito::NoritoSchema for ReputationJournalEventIdSource<'_> {
+    fn nominal_name() -> String {
+        "iroha_data_model::sorafs::reputation::ReputationJournalEventIdSource<'_>".to_owned()
+    }
+    fn frame_name() -> String {
+        <ReputationJournalEntryV1 as norito::NoritoSchema>::frame_name()
+    }
+}
 impl norito::core::NoritoSerialize for ReputationJournalEventIdSource<'_> {
     fn schema_hash() -> [u8; 16] {
         <ReputationJournalEntryV1 as norito::core::NoritoSerialize>::schema_hash()
     }
+}
+impl norito::core::SerializePayload for ReputationJournalEventIdSource<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         if norito::core::use_packed_struct() {
             return Err(norito::core::Error::UnsupportedFeature(
@@ -2685,7 +2695,7 @@ impl norito::core::NoritoSerialize for ReputationJournalEventIdSource<'_> {
             ));
         }
         let zero = ReputationJournalEventIdV1::ZERO;
-        let leading_fields: [&dyn norito::core::NoritoSerialize; 6] = [
+        let leading_fields: [&dyn norito::core::SerializePayload; 6] = [
             &self.0.version,
             &zero,
             &self.0.source_id,
@@ -2693,19 +2703,18 @@ impl norito::core::NoritoSerialize for ReputationJournalEventIdSource<'_> {
             &self.0.predecessor_event_id,
             &self.0.provider_id,
         ];
-        let trailing_fields: [&dyn norito::core::NoritoSerialize; 3] = [
+        let trailing_fields: [&dyn norito::core::SerializePayload; 3] = [
             &self.0.recorded_by,
             &self.0.source_time_unix_ms,
             &self.0.payload,
         ];
-        let mut scratch = norito::core::DeriveSmallBuf::new();
         for field in leading_fields {
-            norito::core::write_len_prefixed(writer, field, &mut scratch)?;
+            norito::core::write_len_prefixed(writer, field)?;
         }
         norito::core::write_len(writer, self.0.authority_policy_digest.len() as u64)?;
         writer.write_all(&self.0.authority_policy_digest)?;
         for field in trailing_fields {
-            norito::core::write_len_prefixed(writer, field, &mut scratch)?;
+            norito::core::write_len_prefixed(writer, field)?;
         }
         Ok(())
     }
@@ -2714,7 +2723,7 @@ impl norito::core::NoritoSerialize for ReputationJournalEventIdSource<'_> {
             return None;
         }
         let zero = ReputationJournalEventIdV1::ZERO;
-        let leading_fields: [&dyn norito::core::NoritoSerialize; 6] = [
+        let leading_fields: [&dyn norito::core::SerializePayload; 6] = [
             &self.0.version,
             &zero,
             &self.0.source_id,
@@ -2722,7 +2731,7 @@ impl norito::core::NoritoSerialize for ReputationJournalEventIdSource<'_> {
             &self.0.predecessor_event_id,
             &self.0.provider_id,
         ];
-        let trailing_fields: [&dyn norito::core::NoritoSerialize; 3] = [
+        let trailing_fields: [&dyn norito::core::SerializePayload; 3] = [
             &self.0.recorded_by,
             &self.0.source_time_unix_ms,
             &self.0.payload,
@@ -2946,6 +2955,31 @@ mod tests {
         .expect("valid explicit retention request")
     }
     #[test]
+    fn retention_request_digest_ignores_ambient_norito_layout() {
+        let expected = retention_request(1, None, 7, 0x71);
+        let canonical = norito::encode_canonical(&expected).expect("canonical retention request");
+        let mut distinct_layout = false;
+        for flags in 0..=u8::MAX {
+            if norito::core::validate_header_flags(flags).is_err() {
+                continue;
+            }
+            let _ambient = norito::core::DecodeFlagsGuard::enter(flags);
+            let before = norito::to_bytes(&expected).expect("ambient retention request");
+            distinct_layout |= before != canonical;
+            assert_eq!(retention_request(1, None, 7, 0x71), expected);
+            expected.validate().expect("same digest under every layout");
+            assert_ne!(
+                retention_request(1, None, 7, 0x72).request_digest,
+                expected.request_digest
+            );
+            assert_eq!(
+                norito::to_bytes(&expected).expect("restored layout"),
+                before
+            );
+        }
+        assert!(distinct_layout);
+    }
+    #[test]
     fn retention_request_round_trips_canonically_and_as_custom_parameter() {
         let request = retention_request(1, None, 7, 0x71);
         let bytes = norito::to_bytes(&request).expect("encode retention request");
@@ -3051,6 +3085,33 @@ mod tests {
             por_payload(seed),
         )
         .expect("valid PoR entry")
+    }
+    #[cfg(feature = "json")]
+    #[test]
+    fn reputation_event_id_identity_projection_matches_capture() {
+        let rows = [0x31, 0x52].map(|seed| {
+            let entry = por_entry(seed);
+            let mut material = entry.clone();
+            material.event_id = ReputationJournalEventIdV1::ZERO;
+            let projection = ReputationJournalEventIdSource(&entry);
+            let frame = norito::encode_canonical(&projection).expect("encode event-id projection");
+            assert_eq!(
+                entry
+                    .expected_event_id()
+                    .expect("derive original event identity"),
+                ReputationJournalEventIdV1(domain_digest(
+                    REPUTATION_JOURNAL_EVENT_ID_DOMAIN_V1,
+                    &frame
+                )),
+            );
+            crate::concrete_identity_tests::projected_record(&projection, &material)
+        });
+        assert_eq!(
+            norito::json!({"projections": (rows.to_vec())}),
+            crate::concrete_identity_tests::fixture_values(include_str!(
+                "../../tests/fixtures/reputation_event_id_identity_frames.json"
+            )),
+        );
     }
     #[test]
     fn streamed_event_id_and_frame_count_match_canonical_material() {

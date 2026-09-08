@@ -256,34 +256,7 @@ impl WitnessArgs {
         ])
     }
     fn operation_json(operation: &OperationKind) -> Result<norito::json::Value> {
-        match operation {
-            OperationKind::Transfer => json_object(vec![("kind", json_value("Transfer")?)]),
-            OperationKind::Mint => json_object(vec![("kind", json_value("Mint")?)]),
-            OperationKind::Burn => json_object(vec![("kind", json_value("Burn")?)]),
-            OperationKind::RoleGrant {
-                role_id,
-                permission_id,
-                epoch,
-            }
-            | OperationKind::RoleRevoke {
-                role_id,
-                permission_id,
-                epoch,
-            } => {
-                let kind = if matches!(operation, OperationKind::RoleGrant { .. }) {
-                    "RoleGrant"
-                } else {
-                    "RoleRevoke"
-                };
-                json_object(vec![
-                    ("kind", json_value(kind)?),
-                    ("role_id_hex", json_value(&Self::hex(role_id))?),
-                    ("permission_id_hex", json_value(&Self::hex(permission_id))?),
-                    ("epoch", json_value(epoch)?),
-                ])
-            }
-            OperationKind::MetaSet => json_object(vec![("kind", json_value("MetaSet")?)]),
-        }
+        json_value(operation)
     }
     fn hex(bytes: &[u8]) -> String {
         format!("0x{}", hex::encode(bytes))
@@ -514,6 +487,68 @@ mod tests {
     use clap::Parser;
 
     #[test]
+    fn operation_json_preserves_unit_selectors() {
+        for (operation, kind) in [
+            (OperationKind::Transfer, "Transfer"),
+            (OperationKind::Mint, "Mint"),
+            (OperationKind::Burn, "Burn"),
+            (OperationKind::MetaSet, "MetaSet"),
+        ] {
+            let value = WitnessArgs::operation_json(&operation).expect("serialize unit selector");
+            assert_eq!(
+                norito::json::from_value::<OperationKind>(value.clone())
+                    .expect("decode unit selector"),
+                operation,
+            );
+            assert_eq!(value, norito::json!({ "kind": kind, "payload": null }),);
+        }
+    }
+
+    #[test]
+    fn operation_json_preserves_permission_payloads() {
+        let role_id = [0x11; 32];
+        let permission_id = [0x22; 32];
+        let epoch = u64::MAX;
+        for (operation, kind) in [
+            (
+                OperationKind::RoleGrant {
+                    role_id,
+                    permission_id,
+                    epoch,
+                },
+                "RoleGrant",
+            ),
+            (
+                OperationKind::RoleRevoke {
+                    role_id,
+                    permission_id,
+                    epoch,
+                },
+                "RoleRevoke",
+            ),
+        ] {
+            let value =
+                WitnessArgs::operation_json(&operation).expect("serialize permission selector");
+            assert_eq!(
+                norito::json::from_value::<OperationKind>(value.clone())
+                    .expect("decode permission selector"),
+                operation,
+            );
+            assert_eq!(
+                value,
+                norito::json!({
+                    "kind": kind,
+                    "payload": {
+                        "role_id": role_id,
+                        "permission_id": permission_id,
+                        "epoch": epoch,
+                    },
+                }),
+            );
+        }
+    }
+
+    #[test]
     fn row_usage_json_preserves_the_exact_v1_ratio() {
         let value = row_usage_json(RowUsage {
             total_rows: 3,
@@ -553,53 +588,6 @@ mod tests {
             ("permission_rows", 9),
         ] {
             assert_eq!(value[field].as_u64(), Some(expected), "{field}");
-        }
-    }
-    #[test]
-    fn operation_json_preserves_all_kinds_and_exact_role_binding_fields() {
-        let role_id = [0x11; 32];
-        let permission_id = [0x22; 32];
-        let epoch = u64::MAX - 7;
-        for (operation, kind) in [
-            (OperationKind::Transfer, "Transfer"),
-            (OperationKind::Mint, "Mint"),
-            (OperationKind::Burn, "Burn"),
-            (OperationKind::MetaSet, "MetaSet"),
-            (
-                OperationKind::RoleGrant {
-                    role_id,
-                    permission_id,
-                    epoch,
-                },
-                "RoleGrant",
-            ),
-            (
-                OperationKind::RoleRevoke {
-                    role_id,
-                    permission_id,
-                    epoch,
-                },
-                "RoleRevoke",
-            ),
-        ] {
-            let value = WitnessArgs::operation_json(&operation).expect("operation JSON");
-            assert_eq!(value["kind"].as_str(), Some(kind));
-            if matches!(
-                operation,
-                OperationKind::RoleGrant { .. } | OperationKind::RoleRevoke { .. }
-            ) {
-                assert_eq!(
-                    value["role_id_hex"].as_str(),
-                    Some(format!("0x{}", "11".repeat(32)).as_str())
-                );
-                assert_eq!(
-                    value["permission_id_hex"].as_str(),
-                    Some(format!("0x{}", "22".repeat(32)).as_str())
-                );
-                assert_eq!(value["epoch"].as_u64(), Some(epoch));
-            } else {
-                assert_eq!(value.as_object().expect("operation object").len(), 1);
-            }
         }
     }
     #[derive(Parser, Debug)]

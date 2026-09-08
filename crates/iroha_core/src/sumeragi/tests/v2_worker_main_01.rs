@@ -748,13 +748,7 @@ fn locally_authorized_autonomous_transport_has_durable_rollover_claim() {
     let (mut service, _) = fixture();
     let target = service.context.roster[1].validator.clone();
     let messages = non_retireable_lane_transport_messages(service.local_peer.clone());
-    service.set_exact_output_admission_hook(|post, ticket| {
-        Err(NetworkActorAdmissionError::Backpressured {
-            message: post,
-            ticket,
-            rank: 1,
-        })
-    });
+    let ranked_tickets = install_applied_height_ranked_backpressure(&mut service);
     for message in &messages {
         service
             .post_lane_block(target.clone(), message.clone())
@@ -775,6 +769,14 @@ fn locally_authorized_autonomous_transport_has_durable_rollover_claim() {
             } if *scope == expected_scope && local_peer == &service.local_peer
         ));
     }
+    assert!(
+        ranked_tickets
+            .lock()
+            .expect("inspect actual autonomous actor reservations")
+            .iter()
+            .any(|ticket| ticket.waiter_count() > 0),
+        "the retained autonomous suffix must own an actual actor reservation"
+    );
 }
 #[test]
 fn generation_hint_requires_exact_reply_route_ownership() {
@@ -2066,16 +2068,30 @@ fn proposal_body_and_payload_at_view(
     keys: &[KeyPair],
     view: u64,
 ) -> (Vec<u8>, EncodedV2Payload) {
+    let proposer = context.leader(0);
+    let proposer_index = usize::try_from(proposer).expect("fixture proposer index");
+    proposal_body_and_payload_at_view_signed_by(
+        context,
+        view,
+        u64::from(proposer),
+        &keys[proposer_index],
+    )
+}
+fn proposal_body_and_payload_at_view_signed_by(
+    context: &wire::HeightContext,
+    view: u64,
+    body_signature_index: u64,
+    body_authority: &KeyPair,
+) -> (Vec<u8>, EncodedV2Payload) {
     let round = wire::ConsensusRound {
         context_id: context.id(),
         height: context.height,
         view,
     };
-    let proposer = context.leader(round.view);
-    let proposer_index = usize::try_from(proposer).expect("fixture proposer index");
-    // The immutable body was created by the genesis authority in view 0;
-    // `view` is the certified round in which that exact body is proposed
-    // or reproposed after restart.
+    // The immutable body originates in view zero. Its signature authority is
+    // explicit: ordinary bodies use the original leader's roster index, while
+    // the fixed genesis authority always signs at index zero. A later proposal
+    // round changes neither the body header nor that original authority.
     let header = BlockHeader::new(
         NonZeroU64::new(round.height).expect("non-zero fixture height"),
         None,
@@ -2084,10 +2100,10 @@ fn proposal_body_and_payload_at_view(
         1_000,
         0,
     );
-    let signature = SignatureOf::try_from_hash(keys[proposer_index].private_key(), header.hash())
+    let signature = SignatureOf::try_from_hash(body_authority.private_key(), header.hash())
         .expect("sign fixture block header");
     let block = SignedBlock::presigned(
-        BlockSignature::new(u64::from(proposer), signature),
+        BlockSignature::new(body_signature_index, signature),
         header,
         Vec::new(),
     );
@@ -2866,27 +2882,21 @@ fn periodic_proposal_retry_does_not_duplicate_a_pending_atomic_batch() {
     assert_eq!(after, before);
     assert!(!service.output_guard.restart_required());
 }
+#[cfg(feature = "bls")]
 #[test]
 fn certified_view_transition_resets_fast_path_before_new_set_a_fanout() {
     let (mut service, keys) = fixture_with_block_payload();
+    let directory = TempDir::new().expect("actual fast-path view WAL");
+    let mut wal = worker_wal_authority_fixture(&mut service, &directory, None);
     let old_round = wire::ConsensusRound {
         context_id: service.context.id(),
         height: service.context.height,
         view: service.active_tag.view(),
     };
     assert!(service.fast_path_proposals.insert(old_round));
-    let new_tag = EventTag::new(
-        service.active_tag.height(),
-        service.active_tag.view() + 1,
-        Generation::new(service.active_tag.generation().get() + 1),
-    );
-    service
-        .entered_view(
-            new_tag,
-            timeout_certificate_at_view(&service, old_round.view),
-            None,
-        )
-        .expect("install certified successor view");
+    let certificate =
+        worker_signed_timeout_certificate(&service.context, &keys, old_round.view, None);
+    let new_tag = enter_worker_view_from_wal(&mut service, &mut wal.adapter, certificate.clone());
     assert!(service.fast_path_proposals.is_empty());
     let (_, payload) = proposal_body_and_payload_at_view(&service.context, &keys, new_tag.view());
     let manifest = payload.manifest().clone();
@@ -2896,7 +2906,7 @@ fn certified_view_transition_resets_fast_path_before_new_set_a_fanout() {
         subject: manifest.subject,
         manifest: manifest.clone(),
         justification: wire::ProposalJustification::Timeout(wire::TimeoutJustification {
-            timeout_certificate: timeout_certificate_at_view(&service, old_round.view),
+            timeout_certificate: certificate,
             highest_prepare_qc: None,
         }),
         signature: vec![0xA5; 48],
@@ -3691,13 +3701,7 @@ fn decided_height_retires_backpressured_block_sync_request() {
         panic!("block sync must emit a CommitCertificateRequest")
     };
     let request_hash = HashOf::new(request_payload);
-    service.set_exact_output_admission_hook(|post, ticket| {
-        Err(NetworkActorAdmissionError::Backpressured {
-            message: post,
-            ticket,
-            rank: 1,
-        })
-    });
+    let ranked_tickets = install_applied_height_ranked_backpressure(&mut service);
     let output_guard = service.lifecycle_output_guard();
     let operation = output_guard
         .begin_fail_stop_operation()
@@ -3728,6 +3732,14 @@ fn decided_height_retires_backpressured_block_sync_request() {
             .has_pending_exact_output()
             .expect("Decision retires the obsolete CommitQC request fanout")
     );
+    assert!(
+        ranked_tickets
+            .lock()
+            .expect("inspect retired discovery actor reservations")
+            .iter()
+            .all(|ticket| ticket.waiter_count() == 0),
+        "retiring the exact discovery request releases every actor reservation"
+    );
 }
 #[test]
 fn admitted_block_sync_response_retires_backpressured_request() {
@@ -3747,13 +3759,7 @@ fn admitted_block_sync_response_retires_backpressured_request() {
         panic!("block sync must emit a CommitCertificateRequest")
     };
     let request_hash = HashOf::new(request_payload);
-    service.set_exact_output_admission_hook(|post, ticket| {
-        Err(NetworkActorAdmissionError::Backpressured {
-            message: post,
-            ticket,
-            rank: 1,
-        })
-    });
+    let ranked_tickets = install_applied_height_ranked_backpressure(&mut service);
     let output_guard = service.lifecycle_output_guard();
     let operation = output_guard
         .begin_fail_stop_operation()
@@ -3796,6 +3802,14 @@ fn admitted_block_sync_response_retires_backpressured_request() {
         !service
             .has_pending_exact_output()
             .expect("admission retires the completed CommitQC request fanout")
+    );
+    assert!(
+        ranked_tickets
+            .lock()
+            .expect("inspect retired discovery actor reservations")
+            .iter()
+            .all(|ticket| ticket.waiter_count() == 0),
+        "retiring the exact discovery request releases every actor reservation"
     );
 }
 #[test]
@@ -4715,13 +4729,14 @@ fn zero_top_up_epoch_boundary_commit_signs_next_pasta_roster() {
         payload_hash: Hash::new(b"boundary payload"),
     };
     let ordinary_writes_root = Hash::new(b"boundary ordinary writes");
-    let execution_commitment = wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
-        Hash::new(b"boundary parent state"),
-        ordinary_writes_root,
-        ordinary_writes_root,
-        1,
-        Hash::new(b"boundary executed block"),
-    );
+    let execution_commitment =
+        wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+            Hash::new(b"boundary parent state"),
+            ordinary_writes_root,
+            ordinary_writes_root,
+            1,
+            Hash::new(b"boundary executed block"),
+        );
     let vote = wire::Vote {
         round,
         proposal_round: round,
@@ -4731,13 +4746,12 @@ fn zero_top_up_epoch_boundary_commit_signs_next_pasta_roster() {
         signer: 0,
         signature: Vec::new(),
     };
-    let authority =
-        crate::zk::kagemusha_v1_recursion::KagemushaMintFinalityLocalAuthorityV1::new(
-            std::sync::Arc::new(context.kagemusha_mint_finality_epoch_roster.clone()),
-            zeroize::Zeroizing::new([0xA0; 32]),
-            0,
-        )
-        .expect("bind fixture Pasta signing authority");
+    let authority = crate::zk::kagemusha_v1_recursion::KagemushaMintFinalityLocalAuthorityV1::new(
+        std::sync::Arc::new(context.kagemusha_mint_finality_epoch_roster.clone()),
+        zeroize::Zeroizing::new([0xA0; 32]),
+        0,
+    )
+    .expect("bind fixture Pasta signing authority");
     let signature = sign_consensus_request_with_kagemusha_authority(
         &context,
         &keys[0],

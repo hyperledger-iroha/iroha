@@ -1581,7 +1581,9 @@ fn run_lifecycle_active_height(
                 let pending_historical_recovery = activated.with_runner_runtime(
                     &mut active_runner,
                     |_owner, _executor, _services, _local_proposal| {
-                        Ok::<_, V2RunnerError>(lane_work.has_pending_historical_recovery())
+                        lane_work
+                            .has_pending_historical_recovery()
+                            .map_err(V2RunnerError::from)
                     },
                 )?;
                 iroha_logger::warn!(
@@ -2203,6 +2205,11 @@ pub(super) fn run_non_pending_lifecycle_loop(
                     pending => pending,
                 };
                 match planning {
+                    LaneReservationReconciliationPlanning::AlreadyCompleted(observation) => {
+                        break observe_completed_lane_reservation_reconciliation(
+                            queue.as_ref(), kura.as_ref(), observation,
+                        )?;
+                    }
                     LaneReservationReconciliationPlanning::Ready(plan) => {
                         let reservation_recovery = output_guard
                             .begin_fail_stop_operation()

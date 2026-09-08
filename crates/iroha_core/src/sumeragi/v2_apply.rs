@@ -65,11 +65,12 @@ use crate::{
     },
     lane_consensus::{LaneExecutablePayloadV1, deterministic_lane_author},
     queue::{
-        LaneQueueReservationError, LaneQueueReservationGroupBindingV1,
-        LaneQueueReservationGroupIdentityV1, LaneQueueReservationReconciliationGroupV1,
-        LaneQueueReservationReconciliationSnapshotV1, LaneQueueReservationReleaseBarrierV1,
-        LaneReservationStartupReconciliationReceipt, Queue, QueueLaneRetirementObserver,
-        RoutingDecision, canonical_lane_queue_reservation_group_identity_projection,
+        CompletedLaneReservationStartupReconciliation, LaneQueueReservationError,
+        LaneQueueReservationGroupBindingV1, LaneQueueReservationGroupIdentityV1,
+        LaneQueueReservationReconciliationGroupV1, LaneQueueReservationReconciliationSnapshotV1,
+        LaneQueueReservationReleaseBarrierV1, LaneReservationStartupReconciliationReceipt, Queue,
+        QueueLaneRetirementObserver, RoutingDecision,
+        canonical_lane_queue_reservation_group_identity_projection,
         lane_queue_reservation_group_binding_from_ordered_keys,
         strictly_absent_lane_reservation_snapshot_recovery_state,
     },
@@ -1136,6 +1137,14 @@ pub(crate) fn plan_lane_reservation_ownership(
 ) -> Result<LaneReservationReconciliationPlanning, V2ReservationLifecycleError> {
     let active_context = verified_active_context.context();
     let current_snapshot = queue.lane_reservation_reconciliation_snapshot()?;
+    if lifecycle_handoff.is_none()
+        && let Some(completed) =
+            queue.observe_completed_lane_reservation_startup_reconciliation(&current_snapshot)?
+    {
+        return Ok(LaneReservationReconciliationPlanning::AlreadyCompleted(
+            completed,
+        ));
+    }
     let (snapshot, recovered_receipt, deferred_terminal_recovery) = match lifecycle_handoff {
         Some(handoff) => {
             let (snapshot, receipt, deferred_terminal_recovery) = handoff.into_queue_handoff();
@@ -2067,6 +2076,38 @@ pub(crate) fn plan_lane_reservation_ownership(
             recovered: unique_recovered.len(),
         },
     ))
+}
+/// Confirm a completed startup cut without replaying any Queue or Kura mutation.
+///
+/// Queue completion alone does not prove Kura terminality. Pending terminal
+/// outcomes must still take their ordinary recovery path before this observation
+/// can be consumed. Callers retain the same serialized startup ownership as for
+/// planning and application.
+pub(crate) fn observe_completed_lane_reservation_reconciliation(
+    queue: &Queue,
+    kura: &Kura,
+    observation: CompletedLaneReservationStartupReconciliation,
+) -> Result<LaneReservationReconciliationSummary, V2ReservationLifecycleError> {
+    if !kura
+        .pending_autonomous_lifecycle_terminal_outcome_inventory()
+        .map_err(
+            |error| V2ReservationLifecycleError::InvalidCarrierCleanupAuthorization {
+                detail: format!("completed startup terminal readback failed: {error}"),
+            },
+        )?
+        .is_empty()
+    {
+        return Err(
+            V2ReservationLifecycleError::InvalidCarrierCleanupAuthorization {
+                detail: "completed startup reconciliation cannot bypass a Pending terminal outcome"
+                    .to_owned(),
+            },
+        );
+    }
+    if !queue.revalidate_completed_lane_reservation_startup_reconciliation(&observation)? {
+        return Err(V2ReservationLifecycleError::QueueSnapshotChanged);
+    }
+    Ok(LaneReservationReconciliationSummary::default())
 }
 /// Apply one previously completed immutable reconciliation plan.
 ///
@@ -3924,7 +3965,9 @@ impl V2ApplyService {
             self.kura.as_ref(),
             context,
             body,
-        ) {
+        )
+        .map_err(V2ApplyError::CanonicalStorageRead)?
+        {
             return Ok(());
         }
         let routes = bundle
@@ -4432,10 +4475,10 @@ impl V2ApplyService {
                 decision_height: height.get(),
             });
         }
-        let durable_hash = self.kura.get_durable_block_hash(height);
-        if durable_hash.is_some_and(|hash| hash != task.subject().block_hash) {
-            return Err(V2ApplyError::KuraConflict);
-        }
+        let durable_body = self
+            .kura
+            .read_block_body_with_verified_finality(height, &verified_artifact)
+            .map_err(V2ApplyError::CanonicalStorageRead)?;
         if state_height < height.get() {
             if state_height.saturating_add(1) != height.get() {
                 return Err(V2ApplyError::StateGap {
@@ -4443,10 +4486,28 @@ impl V2ApplyService {
                     decision_height: height.get(),
                 });
             }
-        } else if durable_hash.is_none() {
+        } else if durable_body.is_none() {
             // WSV cannot be ahead of its canonical block log. Continuing here
             // would manufacture a sidecar for state that Kura cannot identify.
             return Err(V2ApplyError::StateAheadOfKura);
+        }
+        if durable_body.is_some() {
+            // An interrupted append can precede finality publication. The
+            // opaque verified decision above has now authenticated the exact
+            // durable execution bytes, including signatures and results.
+            // Complete that publication before recovery consults canonical
+            // lane ownership; ordinary planning sees the post-append frontier.
+            // The final publication below returns the receipt used for apply
+            // completion after WSV and metadata repair.
+            let _ = self
+                .kura
+                .store_v2_finality_artifact(artifact)
+                .map_err(|error| {
+                    V2ApplyError::committed_recovery_required(
+                        "recovered pre-WSV finality artifact",
+                        &error,
+                    )
+                })?;
         }
         // The durable CommitQC and exact validated body now identify the only
         // carrier that can ever apply at this height. Keep its immutable
@@ -4500,17 +4561,15 @@ impl V2ApplyService {
                 checked_carrier_applications,
             )?;
             self.kura
-                .get_block(height)
+                .read_block_body(height)
+                .map_err(V2ApplyError::CanonicalStorageRead)?
                 .ok_or(V2ApplyError::StateAheadOfKura)?
         } else {
             // WSV is already committed. The proposal body is deliberately
             // resultless, so recovery must authenticate and retain Kura's
             // canonical result-bearing execution image rather than replacing
             // it with the proposal carrier.
-            let committed = self
-                .kura
-                .get_block(height)
-                .ok_or(V2ApplyError::StateAheadOfKura)?;
+            let committed = durable_body.ok_or(V2ApplyError::StateAheadOfKura)?;
             let committed_wire = committed
                 .encode_wire()
                 .map_err(|error| V2ApplyError::CanonicalBlock(error.to_string()))?;
@@ -5167,7 +5226,7 @@ impl V2ApplyService {
                 }
             })?;
             archive
-                .capture_kura_authenticated_view(&state_block, self.kura.as_ref(), receipt)
+                .capture_kura_authenticated_view(state_block.as_ref(), self.kura.as_ref(), receipt)
                 .map_err(|error| {
                     V2ApplyError::committed_recovery_required(
                         "provider-ingest finalized archive capture",
@@ -5185,7 +5244,7 @@ impl V2ApplyService {
                 }
             })?;
             archive
-                .capture_kura_authenticated_view(&state_block, self.kura.as_ref(), receipt)
+                .capture_kura_authenticated_view(state_block.as_ref(), self.kura.as_ref(), receipt)
                 .map_err(|error| {
                     V2ApplyError::committed_recovery_required(
                         "reputation finalized archive capture",
@@ -5473,13 +5532,45 @@ mod fastpq_submission_tests {
             new_root: [0x33; 32],
             perm_root: [0x44; 32],
         };
-        let tx_set_hash = [0x55; 32];
+        // Direct fixture execution has no external or time entrypoint wires.
+        let tx_set_hash: [u8; 32] =
+            iroha_data_model::nexus::axt_ordered_transaction_set_digest_v1(std::iter::empty::<
+                &iroha_data_model::transaction::TransactionEntrypoint,
+            >())
+            .unwrap()
+            .into();
         let entry_hash = Hash::prehashed([0x66; Hash::LENGTH]);
         let entry_dsid = [0x77; 16];
+        let state = crate::state::State::new(
+            crate::state::World::default(),
+            crate::kura::Kura::blank_kura_for_testing(),
+            crate::query::store::LiveQueryStore::start_test(),
+        );
+        let mut state_block = state.block(BlockHeader::new(
+            std::num::NonZeroU64::new(height).unwrap(),
+            None,
+            None,
+            None,
+            23,
+            view,
+        ));
+        state_block.set_fastpq_tx_set_hash(tx_set_hash);
+        state_block
+            .finalize_fastpq_source_inventory(&[], &[], &[])
+            .unwrap();
+        let inventory = Arc::new(
+            state_block
+                .fastpq_source_inventory()
+                .unwrap()
+                .unwrap()
+                .clone(),
+        );
+        assert_eq!(inventory.tx_set_hash(), tx_set_hash);
         let context = FastpqWitnessContext {
             public_inputs: Some(public_inputs),
             tx_set_hash: Some(tx_set_hash),
             entry_dataspaces: BTreeMap::from([(entry_hash, entry_dsid)]),
+            source_inventory: Some(Arc::clone(&inventory)),
         };
         let captured = RefCell::new(None);
 
@@ -5503,6 +5594,10 @@ mod fastpq_submission_tests {
         assert_eq!(actual_public_inputs.new_root, public_inputs.new_root);
         assert_eq!(actual_public_inputs.perm_root, public_inputs.perm_root);
         assert_eq!(job.context.tx_set_hash, Some(tx_set_hash));
+        assert!(Arc::ptr_eq(
+            job.context.source_inventory.as_ref().unwrap(),
+            &inventory
+        ));
         assert_eq!(
             job.context.entry_dataspaces.get(&entry_hash),
             Some(&entry_dsid)

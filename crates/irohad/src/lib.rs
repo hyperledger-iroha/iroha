@@ -6,4 +6,8 @@
 /// Authenticated external software signer service and broker adapters.
 #[cfg(feature = "daemon")]
 pub mod external_software_signer;
+#[cfg(all(feature = "daemon", unix))]
+mod runtime_credential;
+#[cfg(all(feature = "daemon", unix))]
+pub use runtime_credential::RuntimeCredentialErrorV1;
 include!("main.rs");

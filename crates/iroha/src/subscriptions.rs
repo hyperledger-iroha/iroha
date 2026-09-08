@@ -1,242 +1,164 @@
-//! Subscription app API DTOs and helpers.
-use iroha_data_model::{
-    account::AccountId,
-    asset::AssetDefinitionId,
-    name::Name,
-    nft::NftId,
-    subscription::{SubscriptionInvoice, SubscriptionPlan, SubscriptionState},
-    trigger::TriggerId,
-};
+//! Public subscription reads and account-bound unsigned draft preparation.
+//!
+//! Obtain reads with [`crate::client::Client::subscriptions`] and prepare drafts
+//! with [`crate::client::AccountClient::subscriptions`]. Preparing a draft never
+//! submits a transaction. Signing and submission are explicit account operations.
+
+pub use crate::client::subscriptions::{AccountSubscriptions, Subscriptions};
+use iroha_data_model::{asset::AssetDefinitionId, name::Name, nft::NftId, trigger::TriggerId};
 use iroha_primitives::numeric::Quantity;
-use norito::derive::{JsonDeserialize, JsonSerialize};
-/// Request payload for creating a subscription plan.
-#[derive(Clone, Debug, JsonDeserialize, JsonSerialize)]
-pub struct SubscriptionPlanCreateRequest {
-    /// Account authorizing the transaction (plan provider).
-    pub authority: AccountId,
-    /// Asset definition id used to store the plan metadata.
-    pub plan_id: AssetDefinitionId,
-    /// Subscription plan payload stored on the asset definition.
-    pub plan: SubscriptionPlan,
-}
-/// Unsigned transaction draft returned for subscription plan registration.
-#[derive(Clone, Debug, JsonDeserialize, JsonSerialize)]
-pub struct SubscriptionPlanCreateResponse {
-    /// Always false because Torii does not submit the transaction.
-    pub submitted: bool,
-    /// Plan asset definition id.
-    pub plan_id: AssetDefinitionId,
-    /// Canonical Norito transaction payload encoded as padded base64.
-    pub transaction_payload_b64: String,
-    /// Transaction-payload hash encoded as padded base64.
-    pub signing_message_b64: String,
-}
-/// Query parameters for listing subscription plans.
-#[derive(Clone, Debug, Default, JsonDeserialize, JsonSerialize)]
-pub struct SubscriptionPlanListParams {
-    /// Optional plan provider filter.
-    pub provider: Option<String>,
-    /// Optional limit for pagination.
-    pub limit: Option<u64>,
-    /// Offset for pagination (default 0).
-    pub offset: u64,
-    /// Count mode: "bounded" omits exact totals; "exact" preserves total counts.
-    pub count_mode: Option<String>,
-}
-/// Subscription plan list item.
-#[derive(Clone, Debug, JsonDeserialize, JsonSerialize)]
-pub struct SubscriptionPlanListItem {
-    /// Plan asset definition id.
-    pub plan_id: AssetDefinitionId,
-    /// Plan metadata payload.
-    pub plan: SubscriptionPlan,
-}
-/// Response payload for listing subscription plans.
-#[derive(Clone, Debug, JsonDeserialize, JsonSerialize)]
-pub struct SubscriptionPlanListResponse {
-    /// Plan items.
-    pub items: Vec<SubscriptionPlanListItem>,
-    /// Total number of matching plans when `count_mode` is "exact".
-    pub total: Option<u64>,
-    /// Whether more items are available after this page.
-    pub has_more: bool,
-    /// Count mode used to produce pagination metadata.
-    pub count_mode: String,
-}
-/// Request payload for creating a subscription.
-#[derive(Clone, Debug, JsonDeserialize, JsonSerialize)]
-pub struct SubscriptionCreateRequest {
-    /// Account authorizing the transaction (subscriber).
-    pub authority: AccountId,
-    /// Subscription NFT id to register.
+use iroha_torii_shared::subscriptions::SubscriptionCancelMode;
+
+/// Subscription creation intent; the account context supplies its signing authority.
+#[derive(Clone, Debug)]
+pub struct SubscriptionCreate {
+    /// Subscription NFT to register.
     pub subscription_id: NftId,
-    /// Asset definition id for the subscription plan.
+    /// Asset definition containing the selected plan.
     pub plan_id: AssetDefinitionId,
-    /// Optional billing trigger id; derived when omitted.
+    /// Explicit billing trigger, or the deterministic subscription trigger when absent.
     pub billing_trigger_id: Option<TriggerId>,
-    /// Optional usage trigger id for usage plans; derived when omitted.
+    /// Explicit usage trigger for a usage-priced plan.
     pub usage_trigger_id: Option<TriggerId>,
-    /// Optional first charge timestamp in UTC milliseconds.
+    /// First charge time in UTC milliseconds, or the plan's resolved default.
     pub first_charge_ms: Option<u64>,
-    /// Grant `CanExecuteTrigger` to the plan provider for usage recording.
+    /// Whether to grant the plan provider permission to record usage.
     pub grant_usage_to_provider: Option<bool>,
 }
-/// One canonical framed instruction returned for local signing.
-#[derive(Clone, Debug, JsonDeserialize, JsonSerialize)]
-pub struct SubscriptionInstructionDraft {
-    /// Registered instruction wire identifier.
-    pub wire_id: String,
-    /// Lowercase hexadecimal canonical framed instruction bytes.
-    pub payload_hex: String,
-}
-/// Exact unsigned subscription creation draft.
-#[derive(Clone, Debug, JsonDeserialize, JsonSerialize)]
-pub struct SubscriptionCreateResponse {
-    /// Response layout version.
-    pub version: u16,
-    /// Account that must sign the returned instructions.
-    pub authority: AccountId,
-    /// Exact mutation action (`create`).
-    pub action: String,
-    /// Subscription NFT id.
-    pub subscription_id: NftId,
-    /// Plan asset definition bound to the subscription.
-    pub plan_id: AssetDefinitionId,
-    /// Billing trigger id assigned to the subscription.
-    pub billing_trigger_id: TriggerId,
-    /// Usage trigger id (present for usage plans).
-    pub usage_trigger_id: Option<TriggerId>,
-    /// First charge time in UTC milliseconds.
-    pub first_charge_ms: u64,
-    /// Whether the draft includes a provider usage-trigger grant.
-    pub provider_usage_grant_included: bool,
-    /// Exact subscription state produced by the draft.
-    pub resulting_subscription: SubscriptionState,
-    /// Canonical instructions for local transaction signing.
-    pub tx_instructions: Vec<SubscriptionInstructionDraft>,
-}
-/// Query parameters for listing subscriptions.
-#[derive(Clone, Debug, Default, JsonDeserialize, JsonSerialize)]
-pub struct SubscriptionListParams {
-    /// Optional subscriber filter.
-    pub owned_by: Option<String>,
-    /// Optional provider filter.
-    pub provider: Option<String>,
-    /// Optional status filter (active, paused, `past_due`, canceled, suspended).
-    pub status: Option<String>,
-    /// Optional limit for pagination.
-    pub limit: Option<u64>,
-    /// Offset for pagination (default 0).
-    pub offset: u64,
-    /// Count mode: "bounded" omits exact totals; "exact" preserves total counts.
-    pub count_mode: Option<String>,
-}
-/// Subscription list item payload.
-#[derive(Clone, Debug, JsonDeserialize, JsonSerialize)]
-pub struct SubscriptionListItem {
-    /// Subscription NFT id.
-    pub subscription_id: NftId,
-    /// Subscription state metadata.
-    pub subscription: SubscriptionState,
-    /// Optional latest invoice metadata.
-    pub invoice: Option<SubscriptionInvoice>,
-    /// Optional plan metadata payload.
-    pub plan: Option<SubscriptionPlan>,
-}
-/// Response payload for listing subscriptions.
-#[derive(Clone, Debug, JsonDeserialize, JsonSerialize)]
-pub struct SubscriptionListResponse {
-    /// Subscription items.
-    pub items: Vec<SubscriptionListItem>,
-    /// Total number of matching subscriptions when `count_mode` is "exact".
-    pub total: Option<u64>,
-    /// Whether more items are available after this page.
-    pub has_more: bool,
-    /// Count mode used to produce pagination metadata.
-    pub count_mode: String,
-}
-/// Response payload for fetching a subscription.
-#[derive(Clone, Debug, JsonDeserialize, JsonSerialize)]
-pub struct SubscriptionGetResponse {
-    /// Subscription NFT id.
-    pub subscription_id: NftId,
-    /// Subscription state metadata.
-    pub subscription: SubscriptionState,
-    /// Optional latest invoice metadata.
-    pub invoice: Option<SubscriptionInvoice>,
-    /// Optional plan metadata payload.
-    pub plan: Option<SubscriptionPlan>,
-}
-/// Request payload for subscription status updates.
-#[derive(Clone, Debug, JsonDeserialize, JsonSerialize)]
-pub struct SubscriptionActionRequest {
-    /// Account authorizing the transaction (subscriber).
-    pub authority: AccountId,
-    /// Optional charge time override in UTC milliseconds.
-    pub charge_at_ms: Option<u64>,
-    /// Optional cancel mode (`immediate` or `period_end`) for cancel requests.
-    pub cancel_mode: Option<SubscriptionCancelMode>,
-}
-/// Cancelation mode for subscription cancel requests.
-#[derive(Clone, Copy, Debug, JsonDeserialize, JsonSerialize, PartialEq, Eq)]
-#[norito(tag = "mode", content = "value", rename_all = "snake_case")]
-pub enum SubscriptionCancelMode {
-    /// Cancel the subscription immediately.
-    Immediate,
-    /// Cancel the subscription at the end of the current billing period.
-    PeriodEnd,
-}
-/// Request payload for recording subscription usage.
-#[derive(Clone, Debug, JsonDeserialize, JsonSerialize)]
-pub struct SubscriptionUsageRequest {
-    /// Account authorizing the transaction (usage reporter).
-    pub authority: AccountId,
-    /// Usage counter key to update.
+
+/// Usage-recording intent authorized by the bound account.
+#[derive(Clone, Debug)]
+pub struct SubscriptionUsage {
+    /// Usage counter to update.
     pub unit_key: Name,
     /// Non-negative usage increment.
     pub delta: Quantity,
-    /// Optional usage trigger id; derived when omitted.
+    /// Explicit usage trigger, or the deterministic subscription trigger when absent.
     pub usage_trigger_id: Option<TriggerId>,
 }
-/// Exact projected details of a subscription action draft.
-#[derive(Clone, Debug, JsonDeserialize, JsonSerialize)]
-pub struct SubscriptionActionDraftDetails {
-    /// Billing trigger affected by the action.
-    pub billing_trigger_id: TriggerId,
-    /// Exact trigger operation.
-    pub billing_trigger_operation: String,
-    /// Resolved charge time for resume and charge-now actions.
-    pub effective_charge_ms: Option<u64>,
-    /// Explicit cancellation mode for cancel actions.
-    pub cancel_mode: Option<SubscriptionCancelMode>,
-    /// Exact subscription state produced by the draft.
-    pub resulting_subscription: SubscriptionState,
+
+/// Canonical unsigned transaction material returned by subscription preparation.
+#[derive(Clone, Debug, norito::derive::JsonSerialize)]
+#[norito(tag = "kind", content = "value", rename_all = "snake_case")]
+pub enum SubscriptionDraftArtifact {
+    /// Exact payload and fee intent returned by Torii, ready for explicit signing.
+    Payload(iroha_data_model::transaction::TransactionPayload),
+    /// Exact instructions requiring explicit fee selection and transaction preparation.
+    Instructions(Vec<iroha_data_model::isi::InstructionBox>),
 }
-/// Exact unsigned subscription action draft.
-#[derive(Clone, Debug, JsonDeserialize, JsonSerialize)]
-pub struct SubscriptionActionResponse {
-    /// Response layout version.
-    pub version: u16,
-    /// Account that must sign the returned instructions.
-    pub authority: AccountId,
-    /// Exact action name.
-    pub action: String,
-    /// Subscription NFT id.
-    pub subscription_id: NftId,
-    /// Exact projected action details.
-    pub details: SubscriptionActionDraftDetails,
-    /// Canonical instructions for local transaction signing.
-    pub tx_instructions: Vec<SubscriptionInstructionDraft>,
+
+/// Operation and resources to which a prepared subscription draft is bound.
+#[derive(Clone, Debug, norito::derive::JsonSerialize)]
+#[norito(tag = "action", content = "value", rename_all = "snake_case")]
+pub enum SubscriptionDraftOperation {
+    /// Register one subscription plan.
+    Plan {
+        /// Plan being registered.
+        plan_id: AssetDefinitionId,
+    },
+    /// Register a subscription under one plan.
+    Create {
+        /// Subscription being registered.
+        subscription_id: NftId,
+        /// Selected plan.
+        plan_id: AssetDefinitionId,
+    },
+    /// Pause a subscription.
+    Pause {
+        /// Subscription being paused.
+        subscription_id: NftId,
+    },
+    /// Resume a subscription.
+    Resume {
+        /// Subscription being resumed.
+        subscription_id: NftId,
+    },
+    /// Cancel a subscription using an explicit mode.
+    Cancel {
+        /// Subscription being canceled.
+        subscription_id: NftId,
+        /// Requested cancellation mode.
+        mode: SubscriptionCancelMode,
+    },
+    /// Keep a subscription scheduled for cancellation.
+    Keep {
+        /// Subscription being kept.
+        subscription_id: NftId,
+    },
+    /// Schedule a charge for a subscription.
+    Charge {
+        /// Subscription being charged.
+        subscription_id: NftId,
+    },
+    /// Record one usage increment.
+    Usage {
+        /// Subscription whose usage changes.
+        subscription_id: NftId,
+        /// Usage counter being incremented.
+        unit_key: Name,
+        /// Exact increment.
+        delta: Quantity,
+    },
 }
-/// Unsigned transaction draft for recording subscription usage.
-#[derive(Clone, Debug, JsonDeserialize, JsonSerialize)]
-pub struct SubscriptionUsageResponse {
-    /// Always false because Torii does not submit the transaction.
-    pub submitted: bool,
-    /// Subscription NFT id.
-    pub subscription_id: NftId,
-    /// Canonical Norito transaction payload encoded as padded base64.
-    pub transaction_payload_b64: String,
-    /// Transaction-payload hash encoded as padded base64.
-    pub signing_message_b64: String,
+
+/// Decoded unsigned draft bound to its account, network, operation and resources.
+///
+/// This is a preparation result, never a submission receipt. Instruction drafts
+/// retain the server's executable programs for explicit review before signing.
+#[derive(Clone, Debug, norito::derive::JsonSerialize)]
+pub struct SubscriptionDraft {
+    network_id: iroha_data_model::NetworkId,
+    authority: iroha_data_model::account::AccountId,
+    operation: SubscriptionDraftOperation,
+    artifact: SubscriptionDraftArtifact,
+    resulting_subscription: Option<iroha_data_model::subscription::SubscriptionState>,
+}
+
+impl SubscriptionDraft {
+    pub(crate) fn new(
+        account: &crate::client::AccountClient,
+        operation: SubscriptionDraftOperation,
+        artifact: SubscriptionDraftArtifact,
+        resulting_subscription: Option<iroha_data_model::subscription::SubscriptionState>,
+    ) -> Self {
+        Self {
+            network_id: account.network_id().clone(),
+            authority: account.authority().clone(),
+            operation,
+            artifact,
+            resulting_subscription,
+        }
+    }
+    /// Network to which this draft is bound.
+    #[must_use]
+    pub fn network_id(&self) -> &iroha_data_model::NetworkId {
+        &self.network_id
+    }
+    /// Account that authorized draft preparation.
+    #[must_use]
+    pub fn authority(&self) -> &iroha_data_model::account::AccountId {
+        &self.authority
+    }
+    /// Exact requested operation and resources.
+    #[must_use]
+    pub fn operation(&self) -> &SubscriptionDraftOperation {
+        &self.operation
+    }
+    /// Decoded transaction material for explicit local signing or preparation.
+    #[must_use]
+    pub fn artifact(&self) -> &SubscriptionDraftArtifact {
+        &self.artifact
+    }
+    /// Resulting subscription state when supplied by an instruction draft.
+    #[must_use]
+    pub fn resulting_subscription(
+        &self,
+    ) -> Option<&iroha_data_model::subscription::SubscriptionState> {
+        self.resulting_subscription.as_ref()
+    }
+    /// Consume the preparation result and take its decoded transaction material.
+    #[must_use]
+    pub fn into_artifact(self) -> SubscriptionDraftArtifact {
+        self.artifact
+    }
 }

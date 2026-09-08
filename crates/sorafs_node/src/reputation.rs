@@ -1662,7 +1662,8 @@ impl ReputationIngestService {
             .state
             .lock()
             .map_err(|_| ReputationIngestError::RuntimePoisoned)?;
-        norito::to_bytes(&state.checkpoint).map_err(|_| ReputationIngestError::CanonicalEncoding)
+        norito::encode_canonical(&state.checkpoint)
+            .map_err(|_| ReputationIngestError::CanonicalEncoding)
     }
     fn reconcile_pending_on_open(&self) -> Result<(), ReputationIngestError> {
         let mut state = self
@@ -1695,8 +1696,8 @@ impl ReputationIngestService {
         fingerprint: Option<[u8; 32]>,
     ) -> Result<[u8; 32], ReputationIngestError> {
         validate_checkpoint(checkpoint, &self.policy, self.policy_digest)?;
-        let bytes =
-            norito::to_bytes(checkpoint).map_err(|_| ReputationIngestError::CanonicalEncoding)?;
+        let bytes = norito::encode_canonical(checkpoint)
+            .map_err(|_| ReputationIngestError::CanonicalEncoding)?;
         let result = self.store.commit_bytes(&bytes, fingerprint);
         match result {
             Ok(fingerprint) => Ok(fingerprint),
@@ -1822,7 +1823,7 @@ impl<'a> PrepareContext<'a> {
         page: &T,
         max_page_bytes: usize,
     ) -> Result<(), ReputationIngestError> {
-        let encoded_bytes = norito::core::encoded_frame_len(page)
+        let encoded_bytes = norito::canonical_frame_len(page)
             .map_err(|_| ReputationIngestError::CanonicalEncoding)?;
         if encoded_bytes > max_page_bytes {
             return Err(ReputationIngestError::CapacityExceeded);
@@ -2587,7 +2588,7 @@ fn prepare_reserve_projection(
     let mut hasher = blake3::Hasher::new();
     hasher.update(b"sorafs-reputation-reserve-projection-v1");
     let target_bytes =
-        norito::to_bytes(&target).map_err(|_| ReputationIngestError::CanonicalEncoding)?;
+        norito::encode_canonical(&target).map_err(|_| ReputationIngestError::CanonicalEncoding)?;
     update_len_prefixed(&mut hasher, &target_bytes)?;
     for page in pages {
         if previous_promised_more && page.accounts.is_empty() {
@@ -2642,8 +2643,8 @@ fn prepare_reserve_projection(
                 provider_id,
                 stage: reserve_stage(account.lifecycle_stage),
             });
-            let bytes =
-                norito::to_bytes(account).map_err(|_| ReputationIngestError::CanonicalEncoding)?;
+            let bytes = norito::encode_canonical(account)
+                .map_err(|_| ReputationIngestError::CanonicalEncoding)?;
             update_len_prefixed(&mut hasher, &bytes)?;
         }
         previous_promised_more = page.has_more;
@@ -2724,8 +2725,8 @@ fn validate_encoded_page<T: norito::NoritoSerialize>(
     encoded_page_bytes: &mut usize,
     max_batch_bytes: u64,
 ) -> Result<(), ReputationIngestError> {
-    let encoded_bytes = norito::core::encoded_frame_len(page)
-        .map_err(|_| ReputationIngestError::CanonicalEncoding)?;
+    let encoded_bytes =
+        norito::canonical_frame_len(page).map_err(|_| ReputationIngestError::CanonicalEncoding)?;
     if encoded_bytes > max_page_bytes {
         return Err(ReputationIngestError::CapacityExceeded);
     }
@@ -3146,7 +3147,9 @@ fn decode_checkpoint(
         checkpoint_decode_limits(bytes.len())?,
     )
     .map_err(|_| ReputationIngestError::InvalidCheckpoint)?;
-    if norito::to_bytes(&checkpoint).map_err(|_| ReputationIngestError::CanonicalEncoding)? != bytes
+    if norito::encode_canonical(&checkpoint)
+        .map_err(|_| ReputationIngestError::CanonicalEncoding)?
+        != bytes
     {
         return Err(ReputationIngestError::InvalidCheckpoint);
     }
@@ -3157,8 +3160,8 @@ fn ensure_checkpoint_size(
     checkpoint: &ReputationIngestCheckpointV1,
     policy: &ReputationIngestPolicyV1,
 ) -> Result<(), ReputationIngestError> {
-    let bytes =
-        norito::to_bytes(checkpoint).map_err(|_| ReputationIngestError::CanonicalEncoding)?;
+    let bytes = norito::encode_canonical(checkpoint)
+        .map_err(|_| ReputationIngestError::CanonicalEncoding)?;
     if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > policy.checkpoint_max_bytes {
         return Err(ReputationIngestError::CheckpointTooLarge);
     }
@@ -3729,7 +3732,8 @@ fn hash_canonical<T: norito::NoritoSerialize>(
     domain: &'static [u8],
     value: &T,
 ) -> Result<[u8; 32], ReputationIngestError> {
-    let bytes = norito::to_bytes(value).map_err(|_| ReputationIngestError::CanonicalEncoding)?;
+    let bytes =
+        norito::encode_canonical(value).map_err(|_| ReputationIngestError::CanonicalEncoding)?;
     let mut hasher = blake3::Hasher::new();
     hasher.update(domain);
     update_len_prefixed(&mut hasher, &bytes)?;
@@ -3821,6 +3825,7 @@ mod tests {
     };
     use std::fs;
     use tempfile::TempDir;
+    include!("reputation/canonical_boundary_tests.rs");
     const TARGET_HEIGHT: u64 = 10;
     const TARGET_HASH: [u8; 32] = [0xA1; 32];
     const FINALIZED_AT_MS: u64 = 1_800_000_010_000;
@@ -4902,32 +4907,6 @@ mod tests {
                 .enqueue_unsigned_signing_material()
                 .expect_err("outbox mutation fails closed"),
             ReputationIngestError::CheckpointDurabilityUncertain
-        );
-    }
-    #[test]
-    fn replicas_produce_identical_checkpoint_and_unsigned_material_bytes() {
-        let left_root = TempDir::new().expect("left root");
-        let right_root = TempDir::new().expect("right root");
-        let left = ReputationIngestService::open(left_root.path(), policy()).expect("open left");
-        let right = ReputationIngestService::open(right_root.path(), policy()).expect("open right");
-        let batch = all_sources_batch(provider(7));
-        left.ingest_finalized_batch(batch.clone())
-            .expect("ingest left");
-        right.ingest_finalized_batch(batch).expect("ingest right");
-        assert_eq!(
-            left.canonical_checkpoint_bytes().expect("left bytes"),
-            right.canonical_checkpoint_bytes().expect("right bytes")
-        );
-        let left_material = left
-            .unsigned_signing_material()
-            .expect("left unsigned material");
-        let right_material = right
-            .unsigned_signing_material()
-            .expect("right unsigned material");
-        assert_eq!(left_material, right_material);
-        assert_eq!(
-            norito::to_bytes(&left_material).expect("left material bytes"),
-            norito::to_bytes(&right_material).expect("right material bytes")
         );
     }
     #[test]

@@ -55,6 +55,78 @@ def _noncanonical_signature(kind: str) -> bytes:
     return bytes(signature)
 
 
+@pytest.mark.parametrize("size", (4, 5))
+def test_executable_snapshot_has_an_exact_streaming_byte_ceiling(tmp_path, monkeypatch, size):
+    source = tmp_path / "verifier"
+    source.write_bytes(b"x" * size)
+    source.chmod(0o700)
+    destination = tmp_path / "snapshot"
+    digest = hashlib.sha256(source.read_bytes()).hexdigest()
+    monkeypatch.setattr(signing, "MAX_EXECUTABLE_SIZE", 4)
+    if size == 5:
+        with pytest.raises(signing.ReleaseManifestSignatureError, match="executable byte bound"):
+            signing._snapshot_executable(source, destination, digest, label="verifier", mismatch_message="digest mismatch")
+        assert not destination.exists()
+    else:
+        actual, _ = signing._snapshot_executable(source, destination, digest, label="verifier", mismatch_message="digest mismatch")
+        assert actual == digest
+        assert destination.read_bytes() == source.read_bytes()
+
+
+def test_executable_snapshot_bounds_growth_during_streaming(tmp_path, monkeypatch):
+    source = tmp_path / "verifier"
+    source.write_bytes(b"xxxx")
+    source.chmod(0o700)
+    destination = tmp_path / "snapshot"
+    monkeypatch.setattr(signing, "MAX_EXECUTABLE_SIZE", 4)
+    original_read = os.read
+    read_sizes = []
+    def grow_then_read(descriptor, size):
+        read_sizes.append(size)
+        with source.open("ab") as stream:
+            stream.write(b"x")
+        return original_read(descriptor, size)
+    monkeypatch.setattr(signing.os, "read", grow_then_read)
+    with pytest.raises(signing.ReleaseManifestSignatureError, match="executable byte bound"):
+        signing._snapshot_executable(source, destination, hashlib.sha256(b"xxxxx").hexdigest(), label="verifier", mismatch_message="digest mismatch")
+    assert read_sizes == [5]
+    assert not destination.exists()
+
+
+@pytest.mark.parametrize("size", (4, 5))
+def test_executable_digest_rechecks_enforce_the_same_byte_ceiling(tmp_path, monkeypatch, size):
+    source = tmp_path / "verifier"
+    source.write_bytes(b"x" * size)
+    source.chmod(0o700)
+    monkeypatch.setattr(signing, "MAX_EXECUTABLE_SIZE", 4)
+    if size == 5:
+        with pytest.raises(signing.ReleaseManifestSignatureError, match="executable byte bound"):
+            signing._stable_digest(source, "verifier", executable=True)
+    else:
+        digest, identity = signing._stable_digest(source, "verifier", executable=True)
+        assert digest == hashlib.sha256(b"xxxx").hexdigest()
+        source.write_bytes(b"xxxxx")
+        with pytest.raises(signing.ReleaseManifestSignatureError, match="executable byte bound"):
+            signing._assert_digest_unchanged(source, "verifier", digest, identity, executable=True)
+
+
+def test_executable_digest_bounds_growth_while_hashing(tmp_path, monkeypatch):
+    source = tmp_path / "verifier"
+    source.write_bytes(b"xxxx")
+    source.chmod(0o700)
+    original_read = os.read
+    read_sizes = []
+    def grow_then_read(descriptor, size):
+        read_sizes.append(size)
+        with source.open("ab") as stream:
+            stream.write(b"x")
+        return original_read(descriptor, size)
+    monkeypatch.setattr(signing.os, "read", grow_then_read)
+    with pytest.raises(signing.ReleaseManifestSignatureError, match="inspected byte bound"):
+        signing._stable_digest(source, "verifier", executable=True)
+    assert read_sizes == [5]
+
+
 def _write_executable(path: Path, body: str) -> None:
     path.write_text("#!/usr/bin/env python3\n" + body, encoding="utf-8")
     path.chmod(0o700)

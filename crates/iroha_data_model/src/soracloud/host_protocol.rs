@@ -1590,7 +1590,9 @@ pub fn encode_inrou_host_withdraw_provenance_payload(
         &canonical_payload,
     )
 }
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+// Encoding-only signing preimage; borrowed fields do not expose an owned decoder.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::FheJobRunProvenancePayloadV1")]
 struct FheJobRunProvenancePayloadV1<'a> {
     service_name: &'a str,
     binding_name: &'a str,

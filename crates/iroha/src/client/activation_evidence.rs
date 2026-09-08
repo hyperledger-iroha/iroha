@@ -73,6 +73,7 @@ impl Client {
         });
         let mut builder =
             DefaultRequestBuilder::new(HttpMethod::GET, join_torii_url(&self.torii_url, path))
+                .with_transport(self.http_transport.clone())
                 .headers(headers)
                 .header("Accept", APPLICATION_NORITO)
                 .max_response_bytes(maximum);

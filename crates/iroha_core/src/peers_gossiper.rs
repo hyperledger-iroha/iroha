@@ -16,7 +16,7 @@ use iroha_p2p::{
     UpdateTrustedPeers, UpdateValidatorTopology,
 };
 use iroha_primitives::{addr::SocketAddr, unique_vec::UniqueVec};
-use norito::{NoritoDeserialize, NoritoSerialize, codec::Encode, core as ncore};
+use norito::{NoritoDeserialize, NoritoSerialize, SerializePayload, codec::Encode, core as ncore};
 #[allow(clippy::disallowed_types)]
 use std::{
     collections::{BTreeMap, BTreeSet, HashSet},
@@ -1154,7 +1154,8 @@ pub struct SignedPeerTrust {
     /// Signature proving authenticity of the trust record.
     pub signature: Vec<u8>,
 }
-impl NoritoSerialize for PeersGossip {
+impl NoritoSerialize for PeersGossip {}
+impl SerializePayload for PeersGossip {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
         // Serialize peers as Vec to preserve insertion order.
         let wire = PeersGossipWire {
@@ -1854,6 +1855,7 @@ mod tests {
                 iroha_config::parameters::defaults::network::MAX_FRAME_BYTES_PEER_GOSSIP.get(),
             max_frame_bytes_health:
                 iroha_config::parameters::defaults::network::MAX_FRAME_BYTES_HEALTH.get(),
+            max_frame_bytes_connect: iroha_config::parameters::defaults::network::MAX_FRAME_BYTES_CONNECT.get(),
             max_frame_bytes_other:
                 iroha_config::parameters::defaults::network::MAX_FRAME_BYTES_OTHER.get(),
             quic_max_idle_timeout: None,

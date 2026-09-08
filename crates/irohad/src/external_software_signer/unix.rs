@@ -7,29 +7,30 @@ use super::{
         SIGNER_FRAME_QUALIFY_REQUEST_V1, SIGNER_FRAME_QUALIFY_RESPONSE_V1,
         SIGNER_FRAME_SIGN_REQUEST_V1, SIGNER_FRAME_SIGN_RESPONSE_V1, SIGNER_MAX_FRAME_BYTES_V1,
         SIGNER_PROTOCOL_MAGIC_V1, SIGNER_PROTOCOL_VERSION_V1, SignRequestV1, SignResponseV1,
-        SignStatusV1, SoftwareSignerFrameV1, SoftwareSignerKeyAlgorithmV1,
-        SoftwareSignerLiveProvenanceV1, SoftwareSignerPublicBindingV1, SoftwareSignerRoleV1,
-        admin_request_digest, admin_response_digest, payload_digest, qualify_response_digest,
-        scrub, sign_request_digest, sign_response_digest,
+        SignStatusV1, SignerKeyAlgorithmV1, SignerRoleV1, SoftwareSignerFrameV1,
+        SoftwareSignerLiveProvenanceV1, SoftwareSignerPublicBindingV1, admin_request_digest,
+        admin_response_digest, payload_digest, qualify_response_digest, scrub, sign_request_digest,
+        sign_response_digest,
     },
     service::{
         SoftwareSignerServiceV1, native_payload_matches_role, verify_provenance,
         verify_response_attestation,
     },
 };
+use crate::runtime_credential::{RuntimeCredentialErrorV1, load_bounded_runtime_credential_v1};
 use iroha_crypto::Signature;
 use norito::{
-    NoritoDeserialize, NoritoSerialize,
+    NoritoDeserialize, NoritoSerialize, SerializePayload,
     codec::{Decode, Encode},
 };
 use std::{
     ffi::OsString,
-    fs::{self, File, OpenOptions},
+    fs::{self, File},
     io::{Read as _, Write as _},
     os::{
         fd::{AsRawFd as _, OwnedFd},
         unix::{
-            fs::{FileTypeExt as _, MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _},
+            fs::{FileTypeExt as _, MetadataExt as _, PermissionsExt as _},
             net::UnixStream,
         },
     },
@@ -40,7 +41,6 @@ use std::{
     },
     time::Duration,
 };
-use zeroize::Zeroizing;
 const SOCKET_MODE_V1: u32 = 0o666;
 const RUNTIME_DIRECTORY_MODE_V1: u32 = 0o711;
 const IO_TIMEOUT_V1: Duration = Duration::from_secs(10);
@@ -119,7 +119,7 @@ pub struct SoftwareSignerSignatureReceiptV1 {
     pub response_attestation: Vec<u8>,
 }
 fn valid_receipt_commit_position(
-    role: SoftwareSignerRoleV1,
+    role: SignerRoleV1,
     replayed: bool,
     commit_sequence: u64,
     commit_audit_head: [u8; 32],
@@ -137,7 +137,7 @@ fn valid_receipt_commit_position(
         return true;
     }
     replayed
-        && role != SoftwareSignerRoleV1::Promotion
+        && role != SignerRoleV1::Promotion
         && commit_sequence < provenance.audit_sequence
         && commit_audit_head != provenance.audit_head
 }
@@ -462,7 +462,7 @@ pub struct SoftwareSignerRotationRequestV1 {
     /// SHA-256 digest of the reviewed successor policy bytes.
     pub new_policy_digest: [u8; 32],
     /// Signature algorithm for the successor key.
-    pub algorithm: SoftwareSignerKeyAlgorithmV1,
+    pub algorithm: SignerKeyAlgorithmV1,
 }
 impl SoftwareSignerAdministratorClientV1 {
     /// Pin an administrator client to the current reviewed binding.
@@ -546,7 +546,7 @@ impl SoftwareSignerAdministratorClientV1 {
     fn command(
         &self,
         command: AdminCommandV1,
-        expected_rotation: Option<(u64, u64, [u8; 32], SoftwareSignerKeyAlgorithmV1)>,
+        expected_rotation: Option<(u64, u64, [u8; 32], SignerKeyAlgorithmV1)>,
     ) -> Result<SoftwareSignerLiveProvenanceV1, ExternalSoftwareSignerClientErrorV1> {
         let binding_digest = self
             .policy
@@ -953,7 +953,7 @@ fn verify_payload_signature(
     signature: &[u8],
 ) -> Result<(), ExternalSoftwareSignerClientErrorV1> {
     let message = match binding.role {
-        SoftwareSignerRoleV1::Promotion => {
+        SignerRoleV1::Promotion => {
             let Some(json) =
                 payload.strip_prefix(super::protocol::SORAFS_FOUNDATIONAL_PROMOTION_DOMAIN_V1)
             else {
@@ -969,7 +969,7 @@ fn verify_payload_signature(
             }
             payload.to_vec()
         }
-        role if role.native_role().is_some() => {
+        role if super::protocol::native_role(role).is_some() => {
             let builder =
                 iroha_data_model::transaction::TransactionBuilder::decode_payload(payload)
                     .map_err(|_| ExternalSoftwareSignerClientErrorV1::Rejected)?;
@@ -1261,14 +1261,14 @@ fn validate_absolute_normal_path(path: &Path) -> Result<(), SoftwareSignerServer
 /// sources, read failures, and values that are not exactly 32 non-zero bytes.
 pub fn load_software_signer_wrapping_key_from_fd_v1(
     descriptor: OwnedFd,
-) -> Result<SoftwareSignerWrappingKeyV1, SoftwareSignerCredentialErrorV1> {
+) -> Result<SoftwareSignerWrappingKeyV1, RuntimeCredentialErrorV1> {
     if descriptor.as_raw_fd() <= 2 {
-        return Err(SoftwareSignerCredentialErrorV1::InvalidSource);
+        return Err(RuntimeCredentialErrorV1::InvalidSource);
     }
     let file = File::from(descriptor);
     let metadata = file
         .metadata()
-        .map_err(|_| SoftwareSignerCredentialErrorV1::Unavailable)?;
+        .map_err(|_| RuntimeCredentialErrorV1::Unavailable)?;
     let euid = rustix::process::geteuid().as_raw();
     if metadata.is_dir()
         || (metadata.is_file()
@@ -1276,21 +1276,21 @@ pub fn load_software_signer_wrapping_key_from_fd_v1(
                 || metadata.mode() & 0o077 != 0
                 || metadata.nlink() != 1))
     {
-        return Err(SoftwareSignerCredentialErrorV1::InvalidSource);
+        return Err(RuntimeCredentialErrorV1::InvalidSource);
     }
     let mut bytes = Vec::with_capacity(33);
     file.take(33)
         .read_to_end(&mut bytes)
-        .map_err(|_| SoftwareSignerCredentialErrorV1::Unavailable)?;
+        .map_err(|_| RuntimeCredentialErrorV1::Unavailable)?;
     if bytes.len() != 32 {
         scrub(&mut bytes);
-        return Err(SoftwareSignerCredentialErrorV1::InvalidLength);
+        return Err(RuntimeCredentialErrorV1::InvalidLength);
     }
     let mut key = [0_u8; 32];
     key.copy_from_slice(&bytes);
     scrub(&mut bytes);
     let result = SoftwareSignerWrappingKeyV1::try_from_bytes(key)
-        .map_err(|_| SoftwareSignerCredentialErrorV1::InvalidSource);
+        .map_err(|_| RuntimeCredentialErrorV1::InvalidSource);
     scrub(&mut key);
     result
 }
@@ -1305,147 +1305,16 @@ pub fn load_software_signer_wrapping_key_from_fd_v1(
 /// values that are not exactly 32 non-zero bytes.
 pub fn load_software_signer_wrapping_key_from_credential_v1(
     path: &Path,
-) -> Result<SoftwareSignerWrappingKeyV1, SoftwareSignerCredentialErrorV1> {
-    let bytes = load_bounded_software_signer_credential_v1(path, 32, 32)?;
+) -> Result<SoftwareSignerWrappingKeyV1, RuntimeCredentialErrorV1> {
+    let bytes = load_bounded_runtime_credential_v1(path, 32, 32)?;
     let mut key = [0_u8; 32];
     key.copy_from_slice(&bytes);
     let result = SoftwareSignerWrappingKeyV1::try_from_bytes(key)
-        .map_err(|_| SoftwareSignerCredentialErrorV1::InvalidSource);
+        .map_err(|_| RuntimeCredentialErrorV1::InvalidSource);
     scrub(&mut key);
     result
 }
 
-/// Read one bounded secret credential through the software-signer hardened path.
-///
-/// The returned allocation is zeroized on every exit path. Callers must decode
-/// it immediately into secret-owning types whose `Drop` implementation also
-/// scrubs private fields.
-pub(super) fn load_bounded_software_signer_credential_v1(
-    path: &Path,
-    minimum_bytes: usize,
-    maximum_bytes: usize,
-) -> Result<Zeroizing<Vec<u8>>, SoftwareSignerCredentialErrorV1> {
-    if minimum_bytes == 0 || minimum_bytes > maximum_bytes {
-        return Err(SoftwareSignerCredentialErrorV1::InvalidLength);
-    }
-    let expected_identity = validate_credential_path(path)?;
-    let named_before =
-        fs::symlink_metadata(path).map_err(|_| SoftwareSignerCredentialErrorV1::Unavailable)?;
-    let mut options = OpenOptions::new();
-    options.read(true).custom_flags(
-        (rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::CLOEXEC)
-            .bits()
-            .try_into()
-            .map_err(|_| SoftwareSignerCredentialErrorV1::InvalidSource)?,
-    );
-    let descriptor = options
-        .open(path)
-        .map_err(|_| SoftwareSignerCredentialErrorV1::Unavailable)?;
-    let opened = descriptor
-        .metadata()
-        .map_err(|_| SoftwareSignerCredentialErrorV1::Unavailable)?;
-    if (opened.dev(), opened.ino()) != expected_identity
-        || !same_credential_metadata_v1(&named_before, &opened)
-    {
-        return Err(SoftwareSignerCredentialErrorV1::InvalidSource);
-    }
-    let declared_bytes = usize::try_from(opened.len())
-        .map_err(|_| SoftwareSignerCredentialErrorV1::InvalidLength)?;
-    if declared_bytes < minimum_bytes || declared_bytes > maximum_bytes {
-        return Err(SoftwareSignerCredentialErrorV1::InvalidLength);
-    }
-    // Allocate the metadata-declared credential length exactly once. Using
-    // `read_to_end` here would grow a large `Zeroizing<Vec<_>>` through
-    // ordinary reallocations, leaving freed secret-bearing allocations
-    // outside the final zeroizing owner.
-    let mut allocation = Vec::new();
-    allocation
-        .try_reserve_exact(declared_bytes)
-        .map_err(|_| SoftwareSignerCredentialErrorV1::Unavailable)?;
-    allocation.resize(declared_bytes, 0);
-    let mut bytes = Zeroizing::new(allocation);
-    let mut reader = &descriptor;
-    reader
-        .read_exact(&mut bytes)
-        .map_err(|_| SoftwareSignerCredentialErrorV1::Unavailable)?;
-    let mut trailing = [0_u8; 1];
-    let trailing_len = reader
-        .read(&mut trailing)
-        .map_err(|_| SoftwareSignerCredentialErrorV1::Unavailable)?;
-    scrub(&mut trailing);
-    if trailing_len != 0 {
-        return Err(SoftwareSignerCredentialErrorV1::InvalidLength);
-    }
-    let opened_after = descriptor
-        .metadata()
-        .map_err(|_| SoftwareSignerCredentialErrorV1::Unavailable)?;
-    let named_after =
-        fs::symlink_metadata(path).map_err(|_| SoftwareSignerCredentialErrorV1::Unavailable)?;
-    if (opened_after.dev(), opened_after.ino()) != expected_identity
-        || !same_credential_metadata_v1(&opened, &opened_after)
-        || !same_credential_metadata_v1(&opened_after, &named_after)
-    {
-        return Err(SoftwareSignerCredentialErrorV1::InvalidSource);
-    }
-    Ok(bytes)
-}
-
-fn same_credential_metadata_v1(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    left.is_file()
-        && right.is_file()
-        && left.dev() == right.dev()
-        && left.ino() == right.ino()
-        && left.uid() == right.uid()
-        && left.gid() == right.gid()
-        && left.mode() == right.mode()
-        && left.nlink() == right.nlink()
-        && left.len() == right.len()
-        && left.mtime() == right.mtime()
-        && left.mtime_nsec() == right.mtime_nsec()
-        && left.ctime() == right.ctime()
-        && left.ctime_nsec() == right.ctime_nsec()
-}
-
-fn validate_credential_path(path: &Path) -> Result<(u64, u64), SoftwareSignerCredentialErrorV1> {
-    if !path.is_absolute()
-        || path.components().any(|component| {
-            matches!(
-                component,
-                Component::CurDir | Component::ParentDir | Component::Prefix(_)
-            )
-        })
-    {
-        return Err(SoftwareSignerCredentialErrorV1::InvalidSource);
-    }
-    let euid = rustix::process::geteuid().as_raw();
-    let metadata =
-        fs::symlink_metadata(path).map_err(|_| SoftwareSignerCredentialErrorV1::Unavailable)?;
-    if metadata.file_type().is_symlink()
-        || !metadata.is_file()
-        || (metadata.uid() != 0 && metadata.uid() != euid)
-        || metadata.mode() & 0o7077 != 0
-        || metadata.mode() & 0o400 == 0
-        || metadata.nlink() != 1
-    {
-        return Err(SoftwareSignerCredentialErrorV1::InvalidSource);
-    }
-    for ancestor in path
-        .parent()
-        .ok_or(SoftwareSignerCredentialErrorV1::InvalidSource)?
-        .ancestors()
-    {
-        let metadata = fs::symlink_metadata(ancestor)
-            .map_err(|_| SoftwareSignerCredentialErrorV1::Unavailable)?;
-        if metadata.file_type().is_symlink()
-            || !metadata.is_dir()
-            || (metadata.uid() != 0 && metadata.uid() != euid)
-            || metadata.mode() & 0o022 != 0
-        {
-            return Err(SoftwareSignerCredentialErrorV1::InvalidSource);
-        }
-    }
-    Ok((metadata.dev(), metadata.ino()))
-}
 /// Payload-free client failure classification.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ExternalSoftwareSignerClientErrorV1 {
@@ -1479,14 +1348,4 @@ pub enum SoftwareSignerServerErrorV1 {
     Unavailable,
     /// Exact endpoint identity could not be safely removed.
     EndpointCleanup,
-}
-/// Payload-free runtime wrapping-key source failure.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SoftwareSignerCredentialErrorV1 {
-    /// Descriptor or credential path/metadata is not trusted.
-    InvalidSource,
-    /// Credential is not exactly 32 bytes.
-    InvalidLength,
-    /// Credential could not be read.
-    Unavailable,
 }

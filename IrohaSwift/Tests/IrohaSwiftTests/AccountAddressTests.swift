@@ -139,7 +139,10 @@ final class AccountAddressTests: XCTestCase {
 
     func testSm2ExtendedSingleKeyPayloadUsesCanonicalTag() throws {
         let distid = String(repeating: "d", count: 189)
-        let publicKey = Data(repeating: 0x31, count: Sm2Keypair.publicKeyLength)
+        let publicKey = try XCTUnwrap(Data(hexString:
+            "0432C4AE2C1F1981195F9904466A39C9948FE30BBFF2660BE1715A4589334C74C7" +
+            "BC3736A2F4F6779C59BDCEE36B692153D0A9877CC62A474002DF32E52139F0A0"
+        ))
         let address = try AccountAddress.fromAccount(
             publicKey: publicKey,
             algorithm: "sm2",
@@ -161,7 +164,10 @@ final class AccountAddressTests: XCTestCase {
 
     func testSm2ExtendedSingleKeyRoundTripsThroughCanonicalAndI105() throws {
         let distid = String(repeating: "d", count: 189)
-        let publicKey = Data(repeating: 0x31, count: Sm2Keypair.publicKeyLength)
+        let publicKey = try XCTUnwrap(Data(hexString:
+            "0432C4AE2C1F1981195F9904466A39C9948FE30BBFF2660BE1715A4589334C74C7" +
+            "BC3736A2F4F6779C59BDCEE36B692153D0A9877CC62A474002DF32E52139F0A0"
+        ))
         let address = try AccountAddress.fromAccount(
             publicKey: publicKey,
             algorithm: "sm2",
@@ -783,6 +789,8 @@ final class AccountAddressTests: XCTestCase {
 private extension AccountAddressError {
     var identifier: String {
         switch self {
+        case .nativeBridgeUnavailable:
+            return "NativeBridgeUnavailable"
         case .unsupportedAlgorithm:
             return "UnsupportedAlgorithm"
         case .keyPayloadTooLong:

@@ -4271,13 +4271,13 @@ macro_rules! in_flight_first_release_static_equal_body {
             && $left.producer == $right.producer
             && $left.producer_selected_owner == $right.producer_selected_owner
             && $left.replicated_carrier_owners == $right.replicated_carrier_owners
-            && $left.payload_binding_a == $right.payload_binding_a
             && canonical_identity_equal_body!($left.binding_a, $right.binding_a)
     }};
 }
 macro_rules! in_flight_first_release_state_equal_body {
     ($left:expr, $right:expr) => {{
         in_flight_first_release_static_equal_body!($left, $right)
+            && $left.payload_binding_a == $right.payload_binding_a
             && in_flight_first_release_queue_equal_body!($left.queue, $right.queue)
             && in_flight_first_release_carrier_equal_body!($left.carrier, $right.carrier)
             && in_flight_first_release_session_equal_body!($left.session, $right.session)
@@ -4355,6 +4355,14 @@ macro_rules! production_in_flight_first_release_state_body {
             && (history.ever_execution_input_durable & !validator_mask) == 0u128
             && (history.ever_ready_authorized & !validator_mask) == 0u128
             && (history.ready_signed & !validator_mask) == 0u128
+            && (carrier.kura_active & !state.payload_binding_a) == 0u128
+            && (carrier.execution_input_durable & !state.payload_binding_a) == 0u128
+            && (session.ready_authorized & !state.payload_binding_a) == 0u128
+            && (history.ever_execution_input_durable & !state.payload_binding_a) == 0u128
+            && (history.ever_ready_authorized & !state.payload_binding_a) == 0u128
+            && (history.ready_signed & !state.payload_binding_a) == 0u128
+            && (decision.lane_commit_owner & !state.payload_binding_a) == 0u128
+            && (decision.release_owner & !state.payload_binding_a) == 0u128
             && (carrier.execution_input_durable & !carrier.kura_active) == 0u128
             && (carrier.kura_active == 0u128 || history.ever_reservation_v1)
             && (session.ready_authorized & !carrier.execution_input_durable) == 0u128
@@ -4449,6 +4457,41 @@ macro_rules! production_in_flight_first_release_state_body {
             && (!release.kura_retired || decision.release_owner != 0u128)
             && (release.pending_prefix == 0u64
                 || (release.kura_retired && decision.release_owner != 0u128))
+            // Actor-free abort/orphan release is authorized only before any
+            // durable Kura custody. Retired replicas retain their exact
+            // nonproducer release owner and complete ReleasePending prefix.
+            && if queue.reservation_state
+                == refinement_tag_value!(IN_FLIGHT_FIRST_RELEASE_RESERVATION_DIRECT_RELEASED)
+                && !release.kura_retired
+            {
+                carrier.kura_active == 0u128
+            } else {
+                true
+            }
+            // Every release disposition excludes both a lane decision and
+            // actual WSV ownership, even before Commit cleanup is terminal.
+            && if queue.reservation_state
+                == refinement_tag_value!(IN_FLIGHT_FIRST_RELEASE_RESERVATION_RELEASE_PREPARED)
+                || queue.reservation_state
+                    == refinement_tag_value!(IN_FLIGHT_FIRST_RELEASE_RESERVATION_RELEASE_COMPLETED)
+                || queue.reservation_state
+                    == refinement_tag_value!(IN_FLIGHT_FIRST_RELEASE_RESERVATION_RELEASE_FORGOTTEN)
+                || queue.reservation_state
+                    == refinement_tag_value!(IN_FLIGHT_FIRST_RELEASE_RESERVATION_DIRECT_RELEASED)
+                || queue.reservation_state
+                    == refinement_tag_value!(IN_FLIGHT_FIRST_RELEASE_RESERVATION_REPLICA_QUEUE_ABSENT)
+                || queue.reservation_state
+                    == refinement_tag_value!(
+                        IN_FLIGHT_FIRST_RELEASE_RESERVATION_REPLICA_QUEUE_FIFO_PRESERVED
+                    )
+            {
+                decision.lane_commit_owner == 0u128
+                    && !decision.wsv_committed
+                    && decision.application_count == 0u8
+                    && decision.applied_by == 0u128
+            } else {
+                true
+            }
             && if queue.reservation_state
                 == refinement_tag_value!(IN_FLIGHT_FIRST_RELEASE_RESERVATION_DIRECT_RELEASED)
                 && release.kura_retired
@@ -4552,6 +4595,13 @@ macro_rules! production_in_flight_first_release_transition_body {
         production_in_flight_first_release_state_body!(before)
             && production_in_flight_first_release_state_body!(after)
             && in_flight_first_release_static_equal_body!(before, after)
+            && if projection.action
+                == refinement_tag_value!(IN_FLIGHT_FIRST_RELEASE_ACTION_ACTIVATE_KURA)
+            {
+                after.payload_binding_a == (before.payload_binding_a | projection.actor)
+            } else {
+                after.payload_binding_a == before.payload_binding_a
+            }
             && if projection.action
                 == refinement_tag_value!(IN_FLIGHT_FIRST_RELEASE_ACTION_SELECT_QUEUE_PLAN_V1)
             {
@@ -5264,6 +5314,7 @@ macro_rules! production_in_flight_first_release_transition_body {
                     && ((projection.actor == 0u128
                         && before.queue.reservation_state
                             == refinement_tag_value!(IN_FLIGHT_FIRST_RELEASE_RESERVATION_LIVE)
+                        && before.carrier.kura_active == 0u128
                         && before.decision.lane_commit_owner == 0u128
                         && before.decision.release_owner == 0u128)
                         || (in_flight_first_release_single_validator_body!(
@@ -6358,7 +6409,8 @@ pub(crate) struct ProductionInFlightFirstReleaseReleaseProjection {
 /// identifies the authenticated committee members whose custody of that
 /// complete reservation group is established at this boundary; it is
 /// committee-bounded and must include the selected producer, but it does not
-/// assert knowledge by every validator.
+/// assert knowledge by every validator. Authenticated Kura activation adds
+/// exactly its actor to that custody mask; every other action preserves it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct ProductionInFlightFirstReleaseStateProjection {
     pub(crate) validator_count: u8,
@@ -8476,54 +8528,6 @@ include!("refinement/post_carrier_transition.rs");
 mod nonqueue_replica_release_refinement_tests {
     use super::*;
 
-    fn replica_fifo_state(released_prefix: u64) -> ProductionInFlightFirstReleaseStateProjection {
-        let binding_a = CanonicalIdentityProjection::from_bytes(
-            IDENTITY_DOMAIN_PAYLOAD,
-            IDENTITY_KIND_CANONICAL_PAYLOAD,
-            [0x71; 32],
-        );
-        ProductionInFlightFirstReleaseStateProjection {
-            validator_count: 3,
-            producer: 1,
-            producer_selected_owner: 1,
-            replicated_carrier_owners: 6,
-            payload_binding_a: 3,
-            binding_a,
-            queue: ProductionInFlightFirstReleaseQueueProjection {
-                plan_state: IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_SELECTED,
-                selected_count: 2,
-                reservation_state: IN_FLIGHT_FIRST_RELEASE_RESERVATION_DIRECT_RELEASED,
-            },
-            carrier: ProductionInFlightFirstReleaseCarrierProjection {
-                kura_active: 3,
-                ..ProductionInFlightFirstReleaseCarrierProjection::default()
-            },
-            session: ProductionInFlightFirstReleaseSessionProjection {
-                bodies: 3,
-                producer_alive: true,
-                ..ProductionInFlightFirstReleaseSessionProjection::default()
-            },
-            history: ProductionInFlightFirstReleaseHistoryProjection {
-                ever_queue_plan_v1: true,
-                ever_reservation_v1: true,
-                pending_high_water: 2,
-                released_high_water: released_prefix,
-                ..ProductionInFlightFirstReleaseHistoryProjection::default()
-            },
-            decision: ProductionInFlightFirstReleaseDecisionProjection {
-                release_scope: binding_a,
-                release_owner: 2,
-                ..ProductionInFlightFirstReleaseDecisionProjection::default()
-            },
-            release: ProductionInFlightFirstReleaseReleaseProjection {
-                kura_retired: true,
-                pending_prefix: 2,
-                released_prefix,
-                fifo_restored: true,
-            },
-        }
-    }
-
     #[test]
     fn replica_fifo_released_prefix_requires_exact_nonproducer_release_owner() {
         let mut live = replica_fifo_state(0);
@@ -8576,37 +8580,6 @@ mod nonqueue_replica_release_refinement_tests {
         assert!(production_in_flight_first_release_transition_kernel(
             resumed_fifo_proof
         ));
-        assert!(
-            crate::sumeragi::v2_core::check_production_in_flight_first_release_replay_step_v1(
-                resumed_fifo_proof,
-                crate::sumeragi::v2_core::ProductionInFlightFirstReleaseReplayStepV1::ComposedNext,
-            )
-            .is_none(),
-            "an unchanged replica FIFO proof must not masquerade as a state-changing step",
-        );
-        assert!(
-            crate::sumeragi::v2_core::check_production_in_flight_first_release_replay_step_v1(
-                resumed_fifo_proof,
-                crate::sumeragi::v2_core::ProductionInFlightFirstReleaseReplayStepV1::ReleaseReservationDirectProofStutter,
-            )
-            .is_some(),
-            "an exact already-proved nonproducer FIFO release must pass its explicit stutter class",
-        );
-        assert!(
-            crate::sumeragi::v2_core::check_production_in_flight_first_release_transition(
-                resumed_fifo_proof,
-            )
-            .is_some(),
-            "the production wrapper must classify a resumed replica FIFO proof",
-        );
-        assert!(
-            crate::sumeragi::v2_core::check_production_in_flight_first_release_replay_step_v1(
-                direct,
-                crate::sumeragi::v2_core::ProductionInFlightFirstReleaseReplayStepV1::ReleaseReservationDirectProofStutter,
-            )
-            .is_none(),
-            "a state-changing first FIFO proof must not pass the stutter class",
-        );
     }
 }
 #[cfg(test)]

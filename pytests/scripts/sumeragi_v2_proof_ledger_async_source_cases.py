@@ -2605,6 +2605,26 @@ def test_lifecycle_certified_serve_production_contract_is_current(
     assert errors == []
 
 
+def test_lifecycle_certified_serve_reconciled_owner_gate_is_wired(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """The complete Serve checker must consume its independent owner clauses."""
+    module = load_checker()
+    copy_serve_lifecycle_production_fixture(tmp_path, module)
+    calls = []
+
+    def rejected_owner(root):
+        calls.append(root)
+        return ["independent reconciled lifecycle owner rejected"]
+
+    monkeypatch.setattr(
+        module, "_lifecycle_certified_serve_reconciled_owner_errors", rejected_owner,
+    )
+    errors = module._lifecycle_certified_serve_production_source_fidelity_errors(tmp_path)
+    assert calls == [tmp_path]
+    assert errors == ["independent reconciled lifecycle owner rejected"]
+
+
 @pytest.mark.parametrize(
     ("relative", "item_name", "seal_key", "old", "new", "diagnostic"),
     (
@@ -2633,7 +2653,7 @@ def test_lifecycle_certified_serve_production_contract_is_current(
             "opaque Serve worker task construction must retain ordered marker",
         ),
         (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "crates/iroha_core/src/sumeragi/v2_worker_completion.rs",
             "settle_deliver_and_acknowledge",
             "worker:PreparedLifecycleCertifiedServeCompletionV1::settle_deliver_and_acknowledge",
             "services.post_to_peer_on_reply_routes(",
@@ -2641,7 +2661,7 @@ def test_lifecycle_certified_serve_production_contract_is_current(
             "Serve completion settlement/delivery/acknowledgement must retain ordered marker",
         ),
         (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "crates/iroha_core/src/sumeragi/v2_worker_services_impl.rs",
             "post_to_peer_on_reply_routes",
             "worker:ProductionV2Services::post_to_peer_on_reply_routes",
             "ExactFanoutOwnership::SourceRetained",
@@ -2779,7 +2799,7 @@ def test_lifecycle_certified_serve_completion_failure_survives_item_reseal(
     mutate_rust_item_source_in_context(
         module,
         path,
-        "drive_completion_pre_gate",
+        "drive_completion_pre_gate_inner",
         context,
         "iroha_logger::error!(\n                            %reason,\n                            \"lifecycle Certified-Serve completion failed closed\"\n                        );",
         "let _ = reason;",
@@ -2787,11 +2807,11 @@ def test_lifecycle_certified_serve_completion_failure_survives_item_reseal(
     (mutated,) = [
         item
         for item in module.rust_items(
-            path.read_text(encoding="utf-8"), "drive_completion_pre_gate"
+            path.read_text(encoding="utf-8"), "drive_completion_pre_gate_inner"
         )
         if item.brace_context == context
     ]
-    key = "turn:LaunchedProductionLifecycleV1::drive_completion_pre_gate"
+    key = "turn:LaunchedProductionLifecycleV1::drive_completion_pre_gate_inner"
     module._LIFECYCLE_CERTIFIED_SERVE_ITEM_SHA256[key] = (
         module._rust_item_token_sha256(mutated)
     )

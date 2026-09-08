@@ -7,11 +7,13 @@
 use super::*;
 use crate::zk::pasta_sha256::PastaSha256ByteV1;
 use snark_verifier::{
-    loader::EcPointLoader as _,
-    system::halo2::transcript::halo2::TranscriptObject,
-    util::{msm::Msm, transcript::TranscriptRead as _},
+    loader::EcPointLoader as _, system::halo2::transcript::halo2::TranscriptObject, util::msm::Msm,
     verifier::plonk::PlonkProof,
 };
+
+#[path = "ordinary_proof_transcript.rs"]
+mod ordinary_transcript;
+use ordinary_transcript::{CompleteProofTranscriptV1, NativeOrdinaryTranscriptV1};
 
 // Kagemusha V1 circuits request no circuit-specific transcript challenges. The authenticated
 // Halo2 release profile therefore contains only theta, beta/gamma, and alpha: at most two in one
@@ -104,6 +106,10 @@ where
     ///
     /// This is a constrained, constant-size commitment to the protocol transcript
     /// initial state, every public-instance commitment, and every proof-read object.
+    #[expect(
+        dead_code,
+        reason = "Retain the exact proof-read cell for recursive composition and transcript qualification"
+    )]
     pub(in crate::zk::kagemusha_v1_recursion) transcript_binding: AssignedValue<C::ScalarExt>,
     /// Constrained scalar and compressed-point encodings in exact proof-read order.
     pub(in crate::zk::kagemusha_v1_recursion) canonical_bytes: Vec<PastaSha256ByteV1<C::ScalarExt>>,
@@ -125,11 +131,23 @@ where
     pub(in crate::zk::kagemusha_v1_recursion) accumulator: DeferredAccumulator<'chip, C>,
     /// Final transcript squeeze after both instance commitments and every
     /// hybrid-proof object have been absorbed.
+    #[expect(
+        dead_code,
+        reason = "Retain the exact proof-read cell for recursive composition and transcript qualification"
+    )]
     pub(in crate::zk::kagemusha_v1_recursion) transcript_binding: AssignedValue<C::ScalarExt>,
     /// Proof-read commitment claimed as the canonical wide-carrier commitment.
     /// The reciprocal dense ICK relation must substantiate that claim.
+    #[expect(
+        dead_code,
+        reason = "Retain the exact proof-read cell for recursive composition and transcript qualification"
+    )]
     pub(in crate::zk::kagemusha_v1_recursion) carrier_commitment: DeferredEcPoint<'chip, C>,
     /// Exact proof-read objects, including the hybrid carrier commitment.
+    #[expect(
+        dead_code,
+        reason = "Retain the exact proof-read cell for recursive composition and transcript qualification"
+    )]
     pub(in crate::zk::kagemusha_v1_recursion) loaded_stream: DeferredProofStreamV1<'chip, C>,
 }
 
@@ -150,6 +168,10 @@ where
     /// hybrid-proof object have been absorbed.
     pub(in crate::zk::kagemusha_v1_recursion) transcript_binding: AssignedValue<C::ScalarExt>,
     /// Proof-read commitments for instance columns one and two, in that order.
+    #[expect(
+        dead_code,
+        reason = "Retain the exact proof-read cell for recursive composition and transcript qualification"
+    )]
     pub(in crate::zk::kagemusha_v1_recursion) carrier_commitments: [DeferredEcPoint<'chip, C>; 2],
     /// Exact proof-read objects, including both hybrid carrier commitments.
     pub(in crate::zk::kagemusha_v1_recursion) loaded_stream: DeferredProofStreamV1<'chip, C>,
@@ -445,6 +467,42 @@ where
     C::Base: BigPrimeField,
     C::ScalarExt: BigPrimeField + halo2_base::utils::ScalarField,
 {
+    verify_multi_carrier_hybrid_ordinary_proof_and_stream_with_factory_v1(
+        loader,
+        succinct_vk,
+        protocol,
+        semantic_instances,
+        carrier_commitment_limb_indices,
+        proof_bytes,
+        |loader, reader| {
+            Ok(DeferredTranscript::new::<
+                KAGEMUSHA_IPA_POSEIDON_SECURE_MDS_V1,
+            >(loader, reader))
+        },
+    )
+}
+
+fn verify_multi_carrier_hybrid_ordinary_proof_and_stream_with_factory_v1<
+    'proof,
+    'chip,
+    C,
+    const N: usize,
+    T,
+>(
+    loader: &DeferredLoader<'chip, C>,
+    succinct_vk: &IpaSuccinctVerifyingKey<C>,
+    protocol: &PlonkProtocol<C, DeferredLoader<'chip, C>>,
+    semantic_instances: &[DeferredScalar<'chip, C>],
+    carrier_commitment_limb_indices: [[usize; 2]; N],
+    proof_bytes: &'proof [u8],
+    make_transcript: impl FnOnce(&DeferredLoader<'chip, C>, ExactReader<'proof>) -> Result<T, Error>,
+) -> Result<KagemushaMultiCarrierHybridOrdinaryProofV1<'chip, C, N>, Error>
+where
+    C: CurveAffineExt,
+    C::Base: BigPrimeField,
+    C::ScalarExt: BigPrimeField + halo2_base::utils::ScalarField,
+    T: CompleteProofTranscriptV1<'chip, C>,
+{
     validate_zk_ipa_succinct_key_v1(succinct_vk, KagemushaIpaProofKindV1::Ordinary)?;
     if succinct_vk.domain.k != protocol.domain.k
         || succinct_vk.domain.k != KAGEMUSHA_RECURSION_IPA_K_V1 as usize
@@ -515,8 +573,7 @@ where
     }
 
     let (reader, position) = ExactReader::new(proof_bytes);
-    let mut transcript =
-        DeferredTranscript::new::<KAGEMUSHA_IPA_POSEIDON_SECURE_MDS_V1>(loader, reader);
+    let mut transcript = make_transcript(loader, reader)?;
     if let Some(transcript_initial_state) = protocol.transcript_initial_state.as_ref() {
         transcript.common_scalar(transcript_initial_state)?;
     }
@@ -634,7 +691,7 @@ where
         accumulator: accumulators.remove(0),
         transcript_binding,
         carrier_commitments,
-        loaded_stream: transcript.loaded_stream,
+        loaded_stream: transcript.finish_stream()?,
     })
 }
 
@@ -658,6 +715,43 @@ where
     C::Base: BigPrimeField,
     C::ScalarExt: BigPrimeField + halo2_base::utils::ScalarField,
 {
+    verify_ordinary_proof_and_stream_at_k_with_factory_v1(
+        loader,
+        succinct_vk,
+        protocol,
+        instances,
+        proof_bytes,
+        expected_k,
+        |loader, reader| {
+            Ok(DeferredTranscript::new::<
+                KAGEMUSHA_IPA_POSEIDON_SECURE_MDS_V1,
+            >(loader, reader))
+        },
+    )
+}
+
+fn verify_ordinary_proof_and_stream_at_k_with_factory_v1<'proof, 'chip, C, T>(
+    loader: &DeferredLoader<'chip, C>,
+    succinct_vk: &IpaSuccinctVerifyingKey<C>,
+    protocol: &PlonkProtocol<C, DeferredLoader<'chip, C>>,
+    instances: &[Vec<DeferredScalar<'chip, C>>],
+    proof_bytes: &'proof [u8],
+    expected_k: usize,
+    make_transcript: impl FnOnce(&DeferredLoader<'chip, C>, ExactReader<'proof>) -> Result<T, Error>,
+) -> Result<
+    (
+        DeferredAccumulator<'chip, C>,
+        DeferredProofStreamV1<'chip, C>,
+        AssignedValue<C::ScalarExt>,
+    ),
+    Error,
+>
+where
+    C: CurveAffineExt,
+    C::Base: BigPrimeField,
+    C::ScalarExt: BigPrimeField + halo2_base::utils::ScalarField,
+    T: CompleteProofTranscriptV1<'chip, C>,
+{
     validate_zk_ipa_succinct_key_v1(succinct_vk, KagemushaIpaProofKindV1::Ordinary)?;
     if succinct_vk.domain.k != protocol.domain.k || succinct_vk.domain.k != expected_k {
         return Err(transcript_error(
@@ -675,8 +769,7 @@ where
         )));
     }
     let (reader, position) = ExactReader::new(proof_bytes);
-    let mut transcript =
-        DeferredTranscript::new::<KAGEMUSHA_IPA_POSEIDON_SECURE_MDS_V1>(loader, reader);
+    let mut transcript = make_transcript(loader, reader)?;
     let parsed = PlonkSuccinctVerifier::<IpaAs<C, Bgh19>>::read_proof(
         succinct_vk,
         protocol,
@@ -705,7 +798,107 @@ where
     let transcript_binding = transcript.squeeze_challenge().into_assigned();
     Ok((
         accumulators.remove(0),
-        transcript.loaded_stream,
+        transcript.finish_stream()?,
         transcript_binding,
     ))
+}
+
+/// Verify the complete hybrid Claim predecessor with its preselected transcript implementation.
+pub(in crate::zk::kagemusha_v1_recursion) fn verify_two_carrier_hybrid_ordinary_proof_with_native_v1<
+    'chip,
+    C,
+>(
+    loader: &DeferredLoader<'chip, C>,
+    succinct_vk: &IpaSuccinctVerifyingKey<C>,
+    protocol: &PlonkProtocol<C, DeferredLoader<'chip, C>>,
+    semantic_instances: &[DeferredScalar<'chip, C>],
+    carrier_commitment_limb_indices: [[usize; 2]; 2],
+    proof_bytes: &[u8],
+    native_schedule: Option<&[usize]>,
+    jobs: &mut PastaNativePoseidonJobsV1<C::ScalarExt>,
+) -> Result<KagemushaTwoCarrierHybridOrdinaryProofV1<'chip, C>, Error>
+where
+    C: CurveAffineExt,
+    C::Base: BigPrimeField,
+    C::ScalarExt: KagemushaPoseidonFieldV1,
+{
+    let Some(schedule) = native_schedule else {
+        return verify_two_carrier_hybrid_ordinary_proof_and_stream_v1(
+            loader,
+            succinct_vk,
+            protocol,
+            semantic_instances,
+            carrier_commitment_limb_indices,
+            proof_bytes,
+        );
+    };
+
+    let KagemushaMultiCarrierHybridOrdinaryProofV1 {
+        accumulator,
+        transcript_binding,
+        carrier_commitments,
+        loaded_stream,
+    } = verify_multi_carrier_hybrid_ordinary_proof_and_stream_with_factory_v1(
+        loader,
+        succinct_vk,
+        protocol,
+        semantic_instances,
+        carrier_commitment_limb_indices,
+        proof_bytes,
+        move |loader, reader| {
+            let reserved_jobs = jobs;
+            NativeOrdinaryTranscriptV1::new(loader, reader, reserved_jobs, schedule)
+        },
+    )?;
+    Ok(KagemushaTwoCarrierHybridOrdinaryProofV1 {
+        accumulator,
+        transcript_binding,
+        carrier_commitments,
+        loaded_stream,
+    })
+}
+
+/// Verify a complete release-pinned helper proof using its preselected native schedule.
+pub(in crate::zk::kagemusha_v1_recursion) fn verify_ordinary_proof_with_native_binding_at_k_v1<
+    'chip,
+    C,
+>(
+    loader: &DeferredLoader<'chip, C>,
+    succinct_vk: &IpaSuccinctVerifyingKey<C>,
+    protocol: &PlonkProtocol<C, DeferredLoader<'chip, C>>,
+    instances: &[Vec<DeferredScalar<'chip, C>>],
+    proof_bytes: &[u8],
+    expected_k: usize,
+    native_schedule: Option<&[usize]>,
+    jobs: &mut PastaNativePoseidonJobsV1<C::ScalarExt>,
+) -> Result<(DeferredAccumulator<'chip, C>, AssignedValue<C::ScalarExt>), Error>
+where
+    C: CurveAffineExt,
+    C::Base: BigPrimeField,
+    C::ScalarExt: KagemushaPoseidonFieldV1,
+{
+    let Some(schedule) = native_schedule else {
+        return verify_ordinary_proof_with_transcript_binding_at_k_v1(
+            loader,
+            succinct_vk,
+            protocol,
+            instances,
+            proof_bytes,
+            expected_k,
+        );
+    };
+    let (accumulator, stream, binding) = verify_ordinary_proof_and_stream_at_k_with_factory_v1(
+        loader,
+        succinct_vk,
+        protocol,
+        instances,
+        proof_bytes,
+        expected_k,
+        move |loader, reader| {
+            let reserved_jobs = jobs;
+            NativeOrdinaryTranscriptV1::new(loader, reader, reserved_jobs, schedule)
+        },
+    )?;
+    drop(stream);
+    Ok((accumulator, binding))
 }

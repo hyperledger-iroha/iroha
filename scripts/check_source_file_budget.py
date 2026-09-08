@@ -214,10 +214,11 @@ def is_source_path(path: str) -> bool:
 def is_test_path(path: str) -> bool:
     """Classify source paths that are tests, fixtures, examples, or benchmarks."""
     pure = PurePosixPath(path)
-    parts = set(pure.parts)
+    parts = {part.lower() for part in pure.parts[:-1]}
     name = pure.name.lower()
     return (
-        bool(parts & {"benches", "examples", "fixtures", "test", "tests"})
+        bool(parts & {"benches", "examples", "fixtures", "pytests", "test", "tests"})
+        or any(part.endswith("_tests") for part in parts)
         or name.startswith("test_")
         or "_test." in name
         or ".test." in name

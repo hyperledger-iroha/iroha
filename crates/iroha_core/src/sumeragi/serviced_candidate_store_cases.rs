@@ -146,6 +146,15 @@ mod tests {
             decision_durable,
         )
     }
+    fn protected_commit_execution_fixture() -> wire::ExecutionCommitment {
+        wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+            Hash::new(b"protected Commit fixture parent state"),
+            Hash::new(b"protected Commit fixture post state"),
+            Hash::new(b"protected Commit fixture ordinary writes"),
+            1,
+            Hash::new(b"protected Commit fixture execution wire"),
+        )
+    }
     fn key_with_kind(
         context: &wire::HeightContext,
         source_view: u64,
@@ -1317,6 +1326,13 @@ mod tests {
         );
         protected_commit.identity.view = protected_round.view;
         protected_commit.identity.subject_hash = Hash::new(protected_subject.encode());
+        let protected_execution = protected_commit_execution_fixture();
+        protected_commit.identity.vote_statement_hash =
+            Some(super::super::v2::leader_wire_vote_statement_hash(
+                protected_round,
+                protected_subject,
+                &protected_execution,
+            ));
         let historical_commit_qc = leader_wire_slot_token(
             &context,
             &origin,
@@ -1349,7 +1365,10 @@ mod tests {
         .expect("reopen leader-wire owners as dormant");
         assert_eq!(restore.records().len(), 4);
         let advanced = leader_wire_recovery_authority_at(&context, OWNER_A, 3, false)
-            .with_protected_lock(Some((protected_round, protected_subject)))
+            .with_protected_lock(
+                Some((protected_round, protected_subject)),
+                Some(protected_execution),
+            )
             .expect("project the replayed durable lock");
         gate.advance_recovery_cut(advanced, &BTreeSet::from([proposal.slot.clone()]))
             .expect("retire only the view-scoped dormant owner");
@@ -1443,11 +1462,19 @@ mod tests {
             block_hash: HashOf::from_untyped_unchecked(Hash::new(b"protected Commit block")),
             payload_hash: Hash::new(b"protected Commit payload"),
         };
+        let protected_execution = protected_commit_execution_fixture();
         let replayed = leader_wire_recovery_authority_at(&context, OWNER_A, 2, false)
-            .with_protected_lock(Some((protected_round, protected_subject)))
+            .with_protected_lock(
+                Some((protected_round, protected_subject)),
+                Some(protected_execution),
+            )
             .expect("a replayed current-round lock is authoritative");
         let advanced = replayed
-            .advance_view(5, Some((protected_round, protected_subject)))
+            .advance_view(
+                5,
+                Some((protected_round, protected_subject)),
+                Some(protected_execution),
+            )
             .expect("the exact lock survives certified view churn");
         let mut protected_commit = leader_wire_slot_token(
             &context,
@@ -1459,8 +1486,44 @@ mod tests {
         );
         protected_commit.identity.view = protected_round.view;
         protected_commit.identity.subject_hash = Hash::new(protected_subject.encode());
+        protected_commit.identity.vote_statement_hash =
+            Some(super::super::v2::leader_wire_vote_statement_hash(
+                protected_round,
+                protected_subject,
+                &protected_execution,
+            ));
         assert!(!advanced.retires(&protected_commit));
         assert!(advanced.admits_ingress_identity(&protected_commit.identity));
+
+        let observer = leader_wire_recovery_authority_at(&context, OWNER_A, 5, false)
+            .with_protected_lock(Some((protected_round, protected_subject)), None)
+            .expect("historical observer fixture retains a lock without CommitIntent");
+        assert!(observer.retires(&protected_commit));
+        assert!(!observer.admits_ingress_identity(&protected_commit.identity));
+        let mut missing_statement = protected_commit.clone();
+        missing_statement.identity.vote_statement_hash = None;
+        assert!(advanced.retires(&missing_statement));
+        let mut wrong_execution = protected_commit.clone();
+        let other_execution = wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+            Hash::new(b"unrelated parent state"),
+            Hash::new(b"unrelated post state"),
+            Hash::new(b"unrelated writes"),
+            1,
+            Hash::new(b"unrelated execution wire"),
+        );
+        wrong_execution.identity.vote_statement_hash =
+            Some(super::super::v2::leader_wire_vote_statement_hash(
+                protected_round,
+                protected_subject,
+                &other_execution,
+            ));
+        assert!(advanced.retires(&wrong_execution));
+        assert!(!advanced.admits_ingress_identity(&wrong_execution.identity));
+        assert!(
+            leader_wire_recovery_authority(&context)
+                .with_protected_lock(None, Some(protected_execution))
+                .is_err()
+        );
 
         let mut wrong_subject = protected_commit.clone();
         wrong_subject.identity.subject_hash = Hash::new(b"wrong protected Commit subject");
@@ -1499,7 +1562,7 @@ mod tests {
         assert!(advanced.admits_ingress_identity(&historical_commit_qc.identity));
 
         assert!(
-            advanced.advance_view(6, None).is_err(),
+            advanced.advance_view(6, None, None).is_err(),
             "live authority cannot lose its durable lock"
         );
         let conflicting_subject = wire::BlockSubject {
@@ -1508,7 +1571,11 @@ mod tests {
         };
         assert!(
             advanced
-                .advance_view(6, Some((protected_round, conflicting_subject)))
+                .advance_view(
+                    6,
+                    Some((protected_round, conflicting_subject)),
+                    Some(protected_execution)
+                )
                 .is_err(),
             "same-round lock authority cannot change subject"
         );
@@ -1518,7 +1585,11 @@ mod tests {
         };
         assert!(
             advanced
-                .advance_view(6, Some((lower_round, protected_subject)))
+                .advance_view(
+                    6,
+                    Some((lower_round, protected_subject)),
+                    Some(protected_execution)
+                )
                 .is_err(),
             "lock authority cannot regress"
         );
@@ -1526,9 +1597,27 @@ mod tests {
             view: protected_round.view + 1,
             ..protected_round
         };
-        advanced
-            .advance_view(6, Some((higher_round, conflicting_subject)))
+        let higher = advanced
+            .advance_view(
+                6,
+                Some((higher_round, conflicting_subject)),
+                Some(protected_execution),
+            )
             .expect("a strictly higher durable lock may replace the protected subject");
+        assert!(
+            higher.retires(&protected_commit),
+            "the old statement does not inherit a new lock"
+        );
+        let mut higher_commit = protected_commit.clone();
+        higher_commit.identity.view = higher_round.view;
+        higher_commit.identity.subject_hash = Hash::new(conflicting_subject.encode());
+        higher_commit.identity.vote_statement_hash =
+            Some(super::super::v2::leader_wire_vote_statement_hash(
+                higher_round,
+                conflicting_subject,
+                &protected_execution,
+            ));
+        assert!(!higher.retires(&higher_commit));
 
         let decision = advanced.with_durable_decision();
         assert!(decision.retires(&protected_commit));

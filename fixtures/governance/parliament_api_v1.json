@@ -90,7 +90,8 @@
     {"norito_index": 17, "norito_prefix_hex": "11", "json_tag": "RecordInvitationResponse", "json_payload": "required", "event_kind_index": 20},
     {"norito_index": 18, "norito_prefix_hex": "12", "json_tag": "RegisterBallotParticipant", "json_payload": "required", "event_kind_index": 21},
     {"norito_index": 19, "norito_prefix_hex": "13", "json_tag": "RecordBallotDropout", "json_payload": "required", "event_kind_index": 22},
-    {"norito_index": 20, "norito_prefix_hex": "14", "json_tag": "FailPublicFindingNoResult", "json_payload": "required", "event_kind_index": 23}
+    {"norito_index": 20, "norito_prefix_hex": "14", "json_tag": "FailPublicFindingNoResult", "json_payload": "required", "event_kind_index": 23},
+    {"norito_index": 21, "norito_prefix_hex": "15", "json_tag": "RegisterInitialSortition", "json_payload": "forbidden", "event_kind_index": 24}
   ],
   "automatic_execution_outcomes": [
     {"norito_index": 0, "norito_prefix_hex": "00", "json_tag": "Enacted", "json_payload": "forbidden", "event_kind": "MarkEnacted", "event_kind_index": 17},

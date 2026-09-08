@@ -4,7 +4,8 @@ use eyre::{Result, WrapErr, ensure, eyre};
 use futures_util::StreamExt;
 use integration_tests::sandbox;
 use iroha::{
-    client::{Client, UaidManifestQuery, UaidManifestStatus, UaidManifestStatusFilter},
+    blocking::Client,
+    client::{UaidManifestQuery, UaidManifestStatus, UaidManifestStatusFilter},
     crypto::{Algorithm, Hash, KeyPair},
     data_model::{
         account::AccountId,
@@ -246,7 +247,7 @@ fn wait_for_lane_visibility(client: &Client, lane_id: LaneId, context: &str) -> 
     let started = Instant::now();
     let mut last_error = String::new();
     while started.elapsed() <= STATUS_WAIT_TIMEOUT {
-        match client.get_public_lane_validators(lane_id) {
+        match client.client().get_public_lane_validators(lane_id) {
             Ok(snapshot) => return Ok(snapshot),
             Err(err) => {
                 last_error = err.to_string();
@@ -277,7 +278,7 @@ fn wait_for_all_peers_lane_visibility(
         let mut resolved = Vec::new();
         for peer_index in pending.iter().copied() {
             let client = network.peers()[peer_index].client();
-            match client.get_public_lane_validators(lane_id) {
+            match client.client().get_public_lane_validators(lane_id) {
                 Ok(_snapshot) => resolved.push(peer_index),
                 Err(err) => {
                     last_errors.insert(peer_index, err.to_string());
@@ -306,7 +307,7 @@ fn wait_for_lane_authoritative_binding(
     let mut last_snapshot = None;
     let mut last_error = None;
     while started.elapsed() <= STATUS_WAIT_TIMEOUT {
-        match client.get_public_lane_validators(lane_id) {
+        match client.client().get_public_lane_validators(lane_id) {
             Ok(snapshot) => {
                 if snapshot
                     .get("total")
@@ -333,7 +334,7 @@ fn wait_for_lane_absence(client: &Client, lane_id: LaneId, context: &str) -> Res
     let started = Instant::now();
     let mut last_present = String::new();
     while started.elapsed() <= STATUS_WAIT_TIMEOUT {
-        match client.get_public_lane_validators(lane_id) {
+        match client.client().get_public_lane_validators(lane_id) {
             Ok(snapshot) => {
                 if snapshot.get("total").and_then(JsonValue::as_u64) == Some(0) {
                     return Ok(());
@@ -367,7 +368,7 @@ fn wait_for_all_peers_lane_absence(
         let mut resolved = Vec::new();
         for peer_index in pending.iter().copied() {
             let client = network.peers()[peer_index].client();
-            match client.get_public_lane_validators(lane_id) {
+            match client.client().get_public_lane_validators(lane_id) {
                 Ok(snapshot) => {
                     if snapshot.get("total").and_then(JsonValue::as_u64) == Some(0) {
                         resolved.push(peer_index);
@@ -403,9 +404,12 @@ fn wait_for_lane_visibility_with_status(
     let mut last_height = 0_u64;
     let mut last_error = String::new();
     while started.elapsed() <= STATUS_WAIT_TIMEOUT {
-        let status = client.get_sumeragi_status().map_err(|err| eyre!(err))?;
+        let status = client
+            .client()
+            .get_sumeragi_status()
+            .map_err(|err| eyre!(err))?;
         last_height = status.last_committed_height;
-        match client.get_public_lane_validators(lane_id) {
+        match client.client().get_public_lane_validators(lane_id) {
             Ok(_snapshot) => return Ok(status.last_committed_height),
             Err(err) => {
                 last_error = err.to_string();
@@ -440,7 +444,10 @@ fn wait_for_manifest_status(
             offset: Some(0),
             count_mode: None,
         };
-        match client.get_uaid_manifests(uaid_literal, Some(query)) {
+        match client
+            .client()
+            .get_uaid_manifests(uaid_literal, Some(query))
+        {
             Ok(response) => {
                 last_statuses = response
                     .manifests
@@ -502,7 +509,10 @@ fn wait_for_all_peers_manifest_status(
         };
         for peer_index in pending.iter().copied() {
             let client = network.peers()[peer_index].client();
-            match client.get_uaid_manifests(uaid_literal, Some(query)) {
+            match client
+                .client()
+                .get_uaid_manifests(uaid_literal, Some(query))
+            {
                 Ok(response) => {
                     if response.manifests.iter().any(|record| {
                         record.dataspace_id == dataspace.as_u64()
@@ -555,6 +565,7 @@ fn wait_for_account_permissions(
     let mut last_error: Option<String> = None;
     while started.elapsed() <= STATUS_WAIT_TIMEOUT {
         match client
+            .client()
             .query(FindPermissionsByAccountId::new(account_id.clone()))
             .execute_all()
         {
@@ -585,13 +596,19 @@ async fn ensure_publish_manifest_permission(client: &Client, dataspace: DataSpac
     let required_permission = Permission::from(CanPublishSpaceDirectoryManifest { dataspace });
     let grant_instruction = InstructionBox::from(Grant::account_permission(
         required_permission.clone(),
-        client.account.clone(),
+        client.client().account.clone(),
     ));
-    let grant_tx = client.build_transaction(
-        [grant_instruction],
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        Metadata::default(),
-    );
+    let grant_tx = {
+        let account = client.account_client();
+        account
+            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                [grant_instruction],
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                Metadata::default(),
+            ))
+            .and_then(|payload| account.sign_transaction(payload))
+    }
+    .expect("build integration-test transaction");
     submit_and_wait_for_tx_approval(
         client,
         grant_tx,
@@ -601,7 +618,7 @@ async fn ensure_publish_manifest_permission(client: &Client, dataspace: DataSpac
     .wrap_err("grant CanPublishSpaceDirectoryManifest permission transaction did not reach Approved state")?;
     wait_for_account_permissions(
         client,
-        &client.account,
+        &client.client().account,
         &[required_permission],
         "wait for CanPublishSpaceDirectoryManifest permission visibility",
     )
@@ -614,7 +631,9 @@ async fn submit_and_wait_for_tx_approval(
     let tx_hash = transaction.hash();
     let mut events = timeout(
         STATUS_WAIT_TIMEOUT,
-        submitter.listen_for_events_async([TransactionEventFilter::default().for_hash(tx_hash)]),
+        submitter
+            .client()
+            .listen_for_events([TransactionEventFilter::default().for_hash(tx_hash)]),
     )
     .await
     .map_err(|_| eyre!("{context}: timed out opening transaction event stream"))??;
@@ -685,10 +704,11 @@ fn leader_or_highest_height_peer_index(
     if peers.is_empty() {
         return 0;
     }
-    if let Ok(status) = status_client.get_sumeragi_status() {
+    if let Ok(status) = status_client.client().get_sumeragi_status() {
         if let Ok(index) = usize::try_from(status.leader) {
             if index < peers.len() {
                 let leader_height = peers[index]
+                    .client()
                     .client()
                     .get_sumeragi_status()
                     .map(|status| status.last_committed_height)
@@ -704,6 +724,7 @@ fn leader_or_highest_height_peer_index(
         .enumerate()
         .fold((0usize, 0u64), |best, (index, peer)| {
             let observed_height = peer
+                .client()
                 .client()
                 .get_sumeragi_status()
                 .map(|status| status.last_committed_height)
@@ -754,7 +775,7 @@ fn emit_latency_stats(label: &str, samples: &[Duration]) {
 }
 fn submit_lane_lifecycle_plan(client: &Client, plan: &LaneLifecyclePlan) -> Result<()> {
     client
-        .submit_lane_lifecycle_blocking(plan.clone())
+        .submit_lane_lifecycle(plan.clone())
         .map(|_| ())
         .wrap_err(
             "submit signed SetParameter(nexus_lane_lifecycle_v1) transaction and wait for apply",
@@ -808,13 +829,19 @@ fn run_registration_iteration(
         ),
     );
     let publish_started = Instant::now();
-    let publish_tx = submitter.build_transaction(
-        [InstructionBox::from(PublishSpaceDirectoryManifest {
-            manifest: manifest.clone(),
-        })],
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        Metadata::default(),
-    );
+    let publish_tx = {
+        let account = submitter.account_client();
+        account
+            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                [InstructionBox::from(PublishSpaceDirectoryManifest {
+                    manifest: manifest.clone(),
+                })],
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                Metadata::default(),
+            ))
+            .and_then(|payload| account.sign_transaction(payload))
+    }
+    .expect("build integration-test transaction");
     let (manifest_publish_submit_latency, manifest_publish_commit_apply_latency) = rt
         .block_on(submit_and_wait_for_tx_approval(
             &submitter,
@@ -853,16 +880,22 @@ fn run_registration_iteration(
     let manifest_publish_all_peer_visibility_latency = publish_visibility_started.elapsed();
     let manifest_publish_total_latency = publish_started.elapsed();
     let revoke_started = Instant::now();
-    let revoke_tx = submitter.build_transaction(
-        [InstructionBox::from(RevokeSpaceDirectoryManifest {
-            uaid: UniversalAccountId::from_hash(Hash::new(uaid_seed.as_bytes())),
-            dataspace: BENCH_MANIFEST_DATASPACE,
-            revoked_epoch: BENCH_MANIFEST_ACTIVATION_EPOCH.saturating_add(1),
-            reason: Some("runtime registration benchmark revoke".to_owned()),
-        })],
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        Metadata::default(),
-    );
+    let revoke_tx = {
+        let account = submitter.account_client();
+        account
+            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                [InstructionBox::from(RevokeSpaceDirectoryManifest {
+                    uaid: UniversalAccountId::from_hash(Hash::new(uaid_seed.as_bytes())),
+                    dataspace: BENCH_MANIFEST_DATASPACE,
+                    revoked_epoch: BENCH_MANIFEST_ACTIVATION_EPOCH.saturating_add(1),
+                    reason: Some("runtime registration benchmark revoke".to_owned()),
+                })],
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                Metadata::default(),
+            ))
+            .and_then(|payload| account.sign_transaction(payload))
+    }
+    .expect("build integration-test transaction");
     let (manifest_revoke_submit_latency, manifest_revoke_commit_apply_latency) = rt
         .block_on(submit_and_wait_for_tx_approval(
             &submitter,
@@ -914,6 +947,7 @@ fn run_registration_iteration(
         retire: Vec::new(),
     };
     let baseline_height = submitter
+        .client()
         .get_sumeragi_status()
         .map_err(|err| eyre!(err))
         .wrap_err("fetch submitter baseline height")?
@@ -923,6 +957,7 @@ fn run_registration_iteration(
         .iter()
         .map(|peer| {
             peer.client()
+                .client()
                 .get_sumeragi_status()
                 .map(|status| status.last_committed_height)
                 .unwrap_or(0)
@@ -952,6 +987,7 @@ fn run_registration_iteration(
                 lane_id.as_u32()
             );
             submitter
+                .client()
                 .get_sumeragi_status()
                 .map_err(|status_err| eyre!(status_err))
                 .wrap_err_with(|| {
@@ -980,6 +1016,7 @@ fn run_registration_iteration(
         .iter()
         .map(|peer| {
             peer.client()
+                .client()
                 .get_sumeragi_status()
                 .map(|status| status.last_committed_height)
                 .unwrap_or(0)

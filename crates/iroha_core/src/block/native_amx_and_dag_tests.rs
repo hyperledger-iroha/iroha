@@ -11,26 +11,58 @@ fn native_amx_receipt_survives_into_final_header_bound_lane_statement() {
     let (authority, signer) = gen_account_in("wonderland");
     let authority_domain = DomainId::try_new("wonderland", "universal").expect("domain id");
     let domain = Domain::new(authority_domain.clone()).build(&authority);
+    let authority_uaid = iroha_data_model::nexus::UniversalAccountId::from_hash(Hash::new(
+        b"native AMX settlement authority",
+    ));
     let (mut world, keypairs) = native_amx_test_world_with_keys();
     world.domains.insert(authority_domain, domain);
     world.accounts.insert(
         authority.clone(),
         iroha_data_model::account::AccountValue::new(
-            iroha_data_model::account::AccountDetails::default(),
+            iroha_data_model::account::AccountDetails {
+                uaid: Some(authority_uaid),
+                ..iroha_data_model::account::AccountDetails::default()
+            },
         ),
     );
+    let mut manifests = crate::nexus::space_directory::SpaceDirectoryManifestSet::default();
+    let mut bindings = crate::nexus::space_directory::UaidDataspaceBindings::default();
+    let mut manifest_roots = BTreeMap::new();
+    for dataspace in [paynet, cbuae] {
+        let manifest = iroha_data_model::nexus::AssetPermissionManifest {
+            version: iroha_data_model::nexus::ManifestVersion::default(),
+            uaid: authority_uaid,
+            dataspace,
+            issued_ms: 0,
+            activation_epoch: 1,
+            expiry_epoch: None,
+            entries: Vec::new(),
+        };
+        let mut record = crate::nexus::space_directory::SpaceDirectoryManifestRecord::new(manifest);
+        record.lifecycle.mark_activated(1);
+        let mut manifest_root = [0_u8; Hash::LENGTH];
+        manifest_root.copy_from_slice(record.manifest_hash.as_ref());
+        manifest_roots.insert(dataspace, manifest_root);
+        manifests.upsert(record);
+        bindings.bind_account(dataspace, authority.clone());
+    }
+    world
+        .space_directory_manifests_mut_for_testing()
+        .insert(authority_uaid, manifests);
+    world
+        .uaid_dataspaces_mut_for_testing()
+        .insert(authority_uaid, bindings);
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    let mut state = State::try_new_with_chain_and_network_id_with_default_telemetry(
+    let mut state = State::new_with_chain_and_network_id_for_testing(
         world,
         kura,
         query_handle,
         chain_id.clone(),
         native_amx_test_network_id(),
-    )
-    .expect("native AMX test state accepts its explicit network id");
+    );
     {
-        let nexus = state.nexus.get_mut();
+        let mut nexus = state.nexus_snapshot();
         nexus.lane_catalog = LaneCatalog::new(
             nonzero!(4_u32),
             vec![
@@ -53,8 +85,23 @@ fn native_amx_receipt_survives_into_final_header_bound_lane_statement() {
         nexus.lane_config =
             iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
         nexus.dataspace_catalog = native_amx_test_catalog(paynet, cbuae);
+        state
+            .set_nexus(nexus)
+            .expect("install complete Native AMX lane incarnations before execution");
     }
     install_test_lane_manifests(&state);
+    for (dataspace, lane) in [(paynet, LaneId::new(1)), (cbuae, LaneId::new(2))] {
+        state.set_axt_policy(
+            dataspace,
+            AxtPolicyEntry {
+                manifest_root: manifest_roots[&dataspace],
+                target_lane: lane,
+                active_handle_era: 1,
+                next_handle_counter: 1,
+                current_slot: 0,
+            },
+        );
+    }
     let (time_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
     let tx = TransactionBuilder::new_with_time_source(
         state.network_id,
@@ -96,6 +143,18 @@ fn native_amx_receipt_survives_into_final_header_bound_lane_statement() {
     );
     let context = crate::queue::execution_context_for_routing_plan(tx.hash_as_entrypoint(), &plan)
         .with_native_amx_receipt(receipt.clone());
+    let coordinator_manifest_root: [u8; Hash::LENGTH] =
+        Hash::new(b"native AMX coordinator finality manifest").into();
+    state.set_axt_policy(
+        context.dataspace_id,
+        iroha_data_model::nexus::AxtPolicyEntry {
+            manifest_root: coordinator_manifest_root,
+            target_lane: context.lane_id,
+            active_handle_era: 1,
+            next_handle_counter: 1,
+            current_slot: 0,
+        },
+    );
     let mut validator_set = keypairs
         .iter()
         .map(|keypair| PeerId::new(keypair.public_key().clone()))
@@ -170,6 +229,7 @@ fn native_amx_receipt_survives_into_final_header_bound_lane_statement() {
     assert_eq!(statements.len(), 1);
     let statement = &statements[0];
     assert_eq!(statement.block_header_hash, valid_block.as_ref().hash());
+    assert_eq!(statement.manifest_root, coordinator_manifest_root);
     let commitment = &statement.settlement_commitment;
     assert_eq!(commitment.tx_count, 1);
     assert_eq!(commitment.native_amx_receipts, vec![receipt]);

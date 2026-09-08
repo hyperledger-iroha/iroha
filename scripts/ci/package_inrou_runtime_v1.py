@@ -269,7 +269,6 @@ def _validate_path_chain(
     *,
     owner_uid: int,
     owner_gid: int,
-    allow_final_symlink: bool,
     label: str,
 ) -> Path:
     path = _canonical_absolute_host_path(path, label)
@@ -286,11 +285,7 @@ def _validate_path_chain(
         final = prefix == path
         is_link = stat.S_ISLNK(metadata.st_mode)
         if is_link:
-            if not final or not allow_final_symlink:
-                raise PackagingError(f"{label} must not be a symbolic link: {path}")
-            if metadata.st_uid != owner_uid or metadata.st_gid != owner_gid:
-                raise PackagingError(f"{label} symlink is not owned by the fixed owner: {prefix}")
-            continue
+            raise PackagingError(f"{label} must not be a symbolic link: {path}")
         if final:
             continue
         if not stat.S_ISDIR(metadata.st_mode):
@@ -309,6 +304,103 @@ def _validate_path_chain(
     return resolved
 
 
+def _resolve_custodied_source(
+    path: Path,
+    *,
+    owner_uid: int,
+    owner_gid: int,
+    label: str,
+) -> Path:
+    """Resolve distro aliases while authenticating every traversed component.
+
+    Input aliases may include merged-/usr directories and alternatives links.
+    They never become links in the packaged runtime. Do not use this resolver
+    for the destination, which must retain its direct-directory custody.
+    """
+
+    path = _canonical_absolute_host_path(path, label)
+    pending = list(path.parts[1:])
+    current = Path("/")
+    observed: list[tuple[Path, os.stat_result, str | None]] = []
+    symlinks = 0
+
+    def identity(metadata: os.stat_result) -> tuple[int, ...]:
+        return (
+            metadata.st_dev,
+            metadata.st_ino,
+            metadata.st_mode,
+            metadata.st_uid,
+            metadata.st_gid,
+            metadata.st_nlink,
+            metadata.st_size,
+            metadata.st_mtime_ns,
+            metadata.st_ctime_ns,
+        )
+
+    def require_directory(component: Path, metadata: os.stat_result) -> None:
+        if (
+            not stat.S_ISDIR(metadata.st_mode)
+            or (metadata.st_uid, metadata.st_gid) not in {(0, 0), (owner_uid, owner_gid)}
+            or metadata.st_mode & 0o022
+        ):
+            raise PackagingError(f"{label} ancestor is not owner-custodied: {component}")
+
+    try:
+        root_metadata = os.lstat(current)
+        require_directory(current, root_metadata)
+        observed.append((current, root_metadata, None))
+        while pending:
+            part = pending.pop(0)
+            if part == ".":
+                continue
+            if part == "..":
+                current = current.parent
+                continue
+            component = current / part
+            metadata = os.lstat(component)
+            target = None
+            if stat.S_ISLNK(metadata.st_mode):
+                symlinks += 1
+                if symlinks > 40:
+                    raise PackagingError(f"{label} exceeds the source symlink limit: {path}")
+                if (
+                    (metadata.st_uid, metadata.st_gid) != (owner_uid, owner_gid)
+                    or metadata.st_nlink != 1
+                ):
+                    raise PackagingError(f"{label} symlink is not owner-custodied: {component}")
+                target = os.readlink(component)
+                if (
+                    not target
+                    or "//" in target
+                    or "\\" in target
+                    or target.endswith("/")
+                    or any(ord(character) < 0x21 or ord(character) > 0x7E for character in target)
+                ):
+                    raise PackagingError(f"{label} has an invalid source symlink target: {component}")
+                if target.startswith("/"):
+                    current = Path("/")
+                    parts = target.split("/")[1:]
+                else:
+                    parts = target.split("/")
+                pending[0:0] = parts
+            else:
+                if pending:
+                    require_directory(component, metadata)
+                current = component
+            observed.append((component, metadata, target))
+        # Alias traversal must describe one stable chain. In particular, a
+        # final root-owned link cannot hide an untrusted intermediate alias.
+        for component, before, target in observed:
+            after = os.lstat(component)
+            if identity(before) != identity(after) or (
+                target is not None and os.readlink(component) != target
+            ):
+                raise PackagingError(f"{label} source path changed during resolution: {component}")
+    except OSError as error:
+        raise PackagingError(f"cannot resolve {label} {path}: {error}") from error
+    return _canonical_absolute_host_path(current, f"resolved {label}")
+
+
 def validate_regular_source(
     path: Path,
     *,
@@ -320,18 +412,21 @@ def validate_regular_source(
 ) -> Path:
     """Return one securely resolved, immutable, singly-linked source file."""
 
-    resolved = _validate_path_chain(
-        path,
-        owner_uid=owner_uid,
-        owner_gid=owner_gid,
-        allow_final_symlink=allow_symlink,
-        label=label,
-    )
+    if allow_symlink:
+        resolved = _resolve_custodied_source(
+            path, owner_uid=owner_uid, owner_gid=owner_gid, label=label
+        )
+    else:
+        resolved = _validate_path_chain(
+            path,
+            owner_uid=owner_uid,
+            owner_gid=owner_gid,
+            label=label,
+        )
     _validate_path_chain(
         resolved,
         owner_uid=owner_uid,
         owner_gid=owner_gid,
-        allow_final_symlink=False,
         label=f"resolved {label}",
     )
     try:
@@ -831,7 +926,6 @@ def install_runtime(
         parent,
         owner_uid=owner_uid,
         owner_gid=owner_gid,
-        allow_final_symlink=False,
         label="runtime destination parent",
     )
     try:
@@ -918,7 +1012,9 @@ def _validate_fixed_host_tools(*, owner_uid: int = 0, owner_gid: int = 0) -> Non
             owner_uid=owner_uid,
             owner_gid=owner_gid,
             executable=True,
-            allow_symlink=False,
+            # Debian's socat entry resolves to its versioned implementation.
+            # Bubblewrap remains direct, matching the daemon's pinned launcher.
+            allow_symlink=tool == Path("/usr/bin/socat"),
             label=f"fixed host tool {tool}",
         )
 

@@ -10,7 +10,7 @@
 use super::v2_body_store::{DurableCertifiedServeBodyReadbackV1, V2BodyStoreInstanceIdentity};
 use super::{
     v2::VerifiedHeightContext,
-    v2_body_store::{DurableBodyReceipt, V2BodyStore},
+    v2_body_store::V2BodyStore,
     v2_transport::{
         AuthenticatedCertifiedBodyRequest, authenticate_certified_body_request_identity,
         authenticate_certified_body_request_with_verified_height,
@@ -3245,7 +3245,7 @@ impl CertifiedServePayloadStoreV1 {
     }
     /// Test-only convenience for synthetic responses that have no canonical
     /// `SignedBlockWire` body. Production completion uses only
-    /// [`Self::persist_completed_with_exact_body`].
+    /// [`Self::persist_completed_with_worker_readback`].
     #[cfg(test)]
     pub(crate) fn persist_completed(
         &mut self,
@@ -3258,46 +3258,6 @@ impl CertifiedServePayloadStoreV1 {
         self.validate_completed_response(authenticated_request.request(), response)?;
         self.persist_completed_response(authenticated_request.request(), response)
             .map_err(CertifiedServeTerminalPersistenceError::into_store_error)
-    }
-    /// Persist completion through one caller-retained exact body-store owner.
-    ///
-    /// This is the sole production completion writer. It reloads canonical
-    /// bytes through the caller-retained exact body-store owner; the synthetic
-    /// two-argument test helper never crosses the lifecycle-owner boundary.
-    #[cfg(any(not(test), feature = "bls"))]
-    pub(super) fn persist_completed_with_exact_body(
-        &mut self,
-        authenticated_request: &AuthenticatedCertifiedBodyRequest,
-        durable_body: &DurableBodyReceipt,
-        body_store: &V2BodyStore,
-        response: &wire::CertifiedBodyResponse,
-    ) -> Result<DurableCertifiedServeCompletedReceipt, CertifiedServeTerminalPersistenceError> {
-        if authenticated_request.request_hash() != response.request_hash {
-            return Err(CertifiedServeTerminalPersistenceError::InputRejected(
-                CertifiedServePayloadStoreError::AuthenticatedRequestHashMismatch,
-            ));
-        }
-        if let Err(error) = self.validate_durable_response_body(
-            authenticated_request.request(),
-            durable_body,
-            body_store,
-            response,
-        ) {
-            return Err(
-                if matches!(
-                    &error,
-                    CertifiedServePayloadStoreError::DurableBodyReceiptMismatch
-                        | CertifiedServePayloadStoreError::DurableResponseBodyMismatch
-                ) {
-                    CertifiedServeTerminalPersistenceError::InputRejected(error)
-                } else {
-                    CertifiedServeTerminalPersistenceError::StoreInvariant(error)
-                },
-            );
-        }
-        self.validate_completed_response(authenticated_request.request(), response)
-            .map_err(CertifiedServeTerminalPersistenceError::InputRejected)?;
-        self.persist_completed_response(authenticated_request.request(), response)
     }
     /// Persist completion from one exact worker-owned body-store readback.
     ///
@@ -3496,39 +3456,6 @@ impl CertifiedServePayloadStoreV1 {
         authenticate_certified_body_request_identity(request, &request.requester).map_err(
             |error| invalid_frame(path, format!("unauthenticated retained requester: {error}")),
         )?;
-        Ok(())
-    }
-    #[cfg(any(not(test), feature = "bls"))]
-    fn validate_durable_response_body(
-        &self,
-        request: &wire::CertifiedBodyRequest,
-        durable_body: &DurableBodyReceipt,
-        body_store: &V2BodyStore,
-        response: &wire::CertifiedBodyResponse,
-    ) -> Result<(), CertifiedServePayloadStoreError> {
-        if !body_store.matches_context(&self.context) {
-            return Err(CertifiedServePayloadStoreError::ForeignBodyStore);
-        }
-        if durable_body.context_id() != self.context.id()
-            || durable_body.round() != request.round
-            || durable_body.subject() != request.subject
-            || response.manifest.round != request.round
-            || response.manifest.subject != request.subject
-            || durable_body.manifest_hash() != HashOf::new(&response.manifest)
-        {
-            return Err(CertifiedServePayloadStoreError::DurableBodyReceiptMismatch);
-        }
-        if !body_store.owns_receipt(durable_body) {
-            return Err(CertifiedServePayloadStoreError::DurableBodyReceiptMismatch);
-        }
-        let canonical_body = body_store
-            .load_canonical_wire(durable_body)
-            .map_err(|error| {
-                CertifiedServePayloadStoreError::InvalidDurableBody(error.to_string())
-            })?;
-        if canonical_body != response.body {
-            return Err(CertifiedServePayloadStoreError::DurableResponseBodyMismatch);
-        }
         Ok(())
     }
     #[cfg(any(not(test), feature = "bls"))]
@@ -5287,7 +5214,16 @@ mod tests {
                 pending.id(),
                 CertifiedServePayloadNegativeOutcome::Rejected(10),
             ),
-            Err(CertifiedServePayloadStoreError::PublicationConflict(path)) if path == terminal
+            Err(CertifiedServePayloadStoreError::InvalidFrame { path, reason })
+                if path == terminal
+                    && reason == "terminal companion does not extend the exact canonical Pending frame"
+        ));
+        drop(store);
+        assert!(matches!(
+            CertifiedServePayloadStoreV1::open(temporary.path(), &context),
+            Err(CertifiedServePayloadStoreError::InvalidFrame { path, reason })
+                if path == terminal
+                    && reason == "terminal companion does not extend the exact canonical Pending frame"
         ));
         assert_eq!(
             fs::read(&destination).expect("reread untouched incumbent"),
@@ -5875,10 +5811,12 @@ mod tests {
         let foreign_body_store =
             V2BodyStore::open(temporary.path(), foreign_context).expect("open foreign body store");
         assert!(matches!(
-            payload_store.persist_completed_with_exact_body(
+            payload_store.persist_completed_with_worker_readback(
                 &request,
-                &durable_body,
-                &foreign_body_store,
+                body_store
+                    .read_durable_body_for_certified_serve(&durable_body)
+                    .expect("worker reads the exact response frame"),
+                &foreign_body_store.instance_identity(),
                 &response,
             ),
             Err(CertifiedServeTerminalPersistenceError::StoreInvariant(
@@ -5886,10 +5824,12 @@ mod tests {
             ))
         ));
         assert!(matches!(
-            payload_store.persist_completed_with_exact_body(
+            payload_store.persist_completed_with_worker_readback(
                 &request,
-                &other_durable_body,
-                &body_store,
+                body_store
+                    .read_durable_body_for_certified_serve(&other_durable_body)
+                    .expect("worker reads the distinct response frame"),
+                &body_store.instance_identity(),
                 &response,
             ),
             Err(CertifiedServeTerminalPersistenceError::InputRejected(
@@ -5901,10 +5841,12 @@ mod tests {
         let response_with_changed_manifest =
             signed_certified_response(&request, changed_manifest, body.clone(), 0, &keys);
         assert!(matches!(
-            payload_store.persist_completed_with_exact_body(
+            payload_store.persist_completed_with_worker_readback(
                 &request,
-                &durable_body,
-                &body_store,
+                body_store
+                    .read_durable_body_for_certified_serve(&durable_body)
+                    .expect("worker reads the exact response frame"),
+                &body_store.instance_identity(),
                 &response_with_changed_manifest,
             ),
             Err(CertifiedServeTerminalPersistenceError::InputRejected(
@@ -5916,10 +5858,12 @@ mod tests {
         let response_with_changed_body =
             signed_certified_response(&request, manifest, changed_body, 0, &keys);
         assert!(matches!(
-            payload_store.persist_completed_with_exact_body(
+            payload_store.persist_completed_with_worker_readback(
                 &request,
-                &durable_body,
-                &body_store,
+                body_store
+                    .read_durable_body_for_certified_serve(&durable_body)
+                    .expect("worker reads the exact response frame"),
+                &body_store.instance_identity(),
                 &response_with_changed_body,
             ),
             Err(CertifiedServeTerminalPersistenceError::InputRejected(
@@ -5927,13 +5871,27 @@ mod tests {
             ))
         ));
         let completed = payload_store
-            .persist_completed_with_exact_body(&request, &durable_body, &body_store, &response)
+            .persist_completed_with_worker_readback(
+                &request,
+                body_store
+                    .read_durable_body_for_certified_serve(&durable_body)
+                    .expect("worker reads the exact response frame"),
+                &body_store.instance_identity(),
+                &response,
+            )
             .expect("persist receipt-backed completed response");
         assert_eq!(completed.id(), pending.id());
         assert_eq!(completed.response_hash(), HashOf::new(&response));
         assert_eq!(
             payload_store
-                .persist_completed_with_exact_body(&request, &durable_body, &body_store, &response,)
+                .persist_completed_with_worker_readback(
+                    &request,
+                    body_store
+                        .read_durable_body_for_certified_serve(&durable_body)
+                        .expect("worker reads the exact response frame"),
+                    &body_store.instance_identity(),
+                    &response,
+                )
                 .expect("exact receipt-backed completion is idempotent"),
             completed
         );
@@ -5960,7 +5918,14 @@ mod tests {
         let responder = 1;
         let response = signed_certified_response(&request, manifest, body, responder, &keys);
         let _ = payload_store
-            .persist_completed_with_exact_body(&request, &durable_body, &body_store, &response)
+            .persist_completed_with_worker_readback(
+                &request,
+                body_store
+                    .read_durable_body_for_certified_serve(&durable_body)
+                    .expect("worker reads the exact response frame"),
+                &body_store.instance_identity(),
+                &response,
+            )
             .expect("persist completed response");
         drop(payload_store);
         let (_payload_store, recovery) =
@@ -6002,7 +5967,14 @@ mod tests {
             .expect("persist verified locally retained request");
         let response = signed_certified_response(&request, manifest, body, 1, &keys);
         let _ = payload_store
-            .persist_completed_with_exact_body(&request, &durable_body, &body_store, &response)
+            .persist_completed_with_worker_readback(
+                &request,
+                body_store
+                    .read_durable_body_for_certified_serve(&durable_body)
+                    .expect("worker reads the exact response frame"),
+                &body_store.instance_identity(),
+                &response,
+            )
             .expect("persist completed response");
         drop(payload_store);
         drop(body_store);

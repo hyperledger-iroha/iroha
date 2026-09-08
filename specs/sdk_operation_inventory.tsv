@@ -105,6 +105,7 @@ application.nfts_get	GET	/v1/nfts	public	optional_canonical_account_signature	da
 application.nfts_query_post	POST	/v1/nfts/query	public	optional_canonical_account_signature	dataspace_visible	compute	http	feature(app_api)	true	true	false	true
 application.notify_devices_delete	DELETE	/v1/notify/devices	public	canonical_account_signature	authenticated_account	mutation	http	all(app_api,push)	true	true	false	true
 application.notify_devices_post	POST	/v1/notify/devices	public	canonical_account_signature	authenticated_account	mutation	http	all(app_api,push)	true	true	false	true
+application.offline_asset_registration_get	GET	/v1/offline/assets/{asset_definition_id}/registration	public	optional_canonical_account_signature	dataspace_visible	read	http	feature(app_api)	true	true	false	true
 application.parameters_get	GET	/v1/parameters	public	torii_default	public	read	http	feature(app_api)	true	true	false	false
 application.proofs_query_post	POST	/v1/proofs/query	public	canonical_signed_body	authenticated_account	compute	http	feature(app_api)	true	true	false	false
 application.ram_lfe_program_policies_get	GET	/v1/ram-lfe/program-policies	public	torii_default	public	read	http	feature(app_api)	true	true	false	false
@@ -376,6 +377,10 @@ events.stream_sse	GET	/v1/events/sse	protocol	optional_canonical_account_signatu
 events.stream_websocket	GET	/v1/events/ws	protocol	optional_canonical_account_signature	dataspace_visible	stream	websocket	feature(app_api)	false	true	false	true
 fee_sponsor_program.by_id	POST	/v1/fee-sponsor-programs/by-id	public	canonical_account_signature	authenticated_account	read	http	feature(app_api)	true	true	true	true
 fees.quote	POST	/v1/fees/quote	public	canonical_account_signature	authenticated_account	compute	http	feature(app_api)	true	true	true	true
+game.capabilities	GET	/v1/games/capabilities	public	torii_default	public	read	http	always	true	true	false	false
+game.sessions.get	GET	/v1/games/sessions/{session_id}	public	torii_default	public	read	http	always	true	true	false	false
+game.sessions.list	GET	/v1/games/sessions	public	torii_default	public	read	http	always	true	true	false	false
+game.verifications.get	GET	/v1/games/verifications/{verification_id}	public	torii_default	public	read	http	always	false	false	false	false
 governance.ballot.plain	POST	/v1/gov/ballots/plain	public	canonical_account_signature	authenticated_account	read	http	feature(app_api)	true	true	false	true
 governance.ballot.zk_v1	POST	/v1/gov/ballots/zk-v1	public	canonical_account_signature	authenticated_account	read	http	feature(app_api)	true	true	false	true
 governance.ballot.zk_v1_proof	POST	/v1/gov/ballots/zk-v1/ballot-proof	public	canonical_account_signature	authenticated_account	read	http	feature(app_api)	true	true	false	true
@@ -459,6 +464,9 @@ musubi.v1.query.resolver_index	POST	/v1/musubi/queries/resolver-index	public	can
 musubi.v1.query.search	POST	/v1/musubi/queries/search	public	canonical_account_signature	authenticated_account	read	http	feature(app_api)	true	true	true	true
 musubi.v1.query.versions	POST	/v1/musubi/queries/versions	public	canonical_account_signature	authenticated_account	read	http	feature(app_api)	true	true	true	true
 nexus.lifecycle.read	GET	/v1/nexus/lifecycle	public	torii_default	public	read	http	always	true	true	false	false
+nft.offers.capabilities	GET	/v1/nft-offers/capabilities	public	torii_default	public	read	http	always	true	true	false	false
+nft.offers.get	GET	/v1/nft-offers/{offer_id}	public	torii_default	public	read	http	always	true	true	false	false
+nft.offers.list	GET	/v1/nft-offers	public	torii_default	public	read	http	always	true	true	false	false
 node.capabilities	GET	/v1/node/capabilities	public	canonical_account_signature	authenticated_account	read	http	always	true	true	false	true
 node.query_projection.checkpoint	GET	/v1/node/query/projection/checkpoint	public	canonical_account_signature	authenticated_account	read	http	always	true	true	false	true
 operator.authentication.credential_delete	DELETE	/v1/operator/auth/credentials/{credential_id}	operator	operator_signature	operator	mutation	http	always	false	true	false	true
@@ -531,6 +539,8 @@ sccp.message.list_recent	GET	/v1/sccp/messages/recent	public	torii_default	publi
 sccp.message_proof.read	GET	/v1/sccp/proofs/message/{message_id}	public	torii_default	public	read	http	always	true	true	false	false
 sccp.proof_request.read	GET	/v1/sccp/proof-requests/{message_id}	public	torii_default	public	read	http	always	true	true	false	false
 sccp.registry.read	GET	/v1/sccp/registry	public	torii_default	public	read	http	always	true	true	false	false
+sccp.replay.root.read	GET	/v1/sccp/replay/{boundary}/{source_profile}/{route_id}/{asset_key}/{revision}/root	public	torii_default	public	read	http	always	true	true	false	false
+sccp.replay.witness.read	GET	/v1/sccp/replay/{boundary}/{source_profile}/{route_id}/{asset_key}/{revision}/witness/{replay_key}	public	torii_default	public	read	http	always	true	true	false	false
 sccp.sora_outbound_material.read	GET	/v1/sccp/routes/{source_profile}/{route_id}/{asset_key}/{revision}/sora-outbound-material	public	torii_default	public	read	http	always	true	true	false	false
 soradns.directory.events	GET	/v1/soradns/directory/events	public	torii_default	public	read	http	feature(app_api)	false	true	false	false
 soradns.directory.latest	GET	/v1/soradns/directory/latest	public	torii_default	public	read	http	feature(app_api)	false	true	false	false

@@ -614,7 +614,7 @@ fn scheduler_owner_carrier_pins_exact_fifo_identity_and_rank_fields() {
     let RuntimeSelectedCandidateOwnership::Exact(candidate) = &mut mutated.candidate else {
         unreachable!();
     };
-    candidate.local_proposal_worker_completed_before_deadline = true;
+    candidate.local_proposal_ready_before_deadline = true;
     candidate.projection_hash = runtime_fifo_candidate_projection_hash(candidate);
     mutated.projection_hash = runtime_scheduler_projection_hash(&mutated);
     rejected(mutated);

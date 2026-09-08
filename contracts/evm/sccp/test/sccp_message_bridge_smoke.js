@@ -26,10 +26,10 @@ const ROUTE_REVISION = 7;
 const DOMAIN_SORA = 0;
 const DOMAIN_ETHEREUM = 1;
 const DOMAIN_BSC = 2;
-const DOMAIN_TRON = 3;
-const CODEC_TEXT = 0;
-const CODEC_EVM20 = 1;
-const CODEC_TRON21 = 2;
+const DOMAIN_TRON = 5;
+const CODEC_TEXT = 1;
+const CODEC_EVM20 = 2;
+const CODEC_TRON21 = 5;
 const SCALE = 1_000_000_000n;
 const MAX_U128 = (1n << 128n) - 1n;
 const TEST_MAX_WRAPPED_SUPPLY = 1_000_000n * SCALE;
@@ -1242,7 +1242,7 @@ function transferPayload({
   route = "taira_bsc_xor",
 }) {
   return Buffer.concat([
-    Buffer.from([0, 1]),
+    Buffer.from([2, 1]),
     le(sourceDomain, 4),
     le(destinationDomain, 4),
     le(nonce, 8),
@@ -1258,6 +1258,32 @@ function transferPayload({
     Buffer.from([CODEC_TEXT]),
     vec(Buffer.from(route)),
   ]);
+}
+
+async function assertRetiredTransferWireIdsRejected(
+  bridge, proof, publicInputs, statementHash, payload, retiredRecipientCodec, reason,
+) {
+  const recipientOffset = 55 + payload.readUInt32LE(51);
+  const routeOffset = recipientOffset + 5 + payload.readUInt32LE(recipientOffset + 1);
+  const mutations = [
+    ["payload tag", 0, 0],
+    ["asset codec", 26, 0],
+    ["sender codec", 50, 0],
+    ["recipient codec", recipientOffset, retiredRecipientCodec],
+    ["route codec", routeOffset, 0],
+  ];
+  if (payload.readUInt32LE(6) === DOMAIN_TRON) {
+    mutations.push(["TRON domain", 6, 3]);
+  }
+  for (const [label, offset, value] of mutations) {
+    const changed = Buffer.from(payload);
+    changed[offset] = value;
+    await assert.rejects(
+      bridge.finalizeFromTaira(proof, publicInputs, statementHash, changed),
+      rejectedWith(reason),
+      `retired compact ${label} must fail canonical transfer parsing`,
+    );
+  }
 }
 
 function network(profile) {
@@ -2884,6 +2910,9 @@ async function main() {
     g1,
     g2,
   });
+  await assertRetiredTransferWireIdsRejected(
+    tronBridge, tronProof, tronPublicInputs, tronStatementHash, tronInboundPayload, 2, "SC_TRANSFER",
+  );
   const wrongTronRevisionPayload = Buffer.from(tronInboundPayload);
   wrongTronRevisionPayload.writeUInt32LE(ROUTE_REVISION + 1, 18);
   assert.notEqual(
@@ -4034,6 +4063,9 @@ async function main() {
       ethers.ZeroHash,
     ),
     rejectedWith("Route configuration hash is required"),
+  );
+  await assertRetiredTransferWireIdsRejected(
+    bridge, proof, publicInputs, statementHash, inboundPayload, 1, "SC_PAYLOAD",
   );
   const wrongRevisionPayload = Buffer.from(inboundPayload);
   wrongRevisionPayload.writeUInt32LE(ROUTE_REVISION + 1, 18);

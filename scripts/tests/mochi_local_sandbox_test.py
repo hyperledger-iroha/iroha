@@ -1,4 +1,4 @@
-"""Static safety checks for scripts/mochi_local_sandbox.sh."""
+"""Safety checks for public sandbox output and private runtime file custody."""
 
 from __future__ import annotations
 
@@ -63,36 +63,80 @@ class MochiLocalSandboxSafetyTest(unittest.TestCase):
         self.assertIn('pid="$("$PYTHON_BIN" - "$REPO_ROOT"', text)
         self.assertNotIn("python3 - ", text)
 
-    def test_env_reads_private_key_only_from_owner_only_dotenv(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            workspace = Path(directory)
-            sandbox = workspace / ".mochi" / "sandbox" / "four-peer-bft"
-            sandbox.mkdir(parents=True)
-            session = {
-                "api_base": "http://127.0.0.1:8080",
-                "torii_url": "http://127.0.0.1:8080",
-                "chain_id": "mochi-local",
-                "mcp_url": "http://127.0.0.1:8080/v1/mcp",
-                "account_id": "alice",
-            }
-            (sandbox / "session.json").write_text(json.dumps(session), encoding="utf-8")
-            env_file = workspace / ".env.local"
-            env_file.write_text('IROHA_PRIVATE_KEY="private key value"\n', encoding="utf-8")
-            os.chmod(env_file, 0o600)
+    def make_workspace(self, directory: str) -> tuple[Path, dict[str, str]]:
+        workspace = Path(directory)
+        sandbox = workspace / ".mochi" / "sandbox" / "four-peer-bft"
+        sandbox.mkdir(parents=True)
+        session = {
+            "api_base": "http://127.0.0.1:8080",
+            "torii_url": "http://127.0.0.1:8080",
+            "chain_id": "mochi-local",
+            "mcp_url": "http://127.0.0.1:8080/v1/mcp",
+            "account_id": "alice",
+        }
+        (sandbox / "session.json").write_text(json.dumps(session), encoding="utf-8")
+        return workspace, {
+            **os.environ,
+            "MOCHI_WORKSPACE_ROOT": str(workspace),
+            "MOCHI_PYTHON": sys.executable,
+        }
 
+    def test_env_emits_only_public_metadata_and_private_file_reference(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="mochi app ") as directory:
+            workspace, environment = self.make_workspace(directory)
+            env_file = workspace / ".env.local"
+            sentinel = "test-only-signer-sentinel-DO-NOT-OUTPUT"
+            # Malformed dotenv proves metadata output never parses secret contents.
+            env_file.write_text('IROHA_PRIVATE_KEY="' + sentinel + '\n', encoding="utf-8")
+            env_file.chmod(0o600)
             result = subprocess.run(
-                ["bash", str(SCRIPT), "env"],
+                ["bash", "-x", str(SCRIPT), "env"],
                 check=True,
                 capture_output=True,
                 text=True,
-                env={
-                    **os.environ,
-                    "MOCHI_WORKSPACE_ROOT": str(workspace),
-                    "MOCHI_PYTHON": sys.executable,
-                },
+                env=environment,
+                timeout=10,
             )
-            self.assertIn("export IROHA_PRIVATE_KEY='private key value'", result.stdout)
-            self.assertNotIn("private_key", (sandbox / "session.json").read_text())
+            self.assertIn("export IROHA_CHAIN_ID=mochi-local", result.stdout)
+            self.assertIn("export IROHA_ACCOUNT_ID=alice", result.stdout)
+            self.assertIn(f"export IROHA_ENV_FILE='{env_file}'", result.stdout)
+            self.assertNotIn("IROHA_PRIVATE_KEY", result.stdout + result.stderr)
+            self.assertNotIn(sentinel, result.stdout + result.stderr)
+            self.assertEqual(env_file.read_text(), 'IROHA_PRIVATE_KEY="' + sentinel + '\n')
+
+    @unittest.skipUnless(os.name == "posix", "Unix runtime custody")
+    def test_env_rejects_unsafe_runtime_file_without_partial_exports(self) -> None:
+        for kind in ("missing", "public", "symlink", "hardlink", "fifo", "directory"):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as directory:
+                workspace, environment = self.make_workspace(directory)
+                env_file = workspace / ".env.local"
+                sentinel = "test-only-unsafe-signer-sentinel"
+                if kind in ("public", "hardlink", "symlink"):
+                    backing = workspace / "fixture-private-input"
+                    backing.write_text(sentinel, encoding="utf-8")
+                    backing.chmod(0o600)
+                    if kind == "hardlink":
+                        os.link(backing, env_file)
+                    elif kind == "symlink":
+                        env_file.symlink_to(backing)
+                    else:
+                        backing.rename(env_file)
+                        env_file.chmod(0o644)
+                elif kind == "fifo":
+                    os.mkfifo(env_file, 0o600)
+                elif kind == "directory":
+                    env_file.mkdir(mode=0o700)
+                result = subprocess.run(
+                    ["bash", str(SCRIPT), "env"],
+                    capture_output=True,
+                    text=True,
+                    env=environment,
+                    timeout=10,
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(result.stdout, "")
+                self.assertIn("owner-owned 0600", result.stderr)
+                self.assertNotIn(sentinel, result.stdout + result.stderr)
 
 
 if __name__ == "__main__":

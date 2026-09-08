@@ -58,8 +58,12 @@ pub(crate) mod pasta_cycle_loader;
 /// Dense normalized-GLV MSM used by paired Pasta recursion.
 #[cfg(feature = "zk-halo2-ipa")]
 pub(crate) mod pasta_dense_msm;
-/// Shared fixed-profile accounting for Pasta IPA recursive proofs.
+/// Test accounting for direct-instance Pasta IPA recursive proofs.
+#[cfg(test)]
 pub(crate) mod pasta_ipa_recursion;
+/// Dedicated exact native Poseidon permutations for the paired Claim fold.
+#[cfg(feature = "zk-halo2-ipa")]
+pub(crate) mod pasta_native_poseidon;
 /// Exact row-bounded SHA-256 used by the generic Pasta cycle loader.
 #[cfg(feature = "zk-halo2-ipa")]
 pub(crate) mod pasta_sha256;
@@ -85,9 +89,19 @@ use halo2_proofs::poly::commitment::Params as _;
 ))]
 use halo2_proofs::poly::ipa::{commitment::IPACommitmentScheme, multiopen::ProverIPA};
 use iroha_data_model::proof::{ProofBox, VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord};
+#[cfg(all(test, feature = "zk-halo2"))]
+use kaigi_zk::usage_v1::KAIGI_USAGE_CIRCUIT_ID_V1;
 #[cfg(feature = "zk-halo2")]
 use kaigi_zk::{
-    KAIGI_ROSTER_BACKEND, KAIGI_USAGE_BACKEND, KaigiRosterJoinCircuit, KaigiUsageCommitmentCircuit,
+    authorization_v1::{
+        KAIGI_AUTHORIZATION_BACKEND_V1, KAIGI_AUTHORIZATION_CIRCUIT_ID_V1,
+        KAIGI_AUTHORIZATION_CIRCUIT_K_V1, KAIGI_AUTHORIZATION_INSTANCE_ROWS_V1,
+        KAIGI_AUTHORIZATION_PUBLIC_INPUTS_SCHEMA_V1, KaigiAuthorizationCircuitV1,
+    },
+    usage_v1::{
+        KAIGI_USAGE_BACKEND_V1, KAIGI_USAGE_CIRCUIT_K_V1, KAIGI_USAGE_INSTANCE_ROWS_V1,
+        KAIGI_USAGE_PUBLIC_INPUTS_SCHEMA_V1, KaigiUsageCircuitV1,
+    },
 };
 #[cfg(feature = "zk-halo2-ipa")]
 use norito::codec::{Decode, Encode};
@@ -281,7 +295,7 @@ pub const IVM_EXECUTION_V1_CANONICAL_CIRCUIT_ID: &str = "halo2/pasta/ipa/ivm-exe
 /// recursive-spend circuits intentionally have no entry.
 const HALO2_IPA_PRODUCTION_CIRCUIT_IDS_V1: &[&str] = &[
     IVM_EXECUTION_V1_CANONICAL_CIRCUIT_ID,
-    "halo2/pasta/ipa/kaigi-roster-v1",
+    "halo2/pasta/ipa/kaigi-authorization-v1",
     "halo2/pasta/ipa/kaigi-usage-v1",
     "halo2/pasta/ipa/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
     "halo2/pasta/ipa/confidential-unshield-full-merkle16-axiom-poseidon-v3",
@@ -289,8 +303,6 @@ const HALO2_IPA_PRODUCTION_CIRCUIT_IDS_V1: &[&str] = &[
 ];
 /// Halo2 IPA parameter degree used by the canonical IVM execution binding circuit.
 pub const IVM_EXECUTION_V1_IPA_K: u32 = 7;
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-const KAIGI_IPA_K_V1: u32 = 8;
 #[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
 const HALO2_IPA_MAX_K_V1: u32 = confidential_v2::CONFIDENTIAL_TRANSFER_V2_IPA_K;
 /// Maximum encoded proof payload accepted for IVM execution proofs.
@@ -299,9 +311,10 @@ pub const IVM_EXECUTION_V1_MAX_PROOF_BYTES: u32 = 8 * 1024 * 1024;
 fn halo2_ipa_canonical_k_v1(circuit_id: &str) -> Option<u32> {
     match normalize_halo2_ipa_circuit_id(circuit_id)?.as_str() {
         IVM_EXECUTION_V1_CANONICAL_CIRCUIT_ID => Some(IVM_EXECUTION_V1_IPA_K),
-        "halo2/pasta/ipa/kaigi-roster-v1" | "halo2/pasta/ipa/kaigi-usage-v1" => {
-            Some(KAIGI_IPA_K_V1)
-        }
+        #[cfg(feature = "zk-halo2")]
+        KAIGI_AUTHORIZATION_CIRCUIT_ID_V1 => Some(KAIGI_AUTHORIZATION_CIRCUIT_K_V1),
+        #[cfg(feature = "zk-halo2")]
+        "halo2/pasta/ipa/kaigi-usage-v1" => Some(KAIGI_USAGE_CIRCUIT_K_V1),
         confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID => {
             Some(confidential_v2::CONFIDENTIAL_TRANSFER_V2_IPA_K)
         }
@@ -791,14 +804,24 @@ pub(crate) fn halo2_open_verify_circuit_id_matches_backend(
     {
         return false;
     }
-    if backend == ZK_BACKEND_HALO2_IPA {
-        return halo2_open_verify_circuit_id_is_production_v1(circuit_id);
-    }
-    if !halo2_open_verify_circuit_id_is_production_v1(circuit_id) {
+    let Some(canonical) = normalize_halo2_ipa_circuit_id(circuit_id) else {
+        return false;
+    };
+    // Final Kaigi envelopes and registry records carry one full canonical CID.
+    // Internal dispatcher keys are a different field, never a second wire form.
+    if matches!(
+        canonical.as_str(),
+        "halo2/pasta/ipa/kaigi-authorization-v1" | "halo2/pasta/ipa/kaigi-usage-v1"
+    ) && circuit_id != canonical.as_str()
+    {
         return false;
     }
-    normalize_halo2_ipa_circuit_id(backend) == normalize_halo2_ipa_circuit_id(circuit_id)
+    if !HALO2_IPA_PRODUCTION_CIRCUIT_IDS_V1.contains(&canonical.as_str()) {
+        return false;
+    }
+    backend == ZK_BACKEND_HALO2_IPA || normalize_halo2_ipa_circuit_id(backend) == Some(canonical)
 }
+#[cfg(test)]
 fn halo2_open_verify_circuit_id_is_production_v1(circuit_id: &str) -> bool {
     normalize_halo2_ipa_circuit_id(circuit_id).is_some_and(|normalized| {
         HALO2_IPA_PRODUCTION_CIRCUIT_IDS_V1.contains(&normalized.as_str())
@@ -827,9 +850,11 @@ fn halo2_ipa_public_inputs_schema_v1(circuit_id: &str) -> Option<&'static [u8]> 
             Some(confidential_v2::CONFIDENTIAL_UNSHIELD_V3_PUBLIC_INPUTS_SCHEMA_V1)
         }
         #[cfg(feature = "zk-halo2")]
-        "halo2/pasta/ipa/kaigi-roster-v1" => Some(kaigi_zk::KAIGI_ROSTER_PUBLIC_INPUTS_SCHEMA_V1),
+        "halo2/pasta/ipa/kaigi-authorization-v1" => {
+            Some(KAIGI_AUTHORIZATION_PUBLIC_INPUTS_SCHEMA_V1)
+        }
         #[cfg(feature = "zk-halo2")]
-        "halo2/pasta/ipa/kaigi-usage-v1" => Some(kaigi_zk::KAIGI_USAGE_PUBLIC_INPUTS_SCHEMA_V1),
+        "halo2/pasta/ipa/kaigi-usage-v1" => Some(KAIGI_USAGE_PUBLIC_INPUTS_SCHEMA_V1),
         _ => None,
     }
 }
@@ -3023,20 +3048,20 @@ pub(crate) fn validate_builtin_halo2_ipa_verifying_key_v1(
     }
     #[cfg(feature = "zk-halo2")]
     {
-        if verifier_backend == KAIGI_ROSTER_BACKEND {
+        if verifier_backend == KAIGI_AUTHORIZATION_BACKEND_V1 {
             return validate_canonical_halo2_ipa_circuit_key(
                 backend,
                 &params,
                 vk_box,
-                KaigiRosterJoinCircuit::default(),
+                KaigiAuthorizationCircuitV1::default(),
             );
         }
-        if verifier_backend == KAIGI_USAGE_BACKEND {
+        if verifier_backend == KAIGI_USAGE_BACKEND_V1 {
             return validate_canonical_halo2_ipa_circuit_key(
                 backend,
                 &params,
                 vk_box,
-                KaigiUsageCommitmentCircuit::default(),
+                KaigiUsageCircuitV1::default(),
             );
         }
     }
@@ -5656,7 +5681,10 @@ mod stark_backend_tag_tests {
         for (backend, expected_tag) in [
             ("halo2/ipa", BackendTag::Halo2IpaPasta),
             ("halo2/pasta/ivm-execution-v1", BackendTag::Halo2IpaPasta),
-            ("halo2/pasta/kaigi-roster-v1", BackendTag::Halo2IpaPasta),
+            (
+                "halo2/pasta/kaigi-authorization-v1",
+                BackendTag::Halo2IpaPasta,
+            ),
             ("halo2/pasta/kaigi-usage-v1", BackendTag::Halo2IpaPasta),
             (
                 "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
@@ -5687,6 +5715,8 @@ mod stark_backend_tag_tests {
         }
         for backend in [
             "unknown/privacy/backend",
+            "halo2/pasta/kaigi-roster-v1",
+            "halo2/pasta/ipa/kaigi-roster-v1",
             "halo2/unknown-native-v1",
             "halo2/ipa:unknown-native-v1",
             "halo2/pasta/ivm-overlay-bind",
@@ -8208,7 +8238,7 @@ mod halo2_ipa_alias_tests {
         for circuit_id in [
             "ivm-execution-v1",
             "halo2/ipa:ivm-execution-v1",
-            "halo2/pasta/kaigi-roster-v1",
+            "halo2/pasta/kaigi-authorization-v1",
             "halo2/pasta/ipa/kaigi-usage-v1",
             "halo2/pasta/ipa/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
             "halo2/pasta/ipa/confidential-unshield-full-merkle16-axiom-poseidon-v3",
@@ -8221,6 +8251,8 @@ mod halo2_ipa_alias_tests {
         }
         for circuit_id in [
             "tiny-add",
+            "halo2/pasta/kaigi-roster-v1",
+            "halo2/pasta/ipa/kaigi-roster-v1",
             "halo2/ipa:tiny-add",
             "halo2/pasta/anon-transfer-2x2",
             "halo2/ipa:vote-bool-commit-merkle8",
@@ -8253,14 +8285,37 @@ mod halo2_ipa_alias_tests {
                         == Some(iroha_data_model::zk::BackendTag::Halo2IpaPasta)
             })
         {
+            let canonical = normalize_halo2_ipa_circuit_id(backend).expect("listed circuit family");
             assert!(
-                halo2_open_verify_circuit_id_matches_backend(ZK_BACKEND_HALO2_IPA, backend),
+                halo2_open_verify_circuit_id_matches_backend(ZK_BACKEND_HALO2_IPA, &canonical),
                 "generic Halo2 entry point must admit exact production circuit {backend}"
             );
             assert!(
-                halo2_open_verify_circuit_id_matches_backend(backend, backend),
+                halo2_open_verify_circuit_id_matches_backend(backend, &canonical),
                 "concrete Halo2 backend must admit only its own production circuit {backend}"
             );
+        }
+    }
+    #[test]
+    fn final_kaigi_outer_circuit_ids_have_no_short_or_dispatcher_alias() {
+        for name in ["kaigi-authorization-v1", "kaigi-usage-v1"] {
+            let exact_backend = format!("halo2/pasta/{name}");
+            let canonical = format!("halo2/pasta/ipa/{name}");
+            for backend in [ZK_BACKEND_HALO2_IPA, exact_backend.as_str()] {
+                assert!(halo2_open_verify_circuit_id_matches_backend(
+                    backend, &canonical
+                ));
+                for alias in [
+                    name.to_owned(),
+                    exact_backend.clone(),
+                    format!("halo2/ipa:{name}"),
+                ] {
+                    assert!(
+                        !halo2_open_verify_circuit_id_matches_backend(backend, &alias),
+                        "{backend} accepted {alias}"
+                    );
+                }
+            }
         }
     }
     #[cfg(all(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
@@ -8569,10 +8624,27 @@ mod halo2_ipa_parameter_source_tests {
     #[cfg(feature = "zk-halo2")]
     #[test]
     fn production_parameter_map_matches_kaigi_circuit_constants() {
-        assert_eq!(KAIGI_IPA_K_V1, kaigi_zk::KAIGI_ROSTER_CIRCUIT_K);
-        assert_eq!(KAIGI_IPA_K_V1, kaigi_zk::KAIGI_USAGE_CIRCUIT_K);
+        assert_eq!(
+            halo2_ipa_canonical_k_v1(KAIGI_AUTHORIZATION_CIRCUIT_ID_V1),
+            Some(KAIGI_AUTHORIZATION_CIRCUIT_K_V1)
+        );
+        assert_eq!(KAIGI_AUTHORIZATION_CIRCUIT_K_V1, 13);
+        assert_eq!(KAIGI_USAGE_CIRCUIT_K_V1, 12);
+        assert_eq!(
+            halo2_ipa_canonical_k_v1(KAIGI_USAGE_CIRCUIT_ID_V1),
+            Some(KAIGI_USAGE_CIRCUIT_K_V1)
+        );
+        assert_eq!(
+            halo2_ipa_canonical_k_v1("halo2/pasta/ipa/kaigi-roster-v1"),
+            None
+        );
     }
 }
+#[cfg(all(test, feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+mod kaigi_authorization_v1_tests;
+#[cfg(all(test, feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+mod kaigi_usage_v1_tests;
+
 /// Halo2 envelope parsing helpers.
 ///
 /// These routines keep proof/VK payload handling deterministic and bounded while
@@ -10508,15 +10580,16 @@ fn verify_halo2(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox>) -
                 }
             )
         }
-        KAIGI_ROSTER_BACKEND => {
-            if col_refs.len() < 2 {
+        #[cfg(feature = "zk-halo2")]
+        KAIGI_AUTHORIZATION_BACKEND_V1 => {
+            if col_refs.len() != 1 || col_refs[0].len() != KAIGI_AUTHORIZATION_INSTANCE_ROWS_V1 {
                 return false;
             }
             cached_vk_for!(
                 &params,
                 normalized.as_str(),
                 vk_box,
-                KaigiRosterJoinCircuit::default(),
+                KaigiAuthorizationCircuitV1::default(),
                 |vk| {
                     match verify_halo2_ipa_payload_columns_result(
                         &params,
@@ -10530,7 +10603,7 @@ fn verify_halo2(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox>) -
                                 backend,
                                 normalized = normalized.as_str(),
                                 error = ?err,
-                                "halo2 kaigi roster proof rejected (verify_proof failed)"
+                                "halo2 Kaigi authorization V1 proof rejected (verify_proof failed)"
                             );
                             false
                         }
@@ -10538,15 +10611,16 @@ fn verify_halo2(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox>) -
                 }
             )
         }
-        KAIGI_USAGE_BACKEND => {
-            if col_refs.is_empty() {
+        #[cfg(feature = "zk-halo2")]
+        KAIGI_USAGE_BACKEND_V1 => {
+            if col_refs.len() != 1 || col_refs[0].len() != KAIGI_USAGE_INSTANCE_ROWS_V1 {
                 return false;
             }
             cached_vk_for!(
                 &params,
                 normalized.as_str(),
                 vk_box,
-                KaigiUsageCommitmentCircuit::default(),
+                KaigiUsageCircuitV1::default(),
                 |vk| {
                     match verify_halo2_ipa_payload_columns_result(
                         &params,
@@ -10921,15 +10995,16 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                 )
             }
         }
-        KAIGI_ROSTER_BACKEND => {
-            if col_refs.len() < 2 {
+        #[cfg(feature = "zk-halo2")]
+        KAIGI_AUTHORIZATION_BACKEND_V1 => {
+            if col_refs.len() != 1 || col_refs[0].len() != KAIGI_AUTHORIZATION_INSTANCE_ROWS_V1 {
                 return false;
             }
             cached_vk_for!(
                 &params,
                 &vk_box.backend,
                 vk_box,
-                KaigiRosterJoinCircuit::default(),
+                KaigiAuthorizationCircuitV1::default(),
                 |vk| {
                     match verify_halo2_ipa_payload_columns_result(
                         &params,
@@ -10943,7 +11018,7 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                                 backend,
                                 normalized = normalized.as_str(),
                                 error = ?err,
-                                "halo2 kaigi roster proof rejected (verify_proof failed)"
+                                "halo2 Kaigi authorization V1 proof rejected (verify_proof failed)"
                             );
                             false
                         }
@@ -10951,15 +11026,16 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                 }
             )
         }
-        KAIGI_USAGE_BACKEND => {
-            if col_refs.is_empty() {
+        #[cfg(feature = "zk-halo2")]
+        KAIGI_USAGE_BACKEND_V1 => {
+            if col_refs.len() != 1 || col_refs[0].len() != KAIGI_USAGE_INSTANCE_ROWS_V1 {
                 return false;
             }
             cached_vk_for!(
                 &params,
                 &vk_box.backend,
                 vk_box,
-                KaigiUsageCommitmentCircuit::default(),
+                KaigiUsageCircuitV1::default(),
                 |vk| {
                     match verify_halo2_ipa_payload_columns_result(
                         &params,

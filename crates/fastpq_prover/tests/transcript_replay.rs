@@ -39,12 +39,12 @@ fn v1_raw_transcript_64_fixture_verifies() {
         fs::write(&path, &encoded).expect("write fixture");
         return;
     }
-    let expected = include_bytes!("fixtures/v1_raw_transcript_64.bin");
+    let expected = fs::read(&path).expect("read canonical proof fixture");
     assert!(
         !expected.is_empty(),
         "fixture {FIXTURE_NAME} is empty; set FASTPQ_UPDATE_FIXTURES=1 and re-run tests"
     );
-    let proof: Proof = norito::decode_from_bytes(expected).expect("decode proof");
+    let proof: Proof = norito::decode_from_bytes(&expected).expect("decode proof");
     assert!(matches!(
         verify_raw_statement(&batch, &proof),
         Err(Error::VerifierLimitExceeded {
@@ -68,7 +68,7 @@ fn v1_raw_transcript_64_fixture_verifies() {
     let encoded = to_bytes(&regenerated).expect("encode regenerated proof");
     assert_eq!(
         encoded.as_slice(),
-        expected,
+        expected.as_slice(),
         "regenerated proof diverged from fixture"
     );
 }

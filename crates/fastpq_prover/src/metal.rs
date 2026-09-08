@@ -35,6 +35,9 @@
     clippy::useless_conversion
 )]
 //! Metal GPU bindings for FASTPQ.
+#[path = "metal_digest384.rs"]
+pub(crate) mod digest384;
+
 use crate::{
     backend::GpuBackend,
     bn254,
@@ -2429,6 +2432,104 @@ struct MetalPipelines {
     twiddle_cache: Mutex<TwiddleCache>,
     bn254_twiddles: Mutex<Bn254TwiddleCache>,
 }
+
+struct Digest384MetalPipelinesV1 {
+    device: Device,
+    queues: QueuePool,
+    pipeline: ComputePipelineState,
+    // Serialize this bounded primitive path. On uncertain completion, retaining
+    // these exact allocations prevents wiping/recycling memory still in use.
+    quarantine: Mutex<Option<Vec<(PooledBuffer, Buffer)>>>,
+}
+fn digest384_metal_context_v1() -> MetalResult<&'static Digest384MetalPipelinesV1> {
+    static CONTEXT: OnceLock<MetalResult<Digest384MetalPipelinesV1>> = OnceLock::new();
+    match CONTEXT.get_or_init(|| {
+        let device = select_metal_device().ok_or(GpuError::Unsupported(GpuBackend::Metal))?;
+        let library = load_metal_library(&device)?;
+        let pipeline = load_pipeline(&device, &library, "digest384_hash_frames_v1")?;
+        let queues = QueuePool::new(&device, resolve_queue_policy(&device))?;
+        Ok(Digest384MetalPipelinesV1 {
+            device,
+            queues,
+            pipeline,
+            quarantine: Mutex::new(None),
+        })
+    }) {
+        Ok(context) => Ok(context),
+        Err(error) => Err(error.clone()),
+    }
+}
+
+pub(crate) fn digest384_hash_frames_v1(
+    staged: &crate::digest384_gpu::StagedDigest384V1,
+    output: &mut [u64],
+) -> MetalResult<()> {
+    use crate::digest384_gpu::digest384_gpu_parameters_v1;
+    if output.len() != staged.frame_count * 6 {
+        return Err(GpuError::InvalidInput(
+            "six-lane Metal output shape mismatch",
+        ));
+    }
+    let context = digest384_metal_context_v1()?;
+    let mut quarantine = context.quarantine.lock().map_err(|_| GpuError::Execution {
+        backend: GpuBackend::Metal,
+        message: "six-lane dispatch lock poisoned".to_owned(),
+    })?;
+    if quarantine.is_some() {
+        return Err(GpuError::Execution {
+            backend: GpuBackend::Metal,
+            message: "six-lane backend quarantined after uncertain completion".to_owned(),
+        });
+    }
+    for len in [
+        staged.words.len(),
+        staged.descriptors.len(),
+        digest384_gpu_parameters_v1().len(),
+        output.len(),
+    ] {
+        validate_metal_pooled_word_len(&context.device, len)?;
+    }
+    let mut buffers = Vec::with_capacity(4);
+    for mut pool in [
+        PooledBuffer::sensitive_from_slice(&staged.words)?,
+        PooledBuffer::sensitive_from_slice(&staged.descriptors)?,
+        PooledBuffer::from_slice(digest384_gpu_parameters_v1())?,
+        PooledBuffer::sensitive_zeroed(output.len())?,
+    ] {
+        let buffer = shared_pooled_buffer(&context.device, &mut pool)?;
+        buffers.push((pool, buffer));
+    }
+    let args = [staged.frame_count as u32, staged.words.len() as u32];
+    let (queue, queue_index) = context.queues.select(args[0], 0);
+    let ticket = submit_compute_with_geometry(
+        queue,
+        queue_index,
+        &context.pipeline,
+        None,
+        (staged.frame_count * 6) as u64,
+        None,
+        false,
+        |encoder| {
+            for (index, (_, buffer)) in buffers.iter().enumerate() {
+                encoder.set_buffer(index as u64, Some(buffer), 0);
+            }
+            encoder.set_bytes(
+                4,
+                mem::size_of_val(&args) as u64,
+                ptr::from_ref(&args).cast(),
+            );
+        },
+    )?;
+    if let Err(error) = wait_for_ticket(ticket) {
+        *quarantine = Some(buffers);
+        return Err(error);
+    }
+    buffers[3].0.copy_to_slice(output);
+    // GPU completion is known. The last retained backing owner wipes complete
+    // sensitive pages before they can re-enter the shared pool.
+    Ok(())
+}
+
 struct Bn254PoseidonMetalPipelines {
     device: Device,
     queues: QueuePool,
@@ -2675,10 +2776,17 @@ fn embedded_metal_library_source() -> String {
     const FIELD: &str = include_str!("../metal/kernels/field.metal");
     const NTT: &str = include_str!("../metal/kernels/ntt_stage.metal");
     const POSEIDON: &str = include_str!("../metal/kernels/poseidon.metal");
+    const DIGEST384: &str = include_str!("../metal/kernels/digest384.metal");
     const BN254: &str = include_str!("../metal/kernels/bn254.metal");
 
     let mut source = String::with_capacity(
-        PRELUDE.len() + PARAMS.len() + FIELD.len() + NTT.len() + POSEIDON.len() + BN254.len(),
+        PRELUDE.len()
+            + PARAMS.len()
+            + FIELD.len()
+            + NTT.len()
+            + POSEIDON.len()
+            + DIGEST384.len()
+            + BN254.len(),
     );
     source.push_str(PRELUDE);
     source.push_str(PARAMS);
@@ -2687,6 +2795,7 @@ fn embedded_metal_library_source() -> String {
     source.push('\n');
     append_embedded_translation_unit(&mut source, NTT);
     append_embedded_translation_unit(&mut source, POSEIDON);
+    append_embedded_translation_unit(&mut source, DIGEST384);
     append_embedded_translation_unit(&mut source, BN254);
     source
 }
@@ -3569,9 +3678,8 @@ pub fn poseidon_permute(states: &mut [u64]) -> MetalResult<()> {
         .map_err(|_| GpuError::InvalidInput("poseidon batch exceeds u32::MAX states"))?;
     let limits = pipeline_limits(&context.poseidon_permute);
     let mut tuning = metal_config::poseidon_tuning(limits.exec_width, limits.max_threads);
-    // `poseidon_permute` backs the sponge/preflight path where each input state is
-    // independent. Keep that kernel on one state per lane; the trace kernels keep
-    // their multi-state batching and have separate parity coverage.
+    // Keep the established one-state geometry until the scalar-structured
+    // multi-state kernel has completed the supported-device qualification matrix.
     tuning.states_per_lane = 1;
     let poseidon_selection = select_poseidon_batch(state_count, tuning);
     let batch_states = poseidon_selection.columns();
@@ -3683,9 +3791,9 @@ pub fn poseidon_hash_columns(batch: &PoseidonColumnBatch) -> MetalResult<Vec<u64
     let pipeline = &context.poseidon_hash;
     let limits = pipeline_limits(pipeline);
     let mut tuning = metal_config::poseidon_tuning(limits.exec_width, limits.max_threads);
-    // Cross-column command batching is parity-covered, but packed multiple
-    // sponge states per Metal lane diverges for non-leading lanes on current
-    // Apple drivers. Keep one state per lane and batch across lanes/commands.
+    // Cross-column command batching is parity-covered. Keep the established
+    // one-state geometry until the scalar-structured multi-state kernel has
+    // completed the supported-device qualification matrix.
     tuning.states_per_lane = 1;
     let selection = select_poseidon_batch(column_count, tuning);
     let columns_per_batch = selection.columns();
@@ -4762,9 +4870,21 @@ impl BufferPool {
 struct PooledBufferBacking {
     pages: Vec<MetalBufferPage>,
     logical_len: usize,
+    sensitive: bool,
+}
+impl PooledBufferBacking {
+    fn wipe_sensitive_pages(&mut self) {
+        if self.sensitive {
+            use zeroize::Zeroize as _;
+            for page in &mut self.pages {
+                page.words.zeroize();
+            }
+        }
+    }
 }
 impl Drop for PooledBufferBacking {
     fn drop(&mut self) {
+        self.wipe_sensitive_pages();
         let pages = mem::take(&mut self.pages);
         if pages.capacity() == 0 {
             return;
@@ -4780,8 +4900,24 @@ struct PooledBuffer {
 impl PooledBuffer {
     fn from_pages(pages: Vec<MetalBufferPage>, logical_len: usize) -> Self {
         Self {
-            backing: Arc::new(PooledBufferBacking { pages, logical_len }),
+            backing: Arc::new(PooledBufferBacking {
+                pages,
+                logical_len,
+                sensitive: false,
+            }),
         }
+    }
+    fn sensitive_from_slice(elements: &[u64]) -> MetalResult<Self> {
+        let mut buffer = Self::sensitive_zeroed(elements.len())?;
+        buffer.copy_from_slice_at(0, elements);
+        Ok(buffer)
+    }
+    fn sensitive_zeroed(len: usize) -> MetalResult<Self> {
+        let mut buffer = Self::zeroed(len)?;
+        Arc::get_mut(&mut buffer.backing)
+            .expect("unshared sensitive buffer")
+            .sensitive = true;
+        Ok(buffer)
     }
     fn from_columns(columns: &[Vec<u64>]) -> MetalResult<Self> {
         let total_len = columns.iter().try_fold(0usize, |total, column| {
@@ -5887,6 +6023,7 @@ mod tests {
         BN254_FFT_KERNEL,
         BN254_LDE_KERNEL,
         BN254_POSEIDON_HASH_KERNEL,
+        digest384::KERNEL,
     ];
     #[test]
     fn embedded_metal_source_is_self_contained() {
@@ -6265,6 +6402,85 @@ mod tests {
         assert_eq!(cpu_states, metal_states);
     }
     #[test]
+    fn poseidon_multi_state_chunks_match_cpu_edge_vectors() {
+        ensure_multi_queue_env();
+        let _gpu_lane = crate::backend::acquire_gpu_lane();
+        let Some(context) = unwrap_or_skip(super::metal_context(), "Poseidon multi-state chunks")
+        else {
+            return;
+        };
+        let edge_words = [
+            0,
+            1,
+            cpu_poseidon::FIELD_MODULUS - 1,
+            cpu_poseidon::FIELD_MODULUS - 2,
+            u64::from(u32::MAX),
+            1u64 << 32,
+            1u64 << 63,
+            cpu_poseidon::FIELD_MODULUS / 2,
+        ];
+        let pipeline = &context.poseidon_permute;
+        let limits = super::pipeline_limits(pipeline);
+        for state_count in [1u32, 4, 5, 33, 257] {
+            let input: Vec<_> = (0..state_count as usize * cpu_poseidon::STATE_WIDTH)
+                .map(|index| edge_words[index % edge_words.len()])
+                .collect();
+            let mut expected = input.clone();
+            for words in expected.chunks_exact_mut(cpu_poseidon::STATE_WIDTH) {
+                let mut state = [words[0], words[1], words[2]];
+                cpu_poseidon::permute_state(&mut state);
+                words.copy_from_slice(&state);
+            }
+            for states_per_lane in [1, 4, 8] {
+                let tuning = super::metal_config::PoseidonTuning {
+                    threadgroup_lanes: 32,
+                    states_per_lane,
+                };
+                let (groups, group, logical_threads, _) =
+                    super::poseidon_dispatch_geometry(state_count, tuning, &limits);
+                for _ in 0..3 {
+                    let mut buffer =
+                        super::clone_slice_with_stats(&input, super::ColumnStagingPhase::Poseidon)
+                            .expect("stage edge vectors");
+                    let metal_buffer = super::shared_pooled_buffer(&context.device, &mut buffer)
+                        .expect("shared edge-vector buffer");
+                    let args = super::PoseidonArgs {
+                        state_count,
+                        states_per_lane,
+                        block_count: 0,
+                        _reserved: 0,
+                    };
+                    let (queue, queue_index) = context.queues.select(state_count, 0);
+                    let ticket = super::submit_compute_with_geometry(
+                        queue,
+                        queue_index,
+                        pipeline,
+                        Some((groups, group, logical_threads)),
+                        logical_threads,
+                        None,
+                        false,
+                        |encoder| {
+                            encoder.set_buffer(0, Some(&metal_buffer), 0);
+                            encoder.set_bytes(
+                                1,
+                                std::mem::size_of::<super::PoseidonArgs>() as u64,
+                                std::ptr::from_ref(&args).cast(),
+                            );
+                        },
+                    )
+                    .expect("submit multi-state Poseidon kernel");
+                    super::wait_for_ticket(ticket).expect("multi-state Poseidon completion");
+                    let mut actual = vec![0; input.len()];
+                    buffer.copy_to_slice(&mut actual);
+                    assert_eq!(
+                        actual, expected,
+                        "state_count={state_count}, states_per_lane={states_per_lane}"
+                    );
+                }
+            }
+        }
+    }
+    #[test]
     fn poseidon_hash_rows_matches_cpu_reference() {
         ensure_multi_queue_env();
         let _gpu_lane = crate::backend::acquire_gpu_lane();
@@ -6509,6 +6725,32 @@ mod tests {
             assert_eq!(*inverse, super::goldilocks_inv(*forward));
         }
     }
+    #[test]
+    fn digest384_gpu_sensitive_pages_wipe_only_after_exclusive_ownership() {
+        let mut buffer = PooledBuffer::sensitive_from_slice(&[17, 23, 91]).unwrap();
+        let retained = Arc::clone(&buffer.backing);
+        assert!(Arc::get_mut(&mut buffer.backing).is_none());
+        assert_eq!(buffer.to_vec().unwrap(), [17, 23, 91]);
+        drop(retained);
+        let backing = Arc::get_mut(&mut buffer.backing).unwrap();
+        backing.pages[0].words[METAL_BUFFER_PAGE_WORDS - 1] = 99;
+        backing.wipe_sensitive_pages();
+        assert!(
+            backing
+                .pages
+                .iter()
+                .all(|page| page.words.iter().all(|word| *word == 0))
+        );
+        let mut ordinary = PooledBuffer::from_slice(&[17, 23, 91]).unwrap();
+        Arc::get_mut(&mut ordinary.backing)
+            .unwrap()
+            .wipe_sensitive_pages();
+        assert_eq!(ordinary.to_vec().unwrap(), [17, 23, 91]);
+        let zeroed = PooledBuffer::sensitive_zeroed(3).unwrap();
+        assert_eq!(zeroed.to_vec().unwrap(), [0; 3]);
+        assert!(zeroed.backing.sensitive);
+    }
+
     #[test]
     fn buffer_pool_recycles_aligned_page_vectors() {
         let mut pool = BufferPool::default();

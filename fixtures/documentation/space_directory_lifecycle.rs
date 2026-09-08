@@ -3,7 +3,7 @@
 //! Build with:
 //!     cargo run --example space_directory_lifecycle --features="iroha/client"
 use eyre::Result;
-use iroha::client::Client;
+use iroha::blocking::Client;
 use iroha::config::Config;
 use iroha::data_model::{
     isi::{

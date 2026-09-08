@@ -293,6 +293,7 @@ pub mod isi {
                     .unwrap_or(false)
             }),
             DataEventFilter::Any
+            | DataEventFilter::GameSession(_)
             | DataEventFilter::Peer(_)
             | DataEventFilter::Role(_)
             | DataEventFilter::Configuration(_)

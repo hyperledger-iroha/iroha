@@ -17,7 +17,13 @@ type Recovery = KagemushaCoordinatorSenderIntentRecoveryV1;
 const FILE: &str = "operations.norito.wal";
 const CAPACITY: u64 = 8 * 1024 * 1024;
 
-fn machine() -> (Machine, DigestV1, AccountId) {
+pub(in super::super) fn machine() -> (Machine, DigestV1, AccountId) {
+    machine_for_payment_scope(None)
+}
+
+fn machine_for_payment_scope(
+    payment_context: Option<iroha_data_model::kagemusha::KagemushaPaymentRequestV1>,
+) -> (Machine, DigestV1, AccountId) {
     let artifacts = crate::zk::kagemusha_v1_recursion::tests::artifacts();
     let suite_id = snapshot_digest(b"snapshot-suite", 1);
     let vk_digest = snapshot_digest(b"snapshot-verifier-set", 2);
@@ -38,9 +44,10 @@ fn machine() -> (Machine, DigestV1, AccountId) {
     let proof_release =
         KagemushaStateProofReleaseV1::from_test_artifacts(artifacts, vec![enabled_profile])
             .expect("snapshot-test proof release");
-    let payment_context =
+    let payment_context = payment_context.unwrap_or_else(|| {
         crate::zk::kagemusha_v1_recursion::tests::incoming_payment_fixture(1, 2, 3, 5, 32, 32)
-            .request;
+            .request
+    });
     let lane = KagemushaLaneIdV1 {
         network_id: payment_context.network_id,
         device_lane_id: snapshot_digest(b"snapshot-lane", 4),
@@ -93,6 +100,12 @@ fn machine() -> (Machine, DigestV1, AccountId) {
     )
     .expect("empty authenticated history");
     let machine = KagemushaStateMachineV1 {
+        recovery_metadata: snapshot_initial_metadata(
+            &state,
+            &proof_release,
+            old_credential.clone(),
+        ),
+        published_checkpoint: None,
         state,
         journal_revision: 0,
         inbox_revision: 0,
@@ -109,6 +122,7 @@ fn machine() -> (Machine, DigestV1, AccountId) {
         recursive_verifier: AcceptSnapshotRecursiveVerifierV1,
         guard_verifier: AcceptSnapshotGuardVerifierV1,
     };
+    let machine = snapshot_initial_publish(machine);
 
     (
         machine,
@@ -140,6 +154,7 @@ fn intent(
             credential_id,
             hardware_epoch: machine.state.hardware_epoch,
             device_policy_binding: machine.state.device_policy_binding,
+            core_authorization_key_reference: id(70),
         },
         inputs: KagemushaOutgoingPublicInputsV1::RedeemSplit {
             amount: 20,
@@ -150,7 +165,10 @@ fn intent(
 fn binding(intent: &KagemushaOutgoingPublicInputPreimageV1) -> Vec<u8> {
     norito::encode_canonical(&intent.inputs).unwrap()
 }
-fn prepare(machine: &mut Machine, intent: &KagemushaOutgoingPublicInputPreimageV1) {
+fn candidate(
+    machine: &Machine,
+    intent: &KagemushaOutgoingPublicInputPreimageV1,
+) -> PreparedOutgoingCandidateV1 {
     let KagemushaOutgoingPublicInputsV1::RedeemSplit {
         amount,
         beneficiary,
@@ -158,7 +176,7 @@ fn prepare(machine: &mut Machine, intent: &KagemushaOutgoingPublicInputPreimageV
     else {
         panic!("test redemption")
     };
-    let candidate = machine
+    machine
         .prepare_redeem_split(RedeemSplitPreparationV1 {
             amount: *amount,
             beneficiary: beneficiary.clone(),
@@ -182,22 +200,29 @@ fn prepare(machine: &mut Machine, intent: &KagemushaOutgoingPublicInputPreimageV
             sealed_transition_inputs: vec![67],
             sealed_recovery_seeds: vec![68],
         })
-        .unwrap();
+        .unwrap()
+}
+fn prepare(machine: &mut Machine, intent: &KagemushaOutgoingPublicInputPreimageV1) {
+    let candidate = candidate(machine, intent);
     machine
         .prepare_indexed_outgoing_candidate(
             intent.operation_id,
             intent.context.credential_id,
+            intent.context.core_authorization_key_reference,
             candidate,
         )
         .unwrap();
 }
-fn restored(machine: &Machine) -> Machine {
+fn restored(machine: Machine) -> Machine {
+    let machine = snapshot_publish_checkpoint(machine);
+    let anchor = machine.recovery_checkpoint().clone();
     let snapshot = machine.snapshot().unwrap();
-    let anchor = machine.seal_durability_anchor(vec![69]).unwrap();
     Machine::restore(
         snapshot,
         &anchor,
         machine.proof_release.clone(),
+        machine.proof_release.clone(),
+        machine.enrollment_binding(),
         machine.authenticated_history.clone().into_store(),
         AcceptSnapshotRecursiveVerifierV1,
         AcceptSnapshotGuardVerifierV1,
@@ -225,7 +250,7 @@ fn operation_store_exact_reservation_retry_is_stable_and_new_id_is_distinct() {
     );
     assert_eq!(fs::metadata(path.join(FILE)).unwrap().len(), size);
     assert_eq!(
-        machine.reserve_coordinator_operation(&mut store, id(1), 1, &binding),
+        machine.reserve_coordinator_operation(&mut store, id(1), 4, &binding),
         Err(StoreError::Conflict)
     );
     assert_eq!(
@@ -261,13 +286,13 @@ fn operation_store_bounds_and_retired_sender_binding_reject_before_append() {
         .unwrap();
     let size = fs::metadata(path.join(FILE)).unwrap().len();
     for (operation_id, operation, binding) in [
-        (id(0), 1, vec![1]),
+        (id(0), 4, vec![1]),
         (id(1), 0, vec![1]),
         (id(1), 23, vec![1]),
-        (id(1), 1, vec![]),
+        (id(1), 4, vec![]),
         (
             id(1),
-            1,
+            4,
             vec![1; KAGEMUSHA_COORDINATOR_PUBLIC_BINDING_MAX_BYTES_V1 + 1],
         ),
         (id(1), 5, b"retired untagged sender inputs".to_vec()),
@@ -373,7 +398,9 @@ fn operation_store_cross_sdk_sender_reservations_match_canonical_core_types() {
     }
     assert_eq!(norito::encode_canonical(&redeem).unwrap(), redeem_binding);
 
-    let (machine, _, _) = machine();
+    // The cross-SDK fixture owns a different genesis/asset scope from the recursive test
+    // fixture. Build the actual test Core wallet and credential in that exact public scope.
+    let (machine, _, _) = machine_for_payment_scope(Some(send.decode_send_parts().unwrap()));
     let (_root, path) = location();
     let mut store = machine
         .create_coordinator_operation_store(&path, CAPACITY)
@@ -419,7 +446,7 @@ fn operation_store_intent_crash_recovery_never_becomes_prepared_or_absent() {
     assert_eq!(fs::metadata(path.join(FILE)).unwrap().len(), size);
     assert!(machine.outgoing_operation_index().is_empty());
     drop(store);
-    let restored = restored(&machine);
+    let restored = restored(machine);
     let mut store = restored.open_coordinator_operation_store(&path, 0).unwrap();
     assert_eq!(
         restored.recover_coordinator_sender_intent(&store, id(3)),
@@ -435,6 +462,84 @@ fn operation_store_intent_crash_recovery_never_becomes_prepared_or_absent() {
         restored.begin_coordinator_sender_intent(&mut store, &conflict),
         Err(StoreError::Conflict)
     );
+}
+
+#[test]
+fn operation_store_authorization_key_substitution_conflicts_across_reopen() {
+    let (mut machine, credential, account) = machine();
+    let (_root, path) = location();
+    let mut store = machine
+        .create_coordinator_operation_store(&path, CAPACITY)
+        .unwrap();
+    let intent = intent(&machine, credential, account, id(71));
+    machine
+        .reserve_coordinator_operation(&mut store, intent.operation_id, 5, &binding(&intent))
+        .unwrap();
+    let mut substituted = intent.clone();
+    substituted.context.core_authorization_key_reference = [0; 32];
+    assert_eq!(
+        machine.begin_coordinator_sender_intent(&mut store, &substituted),
+        Err(StoreError::InvalidBinding),
+    );
+    machine
+        .begin_coordinator_sender_intent(&mut store, &intent)
+        .unwrap();
+    substituted.context.core_authorization_key_reference = id(72);
+    assert_ne!(
+        intent.canonical_digest().unwrap(),
+        substituted.canonical_digest().unwrap(),
+    );
+    assert_eq!(
+        machine.begin_coordinator_sender_intent(&mut store, &substituted),
+        Err(StoreError::Conflict),
+    );
+    let prepared = candidate(&machine, &intent);
+    assert!(
+        machine
+            .prepare_indexed_outgoing_candidate(
+                intent.operation_id,
+                credential,
+                [0; 32],
+                prepared.clone(),
+            )
+            .is_err()
+    );
+    assert!(machine.outgoing_operation_index().is_empty());
+    machine
+        .prepare_indexed_outgoing_candidate(
+            intent.operation_id,
+            credential,
+            intent.context.core_authorization_key_reference,
+            prepared.clone(),
+        )
+        .unwrap();
+    assert!(
+        machine
+            .prepare_indexed_outgoing_candidate(
+                intent.operation_id,
+                credential,
+                substituted.context.core_authorization_key_reference,
+                prepared,
+            )
+            .is_err()
+    );
+    drop(store);
+    let restored = restored(machine);
+    let mut store = restored.open_coordinator_operation_store(&path, 0).unwrap();
+    restored
+        .begin_coordinator_sender_intent(&mut store, &intent)
+        .unwrap();
+    assert_eq!(
+        restored.begin_coordinator_sender_intent(&mut store, &substituted),
+        Err(StoreError::Conflict),
+    );
+    let Recovery::Indexed(record) = restored
+        .recover_coordinator_sender_intent(&store, intent.operation_id)
+        .unwrap()
+    else {
+        panic!("restored Core preparation must retain its exact index record")
+    };
+    assert_eq!(record.context, intent.context);
 }
 
 #[test]
@@ -459,7 +564,7 @@ fn operation_store_reconciles_actual_prepared_core_index_across_restore() {
         .clone();
     assert_eq!(record.phase, KagemushaOutgoingOperationPhaseV1::Prepared);
     drop(store);
-    let restored = restored(&machine);
+    let restored = restored(machine);
     let mut store = restored
         .open_coordinator_operation_store(&path, CAPACITY)
         .unwrap();
@@ -490,7 +595,7 @@ fn operation_store_old_prefix_cannot_hide_unrelated_core_operation() {
     prepare(&mut machine, &intent);
     drop(store);
     fs::write(path.join(FILE), old_prefix).unwrap();
-    let restored = restored(&machine);
+    let restored = restored(machine);
     assert!(matches!(
         restored.open_coordinator_operation_store(&path, CAPACITY),
         Err(StoreError::CoreMismatch)
@@ -512,7 +617,7 @@ fn operation_store_must_reconcile_again_when_core_advances_after_open() {
     let missing = intent(&machine, credential, account, id(7));
     prepare(&mut machine, &missing);
     assert_eq!(
-        machine.reserve_coordinator_operation(&mut store, id(8), 1, b"read"),
+        machine.reserve_coordinator_operation(&mut store, id(8), 4, b"durable command"),
         Err(StoreError::CoreMismatch)
     );
     assert_eq!(
@@ -541,10 +646,10 @@ fn operation_store_foreign_wallet_context_and_changed_epoch_fail_closed() {
         machine.begin_coordinator_sender_intent(&mut store, &wrong),
         Err(StoreError::InvalidBinding)
     );
-    let mut foreign = restored(&machine);
+    let mut foreign = restored(machine);
     foreign.state.lane.device_lane_id = id(98);
     assert_eq!(
-        foreign.reserve_coordinator_operation(&mut store, id(10), 1, b"read"),
+        foreign.reserve_coordinator_operation(&mut store, id(10), 4, b"durable command"),
         Err(StoreError::CoreMismatch)
     );
 }
@@ -634,11 +739,11 @@ fn operation_store_write_uncertainty_poison_never_acknowledges() {
             .unwrap();
         store.wal.failure.set(Some(failure));
         assert_eq!(
-            machine.reserve_coordinator_operation(&mut store, id(12), 1, b"exact read"),
+            machine.reserve_coordinator_operation(&mut store, id(12), 4, b"exact durable command"),
             Err(StoreError::DurabilityUncertain)
         );
         assert_eq!(
-            machine.reserve_coordinator_operation(&mut store, id(12), 1, b"exact read"),
+            machine.reserve_coordinator_operation(&mut store, id(12), 4, b"exact durable command"),
             Err(StoreError::DurabilityUncertain)
         );
     }
@@ -660,7 +765,7 @@ fn operation_store_same_length_tamper_and_concurrent_writer_reject() {
     bytes[90] ^= 1;
     fs::write(&file, &bytes).unwrap();
     assert_eq!(
-        machine.reserve_coordinator_operation(&mut store, id(13), 1, b"read"),
+        machine.reserve_coordinator_operation(&mut store, id(13), 4, b"durable command"),
         Err(StoreError::JournalCorrupt)
     );
     drop(store);
@@ -697,4 +802,278 @@ fn operation_store_corrupt_empty_partial_and_replaced_frames_never_reset() {
             .is_err()
     );
     assert!(!other.exists());
+}
+
+// This fixture advances only the already Core-owned public index so journal accounting can be
+// tested without generating a recursive monetary proof. It is test-only state, not a provider
+// completion or hardware qualification. Receipt verification has its own Core release tests.
+fn release_index_fixture(machine: &mut Machine, operation_id: DigestV1) {
+    let index = machine
+        .outgoing_candidate_journal
+        .operation_index_mut_for_test();
+    let record = index.records.get_mut(&operation_id).unwrap();
+    assert_eq!(record.phase, KagemushaOutgoingOperationPhaseV1::Prepared);
+    record.phase = KagemushaOutgoingOperationPhaseV1::Installed;
+    record.candidate_digest = Some(id(81));
+    record.commit_certificate_digest = Some(id(82));
+    record.envelope_digest = Some(id(83));
+    record.record_revision = 4;
+    index.revision = 4;
+    let reservation = record.outbox_reservation_id;
+    *index = index
+        .release_successor(reservation, id(83), id(84))
+        .unwrap();
+}
+
+#[test]
+fn operation_store_retires_only_core_released_sender_capacity_and_keeps_exact_tombstone() {
+    let (mut machine, credential, account) = machine();
+    let (_root, path) = location();
+    let mut store = machine
+        .create_coordinator_operation_store(&path, CAPACITY)
+        .unwrap();
+    let first = intent(&machine, credential, account.clone(), id(85));
+    let second = intent(&machine, credential, account, id(86));
+    machine
+        .reserve_coordinator_operation(&mut store, first.operation_id, 5, &binding(&first))
+        .unwrap();
+    let charge = store.live_reserved_bytes();
+    assert!(charge > KAGEMUSHA_COORDINATOR_INTENT_MAX_BYTES_V1 as u64);
+    machine
+        .begin_coordinator_sender_intent(&mut store, &first)
+        .unwrap();
+    prepare(&mut machine, &first);
+    let prepared_journal = machine.outgoing_candidate_journal.clone();
+    drop(store);
+    let mut store = machine
+        .open_coordinator_operation_store(&path, charge)
+        .unwrap();
+    assert_eq!(
+        machine.retire_released_coordinator_sender_operations(&mut store),
+        Ok(0)
+    );
+    assert_eq!(store.live_reserved_bytes(), charge);
+    assert_eq!(
+        machine.reserve_coordinator_operation(
+            &mut store,
+            second.operation_id,
+            5,
+            &binding(&second)
+        ),
+        Err(StoreError::Capacity),
+    );
+    release_index_fixture(&mut machine, first.operation_id);
+    assert_eq!(machine.outgoing_operation_index().reserved_bytes(), 0);
+    assert_eq!(
+        machine.retire_released_coordinator_sender_operations(&mut store),
+        Ok(1)
+    );
+    assert_eq!(store.live_reserved_bytes(), 0);
+    let size = fs::metadata(path.join(FILE)).unwrap().len();
+    assert_eq!(
+        machine.retire_released_coordinator_sender_operations(&mut store),
+        Ok(0)
+    );
+    machine
+        .begin_coordinator_sender_intent(&mut store, &first)
+        .unwrap();
+    assert_eq!(fs::metadata(path.join(FILE)).unwrap().len(), size);
+    machine
+        .reserve_coordinator_operation(&mut store, second.operation_id, 5, &binding(&second))
+        .unwrap();
+    assert_eq!(store.live_reserved_bytes(), charge);
+    drop(store);
+    let mut store = machine
+        .open_coordinator_operation_store(&path, charge)
+        .unwrap();
+    assert_eq!(store.live_reserved_bytes(), charge);
+    assert_eq!(
+        machine.reserve_coordinator_operation(&mut store, first.operation_id, 5, &binding(&first)),
+        Ok(first.operation_id),
+    );
+    assert_eq!(
+        machine.reserve_coordinator_operation(&mut store, first.operation_id, 5, b"changed"),
+        Err(StoreError::Conflict),
+    );
+    let Recovery::Indexed(record) = machine
+        .recover_coordinator_sender_intent(&store, first.operation_id)
+        .unwrap()
+    else {
+        panic!("terminal history must remain Indexed, never Missing or a fresh Intent");
+    };
+    assert_eq!(record.phase, KagemushaOutgoingOperationPhaseV1::Released);
+    drop(store);
+    machine.outgoing_candidate_journal = prepared_journal;
+    assert!(matches!(
+        machine.open_coordinator_operation_store(&path, charge),
+        Err(StoreError::CoreMismatch)
+    ));
+}
+
+#[test]
+fn operation_store_lost_retirement_reply_reopens_exactly_without_double_credit() {
+    let (mut machine, credential, account) = machine();
+    let (_root, path) = location();
+    let mut store = machine
+        .create_coordinator_operation_store(&path, CAPACITY)
+        .unwrap();
+    let first = intent(&machine, credential, account.clone(), id(87));
+    machine
+        .reserve_coordinator_operation(&mut store, first.operation_id, 5, &binding(&first))
+        .unwrap();
+    let charge = store.live_reserved_bytes();
+    machine
+        .begin_coordinator_sender_intent(&mut store, &first)
+        .unwrap();
+    prepare(&mut machine, &first);
+    release_index_fixture(&mut machine, first.operation_id);
+    store
+        .wal
+        .failure
+        .set(Some(TestPersistenceFailure::AfterSync));
+    assert_eq!(
+        machine.retire_released_coordinator_sender_operations(&mut store),
+        Err(StoreError::DurabilityUncertain)
+    );
+    assert_eq!(
+        store.live_reserved_bytes(),
+        charge,
+        "the uncertain writer cannot reuse capacity"
+    );
+    assert_eq!(
+        machine.retire_released_coordinator_sender_operations(&mut store),
+        Err(StoreError::DurabilityUncertain)
+    );
+    let length = fs::metadata(path.join(FILE)).unwrap().len();
+    drop(store);
+    let mut store = machine
+        .open_coordinator_operation_store(&path, charge)
+        .unwrap();
+    assert_eq!(store.live_reserved_bytes(), 0);
+    assert_eq!(fs::metadata(path.join(FILE)).unwrap().len(), length);
+    let second = intent(&machine, credential, account, id(88));
+    machine
+        .reserve_coordinator_operation(&mut store, second.operation_id, 5, &binding(&second))
+        .unwrap();
+    assert_eq!(store.live_reserved_bytes(), charge);
+}
+
+#[test]
+fn operation_store_core_released_journal_prefix_is_retired_but_changed_receipt_is_rejected() {
+    let (mut machine, credential, account) = machine();
+    let (_root, path) = location();
+    let mut store = machine
+        .create_coordinator_operation_store(&path, CAPACITY)
+        .unwrap();
+    let first = intent(&machine, credential, account, id(89));
+    machine
+        .reserve_coordinator_operation(&mut store, first.operation_id, 5, &binding(&first))
+        .unwrap();
+    machine
+        .begin_coordinator_sender_intent(&mut store, &first)
+        .unwrap();
+    prepare(&mut machine, &first);
+    let before_release = fs::read(path.join(FILE)).unwrap();
+    release_index_fixture(&mut machine, first.operation_id);
+    machine
+        .retire_released_coordinator_sender_operations(&mut store)
+        .unwrap();
+    drop(store);
+    fs::write(path.join(FILE), before_release).unwrap();
+    let store = machine.open_coordinator_operation_store(&path, 0).unwrap();
+    assert_eq!(store.live_reserved_bytes(), 0);
+    drop(store);
+    machine
+        .outgoing_candidate_journal
+        .operation_index_mut_for_test()
+        .records
+        .get_mut(&first.operation_id)
+        .unwrap()
+        .terminal_receipt_digest = Some(id(90));
+    assert!(matches!(
+        machine.open_coordinator_operation_store(&path, 0),
+        Err(StoreError::CoreMismatch)
+    ));
+}
+
+#[test]
+fn operation_store_observations_never_append_or_consume_durable_capacity() {
+    let (machine, _, _) = machine();
+    let (_root, path) = location();
+    let mut store = machine
+        .create_coordinator_operation_store(&path, 0)
+        .unwrap();
+    let initialized = fs::read(path.join(FILE)).unwrap();
+    for tag in 1..=96 {
+        for operation in [1, 13, 18, 21] {
+            assert_eq!(
+                machine.reserve_coordinator_operation(&mut store, id(tag), operation, b"read body"),
+                Err(StoreError::InvalidBinding)
+            );
+        }
+    }
+    assert_eq!(store.live_reserved_bytes(), 0);
+    assert_eq!(fs::read(path.join(FILE)).unwrap(), initialized);
+    drop(store);
+    let restored = machine.open_coordinator_operation_store(&path, 0).unwrap();
+    assert_eq!(restored.live_reserved_bytes(), 0);
+    assert_eq!(fs::read(path.join(FILE)).unwrap(), initialized);
+}
+
+#[test]
+fn operation_store_asset_incarnation_is_part_of_immutable_wallet_scope() {
+    let (mut machine, _, _) = machine();
+    let (_root, path) = location();
+    let mut store = machine
+        .create_coordinator_operation_store(&path, CAPACITY)
+        .unwrap();
+    machine
+        .reserve_coordinator_operation(&mut store, id(93), 4, b"exact durable command")
+        .unwrap();
+    machine.state.asset_incarnation =
+        iroha_data_model::nexus::AxtAssetIncarnationV1::try_from_bytes(
+            *iroha_crypto::Hash::new(b"a different issued asset incarnation").as_ref(),
+        )
+        .unwrap();
+    assert_eq!(
+        machine.reserve_coordinator_operation(&mut store, id(94), 4, b"exact durable command"),
+        Err(StoreError::CoreMismatch)
+    );
+    drop(store);
+    assert!(
+        machine
+            .open_coordinator_operation_store(&path, CAPACITY)
+            .is_err()
+    );
+}
+
+#[test]
+fn operation_store_checkpoint_prefix_tracks_exact_durable_frames_and_rejects_replaced_bytes() {
+    let (machine, _, _) = machine();
+    let (_root, path) = location();
+    let mut store = machine
+        .create_coordinator_operation_store(&path, CAPACITY)
+        .unwrap();
+    let initial = store.recovery_prefix().unwrap();
+    assert_eq!(initial.sequence, 1);
+    assert_eq!(
+        initial.byte_len,
+        fs::metadata(path.join(FILE)).unwrap().len()
+    );
+    machine
+        .reserve_coordinator_operation(&mut store, id(91), 4, b"durable command")
+        .unwrap();
+    let selected = store.recovery_prefix().unwrap();
+    assert_eq!(selected.sequence, initial.sequence + 1);
+    assert!(selected.byte_len > initial.byte_len);
+    assert_ne!(selected.head, initial.head);
+    drop(store);
+    let store = machine
+        .open_coordinator_operation_store(&path, CAPACITY)
+        .unwrap();
+    assert_eq!(store.recovery_prefix().unwrap(), selected);
+    let mut bytes = fs::read(path.join(FILE)).unwrap();
+    *bytes.last_mut().unwrap() ^= 1;
+    fs::write(path.join(FILE), bytes).unwrap();
+    assert_eq!(store.recovery_prefix(), Err(StoreError::JournalCorrupt));
 }

@@ -322,6 +322,13 @@ fn reconcile_pending_lane_startup(
             pending_plan => pending_plan,
         };
         match planning {
+            LaneReservationReconciliationPlanning::AlreadyCompleted(observation) => {
+                break observe_completed_lane_reservation_reconciliation(
+                    queue.as_ref(),
+                    kura.as_ref(),
+                    observation,
+                )?;
+            }
             LaneReservationReconciliationPlanning::Ready(plan) => {
                 let recovery = output_guard
                     .begin_fail_stop_operation()

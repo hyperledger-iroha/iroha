@@ -10,7 +10,7 @@ use iroha_core::{
     query::store::LiveQueryStore,
     queue::Queue,
     smartcontracts::Execute,
-    state::{State, StateReadOnly, WorldReadOnly},
+    state::{State, WorldReadOnly},
 };
 use iroha_crypto::Signature;
 use iroha_data_model::{
@@ -71,10 +71,10 @@ fn grant_contract_operator_permissions(
     );
     let mut block = state.block(header);
     let mut transaction = block.transaction();
-    Grant::account_permission(CanRegisterSmartContractCode.into(), authority.clone())
+    Grant::account_permission(CanRegisterSmartContractCode, authority.clone())
         .execute(authority, &mut transaction)
         .expect("grant CanRegisterSmartContractCode");
-    Grant::account_permission(CanEnactGovernance.into(), authority.clone())
+    Grant::account_permission(CanEnactGovernance, authority.clone())
         .execute(authority, &mut transaction)
         .expect("grant CanEnactGovernance");
     Grant::account_permission(
@@ -82,8 +82,7 @@ fn grant_contract_operator_permissions(
             scope: AccountAliasPermissionScope::Dataspace(
                 iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
             ),
-        }
-        .into(),
+        },
         authority.clone(),
     )
     .execute(authority, &mut transaction)

@@ -5,6 +5,7 @@ use iroha_crypto::blake2::{Blake2b512, Digest as _};
 use iroha_data_model::{NetworkId, account::AccountId, governance::types::ParliamentBody};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 /// Bodies selected before a narrow Policy Jury result can trigger a fresh Confirmation Jury.
+#[cfg(test)]
 const PRIMARY_PARLIAMENT_BODIES_V1: [ParliamentBody; 9] = [
     ParliamentBody::RulesCommittee,
     ParliamentBody::AgendaCouncil,
@@ -123,7 +124,6 @@ fn derive_body_plan(
     for assignment_cap in minimum_cap..=maximum_cap {
         if let Some(plan) = try_derive_body_plan_with_cap(
             gov_cfg,
-            epoch,
             candidates,
             bodies,
             &rankings,
@@ -141,7 +141,6 @@ fn derive_body_plan(
 #[allow(clippy::too_many_arguments)]
 fn try_derive_body_plan_with_cap(
     gov_cfg: &Governance,
-    epoch: u64,
     candidates: &[AccountId],
     bodies: &[ParliamentBody],
     rankings: &BTreeMap<ParliamentBody, Vec<AccountId>>,

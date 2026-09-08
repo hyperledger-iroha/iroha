@@ -76,7 +76,7 @@ use iroha_primitives::{
 };
 use mv::storage::{StorageReadOnly, Transaction as StorageTransaction};
 use norito::{
-    DecodeLimits, decode_canonical_with_limits, decode_from_bytes_with_limits,
+    DecodeLimits, decode_canonical_with_limits,
     json::{self, Value},
 };
 use sorafs_manifest::{
@@ -231,7 +231,7 @@ fn pin_global_usage_key() -> &'static StatePath {
     })
 }
 fn pin_authority_usage_key(authority: &AccountId) -> Result<StatePath, InstructionExecutionError> {
-    let authority_bytes = norito::to_bytes(authority).map_err(|error| {
+    let authority_bytes = norito::encode_canonical(authority).map_err(|error| {
         pin_accounting_corruption(format!(
             "failed to encode authority for the accounting key: {error}"
         ))
@@ -336,7 +336,7 @@ fn encode_pin_accounting_state<T: norito::core::NoritoSerialize>(
     value: &T,
     label: &str,
 ) -> Result<Vec<u8>, InstructionExecutionError> {
-    let bytes = norito::to_bytes(value)
+    let bytes = norito::encode_canonical(value)
         .map_err(|error| pin_accounting_corruption(format!("failed to encode {label}: {error}")))?;
     if bytes.len() > PIN_ACCOUNTING_STATE_MAX_BYTES {
         return Err(pin_accounting_corruption(format!(
@@ -354,15 +354,13 @@ where
             "stored {label} exceeds {PIN_ACCOUNTING_STATE_MAX_BYTES} bytes"
         )));
     }
-    let value = decode_from_bytes_with_limits::<T>(bytes, PIN_ACCOUNTING_DECODE_LIMITS).map_err(
-        |error| pin_accounting_corruption(format!("failed to decode stored {label}: {error}")),
-    )?;
-    if encode_pin_accounting_state(&value, label)? != bytes {
-        return Err(pin_accounting_corruption(format!(
-            "stored {label} is not exact canonical Norito"
-        )));
-    }
-    Ok(value)
+    decode_canonical_with_limits::<T>(bytes, PIN_ACCOUNTING_DECODE_LIMITS).map_err(|error| {
+        if matches!(error, norito::Error::NonCanonicalEncoding) {
+            pin_accounting_corruption(format!("stored {label} is not exact canonical Norito"))
+        } else {
+            pin_accounting_corruption(format!("failed to decode stored {label}: {error}"))
+        }
+    })
 }
 fn read_pin_usage(
     world: &impl crate::state::WorldReadOnly,
@@ -486,14 +484,14 @@ fn prepare_pin_admission_accounting(
         }
         let parent_record = world.pin_manifests().get(parent_digest).ok_or_else(|| {
             invalid_parameter(format!(
-                "successor manifest {} referenced by {} is not registered",
+                "predecessor manifest {} referenced by successor {} is not registered",
                 manifest_hex(parent_digest),
                 manifest_hex(digest)
             ))
         })?;
         if !matches!(parent_record.status, PinStatus::Approved(_)) {
             return Err(invalid_parameter(format!(
-                "successor manifest {} must be approved and live before registering {}",
+                "predecessor manifest {} must be approved and live before registering successor {}",
                 manifest_hex(parent_digest),
                 manifest_hex(digest)
             )));
@@ -1671,7 +1669,12 @@ fn has_permission(
         .world
         .account_permissions
         .get(authority)
-        .is_some_and(|perms| perms.iter().any(|perm| perm.name() == permission))
+        .is_some_and(|perms| {
+            perms.iter().any(|grant| {
+                // Raw canonical JSON preserves the distinction between null and "null".
+                grant.name() == permission && grant.payload().get().as_str() == "null"
+            })
+        })
 }
 fn require_permission(
     state_transaction: &StateTransaction<'_, '_>,
@@ -3889,24 +3892,7 @@ impl Execute for iroha_data_model::isi::sorafs::IssueReplicationOrder {
                 .into(),
             ));
         }
-        let order_payload = decode_from_bytes_with_limits::<ReplicationOrderV1>(
-            &self.order_payload,
-            REPLICATION_ORDER_DECODE_LIMITS,
-        )
-        .map_err(|err| {
-            invalid_parameter(format!(
-                "invalid replication order payload for {order_label}: {err}"
-            ))
-        })?;
-        order_payload.validate().map_err(|err| {
-            invalid_parameter(format!(
-                "replication order validation failed for {order_label}: {err}"
-            ))
-        })?;
-        // Preserve semantic-validation precedence while asking the bounded
-        // canonical decoder, rather than a raw decode/re-encode comparison,
-        // to enforce the one accepted V1 layout.
-        decode_canonical_with_limits::<ReplicationOrderV1>(
+        let order_payload = decode_canonical_with_limits::<ReplicationOrderV1>(
             &self.order_payload,
             REPLICATION_ORDER_DECODE_LIMITS,
         )
@@ -3917,9 +3903,14 @@ impl Execute for iroha_data_model::isi::sorafs::IssueReplicationOrder {
                 ))
             } else {
                 invalid_parameter(format!(
-                    "failed to canonicalize replication order {order_label}: {err}"
+                    "invalid replication order payload for {order_label}: {err}"
                 ))
             }
+        })?;
+        order_payload.validate().map_err(|err| {
+            invalid_parameter(format!(
+                "replication order validation failed for {order_label}: {err}"
+            ))
         })?;
         if order_payload.order_id != *self.order_id.as_bytes() {
             return Err(invalid_parameter(format!(
@@ -4233,7 +4224,7 @@ impl Execute for iroha_data_model::isi::sorafs::ReviseReplicationOrderAssignment
                 .into());
             }
         }
-        record.canonical_order = norito::to_bytes(&canonical_order).map_err(|error| {
+        record.canonical_order = norito::encode_canonical(&canonical_order).map_err(|error| {
             InstructionExecutionError::InvariantViolation(
                 format!(
                     "replication order {order_label} replacement assignments could not be canonicalized: {error}"
@@ -4264,25 +4255,7 @@ pub(crate) fn validate_stored_replication_order(
                 .into(),
         )
     })?;
-    let canonical_payload: ReplicationOrderV1 =
-        decode_from_bytes_with_limits(&record.canonical_order, REPLICATION_ORDER_DECODE_LIMITS)
-            .map_err(|err| {
-                InstructionExecutionError::InvariantViolation(
-                format!(
-                    "replication order {order_label} canonical payload could not be decoded: {err}"
-                )
-                .into(),
-            )
-            })?;
-    canonical_payload.validate().map_err(|err| {
-        InstructionExecutionError::InvariantViolation(
-            format!("replication order {order_label} stored payload failed validation: {err}")
-                .into(),
-        )
-    })?;
-    // Keep stored semantic validation ahead of the representation check so
-    // corruption reports retain their established precedence.
-    decode_canonical_with_limits::<ReplicationOrderV1>(
+    let canonical_payload = decode_canonical_with_limits::<ReplicationOrderV1>(
         &record.canonical_order,
         REPLICATION_ORDER_DECODE_LIMITS,
     )
@@ -4297,11 +4270,17 @@ pub(crate) fn validate_stored_replication_order(
         } else {
             InstructionExecutionError::InvariantViolation(
                 format!(
-                    "replication order {order_label} stored payload could not be canonicalized: {err}"
+                    "replication order {order_label} canonical payload could not be decoded: {err}"
                 )
                 .into(),
             )
         }
+    })?;
+    canonical_payload.validate().map_err(|err| {
+        InstructionExecutionError::InvariantViolation(
+            format!("replication order {order_label} stored payload failed validation: {err}")
+                .into(),
+        )
     })?;
     if canonical_payload.order_id != *record.order_id.as_bytes()
         || canonical_payload.manifest_digest != *record.manifest_digest.as_bytes()
@@ -6848,7 +6827,7 @@ fn ensure_repair_query_encoded_budget<T: norito::core::NoritoSerialize>(
     label: &str,
 ) -> Result<(), QueryExecutionFail> {
     let maximum = crate::smartcontracts::isi::query::singular_query_frame_limit(maximum);
-    let encoded_len = norito::core::encoded_frame_len(value).map_err(|error| {
+    let encoded_len = norito::canonical_frame_len(value).map_err(|error| {
         QueryExecutionFail::Conversion(format!("failed to size {label}: {error}"))
     })?;
     if encoded_len > maximum {
@@ -6984,7 +6963,7 @@ fn finalize_pin_manifest_page(
             has_more,
             next_after_digest,
         };
-        let encoded_len = norito::core::encoded_frame_len(&page).map_err(|error| {
+        let encoded_len = norito::canonical_frame_len(&page).map_err(|error| {
             QueryExecutionFail::Conversion(format!(
                 "failed to size finalized pin-manifest page: {error}"
             ))
@@ -7409,7 +7388,7 @@ fn query_repair_task_page(
                 "repair task page inspected more than {REPAIR_QUERY_MAX_TASK_STATE_READ_BYTES_V1} state bytes"
             )));
         }
-        let task_len = norito::core::encoded_frame_len(&task).map_err(|error| {
+        let task_len = norito::canonical_frame_len(&task).map_err(|error| {
             QueryExecutionFail::Conversion(format!(
                 "failed to size authoritative repair task: {error}"
             ))
@@ -7655,7 +7634,7 @@ fn query_repair_event_page(
             "repair event page",
         )?;
         encoded_event_bytes = encoded_event_bytes
-            .checked_add(norito::core::encoded_frame_len(&resolved).map_err(|error| {
+            .checked_add(norito::canonical_frame_len(&resolved).map_err(|error| {
                 QueryExecutionFail::Conversion(format!(
                     "failed to size committed repair event: {error}"
                 ))
@@ -7824,6 +7803,7 @@ impl ValidSingularQuery for FindSorafsRepairEvents {
 #[cfg(test)]
 mod sorafs_tests {
     use super::*;
+    include!("sorafs/permission_token_tests.rs");
     use crate::{
         kura::Kura,
         query::store::LiveQueryStore,
@@ -7994,6 +7974,7 @@ mod sorafs_tests {
     fn registered_manifest_approval_envelope(
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> (Vec<u8>, String, String) {
+        seed_automatic_replication_capacity(state_transaction, default_policy().min_replicas);
         RegisterPinManifest {
             manifest_payload: default_manifest_payload(),
             alias: None,
@@ -8781,6 +8762,7 @@ mod sorafs_tests {
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
+        seed_automatic_replication_capacity(&mut stx, default_policy().min_replicas);
         if let Some(perms) = stx.world.account_permissions.get_mut(&alice()) {
             perms.clear();
         }
@@ -8889,6 +8871,7 @@ mod sorafs_tests {
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
+        seed_automatic_replication_capacity(&mut stx, default_policy().min_replicas);
         stx.gov.sorafs_pin_policy.max_global_manifests = 1;
         RegisterPinManifest {
             manifest_payload: default_manifest_payload(),
@@ -8932,6 +8915,7 @@ mod sorafs_tests {
             let mut block = state.block(block_header());
             let mut stx = block.transaction();
             seed_test_call_hash(&mut stx);
+            seed_automatic_replication_capacity(&mut stx, default_policy().min_replicas);
             if authority_scoped {
                 stx.gov.sorafs_pin_policy.max_manifests_per_authority = 1;
             } else {
@@ -9001,6 +8985,7 @@ mod sorafs_tests {
             let mut block = state.block(block_header());
             let mut stx = block.transaction();
             seed_test_call_hash(&mut stx);
+            seed_automatic_replication_capacity(&mut stx, default_policy().min_replicas);
             if authority_scoped {
                 stx.gov.sorafs_pin_policy.max_bytes_per_authority = default_content_length();
             } else {
@@ -9046,6 +9031,7 @@ mod sorafs_tests {
             let mut block = state.block(block_header());
             let mut stx = block.transaction();
             seed_test_call_hash(&mut stx);
+            seed_automatic_replication_capacity(&mut stx, default_policy().min_replicas);
             RegisterPinManifest {
                 manifest_payload: default_manifest_payload(),
                 alias: None,
@@ -9065,7 +9051,7 @@ mod sorafs_tests {
                 previous.clone(),
                 None,
                 None,
-                41_999,
+                default_policy().retention_epoch * 1_000 - 1,
                 0,
             );
             let mut block = state.block(header);
@@ -9090,7 +9076,7 @@ mod sorafs_tests {
             previous,
             None,
             None,
-            42_000,
+            default_policy().retention_epoch * 1_000,
             0,
         );
         let mut block = state.block(header);
@@ -9104,7 +9090,10 @@ mod sorafs_tests {
             .pin_manifests
             .get(&default_digest())
             .expect("retired pin remains queryable");
-        assert!(matches!(stored.status, PinStatus::Retired(42)));
+        assert_eq!(
+            stored.status,
+            PinStatus::Retired(default_policy().retention_epoch)
+        );
         assert_eq!(
             stored.retirement_reason.as_deref(),
             Some("consensus retention expired")
@@ -9122,7 +9111,10 @@ mod sorafs_tests {
             block
                 .world
                 .smart_contract_state
-                .get(&pin_expiry_key(42, &default_digest()))
+                .get(&pin_expiry_key(
+                    default_policy().retention_epoch,
+                    &default_digest()
+                ))
                 .is_none()
         );
     }
@@ -9133,6 +9125,7 @@ mod sorafs_tests {
             let mut block = state.block(block_header());
             let mut stx = block.transaction();
             seed_test_call_hash(&mut stx);
+            seed_automatic_replication_capacity(&mut stx, default_policy().min_replicas);
             RegisterPinManifest {
                 manifest_payload: default_manifest_payload(),
                 alias: None,
@@ -9151,7 +9144,7 @@ mod sorafs_tests {
             previous,
             None,
             None,
-            42_000,
+            default_policy().retention_epoch * 1_000,
             0,
         );
         let mut block = state.block(header);
@@ -9184,7 +9177,10 @@ mod sorafs_tests {
             block
                 .world
                 .smart_contract_state
-                .get(&pin_expiry_key(42, &default_digest()))
+                .get(&pin_expiry_key(
+                    default_policy().retention_epoch,
+                    &default_digest()
+                ))
                 .is_some(),
             "the due canonical marker must remain when any index entry is corrupt"
         );
@@ -9314,6 +9310,7 @@ mod sorafs_tests {
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
+        seed_automatic_replication_capacity(&mut stx, default_policy().min_replicas);
         insert_pending_manifest(&mut stx, default_digest(), default_chunk_digest());
         let record = stx
             .world
@@ -9347,6 +9344,7 @@ mod sorafs_tests {
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
+        seed_automatic_replication_capacity(&mut stx, default_policy().min_replicas);
         RegisterPinManifest {
             manifest_payload: default_manifest_payload(),
             alias: None,
@@ -9447,56 +9445,7 @@ mod sorafs_tests {
         )
         .expect("seed canonical automatic replication providers");
     }
-    fn insert_manifest_with_status(
-        stx: &mut crate::state::StateTransaction<'_, '_>,
-        digest: ManifestDigest,
-        chunk_digest: [u8; 32],
-        successor_of: Option<ManifestDigest>,
-        status: PinStatus,
-    ) {
-        let policy = default_policy();
-        let content_length = default_content_length();
-        let mut record = PinManifestRecord::new(
-            digest,
-            root_cid_for_manifest(digest),
-            default_chunker(),
-            chunk_digest,
-            por_root_for_manifest(digest),
-            content_length,
-            policy,
-            alice(),
-            5,
-            None,
-            successor_of,
-            Metadata::default(),
-        );
-        match status {
-            PinStatus::Pending => {}
-            PinStatus::Approved(epoch) => {
-                let amount = stx
-                    .world
-                    .sorafs_pricing
-                    .get()
-                    .public_pin_fee(
-                        policy.storage_class,
-                        content_length,
-                        policy.min_replicas,
-                        5,
-                        policy.retention_epoch,
-                    )
-                    .expect("fixture public pin fee");
-                record.record_pin_fee_payment(PinFeePayment {
-                    paid_by: alice(),
-                    fee_asset_id: stx.gov.sorafs_pin_fee_asset_id.clone(),
-                    treasury_account_id: stx.gov.sorafs_pin_fee_treasury_account.clone(),
-                    amount,
-                });
-                record.approve(epoch, None);
-            }
-            PinStatus::Retired(epoch) => record.retire(epoch, None),
-        }
-        insert_pin_record_with_accounting(stx, record);
-    }
+    include!("sorafs/pin_lifecycle_fixture.rs");
     fn insert_pin_record_with_accounting(
         stx: &mut crate::state::StateTransaction<'_, '_>,
         record: PinManifestRecord,
@@ -10036,66 +9985,6 @@ mod sorafs_tests {
             "canonical helpers must restore the caller's ambient layout"
         );
     }
-    #[test]
-    fn v1_norito_decoders_reject_advertised_alternate_layouts() {
-        let provider = ProviderId::new([0x49; 32]);
-        let report = repair_report(
-            "REP-ALTERNATE-LAYOUT",
-            provider,
-            [0x4A; 32],
-            &alice(),
-            4_000,
-        );
-        let canonical = norito::encode_canonical(&report).expect("encode canonical repair report");
-        let alternate_flags =
-            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
-        let alternate = {
-            let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
-            norito::to_bytes(&report).expect("encode alternate-layout repair report")
-        };
-        assert_ne!(alternate, canonical);
-        assert_eq!(
-            norito::decode_from_bytes::<RepairReportV1>(&alternate)
-                .expect("ordinary Norito accepts the advertised alternate layout"),
-            report
-        );
-        let payload_error = decode_repair_payload::<RepairReportV1>(&alternate, "repair report")
-            .expect_err("admitted repair payload must reject alternate layout");
-        assert!(
-            smart_contract_error_message(&payload_error)
-                .contains("repair report is not exact canonical Norito")
-        );
-        for error in [
-            decode_repair_state::<RepairReportV1>(&alternate, "repair report")
-                .expect_err("persisted repair state must reject alternate layout"),
-            decode_stored_repair_payload::<RepairReportV1>(&alternate, "repair report")
-                .expect_err("stored repair payload must reject alternate layout"),
-        ] {
-            assert!(matches!(
-                error,
-                InstructionExecutionError::InvariantViolation(message)
-                    if message.contains("repair report is not exact canonical Norito")
-            ));
-        }
-        let mut alias = default_alias_binding();
-        let bundle = decode_alias_proof_untrusted_signers(&alias.proof)
-            .expect("decode canonical alias fixture integrity");
-        alias.proof = {
-            let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
-            norito::to_bytes(&bundle).expect("encode alternate-layout alias proof")
-        };
-        let alias_error = validate_manifest_alias_binding(
-            &alias,
-            &default_digest(),
-            &default_root_cid(),
-            Some((5, default_policy().retention_epoch)),
-        )
-        .expect_err("alias proof must reject alternate layout");
-        assert!(
-            smart_contract_error_message(&alias_error).contains("not canonical Norito"),
-            "unexpected alias rejection: {alias_error:?}"
-        );
-    }
     pub(super) fn alice() -> AccountId {
         AccountId::new(
             "ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C"
@@ -10279,6 +10168,11 @@ mod sorafs_tests {
         let (provider, declaration) = sample_capacity_record();
         register_governed_capacity_declaration(&mut stx, &alice(), declaration)
             .expect("register capacity declaration");
+        UpsertProviderCredit {
+            record: provider_credit_nanos(provider, 1_000_000_000, 1_000_000_000),
+        }
+        .execute(&alice(), &mut stx)
+        .expect("fund the provider's declared telemetry credit");
         let telemetry = CapacityTelemetryRecord::new(
             provider, 0, 1, 1, 1, 1, 0, 0, 10_000, 10_000, 0, 0, 0, 0, 0,
         )
@@ -10423,6 +10317,12 @@ mod sorafs_tests {
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
+        seed_governed_capacity_provider(
+            &mut stx,
+            ProviderId::new([0xE8; 32]),
+            &alice(),
+            Quantity::from(1_u32),
+        );
         let (provider, declaration) = capacity_record_with_owner(&alice());
         seed_provider_owners(&mut stx, &[provider], &alice());
         let missing_record_error = RegisterCapacityDeclaration {
@@ -10430,24 +10330,31 @@ mod sorafs_tests {
         }
         .execute(&alice(), &mut stx)
         .expect_err("a governed owner without an owner-funded reserve must fail");
-        assert!(matches!(
-            missing_record_error,
-            InstructionExecutionError::InvalidParameter(
-                InvalidParameterError::SmartContract(message)
-            ) if message.contains("no owner-funded reserve account")
-        ));
+        assert!(
+            matches!(
+                &missing_record_error,
+                InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(message)
+                ) if message == &format!("provider {provider} has no owner-funded reserve account")
+            ),
+            "unexpected missing-reserve rejection: {missing_record_error:?}"
+        );
         seed_governed_capacity_provider(&mut stx, provider, &alice(), Quantity::zero());
         let error = RegisterCapacityDeclaration {
             record: declaration,
         }
         .execute(&alice(), &mut stx)
         .expect_err("a governed owner without the declared bonded stake must fail");
-        assert!(matches!(
-            error,
-            InstructionExecutionError::InvalidParameter(
-                InvalidParameterError::SmartContract(message)
-            ) if message.contains("owner-funded native reserve")
-        ));
+        assert!(
+            matches!(
+                &error,
+                InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(message)
+                ) if message.contains("declares stake ")
+                    && message.ends_with("but its unslashed custody-backed bond holds 0")
+            ),
+            "unexpected zero-bond rejection: {error:?}"
+        );
         assert_eq!(stx.world.provider_owners.get(&provider), Some(&alice()));
         assert!(stx.world.capacity_declarations.get(&provider).is_none());
     }
@@ -10461,6 +10368,11 @@ mod sorafs_tests {
         let (provider, declaration) = sample_capacity_record();
         register_governed_capacity_declaration(&mut stx, &alice(), declaration)
             .expect("register declaration");
+        UpsertProviderCredit {
+            record: provider_credit_nanos(provider, 1_000_000_000, 1_000_000_000),
+        }
+        .execute(&alice(), &mut stx)
+        .expect("fund the provider's declared telemetry credit");
         stx.gov.sorafs_telemetry.require_submitter = true;
         stx.gov.sorafs_telemetry.submitters = vec![alice(), bob()];
         let telemetry = CapacityTelemetryRecord::new(
@@ -10679,11 +10591,18 @@ mod sorafs_tests {
         stx.world
             .capacity_declarations
             .insert(provider, declaration);
-        let alias = default_alias_binding();
         let mut manifest = manifest_fixture(0xAA);
         manifest.pin_policy.min_replicas = 1;
         manifest.pin_policy.retention_epoch =
             6 + u64::from(SORAFS_AUTO_REPLICATION_ORDER_INGEST_DEADLINE_SECS_V1);
+        assert_eq!(manifest.root_cid, default_root_cid().as_bytes());
+        let alias = alias_binding_for(
+            default_digest(),
+            "sora",
+            "docs",
+            5,
+            manifest.pin_policy.retention_epoch,
+        );
         let manifest_digest =
             ManifestDigest::from_manifest(&manifest).expect("derive governed manifest digest");
         RegisterPinManifest {
@@ -11039,6 +10958,7 @@ mod sorafs_tests {
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
+        seed_automatic_replication_capacity(&mut stx, default_policy().min_replicas);
         let alias = default_alias_binding();
         let instruction = RegisterPinManifest {
             manifest_payload: default_manifest_payload(),
@@ -11070,6 +10990,7 @@ mod sorafs_tests {
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
+        seed_automatic_replication_capacity(&mut stx, default_policy().min_replicas);
         let alias = default_alias_binding();
         let register = RegisterPinManifest {
             manifest_payload: default_manifest_payload(),
@@ -11596,6 +11517,7 @@ mod sorafs_tests {
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
+        seed_automatic_replication_capacity(&mut stx, default_policy().min_replicas);
         let alias = default_alias_binding();
         let duplicate_alias = alias_binding_for(
             second_digest(),
@@ -11649,6 +11571,7 @@ mod sorafs_tests {
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
+        seed_automatic_replication_capacity(&mut stx, default_policy().min_replicas);
         RegisterPinManifest {
             manifest_payload: default_manifest_payload(),
             alias: None,
@@ -11885,6 +11808,7 @@ mod sorafs_tests {
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
+        seed_automatic_replication_capacity(&mut stx, default_policy().min_replicas);
         RegisterPinManifest {
             manifest_payload: manifest_payload_for_seed(0xBB),
             alias: None,
@@ -11963,10 +11887,15 @@ mod sorafs_tests {
             )) => message,
             other => panic!("unexpected error: {other:?}"),
         };
-        assert!(
-            message.contains("is not registered"),
-            "unexpected error message: {message}"
+        assert_eq!(
+            message,
+            format!(
+                "predecessor manifest {} referenced by successor {} is not registered",
+                manifest_hex(&second_digest()),
+                manifest_hex(&default_digest()),
+            )
         );
+        assert!(stx.world.pin_manifests.get(&default_digest()).is_none());
         assert_pin_fee_balances_unchanged(
             &stx,
             &alice(),
@@ -11998,9 +11927,22 @@ mod sorafs_tests {
             )) => message,
             other => panic!("unexpected error: {other:?}"),
         };
-        assert!(
-            message.contains("must be approved before registering successor"),
-            "unexpected error message: {message}"
+        assert_eq!(
+            message,
+            format!(
+                "predecessor manifest {} must be approved and live before registering successor {}",
+                manifest_hex(&second_digest()),
+                manifest_hex(&default_digest()),
+            )
+        );
+        assert!(stx.world.pin_manifests.get(&default_digest()).is_none());
+        assert_eq!(
+            stx.world
+                .pin_manifests
+                .get(&second_digest())
+                .unwrap()
+                .status,
+            PinStatus::Pending
         );
         assert_pin_fee_balances_unchanged(
             &stx,
@@ -12099,6 +12041,7 @@ mod sorafs_tests {
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
+        seed_automatic_replication_capacity(&mut stx, default_policy().min_replicas);
         stx.gov.sorafs_pin_policy.max_successor_fanout = 1;
         insert_manifest_with_status(
             &mut stx,
@@ -12148,6 +12091,7 @@ mod sorafs_tests {
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
+        seed_automatic_replication_capacity(&mut stx, default_policy().min_replicas);
         stx.gov.sorafs_pin_policy.max_successor_fanout = 1;
         insert_manifest_with_status(
             &mut stx,
@@ -12205,12 +12149,13 @@ mod sorafs_tests {
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
         stx.gov.sorafs_pin_policy.max_lineage_depth = 1;
-        insert_manifest_with_status(
+        insert_manifest_with_status_at_epoch(
             &mut stx,
             second_digest(),
             [0xEE; 32],
             None,
             PinStatus::Approved(4),
+            4,
         );
         insert_manifest_with_status(
             &mut stx,
@@ -12230,7 +12175,7 @@ mod sorafs_tests {
         .execute(&alice(), &mut stx)
         .expect_err("lineage beyond the consensus depth limit must reject");
         assert!(
-            smart_contract_error_message(&error).contains("configured maximum depth 1"),
+            smart_contract_error_message(&error).contains("exceeding configured maximum 1"),
             "unexpected error: {error:?}"
         );
         assert_pin_fee_balances_unchanged(
@@ -12247,6 +12192,7 @@ mod sorafs_tests {
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
+        seed_automatic_replication_capacity(&mut stx, default_policy().min_replicas);
         let register = RegisterPinManifest {
             manifest_payload: default_manifest_payload(),
             alias: None,
@@ -12341,6 +12287,18 @@ mod sorafs_tests {
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
         let (envelope, signature_hex, _) = registered_manifest_approval_envelope(&mut stx);
+        let pending = stx
+            .world
+            .pin_manifests
+            .get(&default_digest())
+            .unwrap()
+            .clone();
+        let automatic_order_id = derive_sorafs_auto_replication_order_id_v1(&default_digest());
+        let automatic_order = stx
+            .world
+            .replication_orders
+            .get(&automatic_order_id)
+            .cloned();
         let inert_signature_hex = hex::encode([0_u8; 64]);
         let mut invalid_json =
             String::from_utf8(envelope.clone()).expect("envelope is valid UTF-8 JSON");
@@ -12352,8 +12310,17 @@ mod sorafs_tests {
             "approval must reject all-zero signature material",
         );
         assert!(
-            message.contains("signature payload must not be all zero"),
+            message.contains("invalid council signature material")
+                && message.contains("signature payload must not be empty or all zero"),
             "unexpected error message: {message}"
+        );
+        assert_eq!(
+            stx.world.pin_manifests.get(&default_digest()),
+            Some(&pending)
+        );
+        assert_eq!(
+            stx.world.replication_orders.get(&automatic_order_id),
+            automatic_order.as_ref()
         );
     }
     #[test]
@@ -12808,6 +12775,7 @@ mod sorafs_tests {
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
+        seed_automatic_replication_capacity(&mut stx, default_policy().min_replicas);
         let register = RegisterPinManifest {
             manifest_payload: default_manifest_payload(),
             alias: None,
@@ -12816,6 +12784,13 @@ mod sorafs_tests {
         register
             .execute(&alice(), &mut stx)
             .expect("register manifest");
+        stx.apply();
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit automatic approval fixture");
+        let mut block = state.block(block_header_at_epoch(6));
+        let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
         let approve = ApprovePinManifest {
             digest: default_digest(),
             council_envelope: None,
@@ -12973,6 +12948,7 @@ mod sorafs_tests {
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
+        seed_automatic_replication_capacity(&mut stx, default_policy().min_replicas);
         let register = RegisterPinManifest {
             manifest_payload: default_manifest_payload(),
             alias: None,
@@ -13219,6 +13195,7 @@ mod sorafs_tests {
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
+        seed_automatic_replication_capacity(&mut stx, default_policy().min_replicas);
         let register = RegisterPinManifest {
             manifest_payload: default_manifest_payload(),
             alias: None,
@@ -13252,6 +13229,7 @@ mod sorafs_tests {
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
+        seed_automatic_replication_capacity(&mut stx, default_policy().min_replicas);
         let register = RegisterPinManifest {
             manifest_payload: default_manifest_payload(),
             alias: None,
@@ -13288,6 +13266,7 @@ mod sorafs_tests {
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
+        seed_automatic_replication_capacity(&mut stx, default_policy().min_replicas);
         let register = RegisterPinManifest {
             manifest_payload: default_manifest_payload(),
             alias: None,
@@ -13646,12 +13625,13 @@ mod sorafs_tests {
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
         register_and_approve_manifest(&mut stx, default_digest(), default_chunk_digest());
-        let binding = alias_binding_for(default_digest(), "sora", "docs", 8, 43);
+        let expiry_epoch = default_policy().retention_epoch + 1;
+        let binding = alias_binding_for(default_digest(), "sora", "docs", 8, expiry_epoch);
         let err = BindManifestAlias {
             digest: default_digest(),
             binding: binding.clone(),
             bound_epoch: 8,
-            expiry_epoch: 43,
+            expiry_epoch,
         }
         .execute(&alice(), &mut stx)
         .expect_err("alias expiry beyond retention must fail");
@@ -14121,47 +14101,6 @@ mod sorafs_tests {
         );
     }
     #[test]
-    fn issue_replication_order_rejects_duplicates() {
-        let state = make_state();
-        let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
-        register_and_approve_manifest(&mut stx, default_digest(), default_chunk_digest());
-        let order_id = ReplicationOrderId::new([0x55; 32]);
-        let providers = vec![
-            ProviderId::new([0x21; 32]),
-            ProviderId::new([0x22; 32]),
-            ProviderId::new([0x23; 32]),
-        ];
-        seed_provider_owners(&mut stx, &providers, &alice());
-        let order_struct = replication_order_struct(order_id, default_digest(), &providers, 3);
-        let payload = encode_replication_order_for_epoch_window(order_struct, 1, 10);
-        let issue = IssueReplicationOrder {
-            order_id,
-            order_payload: payload.clone(),
-            issued_epoch: 1,
-            deadline_epoch: 10,
-            musubi_archive: None,
-        };
-        issue
-            .execute(&alice(), &mut stx)
-            .expect("issue replication order");
-        let duplicate = IssueReplicationOrder {
-            order_id,
-            order_payload: payload,
-            issued_epoch: 21,
-            deadline_epoch: 41,
-            musubi_archive: None,
-        };
-        let err = duplicate
-            .execute(&alice(), &mut stx)
-            .expect_err("duplicate order must fail");
-        assert!(matches!(
-            err,
-            InstructionExecutionError::InvariantViolation(_)
-        ));
-    }
-    #[test]
     fn issue_replication_order_rejects_target_below_policy() {
         let state = make_state();
         let mut block = state.block(block_header());
@@ -14450,198 +14389,6 @@ mod sorafs_tests {
         ));
     }
     #[test]
-    fn complete_replication_order_updates_status() {
-        let state = make_state_with_completion_anchor();
-        let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
-        register_and_approve_manifest(&mut stx, default_digest(), default_chunk_digest());
-        let order_id = ReplicationOrderId::new([0x77; 32]);
-        let providers = vec![
-            ProviderId::new([0x31; 32]),
-            ProviderId::new([0x32; 32]),
-            ProviderId::new([0x33; 32]),
-            ProviderId::new([0x34; 32]),
-        ];
-        seed_provider_owners(&mut stx, &providers, &alice());
-        let order_struct = replication_order_struct(order_id, default_digest(), &providers, 3);
-        let payload = encode_replication_order_for_epoch_window(order_struct, 1, 10);
-        IssueReplicationOrder {
-            order_id,
-            order_payload: payload,
-            issued_epoch: 1,
-            deadline_epoch: 10,
-            musubi_archive: None,
-        }
-        .execute(&alice(), &mut stx)
-        .expect("issue replication order");
-        let complete = completion_instruction(order_id, providers[0], 2, &alice());
-        complete
-            .execute(&alice(), &mut stx)
-            .expect("complete replication order");
-        SetProviderIngestCompletionAuthority::new(
-            providers[0],
-            Some(completion_authority(&alice(), 1)),
-            completion_authority(&alice(), 2),
-        )
-        .execute(&alice(), &mut stx)
-        .expect("rotate completion authority after the retained completion");
-        completion_instruction(order_id, providers[0], 2, &alice())
-            .execute(&alice(), &mut stx)
-            .expect("exact retained completion replay remains idempotent after policy rotation");
-        let conflicting_replay = completion_instruction(order_id, providers[0], 3, &alice())
-            .execute(&alice(), &mut stx)
-            .expect_err("completion replay at a different epoch must fail");
-        assert!(matches!(
-            conflicting_replay,
-            InstructionExecutionError::InvariantViolation(message)
-                if message.contains("different retained completion context")
-        ));
-        let partial_record = stx
-            .world
-            .replication_orders
-            .get(&order_id)
-            .expect("order stored");
-        assert_eq!(partial_record.provider_completions.len(), 1);
-        assert_eq!(partial_record.status, ReplicationOrderStatus::Pending);
-        completion_instruction(order_id, providers[1], 3, &alice())
-            .execute(&alice(), &mut stx)
-            .expect("second provider completion");
-        assert_eq!(
-            stx.world
-                .replication_orders
-                .get(&order_id)
-                .expect("order stored")
-                .status,
-            ReplicationOrderStatus::Pending
-        );
-        completion_instruction(order_id, providers[2], 4, &alice())
-            .execute(&alice(), &mut stx)
-            .expect("target provider completion");
-        let surplus_completion = completion_instruction(order_id, providers[3], 5, &alice())
-            .execute(&alice(), &mut stx)
-            .expect_err("completed redundancy target must reject surplus completion");
-        assert!(matches!(
-            surplus_completion,
-            InstructionExecutionError::InvariantViolation(message)
-                if message.contains("reached its redundancy target at epoch 4")
-        ));
-        let record = stx
-            .world
-            .replication_orders
-            .get(&order_id)
-            .expect("order stored");
-        assert!(matches!(
-            record.status,
-            ReplicationOrderStatus::Completed(epoch) if epoch == 4
-        ));
-        assert_eq!(record.provider_completions.len(), 3);
-    }
-    #[test]
-    fn completion_revalidates_policy_assignment_and_finalized_anchor_at_commit() {
-        let state = make_state_with_completion_anchor();
-        let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
-        register_and_approve_manifest(&mut stx, default_digest(), default_chunk_digest());
-        let order_id = ReplicationOrderId::new([0x7B; 32]);
-        let original_provider = ProviderId::new([0x3A; 32]);
-        let replacement_provider = ProviderId::new([0x3B; 32]);
-        seed_provider_owners(
-            &mut stx,
-            &[original_provider, replacement_provider],
-            &alice(),
-        );
-        let payload = encode_replication_order_for_epoch_window(
-            replication_order_struct(order_id, default_digest(), &[original_provider], 1),
-            1,
-            10,
-        );
-        IssueReplicationOrder {
-            order_id,
-            order_payload: payload,
-            issued_epoch: 1,
-            deadline_epoch: 10,
-            musubi_archive: None,
-        }
-        .execute(&alice(), &mut stx)
-        .expect("issue replication order");
-        let revision_one = completion_authority(&alice(), 1);
-        let revision_two = completion_authority(&alice(), 2);
-        let prepared_under_revision_one =
-            completion_instruction(order_id, original_provider, 2, &alice());
-        SetProviderIngestCompletionAuthority::new(
-            original_provider,
-            Some(revision_one),
-            revision_two,
-        )
-        .execute(&alice(), &mut stx)
-        .expect("rotate original provider completion policy");
-        let stale_policy = prepared_under_revision_one
-            .execute(&alice(), &mut stx)
-            .expect_err("completion prepared under the old policy must fail after rotation");
-        assert!(matches!(
-            stale_policy,
-            InstructionExecutionError::InvalidParameter(
-                InvalidParameterError::SmartContract(message)
-            ) if message.contains("completion authority")
-        ));
-        let prepared_before_reassignment =
-            completion_instruction(order_id, original_provider, 2, &alice());
-        ReviseReplicationOrderAssignments::new(
-            order_id,
-            1,
-            2,
-            vec![ReplicationAssignmentV1 {
-                provider_id: *replacement_provider.as_bytes(),
-                slice_gib: 512,
-                lane: None,
-            }],
-        )
-        .execute(&alice(), &mut stx)
-        .expect("atomically reassign pending order");
-        let stale_assignment = prepared_before_reassignment
-            .execute(&alice(), &mut stx)
-            .expect_err("completion prepared before reassignment must fail");
-        assert!(matches!(
-            stale_assignment,
-            InstructionExecutionError::InvalidParameter(
-                InvalidParameterError::SmartContract(message)
-            ) if message.contains("assignment revision")
-        ));
-        let mut stale_anchor = completion_instruction(order_id, replacement_provider, 3, &alice());
-        stale_anchor.expected_assignment_revision = 2;
-        stale_anchor.finalized_anchor.block_hash = [0xEE; 32];
-        let stale_anchor = stale_anchor
-            .execute(&alice(), &mut stx)
-            .expect_err("completion anchored to another committed prefix must fail");
-        assert!(matches!(
-            stale_anchor,
-            InstructionExecutionError::InvalidParameter(
-                InvalidParameterError::SmartContract(message)
-            ) if message.contains("finalized anchor")
-        ));
-        let mut valid = completion_instruction(order_id, replacement_provider, 3, &alice());
-        valid.expected_assignment_revision = 2;
-        valid
-            .execute(&alice(), &mut stx)
-            .expect("current authority, assignment revision, and anchor must complete");
-        let record = stx
-            .world
-            .replication_orders
-            .get(&order_id)
-            .expect("completed order retained");
-        let completion = record
-            .provider_completion(replacement_provider)
-            .expect("completion audit context retained");
-        assert_eq!(completion.assignment_revision, 2);
-        assert_eq!(
-            completion.completion_authority,
-            completion_authority(&alice(), 1)
-        );
-        assert_eq!(completion.finalized_anchor, completion_anchor());
-    }
-    #[test]
     fn completion_after_deadline_fails_without_changing_pending_order() {
         let state = make_state_with_completion_anchor();
         let mut block = state.block(block_header_at_epoch(16));
@@ -14711,51 +14458,6 @@ mod sorafs_tests {
         exact_retry
             .execute(&alice(), &mut stx)
             .expect("an exact retained completion replay remains idempotent after the deadline");
-    }
-    #[test]
-    fn future_dated_completion_fails_without_mutating_the_order() {
-        let state = make_state_with_completion_anchor();
-        let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
-        register_and_approve_manifest(&mut stx, default_digest(), default_chunk_digest());
-        let order_id = ReplicationOrderId::new([0x72; 32]);
-        let providers = vec![
-            ProviderId::new([0x27; 32]),
-            ProviderId::new([0x28; 32]),
-            ProviderId::new([0x29; 32]),
-        ];
-        seed_provider_owners(&mut stx, &providers, &alice());
-        let payload = encode_replication_order_for_epoch_window(
-            replication_order_struct(order_id, default_digest(), &providers, 3),
-            1,
-            10,
-        );
-        IssueReplicationOrder {
-            order_id,
-            order_payload: payload,
-            issued_epoch: 1,
-            deadline_epoch: 10,
-            musubi_archive: None,
-        }
-        .execute(&alice(), &mut stx)
-        .expect("issue order");
-        let error = completion_instruction(order_id, providers[0], 6, &alice())
-            .execute(&alice(), &mut stx)
-            .expect_err("a completion cannot claim a future consensus second");
-        assert!(matches!(
-            error,
-            InstructionExecutionError::InvalidParameter(
-                InvalidParameterError::SmartContract(message)
-            ) if message.contains("completion_epoch 6 is later than current consensus epoch 5")
-        ));
-        let record = stx
-            .world
-            .replication_orders
-            .get(&order_id)
-            .expect("order remains");
-        assert!(record.provider_completions.is_empty());
-        assert_eq!(record.status, ReplicationOrderStatus::Pending);
     }
     #[test]
     fn expire_replication_order_is_deadline_bound_and_idempotent() {
@@ -14866,10 +14568,16 @@ mod sorafs_tests {
     #[test]
     fn expire_replication_order_rejects_completed_order_and_missing_permission() {
         let state = make_state_with_completion_anchor();
-        let mut block = state.block(block_header());
+        let mut block = state.block(block_header_at_epoch(15));
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
-        register_and_approve_manifest(&mut stx, default_digest(), default_chunk_digest());
+        insert_manifest_with_status(
+            &mut stx,
+            default_digest(),
+            default_chunk_digest(),
+            None,
+            PinStatus::Approved(5),
+        );
         let order_id = ReplicationOrderId::new([0x73; 32]);
         let providers = vec![
             ProviderId::new([0x2D; 32]),
@@ -15111,10 +14819,16 @@ mod sorafs_tests {
     fn provider_owner_transfer_after_retained_completion_cannot_rewrite_evidence() {
         let mut state = make_state_with_completion_anchor();
         seed_sorafs_permissions(&mut state, &bob());
-        let mut block = state.block(block_header());
+        let mut block = state.block(block_header_at_epoch(12));
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
-        register_and_approve_manifest(&mut stx, default_digest(), default_chunk_digest());
+        insert_manifest_with_status(
+            &mut stx,
+            default_digest(),
+            default_chunk_digest(),
+            None,
+            PinStatus::Approved(5),
+        );
         let order_id = ReplicationOrderId::new([0x79; 32]);
         let providers = vec![
             ProviderId::new([0x35; 32]),
@@ -15523,6 +15237,11 @@ mod sorafs_tests {
         let (provider, declaration) = sample_capacity_record();
         register_governed_capacity_declaration(&mut stx, &alice(), declaration)
             .expect("register capacity declaration");
+        UpsertProviderCredit {
+            record: provider_credit_nanos(provider, 1_000_000_000, 1_000_000_000),
+        }
+        .execute(&alice(), &mut stx)
+        .expect("fund the provider's declared telemetry credit");
         record_capacity_window(&mut stx, provider, 0, 10, 50, 50, 25, 9_500, 9_500, 0);
         let overlap = CapacityTelemetryRecord::new(
             provider, 5, 12, 50, 50, 25, 1, 1, 9_500, 9_500, 0, 0, 0, 0, 0,
@@ -15574,6 +15293,11 @@ mod sorafs_tests {
         let (provider, declaration) = sample_capacity_record();
         register_governed_capacity_declaration(&mut stx, &alice(), declaration)
             .expect("register capacity declaration");
+        UpsertProviderCredit {
+            record: provider_credit_nanos(provider, 1_000_000_000, 1_000_000_000),
+        }
+        .execute(&alice(), &mut stx)
+        .expect("fund the provider's declared telemetry credit");
         stx.gov.sorafs_telemetry.require_nonce = false;
         record_capacity_window(&mut stx, provider, 0, 10, 50, 50, 25, 9_500, 9_500, 0);
         let replay = CapacityTelemetryRecord::new(
@@ -15631,6 +15355,11 @@ mod sorafs_tests {
         let (provider, declaration) = capacity_record_with_owner(&bob());
         register_governed_capacity_declaration(&mut stx, &bob(), declaration)
             .expect("register capacity declaration");
+        UpsertProviderCredit {
+            record: provider_credit_nanos(provider, 1_000_000_000, 1_000_000_000),
+        }
+        .execute(&alice(), &mut stx)
+        .expect("fund the provider's declared telemetry credit");
         stx.gov.sorafs_telemetry.require_submitter = true;
         stx.gov.sorafs_telemetry.submitters = vec![alice()];
         stx.gov
@@ -16912,6 +16641,12 @@ mod sorafs_tests {
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
+        seed_governed_capacity_provider(
+            &mut stx,
+            ProviderId::new([0xE8; 32]),
+            &alice(),
+            Quantity::from(1_u32),
+        );
         let provider = ProviderId::new([0x56; 32]);
         seed_provider_owners(&mut stx, &[provider], &alice());
         let record = ProviderCreditRecord::new(
@@ -17529,13 +17264,15 @@ mod sorafs_tests {
         let mut state = make_state();
         let mut first_digest = None;
         for ordinal in 1..=RECORD_COUNT {
-            let digest = ManifestDigest::new([u8::try_from(ordinal).expect("small ordinal"); 32]);
-            first_digest.get_or_insert(digest);
+            let seed = u8::try_from(ordinal).expect("small ordinal");
+            let digest = manifest_digest_for_seed(seed);
+            first_digest =
+                Some(first_digest.map_or(digest, |first: ManifestDigest| first.min(digest)));
             let record = PinManifestRecord::new(
                 digest,
-                default_root_cid(),
+                root_cid_for_manifest(digest),
                 default_chunker(),
-                default_chunk_digest(),
+                chunk_digest_for_seed(seed),
                 por_root_for_manifest(digest),
                 default_content_length(),
                 default_policy(),
@@ -17564,7 +17301,7 @@ mod sorafs_tests {
             )
             .expect("encode byte-ceiling query fixture usage"),
         );
-        let block_hash = iroha_crypto::HashOf::new(&block_header());
+        let block_hash = block_header().hash();
         state.push_block_hash_for_testing(block_hash);
         let page = FindSorafsPinManifests::new(
             None,
@@ -18248,4 +17985,6 @@ mod sorafs_tests {
         );
     }
     include!("sorafs/repair_query_tail_tests.rs");
+    include!("sorafs/canonical_accounting_tests.rs");
+    include!("sorafs/replication_lifecycle_tests.rs");
 }

@@ -249,10 +249,16 @@ fn local_proposal_and_prepare_are_each_persisted_before_signing() {
         effects => panic!("unexpected local proposal effects: {effects:?}"),
     };
     assert_eq!(adapter.wal.recovered_records().len(), 1);
+    let handoff = adapter
+        .take_live_proposal_intent_wal_sign(&sign)
+        .expect("claim the exact fsynced ProposalIntent Sign batch")
+        .expect("the live ProposalIntent owns one move-only Sign handoff");
+    assert!(handoff.exactly_matches_effects(&sign));
     let effects = adapter
         .signature_completed(tag, vec![0xD1; 96])
         .expect("sign local proposal")
         .into_effects();
+    drop(handoff);
     assert!(matches!(
         effects.as_slice(),
         [
@@ -940,10 +946,16 @@ fn proposal_signed_callback_is_restart_scoped_before_control_delivery() {
             ] => *tag,
             effects => panic!("unexpected proposal sign effects: {effects:?}"),
         };
+        let handoff = adapter
+            .take_live_proposal_intent_wal_sign(sign.effects())
+            .expect("claim the fsynced live ProposalIntent before simulated signing")
+            .expect("the live callback must consume its exact WAL Sign handoff");
+        assert!(handoff.exactly_matches_effects(sign.effects()));
         let retained = adapter.serviced_candidate_count_for_test();
         let signed = adapter
             .signature_completed(sign_tag, proposal_signature.clone())
             .expect("complete proposal signature before simulated control loss");
+        drop(handoff);
         assert!(signed.effects().iter().any(|effect| matches!(
             effect,
             AdapterEffect::Broadcast(wire::ConsensusMessageV2 {
@@ -979,6 +991,12 @@ fn proposal_signed_callback_is_restart_scoped_before_control_delivery() {
         deferred_admission_ordinals(),
     )
     .expect("recover proposal and Prepare intents");
+    assert!(
+        recovered
+            .take_live_proposal_intent_wal_sign(&startup)
+            .expect("recovered Proposal signing has no fresh WAL append sidecar")
+            .is_none()
+    );
     let proposal_tag = match startup.as_slice() {
         [
             AdapterEffect::Sign {

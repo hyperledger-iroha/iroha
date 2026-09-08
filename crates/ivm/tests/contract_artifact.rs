@@ -582,6 +582,32 @@ fn contract_code_hash_binds_every_byte_of_compiled_deployable_image() {
     }
 }
 #[test]
+fn sdk_code_readback_fixture_is_reproducible_and_admitted() {
+    let _context = iroha_data_model::account::address::ChainDiscriminantGuard::enter(369);
+    let source = include_str!("../../iroha/tests/fixtures/contract_code_readback/code_readback.ko");
+    let artifact =
+        include_bytes!("../../iroha/tests/fixtures/contract_code_readback/code_readback.to");
+    let rebuilt = ivm::KotodamaCompiler::new()
+        .compile_source(source)
+        .expect("reproduce the checked-in SDK contract artifact");
+    assert_eq!(rebuilt.as_slice(), artifact);
+    let admitted = ivm::verify_contract_artifact(artifact)
+        .expect("admit the actual checked-in SDK contract artifact");
+    assert_eq!(admitted.metadata.abi_version, 1);
+    assert_eq!(
+        admitted.manifest.seiyaku_name.as_deref(),
+        Some("CodeReadbackFixture")
+    );
+    assert_eq!(
+        admitted.code_hash,
+        iroha_data_model::smart_contract::contract_code_hash(artifact)
+    );
+    assert_eq!(
+        hex::encode(admitted.code_hash.as_ref()),
+        "503f4936525f4790f6a9a123aacfaa49a7fd636bde4e1704833bf7a729c99f1f"
+    );
+}
+#[test]
 fn verified_code_hash_binds_execution_header() {
     let original = contract_artifact(1, vec![entrypoint("main", EntryPointKind::Kotoage, 0)]);
     let original_verified =

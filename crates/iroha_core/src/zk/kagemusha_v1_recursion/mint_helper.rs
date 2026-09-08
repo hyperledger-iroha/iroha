@@ -226,7 +226,15 @@ pub(super) struct KagemushaAssignedMintCertificateV1<F: KagemushaPoseidonFieldV1
     pub(super) mint_instances: [AssignedValue<F>; 3],
     pub(super) roster_state_digest: [AssignedValue<F>; 2],
     pub(super) certificate_binding_digest: [AssignedValue<F>; 2],
+    #[expect(
+        dead_code,
+        reason = "Retain constrained roster cells for recursive authority composition"
+    )]
     pub(super) epoch: AssignedValue<F>,
+    #[expect(
+        dead_code,
+        reason = "Retain constrained roster cells for recursive authority composition"
+    )]
     pub(super) next_epoch_present: AssignedValue<F>,
     pub(super) next_epoch_id_digest: [AssignedValue<F>; 2],
 }
@@ -355,6 +363,10 @@ impl_mint_certificate_circuit!(
 );
 
 /// Build both fixed-shape certificate halves from the same exact finalized top-up evidence.
+#[expect(
+    dead_code,
+    reason = "Retain standalone certificate circuit construction for qualification of the shared certificate relation"
+)]
 pub(super) fn build_kagemusha_mint_certificate_pair_v1(
     witness: KagemushaMintCertificateWitnessV1,
 ) -> Result<
@@ -399,8 +411,8 @@ pub(super) fn build_kagemusha_mint_certificate_pair_v1(
     {
         return Err("Kagemusha mint-certificate public shape drifted".to_owned());
     }
-    eq_builder.calculate_params(Some(MINIMUM_UNUSABLE_ROWS));
-    ep_builder.calculate_params(Some(MINIMUM_UNUSABLE_ROWS));
+    super::base_packing::finalize_base_params_v1(&mut eq_builder, MINIMUM_UNUSABLE_ROWS)?;
+    super::base_packing::finalize_base_params_v1(&mut ep_builder, MINIMUM_UNUSABLE_ROWS)?;
     let usable_rows = (1_usize << 16) - MINIMUM_UNUSABLE_ROWS;
     eq_jobs.sha.validate_capacity(usable_rows)?;
     eq_jobs.dense.validate_capacity(usable_rows)?;

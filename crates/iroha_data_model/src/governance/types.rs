@@ -139,17 +139,21 @@ impl HashWire32 {
     }
 }
 fn decode_hex_array<const N: usize>(input: &str) -> Result<[u8; N], HashParseError> {
-    let bytes = hex::decode(input).map_err(|err| HashParseError::InvalidHex {
-        message: format!("{err}"),
-    })?;
-    if bytes.len() != N {
+    if !input.len().is_multiple_of(2) {
+        return Err(HashParseError::InvalidHex {
+            message: "hash must contain an even number of hexadecimal digits".to_owned(),
+        });
+    }
+    if input.len() / 2 != N {
         return Err(HashParseError::InvalidLength {
             expected: N,
-            actual: bytes.len(),
+            actual: input.len() / 2,
         });
     }
     let mut array = [0_u8; N];
-    array.copy_from_slice(&bytes);
+    hex::decode_to_slice(input, &mut array).map_err(|err| HashParseError::InvalidHex {
+        message: format!("{err}"),
+    })?;
     Ok(array)
 }
 fn decode_lowercase_hex_array<const N: usize>(input: &str) -> Result<[u8; N], HashParseError> {
@@ -164,10 +168,23 @@ fn decode_lowercase_hex_array<const N: usize>(input: &str) -> Result<[u8; N], Ha
     decode_hex_array(input)
 }
 macro_rules! define_hash32_newtype {
-    ($name:ident, $doc:literal) => {
+    ($name:ident, $schema_name:literal, $doc:literal) => {
         #[doc = $doc]
+        /// JSON values and object keys use exactly 64 lowercase hexadecimal digits.
         #[repr(transparent)]
-        #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, IntoSchema)]
+        #[derive(
+            Clone,
+            Copy,
+            Debug,
+            PartialEq,
+            Eq,
+            PartialOrd,
+            Ord,
+            Hash,
+            IntoSchema,
+            norito::NoritoSchema,
+        )]
+        #[norito_schema(name = $schema_name)]
         pub struct $name([u8; 32]);
         impl $name {
             /// Number of bytes in the encoded hash.
@@ -216,21 +233,22 @@ macro_rules! define_hash32_newtype {
                 f.write_str(&self.to_hex())
             }
         }
-        impl norito::core::NoritoSerialize for $name {
+        impl norito::core::NoritoSerialize for $name {}
+        impl norito::core::SerializePayload for $name {
             fn serialize(
                 &self,
                 writer: &mut norito::core::Encoder<'_>,
             ) -> Result<(), norito::core::Error> {
                 let wire = HashWire32::new(self.0);
-                <HashWire32 as norito::core::NoritoSerialize>::serialize(&wire, writer)
+                <HashWire32 as norito::core::SerializePayload>::serialize(&wire, writer)
             }
             fn encoded_len_hint(&self) -> Option<usize> {
                 let wire = HashWire32::new(self.0);
-                <HashWire32 as norito::core::NoritoSerialize>::encoded_len_hint(&wire)
+                <HashWire32 as norito::core::SerializePayload>::encoded_len_hint(&wire)
             }
             fn encoded_len_exact(&self) -> Option<usize> {
                 let wire = HashWire32::new(self.0);
-                <HashWire32 as norito::core::NoritoSerialize>::encoded_len_exact(&wire)
+                <HashWire32 as norito::core::SerializePayload>::encoded_len_exact(&wire)
             }
         }
         impl<'de> norito::core::NoritoDeserialize<'de> for $name {
@@ -271,6 +289,34 @@ macro_rules! define_hash32_newtype {
                 Self::from_hex_str(&buf).map_err(|err| json::Error::Message(format!("{err}")))
             }
         }
+        #[cfg(feature = "json")]
+        impl json::JsonObjectKey for $name {
+            fn visit_json_key_text<E>(
+                &self,
+                mut visitor: impl FnMut(&str) -> Result<(), E>,
+            ) -> Result<(), E> {
+                const HEX: &str = "0123456789abcdef";
+                for byte in &self.0 {
+                    let high = usize::from(byte >> 4);
+                    let low = usize::from(byte & 0x0f);
+                    visitor(&HEX[high..=high])?;
+                    visitor(&HEX[low..=low])?;
+                }
+                Ok(())
+            }
+        }
+        #[cfg(feature = "json")]
+        impl json::JsonObjectKeyOwned for $name {
+            fn from_json_key_text(key: &str) -> Result<Self, json::Error> {
+                if key.len() != Self::LENGTH * 2 {
+                    return Err(json::Error::Message(
+                        "governance hash key must contain exactly 64 lowercase hex digits"
+                            .to_owned(),
+                    ));
+                }
+                Self::from_hex_str(key).map_err(|err| json::Error::Message(err.to_string()))
+            }
+        }
         impl FromStr for $name {
             type Err = HashParseError;
             fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -281,50 +327,62 @@ macro_rules! define_hash32_newtype {
 }
 define_hash32_newtype!(
     ContractCodeHash,
+    "iroha_data_model::parliament_types::ContractCodeHash",
     "Blake2b-32 hash identifying a contract bytecode artifact."
 );
 define_hash32_newtype!(
     ContractAbiHash,
+    "iroha_data_model::parliament_types::ContractAbiHash",
     "Blake2b-32 hash describing the ABI surface of a contract."
 );
 define_hash32_newtype!(
     AgendaItemId,
+    "iroha_data_model::parliament_types::AgendaItemId",
     "Immutable content identifier for an admitted Parliament agenda item."
 );
 define_hash32_newtype!(
     DraftId,
+    "iroha_data_model::parliament_types::DraftId",
     "Immutable content identifier for a deliberative Parliament draft."
 );
 define_hash32_newtype!(
     ProposalContentId,
+    "iroha_data_model::parliament_types::ProposalContentId",
     "Immutable identifier for proposal content shared by every retry attempt."
 );
 define_hash32_newtype!(
     GovernanceAttemptId,
+    "iroha_data_model::parliament_types::GovernanceAttemptId",
     "Identifier for one retryable end-to-end governance attempt."
 );
 define_hash32_newtype!(
     BodyInstanceId,
+    "iroha_data_model::parliament_types::BodyInstanceId",
     "Identifier for one sealed Parliament body instance."
 );
 define_hash32_newtype!(
     BodyElectionAttemptId,
+    "iroha_data_model::parliament_types::BodyElectionAttemptId",
     "Identifier for one retryable Parliament body-election attempt."
 );
 define_hash32_newtype!(
     AssignmentId,
+    "iroha_data_model::parliament_types::AssignmentId",
     "Identifier for one deterministic Parliament service assignment."
 );
 define_hash32_newtype!(
     SortitionRequestId,
+    "iroha_data_model::parliament_types::SortitionRequestId",
     "Identifier for one immutable future-pulse sortition request."
 );
 define_hash32_newtype!(
     BallotAttemptId,
+    "iroha_data_model::parliament_types::BallotAttemptId",
     "Identifier for one retryable hidden Parliament ballot attempt."
 );
 define_hash32_newtype!(
     BeaconSessionId,
+    "iroha_data_model::parliament_types::BeaconSessionId",
     "Stable network-scoped identifier for the logical Parliament beacon."
 );
 impl BeaconSessionId {
@@ -347,18 +405,22 @@ impl BeaconSessionId {
 }
 define_hash32_newtype!(
     BeaconPulseId,
+    "iroha_data_model::parliament_types::BeaconPulseId",
     "Identifier for one finalized threshold-beacon pulse."
 );
 define_hash32_newtype!(
     TleSessionId,
+    "iroha_data_model::parliament_types::TleSessionId",
     "Identifier for one ballot-specific threshold timelock-encryption session."
 );
 define_hash32_newtype!(
     TleKeySessionId,
+    "iroha_data_model::parliament_types::TleKeySessionId",
     "Identifier for one finalized threshold-BLS key session dedicated to TLE releases."
 );
 define_hash32_newtype!(
     GovernanceCertificateId,
+    "iroha_data_model::parliament_types::GovernanceCertificateId",
     "Content identifier for one finalized V1 governance certificate."
 );
 
@@ -837,10 +899,11 @@ pub struct GovernanceParameters {
 #[repr(transparent)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, IntoSchema)]
 pub struct ProposalId(pub [u8; 32]);
-impl norito::core::NoritoSerialize for ProposalId {
+impl norito::core::NoritoSerialize for ProposalId {}
+impl norito::core::SerializePayload for ProposalId {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let wire = HashWire32::new(self.0);
-        <HashWire32 as norito::core::NoritoSerialize>::serialize(&wire, writer)
+        <HashWire32 as norito::core::SerializePayload>::serialize(&wire, writer)
     }
 }
 impl<'de> norito::core::NoritoDeserialize<'de> for ProposalId {
@@ -942,6 +1005,8 @@ pub struct Vote {
     pub choice: VoteChoice,
 }
 /// Parliament governance body identifiers.
+///
+/// JSON values and object keys share the canonical lowercase, hyphenated body labels.
 #[derive(
     Clone,
     Copy,
@@ -1004,60 +1069,70 @@ pub const PARLIAMENT_BODIES_V1: [ParliamentBody; 10] = [
     ParliamentBody::ConfirmationJury,
 ];
 #[cfg(feature = "json")]
+impl ParliamentBody {
+    const fn json_label(self) -> &'static str {
+        match self {
+            Self::RulesCommittee => "rules-committee",
+            Self::AgendaCouncil => "agenda-council",
+            Self::InterestPanel => "interest-panel",
+            Self::ReviewPanel => "review-panel",
+            Self::CoordinationCouncil => "coordination-council",
+            Self::MpcCommittee => "mpc-committee",
+            Self::FmaCommittee => "fma-committee",
+            Self::OversightCommittee => "oversight-committee",
+            Self::PolicyJury => "policy-jury",
+            Self::ConfirmationJury => "confirmation-jury",
+        }
+    }
+    fn parse_json_label(value: &str) -> Result<Self, json::Error> {
+        match value {
+            "rules-committee" => Ok(Self::RulesCommittee),
+            "agenda-council" => Ok(Self::AgendaCouncil),
+            "interest-panel" => Ok(Self::InterestPanel),
+            "review-panel" => Ok(Self::ReviewPanel),
+            "coordination-council" => Ok(Self::CoordinationCouncil),
+            "mpc-committee" => Ok(Self::MpcCommittee),
+            "fma-committee" => Ok(Self::FmaCommittee),
+            "oversight-committee" => Ok(Self::OversightCommittee),
+            "policy-jury" => Ok(Self::PolicyJury),
+            "confirmation-jury" => Ok(Self::ConfirmationJury),
+            other => Err(json::Error::UnknownField {
+                field: other.to_owned(),
+            }),
+        }
+    }
+}
+#[cfg(feature = "json")]
 impl json::JsonSerialize for ParliamentBody {
     fn json_serialize(&self, out: &mut String) {
-        let label = match self {
-            ParliamentBody::RulesCommittee => "rules-committee",
-            ParliamentBody::AgendaCouncil => "agenda-council",
-            ParliamentBody::InterestPanel => "interest-panel",
-            ParliamentBody::ReviewPanel => "review-panel",
-            ParliamentBody::CoordinationCouncil => "coordination-council",
-            ParliamentBody::MpcCommittee => "mpc-committee",
-            ParliamentBody::FmaCommittee => "fma-committee",
-            ParliamentBody::OversightCommittee => "oversight-committee",
-            ParliamentBody::PolicyJury => "policy-jury",
-            ParliamentBody::ConfirmationJury => "confirmation-jury",
-        };
-        json::write_json_string(label, out);
+        json::write_json_string(self.json_label(), out);
     }
     fn json_serialize_to(
         &self,
         out: &mut dyn json::JsonWriteSink,
     ) -> Result<(), json::BoundedJsonError> {
-        let label = match self {
-            ParliamentBody::RulesCommittee => "rules-committee",
-            ParliamentBody::AgendaCouncil => "agenda-council",
-            ParliamentBody::InterestPanel => "interest-panel",
-            ParliamentBody::ReviewPanel => "review-panel",
-            ParliamentBody::CoordinationCouncil => "coordination-council",
-            ParliamentBody::MpcCommittee => "mpc-committee",
-            ParliamentBody::FmaCommittee => "fma-committee",
-            ParliamentBody::OversightCommittee => "oversight-committee",
-            ParliamentBody::PolicyJury => "policy-jury",
-            ParliamentBody::ConfirmationJury => "confirmation-jury",
-        };
-        json::write_json_string_to(label, out)
+        json::write_json_string_to(self.json_label(), out)
     }
 }
 #[cfg(feature = "json")]
 impl json::JsonDeserialize for ParliamentBody {
     fn json_deserialize(parser: &mut Parser<'_>) -> Result<Self, json::Error> {
-        let value = parser.parse_string()?;
-        match value.as_str() {
-            "rules-committee" => Ok(ParliamentBody::RulesCommittee),
-            "agenda-council" => Ok(ParliamentBody::AgendaCouncil),
-            "interest-panel" => Ok(ParliamentBody::InterestPanel),
-            "review-panel" => Ok(ParliamentBody::ReviewPanel),
-            "coordination-council" => Ok(ParliamentBody::CoordinationCouncil),
-            "mpc-committee" => Ok(ParliamentBody::MpcCommittee),
-            "fma-committee" => Ok(ParliamentBody::FmaCommittee),
-            "oversight-committee" => Ok(ParliamentBody::OversightCommittee),
-            "policy-jury" => Ok(ParliamentBody::PolicyJury),
-            "confirmation-jury" => Ok(ParliamentBody::ConfirmationJury),
-            other => Err(json::Error::UnknownField {
-                field: other.to_owned(),
-            }),
-        }
+        Self::parse_json_label(&parser.parse_string()?)
+    }
+}
+#[cfg(feature = "json")]
+impl json::JsonObjectKey for ParliamentBody {
+    fn visit_json_key_text<E>(
+        &self,
+        mut visitor: impl FnMut(&str) -> Result<(), E>,
+    ) -> Result<(), E> {
+        visitor(self.json_label())
+    }
+}
+#[cfg(feature = "json")]
+impl json::JsonObjectKeyOwned for ParliamentBody {
+    fn from_json_key_text(key: &str) -> Result<Self, json::Error> {
+        Self::parse_json_label(key)
     }
 }
 /// Closed V1 governance risk classification.
@@ -3458,6 +3533,181 @@ mod tests {
         let encoded = hash.to_hex();
         let parsed = ContractCodeHash::from_hex_str(&encoded).expect("parse hex");
         assert_eq!(parsed, hash);
+    }
+    #[cfg(feature = "json")]
+    #[test]
+    fn parliament_hash_identifiers_are_canonical_json_object_keys() {
+        fn assert_key<T>(value: T, expected: &str)
+        where
+            T: json::JsonObjectKey
+                + json::JsonObjectKeyOwned
+                + JsonSerialize
+                + Clone
+                + core::fmt::Debug
+                + Ord
+                + PartialEq,
+        {
+            let mut visited = String::new();
+            json::JsonObjectKey::visit_json_key_text(&value, |chunk| {
+                visited.push_str(chunk);
+                Ok::<_, core::convert::Infallible>(())
+            })
+            .expect("infallible key visitor");
+            assert_eq!(visited, expected);
+            assert_eq!(
+                json::to_json(&value).expect("identifier JSON string"),
+                format!("\"{expected}\"")
+            );
+            assert_eq!(
+                <T as json::JsonObjectKeyOwned>::from_json_key_text(expected)
+                    .expect("canonical identifier key"),
+                value
+            );
+            let uppercase = expected.to_ascii_uppercase();
+            if uppercase != expected {
+                assert!(
+                    <T as json::JsonObjectKeyOwned>::from_json_key_text(&uppercase).is_err(),
+                    "uppercase aliases must fail closed"
+                );
+            }
+            for invalid in [
+                expected[..63].to_owned(),
+                format!("{expected}00"),
+                format!("0x{expected}"),
+                format!("g{}", &expected[1..]),
+            ] {
+                assert!(<T as json::JsonObjectKeyOwned>::from_json_key_text(&invalid).is_err());
+            }
+            let limits =
+                norito::core::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX);
+            let (decoded, usage) = norito::core::with_decode_limits_measured(limits, || {
+                <T as json::JsonObjectKeyOwned>::from_json_key_text(expected)
+            });
+            assert_eq!(
+                decoded.expect("fixed-size key with no allocation budget"),
+                value
+            );
+            assert_eq!(usage.total_allocated_bytes(), 0);
+
+            let mut calls = 0;
+            let stopped = json::JsonObjectKey::visit_json_key_text(&value, |_| {
+                calls += 1;
+                Err("key visitor stopped")
+            });
+            assert_eq!(stopped, Err("key visitor stopped"));
+            assert_eq!(calls, 1);
+
+            let map = std::collections::BTreeMap::from([(value, 1_u8)]);
+            let encoded = format!("{{\"{expected}\":1}}");
+            assert_eq!(
+                json::to_json_bounded(&map, encoded.len()).expect("exact identifier-key bound"),
+                encoded
+            );
+            assert_eq!(
+                json::from_json::<std::collections::BTreeMap<T, u8>>(&encoded)
+                    .expect("identifier-key map roundtrip"),
+                map
+            );
+            assert!(matches!(
+                json::to_json_bounded(&map, encoded.len() - 1),
+                Err(json::BoundedJsonError::BodyTooLarge)
+            ));
+        }
+
+        assert_key(AssignmentId::new([0xA1; 32]), &"a1".repeat(32));
+        assert_key(BeaconPulseId::new([0xB2; 32]), &"b2".repeat(32));
+        assert_key(BodyElectionAttemptId::new([0xC3; 32]), &"c3".repeat(32));
+        assert_key(BodyInstanceId::new([0xD4; 32]), &"d4".repeat(32));
+        assert_key(TleSessionId::new([0xE5; 32]), &"e5".repeat(32));
+        assert_key(ContractCodeHash::new([0xA1; 32]), &"a1".repeat(32));
+        assert_key(ContractAbiHash::new([0xA1; 32]), &"a1".repeat(32));
+        assert_key(AgendaItemId::new([0xA1; 32]), &"a1".repeat(32));
+        assert_key(DraftId::new([0xA1; 32]), &"a1".repeat(32));
+        assert_key(ProposalContentId::new([0xA1; 32]), &"a1".repeat(32));
+        assert_key(GovernanceAttemptId::new([0xA1; 32]), &"a1".repeat(32));
+        assert_key(SortitionRequestId::new([0xA1; 32]), &"a1".repeat(32));
+        assert_key(BallotAttemptId::new([0xA1; 32]), &"a1".repeat(32));
+        assert_key(BeaconSessionId::new([0xA1; 32]), &"a1".repeat(32));
+        assert_key(TleKeySessionId::new([0xA1; 32]), &"a1".repeat(32));
+        assert_key(GovernanceCertificateId::new([0xA1; 32]), &"a1".repeat(32));
+        assert_key(AssignmentId::new([0; 32]), &"00".repeat(32));
+        assert_key(AssignmentId::new([0xFF; 32]), &"ff".repeat(32));
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn every_parliament_body_has_one_json_object_key_label() {
+        let labels = [
+            "rules-committee",
+            "agenda-council",
+            "interest-panel",
+            "review-panel",
+            "coordination-council",
+            "mpc-committee",
+            "fma-committee",
+            "oversight-committee",
+            "policy-jury",
+            "confirmation-jury",
+        ];
+        for (body, label) in PARLIAMENT_BODIES_V1.into_iter().zip(labels) {
+            let mut visited = String::new();
+            json::JsonObjectKey::visit_json_key_text(&body, |chunk| {
+                visited.push_str(chunk);
+                Ok::<_, core::convert::Infallible>(())
+            })
+            .expect("infallible key visitor");
+            assert_eq!(visited, label);
+            assert_eq!(
+                <ParliamentBody as json::JsonObjectKeyOwned>::from_json_key_text(label)
+                    .expect("canonical Parliament body key"),
+                body
+            );
+            assert_eq!(
+                json::to_json(&body).expect("Parliament body JSON"),
+                format!("\"{label}\"")
+            );
+            assert_eq!(
+                json::from_json::<ParliamentBody>(&format!("\"{label}\""))
+                    .expect("Parliament body JSON roundtrip"),
+                body
+            );
+
+            let map = std::collections::BTreeMap::from([(body, 1_u8)]);
+            let encoded = format!("{{\"{label}\":1}}");
+            assert_eq!(
+                json::to_json_bounded(&map, encoded.len()).expect("exact body-key bound"),
+                encoded
+            );
+            assert_eq!(
+                json::from_json::<std::collections::BTreeMap<ParliamentBody, u8>>(&encoded)
+                    .expect("body-key map roundtrip"),
+                map
+            );
+            let mut calls = 0;
+            let stopped = json::JsonObjectKey::visit_json_key_text(&body, |_| {
+                calls += 1;
+                Err("body visitor stopped")
+            });
+            assert_eq!(stopped, Err("body visitor stopped"));
+            assert_eq!(calls, 1);
+            assert!(matches!(
+                json::to_json_bounded(&map, encoded.len() - 1),
+                Err(json::BoundedJsonError::BodyTooLarge)
+            ));
+        }
+        for invalid in [
+            "RulesCommittee",
+            "rules_committee",
+            "Rules-Committee",
+            " rules-committee",
+            "rules-committee ",
+            "unknown",
+        ] {
+            assert!(
+                <ParliamentBody as json::JsonObjectKeyOwned>::from_json_key_text(invalid).is_err()
+            );
+            assert!(json::from_json::<ParliamentBody>(&format!("\"{invalid}\"")).is_err());
+        }
     }
     #[test]
     fn contract_lifecycle_and_emergency_fingerprints_are_kind_separated() {

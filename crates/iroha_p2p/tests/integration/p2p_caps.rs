@@ -30,7 +30,15 @@ impl ClassifyTopic for BigMsg {
             3 => Topic::TxGossip,
             4 => Topic::PeerGossip,
             5 => Topic::Health,
+            6 => Topic::Connect,
             _ => Topic::Other,
+        }
+    }
+    fn subscriber_route(&self) -> SubscriberRoute {
+        if self.topic == 6 {
+            SubscriberRoute::Connect
+        } else {
+            SubscriberRoute::General
         }
     }
 }
@@ -103,6 +111,7 @@ fn make_config(
         max_frame_bytes_tx_gossip: topic_cap,
         max_frame_bytes_peer_gossip: topic_cap,
         max_frame_bytes_health: topic_cap,
+        max_frame_bytes_connect: topic_cap,
         max_frame_bytes_other: topic_cap,
         ..super::test_network_config(
             addr.clone(),
@@ -113,6 +122,124 @@ fn make_config(
         )
     }
 }
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn execution_transport_carries_large_connect_and_gossip_frames_without_widening_health() {
+    let _cap_test_guard = FRAME_CAP_TEST_LOCK.lock().await;
+    let network_id = super::test_network_id("execution_transport_frames");
+    let key1 = super::random_node_key_pair();
+    let key2 = super::random_node_key_pair();
+    let addr1 = super::next_addr();
+    let addr2 = super::next_addr();
+    let shutdown1 = ShutdownSignal::new();
+    let shutdown2 = ShutdownSignal::new();
+    let config = |addr: &SocketAddr| {
+        let mut cfg = make_config(addr, addr, 17 * 1024 * 1024, 32_768);
+        cfg.max_frame_bytes_connect = 8 * 1024 * 1024;
+        cfg.max_frame_bytes_tx_gossip = 8 * 1024 * 1024;
+        cfg
+    };
+    let (receiver, _receiver_child) = NetworkHandle::<BigMsg>::start(
+        super::p2p_identity_keys(key1.clone()),
+        config(&addr1),
+        network_id,
+        None,
+        None,
+        shutdown1.clone(),
+    )
+    .await
+    .expect("execution receiver must start; this test does not silently skip startup failures");
+    let (sender, _sender_child) = NetworkHandle::<BigMsg>::start(
+        super::p2p_identity_keys(key2.clone()),
+        config(&addr2),
+        network_id,
+        None,
+        None,
+        shutdown2.clone(),
+    )
+    .await
+    .expect("execution sender must start");
+    let peer1 = Peer::new(addr1.clone(), key1.public_key().clone());
+    let peer2 = Peer::new(addr2.clone(), key2.public_key().clone());
+    receiver.update_topology(UpdateTopology(HashSet::from([peer2.id().clone()])));
+    sender.update_topology(UpdateTopology(HashSet::from([peer1.id().clone()])));
+    sender.update_peers_addresses(UpdatePeers(vec![(peer1.id().clone(), addr1)]));
+    assert!(
+        wait_for_both_online(
+            &receiver,
+            &sender,
+            Duration::from_secs(10),
+            Duration::from_millis(25)
+        )
+        .await,
+        "both actual authenticated P2P sessions must become online"
+    );
+    let (connect_tx, mut connect_rx) = tokio::sync::mpsc::channel(2);
+    let (gossip_tx, mut gossip_rx) = tokio::sync::mpsc::channel(2);
+    receiver
+        .subscribe_to_peers_messages_with_filter(
+            connect_tx,
+            iroha_p2p::network::SubscriberFilter::topics_for_route(
+                [Topic::Connect],
+                SubscriberRoute::Connect,
+            ),
+        )
+        .expect("dedicated Connect subscriber");
+    receiver
+        .subscribe_to_peers_messages_with_filter(
+            gossip_tx,
+            iroha_p2p::network::SubscriberFilter::topics_for_route(
+                [Topic::TxGossip],
+                SubscriberRoute::General,
+            ),
+        )
+        .expect("ordinary gossip subscriber");
+    for (topic, inbox) in [(6, &mut connect_rx), (3, &mut gossip_rx)] {
+        let data = vec![topic; 4 * 1024 * 1024];
+        sender
+            .post_recoverable(
+                Post {
+                    data: BigMsg {
+                        topic,
+                        data: data.clone(),
+                    },
+                    peer_id: peer1.id().clone(),
+                    priority: Priority::Low,
+                },
+                None,
+            )
+            .expect("execution-sized complete frame admission");
+        let received = tokio::time::timeout(Duration::from_secs(10), inbox.recv())
+            .await
+            .expect("large frame crosses authenticated P2P transport")
+            .expect("subscriber receives complete frame");
+        assert_eq!(received.payload.topic, topic);
+        assert_eq!(received.payload.data, data);
+    }
+    assert_eq!(sender.outbound_topic_frame_cap(Topic::Health), 32_768);
+    let rejection = sender
+        .post_recoverable(
+            Post {
+                data: BigMsg {
+                    topic: 5,
+                    data: vec![0; 64 * 1024],
+                },
+                peer_id: peer1.id().clone(),
+                priority: Priority::Low,
+            },
+            None,
+        )
+        .expect_err("Health must retain its ordinary frame bound");
+    assert!(matches!(
+        rejection,
+        NetworkActorAdmissionError::Rejected {
+            reason: NetworkActorAdmissionRejection::FrameTooLarge,
+            ..
+        }
+    ));
+    shutdown1.send();
+    shutdown2.send();
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn topic_cap_violation_disconnects() {
     let _cap_test_guard = FRAME_CAP_TEST_LOCK.lock().await;

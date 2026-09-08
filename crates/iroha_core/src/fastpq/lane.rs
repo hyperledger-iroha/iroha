@@ -83,12 +83,28 @@ pub struct FastpqWitnessJob {
 /// Proof bytes and digest produced by the FASTPQ lane.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FastpqProofOutput {
-    /// Norito-encoded FASTPQ proof payload.
+    /// FASTPQ proof payload encoded with the canonical V1 Norito layout.
     pub proof_bytes: Vec<u8>,
     /// Stable digest of `proof_bytes` for relay metadata and telemetry.
     pub proof_digest: Hash,
     /// Canonical six-lane batch trace commitment proven by the proof.
     pub trace_commitment: GoldilocksDigest384V1,
+}
+impl FastpqProofOutput {
+    /// Encode a generated proof within its byte budget and derive its canonical identity.
+    fn encode_proof(
+        proof: &fastpq_prover::Proof,
+        max_bytes: usize,
+    ) -> Result<Self, norito::core::BoundedEncodeError> {
+        let _canonical =
+            norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+        let proof_bytes = norito::core::to_bytes_bounded(proof, max_bytes)?;
+        Ok(Self {
+            proof_digest: Hash::new(&proof_bytes),
+            trace_commitment: proof.commitment(),
+            proof_bytes,
+        })
+    }
 }
 /// Trait abstracting over the FASTPQ prover backend so tests can inject mocks.
 pub trait FastpqProofEngine: Send + Sync + 'static {
@@ -103,6 +119,7 @@ pub trait FastpqProofEngine: Send + Sync + 'static {
 }
 struct RealProofEngine {
     prover: Prover,
+    max_proof_bytes: usize,
 }
 impl FastpqProofEngine for RealProofEngine {
     fn prove(
@@ -110,13 +127,16 @@ impl FastpqProofEngine for RealProofEngine {
         batch: &fastpq_prover::TransitionBatch,
     ) -> fastpq_prover::Result<FastpqProofOutput> {
         let proof = self.prover.prove(batch)?;
-        let trace_commitment = proof.commitment();
-        let proof_bytes = norito::to_bytes(&proof)?;
-        let proof_digest = Hash::new(&proof_bytes);
-        Ok(FastpqProofOutput {
-            proof_bytes,
-            proof_digest,
-            trace_commitment,
+        FastpqProofOutput::encode_proof(&proof, self.max_proof_bytes).map_err(|error| match error {
+            norito::core::BoundedEncodeError::FrameTooLarge {
+                encoded_bytes,
+                max_bytes,
+            } => fastpq_prover::Error::VerifierLimitExceeded {
+                limit: "max_proof_bytes",
+                actual: encoded_bytes,
+                max: max_bytes,
+            },
+            error => fastpq_prover::Error::Encode(norito::Error::Message(error.to_string())),
         })
     }
 }
@@ -279,7 +299,12 @@ fn build_engine(cfg: &Fastpq) -> Option<Arc<dyn FastpqProofEngine>> {
     let poseidon_mode = map_poseidon_mode(cfg.poseidon_mode);
     let (mode, poseidon_mode) = preflight_prover_modes(cfg, mode, poseidon_mode)?;
     match Prover::canonical_with_modes(FASTPQ_CANONICAL_PARAMETER_SET, mode, poseidon_mode) {
-        Ok(prover) => Some(Arc::new(RealProofEngine { prover })),
+        Ok(prover) => Some(Arc::new(RealProofEngine {
+            prover,
+            max_proof_bytes: usize::try_from(cfg.proof_sidecar_max_bytes.get())
+                .unwrap_or(usize::MAX)
+                .min(fastpq_prover::VerifyLimits::default().max_proof_bytes),
+        })),
         Err(err) => {
             warn!(?err, "fastpq lane: failed to construct canonical prover");
             None
@@ -312,7 +337,7 @@ fn preflight_prover_modes(
         mode,
         poseidon_mode,
         preflight_execution_gpu_backend,
-        fastpq_prover::preflight_poseidon_gpu_backend,
+        fastpq_prover::preflight_native_v1_gpu_backend,
         fastpq_prover::preflight_bn254_poseidon_word_batches,
     )
 }
@@ -729,6 +754,94 @@ mod tests {
     use iroha_test_samples::{ALICE_ID, BOB_ID};
     use std::{collections::BTreeMap, sync::atomic::AtomicBool, time::Duration};
     static LANE_REGISTRY_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    #[test]
+    fn persisted_proof_encoding_is_canonical_bounded_and_digest_bound() {
+        // This independently replayed raw proof exercises serialization only. Its size exceeds
+        // the production verifier cap and must therefore be rejected by the production budget.
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../fastpq_prover/tests/fixtures/v1_raw_transcript_64.bin");
+        let expected = std::fs::read(path).expect("current raw proof fixture");
+        let proof: fastpq_prover::Proof =
+            norito::decode_canonical(&expected).expect("canonical raw proof fixture");
+        for flags in
+            (u8::MIN..=u8::MAX).filter(|&flags| norito::core::validate_header_flags(flags).is_ok())
+        {
+            let _layout = norito::core::DecodeFlagsGuard::enter(flags);
+            let effective_flags = norito::core::get_decode_flags();
+            let output = FastpqProofOutput::encode_proof(&proof, expected.len())
+                .expect("exact diagnostic serialization budget");
+            assert_eq!(output.proof_bytes, expected);
+            assert_eq!(output.proof_digest, Hash::new(&expected));
+            assert_eq!(output.trace_commitment, proof.commitment());
+            assert_eq!(norito::core::get_decode_flags(), effective_flags);
+        }
+        for max_bytes in [
+            expected.len() - 1,
+            fastpq_prover::VerifyLimits::default().max_proof_bytes,
+        ] {
+            assert!(max_bytes < expected.len());
+            assert!(matches!(
+                FastpqProofOutput::encode_proof(&proof, max_bytes),
+                Err(norito::core::BoundedEncodeError::FrameTooLarge {
+                    encoded_bytes,
+                    max_bytes: rejected_limit,
+                }) if encoded_bytes == expected.len() && rejected_limit == max_bytes
+            ));
+        }
+    }
+    #[test]
+    fn proof_output_uses_canonical_bytes_under_every_ambient_layout() {
+        // Codec-only fixture: this is not a valid mathematical proof. Exercise
+        // the exact post-prover production helper without running the prover.
+        let zero = GoldilocksDigest384V1::default();
+        let proof = fastpq_prover::Proof {
+            protocol_version: 1,
+            parameter: FASTPQ_CANONICAL_PARAMETER_SET.to_owned(),
+            trace_commitment: GoldilocksDigest384V1::new([7; 6]).unwrap(),
+            public_io: Default::default(),
+            trace_root: zero,
+            air_trace_root: zero,
+            air_composition_root: zero,
+            lde_root: zero,
+            lde_domain_size: 0,
+            lookup_grand_product: 15,
+            lookup_challenge: 16,
+            alphas: Vec::new(),
+            betas: Vec::new(),
+            fri_layers: Vec::new(),
+            queries: Vec::new(),
+            air_openings: Vec::new(),
+            fri_queries: Vec::new(),
+        };
+        let canonical = norito::encode_canonical(&proof).unwrap();
+        let expected_digest = Hash::new(&canonical);
+        let mut saw_noncanonical_encoding = false;
+        for flags in
+            (u8::MIN..=u8::MAX).filter(|&flags| norito::core::validate_header_flags(flags).is_ok())
+        {
+            let _ambient = norito::core::DecodeFlagsGuard::enter(flags);
+            let ambient = norito::to_bytes(&proof).unwrap();
+            let decoded_ambient: fastpq_prover::Proof =
+                norito::decode_from_bytes(&ambient).unwrap();
+            assert_eq!(decoded_ambient, proof);
+            if ambient != canonical {
+                saw_noncanonical_encoding = true;
+                assert_ne!(Hash::new(&ambient), expected_digest);
+            }
+            let output = FastpqProofOutput::encode_proof(&proof, canonical.len()).unwrap();
+            assert_eq!(output.proof_bytes, canonical);
+            assert_eq!(output.proof_digest, expected_digest);
+            assert_eq!(output.trace_commitment, proof.commitment());
+            let decoded: fastpq_prover::Proof =
+                norito::decode_from_bytes(&output.proof_bytes).unwrap();
+            assert_eq!(decoded, proof);
+            assert_eq!(norito::core::effective_decode_flags(), Some(flags));
+        }
+        assert!(
+            saw_noncanonical_encoding,
+            "fixture must expose the old ambient-sensitive behavior"
+        );
+    }
     fn gpu_execution_cpu_poseidon_config() -> Fastpq {
         Fastpq {
             execution_mode: FastpqExecutionMode::Gpu,
@@ -828,6 +941,7 @@ mod tests {
                 public_inputs: Some(template),
                 tx_set_hash: Some(tx_set_hash),
                 entry_dataspaces: BTreeMap::new(),
+                source_inventory: None,
             },
         };
         assert!(try_submit(job));
@@ -971,18 +1085,23 @@ mod tests {
     async fn shutdown_keeps_generation_until_blocking_initialisation_finishes() {
         let _registry_lock = LANE_REGISTRY_TEST_LOCK.lock().await;
         let external_shutdown = ShutdownSignal::new();
-        let started = Arc::new(std::sync::Barrier::new(2));
-        let release = Arc::new(std::sync::Barrier::new(2));
-        let worker_started = Arc::clone(&started);
-        let worker_release = Arc::clone(&release);
+        // Await startup without blocking this test's single Tokio thread.
+        // Dropping the release sender also frees the blocking initializer if
+        // an assertion fails, so runtime teardown cannot hang on the fixture.
+        let (started, started_rx) = tokio::sync::oneshot::channel();
+        let (release, release_rx) = std::sync::mpsc::channel();
         let (_handle, task) =
             start_with_builder(None, None, Some(external_shutdown.clone()), move || {
-                worker_started.wait();
-                worker_release.wait();
+                if started.send(()).is_ok() {
+                    let _ = release_rx.recv();
+                }
                 None
             })
             .expect("lane registers");
-        started.wait();
+        tokio::time::timeout(Duration::from_secs(5), started_rx)
+            .await
+            .expect("blocking setup starts without blocking the runtime")
+            .expect("blocking setup reports startup");
         external_shutdown.send();
         tokio::task::yield_now().await;
         assert!(
@@ -991,7 +1110,9 @@ mod tests {
         );
         assert!(!task.is_finished());
 
-        release.wait();
+        release
+            .send(())
+            .expect("blocking setup remains alive until explicitly released");
         tokio::time::timeout(Duration::from_secs(1), task)
             .await
             .expect("lane exits once blocking setup returns")
@@ -1003,18 +1124,23 @@ mod tests {
         use tokio::time::{Instant, sleep};
         let _registry_lock = LANE_REGISTRY_TEST_LOCK.lock().await;
         let external_shutdown = ShutdownSignal::new();
-        let started = Arc::new(std::sync::Barrier::new(2));
-        let release = Arc::new(std::sync::Barrier::new(2));
-        let worker_started = Arc::clone(&started);
-        let worker_release = Arc::clone(&release);
+        // Await startup without blocking this test's single Tokio thread.
+        // Dropping the release sender also frees the blocking initializer if
+        // an assertion fails, so runtime teardown cannot hang on the fixture.
+        let (started, started_rx) = tokio::sync::oneshot::channel();
+        let (release, release_rx) = std::sync::mpsc::channel();
         let (_handle, task) =
             start_with_builder(None, None, Some(external_shutdown.clone()), move || {
-                worker_started.wait();
-                worker_release.wait();
+                if started.send(()).is_ok() {
+                    let _ = release_rx.recv();
+                }
                 None
             })
             .expect("lane registers");
-        started.wait();
+        tokio::time::timeout(Duration::from_secs(5), started_rx)
+            .await
+            .expect("blocking setup starts without blocking the runtime")
+            .expect("blocking setup reports startup");
         external_shutdown.send();
         task.abort();
         let join_error = task.await.expect_err("aborted worker reports cancellation");
@@ -1024,7 +1150,9 @@ mod tests {
             "detached blocking setup must retain its generation lease"
         );
 
-        release.wait();
+        release
+            .send(())
+            .expect("blocking setup remains alive until explicitly released");
         let deadline = Instant::now() + Duration::from_secs(1);
         while lock_global_lane().current.is_some() {
             assert!(
@@ -1084,6 +1212,7 @@ mod tests {
                 public_inputs: Some(template),
                 tx_set_hash: Some(tx_set_hash),
                 entry_dataspaces,
+                source_inventory: None,
             },
         };
         let batches = batches_for_job(&job).expect("context builds batches");
@@ -1123,6 +1252,7 @@ mod tests {
                 public_inputs: Some(template),
                 tx_set_hash: Some(tx_set_hash),
                 entry_dataspaces: BTreeMap::from([(entry_hash, entry_dsid)]),
+                source_inventory: None,
             },
         };
 
@@ -1138,6 +1268,26 @@ mod tests {
         assert_eq!(
             rebound[0].public_inputs.new_root, batches[0].public_inputs.new_root,
             "transfer SMT roots remain transcript-bound"
+        );
+        let mut missing = job;
+        missing.context.tx_set_hash = None;
+        assert!(matches!(
+            batches_for_job(&missing),
+            Err(TranscriptBatchError::MissingTransactionSetCommitment)
+        ));
+        missing.context.tx_set_hash = Some([0; 32]);
+        assert!(matches!(
+            batches_for_job(&missing),
+            Err(TranscriptBatchError::MissingTransactionSetCommitment)
+        ));
+        missing.context.tx_set_hash = None;
+        missing.witness.fastpq_transcripts.clear();
+        assert!(
+            matches!(
+                batches_for_job(&missing),
+                Err(TranscriptBatchError::MissingTransactionSetCommitment)
+            ),
+            "precomputed proof-only batches cannot supply their own transaction-set authority"
         );
     }
     #[test]
@@ -1407,6 +1557,13 @@ mod tests {
             new_root: [0; 32],
             perm_root: [0; 32],
         };
+        // This fixture has an internal transcript and no external transaction wires.
+        // Supply the real empty-wire commitment so admission reaches the prover.
+        let entrypoints: [iroha_data_model::transaction::TransactionEntrypoint; 0] = [];
+        let tx_set_hash =
+            iroha_data_model::nexus::axt_ordered_transaction_set_digest_v1(&entrypoints)
+                .expect("canonical empty transaction-wire commitment")
+                .into();
         let job = FastpqWitnessJob {
             block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xAC; 32])),
             height: 7,
@@ -1418,10 +1575,14 @@ mod tests {
             },
             context: FastpqWitnessContext {
                 public_inputs: Some(template),
-                tx_set_hash: Some([0; 32]),
+                tx_set_hash: Some(tx_set_hash),
                 entry_dataspaces: BTreeMap::new(),
+                source_inventory: None,
             },
         };
+        let admitted = batches_for_job(&job).expect("shutdown fixture reaches the prover");
+        assert_eq!(admitted.len(), 1);
+        assert_eq!(admitted[0].public_inputs.tx_set_hash, tx_set_hash);
         let kura = Kura::blank_kura_for_testing();
 
         process_job(
@@ -1469,6 +1630,14 @@ mod tests {
     }
 }
 fn batches_for_job(job: &FastpqWitnessJob) -> Result<Vec<TransitionBatch>, TranscriptBatchError> {
+    if (!job.witness.fastpq_batches.is_empty() || !job.witness.fastpq_transcripts.is_empty())
+        && job
+            .context
+            .tx_set_hash
+            .is_none_or(|digest| digest == [0; 32])
+    {
+        return Err(TranscriptBatchError::MissingTransactionSetCommitment);
+    }
     let mut batches = match batches_from_exec_witness(&job.witness) {
         Ok(batches) => batches,
         Err(TranscriptBatchError::MissingFastpqBatches) => Vec::new(),

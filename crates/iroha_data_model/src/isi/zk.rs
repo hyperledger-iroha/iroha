@@ -11,6 +11,7 @@ isi! {
     /// This instruction records verification result in WSV. Backends and
     /// cryptographic verification are provided by `iroha_core` under feature
     /// flags; this data model type acts as a transport envelope.
+    #[norito_schema(name = "iroha_data_model::isi::zk::VerifyProof")]
     pub struct VerifyProof {
         /// Proof attachment containing the proof and a VK registry reference.
         pub attachment: crate::proof::ProofAttachment,
@@ -33,6 +34,7 @@ isi! {
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
+    #[norito_schema(name = "iroha_data_model::isi::zk::PruneProofs")]
     pub struct PruneProofs {
         /// Optional backend label to restrict pruning scope (e.g., `halo2/ipa`).
         pub backend: Option<String>,
@@ -52,6 +54,7 @@ isi! {
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
+    #[norito_schema(name = "iroha_data_model::isi::zk::RegisterZkAsset")]
     pub struct RegisterZkAsset {
         /// Asset definition id.
         pub asset: AssetDefinitionId,
@@ -96,6 +99,7 @@ isi! {
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
+    #[norito_schema(name = "iroha_data_model::isi::zk::ScheduleConfidentialPolicyTransition")]
     pub struct ScheduleConfidentialPolicyTransition {
         /// Asset definition id.
         pub asset: AssetDefinitionId,
@@ -134,6 +138,7 @@ isi! {
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
+    #[norito_schema(name = "iroha_data_model::isi::zk::CancelConfidentialPolicyTransition")]
     pub struct CancelConfidentialPolicyTransition {
         /// Asset definition id.
         pub asset: AssetDefinitionId,
@@ -231,6 +236,7 @@ isi! {
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
+    #[norito_schema(name = "iroha_data_model::isi::zk::CreateElection")]
     pub struct CreateElection {
         /// Unique canonical V1 governance selector.
         ///
@@ -261,6 +267,7 @@ isi! {
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
+    #[norito_schema(name = "iroha_data_model::isi::zk::SubmitBallot")]
     pub struct SubmitBallot {
         /// Canonical V1 election selector.
         pub election_id: String,
@@ -280,6 +287,7 @@ isi! {
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
+    #[norito_schema(name = "iroha_data_model::isi::zk::FinalizeElection")]
     pub struct FinalizeElection {
         /// Canonical V1 election selector.
         pub election_id: String,

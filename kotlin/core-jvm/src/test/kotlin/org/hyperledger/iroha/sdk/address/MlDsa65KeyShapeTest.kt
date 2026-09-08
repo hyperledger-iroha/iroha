@@ -33,7 +33,7 @@ class MlDsa65KeyShapeTest {
 
     @Test
     fun accountAddressUsesCanonicalExtendedSingleKeyWireAndRejectsMalformedKeys() {
-        withMlDsaSupport {
+        run {
             val valid = validMlDsa65Key()
             val address = AccountAddress.fromAccount(valid, "ml-dsa")
             val canonical = address.canonicalBytes
@@ -105,7 +105,7 @@ class MlDsa65KeyShapeTest {
 
     @Test
     fun canonicalDecodeRejectsHeaderControllerClassMismatches() {
-        withMlDsaSupport {
+        run {
             val ed25519Single = AccountAddress
                 .fromAccount(TestEd25519Keys.publicKey(0x43), "ed25519")
                 .canonicalBytes
@@ -217,17 +217,6 @@ class MlDsa65KeyShapeTest {
             assertFailsWith<IllegalArgumentException>(name) {
                 MultisigSignature.fromPublicKeyLiteral(literal, invalidSignature)
             }
-        }
-    }
-
-    private fun withMlDsaSupport(block: () -> Unit) {
-        try {
-            AccountAddress.configureCurveSupport(
-                CurveSupportConfig.builder().allowMlDsa(true).build(),
-            )
-            block()
-        } finally {
-            AccountAddress.configureCurveSupport(CurveSupportConfig.ed25519Only())
         }
     }
 

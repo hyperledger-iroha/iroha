@@ -1259,35 +1259,13 @@ function createNativeAmxReceiptFixture(overrides = {}, sourceIndex = 0) {
           payload_block_hint: null,
         },
         participant_settlement: {
-          block_height: 8,
           lane_id: 3,
-          lane_incarnation: fakeSumeragiHash(0x65),
           dataspace_id: 8,
-          tx_count: 2,
-          total_local_amount: "0",
-          total_xor_due: "0",
-          total_xor_after_haircut: "0",
-          total_xor_variance: "0",
-          swap_metadata: null,
-          receipts: [
-            {
-              source_id: sourceIds[0],
-              local_amount: "0",
-              xor_due: "0",
-              xor_after_haircut: "0",
-              xor_variance: "0",
-              timestamp_ms: 10,
-            },
-            {
-              source_id: "CD".repeat(32),
-              local_amount: "0",
-              xor_due: "0",
-              xor_after_haircut: "0",
-              xor_variance: "0",
-              timestamp_ms: 10,
-            },
-          ],
-          nexus_fee_receipts: [],
+          lane_incarnation: fakeSumeragiHash(0x65),
+          participant_lane_block_height: 8,
+          authority_context_height: 10,
+          previous_native_settlement_hash: null,
+          source_ids: [...sourceIds],
         },
         participant_settlement_hash: participantSettlementHash,
         prepare_qc: qc("prepare"),
@@ -11588,10 +11566,8 @@ test("getSumeragiDiagnosticsTyped preserves exact u64 Native AMX V2 receipt iden
       descriptor.lane_block_height = participantHeight;
       descriptor.lane_block_view = maximum;
       leg.participant_settlement.dataspace_id = participantDataspace;
-      leg.participant_settlement.block_height = participantHeight;
-      for (const settlementReceipt of leg.participant_settlement.receipts) {
-        settlementReceipt.timestamp_ms = authority;
-      }
+      leg.participant_settlement.participant_lane_block_height = participantHeight;
+      leg.participant_settlement.authority_context_height = authority;
       for (const qc of [leg.prepare_qc, leg.commit_qc]) {
         qc.body.round.height = authority;
         qc.body.epoch = maximum;
@@ -12856,11 +12832,31 @@ test("getSumeragiDiagnosticsTyped parses exact nested fee and native AMX receipt
   const leg = parsed.native_amx_receipts[0].legs[0];
   assert.equal(leg.participant_proposal.proposal_hash, leg.prepare_qc.body.participant_proposal_hash);
   assert.equal(leg.participant_settlement_hash, leg.commit_qc.body.participant_settlement_commitment);
-  assert.equal(leg.participant_settlement.block_height, 8);
-  assert.equal(leg.participant_settlement.receipts.length, 2);
+  assert.equal(leg.participant_settlement.participant_lane_block_height, 8);
+  assert.equal(leg.participant_settlement.source_ids.length, 2);
   assert.equal(leg.prepare_qc.body.source_id, "AB".repeat(32));
   assert.equal(leg.prepare_qc.body.tx_entrypoint_hash, fakeSumeragiHash(0x61));
   assert.equal(leg.participant_proposal.payload_block_hint, null);
+});
+
+test("getSumeragiDiagnosticsTyped preserves FIFO native AMX order and route-local participant groups", async () => {
+  const group = createNativeAmxReceiptGroup().reverse();
+  for (const receipt of group) {
+    const leg = receipt.legs[0];
+    leg.participant_settlement.source_ids.reverse();
+    leg.participant_proposal.descriptor.accepted_transaction_hashes.reverse();
+    sealNativeAmxReceiptFixture(receipt);
+  }
+  const parse = async (receipts) => (await sumeragiDiagnosticsClientForPayload(
+    createSumeragiDiagnosticsPayload({ lane_settlement_commitments: [
+      createLaneSettlementCommitment({ native_amx_receipts: receipts }),
+    ] }),
+  ).getSumeragiDiagnosticsTyped()).lane_settlement_commitments[0].native_amx_receipts;
+  const parsed = await parse(group);
+  assert.deepEqual(parsed.map((receipt) => receipt.source_id), ["CD".repeat(32), "AB".repeat(32)]);
+  assert.deepEqual(parsed[0].legs[0].participant_settlement.source_ids, ["CD".repeat(32), "AB".repeat(32)]);
+  // A separate participant route may also include sources from another coordinator.
+  assert.equal((await parse([group[0]])).length, 1);
 });
 
 test("getSumeragiDiagnosticsTyped accepts the canonical first participant-lane block", async () => {
@@ -12875,7 +12871,7 @@ test("getSumeragiDiagnosticsTyped accepts the canonical first participant-lane b
     leg.participant_proposal.descriptor.previous_lane_block_height = 0;
     delete leg.participant_proposal.descriptor.previous_lane_block_descriptor_hash;
     leg.participant_proposal.descriptor.lane_block_height = 1;
-    leg.participant_settlement.block_height = 1;
+    leg.participant_settlement.participant_lane_block_height = 1;
     sealNativeAmxReceiptFixture(native);
   }
   const status = await sumeragiDiagnosticsClientForPayload(createSumeragiDiagnosticsPayload({
@@ -13016,26 +13012,25 @@ test("getSumeragiDiagnosticsTyped rejects participant-finality tampering", async
       leg.participant_proposal.descriptor.previous_lane_block_height = 0;
       leg.participant_proposal.descriptor.previous_lane_block_descriptor_hash = null;
       leg.participant_proposal.descriptor.lane_block_height = 1;
-      leg.participant_settlement.block_height = 1;
+      leg.participant_settlement.participant_lane_block_height = 1;
     },
     (leg) => { leg.participant_proposal.descriptor.lane_id = 99; },
     (leg) => { leg.participant_proposal.descriptor.proposal_height = 11; },
     (leg) => { leg.participant_settlement_hash = fakeSumeragiHash(0x79); },
     (leg) => { leg.participant_settlement.lane_id = 99; },
     (leg) => { leg.participant_settlement.total_local_amount = "1"; },
-    (leg) => { leg.participant_settlement.receipts[0].source_id = "EF".repeat(32); },
-    (leg) => { leg.participant_settlement.receipts[1].source_id = "AB".repeat(32); },
+    (leg) => { leg.participant_settlement.source_ids[0] = "EF".repeat(32); },
+    (leg) => { leg.participant_settlement.source_ids[1] = "AB".repeat(32); },
     (leg) => { leg.participant_settlement.tx_count = 1; },
     (leg) => {
-      leg.participant_settlement.tx_count = 0;
-      leg.participant_settlement.receipts = [];
+      leg.participant_settlement.source_ids = [];
     },
     (leg) => {
-      leg.participant_settlement.tx_count = 4097;
-      leg.participant_settlement.receipts = Array(4097).fill(
-        leg.participant_settlement.receipts[0],
+      leg.participant_settlement.source_ids = Array(4097).fill(
+        leg.participant_settlement.source_ids[0],
       );
     },
+    (leg) => { leg.participant_settlement.native_amx_receipts = []; },
     (leg) => { leg.participant_settlement.native_amx_receipts = [{}]; },
   ];
 

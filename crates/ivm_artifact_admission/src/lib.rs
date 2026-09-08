@@ -28,9 +28,9 @@ use ivm_abi::{
         ParsedProgramMetadata, ProgramMetadata, contract_code_hash, mode,
     },
 };
-#[cfg(test)]
-use norito::NoritoSerialize;
 use norito::codec::{Decode, Encode};
+#[cfg(test)]
+use norito::{NoritoSerialize, SerializePayload};
 use std::{error::Error as StdError, fmt, fmt::Write as _};
 mod policy;
 /// Maximum executable-image bytes admitted by IVM code memory.

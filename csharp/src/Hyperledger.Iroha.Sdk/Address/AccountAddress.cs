@@ -124,6 +124,7 @@ public sealed class AccountAddress : IEquatable<AccountAddress>
         }
 
         var canonicalBytes = payload.ToArray();
+        AccountAddressNative.ValidateCanonical(canonicalBytes);
         return classBits switch
         {
             (byte)AddressClass.SingleKey => ParseSingleKey(canonicalBytes, headerVersion, normalizationVersion),
@@ -172,6 +173,8 @@ public sealed class AccountAddress : IEquatable<AccountAddress>
         var canonicalBytes = new byte[1 + controllerBytes.Length];
         canonicalBytes[0] = EncodeHeader(AddressClass.SingleKey);
         controllerBytes.CopyTo(canonicalBytes.AsSpan(1));
+
+        AccountAddressNative.ValidateCanonical(canonicalBytes);
 
         return new AccountAddress(
             DefaultHeaderVersion,
@@ -240,6 +243,29 @@ public sealed class AccountAddress : IEquatable<AccountAddress>
 
     public override string ToString() => ToI105();
 
+    internal sealed record MultisigMember(CurveId Curve, ushort Weight, byte[] PublicKey);
+    internal sealed record MultisigPolicy(byte Version, ushort Threshold, IReadOnlyList<MultisigMember> Members);
+
+    /// <summary>Return the complete already-validated controller for canonical transaction encoding.</summary>
+    internal MultisigPolicy? GetMultisigPolicy()
+    {
+        if (AddressClass != AddressClass.MultiSig) return null;
+        var cursor = 2;
+        var version = canonicalBytes[cursor++];
+        var threshold = ReadUInt16(canonicalBytes, ref cursor);
+        var count = ReadUInt16(canonicalBytes, ref cursor);
+        var members = new MultisigMember[count];
+        for (var index = 0; index < count; index++)
+        {
+            var curve = (CurveId)canonicalBytes[cursor++];
+            var weight = ReadUInt16(canonicalBytes, ref cursor);
+            var keyLength = ReadUInt16(canonicalBytes, ref cursor);
+            members[index] = new MultisigMember(curve, weight, canonicalBytes.AsSpan(cursor, keyLength).ToArray());
+            cursor += keyLength;
+        }
+        return new MultisigPolicy(version, threshold, Array.AsReadOnly(members));
+    }
+
     private static AccountAddress ParseMultisig(byte[] canonicalBytes, byte headerVersion, byte normalizationVersion)
     {
         if (canonicalBytes.Length < 8)
@@ -265,6 +291,7 @@ public sealed class AccountAddress : IEquatable<AccountAddress>
             throw NewError(AccountAddressErrorCode.InvalidLength, "invalid multisig threshold or member count");
         }
         var totalWeight = 0UL;
+        byte[]? previousSortKey = null;
         for (var index = 0; index < memberCount; index++)
         {
             if (cursor >= canonicalBytes.Length)
@@ -285,6 +312,13 @@ public sealed class AccountAddress : IEquatable<AccountAddress>
             ValidateControllerPublicKey(
                 (CurveId)curveRaw,
                 canonicalBytes.AsSpan(cursor, keyLength));
+            var algorithm = Encoding.ASCII.GetBytes(CurveIdToAlgorithm((CurveId)curveRaw));
+            var sortKey = new byte[algorithm.Length + 1 + keyLength];
+            algorithm.CopyTo(sortKey, 0);
+            canonicalBytes.AsSpan(cursor, keyLength).CopyTo(sortKey.AsSpan(algorithm.Length + 1));
+            if (previousSortKey is not null && previousSortKey.AsSpan().SequenceCompareTo(sortKey) >= 0)
+                throw NewError(AccountAddressErrorCode.InvalidLength, "multisig members must be unique and canonically ordered by algorithm and public key");
+            previousSortKey = sortKey;
             cursor += keyLength;
             totalWeight += weight;
         }
@@ -371,21 +405,38 @@ public sealed class AccountAddress : IEquatable<AccountAddress>
 
     private static void ValidateControllerPublicKey(CurveId curveId, ReadOnlySpan<byte> publicKey)
     {
-        if (curveId == CurveId.Ed25519
-            && (publicKey.Length != 32 || IsAllZero(publicKey)))
+        // This validates the canonical key envelope. Signature/proof verification
+        // and cryptographic group admission remain separate responsibilities.
+        var expectedLength = curveId switch
         {
-            throw NewError(
-                AccountAddressErrorCode.InvalidPublicKey,
-                "invalid Ed25519 public key: expected a nonzero 32-byte key");
-        }
-
-        if (curveId == CurveId.MlDsa
-            && (publicKey.Length != MlDsa65PublicKeyLength || IsAllZero(publicKey)))
+            CurveId.Ed25519 => 32,
+            CurveId.Secp256k1 => 33,
+            CurveId.BlsNormal => 48,
+            CurveId.BlsSmall => 96,
+            CurveId.MlDsa => MlDsa65PublicKeyLength,
+            CurveId.Gost256A or CurveId.Gost256B or CurveId.Gost256C => 64,
+            CurveId.Gost512A or CurveId.Gost512B => 128,
+            CurveId.Sm2 => 0,
+            _ => throw NewError(AccountAddressErrorCode.UnknownCurve, "unknown public key curve"),
+        };
+        if (curveId == CurveId.Sm2)
         {
-            throw NewError(
-                AccountAddressErrorCode.InvalidPublicKey,
-                "invalid ML-DSA public key: expected a nonzero 1952-byte ML-DSA-65 key");
+            if (publicKey.Length < 67) throw NewError(AccountAddressErrorCode.InvalidPublicKey, "invalid SM2 public key envelope");
+            var identityLength = (publicKey[0] << 8) | publicKey[1];
+            if (identityLength > ushort.MaxValue / 8 || publicKey.Length != 2 + identityLength + 65
+                || publicKey[2 + identityLength] != 4)
+                throw NewError(AccountAddressErrorCode.InvalidPublicKey, "invalid SM2 public key envelope");
+            try { _ = new UTF8Encoding(false, true).GetCharCount(publicKey.Slice(2, identityLength)); }
+            catch (DecoderFallbackException) { throw NewError(AccountAddressErrorCode.InvalidPublicKey, "invalid SM2 distinguishing identifier"); }
+            return;
         }
+        if (publicKey.Length != expectedLength || IsAllZero(publicKey)
+            || curveId == CurveId.Secp256k1 && publicKey[0] is not (2 or 3))
+            throw NewError(AccountAddressErrorCode.InvalidPublicKey, curveId switch {
+                CurveId.Ed25519 => "invalid Ed25519 public key: expected a nonzero 32-byte key",
+                CurveId.MlDsa => "invalid ML-DSA public key: expected a nonzero 1952-byte ML-DSA-65 key",
+                _ => $"invalid {CurveIdToAlgorithm(curveId)} public key envelope",
+            });
     }
 
     private static bool IsAllZero(ReadOnlySpan<byte> bytes)
@@ -414,6 +465,9 @@ public sealed class AccountAddress : IEquatable<AccountAddress>
         return curveId switch
         {
             CurveId.Ed25519 => "ed25519",
+            CurveId.Secp256k1 => "secp256k1",
+            CurveId.BlsNormal => "bls_normal",
+            CurveId.BlsSmall => "bls_small",
             CurveId.MlDsa => "ml-dsa",
             CurveId.Gost256A => "gost3410-2012-256-paramset-a",
             CurveId.Gost256B => "gost3410-2012-256-paramset-b",

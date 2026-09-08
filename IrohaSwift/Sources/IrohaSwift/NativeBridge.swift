@@ -147,7 +147,7 @@ enum NoritoBridgeLoader {
         "connect_norito_kagemusha_core_coordinator_invoke_v1",
         "connect_norito_kagemusha_device_capabilities_v1",
         "connect_norito_kagemusha_device_execute_v1",
-        "connect_norito_kagemusha_device_response_authenticator_v1_verify",
+        "connect_norito_kagemusha_device_command_response_v1_verify",
         "connect_norito_kagemusha_device_mint_stage_command_v1_validate",
         "connect_norito_kagemusha_device_mint_stage_result_v1_validate"
     ] + parliamentTimedOvnWalletRequiredSymbols
@@ -2445,7 +2445,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         }
         do {
             let prefix = try AccountAddress.inspectI105NetworkPrefix(authority, expectedPrefix: nil).chainDiscriminant
-            let address = try AccountAddress.parseEncodedSwiftOnly(authority, expectedPrefix: prefix)
+            let address = try AccountAddress.parseCanonicalI105(authority, expectedPrefix: prefix)
             guard try address.toI105(networkPrefix: prefix) == authority else {
                 throw NativeBridgeError.authority
             }

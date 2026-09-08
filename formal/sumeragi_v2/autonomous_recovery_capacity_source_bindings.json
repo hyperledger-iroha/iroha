@@ -143,18 +143,18 @@
       "coverage": "invariant_chain",
       "path": "crates/iroha_core/src/state/autonomous_predecessor_application.rs",
       "kind": "method",
-      "symbol": "State::certified_lane_block_session_predecessor_is_applied_cached",
+      "symbol": "State::certified_lane_block_session_predecessor_is_applied",
       "required_tokens": [
         "session.prepare_qc.payload_availability_qc.is_some()",
-        "self.certified_autonomous_lane_block_predecessor_is_globally_applied_cached",
-        "self.certified_lane_block_predecessor_is_applied_or_snapshot_anchored_cached",
+        "self.certified_autonomous_lane_block_predecessor_is_globally_applied",
+        "self.certified_lane_block_predecessor_is_applied_or_snapshot_anchored",
         "&session.proposal"
       ],
       "ordered_tokens": [
         "if session.prepare_qc.payload_availability_qc.is_some()",
-        "self.certified_autonomous_lane_block_predecessor_is_globally_applied_cached",
+        "self.certified_autonomous_lane_block_predecessor_is_globally_applied",
         "else",
-        "self.certified_lane_block_predecessor_is_applied_or_snapshot_anchored_cached"
+        "self.certified_lane_block_predecessor_is_applied_or_snapshot_anchored"
       ]
     },
     {
@@ -183,27 +183,71 @@
       "coverage": "invariant_chain",
       "path": "crates/iroha_core/src/state/autonomous_predecessor_application.rs",
       "kind": "method",
-      "symbol": "State::certified_autonomous_lane_block_predecessor_is_globally_applied_cached",
+      "symbol": "State::certified_autonomous_lane_block_predecessor_is_globally_applied",
       "required_tokens": [
         "descriptor.previous_lane_block_height",
         "descriptor.previous_lane_block_descriptor_hash",
         "previous_height.checked_add(1) != Some(descriptor.lane_block_height)",
+        "Result<bool, MergeLedgerCommitError>",
+        "let native_snapshot = self.native_amx_participant_application_snapshot()?",
+        ".blocked",
         "Self::canonical_merged_lane_frontier_from_world",
         "if frontier.0 >= previous_height",
-        "return frontier == (previous_height, Some(previous_descriptor_hash))",
-        "self.kura.canonical_lane_block_predecessor_receipt_revalidates_without_sidecar_repair",
-        "self.kura.autonomous_lane_block_predecessor_merge_receipt_revalidates_without_sidecar_repair",
-        "proposal"
+        "return Ok(frontier == (previous_height, Some(previous_descriptor_hash)))",
+        "self.lane_block_predecessor_has_authenticated_receipt(proposal, &native_snapshot)"
       ],
       "ordered_tokens": [
         "let previous_height = descriptor.previous_lane_block_height",
-        "let Some(previous_descriptor_hash) = descriptor.previous_lane_block_descriptor_hash else",
         "previous_height.checked_add(1) != Some(descriptor.lane_block_height)",
+        "let native_snapshot = self.native_amx_participant_application_snapshot()?",
+        ".blocked",
+        "let Some(previous_descriptor_hash) = descriptor.previous_lane_block_descriptor_hash else",
         "Self::canonical_merged_lane_frontier_from_world",
         "if frontier.0 >= previous_height",
-        "return frontier == (previous_height, Some(previous_descriptor_hash))",
-        "canonical_lane_block_predecessor_receipt_revalidates_without_sidecar_repair",
-        "autonomous_lane_block_predecessor_merge_receipt_revalidates_without_sidecar_repair"
+        "return Ok(frontier == (previous_height, Some(previous_descriptor_hash)))",
+        "self.lane_block_predecessor_has_authenticated_receipt(proposal, &native_snapshot)"
+      ]
+    },
+    {
+      "id": "autonomous_predecessor_authenticated_receipt_dispatch",
+      "invariant": "MLAutonomousPredecessorGloballyApplied",
+      "coverage": "invariant_chain",
+      "path": "crates/iroha_core/src/state/autonomous_predecessor_application.rs",
+      "kind": "method",
+      "symbol": "State::lane_block_predecessor_has_authenticated_receipt",
+      "required_tokens": [
+        "Result<bool, MergeLedgerCommitError>",
+        ".read_lane_application_receipt(descriptor.lane_id, previous_height)",
+        ".read_native_amx_participant_application_history(descriptor.lane_id)",
+        ".map_err(MergeLedgerCommitError::Persistence)?",
+        "native_snapshot.applied.iter().find",
+        "native_history.get(previous_height)",
+        "ordinary.proposal != native.participant_proposal",
+        "return Err(MergeLedgerCommitError::ExecutionMarkerConflict(",
+        "previous.lane_id == descriptor.lane_id",
+        "previous.dataspace_id == descriptor.dataspace_id",
+        "previous.lane_incarnation == descriptor.lane_incarnation",
+        "previous.lane_block_height == previous_height",
+        "previous.descriptor_hash == previous_descriptor_hash",
+        "previous.proposal_height < descriptor.proposal_height",
+        "receipt.application_block_height < descriptor.proposal_height"
+      ],
+      "ordered_tokens": [
+        "Result<bool, MergeLedgerCommitError>",
+        ".read_lane_application_receipt(descriptor.lane_id, previous_height)",
+        ".read_native_amx_participant_application_history(descriptor.lane_id)",
+        ".map_err(MergeLedgerCommitError::Persistence)?",
+        "native_snapshot.applied.iter().find",
+        "native_history.get(previous_height)",
+        "ordinary.proposal != native.participant_proposal",
+        "return Err(MergeLedgerCommitError::ExecutionMarkerConflict(",
+        "previous.lane_id == descriptor.lane_id",
+        "previous.dataspace_id == descriptor.dataspace_id",
+        "previous.lane_incarnation == descriptor.lane_incarnation",
+        "previous.lane_block_height == previous_height",
+        "previous.descriptor_hash == previous_descriptor_hash",
+        "previous.proposal_height < descriptor.proposal_height",
+        "receipt.application_block_height < descriptor.proposal_height"
       ]
     },
     {
@@ -276,19 +320,21 @@
       "coverage": "invariant_chain",
       "path": "crates/iroha_core/src/state/autonomous_predecessor_application_tests.rs",
       "kind": "fn",
-      "symbol": "autonomous_lane_predecessor_accepts_exact_canonical_receipt_without_merge_frontier",
+      "symbol": "autonomous_lane_predecessor_authenticates_receipt_and_preserves_occupied_corruption",
       "required_tokens": [
         "persist_lane_block_application_receipt(&predecessor.proposal)",
         "canonical_lane_block_predecessor_receipt_revalidates_without_sidecar_repair",
-        "certified_autonomous_lane_block_predecessor_is_globally_applied_cached",
+        "certified_autonomous_lane_block_predecessor_is_globally_applied",
         "malformed-frontier"
       ],
       "ordered_tokens": [
         "persist_lane_block_application_receipt(&predecessor.proposal)",
         "canonical_lane_block_predecessor_receipt_revalidates_without_sidecar_repair",
-        "state.certified_autonomous_lane_block_predecessor_is_globally_applied_cached",
+        ".certified_autonomous_lane_block_predecessor_is_globally_applied(&successor)",
+        ".expect(\"authenticate predecessor evidence\")",
         "malformed-frontier",
-        "!malformed.certified_autonomous_lane_block_predecessor_is_globally_applied_cached"
+        "malformed .certified_autonomous_lane_block_predecessor_is_globally_applied(&successor)",
+        ".is_err()"
       ]
     },
     {
@@ -623,7 +669,7 @@
         "let before = Self::sidecar_tracked_bytes",
         "self.update_disk_usage_delta(before_recovery, before)",
         "recovery_accounting.finish()",
-        "let temp_peak = before",
+        "let temp_peak = pairs.iter().try_fold(0_u64, |peak, ((data, index), _, _)| { Self::sidecar_tracked_bytes(data, index).map(|bytes| peak.max(bytes)) })?",
         ".checked_add(pending_canonical_bytes)",
         ".checked_add(terminal_reservations)",
         ".checked_add(post_wsv_reservations)",
@@ -631,16 +677,25 @@
         "Self::canonical_prune_intent_maintenance_headroom_bytes()",
         ".checked_add(temp_peak)",
         "LaneHistoryCompactionOutcome::CapacityBlocked",
-        "Self::prune_indexed_sidecars_through_terminal_frontier"
+        "Self::prune_indexed_sidecars_through_terminal_frontier",
+        "for ((data_path, index_path), kind, role) in &pairs",
+        "LaneHistoryTerminalEvidenceRole::CanonicalReplica => { &terminal_references.replica_heights }",
+        "LaneHistoryTerminalEvidenceRole::ApplicationReceipt => { &terminal_references.receipt_heights }",
+        "Self::recover_indexed_sidecar_artifacts_with_required_heights( data_path, index_path, required_heights, kind, )",
+        "self.validate_active_autonomous_terminal_evidence_references_locked( entry, &terminal_references, )?"
       ],
       "ordered_tokens": [
+        "for ((data_path, index_path), kind, role) in &pairs",
+        "LaneHistoryTerminalEvidenceRole::CanonicalReplica => { &terminal_references.replica_heights }",
+        "LaneHistoryTerminalEvidenceRole::ApplicationReceipt => { &terminal_references.receipt_heights }",
         "let before_recovery = Self::sidecar_tracked_bytes",
         "let recovery_accounting = self.begin_total_disk_usage_mutation()",
         "Self::recover_indexed_sidecar_artifacts",
         "let before = Self::sidecar_tracked_bytes",
         "self.update_disk_usage_delta(before_recovery, before)",
         "recovery_accounting.finish()",
-        "let temp_peak = before",
+        "self.validate_active_autonomous_terminal_evidence_references_locked( entry, &terminal_references, )?",
+        "let temp_peak = pairs.iter().try_fold(0_u64, |peak, ((data, index), _, _)| { Self::sidecar_tracked_bytes(data, index).map(|bytes| peak.max(bytes)) })?",
         ".checked_add(pending_canonical_bytes)",
         "Self::canonical_prune_intent_maintenance_headroom_bytes()",
         ".checked_add(temp_peak)",
@@ -799,7 +854,7 @@
       "symbol": "Kura::rebuild_post_wsv_lane_artifact_budget_reservations_on_startup",
       "required_tokens": [
         "self.autonomous_lane_attempt_inventory_counts_locked(&lane_entry, 1)?",
-        ".difference(&inventory.complete_terminal_outcome_identities)",
+        "for identity in inventory.lifecycle_identities.union(&inventory.terminal_outcome_identities).filter(|identity| { !inventory.complete_terminal_outcome_identities.contains(identity) }).copied()",
         "incomplete_seen > MAX_AUTONOMOUS_LANE_ATTEMPT_NAMESPACE_FILES",
         "AutonomousLifecycleTerminalOutcomeSourceV1::CanonicalCarrier",
         "read_lane_block_application_receipt_from_paths_durability_attested_locked",
@@ -814,7 +869,7 @@
       ],
       "ordered_tokens": [
         "let mut incomplete_seen = 0_usize",
-        ".difference(&inventory.complete_terminal_outcome_identities)",
+        "for identity in inventory.lifecycle_identities.union(&inventory.terminal_outcome_identities).filter(|identity| { !inventory.complete_terminal_outcome_identities.contains(identity) }).copied()",
         "incomplete_seen > MAX_AUTONOMOUS_LANE_ATTEMPT_NAMESPACE_FILES",
         "AutonomousLifecycleTerminalOutcomeSourceV1::CanonicalCarrier",
         "if let Some(entry_hash) = terminal_entry_hash",
@@ -1214,7 +1269,7 @@
       "coverage": "invariant_chain",
       "path": "crates/iroha_core/src/kura/autonomous_terminal_capacity.rs",
       "kind": "method",
-      "symbol": "Kura::validate_configured_autonomous_mutation_disk_peak_with_allowed_view_temp_locked",
+      "symbol": "Kura::validate_configured_autonomous_mutation_disk_peak_with_reservation_deltas_locked",
       "required_tokens": [
         "additional_physical_peak_bytes",
         "stable_terminal_reservations",
@@ -1225,7 +1280,13 @@
         ".and_then(|bytes| bytes.checked_add(post_wsv_reservations))",
         ".and_then(|bytes| bytes.checked_add(certified_bundle_reservations))",
         "Self::canonical_prune_intent_maintenance_headroom_bytes()",
-        "if required > self.max_disk_usage_bytes"
+        "if required > self.max_disk_usage_bytes",
+        "if self.max_disk_usage_bytes == 0 || self.store_root.as_os_str().is_empty() { return Ok(()); }",
+        ".checked_add(additional_missing_terminal_identities)",
+        ".checked_add(additional_incomplete_terminal_identities)",
+        "resulting_missing > MAX_AUTONOMOUS_LANE_ATTEMPT_NAMESPACE_FILES || resulting_incomplete > MAX_AUTONOMOUS_LANE_ATTEMPT_NAMESPACE_FILES",
+        "if consumes_terminal_cas_transient && additional_physical_peak_bytes > shared_terminal_transient",
+        ".and_then(|bytes| bytes.checked_add(additional_unreserved_stable_bytes))"
       ],
       "ordered_tokens": [
         "let physical_and_transient",
@@ -1234,6 +1295,7 @@
         "let required = self",
         ".kura_disk_usage_bytes()?",
         ".checked_add(pending_canonical_bytes)",
+        ".and_then(|bytes| bytes.checked_add(additional_unreserved_stable_bytes))",
         ".checked_add(physical_and_transient)",
         ".and_then(|bytes| bytes.checked_add(stable_terminal_reservations))",
         ".and_then(|bytes| bytes.checked_add(post_wsv_reservations))",

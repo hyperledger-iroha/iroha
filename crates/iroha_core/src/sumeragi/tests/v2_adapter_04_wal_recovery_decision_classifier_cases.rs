@@ -1,6 +1,14 @@
 #[cfg(feature = "bls")]
 #[test]
 fn recovered_decision_fetch_classifier_authenticates_exact_absent_manifest_and_sources() {
+    run_lifecycle_fixture_on_large_stack(
+        "recovered_decision_fetch_classifier_authenticates_exact_absent_manifest_and_sources",
+        recovered_decision_fetch_classifier_authenticates_exact_absent_manifest_and_sources_body,
+    );
+}
+
+#[cfg(feature = "bls")]
+fn recovered_decision_fetch_classifier_authenticates_exact_absent_manifest_and_sources_body() {
     let exact_directory = TempDir::new().expect("temporary exact Decision Fetch WAL");
     let (context, keys, proofs) = authenticated_context();
     let round = wire::ConsensusRound {

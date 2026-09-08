@@ -206,3 +206,7 @@ export function createConnectAppSession(
 export function createConnectCanonicalRequestAuth(
   session: Pick<BrowserConnectAppSession, "waitForApproval" | "signRaw">,
 ): Promise<BrowserConnectCanonicalRequestAuth>;
+/** Exact current binary transaction-request framing and AEAD overhead. */
+export const CONNECT_SIGN_REQUEST_TX_FRAME_OVERHEAD_V1: number;
+/** Checks endpoint-reported WebSocket and buffer bounds, not wallet capability or authenticated finality. */
+export function validateConnectTransactionTransportStatus(status: unknown, payloadLength: number): Readonly<{ frameBytes: number; frameMaxBytes: number; sessionBufferMaxBytes: number }>;

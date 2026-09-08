@@ -160,16 +160,17 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_privacy_PrivacyNati
 }
 android:
 /// Validate a Torii Exact12 capability manifest for the Java Android SDK.
-fn Java_org_hyperledger_iroha_android_privacy_PrivacyNativeBridge_nativeValidateExact12CapabilityManifest();
+fn Java_org_hyperledger_iroha_android_privacy_PrivacyNativeBridge_nativeValidateExact12CapabilityManifestForNetworkV1();
 sdk:
 /// Validate a Torii Exact12 capability manifest for the Kotlin/JVM SDK.
 #[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_privacy_PrivacyNativeBridge_nativeValidateExact12CapabilityManifest(
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_privacy_PrivacyNativeBridge_nativeValidateExact12CapabilityManifestForNetworkV1(
     mut env: jni::JNIEnv<'_>,
     _class: jni::objects::JClass<'_>,
     archive: jni::objects::JByteArray<'_>,
+    expected_network: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jint {
-    java_native_privacy_validate_exact12_capability_manifest(&mut env, archive)
+    java_native_privacy_validate_exact12_capability_manifest(&mut env, archive, expected_network)
 }
 android:
 /// Inspect one validated Torii Exact12 manifest and compare all local profile tuples.
@@ -186,36 +187,39 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_privacy_PrivacyNati
 }
 android:
 /// Require active committed admission and exact local tuple equality for Java/Android.
-fn Java_org_hyperledger_iroha_android_privacy_PrivacyNativeBridge_nativeRequireExact12CapabilityTuple();
+fn Java_org_hyperledger_iroha_android_privacy_PrivacyNativeBridge_nativeRequireExact12CapabilityTupleForNetworkV1();
 sdk:
 /// Require active committed admission and exact local tuple equality for Kotlin/JVM.
 #[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_privacy_PrivacyNativeBridge_nativeRequireExact12CapabilityTuple(
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_privacy_PrivacyNativeBridge_nativeRequireExact12CapabilityTupleForNetworkV1(
     mut env: jni::JNIEnv<'_>,
     _class: jni::objects::JClass<'_>,
     archive: jni::objects::JByteArray<'_>,
     protocol_index: jni::sys::jint,
+    expected_network: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jboolean {
-    java_native_privacy_require_exact12_capability_tuple(&mut env, archive, protocol_index)
+    java_native_privacy_require_exact12_capability_tuple(&mut env, archive, protocol_index, expected_network)
 }
 android:
 /// Validate a canonical retained submit-proof instruction against committed Java admission.
-fn Java_org_hyperledger_iroha_android_privacy_PrivacyNativeBridge_nativeValidateExact12SubmitProofConstruction();
+fn Java_org_hyperledger_iroha_android_privacy_PrivacyNativeBridge_nativeValidateExact12SubmitProofConstructionForNetworkV1();
 sdk:
 /// Validate a canonical retained submit-proof instruction against committed Kotlin/JVM admission.
 #[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_privacy_PrivacyNativeBridge_nativeValidateExact12SubmitProofConstruction(
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_privacy_PrivacyNativeBridge_nativeValidateExact12SubmitProofConstructionForNetworkV1(
     mut env: jni::JNIEnv<'_>,
     _class: jni::objects::JClass<'_>,
     manifest_archive: jni::objects::JByteArray<'_>,
     protocol_index: jni::sys::jint,
     instruction_archive: jni::objects::JByteArray<'_>,
+    expected_network: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jboolean {
     java_native_privacy_validate_exact12_submit_proof_construction(
         &mut env,
         manifest_archive,
         protocol_index,
         instruction_archive,
+        expected_network,
     )
 }
 android:

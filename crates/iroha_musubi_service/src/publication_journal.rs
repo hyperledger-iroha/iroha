@@ -42,6 +42,9 @@ const JOURNAL_DECODE_FIXED_ALLOCATION_BYTES_V1: usize = 64 * 1024;
     reason = "the stable max_* names distinguish immutable upper bounds from live journal counts"
 )]
 #[derive(norito::NoritoSchema)]
+#[norito(
+    schema_name = "iroha::musubi_runtime::publication_journal::DurableMusubiPublicationServiceJournalLimitsV1"
+)]
 #[norito_schema(
     name = "iroha::musubi_runtime::publication_journal::DurableMusubiPublicationServiceJournalLimitsV1"
 )]
@@ -193,6 +196,9 @@ impl std::error::Error for DurableMusubiPublicationServiceJournalOpenErrorV1 {}
     norito::derive::Decode,
     norito::NoritoSchema,
 )]
+#[norito(
+    schema_name = "iroha::musubi_runtime::publication_journal::DurablePublicationOperationRecordV1"
+)]
 #[norito_schema(
     name = "iroha::musubi_runtime::publication_journal::DurablePublicationOperationRecordV1"
 )]
@@ -208,6 +214,9 @@ struct DurablePublicationOperationRecordV1 {
     norito::derive::Encode,
     norito::derive::Decode,
     norito::NoritoSchema,
+)]
+#[norito(
+    schema_name = "iroha::musubi_runtime::publication_journal::DurablePublicationResultStateV1"
 )]
 #[norito_schema(
     name = "iroha::musubi_runtime::publication_journal::DurablePublicationResultStateV1"
@@ -241,6 +250,9 @@ enum DurablePublicationResultStateV1 {
     norito::derive::Decode,
     norito::NoritoSchema,
 )]
+#[norito(
+    schema_name = "iroha::musubi_runtime::publication_journal::DurablePublicationResultRecordV1"
+)]
 #[norito_schema(
     name = "iroha::musubi_runtime::publication_journal::DurablePublicationResultRecordV1"
 )]
@@ -257,6 +269,9 @@ struct DurablePublicationResultRecordV1 {
     norito::derive::Decode,
     norito::NoritoSchema,
 )]
+#[norito(
+    schema_name = "iroha::musubi_runtime::publication_journal::DurablePublicationAuthorizationRecordV1"
+)]
 #[norito_schema(
     name = "iroha::musubi_runtime::publication_journal::DurablePublicationAuthorizationRecordV1"
 )]
@@ -272,6 +287,9 @@ struct DurablePublicationAuthorizationRecordV1 {
     norito::derive::Encode,
     norito::derive::Decode,
     norito::NoritoSchema,
+)]
+#[norito(
+    schema_name = "iroha::musubi_runtime::publication_journal::DurablePublicationJournalStateV1"
 )]
 #[norito_schema(
     name = "iroha::musubi_runtime::publication_journal::DurablePublicationJournalStateV1"
@@ -305,6 +323,9 @@ impl DurablePublicationJournalStateV1 {
     norito::derive::Encode,
     norito::derive::Decode,
     norito::NoritoSchema,
+)]
+#[norito(
+    schema_name = "iroha::musubi_runtime::publication_journal::DurablePublicationJournalEnvelopeV1"
 )]
 #[norito_schema(
     name = "iroha::musubi_runtime::publication_journal::DurablePublicationJournalEnvelopeV1"

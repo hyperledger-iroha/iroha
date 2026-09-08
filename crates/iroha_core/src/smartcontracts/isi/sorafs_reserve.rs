@@ -45,7 +45,7 @@ use iroha_data_model::{
 };
 use iroha_primitives::{json::Json, numeric::Quantity};
 use mv::storage::StorageReadOnly;
-use norito::{DecodeLimits, decode_from_bytes_with_limits};
+use norito::{DecodeLimits, decode_canonical_with_limits};
 use sorafs_manifest::deal::XorQuantity;
 use std::{str::FromStr, sync::OnceLock};
 const RESERVE_STATE_KEY: &str = "sorafs_reserve_state_v1";
@@ -269,7 +269,7 @@ fn encode_state<T: norito::core::NoritoSerialize>(
     value: &T,
     label: &str,
 ) -> Result<Vec<u8>, InstructionExecutionError> {
-    norito::to_bytes(value)
+    norito::encode_canonical(value)
         .map_err(|error| corrupt_state(format!("failed to encode {label}: {error}")))
 }
 fn decode_state<T>(bytes: &[u8], label: &str) -> Result<T, InstructionExecutionError>
@@ -311,26 +311,21 @@ where
     .map_err(InstructionExecutionError::Query)?;
     let (value, allocation_bytes) = if current.is_some() {
         let (value, usage) = norito::core::with_decode_limits_measured(limits, || {
-            decode_from_bytes_with_limits::<T>(bytes, limits)
+            decode_canonical_with_limits::<T>(bytes, limits)
         });
         (value, Some(usage.total_allocated_bytes()))
     } else {
-        (decode_from_bytes_with_limits::<T>(bytes, limits), None)
+        (decode_canonical_with_limits::<T>(bytes, limits), None)
     };
     let value = value.map_err(|error| {
         if crate::smartcontracts::isi::query::singular_query_limits_active()
             && error.is_decode_resource_limit()
         {
             InstructionExecutionError::Query(QueryExecutionFail::CapacityLimit)
-        } else {
-            corrupt_state(format!("failed to decode {label}: {error}"))
-        }
-    })?;
-    norito::verify_exact_frame(&value, bytes).map_err(|error| {
-        if matches!(error, norito::Error::NonCanonicalEncoding) {
+        } else if matches!(error, norito::Error::NonCanonicalEncoding) {
             corrupt_state(format!("{label} state is not exact canonical Norito"))
         } else {
-            corrupt_state(format!("failed to encode {label}: {error}"))
+            corrupt_state(format!("failed to decode {label}: {error}"))
         }
     })?;
     if let (Some(current), Some(allocation_bytes)) = (current.as_deref_mut(), allocation_bytes) {
@@ -2756,7 +2751,7 @@ fn query_reserve_event_page(
         let position = ReserveQueryEventPosition::from(&record);
         let resolved = resolve_committed_event(state_ro, record, budget)?;
         encoded_event_bytes = encoded_event_bytes
-            .checked_add(norito::core::encoded_frame_len(&resolved).map_err(|error| {
+            .checked_add(norito::canonical_frame_len(&resolved).map_err(|error| {
                 QueryExecutionFail::Conversion(format!(
                     "failed to size committed reserve event: {error}"
                 ))
@@ -2790,7 +2785,7 @@ fn query_reserve_event_page(
         has_more,
         next_after,
     };
-    let encoded_len = norito::core::encoded_frame_len(&page).map_err(|error| {
+    let encoded_len = norito::canonical_frame_len(&page).map_err(|error| {
         QueryExecutionFail::Conversion(format!(
             "failed to size committed reserve event page: {error}"
         ))
@@ -2865,7 +2860,7 @@ fn validate_encoded_record_page<T: norito::core::NoritoSerialize>(
     let maximum = crate::smartcontracts::isi::query::singular_query_frame_limit(
         RESERVE_QUERY_MAX_EVENT_PAGE_BYTES_V1,
     );
-    let encoded_len = norito::core::encoded_frame_len(page).map_err(|error| {
+    let encoded_len = norito::canonical_frame_len(page).map_err(|error| {
         QueryExecutionFail::Conversion(format!(
             "failed to size authoritative reserve record page: {error}"
         ))
@@ -3090,3 +3085,7 @@ impl ValidSingularQuery for FindSorafsReserveEvents {
 }
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "sorafs_reserve/canonical_state_tests.rs"]
+mod canonical_state_tests;

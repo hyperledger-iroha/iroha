@@ -107,6 +107,40 @@ impl TransactionsStorage {
             }))),
         }
     }
+    /// Deliberately replace existing membership for a malformed-State recovery fixture.
+    ///
+    /// Unlike historical seeding, this removes a newer hot-set copy too, so the
+    /// public reader observes the requested corruption. The canonical frontier
+    /// and all unrelated memberships remain fixed; production never calls this.
+    #[cfg(test)]
+    pub(crate) fn overwrite_committed_entrypoint_membership_for_tests(
+        &self,
+        entrypoint: Key,
+        height: Value,
+    ) {
+        let _guard = self.write_lock.lock();
+        assert!(
+            self.view().get(&entrypoint).is_some(),
+            "overwrite needs existing membership"
+        );
+        let latest = self
+            .latest_block
+            .load_full()
+            .expect("existing membership has a frontier");
+        assert!(
+            height <= latest.height,
+            "corruption must not advance the fixture frontier"
+        );
+        let mut updated = latest.as_ref().clone();
+        updated.transactions.remove(&entrypoint);
+        self.blocks.remove(&entrypoint);
+        if height == updated.height {
+            updated.transactions.insert(entrypoint);
+        } else {
+            self.blocks.insert(entrypoint, height);
+        }
+        self.latest_block.store(Some(Arc::new(updated)));
+    }
     /// Create block to aggregate updates
     pub fn block(&self) -> TransactionsBlock<'_> {
         self.block_impl(false)
@@ -208,6 +242,8 @@ mod block {
         AutoscaleLaneLifecycle,
         /// Certified merge admission changed before the block could commit
         MergeAdmission,
+        /// Finalized FASTPQ source ownership is invalid at block commit
+        FastpqSourceInventory,
         /// Permanent AXT handle counter could not finalize its block transition
         AxtCounterRatchet,
         /// Live asset-definition incarnations are inconsistent with the registry
@@ -499,6 +535,22 @@ mod tests {
     fn insert_keys(block: &mut TransactionsBlock, keys: &[Key], value: Value) {
         let keys = keys.iter().copied().collect();
         block.insert_block(keys, value);
+    }
+    #[test]
+    fn fixture_membership_overwrite_reaches_public_reader_without_moving_frontier() {
+        let [corrupted, untouched] = get_keys();
+        let [historical, current] = get_values();
+        let storage = TransactionsStorage::new();
+        storage.record_committed_entrypoint_membership_for_tests([corrupted, untouched], current);
+        storage.overwrite_committed_entrypoint_membership_for_tests(corrupted, historical);
+        assert_eq!(storage.view().get(&corrupted), Some(historical));
+        assert_eq!(storage.view().get(&untouched), Some(current));
+        assert_eq!(storage.latest_height(), current.get());
+        storage.overwrite_committed_entrypoint_membership_for_tests(corrupted, current);
+        assert_eq!(storage.view().get(&corrupted), Some(current));
+        assert_eq!(storage.view().get(&untouched), Some(current));
+        assert!(storage.blocks.get(&corrupted).is_none());
+        assert_eq!(storage.latest_height(), current.get());
     }
     #[test]
     fn get() {

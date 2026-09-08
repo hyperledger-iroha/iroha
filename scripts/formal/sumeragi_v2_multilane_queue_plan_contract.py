@@ -19,6 +19,8 @@ def validate_queue_plan_autonomous_only_contract(
 ) -> None:
     """Bind QueuePlan execution to the autonomous lane/merge corridor only."""
 
+    validate_direct_release_authority_contract(root, errors, rust_binding_item)
+
     if not isinstance(models, list):
         return
     queue_models = [
@@ -825,7 +827,7 @@ QUEUE_PLAN_STARTUP_REPLAY_BINDINGS = (
             "install_lane_reservation_journal(",
             "install_plan_journal(",
             "replay_plan_journal(&state)",
-            "IrohaNetwork::start_with_crypto_and_initial_trusted_sources(",
+            "IrohaNetwork::start_with_crypto_and_initial_authorities(",
         ),
     ),
 )
@@ -1109,7 +1111,7 @@ QUEUE_PLAN_STARTUP_REPLAY_ORDERED_SOURCE_CHECKS = (
             "install_lane_reservation_journal(",
             "install_plan_journal(",
             "replay_plan_journal(&state)",
-            "IrohaNetwork::start_with_crypto_and_initial_trusted_sources(",
+            "IrohaNetwork::start_with_crypto_and_initial_authorities(",
         ),
     ),
 )
@@ -1190,13 +1192,13 @@ QUEUE_PLAN_STARTUP_REPLAY_TEST_BINDINGS = (
     ),
     (
         "crates/iroha_core/src/queue.rs",
-        "queue_plan_journal_replay_retains_current_admission_rejection_and_fails_startup",
+        "queue_plan_journal_replay_retains_entrypoint_that_fails_stateless_revalidation",
         (
-            "expect_err(\"a current admission failure must abort startup\")",
-            "failed current admission",
-            "assert_eq!(replay_queue.active_len(), 0);",
+            'expect_err("wrong-network journal entrypoint must fail startup")',
+            "failed canonical stateless validation",
+            "assert!(!replay_queue.txs.contains_key(&hash));",
             "live_record_count()",
-            "without publishing or tombstoning a prefix",
+            "stateless failure must not append a tombstone or replacement",
         ),
     ),
     (
@@ -1294,3 +1296,289 @@ QUEUE_PLAN_STARTUP_REPLAY_TEST_BINDINGS = (
         ),
     ),
 )
+
+
+# The semantic expectations are independent of refreshed item digests. In particular,
+# adding a shipping fixture variant or returning before the checked transition cannot
+# be legitimized by updating the seal of the changed implementation.
+_DIRECT_RELEASE_PRODUCTION_ITEM_SHA256 = {
+    'release_strictly_absent_lane_reservations_in_order': '19c28cbdf28b6750e25352e784c665c1b9ce20b581e9ea9d33762f77e2ab8471',
+    'release_lane_reservations_in_order_inner': '453b579be68dc0f5a83b5cbe10926a3e05824b2839db2e3f3836910eaa965a37',
+}
+
+_DIRECT_RELEASE_PRODUCTION_SOURCE = {
+    'release_strictly_absent_lane_reservations_in_order': r"""
+    pub(crate) fn release_strictly_absent_lane_reservations_in_order(
+        &self,
+        keys: &[LaneQueueReservationKeyV1],
+        authorizations: Vec<StrictAbsenceDirectReleaseAuthorization>,
+    ) -> Result<usize, LaneQueueReservationError> {
+        self.release_lane_reservations_in_order_inner(
+            keys,
+            LaneQueueDirectReleaseGate::StrictAbsence(authorizations),
+        )
+    }
+""",
+    'release_lane_reservations_in_order_inner': r"""
+    fn release_lane_reservations_in_order_inner(
+        &self,
+        keys: &[LaneQueueReservationKeyV1],
+        gate: LaneQueueDirectReleaseGate,
+    ) -> Result<usize, LaneQueueReservationError> {
+        if self.transaction_selection_durability_faulted() {
+            return Err(LaneQueueReservationError::DurabilityFault);
+        }
+        let mut entrypoint_hashes = BTreeSet::new();
+        for key in keys {
+            key.validate()
+                .map_err(|reason| LaneQueueReservationError::InvalidIdentity(reason.to_owned()))?;
+            if !entrypoint_hashes.insert(key.entrypoint_hash) {
+                return Err(LaneQueueReservationError::InvalidIdentity(
+                    "ordered lane reservation release contains a duplicate entrypoint".to_owned(),
+                ));
+            }
+        }
+        match &gate {
+            LaneQueueDirectReleaseGate::StrictAbsence(authorizations) => {
+                let mut authorized_groups = BTreeSet::new();
+                let mut authorized_hashes = BTreeSet::new();
+                for authorization in authorizations {
+                    let (group, group_keys, projection) =
+                        authorization.queue_group().ok_or_else(|| {
+                            LaneQueueReservationError::InvalidIdentity(
+                                "strict-absence direct-release authority is malformed".to_owned(),
+                            )
+                        })?;
+                    if group_keys.is_empty()
+                        || !authorized_groups.insert(group.identity)
+                        || projection.before.queue.reservation_state
+                            != IN_FLIGHT_FIRST_RELEASE_RESERVATION_LIVE
+                        || projection.after.queue.reservation_state
+                            != IN_FLIGHT_FIRST_RELEASE_RESERVATION_DIRECT_RELEASED
+                        || !projection.after.release.fifo_restored
+                    {
+                        return Err(LaneQueueReservationError::InvalidIdentity(
+                            "strict-absence direct-release authority has a duplicate group or invalid terminal state"
+                                .to_owned(),
+                        ));
+                    }
+                    for key in group_keys {
+                        if !authorized_hashes.insert(key.entrypoint_hash) {
+                            return Err(LaneQueueReservationError::InvalidIdentity(
+                                "strict-absence direct-release groups overlap one Queue owner"
+                                    .to_owned(),
+                            ));
+                        }
+                    }
+                }
+                if authorized_hashes != entrypoint_hashes {
+                    return Err(LaneQueueReservationError::InvalidIdentity(
+                        "strict-absence direct-release authorities differ from the exact global FIFO set"
+                            .to_owned(),
+                    ));
+                }
+            }
+            #[cfg(test)]
+            LaneQueueDirectReleaseGate::Fixture => {}
+        }
+        let _reservation_transition_guard = self.lane_reservation_transition_lock.lock();
+        let queue_guard = self.push_remove_lock.lock();
+        if self.transaction_selection_durability_faulted() {
+            return Err(LaneQueueReservationError::DurabilityFault);
+        }
+        match &gate {
+            LaneQueueDirectReleaseGate::StrictAbsence(authorizations) => {
+                for authorization in authorizations {
+                    let (group, group_keys, _) = authorization.queue_group().ok_or_else(|| {
+                        LaneQueueReservationError::InvalidIdentity(
+                            "strict-absence direct-release authority changed under the Queue lock"
+                                .to_owned(),
+                        )
+                    })?;
+                    self.revalidate_complete_live_pre_kura_group_locked(group, group_keys)?;
+                }
+            }
+            #[cfg(test)]
+            LaneQueueDirectReleaseGate::Fixture => {}
+        }
+        let store = self.lane_reservations.lock();
+        for key in keys {
+            store.ensure_no_conflict(key)?;
+            store.ensure_not_release_prepared(key)?;
+        }
+        let records = keys
+            .iter()
+            .filter_map(|key| {
+                store
+                    .live_by_entrypoint
+                    .get(&key.entrypoint_hash)
+                    .cloned()
+                    .map(|record| (*key, record))
+            })
+            .collect::<Vec<_>>();
+        match &gate {
+            LaneQueueDirectReleaseGate::StrictAbsence(_) => {
+                if records.len() != keys.len() {
+                    return Err(LaneQueueReservationError::InvalidIdentity(
+                        "strict-absence direct release lost an exact live reservation before its sink"
+                            .to_owned(),
+                    ));
+                }
+            }
+            #[cfg(test)]
+            LaneQueueDirectReleaseGate::Fixture => {}
+        }
+        for (_, record) in &records {
+            self.validate_live_reservation_against_queue(record)?;
+        }
+        if records
+            .windows(2)
+            .any(|records| records[0].1.fifo_order.ordinal >= records[1].1.fifo_order.ordinal)
+        {
+            return Err(LaneQueueReservationError::InvalidIdentity(
+                "ordered lane reservation release does not follow original global FIFO order"
+                    .to_owned(),
+            ));
+        }
+        let released_records = records
+            .iter()
+            .map(|(_, record)| record.clone())
+            .collect::<Vec<_>>();
+        // Preflight capacity and stable ordinals before the durable append. Unrelated hashes may
+        // continue to enter or leave FIFO while fsync runs; publication therefore rebuilds from a
+        // fresh locked snapshot below instead of replacing FIFO with this stale observation.
+        self.fifo_with_released_reservations_locked(&released_records)?;
+        let transition = self
+            .begin_durability_transition_locked(records.iter().map(|(key, _)| key.entrypoint_hash))
+            .map_err(|hash| LaneQueueReservationError::Conflict { hash })?;
+        let release_keys = records.iter().map(|(key, _)| *key).collect();
+        drop(store);
+        drop(queue_guard);
+        self.apply_lane_reservation_journal(move |journal| {
+            match gate {
+                LaneQueueDirectReleaseGate::StrictAbsence(authorizations) => {
+                    for authorization in authorizations {
+                        let projection = authorization.consume_for_queue().ok_or_else(|| {
+                            std::io::Error::new(
+                                std::io::ErrorKind::InvalidData,
+                                "strict-absence direct-release authority changed before append",
+                            )
+                        })?;
+                        let terminal =
+                            production_in_flight_first_release_terminal_owner(projection.after)
+                                .ok_or_else(|| {
+                                    std::io::Error::new(
+                                        std::io::ErrorKind::InvalidData,
+                                        "strict-absence direct release has no terminal owner",
+                                    )
+                                })?;
+                        if !terminal.ordinary_fifo_owner
+                            || terminal.canonical_wsv_owner
+                            || terminal.commit_terminal
+                            || !terminal.release_terminal
+                        {
+                            return Err(std::io::Error::new(
+                                std::io::ErrorKind::InvalidData,
+                                "strict-absence direct release is not FIFO-only terminal ownership",
+                            ));
+                        }
+                    }
+                }
+                #[cfg(test)]
+                LaneQueueDirectReleaseGate::Fixture => {}
+            }
+            journal.release_batch(release_keys)
+        })?;
+        let queue_guard = self.push_remove_lock.lock();
+        let mut store = self.lane_reservations.lock();
+        let restored_fifo = match self.fifo_with_released_reservations_locked(&released_records) {
+            Ok(fifo) => fifo,
+            Err(error) => {
+                let error = std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!(
+                        "cannot publish durably released lane reservations against the current FIFO: {error}"
+                    ),
+                );
+                self.latch_lane_reservation_post_journal_publication_fault_locked(&error);
+                drop(store);
+                drop(transition);
+                drop(queue_guard);
+                self.publish_latched_lane_reservation_durability_fault(None);
+                return Err(LaneQueueReservationError::Journal(error));
+            }
+        };
+        for (key, _) in &records {
+            store.live_by_entrypoint.remove(&key.entrypoint_hash);
+        }
+        self.replace_fifo_locked(&restored_fifo);
+        self.reconcile_missing_reservation_payloads_locked(&mut store);
+        drop(store);
+        drop(transition);
+        drop(queue_guard);
+        let publish_fault = self.compact_lane_reservations_off_lock();
+        if publish_fault {
+            self.publish_latched_lane_reservation_durability_fault(None);
+        }
+        Ok(records.len())
+    }
+""",
+}
+
+_DIRECT_RELEASE_GATE_SOURCE = """
+enum LaneQueueDirectReleaseGate {
+    StrictAbsence(Vec<StrictAbsenceDirectReleaseAuthorization>),
+    #[cfg(test)]
+    Fixture,
+}
+"""
+
+
+def validate_direct_release_authority_contract(
+    root: Path, errors: list[str], rust_binding_item: Any
+) -> None:
+    """Require one shipping authority path and reject all raw-key test escapes."""
+    import check_sumeragi_v2_proof_ledger as ledger
+
+    queue_path = root / "crates/iroha_core/src/queue.rs"
+    journal_path = root / "crates/iroha_core/src/queue/reservation_journal.rs"
+    sources = {}
+    for path in (queue_path, journal_path):
+        if path.is_symlink() or not path.is_file():
+            errors.append(f"{path}: direct-release authority requires a regular source owner")
+            return
+        sources[path] = path.read_text(encoding="utf-8")
+    for path, owner, name in (
+        (queue_path, "Queue", "release_lane_reservation"),
+        (queue_path, "Queue", "release_lane_reservations_in_order"),
+        (journal_path, "LaneQueueReservationJournal", "release"),
+    ):
+        item = ledger._require_qualified_rust_item(
+            path, sources[path], owner, name, errors,
+            "raw-key direct release must remain a test-only fixture",
+            expected_attributes=("#[cfg(test)]",),
+        )
+        if item is not None:
+            visibility = "pub(super)" if path == journal_path else "pub(crate)"
+            expected = ledger.rust_code_tokens(f"{visibility} fn {name}")
+            if ledger.rust_code_tokens(item.source)[:len(expected)] != expected:
+                errors.append(f"{path}: raw-key direct release must retain crate-local test visibility")
+    for name, expected_source in _DIRECT_RELEASE_PRODUCTION_SOURCE.items():
+        item = ledger._require_qualified_rust_item(
+            queue_path, sources[queue_path], "Queue", name, errors,
+            "direct-release authority requires its shipping Queue owner",
+        )
+        ledger._require_rust_item_token_sha256(
+            queue_path, item, _DIRECT_RELEASE_PRODUCTION_ITEM_SHA256[name],
+            "direct-release authority source seal", errors,
+        )
+        ledger._require_exact_rust_tokens(
+            queue_path, item, expected_source,
+            "direct-release authority must be mandatory through the exact journal sink", errors,
+        )
+    gate = rust_binding_item(
+        root, "crates/iroha_core/src/queue.rs", "enum", "LaneQueueDirectReleaseGate",
+        "direct-release authority gate", errors,
+    )
+    if gate is not None and ledger.rust_code_tokens(gate) != ledger.rust_code_tokens(_DIRECT_RELEASE_GATE_SOURCE):
+        errors.append(f"{queue_path}: direct-release authority gate must have only StrictAbsence in shipping builds")

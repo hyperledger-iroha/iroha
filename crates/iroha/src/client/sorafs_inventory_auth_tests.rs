@@ -6,7 +6,11 @@ fn sorafs_inventory_methods_sign_the_exact_filtered_get() {
     let response = json_response(StatusCode::OK, "{}");
     let alias_digest = "aa".repeat(32);
     let replication_digest = "bb".repeat(32);
-    with_mock_http(respond_with(&store, response), || {
+    with_mock_http(respond_with(&store, response), |mock_transport| {
+        let client = client
+            .clone()
+            .with_test_http_transport(mock_transport.clone());
+
         client
             .get_sorafs_aliases(&SorafsAliasListFilter {
                 limit: Some(10),
@@ -35,10 +39,7 @@ fn sorafs_inventory_methods_sign_the_exact_filtered_get() {
     assert_eq!(snapshots[0].url.query(), Some(alias_query.as_str()));
     let replication_query =
         format!("limit=50&offset=2&status=completed&manifest_digest={replication_digest}");
-    assert_eq!(
-        snapshots[1].url.query(),
-        Some(replication_query.as_str())
-    );
+    assert_eq!(snapshots[1].url.query(), Some(replication_query.as_str()));
 }
 
 #[test]
@@ -46,7 +47,11 @@ fn sorafs_manifest_digest_inputs_fail_before_http_io() {
     let client = client_with_base_url(base_url());
     let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
     let response = json_response(StatusCode::OK, "{}");
-    with_mock_http(respond_with(&store, response), || {
+    with_mock_http(respond_with(&store, response), |mock_transport| {
+        let client = client
+            .clone()
+            .with_test_http_transport(mock_transport.clone());
+
         let alias_error = client
             .get_sorafs_aliases(&SorafsAliasListFilter {
                 manifest_digest: Some("deadbeef"),

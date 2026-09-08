@@ -173,10 +173,6 @@ where
         let inner = T::json_from_value(value)?;
         Ok(WithOrigin::inline(inner))
     }
-    fn json_from_map_key(key: &str) -> Result<Self, norito::json::Error> {
-        let inner = T::json_from_map_key(key)?;
-        Ok(WithOrigin::inline(inner))
-    }
 }
 impl<T: AsRef<Path>> WithOrigin<T> {
     /// If the origin is [`ParameterOrigin::File`], will resolve the contained path relative to the origin.

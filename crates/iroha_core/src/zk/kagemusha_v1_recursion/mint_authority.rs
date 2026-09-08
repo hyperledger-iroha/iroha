@@ -163,11 +163,11 @@ pub(super) mod public_instance {
     /// High limb of the exact paired finality-certificate binding.
     pub const CERTIFICATE_HI: usize = 5;
     /// Low limb of the current recursively authenticated roster identifier.
-    pub const AUTHORITY_LO: usize = 6;
+    pub const AUTHORITY_LO: usize = CERTIFICATE_HI + 1;
     /// High limb of the current recursively authenticated roster identifier.
     pub const AUTHORITY_HI: usize = 7;
     /// Low limb of the authenticated Kagemusha release identifier.
-    pub const RELEASE_LO: usize = 8;
+    pub const RELEASE_LO: usize = AUTHORITY_HI + 1;
     /// High limb of the authenticated Kagemusha release identifier.
     pub const RELEASE_HI: usize = 9;
     /// Low limb of the release-pinned genesis roster identifier.
@@ -175,7 +175,7 @@ pub(super) mod public_instance {
     /// High limb of the release-pinned genesis roster identifier.
     pub const GENESIS_HI: usize = 11;
     /// Low limb of the Eq compact outer checkpoint protocol identity.
-    pub const EQ_PROTOCOL_LO: usize = 12;
+    pub const EQ_PROTOCOL_LO: usize = GENESIS_HI + 1;
     /// High limb of the Eq compact outer checkpoint protocol identity.
     pub const EQ_PROTOCOL_HI: usize = 13;
     /// Low limb of the Ep compact outer checkpoint protocol identity.
@@ -503,7 +503,7 @@ pub(super) fn build_kagemusha_mint_authority_eq_v1(
         &mut eq_dense,
     )?;
 
-    eq_builder.calculate_params(Some(MINIMUM_UNUSABLE_ROWS));
+    super::base_packing::finalize_base_params_v1(&mut eq_builder, MINIMUM_UNUSABLE_ROWS)?;
     let usable_rows = (1_usize << 16) - MINIMUM_UNUSABLE_ROWS;
     eq_dense.validate_capacity(usable_rows)?;
     Ok(KagemushaMintAuthorityEqCircuitV1 {
@@ -567,7 +567,7 @@ pub(super) fn build_kagemusha_mint_authority_ep_v1(
         &mut ep_dense,
     )?;
 
-    ep_builder.calculate_params(Some(MINIMUM_UNUSABLE_ROWS));
+    super::base_packing::finalize_base_params_v1(&mut ep_builder, MINIMUM_UNUSABLE_ROWS)?;
     let usable_rows = (1_usize << 16) - MINIMUM_UNUSABLE_ROWS;
     ep_dense.validate_capacity(usable_rows)?;
     Ok(KagemushaMintAuthorityEpCircuitV1 {

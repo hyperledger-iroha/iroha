@@ -12296,9 +12296,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         }
         let key = (round, subject);
         if let Some(stage) = self.authenticated_genesis_replay.get(&key) {
-            if proposal_replay.is_some()
-                || !stage.exactly_authenticates_fetch_rediscovery(&incoming_effect)
-            {
+            if proposal_replay.is_some() || certificate.is_none() {
                 return Err(EffectExecutorError::Contract(
                     "certified genesis Fetch rediscovery changed its authenticated origin"
                         .to_owned(),
@@ -12310,7 +12308,44 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                         .to_owned(),
                 ));
             }
-            return Ok(());
+            if stage.exactly_authenticates_fetch_rediscovery(&incoming_effect) {
+                return Ok(());
+            }
+            if !matches!(
+                stage,
+                AuthenticatedGenesisReplayStageV1::Store { .. }
+                    | AuthenticatedGenesisReplayStageV1::Stored { .. }
+            ) {
+                return Err(EffectExecutorError::Contract(
+                    "certified genesis Fetch cannot replace an unfinished origin".to_owned(),
+                ));
+            }
+            // EnterView retires the old reducer consumer while preserving the
+            // immutable Store/Stored replay root. Authenticate the current
+            // certified Fetch through that root's existing Store projection,
+            // then follow the ordinary BodyAvailable -> Store FIFO below.
+            // This preflight neither moves the replay stage nor attaches a
+            // Store consumer; the actual Store effect performs that handoff.
+            let store_effect = AdapterEffect::StoreBody {
+                tag,
+                round,
+                subject,
+            };
+            let store_ownership = ownership
+                .rebind_as_inherited_adapter_effect(&store_effect)
+                .map_err(EffectExecutorError::Contract)?;
+            if !matches!(
+                self.prepare_authenticated_genesis_store_replay(
+                    key,
+                    &store_effect,
+                    &store_ownership
+                )?,
+                AuthenticatedGenesisStoreReplayDispositionV1::Retry(_)
+            ) {
+                return Err(EffectExecutorError::Contract(
+                    "certified genesis Fetch lost its retained Store projection".to_owned(),
+                ));
+            }
         }
         let existing_id = self.pending_fetches.iter().find_map(|(id, pending)| {
             (pending.task.round == round && pending.task.subject == subject).then_some(*id)
@@ -12553,6 +12588,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             && self.context.snapshot_bootstrap.is_none()
             && self.pending_tip_recovery.is_none()
             && !self.recovered_bodies.contains_key(&key)
+            && !self.authenticated_genesis_replay.contains_key(&key)
             && let Some(authenticated_genesis) = self.authenticated_genesis_body.as_ref()
             && authenticated_genesis.subject() == subject
         {
@@ -15017,9 +15053,14 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 )
             })
             .collect::<BTreeSet<_>>();
+        // An immutable detached Store retains its physical task/replay owner,
+        // but its superseded reducer consumer has already been retired above.
+        // Keeping that old pipeline tag would reject the next certified Fetch
+        // before it could attach the current consumer to the same Store task.
         let retained_store_owners = self
             .pending_stores
             .values()
+            .filter(|pending| pending.consumer.is_some())
             .map(|pending| (pending.task.manifest.round, pending.task.manifest.subject))
             .collect::<BTreeSet<_>>();
         self.body_pipeline_owners.retain(|key, owner| {

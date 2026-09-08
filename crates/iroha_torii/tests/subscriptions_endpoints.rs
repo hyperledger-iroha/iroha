@@ -451,6 +451,7 @@ async fn subscription_resume_route_returns_exact_unsigned_draft_without_mutating
             .is_some(),
         "draft construction must not replace the committed billing trigger"
     );
+    drop(view);
     harness.shutdown().await;
 }
 #[tokio::test]

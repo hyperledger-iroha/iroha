@@ -130,8 +130,21 @@ jobs:
           cache-dependency-path: javascript/iroha_js/package-lock.json
       - name: Install Apple Rust targets
         run: |
+          resolve_mobile_tool() {
+            "$MOBILE_SDK_PYTHON_BINARY" -I -S -B -c '
+          import sys
+          sys.path.insert(0, "scripts")
+          from pathlib import Path
+          from sorafs_path_identity import resolve_path_identity
+          errors = []
+          identity = resolve_path_identity(Path(sys.argv[1]), errors, label="mobile SDK Rustup")
+          if identity is None or errors:
+              raise SystemExit("mobile SDK Rustup path identity could not be resolved")
+          print(identity)
+          ' "$1"
+          }
           rustup_source="$(command -v rustup)"
-          rustup_source="$("$MOBILE_SDK_PYTHON_BINARY" -I -S -B -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$rustup_source")"
+          rustup_source="$(resolve_mobile_tool "$rustup_source")"
           [[ "$rustup_source" == /* && -f "$rustup_source" && ! -L "$rustup_source" && -x "$rustup_source" ]]
           rustup_tools="$RUNNER_TEMP/iroha-sorafs-apple-tools"
           mkdir -p "$rustup_tools"
@@ -140,7 +153,7 @@ jobs:
           test ! -e "$rustup_path"
           /bin/cp "$rustup_source" "$rustup_path"
           chmod 0700 "$rustup_path"
-          rustup_path="$("$MOBILE_SDK_PYTHON_BINARY" -I -S -B -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$rustup_path")"
+          rustup_path="$(resolve_mobile_tool "$rustup_path")"
           [[ "$rustup_path" == /* && "${rustup_path##*/}" == rustup && -f "$rustup_path" && ! -L "$rustup_path" && -x "$rustup_path" ]]
           echo "MOBILE_SDK_RUSTUP_BINARY=$rustup_path" >> "$GITHUB_ENV"
           "$rustup_path" target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios aarch64-apple-darwin x86_64-apple-darwin

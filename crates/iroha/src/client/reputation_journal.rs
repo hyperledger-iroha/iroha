@@ -1,112 +1,22 @@
 //! Type-safe native `SoraFS` reputation-journal transaction and query helpers.
 use super::{Client, QueryError, QueryResult};
-use eyre::{Result, WrapErr as _, bail, eyre};
+use eyre::eyre;
 use iroha_data_model::{
-    isi::sorafs::{
-        AppendSorafsPorReputationJournalEntry, AppendSorafsStreamTokenReputationJournalEntry,
-        SetSorafsReputationJournalAuthorityPolicy,
-    },
-    metadata::Metadata,
     query::sorafs::prelude::{
         FindSorafsReputationJournalAuthorityPolicy, FindSorafsReputationJournalEventBySourceId,
         FindSorafsReputationJournalEvents,
     },
     sorafs::reputation::{
         REPUTATION_JOURNAL_QUERY_MAX_ITEMS_V1, ReputationJournalAuthorityPolicyRecordV1,
-        ReputationJournalAuthorityPolicyV1, ReputationJournalEntryV1,
         ReputationJournalFinalizedCursorV1, ReputationJournalFinalizedEventCursorV1,
         ReputationJournalFinalizedEventPageV1, ReputationJournalFinalizedEventV1,
-        ReputationJournalSourceIdV1, ReputationJournalSourceKindV1,
+        ReputationJournalSourceIdV1,
     },
-    transaction::{FeePaymentIntent, SignedTransaction},
 };
-fn validate_entry_for_transaction(
-    client: &Client,
-    entry: &ReputationJournalEntryV1,
-    expected_kind: ReputationJournalSourceKindV1,
-) -> Result<()> {
-    entry
-        .validate()
-        .wrap_err("invalid canonical SoraFS reputation-journal entry")?;
-    if entry.source_kind() != expected_kind {
-        bail!("SoraFS reputation-journal transaction accepts only {expected_kind:?} entries");
-    }
-    if entry.recorded_by != client.account {
-        bail!(
-            "SoraFS reputation-journal entry recorded_by must equal the client transaction authority"
-        );
-    }
-    Ok(())
-}
 fn query_validation_error(context: &'static str, error: impl std::fmt::Display) -> QueryError {
     QueryError::Other(eyre!("{context}: {error}"))
 }
 impl Client {
-    /// Build and sign a native transaction that activates a reputation-journal authority policy.
-    ///
-    /// Submission remains caller-controlled through [`Self::submit_transaction`] or
-    /// [`Self::submit_transaction_blocking`]. The transaction authority needs
-    /// `CanManageSorafsReputationJournalPolicy` at execution time.
-    ///
-    /// # Errors
-    /// Returns an error for an invalid V1 policy, nonce entropy failure, or signing failure.
-    pub fn try_build_sorafs_reputation_journal_authority_policy_transaction(
-        &self,
-        policy: ReputationJournalAuthorityPolicyV1,
-        fee_payment: FeePaymentIntent,
-        metadata: Metadata,
-    ) -> Result<SignedTransaction> {
-        policy
-            .validate()
-            .wrap_err("invalid SoraFS reputation-journal authority policy")?;
-        self.try_build_transaction_from_items(
-            [SetSorafsReputationJournalAuthorityPolicy::new(policy)],
-            fee_payment,
-            metadata,
-        )
-    }
-    /// Build and sign a native transaction that appends one canonical `PoR` journal entry.
-    ///
-    /// Submission remains caller-controlled. The client account must equal `entry.recorded_by`
-    /// and needs `CanRecordSorafsReputationJournal` at execution time.
-    ///
-    /// # Errors
-    /// Returns an error for an invalid or wrong-family entry, authority mismatch, nonce entropy
-    /// failure, or signing failure.
-    pub fn try_build_sorafs_reputation_journal_por_entry_transaction(
-        &self,
-        entry: ReputationJournalEntryV1,
-        fee_payment: FeePaymentIntent,
-        metadata: Metadata,
-    ) -> Result<SignedTransaction> {
-        validate_entry_for_transaction(self, &entry, ReputationJournalSourceKindV1::Por)?;
-        self.try_build_transaction_from_items(
-            [AppendSorafsPorReputationJournalEntry::new(entry)],
-            fee_payment,
-            metadata,
-        )
-    }
-    /// Build and sign a native transaction that appends one canonical stream-token journal entry.
-    ///
-    /// Submission remains caller-controlled. The client account must equal `entry.recorded_by`
-    /// and needs `CanRecordSorafsReputationJournal` at execution time.
-    ///
-    /// # Errors
-    /// Returns an error for an invalid or wrong-family entry, authority mismatch, nonce entropy
-    /// failure, or signing failure.
-    pub fn try_build_sorafs_reputation_journal_stream_token_entry_transaction(
-        &self,
-        entry: ReputationJournalEntryV1,
-        fee_payment: FeePaymentIntent,
-        metadata: Metadata,
-    ) -> Result<SignedTransaction> {
-        validate_entry_for_transaction(self, &entry, ReputationJournalSourceKindV1::StreamToken)?;
-        self.try_build_transaction_from_items(
-            [AppendSorafsStreamTokenReputationJournalEntry::new(entry)],
-            fee_payment,
-            metadata,
-        )
-    }
     /// Query the active chain-authoritative reputation-journal authority policy.
     ///
     /// The request is account-authenticated. The authority needs any one of
@@ -259,9 +169,12 @@ impl Client {
 mod tests {
     use super::*;
     use crate::{
-        client::evidence_http_tests::{
-            SnapshotStore, base_url, client_with_base_url, mark_data_model_compatible,
-            with_mock_http,
+        client::{
+            AccountTransactionDraft,
+            evidence_http_tests::{
+                SnapshotStore, base_url, client_with_base_url, mark_data_model_compatible,
+                with_mock_http,
+            },
         },
         http::{Response as HttpResponse, StatusCode},
         http_default::RequestSnapshot,
@@ -269,10 +182,15 @@ mod tests {
     use iroha_crypto::KeyPair;
     use iroha_data_model::{
         account::AccountId,
-        isi::sorafs::{
-            AppendSorafsPorReputationJournalEntry, AppendSorafsStreamTokenReputationJournalEntry,
-            SetSorafsReputationJournalAuthorityPolicy,
+        isi::{
+            InstructionBox,
+            sorafs::{
+                AppendSorafsPorReputationJournalEntry,
+                AppendSorafsStreamTokenReputationJournalEntry,
+                SetSorafsReputationJournalAuthorityPolicy,
+            },
         },
+        metadata::Metadata,
         query::{
             QueryRequest, QueryResponse, SignedQuery, SingularQueryBox, SingularQueryOutputBox,
         },
@@ -281,10 +199,11 @@ mod tests {
             reputation::{
                 PorTerminalOutcomeV1, PorTerminalStatusV1,
                 REPUTATION_JOURNAL_AUTHORITY_POLICY_VERSION_V1,
-                ReputationJournalAuthorityPolicyRecordV1, ReputationJournalEntryV1,
-                ReputationJournalEventIdV1, ReputationJournalFinalizedCursorV1,
-                ReputationJournalFinalizedEventCursorV1, ReputationJournalFinalizedEventPageV1,
-                ReputationJournalPayloadV1, StreamTokenValidationBindingV1,
+                ReputationJournalAuthorityPolicyRecordV1, ReputationJournalAuthorityPolicyV1,
+                ReputationJournalEntryV1, ReputationJournalEventIdV1,
+                ReputationJournalFinalizedCursorV1, ReputationJournalFinalizedEventCursorV1,
+                ReputationJournalFinalizedEventPageV1, ReputationJournalPayloadV1,
+                ReputationJournalSourceKindV1, StreamTokenValidationBindingV1,
                 StreamTokenValidationOutcomeV1, StreamTokenValidationStatusV1,
             },
         },
@@ -382,21 +301,38 @@ mod tests {
             .expect("exact reputation instruction type");
         assert_eq!(actual, expected);
     }
+    fn sign_instruction(
+        client: &Client,
+        instruction: impl Into<InstructionBox>,
+        fee_payment: FeePaymentIntent,
+        metadata: Metadata,
+    ) -> SignedTransaction {
+        let account = client.account_client().expect("bind reputation account");
+        let payload = account
+            .prepare_transaction(AccountTransactionDraft::new(
+                [instruction.into()],
+                fee_payment,
+                metadata,
+            ))
+            .expect("prepare reputation transaction");
+        account
+            .sign_transaction(payload)
+            .expect("sign reputation transaction")
+    }
     #[test]
-    fn transaction_builders_sign_exact_typed_instruction() {
+    fn canonical_drafts_sign_exact_typed_reputation_instructions() {
         let client = client_with_base_url(base_url());
         let policy = policy(&client.account);
         let canonical_por = por_entry(&client.account, &policy);
         let canonical_token = token_entry(&client.account, &policy);
         let fee_payment = FeePaymentIntent::authority(Vec::new(), None);
         let metadata = Metadata::default();
-        let transaction = client
-            .try_build_sorafs_reputation_journal_authority_policy_transaction(
-                policy.clone(),
-                fee_payment.clone(),
-                metadata.clone(),
-            )
-            .expect("policy transaction");
+        let transaction = sign_instruction(
+            &client,
+            SetSorafsReputationJournalAuthorityPolicy::new(policy.clone()),
+            fee_payment.clone(),
+            metadata.clone(),
+        );
         assert_exact_instruction(
             &client,
             &transaction,
@@ -404,13 +340,12 @@ mod tests {
             &metadata,
             &SetSorafsReputationJournalAuthorityPolicy::new(policy.clone()),
         );
-        let transaction = client
-            .try_build_sorafs_reputation_journal_por_entry_transaction(
-                canonical_por.clone(),
-                fee_payment.clone(),
-                metadata.clone(),
-            )
-            .expect("PoR transaction");
+        let transaction = sign_instruction(
+            &client,
+            AppendSorafsPorReputationJournalEntry::new(canonical_por.clone()),
+            fee_payment.clone(),
+            metadata.clone(),
+        );
         assert_exact_instruction(
             &client,
             &transaction,
@@ -418,13 +353,12 @@ mod tests {
             &metadata,
             &AppendSorafsPorReputationJournalEntry::new(canonical_por),
         );
-        let transaction = client
-            .try_build_sorafs_reputation_journal_stream_token_entry_transaction(
-                canonical_token.clone(),
-                fee_payment.clone(),
-                metadata.clone(),
-            )
-            .expect("stream-token transaction");
+        let transaction = sign_instruction(
+            &client,
+            AppendSorafsStreamTokenReputationJournalEntry::new(canonical_token.clone()),
+            fee_payment.clone(),
+            metadata.clone(),
+        );
         assert_exact_instruction(
             &client,
             &transaction,
@@ -434,12 +368,11 @@ mod tests {
         );
     }
     #[test]
-    fn transaction_builders_reject_invalid_family_and_authority_before_signing() {
+    fn reputation_inputs_expose_invalid_family_and_authority_before_drafting() {
         let client = client_with_base_url(base_url());
         let policy = policy(&client.account);
         let canonical_por = por_entry(&client.account, &policy);
         let canonical_token = token_entry(&client.account, &policy);
-        let fee = || FeePaymentIntent::authority(Vec::new(), None);
         let mut invalid_policy = policy.clone();
         invalid_policy.revision = 0;
         let other = AccountId::new(
@@ -451,45 +384,21 @@ mod tests {
         let wrong_authority = por_entry(&other, &policy);
         let mut malformed = canonical_por.clone();
         malformed.event_id = ReputationJournalEventIdV1::default();
-        for result in [
-            client
-                .try_build_sorafs_reputation_journal_authority_policy_transaction(
-                    invalid_policy,
-                    fee(),
-                    Metadata::default(),
-                )
-                .map(drop),
-            client
-                .try_build_sorafs_reputation_journal_por_entry_transaction(
-                    canonical_token,
-                    fee(),
-                    Metadata::default(),
-                )
-                .map(drop),
-            client
-                .try_build_sorafs_reputation_journal_stream_token_entry_transaction(
-                    canonical_por.clone(),
-                    fee(),
-                    Metadata::default(),
-                )
-                .map(drop),
-            client
-                .try_build_sorafs_reputation_journal_por_entry_transaction(
-                    wrong_authority,
-                    fee(),
-                    Metadata::default(),
-                )
-                .map(drop),
-            client
-                .try_build_sorafs_reputation_journal_por_entry_transaction(
-                    malformed,
-                    fee(),
-                    Metadata::default(),
-                )
-                .map(drop),
-        ] {
-            assert!(result.is_err());
-        }
+        assert!(invalid_policy.validate().is_err());
+        assert_eq!(
+            canonical_por.source_kind(),
+            ReputationJournalSourceKindV1::Por
+        );
+        assert_ne!(
+            canonical_token.source_kind(),
+            ReputationJournalSourceKindV1::Por
+        );
+        assert_ne!(
+            canonical_por.source_kind(),
+            ReputationJournalSourceKindV1::StreamToken
+        );
+        assert_ne!(wrong_authority.recorded_by, client.account);
+        assert!(malformed.validate().is_err());
     }
     fn norito_response(response: &QueryResponse) -> HttpResponse<Vec<u8>> {
         HttpResponse::builder()
@@ -577,7 +486,11 @@ mod tests {
                 Ok(norito_response(&response))
             }
         };
-        with_mock_http(responder, || {
+        with_mock_http(responder, |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+
             assert_eq!(
                 client
                     .query_sorafs_reputation_journal_authority_policy()
@@ -668,7 +581,11 @@ mod tests {
                 Ok(norito_response(&response))
             }
         };
-        let result = with_mock_http(responder, || {
+        let result = with_mock_http(responder, |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+
             client.query_sorafs_reputation_journal_event_by_source_id(source_id, None)
         });
         assert!(result.is_err());
@@ -734,7 +651,11 @@ mod tests {
                 Ok(norito_response(&response))
             }
         };
-        with_mock_http(responder, || {
+        with_mock_http(responder, |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+
             assert!(
                 client
                     .query_sorafs_reputation_journal_events(Some(finalized_cursor), None, 1,)
@@ -759,7 +680,11 @@ mod tests {
                 panic!("invalid query must not send HTTP")
             }
         };
-        with_mock_http(responder, || {
+        with_mock_http(responder, |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+
             let invalid_finalized = ReputationJournalFinalizedCursorV1 {
                 height: 0,
                 block_hash: [0; 32],

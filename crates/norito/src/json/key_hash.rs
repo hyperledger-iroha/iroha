@@ -1,4 +1,8 @@
 //! One JSON key hash implementation shared by compile-time and runtime dispatch.
+//!
+//! The CRC feature uses a raw Castagnoli register seeded with all ones and
+//! applies its 64-bit avalanche without a final complement. This internal field
+//! dispatch hash does not use the xor-out convention of a CRC checksum.
 
 /// Incremental key hash state, selected by the codec feature set.
 pub(super) struct KeyHasher {

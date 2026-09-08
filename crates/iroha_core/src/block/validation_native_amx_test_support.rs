@@ -40,6 +40,17 @@ fn test_confidential_features(state: &State, height: u64) -> Option<Confidential
         compute_confidential_feature_digest(view.world(), view.zk(), view.sccp_registry(), height);
     (!digest.is_empty()).then_some(digest)
 }
+/// Finalize preseeded fixture definitions at their exact genesis boundary before
+/// executing a successor. Later candidates must retain these registration tokens.
+fn finalize_test_genesis_assets(state: &State, genesis: &SignedBlock) {
+    assert_eq!(genesis.header().height().get(), 1);
+    assert!(genesis.header().prev_block_hash().is_none());
+    assert!(state.block_hashes.view().is_empty());
+    state
+        .block(genesis.header())
+        .commit_world_overlay_for_testing()
+        .expect("fixture genesis asset registrations must finalize before successor execution");
+}
 fn test_world_with_assets<D, A, Ad, As, N>(
     domains: D,
     accounts: A,
@@ -317,11 +328,18 @@ impl NativeAmxAuthorityContext for NativeAmxTestAuthority {
     fn native_amx_participant_predecessor_is_current(
         &self,
         proposal: &LaneBlockProposalV1,
-    ) -> bool {
+        previous_native_settlement_hash: Option<
+            HashOf<iroha_data_model::block::consensus::NativeAmxParticipantSettlement>,
+        >,
+    ) -> crate::kura::Result<bool> {
         let descriptor = &proposal.descriptor;
-        descriptor.previous_lane_block_height.checked_add(1) == Some(descriptor.lane_block_height)
-            && (descriptor.previous_lane_block_height == 0)
-                == descriptor.previous_lane_block_descriptor_hash.is_none()
+        Ok(
+            (descriptor.lane_block_height != 1 || previous_native_settlement_hash.is_none())
+                && descriptor.previous_lane_block_height.checked_add(1)
+                    == Some(descriptor.lane_block_height)
+                && (descriptor.previous_lane_block_height == 0)
+                    == descriptor.previous_lane_block_descriptor_hash.is_none(),
+        )
     }
 }
 struct NativeAmxStalePredecessorTestAuthority<'a> {
@@ -361,11 +379,15 @@ impl NativeAmxAuthorityContext for NativeAmxStalePredecessorTestAuthority<'_> {
     fn native_amx_participant_predecessor_is_current(
         &self,
         proposal: &LaneBlockProposalV1,
-    ) -> bool {
-        proposal.descriptor.lane_id != self.stale_lane_id
-            && self
-                .inner
-                .native_amx_participant_predecessor_is_current(proposal)
+        previous_native_settlement_hash: Option<
+            HashOf<iroha_data_model::block::consensus::NativeAmxParticipantSettlement>,
+        >,
+    ) -> crate::kura::Result<bool> {
+        Ok(proposal.descriptor.lane_id != self.stale_lane_id
+            && self.inner.native_amx_participant_predecessor_is_current(
+                proposal,
+                previous_native_settlement_hash,
+            )?)
     }
 }
 struct NativeAmxDriftedParticipantTestAuthority<'a> {
@@ -417,12 +439,17 @@ impl NativeAmxAuthorityContext for NativeAmxDriftedParticipantTestAuthority<'_> 
     fn native_amx_participant_predecessor_is_current(
         &self,
         proposal: &LaneBlockProposalV1,
-    ) -> bool {
+        previous_native_settlement_hash: Option<
+            HashOf<iroha_data_model::block::consensus::NativeAmxParticipantSettlement>,
+        >,
+    ) -> crate::kura::Result<bool> {
         if proposal.descriptor.lane_id == self.participant_lane_id {
-            self.participant_predecessor_is_current
+            Ok(self.participant_predecessor_is_current)
         } else {
-            self.inner
-                .native_amx_participant_predecessor_is_current(proposal)
+            self.inner.native_amx_participant_predecessor_is_current(
+                proposal,
+                previous_native_settlement_hash,
+            )
         }
     }
 }

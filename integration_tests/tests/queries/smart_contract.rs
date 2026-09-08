@@ -32,24 +32,36 @@ fn smart_contract_query_scenarios() -> Result<()> {
         return Ok(());
     };
     let client = network.client();
-    let torii = client.torii_url.clone();
+    let torii = client.client().torii_url.clone();
     let env_dir = network.env_dir().to_path_buf();
     // live_query_is_dropped_after_smart_contract_end
     {
         let bytecode = load_sample_ivm("query_assets_and_save_cursor");
         let fee_payment = fee_payment_with_gas_limit(&bytecode)?;
-        let transaction = client.build_transaction(bytecode, fee_payment, Metadata::default());
-        client.submit_transaction_blocking(&transaction)?;
+        let transaction = {
+            let account = client.account_client();
+            account
+                .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                    bytecode,
+                    fee_payment,
+                    Metadata::default(),
+                ))
+                .and_then(|payload| account.sign_transaction(payload))
+        }
+        .expect("build integration-test transaction");
+        client.submit_transaction_and_wait(&transaction)?;
         let cursor_key: Name = "cursor".parse().unwrap();
         let asset_cursor = client
+            .client()
             .query(FindAccounts)
             .execute_all()? // lightweight DSL: filter/select on client
             .into_iter()
-            .find(|account| account.id() == &client.account)
+            .find(|account| account.id() == &client.client().account)
             .and_then(|account| account.metadata().get(&cursor_key).cloned())
             .expect("account metadata must contain cursor")
             .try_into_any_norito()?;
         let err = client
+            .client()
             .raw_continue_iterable_query(asset_cursor)
             .expect_err("Request with cursor from smart contract should fail");
         // Continuation must fail; the exact error depends on cursor mode/config.
@@ -71,9 +83,19 @@ fn smart_contract_query_scenarios() -> Result<()> {
     {
         let bytecode = load_sample_ivm("smart_contract_can_filter_queries");
         let fee_payment = fee_payment_with_gas_limit(&bytecode)?;
-        let transaction = client.build_transaction(bytecode, fee_payment, Metadata::default());
+        let transaction = {
+            let account = client.account_client();
+            account
+                .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                    bytecode,
+                    fee_payment,
+                    Metadata::default(),
+                ))
+                .and_then(|payload| account.sign_transaction(payload))
+        }
+        .expect("build integration-test transaction");
         client
-            .submit_transaction_blocking(&transaction)
+            .submit_transaction_and_wait(&transaction)
             .wrap_err_with(|| {
                 format!(
                     "submit smart_contract_can_filter_queries failed; torii={torii}, env_dir={}",

@@ -1301,21 +1301,8 @@ fn validate_completed_musubi_capture_source_page(
         {
             return Err(ProviderIngestRuntimeErrorV1::InvalidFinalizedBinding);
         }
-        let canonical_order = decode_from_bytes_with_limits::<ReplicationOrderV1>(
-            &row.order.canonical_order,
-            REPLICATION_ORDER_DECODE_LIMITS_V1,
-        )
-        .map_err(|_| ProviderIngestRuntimeErrorV1::InvalidFinalizedBinding)?;
-        canonical_order
-            .validate()
-            .map_err(|_| ProviderIngestRuntimeErrorV1::InvalidFinalizedBinding)?;
-        let canonical_bytes = norito::encode_canonical(&canonical_order)
-            .map_err(|_| ProviderIngestRuntimeErrorV1::InvalidFinalizedBinding)?;
-        if canonical_bytes != row.order.canonical_order
-            || canonical_order.order_id != order_id
-            || canonical_order.manifest_digest != *row.order.manifest_digest.as_bytes()
-            || canonical_order.manifest_cid.as_slice() != row.order.manifest_root_cid.as_bytes()
-            || row.pin.manifest.digest != row.order.manifest_digest
+        let canonical_order = decode_bound_replication_order(&row.order)?;
+        if row.pin.manifest.digest != row.order.manifest_digest
             || row.pin.manifest.root_cid != row.order.manifest_root_cid
             || row.pin.manifest.chunker.to_handle() != canonical_order.chunking_profile
             || !canonical_order

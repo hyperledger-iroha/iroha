@@ -1,7 +1,9 @@
 #[cfg(feature = "bench-internal")]
 use criterion::{BatchSize, Criterion, Throughput, criterion_group, criterion_main};
 #[cfg(feature = "bench-internal")]
-use norito::{NoritoDeserialize, NoritoSerialize, codec, decode_from_bytes, to_bytes};
+use norito::{
+    NoritoDeserialize, NoritoSerialize, SerializePayload, codec, decode_from_bytes, to_bytes,
+};
 #[cfg(feature = "bench-internal")]
 #[derive(Clone, Debug, PartialEq, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]

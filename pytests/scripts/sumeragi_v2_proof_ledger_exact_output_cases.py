@@ -1,5 +1,1364 @@
 # Executed lexically in sumeragi_v2_proof_ledger_test.py; do not collect directly.
 
+
+_TERMINAL_LANE_MUTATIONS = (
+    ("V2LaneWorkAdapter::accept_lane_message_owned",
+     "self.output_guard.close_admission_for_restart();", "",
+     "close malformed ownership"),
+    ("V2LaneWorkAdapter::accept_lane_message_owned",
+     "BlockMessage::LaneBlockProposal(proposal) => Some(proposal),",
+     "BlockMessage::LaneBlockProposal(proposal) => None,",
+     "revalidate finalized proposal"),
+    ("V2LaneWorkAdapter::accept_lane_message_owned",
+     "self.finalized_autonomous_ingress_payload_for_proposal_or_fail_stop(proposal)\n                .is_err()",
+     "self.finalized_autonomous_ingress_payload_for_proposal_or_fail_stop(proposal)\n                .is_ok()",
+     "revalidate finalized proposal"),
+    ("V2LaneWorkAdapter::accept_lane_message_owned",
+     "if self.decision_pending() {\n            let finalized_body",
+     "if false {\n            let finalized_body",
+     "Decision bodies before dispatch"),
+    ("V2LaneWorkAdapter::accept_lane_message_owned",
+     "self.finalized_autonomous_ingress_payload_or_fail_stop(body)\n                    .is_err()",
+     "self.finalized_autonomous_ingress_payload_or_fail_stop(body)\n                    .is_ok()",
+     "Decision bodies before dispatch"),
+    ("V2LaneWorkAdapter::accept_lane_message_owned",
+     "if self.output_guard.restart_required() {", "if false {",
+     "preserving restart admission closure"),
+    ("From<&LaneBlockProposalV1> for AutonomousLanePayloadKey::from",
+     "dataspace_id: descriptor.dataspace_id,", "dataspace_id: DataSpaceId::UNIVERSAL,",
+     "full proposal route, incarnation, and lane height"),
+    ("From<&LaneBlockProposalV1> for AutonomousLanePayloadKey::from",
+     "lane_incarnation: descriptor.lane_incarnation,", "lane_incarnation: Hash::prehashed([0; 32]),",
+     "full proposal route, incarnation, and lane height"),
+    ("From<&LaneBlockProposalV1> for AutonomousLanePayloadKey::from",
+     "lane_block_height: descriptor.lane_block_height,", "lane_block_height: descriptor.proposal_height,",
+     "full proposal route, incarnation, and lane height"),
+    ("validate_terminal_autonomous_availability", "if *actual != expected {",
+     "if false && *actual != expected {", "bind Prepare READY"),
+    ("validate_terminal_autonomous_availability", "(CertPhase::Commit, None) => Ok(()),",
+     "(CertPhase::Prepare | CertPhase::Commit, None) => Ok(()),", "require Commit without READY"),
+    ("validate_terminal_autonomous_vote",
+     "crate::lane_consensus::validate_vote_matches_proposal(vote, &payload.origin_proposal)\n        .map_err(|error| error.to_string())?;",
+     "let _ = &payload.origin_proposal;", "READY committee PoPs, outer signature"),
+    ("validate_terminal_autonomous_vote",
+     "vote.validate_ingress(vote.body.phase)\n        .map_err(|error| error.to_string())?;",
+     "let _ = vote.body.phase;", "READY committee PoPs, outer signature"),
+    ("validate_terminal_autonomous_qc",
+     "validate_winning_lane_qc(qc, &payload.origin_proposal, signer_pops)?;",
+     "let _ = signer_pops;", "complete aggregate before exact availability"),
+    ("validate_terminal_autonomous_qc", "qc.body.phase,", "CertPhase::Commit,",
+     "complete aggregate before exact availability"),
+    ("V2LaneWorkAdapter::insert_lane_vote",
+     ".certified_autonomous_lane_block_is_globally_applied(",
+     ".certified_autonomous_lane_block_predecessor_is_globally_applied(",
+     "authenticate exact applied replay before the first cache clone"),
+    ("V2LaneWorkAdapter::insert_lane_vote",
+     "validate_terminal_autonomous_vote(&vote, payload).is_ok()", "true",
+     "authenticate exact applied replay before the first cache clone"),
+    ("V2LaneWorkAdapter::insert_lane_vote", "return if validate_terminal_autonomous_vote",
+     "let _outcome = if validate_terminal_autonomous_vote",
+     "authenticate exact applied replay before the first cache clone"),
+    ("V2LaneWorkAdapter::insert_lane_qc",
+     ".certified_autonomous_lane_block_is_globally_applied(",
+     ".certified_autonomous_lane_block_predecessor_is_globally_applied(",
+     "authenticate exact applied replay before the first cache clone"),
+    ("V2LaneWorkAdapter::insert_lane_qc",
+     "validate_terminal_autonomous_qc(&qc, payload, &pops).is_ok()", "true",
+     "authenticate exact applied replay before the first cache clone"),
+    ("V2LaneWorkAdapter::insert_lane_qc", "return if validate_terminal_autonomous_qc",
+     "let _outcome = if validate_terminal_autonomous_qc",
+     "authenticate exact applied replay before the first cache clone"),
+    ("V2LaneWorkAdapter::insert_lane_qc", "move_clone_before_terminal", "",
+     "authenticate exact applied replay before the first cache clone"),
+    ("V2LaneWorkAdapter::insert_lane_certificate", ".any(|(qc, phase)| {",
+     ".all(|(qc, phase)| {", "availability before any historical shortcut"),
+    ("V2LaneWorkAdapter::insert_lane_certificate", "move_availability_after_historical", "",
+     "availability before any historical shortcut"),
+    ("V2LaneWorkAdapter::canonical_finalized_autonomous_payload_for_vote_body",
+     ".certified_autonomous_lane_block_is_globally_applied(proposal)",
+     ".certified_autonomous_lane_block_predecessor_is_globally_applied(proposal)",
+     "either exact own application or the exact applied predecessor"),
+    ("V2LaneWorkAdapter::canonical_finalized_autonomous_payload_for_vote_body",
+     ".map_err(|error| error.to_string())?\n                && !self",
+     ".map_err(|error| error.to_string())?\n                || !self",
+     "either exact own application or the exact applied predecessor"),
+    ("V2LaneWorkAdapter::canonical_finalized_autonomous_payload_for_vote_body",
+     "let proposal = &payload.origin_proposal;",
+     "let mut detached = payload.origin_proposal.clone();\n            detached.payload_block_hint = None;\n            let proposal = &detached;",
+     "attach the exact global hint"),
+    ("V2LaneWorkAdapter::retire_applied_autonomous_sessions",
+     "self.lane_sessions.retained_vote_bodies()", "Vec::new()", "bounded read-only candidates"),
+    ("V2LaneWorkAdapter::retire_applied_autonomous_sessions",
+     "self.lane_sessions.rollover_slots()", "BTreeSet::new()", "bounded read-only candidates"),
+    ("V2LaneWorkAdapter::retire_applied_autonomous_sessions",
+     ".read_certified_lane_block_artifact_read_only(lane_id, lane_block_height)",
+     ".read_certified_lane_block_artifact(lane_id, lane_block_height)", "bounded read-only candidates"),
+    ("V2LaneWorkAdapter::retire_applied_autonomous_sessions",
+     "Kura::validate_certified_lane_block_artifact(&artifact)", "Ok::<(), &str>(())",
+     "authenticate bounded read-only candidates"),
+    ("V2LaneWorkAdapter::retire_applied_autonomous_sessions",
+     ".canonical_finalized_autonomous_payload_for_vote_body(&body)\n                .map_err(V2LaneWorkError::Persistence)?",
+     ".canonical_finalized_autonomous_payload_for_vote_body(&body).unwrap_or(None)",
+     "authenticate bounded read-only candidates"),
+    ("V2LaneWorkAdapter::retire_applied_autonomous_sessions",
+     "for qc in [&artifact.prepare_qc, &artifact.commit_qc] {",
+     "for qc in [] as [&LaneBlockQcV1; 0] {", "authenticate bounded read-only candidates"),
+    ("V2LaneWorkAdapter::retire_applied_autonomous_sessions",
+     ".certified_autonomous_lane_block_is_globally_applied(&proposal)",
+     ".certified_autonomous_lane_block_predecessor_is_globally_applied(&proposal)",
+     "exact application"),
+    ("V2LaneWorkAdapter::retire_applied_autonomous_sessions",
+     ".is_some_and(|existing| existing != &proposal)",
+     ".is_some_and(|existing| !existing.same_consensus_identity(&proposal))", "full slots atomically"),
+    ("V2LaneWorkAdapter::retire_applied_autonomous_sessions",
+     ".retire_applied_proposals(&proposals)", ".retire_applied_proposals(&[])", "full slots atomically"),
+    ("V2LaneWorkAdapter::retire_applied_autonomous_sessions", "move_cleanup_before_cache", "",
+     "then clean only selected volatile owners"),
+    ("V2LaneWorkAdapter::retire_applied_autonomous_sessions",
+     "lane_incarnation: key.lane_incarnation,", "lane_incarnation: Hash::prehashed([0; 32]),",
+     "only selected volatile owners"),
+    ("V2LaneWorkAdapter::retire_applied_autonomous_sessions", "Ok(retired)",
+     "self.pending_committed_lanes.clear();\n        self.committed_lane_outputs.clear();\n        Ok(retired)",
+     "without consuming outputs"),
+    ("V2LaneWorkAdapter::drive_lane_sessions", "self.retire_applied_autonomous_sessions()",
+     "Ok::<usize, V2LaneWorkError>(0)", "close admission on failure before its first signing work"),
+    ("V2LaneWorkAdapter::persist_anchored_sessions", "self.retire_applied_autonomous_sessions()?;",
+     "let _ = self.retire_applied_autonomous_sessions();", "inside its fail-stop operation before hydration"),
+    ("V2LaneWorkAdapter::persist_anchored_sessions", "move_retirement_before_guard", "",
+     "inside its fail-stop operation before hydration"),
+    ("V2LaneWorkAdapter::persist_anchored_sessions",
+     "self.retire_applied_autonomous_sessions()?;\n        self.hydrate_canonical_lane_artifacts()?;",
+     "self.hydrate_canonical_lane_artifacts()?;\n        self.retire_applied_autonomous_sessions()?;",
+     "inside its fail-stop operation before hydration"),
+    ("V2LaneWorkAdapter::proposal_can_progress",
+     ".certified_autonomous_lane_block_is_globally_applied(proposal)",
+     ".certified_autonomous_lane_block_predecessor_is_globally_applied(proposal)",
+     "reject exact own application"),
+    ("V2LaneWorkAdapter::proposal_can_progress",
+     "if (historical\n            || self.autonomous_payload_is_expected_for(proposal)?\n            || finalized_autonomous)",
+     "if true", "only for authenticated autonomous roles"),
+    ("V2LaneWorkAdapter::proposal_can_progress",
+     "|| finalized_autonomous)", "|| finalized_observer)",
+     "only for authenticated autonomous roles"),
+    ("V2LaneWorkAdapter::proposal_can_progress",
+     "historical\n            || self.autonomous_payload_is_expected_for(proposal)?\n            || finalized_autonomous",
+     "finalized_autonomous", "only for authenticated autonomous roles"),
+    ("LaneBlockSessionCache::preflight_canonical_evidence",
+     "for ((slot, signer), locked_proposal_hash) in &self.commit_vote_locks {",
+     "for ((slot, signer), locked_proposal_hash) in &BTreeMap::new() {", "orphan Commit quorums"),
+    ("LaneBlockSessionCache::preflight_canonical_evidence", "signers.len() >= quorum",
+     "signers.len() > quorum", "orphan Commit quorums"),
+    ("LaneBlockSessionCache::preflight_canonical_evidence",
+     "descriptor.validator_set.binary_search(signer).is_err()",
+     "descriptor.validator_set.binary_search(signer).is_ok()", "exact-committee orphan Commit quorums"),
+    ("LaneBlockSessionCache::preflight_canonical_evidence", "if session_has_quorum_certificate(session)",
+     "if session.commit_qc.is_some()", "proposal-less Prepare or Commit QCs"),
+    ("LaneBlockSessionCache::retire_applied_proposals",
+     "validate_lane_block_proposal(proposal)\n                .map_err(LaneBlockSessionError::InvalidProposal)?;",
+     "let _ = proposal;", "complete exact full-slot target set before mutation"),
+    ("LaneBlockSessionCache::retire_applied_proposals", ".is_some_and(|existing| existing != proposal)",
+     ".is_some_and(|existing| !existing.same_consensus_identity(proposal))", "complete exact full-slot target set"),
+    ("LaneBlockSessionCache::retire_applied_proposals", "move_preflight_after_retirement", "",
+     "target set before mutation"),
+    ("LaneBlockSessionCache::retire_applied_proposals",
+     "lane_incarnation: descriptor.lane_incarnation,", "lane_incarnation: Hash::prehashed([0; 32]),",
+     "exact full-slot target set"),
+    ("LaneBlockSessionCache::retire_applied_proposals",
+     "self.commit_vote_locks\n            .retain(|(slot, _), _| !canonical.contains_key(slot));",
+     "self.commit_vote_locks.clear();", "preserve unselected sessions, locks"),
+    ("LaneBlockSessionCache::retire_applied_proposals", ".or_insert(*key);",
+     ".and_modify(|owner| *owner = *key).or_insert(*key);", "claims, recency, and capacity"),
+    ("LaneBlockSessionCache::retire_applied_proposals", "Ok(before.saturating_sub(after))",
+     "self.capacity += 1;\n        Ok(before.saturating_sub(after))", "recency, and capacity"),
+    ("LaneBlockSessionCache::retire_applied_proposals",
+     "self.order.retain(|key| retained_sessions.contains_key(key));", "self.order.clear();",
+     "recency, and capacity"),
+    ("LaneBlockSessionCache::retained_vote_bodies",
+     ".or_else(|| session.prepare_qc.as_ref().map(|qc| qc.body.clone()))", "",
+     "every retained proposal or vote/QC body"),
+    ("LaneBlockSessionCache::retained_vote_bodies",
+     ".or_else(|| session.commit_qc.as_ref().map(|qc| qc.body.clone()))", "",
+     "every retained proposal or vote/QC body"),
+    ("LaneBlockSessionCache::retained_vote_bodies", ".commit_votes", ".prepare_votes",
+     "every retained proposal or vote/QC body"),
+    ("LaneBlockSessionCache::retained_vote_bodies",
+     "session.commit_qc.as_ref().map(|qc| qc.body.clone())",
+     "session.commit_qc.as_ref().map(|qc| { let mut body = qc.body.clone(); body.proposal_height += 1; body })",
+     "without mutation or inferred global heights"),
+    ("LaneBlockSessionCache::retain_canonical_rollover_evidence", "remove_shared_preflight", "",
+     "share the complete canonical quorum preflight"),
+    ("validate_vote_matches_proposal",
+     "|| availability_vote\n                    .validate_against_validator_set(&proposal.descriptor.validator_set)\n                    .is_err()",
+     "|| false", "exact complete committee and its PoPs"),
+    ("State::certified_autonomous_lane_block_is_globally_applied", "replace_exact_frontier_with_height", "",
+     "exact route/incarnation frontier identity"),
+    ("State::certified_autonomous_lane_block_is_globally_applied",
+     "receipt.proposal == *proposal",
+     "true", "exact authenticated merge receipt"),
+    ("State::certified_autonomous_lane_block_is_globally_applied",
+     "descriptor.lane_incarnation,\n        )?;",
+     "descriptor.lane_incarnation,\n        ).unwrap_or((0, None));",
+     "fail closed on malformed frontier bytes"),
+)
+
+
+def _terminal_lane_order_mutation(item, mutation: str) -> tuple[str, str]:
+    """Move real complete source blocks to exercise semantic boundary ordering."""
+
+    old = item.source
+    if mutation == "move_clone_before_terminal":
+        clone = "        let mut next_sessions = self.lane_sessions.clone();\n"
+        assert old.count(clone) == 1
+        new = old.replace(clone, "", 1).replace(
+            "        if let Some(payload) = finalized_payload.as_ref()",
+            clone + "        if let Some(payload) = finalized_payload.as_ref()", 1,
+        )
+    elif mutation == "move_availability_after_historical":
+        start = old.index("        if let Some(payload) = finalized_payload.as_ref()")
+        end = old.index("        if proposal.descriptor.proposal_height < self.context.height {", start)
+        block = old[start:end]
+        new = old.replace(block, "", 1).replace(
+            "        if !self\n            .proposal_body_available(&proposal)",
+            block + "        if !self\n            .proposal_body_available(&proposal)", 1,
+        )
+    elif mutation == "move_cleanup_before_cache":
+        start = old.index("        let retired = self")
+        end = old.index("        self.lane_ready_authorizations.retain", start)
+        block = old[start:end]
+        new = old.replace(block, "", 1).replace("        Ok(retired)", block + "        Ok(retired)", 1)
+    elif mutation == "move_retirement_before_guard":
+        retire = "        self.retire_applied_autonomous_sessions()?;\n"
+        assert old.count(retire) == 1
+        new = old.replace(retire, "", 1).replace(
+            "        let output_guard = Arc::clone(&self.output_guard);",
+            retire + "        let output_guard = Arc::clone(&self.output_guard);", 1,
+        )
+    elif mutation == "move_preflight_after_retirement":
+        preflight = "        self.preflight_canonical_evidence(|slot| canonical.get(&slot).copied())?;\n"
+        assert old.count(preflight) == 1
+        new = old.replace(preflight, "", 1).replace(
+            "        Ok(before.saturating_sub(after))",
+            preflight + "        Ok(before.saturating_sub(after))", 1,
+        )
+    elif mutation == "remove_shared_preflight":
+        start = old.index("        self.preflight_canonical_evidence(|slot| {")
+        end = old.index("        let mut retained_sessions = BTreeMap::new();", start)
+        new = old[:start] + old[end:]
+    elif mutation == "replace_exact_frontier_with_height":
+        start = old.index("        if frontier\n            == (")
+        end = old.index("        {\n            return Ok(true);", start)
+        new = old[:start] + "        if frontier.0 >= descriptor.lane_block_height\n" + old[end:]
+    else:
+        raise AssertionError(mutation)
+    assert new != old, mutation
+    return old, new
+
+
+@pytest.mark.parametrize(("qualified", "old", "new", "expected_error"), _TERMINAL_LANE_MUTATIONS)
+def test_terminal_lane_source_mutations_survive_digest_refresh(
+    tmp_path: Path, qualified: str, old: str, new: str, expected_error: str,
+) -> None:
+    """Every copied production baseline passes before a fully rehashed semantic mutant fails."""
+
+    module = load_checker()
+    selected = [
+        (relative, owner, name)
+        for relative, declarations in module._TERMINAL_LANE_SOURCE_OWNERS.items()
+        for owner, name in declarations
+        if (f"{owner}::{name}" if owner else name) == qualified
+    ]
+    assert len(selected) == 1, qualified
+    relative, owner, name = selected[0]
+    path = tmp_path / relative
+    path.parent.mkdir(parents=True)
+    shutil.copyfile(ROOT_DIR / relative, path)
+    context = (module.rust_code_tokens(f"impl {owner}"),) if owner else ()
+    errors = []
+    item = module._require_terminal_lane_owner(
+        path, path.read_text(encoding="utf-8"), owner, name, errors,
+    )
+    assert item is not None
+    baseline_digest = module._PRODUCTION_TERMINAL_LANE_ITEM_SHA256.get(
+        qualified, module._rust_item_token_sha256(item),
+    )
+    if qualified == "V2LaneWorkAdapter::persist_anchored_sessions":
+        baseline_digest = module._PRODUCTION_LANE_ACK_SEAM_ITEM_SHA256[qualified]
+    if qualified == "V2LaneWorkAdapter::accept_lane_message_owned":
+        baseline_digest = module._PRODUCTION_EXACT_OUTPUT_INGRESS_SEAM_ITEM_SHA256[
+            "lane::accept_lane_message_owned"
+        ]
+    module._require_rust_item_token_sha256(path, item, baseline_digest, qualified, errors)
+    module._require_terminal_lane_source_contracts(path, {qualified: item}, errors)
+    assert not errors, errors
+    if old.startswith("move_") or old in ("remove_shared_preflight", "replace_exact_frontier_with_height"):
+        old, new = _terminal_lane_order_mutation(item, old)
+    mutate_rust_item_source_in_context(module, path, name, context, old, new)
+    # Existing owners are not silently resealed in production. This local table
+    # verifies each mutant's complete item digest independently of its semantics.
+    refreshed = {qualified: baseline_digest}
+    bindings = [(refreshed, qualified)]
+    if qualified in module._PRODUCTION_TERMINAL_LANE_ITEM_SHA256:
+        bindings.append((module._PRODUCTION_TERMINAL_LANE_ITEM_SHA256, qualified))
+    if qualified == "V2LaneWorkAdapter::persist_anchored_sessions":
+        bindings.append((module._PRODUCTION_LANE_ACK_SEAM_ITEM_SHA256, qualified))
+    if qualified == "V2LaneWorkAdapter::accept_lane_message_owned":
+        bindings.append((
+            module._PRODUCTION_EXACT_OUTPUT_INGRESS_SEAM_ITEM_SHA256,
+            "lane::accept_lane_message_owned",
+        ))
+    original = rebind_reviewed_rust_item_digests(module, path, name, context, tuple(bindings))
+    try:
+        errors = []
+        mutated = next(
+            candidate for candidate in module.rust_items(path.read_text(encoding="utf-8"), name)
+            if candidate.brace_context == context
+        )
+        assert refreshed[qualified] != baseline_digest
+        module._require_rust_item_token_sha256(path, mutated, refreshed[qualified], qualified, errors)
+        module._require_terminal_lane_source_contracts(path, {qualified: mutated}, errors)
+    finally:
+        restore_reviewed_rust_item_digests(original)
+    assert any(expected_error in error for error in errors), errors
+    assert not any("exact reviewed token digest" in error for error in errors), errors
+
+
+def test_terminal_lane_production_source_is_bound() -> None:
+    """The independent loader binds real adapter, cache, and State production owners."""
+
+    module = load_checker()
+    errors = module._terminal_lane_source_fidelity_errors(ROOT_DIR)
+    assert not errors, errors
+
+
+def _worker_ownership_mutations_survive_digest_refresh(tmp_path: Path) -> None:
+    """Rehash real worker constructors, exact claims and opaque proof owners."""
+
+    module = load_checker()
+    mutations = (
+        ("proof_layout", "    network_id: NetworkId,", "    pub(crate) network_id: NetworkId,", "no mutable or forgeable source identity"),
+        ("proof_layout", "    exact_output_hash: HashOf<NetworkMessage>,", "    pub(crate) exact_output_hash: HashOf<NetworkMessage>,", "no mutable or forgeable source identity"),
+        ("proof_network_id", "self.network_id", "NetworkId::default()", "immutable minted network"),
+        ("proof_source_round", "self.source_round", "wire::ConsensusRound { height: 0, ..self.source_round }", "immutable minted height and context"),
+        ("proof_covers_message", "if &self.network_id != expected_network_id {", "if false {", "exact network, response family"),
+        ("proof_covers_message", "response.request_hash == self.request_hash", "true", "request, source, responder"),
+        ("proof_covers_message", "&& response.manifest.round == self.source_round", "&& true", "request, source, responder"),
+        ("proof_covers_message", "&& response.manifest.subject == self.source_subject", "&& true", "request, source, responder"),
+        ("proof_covers_message", "&& response.responder == self.responder", "&& true", "request, source, responder"),
+        ("proof_covers_message", "&& message.cached_exact_output_hash() == Some(self.exact_output_hash)", "&& true", "warmed whole-message hash"),
+        ("network_exact_output_hash", "HashOf::new(self))", "HashOf::new(envelope.as_message()))", "canonical whole-message cached identity"),
+        ("durable_history_source_covers", "let [message] = messages else {", "let Some(message) = messages.first() else {", "non-singleton, exact-only or foreign"),
+        ("durable_history_source_covers", "if message.progress_reconstruction() != ProgressReconstruction::Retransmit {", "if false {", "non-singleton, exact-only or foreign"),
+        ("durable_history_source_covers", "proof.source_round().height > maximum_source_height", "proof.source_round().height < maximum_source_height", "canonical Kura block through the prepared proof"),
+        ("durable_history_source_covers", "if network_id != source_network_id", "if false", "canonical Kura block through the prepared proof"),
+        ("durable_history_source_covers", "|| proof.network_id() != *source_network_id", "|| false", "canonical Kura block through the prepared proof"),
+        ("durable_history_source_covers", "|| !proof.covers_message_in_network(source_network_id, message)", "|| false", "canonical Kura block through the prepared proof"),
+        ("durable_history_source_covers", "proof.covers_message_in_network(source_network_id, message)", "proof.covers_message_in_network(network_id, message)", "canonical Kura block through the prepared proof"),
+        ("validate_fanout", "let [message] = messages else {", "let Some(message) = messages.first() else {", "one exact message, target, network"),
+        ("validate_fanout", "if peers != std::slice::from_ref(target)\n                    || proof.network_id()", "if false\n                    || proof.network_id()", "one exact message, target, network"),
+        ("validate_fanout", "|| proof.network_id() != *network_id", "|| false", "one exact message, target, network"),
+        ("validate_fanout", "|| !proof.covers_message_in_network(network_id, message)", "|| false", "one exact message, target, network"),
+        ("post_durable_history_response_with_routes", "return Err(\n                    \"historical body output must cross the bounded prepared-worker seam\".to_owned(),\n                );", "return Ok(());", "rejects body responses before encoding"),
+        ("post_durable_history_response_with_routes", "&& response.responder == self.local_peer", "&& true", "local responder, exact hash"),
+        ("post_durable_history_response_with_routes", "response.certificate.round.height <= self.context.height", "true", "non-future creation scope"),
+        ("post_durable_history_response_with_routes", "rollover_claim.validate_fanout(&messages, &peers)?;", "", "Kura before transferring output ownership"),
+        ("post_durable_history_response_with_routes", "durable_history_source_covers(", "durable_history_source_covers_unchecked(", "Kura before transferring output ownership"),
+        ("applied_height_reconstruction_covers", "rollover_claim.validate_fanout(messages, peers)?;", "", "before any role shortcut"),
+        ("applied_height_reconstruction_covers", "if !scope.covers(artifact) {", "if false {", "exact creation scope before any role shortcut"),
+        ("applied_height_reconstruction_covers", "            &artifact.height_context.network_id,", "            &wire::NetworkId::default(),", "artifact network and height into prepared-proof"),
+        ("applied_height_reconstruction_covers", "            artifact.height,", "            u64::MAX,", "artifact network and height into prepared-proof"),
+        ("applied_height_reconstruction_covers", "round.context_id == context_id && round.height == height", "round.context_id == context_id", "both context and height"),
+        ("applied_height_reconstruction_covers", "wire::ConsensusMessageV2Payload::PayloadChunk(_) => false,", "wire::ConsensusMessageV2Payload::PayloadManifest(manifest) => round_matches(manifest.round),\n                    wire::ConsensusMessageV2Payload::PayloadChunk(_) => false,", "standalone manifest cannot reenter"),
+        ("applied_height_reconstruction_covers", "wire::ConsensusMessageV2Payload::PayloadChunk(_) => false,", "wire::ConsensusMessageV2Payload::PayloadChunk(_) => true,", "excluding unclaimed chunks"),
+        ("validate_fanout_bounds", "fanout.message_hashes.len() != fanout.messages.len()", "false", "complete immutable indexes"),
+        ("validate_fanout_bounds", "message.exact_output_hash() != *expected_hash", "message.exact_output_hash() == *expected_hash", "canonical cached hashes and traffic classes"),
+        ("validate_fanout_bounds", "|| exact_output_class(message).as_ref() != Ok(expected_class)", "|| false", "canonical cached hashes and traffic classes"),
+        ("validate_fanout_bounds", "let _ = fanout.outstanding_sources()?;", "", "every future source and FIFO before capacity"),
+        ("start", "            None,\n            key_pair,", "            kagemusha_mint_finality_authority,\n            key_pair,", "without fabricating lifecycle authority"),
+        ("start", "            exact_output_handoff_owner,", "            DurableExactOutputServiceOwner::default(),", "exact authorities and capacities"),
+        ("start_inner", ".begin_fail_stop_operation()", ".begin_operation()", "holds fail-stop authority"),
+        ("start_inner", "consensus_io_capacity == 0 || auxiliary_io_capacity == 0 || orphan_chunk_capacity == 0", "false", "validates capacity and tag before side effects"),
+        ("start_inner", "if initial_tag.height() != context.height {", "if false {", "validates capacity and tag before side effects"),
+        ("start_inner", ".map(|entry| entry.validator.clone())", ".filter(|_| false).map(|entry| entry.validator.clone())", "complete frozen roster"),
+        ("start_inner", "            kagemusha_mint_finality_authority,", "            None,", "explicit finality authority under its guard"),
+        ("start_inner", "            Arc::clone(&output_guard),", "            Arc::new(ConsensusOutputGuard::new()),", "explicit finality authority under its guard"),
+        ("start_inner", "let lifecycle_body_store_identity = body_store.instance_identity();", "let lifecycle_body_store_identity = body_store.instance_identity();\n        std::fs::create_dir_all(\"discarded-chunks\")?;", "unused raw chunk-directory ownership"),
+        ("start_inner", "        construction.complete();\n        service.clean_teardown = false;", "        service.clean_teardown = false;\n        construction.complete();", "only after the full service exists"),
+    )
+    # Preserve every required clause while moving the actual geometry preflight
+    # after worker creation, so a token-presence-only checker cannot pass.
+    relative, name, context = module._WORKER_OWNERSHIP_RECONCILIATION_OWNERS["start_inner"]
+    constructor = next(item for item in module.rust_items(
+        (ROOT_DIR / "crates/iroha_core/src/sumeragi" / relative).read_text(), name)
+        if item.brace_context == (module.rust_code_tokens(context),)).source
+    geometry_start = constructor.index("        let shared_pending_ownership_unit_capacity =")
+    geometry_end = constructor.index("        let durable_history =")
+    spawn_end = constructor.index("        let mut service =")
+    mutations += (("start_inner", constructor[geometry_start:spawn_end],
+        constructor[geometry_end:spawn_end] + constructor[geometry_start:geometry_end],
+        "validates ownership geometry before spawning"),)
+
+    def copy_source(relative: str, copy_root: Path, copied: set[str]) -> None:
+        if relative in copied:
+            return
+        copied.add(relative)
+        path = copy_root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT_DIR / relative, path)
+        for child in module._REVIEWED_RUST_INCLUDE_MANIFESTS.get(relative, ()):
+            copy_source((Path(relative).parent / child).as_posix(), copy_root, copied)
+
+    for index, (key, old, new, expected) in enumerate(mutations):
+        copy_root = tmp_path / f"worker-ownership-{index:02d}"
+        copied: set[str] = set()
+        for relative, _name, _context in module._WORKER_OWNERSHIP_RECONCILIATION_OWNERS.values():
+            copy_source(f"crates/iroha_core/src/sumeragi/{relative}", copy_root, copied)
+        baseline = module._worker_ownership_reconciled_source_fidelity_errors(copy_root)
+        assert not baseline, (key, old, baseline)
+        relative, name, context = module._WORKER_OWNERSHIP_RECONCILIATION_OWNERS[key]
+        path = copy_root / "crates/iroha_core/src/sumeragi" / relative
+        brace_context = (module.rust_code_tokens(context),) if context else ()
+        parser = module.rust_struct_items if key == "proof_layout" else module.rust_items
+        source = path.read_text()
+        item = next(item for item in parser(source, name) if item.brace_context == brace_context)
+        assert item.source.count(old) == 1, (key, old, item.source.count(old))
+        path.write_text(source.replace(item.source, item.source.replace(old, new, 1), 1))
+        item = next(item for item in parser(path.read_text(), name) if item.brace_context == brace_context)
+        digest = module._rust_item_token_sha256(item)
+        seals = module._WORKER_OWNERSHIP_RECONCILIATION_EXISTING_SEALS.get(key,
+            (("_PRODUCTION_WORKER_OWNERSHIP_RECONCILIATION_ITEM_SHA256", key),))
+        restored = []
+        try:
+            for mapping_name, seal_key in seals:
+                mapping = getattr(module, mapping_name)
+                assert digest != mapping[seal_key], (key, old)
+                restored.append((mapping, seal_key, mapping[seal_key]))
+                mapping[seal_key] = digest
+            errors = module._worker_ownership_reconciled_source_fidelity_errors(copy_root)
+            assert any(expected in error for error in errors), (key, old, errors)
+            assert not any("exact reviewed token digest" in error for error in errors), (key, old, errors)
+        finally:
+            for mapping, seal_key, original in restored:
+                mapping[seal_key] = original
+
+
+def _worker_ack_mutations_survive_digest_refresh(tmp_path: Path) -> None:
+    """Keep exact payload, post-lock advert and receipt retirement checks after rehash."""
+
+    module = load_checker()
+    mutations = (
+        ("classified_with_route_history", ".map(NetworkMessage::exact_output_hash)", ".map(HashOf::new)", "canonical cached hash"),
+        ("classified_with_route_history", "            reply_routes,", "            reply_routes: None,", "full route geometry"),
+        ("classified_with_route_history", "fanout.rebuild_current_source_targets()?;", "", "rebuilds exact source ownership"),
+        ("plan_fanout_removal", "message.exact_output_hash() != *expected", "message.exact_output_hash() == *expected", "authenticates every cached payload"),
+        ("plan_fanout_removal", "fanout.message_hashes.len() != fanout.messages.len()", "false", "authenticates every cached payload"),
+        ("plan_fanout_removal", "validate_removed(fanout)?;", "", "validates each selected FIFO owner"),
+        ("plan_fanout_removal", "|| current_reservations != self.reservation_owner_counts", "|| false", "inconsistent source and reservation indexes"),
+        ("handoff_applied_height_to_durable_reconstruction", "message.exact_output_hash() != *expected_hash", "message.exact_output_hash() == *expected_hash", "preflight every pinned payload"),
+        ("handoff_applied_height_to_durable_reconstruction", "current.data.exact_output_hash() != *expected_hash", "current.data.exact_output_hash() == *expected_hash", "each returned actor post"),
+        ("handoff_applied_height_to_durable_reconstruction", "                durable_lane_authority,", "                None,", "durable reconstruction authority"),
+        ("handoff_applied_height_to_durable_reconstruction", "|| self.shared_ownership_units != expected_shared_ownership_units", "|| false", "before atomically clearing the corridor"),
+        ("handoff_applied_height_to_durable_reconstruction", "let sidecar_completions = self.admitted_sidecar_chunks.len();", "self.fanouts.clear();\n        let sidecar_completions = self.admitted_sidecar_chunks.len();", "before atomically clearing the corridor"),
+        ("handoff_applied_height_to_durable_reconstruction", ".checked_add(sidecar_completions)", ".checked_add(0)", "checked sidecar count"),
+        ("retain_returned", "if target.parked {", "if false {", "rejects parked or flushing sources"),
+        ("retain_returned", "if target.pending_flush.is_some() {", "if false {", "rejects parked or flushing sources"),
+        ("retain_returned", ".get(target.message_index)", ".get(0)", "exact payload index"),
+        ("retain_returned", "post.data.exact_output_hash() != *expected_hash", "post.data.exact_output_hash() == *expected_hash", "exact pinned payload identity"),
+        ("retain_returned", "target.ticket = ticket;", "target.ticket = None;", "exact pinned payload identity"),
+        ("enqueue_owned_exact_reply_routes_while_guarded", "if reply_routes.semantic_target() != &peer {", "if false {", "exact semantic target, source routes and ingress claim"),
+        ("enqueue_owned_exact_reply_routes_while_guarded", "            ingress_ownership,", "            None,", "exact semantic target, source routes and ingress claim"),
+        ("enqueue_owned_exact_reply_routes_while_guarded", "let ownership = {\n            let mut pending = self.lock_pending_exact_output()?;", "let mut pending = self.lock_pending_exact_output()?;\n        let ownership = {", "releases the corridor lock"),
+        ("enqueue_owned_exact_reply_routes_while_guarded", "if self.exact_output_handoff_owner.is_sealed() {", "if false {", "schedules every released advert"),
+        ("enqueue_owned_exact_reply_routes_while_guarded", "if ownership == ExactFanoutOwnership::Owned {", "if ownership == ExactFanoutOwnership::SourceRetained {", "schedules every released advert"),
+        ("enqueue_owned_exact_reply_routes_while_guarded", "                .map(|_| ownership)", "                ?;\n                Ok(ownership)", "even a failed drive result"),
+        ("enqueue_owned_exact_reply_routes_while_guarded", "self.schedule_released_kura_replica_advert_heights(released_kura_replica_advert_heights)?;", "self.schedule_released_kura_replica_advert_heights(BTreeSet::new())?;", "schedules every released advert"),
+        ("enqueue_owned_exact_reply_routes_while_guarded", "self.schedule_released_kura_replica_advert_heights(released_kura_replica_advert_heights)?;", "let _ = self.schedule_released_kura_replica_advert_heights(released_kura_replica_advert_heights);", "even a failed drive result"),
+        ("enqueue_exact_fanout_while_guarded_collecting_released_adverts", "PendingExactFanout::claimed(messages, peers, rollover_claim)", "PendingExactFanout::classified(messages, peers)", "typed claim"),
+        ("enqueue_exact_fanout_while_guarded_collecting_released_adverts", "if self.exact_output_handoff_owner.is_sealed() {", "if false {", "typed claim"),
+        ("enqueue_exact_fanout_while_guarded_collecting_released_adverts", "self.drive_pending_exact_output(&mut pending, released_kura_replica_advert_heights)", "self.drive_pending_exact_output(&mut pending, &mut BTreeSet::new())", "preserving released adverts"),
+        ("finish_height", "Ok(_) if !self.exact_output_handoff_owner.is_sealed()", "Ok(_) if false", "sealed empty corridor"),
+        ("finish_height", "Ok(pending) if pending.is_pending()", "Ok(pending) if false", "sealed empty corridor"),
+        ("finish_height", "self.output_guard.activate_restart_required();", "", "activates restart before retirement"),
+        ("finish_height", "                receipt,\n                cleanup: supervisor.submission(),", "                receipt,\n                cleanup: supervisor.submission(),\n                chunk_root: self.chunk_root.clone(),", "without a raw directory path"),
+        ("finish_height", "drop(retirement_enqueue_permit);", "", "drops its permit before waiting"),
+        ("finish_height", "command = returned;", "command = V2IoCommand::Shutdown;", "preserves a full returned retirement command"),
+        ("finish_height", "recv_cleanup_completion(&io, deadline)", "recv_cleanup_completion(&io, Instant::now())", "drops its permit before waiting"),
+        ("finish_height", ".store(true, AtomicOrdering::Release);", ".store(false, AtomicOrdering::Release);", "configured cleanup deadline"),
+        ("network_exact_output_hash", "*envelope.exact_output_hash.get_or_init(|| HashOf::new(self))", "*envelope.exact_output_hash.get().expect(\"hash absent\")", "canonical whole-message hash"),
+        ("network_exact_output_hash", "_ => HashOf::new(self),", "_ => unreachable!(),", "every variant"),
+        ("wire_make_mut", "self.encoded = None;", "", "invalidates both bytes and exact identity"),
+        ("wire_make_mut", "let _ = self.exact_output_hash.take();", "", "invalidates both bytes and exact identity"),
+        ("body_retirement_job", "self.ensure_mutable()?;", "", "only after matching receipt context and height"),
+        ("body_retirement_job", "kura_receipt.context_id() != self.context.id()", "false", "matching receipt context and height"),
+        ("body_retirement_job", "|| kura_receipt.height() != self.context.height", "|| false", "matching receipt context and height"),
+        ("body_retirement_job", "self.bound_directory.take()", "self.bound_directory.as_ref().cloned()", "consumes the exact bound directory"),
+        ("body_retirement_execute", "self.directory.retire()", "Ok(())", "already-bound directory capability"),
+        ("cleanup_execute", "job.bodies.execute()", "Ok::<(), V2BodyStoreError>(())", "executes durable body retirement"),
+        ("cleanup_execute", "PostFinalityCleanupTarget::DurableBodies,", "PostFinalityCleanupTarget::CleanupWorker,", "records retained-file failures"),
+    )
+
+    def copy_source(relative: str, copy_root: Path, copied: set[str]) -> None:
+        if relative in copied:
+            return
+        copied.add(relative)
+        path = copy_root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT_DIR / relative, path)
+        for child in module._REVIEWED_RUST_INCLUDE_MANIFESTS.get(relative, ()):
+            copy_source((Path(relative).parent / child).as_posix(), copy_root, copied)
+
+    for index, (key, old, new, expected) in enumerate(mutations):
+        copy_root = tmp_path / f"worker-ack-{index:02d}"
+        copied: set[str] = set()
+        for relative, _name, _context in module._WORKER_ACK_RECONCILIATION_OWNERS.values():
+            copy_source(f"crates/iroha_core/src/sumeragi/{relative}", copy_root, copied)
+        baseline = module._worker_ack_reconciled_source_fidelity_errors(copy_root)
+        assert not baseline, (key, old, baseline)
+        relative, name, context = module._WORKER_ACK_RECONCILIATION_OWNERS[key]
+        path = copy_root / "crates/iroha_core/src/sumeragi" / relative
+        brace_context = (module.rust_code_tokens(context),) if context else ()
+        mutate_rust_item_source_in_context(module, path, name, brace_context, old, new)
+        item = next(item for item in module.rust_items(path.read_text(), name) if item.brace_context == brace_context)
+        digest = module._rust_item_token_sha256(item)
+        seals = module._WORKER_ACK_RECONCILIATION_EXISTING_SEALS.get(key,
+            (("_PRODUCTION_WORKER_ACK_RECONCILIATION_ITEM_SHA256", key),))
+        restored = []
+        try:
+            for mapping_name, seal_key in seals:
+                mapping = getattr(module, mapping_name)
+                assert digest != mapping[seal_key], (key, old)
+                restored.append((mapping, seal_key, mapping[seal_key]))
+                mapping[seal_key] = digest
+            errors = module._worker_ack_reconciled_source_fidelity_errors(copy_root)
+            assert any(expected in error for error in errors), (key, old, errors)
+            assert not any("exact reviewed token digest" in error for error in errors), (key, old, errors)
+        finally:
+            for mapping, seal_key, original in restored:
+                mapping[seal_key] = original
+
+
+def _ingress_effects_mutations_survive_digest_refresh(tmp_path: Path) -> None:
+    """Rehash real chunk, Apply exclusion and ticketless-regression owners."""
+
+    module = load_checker()
+    mappings = (
+        module._PRODUCTION_EXACT_OUTPUT_INGRESS_SEAM_ITEM_SHA256,
+        module._APPLIED_HEIGHT_TICKETLESS_FINALITY_REGRESSION_TEST_SHA256,
+        module._PRODUCTION_INGRESS_EFFECTS_RECONCILIATION_ITEM_SHA256,
+    )
+    originals = tuple(dict(mapping) for mapping in mappings)
+    mutations = (
+        ("effects::accept_payload_chunk_with_ingress_ownership", "wire::ConsensusMessageV2Payload::PayloadChunk(chunk),\n        ));", "wire::ConsensusMessageV2Payload::PayloadChunk(chunk.clone()),\n        ));", "same moved chunk"),
+        ("effects::accept_payload_chunk_with_ingress_ownership", "if !ingress_ownership.validate_exact()", "if false", "same moved chunk"),
+        ("effects::accept_payload_chunk_with_ingress_ownership", "|| !ingress_ownership.matches_message(&message)", "|| false", "same moved chunk"),
+        ("effects::accept_payload_chunk_with_ingress_ownership", "|| !ingress_ownership.matches_semantic_origin(authenticated_sender)", "|| false", "same moved chunk"),
+        ("effects::accept_payload_chunk_with_ingress_ownership", "let chunk = match message {", "let chunk = match foreign_message {", "same moved chunk"),
+        ("effects::accept_payload_chunk_with_ingress_ownership", "self.accept_payload_chunk_inner(work_id, chunk, authenticated_sender, services)", "self.accept_payload_chunk_inner(work_id, foreign_chunk, authenticated_sender, services)", "same moved chunk"),
+        ("worker::route_payload_chunk", "wire::ConsensusMessageV2Payload::PayloadChunk(chunk),\n        ));", "wire::ConsensusMessageV2Payload::PayloadChunk(chunk.clone()),\n        ));", "recovering and delivering the same chunk"),
+        ("worker::route_payload_chunk", "|| !ingress_ownership.matches_message(&chunk_message)", "|| false", "recovering and delivering the same chunk"),
+        ("worker::route_payload_chunk", "|| !ingress_ownership.matches_semantic_origin(&sender)", "|| false", "recovering and delivering the same chunk"),
+        ("worker::route_payload_chunk", "let chunk = match chunk_message {", "let chunk = match foreign_message {", "recovering and delivering the same chunk"),
+        ("worker::route_payload_chunk", "self.deliver_payload_chunk(executor, work_id, sender, chunk, ingress_ownership)", "self.deliver_payload_chunk(executor, work_id, sender, foreign_chunk, ingress_ownership)", "recovering and delivering the same chunk"),
+        ("predecessor_remains_exact", "LifecycleDecisionApplySuccessorOutputModeV1::SameBatchSuffix", "LifecycleDecisionApplySuccessorOutputModeV1::AnySuffix", "restricted to the attested same-batch suffix"),
+        ("predecessor_remains_exact", "&& self.finality_completion.is_none()", "&& self.finality_completion.is_some()", "no finality and the attested runtime ordinal"),
+        ("predecessor_remains_exact", "&& self.pending_work() == self.pending_lifecycle_output_admissions.len()", "&& true", "exact census, no finality"),
+        ("predecessor_remains_exact", "attestation.dispatch_key().lifecycle_ordinal(),", "0,", "attested runtime ordinal"),
+        ("test_executor_owners_empty", "#[cfg(test)]", "#[cfg(any(test, not(test)))]", "unreviewed cfg/cfg_attr"),
+        ("test_executor_owners_empty", "&& self.finality_completion.is_none()", "&& self.finality_completion.is_some()", "test-only executor emptiness"),
+        ("test_executor_owners_empty", "&& self.finality_completion.is_none()", "&& { self.finality_completion = None; true }", "only runtime and lifecycle finality installation may assign"),
+        ("test_executor_owners_empty", "&& self.runtime.queued_commands() == 0", "&& true", "test-only executor emptiness"),
+        ("released_validate_preflight", "|| marker.terminal_no_successor_ordinal().is_none()", "|| false", "exact cleaned terminal Commit owner"),
+        ("released_validate_preflight", "|| runtime_decision != self.protected_decision", "|| false", "exact cleaned terminal Commit owner"),
+        ("released_validate_preflight", "|| self.pending_work() != 1", "|| self.pending_work() != 0", "exact cleaned terminal Commit owner"),
+        ("released_validate_preflight", "|| self.finality_completion.is_some()", "|| self.finality_completion.is_none()", "exact cleaned terminal Commit owner"),
+        ("released_validate_preflight", "|| !self.decision_body_drained", "|| false", "exact cleaned terminal Commit owner"),
+        ("validate_body", "if pending.key() != key || !pending.exactly_matches_retry(&effect, &ownership) {", "if pending.key() != key {", "exact existing publication owner"),
+        ("validate_body", "let projected = marker\n                .project_retry(&effect, &ownership)", "let projected = marker\n                .project_retry(&effect, &foreign_ownership)", "exact retry and incoming runtime binding"),
+        ("validate_body", ".exact_pending_adapter_effect_binding(&effect)", ".exact_pending_adapter_effect_binding(&foreign_effect)", "exact retry and incoming runtime binding"),
+        ("validate_body", "|| marker.terminal_no_successor_ordinal().is_none()", "|| false", "terminal no-successor Commit"),
+        ("validate_body", "|| incoming_statement.phase() != Some(wire::GlobalPhase::Commit)", "|| false", "terminal no-successor Commit"),
+        ("validate_body", "|| self.durable_validate_retry_seals.contains_key(&key)", "|| false", "without another replay authority"),
+        ("validate_body", ".filter(|certificate| certificate.phase == wire::GlobalPhase::Commit)", ".filter(|certificate| certificate.phase == wire::GlobalPhase::Prepare)", "exact authenticated Commit certificate"),
+        ("validate_body", "|| runtime_decision != Some(decision)", "|| false", "exact cached Decision"),
+        ("validate_body", "|| projected.latest_effect != effect", "|| false", "all durable validation identities"),
+        ("validate_body", "|| recovered_durable != durable", "|| false", "all durable validation identities"),
+        ("validate_body", "|| projected.latest_statement.execution_commitment()\n                    != Some(certificate.execution_commitment)", "|| false", "all durable validation identities"),
+        ("validate_body", "if self.decision_apply_dispatch_barrier_is_occupied()", "if false", "excludes competing Apply/finality"),
+        ("validate_body", "self.ensure_pending_slot()?;\n            self.reconcile_decision_work(decision, true, services)?;", "self.reconcile_decision_work(decision, true, services)?;\n            self.ensure_pending_slot()?;", "before exact Decision cleanup"),
+        ("validate_body", "self.reconcile_decision_work(decision, true, services)?;", "self.reconcile_decision_work(decision, false, services)?;", "before exact Decision cleanup"),
+        ("validate_body", "owned.effect == effect && owned.ownership == ownership", "owned.effect == effect", "preserves only the current exact occurrence"),
+        ("validate_body", "|| (self.retained_effect_batch.is_some() && !retained_is_current_occurrence)", "|| false", "rechecks finality"),
+        ("validate_body", "ReleasedLifecycleValidatedMarkerSealPermitV1::new(),", "foreign_permit,", "seals the exact cached receipts"),
+        ("validate_body", "                marker.published_pending.clone(),", "                incoming_pending.clone(),", "terminal predecessor"),
+        ("validate_body", ".insert(key, projected)\n                .is_some()", ".insert(key, projected)\n                .is_none()", "restores only its projected terminal marker"),
+        ("validate_body", ".replace(deferred)\n                    .is_none()", ".replace(deferred)\n                    .is_some()", "one deferred publication"),
+        ("settle_released_validate", "self.preflight_pending_released_validate_apply_publication()", "Ok::<_, EffectExecutorError>(())", "checks executor ownership before coordinator capacity"),
+        ("settle_released_validate", ") => return Ok(0),", ") => {},", "capacity deferral and preflight failure retain the pending owner before take"),
+        ("settle_released_validate", ".replace(pending)\n                        .is_none()", ".replace(pending)\n                        .is_some()", "restores failed preparation"),
+        ("settle_released_validate", "owner.publish_released_validate_apply(prepared)", "owner.publish_unchecked_apply(prepared)", "publishes durable authority before executor commit"),
+        ("settle_released_validate", "self.commit_released_validate_apply_publication(key, ordinal, authority);", "self.commit_released_validate_apply_publication(key, 0, authority);", "only the published exact authority"),
+        ("settle_released_validate", "return Err(self.close(\n                    EffectExecutorError::Contract(format!(\n                        \"released Validate Apply lifecycle publication failed: {error}\"\n                    )),\n                    services,\n                ));", "return Err(EffectExecutorError::Contract(format!(\n                    \"released Validate Apply lifecycle publication failed: {error}\"\n                )));", "only the published exact authority"),
+        ("commit_released_validate", ".remove(&key)\n            .expect(\"preflight retained the exact terminal Validate marker\")", ".get(&key).cloned()\n            .expect(\"preflight retained the exact terminal Validate marker\")", "consumes its terminal marker"),
+        ("commit_released_validate", "self.live_lifecycle_decision_apply = Some(LiveLifecycleDecisionApplyOwnerV1 {", "self.live_lifecycle_decision_apply = Some(ArbitraryApplyOwner {", "typed live Apply owner"),
+        ("commit_released_validate", "assert_eq!(dispatch_key.lifecycle_ordinal(), ordinal);", "assert_eq!(dispatch_key.lifecycle_ordinal(), 0);", "exact published ordinal, Decision and durable receipts"),
+        ("commit_released_validate", "assert_eq!(self.validated_bodies.get(&key), Some(&validated_receipt));", "assert!(self.validated_bodies.contains_key(&key));", "exact published ordinal, Decision and durable receipts"),
+        ("coordinator_released_validate_preflight", "|| coordinator.lifecycle_ordinal_authority.is_none()", "|| false", "live durable ordinal authority"),
+        ("coordinator_released_validate_preflight", "|| effect_used >= effect_limit", "|| false", "bounded effect and record capacity"),
+        ("coordinator_released_validate_preflight", "|| !super::schema::has_lifecycle_record_capacity(coordinator.records.len(), 1)", "|| false", "bounded effect and record capacity"),
+        ("coordinator_released_validate_publish", ".project_apply_candidate(&SealedValidateApplyProjectionPermit::new(), verified)", ".project_apply_candidate(&foreign_permit, verified)", "authenticated independent Ready Apply body frame"),
+        ("coordinator_released_validate_publish", "|| candidate.stage.predecessor_scope() != PredecessorScope::Independent", "|| false", "authenticated independent Ready Apply body frame"),
+        ("coordinator_released_validate_publish", "&& staged.records.len() == records_before.saturating_add(1)", "&& true", "exactly one fully indexed durable record"),
+        ("coordinator_released_validate_publish", "metadata.continuation == DurableContinuation::None", "true", "exactly one fully indexed durable record"),
+        ("coordinator_released_validate_publish", "if !prepared.registry_work_matches(owner, ordinal, slot, digest) {", "if false {", "mismatched concrete registry address"),
+        ("coordinator_released_validate_publish", ".persist_exact_staged_successor_with_ordinal_reservation(&staged, &ordinal_reservation)", ".persist_unchecked_staged_successor(&staged, &ordinal_reservation)", "fsyncs before any owner installation"),
+        ("coordinator_released_validate_publish", "let reconciliation = reservation.install_after_ledger_fsync();\n        *coordinator = staged;", "*coordinator = staged;\n        let reconciliation = reservation.install_after_ledger_fsync();", "fsyncs before any owner installation"),
+        ("coordinator_released_validate_publish", "            coordinator.fault = Some(CoordinatorFault::DurabilityFailure);", "            coordinator.fault = None;", "fsyncs before any owner installation"),
+        ("register_outbound_payload", "self.sign_payload_chunks(payload, sender)?", "self.sign_payload_chunks(payload, sender).unwrap()", "signed canonical frames"),
+        ("register_outbound_payload", "Self::preencode_v2_network_message(wire::ConsensusMessageV2::new(", "Self::unencoded_v2_network_message(wire::ConsensusMessageV2::new(", "signed canonical frames"),
+        ("register_outbound_payload", "if self.proposal_work_retired {", "if false {", "excludes retired proposal work"),
+        ("register_outbound_payload", "output_guard.begin_fail_stop_operation()", "output_guard.begin_unchecked_operation()", "fail-stop output guard"),
+        ("register_outbound_payload", "if owner != self.active_tag || payload.manifest().round != expected_round {", "if payload.manifest().round != expected_round {", "matching incarnation and cached manifest"),
+        ("register_outbound_payload", "if !existing.owns_manifest(owner, payload.manifest()) {", "if false {", "matching incarnation and cached manifest"),
+        ("register_outbound_payload", ".retain(|hash, _| *hash == manifest_hash);", ".retain(|_, _| true);", "matching incarnation and cached manifest"),
+        ("register_outbound_payload", "self.outbound_chunks.insert(manifest_hash, retained);\n        operation.complete();", "operation.complete();\n        self.outbound_chunks.insert(manifest_hash, retained);", "before completing output ownership"),
+        ("production_exact_output_observes_finality_only_after_state_commit", "wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(", "wire::ExecutionCommitment::without_topups_or_merge_carrier(", "current empty top-up/merge constructor"),
+        ("production_exact_output_observes_finality_only_after_state_commit", "assert!(pending.applied_height_finality.is_none());", "assert!(pending.applied_height_finality.is_some());", "Kura-only fixture leaves both pending output"),
+        ("production_exact_output_observes_finality_only_after_state_commit", "state_block.commit().expect(\"commit synthetic State block\");", "drop(state_block);", "actual committed State boundary"),
+        ("production_exact_output_observes_finality_only_after_state_commit", "assert_eq!(pending.applied_height_finality.as_ref(), Some(&artifact));", "assert!(pending.applied_height_finality.is_some());", "exact artifact adoption after State commit"),
+        ("applied_height_finality_releases_only_covered_ticketless_payload_chunks", ".get(&HashOf::new(&manifest))", ".get(&HashOf::new(&foreign_manifest))", "registered preencoded manifest-bound frames"),
+        ("applied_height_finality_releases_only_covered_ticketless_payload_chunks", "assert_eq!(ticketless_attempts, chunk_count);", "assert_eq!(ticketless_attempts, 1);", "discharges every covered frame"),
+        ("applied_height_finality_releases_only_covered_ticketless_payload_chunks", "assert!(ticketed.is_pending(), \"ticketed payload chunks stay owned\");", "assert!(!ticketed.is_pending(), \"ticketed payload chunks stay owned\");", "genuine ticketed negative control"),
+        ("applied_height_finality_releases_only_covered_ticketless_payload_chunks", "assert!(\n        uncovered.is_pending(),", "assert!(\n        !uncovered.is_pending(),", "uncovered-scope negative control"),
+    )
+
+    def copy_source(relative: str, copy_root: Path, copied: set[str]) -> None:
+        if relative in copied:
+            return
+        copied.add(relative)
+        path = copy_root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT_DIR / relative, path)
+        for child in module._REVIEWED_RUST_INCLUDE_MANIFESTS.get(relative, ()):
+            copy_source((Path(relative).parent / child).as_posix(), copy_root, copied)
+
+    try:
+        for index, (key, old, new, expected) in enumerate(mutations):
+            copy_root = tmp_path / f"ingress-effects-{index:02d}"
+            copied: set[str] = set()
+            for relative, _name, _context, _attributes in module._INGRESS_EFFECTS_RECONCILIATION_OWNERS.values():
+                copy_source(f"crates/iroha_core/src/sumeragi/{relative}", copy_root, copied)
+            baseline = module._ingress_effects_source_fidelity_errors(copy_root)
+            assert not baseline, (key, old, baseline)
+            relative, name, context, _attributes = module._INGRESS_EFFECTS_RECONCILIATION_OWNERS[key]
+            path = copy_root / "crates/iroha_core/src/sumeragi" / relative
+            brace_context = (module.rust_code_tokens(context),) if context else ()
+            if old.startswith("#[cfg("):
+                source = path.read_text()
+                item = next(item for item in module.rust_items(source, name) if item.brace_context == brace_context)
+                item_start = source.index(item.source)
+                attribute_start = source.rfind(old, 0, item_start)
+                assert attribute_start >= 0 and not source[attribute_start + len(old):item_start].strip()
+                path.write_text(source[:attribute_start] + new + source[attribute_start + len(old):])
+                # Attribute context is sealed independently of item-body hashes.
+                # A harmless statement also changes the entire item digest so
+                # this control proves that refreshing it cannot hide cfg drift.
+                mutate_rust_item_source_in_context(module, path, name, brace_context,
+                    "self.pending_work() == 0", "let _reviewed = (); self.pending_work() == 0")
+            else:
+                mutate_rust_item_source_in_context(module, path, name, brace_context, old, new)
+            item = next(item for item in module.rust_items(path.read_text(), name) if item.brace_context == brace_context)
+            mapping = next(mapping for mapping in mappings if key in mapping)
+            digest = module._rust_item_token_sha256(item)
+            assert digest != mapping[key], (key, old)
+            mapping[key] = digest
+            errors = module._ingress_effects_source_fidelity_errors(copy_root)
+            assert any(expected in error for error in errors), (key, old, errors)
+            assert not any("exact reviewed token digest" in error for error in errors), (key, old, errors)
+            for mapping, original in zip(mappings, originals, strict=True):
+                mapping.clear()
+                mapping.update(original)
+    finally:
+        for mapping, original in zip(mappings, originals, strict=True):
+            mapping.clear()
+            mapping.update(original)
+
+
+def _decided_body_serve_mutations_survive_digest_refresh(tmp_path: Path) -> None:
+    """Rehash each real worker-chain owner after an independently rejected mutation."""
+
+    module = load_checker()
+    original = dict(module._PRODUCTION_DECIDED_BODY_SERVE_ITEM_SHA256)
+    mutations = (
+        ("commit_certified_serve", "let ingress_ownership = self.take_bound_leader_wire()?;", "let ingress_ownership = self.take_bound_leader_wire().unwrap();", "bound occurrence and authenticated hop"),
+        ("commit_certified_serve", "let authenticated_via = inbound.via().clone();", "let authenticated_via = inbound.sender().clone();", "bound occurrence and authenticated hop"),
+        ("commit_certified_serve", ".validate_version()", ".accept_any_version()", "validates wire version"),
+        ("commit_certified_serve", "let BlockMessage::V2(message) = message else {", "let BlockMessage::Unverified(message) = message else {", "authorized message family"),
+        ("commit_certified_serve", "let wire::ConsensusMessageV2Payload::CertifiedBodyRequest(request) = message.payload else {", "let wire::ConsensusMessageV2Payload::CommitCertificateRequest(request) = message.payload else {", "authorized request payload"),
+        ("commit_certified_serve", "if !scope.permits_height(request.round.height, self.executor.context().height) {", "if false {", "exact height, subject and reply target"),
+        ("commit_certified_serve", "if !scope.permits_subject(request.subject, self.decided_subject) {", "if false {", "exact height, subject and reply target"),
+        ("commit_certified_serve", "if reply_routes.semantic_target() != &sender {", "if false {", "exact height, subject and reply target"),
+        ("commit_certified_serve", "            request,\n            sender,\n            authenticated_via,", "            request,\n            authenticated_via.clone(),\n            authenticated_via,", "retains queued ownership"),
+        ("commit_certified_serve", "            authenticated_via,\n            reply_routes,", "            sender.clone(),\n            reply_routes,", "retains queued ownership"),
+        ("commit_certified_serve", "            reply_routes,\n            ingress_ownership,", "            reply_routes.retain_active(),\n            ingress_ownership,", "retains queued ownership"),
+        ("commit_certified_serve", "            ingress_ownership,\n        );", "            terminal_ownership,\n        );", "retains queued ownership"),
+        ("commit_certified_serve", "self.block_sync_server.try_enqueue_historical_body(task)", "Ok(HistoricalBodyServeAdmission::Queued)", "retains queued ownership"),
+        ("commit_certified_serve", "Ok(HistoricalBodyServeAdmission::Queued) => {}", "Ok(HistoricalBodyServeAdmission::Queued) => { mark_leader_wire_volatile(self.receiver, &terminal_ownership)?; }", "retains queued ownership"),
+        ("commit_certified_serve", "HistoricalBodyServeAdmission::RateLimited | HistoricalBodyServeAdmission::Busy", "HistoricalBodyServeAdmission::RateLimited", "retains queued ownership"),
+        ("commit_certified_serve", '"retired certified body request at bounded terminal-recovery worker admission"\n                );\n                mark_leader_wire_volatile(self.receiver, &terminal_ownership)?;', '"retired certified body request at bounded terminal-recovery worker admission"\n                );', "retains queued ownership"),
+        ("commit_certified_serve", "Err(error) if is_remote_block_sync_rejection(&error) => {", "Err(error) if true => {", "retains queued ownership"),
+        ("commit_certified_serve", '"rejected certified body request during terminal recovery"\n                );\n                mark_leader_wire_volatile(self.receiver, &terminal_ownership)?;', '"rejected certified body request during terminal recovery"\n                );', "retains queued ownership"),
+        ("commit_certified_serve", "Err(error) => return Err(error.into()),", "Err(_error) => {},", "retains queued ownership"),
+        ("commit_certified_serve", "let task = HistoricalBodyServeTask::from_bound_ingress(", "let _ = self.block_sync_server.serve_historical_body(self.kura, request.clone(), &sender, self.local_key);\n        let task = HistoricalBodyServeTask::from_bound_ingress(", "only the prepared worker seam"),
+        ("bind_leader_wire", "|| !ingress_ownership.matches_message(inbound.message())", "|| false", "complete fair-ingress ownership"),
+        ("bind_leader_wire", ".bind_leader_wire_runtime_ownership(&mut ingress_ownership)", ".skip_leader_wire_runtime_ownership(&mut ingress_ownership)", "checked runtime-bound ingress carrier"),
+        ("permits_height", "Self::Historical => request < active,", "Self::Historical => request <= active,", "exact current versus historical height"),
+        ("permits_height", "Self::Current => request == active,", "Self::Current => request <= active,", "exact current versus historical height"),
+        ("permits_subject", "Self::Current => request == decided,", "Self::Current => true,", "exact Decision subject"),
+        ("task_from_bound_ingress", "if request.requester != recipient", "if false", "authenticates exact request, hop, full routes and ingress"),
+        ("task_from_bound_ingress", "|| reply_routes.semantic_target() != &recipient", "|| false", "authenticates exact request, hop, full routes and ingress"),
+        ("task_from_bound_ingress", ".any(|route| route.is_authenticated_via(&authenticated_via))", ".any(|route| route.is_active())", "authenticates exact request, hop, full routes and ingress"),
+        ("task_from_bound_ingress", "|| !ingress_ownership.matches_message(&exact_message)", "|| false", "authenticates exact request, hop, full routes and ingress"),
+        ("task_from_bound_ingress", "|| !ingress_ownership.matches_reply_routes(Some(&reply_routes))", "|| false", "authenticates exact request, hop, full routes and ingress"),
+        ("task_from_bound_ingress", "authenticate_certified_body_request_identity(&request, &recipient)?;", "", "validates the signature before constructing"),
+        ("task_from_bound_ingress", "HistoricalBodyAdmissionPlan::from_reply_routes(&reply_routes)?", "HistoricalBodyAdmissionPlan::from_reply_routes(&reply_routes).unwrap()", "validates the signature before constructing"),
+        ("server_enqueue", ".try_enqueue(task)", ".try_enqueue_unbounded(task)", "requires the installed service"),
+        ("worker_spawn", "let (completion_tx, completion_rx) = mpsc::sync_channel(queue_capacity);", "let (completion_tx, completion_rx) = mpsc::channel();", "validated finite geometry"),
+        ("worker_spawn", "limits.validate()?;", "", "validated finite geometry"),
+        ("worker_try_enqueue", "if self.deferred_prepared.is_some() {", "if false {", "reserves budgets before nonblocking send"),
+        ("worker_try_enqueue", "if !self.admission.try_reserve(&task, now)? {", "if false {", "reserves budgets before nonblocking send"),
+        ("worker_try_enqueue", "self.task_tx.try_send(task)", "self.task_tx.send(task)", "reserves budgets before nonblocking send"),
+        ("worker_try_enqueue", "Err(TrySendError::Full(task)) => {\n                self.admission.release(&task)?;", "Err(TrySendError::Full(task)) => {", "releases exact failed charges"),
+        ("worker_try_enqueue", "Err(TrySendError::Disconnected(task)) => {\n                self.admission.release(&task)?;", "Err(TrySendError::Disconnected(task)) => {", "releases exact failed charges"),
+        ("worker_try_recv", "self.deferred_prepared.take()", "self.deferred_prepared.clone()", "prioritizes the exact retry"),
+        ("worker_try_recv", "self.admission.release(completion.task())?;", "", "releases each worker charge once"),
+        ("worker_defer_prepared", "if self.deferred_prepared.is_some() {", "if false {", "single retained retry owner"),
+        ("worker_has_pending", "self.deferred_prepared.is_some() || self.admission.outstanding != 0", "self.admission.outstanding != 0", "retry or outstanding ingress exists"),
+        ("historical_body_worker", "&task.request,\n            &task.recipient,", "&task.request,\n            &task.authenticated_via,", "exact authenticated task through every completion"),
+        ("cache_serve", "authenticate_certified_body_request_identity(request, authenticated_requester)?;", "", "authenticates the signed requester even on cache hits"),
+        ("cache_serve", "build_historical_body_response(", "build_unverified_body_response(", "canonical authenticated Kura response"),
+        ("cache_prepare", "let _ = message.exact_output_hash();", "", "warms the exact output hash"),
+        ("cache_prepare", "BlockMessageWire::try_preencoded(", "BlockMessageWire::new(", "preencodes and warms"),
+        ("proof_mint", "source_subject: request.subject,", "source_subject: response.manifest.subject,", "exact request, round, subject, responder and output hash"),
+        ("validated_cached_exact_output_hash", "|| response.manifest.subject != request.subject", "|| false", "foreign request, source round or subject"),
+        ("validated_cached_exact_output_hash", "message.cached_exact_output_hash().ok_or_else(", "Some(message.exact_output_hash()).ok_or_else(", "requires the worker-warmed exact hash"),
+        ("proof_covers_message", "if &self.network_id != expected_network_id {", "if false {", "preserves its exact network"),
+        ("proof_covers_message", "&& response.manifest.round == self.source_round", "&& true", "every immutable output identity field"),
+        ("proof_covers_message", "&& message.cached_exact_output_hash() == Some(self.exact_output_hash)", "&& true", "every immutable output identity field"),
+        ("settle_completion", ".begin_fail_stop_operation()", ".acquire()", "posts under fail-stop guard"),
+        ("settle_completion", "operation.permit(),", "foreign_permit,", "posts under fail-stop guard"),
+        ("settle_completion", "block_sync_server.defer_prepared_historical_body_output(prepared)", "Ok::<_, V2BlockSyncError>(())", "retains an exact rejected output"),
+        ("settle_completion", "drop(operation);\n                        return Err(error.into());", "operation.complete();\n                        return Err(error.into());", "posts under fail-stop guard"),
+        ("settle_completion", "drop(operation);\n                    return Err(V2BlockSyncError::ResponsePost(error).into());", "operation.complete();\n                    return Err(V2BlockSyncError::ResponsePost(error).into());", "posts under fail-stop guard"),
+        ("settle_completion", "HistoricalBodyServeCompletion::NoResponse(task) => {\n            mark_leader_wire_volatile(receiver, task.ingress_ownership())?;", "HistoricalBodyServeCompletion::NoResponse(task) => {", "retires exact remote/no-response ingress"),
+        ("settle_completion", "if is_remote_block_sync_rejection(&error) =>", "if true =>", "propagates local failure"),
+        ("settle_completion", "HistoricalBodyServeCompletion::Failed(_task, error) => return Err(error.into()),", "HistoricalBodyServeCompletion::Failed(_task, _error) => {},", "propagates local failure"),
+        ("post_prepared", "|| !ingress_ownership.matches_reply_routes(Some(&reply_routes))", "|| false", "authenticates ingress, full routes"),
+        ("post_prepared", "|| proof.network_id() != self.context.network_id", "|| false", "non-future local durable proof"),
+        ("post_prepared", "|| proof.source_round().height > self.context.height", "|| proof.source_round().height < self.context.height", "non-future local durable proof"),
+        ("post_prepared", "|| proof.responder() != &self.local_peer", "|| false", "non-future local durable proof"),
+        ("post_prepared", "|| !proof.covers_message_in_network(&self.context.network_id, &message)", "|| false", "non-future local durable proof"),
+        ("post_prepared", "ExactOutputRolloverClaim::DurableCertifiedBodyResponse", "ExactOutputRolloverClaim::Volatile", "typed durable claim before guarded ownership transfer"),
+        ("post_prepared", "durable_history_source_covers(", "skip_durable_history_source_covers(", "typed durable claim before guarded ownership transfer"),
+        ("post_prepared", "Some(ingress_ownership),", "None,", "full routes and exact ingress"),
+        ("post_prepared", "super::v2_block_sync::PreparedHistoricalBodyPostOutcome::SourceRetained(retry)", "super::v2_block_sync::PreparedHistoricalBodyPostOutcome::Posted", "exact source on output capacity rejection"),
+    )
+
+    def copy_source(relative: str, copy_root: Path, copied: set[str]) -> None:
+        if relative in copied:
+            return
+        copied.add(relative)
+        path = copy_root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT_DIR / relative, path)
+        for child in module._REVIEWED_RUST_INCLUDE_MANIFESTS.get(relative, ()):
+            copy_source((Path(relative).parent / child).as_posix(), copy_root, copied)
+
+    try:
+        for index, (key, old, new, expected) in enumerate(mutations):
+            copy_root = tmp_path / f"decided-body-{index:02d}"
+            copied: set[str] = set()
+            for relative, _name, _context in module._DECIDED_BODY_SERVE_SOURCE_OWNERS.values():
+                copy_source(f"crates/iroha_core/src/sumeragi/{relative}", copy_root, copied)
+            baseline = module._decided_body_serve_source_fidelity_errors(copy_root)
+            assert not baseline, (key, old, baseline)
+            relative, name, context = module._DECIDED_BODY_SERVE_SOURCE_OWNERS[key]
+            path = copy_root / "crates/iroha_core/src/sumeragi" / relative
+            brace_context = (module.rust_code_tokens(context),) if context else ()
+            mutate_rust_item_source_in_context(module, path, name, brace_context, old, new)
+            item = next(item for item in module.rust_items(path.read_text(), name) if item.brace_context == brace_context)
+            digest = module._rust_item_token_sha256(item)
+            assert digest != original[key], (key, old)
+            module._PRODUCTION_DECIDED_BODY_SERVE_ITEM_SHA256[key] = digest
+            errors = module._decided_body_serve_source_fidelity_errors(copy_root)
+            assert any(expected in error for error in errors), (key, old, errors)
+            assert not any("exact reviewed token digest" in error for error in errors), (key, old, errors)
+            module._PRODUCTION_DECIDED_BODY_SERVE_ITEM_SHA256.clear()
+            module._PRODUCTION_DECIDED_BODY_SERVE_ITEM_SHA256.update(original)
+    finally:
+        module._PRODUCTION_DECIDED_BODY_SERVE_ITEM_SHA256.clear()
+        module._PRODUCTION_DECIDED_BODY_SERVE_ITEM_SHA256.update(original)
+
+
+def _ordinary_ingress_consumer_mutations_survive_digest_refresh(tmp_path: Path) -> None:
+    """Exercise each reviewed ordinary-tail delta after rebinding both owner seals."""
+
+    module = load_checker()
+    relative = Path("crates/iroha_core/src/sumeragi/v2_runner/ordinary_ingress_consumer.rs")
+    name = "consume_prepared_dequeued_v2_ingress"
+    original_scalar = module._PRODUCTION_ORDINARY_INGRESS_CONSUMER_ITEM_SHA256
+    original_map = dict(module._PRODUCTION_EXACT_OUTPUT_ORDINARY_INGRESS_ITEM_SHA256)
+    mutations = (
+        ("propagate lane ingress failure", "executor.current_tag().view(),\n            )?;",
+         "executor.current_tag().view(),\n            );", "lane ingress failure and shared recovery"),
+        ("shared recovery service", "service_historical_recovery_tick(lane_work, services)?",
+         "lane_work.service_next_historical_recovery()?", "lane ingress failure and shared recovery"),
+        ("propagate recovery failure", "service_historical_recovery_tick(lane_work, services)?",
+         "service_historical_recovery_tick(lane_work, services)", "lane ingress failure and shared recovery"),
+        ("preserve authenticated hop", "let authenticated_via = inbound.via().clone();",
+         "let authenticated_via = inbound.sender().clone();", "authenticated hop before consuming"),
+        ("authenticate route set", "if !ingress_ownership.matches_reply_routes(reply_routes.as_ref()) {",
+         "if false {", "authenticated hop before consuming"),
+        ("strict historical height", "if request.round.height < executor.context().height {",
+         "if request.round.height <= executor.context().height {", "bounded historical worker handoff"),
+        ("transfer exact requester", "                    request,\n                    sender,\n                    authenticated_via,",
+         "                    request,\n                    authenticated_via.clone(),\n                    authenticated_via,", "bounded historical worker handoff"),
+        ("transfer authenticated hop", "                    authenticated_via,\n                    reply_routes,",
+         "                    sender.clone(),\n                    reply_routes,", "bounded historical worker handoff"),
+        ("preserve complete route history", "                    reply_routes,\n                    ingress_ownership,\n                );",
+         "                    reply_routes.retain_active(),\n                    ingress_ownership,\n                );", "bounded historical worker handoff"),
+        ("preserve exact worker ingress", "                    ingress_ownership,\n                );\n                match task.and_then",
+         "                    terminal_ownership,\n                );\n                match task.and_then", "bounded historical worker handoff"),
+        ("installed bounded worker", "block_sync_server.try_enqueue_historical_body(task)",
+         "Ok(HistoricalBodyServeAdmission::Queued)", "bounded historical worker handoff"),
+        ("keep queued ownership alive", "Ok(HistoricalBodyServeAdmission::Queued) => {}",
+         "Ok(HistoricalBodyServeAdmission::Queued) => { mark_leader_wire_volatile(receiver, &terminal_ownership)?; }", "bounded historical worker handoff"),
+        ("retire both capacity rejections", "HistoricalBodyServeAdmission::RateLimited\n                        | HistoricalBodyServeAdmission::Busy",
+         "HistoricalBodyServeAdmission::RateLimited", "bounded historical worker handoff"),
+        ("capacity rejection retires exact owner", "worker admission gate\"\n                        );\n                        mark_leader_wire_volatile(receiver, &terminal_ownership)?;",
+         "worker admission gate\"\n                        );", "bounded historical worker handoff"),
+        ("remote rejection classification", "Err(error) if is_remote_block_sync_rejection(&error) => {",
+         "Err(error) if true => {", "bounded historical worker handoff"),
+        ("remote rejection retires exact owner", '"rejected historical certified body request");\n                        mark_leader_wire_volatile(receiver, &terminal_ownership)?;',
+         '"rejected historical certified body request");', "bounded historical worker handoff"),
+        ("local worker failure propagates", "Err(error) => return Err(error.into()),",
+         "Err(_error) => {},", "bounded historical worker handoff"),
+        ("current-height rejection remains separate", "} else if request.round.height == executor.context().height {",
+         "} else if request.round.height >= executor.context().height {", "bounded historical worker handoff"),
+        ("synchronous body reconstruction stays absent", "let task = HistoricalBodyServeTask::from_bound_ingress(",
+         "let _ = block_sync_server.serve_historical_body(kura, request.clone(), &sender, local_key);\n                let task = HistoricalBodyServeTask::from_bound_ingress(", "historical body work must remain off the ordinary actor"),
+        ("retired manifest path stays absent", "wire::ConsensusMessageV2Payload::PayloadChunk(chunk) => {",
+         "wire::ConsensusMessageV2Payload::PayloadManifest(manifest) => { drop(manifest); }\n        wire::ConsensusMessageV2Payload::PayloadChunk(chunk) => {", "retired standalone manifest ingress"),
+        ("CommitQC guarded reconstruction", "|| block_sync_server.serve(kura, request, &sender, local_key),",
+         "|| Ok(None),", "CommitQC discovery must remain synchronous under its output guard"),
+        ("CommitQC complete reply routes", "services.post_durable_history_response_on_reply_routes_with_permit(",
+         "services.post_durable_history_response_with_permit(", "historical global responses preserve the complete prevalidated route set"),
+        ("CommitQC exact terminal", "|| mark_leader_wire_volatile(receiver, &terminal_ownership),",
+         "|| Ok(()),", "CommitQC discovery must remain synchronous under its output guard"),
+        ("reply target validation", "if reply_routes.semantic_target() != &sender {\n                iroha_logger::debug!(\n                    %sender,\n                    \"rejected certified body request with mismatched reply target\"",
+         "if false {\n                iroha_logger::debug!(\n                    %sender,\n                    \"rejected certified body request with mismatched reply target\"", "historical response route sets must match"),
+    )
+    try:
+        for index, (case, old, new, expected) in enumerate(mutations):
+            copy_root = tmp_path / f"ordinary-{index:02d}"
+            path = copy_root / relative
+            path.parent.mkdir(parents=True)
+            shutil.copyfile(ROOT_DIR / relative, path)
+            baseline = module._ordinary_ingress_consumer_source_fidelity_errors(copy_root)
+            assert not baseline, (case, baseline)
+            mutate_rust_item_source_in_context(module, path, name, (), old, new)
+            source = path.read_text(encoding="utf-8")
+            item = next(item for item in module.rust_items(source, name) if item.brace_context == ())
+            digest = module._rust_item_token_sha256(item)
+            assert digest != original_scalar, case
+            module._PRODUCTION_ORDINARY_INGRESS_CONSUMER_ITEM_SHA256 = digest
+            module._PRODUCTION_EXACT_OUTPUT_ORDINARY_INGRESS_ITEM_SHA256[name] = digest
+            errors = module._ordinary_ingress_consumer_source_fidelity_errors(copy_root)
+            assert any(expected in error for error in errors), (case, errors)
+            assert not any("exact reviewed token digest" in error for error in errors), (case, errors)
+            module._PRODUCTION_ORDINARY_INGRESS_CONSUMER_ITEM_SHA256 = original_scalar
+            module._PRODUCTION_EXACT_OUTPUT_ORDINARY_INGRESS_ITEM_SHA256.clear()
+            module._PRODUCTION_EXACT_OUTPUT_ORDINARY_INGRESS_ITEM_SHA256.update(original_map)
+    finally:
+        module._PRODUCTION_ORDINARY_INGRESS_CONSUMER_ITEM_SHA256 = original_scalar
+        module._PRODUCTION_EXACT_OUTPUT_ORDINARY_INGRESS_ITEM_SHA256.clear()
+        module._PRODUCTION_EXACT_OUTPUT_ORDINARY_INGRESS_ITEM_SHA256.update(original_map)
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "expected_error"),
+    (
+        (
+            'adapter.limits.session_capacity = NonZeroUsize::new(1).expect("one exact recovery slot");',
+            'adapter.limits.session_capacity = NonZeroUsize::new(2).expect("one exact recovery slot");',
+            "set actual capacity one before canonical ownership arrives",
+        ),
+        (
+            "adapter.lane_sessions = LaneBlockSessionCache::new(1);",
+            "adapter.lane_sessions = LaneBlockSessionCache::new(2);",
+            "set actual capacity one before canonical ownership arrives",
+        ),
+        (
+            "for _ in 0..2 {",
+            "for _ in 0..0 {",
+            "retain incomplete certificate progress in the active predecessor",
+        ),
+        (
+            '.persist_anchored_sessions()\n                    .expect("repeat persistence must not charge an exact cached recovery twice")',
+            '.persist_anchored_sessions().or(Ok::<_, V2LaneWorkError>(0))\n                    .expect("repeat persistence must not charge an exact cached recovery twice")',
+            "retain incomplete certificate progress in the active predecessor",
+        ),
+        (
+            '.hydrate_canonical_lane_artifacts()\n                .expect("direct hydration remains idempotent at its exact capacity");',
+            '.hydrate_canonical_lane_artifacts().ok();',
+            "retain incomplete certificate progress in the active predecessor",
+        ),
+        (
+            "assert_eq!(adapter.lane_sessions, exact_recovered_cache);",
+            "assert!(adapter.lane_sessions.len() <= 2);",
+            "retain incomplete certificate progress in the active predecessor",
+        ),
+        (
+            "assert!(!adapter.output_guard.restart_required());",
+            "let _ = adapter.output_guard.restart_required();",
+            "retain incomplete certificate progress in the active predecessor",
+        ),
+        (
+            "Some(&proposal.descriptor.lane_block_height)",
+            "None",
+            "retain incomplete certificate progress in the active predecessor",
+        ),
+    ),
+)
+def test_late_lane_recovery_runtime_mutations_survive_digest_refresh(
+    tmp_path: Path, old: str, new: str, expected_error: str,
+) -> None:
+    """The capacity-one regression must exercise real repeated recovery and fail-stop."""
+
+    module = load_checker()
+    relative = Path("crates/iroha_core/src/sumeragi/v2_lane_work.rs")
+    path = tmp_path / relative
+    path.parent.mkdir(parents=True)
+    shutil.copyfile(ROOT_DIR / relative, path)
+    source = path.read_text(encoding="utf-8")
+    name = "globally_applied_lane_body_without_certificate_remains_recoverable"
+    errors = []
+    item = module._require_rust_item(path, source, name, errors)
+    assert item is not None
+    module._require_rust_item_token_sha256(
+        path, item, module._LATE_LANE_RECOVERY_TEST_SHA256, name, errors
+    )
+    module._require_late_lane_recovery_runtime_source_contracts(path, item, errors)
+    assert not errors, errors
+    mutate_rust_item_source_in_context(
+        module, path, name, item.brace_context, old, new
+    )
+    errors = []
+    mutated = module._require_rust_item(path, path.read_text(encoding="utf-8"), name, errors)
+    assert mutated is not None
+    original_digest = module._LATE_LANE_RECOVERY_TEST_SHA256
+    module._LATE_LANE_RECOVERY_TEST_SHA256 = module._rust_item_token_sha256(mutated)
+    try:
+        module._require_rust_item_token_sha256(
+            path, mutated, module._LATE_LANE_RECOVERY_TEST_SHA256, name, errors
+        )
+        module._require_late_lane_recovery_runtime_source_contracts(path, mutated, errors)
+    finally:
+        module._LATE_LANE_RECOVERY_TEST_SHA256 = original_digest
+    assert any(expected_error in error for error in errors), errors
+    assert not any("exact reviewed token digest" in error for error in errors), errors
+
+
+@pytest.mark.parametrize(
+    ("item_name", "old", "new", "expected_error"),
+    (
+        (
+            "insert_recovered_proposals",
+            "self.preflight_trusted_proposal_replacement(proposal)?;",
+            "let _ = proposal;",
+            "preflight every input against original quorum evidence",
+        ),
+        (
+            "insert_recovered_proposals",
+            "Some(previous) if previous != proposal",
+            "Some(previous) if !previous.same_consensus_identity(proposal)",
+            "preflight every input against original quorum evidence",
+        ),
+        (
+            "insert_recovered_proposals",
+            "None => ordered_required.push(proposal),",
+            "None => {},",
+            "preserve exact first-occurrence caller order",
+        ),
+        (
+            "insert_recovered_proposals",
+            ".is_some_and(|previous| previous != key.proposal_hash)",
+            ".is_some_and(|previous| previous == key.proposal_hash)",
+            "bound the unique consistent required union before cloning",
+        ),
+        (
+            "insert_recovered_proposals",
+            "if required.len() > self.capacity",
+            "if required.len() > self.capacity.saturating_add(self.sessions.len())",
+            "bound the unique consistent required union before cloning",
+        ),
+        (
+            "insert_recovered_proposals",
+            "if required.len() > self.capacity",
+            "if required.len() >= self.capacity",
+            "bound the unique consistent required union before cloning",
+        ),
+        (
+            "insert_recovered_proposals",
+            "move_preflight_after_insertion",
+            "",
+            "preflight every input against original quorum evidence",
+        ),
+        (
+            "insert_recovered_proposals",
+            "next.touch(key);",
+            "let _ = key;",
+            "touch required survivors before insertion",
+        ),
+        (
+            "insert_recovered_proposals",
+            "for proposal in ordered_required {",
+            "for proposal in required.values() {",
+            "use trusted insertion in caller order",
+        ),
+        (
+            "insert_recovered_proposals",
+            "next.insert_trusted_proposal_replacing_uncommitted_conflict(proposal.clone())?;",
+            "next.insert_proposal(proposal.clone())?;",
+            "use trusted insertion in caller order",
+        ),
+        (
+            "insert_recovered_proposals",
+            "next.touch(LaneBlockSessionKey::from_proposal(proposal));",
+            "let _ = LaneBlockSessionKey::from_proposal(proposal);",
+            "use trusted insertion in caller order",
+        ),
+        (
+            "insert_recovered_proposals",
+            "next.sessions\n                .get(key)\n                .and_then(|session| session.proposal.as_ref())\n                != Some(*proposal)",
+            "!next.sessions.get(key).and_then(|session| session.proposal.as_ref()).is_some_and(|retained| retained.same_consensus_identity(proposal))",
+            "verify the full exact retained set before atomic publication",
+        ),
+        (
+            "insert_recovered_proposals",
+            "if required.iter().any(|(key, proposal)| {",
+            "if false && required.iter().any(|(key, proposal)| {",
+            "verify the full exact retained set before atomic publication",
+        ),
+        (
+            "insert_recovered_proposals",
+            "if required.iter().any(|(key, proposal)| {",
+            "*self = next.clone();\n        if required.iter().any(|(key, proposal)| {",
+            "verify the full exact retained set before atomic publication",
+        ),
+        (
+            "insert_recovered_proposals",
+            "let mut next = self.clone();",
+            "let _extra_snapshot = self.clone();\n        let mut next = self.clone();",
+            "stage exactly one cache clone",
+        ),
+        (
+            "preflight_trusted_proposal_replacement",
+            "validate_lane_block_proposal(proposal).map_err(LaneBlockSessionError::InvalidProposal)?;",
+            "let _ = proposal;",
+            "validate the proposal and protect any original same-slot quorum",
+        ),
+        (
+            "preflight_trusted_proposal_replacement",
+            "self\n            .sessions\n            .range(first..=last)",
+            "self.sessions.range(key..=key)",
+            "protect any original same-slot quorum including proposal-less evidence",
+        ),
+        (
+            "preflight_trusted_proposal_replacement",
+            "session_has_quorum_certificate(session)",
+            "session.commit_qc.is_some()",
+            "protect any original same-slot quorum including proposal-less evidence",
+        ),
+        (
+            "preflight_trusted_proposal_replacement",
+            "retained_key.proposal_hash != key.proposal_hash\n                    && session_has_quorum_certificate(session)",
+            "retained_key.proposal_hash != key.proposal_hash && session.proposal.is_some() && session_has_quorum_certificate(session)",
+            "protect any original same-slot quorum including proposal-less evidence",
+        ),
+        (
+            "insert_trusted_proposal_replacing_uncommitted_conflict",
+            "self.preflight_trusted_proposal_replacement(&proposal)?;",
+            "let _ = &proposal;",
+            "share the original-quorum preflight before every mutation",
+        ),
+    ),
+)
+def test_lane_recovery_cache_mutations_survive_digest_refresh(
+    tmp_path: Path, item_name: str, old: str, new: str, expected_error: str,
+) -> None:
+    """A refreshed target seal cannot hide weakened transactional recovery."""
+
+    module = load_checker()
+    relative = Path("crates/iroha_core/src/lane_consensus.rs")
+    cache_path = tmp_path / relative
+    cache_path.parent.mkdir(parents=True)
+    shutil.copyfile(ROOT_DIR / relative, cache_path)
+    baseline_errors = _lane_recovery_cache_owner_contract_errors(module, cache_path)
+    assert not baseline_errors, baseline_errors
+    context = (("impl", "LaneBlockSessionCache"),)
+    if old == "move_preflight_after_insertion":
+        source = cache_path.read_text(encoding="utf-8")
+        item = next(
+            item for item in module.rust_items(source, item_name)
+            if item.brace_context == context
+        )
+        old = item.source
+        new = old.replace(
+            "self.preflight_trusted_proposal_replacement(proposal)?;",
+            "let _ = proposal;", 1,
+        ).replace(
+            "next.insert_trusted_proposal_replacing_uncommitted_conflict(proposal.clone())?;",
+            "next.insert_trusted_proposal_replacing_uncommitted_conflict(proposal.clone())?;\n"
+            "            next.preflight_trusted_proposal_replacement(proposal)?;", 1,
+        )
+    mutate_rust_item_source_in_context(module, cache_path, item_name, context, old, new)
+    original = rebind_reviewed_rust_item_digests(
+        module, cache_path, item_name, context,
+        ((module._PRODUCTION_LANE_RECOVERY_CACHE_ITEM_SHA256, item_name),),
+    )
+    try:
+        errors = _lane_recovery_cache_owner_contract_errors(module, cache_path)
+    finally:
+        restore_reviewed_rust_item_digests(original)
+    assert any(expected_error in error for error in errors), errors
+    assert not any("exact reviewed token digest" in error for error in errors), errors
+
+
+def _lane_recovery_cache_owner_contract_errors(
+    module, cache_path: Path,
+) -> list[str]:
+    """Check the actual cache owner independently of the lane adapter source."""
+
+    source = cache_path.read_text(encoding="utf-8")
+    errors = []
+    items = {}
+    for name in (
+        "insert_recovered_proposals",
+        "preflight_trusted_proposal_replacement",
+        "insert_trusted_proposal_replacing_uncommitted_conflict",
+    ):
+        item = module._require_qualified_rust_item(
+            cache_path, source, "LaneBlockSessionCache", name, errors,
+            f"lane recovery cache owner {name}",
+        )
+        items[name] = item
+        module._require_rust_item_token_sha256(
+            cache_path, item, module._PRODUCTION_LANE_RECOVERY_CACHE_ITEM_SHA256[name],
+            name, errors,
+        )
+    module._require_lane_recovery_cache_source_contracts(cache_path, items, errors)
+    return errors
+
+
+def test_lane_recovery_cache_production_source_is_bound() -> None:
+    """The independent cache contract reads and seals its canonical production owner."""
+
+    module = load_checker()
+    errors = module._lane_recovery_cache_source_fidelity_errors(ROOT_DIR)
+    assert not errors, errors
+
+
+@pytest.mark.parametrize(
+    ("item_name", "old", "new", "expected_error"),
+    (
+        (
+            "persist_anchored_sessions",
+            "Kura::validate_certified_lane_block_artifact(&candidate).map_err(|message| {",
+            "Ok::<(), String>(()).map_err(|message| {",
+            "anchored lane persistence must derive autonomous execution authority",
+        ),
+        (
+            "persist_anchored_sessions",
+            "&session.prepare_qc,\n                autonomous_anchor,",
+            "&session.prepare_qc,\n                true,",
+            "anchored lane persistence must derive autonomous execution authority",
+        ),
+        (
+            "persist_anchored_sessions",
+            "if autonomous_certificate && !self.local_can_own_autonomous_payload(&session.proposal)",
+            "if !self.local_can_own_autonomous_payload(&session.proposal)",
+            "public observer persistence must verify its separate exact replica",
+        ),
+        (
+            "persist_anchored_sessions",
+            "if autonomous_certificate && !self.local_can_own_autonomous_payload(&session.proposal)",
+            "if autonomous_certificate && self.local_can_own_autonomous_payload(&session.proposal)",
+            "public observer persistence must verify its separate exact replica",
+        ),
+        (
+            "persist_anchored_sessions",
+            ".persist_canonical_autonomous_lane_replica(&candidate)",
+            ".persist_committed_lane_block_session(&session, &pops)",
+            "public observer persistence must verify its separate exact replica",
+        ),
+        (
+            "persist_anchored_sessions",
+            "if !certified_lane_artifacts_certify_same_decision(",
+            "if certified_lane_artifacts_certify_same_decision(",
+            "public observer persistence must verify its separate exact replica",
+        ),
+        (
+            "persist_anchored_sessions",
+            ") || replica.bundle.executable_payload().origin_proposal != session.proposal",
+            ") && replica.bundle.executable_payload().origin_proposal != session.proposal",
+            "public observer persistence must verify its separate exact replica",
+        ),
+        (
+            "persist_anchored_sessions",
+            "replica.bundle.executable_payload().origin_proposal != session.proposal",
+            "!replica.bundle.executable_payload().origin_proposal.same_consensus_identity(&session.proposal)",
+            "public observer persistence must verify its separate exact replica",
+        ),
+        (
+            "persist_anchored_sessions",
+            "persisted = persisted.saturating_add(1);\n                continue;\n            }\n            // A complete certificate",
+            "persisted = persisted.saturating_add(1);\n            }\n            // A complete certificate",
+            "public observer persistence must verify its separate exact replica",
+        ),
+        (
+            "persist_anchored_sessions",
+            "let pops = self.pops_for_lane_session(&session);",
+            "self.persist_autonomous_prepare_availability(&session.proposal, &session.prepare_qc)\n"
+            "                .map_err(V2LaneWorkError::Persistence)?;\n"
+            "            let pops = self.pops_for_lane_session(&session);",
+            "anchored lane persistence must have exactly one committee READY persistence call",
+        ),
+        (
+            "persist_anchored_sessions",
+            "move_validation_after_observer",
+            "",
+            "anchored lane persistence must derive autonomous execution authority",
+        ),
+        (
+            "reconstruct_durable_lane_certificate",
+            "if artifact.proposal != *proposal",
+            "if !artifact.proposal.same_consensus_identity(proposal)",
+            "lane recovery reconstruction must begin from the exact certified Kura artifact",
+        ),
+        (
+            "reconstruct_durable_lane_certificate",
+            ".canonical_finalized_autonomous_payload_for_proposal(proposal)",
+            ".canonical_autonomous_payload_from_kura(proposal)",
+            "lane recovery reconstruction must authenticate current or historical membership or exact verified public finality",
+        ),
+        (
+            "reconstruct_durable_lane_certificate",
+            "self.output_guard.close_admission_for_restart();",
+            "let _ = &self.output_guard;",
+            "lane recovery reconstruction must authenticate current or historical membership or exact verified public finality",
+        ),
+        (
+            "reconstruct_durable_lane_certificate",
+            "})?\n                    .is_some();",
+            "}).ok().flatten()\n                    .is_some();",
+            "lane recovery reconstruction must authenticate current or historical membership or exact verified public finality",
+        ),
+        (
+            "reconstruct_durable_lane_certificate",
+            ".is_some();",
+            ".is_none();",
+            "lane recovery reconstruction must authenticate current or historical membership or exact verified public finality",
+        ),
+        (
+            "reconstruct_durable_lane_certificate",
+            "&& !requester_observes_finalized_public_autonomous_carrier",
+            "&& requester_observes_finalized_public_autonomous_carrier",
+            "lane recovery reconstruction must authenticate current or historical membership or exact verified public finality",
+        ),
+        (
+            "reconstruct_durable_lane_certificate",
+            "artifact.commit_qc.validator_set.contains(sender)",
+            "!artifact.commit_qc.validator_set.contains(sender)",
+            "lane recovery reconstruction must authenticate current or historical membership or exact verified public finality",
+        ),
+        (
+            "reconstruct_durable_lane_certificate",
+            "commit_qc: artifact.commit_qc,",
+            "commit_qc: artifact.prepare_qc.clone(),",
+            "lane recovery reconstruction must authenticate current or historical membership or exact verified public finality",
+        ),
+    ),
+)
+def test_lane_public_certificate_mutations_survive_digest_refresh(
+    tmp_path: Path, item_name: str, old: str, new: str, expected_error: str,
+) -> None:
+    """Resealing an observer branch cannot grant custody or invent finality."""
+
+    module = load_checker()
+    relative = Path("crates/iroha_core/src/sumeragi/v2_lane_work.rs")
+    lane_path = tmp_path / relative
+    lane_path.parent.mkdir(parents=True)
+    shutil.copyfile(ROOT_DIR / relative, lane_path)
+    baseline_errors = _lane_public_certificate_owner_contract_errors(module, lane_path)
+    assert not baseline_errors, baseline_errors
+    context = (("impl", "V2LaneWorkAdapter"),)
+    if old == "move_validation_after_observer":
+        source = lane_path.read_text(encoding="utf-8")
+        start = source.index("            Kura::validate_certified_lane_block_artifact(&candidate).map_err(|message| {")
+        validation_end = source.index("            let descriptor = &session.proposal.descriptor;", start)
+        observer_end = source.index("            // A complete certificate", validation_end)
+        validation = source[start:validation_end]
+        observer = source[validation_end:observer_end]
+        old, new = validation + observer, observer + validation
+    mutate_rust_item_source_in_context(module, lane_path, item_name, context, old, new)
+    qualified = f"V2LaneWorkAdapter::{item_name}"
+    bindings = (
+        ((module._PRODUCTION_LANE_ACK_SEAM_ITEM_SHA256, qualified),)
+        if item_name == "persist_anchored_sessions"
+        else ((module._PRODUCTION_LANE_ROLLOVER_AUTHORITY_ITEM_SHA256, item_name),)
+    )
+    original = rebind_reviewed_rust_item_digests(
+        module, lane_path, item_name, context, bindings
+    )
+    try:
+        errors = _lane_public_certificate_owner_contract_errors(
+            module, lane_path, item_name
+        )
+    finally:
+        restore_reviewed_rust_item_digests(original)
+    assert any(expected_error in error for error in errors), errors
+    assert not any("exact reviewed token digest" in error for error in errors), errors
+
+
+def _lane_public_certificate_owner_contract_errors(
+    module, lane_path: Path, refreshed_item: str | None = None,
+) -> list[str]:
+    """Check real qualified owners; preserve the separate full integration seal."""
+
+    source = lane_path.read_text(encoding="utf-8")
+    errors = []
+    lane_items = {}
+    lane_ack_items = {}
+    for name in ("persist_anchored_sessions", "reconstruct_durable_lane_certificate"):
+        item = module._require_qualified_rust_item(
+            lane_path, source, "V2LaneWorkAdapter", name, errors,
+            f"lane public certificate owner {name}",
+        )
+        qualified = f"V2LaneWorkAdapter::{name}"
+        lane_items[name] = item
+        lane_ack_items[qualified] = item
+        if name == refreshed_item:
+            digest = (
+                module._PRODUCTION_LANE_ACK_SEAM_ITEM_SHA256[qualified]
+                if name == "persist_anchored_sessions"
+                else module._PRODUCTION_LANE_ROLLOVER_AUTHORITY_ITEM_SHA256[name]
+            )
+            module._require_rust_item_token_sha256(lane_path, item, digest, name, errors)
+    module._require_lane_public_certificate_source_contracts(
+        lane_path, lane_ack_items, lane_items, errors
+    )
+    return errors
+
+
 def test_merge_execution_validation_cache_semantics_survive_digest_refresh(tmp_path: Path) -> None:
     """Resealing cannot hide weakened merge-execution cache authority."""
 
@@ -38,6 +1397,57 @@ def test_merge_execution_validation_cache_semantics_survive_digest_refresh(tmp_p
             "let _ = &self.validated_merge_execution_candidate;",
             "global body lock must invalidate merge execution validation authority",
         ),
+        (
+            "validate_merge_candidate_for_active_round",
+            "#[cfg(test)]\n        self.merge_candidate_validation_checks.set(",
+            "self.merge_candidate_validation_checks.set(",
+            "merge validation accounting must remain test-only",
+        ),
+        (
+            "refresh_merge_candidates",
+            "if persisted_entries.next().is_some() {",
+            "if false {",
+            "persisted merge reuse must reject competing owners",
+        ),
+        (
+            "refresh_merge_candidates",
+            "let PendingMergeStage::Persisted(entry) = &pending.stage",
+            "let PendingMergeStage::Certified(entry) = &pending.stage",
+            "persisted merge reuse must reject competing owners",
+        ),
+        (
+            "refresh_merge_candidates",
+            "| PendingMergeStage::Persisted(_) => None,",
+            "=> None,\n                PendingMergeStage::Persisted(entry) => Some(crate::merge::MergeLedgerCandidate::from(entry)),",
+            "persisted merge owners must never reenter collecting candidate reconstruction",
+        ),
+        (
+            "refresh_merge_candidates",
+            "move_parent_check_after_persisted",
+            "",
+            "persisted merge reuse must authenticate current authority before its terminal return",
+        ),
+        *(
+            (
+                "refresh_merge_candidates",
+                comparison,
+                "false",
+                "persisted merge reuse must reject competing owners and bind the full candidate",
+            )
+            for comparison in (
+                "key.epoch_id != expected_epoch",
+                "key.view != active_view",
+                "candidate.epoch_id != key.epoch_id",
+                "candidate.view != key.view",
+                "candidate.carrier_height != self.context.height",
+                "candidate.carrier_parent_hash != expected_parent",
+                "key.digest != expected_digest",
+                "entry.merge_qc.epoch_id != key.epoch_id",
+                "entry.merge_qc.view != key.view",
+                "entry.merge_qc.message_digest != key.digest",
+                "authorized != Some((key.digest, candidate, candidate_bytes))",
+            )
+        ),
     )
     try:
         for index, (item_name, old, new, expected_error) in enumerate(mutations):
@@ -51,14 +1461,38 @@ def test_merge_execution_validation_cache_semantics_survive_digest_refresh(tmp_p
                 ROOT_DIR / "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
                 lane_path,
             )
-            mutate_rust_item_source_in_context(
-                module,
+            baseline_errors: list[str] = []
+            module._require_merge_execution_validation_cache_contract(
                 lane_path,
-                item_name,
-                (("impl", "V2LaneWorkAdapter"),),
-                old,
-                new,
+                lane_path.read_text(encoding="utf-8"),
+                baseline_errors,
             )
+            assert not baseline_errors, baseline_errors
+            if old == "move_parent_check_after_persisted":
+                source = lane_path.read_text(encoding="utf-8")
+                original_item = next(
+                    candidate
+                    for candidate in module.rust_items(source, item_name)
+                    if candidate.brace_context == (("impl", "V2LaneWorkAdapter"),)
+                )
+                guard_start = original_item.source.index("        if parent_header.hash() != expected_parent")
+                guard_end = original_item.source.index("        let local_is_leader =", guard_start)
+                parent_guard = original_item.source[guard_start:guard_end]
+                mutated_item = original_item.source.replace(parent_guard, "", 1)
+                marker = "        let authorized_candidate = signing_guard"
+                assert mutated_item.count(marker) == 1
+                mutated_item = mutated_item.replace(marker, parent_guard + marker, 1)
+                assert source.count(original_item.source) == 1
+                lane_path.write_text(source.replace(original_item.source, mutated_item, 1), encoding="utf-8")
+            else:
+                mutate_rust_item_source_in_context(
+                    module,
+                    lane_path,
+                    item_name,
+                    (("impl", "V2LaneWorkAdapter"),),
+                    old,
+                    new,
+                )
             item = next(
                 candidate
                 for candidate in module.rust_items(
@@ -82,6 +1516,7 @@ def test_merge_execution_validation_cache_semantics_survive_digest_refresh(tmp_p
                 and "exact reviewed token digest" not in error
                 for error in errors
             ), errors
+            assert not any("exact reviewed token digest" in error for error in errors), errors
             module._PRODUCTION_MERGE_EXECUTION_CACHE_ITEM_SHA256.clear()
             module._PRODUCTION_MERGE_EXECUTION_CACHE_ITEM_SHA256.update(
                 original_seals
@@ -583,24 +2018,24 @@ def test_merge_execution_validation_cache_semantics_survive_digest_refresh(tmp_p
             "pending exact output must include dispatchable fanouts, writer flushes, and undrained receipts without spinning on parked ownership",
         ),
         (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "crates/iroha_core/src/sumeragi/v2_worker_exact_output.rs",
             "fn handoff_applied_height_to_durable_reconstruction(",
             "self.admitted_sidecar_chunks.clear();",
             "let _ = &self.admitted_sidecar_chunks;",
             "applied-height handoff must retire every volatile sidecar completion state",
         ),
         (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "crates/iroha_core/src/sumeragi/v2_worker_io_execution.rs",
             "fn retain_returned(",
-            "if HashOf::new(&post.data) != *expected_hash {",
-            "if false && HashOf::new(&post.data) != *expected_hash {",
+            "if post.data.exact_output_hash() != *expected_hash {",
+            "if false && post.data.exact_output_hash() != *expected_hash {",
             "returned actor post must retain the exact pinned payload identity",
         ),
         (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "crates/iroha_core/src/sumeragi/v2_worker_exact_output.rs",
             "fn handoff_applied_height_to_durable_reconstruction(",
-            ".any(|(message, expected_hash)| HashOf::new(message) != *expected_hash)",
-            ".any(|(message, expected_hash)| false && HashOf::new(message) != *expected_hash)",
+            ".any(|(message, expected_hash)| message.exact_output_hash() != *expected_hash)",
+            ".any(|(message, expected_hash)| false && message.exact_output_hash() != *expected_hash)",
             "applied-height handoff must preflight every pinned payload before classification",
         ),
         (
@@ -721,7 +2156,7 @@ def test_merge_execution_validation_cache_semantics_survive_digest_refresh(tmp_p
             "reply fanout construction must preserve the complete bounded route history",
         ),
         (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "crates/iroha_core/src/sumeragi/v2_worker_io_execution.rs",
             "fn classified_with_route_history(",
             "            reply_routes,\n"
             "            ingress_ownership: None,\n"
@@ -781,28 +2216,28 @@ def test_merge_execution_validation_cache_semantics_survive_digest_refresh(tmp_p
             "admission advances only the completed class/source ownership",
         ),
         (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "crates/iroha_core/src/sumeragi/v2_worker_services_impl.rs",
             "fn start_inner(",
             ".map(|entry| entry.validator.clone())",
             ".filter(|_| false).map(|entry| entry.validator.clone())",
             "production bounds protocol fanout by roster and source geometry while charging the shared pool only for the independently reserved authenticated reply sources",
         ),
         (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "crates/iroha_core/src/sumeragi/v2_worker_services_impl.rs",
             "fn enqueue_owned_exact_reply_routes_while_guarded(",
             "PendingExactFanout::claimed_with_reply_routes_and_ingress_ownership(",
             "PendingExactFanout::claimed_with_routes(",
             "exact replies expand all authenticated sources without changing semantic identity and preserve bounded route",
         ),
         (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "crates/iroha_core/src/sumeragi/v2_worker/autonomous_lane_output_reconstruction.rs",
             "fn applied_height_reconstruction_covers(",
             "rollover_claim.validate_fanout(messages, peers)?;",
             "let _ = (messages, peers);",
             "durable rollover requires a validated typed claim in the exact creation scope",
         ),
         (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "crates/iroha_core/src/sumeragi/v2_worker/autonomous_lane_output_reconstruction.rs",
             "fn applied_height_reconstruction_covers(",
             "if !scope.covers(artifact) {",
             "if false && !scope.covers(artifact) {",
@@ -816,35 +2251,35 @@ def test_merge_execution_validation_cache_semantics_survive_digest_refresh(tmp_p
             "every production exact fanout must enter the corridor with its typed claim",
         ),
         (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "crates/iroha_core/src/sumeragi/v2_worker/autonomous_lane_output_reconstruction.rs",
             "fn applied_height_reconstruction_covers(",
-            "durable_history.ok_or_else(|| {",
-            "Some(durable_history.unwrap()).ok_or_else(|| {",
+            "durable_history.ok_or_else(|| {\n                \"Sumeragi v2 durable response lacks an independently readable history source\"",
+            "Some(durable_history.unwrap()).ok_or_else(|| {\n                \"Sumeragi v2 durable response lacks an independently readable history source\"",
             "applied-height handoff must independently reread every durable Kura response source",
         ),
         (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "crates/iroha_core/src/sumeragi/v2_worker_exact_output.rs",
             "fn durable_history_source_covers(",
             "|| response.certificate != source.commit_qc",
             "|| false",
             "durable CommitQC response must match its exact Kura finality source",
         ),
         (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "crates/iroha_core/src/sumeragi/v2_worker_exact_output.rs",
             "fn durable_history_source_covers(",
-            "|| canonical_wire != response.body",
+            "|| !proof.covers_message_in_network(source_network_id, message)",
             "|| false",
             "durable body response must match its exact canonical Kura block",
         ),
         (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "crates/iroha_core/src/sumeragi/v2_worker_exact_output.rs",
             "fn durable_history_source_covers(",
             "|| certificate.commit_qc != source.commit_qc",
             "|| false",
             "durable lane certificate must match its exact certified Kura source",
         ),
         (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "crates/iroha_core/src/sumeragi/v2_worker_services_impl.rs",
             "fn post_durable_history_response_with_routes(",
             "durable_history_source_covers(",
             "durable_history_source_covers_unchecked(",
@@ -865,14 +2300,14 @@ def test_merge_execution_validation_cache_semantics_survive_digest_refresh(tmp_p
             "production handoff must pass exact lane and Kura authorities into retirement",
         ),
         (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "crates/iroha_core/src/sumeragi/v2_worker/autonomous_lane_output_reconstruction.rs",
             "fn applied_height_reconstruction_covers(",
             "round.context_id == context_id && round.height == height",
             "round.context_id == context_id",
             "durable rollover classification must bind the exact artifact context and height",
         ),
         (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "crates/iroha_core/src/sumeragi/v2_worker/autonomous_lane_output_reconstruction.rs",
             "fn applied_height_reconstruction_covers(",
             "ProgressReconstruction::Retransmit",
             "ProgressReconstruction::Exact",
@@ -1021,7 +2456,7 @@ def test_merge_execution_validation_cache_semantics_survive_digest_refresh(tmp_p
         (
             "crates/iroha_core/src/sumeragi/v2_runner/finalized_output_rollover.rs",
             "pub(super) fn preflight_finalized_lane_rollover(",
-            "let _ = lane_work.service_next_historical_recovery()?;",
+            "let _ = service_historical_recovery_tick(lane_work, services)?;",
             "let _ = &lane_work;",
             "finalized-lane preflight must keep the active predecessor alive",
         ),
@@ -1089,9 +2524,10 @@ def test_merge_execution_validation_cache_semantics_survive_digest_refresh(tmp_p
         (
             "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
             "fn hydrate_canonical_lane_artifacts(",
-            "for proposal in raw_proposals {",
-            "for proposal in raw_proposals.into_iter().rev() {",
-            "canonical raw lane hydration must replay the complete predecessor chain in deterministic order and fail closed on conflicts",
+            "        self.lane_sessions\n            .insert_recovered_proposals(&raw_proposals)",
+            "        raw_proposals.reverse();\n"
+            "        self.lane_sessions\n            .insert_recovered_proposals(&raw_proposals)",
+            "raw lane hydration must install independent chains in canonical deterministic order as one complete bounded recovery batch before publishing payloads or historical READY",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_runner/finalized_output_rollover.rs",
@@ -1814,14 +3250,14 @@ def test_merge_execution_validation_cache_semantics_survive_digest_refresh(tmp_p
             "terminal reply-flush polling must bind the mutable target, retained writer occurrence, and actor acknowledgement to one adaptive timeout attempt",
         ),
         (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "crates/iroha_core/src/sumeragi/v2_worker_exact_output.rs",
             "fn handoff_applied_height_to_durable_reconstruction(",
             "!= target.reply_writer_timeout_attempt",
             "!= 0",
             "finality handoff must revalidate target, retained writer occurrence, and actor acknowledgement against the same adaptive timeout attempt",
         ),
         (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "crates/iroha_core/src/sumeragi/v2_worker_exact_output.rs",
             "fn handoff_applied_height_to_durable_reconstruction(",
             "!= pending_flush.reply_writer_timeout_attempt",
             "!= target.reply_writer_timeout_attempt",
@@ -2063,10 +3499,10 @@ def test_merge_execution_validation_cache_semantics_survive_digest_refresh(tmp_p
             "pub fn parse(self) -> Result<actual::Root, ParseError> {",
             ".max_total_connections\n",
             ".max_connections_per_peer\n",
-            "root configuration must derive the authenticated-source bound from network geometry and reject invalid lifecycle or exact-output capacity",
+            "root configuration must derive the authenticated-source bound from network geometry and reject invalid canonical ingress, lifecycle, or exact-output capacity",
         ),
         (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "crates/iroha_core/src/sumeragi/v2_worker_services_impl.rs",
             "fn start_inner(",
             "validate_shared_ownership_geometry(\n"
             "            shared_pending_ownership_unit_capacity,\n"
@@ -2095,7 +3531,7 @@ def test_merge_execution_validation_cache_semantics_survive_digest_refresh(tmp_p
         (
             "crates/iroha_core/src/sumeragi/v2_effects.rs",
             "pub(crate) fn accept_payload_chunk_with_ingress_ownership",
-            "|| !ingress_ownership.matches_semantic_origin(Some(authenticated_sender))",
+            "|| !ingress_ownership.matches_semantic_origin(authenticated_sender)",
             "|| false",
             "payload chunk effect consumption must reject a changed envelope or semantic origin before mutation",
         ),
@@ -2130,9 +3566,9 @@ def test_merge_execution_validation_cache_semantics_survive_digest_refresh(tmp_p
             "certified response emission preserves the complete authenticated route set until the guarded enqueue has completed",
         ),
         (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "crates/iroha_core/src/sumeragi/v2_worker_services_impl.rs",
             "pub(crate) fn route_payload_chunk<R: EffectRuntime>(",
-            "|| !ingress_ownership.matches_semantic_origin(Some(&sender))",
+            "|| !ingress_ownership.matches_semantic_origin(&sender)",
             "|| false",
             "payload chunk routing must bind canonical bytes and semantic sender before buffering or effect mutation",
         ),
@@ -2235,7 +3671,7 @@ def test_merge_execution_validation_cache_semantics_survive_digest_refresh(tmp_p
             "exact Apply retransmission must retain the incumbent authority and coalesce every later periodic lifecycle",
         ),
         (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "crates/iroha_core/src/sumeragi/v2_worker_services_impl.rs",
             "pub(crate) fn route_payload_chunk<R: EffectRuntime>(",
             "            if self.has_exact_reconstructed_completion(manifest_hash, &ingress_ownership)? {\n",
             "            if false && self.has_exact_reconstructed_completion(manifest_hash, &ingress_ownership)? {\n",
@@ -2273,10 +3709,10 @@ def test_merge_execution_validation_cache_semantics_survive_digest_refresh(tmp_p
         (
             "crates/iroha_core/src/sumeragi/v2_runner/ordinary_ingress_consumer.rs",
             "fn consume_prepared_dequeued_v2_ingress(",
-            "    if matches!(inbound.message(), BlockMessage::KuraReplicaAdvert(_)) {\n"
-            "        admit_kura_replica_advert_ingress(receiver, kura, inbound)?;\n"
-            "        finish!(ProductionPreparedOrdinaryIngressConsumptionV1::Continue);\n"
-            "    }\n",
+            "        BlockMessage::KuraReplicaAdvert(_) => {\n"
+            "            admit_kura_replica_advert_ingress(receiver, kura, inbound)?;\n"
+            "            finish!(ProductionPreparedOrdinaryIngressConsumptionV1::Continue);\n"
+            "        }\n",
             "",
             "KuraReplicaAdvert ingress must bypass both consensus reducers",
         ),
@@ -2304,14 +3740,14 @@ def test_merge_execution_validation_cache_semantics_survive_digest_refresh(tmp_p
             "the production exact-output driver must consume the checked atomic Proposal drive budget",
         ),
         (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "crates/iroha_core/src/sumeragi/v2_worker_services_impl.rs",
             "pub(crate) fn start(\n",
             "            body_store,\n            None,\n            state,",
             "            body_store,\n            Some(body_store.instance_identity()),\n            state,",
             "ordinary startup must explicitly omit recovered Certified-Serve payload-store identity",
         ),
         (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "crates/iroha_core/src/sumeragi/v2_worker_services_impl.rs",
             "fn start_inner(\n",
             "            lifecycle_payload_store_identity,\n            fetches: BTreeMap::new(),",
             "            lifecycle_payload_store_identity: None,\n            fetches: BTreeMap::new(),",
@@ -2330,6 +3766,42 @@ def test_exact_output_production_source_mutations_fail_closed(
 ) -> None:
     module = load_checker()
     exact_output_production_fixture(tmp_path)
+
+    if region_marker == "pub(crate) fn accept_payload_chunk_with_ingress_ownership":
+        _ingress_effects_mutations_survive_digest_refresh(
+            tmp_path / "ingress-effects-semantics"
+        )
+
+    if region_marker == "fn classified_with_route_history(":
+        _worker_ack_mutations_survive_digest_refresh(tmp_path / "worker-ack-semantics")
+
+    if region_marker == "fn start_inner(" and old == ".map(|entry| entry.validator.clone())":
+        _worker_ownership_mutations_survive_digest_refresh(tmp_path / "worker-ownership-semantics")
+
+    if (
+        region_marker == "fn consume_prepared_dequeued_v2_ingress("
+        and old == "services.post_durable_history_response_on_reply_routes_with_permit("
+    ):
+        _ordinary_ingress_consumer_mutations_survive_digest_refresh(
+            tmp_path / "ordinary-consumer-semantics"
+        )
+        _decided_body_serve_mutations_survive_digest_refresh(
+            tmp_path / "decided-body-serve-semantics"
+        )
+
+    if (
+        relative_path == "crates/iroha_config/src/parameters/user.rs"
+        and region_marker == "pub fn parse(self) -> Result<actual::Root, ParseError> {"
+    ):
+        _root_parse_geometry_mutations_survive_digest_refresh(
+            tmp_path / "root-geometry-semantics"
+        )
+
+    if (
+        region_marker == "fn new_with_output_guard_and_transport_inner("
+        and old == "MergeSidecarTransport::open_durable_with_server_stream_capacity("
+    ):
+        _lane_output_mutations_survive_digest_refresh(tmp_path / "lane-output-semantics")
 
     path = tmp_path / relative_path
     source = path.read_text(encoding="utf-8")
@@ -2371,6 +3843,295 @@ def test_exact_output_production_source_mutations_fail_closed(
         any(expected_error in error for error in errors)
         for expected_error in expected_errors
     ), errors
+
+def _lane_output_mutations_survive_digest_refresh(tmp_path: Path) -> None:
+    """Keep requester and rollover authority checks effective after resealing."""
+    module = load_checker()
+    relative = Path("crates/iroha_core/src/sumeragi/v2_lane_work.rs")
+    canonical = ROOT_DIR / relative
+    assert canonical.is_file() and not canonical.is_symlink()
+    source = canonical.read_text(encoding="utf-8")
+    names = (
+        "new_with_output_guard_and_transport_inner",
+        "accept_certified_merge_sidecar_request",
+        "service_next_certified_merge_sidecar_materialization",
+        "durable_lane_rollover_authority",
+    )
+    items, digests = {}, {}
+    errors: list[str] = []
+    for name in names:
+        item = module._require_qualified_rust_item(
+            canonical, source, "V2LaneWorkAdapter", name, errors,
+            "canonical lane-output production owner",
+            expected_attributes=("#[allow(clippy::too_many_arguments)]",)
+            if name == names[0] else (),
+        )
+        assert item is not None and not errors, errors
+        table = (module._PRODUCTION_LANE_ROLLOVER_AUTHORITY_ITEM_SHA256
+                 if name == names[3] else module._PRODUCTION_LANE_ACK_SEAM_ITEM_SHA256)
+        key = name if name == names[3] else f"V2LaneWorkAdapter::{name}"
+        module._require_rust_item_token_sha256(canonical, item, table[key], name, errors)
+        items[name], digests[name] = item, table[key]
+    module._require_lane_output_reconciled_source_contracts(
+        canonical, {f"V2LaneWorkAdapter::{name}": item for name, item in items.items()},
+        items, errors,
+    )
+    assert not errors, errors
+    constructor, request, materialize, rollover = names
+    request_error = "bounded exact historical requester before allocation"
+    materialize_error = "exact metadata, authenticated historical finality, requester membership and local custody"
+    rollover_error = "must keep the predecessor active until each winning lane has an exact durable certificate"
+    mutations = (
+        (constructor, "empty-hints", "obsolete_merge_sidecar_generation_hints: BTreeMap::new(),", "obsolete_merge_sidecar_generation_hints: retained_hints,", "initialize empty obsolete generation hints"),
+        (constructor, "instrumentation-test-only", "#[cfg(test)]\n            merge_candidate_validation_checks", "merge_candidate_validation_checks", "validation instrumentation test-only"),
+        (constructor, "instrumentation-zero", "merge_candidate_validation_checks: std::cell::Cell::new(0),", "merge_candidate_validation_checks: std::cell::Cell::new(1),", "validation instrumentation test-only"),
+        (constructor, "empty-memo", "validated_merge_execution_candidate: None,", "validated_merge_execution_candidate: retained_candidate,", "production memo empty"),
+        (request, "semantic-target", "reply_route.semantic_target() != &sender", "reply_route.semantic_target() == &sender", request_error),
+        (request, "active-route", "!reply_route.is_active()", "false", request_error),
+        (request, "current-membership", "let sender_is_current = self.frozen_roster_contains(&sender);", "let sender_is_current = true;", request_error),
+        (request, "requester-identity", "|| request.requester != sender", "|| false", request_error),
+        (request, "request-version", "request.version != CERTIFIED_MERGE_SIDECAR_VERSION_V1", "false", request_error),
+        (request, "request-id", "|| request.request_id != request.canonical_request_id()", "|| false", request_error),
+        (request, "bounded-request", "u64::try_from(MAX_MERGE_LEDGER_ENTRY_BYTES).unwrap_or(u64::MAX)", "u64::MAX", request_error),
+        (request, "predecessor-read-error", ".immediate_predecessor_sidecar_requesters()?", ".immediate_predecessor_sidecar_requesters().ok().flatten()", request_error),
+        (request, "historical-auth", "self.exact_historical_lane_sidecar_requester(&request, &sender)?", "true", request_error),
+        (request, "historical-auth-error", "self.exact_historical_lane_sidecar_requester(&request, &sender)?", "self.exact_historical_lane_sidecar_requester(&request, &sender).unwrap_or(false)", request_error),
+        (request, "outsider-reject", "if !sender_is_predecessor && !sender_is_lane_validator {", "if !sender_is_predecessor && false {", request_error),
+        (request, "corridor-capacity", "historical_streams >= wire::MAX_VALIDATORS_PER_HEIGHT", "historical_streams > wire::MAX_VALIDATORS_PER_HEIGHT", "complete-committee stream bound"),
+        (request, "stream-generation", ".would_allocate_current_server_stream(&sender, request.service_generation)", ".would_allocate_current_server_stream(&sender, request.service_generation.saturating_add(1))", "complete-committee stream bound"),
+        (materialize, "corrupt-read-as-absence", "return self.consensus_storage_read(Err(error));", "return Ok(false);", "preserve admitted ownership on corrupt local reads"),
+        (materialize, "corrupt-read-retire", "return self.consensus_storage_read(Err(error));", "self.merge_sidecars.retire_unmaterialized_server_request(&requester, &request)?;\n                return self.consensus_storage_read(Err(error));", "preserve admitted ownership on corrupt local reads"),
+        (materialize, "exact-reference", "request.reference_digest == certified_merge_reference_digest(&reference)", "true", materialize_error),
+        (materialize, "lane-membership", "self.finalized_merge_active_lane_committee_contains(&entry, &requester)", "true", materialize_error),
+        (materialize, "finality-requester", "Some(&requester),", "None,", materialize_error),
+        (materialize, "custody", "&& local_is_authenticated_custodian;", ";", materialize_error),
+        (materialize, "holder-reject", "if !local_is_holder {", "if false {", materialize_error),
+        (materialize, "finality-error", "            )?\n            && local_is_authenticated_custodian;", "            ).unwrap_or(false)\n            && local_is_authenticated_custodian;", materialize_error),
+        (rollover, "canonical-lossy-read", "self.canonical_block_body(height)?", "self.kura.get_block(height)", "exact canonical block"),
+        (rollover, "strict-certificate", "self.kura.read_lane_completion_certificate(", "self.kura.read_certified_lane_block_artifact(", rollover_error),
+        (rollover, "strict-payload", "self.kura.read_lane_completion_autonomous_artifact(", "self.kura.read_autonomous_lane_block_artifact(", rollover_error),
+        (rollover, "replica-network", "                                network_id,\n                                self.context.epoch,", "                                wire::NetworkId::default(),\n                                self.context.epoch,", rollover_error),
+        (rollover, "replica-height", "                                descriptor.lane_block_height,", "                                descriptor.proposal_height,", rollover_error),
+        (rollover, "replica-on-partial", "(None, None) => {", "(None, _) => {", rollover_error),
+        (rollover, "partial-private-omit", "(Some(_), None) | (None, Some(_)) => return Ok(None),", "(Some(_), None) | (None, Some(_)) => continue,", rollover_error),
+        (rollover, "replica-absent-omit", "let Some(replica) = replica else {\n                            return Ok(None);", "let Some(replica) = replica else {\n                            continue;", rollover_error),
+        (rollover, "ordinary-absent-omit", "let Some(durable) = private_durable else {\n                    return Ok(None);", "let Some(durable) = private_durable else {\n                    continue;", rollover_error),
+        (rollover, "execution-role", "if autonomous_certificate != autonomous_payload.is_some() {", "if false {", rollover_error),
+        (rollover, "strict-receipt", "self.kura.read_lane_completion_receipt(proposal)", "self.kura.read_lane_completion_receipt_unchecked(proposal)", rollover_error),
+        (rollover, "receipt-finality", "|| receipt.application_block_hash != finality_artifact.block_hash", "|| false", "bind every winner to the exact applied artifact"),
+        (rollover, "exact-payload-proposal", "if payload.origin_proposal != *proposal {", "if false {", "one exact ordinary or autonomous durable witness per winner"),
+        (rollover, "complete-winner-set", "durable_sessions.insert(proposal.proposal_hash, source);", "let _ = source;", "one exact ordinary or autonomous durable witness per winner"),
+    )
+    for index, (name, case, old, new, expected) in enumerate(mutations):
+        assert items[name].source.count(old) == 1, (case, old)
+        _assert_lane_output_rehashed_mutant(
+            tmp_path / f"{index:02d}-{case}", module, relative, items,
+            name, items[name].source.replace(old, new, 1), digests[name], expected,
+        )
+    # Move complete statements while preserving every reviewed guard token.
+    request_source = items[request].source
+    admission_start = request_source.index("        let now = Instant::now();")
+    admission_end = request_source.index("        let ingress_selected =", admission_start)
+    admission = request_source[admission_start:admission_end]
+    order_cases = (
+        (constructor, "construction-early-complete", "        construction.complete();", "        let adapter = Self {", False, "complete its fail-stop operation only after initializing every owner"),
+        (request, "admission-before-auth", admission, "        let sender_is_current =", False, "authentication and stream bounds must precede durable admission"),
+        (materialize, "bytes-before-auth", "        let selected_reply_route = reply_route.clone();", "        let reference = CertifiedMergeLedgerReference::new(&entry);", False, None),
+        (rollover, "publish-before-winner-validation", "            durable_sessions.insert(proposal.proposal_hash, source);", "            if durable.proposal != *proposal", False, "strict rollover reads and complete winner validation must precede durable authority publication"),
+    )
+    for name, case, moving, target, after, expected in order_cases:
+        current = items[name].source
+        if name == materialize:
+            # Move the complete enqueue match (the function's final expression)
+            # above metadata/finality validation, leaving those guards present.
+            begin = current.index(moving)
+            moving = current[begin:current.rfind("    }")]
+            expected = "complete serving authority must precede response bytes"
+        assert current.count(moving) == current.count(target) == 1, case
+        changed = current.replace(moving, "", 1)
+        changed = changed.replace(target, target + "\n" + moving if after else moving + "\n" + target, 1)
+        _assert_lane_output_rehashed_mutant(
+            tmp_path / case, module, relative, items, name, changed,
+            digests[name], expected,
+        )
+
+
+def _assert_lane_output_rehashed_mutant(
+    root: Path, module, relative: Path, baseline_items: dict,
+    name: str, source: str, baseline_digest: str, expected: str,
+) -> None:
+    path = root / relative
+    path.parent.mkdir(parents=True)
+    baseline = baseline_items[name]
+    wrapper = "impl V2LaneWorkAdapter {\n" + "\n".join(baseline.attributes) + "\n" + source + "\n}\n"
+    path.write_text(wrapper, encoding="utf-8")
+    errors: list[str] = []
+    item = module._require_qualified_rust_item(
+        path, wrapper, "V2LaneWorkAdapter", name, errors,
+        "independently rehashed lane-output owner",
+        expected_attributes=baseline.attributes,
+    )
+    assert item is not None and not errors, errors
+    digest = module._rust_item_token_sha256(item)
+    assert digest != baseline_digest
+    table = (module._PRODUCTION_LANE_ROLLOVER_AUTHORITY_ITEM_SHA256
+             if name == "durable_lane_rollover_authority" else module._PRODUCTION_LANE_ACK_SEAM_ITEM_SHA256)
+    key = name if name == "durable_lane_rollover_authority" else f"V2LaneWorkAdapter::{name}"
+    original = table[key]
+    table[key] = digest
+    try:
+        module._require_rust_item_token_sha256(path, item, table[key], name, errors)
+        selected = dict(baseline_items, **{name: item})
+        module._require_lane_output_reconciled_source_contracts(
+            path, {f"V2LaneWorkAdapter::{owner}": value for owner, value in selected.items()},
+            selected, errors,
+        )
+    finally:
+        table[key] = original
+    (root / "source-rehash.json").write_text(json.dumps({
+        "owner": name, "baseline_token_sha256": baseline_digest,
+        "mutant_token_sha256": digest, "expected_semantic_error": expected,
+        "errors": errors,
+    }, indent=2) + "\n", encoding="utf-8")
+    assert any(expected in error for error in errors), errors
+    assert not any("exact reviewed token digest" in error for error in errors), errors
+
+
+def _root_parse_geometry_mutations_survive_digest_refresh(tmp_path: Path) -> None:
+    """Keep parser guards and publication order authoritative after a fresh seal."""
+    module = load_checker()
+    relative = Path("crates/iroha_config/src/parameters/user.rs")
+    path = ROOT_DIR / relative
+    errors: list[str] = []
+    source = path.read_text(encoding="utf-8")
+    structural = module.mask_rust_comments_and_literals(source)
+    marker = "    pub fn parse(self) -> Result<actual::Root, ParseError> {"
+    assert structural.count(marker) == 1
+    start = structural.index(marker)
+    body_start = structural.index("{", start)
+    depth, end = 1, body_start + 1
+    while depth:
+        depth += (structural[end] == "{") - (structural[end] == "}")
+        end += 1
+    # Select this complete item without parsing every unrelated `parse`
+    # method in user.rs. Context and attributes still come from the actual
+    # full production source, using the checker's canonical lexical helpers.
+    delimiter_context = module._rust_delimiter_context(structural, start)
+    item = module.RustItem(
+        name="parse", line=source.count("\n", 0, start) + 1,
+        source=source[start:end], body=source[body_start + 1:end - 1],
+        structural_source=structural[start:end],
+        brace_context=module._rust_brace_context(structural, start),
+        delimiter_context=delimiter_context,
+        attributes=module._leading_rust_attributes(source, structural, start),
+        ancestor_inner_attributes=module._rust_ancestor_inner_cfg_attributes(
+            source, structural, start, delimiter_context,
+        ),
+    )
+    baseline_digest = module._PRODUCTION_EXACT_OUTPUT_GEOMETRY_ITEM_SHA256["user::Root::parse"]
+    module._require_rust_item_token_sha256(path, item, baseline_digest, "Root::parse", errors)
+    module._require_root_parse_exact_output_geometry_contract(path, item, errors)
+    assert not errors, errors
+    geometry = "reject invalid canonical ingress, lifecycle, or exact-output capacity"
+    mutations = (
+        ("network-capacity", ".max_total_connections\n", ".max_connections_per_peer\n", geometry),
+        ("network-derived-fallback", ".or(lane_profile.derived_limits().max_total_connections)", "", geometry),
+        ("network-default-fallback", "lane_profile.defaults().max_total_connections,", "1,", geometry),
+        ("trusted-full-fanout", "if remote_trusted_peer_count > reply_source_capacity {", "if false {", geometry),
+        ("nonvalidator-source-bound", "if sumeragi.queues.authenticated_non_validator_sources.get() > reply_source_capacity {", "if false {", geometry),
+        ("completion-reserve", "/ defaults::sumeragi::V2_RUNTIME_COMPLETION_RESERVE_DIVISOR", "* defaults::sumeragi::V2_RUNTIME_COMPLETION_RESERVE_DIVISOR", geometry),
+        ("complete-validator-roster", "trusted_peers.value().validator_roster_len()", "trusted_peers.value().others.len()", geometry),
+        ("canonical-message-minimum", "Some(required_bodies) if sumeragi.queues.bodies.get() < required_bodies", "Some(required_bodies) if false", geometry),
+        ("canonical-byte-minimum", "if sumeragi.queues.body_bytes.get() < required_body_bytes", "if false", geometry),
+        ("per-source-wire-budget", "let body_source_bytes = sumeragi.queues.body_source_bytes.get();", "let body_source_bytes = 1;", geometry),
+        ("lifecycle-source-bound", "actual::sumeragi_v2_lifecycle_capacity_geometry(\n                validator_roster_len,", "actual::sumeragi_v2_lifecycle_capacity_geometry(\n                0,", geometry),
+        ("shared-output-source-bound", "                    shared_capacity,\n                    reply_source_capacity,", "                    shared_capacity,\n                    1,", geometry),
+        ("collect-sccp-error", "emit_torii_config_error(&mut emitter, message);", "let _ = message;", "validate SCCP/Norito limits"),
+        ("exact-sccp-input", "&self.torii.sccp_replay_archive, &self.norito", "&self.torii.sccp_replay_archive, &Norito::default()", "validate SCCP/Norito limits"),
+        ("direct-telemetry-profile", "actual::TelemetryProfile::from(self.telemetry_profile)", "actual::TelemetryProfile::Disabled", "sole direct telemetry profile"),
+        ("retired-master", "let telemetry_profile =", "let telemetry_enabled = true;\n        let telemetry_profile =", "must not restore retired telemetry"),
+        ("retired-redaction", "let telemetry_profile =", "let telemetry_redaction = true;\n        let telemetry_profile =", "must not restore retired telemetry"),
+        ("parsed-sumeragi", "if let Some(sumeragi) = sumeragi.as_ref() {", "if let Some(sumeragi) = None {", "geometry for the parsed Sumeragi"),
+        ("collect-pipeline-error", "let pipeline = self.pipeline.parse(&mut emitter);", "let pipeline = self.pipeline.parse();", "pipeline parsing must report"),
+        ("propagate-collective-errors", "emitter.into_result()?;", "emitter.into_result();", "propagate collective validation failure"),
+        ("apply-storage-budget", "root.apply_storage_budget();", "", "apply the storage budget"),
+    )
+    # Every retained mutant contains the complete Root item in its real impl
+    # context. The baseline above authenticates this item against the full
+    # canonical source; no fixture digest can substitute for that provenance.
+    for index, (case, old, new, expected) in enumerate(mutations):
+        assert old in item.source, case
+        mutated_source = item.source.replace(old, new, 1)
+        _assert_root_parse_geometry_mutant(
+            tmp_path / f"{index:02d}-{case}", module, relative, item,
+            mutated_source, baseline_digest, expected,
+        )
+    order_cases = (
+        (
+            "pipeline-after-validation", "let pipeline = self.pipeline.parse(&mut emitter);",
+            "emitter.into_result()?;",
+            "must precede configuration publication in the reviewed order",
+        ),
+        (
+            "validation-after-root-construction", "emitter.into_result()?;",
+            "root.apply_storage_budget();",
+            "must precede configuration publication in the reviewed order",
+        ),
+        (
+            "sccp-after-torii-consumption",
+            "if let Err(message) =\n"
+            "            validate_sccp_replay_archive_norito_limit(&self.torii.sccp_replay_archive, &self.norito)\n"
+            "        {\n            emit_torii_config_error(&mut emitter, message);\n        }",
+            "let (torii, live_query_store) = self.torii.parse(&mut emitter, parsed_sorafs);",
+            "validate SCCP/Norito limits through the collective emitter before consuming Torii",
+        ),
+    )
+    for case, moving, after, expected in order_cases:
+        assert item.source.count(moving) == item.source.count(after) == 1
+        mutated_source = item.source.replace(moving, "", 1)
+        # The validation/root case deliberately moves the collective error
+        # boundary beyond the already constructed Root while retaining tokens.
+        mutated_source = mutated_source.replace(after, after + "\n        " + moving, 1)
+        _assert_root_parse_geometry_mutant(
+            tmp_path / case, module, relative, item, mutated_source,
+            baseline_digest, expected,
+        )
+
+
+def _assert_root_parse_geometry_mutant(
+    root: Path, module, relative: Path, baseline, source: str,
+    baseline_digest: str, expected: str,
+) -> None:
+    path = root / relative
+    path.parent.mkdir(parents=True)
+    wrapper = "impl Root {\n" + "\n".join(baseline.attributes) + "\n" + source + "\n}\n"
+    path.write_text(wrapper, encoding="utf-8")
+    errors: list[str] = []
+    item = module._require_qualified_rust_item(
+        path, wrapper, "Root", "parse", errors, "rehashed Root parser mutation",
+        expected_attributes=("#[allow(clippy::too_many_lines)]",),
+    )
+    assert item is not None and not errors, errors
+    digest = module._rust_item_token_sha256(item)
+    assert digest != baseline_digest
+    original = module._PRODUCTION_EXACT_OUTPUT_GEOMETRY_ITEM_SHA256["user::Root::parse"]
+    module._PRODUCTION_EXACT_OUTPUT_GEOMETRY_ITEM_SHA256["user::Root::parse"] = digest
+    try:
+        module._require_rust_item_token_sha256(
+            path, item,
+            module._PRODUCTION_EXACT_OUTPUT_GEOMETRY_ITEM_SHA256["user::Root::parse"],
+            "Root::parse", errors,
+        )
+        module._require_root_parse_exact_output_geometry_contract(path, item, errors)
+    finally:
+        module._PRODUCTION_EXACT_OUTPUT_GEOMETRY_ITEM_SHA256["user::Root::parse"] = original
+    (root / "source-rehash.json").write_text(json.dumps({
+        "baseline_token_sha256": baseline_digest, "mutant_token_sha256": digest,
+        "expected_semantic_error": expected, "errors": errors,
+    }, indent=2) + "\n", encoding="utf-8")
+    assert any(expected in error for error in errors), errors
+    assert not any("exact reviewed token digest" in error for error in errors), errors
+
 
 def _apply_exact_output_non_runtime_extended_mutations(
     tmp_path: Path, module, monkeypatch: pytest.MonkeyPatch
@@ -2464,8 +4225,8 @@ def _apply_exact_output_non_runtime_extended_mutations(
         (
             "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
             "pub(crate) fn durable_lane_rollover_authority(",
-            "let Some(durable) = durable else {\n                return Ok(None);\n            };",
-            "let Some(durable) = durable else {\n                continue;\n            };",
+            "let Some(durable) = private_durable else {\n                    return Ok(None);\n                };",
+            "let Some(durable) = private_durable else {\n                    continue;\n                };",
             "must keep the predecessor active until each winning lane has an exact durable certificate",
         ),
         (
@@ -2792,19 +4553,43 @@ def _apply_exact_output_non_runtime_extended_mutations(
     (
         (
             "proposal_predecessor_is_ready_for_progress",
-            "|| self.autonomous_payload_is_expected_for(proposal)",
+            "|| self.autonomous_payload_is_expected_for(proposal)?",
             "|| false",
             "lane predecessor readiness must dispatch autonomous and ordinary proofs",
         ),
         (
+            "proposal_predecessor_is_ready_for_progress",
+            "|| finalized_observer",
+            "|| false",
+            "lane predecessor readiness must dispatch autonomous and ordinary proofs",
+        ),
+        (
+            "proposal_predecessor_is_ready_for_progress",
+            "!self.local_can_own_autonomous_payload(proposal)",
+            "self.local_can_own_autonomous_payload(proposal)",
+            "lane predecessor readiness must dispatch autonomous and ordinary proofs",
+        ),
+        (
+            "proposal_predecessor_is_ready_for_progress",
+            "})?\n                .is_some()",
+            "})?\n                .is_none()",
+            "lane predecessor readiness must dispatch autonomous and ordinary proofs",
+        ),
+        (
+            "proposal_predecessor_is_ready_for_progress",
+            ".certified_autonomous_lane_block_predecessor_is_globally_applied(proposal)",
+            ".certified_lane_block_predecessor_is_applied_or_snapshot_anchored(proposal)",
+            "lane predecessor readiness must dispatch autonomous and ordinary proofs",
+        ),
+        (
             "persist_anchored_sessions",
-            "if !self.proposal_predecessor_is_ready_for_progress(&session.proposal) {",
+            "if !self.proposal_predecessor_is_ready_for_progress(&session.proposal)? {",
             "if false {",
             "anchored lane persistence must retain a certified successor",
         ),
         (
             "reconstruct_durable_lane_certificate",
-            "if !self.proposal_predecessor_is_ready_for_progress(proposal) {",
+            "if !self\n            .proposal_predecessor_is_ready_for_progress(proposal)\n            .map_err(|_| ())?\n        {",
             "if false {",
             "lane recovery reconstruction must not emit a successor certificate",
         ),
@@ -2814,6 +4599,152 @@ def _apply_exact_output_non_runtime_extended_mutations(
             "if false {",
             "lane effect admission must reject every fresh consensus output",
         ),
+        pytest.param(
+            "hydrate_canonical_lane_artifacts",
+            "if historical_records.len() > hydration_capacity {",
+            "if false {",
+            "historical lane hydration must bound and authenticate every recovery record",
+            id="historical-record-count-bound",
+        ),
+        pytest.param(
+            "hydrate_canonical_lane_artifacts",
+            "validate_historical_autonomous_lane_recovery_record(\n"
+            "                self.state.as_ref(),\n"
+            "                self.kura.as_ref(),\n"
+            "                &record,\n"
+            "            )\n"
+            "            .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;",
+            "let _ = &record;",
+            "historical lane hydration must bound and authenticate every recovery record",
+            id="historical-record-authentication",
+        ),
+        pytest.param(
+            "hydrate_canonical_lane_artifacts",
+            "if committed != 0 && committed != record.reservation_group.ordered_keys.len() {",
+            "if false {",
+            "historical lane hydration must reject partially committed FIFO groups",
+            id="historical-partial-fifo",
+        ),
+        pytest.param(
+            "hydrate_canonical_lane_artifacts",
+            "if certified.proposal != *proposal",
+            "if certified.proposal.proposal_hash != proposal.proposal_hash",
+            "historical lane hydration must authenticate the entire certified proposal",
+            id="historical-entire-certified-proposal",
+        ),
+        pytest.param(
+            "hydrate_canonical_lane_artifacts",
+            "std::collections::btree_map::Entry::Occupied(entry) if entry.get() == &record => {}",
+            "std::collections::btree_map::Entry::Occupied(entry) if true => {}",
+            "historical lane hydration must preserve immutable record identity",
+            id="historical-immutable-record",
+        ),
+        pytest.param(
+            "hydrate_canonical_lane_artifacts",
+            ".insert_recovered_proposals(&raw_proposals)",
+            ".insert_recovered_proposals(&[])",
+            "one complete bounded recovery batch before publishing payloads or historical READY",
+            id="historical-capacity-replacement-owner",
+        ),
+        pytest.param(
+            "hydrate_canonical_lane_artifacts",
+            "self.lane_sessions\n"
+            "            .insert_recovered_proposals(&raw_proposals)",
+            "if self.lane_sessions.len() >= hydration_capacity {\n"
+            "            return Err(V2LaneWorkError::RestartRequired);\n"
+            "        }\n"
+            "        self.lane_sessions\n"
+            "            .insert_recovered_proposals(&raw_proposals)",
+            "one complete bounded recovery batch before publishing payloads or historical READY",
+            id="historical-capacity-replacement-before-count",
+        ),
+        pytest.param(
+            "hydrate_canonical_lane_artifacts",
+            "record.historical_context_id,",
+            "self.context.id(),",
+            "one complete bounded recovery batch before publishing payloads or historical READY",
+            id="historical-ready-context",
+        ),
+        pytest.param(
+            "hydrate_canonical_lane_artifacts",
+            ".saturating_add(recovered_historical_records.len())\n"
+            "            > hydration_capacity",
+            ".saturating_add(0)\n"
+            "            > hydration_capacity",
+            "historical and current autonomous payloads must share the exact bounded hydration inventory",
+            id="historical-combined-payload-bound",
+        ),
+        pytest.param(
+            "hydrate_canonical_lane_artifacts",
+            "let mut raw_proposals = Vec::new();",
+            "let ordinary_hydration_capacity = hydration_capacity.saturating_sub(self.lane_sessions.len());\n"
+            "        let mut raw_proposals = Vec::new();",
+            "lane hydration must stage required proposals independently of retained cache occupancy",
+            id="historical-retained-session-accounting",
+        ),
+        pytest.param(
+            "hydrate_canonical_lane_artifacts",
+            "let mut recovered_historical_records = BTreeMap::new();",
+            "let mut recovered_historical_records = self.historical_autonomous_recovery_records.clone();",
+            "historical lane hydration must bound and authenticate every recovery record",
+            id="historical-no-obsolete-map-resurrection",
+        ),
+        pytest.param(
+            "hydrate_canonical_lane_artifacts",
+            ".is_some_and(|existing| existing != &record)",
+            ".is_some_and(|_| false)",
+            "compare retained immutable identity before terminal skipping",
+            id="historical-retained-immutable-record",
+        ),
+        pytest.param(
+            "hydrate_canonical_lane_artifacts",
+            "let proposal = &record.payload.origin_proposal;\n"
+            "            let key = AutonomousLanePayloadKey::from(proposal);",
+            "let proposal = &record.payload.origin_proposal;\n"
+            "            if self.kura.lane_block_application_receipt_available(proposal) { continue; }\n"
+            "            let key = AutonomousLanePayloadKey::from(proposal);",
+            "compare retained immutable identity before terminal skipping",
+            id="historical-terminal-skip-before-immutable-check",
+        ),
+        pytest.param(
+            "hydrate_canonical_lane_artifacts",
+            ".validate_historical_autonomous_lane_recovery_record_dependencies(&record)",
+            ".validate_historical_autonomous_lane_recovery_record_dependencies(&record).or(Ok(()))",
+            "validate pending dependencies",
+            id="historical-dependency-errors-propagate",
+        ),
+        pytest.param(
+            "hydrate_canonical_lane_artifacts",
+            "raw_proposals.extend(\n            historical_ready_records\n                .iter()",
+            "raw_proposals.extend(\n            self.historical_autonomous_recovery_records\n                .values()",
+            "one complete bounded recovery batch before publishing payloads or historical READY",
+            id="historical-no-obsolete-session-resurrection",
+        ),
+        pytest.param(
+            "hydrate_canonical_lane_artifacts",
+            "self.lane_sessions\n            .insert_recovered_proposals(&raw_proposals)",
+            "self.historical_autonomous_recovery_records = recovered_historical_records.clone();\n"
+            "        self.lane_sessions\n            .insert_recovered_proposals(&raw_proposals)",
+            "publish the fresh historical inventory exactly once after complete batch installation",
+            id="historical-no-early-map-publication",
+        ),
+        pytest.param(
+            "hydrate_canonical_lane_artifacts",
+            "self.lane_sessions\n            .insert_recovered_proposals(&raw_proposals)",
+            "self.pending_autonomous_anchor_payloads = pending_autonomous_anchor_payloads.clone();\n"
+            "        self.lane_sessions\n            .insert_recovered_proposals(&raw_proposals)",
+            "publish pending payloads exactly once after complete batch installation",
+            id="historical-no-early-payload-publication",
+        ),
+        pytest.param(
+            "hydrate_canonical_lane_artifacts",
+            "historical_ready_records.push(record);",
+            "self.authorize_autonomous_ready_from_durable_input(&record.payload, proposal, record.historical_context_id)\n"
+            "                .map_err(V2LaneWorkError::InvalidContext)?;\n"
+            "            historical_ready_records.push(record);",
+            "authorize historical READY exactly once after complete batch installation",
+            id="historical-no-early-ready-authorization",
+        ),
         (
             "hydrate_canonical_lane_artifacts",
             "if !raw_slots.insert((lane_id, lane_block_height)) {",
@@ -2822,17 +4753,34 @@ def _apply_exact_output_non_runtime_extended_mutations(
         ),
         (
             "hydrate_canonical_lane_artifacts",
-            "raw_proposals.len().saturating_add(route_chain.len())\n"
-            "                    >= ordinary_hydration_capacity",
-            "raw_proposals.len().saturating_add(route_chain.len())\n"
-            "                    > ordinary_hydration_capacity",
+            "raw_proposals.len().saturating_add(route_chain.len()) >= hydration_capacity",
+            "raw_proposals.len().saturating_add(route_chain.len()) > hydration_capacity",
             "raw lane hydration must fail stop at the exact bounded inventory",
         ),
         (
             "hydrate_canonical_lane_artifacts",
-            "read_lane_block_artifact_without_sidecar_repair(lane_id, lane_block_height)",
+            "read_lane_block_artifact_read_only(lane_id, lane_block_height)",
             "read_lane_block_artifact(lane_id, lane_block_height)",
             "read only the indexed immutable artifact",
+        ),
+        (
+            "hydrate_canonical_lane_artifacts",
+            "let artifact = self\n"
+            "                    .consensus_storage_read(\n"
+            "                        self.kura\n"
+            "                            .read_lane_block_artifact_read_only(lane_id, lane_block_height),\n"
+            "                    )?",
+            "let artifact = self.kura\n"
+            "                    .read_lane_block_artifact_read_only(lane_id, lane_block_height)?",
+            "raw lane hydration must fail stop at the exact bounded inventory",
+        ),
+        (
+            "hydrate_canonical_lane_artifacts",
+            "read_lane_block_artifact_read_only(lane_id, lane_block_height),\n"
+            "                    )?",
+            "read_lane_block_artifact_read_only(lane_id, lane_block_height),\n"
+            "                    ).ok().flatten()",
+            "raw lane hydration must fail stop at the exact bounded inventory",
         ),
         (
             "hydrate_canonical_lane_artifacts",
@@ -2848,8 +4796,8 @@ def _apply_exact_output_non_runtime_extended_mutations(
         ),
         (
             "hydrate_canonical_lane_artifacts",
-            "if !canonical_raw_lane_predecessor_matches_proposal(",
-            "if false && !canonical_raw_lane_predecessor_matches_proposal(",
+            "if !self.consensus_storage_read(canonical_raw_lane_predecessor_matches_proposal(",
+            "if false && !self.consensus_storage_read(canonical_raw_lane_predecessor_matches_proposal(",
             "raw lane hydration must authenticate every unapplied predecessor link",
         ),
         (
@@ -2885,9 +4833,13 @@ def test_lane_predecessor_ordering_mutations_survive_digest_refresh(
     """Refreshed lane item seals cannot hide raw/predecessor order weakening."""
 
     module = load_checker()
-    exact_output_production_fixture(tmp_path)
-    lane_path = tmp_path / "crates/iroha_core/src/sumeragi/v2_lane_work.rs"
+    relative = Path("crates/iroha_core/src/sumeragi/v2_lane_work.rs")
+    lane_path = tmp_path / relative
+    lane_path.parent.mkdir(parents=True)
+    shutil.copyfile(ROOT_DIR / relative, lane_path)
     context = (("impl", "V2LaneWorkAdapter"),)
+    baseline_errors = _lane_predecessor_owner_contract_errors(module, lane_path)
+    assert not baseline_errors, baseline_errors
     mutate_rust_item_source_in_context(
         module, lane_path, item_name, context, old, new
     )
@@ -2905,7 +4857,7 @@ def test_lane_predecessor_ordering_mutations_survive_digest_refresh(
         module, lane_path, item_name, context, bindings
     )
     try:
-        errors = module._exact_output_production_source_fidelity_errors(tmp_path)
+        errors = _lane_predecessor_owner_contract_errors(module, lane_path, item_name)
     finally:
         restore_reviewed_rust_item_digests(original)
 
@@ -2914,6 +4866,43 @@ def test_lane_predecessor_ordering_mutations_survive_digest_refresh(
         item_name in error and "exact reviewed token digest" in error
         for error in errors
     ), errors
+
+
+def _lane_predecessor_owner_contract_errors(
+    module, lane_path: Path, refreshed_item: str | None = None,
+) -> list[str]:
+    """Check this exact owner; the full source-fidelity baseline runs separately."""
+
+    source = lane_path.read_text(encoding="utf-8")
+    errors = []
+    lane_items = {}
+    lane_ack_items = {}
+    for name in (
+        "proposal_predecessor_is_ready_for_progress",
+        "persist_anchored_sessions",
+        "reconstruct_durable_lane_certificate",
+        "preflight_effect_insertion",
+        "hydrate_canonical_lane_artifacts",
+    ):
+        item = module._require_qualified_rust_item(
+            lane_path, source, "V2LaneWorkAdapter", name, errors,
+            f"lane predecessor owner {name}",
+        )
+        qualified = f"V2LaneWorkAdapter::{name}"
+        lane_items[name] = item
+        lane_ack_items[qualified] = item
+        if name == refreshed_item:
+            digest = (
+                module._PRODUCTION_LANE_ACK_SEAM_ITEM_SHA256[qualified]
+                if qualified in module._PRODUCTION_LANE_ACK_SEAM_ITEM_SHA256
+                else module._PRODUCTION_LANE_ROLLOVER_AUTHORITY_ITEM_SHA256[name]
+            )
+            module._require_rust_item_token_sha256(lane_path, item, digest, name, errors)
+    module._require_lane_predecessor_ordering_source_contracts(
+        lane_path, lane_ack_items, lane_items, errors,
+    )
+    return errors
+
 
 @pytest.mark.parametrize(
     ("owner", "old", "new", "expected_error"),
@@ -2983,9 +4972,6 @@ def test_extracted_exact_output_owner_mutations_survive_digest_refresh(
             (module._PRODUCTION_RUNNER_ACK_SEAM_ITEM_SHA256, item_name),
             (module._PRODUCTION_EXACT_OUTPUT_RUNNER_ITEM_SHA256, item_name),
         )
-        if owner == "dispatch":
-            bindings += ((module._PRODUCTION_LOCAL_RUNNER_SERVICE_ITEM_SHA256,
-                          f"runner::{item_name}"),)
     mutate_rust_item_source_in_context(module, path, item_name, context, old, new)
     original = rebind_reviewed_rust_item_digests(
         module, path, item_name, context, bindings

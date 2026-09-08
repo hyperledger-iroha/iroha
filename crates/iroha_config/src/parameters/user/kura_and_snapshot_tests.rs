@@ -6,7 +6,7 @@ fn snapshot_resource_defaults_respect_norito_structural_limit() {
         .expect("snapshot defaults satisfy their production validation policy");
     assert_eq!(
         resources.max_decode_depth.get(),
-        norito::json::MAX_JSON_VALUE_NESTING_DEPTH,
+        norito::core::MAX_VALUE_NESTING_DEPTH,
     );
     let actual = load_root(base_table());
     assert_eq!(
@@ -18,8 +18,8 @@ fn snapshot_resource_defaults_respect_norito_structural_limit() {
 #[test]
 fn snapshot_resource_depth_boundary_is_enforced_without_other_invalid_budgets() {
     for (depth, valid) in [
-        (norito::json::MAX_JSON_VALUE_NESTING_DEPTH, true),
-        (norito::json::MAX_JSON_VALUE_NESTING_DEPTH + 1, false),
+        (norito::core::MAX_VALUE_NESTING_DEPTH, true),
+        (norito::core::MAX_VALUE_NESTING_DEPTH + 1, false),
     ] {
         let resources = super::SnapshotResourcePolicy {
             max_decode_depth: NonZeroUsize::new(depth).expect("positive depth"),
@@ -269,6 +269,14 @@ fn explicit_snapshot_store_dir_is_preserved() {
     assert_eq!(
         actual.snapshot.store_dir.value(),
         &PathBuf::from("/snapshots/paynet-1")
+    );
+}
+#[test]
+fn default_snapshot_decode_depth_matches_norito() {
+    let actual = load_root(base_table());
+    assert_eq!(
+        actual.snapshot.resources.max_decode_depth.get(),
+        norito::core::MAX_VALUE_NESTING_DEPTH,
     );
 }
 #[test]

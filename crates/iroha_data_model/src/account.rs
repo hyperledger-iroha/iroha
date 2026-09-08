@@ -71,6 +71,8 @@ mod model {
     )]
     #[cfg_attr(feature = "json", norito(no_fast_from_json))]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::account::model::Account")]
     pub struct Account {
         /// Identification of the [`Account`].
         pub id: AccountId,
@@ -157,8 +159,29 @@ impl norito::json::JsonDeserialize for AccountId {
         };
         account_id_from_json_str(value)
     }
+}
+#[cfg(feature = "json")]
+impl norito::json::JsonObjectKey for AccountId {
+    fn visit_json_key_text<E>(
+        &self,
+        mut visitor: impl FnMut(&str) -> Result<(), E>,
+    ) -> Result<(), E> {
+        let canonical = self
+            .canonical_i105()
+            .expect("AccountId JSON serialization requires canonical I105 encoding");
+        visitor(&canonical)
+    }
 
-    fn json_from_map_key(key: &str) -> Result<Self, norito::json::Error> {
+    fn visit_json_key_text_checked(
+        &self,
+        visitor: impl FnMut(&str) -> Result<(), norito::json::BoundedJsonError>,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        i105_json::visit_key_text(self, visitor)
+    }
+}
+#[cfg(feature = "json")]
+impl norito::json::JsonObjectKeyOwned for AccountId {
+    fn from_json_key_text(key: &str) -> Result<Self, norito::json::Error> {
         account_id_from_json_str(key)
     }
 }
@@ -330,15 +353,16 @@ impl FromStr for OpaqueAccountId {
         Ok(opaque)
     }
 }
-impl norito::NoritoSerialize for AccountId {
+impl norito::NoritoSerialize for AccountId {}
+impl norito::SerializePayload for AccountId {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::Error> {
-        norito::core::NoritoSerialize::serialize(&self.controller, writer)
+        norito::core::SerializePayload::serialize(&self.controller, writer)
     }
     fn encoded_len_hint(&self) -> Option<usize> {
-        norito::core::NoritoSerialize::encoded_len_hint(&self.controller)
+        norito::core::SerializePayload::encoded_len_hint(&self.controller)
     }
     fn encoded_len_exact(&self) -> Option<usize> {
-        norito::core::NoritoSerialize::encoded_len_exact(&self.controller)
+        norito::core::SerializePayload::encoded_len_exact(&self.controller)
     }
 }
 impl<'de> norito::NoritoDeserialize<'de> for AccountId {
@@ -367,6 +391,8 @@ pub type AccountEntry<'world> = Ref<'world, AccountId, AccountValue>;
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::account::AccountDetails")]
 pub struct AccountDetails {
     /// Arbitrary metadata attached to the account.
     pub metadata: Metadata,
@@ -1449,6 +1475,89 @@ mod json_tests {
         assert_eq!(json, expected);
         let decoded: AccountId = norito::json::from_json(&json).expect("deserialize account id");
         assert_eq!(decoded.controller(), id.controller());
+
+        let map = std::collections::BTreeMap::from([(id.clone(), 7_u8)]);
+        let expected_map = format!("{{\"{i105}\":7}}");
+        assert_eq!(
+            norito::json::to_json(&map).expect("serialize account-key map"),
+            expected_map
+        );
+        assert_eq!(
+            norito::json::to_json_bounded(&map, expected_map.len())
+                .expect("serialize account-key map at exact bound"),
+            expected_map
+        );
+        assert!(matches!(
+            norito::json::to_json_bounded(&map, expected_map.len() - 1),
+            Err(norito::json::BoundedJsonError::BodyTooLarge)
+        ));
+    }
+    #[test]
+    fn account_id_json_object_key_roundtrip_and_bounds() {
+        use norito::json::{self, BoundedJsonError, JsonObjectKey};
+        use std::collections::BTreeMap;
+
+        let _guard = guard_chain_discriminant();
+        let single = AccountId::new(
+            checked_keypair_from_seed(vec![0x61; 32])
+                .public_key()
+                .clone(),
+        );
+        let members = [0x62, 0x63, 0x64]
+            .into_iter()
+            .map(|seed| {
+                MultisigMember::new(
+                    checked_keypair_from_seed(vec![seed; 32])
+                        .public_key()
+                        .clone(),
+                    1,
+                )
+                .expect("multisig member")
+            })
+            .collect();
+        let multisig = AccountId::new_multisig(MultisigPolicy::new(2, members).expect("policy"));
+        for id in [single, multisig] {
+            let literal = id.canonical_i105().expect("canonical account text");
+            let map = BTreeMap::from([(id.clone(), 7_u8)]);
+            let expected = format!("{{\"{literal}\":7}}");
+            assert_eq!(json::to_json(&map).expect("account-key map"), expected);
+            assert_eq!(
+                json::to_json_bounded(&map, expected.len()).expect("exact account-key bound"),
+                expected
+            );
+            assert_eq!(
+                json::to_json_bounded(&map, expected.len() - 1),
+                Err(BoundedJsonError::BodyTooLarge)
+            );
+            assert_eq!(
+                json::from_str::<BTreeMap<AccountId, u8>>(&expected)
+                    .expect("account-key roundtrip"),
+                map
+            );
+            let value: json::Value = json::from_str(&expected).expect("object value");
+            assert_eq!(
+                <BTreeMap<AccountId, u8> as json::JsonDeserialize>::json_from_value(&value)
+                    .expect("account-key value roundtrip"),
+                map
+            );
+            let duplicate = format!("{{\"{literal}\":7,\"{literal}\":8}}");
+            assert!(json::from_str::<BTreeMap<AccountId, u8>>(&duplicate).is_err());
+            assert_eq!(id.visit_json_key_text(|_| Err(17_u8)), Err(17));
+            for failure in [
+                BoundedJsonError::BodyTooLarge,
+                BoundedJsonError::AllocationFailed,
+                BoundedJsonError::LengthMismatch,
+                BoundedJsonError::Unsupported,
+            ] {
+                let mut visits = 0;
+                let result = id.visit_json_key_text_checked(|_| {
+                    visits += 1;
+                    Err(failure)
+                });
+                assert_eq!(result, Err(failure));
+                assert_eq!(visits, 1, "stop on the first visitor failure");
+            }
+        }
     }
     #[test]
     fn account_id_value_and_map_key_json_decoders_are_borrowed_and_measured() {
@@ -1467,7 +1576,7 @@ mod json_tests {
         let exact = usage.total_allocated_bytes();
         for decode in [
             AccountId::json_from_value(&value),
-            AccountId::json_from_map_key(&literal),
+            <AccountId as norito::json::JsonObjectKeyOwned>::from_json_key_text(&literal),
         ] {
             assert_eq!(decode.expect("borrowed AccountId JSON decode"), id);
         }
@@ -1476,14 +1585,14 @@ mod json_tests {
                 AccountId::json_from_value(&value)
             }),
             norito::core::with_decode_limits_measured(limits(exact), || {
-                AccountId::json_from_map_key(&literal)
+                <AccountId as norito::json::JsonObjectKeyOwned>::from_json_key_text(&literal)
             }),
         ] {
             assert_eq!(decode.0.expect("exact AccountId budget"), id);
             assert_eq!(decode.1.total_allocated_bytes(), exact);
         }
         let (decoded, usage) = norito::core::with_decode_limits_measured(limits(exact - 1), || {
-            AccountId::json_from_map_key(&literal)
+            <AccountId as norito::json::JsonObjectKeyOwned>::from_json_key_text(&literal)
         });
         assert!(matches!(
             decoded,

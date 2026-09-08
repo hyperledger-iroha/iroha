@@ -2730,10 +2730,8 @@ impl MochiApp {
         let peer = Self::recipe_peer(peer_rows)?;
         let signer = supervisor.signers().first();
         let account_id = signer.map(|entry| account_literal(entry.account_id()));
-        let private_key = signer.map(|entry| {
-            SecretString::new(ExposedPrivateKey(entry.key_pair().private_key().clone()).to_string())
-        });
         Some(compose_app_env_recipe(
+            &self.effective_workspace_recipe(supervisor),
             &Self::peer_api_base(peer),
             &peer.torii,
             ToriiClient::new(&peer.torii)
@@ -2743,7 +2741,6 @@ impl MochiApp {
                 .as_deref(),
             &self.effective_chain_id_recipe(supervisor),
             account_id.as_deref(),
-            private_key.as_ref().map(SecretString::expose),
         ))
     }
     fn copy_app_env_recipe(
@@ -10869,12 +10866,12 @@ fn compose_launch_recipe(
     parts.join(" ")
 }
 fn compose_app_env_recipe(
+    workspace_root: &str,
     api_base: &str,
     torii_url: &str,
     mcp_url: Option<&str>,
     chain_id: &str,
     account_id: Option<&str>,
-    private_key: Option<&str>,
 ) -> String {
     BootstrapInputs {
         api_base: api_base.to_owned(),
@@ -10882,9 +10879,9 @@ fn compose_app_env_recipe(
         mcp_url: mcp_url.map(ToOwned::to_owned),
         chain_id: chain_id.to_owned(),
         account_id: account_id.map(ToOwned::to_owned),
-        private_key: private_key.map(ToOwned::to_owned),
+        private_key: None,
     }
-    .render_shell_exports()
+    .render_shell_exports(Path::new(workspace_root))
 }
 fn compose_status_probe_recipe(api_base: &str) -> String {
     format!(

@@ -156,6 +156,15 @@ use iroha_sccp::{
 use iroha_telemetry::privacy::{PrivacyBucketConfig, PrivacyEventError, PrivacyShareError};
 #[cfg(feature = "telemetry")]
 use iroha_torii_shared::status::Status;
+use iroha_torii_shared::subscriptions::{
+    SUBSCRIPTION_MUTATION_DRAFT_VERSION_V1, SubscriptionActionDraftDetails,
+    SubscriptionActionRequest, SubscriptionActionResponse, SubscriptionCancelMode,
+    SubscriptionCreateRequest, SubscriptionCreateResponse, SubscriptionGetResponse,
+    SubscriptionInstructionDraft, SubscriptionListItem, SubscriptionListParams,
+    SubscriptionListResponse, SubscriptionPlanCreateRequest, SubscriptionPlanCreateResponse,
+    SubscriptionPlanListItem, SubscriptionPlanListParams, SubscriptionPlanListResponse,
+    SubscriptionUsageRequest, SubscriptionUsageResponse,
+};
 use iroha_torii_shared::sumeragi_evidence_api::{
     SUMERAGI_EVIDENCE_COUNT_RESPONSE_MAX_BYTES, SUMERAGI_EVIDENCE_LIST_DEFAULT_LIMIT,
     SUMERAGI_EVIDENCE_LIST_JSON_RESPONSE_MAX_BYTES, SUMERAGI_EVIDENCE_LIST_MAX_LIMIT,
@@ -31219,7 +31228,7 @@ mod multisig_native_norito_dto_tests {
         IrohaJson, MultisigAccountSelectorDto, MultisigContractCallProposeDto, MultisigProposeDto,
     };
     use iroha_data_model::{account::AccountId, smart_contract::ContractAlias};
-    use norito::NoritoSerialize;
+    use norito::{NoritoSerialize, SerializePayload};
     fn bare_payload_with_flags<T: NoritoSerialize>(
         value: &T,
         flags: u8,
@@ -31663,269 +31672,7 @@ struct PreparedContractCall {
     contract_alias: Option<iroha_data_model::smart_contract::ContractAlias>,
 }
 }
-// ---------------------- Subscription API DTOs ----------------------
-/// First-release subscription mutation draft layout version.
-pub const SUBSCRIPTION_MUTATION_DRAFT_VERSION_V1: u16 = 1;
 derived_items! {
-( Clone, Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
-#[norito(deny_unknown_fields)]
-/// One canonical framed instruction returned for local transaction signing.
-pub struct SubscriptionInstructionDraftDto {
-    /// Registered instruction wire identifier.
-    pub wire_id: String,
-    /// Lowercase hexadecimal canonical framed instruction bytes.
-    pub payload_hex: String,
-}
-( Clone, Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
-/// Request payload for creating a subscription plan.
-#[norito(deny_unknown_fields)]
-pub struct SubscriptionPlanCreateDto {
-    /// Account authorizing the transaction (plan provider).
-    pub authority: iroha_data_model::account::AccountId,
-    /// Asset definition id used to store the plan metadata.
-    pub plan_id: iroha_data_model::asset::AssetDefinitionId,
-    /// Subscription plan payload stored on the asset definition.
-    pub plan: iroha_data_model::subscription::SubscriptionPlan,
-}
-(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)
-/// Canonical unsigned transaction draft for registering a subscription plan.
-pub struct SubscriptionPlanCreateResponseDto {
-    /// Always `false`; Torii has not submitted this transaction.
-    pub submitted: bool,
-    /// Plan asset definition id.
-    pub plan_id: iroha_data_model::asset::AssetDefinitionId,
-    /// Canonical Norito `TransactionPayload` bytes encoded as padded base64.
-    pub transaction_payload_b64: String,
-    /// Signature message (`HashOf<TransactionPayload>`) encoded as padded base64.
-    pub signing_message_b64: String,
-}
-( Clone, Debug, Default, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,)
-/// Query parameters for listing subscription plans.
-pub struct SubscriptionPlanListParams {
-    /// Optional plan provider filter using a canonical I105 id or on-chain alias.
-    pub provider: Option<String>,
-    /// Optional limit for pagination.
-    pub limit: Option<u64>,
-    /// Offset for pagination (default 0).
-    #[norito(default)]
-    pub offset: u64,
-    /// Count mode: "bounded" omits exact totals; "exact" preserves total counts.
-    #[norito(default)]
-    pub count_mode: Option<String>,
-}
-(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)
-/// Subscription plan list item.
-pub struct SubscriptionPlanListItem {
-    /// Plan asset definition id.
-    pub plan_id: iroha_data_model::asset::AssetDefinitionId,
-    /// Plan metadata payload.
-    pub plan: iroha_data_model::subscription::SubscriptionPlan,
-}
-(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)
-/// Response payload for listing subscription plans.
-pub struct SubscriptionPlanListResponseDto {
-    /// Plan items.
-    pub items: Vec<SubscriptionPlanListItem>,
-    /// Total number of matching plans.
-    #[norito(default)]
-    pub total: Option<u64>,
-    /// Whether more items are available after this page.
-    pub has_more: bool,
-    /// Count mode used to produce pagination metadata.
-    pub count_mode: String,
-}
-( Clone, Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
-#[norito(deny_unknown_fields)]
-/// Request payload for creating a subscription.
-pub struct SubscriptionCreateDto {
-    /// Account authorizing the transaction (subscriber).
-    pub authority: iroha_data_model::account::AccountId,
-    /// Subscription NFT id to register.
-    pub subscription_id: iroha_data_model::nft::NftId,
-    /// Asset definition id for the subscription plan.
-    pub plan_id: iroha_data_model::asset::AssetDefinitionId,
-    /// Optional billing trigger id; derived when omitted.
-    #[norito(default)]
-    pub billing_trigger_id: Option<iroha_data_model::trigger::TriggerId>,
-    /// Optional usage trigger id for usage plans; derived when omitted.
-    #[norito(default)]
-    pub usage_trigger_id: Option<iroha_data_model::trigger::TriggerId>,
-    /// Optional first charge timestamp in UTC milliseconds.
-    #[norito(default)]
-    pub first_charge_ms: Option<u64>,
-    /// Grant `CanExecuteTrigger` to the plan provider for usage recording.
-    #[norito(default)]
-    pub grant_usage_to_provider: Option<bool>,
-}
-(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)
-/// Exact unsigned subscription creation draft.
-pub struct SubscriptionCreateResponseDto {
-    /// Response layout version.
-    pub version: u16,
-    /// Account that must be used as the transaction authority.
-    pub authority: iroha_data_model::account::AccountId,
-    /// Exact mutation action (`create`).
-    pub action: String,
-    /// Subscription NFT id.
-    pub subscription_id: iroha_data_model::nft::NftId,
-    /// Plan asset definition bound to the subscription.
-    pub plan_id: iroha_data_model::asset::AssetDefinitionId,
-    /// Billing trigger id assigned to the subscription.
-    pub billing_trigger_id: iroha_data_model::trigger::TriggerId,
-    /// Usage trigger id (present for usage plans).
-    #[norito(default)]
-    pub usage_trigger_id: Option<iroha_data_model::trigger::TriggerId>,
-    /// First charge time in UTC milliseconds.
-    pub first_charge_ms: u64,
-    /// Whether the draft includes a provider `CanExecuteTrigger` grant.
-    pub provider_usage_grant_included: bool,
-    /// Exact subscription state produced when the draft instructions commit.
-    pub resulting_subscription: iroha_data_model::subscription::SubscriptionState,
-    /// Canonical instructions the authority must sign and submit.
-    pub tx_instructions: Vec<SubscriptionInstructionDraftDto>,
-}
-( Clone, Debug, Default, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,)
-/// Query parameters for listing subscriptions.
-pub struct SubscriptionListParams {
-    /// Optional subscriber filter using a canonical I105 id or on-chain alias.
-    pub owned_by: Option<String>,
-    /// Optional provider filter using a canonical I105 id or on-chain alias.
-    pub provider: Option<String>,
-    /// Optional status filter (active, paused, past_due, canceled, suspended).
-    pub status: Option<String>,
-    /// Optional limit for pagination.
-    pub limit: Option<u64>,
-    /// Offset for pagination (default 0).
-    #[norito(default)]
-    pub offset: u64,
-    /// Count mode: "bounded" omits exact totals; "exact" preserves total counts.
-    #[norito(default)]
-    pub count_mode: Option<String>,
-}
-(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)
-/// Subscription list item payload.
-pub struct SubscriptionListItem {
-    /// Subscription NFT id.
-    pub subscription_id: iroha_data_model::nft::NftId,
-    /// Subscription state metadata.
-    pub subscription: iroha_data_model::subscription::SubscriptionState,
-    /// Optional latest invoice metadata.
-    #[norito(default)]
-    pub invoice: Option<iroha_data_model::subscription::SubscriptionInvoice>,
-    /// Optional plan metadata payload.
-    #[norito(default)]
-    pub plan: Option<iroha_data_model::subscription::SubscriptionPlan>,
-}
-(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)
-/// Response payload for listing subscriptions.
-pub struct SubscriptionListResponseDto {
-    /// Subscription items.
-    pub items: Vec<SubscriptionListItem>,
-    /// Total number of matching subscriptions.
-    #[norito(default)]
-    pub total: Option<u64>,
-    /// Whether more items are available after this page.
-    pub has_more: bool,
-    /// Count mode used to produce pagination metadata.
-    pub count_mode: String,
-}
-(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)
-/// Response payload for fetching a subscription.
-pub struct SubscriptionGetResponseDto {
-    /// Subscription NFT id.
-    pub subscription_id: iroha_data_model::nft::NftId,
-    /// Subscription state metadata.
-    pub subscription: iroha_data_model::subscription::SubscriptionState,
-    /// Optional latest invoice metadata.
-    #[norito(default)]
-    pub invoice: Option<iroha_data_model::subscription::SubscriptionInvoice>,
-    /// Optional plan metadata payload.
-    #[norito(default)]
-    pub plan: Option<iroha_data_model::subscription::SubscriptionPlan>,
-}
-( Clone, Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
-#[norito(deny_unknown_fields)]
-/// Request payload for subscription status updates.
-pub struct SubscriptionActionDto {
-    /// Account authorizing the transaction (subscriber).
-    pub authority: iroha_data_model::account::AccountId,
-    /// Optional charge time override in UTC milliseconds.
-    #[norito(default)]
-    pub charge_at_ms: Option<u64>,
-    /// Optional cancel mode (`immediate` or `period_end`).
-    #[norito(default)]
-    pub cancel_mode: Option<SubscriptionCancelMode>,
-}
-( Clone, Copy, Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize, PartialEq, Eq,)
-#[norito(
-    tag = "mode",
-    content = "value",
-    rename_all = "snake_case",
-    deny_unknown_fields
-)]
-/// Cancelation mode for subscription cancel requests.
-pub enum SubscriptionCancelMode {
-    Immediate,
-    PeriodEnd,
-}
-( Clone, Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
-/// Request payload for recording subscription usage.
-#[norito(deny_unknown_fields)]
-pub struct SubscriptionUsageRequestDto {
-    /// Account authorizing the transaction (usage reporter).
-    pub authority: iroha_data_model::account::AccountId,
-    /// Usage counter key to update.
-    pub unit_key: iroha_data_model::name::Name,
-    /// Non-negative usage increment.
-    pub delta: iroha_primitives::numeric::Quantity,
-    /// Optional usage trigger id; derived when omitted.
-    #[norito(default)]
-    pub usage_trigger_id: Option<iroha_data_model::trigger::TriggerId>,
-}
-(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)
-/// Exact details projected by a subscription action draft.
-pub struct SubscriptionActionDraftDetailsDto {
-    /// Billing trigger affected by the action.
-    pub billing_trigger_id: iroha_data_model::trigger::TriggerId,
-    /// Exact trigger operation (`none`, `register`, `unregister`, or `replace`).
-    pub billing_trigger_operation: String,
-    /// Resolved charge time for resume and charge-now actions.
-    #[norito(default)]
-    pub effective_charge_ms: Option<u64>,
-    /// Explicit cancellation mode for cancel actions.
-    #[norito(default)]
-    pub cancel_mode: Option<SubscriptionCancelMode>,
-    /// Exact subscription state produced when the draft instructions commit.
-    pub resulting_subscription: iroha_data_model::subscription::SubscriptionState,
-}
-(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)
-/// Exact unsigned subscription action draft.
-pub struct SubscriptionActionResponseDto {
-    /// Response layout version.
-    pub version: u16,
-    /// Account that must be used as the transaction authority.
-    pub authority: iroha_data_model::account::AccountId,
-    /// Exact route action (`pause`, `resume`, `cancel`, `keep`, or `charge_now`).
-    pub action: String,
-    /// Subscription NFT id.
-    pub subscription_id: iroha_data_model::nft::NftId,
-    /// Exact projected action details.
-    pub details: SubscriptionActionDraftDetailsDto,
-    /// Canonical instructions the authority must sign and submit.
-    pub tx_instructions: Vec<SubscriptionInstructionDraftDto>,
-}
-(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)
-/// Canonical unsigned transaction draft for recording subscription usage.
-pub struct SubscriptionUsageResponseDto {
-    /// Always `false`; Torii has not submitted this transaction.
-    pub submitted: bool,
-    /// Subscription NFT id.
-    pub subscription_id: iroha_data_model::nft::NftId,
-    /// Canonical Norito `TransactionPayload` bytes encoded as padded base64.
-    pub transaction_payload_b64: String,
-    /// Signature message (`HashOf<TransactionPayload>`) encoded as padded base64.
-    pub signing_message_b64: String,
-}
 ( crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 /// Response returned after registering a manifest for pinning.
 pub struct RegisterPinManifestResponseDto {
@@ -42616,6 +42363,7 @@ mod tx_query_filter_tests {
             participant_metadata: std::collections::BTreeMap::new(),
             roster_root: Hash::prehashed([0x44; Hash::LENGTH]).into(),
             roster_commitments: Vec::new(),
+            private_participation: Default::default(),
             nullifier_log: Vec::new(),
             usage_commitments: Vec::new(),
             status: iroha_data_model::kaigi::KaigiStatus::Active,
@@ -61794,8 +61542,8 @@ mod app_api_inline_signing_boundary_tests {
         assert_private_key_rejected!(MultisigContractCallProposeDto);
         assert_private_key_rejected!(MultisigContractCallApproveDto);
         assert_private_key_rejected!(MultisigCancelRequestDto);
-        assert_private_key_rejected!(SubscriptionPlanCreateDto);
-        assert_private_key_rejected!(SubscriptionUsageRequestDto);
+        assert_private_key_rejected!(SubscriptionPlanCreateRequest);
+        assert_private_key_rejected!(SubscriptionUsageRequest);
         assert_private_key_rejected!(SpaceDirectoryManifestPublishDto);
         assert_private_key_rejected!(SpaceDirectoryManifestRevokeDto);
     }
@@ -68601,22 +68349,19 @@ fn public_lane_unbonding_to_json(unbonding: &PublicLaneUnbonding) -> Value {
 fn exact_field_filter_candidates<T>(
     expr: Option<&crate::filter::FilterExpr>,
     field_name: &str,
+    parse_value: &impl Fn(&Value) -> Option<T>,
 ) -> Option<BTreeSet<T>>
 where
-    T: FromStr + Ord,
+    T: Ord,
 {
-    fn parse_value<T>(value: &Value) -> Option<T>
-    where
-        T: FromStr,
-    {
-        value.as_str()?.parse().ok()
-    }
     use crate::filter::FilterExpr as F;
     match expr? {
         F::And(list) => {
             let mut selected: Option<BTreeSet<T>> = None;
             for nested in list {
-                if let Some(candidates) = exact_field_filter_candidates(Some(nested), field_name) {
+                if let Some(candidates) =
+                    exact_field_filter_candidates(Some(nested), field_name, parse_value)
+                {
                     if let Some(selected) = selected.as_mut() {
                         selected.retain(|id| candidates.contains(id));
                     } else {
@@ -68629,7 +68374,8 @@ where
         F::Or(list) => {
             let mut union = BTreeSet::new();
             for nested in list {
-                let candidates = exact_field_filter_candidates(Some(nested), field_name)?;
+                let candidates =
+                    exact_field_filter_candidates(Some(nested), field_name, parse_value)?;
                 union.extend(candidates);
             }
             Some(union)
@@ -68740,7 +68486,7 @@ fn nft_to_query_row(nft: &iroha_data_model::nft::Nft) -> norito::json::Map {
     row
 }
 fn nft_filter_candidate_ids(expr: Option<&crate::filter::FilterExpr>) -> Option<BTreeSet<NftId>> {
-    exact_field_filter_candidates(expr, "id")
+    exact_field_filter_candidates(expr, "id", &|value| value.as_str()?.parse().ok())
 }
 fn nft_from_key_value(id: &NftId, value: &iroha_data_model::nft::NftValue) -> Nft {
     let details = value.clone().into_inner();
@@ -69013,7 +68759,7 @@ fn rwa_filter_object(expr: &FilterExpr, item: &RwaListItem) -> bool {
     filter_id(expr, &item.id)
 }
 fn rwa_filter_candidate_ids(expr: Option<&crate::filter::FilterExpr>) -> Option<BTreeSet<RwaId>> {
-    exact_field_filter_candidates(expr, "id")
+    exact_field_filter_candidates(expr, "id", &|value| value.as_str()?.parse().ok())
 }
 fn rwa_list_item_from_id(id: &RwaId) -> RwaListItem {
     RwaListItem { id: id.to_string() }
@@ -69424,7 +69170,7 @@ fn resolve_trigger_id(
 }
 fn subscription_instruction_drafts(
     instructions: impl IntoIterator<Item = InstructionBox>,
-) -> Result<Vec<SubscriptionInstructionDraftDto>> {
+) -> Result<Vec<SubscriptionInstructionDraft>> {
     use iroha_data_model::isi::Instruction;
     instructions
         .into_iter()
@@ -69438,7 +69184,7 @@ fn subscription_instruction_drafts(
                         ))
                     },
                 )?;
-            Ok(SubscriptionInstructionDraftDto {
+            Ok(SubscriptionInstructionDraft {
                 wire_id: wire_id.to_owned(),
                 payload_hex: hex::encode(framed),
             })
@@ -69463,15 +69209,15 @@ fn subscription_action_draft_response(
     effective_charge_ms: Option<u64>,
     cancel_mode: Option<SubscriptionCancelMode>,
     instructions: Vec<InstructionBox>,
-) -> Result<JsonBody<SubscriptionActionResponseDto>> {
+) -> Result<JsonBody<SubscriptionActionResponse>> {
     let billing_trigger_id = resulting_subscription.billing_trigger_id.clone();
     let tx_instructions = subscription_instruction_drafts(instructions)?;
-    Ok(JsonBody(SubscriptionActionResponseDto {
+    Ok(JsonBody(SubscriptionActionResponse {
         version: SUBSCRIPTION_MUTATION_DRAFT_VERSION_V1,
         authority,
         action: action.to_owned(),
         subscription_id,
-        details: SubscriptionActionDraftDetailsDto {
+        details: SubscriptionActionDraftDetails {
             billing_trigger_id,
             billing_trigger_operation: subscription_billing_trigger_operation(
                 billing_trigger_existed,
@@ -69557,9 +69303,9 @@ fn build_usage_trigger(
 pub async fn handle_post_v1_subscription_plan(
     queue: Arc<Queue>,
     state: Arc<CoreState>,
-    NoritoJson(req): NoritoJson<SubscriptionPlanCreateDto>,
-) -> Result<JsonBody<SubscriptionPlanCreateResponseDto>> {
-    let SubscriptionPlanCreateDto {
+    NoritoJson(req): NoritoJson<SubscriptionPlanCreateRequest>,
+) -> Result<JsonBody<SubscriptionPlanCreateResponse>> {
+    let SubscriptionPlanCreateRequest {
         authority,
         plan_id,
         plan,
@@ -69591,7 +69337,7 @@ pub async fn handle_post_v1_subscription_plan(
         ENDPOINT_SUBSCRIPTION_PLANS_LIST,
     )?;
     let draft = app_api_transaction_draft(&builder);
-    Ok(JsonBody(SubscriptionPlanCreateResponseDto {
+    Ok(JsonBody(SubscriptionPlanCreateResponse {
         submitted: draft.submitted,
         plan_id,
         transaction_payload_b64: draft.transaction_payload_b64,
@@ -69654,7 +69400,7 @@ pub async fn handle_v1_subscription_plans(
         None,
         count_mode,
     );
-    let payload = SubscriptionPlanListResponseDto {
+    let payload = SubscriptionPlanListResponse {
         items: page.items,
         total: page.total.map(|total| total as u64),
         has_more: page.has_more,
@@ -69665,10 +69411,10 @@ pub async fn handle_v1_subscription_plans(
 #[iroha_futures::telemetry_future]
 pub async fn handle_post_v1_subscription_create(
     state: Arc<CoreState>,
-    NoritoJson(req): NoritoJson<SubscriptionCreateDto>,
-) -> Result<JsonBody<SubscriptionCreateResponseDto>> {
+    NoritoJson(req): NoritoJson<SubscriptionCreateRequest>,
+) -> Result<JsonBody<SubscriptionCreateResponse>> {
     use iroha_executor_data_model::permission::trigger::CanExecuteTrigger;
-    let SubscriptionCreateDto {
+    let SubscriptionCreateRequest {
         authority,
         subscription_id,
         plan_id,
@@ -69772,7 +69518,7 @@ pub async fn handle_post_v1_subscription_create(
         )));
     }
     let tx_instructions = subscription_instruction_drafts(instructions)?;
-    Ok(JsonBody(SubscriptionCreateResponseDto {
+    Ok(JsonBody(SubscriptionCreateResponse {
         version: SUBSCRIPTION_MUTATION_DRAFT_VERSION_V1,
         authority,
         action: "create".to_owned(),
@@ -69890,7 +69636,7 @@ pub async fn handle_v1_subscriptions(
         None,
         count_mode,
     );
-    let payload = SubscriptionListResponseDto {
+    let payload = SubscriptionListResponse {
         items: page.items,
         total: page.total.map(|total| total as u64),
         has_more: page.has_more,
@@ -69915,7 +69661,7 @@ pub async fn handle_v1_subscription_get(
         Some(def) => subscription_plan_from_metadata(def.metadata())?,
         None => None,
     };
-    let payload = SubscriptionGetResponseDto {
+    let payload = SubscriptionGetResponse {
         subscription_id,
         subscription,
         invoice,
@@ -69927,9 +69673,9 @@ pub async fn handle_v1_subscription_get(
 pub async fn handle_post_v1_subscription_pause(
     state: Arc<CoreState>,
     subscription_id: NftId,
-    NoritoJson(req): NoritoJson<SubscriptionActionDto>,
-) -> Result<JsonBody<SubscriptionActionResponseDto>> {
-    let SubscriptionActionDto {
+    NoritoJson(req): NoritoJson<SubscriptionActionRequest>,
+) -> Result<JsonBody<SubscriptionActionResponse>> {
+    let SubscriptionActionRequest {
         authority,
         charge_at_ms,
         cancel_mode,
@@ -69998,9 +69744,9 @@ pub async fn handle_post_v1_subscription_pause(
 pub async fn handle_post_v1_subscription_resume(
     state: Arc<CoreState>,
     subscription_id: NftId,
-    NoritoJson(req): NoritoJson<SubscriptionActionDto>,
-) -> Result<JsonBody<SubscriptionActionResponseDto>> {
-    let SubscriptionActionDto {
+    NoritoJson(req): NoritoJson<SubscriptionActionRequest>,
+) -> Result<JsonBody<SubscriptionActionResponse>> {
+    let SubscriptionActionRequest {
         authority,
         charge_at_ms,
         cancel_mode,
@@ -70084,9 +69830,9 @@ pub async fn handle_post_v1_subscription_resume(
 pub async fn handle_post_v1_subscription_cancel(
     state: Arc<CoreState>,
     subscription_id: NftId,
-    NoritoJson(req): NoritoJson<SubscriptionActionDto>,
-) -> Result<JsonBody<SubscriptionActionResponseDto>> {
-    let SubscriptionActionDto {
+    NoritoJson(req): NoritoJson<SubscriptionActionRequest>,
+) -> Result<JsonBody<SubscriptionActionResponse>> {
+    let SubscriptionActionRequest {
         authority,
         charge_at_ms,
         cancel_mode,
@@ -70173,9 +69919,9 @@ pub async fn handle_post_v1_subscription_cancel(
 pub async fn handle_post_v1_subscription_keep(
     state: Arc<CoreState>,
     subscription_id: NftId,
-    NoritoJson(req): NoritoJson<SubscriptionActionDto>,
-) -> Result<JsonBody<SubscriptionActionResponseDto>> {
-    let SubscriptionActionDto {
+    NoritoJson(req): NoritoJson<SubscriptionActionRequest>,
+) -> Result<JsonBody<SubscriptionActionResponse>> {
+    let SubscriptionActionRequest {
         authority,
         charge_at_ms,
         cancel_mode,
@@ -70238,9 +69984,9 @@ pub async fn handle_post_v1_subscription_keep(
 pub async fn handle_post_v1_subscription_charge_now(
     state: Arc<CoreState>,
     subscription_id: NftId,
-    NoritoJson(req): NoritoJson<SubscriptionActionDto>,
-) -> Result<JsonBody<SubscriptionActionResponseDto>> {
-    let SubscriptionActionDto {
+    NoritoJson(req): NoritoJson<SubscriptionActionRequest>,
+) -> Result<JsonBody<SubscriptionActionResponse>> {
+    let SubscriptionActionRequest {
         authority,
         charge_at_ms,
         cancel_mode,
@@ -70319,9 +70065,9 @@ pub async fn handle_post_v1_subscription_usage(
     queue: Arc<Queue>,
     state: Arc<CoreState>,
     subscription_id: NftId,
-    NoritoJson(req): NoritoJson<SubscriptionUsageRequestDto>,
-) -> Result<JsonBody<SubscriptionUsageResponseDto>> {
-    let SubscriptionUsageRequestDto {
+    NoritoJson(req): NoritoJson<SubscriptionUsageRequest>,
+) -> Result<JsonBody<SubscriptionUsageResponse>> {
+    let SubscriptionUsageRequest {
         authority,
         unit_key,
         delta,
@@ -70343,7 +70089,7 @@ pub async fn handle_post_v1_subscription_usage(
         ENDPOINT_SUBSCRIPTIONS_LIST,
     )?;
     let draft = app_api_transaction_draft(&builder);
-    Ok(JsonBody(SubscriptionUsageResponseDto {
+    Ok(JsonBody(SubscriptionUsageResponse {
         submitted: draft.submitted,
         subscription_id,
         transaction_payload_b64: draft.transaction_payload_b64,

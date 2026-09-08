@@ -21,12 +21,14 @@ use super::{
     },
 };
 #[cfg(test)]
-use iroha_data_model::privacy::PrivacyProtocolIdV1;
-use iroha_data_model::privacy::TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1;
+use iroha_data_model::privacy::{PrivacyProtocolIdV1, TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1};
+
 use rand::TryRngCore;
 use rayon::prelude::*;
 use std::collections::BTreeSet;
 use thiserror::Error;
+#[path = "proof_managed_note_stark_execution_fixed.rs"]
+mod execution_fixed;
 /// Number of byte-copy cells in every shared note row.
 pub(crate) const NOTE_COPY_WIDTH_V1: usize = 8;
 /// Independent copy-permutation lanes.
@@ -344,8 +346,19 @@ impl ProofManagedNoteStarkProtocolV1 {
             self.parameters.query_count,
         )
         .map_err(map_transparent_error_v1)?;
-        let consensus_proof_cap = usize::try_from(TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1)
-            .map_err(|_| ProofManagedNoteStarkErrorV1::InvalidProfile)?;
+        let consensus_proof_cap = self.domains.digest_context.maximum_proof_bytes_v1();
+        // Native game microcycles use a separately committed domain cap. Existing private-note
+        // profiles retain their exact first-release geometry and theorem floor.
+        let maximum_native_log = if self.domains.digest_context.is_execution_v1() {
+            19
+        } else {
+            PROOF_MANAGED_NOTE_MAX_NATIVE_TRACE_LOG2_V1
+        };
+        let minimum_commitment_bits = if self.domains.digest_context.is_execution_v1() {
+            187
+        } else {
+            PROOF_MANAGED_NOTE_FRI_COMMITMENT_ERROR_BITS_MIN_V1
+        };
         let _combined_profile_digest =
             proof_managed_note_stark_profile_digest_v1(self.domains, self.profile_descriptor)?;
         if self.parameters.security_lanes != PROOF_MANAGED_NOTE_SECURITY_LANES_V1
@@ -355,14 +368,13 @@ impl ProofManagedNoteStarkProtocolV1 {
             || self.parameters.terminal_degree_bound != PROOF_MANAGED_NOTE_TERMINAL_DEGREE_BOUND_V1
             || self.parameters.composition_degree_chunks
                 != PROOF_MANAGED_NOTE_COMPOSITION_DEGREE_CHUNKS_V1
-            || self.parameters.maximum_trace_log2 > PROOF_MANAGED_NOTE_MAX_NATIVE_TRACE_LOG2_V1
+            || self.parameters.maximum_trace_log2 > maximum_native_log
             || self.parameters.maximum_trace_groups != 1
             || self.parameters.maximum_segment_instances != 1
             || self.parameters.maximum_proof_bytes > consensus_proof_cap
             || PROOF_MANAGED_NOTE_MASK_DEGREE_V1 < mask_geometry.minimum_mask_degree
             || fri_soundness.query_error_bits != PROOF_MANAGED_NOTE_FRI_QUERY_ERROR_BITS_V1
-            || fri_soundness.commitment_error_bits
-                < PROOF_MANAGED_NOTE_FRI_COMMITMENT_ERROR_BITS_MIN_V1
+            || fri_soundness.commitment_error_bits < minimum_commitment_bits
             || fri_soundness.query_error_bits < PROOF_MANAGED_NOTE_TARGET_SOUNDNESS_BITS_V1
             || fri_soundness.commitment_error_bits < PROOF_MANAGED_NOTE_TARGET_SOUNDNESS_BITS_V1
             || self.profile_binding_label.is_empty()
@@ -972,6 +984,12 @@ fn maximum_fri_input_degree_v1(
 fn prepare_note_profile_v1<A: ProofManagedNoteStarkAdapterV1>(
     adapter: &A,
 ) -> Result<PreparedNoteProfileV1, ProofManagedNoteStarkErrorV1> {
+    prepare_note_profile_with_fixed_v1(adapter, true)
+}
+fn prepare_note_profile_with_fixed_v1<A: ProofManagedNoteStarkAdapterV1>(
+    adapter: &A,
+    materialize_fixed: bool,
+) -> Result<PreparedNoteProfileV1, ProofManagedNoteStarkErrorV1> {
     let protocol = adapter.protocol_v1();
     protocol.validate()?;
     let trace_log2 = adapter.trace_log2_v1();
@@ -993,12 +1011,6 @@ fn prepare_note_profile_v1<A: ProofManagedNoteStarkAdapterV1>(
     {
         return Err(ProofManagedNoteStarkErrorV1::InvalidProfile);
     }
-    let schedule = adapter.copy_schedule_v1()?;
-    let mut fixed_columns = schedule.fixed_columns_v1(trace_size)?;
-    let profile_fixed = adapter.profile_fixed_columns_v1()?;
-    canonical_columns_v1(&profile_fixed, adapter.profile_fixed_width_v1(), trace_size)?;
-    fixed_columns.extend(profile_fixed);
-    canonical_columns_v1(&fixed_columns, fixed_width, trace_size)?;
     let layout = aggregate::AggregateProofLayoutV1::new(
         protocol.parameters,
         vec![aggregate::AggregateTraceGroupLayoutV1 {
@@ -1032,6 +1044,11 @@ fn prepare_note_profile_v1<A: ProofManagedNoteStarkAdapterV1>(
     {
         return Err(ProofManagedNoteStarkErrorV1::InvalidProfile);
     }
+    let fixed_columns = if materialize_fixed {
+        prepare_fixed_columns_v1(adapter, trace_size, fixed_width)?
+    } else {
+        Vec::new()
+    };
     Ok(PreparedNoteProfileV1 {
         protocol,
         trace_log2,
@@ -1043,6 +1060,19 @@ fn prepare_note_profile_v1<A: ProofManagedNoteStarkAdapterV1>(
         layout,
         fixed_columns,
     })
+}
+fn prepare_fixed_columns_v1<A: ProofManagedNoteStarkAdapterV1>(
+    adapter: &A,
+    trace_size: usize,
+    fixed_width: usize,
+) -> Result<Vec<Vec<F>>, ProofManagedNoteStarkErrorV1> {
+    let schedule = adapter.copy_schedule_v1()?;
+    let mut fixed_columns = schedule.fixed_columns_v1(trace_size)?;
+    let profile_fixed = adapter.profile_fixed_columns_v1()?;
+    canonical_columns_v1(&profile_fixed, adapter.profile_fixed_width_v1(), trace_size)?;
+    fixed_columns.extend(profile_fixed);
+    canonical_columns_v1(&fixed_columns, fixed_width, trace_size)?;
+    Ok(fixed_columns)
 }
 fn row_at_columns_v1(
     columns: &[Vec<F>],
@@ -1316,6 +1346,31 @@ fn fixed_lde_columns_v1(
         goldilocks_fft_v1(&mut coefficients, lde_root).map_err(map_transparent_error_v1)?;
         Ok(coefficients)
     })
+}
+#[cfg(test)]
+/// Compare selected execution evaluations against the original native full-LDE path.
+pub(crate) fn execution_fixed_query_parity_v1<A: ProofManagedNoteStarkAdapterV1>(
+    adapter: &A,
+    query_indices: &[usize],
+) -> Result<bool, ProofManagedNoteStarkErrorV1> {
+    let prepared = prepare_note_profile_v1(adapter)?;
+    let reference = fixed_lde_columns_v1(
+        &prepared.fixed_columns,
+        prepared.trace_log2,
+        prepared.layout.common_lde_log2(),
+    )?;
+    let queries = execution_fixed::query_rows_v1(
+        prepared.fixed_columns,
+        prepared.trace_log2,
+        prepared.layout.common_lde_log2(),
+        query_indices,
+    )?;
+    for index in query_indices {
+        if queries.get(index) != Some(&row_at_columns_v1(&reference, *index)?) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 fn masked_lde_columns_v1<R: TryRngCore>(
     columns: &[Vec<F>],
@@ -2314,11 +2369,26 @@ pub(crate) fn prove_proof_managed_note_stark_v1<A: ProofManagedNoteStarkAdapterV
 struct NoteOpenedRowEvaluatorV1<'a, A: ProofManagedNoteStarkAdapterV1> {
     adapter: &'a A,
     prepared: &'a PreparedNoteProfileV1,
-    fixed_lde: &'a [Vec<F>],
+    fixed_openings: FixedOpeningsV1<'a>,
     copy_challenges: NoteCopyChallengesV1,
     profile_challenges: &'a A::ProfileChallenges,
     alphas: &'a [Vec<E>],
     lde_root: F,
+}
+enum FixedOpeningsV1<'a> {
+    FullLde(&'a [Vec<F>]),
+    ExecutionQueries(&'a std::collections::BTreeMap<usize, Vec<F>>),
+}
+impl FixedOpeningsV1<'_> {
+    fn row(&self, index: usize) -> Result<Vec<F>, ProofManagedNoteStarkErrorV1> {
+        match self {
+            Self::FullLde(columns) => row_at_columns_v1(columns, index),
+            Self::ExecutionQueries(rows) => rows
+                .get(&index)
+                .cloned()
+                .ok_or(ProofManagedNoteStarkErrorV1::InvalidProfile),
+        }
+    }
 }
 impl<A: ProofManagedNoteStarkAdapterV1> AggregateOpenedRowEvaluatorV1
     for NoteOpenedRowEvaluatorV1<'_, A>
@@ -2339,7 +2409,9 @@ impl<A: ProofManagedNoteStarkAdapterV1> AggregateOpenedRowEvaluatorV1
             .get(lane)
             .filter(|alphas| alphas.len() == self.prepared.constraint_count)
             .ok_or(aggregate::AggregateStarkErrorV1::ConstraintOpening)?;
-        let fixed = row_at_columns_v1(self.fixed_lde, query_index)
+        let fixed = self
+            .fixed_openings
+            .row(query_index)
             .map_err(|_| aggregate::AggregateStarkErrorV1::ConstraintOpening)?;
         let residues = all_constraint_residues_v1(
             self.adapter,
@@ -2381,7 +2453,15 @@ pub(crate) fn verify_proof_managed_note_stark_v1<A: ProofManagedNoteStarkAdapter
     adapter: &A,
     proof_bytes: &[u8],
 ) -> Result<(), ProofManagedNoteStarkErrorV1> {
-    let prepared = prepare_note_profile_v1(adapter)?;
+    // Execution profiles can have much larger public traces than privacy
+    // profiles. Reject malformed wire, transcript and Merkle paths before
+    // materializing any execution fixed-column or copy-permutation matrix.
+    let execution = adapter
+        .protocol_v1()
+        .domains
+        .digest_context
+        .is_execution_v1();
+    let prepared = prepare_note_profile_with_fixed_v1(adapter, !execution)?;
     let (proof, deep) = aggregate::decode_proof_with_deep_v1(
         proof_bytes,
         prepared.protocol.parameters,
@@ -2473,17 +2553,30 @@ pub(crate) fn verify_proof_managed_note_stark_v1<A: ProofManagedNoteStarkAdapter
         &expected_indices,
     )
     .map_err(map_aggregate_error_v1)?;
-    let fixed_lde = fixed_lde_columns_v1(
-        &prepared.fixed_columns,
-        prepared.trace_log2,
-        prepared.layout.common_lde_log2(),
-    )?;
+    let fixed_lde;
+    let execution_rows;
+    let fixed_openings = if execution {
+        execution_rows = execution_fixed::query_rows_v1(
+            prepare_fixed_columns_v1(adapter, prepared.trace_size, prepared.fixed_width)?,
+            prepared.trace_log2,
+            prepared.layout.common_lde_log2(),
+            &expected_indices,
+        )?;
+        FixedOpeningsV1::ExecutionQueries(&execution_rows)
+    } else {
+        fixed_lde = fixed_lde_columns_v1(
+            &prepared.fixed_columns,
+            prepared.trace_log2,
+            prepared.layout.common_lde_log2(),
+        )?;
+        FixedOpeningsV1::FullLde(&fixed_lde)
+    };
     let lde_root = goldilocks_primitive_root_v1(prepared.layout.common_lde_log2())
         .map_err(map_transparent_error_v1)?;
     let mut evaluator = NoteOpenedRowEvaluatorV1 {
         adapter,
         prepared: &prepared,
-        fixed_lde: &fixed_lde,
+        fixed_openings,
         copy_challenges,
         profile_challenges: &profile_challenges,
         alphas: &alphas,
@@ -2675,6 +2768,8 @@ mod tests {
         maximum_constraint_degree: u8,
         public_digest: GoldilocksDigest384V1,
         corrupt_schedule: bool,
+        execution: bool,
+        reject_fixed_materialization: bool,
     }
     impl Default for MockAdapterV1 {
         fn default() -> Self {
@@ -2684,15 +2779,24 @@ mod tests {
                 public_digest: GoldilocksDigest384V1::new([0x24; 6])
                     .expect("mock public digest is canonical"),
                 corrupt_schedule: false,
+                execution: false,
+                reject_fixed_materialization: false,
             }
         }
     }
     impl ProofManagedNoteStarkAdapterV1 for MockAdapterV1 {
         type ProfileChallenges = ();
         fn protocol_v1(&self) -> ProofManagedNoteStarkProtocolV1 {
+            let mut domains = MOCK_DOMAINS_V1;
+            if self.execution {
+                domains.digest_context =
+                    super::super::transparent_stark::TransparentStarkDigestContextV1::execution_v1(
+                        b"execution-fixed-rejection-test",
+                    );
+            }
             ProofManagedNoteStarkProtocolV1 {
                 parameters: self.parameters,
-                domains: MOCK_DOMAINS_V1,
+                domains,
                 maximum_constraint_degree: self.maximum_constraint_degree,
                 profile_binding_label: b"proof-managed-note-mock-profile-binding-v1",
                 profile_descriptor: MOCK_PROFILE_DESCRIPTOR_V1,
@@ -2720,6 +2824,10 @@ mod tests {
             1
         }
         fn copy_schedule_v1(&self) -> Result<NoteCopyScheduleV1, ProofManagedNoteStarkErrorV1> {
+            assert!(
+                !self.reject_fixed_materialization,
+                "fixed trace must not be materialized for malformed execution proof"
+            );
             let trace_size = 1_usize << self.trace_log2_v1();
             let policies = vec![[NoteCopyCellPolicyV1::Variable; NOTE_COPY_WIDTH_V1]; trace_size];
             let mut sigma = vec![[0_u32; NOTE_COPY_WIDTH_V1]; trace_size];
@@ -2770,6 +2878,21 @@ mod tests {
                     .first()
                     .ok_or(ProofManagedNoteStarkErrorV1::InvalidTrace)?,
             ])
+        }
+    }
+
+    #[test]
+    fn execution_rejects_malformed_wire_before_any_fixed_trace_allocation() {
+        let adapter = MockAdapterV1 {
+            execution: true,
+            reject_fixed_materialization: true,
+            ..MockAdapterV1::default()
+        };
+        let geometry =
+            prepare_note_profile_with_fixed_v1(&adapter, false).expect("allocation-free geometry");
+        assert!(geometry.fixed_columns.is_empty());
+        for bytes in [vec![], b"RCE1".to_vec(), vec![0; 1_048_576]] {
+            assert!(verify_proof_managed_note_stark_v1(&adapter, &bytes).is_err());
         }
     }
     fn mock_base_columns_v1() -> Vec<Vec<F>> {

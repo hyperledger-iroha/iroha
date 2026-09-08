@@ -1577,6 +1577,7 @@ impl PopCredentialToriiRuntimeV1 {
         credential_commitment: [u8; 32],
         challenge_digest: [u8; 32],
         verifier_context: &str,
+        presentation_binding_digest: [u8; 32],
     ) -> Result<PopMembershipProofV1, PopCredentialServiceError> {
         self.provider_registry.assert_qualification()?;
         let result = async {
@@ -1586,6 +1587,7 @@ impl PopCredentialToriiRuntimeV1 {
                 credential_commitment,
                 challenge_digest,
                 verifier_context,
+                presentation_binding_digest,
                 authenticated_sample.finalized_epoch,
             )?;
             let committed =
@@ -1598,6 +1600,7 @@ impl PopCredentialToriiRuntimeV1 {
                 credential_commitment,
                 challenge_digest,
                 verifier_context,
+                presentation_binding_digest,
                 committed,
             )
         }
@@ -1610,6 +1613,7 @@ impl PopCredentialToriiRuntimeV1 {
         proof: &PopMembershipProofV1,
         challenge_digest: [u8; 32],
         verifier_context: &str,
+        presentation_binding_digest: [u8; 32],
     ) -> Result<(), PopCredentialServiceError> {
         self.provider_registry.assert_qualification()?;
         let result = async {
@@ -1619,6 +1623,7 @@ impl PopCredentialToriiRuntimeV1 {
                 proof,
                 challenge_digest,
                 verifier_context,
+                presentation_binding_digest,
                 authenticated_sample.finalized_epoch,
             )?;
             let committed =
@@ -1630,6 +1635,7 @@ impl PopCredentialToriiRuntimeV1 {
                 proof,
                 challenge_digest,
                 verifier_context,
+                presentation_binding_digest,
                 committed,
             )
         }
@@ -1668,6 +1674,8 @@ pub struct PopMembershipRequestV1 {
     pub challenge_digest_hex: String,
     /// Canonical bounded verifier context.
     pub verifier_context: String,
+    /// Non-zero recipient or action binding as lowercase hex, independent of the nullifier domain.
+    pub presentation_binding_digest_hex: String,
 }
 #[derive(Clone, Debug, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
@@ -1679,6 +1687,8 @@ pub struct PopVerifyMembershipRequestV1 {
     pub challenge_digest_hex: String,
     /// Canonical bounded verifier context.
     pub verifier_context: String,
+    /// Non-zero recipient or action binding as lowercase hex, independent of the nullifier domain.
+    pub presentation_binding_digest_hex: String,
 }
 #[derive(Clone, Copy, Debug, Default, NoritoSerialize, NoritoDeserialize)]
 #[norito(deny_unknown_fields)]
@@ -2395,6 +2405,13 @@ pub(crate) async fn handle_post_pop_wallet_prove(
         Ok(value) => value,
         Err(error) => return error_response(error),
     };
+    let presentation_binding_digest = match decode_hex_32(
+        &request.presentation_binding_digest_hex,
+        "presentation_binding_digest_hex",
+    ) {
+        Ok(value) => value,
+        Err(error) => return error_response(error),
+    };
     if !valid_context(&request.verifier_context) {
         return error_response(PopCredentialServiceError::InvalidInput {
             field: "verifier_context",
@@ -2406,6 +2423,7 @@ pub(crate) async fn handle_post_pop_wallet_prove(
             commitment,
             challenge,
             &request.verifier_context,
+            presentation_binding_digest,
         )
         .await
     {
@@ -2432,6 +2450,13 @@ pub(crate) async fn handle_post_pop_verify(
         Ok(value) => value,
         Err(error) => return error_response(error),
     };
+    let presentation_binding_digest = match decode_hex_32(
+        &request.presentation_binding_digest_hex,
+        "presentation_binding_digest_hex",
+    ) {
+        Ok(value) => value,
+        Err(error) => return error_response(error),
+    };
     if !valid_context(&request.verifier_context) {
         return error_response(PopCredentialServiceError::InvalidInput {
             field: "verifier_context",
@@ -2450,6 +2475,7 @@ pub(crate) async fn handle_post_pop_verify(
             &proof,
             challenge,
             &request.verifier_context,
+            presentation_binding_digest,
         )
         .await
     {
@@ -2463,6 +2489,9 @@ fn valid_context(value: &str) -> bool {
         && value.len() <= POP_MEMBERSHIP_CONTEXT_MAX_BYTES_V1
         && !value.chars().any(char::is_control)
 }
+#[cfg(test)]
+#[path = "pop_api/presentation_binding_tests.rs"]
+mod presentation_binding_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3566,7 +3595,13 @@ mod tests {
         );
         assert_eq!(
             runtime
-                .prove_membership(b"credential", [0x83; 32], [0x84; 32], "verifier.example",)
+                .prove_membership(
+                    b"credential",
+                    [0x83; 32],
+                    [0x84; 32],
+                    "verifier.example",
+                    [0x85; 32]
+                )
                 .await,
             Err(PopCredentialServiceError::RegistryUnavailable)
         );

@@ -85,6 +85,8 @@ Modes ==
    "ReleasedClaimsBeforePrepare",
    "ReleaseCompleteBeforeReleased",
    "ForgetReleaseBeforeFifo",
+   "DirectReleaseWithActiveKura",
+   "KuraWithoutPayloadBinding",
    "OversizeSelectedQueuePlan"}
 
 Validators == {Producer, ReplicaOne, ReplicaTwo}
@@ -232,14 +234,23 @@ FsyncReservationV1 ==
   /\ history' = [history EXCEPT !.everReservationV1 = TRUE]
   /\ UNCHANGED <<ownership, payloadBinding, carrier, session, decision, release>>
 
+(***************************************************************************
+The authenticated Kura activation boundary establishes the actor's exact
+payload-binding custody together with durable carrier ownership. Outbound
+fanout and late-body effects alone do not confer that authority.
+***************************************************************************)
 ActivateKura(p) ==
   /\ p \in Validators
   /\ p \notin session.crashed
   /\ p \in session.bodies
   /\ (queue.reservation = "Live" \/ Mode = "KuraBeforeReservation")
+  /\ payloadBinding' =
+       IF Mode = "KuraWithoutPayloadBinding"
+       THEN payloadBinding
+       ELSE [payloadBinding EXCEPT ![p] = BindingA]
   /\ carrier' =
        [carrier EXCEPT !.kuraActive = @ \union {p}]
-  /\ UNCHANGED <<ownership, payloadBinding, queue, session, history, decision,
+  /\ UNCHANGED <<ownership, queue, session, history, decision,
                  release>>
 
 (***************************************************************************
@@ -343,8 +354,9 @@ RecoverReservationSnapshot ==
   UNCHANGED vars
 
 (***************************************************************************
-Direct abort/orphan release is a real journal action outside the ordered
-four-stage lane release. The same physical FIFO state is authenticated by a
+Direct abort/orphan release requires absent durable Kura custody and is a real
+journal action outside the ordered four-stage lane release. The same physical
+FIFO state is authenticated by a
 strict retired non-producer replica only after the complete ReleasePending
 prefix; that branch never fabricates the producer's Queue reservation owner.
 Both branches end with ordinary FIFO ownership and may not masquerade as a
@@ -354,6 +366,8 @@ action.
 ReleaseReservationDirect ==
   /\ queue.plan = "SelectedConjunction"
   /\ ((queue.reservation = "Live"
+       /\ (carrier.kuraActive = {}
+           \/ Mode = "DirectReleaseWithActiveKura")
        /\ decision.laneCommitOwner = "None"
        /\ decision.releaseOwner = "None")
       \/ (queue.reservation \in {"Live", "DirectReleased"}
@@ -694,6 +708,18 @@ MLValidatorCarrierOwnership ==
   /\ ownership[Producer] = "ProducerSelected"
   /\ \A p \in Validators \ {Producer}:
        ownership[p] = "ReplicatedCarrier"
+  /\ LET authenticated == {p \in Validators: payloadBinding[p] = BindingA}
+     IN
+       /\ carrier.kuraActive \subseteq authenticated
+       /\ carrier.inputDurable \subseteq authenticated
+       /\ session.readyAuthorized \subseteq authenticated
+       /\ history.everInputDurable \subseteq authenticated
+       /\ history.everReadyAuthorized \subseteq authenticated
+       /\ history.readySigned \subseteq authenticated
+       /\ decision.laneCommitOwner # "None" =>
+            decision.laneCommitOwner \in authenticated
+       /\ decision.releaseOwner # "None" =>
+            decision.releaseOwner \in authenticated
 
 MLSelectedQueuePlanV1ConjunctionBeforeReservationV1 ==
   queue.reservation # "Absent" => queue.plan # "Absent"
@@ -833,8 +859,19 @@ MLReleaseStageOrder ==
        /\ release.pendingPrefix = queue.selectedCount
        /\ decision.releaseOwner \in (Validators \ {Producer})
 
+MLDirectReleaseRequiresAbsentKura ==
+  queue.reservation = "DirectReleased" /\ ~release.kuraRetired =>
+    carrier.kuraActive = {}
+
 MLTerminalDispositionExclusive ==
   /\ ~(CommitTerminal /\ ReleaseTerminal)
+  /\ queue.reservation
+       \in (PreparedReleaseStates \union ReplicaQueueReleaseStates
+            \union {"DirectReleased"}) =>
+       /\ decision.laneCommitOwner = "None"
+       /\ ~decision.wsvCommitted
+       /\ decision.applicationCount = 0
+       /\ decision.appliedBy = "None"
   /\ (ReplicaQueueAbsentTerminal => ~OrdinaryFifoTerminal)
   /\ (ReplicaQueueFifoPreservedTerminal =>
        /\ OrdinaryFifoTerminal
@@ -862,6 +899,7 @@ InFlightFirstReleaseSafetyInvariant ==
   /\ MLPostCarrierCommitCleanupOrder
   /\ MLReleasePrefixesRecoverable
   /\ MLReleaseStageOrder
+  /\ MLDirectReleaseRequiresAbsentKura
   /\ MLTerminalDispositionExclusive
   /\ MLQueuePlanV1SelectedConjunctionBound4096
 

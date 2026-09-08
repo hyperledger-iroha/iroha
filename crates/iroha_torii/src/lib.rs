@@ -59,12 +59,14 @@
 mod account_activity;
 #[cfg(feature = "app_api")]
 mod app_api;
+mod game;
 #[cfg(feature = "app_api")]
 mod identifier_resolution;
 mod iso_profile;
 #[cfg(feature = "app_api")]
 mod kagemusha_commands;
 mod ledger_state_finality;
+mod nft_market;
 mod operator_auth;
 mod operator_signatures;
 #[cfg(feature = "app_api")]
@@ -342,7 +344,7 @@ use ivm::iso20022::{MsgError, parse_xml_message};
 #[cfg(feature = "app_api")]
 use jsonwebtoken::{Algorithm as JwtAlgorithm, DecodingKey};
 use mv::storage::StorageReadOnly;
-use norito::core::NoritoSerialize as _;
+use norito::core::SerializePayload as _;
 #[cfg(feature = "app_api")]
 use norito::json::Map;
 use norito::json::Value;
@@ -1145,6 +1147,8 @@ mod iso20022_bridge;
 mod limits;
 mod mcp;
 mod musubi;
+#[cfg(feature = "app_api")]
+mod offline_asset_registration;
 mod panic_recovery;
 #[cfg(feature = "app_api")]
 mod predicates;
@@ -17942,7 +17946,7 @@ async fn handler_subscription_plans_create(
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     crate::utils::extractors::NoritoJson(req): crate::utils::extractors::NoritoJson<
-        crate::routing::SubscriptionPlanCreateDto,
+        iroha_torii_shared::subscriptions::SubscriptionPlanCreateRequest,
     >,
 ) -> Result<impl IntoResponse, Error> {
     require_subscription_draft_account(&req.authority, &verified, "subscription plan draft")?;
@@ -17977,7 +17981,7 @@ async fn handler_subscriptions_list(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    AxQuery(p): AxQuery<crate::routing::SubscriptionListParams>,
+    AxQuery(p): AxQuery<iroha_torii_shared::subscriptions::SubscriptionListParams>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
     if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
@@ -17995,7 +17999,7 @@ async fn handler_subscriptions_create(
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     crate::utils::extractors::NoritoJson(req): crate::utils::extractors::NoritoJson<
-        crate::routing::SubscriptionCreateDto,
+        iroha_torii_shared::subscriptions::SubscriptionCreateRequest,
     >,
 ) -> Result<impl IntoResponse, Error> {
     require_subscription_draft_account(&req.authority, &verified, "subscription creation draft")?;
@@ -18051,7 +18055,7 @@ macro_rules! subscription_action_handlers {
                 axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
                 AxPath(subscription_raw): AxPath<String>,
                 crate::utils::extractors::NoritoJson(req): crate::utils::extractors::NoritoJson<
-                    crate::routing::SubscriptionActionDto,
+                    iroha_torii_shared::subscriptions::SubscriptionActionRequest,
                 >,
             ) -> Result<impl IntoResponse, Error> {
                 require_subscription_draft_account(&req.authority, &verified, "subscription action draft")?;
@@ -18115,7 +18119,7 @@ async fn handler_subscription_usage(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath(subscription_raw): AxPath<String>,
     crate::utils::extractors::NoritoJson(req): crate::utils::extractors::NoritoJson<
-        crate::routing::SubscriptionUsageRequestDto,
+        iroha_torii_shared::subscriptions::SubscriptionUsageRequest,
     >,
 ) -> Result<impl IntoResponse, Error> {
     require_subscription_draft_account(&req.authority, &verified, "subscription usage draft")?;
@@ -18397,6 +18401,86 @@ async fn handler_get_configuration(
     let remote_ip = remote.ip();
     check_operator_rate_limit(&app, &headers, Some(remote_ip), "v1/configuration", true).await?;
     routing::handle_get_configuration(app.kiso.clone()).await
+}
+/// Exact native marketplace policy and reviewed rollout qualification.
+async fn handler_nft_offer_capabilities(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+) -> Result<Response, Error> {
+    check_access(
+        &app,
+        &headers,
+        Some(remote.ip()),
+        "v1/nft-offers/capabilities",
+    )
+    .await?;
+    nft_market::capabilities(&app)
+}
+/// Bounded public discovery of native NFT sale offers.
+async fn handler_nft_offer_list(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    NoritoQuery(params): NoritoQuery<nft_market::NftOfferListParams>,
+) -> Result<Response, Error> {
+    check_access(&app, &headers, Some(remote.ip()), "v1/nft-offers").await?;
+    nft_market::list(&app, params)
+}
+/// Exact immutable seller terms and retained terminal decision.
+async fn handler_nft_offer_get(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Result<Response, Error> {
+    check_access(&app, &headers, Some(remote.ip()), "v1/nft-offers/by-id").await?;
+    nft_market::get(&app, &id)
+}
+/// Public native game session profile and proof qualification.
+async fn handler_game_capabilities(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+) -> Result<Response, Error> {
+    check_access(&app, &headers, Some(remote.ip()), "v1/games/capabilities").await?;
+    game::capabilities(&app)
+}
+/// Bounded public native game session discovery.
+async fn handler_game_list(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    NoritoQuery(params): NoritoQuery<game::GameListParams>,
+) -> Result<Response, Error> {
+    check_access(&app, &headers, Some(remote.ip()), "v1/games/sessions").await?;
+    game::list(&app, params)
+}
+/// Public exact native game session state.
+async fn handler_game_get(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Result<Response, Error> {
+    check_access(&app, &headers, Some(remote.ip()), "v1/games/sessions/by-id").await?;
+    game::get(&app, &id)
+}
+/// Public bounded native execution-proof verification receipt.
+async fn handler_game_verification(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Result<Response, Error> {
+    check_access(
+        &app,
+        &headers,
+        Some(remote.ip()),
+        "v1/games/verifications/by-id",
+    )
+    .await?;
+    game::verification(&app, &id)
 }
 /// GET /v1/vpn/profile — public Sora VPN profile snapshot for wallet clients.
 async fn handler_get_vpn_profile(
@@ -24416,24 +24500,20 @@ impl norito::core::NoritoSerialize for BorrowedToriiProxyRequestIdPreimage<'_> {
     fn schema_hash() -> [u8; 16] {
         <OwnedToriiProxyRequestIdPreimage as norito::core::NoritoSerialize>::schema_hash()
     }
+}
+#[cfg(feature = "connect")]
+impl norito::core::SerializePayload for BorrowedToriiProxyRequestIdPreimage<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         const DOMAIN: &str = "torii:proxy:v1";
-        let mut scratch = norito::core::SmallBuf::<384>::new();
-        norito::core::write_len_prefixed(writer, &DOMAIN, &mut scratch)?;
-        norito::core::write_len_prefixed(writer, self.process_session_id, &mut scratch)?;
-        norito::core::write_len_prefixed(writer, self.local_peer_id, &mut scratch)?;
-        norito::core::write_len_prefixed(writer, &self.sequence, &mut scratch)?;
-        if self.request.encoded_len_exact().is_none() {
-            // The generic fallback stages the entire request field. Request-id
-            // derivation is admitted only when the request enum can use the
-            // proven direct-streaming path.
-            return Err(norito::core::Error::LengthMismatch);
-        }
-        norito::core::write_len_prefixed(writer, self.request, &mut scratch)?;
+        norito::core::write_len_prefixed(writer, &DOMAIN)?;
+        norito::core::write_len_prefixed(writer, self.process_session_id)?;
+        norito::core::write_len_prefixed(writer, self.local_peer_id)?;
+        norito::core::write_len_prefixed(writer, &self.sequence)?;
+        norito::core::write_len_prefixed(writer, self.request)?;
         Ok(())
     }
     fn encoded_len_exact(&self) -> Option<usize> {
-        fn field(value: &dyn norito::core::NoritoSerialize) -> Option<usize> {
+        fn field(value: &dyn norito::core::SerializePayload) -> Option<usize> {
             let bytes = value.encoded_len_exact()?;
             norito::core::len_prefix_len(bytes).checked_add(bytes)
         }
@@ -25771,19 +25851,6 @@ fn decode_verified_singular_fanout_request_bounded(
 fn canonical_fanout_len_prefixed(payload_len: usize) -> Option<usize> {
     norito::core::len_prefix_len(payload_len).checked_add(payload_len)
 }
-fn write_canonical_fanout_exact_field<T>(
-    writer: &mut norito::core::Encoder<'_>,
-    value: &T,
-) -> Result<(), norito::core::Error>
-where
-    T: norito::core::NoritoSerialize,
-{
-    if value.encoded_len_exact().is_none() {
-        return Err(norito::core::Error::LengthMismatch);
-    }
-    let mut unused_fallback = norito::core::DeriveSmallBuf::new();
-    norito::core::write_len_prefixed(writer, value, &mut unused_fallback)
-}
 #[derive(Clone, Copy)]
 enum CanonicalFanoutBatchRef<'a> {
     RoleId(&'a Vec<iroha_data_model::role::RoleId>),
@@ -25841,7 +25908,7 @@ impl CanonicalFanoutBatchRef<'_> {
                 u64::try_from(values.len()).map_err(|_| norito::core::Error::LengthMismatch)?,
             )?;
             for value in values {
-                write_canonical_fanout_exact_field(writer, value)?;
+                norito::core::write_len_prefixed(writer, value)?;
             }
             Ok(())
         }
@@ -25851,11 +25918,12 @@ impl CanonicalFanoutBatchRef<'_> {
         }
     }
 }
-impl norito::core::NoritoSerialize for CanonicalFanoutBatchRef<'_> {
+impl norito::core::NoritoSerialize for CanonicalFanoutBatchRef<'_> {}
+impl norito::core::SerializePayload for CanonicalFanoutBatchRef<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
-        norito::core::NoritoSerialize::serialize(&self.discriminant(), writer)?;
+        norito::core::SerializePayload::serialize(&self.discriminant(), writer)?;
         let values = CanonicalFanoutValuesRef(*self);
-        write_canonical_fanout_exact_field(writer, &values)
+        norito::core::write_len_prefixed(writer, &values)
     }
     fn encoded_len_hint(&self) -> Option<usize> {
         self.encoded_len_exact()
@@ -25867,7 +25935,8 @@ impl norito::core::NoritoSerialize for CanonicalFanoutBatchRef<'_> {
 }
 #[derive(Clone, Copy)]
 struct CanonicalFanoutValuesRef<'a>(CanonicalFanoutBatchRef<'a>);
-impl norito::core::NoritoSerialize for CanonicalFanoutValuesRef<'_> {
+impl norito::core::NoritoSerialize for CanonicalFanoutValuesRef<'_> {}
+impl norito::core::SerializePayload for CanonicalFanoutValuesRef<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         self.0.serialize_values(writer)
     }
@@ -25880,10 +25949,11 @@ impl norito::core::NoritoSerialize for CanonicalFanoutValuesRef<'_> {
 }
 #[derive(Clone, Copy)]
 struct CanonicalFanoutOneColumnRef<'a>(CanonicalFanoutBatchRef<'a>);
-impl norito::core::NoritoSerialize for CanonicalFanoutOneColumnRef<'_> {
+impl norito::core::NoritoSerialize for CanonicalFanoutOneColumnRef<'_> {}
+impl norito::core::SerializePayload for CanonicalFanoutOneColumnRef<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         norito::core::write_seq_len(writer, 1)?;
-        write_canonical_fanout_exact_field(writer, &self.0)
+        norito::core::write_len_prefixed(writer, &self.0)
     }
     fn encoded_len_hint(&self) -> Option<usize> {
         self.encoded_len_exact()
@@ -25895,9 +25965,10 @@ impl norito::core::NoritoSerialize for CanonicalFanoutOneColumnRef<'_> {
 }
 #[derive(Clone, Copy)]
 struct CanonicalFanoutBatchTupleRef<'a>(CanonicalFanoutBatchRef<'a>);
-impl norito::core::NoritoSerialize for CanonicalFanoutBatchTupleRef<'_> {
+impl norito::core::NoritoSerialize for CanonicalFanoutBatchTupleRef<'_> {}
+impl norito::core::SerializePayload for CanonicalFanoutBatchTupleRef<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
-        write_canonical_fanout_exact_field(writer, &CanonicalFanoutOneColumnRef(self.0))
+        norito::core::write_len_prefixed(writer, &CanonicalFanoutOneColumnRef(self.0))
     }
     fn encoded_len_hint(&self) -> Option<usize> {
         self.encoded_len_exact()
@@ -25914,12 +25985,13 @@ struct CanonicalFanoutOutputRef<'a> {
     has_more: &'a bool,
     continue_cursor: &'a Option<iroha_data_model::query::parameters::ForwardCursor>,
 }
-impl norito::core::NoritoSerialize for CanonicalFanoutOutputRef<'_> {
+impl norito::core::NoritoSerialize for CanonicalFanoutOutputRef<'_> {}
+impl norito::core::SerializePayload for CanonicalFanoutOutputRef<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
-        write_canonical_fanout_exact_field(writer, &CanonicalFanoutBatchTupleRef(self.batch))?;
-        write_canonical_fanout_exact_field(writer, self.remaining_items)?;
-        write_canonical_fanout_exact_field(writer, self.has_more)?;
-        write_canonical_fanout_exact_field(writer, self.continue_cursor)
+        norito::core::write_len_prefixed(writer, &CanonicalFanoutBatchTupleRef(self.batch))?;
+        norito::core::write_len_prefixed(writer, self.remaining_items)?;
+        norito::core::write_len_prefixed(writer, self.has_more)?;
+        norito::core::write_len_prefixed(writer, self.continue_cursor)
     }
     fn encoded_len_hint(&self) -> Option<usize> {
         self.encoded_len_exact()
@@ -25989,6 +26061,8 @@ impl norito::core::NoritoSerialize for BoundedCanonicalIterableFanoutResponse {
     fn schema_hash() -> [u8; 16] {
         <iroha_data_model::query::QueryResponse as norito::core::NoritoSerialize>::schema_hash()
     }
+}
+impl norito::core::SerializePayload for BoundedCanonicalIterableFanoutResponse {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         if norito::core::use_packed_struct() || norito::core::use_packed_seq() {
             return Err(norito::core::Error::UnsupportedFeature(
@@ -25996,8 +26070,8 @@ impl norito::core::NoritoSerialize for BoundedCanonicalIterableFanoutResponse {
             ));
         }
         // QueryResponse::Iterable is the second data-model variant.
-        norito::core::NoritoSerialize::serialize(&1_u32, writer)?;
-        write_canonical_fanout_exact_field(writer, &self.output_ref())
+        norito::core::SerializePayload::serialize(&1_u32, writer)?;
+        norito::core::write_len_prefixed(writer, &self.output_ref())
     }
     fn encoded_len_hint(&self) -> Option<usize> {
         self.encoded_len_exact()
@@ -50735,6 +50809,13 @@ impl Torii {
             READYZ => unauthenticated_get(handler_readyz);
             LIVEZ => unauthenticated_get(handler_livez);
             NEXUS_LIFECYCLE_GET => public_get(handler_get_nexus_lane_lifecycle);
+            NFT_OFFER_CAPABILITIES => public_get(handler_nft_offer_capabilities);
+            NFT_OFFER_LIST => public_get(handler_nft_offer_list);
+            NFT_OFFER_GET => public_get(handler_nft_offer_get);
+            GAME_CAPABILITIES => public_get(handler_game_capabilities);
+            GAME_SESSION_LIST => public_get(handler_game_list);
+            GAME_SESSION_GET => public_get(handler_game_get);
+            GAME_VERIFICATION_GET => public_get(handler_game_verification);
             VPN_PROFILE => public_get(handler_get_vpn_profile);
             VPN_QUOTE_CREATE => limited_canonical_signature_post(handler_create_vpn_quote, vpn::VPN_MUTATION_REQUEST_MAX_BYTES_V1);
             VPN_SESSION_CREATE => limited_canonical_signature_post(handler_create_vpn_session, vpn::VPN_MUTATION_REQUEST_MAX_BYTES_V1);
@@ -51716,6 +51797,7 @@ impl Torii {
             EXPLORER_ACCOUNTS_BY_ACCOUNT_ID_GET => optional_canonical_signature_get(handler_explorer_account_detail);
             EXPLORER_ACCOUNTS_BY_ACCOUNT_ID_QR_GET => optional_canonical_signature_get(handler_explorer_account_qr);
             EXPLORER_DOMAINS_BY_DOMAIN_ID_GET => optional_canonical_signature_get(handler_explorer_domain_detail);
+            OFFLINE_ASSET_REGISTRATION_GET => optional_canonical_signature_get(offline_asset_registration::handler);
             EXPLORER_ASSET_DEFINITIONS_BY_DEFINITION_ID_GET => optional_canonical_signature_get(handler_explorer_asset_definition_detail);
             EXPLORER_ASSET_DEFINITIONS_BY_DEFINITION_ID_ECONOMETRICS_GET => optional_canonical_signature_get(handler_explorer_asset_definition_econometrics);
             EXPLORER_ASSET_DEFINITIONS_BY_DEFINITION_ID_SNAPSHOT_GET => optional_canonical_signature_get(handler_explorer_asset_definition_snapshot);

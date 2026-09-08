@@ -8,7 +8,7 @@ use crate::{
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use blake3::Hasher;
 use ed25519_dalek::{PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH};
-use norito::core::NoritoSerialize as _;
+use norito::core::SerializePayload as _;
 use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
 use std::collections::BTreeSet;
 use thiserror::Error;
@@ -236,7 +236,7 @@ impl ProviderVrfSubmissionV1 {
     }
     /// Return canonical domain-separated bytes signed by the provider advert key.
     pub fn signature_payload_bytes(&self) -> Result<Vec<u8>, norito::core::Error> {
-        norito::to_bytes(&ProviderVrfSubmissionSigningPayloadV1::from(self))
+        norito::encode_canonical(&ProviderVrfSubmissionSigningPayloadV1::from(self))
     }
     /// Verify the Ed25519 signature and bind it to the current admitted advert key.
     pub fn verify_signature_for_provider(
@@ -324,6 +324,8 @@ fn preflight_provider_vrf_submission_len(
     submission: &ProviderVrfSubmissionV1,
     maximum: usize,
 ) -> Result<usize, ProviderVrfSubmissionValidationError> {
+    let _canonical_flags =
+        norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
     let found = submission
         .encoded_len_exact()
         .ok_or(ProviderVrfSubmissionValidationError::CanonicalLengthUnavailable)?;
@@ -347,7 +349,7 @@ pub fn decode_provider_vrf_submission_v1(
         PROVIDER_VRF_SUBMISSION_MAX_CANONICAL_BYTES_V1,
         norito::DecodeLimits::new(
             SIGNATURE_LENGTH,
-            256,
+            PROVIDER_VRF_SUBMISSION_MAX_CANONICAL_BYTES_V1,
             512,
             PROVIDER_VRF_SUBMISSION_MAX_CANONICAL_BYTES_V1 * 4,
             32,
@@ -639,6 +641,8 @@ fn preflight_por_challenge_len(
     challenge: &PorChallengeV1,
     maximum: usize,
 ) -> Result<usize, PorChallengeValidationError> {
+    let _canonical_flags =
+        norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
     let found = challenge
         .encoded_len_exact()
         .ok_or(PorChallengeValidationError::CanonicalLengthUnavailable)?;
@@ -761,6 +765,8 @@ fn preflight_por_challenge_publication_len(
     publication: &PorChallengePublicationV1,
     maximum: usize,
 ) -> Result<usize, PorChallengePublicationValidationError> {
+    let _canonical_flags =
+        norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
     let found = publication
         .encoded_len_exact()
         .ok_or(PorChallengePublicationValidationError::CanonicalLengthUnavailable)?;
@@ -776,7 +782,17 @@ fn preflight_por_challenge_publication_len(
 /// Returns a Norito error for oversized, noncanonical, malformed, or
 /// structurally invalid challenge bytes.
 pub fn decode_por_challenge_v1(bytes: &[u8]) -> Result<PorChallengeV1, norito::core::Error> {
-    let challenge: PorChallengeV1 = decode_bounded_canonical_por_payload(
+    let challenge = decode_por_challenge_payload_v1(bytes)?;
+    challenge
+        .validate()
+        .map_err(|error| norito::core::Error::Message(error.to_string()))?;
+    Ok(challenge)
+}
+/// Decode the bounded canonical wire before a caller reports typed validation errors.
+pub(crate) fn decode_por_challenge_payload_v1(
+    bytes: &[u8],
+) -> Result<PorChallengeV1, norito::core::Error> {
+    decode_bounded_canonical_por_payload(
         "PoR challenge",
         bytes,
         POR_CHALLENGE_MAX_CANONICAL_BYTES_V1,
@@ -787,11 +803,7 @@ pub fn decode_por_challenge_v1(bytes: &[u8]) -> Result<PorChallengeV1, norito::c
             POR_CHALLENGE_MAX_CANONICAL_BYTES_V1 * 4,
             32,
         ),
-    )?;
-    challenge
-        .validate()
-        .map_err(|error| norito::core::Error::Message(error.to_string()))?;
-    Ok(challenge)
+    )
 }
 /// Decode and validate one bounded canonical V1 PoR challenge publication.
 ///
@@ -834,7 +846,9 @@ where
             bytes.len()
         )));
     }
-    let value: T = norito::decode_from_bytes_with_limits(bytes, limits)?;
+    let value: T = norito::decode_canonical_with_limits(bytes, limits)?;
+    let _canonical_flags =
+        norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
     let exact = value.encoded_len_exact().ok_or_else(|| {
         norito::core::Error::Message(format!(
             "{payload} does not expose an exact canonical encoded length"
@@ -843,12 +857,6 @@ where
     if exact > maximum {
         return Err(norito::core::Error::Message(format!(
             "{payload} has {exact} canonical bytes; maximum is {maximum}"
-        )));
-    }
-    let canonical = norito::to_bytes(&value)?;
-    if canonical != bytes {
-        return Err(norito::core::Error::Message(format!(
-            "{payload} is not canonically encoded"
         )));
     }
     Ok(value)
@@ -919,13 +927,15 @@ struct PorProofSigningPayloadV1 {
     submitted_at: u64,
 }
 mod borrowed_norito {
-    use norito::core::NoritoSerialize;
+    use norito::core::{NoritoSerialize, SerializePayload};
     /// Borrowed string that preserves the owned `String` wire representation.
     pub(super) struct String<'a>(pub(super) &'a str);
     impl NoritoSerialize for String<'_> {
         fn schema_hash() -> [u8; 16] {
             <std::string::String>::schema_hash()
         }
+    }
+    impl SerializePayload for String<'_> {
         fn serialize(
             &self,
             writer: &mut norito::core::Encoder<'_>,
@@ -945,6 +955,8 @@ mod borrowed_norito {
         fn schema_hash() -> [u8; 16] {
             <std::vec::Vec<T>>::schema_hash()
         }
+    }
+    impl<T: NoritoSerialize> SerializePayload for Vec<'_, T> {
         fn serialize(
             &self,
             writer: &mut norito::core::Encoder<'_>,
@@ -964,6 +976,8 @@ mod borrowed_norito {
         fn schema_hash() -> [u8; 16] {
             <std::option::Option<T>>::schema_hash()
         }
+    }
+    impl<T: NoritoSerialize> SerializePayload for Option<'_, T> {
         fn serialize(
             &self,
             writer: &mut norito::core::Encoder<'_>,
@@ -1008,6 +1022,8 @@ impl norito::core::NoritoSerialize for PorProofSigningPayloadViewV1<'_> {
     fn schema_hash() -> [u8; 16] {
         PorProofSigningPayloadV1::schema_hash()
     }
+}
+impl norito::core::SerializePayload for PorProofSigningPayloadViewV1<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         self.0.serialize(writer)
     }
@@ -1103,6 +1119,8 @@ impl PorProofV1 {
     ///
     /// Returns a Norito encoding error if the canonical payload cannot be serialized.
     pub fn signature_payload_bytes(&self) -> Result<Vec<u8>, norito::core::Error> {
+        let _canonical_flags =
+            norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
         preflight_por_proof_len(self, POR_PROOF_MAX_CANONICAL_BYTES_V1)
             .map_err(|error| norito::core::Error::Message(error.to_string()))?;
         let payload = PorProofSigningPayloadViewV1::from(self);
@@ -1116,7 +1134,7 @@ impl PorProofV1 {
                 "PoR proof signing payload has {exact} bytes; maximum is {POR_PROOF_MAX_CANONICAL_BYTES_V1}"
             )));
         }
-        norito::to_bytes(&payload)
+        norito::encode_canonical(&payload)
     }
     /// Cryptographically verifies the provider signature.
     ///
@@ -1220,6 +1238,8 @@ fn preflight_por_proof_len(
     proof: &PorProofV1,
     maximum: usize,
 ) -> Result<usize, PorProofValidationError> {
+    let _canonical_flags =
+        norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
     let found = proof
         .encoded_len_exact()
         .ok_or(PorProofValidationError::CanonicalLengthUnavailable)?;
@@ -1235,7 +1255,15 @@ fn preflight_por_proof_len(
 /// Returns a Norito error for oversized, noncanonical, malformed, or
 /// structurally invalid proof bytes.
 pub fn decode_por_proof_v1(bytes: &[u8]) -> Result<PorProofV1, norito::core::Error> {
-    let proof: PorProofV1 = decode_bounded_canonical_por_payload(
+    let proof = decode_por_proof_payload_v1(bytes)?;
+    proof
+        .validate()
+        .map_err(|error| norito::core::Error::Message(error.to_string()))?;
+    Ok(proof)
+}
+/// Decode the bounded canonical wire before a caller reports typed validation errors.
+pub(crate) fn decode_por_proof_payload_v1(bytes: &[u8]) -> Result<PorProofV1, norito::core::Error> {
+    decode_bounded_canonical_por_payload(
         "PoR proof",
         bytes,
         POR_PROOF_MAX_CANONICAL_BYTES_V1,
@@ -1246,11 +1274,7 @@ pub fn decode_por_proof_v1(bytes: &[u8]) -> Result<PorProofV1, norito::core::Err
             POR_PROOF_MAX_CANONICAL_BYTES_V1 * 4,
             64,
         ),
-    )?;
-    proof
-        .validate()
-        .map_err(|error| norito::core::Error::Message(error.to_string()))?;
-    Ok(proof)
+    )
 }
 /// Outcome recorded after challenge verification.
 #[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
@@ -1337,6 +1361,8 @@ impl norito::core::NoritoSerialize for AuditVerdictSigningPayloadViewV1<'_> {
     fn schema_hash() -> [u8; 16] {
         AuditVerdictSigningPayloadV1::schema_hash()
     }
+}
+impl norito::core::SerializePayload for AuditVerdictSigningPayloadViewV1<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         self.0.serialize(writer)
     }
@@ -1491,6 +1517,8 @@ impl AuditVerdictV1 {
     ///
     /// Returns a Norito encoding error if the canonical payload cannot be serialized.
     pub fn signature_payload_bytes(&self) -> Result<Vec<u8>, norito::core::Error> {
+        let _canonical_flags =
+            norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
         preflight_audit_verdict_len(self, AUDIT_VERDICT_MAX_CANONICAL_BYTES_V1)
             .map_err(|error| norito::core::Error::Message(error.to_string()))?;
         let payload = AuditVerdictSigningPayloadViewV1::from(self);
@@ -1504,7 +1532,7 @@ impl AuditVerdictV1 {
                 "audit verdict signing payload has {exact} bytes; maximum is {AUDIT_VERDICT_MAX_CANONICAL_BYTES_V1}"
             )));
         }
-        norito::to_bytes(&payload)
+        norito::encode_canonical(&payload)
     }
     /// Cryptographically verifies every unique auditor signature.
     ///
@@ -1639,6 +1667,8 @@ fn preflight_audit_verdict_len(
     verdict: &AuditVerdictV1,
     maximum: usize,
 ) -> Result<usize, AuditVerdictValidationError> {
+    let _canonical_flags =
+        norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
     let found = verdict
         .encoded_len_exact()
         .ok_or(AuditVerdictValidationError::CanonicalLengthUnavailable)?;
@@ -1824,7 +1854,7 @@ impl PorStatusCursorV1 {
     /// Encode this validated cursor as unique unpadded base64url.
     pub fn encode_opaque(self) -> Result<String, PorStatusCursorCodecError> {
         self.validate()?;
-        let bytes = norito::to_bytes(&self)
+        let bytes = norito::encode_canonical(&self)
             .map_err(|error| PorStatusCursorCodecError::Canonical(error.to_string()))?;
         if bytes.len() > POR_STATUS_CURSOR_MAX_CANONICAL_BYTES_V1 {
             return Err(PorStatusCursorCodecError::CanonicalTooLarge {
@@ -2229,6 +2259,8 @@ fn preflight_por_challenge_status_len(
     status: &PorChallengeStatusV1,
     maximum: usize,
 ) -> Result<usize, PorChallengeStatusValidationError> {
+    let _canonical_flags =
+        norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
     let found = status
         .encoded_len_exact()
         .ok_or(PorChallengeStatusValidationError::CanonicalLengthUnavailable)?;
@@ -2252,7 +2284,9 @@ pub fn decode_por_challenge_status_v1(
         POR_CHALLENGE_STATUS_MAX_CANONICAL_BYTES_V1,
         norito::DecodeLimits::new(
             8,
-            POR_CHALLENGE_STATUS_FAILURE_REASON_MAX_BYTES_V1,
+            // Norito applies this to the containing record as well as its leaf fields.
+            // validate() retains the exact failure-reason and sample bounds below.
+            POR_CHALLENGE_STATUS_MAX_CANONICAL_BYTES_V1,
             256,
             POR_CHALLENGE_STATUS_MAX_CANONICAL_BYTES_V1 * 4,
             16,
@@ -2286,7 +2320,8 @@ pub fn decode_por_challenge_status_page_v1(
         POR_CHALLENGE_STATUS_PAGE_MAX_CANONICAL_BYTES_V1,
         norito::DecodeLimits::new(
             POR_CHALLENGE_STATUS_PAGE_MAX_RECORDS_V1,
-            POR_CHALLENGE_STATUS_FAILURE_REASON_MAX_BYTES_V1,
+            // The records vector is a composite field; each record is validated below.
+            POR_CHALLENGE_STATUS_PAGE_MAX_CANONICAL_BYTES_V1,
             POR_CHALLENGE_STATUS_PAGE_MAX_RECORDS_V1 * 64,
             POR_CHALLENGE_STATUS_PAGE_MAX_CANONICAL_BYTES_V1 * 4,
             32,
@@ -2767,6 +2802,8 @@ fn preflight_por_weekly_report_len(
     report: &PorWeeklyReportV1,
     maximum: usize,
 ) -> Result<usize, PorWeeklyReportValidationError> {
+    let _canonical_flags =
+        norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
     let found = report
         .encoded_len_exact()
         .ok_or(PorWeeklyReportValidationError::CanonicalLengthUnavailable)?;
@@ -2804,6 +2841,7 @@ pub fn decode_por_weekly_report_v1(bytes: &[u8]) -> Result<PorWeeklyReportV1, no
 mod tests {
     use super::*;
     use ed25519_dalek::{Signer as _, SigningKey};
+    use norito::core::NoritoSerialize as _;
     fn encode_bare_with_flags<T: norito::core::NoritoSerialize>(value: &T, flags: u8) -> Vec<u8> {
         let _guard = norito::core::DecodeFlagsGuard::enter(flags);
         let mut bytes = Vec::new();
@@ -2986,6 +3024,8 @@ mod tests {
         );
     }
     include!("por/provider_vrf_tests.rs");
+    include!("por/canonical_signing_tests.rs");
+    include!("por/canonical_decoder_tests.rs");
     #[test]
     fn challenge_id_reflects_epoch_and_round() {
         let seed = [0x11; 32];
@@ -3378,7 +3418,7 @@ mod tests {
                 proof
                     .signature_payload_bytes()
                     .expect("encode borrowed proof signing payload"),
-                owned_frame,
+                norito::encode_canonical(&owned).expect("encode canonical proof signing payload"),
                 "PoR proof signature frame changed for flags 0x{flags:02x}"
             );
         }
@@ -3736,7 +3776,7 @@ mod tests {
                 verdict
                     .signature_payload_bytes()
                     .expect("encode borrowed verdict signing payload"),
-                owned_frame,
+                norito::encode_canonical(&owned).expect("encode canonical verdict signing payload"),
                 "audit-verdict signature frame changed for flags 0x{flags:02x}"
             );
         }
@@ -4137,11 +4177,25 @@ mod tests {
                 maximum: exact - 1,
             })
         );
-        let encoded = norito::to_bytes(&status).expect("encode bounded status");
-        assert_eq!(
-            decode_por_challenge_status_v1(&encoded).expect("bounded status decoder"),
-            status
-        );
+        let encoded = norito::encode_canonical(&status).expect("encode bounded status");
+        for flags in supported_layouts() {
+            let _context = norito::core::DecodeFlagsGuard::enter(flags);
+            assert_eq!(
+                decode_por_challenge_status_v1(&encoded).expect("bounded status decoder"),
+                status
+            );
+            assert_eq!(
+                preflight_por_challenge_status_len(&status, exact),
+                Ok(exact)
+            );
+            assert_eq!(
+                preflight_por_challenge_status_len(&status, exact - 1),
+                Err(PorChallengeStatusValidationError::PayloadTooLarge {
+                    found: exact,
+                    maximum: exact - 1,
+                })
+            );
+        }
         assert!(
             decode_por_challenge_status_v1(&vec![
                 0;
@@ -4157,6 +4211,19 @@ mod tests {
         assert_eq!(
             status.validate(),
             Err(PorChallengeStatusValidationError::InvalidFailureReason)
+        );
+        let oversized_reason = norito::encode_canonical(&status).unwrap();
+        assert!(matches!(
+            decode_por_challenge_status_v1(&oversized_reason),
+            Err(norito::core::Error::Message(reason))
+                if reason == PorChallengeStatusValidationError::InvalidFailureReason.to_string()
+        ));
+        assert!(
+            decode_por_challenge_status_page_v1(
+                &norito::encode_canonical(&vec![status.clone()]).unwrap(),
+                1,
+            )
+            .is_err()
         );
         status.failure_reason = Some("failure".to_owned());
         status.sample_count += 1;
@@ -4189,7 +4256,7 @@ mod tests {
             verifier_latency_ms: Some(950),
         };
         let exact_page = vec![status.clone(); POR_CHALLENGE_STATUS_PAGE_MAX_RECORDS_V1];
-        let exact_bytes = norito::to_bytes(&exact_page).expect("encode exact status page");
+        let exact_bytes = norito::encode_canonical(&exact_page).expect("encode exact status page");
         assert_eq!(
             decode_por_challenge_status_page_v1(
                 &exact_bytes,
@@ -4197,6 +4264,13 @@ mod tests {
             )
             .expect("protocol-maximum status page"),
             exact_page
+        );
+        assert!(
+            decode_por_challenge_status_page_v1(
+                &exact_bytes,
+                POR_CHALLENGE_STATUS_PAGE_MAX_RECORDS_V1 - 1,
+            )
+            .is_err()
         );
         let oversized_page =
             vec![status; POR_CHALLENGE_STATUS_PAGE_MAX_RECORDS_V1.saturating_add(1)];

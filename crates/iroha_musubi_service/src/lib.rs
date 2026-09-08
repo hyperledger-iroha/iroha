@@ -150,6 +150,7 @@ const BUNDLE_DOMAIN_V1: &[u8] = b"musubi-bundle-v1\0";
     norito::derive::Decode,
     norito::NoritoSchema,
 )]
+#[norito(schema_name = "iroha::musubi_runtime::MusubiPublicationRuntimeOperationV1")]
 #[norito_schema(name = "iroha::musubi_runtime::MusubiPublicationRuntimeOperationV1")]
 pub enum MusubiPublicationRuntimeOperationV1 {
     /// Stage one exact CAR through authenticated seed ingress.
@@ -172,6 +173,7 @@ pub enum MusubiPublicationRuntimeOperationV1 {
     norito::derive::Decode,
     norito::NoritoSchema,
 )]
+#[norito(schema_name = "iroha::musubi_runtime::MusubiPublicationRuntimeAuthorizationPayloadV1")]
 #[norito_schema(name = "iroha::musubi_runtime::MusubiPublicationRuntimeAuthorizationPayloadV1")]
 pub struct MusubiPublicationRuntimeAuthorizationPayloadV1 {
     /// Fixed domain marker preventing cross-protocol signature reuse.
@@ -222,6 +224,7 @@ impl MusubiPublicationRuntimeAuthorizationPayloadV1 {
     norito::derive::Decode,
     norito::NoritoSchema,
 )]
+#[norito(schema_name = "iroha::musubi_runtime::MusubiPublicationRuntimeAuthorizationApprovalV1")]
 #[norito_schema(name = "iroha::musubi_runtime::MusubiPublicationRuntimeAuthorizationApprovalV1")]
 pub struct MusubiPublicationRuntimeAuthorizationApprovalV1 {
     /// Publisher-controller key that produced this approval.
@@ -239,6 +242,7 @@ pub struct MusubiPublicationRuntimeAuthorizationApprovalV1 {
     norito::derive::Decode,
     norito::NoritoSchema,
 )]
+#[norito(schema_name = "iroha::musubi_runtime::MusubiPublicationRuntimeAuthorizationV1")]
 #[norito_schema(name = "iroha::musubi_runtime::MusubiPublicationRuntimeAuthorizationV1")]
 pub struct MusubiPublicationRuntimeAuthorizationV1 {
     /// Exact statement covered by the signature.
@@ -389,6 +393,7 @@ impl MusubiPublicationRuntimeAuthorizationV1 {
     norito::derive::Decode,
     norito::NoritoSchema,
 )]
+#[norito(schema_name = "iroha::musubi_runtime::MusubiSeedIngressCarChunkV1")]
 #[norito_schema(name = "iroha::musubi_runtime::MusubiSeedIngressCarChunkV1")]
 pub struct MusubiSeedIngressCarChunkV1 {
     /// Absolute byte offset in the concatenated bundle payload.
@@ -408,6 +413,7 @@ pub struct MusubiSeedIngressCarChunkV1 {
     norito::derive::Decode,
     norito::NoritoSchema,
 )]
+#[norito(schema_name = "iroha::musubi_runtime::MusubiSeedIngressCarFileV1")]
 #[norito_schema(name = "iroha::musubi_runtime::MusubiSeedIngressCarFileV1")]
 pub struct MusubiSeedIngressCarFileV1 {
     /// Portable UTF-8 path components in canonical byte order.
@@ -433,6 +439,7 @@ pub struct MusubiSeedIngressCarFileV1 {
     norito::derive::Decode,
     norito::NoritoSchema,
 )]
+#[norito(schema_name = "iroha::musubi_runtime::MusubiSeedIngressCarPlanV1")]
 #[norito_schema(name = "iroha::musubi_runtime::MusubiSeedIngressCarPlanV1")]
 pub struct MusubiSeedIngressCarPlanV1 {
     /// Closed witness schema version; must equal one.
@@ -640,6 +647,7 @@ fn clone_seed_ingress_path(
     norito::derive::Decode,
     norito::NoritoSchema,
 )]
+#[norito(schema_name = "iroha::musubi_runtime::MusubiSeedIngressStageRequestV1")]
 #[norito_schema(name = "iroha::musubi_runtime::MusubiSeedIngressStageRequestV1")]
 pub struct MusubiSeedIngressStageRequestV1 {
     /// Closed schema version; must equal one.
@@ -719,6 +727,7 @@ fn seed_ingress_plan_digest(
     norito::derive::Decode,
     norito::NoritoSchema,
 )]
+#[norito(schema_name = "iroha::musubi_runtime::MusubiFinalizedArchiveRegistrationEvidenceV1")]
 #[norito_schema(name = "iroha::musubi_runtime::MusubiFinalizedArchiveRegistrationEvidenceV1")]
 pub struct MusubiFinalizedArchiveRegistrationEvidenceV1 {
     /// Closed schema version; must equal one.
@@ -774,6 +783,7 @@ impl MusubiFinalizedArchiveRegistrationEvidenceV1 {
     norito::derive::Decode,
     norito::NoritoSchema,
 )]
+#[norito(schema_name = "iroha::musubi_runtime::MusubiStorageCoordinationRequestV1")]
 #[norito_schema(name = "iroha::musubi_runtime::MusubiStorageCoordinationRequestV1")]
 pub struct MusubiStorageCoordinationRequestV1 {
     /// Closed schema version; must equal one.
@@ -867,6 +877,7 @@ impl MusubiStorageCoordinationRequestV1 {
     norito::derive::Decode,
     norito::NoritoSchema,
 )]
+#[norito(schema_name = "iroha::musubi_runtime::MusubiStorageLocationDispositionV1")]
 #[norito_schema(name = "iroha::musubi_runtime::MusubiStorageLocationDispositionV1")]
 pub enum MusubiStorageLocationDispositionV1 {
     /// Coordinator has a pin/order and at least one finalized provider completion.
@@ -891,6 +902,7 @@ pub enum MusubiStorageLocationDispositionV1 {
     norito::derive::Decode,
     norito::NoritoSchema,
 )]
+#[norito(schema_name = "iroha::musubi_runtime::MusubiStorageCoordinationResponseV1")]
 #[norito_schema(name = "iroha::musubi_runtime::MusubiStorageCoordinationResponseV1")]
 pub struct MusubiStorageCoordinationResponseV1 {
     /// Closed schema version; must equal one.
@@ -1056,6 +1068,7 @@ impl MusubiStorageCoordinationResponseV1 {
     norito::derive::Decode,
     norito::NoritoSchema,
 )]
+#[norito(schema_name = "iroha::musubi_runtime::MusubiProviderReadbackRequestV1")]
 #[norito_schema(name = "iroha::musubi_runtime::MusubiProviderReadbackRequestV1")]
 pub struct MusubiProviderReadbackRequestV1 {
     /// Closed schema version; must equal one.
@@ -1135,6 +1148,7 @@ impl MusubiProviderReadbackRequestV1 {
     norito::derive::Decode,
     norito::NoritoSchema,
 )]
+#[norito(schema_name = "iroha::musubi_runtime::MusubiProviderReadbackResponseV1")]
 #[norito_schema(name = "iroha::musubi_runtime::MusubiProviderReadbackResponseV1")]
 pub struct MusubiProviderReadbackResponseV1 {
     /// Closed schema version; must equal one.
@@ -1306,6 +1320,7 @@ impl MusubiPublicationPrivateRouteV1 {
     norito::derive::Decode,
     norito::NoritoSchema,
 )]
+#[norito(schema_name = "iroha::musubi_runtime::MusubiPublicationServiceErrorCodeV1")]
 #[norito_schema(name = "iroha::musubi_runtime::MusubiPublicationServiceErrorCodeV1")]
 pub enum MusubiPublicationServiceErrorCodeV1 {
     /// The request did not select one exact fixed route.
@@ -1406,6 +1421,7 @@ impl MusubiPublicationServiceErrorCodeV1 {
     norito::derive::Decode,
     norito::NoritoSchema,
 )]
+#[norito(schema_name = "iroha::musubi_runtime::MusubiPublicationServiceErrorResponseV1")]
 #[norito_schema(name = "iroha::musubi_runtime::MusubiPublicationServiceErrorResponseV1")]
 pub struct MusubiPublicationServiceErrorResponseV1 {
     /// Closed response schema version; always one.
@@ -1498,6 +1514,7 @@ impl MusubiPublicationServiceConfigurationV1 {
     norito::derive::Decode,
     norito::NoritoSchema,
 )]
+#[norito(schema_name = "iroha::musubi_runtime::MusubiPublicationServiceJournalBindingV1")]
 #[norito_schema(name = "iroha::musubi_runtime::MusubiPublicationServiceJournalBindingV1")]
 pub struct MusubiPublicationServiceJournalBindingV1 {
     /// Exact deployment identity accepted by every retained operation.
@@ -1642,6 +1659,7 @@ pub trait MusubiProviderReadbackBackendV1: Send {
     norito::derive::Decode,
     norito::NoritoSchema,
 )]
+#[norito(schema_name = "iroha::musubi_runtime::MusubiPublicationOperationBindingV1")]
 #[norito_schema(name = "iroha::musubi_runtime::MusubiPublicationOperationBindingV1")]
 pub struct MusubiPublicationOperationBindingV1 {
     /// Stable publisher-selected operation id.
@@ -1688,6 +1706,7 @@ impl MusubiPublicationOperationBindingV1 {
     norito::derive::Decode,
     norito::NoritoSchema,
 )]
+#[norito(schema_name = "iroha::musubi_runtime::MusubiPublicationIdempotencyKeyV1")]
 #[norito_schema(name = "iroha::musubi_runtime::MusubiPublicationIdempotencyKeyV1")]
 pub struct MusubiPublicationIdempotencyKeyV1 {
     /// Exact private operation.

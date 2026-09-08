@@ -25,22 +25,87 @@ pub(super) fn write_bounded(
     account: &AccountId,
     output: &mut dyn JsonWriteSink,
 ) -> Result<(), BoundedJsonError> {
-    let canonical_len = canonical_address_len(account)?;
-    let maximum_limbs = maximum_base105_limbs(canonical_len)?;
-    let limbs = try_allocate_exact_limbs(maximum_limbs)?;
-    let mut encoder = I105Encoder::new(limbs);
-    emit_canonical_address(account, |byte| encoder.push_canonical_byte(byte))?;
-    if encoder.canonical_bytes != canonical_len || encoder.initialized_limbs().is_empty() {
-        return Err(BoundedJsonError::LengthMismatch);
-    }
+    let prepared = PreparedI105::new(account)?;
     output.push('"')?;
-    write_sentinel(super::address::chain_discriminant(), output)?;
-    write_base105_limbs(encoder.initialized_limbs(), output)?;
-    let checksum = encoder.checksum.finish();
-    for digit in checksum {
-        write_i105_symbol(digit, output)?;
-    }
+    prepared.write_to(output)?;
     output.push('"')
+}
+
+/// Visit canonical I105 text without staging the complete account literal.
+pub(super) fn visit_key_text(
+    account: &AccountId,
+    mut visitor: impl FnMut(&str) -> Result<(), BoundedJsonError>,
+) -> Result<(), BoundedJsonError> {
+    struct VisitorSink<'a, F> {
+        visitor: &'a mut F,
+    }
+
+    impl<F> JsonWriteSink for VisitorSink<'_, F>
+    where
+        F: FnMut(&str) -> Result<(), BoundedJsonError>,
+    {
+        fn push(&mut self, value: char) -> Result<(), BoundedJsonError> {
+            let mut bytes = [0_u8; 4];
+            (self.visitor)(value.encode_utf8(&mut bytes))
+        }
+
+        fn push_str(&mut self, value: &str) -> Result<(), BoundedJsonError> {
+            (self.visitor)(value)
+        }
+    }
+
+    let prepared = PreparedI105::new(account)?;
+    prepared.write_to(&mut VisitorSink {
+        visitor: &mut visitor,
+    })
+}
+
+struct PreparedI105 {
+    limbs: Box<[MaybeUninit<u64>]>,
+    initialized_limbs: usize,
+    checksum: [u8; I105_CHECKSUM_LEN],
+}
+
+impl PreparedI105 {
+    fn new(account: &AccountId) -> Result<Self, BoundedJsonError> {
+        let canonical_len = canonical_address_len(account)?;
+        let maximum_limbs = maximum_base105_limbs(canonical_len)?;
+        let limbs = try_allocate_exact_limbs(maximum_limbs)?;
+        let mut encoder = I105Encoder::new(limbs);
+        emit_canonical_address(account, |byte| encoder.push_canonical_byte(byte))?;
+        if encoder.canonical_bytes != canonical_len || encoder.initialized_limbs().is_empty() {
+            return Err(BoundedJsonError::LengthMismatch);
+        }
+        let I105Encoder {
+            limbs,
+            initialized_limbs,
+            checksum,
+            ..
+        } = encoder;
+        Ok(Self {
+            limbs,
+            initialized_limbs,
+            checksum: checksum.finish(),
+        })
+    }
+
+    fn write_to(&self, output: &mut dyn JsonWriteSink) -> Result<(), BoundedJsonError> {
+        write_sentinel(super::address::chain_discriminant(), output)?;
+        write_base105_limbs(self.initialized_limbs(), output)?;
+        for &digit in &self.checksum {
+            write_i105_symbol(digit, output)?;
+        }
+        Ok(())
+    }
+
+    #[allow(unsafe_code)]
+    fn initialized_limbs(&self) -> &[u64] {
+        // SAFETY: `PreparedI105::new` moves the initialized prefix out of an
+        // `I105Encoder` together with its exact initialized length.
+        unsafe {
+            core::slice::from_raw_parts(self.limbs.as_ptr().cast::<u64>(), self.initialized_limbs)
+        }
+    }
 }
 #[allow(unsafe_code)]
 fn try_allocate_exact_limbs(length: usize) -> Result<Box<[MaybeUninit<u64>]>, BoundedJsonError> {

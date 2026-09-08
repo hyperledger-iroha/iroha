@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import importlib.util
 import json
 import os
@@ -166,6 +167,62 @@ def canonical_contract() -> dict:
 def canonical_models() -> list[dict]:
     ledger = json.loads(BINDINGS.read_text(encoding="utf-8"))
     return copy.deepcopy(ledger["models"])
+
+
+@pytest.mark.parametrize(
+    ("symbol", "old", "new"),
+    [
+        (None, None, None),
+        (
+            "build_merge_execution_candidate_for_consensus",
+            "if descriptor.validator_set != authoritative",
+            "if false",
+        ),
+        (
+            "build_merge_execution_candidate_for_consensus",
+            "consensus.is_current(self).then_some(selected).flatten()",
+            "selected",
+        ),
+        (
+            "select_merge_execution_candidate_prefix",
+            "candidate.canonical_bytes().len() <= unsigned_limit",
+            "true",
+        ),
+    ],
+    ids=("current", "historical-committee", "final-generation", "whole-candidate-budget"),
+)
+def test_merge_candidate_builder_source_contract(
+    tmp_path: Path, symbol: str | None, old: str | None, new: str | None
+) -> None:
+    """Bind the production candidate builder and reject weakened safety checks."""
+    module = load_checker()
+    relative = "crates/iroha_core/src/state.rs"
+    path = copy_reviewed_rust_source_fixture(tmp_path, module, relative)
+    model = next(
+        model for model in canonical_models()
+        if model["module"] == "SumeragiV2AutonomousReservationCarrier"
+    )
+    # Exercise the ordinary model validator with just the two reviewed owners.
+    # Other production bindings have their own source/negative-control suites.
+    model["production_symbols"] = [
+        binding for binding in model["production_symbols"]
+        if binding["symbol"] in (
+            "build_merge_execution_candidate_for_consensus",
+            "select_merge_execution_candidate_prefix",
+        )
+    ]
+    assert len(model["production_symbols"]) == 2
+    if symbol is not None:
+        assert old is not None and new is not None
+        replace_once_after(path, f"fn {symbol}(", old, new)
+    errors: list[str] = []
+    module._validate_model(
+        tmp_path, ROOT_DIR / "formal/sumeragi_v2", model, errors
+    )
+    if symbol is None:
+        assert errors == [], errors
+    else:
+        assert any(symbol in error and old in error for error in errors), errors
 
 
 def copy_stable_generation_diagnostics_fixture(
@@ -1181,6 +1238,347 @@ def test_inflight_layout_contract_accepts_current_production(tmp_path: Path) -> 
                        "Some(CheckedProductionTransition { projection })")
     errors = validate_fixture(tmp_path, module, contract)
     assert any(symbol in error and constructor in error for error in errors), errors
+
+
+def copy_inflight_repair_fixture(
+    tmp_path: Path, module, monkeypatch, symbols: tuple[str, ...] = (
+        "production_in_flight_first_release_state_body",
+        "production_in_flight_first_release_transition_body",
+    ),
+) -> dict:
+    """Isolate repaired Rust owners while retaining the full TLA corpus.
+
+    The existing canonical acceptance test checks the entire production closure.
+    These negatives exercise the same validator with only unrelated Rust owners
+    omitted so each source mutation reports its own semantic-clause failure.
+    """
+    contract = canonical_contract()
+    bindings = tuple(
+        row for row in module.INFLIGHT_LAYOUT_PRODUCTION_BINDINGS
+        if row[2] in symbols
+    )
+    assert len(bindings) == len(symbols)
+    monkeypatch.setattr(module, "INFLIGHT_LAYOUT_PRODUCTION_BINDINGS", bindings)
+    contract["production_symbols"] = [
+        row for row in contract["production_symbols"] if row["symbol"] in symbols
+    ]
+    ordered = tuple(
+        row for row in module.INFLIGHT_LAYOUT_ORDERED_SOURCE_CHECKS
+        if row[2] in symbols
+    )
+    monkeypatch.setattr(module, "INFLIGHT_LAYOUT_ORDERED_SOURCE_CHECKS", ordered)
+    contract["ordered_source_checks"] = [
+        row for row in contract["ordered_source_checks"] if row["symbol"] in symbols
+    ]
+    for name, key in (
+        ("INFLIGHT_LAYOUT_FORBIDDEN_SOURCE_CHECKS", "forbidden_source_checks"),
+        ("INFLIGHT_LAYOUT_SOURCE_CHECKS", "source_checks"),
+    ):
+        monkeypatch.setattr(module, name, ())
+        contract[key] = []
+    copy_layout_fixture(tmp_path, module, contract)
+    assert validate_fixture(tmp_path, module, contract) == ()
+    return contract
+
+
+@pytest.mark.parametrize(
+    ("relative", "anchor", "old", "new", "diagnostic"),
+    (
+        *(
+            (
+                "formal/sumeragi_v2/SumeragiV2InFlightFirstRelease.tla",
+                "ReleaseReservationDirect ==",
+                old,
+                new,
+                "composed Rust/TLA action-alignment token",
+            )
+            for old, new in (
+                ('carrier.kuraActive = {}', 'TRUE'),
+                ('decision.laneCommitOwner = "None"', 'TRUE'),
+                ('release.pendingPrefix = queue.selectedCount', 'TRUE'),
+                (r'decision.releaseOwner \in (Validators \ {Producer})',
+                 r'decision.releaseOwner \in Validators'),
+            )
+        ),
+        (
+            "formal/sumeragi_v2/SumeragiV2InFlightFirstRelease.tla",
+            "ActivateKura(p) ==",
+            'ELSE [payloadBinding EXCEPT ![p] = BindingA]',
+            'ELSE payloadBinding',
+            "composed Rust/TLA action-alignment token",
+        ),
+        *(
+            (
+                "formal/sumeragi_v2/SumeragiV2InFlightFirstRelease.tla",
+                "MLValidatorCarrierOwnership ==",
+                owner + r' \subseteq authenticated',
+                owner + r' \subseteq Validators',
+                "composed Rust/TLA action-alignment token",
+            )
+            for owner in (
+                "carrier.kuraActive", "carrier.inputDurable",
+                "session.readyAuthorized", "history.everInputDurable",
+                "history.everReadyAuthorized", "history.readySigned",
+            )
+        ),
+        *(
+            (
+                "formal/sumeragi_v2/SumeragiV2InFlightFirstRelease.tla",
+                "MLValidatorCarrierOwnership ==",
+                owner + r' \in authenticated',
+                owner + r' \in Validators',
+                "composed Rust/TLA action-alignment token",
+            )
+            for owner in ("decision.laneCommitOwner", "decision.releaseOwner")
+        ),
+        (
+            "formal/sumeragi_v2/SumeragiV2InFlightFirstRelease.tla",
+            "MLDirectReleaseRequiresAbsentKura ==",
+            'carrier.kuraActive = {}', 'TRUE',
+            "composed Rust/TLA action-alignment token",
+        ),
+        *(
+            (
+                "formal/sumeragi_v2/SumeragiV2InFlightFirstRelease.tla",
+                "MLTerminalDispositionExclusive ==", old, 'TRUE',
+                "composed Rust/TLA action-alignment token",
+            )
+            for old in (
+                'decision.laneCommitOwner = "None"',
+                '~decision.wsvCommitted', 'decision.applicationCount = 0',
+                'decision.appliedBy = "None"',
+            )
+        ),
+        *(
+            (
+                "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
+                "macro_rules! production_in_flight_first_release_state_body",
+                f'({owner} & !state.payload_binding_a) == 0u128', 'true',
+                "production_in_flight_first_release_state_body",
+            )
+            for owner in (
+                "carrier.kura_active", "carrier.execution_input_durable",
+                "session.ready_authorized", "history.ever_execution_input_durable",
+                "history.ever_ready_authorized", "history.ready_signed",
+                "decision.lane_commit_owner", "decision.release_owner",
+            )
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
+            "// Actor-free abort/orphan release is authorized only before any",
+            'carrier.kura_active == 0u128', 'true',
+            "production_in_flight_first_release_state_body",
+        ),
+        *(
+            (
+                "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
+                "// Every release disposition excludes both a lane decision and",
+                old, 'true', "production_in_flight_first_release_state_body",
+            )
+            for old in (
+                'decision.lane_commit_owner == 0u128',
+                '!decision.wsv_committed', 'decision.application_count == 0u8',
+                'decision.applied_by == 0u128',
+            )
+        ),
+        *(
+            (
+                "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
+                (
+                    "macro_rules! production_in_flight_first_release_transition_body"
+                    if old.startswith("after.payload_binding_a")
+                    else "} else if projection.action\n"
+                    "                == refinement_tag_value!("
+                    "IN_FLIGHT_FIRST_RELEASE_ACTION_RELEASE_RESERVATION_DIRECT)"
+                ),
+                old, new, "production_in_flight_first_release_transition_body",
+            )
+            for old, new in (
+                ('after.payload_binding_a == (before.payload_binding_a | projection.actor)',
+                 'after.payload_binding_a == before.payload_binding_a'),
+                ('after.payload_binding_a == before.payload_binding_a', 'true'),
+                ('before.carrier.kura_active == 0u128', 'true'),
+                ('projection.actor == before.decision.release_owner', 'true'),
+                ('projection.actor != before.producer', 'true'),
+                ('before.release.pending_prefix == before.queue.selected_count', 'true'),
+            )
+        ),
+    ),
+)
+def test_inflight_direct_release_and_binding_repair_rejects_semantic_weakening(
+    tmp_path: Path, monkeypatch, relative: str, anchor: str, old: str, new: str,
+    diagnostic: str,
+) -> None:
+    """Reject authority weakening by semantic clauses, without digest-pin failures."""
+    module = load_checker()
+    contract = copy_inflight_repair_fixture(tmp_path, module, monkeypatch)
+    replace_once_after(tmp_path / relative, anchor, old, new)
+    errors = validate_fixture(tmp_path, module, contract)
+    assert any(
+        diagnostic in error and ("token" in error or "required" in error)
+        for error in errors
+    ), errors
+
+
+@pytest.mark.parametrize(
+    ("config", "mode", "invariant", "diagnostic"),
+    (
+        (
+            "inflight_first_release_direct_release_with_active_kura_bug.cfg",
+            "DirectReleaseWithActiveKura", "MLDirectReleaseRequiresAbsentKura",
+            "direct-release mutation must bypass only the active-Kura absence guard",
+        ),
+        (
+            "inflight_first_release_direct_release_commit_conflict_bug.cfg",
+            "DirectReleaseWithActiveKura", "MLTerminalDispositionExclusive",
+            "direct-release mutation must bypass only the active-Kura absence guard",
+        ),
+        (
+            "inflight_first_release_kura_without_payload_binding_bug.cfg",
+            "KuraWithoutPayloadBinding", "MLValidatorCarrierOwnership",
+            "Kura binding mutation must omit only authenticated payload binding publication",
+        ),
+    ),
+)
+def test_inflight_repair_mutation_registration_rejects_wrong_mode_and_omission(
+    tmp_path: Path, monkeypatch, config: str, mode: str, invariant: str, diagnostic: str,
+) -> None:
+    """Each new witness must retain its single mutation and exact named obligation."""
+    module = load_checker()
+    contract = copy_inflight_repair_fixture(tmp_path, module, monkeypatch)
+    path = tmp_path / module.FORMAL_RELATIVE / config
+    original = path.read_text(encoding="utf-8")
+    replace_once(path, f'Mode = "{mode}"', 'Mode = "Fixed"')
+    assert any(diagnostic in error for error in validate_fixture(tmp_path, module, contract))
+    path.write_text(original, encoding="utf-8")
+    replace_once(path, f'INVARIANT {invariant}\n', '')
+    assert any(
+        "mutation must check exactly the type invariant" in error
+        and invariant in error
+        for error in validate_fixture(tmp_path, module, contract)
+    )
+    path.write_text(original, encoding="utf-8")
+    fixed = tmp_path / module.FORMAL_RELATIVE / module.INFLIGHT_LAYOUT_POSITIVE_CONFIG
+    fixed_original = fixed.read_text(encoding="utf-8")
+    replace_once(fixed, f'INVARIANT {invariant}\n', '')
+    assert any(
+        "invariant list differs" in error
+        for error in validate_fixture(tmp_path, module, contract)
+    )
+    fixed.write_text(fixed_original, encoding="utf-8")
+    runner = tmp_path / module.INFLIGHT_LAYOUT_RUNNER
+    replace_once(runner, f'run_mutant {config} {invariant}\n', '')
+    assert any(
+        "mutation calls differ" in error and "twenty-five-control corpus" in error
+        for error in validate_fixture(tmp_path, module, contract)
+    )
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    (
+        ('payload_binding_a: producer,', 'payload_binding_a: producer | local_actor,'),
+        ('after_activate.payload_binding_a |= local_actor;', 'let _ = local_actor;'),
+        ('after_activate.payload_binding_a |= local_actor;',
+         'after_activate.payload_binding_a |= validator_mask;'),
+        ('after_activate.carrier.kura_active |= local_actor;', 'let _ = local_actor;'),
+        ('after_activate.carrier.kura_active |= local_actor;',
+         'after_activate.carrier.kura_active |= validator_mask;'),
+        ('actor: local_actor,', 'actor: producer,'),
+        ('let authorization = authorize(binding.clone(), checked_activate)?;',
+         'let authorization = authorize(binding.clone(), unchecked_activate)?;'),
+        ('process_generation.network_id() != payload.network_id', 'false'),
+        ('completion.takeover_required() || completion.cursor() != &live_activate',
+         'completion.takeover_required()'),
+    ),
+)
+def test_inflight_nonqueue_kura_activation_rejects_unowned_projection(
+    tmp_path: Path, monkeypatch, old: str, new: str,
+) -> None:
+    """Rehash each bridge mutation, then reject its exact authority-clause loss."""
+    module = load_checker()
+    symbol = "persist_nonqueue_autonomous_payload_with_custody"
+    contract = copy_inflight_repair_fixture(tmp_path, module, monkeypatch, (symbol,))
+    path = tmp_path / "crates/iroha_core/src/sumeragi/v2_lane_work.rs"
+    canonical_sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
+    replace_once_after(path, f"fn {symbol}(", old, new)
+    mutant_sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
+    assert canonical_sha256 != mutant_sha256
+    (tmp_path / "source-rehash.json").write_text(json.dumps({
+        "canonical_sha256": canonical_sha256, "mutant_sha256": mutant_sha256,
+        "source_pin_replacements": [],
+        "contract": "exact item and ordering clauses; no per-owner hash pin",
+    }, indent=2) + "\n", encoding="utf-8")
+    errors = validate_fixture(tmp_path, module, contract)
+    assert any(symbol in error and "missing current-layout token" in error for error in errors), errors
+
+
+@pytest.mark.parametrize(
+    ("moving", "before"),
+    (
+        (
+            'let authorization = authorize(binding.clone(), checked_activate)?;',
+            'let checked_activate = check_production_in_flight_first_release_transition(',
+        ),
+        (
+            'let bootstrap_signature = sign_lifecycle_preimage(&bootstrap_preimage)?;',
+            'let bootstrap_preimage = kura',
+        ),
+    ),
+)
+def test_inflight_nonqueue_kura_activation_rejects_authority_order_drift(
+    tmp_path: Path, monkeypatch, moving: str, before: str,
+) -> None:
+    """Retain all item tokens while moving authority ahead of its checked input."""
+    module = load_checker()
+    symbol = "persist_nonqueue_autonomous_payload_with_custody"
+    contract = copy_inflight_repair_fixture(tmp_path, module, monkeypatch, (symbol,))
+    path = tmp_path / "crates/iroha_core/src/sumeragi/v2_lane_work.rs"
+    original = path.read_text(encoding="utf-8")
+    source = original
+    anchor = source.index(f"fn {symbol}(")
+    moving_offset = source.index(moving, anchor)
+    before_offset = source.index(before, anchor)
+    assert before_offset < moving_offset
+    source = source[:moving_offset] + source[moving_offset + len(moving):]
+    source = source[:before_offset] + moving + "\n    " + source[before_offset:]
+    path.write_text(source, encoding="utf-8")
+    (tmp_path / "source-rehash.json").write_text(json.dumps({
+        "canonical_sha256": hashlib.sha256(original.encode()).hexdigest(),
+        "mutant_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        "source_pin_replacements": [],
+        "contract": "ordered source clauses; all required item tokens retained",
+    }, indent=2) + "\n", encoding="utf-8")
+    errors = validate_fixture(tmp_path, module, contract)
+    assert any(symbol in error and "missing or reorders token" in error for error in errors), errors
+    assert not any(symbol in error and "missing current-layout token" in error for error in errors), errors
+
+
+def test_inflight_repair_apalache_registration_retains_bound_and_tlc_ownership(
+    tmp_path: Path,
+) -> None:
+    """Keep the bounded positive run separate from the named TLC counterexamples."""
+    module = load_checker()
+    source = (ROOT_DIR / module.APALACHE_RUNNER_RELATIVE).read_text(encoding="utf-8")
+    assert module._apalache_runner_source_errors(source) == []
+    changes = [
+        ("missing-absence-property", ", MLDirectReleaseRequiresAbsentKura", ""),
+        ("missing-terminal-property", ", MLTerminalDispositionExclusive", ""),
+        ("bound-drift", "inflight_first_release_fixed.cfg \\\n  18 ",
+         "inflight_first_release_fixed.cfg \\\n  19 "),
+    ]
+    for name, old, new in changes:
+        assert source.count(old) == 1
+        mutant = source.replace(old, new, 1)
+        (tmp_path / f"{name}.sh").write_text(mutant, encoding="utf-8")
+        assert module._apalache_runner_source_errors(mutant), name
+    for config, _invariant in module.INFLIGHT_LAYOUT_MUTATIONS[-3:]:
+        mutant = source + f"\n# {config}\n"
+        (tmp_path / f"{config}.sh").write_text(mutant, encoding="utf-8")
+        assert any(
+            "TLC-owned mutation" in error and config in error
+            for error in module._apalache_runner_source_errors(mutant)
+        ), config
 
 
 def test_inflight_composed_contract_rejects_rehydrate_without_kura_ownership(
@@ -2510,13 +2908,13 @@ def test_inflight_layout_contract_rejects_closure_ledger_mutation_count_drift(
     path = tmp_path / "specs/sumeragi_v2_multilane_closure_ledger.md"
     replace_once(
         path,
-        "twenty-two exact TLC mutation witnesses",
+        "twenty-five exact TLC mutation witnesses",
         "twenty exact TLC mutation witnesses",
     )
     errors = validate_fixture(tmp_path, module, contract)
     assert any(
         "missing current-layout closure token "
-        "'twenty-two exact TLC mutation witnesses'" in error
+        "'twenty-five exact TLC mutation witnesses'" in error
         for error in errors
     ), errors
 

@@ -534,6 +534,8 @@ pub unsafe extern "C" fn sorafs_reference_validate_orderbook_json(
 /// Validate a Norito-encoded PoP payload and return outcome JSON.
 ///
 /// `kind` must be one of the `SORAFS_REFERENCE_POP_KIND_*` constants.
+/// Membership-proof validation checks wire shape and metadata only; it does not
+/// verify Halo2, authenticate a recipient, or consume a replay nullifier.
 ///
 /// # Safety
 /// Non-null pointers must be valid for their corresponding lengths until the function returns. The
@@ -2031,7 +2033,14 @@ mod tests {
         ))
         .expect("read governance fixture");
         let label = b"governance.to";
-        let cid = b"bafywronggovernancenode";
+        let node: GovernanceLogNodeV1 =
+            norito::decode_canonical(&bytes).expect("decode canonical governance fixture");
+        let mut cid = node.node_cid;
+        assert_eq!(
+            cid.len(),
+            SORAFS_REFERENCE_GOVERNANCE_DAG_CID_BYTES_V1 as usize
+        );
+        cid[0] ^= 1;
         // SAFETY: the pointers reference live test vectors for the duration of the call.
         let outcome = outcome_from_buffer(unsafe {
             sorafs_reference_validate_governance_json(

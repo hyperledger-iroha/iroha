@@ -8,6 +8,12 @@ Norito's first-release Rust implementation targets `std` only. There is no
 WASM/no-`std` codec branch, panic containment is always active at fallible
 decode boundaries, and build features do not weaken those safety rules.
 
+Rust bare payload writers use the object-safe `SerializePayload` contract.
+`NoritoSerialize` adds typed frame ownership. Borrowed field adapters can
+implement or derive `SerializePayload` without acquiring a root-frame identity;
+generic frame writers require `NoritoSerialize` explicitly. This separation
+does not change the V1 header, payload layout, checksum or signed bytes.
+
 ## Header
 
 The Norito header is always present on wire and on disk. It frames the payload
@@ -88,6 +94,10 @@ truth for compact per-value lengths; decoders must not infer compactness from
 the version or from payload heuristics. Fixed-width per-value prefixes are a
 distinct advertised V1 mode when a caller explicitly encodes with
 `flags = 0x00`.
+Nested tuple and metadata-entry serializers inherit that exact selection.
+They do not merge defaults into an active layout: changing length formats
+after an enclosing field has been written would make the frame internally
+inconsistent. Defaults apply only when no layout context is active.
 
 ## Length Prefixes
 
@@ -111,6 +121,33 @@ copy of the encoded payload. The write pass verifies every counted length and
 fails with a length mismatch if a stateful serializer changes between passes.
 Allocation failures in temporary codec buffers are returned as errors rather
 than using infallible `Vec` growth. These rules do not change the v1 bytes.
+The field writer takes only its destination and value. Generated serializers
+and manual callers do not construct per-field scratch buffers.
+
+The length-only encoder has its own counting destination. Core field and
+container helpers measure each child once during that pass, then add its measured
+length without replaying its body. This prevents nested count/write pairs from
+doubling work at every level. Only a helper that owns the measurement may do this;
+caller-supplied lengths and optional length hints remain untrusted. Byte writers,
+checksum writers, canonical comparisons, and separately constructed nested
+buffers always receive actual bytes. Count overflow remains an error even if a
+custom serializer ignores an individual failed write.
+
+Embedded instruction frames retain the counting destination through a
+codec-owned prefix writer. A size-only pass measures the concrete payload and
+adds the fixed header/alignment overhead; it does not construct a checksum writer.
+Actual frame output still computes and checks length, checksum, and finalized
+flags across its two passes. The tuple prefix runs in the enclosing layout
+context. `ConstVec` retains individually framed byte elements and its packed
+table/payload bound; `SmallVec` retains fixed-width element length prefixes.
+
+`Metadata` projects borrowed entry views into the same element-sequence writer
+as `ConstVec`, preserving its sequence-of-tuples layout without collecting entries.
+The writer derives cardinality from a cloneable exact-size iterator and checks
+the number of elements yielded during measurement and emission. Packed Metadata
+also enforces the configured archive limit over its offset table plus payload
+(excluding the sequence count), rejecting an oversized table before allocation
+and an oversized payload total before writing offsets or payloads.
 
 Varint encodings must fit in `u64` and use the shortest (canonical) encoding;
 overflow or overlong encodings are rejected.
@@ -153,6 +190,12 @@ admission, or buffer reservation. This prevents a recursive or incorrect
 length oracle from exhausting the stack, forcing a payload-sized speculative
 allocation, or understating the bytes accepted by the output pass.
 
+Use `canonical_frame_len` to count the exact uncompressed V1 frame emitted by
+`encode_canonical`, including for resource admission and length-prefixed hashes.
+Both ignore ambient layout guards and restore the caller's guard on return.
+The lower-level `core::encoded_frame_len` follows the active layout, matching
+the corresponding layout-aware encoder.
+
 Derive-generated serializers and length diagnostics also enforce
 `MAX_VALUE_NESTING_DEPTH`. Recursive in-memory values therefore return a
 typed `NestingDepthExceeded` error through fallible encoding APIs before native
@@ -183,6 +226,12 @@ temporary storage and returns typed resource-limit errors on violation.
 Resource-limit and allocation errors are terminal. The V1 decoder never retries
 the same bytes through an alternate layout after a budget has rejected them;
 the header flags select the only layout used for that frame.
+
+Derived packed structures validate the complete boundary after their declared
+fields, for both offset tables and field-bitset layouts. A valid checksum does
+not make trailing bytes part of a structure. Explicit prefix-field decoding
+reports only the bytes belonging to that field so the enclosing decoder can
+read its following fields.
 
 Nested decode scopes may tighten but never relax an outer budget. Binary value
 decoding is sequential in V1, so its budget counters stay in the calling decode
@@ -250,7 +299,8 @@ hiding beneath a typed outer object or array.
 JSON field dispatch uses one key hash implementation for compile-time constants,
 the scalar parser, and the tape parser. With `crc-key-hash`, the portable
 Castagnoli byte update and runtime-detected ARM CRC or x86 SSE4.2 update use
-the same accumulator convention and final mixing. Without that feature they
+the same raw register seeded with `0xffffffff`, without a final complement,
+before the fixed 64-bit avalanche. Without that feature they
 all use FNV-1a. These hashes select JSON fields internally; they do not alter
 the serialized JSON or binary schema hashes. Key comparisons still guard
 against hash collisions.
@@ -601,10 +651,10 @@ An entrypoint value schema is limited to 256 nodes and aggregate depth 256.
 `EntrypointValueTypeV1` validates the complete tape during binary and JSON
 deserialization, so truncated trees, trailing trees, over-limit depths, and
 otherwise invalid schemas are never returned as decoded values.
-The dynamic JSON `Value` parser permits 257 structural levels: the extra level
-covers the required outer entrypoint parameter object around a value at
-the full V1 type depth. Recursively owned typed JSON decoders retain their
-independent 256-level guard.
+The logical 256-level schema remains flat on wire and therefore does not consume
+one JSON parser frame per logical type level. The dynamic JSON `Value` parser
+admits 33 structural levels, including one boundary-envelope level, while
+recursively owned typed JSON decoders enforce the codec's 32-level limit.
 The built-in `QueryPage<View>` product uses the canonical nominal schema name
 `QueryPage`; its `items` list child is followed by the exact `View`
 specialization, so
@@ -661,6 +711,20 @@ Maps encode deterministically with the same active layout flags:
   offsets are monotonic with the first offset 0.
 - `HashMap` encodes entries in sorted key order for deterministic output;
   `BTreeMap` uses its natural ordering.
+
+JSON objects have a separate key contract. `JsonObjectKey` supplies canonical,
+unquoted text; the map writer adds quotes and applies the same escaping as JSON
+strings. `JsonObjectKeyOwned` parses that text directly when decoding. Numeric
+and boolean keys therefore use quoted decimal and `true`/`false` spellings.
+Byte-array keys use uppercase hexadecimal. Arbitrary JSON values, optional
+values, tuples, and collections are not object keys; their ordinary value
+serializers cannot establish an unambiguous key identity.
+
+Bounded writers visit key text through the checked contract, including through
+borrowed keys, and stop on the first conversion or output-limit error. Streaming
+formatters must preserve that error even if a formatter ignores a failed write.
+Key decoders retain duplicate-key rejection and the active decode resource
+limits. This JSON contract does not change the binary map layout above.
 
 ## MerkleTree Derived-Cache Encoding
 

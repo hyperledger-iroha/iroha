@@ -1,6 +1,6 @@
 [build-system]
-requires = ["maturin>=1.5,<2"]
-build-backend = "maturin"
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "iroha-python"
@@ -12,6 +12,7 @@ license = {text = "Apache-2.0"}
 requires-python = ">=3.10"
 dependencies = [
   "blake3>=1.0",
+  "iroha-native==0.0.1",
   "iroha-norito>=0.1.0",
   "iroha-torii-client>=0.0.1",
   "requests>=2.31",
@@ -44,22 +45,14 @@ dev = [
 Homepage = "https://github.com/hyperledger/iroha"
 Repository = "https://github.com/hyperledger/iroha"
 
-[tool.maturin]
-python-source = "src"
-manifest-path = "iroha_python_rs/Cargo.toml"
-module-name = "iroha_python._crypto"
-exclude = [
-  "src/**/*.so",
-  "src/**/*.dylib",
-  "src/**/*.pyd",
-  "src/**/__pycache__/**",
-  "src/**/*.pyc",
-  "src/**/*.pyo",
-]
-include = [
-  "src/iroha_python/examples/connect_app_metadata.json",
-  "src/iroha_python/py.typed",
-]
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+iroha_python = ["py.typed", "examples/connect_app_metadata.json"]
+
+[tool.setuptools.exclude-package-data]
+"*" = ["*.so", "*.dylib", "*.pyd", "*.pyc", "*.pyo"]
 
 [tool.ruff]
 line-length = 100

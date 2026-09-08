@@ -39,7 +39,7 @@ fn send_tx_with_same_chain_name_but_different_genesis_network() {
         AssetId::new(asset_definition_id.clone(), sender_id.clone()),
     );
     test_client
-        .submit_all_blocking::<InstructionBox>(
+        .submit_all::<InstructionBox>(
             [
                 create_sender_account.into(),
                 create_receiver_account.into(),
@@ -81,7 +81,7 @@ fn send_tx_with_same_chain_name_but_different_genesis_network() {
     .with_instructions([transfer_instruction])
     .sign(sender_keypair.private_key());
     test_client
-        .submit_transaction_blocking(&asset_transfer_tx_0)
+        .submit_transaction_and_wait(&asset_transfer_tx_0)
         .unwrap();
     let _err = test_client
         // no need for "blocking" - it must be rejected synchronously

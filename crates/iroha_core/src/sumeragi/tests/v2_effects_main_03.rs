@@ -242,7 +242,8 @@ fn higher_different_lock_releases_retained_cache_before_replacement_staging() {
     let mut timeout = timeout_at_view(&fixture, 1);
     timeout.groups[0].highest_prepare_qc = Some(replacement.clone());
     executor
-        .consume_effects(
+        .consume_admitted_fixture_effects(
+            &fixture,
             vec![AdapterEffect::EnterView {
                 tag: EventTag::new(1, 2, Generation::new(52)),
                 certificate: timeout,
@@ -277,6 +278,12 @@ fn higher_different_lock_releases_retained_cache_before_replacement_staging() {
 }
 #[test]
 fn decided_apply_retries_after_exact_merge_sidecar_recovery() {
+    for corrupt_ordinal in [false, true] {
+        assert_decided_apply_merge_sidecar_corruption(corrupt_ordinal);
+    }
+}
+
+fn assert_decided_apply_merge_sidecar_corruption(corrupt_ordinal: bool) {
     let fixture = Fixture::new();
     let mut executor = fixture.executor(EffectQueueConfig::default());
     let mut services = fixture.services();
@@ -395,16 +402,18 @@ fn decided_apply_retries_after_exact_merge_sidecar_recovery() {
     // Application deferral is also an ownership boundary. An internally
     // inconsistent decided task must fail before sidecar registration or
     // a recovery callback can treat it as legitimate pending work.
-    executor
+    let pending = executor
         .pending_applications
         .get_mut(&work_id)
-        .expect("retained exact Apply owner")
-        .task
-        .certificate
-        .subject = wire::BlockSubject {
-        block_hash: HashOf::from_untyped_unchecked(Hash::new(b"corrupt deferred apply")),
-        ..task.subject
-    };
+        .expect("retained exact Apply owner");
+    if corrupt_ordinal {
+        pending.task.lifecycle_ordinal = pending.task.lifecycle_ordinal.saturating_add(1);
+    } else {
+        pending.task.certificate.subject = wire::BlockSubject {
+            block_hash: HashOf::from_untyped_unchecked(Hash::new(b"corrupt deferred apply")),
+            ..task.subject
+        };
+    }
     let deferred_callbacks = services.deferred_merge_sidecars.len();
     assert!(matches!(
         executor.defer_application_for_merge_sidecar(work_id, &reference, &mut services,),
@@ -414,25 +423,18 @@ fn decided_apply_retries_after_exact_merge_sidecar_recovery() {
     assert!(executor.pending_applications.contains_key(&work_id));
     assert!(executor.deferred_merge_work.is_empty());
     assert_eq!(services.deferred_merge_sidecars.len(), deferred_callbacks);
-    let pending = executor
-        .pending_applications
-        .get_mut(&work_id)
-        .expect("retained Apply remains available for ordinal corruption");
-    pending.task.certificate = task.certificate.clone();
-    pending.task.lifecycle_ordinal = pending.task.lifecycle_ordinal.saturating_add(1);
-    assert!(matches!(
-        executor.defer_application_for_merge_sidecar(work_id, &reference, &mut services,),
-        Err(EffectExecutorError::Contract(reason))
-            if reason.contains("exact decided-body owner")
-    ));
-    assert!(executor.deferred_merge_work.is_empty());
-    assert_eq!(services.deferred_merge_sidecars.len(), deferred_callbacks);
+    assert!(executor.output_guard.restart_required());
+    assert!(executor.status().fail_closed);
 }
+
 #[test]
 fn queued_protected_store_keeps_one_work_id_across_repeated_tcs() {
     let fixture = Fixture::new();
     let mut executor = fixture.executor(EffectQueueConfig::new(1, 2, 1_048_576, 1));
     let mut services = fixture.services();
+    let initial_tag = EventTag::new(1, 0, Generation::new(60));
+    executor.runtime.round_tag = Some(initial_tag);
+    executor.reconciled_tag = Some(initial_tag);
     executor
         .admit_local_proposal(
             EventTag::new(1, 0, Generation::new(60)),
@@ -450,7 +452,8 @@ fn queued_protected_store_keeps_one_work_id_across_repeated_tcs() {
         let mut timeout = timeout_at_view(&fixture, view - 1);
         timeout.groups[0].highest_prepare_qc = Some(high_prepare.clone());
         executor
-            .consume_effects(
+            .consume_admitted_fixture_effects(
+                &fixture,
                 vec![AdapterEffect::EnterView {
                     tag: EventTag::new(1, view, Generation::new(generation)),
                     certificate: timeout,
@@ -471,11 +474,16 @@ fn queued_protected_store_keeps_one_work_id_across_repeated_tcs() {
         );
         assert!(services.cancelled_stores.is_empty());
         assert_eq!(services.store_tasks.len(), 1);
+        assert!(
+            !executor.body_pipeline_owners.contains_key(&protected),
+            "detached immutable Store work must release the superseded reducer tag"
+        );
     }
     let current_tag = EventTag::new(1, 2, Generation::new(62));
     let sources = certified_sources(&fixture, &high_prepare);
     executor
-        .consume_effects(
+        .consume_admitted_fixture_effects(
+            &fixture,
             vec![
                 AdapterEffect::FetchBody {
                     tag: current_tag,
@@ -534,7 +542,8 @@ fn active_old_view_store_rebinds_current_consumer_before_late_completion() {
     let mut timeout = timeout_certificate(&fixture);
     timeout.groups[0].highest_prepare_qc = Some(prepare.clone());
     executor
-        .consume_effects(
+        .consume_admitted_fixture_effects(
+            &fixture,
             vec![AdapterEffect::EnterView {
                 tag: tag(1),
                 certificate: timeout,
@@ -555,7 +564,8 @@ fn active_old_view_store_rebinds_current_consumer_before_late_completion() {
     );
     assert!(executor.body_pipeline_owners.is_empty());
     executor
-        .consume_effects(
+        .consume_admitted_fixture_effects(
+            &fixture,
             vec![AdapterEffect::FetchBody {
                 tag: tag(1),
                 round: fixture.manifest.round,
@@ -581,7 +591,8 @@ fn active_old_view_store_rebinds_current_consumer_before_late_completion() {
         Some(tag(1))
     );
     executor
-        .consume_effects(
+        .consume_admitted_fixture_effects(
+            &fixture,
             vec![AdapterEffect::StoreBody {
                 tag: tag(1),
                 round: fixture.manifest.round,
@@ -639,7 +650,8 @@ fn active_old_view_store_completes_between_current_fetch_and_store() {
     let mut timeout = timeout_certificate(&fixture);
     timeout.groups[0].highest_prepare_qc = Some(prepare.clone());
     executor
-        .consume_effects(
+        .consume_admitted_fixture_effects(
+            &fixture,
             vec![AdapterEffect::EnterView {
                 tag: tag(1),
                 certificate: timeout,
@@ -650,7 +662,8 @@ fn active_old_view_store_completes_between_current_fetch_and_store() {
         .expect("detach active old-view store consumer");
     assert!(executor.pending_stores[&store_id].consumer.is_none());
     executor
-        .consume_effects(
+        .consume_admitted_fixture_effects(
+            &fixture,
             vec![AdapterEffect::FetchBody {
                 tag: tag(1),
                 round: fixture.manifest.round,
@@ -692,7 +705,8 @@ fn active_old_view_store_completes_between_current_fetch_and_store() {
             if *completion_tag == tag(1) && manifest == &fixture.manifest
     ));
     executor
-        .consume_effects(
+        .consume_admitted_fixture_effects(
+            &fixture,
             vec![AdapterEffect::StoreBody {
                 tag: tag(1),
                 round: fixture.manifest.round,
@@ -725,7 +739,8 @@ fn matching_ready_body_winner_makes_fetch_completion_idempotent() {
     let mut executor = fixture.executor(EffectQueueConfig::new(8, 1, body_len, 4));
     let mut services = fixture.services();
     executor
-        .consume_effects(
+        .consume_admitted_fixture_effects(
+            &fixture,
             vec![AdapterEffect::FetchBody {
                 tag: tag(0),
                 round: fixture.manifest.round,
@@ -773,6 +788,15 @@ fn matching_ready_body_winner_makes_fetch_completion_idempotent() {
 }
 #[test]
 fn late_retired_store_cannot_overwrite_current_pending_manifest() {
+    assert_late_retired_store_preserves_current_manifest(false);
+}
+
+#[test]
+fn late_retired_store_rejects_corrupt_retained_manifest() {
+    assert_late_retired_store_preserves_current_manifest(true);
+}
+
+fn assert_late_retired_store_preserves_current_manifest(corrupt_old_manifest: bool) {
     let fixture = Fixture::new();
     let mut executor = fixture.executor(EffectQueueConfig::default());
     let mut services = fixture.services();
@@ -787,7 +811,8 @@ fn late_retired_store_cannot_overwrite_current_pending_manifest() {
     let retired_id = services.store_tasks[0].id();
     services.inflight_stores.insert(retired_id);
     executor
-        .consume_effects(
+        .consume_admitted_fixture_effects(
+            &fixture,
             vec![AdapterEffect::EnterView {
                 tag: tag(1),
                 certificate: timeout_certificate(&fixture),
@@ -797,40 +822,94 @@ fn late_retired_store_cannot_overwrite_current_pending_manifest() {
         )
         .expect("retire unprotected active store consumer");
     assert!(executor.pending_stores.is_empty());
-    let mut alternate_chunk = fixture.body.clone();
-    alternate_chunk[0] ^= 1;
-    let alternate_manifest = deliberately_conflicting_payload_manifest(
-        &fixture.context,
-        fixture.manifest.round,
-        fixture.manifest.subject,
-        &alternate_chunk,
-    );
-    assert_ne!(alternate_manifest, fixture.manifest);
+    assert!(matches!(
+        executor.admit_local_proposal(
+            tag(1),
+            fixture.manifest.clone(),
+            fixture.body.clone(),
+            &mut services,
+        ),
+        Err(EffectExecutorError::Contract(reason))
+            if reason.contains("exact authoritative round")
+    ));
+    assert!(executor.pending_stores.is_empty());
+    assert_eq!(services.store_tasks.len(), 1);
+    assert!(!executor.status().fail_closed);
+
+    // A new local proposal owns its actual current round. It cannot relabel
+    // the old round merely to manufacture a same-key manifest collision.
+    let current_manifest = manifest_at_view(&fixture, 1);
     executor
         .admit_local_proposal(
             tag(1),
-            alternate_manifest.clone(),
+            current_manifest.clone(),
             fixture.body.clone(),
             &mut services,
         )
-        .expect("current view owns alternate exact manifest");
+        .expect("current view owns its canonical manifest");
     let current_id = services.store_tasks.last().expect("current store").id();
     assert_ne!(current_id, retired_id);
     assert_eq!(executor.pending_stores.len(), 1);
+    let key = (fixture.manifest.round, fixture.manifest.subject);
     let late_completion = services.execute_store(retired_id);
-    assert!(matches!(
-        executor.complete_body_store(late_completion, &mut services),
-        Err(EffectExecutorError::BodyStore(reason))
-            if reason.contains("conflicts with retained exact-body ownership")
-    ));
+    let late_receipt = late_completion.receipt().clone();
+    if corrupt_old_manifest {
+        // Fault injection at the completion boundary: corrupt only the old
+        // retained manifest after both real local admissions. No admission
+        // helper is made to accept an unauthoritative old-round proposal.
+        let mut alternate_chunk = fixture.body.clone();
+        alternate_chunk[0] ^= 1;
+        let corrupt_manifest = deliberately_conflicting_payload_manifest(
+            &fixture.context,
+            fixture.manifest.round,
+            fixture.manifest.subject,
+            &alternate_chunk,
+        );
+        assert_ne!(corrupt_manifest, fixture.manifest);
+        assert!(
+            executor
+                .ready_bodies
+                .insert(
+                    key,
+                    ReadyBody {
+                        manifest: corrupt_manifest,
+                        bytes: fixture.body.clone().into(),
+                    },
+                )
+                .is_none()
+        );
+        executor.ready_body_bytes += u64::try_from(fixture.body.len()).expect("body length");
+        assert!(matches!(
+            executor.complete_body_store(late_completion, &mut services),
+            Err(EffectExecutorError::BodyStore(reason))
+                if reason.contains("conflicts with retained exact-body ownership")
+        ));
+        assert!(executor.recovered_bodies.is_empty());
+        assert!(executor.durable_bodies.is_empty());
+        assert!(executor.status().fail_closed);
+        assert_eq!(services.closed.len(), 1);
+    } else {
+        assert_eq!(
+            executor
+                .complete_body_store(late_completion, &mut services)
+                .expect("catalog the retired task under its immutable old round"),
+            CompletionDisposition::Stale
+        );
+        assert_eq!(
+            executor.recovered_bodies.get(&key),
+            Some(&(fixture.manifest.clone(), late_receipt.clone()))
+        );
+        assert_eq!(executor.durable_bodies.get(&key), Some(&late_receipt));
+        assert!(!executor.status().fail_closed);
+        assert!(services.closed.is_empty());
+    }
+    assert_eq!(executor.pending_stores.len(), 1);
     assert_eq!(
         executor.pending_stores[&current_id].task.manifest(),
-        &alternate_manifest
+        &current_manifest
     );
-    assert!(executor.recovered_bodies.is_empty());
-    assert!(executor.durable_bodies.is_empty());
-    assert!(executor.status().fail_closed);
-    assert_eq!(services.closed.len(), 1);
+    assert_eq!(executor.pending_stores[&current_id].task.tag(), tag(1));
+    assert!(executor.runtime.completions.is_empty());
 }
 #[test]
 fn active_losing_store_releases_capacity_for_high_qc_fetch() {
@@ -857,7 +936,8 @@ fn active_losing_store_releases_capacity_for_high_qc_fetch() {
     let mut timeout = timeout_certificate(&fixture);
     timeout.groups[0].highest_prepare_qc = Some(high_prepare.clone());
     executor
-        .consume_effects(
+        .consume_admitted_fixture_effects(
+            &fixture,
             vec![AdapterEffect::EnterView {
                 tag: tag(1),
                 certificate: timeout,
@@ -871,7 +951,8 @@ fn active_losing_store_releases_capacity_for_high_qc_fetch() {
     assert_eq!(executor.pending_store_bytes, 0);
     assert!(executor.body_pipeline_owners.is_empty());
     executor
-        .consume_effects(
+        .consume_admitted_fixture_effects(
+            &fixture,
             vec![AdapterEffect::FetchBody {
                 tag: tag(1),
                 round: high_prepare.round,

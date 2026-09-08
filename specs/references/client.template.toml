@@ -1,3 +1,5 @@
+# SDK-owned client configuration. CLI filesystem settings are documented in
+# crates/iroha_cli/README.md and are not accepted by the reusable SDK loader.
 # chain =
 # Select the same canonical one-line identity file used by validator `genesis.expected_hash_file`.
 # network_id_file = "genesis.expected_hash"
@@ -21,7 +23,3 @@
 # status_timeout_ms = 100_000
 ## Whether to append a random nonce to every submitted transaction (helps avoid hash clashes in demos/tests).
 # nonce = false
-
-[connect]
-# Root directory for Connect queue diagnostics and evidence export. Defaults to `~/.iroha/connect`.
-# queue_root = "/home/alice/.iroha/connect"

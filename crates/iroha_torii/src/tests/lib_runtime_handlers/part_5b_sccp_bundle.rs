@@ -7,7 +7,15 @@ fn app_with_indexed_sccp_message_for_test(
     let chain: ChainId = iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1
         .parse()
         .expect("SCCP Taira chain label");
-    let app = mk_app_state_for_tests_with_chain_id(chain.clone());
+    let app = mk_app_state_for_tests_with_world_and_options_and_network_id(
+        World::default(),
+        None,
+        None,
+        None,
+        None,
+        chain,
+        iroha_sccp::sccp_taira_finality_network_id_v1(),
+    );
     let authority = AccountId::new(keypair.public_key().clone());
     let payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
         version: 1,
@@ -115,33 +123,26 @@ fn app_with_indexed_sccp_message_for_test(
             power,
         })
         .collect::<Vec<_>>();
-    use iroha_data_model::isi::kagemusha_v1::{
-        KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterV1,
-        KagemushaMintFinalityValidatorKeysV1,
-    };
-    let mint_roster = KagemushaMintFinalityEpochRosterV1 {
-        version: KAGEMUSHA_CHAIN_VERSION_V1,
-        network_id: *app.state.network_id_ref(),
-        epoch: 0,
-        validators: roster
-            .iter()
-            .zip(1..=4_u8)
-            .map(|(validator, index)| KagemushaMintFinalityValidatorKeysV1 {
-                validator: validator.validator.clone(),
-                eq_proof_public_key: [index; 32],
-                ep_proof_public_key: [index + 16; 32],
-            })
-            .collect(),
-    };
+    let kagemusha_mint_finality_epoch_roster =
+        iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochRosterV1 {
+            version: iroha_data_model::isi::kagemusha_v1::KAGEMUSHA_CHAIN_VERSION_V1,
+            network_id: *app.state.network_id_ref(),
+            epoch: 0,
+            validators: roster.iter().enumerate().map(|(index, validator)| {
+                let seed = 0xA0_u8 + u8::try_from(index).expect("four-validator fixture index");
+                iroha_core::zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
+                    &[seed; 32], 0, validator.validator.clone(),
+                ).expect("derive paired-Pasta finality fixture keys")
+            }).collect(),
+        };
+    let kagemusha_mint_finality_epoch_id = kagemusha_mint_finality_epoch_roster
+        .finality_epoch_id()
+        .expect("canonical finality roster identity");
     let context = HeightContext {
         network_id: *app.state.network_id_ref(),
         protocol_version: PROTOCOL_VERSION,
         height: HEIGHT,
         epoch: 0,
-        kagemusha_mint_finality_epoch_id: mint_roster
-            .finality_epoch_id()
-            .expect("valid SCCP mint-finality roster"),
-        kagemusha_mint_finality_epoch_roster: mint_roster,
         epoch_end_height: 10,
         next_epoch_snapshot: None,
         mode: ConsensusMode::Npos,
@@ -149,6 +150,8 @@ fn app_with_indexed_sccp_message_for_test(
         snapshot_bootstrap: None,
         quorum: DualQuorum::from_roster(&roster).expect("valid SCCP finality roster"),
         roster,
+        kagemusha_mint_finality_epoch_id,
+        kagemusha_mint_finality_epoch_roster,
         nexus_amx_context_hash: Hash::new(b"Torii SCCP exact-v2 finality context"),
         execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
         da_layout: iroha_data_model::block::consensus_v2::recommended_data_availability_layout(),
@@ -260,6 +263,10 @@ async fn sccp_bundle_endpoint_uses_exact_v2_artifact_and_authoritative_index() {
     let bundle = norito::json::from_slice::<iroha_sccp::TairaSccpMessageProofV1>(&bundle_bytes)
         .expect("typed bundle JSON");
     assert_eq!(bundle.commitment.message_id, message_id);
+    assert_eq!(
+        expected_artifact.height_context.network_id,
+        iroha_sccp::sccp_taira_finality_network_id_v1(),
+    );
     assert!(iroha_sccp::verify_message_bundle_structure(&bundle));
     let verified_finality =
         iroha_sccp::verified_sccp_message_taira_finality_proof_cryptographically_self_consistent(

@@ -18,10 +18,13 @@ use iroha_data_model::{
         FastpqTransitionBatch, TRANSFER_TRANSCRIPTS_METADATA_KEY,
     },
     nexus::{
-        AxtEffectBinding, AxtFastpqBinding, AxtProofEnvelope, AxtRemoteSpendClaimV1, ProofBlob,
+        AxtEffectBinding, AxtFastpqBinding, AxtFinalizedSpendAnchorV1, AxtProofEnvelope,
+        AxtRemoteSpendClaimV1, ProofBlob, axt_ordered_transaction_set_digest_v1,
         compute_remote_spend_claim_commitment_v1,
     },
+    transaction::signed::TransactionEntrypoint,
 };
+use iroha_primitives::numeric::Quantity;
 use norito::{NoritoDeserialize, NoritoSerialize, decode_from_bytes, to_bytes};
 use sha2::Digest;
 /// Metadata key binding the structured AXT FASTPQ payload into the proof trace.
@@ -308,19 +311,17 @@ pub fn axt_proof_envelope_from_bound_batch(
     let binding = embedded_axt_binding(batch)?;
     let committed_amount = proof_bound_committed_amount(batch)?;
     let proof_bound_manifest_root = proof_bound_manifest_root(batch)?;
-    if manifest_root != proof_bound_manifest_root {
-        return Err(Error::InvalidAxtBinding {
-            details: "AXT proof envelope manifest_root does not match proof-bound batch metadata"
-                .into(),
-        });
-    }
+    require_proof_mirror(
+        "envelope manifest_root",
+        manifest_root,
+        proof_bound_manifest_root,
+    )?;
     let proof_bound_da_commitment = proof_bound_da_commitment(batch)?;
-    if da_commitment != proof_bound_da_commitment {
-        return Err(Error::InvalidAxtBinding {
-            details: "AXT proof envelope da_commitment does not match proof-bound batch metadata"
-                .into(),
-        });
-    }
+    require_proof_mirror(
+        "envelope da_commitment",
+        da_commitment,
+        proof_bound_da_commitment,
+    )?;
     enforce_default_verify_limits(batch, &proof)?;
     verify_with_default_limits_prechecked_and_semantics(
         batch,
@@ -453,16 +454,7 @@ pub fn bind_axt_batch_with_proof_metadata(
     }
     let canonical = canonicalize_binding(binding)?;
     let context = BindingContext::from_binding(&canonical)?;
-    if batch.parameter != canonical.parameter {
-        return Err(Error::InvalidAxtBinding {
-            details: "FastPQ batch parameter does not match AXT binding".into(),
-        });
-    }
-    if batch.public_inputs.dsid != dsid_bytes(canonical.source_dsid) {
-        return Err(Error::InvalidAxtBinding {
-            details: "FastPQ batch public dsid does not match AXT binding".into(),
-        });
-    }
+    require_execution_header(&batch.parameter, batch.public_inputs.dsid, &canonical)?;
     require_concrete_execution_batch(batch, &context)?;
     validate_batch_semantics(batch, axt_proof_semantics(&canonical)?)?;
     batch.metadata.remove(AXT_FASTPQ_BATCH_SEAL_METADATA_KEY);
@@ -517,6 +509,100 @@ pub fn bind_axt_batch_with_proof_metadata(
 /// binding/payload or when the carried batch does not bind to the AXT statement. Returns
 /// any `FastPQ` proof verification error for invalid proof material.
 pub fn verify_axt_proof_envelope(envelope: &AxtProofEnvelope) -> Result<AxtVerifiedProof> {
+    verify_axt_proof_envelope_inner(envelope, None)
+}
+
+/// Verify a transfer proof against an independently authenticated finalized anchor.
+///
+/// The caller must resolve the exact anchor from immutable finalized consensus
+/// state and authenticate its network, lane/incarnation, block, QC, committee,
+/// issuer signatures and spend nonce. It must also establish successful finalized
+/// execution and the exact transfer facts for the selected source transaction.
+/// Merely supplying an anchor does not authenticate it, and this function does not authorize a spend by itself.
+///
+/// Exact ordered canonical transaction wires must reproduce the anchor's set
+/// digest and contain the binding's execution-call identity exactly once. The
+/// proof's pre/post roots and transaction-set digest are then compared byte for
+/// byte with that anchor before cryptographic verification. No local transfer
+/// subtree root or sorted execution-identity digest is substituted. Only the
+/// witnessed transfer profile is admitted; opaque effect carriers cannot be used.
+///
+/// # Errors
+/// Rejects an invalid anchor, absent/non-positive expiry, excessive transaction
+/// witness, wrong transaction order/wires or execution membership, any mismatch
+/// in the public roots, dataspace, DA commitment or expiry, and invalid proofs.
+pub fn verify_axt_proof_envelope_against_anchor_v1(
+    envelope: &AxtProofEnvelope,
+    expiry_slot: Option<u64>,
+    authoritative_anchor: &AxtFinalizedSpendAnchorV1,
+    ordered_transactions: &[TransactionEntrypoint],
+) -> Result<AxtVerifiedProof> {
+    enforce_axt_fastpq_payload_limit(&envelope.proof)?;
+    if ordered_transactions.len() > iroha_data_model::nexus::MAX_AXT_FINALIZED_TRANSACTIONS_V1 {
+        return Err(Error::VerifierLimitExceeded {
+            limit: "max_axt_finalized_transactions",
+            actual: ordered_transactions.len(),
+            max: iroha_data_model::nexus::MAX_AXT_FINALIZED_TRANSACTIONS_V1,
+        });
+    }
+    authoritative_anchor
+        .validate()
+        .map_err(|error| Error::InvalidAxtBinding {
+            details: format!("invalid authoritative AXT finalized anchor: {error}"),
+        })?;
+    if expiry_slot.is_none_or(|expiry| expiry == 0) {
+        return Err(Error::InvalidAxtBinding {
+            details: "anchored AXT proof requires a non-zero expiry_slot".into(),
+        });
+    }
+    if envelope.dsid != authoritative_anchor.dataspace_id {
+        return Err(Error::InvalidAxtBinding {
+            details: "AXT proof dataspace does not match authoritative finalized anchor".into(),
+        });
+    }
+    if envelope.da_commitment != Some(authoritative_anchor.da_manifest_digest.into()) {
+        return Err(Error::InvalidAxtBinding {
+            details: "AXT proof DA manifest does not match authoritative finalized anchor".into(),
+        });
+    }
+    let binding = envelope
+        .fastpq_binding
+        .as_ref()
+        .ok_or_else(|| Error::InvalidAxtBinding {
+            details: "AXT proof envelope is missing fastpq_binding".into(),
+        })?;
+    validate_axt_transfer_claim_binding(binding)?;
+    let canonical = require_canonical_binding(binding)?;
+    let transaction_set_digest = axt_ordered_transaction_set_digest_v1(ordered_transactions)
+        .map_err(|error| Error::InvalidAxtBinding {
+            details: format!("invalid AXT finalized transaction witness: {error}"),
+        })?;
+    if transaction_set_digest != authoritative_anchor.transaction_set_digest {
+        return Err(Error::InvalidAxtBinding {
+            details: "AXT ordered transaction wires do not match authoritative finalized anchor"
+                .into(),
+        });
+    }
+    let source_execution =
+        decode_hex_digest(&canonical.source_tx_commitment, "source_tx_commitment")?;
+    let occurrences = ordered_transactions
+        .iter()
+        .filter(|transaction| transaction.execution_call_hash().as_ref() == &source_execution)
+        .count();
+    if occurrences != 1 {
+        return Err(Error::InvalidAxtBinding {
+            details:
+                "AXT source execution must occur exactly once in the finalized transaction set"
+                    .into(),
+        });
+    }
+    verify_axt_proof_envelope_inner(envelope, Some((authoritative_anchor, expiry_slot)))
+}
+
+fn verify_axt_proof_envelope_inner(
+    envelope: &AxtProofEnvelope,
+    finalized: Option<(&AxtFinalizedSpendAnchorV1, Option<u64>)>,
+) -> Result<AxtVerifiedProof> {
     let binding = envelope
         .fastpq_binding
         .as_ref()
@@ -546,6 +632,9 @@ pub fn verify_axt_proof_envelope(envelope: &AxtProofEnvelope) -> Result<AxtVerif
     }
     let batch = transition_batch_from_model_owned(batch_model);
     enforce_default_verify_limits(&batch, &proof)?;
+    if let Some((anchor, _)) = finalized {
+        require_finalized_public_inputs_v1(&batch.public_inputs, anchor)?;
+    }
 
     // Canonical re-encoding and the model clone are deliberately delayed until
     // the decoded batch and proof have passed their verifier resource limits.
@@ -557,25 +646,28 @@ pub fn verify_axt_proof_envelope(envelope: &AxtProofEnvelope) -> Result<AxtVerif
     verify_batch_matches_canonical_binding(&batch, &canonical_binding)?;
     let proof_bound_amount = proof_bound_committed_amount(&batch)?;
     let proof_bound_expiry = proof_bound_expiry_slot(&batch)?;
-    if envelope.manifest_root != proof_bound_manifest_root(&batch)? {
+    if let Some((_, expiry_slot)) = finalized
+        && expiry_slot != proof_bound_expiry
+    {
         return Err(Error::InvalidAxtBinding {
-            details: "AXT proof envelope manifest_root does not match proof-bound batch metadata"
-                .into(),
+            details: "anchored AXT expiry_slot does not match proof-bound batch metadata".into(),
         });
     }
-    if envelope.da_commitment != proof_bound_da_commitment(&batch)? {
-        return Err(Error::InvalidAxtBinding {
-            details: "AXT proof envelope da_commitment does not match proof-bound batch metadata"
-                .into(),
-        });
-    }
-    if envelope.committed_amount != proof_bound_amount {
-        return Err(Error::InvalidAxtBinding {
-            details:
-                "AXT proof envelope committed_amount does not match proof-bound batch metadata"
-                    .into(),
-        });
-    }
+    require_proof_mirror(
+        "envelope manifest_root",
+        envelope.manifest_root,
+        proof_bound_manifest_root(&batch)?,
+    )?;
+    require_proof_mirror(
+        "envelope da_commitment",
+        envelope.da_commitment,
+        proof_bound_da_commitment(&batch)?,
+    )?;
+    require_proof_mirror(
+        "envelope committed_amount",
+        envelope.committed_amount,
+        proof_bound_amount,
+    )?;
     verify_with_default_limits_prechecked_and_semantics(
         &batch,
         &payload.proof,
@@ -590,6 +682,39 @@ pub fn verify_axt_proof_envelope(envelope: &AxtProofEnvelope) -> Result<AxtVerif
         expiry_slot: proof_bound_expiry,
     })
 }
+fn require_finalized_public_inputs_v1(
+    inputs: &PublicInputs,
+    anchor: &AxtFinalizedSpendAnchorV1,
+) -> Result<()> {
+    if inputs.dsid != dsid_bytes(anchor.dataspace_id.as_u64()) {
+        return Err(Error::InvalidAxtBinding {
+            details: "FastPQ public dsid does not match authoritative finalized anchor".into(),
+        });
+    }
+    for (field, actual, expected) in [
+        ("old_root", &inputs.old_root, anchor.pre_state_root.as_ref()),
+        (
+            "new_root",
+            &inputs.new_root,
+            anchor.post_state_root.as_ref(),
+        ),
+        (
+            "tx_set_hash",
+            &inputs.tx_set_hash,
+            anchor.transaction_set_digest.as_ref(),
+        ),
+    ] {
+        if actual != expected {
+            return Err(Error::InvalidAxtBinding {
+                details: format!(
+                    "FastPQ public {field} does not match authoritative finalized anchor"
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
 fn enforce_axt_fastpq_payload_limit(payload: &[u8]) -> Result<()> {
     if payload.len() > DEFAULT_MAX_AXT_FASTPQ_PAYLOAD_BYTES {
         return Err(Error::VerifierLimitExceeded {
@@ -652,11 +777,7 @@ pub fn verify_axt_proof_envelope_with_outer_metadata(
     expiry_slot: Option<u64>,
 ) -> Result<AxtVerifiedProof> {
     let verified = verify_axt_proof_envelope(envelope)?;
-    if expiry_slot != verified.expiry_slot {
-        return Err(Error::InvalidAxtBinding {
-            details: "AXT proof blob expiry_slot does not match proof-bound batch metadata".into(),
-        });
-    }
+    require_proof_mirror("blob expiry_slot", expiry_slot, verified.expiry_slot)?;
     Ok(verified)
 }
 /// Convert a prover batch into the shared `FastPQ` data-model representation.
@@ -832,16 +953,11 @@ fn verify_batch_matches_canonical_binding(
     canonical_binding: &AxtFastpqBinding,
 ) -> Result<()> {
     let context = BindingContext::from_binding(canonical_binding)?;
-    if batch.parameter != canonical_binding.parameter {
-        return Err(Error::InvalidAxtBinding {
-            details: "FastPQ batch parameter does not match AXT binding".into(),
-        });
-    }
-    if batch.public_inputs.dsid != dsid_bytes(canonical_binding.source_dsid) {
-        return Err(Error::InvalidAxtBinding {
-            details: "FastPQ batch public dsid does not match AXT binding".into(),
-        });
-    }
+    require_execution_header(
+        &batch.parameter,
+        batch.public_inputs.dsid,
+        canonical_binding,
+    )?;
     require_concrete_execution_batch(batch, &context)?;
     validate_batch_semantics(batch, axt_proof_semantics(canonical_binding)?)?;
     let encoded = required_metadata(batch, AXT_FASTPQ_BINDING_METADATA_KEY)?;
@@ -904,6 +1020,9 @@ fn required_metadata<'a>(batch: &'a TransitionBatch, key: &str) -> Result<&'a [u
 }
 fn require_metadata_eq(batch: &TransitionBatch, key: &str, expected: &[u8]) -> Result<()> {
     let actual = required_metadata(batch, key)?;
+    require_public_value_eq(key, actual, expected)
+}
+fn require_public_value_eq(key: &str, actual: &[u8], expected: &[u8]) -> Result<()> {
     if actual == expected {
         Ok(())
     } else {
@@ -913,18 +1032,23 @@ fn require_metadata_eq(batch: &TransitionBatch, key: &str, expected: &[u8]) -> R
     }
 }
 fn proof_bound_committed_amount(batch: &TransitionBatch) -> Result<Option<u128>> {
-    let Some(encoded) = batch.metadata.get(AXT_FASTPQ_COMMITTED_AMOUNT_METADATA_KEY) else {
+    parse_committed_amount(
+        batch
+            .metadata
+            .get(AXT_FASTPQ_COMMITTED_AMOUNT_METADATA_KEY)
+            .map(Vec::as_slice),
+    )
+}
+fn parse_committed_amount(encoded: Option<&[u8]>) -> Result<Option<u128>> {
+    let Some(encoded) = encoded else {
         return Ok(None);
     };
     let bytes: [u8; core::mem::size_of::<u128>()] =
-        encoded
-            .as_slice()
-            .try_into()
-            .map_err(|_| Error::MetadataLength {
-                key: AXT_FASTPQ_COMMITTED_AMOUNT_METADATA_KEY.to_owned(),
-                expected: core::mem::size_of::<u128>(),
-                actual: encoded.len(),
-            })?;
+        encoded.try_into().map_err(|_| Error::MetadataLength {
+            key: AXT_FASTPQ_COMMITTED_AMOUNT_METADATA_KEY.to_owned(),
+            expected: core::mem::size_of::<u128>(),
+            actual: encoded.len(),
+        })?;
     let amount = u128::from_le_bytes(bytes);
     if amount == 0 {
         return Err(Error::InvalidAxtBinding {
@@ -935,6 +1059,9 @@ fn proof_bound_committed_amount(batch: &TransitionBatch) -> Result<Option<u128>>
 }
 fn proof_bound_expiry_slot(batch: &TransitionBatch) -> Result<Option<u64>> {
     let encoded = required_metadata(batch, AXT_FASTPQ_EXPIRY_SLOT_METADATA_KEY)?;
+    parse_expiry_slot(encoded)
+}
+fn parse_expiry_slot(encoded: &[u8]) -> Result<Option<u64>> {
     let bytes: [u8; core::mem::size_of::<u64>()] =
         encoded.try_into().map_err(|_| Error::MetadataLength {
             key: AXT_FASTPQ_EXPIRY_SLOT_METADATA_KEY.to_owned(),
@@ -946,6 +1073,9 @@ fn proof_bound_expiry_slot(batch: &TransitionBatch) -> Result<Option<u64>> {
 }
 fn proof_bound_manifest_root(batch: &TransitionBatch) -> Result<[u8; 32]> {
     let encoded = required_metadata(batch, AXT_FASTPQ_MANIFEST_ROOT_METADATA_KEY)?;
+    parse_manifest_root(encoded)
+}
+fn parse_manifest_root(encoded: &[u8]) -> Result<[u8; 32]> {
     let root: [u8; 32] = encoded.try_into().map_err(|_| Error::MetadataLength {
         key: AXT_FASTPQ_MANIFEST_ROOT_METADATA_KEY.to_owned(),
         expected: 32,
@@ -960,6 +1090,9 @@ fn proof_bound_manifest_root(batch: &TransitionBatch) -> Result<[u8; 32]> {
 }
 fn proof_bound_da_commitment(batch: &TransitionBatch) -> Result<Option<[u8; 32]>> {
     let encoded = required_metadata(batch, AXT_FASTPQ_DA_COMMITMENT_METADATA_KEY)?;
+    parse_da_commitment(encoded)
+}
+fn parse_da_commitment(encoded: &[u8]) -> Result<Option<[u8; 32]>> {
     if encoded.len() != 33 {
         return Err(Error::MetadataLength {
             key: AXT_FASTPQ_DA_COMMITMENT_METADATA_KEY.to_owned(),
@@ -996,16 +1129,37 @@ fn require_concrete_execution_batch(
     batch: &TransitionBatch,
     context: &BindingContext<'_>,
 ) -> Result<()> {
-    if batch.transitions.is_empty() {
-        return Err(Error::InvalidAxtBinding {
-            details: "AXT FastPQ batch must contain execution-captured state transitions".into(),
-        });
-    }
+    require_execution_rows(batch.transitions.len())?;
     require_metadata_eq(
         batch,
         ENTRY_HASH_METADATA_KEY,
         &context.source_tx_commitment,
     )
+}
+fn require_execution_header(
+    parameter: &str,
+    dsid: [u8; 16],
+    binding: &AxtFastpqBinding,
+) -> Result<()> {
+    if parameter != binding.parameter {
+        return Err(Error::InvalidAxtBinding {
+            details: "FastPQ batch parameter does not match AXT binding".into(),
+        });
+    }
+    if dsid != dsid_bytes(binding.source_dsid) {
+        return Err(Error::InvalidAxtBinding {
+            details: "FastPQ batch public dsid does not match AXT binding".into(),
+        });
+    }
+    Ok(())
+}
+fn require_execution_rows(count: usize) -> Result<()> {
+    if count == 0 {
+        return Err(Error::InvalidAxtBinding {
+            details: "AXT FastPQ batch must contain execution-captured state transitions".into(),
+        });
+    }
+    Ok(())
 }
 fn require_transfer_claim_witnesses(
     batch: &TransitionBatch,
@@ -1017,19 +1171,27 @@ fn require_transfer_claim_witnesses(
             decode_transcripts(&batch.metadata)?.ok_or_else(|| Error::MissingMetadata {
                 key: TRANSFER_TRANSCRIPTS_METADATA_KEY.to_owned(),
             })?;
-        if transcripts.is_empty() {
-            return Err(Error::InvalidAxtBinding {
-                details: "transfer AXT claim must carry at least one transfer transcript".into(),
-            });
-        }
-        if transcripts.iter().any(|transcript| {
-            transcript.batch_hash.as_ref() != context.source_tx_commitment.as_slice()
-        }) {
-            return Err(Error::InvalidAxtBinding {
-                details: "transfer transcript batch_hash does not match source_tx_commitment"
-                    .into(),
-            });
-        }
+        require_transfer_batch_hashes(
+            &context.source_tx_commitment,
+            transcripts.iter().map(|transcript| transcript.batch_hash),
+        )?;
+    }
+    Ok(())
+}
+fn require_transfer_batch_hashes(
+    source_tx_commitment: &[u8; 32],
+    hashes: impl IntoIterator<Item = Hash>,
+) -> Result<()> {
+    let mut hashes = hashes.into_iter().peekable();
+    if hashes.peek().is_none() {
+        return Err(Error::InvalidAxtBinding {
+            details: "transfer AXT claim must carry at least one transfer transcript".into(),
+        });
+    }
+    if hashes.any(|hash| hash.as_ref() != source_tx_commitment.as_slice()) {
+        return Err(Error::InvalidAxtBinding {
+            details: "transfer transcript batch_hash does not match source_tx_commitment".into(),
+        });
     }
     Ok(())
 }
@@ -1044,7 +1206,14 @@ fn decode_bound_remote_spend_claims(
             details: "remote-spend claim metadata must use canonical Norito bytes".into(),
         });
     }
-    for claim in &claims {
+    validate_remote_spend_claim_preimages(&claims, binding)?;
+    Ok(claims)
+}
+fn validate_remote_spend_claim_preimages(
+    claims: &[AxtRemoteSpendClaimV1],
+    binding: &AxtFastpqBinding,
+) -> Result<()> {
+    for claim in claims {
         claim
             .handle_replay_key
             .validate()
@@ -1064,7 +1233,7 @@ fn decode_bound_remote_spend_claims(
                 .into(),
         });
     }
-    Ok(claims)
+    Ok(())
 }
 
 fn canonical_remote_spend_source_asset(binding: &AxtFastpqBinding) -> Result<AssetDefinitionId> {
@@ -1099,23 +1268,8 @@ fn require_remote_spend_transcript_linkage(
     let encoded_claims = batch
         .metadata
         .get(AXT_FASTPQ_REMOTE_SPEND_CLAIMS_METADATA_KEY);
-    if binding.remote_spend_intent_commitments.is_empty() {
-        if encoded_claims.is_some() {
-            return Err(Error::InvalidAxtBinding {
-                details: "remote-spend claim metadata is forbidden when the binding commitment set is empty"
-                    .into(),
-            });
-        }
+    if !require_remote_spend_claim_presence(binding, encoded_claims.is_some())? {
         return Ok(());
-    }
-    if !matches!(
-        binding.claim_type.as_str(),
-        "tx_predicate" | "value_conservation"
-    ) {
-        return Err(Error::InvalidAxtBinding {
-            details: "remote-spend commitments require a transfer claim; opaque AXT proofs cannot authorize handles"
-                .into(),
-        });
     }
     let encoded_claims = encoded_claims.ok_or_else(|| Error::MissingMetadata {
         key: AXT_FASTPQ_REMOTE_SPEND_CLAIMS_METADATA_KEY.to_owned(),
@@ -1129,26 +1283,76 @@ fn require_remote_spend_transcript_linkage(
         decode_transcripts(&batch.metadata)?.ok_or_else(|| Error::MissingMetadata {
             key: TRANSFER_TRANSCRIPTS_METADATA_KEY.to_owned(),
         })?;
-    let mut transcript_facts = Vec::new();
-    for transcript in &transcripts {
-        for delta in &transcript.deltas {
-            if delta.asset_definition != source_asset {
-                return Err(Error::InvalidAxtBinding {
-                    details: "remote-spend proof contains a transfer for an asset other than source_asset_definition_id"
-                        .into(),
-                });
-            }
-            transcript_facts.push((
-                delta.asset_definition.clone(),
-                delta.from_account.clone(),
-                delta.to_account.clone(),
-                delta.amount.clone(),
-            ));
+    require_remote_spend_transfer_facts(
+        binding,
+        &source_asset,
+        &claims,
+        transcripts.iter().flat_map(|transcript| {
+            transcript.deltas.iter().map(|delta| AxtTransferFact {
+                asset: &delta.asset_definition,
+                from: &delta.from_account,
+                to: &delta.to_account,
+                amount: &delta.amount,
+            })
+        }),
+    )
+}
+fn require_remote_spend_claim_presence(binding: &AxtFastpqBinding, supplied: bool) -> Result<bool> {
+    if binding.remote_spend_intent_commitments.is_empty() {
+        if supplied {
+            return Err(Error::InvalidAxtBinding {
+                details: "remote-spend claim metadata is forbidden when the binding commitment set is empty"
+                    .into(),
+            });
         }
+        return Ok(false);
+    }
+    if !matches!(
+        binding.claim_type.as_str(),
+        "tx_predicate" | "value_conservation"
+    ) {
+        return Err(Error::InvalidAxtBinding {
+            details: "remote-spend commitments require a transfer claim; opaque AXT proofs cannot authorize handles"
+                .into(),
+        });
+    }
+    Ok(true)
+}
+/// Borrowed public transfer identity; no private SMT data can be represented.
+pub(crate) struct AxtTransferFact<'a> {
+    /// Complete canonical asset identity.
+    pub(crate) asset: &'a AssetDefinitionId,
+    /// Complete canonical sender identity.
+    pub(crate) from: &'a AccountId,
+    /// Complete canonical receiver identity.
+    pub(crate) to: &'a AccountId,
+    /// Exact public amount, without lossy scale conversion.
+    pub(crate) amount: &'a Quantity,
+}
+fn require_remote_spend_transfer_facts<'a>(
+    binding: &AxtFastpqBinding,
+    source_asset: &'a AssetDefinitionId,
+    claims: &[AxtRemoteSpendClaimV1],
+    facts: impl IntoIterator<Item = AxtTransferFact<'a>>,
+) -> Result<()> {
+    let mut transcript_facts = Vec::new();
+    for fact in facts {
+        if fact.asset != source_asset {
+            return Err(Error::InvalidAxtBinding {
+                details: "remote-spend proof contains a transfer for an asset other than source_asset_definition_id"
+                    .into(),
+            });
+        }
+        transcript_facts.push((
+            fact.asset.clone(),
+            fact.from.clone(),
+            fact.to.clone(),
+            fact.amount.clone(),
+        ));
     }
 
     let mut claim_facts = Vec::with_capacity(claims.len());
-    for claim in &claims {
+    for claim in claims {
         if claim.handle_replay_key.asset_dsid.as_u64() != binding.source_dsid {
             return Err(Error::InvalidAxtBinding {
                 details:
@@ -1162,7 +1366,7 @@ fn require_remote_spend_transcript_linkage(
                     .into(),
             });
         }
-        if claim.asset_definition_id != source_asset {
+        if &claim.asset_definition_id != source_asset {
             return Err(Error::InvalidAxtBinding {
                 details: "remote-spend claim asset_definition_id does not match source_asset_definition_id"
                     .into(),
@@ -1196,12 +1400,136 @@ fn canonical_remote_account(value: &str, field: &str) -> Result<AccountId> {
     let parsed = AccountId::parse_encoded(value).map_err(|error| Error::InvalidAxtBinding {
         details: format!("remote-spend {field} account is not canonical I105: {error}"),
     })?;
-    if parsed.to_string() != value {
+    // Rendering an account can exhaust an inherited codec budget. Do not use
+    // `to_string`, which panics when this formatter legitimately returns an error.
+    let canonical = parsed
+        .canonical_i105()
+        .map_err(|_| Error::InvalidAxtBinding {
+            details: format!("remote-spend {field} account canonicalization failed"),
+        })?;
+    if canonical != value {
         return Err(Error::InvalidAxtBinding {
             details: format!("remote-spend {field} account must use canonical I105 text"),
         });
     }
     Ok(parsed)
+}
+
+/// Exact public metadata byte fields accepted by the offline compact relation.
+///
+/// The type cannot carry the legacy batch seal or private transcript metadata.
+#[derive(Clone, Copy)]
+pub(crate) struct AxtPublicMetadataBytes<'a> {
+    /// Concrete execution parameter, exact-compared to the canonical binding.
+    pub(crate) parameter: &'a str,
+    /// Original execution entrypoint commitment.
+    pub(crate) entry_hash: &'a [u8],
+    /// Optional exact sixteen-byte nonzero scalar.
+    pub(crate) committed_amount: Option<&'a [u8]>,
+    /// Required eight-byte expiry, with zero representing absence.
+    pub(crate) expiry_slot: &'a [u8],
+    /// Required nonzero 32-byte manifest root.
+    pub(crate) manifest_root: &'a [u8],
+    /// Required 33-byte canonical option encoding.
+    pub(crate) da_commitment: &'a [u8],
+}
+
+/// Pre-proof outer metadata mirrors; completed-proof commitments are excluded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize)]
+#[norito(schema_name = "fastpq_prover::compact_prototype::AxtProofContextMirrorsV1")]
+pub(crate) struct AxtProofContextMirrors {
+    /// Exact outer envelope dataspace.
+    pub(crate) dsid: DataSpaceId,
+    /// Exact outer envelope manifest.
+    pub(crate) manifest_root: [u8; 32],
+    /// Exact outer envelope DA option.
+    pub(crate) da_commitment: Option<[u8; 32]>,
+    /// Exact outer envelope scalar; business-amount resolution remains external.
+    pub(crate) committed_amount: Option<u128>,
+    /// Exact outer proof-blob expiry.
+    pub(crate) expiry_slot: Option<u64>,
+}
+
+/// Check path-free prepared facts using the same AXT predicates as legacy replay.
+///
+/// The caller must first apply its public resource bounds. This validates the
+/// public relation, not source finality, permissions, or handle signatures.
+pub(crate) fn validate_axt_public_transfer_facts<V>(
+    binding: &AxtFastpqBinding,
+    metadata: AxtPublicMetadataBytes<'_>,
+    prepared: &crate::gadgets::public_transfer_statement::PreparedPublicTransfers<'_, V>,
+    claims: Option<&[AxtRemoteSpendClaimV1]>,
+) -> Result<()> {
+    validate_axt_transfer_claim_binding(binding)?;
+    if prepared.semantics() != ProofSemantics::AxtTransferClaim {
+        return Err(Error::InvalidProofSemantics {
+            profile: prepared.semantics().name(),
+            details: "compact AXT context requires the AXT transfer profile".into(),
+        });
+    }
+    let context = BindingContext::from_binding(binding)?;
+    require_execution_header(metadata.parameter, prepared.public_inputs().dsid, binding)?;
+    require_execution_rows(prepared.transitions().len())?;
+    require_public_value_eq(
+        ENTRY_HASH_METADATA_KEY,
+        metadata.entry_hash,
+        &context.source_tx_commitment,
+    )?;
+    require_transfer_batch_hashes(
+        &context.source_tx_commitment,
+        prepared.claims().iter().map(|claim| claim.batch_hash),
+    )?;
+    if !require_remote_spend_claim_presence(binding, claims.is_some())? {
+        return Ok(());
+    }
+    let claims = claims.ok_or_else(|| Error::MissingMetadata {
+        key: AXT_FASTPQ_REMOTE_SPEND_CLAIMS_METADATA_KEY.to_owned(),
+    })?;
+    validate_remote_spend_claim_preimages(claims, binding)?;
+    let source_asset = canonical_remote_spend_source_asset(binding)?;
+    require_remote_spend_transfer_facts(
+        binding,
+        &source_asset,
+        claims,
+        prepared.claims().iter().flat_map(|transcript| {
+            transcript.deltas.iter().map(|delta| AxtTransferFact {
+                asset: &delta.asset_definition,
+                from: &delta.from_account,
+                to: &delta.to_account,
+                amount: &delta.amount,
+            })
+        }),
+    )
+}
+
+/// Parse the exact legacy public encodings and compare their outer mirrors.
+pub(crate) fn validate_axt_public_metadata(
+    binding: &AxtFastpqBinding,
+    metadata: AxtPublicMetadataBytes<'_>,
+    outer: AxtProofContextMirrors,
+) -> Result<()> {
+    if binding.source_dsid != outer.dsid.as_u64() {
+        return Err(Error::InvalidAxtBinding {
+            details: "AXT proof envelope source_dsid does not match dsid".into(),
+        });
+    }
+    let amount = parse_committed_amount(metadata.committed_amount)?;
+    let expiry = parse_expiry_slot(metadata.expiry_slot)?;
+    let manifest = parse_manifest_root(metadata.manifest_root)?;
+    require_proof_mirror("envelope manifest_root", outer.manifest_root, manifest)?;
+    let da = parse_da_commitment(metadata.da_commitment)?;
+    require_proof_mirror("envelope da_commitment", outer.da_commitment, da)?;
+    require_proof_mirror("envelope committed_amount", outer.committed_amount, amount)?;
+    require_proof_mirror("blob expiry_slot", outer.expiry_slot, expiry)
+}
+
+fn require_proof_mirror<T: PartialEq>(field: &str, actual: T, expected: T) -> Result<()> {
+    if actual != expected {
+        return Err(Error::InvalidAxtBinding {
+            details: format!("AXT proof {field} does not match proof-bound batch metadata"),
+        });
+    }
+    Ok(())
 }
 fn axt_statement_digest(
     envelope: &AxtProofEnvelope,
@@ -1425,9 +1753,16 @@ fn decode_canonical_binding(encoded: &[u8]) -> Result<AxtFastpqBinding> {
     require_canonical_binding(&binding)
 }
 fn decode_axt_fastpq_payload(encoded: &[u8]) -> Result<AxtFastpqProofPayload> {
-    let _canonical_flags =
-        norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
-    decode_from_bytes(encoded).map_err(|source| Error::AxtProofPayloadDecode { source })
+    crate::artifact_dispatch::decode_legacy_payload(
+        encoded,
+        DEFAULT_MAX_AXT_FASTPQ_PAYLOAD_BYTES,
+        "max_axt_fastpq_payload_bytes",
+        |encoded| {
+            let _canonical_flags =
+                norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+            decode_from_bytes(encoded).map_err(|source| Error::AxtProofPayloadDecode { source })
+        },
+    )
 }
 fn require_canonical_axt_fastpq_payload(
     encoded: &[u8],
@@ -1483,6 +1818,306 @@ mod tests {
         nexus::{AxtAssetIncarnationV1, AxtHandleIssuerContextV1, AxtHandleReplayKey, LaneId},
     };
     use iroha_primitives::numeric::Quantity;
+    fn finalized_transaction(seed: u8) -> TransactionEntrypoint {
+        let signer = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+        let network = iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+            iroha_data_model::block::BlockHeader,
+        >::from_untyped_unchecked(
+            Hash::new(b"axt-finalized-verifier-network"),
+        ));
+        let mut builder = iroha_data_model::transaction::TransactionBuilder::new(
+            network,
+            AccountId::new(signer.public_key().clone()),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
+        builder.set_creation_time(std::time::Duration::from_millis(1_000));
+        TransactionEntrypoint::External(builder.try_sign(signer.private_key()).expect("sign entry"))
+    }
+
+    fn finalized_test_anchor(
+        inputs: PublicInputs,
+        transactions: &[TransactionEntrypoint],
+    ) -> AxtFinalizedSpendAnchorV1 {
+        let network_id = iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+            iroha_data_model::block::BlockHeader,
+        >::from_untyped_unchecked(
+            Hash::new(b"axt-finalized-verifier-network"),
+        ));
+        AxtFinalizedSpendAnchorV1 {
+            network_id,
+            genesis_hash: *network_id.as_bytes(),
+            dataspace_id: DataSpaceId::new(7),
+            lane_id: LaneId::new(1),
+            lane_incarnation: Hash::new(b"test lane incarnation"),
+            finalized_height: 42,
+            block_header_hash: iroha_crypto::HashOf::from_untyped_unchecked(Hash::new(
+                b"test block",
+            )),
+            quorum_certificate_digest: Hash::new(b"test QC"),
+            committee_digest: Hash::new(b"test committee"),
+            pre_state_root: Hash::prehashed(inputs.old_root),
+            post_state_root: Hash::prehashed(inputs.new_root),
+            transaction_set_digest: axt_ordered_transaction_set_digest_v1(transactions).unwrap(),
+            da_manifest_digest: Hash::new(b"test DA manifest"),
+        }
+    }
+
+    fn finalized_proof_fixture() -> &'static (
+        AxtProofEnvelope,
+        AxtFinalizedSpendAnchorV1,
+        Vec<TransactionEntrypoint>,
+    ) {
+        static FIXTURE: std::sync::OnceLock<(
+            AxtProofEnvelope,
+            AxtFinalizedSpendAnchorV1,
+            Vec<TransactionEntrypoint>,
+        )> = std::sync::OnceLock::new();
+        FIXTURE.get_or_init(|| {
+            let transactions = vec![finalized_transaction(71), finalized_transaction(72)];
+            let mut binding = sample_binding();
+            binding.claim_type = "tx_predicate".into();
+            binding.source_tx_commitment =
+                hex::encode(transactions[0].execution_call_hash().as_ref());
+            let mut batch = real_transfer_claim_batch(&binding);
+            // This is a verifier boundary fixture, not evidence of a real finalized WSV.
+            let anchor = finalized_test_anchor(batch.public_inputs, &transactions);
+            batch.public_inputs.tx_set_hash = anchor.transaction_set_digest.into();
+            bind_axt_batch_with_proof_metadata(
+                &mut batch,
+                &binding,
+                [0x42; 32],
+                Some(anchor.da_manifest_digest.into()),
+                None,
+                Some(100),
+            )
+            .expect("bind finalized fixture");
+            let proof = Prover::canonical(DEFAULT_PARAMETER)
+                .unwrap()
+                .prove_axt_bound(&batch, &binding)
+                .expect("prove transfer fixture");
+            let envelope = axt_proof_envelope_from_bound_batch(
+                &batch,
+                proof,
+                [0x42; 32],
+                Some(anchor.da_manifest_digest.into()),
+            )
+            .expect("package finalized fixture");
+            (envelope, anchor, transactions)
+        })
+    }
+
+    #[test]
+    fn anchored_axt_verifier_accepts_exact_public_roots_and_ordered_wires() {
+        let (envelope, anchor, transactions) = finalized_proof_fixture();
+        let verified =
+            verify_axt_proof_envelope_against_anchor_v1(envelope, Some(100), anchor, transactions)
+                .expect("exact anchored transfer proof");
+        assert_eq!(verified.old_root, *anchor.pre_state_root.as_ref());
+        assert_eq!(verified.new_root, *anchor.post_state_root.as_ref());
+        assert_eq!(
+            verified.tx_set_hash,
+            *anchor.transaction_set_digest.as_ref()
+        );
+        assert_eq!(verified.expiry_slot, Some(100));
+        for expiry in [None, Some(0), Some(101)] {
+            assert!(
+                verify_axt_proof_envelope_against_anchor_v1(envelope, expiry, anchor, transactions)
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn anchored_axt_verifier_rejects_root_dataspace_da_and_public_set_substitution() {
+        let (envelope, anchor, transactions) = finalized_proof_fixture();
+        for (field, changed) in [
+            (
+                "old_root",
+                AxtFinalizedSpendAnchorV1 {
+                    pre_state_root: Hash::new(b"foreign WSV pre-root"),
+                    ..*anchor
+                },
+            ),
+            (
+                "new_root",
+                AxtFinalizedSpendAnchorV1 {
+                    post_state_root: Hash::new(b"foreign WSV post-root"),
+                    ..*anchor
+                },
+            ),
+            (
+                "dataspace",
+                AxtFinalizedSpendAnchorV1 {
+                    dataspace_id: DataSpaceId::new(8),
+                    ..*anchor
+                },
+            ),
+            (
+                "DA manifest",
+                AxtFinalizedSpendAnchorV1 {
+                    da_manifest_digest: Hash::new(b"foreign DA"),
+                    ..*anchor
+                },
+            ),
+        ] {
+            let error = verify_axt_proof_envelope_against_anchor_v1(
+                envelope,
+                Some(100),
+                &changed,
+                transactions,
+            )
+            .expect_err("foreign authoritative context must fail");
+            assert!(
+                matches!(error, Error::InvalidAxtBinding { details } if details.contains(field))
+            );
+        }
+        let mut payload = decode_axt_fastpq_payload(&envelope.proof).unwrap();
+        payload.batch.public_inputs.tx_set_hash = Hash::new(b"old sorted execution digest").into();
+        let mut changed = envelope.clone();
+        changed.proof = encode_canonical_norito(&payload).unwrap();
+        let error =
+            verify_axt_proof_envelope_against_anchor_v1(&changed, Some(100), anchor, transactions)
+                .expect_err("wrong public set fails before batch seal or proof replay");
+        assert!(
+            matches!(error, Error::InvalidAxtBinding { details } if details.contains("tx_set_hash"))
+        );
+    }
+
+    #[test]
+    fn anchored_axt_verifier_requires_exact_execution_membership_and_wire_order() {
+        let (envelope, anchor, transactions) = finalized_proof_fixture();
+        let reversed = vec![transactions[1].clone(), transactions[0].clone()];
+        let error =
+            verify_axt_proof_envelope_against_anchor_v1(envelope, Some(100), anchor, &reversed)
+                .unwrap_err();
+        assert!(
+            matches!(error, Error::InvalidAxtBinding { details } if details.contains("ordered transaction wires"))
+        );
+        for entries in [
+            vec![transactions[1].clone()],
+            vec![transactions[0].clone(), transactions[0].clone()],
+        ] {
+            let changed = AxtFinalizedSpendAnchorV1 {
+                transaction_set_digest: axt_ordered_transaction_set_digest_v1(&entries).unwrap(),
+                ..*anchor
+            };
+            let error = verify_axt_proof_envelope_against_anchor_v1(
+                envelope,
+                Some(100),
+                &changed,
+                &entries,
+            )
+            .unwrap_err();
+            assert!(
+                matches!(error, Error::InvalidAxtBinding { details } if details.contains("exactly once"))
+            );
+        }
+        let mut opaque = envelope.clone();
+        opaque.fastpq_binding.as_mut().unwrap().claim_type = "authorization".into();
+        assert!(matches!(
+            verify_axt_proof_envelope_against_anchor_v1(&opaque, Some(100), anchor, transactions),
+            Err(Error::InvalidProofSemantics { .. }),
+        ));
+    }
+
+    #[test]
+    fn anchored_axt_verifier_derives_sealed_reveal_execution_from_exact_outer_wire() {
+        let TransactionEntrypoint::External(transaction) = finalized_transaction(73) else {
+            unreachable!()
+        };
+        let execution = transaction.hash_as_entrypoint();
+        let reveal = TransactionEntrypoint::SealedReveal(
+            iroha_data_model::transaction::signed::SealedTransactionReveal::new(
+                Hash::new(b"test sealed commitment"),
+                transaction,
+                [0x74; 32],
+            ),
+        );
+        assert_ne!(reveal.hash(), execution);
+        let transactions = [reveal];
+        let mut binding = sample_binding();
+        binding.claim_type = "tx_predicate".into();
+        binding.source_tx_commitment = hex::encode(execution.as_ref());
+        let anchor = finalized_test_anchor(
+            PublicInputs {
+                old_root: [1; 32],
+                new_root: [2; 32],
+                ..PublicInputs::default()
+            },
+            &transactions,
+        );
+        let mut envelope = envelope_with_payload(binding, vec![0xAA]);
+        envelope.da_commitment = Some(anchor.da_manifest_digest.into());
+        assert!(
+            matches!(
+                verify_axt_proof_envelope_against_anchor_v1(
+                    &envelope,
+                    Some(100),
+                    &anchor,
+                    &transactions
+                ),
+                Err(Error::AxtProofPayloadDecode { .. }),
+            ),
+            "inner execution membership must pass before invalid proof bytes are decoded"
+        );
+        envelope
+            .fastpq_binding
+            .as_mut()
+            .unwrap()
+            .source_tx_commitment = hex::encode(transactions[0].hash().as_ref());
+        let error = verify_axt_proof_envelope_against_anchor_v1(
+            &envelope,
+            Some(100),
+            &anchor,
+            &transactions,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(error, Error::InvalidAxtBinding { details } if details.contains("exactly once"))
+        );
+    }
+
+    #[test]
+    fn anchored_axt_verifier_enforces_its_witness_count_cap_before_hashing() {
+        let transaction = finalized_transaction(74);
+        let maximum = iroha_data_model::nexus::MAX_AXT_FINALIZED_TRANSACTIONS_V1;
+        let transactions = vec![transaction; maximum + 1];
+        let envelope = envelope_with_payload(sample_binding(), Vec::new());
+        let anchor = finalized_test_anchor(PublicInputs::default(), &[]);
+        assert!(matches!(
+            verify_axt_proof_envelope_against_anchor_v1(&envelope, Some(100), &anchor, &transactions),
+            Err(Error::VerifierLimitExceeded { limit: "max_axt_finalized_transactions", actual, max })
+                if actual == maximum + 1 && max == maximum,
+        ));
+    }
+
+    #[test]
+    fn anchored_axt_public_inputs_compare_every_dataspace_and_digest_byte() {
+        let (_, anchor, _) = finalized_proof_fixture();
+        let inputs = PublicInputs {
+            dsid: dsid_bytes(anchor.dataspace_id.as_u64()),
+            old_root: anchor.pre_state_root.into(),
+            new_root: anchor.post_state_root.into(),
+            tx_set_hash: anchor.transaction_set_digest.into(),
+            ..PublicInputs::default()
+        };
+        assert!(require_finalized_public_inputs_v1(&inputs, anchor).is_ok());
+        let mut changed = inputs;
+        changed.dsid[15] = 1;
+        assert!(require_finalized_public_inputs_v1(&changed, anchor).is_err());
+        for index in 0..32 {
+            for field in [0, 1, 2] {
+                let mut changed = inputs;
+                match field {
+                    0 => changed.old_root[index] ^= 1,
+                    1 => changed.new_root[index] ^= 1,
+                    _ => changed.tx_set_hash[index] ^= 1,
+                }
+                assert!(require_finalized_public_inputs_v1(&changed, anchor).is_err());
+            }
+        }
+    }
+
     fn sample_binding() -> AxtFastpqBinding {
         AxtFastpqBinding {
             parameter: DEFAULT_PARAMETER.to_string(),
@@ -1685,6 +2320,220 @@ mod tests {
             .expect("derive AXT fixture account key");
         AccountId::new(keypair.public_key().clone())
     }
+
+    fn public_metadata_bytes(batch: &TransitionBatch) -> AxtPublicMetadataBytes<'_> {
+        AxtPublicMetadataBytes {
+            parameter: &batch.parameter,
+            entry_hash: &batch.metadata[ENTRY_HASH_METADATA_KEY],
+            committed_amount: batch
+                .metadata
+                .get(AXT_FASTPQ_COMMITTED_AMOUNT_METADATA_KEY)
+                .map(Vec::as_slice),
+            expiry_slot: &batch.metadata[AXT_FASTPQ_EXPIRY_SLOT_METADATA_KEY],
+            manifest_root: &batch.metadata[AXT_FASTPQ_MANIFEST_ROOT_METADATA_KEY],
+            da_commitment: &batch.metadata[AXT_FASTPQ_DA_COMMITMENT_METADATA_KEY],
+        }
+    }
+
+    #[test]
+    fn public_metadata_parsers_preserve_legacy_errors_and_option_boundaries() {
+        let binding = remote_transfer_binding();
+        let batch = real_transfer_claim_batch(&binding);
+        let outer = AxtProofContextMirrors {
+            dsid: DataSpaceId::new(binding.source_dsid),
+            manifest_root: proof_bound_manifest_root(&batch).unwrap(),
+            da_commitment: proof_bound_da_commitment(&batch).unwrap(),
+            committed_amount: proof_bound_committed_amount(&batch).unwrap(),
+            expiry_slot: proof_bound_expiry_slot(&batch).unwrap(),
+        };
+        validate_axt_public_metadata(&binding, public_metadata_bytes(&batch), outer).unwrap();
+        let mut conflicting = public_metadata_bytes(&batch);
+        conflicting.da_commitment = &[0; 32];
+        let mut wrong_manifest = outer;
+        wrong_manifest.manifest_root[0] ^= 1;
+        assert_eq!(
+            validate_axt_public_metadata(&binding, conflicting, wrong_manifest)
+                .unwrap_err()
+                .to_string(),
+            require_proof_mirror(
+                "envelope manifest_root",
+                wrong_manifest.manifest_root,
+                outer.manifest_root
+            )
+            .unwrap_err()
+            .to_string(),
+            "the manifest mirror precedes malformed DA parsing",
+        );
+        for (key, length) in [
+            (AXT_FASTPQ_COMMITTED_AMOUNT_METADATA_KEY, 16),
+            (AXT_FASTPQ_EXPIRY_SLOT_METADATA_KEY, 8),
+            (AXT_FASTPQ_MANIFEST_ROOT_METADATA_KEY, 32),
+            (AXT_FASTPQ_DA_COMMITMENT_METADATA_KEY, 33),
+        ] {
+            for actual_length in [0, length - 1, length + 1] {
+                let mut changed = batch.clone();
+                changed.metadata.insert(key.into(), vec![0; actual_length]);
+                let legacy = match key {
+                    AXT_FASTPQ_COMMITTED_AMOUNT_METADATA_KEY => {
+                        proof_bound_committed_amount(&changed).unwrap_err()
+                    }
+                    AXT_FASTPQ_EXPIRY_SLOT_METADATA_KEY => {
+                        proof_bound_expiry_slot(&changed).unwrap_err()
+                    }
+                    AXT_FASTPQ_MANIFEST_ROOT_METADATA_KEY => {
+                        proof_bound_manifest_root(&changed).unwrap_err()
+                    }
+                    AXT_FASTPQ_DA_COMMITMENT_METADATA_KEY => {
+                        proof_bound_da_commitment(&changed).unwrap_err()
+                    }
+                    _ => unreachable!(),
+                };
+                let public =
+                    validate_axt_public_metadata(&binding, public_metadata_bytes(&changed), outer)
+                        .unwrap_err();
+                assert_eq!(
+                    public.to_string(),
+                    legacy.to_string(),
+                    "{key}/{actual_length}"
+                );
+            }
+        }
+        assert_eq!(parse_committed_amount(None).unwrap(), None);
+        assert_eq!(
+            parse_committed_amount(Some(&u128::MAX.to_le_bytes())).unwrap(),
+            Some(u128::MAX)
+        );
+        assert!(parse_committed_amount(Some(&[0; 16])).is_err());
+        assert_eq!(parse_expiry_slot(&[0; 8]).unwrap(), None);
+        assert_eq!(
+            parse_expiry_slot(&u64::MAX.to_le_bytes()).unwrap(),
+            Some(u64::MAX)
+        );
+        assert_eq!(parse_da_commitment(&[0; 33]).unwrap(), None);
+        let mut present_zero = [0; 33];
+        present_zero[0] = 1;
+        assert_eq!(parse_da_commitment(&present_zero).unwrap(), Some([0; 32]));
+    }
+
+    #[test]
+    fn public_remote_facts_and_legacy_decoder_have_identical_acceptance() {
+        use crate::gadgets::public_transfer_statement::{
+            PublicTransferLimits, prepare_public_transfers, public_claims_from_transcripts,
+        };
+        let binding = remote_transfer_binding();
+        let batch = real_transfer_claim_batch(&binding);
+        let transcripts = decode_transcripts(&batch.metadata).unwrap().unwrap();
+        let public =
+            public_claims_from_transcripts(&transcripts, PublicTransferLimits::default()).unwrap();
+        let prepared = prepare_public_transfers(
+            &batch.transitions,
+            &public,
+            batch.public_inputs.clone(),
+            ProofSemantics::AxtTransferClaim,
+            PublicTransferLimits::default(),
+        )
+        .unwrap();
+        let claim = real_transfer_claim(&binding);
+        require_remote_spend_transcript_linkage(&batch, &binding).unwrap();
+        validate_axt_public_transfer_facts(
+            &binding,
+            public_metadata_bytes(&batch),
+            &prepared,
+            Some(core::slice::from_ref(&claim)),
+        )
+        .unwrap();
+        for field in 0..6 {
+            let mut changed_claim = claim.clone();
+            match field {
+                0 => changed_claim.effective_amount = Quantity::from(34_u64),
+                1 => changed_claim.kind = "mint".into(),
+                2 => changed_claim.from = claim.to.clone(),
+                3 => changed_claim.from.push(' '),
+                4 => {
+                    changed_claim.handle_replay_key.asset_dsid =
+                        DataSpaceId::new(binding.source_dsid + 1)
+                }
+                5 => {
+                    changed_claim.asset_definition_id = AssetDefinitionId::derive_from_components(
+                        DomainId::try_new("axt", "universal").unwrap(),
+                        "lily".parse().unwrap(),
+                    )
+                }
+                _ => unreachable!(),
+            }
+            let claims = vec![changed_claim];
+            let mut changed_binding = binding.clone();
+            changed_binding.remote_spend_intent_commitments = claims
+                .iter()
+                .map(compute_remote_spend_claim_commitment_v1)
+                .collect();
+            let mut changed_batch = batch.clone();
+            changed_batch.metadata.insert(
+                AXT_FASTPQ_REMOTE_SPEND_CLAIMS_METADATA_KEY.into(),
+                encode_canonical_norito(&claims).unwrap(),
+            );
+            let legacy = require_remote_spend_transcript_linkage(&changed_batch, &changed_binding)
+                .unwrap_err();
+            let public = validate_axt_public_transfer_facts(
+                &changed_binding,
+                public_metadata_bytes(&batch),
+                &prepared,
+                Some(&claims),
+            )
+            .unwrap_err();
+            assert_eq!(
+                public.to_string(),
+                legacy.to_string(),
+                "remote field {field}"
+            );
+        }
+        // No private decoder is reachable from the shared public-fact entry.
+        let mut corrupt_private = batch.clone();
+        corrupt_private
+            .metadata
+            .insert(TRANSFER_TRANSCRIPTS_METADATA_KEY.into(), vec![0xff]);
+        assert!(require_remote_spend_transcript_linkage(&corrupt_private, &binding).is_err());
+        validate_axt_public_transfer_facts(
+            &binding,
+            public_metadata_bytes(&corrupt_private),
+            &prepared,
+            Some(&[claim]),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn shared_public_header_and_hash_checks_preserve_exact_source_identity() {
+        let binding = remote_transfer_binding();
+        let hash: [u8; 32] = hex::decode(&binding.source_tx_commitment)
+            .unwrap()
+            .try_into()
+            .unwrap();
+        let source = Hash::prehashed(hash);
+        require_execution_header(DEFAULT_PARAMETER, dsid_bytes(binding.source_dsid), &binding)
+            .unwrap();
+        assert!(
+            require_execution_header("other", dsid_bytes(binding.source_dsid), &binding).is_err()
+        );
+        let mut high_dsid = dsid_bytes(binding.source_dsid);
+        high_dsid[15] = 1;
+        assert!(require_execution_header(DEFAULT_PARAMETER, high_dsid, &binding).is_err());
+        assert!(require_execution_rows(0).is_err());
+        require_execution_rows(1).unwrap();
+        require_transfer_batch_hashes(&hash, [source, source]).unwrap();
+        assert!(require_transfer_batch_hashes(&hash, []).is_err());
+        assert!(
+            require_transfer_batch_hashes(&hash, [source, Hash::new(b"other source")]).is_err()
+        );
+        require_public_value_eq("entry_hash", &hash, &hash).unwrap();
+        assert!(require_public_value_eq("entry_hash", &hash[..31], &hash).is_err());
+        assert!(require_remote_spend_claim_presence(&binding, false).unwrap());
+        let mut empty = binding;
+        empty.remote_spend_intent_commitments.clear();
+        assert!(!require_remote_spend_claim_presence(&empty, false).unwrap());
+        assert!(require_remote_spend_claim_presence(&empty, true).is_err());
+    }
+
     #[test]
     fn deterministic_account_uses_checked_seed_derivation() {
         let domain = DomainId::try_new("wonderland", "universal").expect("domain id");
@@ -1715,7 +2564,8 @@ mod tests {
     }
 
     fn transfer_balance_key(asset: &AssetDefinitionId, account: &AccountId) -> Vec<u8> {
-        format!("asset/{asset}/{account}").into_bytes()
+        iroha_data_model::fastpq::transfer_balance_key(asset, account)
+            .expect("canonical balance key")
     }
     fn transfer_transcript(
         asset_definition: &AssetDefinitionId,
@@ -2821,6 +3671,37 @@ mod tests {
         ));
     }
     #[test]
+    fn canonical_remote_account_returns_error_when_rendering_exceeds_inherited_budget() {
+        let literal = iroha_test_samples::ALICE_ID.canonical_i105().unwrap();
+        let unrestricted =
+            norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, usize::MAX, 32);
+        let (parsed, usage) = norito::core::with_decode_limits_measured(unrestricted, || {
+            AccountId::parse_encoded(&literal)
+        });
+        assert!(parsed.is_ok());
+        let exact_parse = norito::DecodeLimits::new(
+            usize::MAX,
+            usize::MAX,
+            usize::MAX,
+            usage.total_allocated_bytes(),
+            32,
+        );
+        assert!(
+            norito::core::with_decode_limits_scope(exact_parse, || AccountId::parse_encoded(
+                &literal
+            ))
+            .is_ok()
+        );
+        let result = norito::core::with_decode_limits_scope(exact_parse, || {
+            canonical_remote_account(&literal, "from")
+        });
+        assert!(
+            matches!(result, Err(Error::InvalidAxtBinding { details }) if details == "remote-spend from account canonicalization failed")
+        );
+        assert!(canonical_remote_account(&literal, "from").is_ok());
+    }
+
+    #[test]
     fn canonical_remote_account_rejects_padded_i105() {
         let binding = remote_transfer_binding();
         let claim = real_transfer_claim(&binding);
@@ -3043,6 +3924,126 @@ mod tests {
                 && max == MAX_AXT_PROOF_BLOB_PAYLOAD_BYTES
         ));
     }
+    #[test]
+    fn compact_artifact_dispatch_preserves_canonical_axt_codec_bytes_and_errors() {
+        // A small codec fixture is deliberately not a valid mathematical proof.
+        // This regression invokes no prover, witness construction or verifier.
+        let batch = unbound_axt_batch(&sample_binding());
+        let zero = iroha_data_model::privacy::GoldilocksDigest384V1::new([0; 6]).unwrap();
+        let proof = Proof {
+            protocol_version: 1,
+            parameter: DEFAULT_PARAMETER.to_owned(),
+            trace_commitment: zero,
+            public_io: crate::proof::PublicIO {
+                dsid: batch.public_inputs.dsid,
+                slot: batch.public_inputs.slot,
+                old_root: batch.public_inputs.old_root,
+                new_root: batch.public_inputs.new_root,
+                perm_root: batch.public_inputs.perm_root,
+                tx_set_hash: batch.public_inputs.tx_set_hash,
+                ordering_hash: [0; 32],
+            },
+            trace_root: zero,
+            air_trace_root: zero,
+            air_composition_root: zero,
+            lde_root: zero,
+            lde_domain_size: 0,
+            lookup_grand_product: 1,
+            lookup_challenge: 0,
+            alphas: Vec::new(),
+            betas: Vec::new(),
+            fri_layers: Vec::new(),
+            queries: Vec::new(),
+            air_openings: Vec::new(),
+            fri_queries: Vec::new(),
+        };
+        let payload = AxtFastpqProofPayload {
+            batch: transition_batch_to_model(&batch),
+            proof: proof.clone(),
+        };
+        let canonical = encode_axt_fastpq_payload(&batch, proof).unwrap();
+        assert_eq!(canonical, encode_canonical_norito(&payload).unwrap());
+        assert_eq!(decode_axt_fastpq_payload(&canonical).unwrap(), payload);
+        let mut cases = vec![canonical.clone(), alternate_norito_bytes(&payload), vec![]];
+        for length in [5, norito::core::Header::SIZE - 1] {
+            cases.push(canonical[..length].to_vec());
+        }
+        let mut unknown = canonical.clone();
+        unknown[6..22].copy_from_slice(&norito::core::schema_hash_for_name("unknown:AXT:artifact"));
+        assert!(matches!(
+            decode_axt_fastpq_payload(&unknown),
+            Err(Error::AxtProofPayloadDecode {
+                source: norito::Error::SchemaMismatch
+            })
+        ));
+        cases.push(unknown);
+        let mut corrupt = canonical.clone();
+        corrupt[31] ^= 1;
+        cases.push(corrupt);
+        let mut trailing = canonical.clone();
+        trailing.push(0);
+        cases.push(trailing);
+        for flags in [0, norito::core::default_encode_flags()] {
+            let _ambient = norito::core::DecodeFlagsGuard::enter(flags);
+            for encoded in &cases {
+                let original: Result<AxtFastpqProofPayload> = {
+                    let _canonical_flags =
+                        norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+                    decode_from_bytes(encoded)
+                        .map_err(|source| Error::AxtProofPayloadDecode { source })
+                };
+                let actual = decode_axt_fastpq_payload(encoded);
+                assert_eq!(format!("{actual:?}"), format!("{original:?}"));
+                assert_eq!(norito::core::get_decode_flags(), flags);
+            }
+        }
+    }
+
+    #[test]
+    fn compact_artifact_dispatch_rejects_both_model_routes_at_public_axt_ingress() {
+        use iroha_data_model::fastpq::{
+            FASTPQ_AXT_COMPACT_ARTIFACT_V1_SCHEMA_NAME,
+            FASTPQ_ORDINARY_COMPACT_ARTIFACT_V1_SCHEMA_NAME,
+        };
+
+        for schema in [
+            FASTPQ_ORDINARY_COMPACT_ARTIFACT_V1_SCHEMA_NAME,
+            FASTPQ_AXT_COMPACT_ARTIFACT_V1_SCHEMA_NAME,
+        ] {
+            let mut encoded = norito::encode_canonical(&0_u8).unwrap();
+            encoded[6..22].copy_from_slice(&norito::core::schema_hash_for_name(schema));
+            encoded.truncate(norito::core::Header::SIZE);
+            // A valid header with an impossible body length and no body still
+            // takes the explicit unqualified route, ahead of CRC/body work.
+            encoded[23..31].copy_from_slice(&u64::MAX.to_le_bytes());
+            for result in [
+                decode_axt_fastpq_payload(&encoded).map(|_| ()),
+                verify_axt_proof_envelope(&envelope_with_payload(
+                    sample_binding(),
+                    encoded.clone(),
+                ))
+                .map(|_| ()),
+            ] {
+                assert!(
+                    matches!(result, Err(Error::UnqualifiedCompactArtifact { schema: actual }) if actual == schema)
+                );
+            }
+            encoded.resize(DEFAULT_MAX_AXT_FASTPQ_PAYLOAD_BYTES + 1, 0xff);
+            for result in [
+                decode_axt_fastpq_payload(&encoded).map(|_| ()),
+                verify_axt_proof_envelope(&envelope_with_payload(
+                    sample_binding(),
+                    encoded.clone(),
+                ))
+                .map(|_| ()),
+            ] {
+                assert!(matches!(result, Err(Error::VerifierLimitExceeded {
+                    limit: "max_axt_fastpq_payload_bytes", actual, max,
+                }) if actual == encoded.len() && max == DEFAULT_MAX_AXT_FASTPQ_PAYLOAD_BYTES));
+            }
+        }
+    }
+
     #[test]
     fn verify_axt_envelope_rejects_alternate_payload_layout_and_encoder_is_pinned() {
         let binding = sample_binding();

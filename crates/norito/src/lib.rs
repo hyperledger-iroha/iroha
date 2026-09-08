@@ -30,6 +30,9 @@
 //!   decoding headers.
 //!
 //! Helpers
+//! - [`SerializePayload`] owns object-safe bare serialization and size hints.
+//!   Borrowed field adapters can derive this contract without a frame identity.
+//!   [`NoritoSerialize`] adds the typed frame contract used by framed encoders.
 //! - [`encode_canonical`], [`decode_canonical`], and
 //!   [`decode_canonical_with_limits`] provide exact uncompressed V1 boundaries
 //!   with payload-derived decode budgets and byte-for-byte re-encoding checks.
@@ -56,8 +59,8 @@ pub use schema::identity::NoritoSchema;
 pub mod streaming;
 pub use core::{
     Archived, ArchivedBox, Compression, CompressionConfig, DecodeLimits, Encoder, Error,
-    NoritoDeserialize, NoritoSerialize, crc64_fallback, default_encode_flags, from_bytes,
-    from_compressed_bytes, hardware_crc64, to_bytes, to_bytes_auto, to_bytes_in,
+    NoritoDeserialize, NoritoSerialize, SerializePayload, crc64_fallback, default_encode_flags,
+    from_bytes, from_compressed_bytes, hardware_crc64, to_bytes, to_bytes_auto, to_bytes_in,
     to_compressed_bytes, with_decode_limits, with_decode_limits_scope,
 };
 #[doc(hidden)]
@@ -160,14 +163,14 @@ pub mod yaml;
 pub mod derive {
     pub use norito_derive::{
         Decode, Encode, FastJson, FastJsonWrite, JsonDeserialize, JsonSerialize, NoritoDeserialize,
-        NoritoSchema, NoritoSerialize,
+        NoritoSchema, NoritoSerialize, SerializePayload,
     };
 }
 pub use derive::*;
 /// Bare Norito `Encode` and `Decode` traits used for compact payloads without a Norito header.
 pub mod codec {
     pub use super::Error;
-    use super::{NoritoDeserialize, NoritoSerialize, core};
+    use super::{NoritoDeserialize, NoritoSerialize, SerializePayload, core};
     pub use crate::derive::{Decode, Encode};
     use std::io::{Read, Write};
     struct CountingWriter<'a, W: Write> {
@@ -196,7 +199,7 @@ pub mod codec {
         }
     }
     /// Encode values into bytes using Norito.
-    pub trait Encode: NoritoSerialize + Sized {
+    pub trait Encode: SerializePayload + Sized {
         /// Encode `self` into a new `Vec<u8>` without compression.
         ///
         /// Uses the fixed v1 bare layout (no adaptive layout flags).
@@ -213,7 +216,7 @@ pub mod codec {
             encode_adaptive_into(self, &mut sink).expect("encoding should not fail")
         }
     }
-    impl<T: NoritoSerialize + Sized> Encode for T {}
+    impl<T: SerializePayload + Sized> Encode for T {}
     /// Input stream for decoding.
     pub trait Input: Read {}
     impl<T: Read> Input for T {}
@@ -230,10 +233,10 @@ pub mod codec {
     }
     impl<T> Decode for T where T: for<'de> NoritoDeserialize<'de> + NoritoSerialize + Sized {}
     /// Bare encode using the fixed v1 layout flags.
-    pub fn encode_adaptive<T: NoritoSerialize>(value: &T) -> Vec<u8> {
+    pub fn encode_adaptive<T: SerializePayload>(value: &T) -> Vec<u8> {
         encode_adaptive_with_flags(value, core::default_encode_flags())
     }
-    fn encode_adaptive_with_flags<T: NoritoSerialize>(value: &T, flags: u8) -> Vec<u8> {
+    fn encode_adaptive_with_flags<T: SerializePayload>(value: &T, flags: u8) -> Vec<u8> {
         core::validate_header_flags(flags).expect("adaptive encode flags must be supported");
         #[cfg(debug_assertions)]
         if crate::debug_trace_enabled() {
@@ -251,13 +254,13 @@ pub mod codec {
     /// Bare encode into the provided writer using the fixed v1 layout flags.
     ///
     /// Returns the number of payload bytes written.
-    pub fn encode_adaptive_into<T: NoritoSerialize, W: Write>(
+    pub fn encode_adaptive_into<T: SerializePayload, W: Write>(
         value: &T,
         writer: &mut W,
     ) -> Result<usize, Error> {
         encode_adaptive_into_with_flags(value, writer, core::default_encode_flags())
     }
-    fn encode_adaptive_into_with_flags<T: NoritoSerialize, W: Write>(
+    fn encode_adaptive_into_with_flags<T: SerializePayload, W: Write>(
         value: &T,
         writer: &mut W,
         flags: u8,
@@ -271,7 +274,7 @@ pub mod codec {
         {
             let _fg = core::DecodeFlagsGuard::enter(flags);
             let mut encoder = core::Encoder::new(&mut counting);
-            NoritoSerialize::serialize(value, &mut encoder)?;
+            SerializePayload::serialize(value, &mut encoder)?;
         }
         let payload_len = counting.bytes_written();
         Ok(payload_len)
@@ -280,13 +283,14 @@ pub mod codec {
     #[allow(clippy::items_after_test_module)]
     mod encode_tests {
         use super::Encode;
-        use crate::{NoritoDeserialize, NoritoSerialize};
+        use crate::{NoritoDeserialize, NoritoSerialize, SerializePayload};
         use std::sync::atomic::{AtomicUsize, Ordering};
         static HINT_CALLS: AtomicUsize = AtomicUsize::new(0);
         static EXACT_CALLS: AtomicUsize = AtomicUsize::new(0);
         #[derive(Clone, Copy)]
         struct Hinted(u8);
-        impl NoritoSerialize for Hinted {
+        impl NoritoSerialize for Hinted {}
+        impl SerializePayload for Hinted {
             fn serialize(
                 &self,
                 encoder: &mut crate::core::Encoder<'_>,
@@ -303,7 +307,8 @@ pub mod codec {
             }
         }
         struct ExactLenOnly(u8);
-        impl NoritoSerialize for ExactLenOnly {
+        impl NoritoSerialize for ExactLenOnly {}
+        impl SerializePayload for ExactLenOnly {
             fn serialize(
                 &self,
                 encoder: &mut crate::core::Encoder<'_>,
@@ -317,7 +322,8 @@ pub mod codec {
             }
         }
         struct HugeHint(u8);
-        impl NoritoSerialize for HugeHint {
+        impl NoritoSerialize for HugeHint {}
+        impl SerializePayload for HugeHint {
             fn serialize(
                 &self,
                 encoder: &mut crate::core::Encoder<'_>,
@@ -330,7 +336,8 @@ pub mod codec {
             }
         }
         struct AlwaysFails;
-        impl NoritoSerialize for AlwaysFails {
+        impl NoritoSerialize for AlwaysFails {}
+        impl SerializePayload for AlwaysFails {
             fn serialize(
                 &self,
                 _encoder: &mut crate::core::Encoder<'_>,
@@ -427,7 +434,7 @@ pub mod codec {
     }
     /// Encode `value` and return both the bare payload and the exact header flags required
     /// to frame it for header-based decoding.
-    pub fn encode_with_header_flags<T: NoritoSerialize>(value: &T) -> (Vec<u8>, u8) {
+    pub fn encode_with_header_flags<T: SerializePayload>(value: &T) -> (Vec<u8>, u8) {
         let (payload, flags) =
             core::encode_bare_with_flags(value).expect("encode_with_header_flags should succeed");
         (payload, flags)
@@ -601,9 +608,9 @@ pub mod json {
     };
     /// Maximum structural nesting accepted while constructing a JSON [`Value`].
     ///
-    /// A Kotodama boundary value may use the complete 256-level public type budget beneath its
-    /// required parameter object. The one extra structural level covers that boundary envelope
-    /// without relaxing the 256-level guard used by recursively owned typed decoders.
+    /// The extra structural level covers a required boundary envelope around a value at the
+    /// codec's recursively owned value limit. Kotodama's larger logical type budget uses a flat
+    /// node tape and therefore does not consume one JSON parser frame per logical type level.
     pub const MAX_JSON_VALUE_NESTING_DEPTH: usize = crate::core::MAX_VALUE_NESTING_DEPTH + 1;
     thread_local! {
         static OWNED_VALUE_DECODE_DEPTH: Cell<usize> = const { Cell::new(0) };
@@ -907,7 +914,7 @@ pub mod json {
     mod validated;
     pub use bounded::{
         BoundedJsonError, FastJsonWrite, JsonWriteSink, to_json_bounded, to_json_bounded_boxed,
-        write_json_display_to, write_json_string_to, write_json_unbounded,
+        visit_json_display_text, write_json_display_to, write_json_string_to, write_json_unbounded,
     };
     #[doc(hidden)]
     pub use canonical_base64::{
@@ -993,24 +1000,21 @@ pub mod json {
         fn i64_equals_f64(integer: i64, float: f64) -> bool {
             float.is_finite()
                 && float.fract() == 0.0
-                && float >= -F64_TWO_POW_63
-                && float < F64_TWO_POW_63
+                && (-F64_TWO_POW_63..F64_TWO_POW_63).contains(&float)
                 && (float as i64) == integer
         }
 
         fn u64_equals_f64(integer: u64, float: f64) -> bool {
             float.is_finite()
                 && float.fract() == 0.0
-                && float >= 0.0
-                && float < F64_TWO_POW_64
+                && (0.0..F64_TWO_POW_64).contains(&float)
                 && (float as u64) == integer
         }
 
         fn u128_equals_f64(integer: u128, float: f64) -> bool {
             float.is_finite()
                 && float.fract() == 0.0
-                && float >= 0.0
-                && float < F64_TWO_POW_128
+                && (0.0..F64_TWO_POW_128).contains(&float)
                 && (float as u128) == integer
         }
 
@@ -3190,6 +3194,57 @@ pub mod json {
             out.push('"');
         }
     }
+    /// A type whose values have one injective canonical JSON object-key text.
+    ///
+    /// Implementations provide unescaped key text in bounded chunks. The map
+    /// serializer applies Norito's canonical JSON string escaping exactly once.
+    ///
+    /// Composite and optional values intentionally do not implement this trait.
+    ///
+    /// ```compile_fail
+    /// use std::collections::BTreeMap;
+    /// let values = BTreeMap::from([(vec![1_u8], 1_u8)]);
+    /// let _ = norito::json::to_json(&values);
+    /// ```
+    ///
+    /// ```compile_fail
+    /// use std::collections::BTreeMap;
+    /// let values = BTreeMap::from([(("left".to_owned(), "right".to_owned()), 1_u8)]);
+    /// let _ = norito::json::to_json(&values);
+    /// ```
+    ///
+    /// ```compile_fail
+    /// use std::collections::BTreeMap;
+    /// let values = BTreeMap::from([(Some("value".to_owned()), 1_u8)]);
+    /// let _ = norito::json::to_json(&values);
+    /// ```
+    pub trait JsonObjectKey {
+        /// Visit the canonical unescaped object-key text.
+        ///
+        /// Concatenating every visited chunk must produce one injective canonical
+        /// representation. Implementations can only return errors from `visitor`.
+        fn visit_json_key_text<E>(
+            &self,
+            visitor: impl FnMut(&str) -> Result<(), E>,
+        ) -> Result<(), E>;
+
+        /// Visit the key text through a checked serialization path.
+        ///
+        /// Types whose canonical key conversion can fail override this method.
+        fn visit_json_key_text_checked(
+            &self,
+            visitor: impl FnMut(&str) -> Result<(), BoundedJsonError>,
+        ) -> Result<(), BoundedJsonError> {
+            self.visit_json_key_text(visitor)
+        }
+    }
+
+    /// An owned JSON object key that can be reconstructed from canonical key text.
+    pub trait JsonObjectKeyOwned: JsonObjectKey + Sized {
+        /// Parse one unescaped JSON object-key string.
+        fn from_json_key_text(key: &str) -> Result<Self, Error>;
+    }
+
     /// Trait for types that can be serialized to JSON.
     pub trait JsonSerialize {
         /// Serialize `self` into `out` as JSON.
@@ -3312,7 +3367,17 @@ pub mod json {
             }
             String::json_from_value(value).map(String::into_boxed_str)
         }
-        fn json_from_map_key(key: &str) -> Result<Self, Error> {
+    }
+    impl JsonObjectKey for Box<str> {
+        fn visit_json_key_text<E>(
+            &self,
+            visitor: impl FnMut(&str) -> Result<(), E>,
+        ) -> Result<(), E> {
+            self.as_ref().visit_json_key_text(visitor)
+        }
+    }
+    impl JsonObjectKeyOwned for Box<str> {
+        fn from_json_key_text(key: &str) -> Result<Self, Error> {
             try_decode_string_copy(key).map(String::into_boxed_str)
         }
     }
@@ -4431,152 +4496,15 @@ pub mod json {
                 }
             }
         }
-        /// Read a JSON object key using the same hash as compile-time field dispatch.
+        /// Read a JSON object key using the same hash as compile-time and tape dispatch.
+        /// The existing string parser borrows unescaped keys and validates/unescapes
+        /// escaped keys. The colon remains unconsumed, as with the tape reader.
         pub fn read_key_hash(&mut self) -> Result<u64, Error> {
-            self.skip_ws();
-            self.expect(b'"')?;
-            let mut hash = key_hash::KeyHasher::new();
-            loop {
-                let b = self.bump().ok_or_else(|| {
-                    let (byte, line, col) = self.pos_meta(self.i);
-                    Error::UnterminatedString { byte, line, col }
-                })?;
-                match b {
-                    b'"' => break,
-                    b'\\' => {
-                        // Hash the escaped char logically (treat escape as the resulting byte where trivial)
-                        let esc = self.bump().ok_or_else(|| {
-                            let (byte, line, col) = self.pos_meta(self.i);
-                            Error::EofEscape { byte, line, col }
-                        })?;
-                        match esc {
-                            b'"' => {
-                                hash.update(b'"');
-                            }
-                            b'\\' => {
-                                hash.update(b'\\');
-                            }
-                            b'/' => {
-                                hash.update(b'/');
-                            }
-                            b'b' => {
-                                hash.update(0x08);
-                            }
-                            b'f' => {
-                                hash.update(0x0C);
-                            }
-                            b'n' => {
-                                hash.update(b'\n');
-                            }
-                            b'r' => {
-                                hash.update(b'\r');
-                            }
-                            b't' => {
-                                hash.update(b'\t');
-                            }
-                            b'u' => {
-                                // Consume 4 hex digits; combine surrogate pairs when present and hash UTF‑8 bytes
-                                let hex_to_u32 = |p: &mut Self| -> Result<u32, Error> {
-                                    let mut v: u32 = 0;
-                                    for _ in 0..4 {
-                                        let c = p.bump().ok_or_else(|| {
-                                            let (byte, line, col) = p.pos_meta(p.i);
-                                            Error::EofHex { byte, line, col }
-                                        })?;
-                                        v = (v << 4)
-                                            | match c {
-                                                b'0'..=b'9' => (c - b'0') as u32,
-                                                b'a'..=b'f' => (c - b'a' + 10) as u32,
-                                                b'A'..=b'F' => (c - b'A' + 10) as u32,
-                                                _ => {
-                                                    let (byte, line, col) =
-                                                        p.pos_meta(p.i.saturating_sub(1));
-                                                    return Err(Error::InvalidHex {
-                                                        byte,
-                                                        line,
-                                                        col,
-                                                    });
-                                                }
-                                            };
-                                    }
-                                    Ok(v)
-                                };
-                                let hi = hex_to_u32(self)?;
-                                let cp = if (0xD800..=0xDBFF).contains(&hi) {
-                                    if self.peek() != Some(b'\\') {
-                                        let (byte, line, col) = self.pos_meta(self.i);
-                                        return Err(Error::WithPos {
-                                            msg: "expected low surrogate",
-                                            byte,
-                                            line,
-                                            col,
-                                        });
-                                    }
-                                    self.bump();
-                                    if self.bump() != Some(b'u') {
-                                        let (byte, line, col) = self.pos_meta(self.i);
-                                        return Err(Error::WithPos {
-                                            msg: "expected \\u for low surrogate",
-                                            byte,
-                                            line,
-                                            col,
-                                        });
-                                    }
-                                    let lo = hex_to_u32(self)?;
-                                    if !(0xDC00..=0xDFFF).contains(&lo) {
-                                        let (byte, line, col) = self.pos_meta(self.i);
-                                        return Err(Error::WithPos {
-                                            msg: "invalid low surrogate",
-                                            byte,
-                                            line,
-                                            col,
-                                        });
-                                    }
-                                    0x10000 + (((hi - 0xD800) << 10) | (lo - 0xDC00))
-                                } else if (0xDC00..=0xDFFF).contains(&hi) {
-                                    let (byte, line, col) = self.pos_meta(self.i);
-                                    return Err(Error::WithPos {
-                                        msg: "unexpected low surrogate",
-                                        byte,
-                                        line,
-                                        col,
-                                    });
-                                } else {
-                                    hi
-                                };
-                                if let Some(ch) = char::from_u32(cp) {
-                                    let mut buf = [0u8; 4];
-                                    let s = ch.encode_utf8(&mut buf);
-                                    for &bb in s.as_bytes() {
-                                        hash.update(bb);
-                                    }
-                                } else {
-                                    let (byte, line, col) = self.pos_meta(self.i);
-                                    return Err(Error::WithPos {
-                                        msg: "invalid codepoint",
-                                        byte,
-                                        line,
-                                        col,
-                                    });
-                                }
-                            }
-                            _ => {
-                                let (byte, line, col) = self.pos_meta(self.i.saturating_sub(1));
-                                return Err(Error::WithPos {
-                                    msg: "bad escape",
-                                    byte,
-                                    line,
-                                    col,
-                                });
-                            }
-                        }
-                    }
-                    _ => {
-                        hash.update(b);
-                    }
-                }
-            }
-            Ok(hash.finish())
+            let mut arena = Arena::new();
+            let key = self.parse_string_ref(&mut arena)?;
+            Ok(key_hash_const(match key {
+                StrRef::Borrowed(value) | StrRef::Owned(value) => value,
+            }))
         }
         /// Parse a JSON object key and return a borrowed `&str` when no escapes are present,
         /// or an owned `String` otherwise. This avoids allocating in the common fast path.
@@ -4659,10 +4587,6 @@ pub mod json {
         fn json_from_value(value: &Value) -> Result<Self, Error> {
             json_from_value_via_string::<Self>(value)
         }
-        /// Convert a JSON object key into `Self`.
-        fn json_from_map_key(key: &str) -> Result<Self, Error> {
-            json_from_value_via_string::<Self>(&Value::String(key.to_owned()))
-        }
     }
     /// Marker trait mirroring `serde::de::DeserializeOwned` for Norito JSON.
     pub trait JsonDeserializeOwned: JsonDeserialize {}
@@ -4689,7 +4613,9 @@ pub mod json {
                 .as_bool()
                 .ok_or_else(|| Error::Message("expected bool".into()))
         }
-        fn json_from_map_key(key: &str) -> Result<Self, Error> {
+    }
+    impl JsonObjectKeyOwned for bool {
+        fn from_json_key_text(key: &str) -> Result<Self, Error> {
             match key {
                 "true" => Ok(true),
                 "false" => Ok(false),
@@ -4766,7 +4692,9 @@ pub mod json {
             }
             json_from_value_via_string(value)
         }
-        fn json_from_map_key(key: &str) -> Result<Self, Error> {
+    }
+    impl JsonObjectKeyOwned for u128 {
+        fn from_json_key_text(key: &str) -> Result<Self, Error> {
             key.parse::<u128>()
                 .map_err(|_| Error::Message("expected u128".into()))
         }
@@ -4782,8 +4710,10 @@ pub mod json {
             core::num::NonZeroU128::new(value)
                 .ok_or_else(|| Error::Message("expected non-zero u128".into()))
         }
-        fn json_from_map_key(key: &str) -> Result<Self, Error> {
-            let value = u128::json_from_map_key(key)?;
+    }
+    impl JsonObjectKeyOwned for core::num::NonZeroU128 {
+        fn from_json_key_text(key: &str) -> Result<Self, Error> {
+            let value = <u128 as JsonObjectKeyOwned>::from_json_key_text(key)?;
             core::num::NonZeroU128::new(value)
                 .ok_or_else(|| Error::Message("expected non-zero u128".into()))
         }
@@ -4798,7 +4728,9 @@ pub mod json {
             }
             json_from_value_via_string(value)
         }
-        fn json_from_map_key(key: &str) -> Result<Self, Error> {
+    }
+    impl JsonObjectKeyOwned for u64 {
+        fn from_json_key_text(key: &str) -> Result<Self, Error> {
             key.parse::<u64>()
                 .map_err(|_| Error::Message("expected u64".into()))
         }
@@ -4814,8 +4746,10 @@ pub mod json {
             core::num::NonZeroU64::new(value)
                 .ok_or_else(|| Error::Message("expected non-zero u64".into()))
         }
-        fn json_from_map_key(key: &str) -> Result<Self, Error> {
-            let value = u64::json_from_map_key(key)?;
+    }
+    impl JsonObjectKeyOwned for core::num::NonZeroU64 {
+        fn from_json_key_text(key: &str) -> Result<Self, Error> {
+            let value = <u64 as JsonObjectKeyOwned>::from_json_key_text(key)?;
             core::num::NonZeroU64::new(value)
                 .ok_or_else(|| Error::Message("expected non-zero u64".into()))
         }
@@ -4832,8 +4766,10 @@ pub mod json {
             core::num::NonZeroU32::new(value)
                 .ok_or_else(|| Error::Message("expected non-zero u32".into()))
         }
-        fn json_from_map_key(key: &str) -> Result<Self, Error> {
-            let value = u32::json_from_map_key(key)?;
+    }
+    impl JsonObjectKeyOwned for core::num::NonZeroU32 {
+        fn from_json_key_text(key: &str) -> Result<Self, Error> {
+            let value = <u32 as JsonObjectKeyOwned>::from_json_key_text(key)?;
             core::num::NonZeroU32::new(value)
                 .ok_or_else(|| Error::Message("expected non-zero u32".into()))
         }
@@ -4849,7 +4785,9 @@ pub mod json {
             }
             json_from_value_via_string(value)
         }
-        fn json_from_map_key(key: &str) -> Result<Self, Error> {
+    }
+    impl JsonObjectKeyOwned for u32 {
+        fn from_json_key_text(key: &str) -> Result<Self, Error> {
             key.parse::<u32>()
                 .map_err(|_| Error::Message("u32 overflow".into()))
         }
@@ -4860,10 +4798,23 @@ pub mod json {
             u16::try_from(n).map_err(|_| Error::Message("u16 overflow".into()))
         }
     }
+    impl JsonObjectKeyOwned for u16 {
+        fn from_json_key_text(key: &str) -> Result<Self, Error> {
+            key.parse::<u16>()
+                .map_err(|_| Error::Message("u16 overflow".into()))
+        }
+    }
     impl JsonDeserialize for core::num::NonZeroU16 {
         fn json_deserialize(p: &mut Parser<'_>) -> Result<Self, Error> {
             let n = p.parse_u64()?;
             let value = u16::try_from(n).map_err(|_| Error::Message("u16 overflow".into()))?;
+            core::num::NonZeroU16::new(value)
+                .ok_or_else(|| Error::Message("expected non-zero u16".into()))
+        }
+    }
+    impl JsonObjectKeyOwned for core::num::NonZeroU16 {
+        fn from_json_key_text(key: &str) -> Result<Self, Error> {
+            let value = <u16 as JsonObjectKeyOwned>::from_json_key_text(key)?;
             core::num::NonZeroU16::new(value)
                 .ok_or_else(|| Error::Message("expected non-zero u16".into()))
         }
@@ -4880,8 +4831,10 @@ pub mod json {
             core::num::NonZeroUsize::new(value)
                 .ok_or_else(|| Error::Message("expected non-zero usize".into()))
         }
-        fn json_from_map_key(key: &str) -> Result<Self, Error> {
-            let value = usize::json_from_map_key(key)?;
+    }
+    impl JsonObjectKeyOwned for core::num::NonZeroUsize {
+        fn from_json_key_text(key: &str) -> Result<Self, Error> {
+            let value = <usize as JsonObjectKeyOwned>::from_json_key_text(key)?;
             core::num::NonZeroUsize::new(value)
                 .ok_or_else(|| Error::Message("expected non-zero usize".into()))
         }
@@ -4897,7 +4850,9 @@ pub mod json {
             }
             json_from_value_via_string(value)
         }
-        fn json_from_map_key(key: &str) -> Result<Self, Error> {
+    }
+    impl JsonObjectKeyOwned for u8 {
+        fn from_json_key_text(key: &str) -> Result<Self, Error> {
             key.parse::<u8>()
                 .map_err(|_| Error::Message("u8 overflow".into()))
         }
@@ -4913,7 +4868,9 @@ pub mod json {
             }
             json_from_value_via_string(value)
         }
-        fn json_from_map_key(key: &str) -> Result<Self, Error> {
+    }
+    impl JsonObjectKeyOwned for usize {
+        fn from_json_key_text(key: &str) -> Result<Self, Error> {
             key.parse::<usize>()
                 .map_err(|_| Error::Message("usize overflow".into()))
         }
@@ -4990,10 +4947,22 @@ pub mod json {
             parse_i64_from_parser(p)
         }
     }
+    impl JsonObjectKeyOwned for i64 {
+        fn from_json_key_text(key: &str) -> Result<Self, Error> {
+            key.parse::<i64>()
+                .map_err(|_| Error::Message("i64 overflow".into()))
+        }
+    }
     impl JsonDeserialize for i32 {
         fn json_deserialize(p: &mut Parser<'_>) -> Result<Self, Error> {
             let v = parse_i64_from_parser(p)?;
             i32::try_from(v).map_err(|_| Error::Message("i32 overflow".into()))
+        }
+    }
+    impl JsonObjectKeyOwned for i32 {
+        fn from_json_key_text(key: &str) -> Result<Self, Error> {
+            key.parse::<i32>()
+                .map_err(|_| Error::Message("i32 overflow".into()))
         }
     }
     impl JsonDeserialize for i16 {
@@ -5002,16 +4971,34 @@ pub mod json {
             i16::try_from(v).map_err(|_| Error::Message("i16 overflow".into()))
         }
     }
+    impl JsonObjectKeyOwned for i16 {
+        fn from_json_key_text(key: &str) -> Result<Self, Error> {
+            key.parse::<i16>()
+                .map_err(|_| Error::Message("i16 overflow".into()))
+        }
+    }
     impl JsonDeserialize for i8 {
         fn json_deserialize(p: &mut Parser<'_>) -> Result<Self, Error> {
             let v = parse_i64_from_parser(p)?;
             i8::try_from(v).map_err(|_| Error::Message("i8 overflow".into()))
         }
     }
+    impl JsonObjectKeyOwned for i8 {
+        fn from_json_key_text(key: &str) -> Result<Self, Error> {
+            key.parse::<i8>()
+                .map_err(|_| Error::Message("i8 overflow".into()))
+        }
+    }
     impl JsonDeserialize for isize {
         fn json_deserialize(p: &mut Parser<'_>) -> Result<Self, Error> {
             let v = parse_i64_from_parser(p)?;
             isize::try_from(v).map_err(|_| Error::Message("isize overflow".into()))
+        }
+    }
+    impl JsonObjectKeyOwned for isize {
+        fn from_json_key_text(key: &str) -> Result<Self, Error> {
+            key.parse::<isize>()
+                .map_err(|_| Error::Message("isize overflow".into()))
         }
     }
     impl JsonDeserialize for f64 {
@@ -5089,7 +5076,9 @@ pub mod json {
             }
             json_from_value_via_string(value)
         }
-        fn json_from_map_key(key: &str) -> Result<Self, Error> {
+    }
+    impl JsonObjectKeyOwned for String {
+        fn from_json_key_text(key: &str) -> Result<Self, Error> {
             try_decode_string_copy(key)
         }
     }
@@ -5107,7 +5096,9 @@ pub mod json {
             }
             json_from_value_via_string(value)
         }
-        fn json_from_map_key(key: &str) -> Result<Self, Error> {
+    }
+    impl JsonObjectKeyOwned for Url {
+        fn from_json_key_text(key: &str) -> Result<Self, Error> {
             key.parse()
                 .map_err(|e| Error::Message(format!("invalid url: {e}")))
         }
@@ -5171,13 +5162,6 @@ pub mod json {
                 Ok(None)
             } else {
                 T::json_from_value(value).map(Some)
-            }
-        }
-        fn json_from_map_key(key: &str) -> Result<Self, Error> {
-            if key == "null" {
-                Ok(None)
-            } else {
-                T::json_from_map_key(key).map(Some)
             }
         }
     }
@@ -8257,7 +8241,9 @@ pub mod json {
                 json_from_value_via_string(value)
             }
         }
-        fn json_from_map_key(key: &str) -> Result<Self, Error> {
+    }
+    impl<const N: usize> JsonObjectKeyOwned for [u8; N] {
+        fn from_json_key_text(key: &str) -> Result<Self, Error> {
             decode_hex::<N>(key)
         }
     }
@@ -8269,9 +8255,23 @@ pub mod json {
             bounded::write_hex_to(self, out)
         }
     }
+    impl<const N: usize> JsonObjectKey for [u8; N] {
+        fn visit_json_key_text<E>(
+            &self,
+            mut visitor: impl FnMut(&str) -> Result<(), E>,
+        ) -> Result<(), E> {
+            const HEX: &[u8; 16] = b"0123456789ABCDEF";
+            for byte in self {
+                let chunk = [HEX[usize::from(byte >> 4)], HEX[usize::from(byte & 0x0f)]];
+                // SAFETY: both bytes come from the ASCII hexadecimal alphabet.
+                visitor(unsafe { std::str::from_utf8_unchecked(&chunk) })?;
+            }
+            Ok(())
+        }
+    }
     impl<K, V> JsonDeserialize for std::collections::HashMap<K, V>
     where
-        K: JsonDeserialize + Eq + core::hash::Hash,
+        K: JsonObjectKeyOwned + Eq + core::hash::Hash,
         V: JsonDeserialize,
     {
         fn json_deserialize(parser: &mut Parser<'_>) -> Result<Self, Error> {
@@ -8287,7 +8287,7 @@ pub mod json {
                     KeyRef::Borrowed(s) => *s,
                     KeyRef::Owned(s) => s.as_str(),
                 };
-                let parsed_key = K::json_from_map_key(key_ref)?;
+                let parsed_key = K::from_json_key_text(key_ref)?;
                 let value = visitor.parse_value::<V>()?;
                 if map.insert(parsed_key, value).is_some() {
                     return Err(MapVisitor::duplicate_field(key_ref));
@@ -8304,7 +8304,7 @@ pub mod json {
                 map.try_reserve(obj.len())
                     .map_err(|_| Error::AllocationFailed)?;
                 for (k, v) in obj.iter() {
-                    let parsed_key = K::json_from_map_key(k)?;
+                    let parsed_key = K::from_json_key_text(k)?;
                     if map.insert(parsed_key, V::json_from_value(v)?).is_some() {
                         return Err(Error::duplicate_field(k));
                     }
@@ -8317,7 +8317,7 @@ pub mod json {
     }
     impl<K, V> JsonDeserialize for std::collections::BTreeMap<K, V>
     where
-        K: JsonDeserialize + Ord,
+        K: JsonObjectKeyOwned + Ord,
         V: JsonDeserialize,
     {
         fn json_deserialize(parser: &mut Parser<'_>) -> Result<Self, Error> {
@@ -8331,7 +8331,7 @@ pub mod json {
                     KeyRef::Borrowed(s) => *s,
                     KeyRef::Owned(s) => s.as_str(),
                 };
-                let parsed_key = K::json_from_map_key(key_ref)?;
+                let parsed_key = K::from_json_key_text(key_ref)?;
                 let value = visitor.parse_value::<V>()?;
                 if map.insert(parsed_key, value).is_some() {
                     return Err(MapVisitor::duplicate_field(key_ref));
@@ -8346,7 +8346,7 @@ pub mod json {
                     .map_err(Error::from_decode_resource)?;
                 let mut map = std::collections::BTreeMap::new();
                 for (k, v) in obj.iter() {
-                    let parsed_key = K::json_from_map_key(k)?;
+                    let parsed_key = K::from_json_key_text(k)?;
                     if map.insert(parsed_key, V::json_from_value(v)?).is_some() {
                         return Err(Error::duplicate_field(k));
                     }
@@ -8459,6 +8459,14 @@ pub mod json {
         }
         fn write_json_to(&self, out: &mut dyn JsonWriteSink) -> Result<(), BoundedJsonError> {
             write_json_string_to(self.as_str(), out)
+        }
+    }
+    impl JsonObjectKey for Url {
+        fn visit_json_key_text<E>(
+            &self,
+            mut visitor: impl FnMut(&str) -> Result<(), E>,
+        ) -> Result<(), E> {
+            visitor(self.as_str())
         }
     }
     /// Borrowed-or-owned key reference returned by `Parser::parse_key`.
@@ -8858,6 +8866,18 @@ where
 {
     let _canonical_flags = core::DecodeFlagsGuard::enter(core::default_encode_flags());
     core::to_bytes(value)
+}
+/// Count the exact uncompressed V1 frame produced by [`encode_canonical`].
+///
+/// A real serialization pass counts bytes without allocating an output frame or trusting
+/// serializer length hints. Ambient layout guards are restored before returning.
+///
+/// # Errors
+///
+/// Returns the serialization error or [`Error::LengthMismatch`] on length overflow.
+pub fn canonical_frame_len<T: NoritoSerialize>(value: &T) -> Result<usize, Error> {
+    let _canonical_flags = core::DecodeFlagsGuard::enter(core::default_encode_flags());
+    core::encoded_frame_len(value)
 }
 const CANONICAL_DECODE_ALLOCATION_EXTRA_MULTIPLIER: usize = 63;
 const CANONICAL_DECODE_MAX_EXTRA_ALLOCATION_BYTES: usize = 256 * 1024 * 1024;

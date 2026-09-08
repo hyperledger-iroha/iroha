@@ -95,16 +95,55 @@ pub mod common {
 }
 /// Canonical first-release Taira deployment policy shared by generators and launchers.
 pub mod taira {
+    /// Canonical first-release Inrou canary guest CPU allocation.
+    pub const INROU_CANARY_CPU_MILLIS: u32 = 750;
+    /// Canonical first-release Inrou canary guest RAM.
+    pub const INROU_CANARY_MEMORY_BYTES: u64 = 512 * 1024 * 1024;
+    /// Canary temporary filesystem; its sole durable state is separately bounded.
+    pub const INROU_CANARY_EPHEMERAL_STORAGE_BYTES: u64 = 16 * 1024 * 1024;
+    /// Exact normalized Debian ext4 size produced by the verified asset helper.
+    pub const INROU_CANARY_ROOT_VOLUME_BYTES: u64 = 1536 * 1024 * 1024;
+    /// Ext4 app-data volume for the at-most-1024-byte canonical state plus journal.
+    pub const INROU_CANARY_SHARED_VOLUME_BYTES: u64 = 64 * 1024 * 1024;
+    /// Exact per-replica root and temporary storage admission.
+    pub const INROU_CANARY_HOST_STORAGE_BYTES: u64 =
+        INROU_CANARY_ROOT_VOLUME_BYTES + INROU_CANARY_EPHEMERAL_STORAGE_BYTES;
+    /// Host CPU ceiling includes one canonical canary plus mandatory VMM overhead.
+    pub const INROU_MAX_CPU_MILLIS: u32 = INROU_CANARY_CPU_MILLIS
+        + iroha_data_model::soracloud::SORA_INROU_VMM_CPU_OVERHEAD_MILLIS_V1 as u32;
+    /// Host RAM ceiling includes one canonical canary plus mandatory VMM overhead.
+    pub const INROU_MAX_MEMORY_BYTES: u64 = INROU_CANARY_MEMORY_BYTES
+        + iroha_data_model::soracloud::SORA_INROU_VMM_MEMORY_OVERHEAD_BYTES_V1;
+    /// Full writable allowance, including the declared app-data volume.
+    pub const INROU_MAX_STORAGE_BYTES: u64 =
+        INROU_CANARY_HOST_STORAGE_BYTES + INROU_CANARY_SHARED_VOLUME_BYTES;
+    /// Normalized 1536 MiB rootfs plus pinned kernel/initrd fit within 1600 MiB.
+    /// Exact prepared material is still checked by staging and runtime admission.
+    pub const INROU_GUEST_IMAGE_MAX_BYTES: u64 = 1600 * 1024 * 1024;
+    /// One bounded hydration worker per first-release validator.
+    pub const HYDRATION_CONCURRENCY: usize = 1;
+    /// One retained prepared runtime per first-release validator.
+    pub const PREPARED_RUNTIME_CACHE_CAPACITY: usize = 1;
+    /// Whole-validator CPU bound for the signed service unit, outside its Inrou worker.
+    pub const VALIDATOR_CPU_MILLIS: u64 = 1000;
+    /// Whole-validator RAM bound for the signed service unit, outside its Inrou worker.
+    pub const VALIDATOR_MEMORY_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+    /// Explicit guest-system CPU outside the four validators and their workers.
+    pub const SYSTEM_CPU_RESERVE_MILLIS: u64 = 1000;
+    /// Explicit guest-system memory outside the four validators and their workers.
+    pub const SYSTEM_MEMORY_RESERVE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+    /// Encoded WSV budget inside the whole-validator memory bound.
+    pub const NEXUS_MAX_WSV_MEMORY_BYTES: u64 = 256 * 1024 * 1024;
     /// Denominator used by the Nexus storage weight fields.
     pub const STORAGE_WEIGHT_BASIS_POINTS: u16 = 10_000;
     /// Aggregate Nexus disk budget for one validator.
-    pub const NEXUS_STORAGE_BUDGET_BYTES: u64 = 68_719_476_736;
+    pub const NEXUS_STORAGE_BUDGET_BYTES: u64 = 4 * 1024 * 1024 * 1024;
     /// Kura share of the Nexus disk budget, in basis points.
-    pub const NEXUS_KURA_BLOCKS_BPS: u16 = 6_000;
+    pub const NEXUS_KURA_BLOCKS_BPS: u16 = 2_500;
     /// WSV snapshot share of the Nexus disk budget, in basis points.
-    pub const NEXUS_WSV_SNAPSHOTS_BPS: u16 = 2_000;
+    pub const NEXUS_WSV_SNAPSHOTS_BPS: u16 = 1_250;
     /// SoraFS share of the Nexus disk budget, in basis points.
-    pub const NEXUS_SORAFS_BPS: u16 = 2_000;
+    pub const NEXUS_SORAFS_BPS: u16 = 6_250;
     /// Effective SoraFS component cap derived from the aggregate budget.
     pub const SORAFS_STORAGE_CAP_BYTES: u64 =
         NEXUS_STORAGE_BUDGET_BYTES * NEXUS_SORAFS_BPS as u64 / STORAGE_WEIGHT_BASIS_POINTS as u64;
@@ -113,9 +152,73 @@ pub mod taira {
     /// Inrou egress byte budget per minute.
     pub const INROU_EGRESS_MAX_BYTES_PER_MINUTE: u64 = 100 * 1024 * 1024;
 
+    #[cfg(test)]
+    mod compact_tests {
+        use super::*;
+        #[test]
+        fn four_validators_and_required_workloads_fit_nine_cpus_and_sixteen_gib() {
+            assert_eq!(
+                4 * (VALIDATOR_CPU_MILLIS + u64::from(INROU_MAX_CPU_MILLIS))
+                    + SYSTEM_CPU_RESERVE_MILLIS,
+                9_000
+            );
+            let memory =
+                4 * (VALIDATOR_MEMORY_BYTES + INROU_MAX_MEMORY_BYTES) + SYSTEM_MEMORY_RESERVE_BYTES;
+            assert_eq!(memory, 13 * 1024 * 1024 * 1024);
+            assert!(memory < 16 * 1024 * 1024 * 1024);
+            assert!(NEXUS_MAX_WSV_MEMORY_BYTES < VALIDATOR_MEMORY_BYTES);
+        }
+        #[test]
+        fn nexus_storage_contains_the_complete_admitted_preseed() {
+            let mib = 1024 * 1024;
+            assert_eq!(NEXUS_STORAGE_BUDGET_BYTES, 4096 * mib);
+            for (weight, expected_mib) in [
+                (NEXUS_KURA_BLOCKS_BPS, 1024),
+                (NEXUS_WSV_SNAPSHOTS_BPS, 512),
+                (NEXUS_SORAFS_BPS, 2560),
+            ] {
+                assert_eq!(
+                    NEXUS_STORAGE_BUDGET_BYTES * u64::from(weight)
+                        / u64::from(STORAGE_WEIGHT_BASIS_POINTS),
+                    expected_mib * mib
+                );
+            }
+            let payload_ceiling = INROU_GUEST_IMAGE_MAX_BYTES
+                + super::super::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_COMPRESSED_BYTES_LIMIT;
+            assert_eq!(SORAFS_STORAGE_CAP_BYTES - payload_ceiling, 448 * mib);
+        }
+        #[test]
+        fn normalized_debian_geometry_and_complete_canary_storage_fit_the_profile() {
+            let upstream_root = 3_085_959_168_u64;
+            let root = 1536 * 1024 * 1024;
+            let kernel = 27_236_288_u64;
+            let initrd = 13_923_072_u64;
+            assert!(upstream_root > INROU_CANARY_ROOT_VOLUME_BYTES);
+            assert_eq!(root, INROU_CANARY_ROOT_VOLUME_BYTES);
+            assert_eq!(INROU_GUEST_IMAGE_MAX_BYTES, 1600 * 1024 * 1024);
+            assert!(root + kernel + initrd <= INROU_GUEST_IMAGE_MAX_BYTES);
+            assert_eq!(
+                INROU_MAX_STORAGE_BYTES,
+                INROU_CANARY_ROOT_VOLUME_BYTES
+                    + INROU_CANARY_EPHEMERAL_STORAGE_BYTES
+                    + INROU_CANARY_SHARED_VOLUME_BYTES
+            );
+            assert_eq!(INROU_MAX_CPU_MILLIS, 1000);
+            assert_eq!(INROU_MAX_MEMORY_BYTES, 768 * 1024 * 1024);
+        }
+    }
+
     const _: () = assert!(
         NEXUS_KURA_BLOCKS_BPS + NEXUS_WSV_SNAPSHOTS_BPS + NEXUS_SORAFS_BPS
             == STORAGE_WEIGHT_BASIS_POINTS
+    );
+    // Preseed stores the admitted guest and bundle together. Keep at least 64 MiB
+    // beyond both payload ceilings for discovery, manifests and storage metadata.
+    const _: () = assert!(
+        SORAFS_STORAGE_CAP_BYTES
+            >= INROU_GUEST_IMAGE_MAX_BYTES
+                + super::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_COMPRESSED_BYTES_LIMIT
+                + 64 * 1024 * 1024
     );
 }
 /// IVM- and banner-related defaults.
@@ -969,6 +1072,8 @@ pub mod network {
     pub const MAX_FRAME_BYTES_PEER_GOSSIP: NonZeroUsize = nonzero!(65_536_usize); // 64 KiB
     /// Maximum frame size for health-check channel messages.
     pub const MAX_FRAME_BYTES_HEALTH: NonZeroUsize = nonzero!(32_768_usize); // 32 KiB
+    /// Maximum Connect relay envelope, separate from health/diagnostic traffic.
+    pub const MAX_FRAME_BYTES_CONNECT: NonZeroUsize = nonzero!(131_072_usize); // 128 KiB
     /// Maximum frame size for other miscellaneous topics.
     pub const MAX_FRAME_BYTES_OTHER: NonZeroUsize = nonzero!(131_072_usize); // 128 KiB
     // TCP options
@@ -998,9 +1103,11 @@ pub mod snapshot {
     /// JSON restoration uses additional transient memory; operators should size this below
     /// available restore headroom for their representative world state.
     pub const MAX_PAYLOAD_BYTES: NonZeroUsize = nonzero!(1_073_741_824_usize);
-    /// Maximum snapshot nesting depth, bounded by Norito's structural decoder ceiling.
-    pub const MAX_DECODE_DEPTH: NonZeroUsize =
-        nonzero!(::norito::json::MAX_JSON_VALUE_NESTING_DEPTH);
+    /// Maximum typed-decoder nesting depth for one snapshot payload.
+    ///
+    /// Keep the default tied to the codec's structural ceiling so a default
+    /// configuration can never advertise a depth that Norito rejects.
+    pub const MAX_DECODE_DEPTH: NonZeroUsize = nonzero!(::norito::core::MAX_VALUE_NESTING_DEPTH);
     /// Maximum aggregate collection items decoded from one snapshot payload.
     pub const MAX_DECODE_ITEMS: NonZeroUsize = nonzero!(10_000_000_usize);
     /// Maximum UTF-8 bytes accepted for any individual snapshot string.

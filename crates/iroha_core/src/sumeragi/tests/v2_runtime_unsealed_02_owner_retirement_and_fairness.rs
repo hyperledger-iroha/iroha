@@ -100,10 +100,11 @@ fn future_view_proposal_remains_owned_until_matching_tc_enters_view() {
     let semantic_origin = context.roster[usize::try_from(proposer).expect("small proposer index")]
         .validator
         .clone();
-    let (_ingress_directory, ingress, mut ownerships) = preowned_leader_wire_ownerships(
-        &context,
+    let (_ingress_directory, ingress, mut ownerships) = preowned_runtime_wal_ownerships(
+        &runtime,
+        &directory,
         &[(proposal_message.clone(), semantic_origin.clone())],
-        runtime.ingress.lifecycle_ordinals.clone(),
+        false,
     );
     let proposal_ownership = ownerships
         .pop()
@@ -120,17 +121,11 @@ fn future_view_proposal_remains_owned_until_matching_tc_enters_view() {
         .arm_live_clocks(now)
         .expect("arm future-view runtime");
 
-    assert!(matches!(
-        runtime.step(now),
-        Ok(RuntimeStep::Advanced(ref effects)) if effects.is_empty()
-    ));
+    assert!(matches!(runtime.step(now), Ok(RuntimeStep::Idle)));
     let retained = runtime
         .take_last_scheduler_ownership()
         .expect("future-view retry retains scheduler ownership");
-    assert_eq!(
-        retained.selected,
-        RuntimeSelectedOwnerKind::FifoRetryRetained
-    );
+    assert_eq!(retained.selected, RuntimeSelectedOwnerKind::Idle);
     assert_eq!(retained.validate_exact(), Ok(()));
     assert_eq!(runtime.take_effect_ownership(0), Ok(Vec::new()));
     assert_eq!(runtime.queued_commands(), 1);
@@ -170,6 +165,14 @@ fn future_view_proposal_remains_owned_until_matching_tc_enters_view() {
         .take_effect_ownership(enter_view_effects.len())
         .expect("consume matching TC effect ownership");
     assert_eq!(runtime.round_tag().view(), proposal_round.view);
+    let entered_authority = runtime
+        .driver
+        .leader_wire_recovery_authority()
+        .expect("actual post-TC WAL consumer");
+    ingress
+        .advance_leader_wire_recovery_cut(entered_authority)
+        .expect("publish actual entered view while retaining the existing physical owner");
+
     assert_eq!(runtime.queued_commands(), 1);
 
     let retried = runtime
@@ -203,6 +206,55 @@ fn future_view_proposal_remains_owned_until_matching_tc_enters_view() {
     ingress
         .mark_leader_wire_volatile_terminal(retired)
         .expect("publish the consumed proposal's volatile terminal");
+    // The physical owner was transferred before the TC. Its terminal still
+    // names that old consumer, so the actual entered-view WAL cut reopens the
+    // carrierless token once. A fresh carrier must bind the current consumer.
+    assert!(matches!(
+        ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+            BlockMessage::V2(proposal_message.clone()),
+            semantic_origin.clone(),
+        )),
+        Ok(super::super::FairV2IngressPushDisposition::Enqueued)
+    ));
+    let mut retry = ingress
+        .try_recv()
+        .expect("dequeue exact current-consumer retry");
+    let retry_ownership = retry
+        .take_ingress_ownership()
+        .expect("new physical carrier retains exact logical ownership");
+    let retry_receipt = retry_ownership
+        .leader_wire_runtime_receipt()
+        .expect("retry binds the current WAL consumer")
+        .clone();
+    assert_eq!(retry_receipt.token(), proposal_receipt.token());
+    assert_ne!(retry_receipt, proposal_receipt);
+    assert!(
+        ingress
+            .mark_leader_wire_volatile_terminal(&proposal_receipt)
+            .is_err(),
+        "the old consumer receipt cannot retire the replacement carrier"
+    );
+    runtime
+        .enqueue_network_with_ingress_ownership(proposal_message.clone(), retry_ownership)
+        .expect("enqueue exact retry under the current consumer");
+    let RuntimeStep::Advanced(retry_effects) = runtime.step(now).expect("consume exact retry")
+    else {
+        panic!("current-consumer retry unexpectedly idled")
+    };
+    assert!(
+        retry_effects.is_empty(),
+        "the existing proposal fetch is not duplicated"
+    );
+    assert_eq!(
+        runtime
+            .take_last_scheduler_ownership()
+            .expect("exact retry scheduler")
+            .validate_exact(),
+        Ok(())
+    );
+    assert_eq!(runtime.take_effect_ownership(0), Ok(Vec::new()));
+    publish_selected_runtime_wire_terminals(&mut runtime, &ingress, &retry_receipt);
+    assert_eq!(runtime.queued_commands(), 0);
     assert!(matches!(
         ingress.try_push(InboundBlockMessage::from_authenticated_peer(
             BlockMessage::V2(proposal_message),
@@ -230,10 +282,11 @@ fn ordinary_step_skips_only_blocked_prepare_qcs_to_install_matching_tc() {
         wire::ConsensusMessageV2Payload::QuorumCertificate(certificate.clone()),
     );
     let semantic_origin = context.roster[0].validator.clone();
-    let (_ingress_directory, ingress, mut ownerships) = preowned_leader_wire_ownerships(
-        &context,
+    let (_ingress_directory, ingress, mut ownerships) = preowned_runtime_wal_ownerships(
+        &runtime,
+        &directory,
         &[(certificate_message.clone(), semantic_origin.clone())],
-        runtime.ingress.lifecycle_ordinals.clone(),
+        false,
     );
     let certificate_ownership = ownerships
         .pop()
@@ -245,22 +298,63 @@ fn ordinary_step_skips_only_blocked_prepare_qcs_to_install_matching_tc() {
     runtime
         .enqueue_network_with_ingress_ownership(certificate_message.clone(), certificate_ownership)
         .expect("enqueue authenticated future PrepareQC");
+    let blocked_future =
+        wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::QuorumCertificate(
+            signed_runtime_quorum_certificate_for_phase_at_view(
+                &context,
+                &keys,
+                0xC9,
+                wire::GlobalPhase::Prepare,
+                2,
+            ),
+        ));
+    runtime
+        .driver
+        .authenticate(blocked_future.clone())
+        .expect("the competing future certificate has actual quorum signatures");
+    let gate = Arc::clone(
+        ingress
+            .state
+            .lock()
+            .leader_wire_lifecycle_gate
+            .as_ref()
+            .expect("actual WAL-owned bounded gate"),
+    );
+    let before = gate.restore().expect("read retained exact slot");
+    let blocked_admission = ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+        BlockMessage::V2(blocked_future),
+        semantic_origin.clone(),
+    ));
+    assert!(
+        matches!(
+            &blocked_admission,
+            Err(super::super::FairV2IngressPushError::Full(_))
+        ),
+        "a future certificate cannot replace its physically owned same-source slot: {blocked_admission:?}"
+    );
+    assert_eq!(ingress.len(), 0);
+    let after = gate
+        .restore()
+        .expect("read unchanged bounded slot after backpressure");
+    assert_eq!(after.records().len(), before.records().len());
+    assert_eq!(
+        after.last_admission_ordinal(),
+        before.last_admission_ordinal()
+    );
+    assert_eq!(
+        after.scheduler_ordinal_high_watermark(),
+        before.scheduler_ordinal_high_watermark()
+    );
     let now = Instant::now();
     runtime
         .arm_live_clocks(now)
         .expect("arm future-PrepareQC runtime");
 
-    assert!(matches!(
-        runtime.step(now),
-        Ok(RuntimeStep::Advanced(ref effects)) if effects.is_empty()
-    ));
+    assert!(matches!(runtime.step(now), Ok(RuntimeStep::Idle)));
     let retained = runtime
         .take_last_scheduler_ownership()
         .expect("future PrepareQC retry retains scheduler ownership");
-    assert_eq!(
-        retained.selected,
-        RuntimeSelectedOwnerKind::FifoRetryRetained
-    );
+    assert_eq!(retained.selected, RuntimeSelectedOwnerKind::Idle);
     assert_eq!(retained.validate_exact(), Ok(()));
     assert_eq!(runtime.take_effect_ownership(0), Ok(Vec::new()));
     assert_eq!(runtime.queued_commands(), 1);
@@ -314,14 +408,7 @@ fn ordinary_step_skips_only_blocked_prepare_qcs_to_install_matching_tc() {
     let tc_scheduler = runtime
         .take_last_scheduler_ownership()
         .expect("matching TC retains scheduler ownership");
-    assert_eq!(
-        tc_scheduler.selected,
-        RuntimeSelectedOwnerKind::PacemakerProgress
-    );
-    assert!(
-        tc_scheduler.view_blocked_progress_authorization.is_some(),
-        "ordinary TC bypass must retain its exact blocked-PrepareQC authorization"
-    );
+    assert_eq!(tc_scheduler.selected, RuntimeSelectedOwnerKind::Fifo);
     assert!(tc_scheduler.fifo_owed_before);
     assert!(!tc_scheduler.fifo_owed_after);
     assert!(!runtime.schedule.fifo_owed);
@@ -339,27 +426,36 @@ fn ordinary_step_skips_only_blocked_prepare_qcs_to_install_matching_tc() {
     };
     assert_eq!(
         tc_candidate.selection_seal.kind,
-        RuntimeQueueSelectionKind::OrdinaryViewProgress
+        RuntimeQueueSelectionKind::Ordinary
     );
     assert_eq!(tc_scheduler.validate_exact(), Ok(()));
-    let mut forged_target = tc_scheduler.clone();
-    let selected_view = forged_target.round_tag.view();
-    let authorization = forged_target
-        .view_blocked_progress_authorization
-        .as_mut()
-        .expect("matching TC evidence carries a blocked-PrepareQC authorization");
-    authorization.target_view = selected_view;
-    authorization.projection_hash =
-        runtime_view_blocked_progress_authorization_projection_hash(authorization);
-    forged_target.projection_hash = runtime_scheduler_projection_hash(&forged_target);
+    let mut forged_partition = tc_scheduler.clone();
     assert!(
-        forged_target.validate_exact().is_err(),
-        "scheduler evidence must reject a target view which cannot unblock the retained QC"
+        forged_partition
+            .queue_before_snapshot
+            .consumer_pending_count
+            > 0
+    );
+    forged_partition
+        .queue_before_snapshot
+        .consumer_pending_count -= 1;
+    forged_partition.projection_hash = runtime_scheduler_projection_hash(&forged_partition);
+    assert!(
+        forged_partition.validate_exact().is_err(),
+        "ordinary selection cannot erase a physically retained pending occurrence"
     );
     runtime
         .take_effect_ownership(enter_view_effects.len())
         .expect("consume matching TC effect ownership");
     assert_eq!(runtime.round_tag().view(), certificate.round.view);
+    let entered_authority = runtime
+        .driver
+        .leader_wire_recovery_authority()
+        .expect("actual post-TC WAL consumer");
+    ingress
+        .advance_leader_wire_recovery_cut(entered_authority)
+        .expect("publish actual entered view while retaining the existing physical owner");
+
     assert_eq!(runtime.queued_commands(), 3);
 
     assert!(matches!(
@@ -448,17 +544,11 @@ fn ordinary_step_skips_future_prepare_qc_to_install_ahead_tc() {
     let now = Instant::now();
     runtime.arm_live_clocks(now).expect("arm ahead-TC runtime");
 
-    assert!(matches!(
-        runtime.step(now),
-        Ok(RuntimeStep::Advanced(ref effects)) if effects.is_empty()
-    ));
+    assert!(matches!(runtime.step(now), Ok(RuntimeStep::Idle)));
     let retained = runtime
         .take_last_scheduler_ownership()
         .expect("future PrepareQC retry retains scheduler ownership");
-    assert_eq!(
-        retained.selected,
-        RuntimeSelectedOwnerKind::FifoRetryRetained
-    );
+    assert_eq!(retained.selected, RuntimeSelectedOwnerKind::Idle);
     assert_eq!(retained.validate_exact(), Ok(()));
     assert_eq!(runtime.take_effect_ownership(0), Ok(Vec::new()));
     assert_eq!(runtime.round_tag().view(), 0);
@@ -490,17 +580,13 @@ fn ordinary_step_skips_future_prepare_qc_to_install_ahead_tc() {
     let scheduler = runtime
         .take_last_scheduler_ownership()
         .expect("ahead TC retains scheduler ownership");
-    assert_eq!(
-        scheduler.selected,
-        RuntimeSelectedOwnerKind::PacemakerProgress
-    );
-    assert!(scheduler.view_blocked_progress_authorization.is_some());
+    assert_eq!(scheduler.selected, RuntimeSelectedOwnerKind::Fifo);
     let RuntimeSelectedCandidateOwnership::Exact(candidate) = &scheduler.candidate else {
         panic!("ahead TC owns one exact authenticated candidate")
     };
     assert_eq!(
         candidate.selection_seal.kind,
-        RuntimeQueueSelectionKind::OrdinaryViewProgress
+        RuntimeQueueSelectionKind::Ordinary
     );
     assert_eq!(scheduler.validate_exact(), Ok(()));
     runtime
@@ -533,17 +619,11 @@ fn ordinary_step_skips_future_prepare_qc_for_higher_view_commit_qc() {
         .arm_live_clocks(now)
         .expect("arm higher-CommitQC runtime");
 
-    assert!(matches!(
-        runtime.step(now),
-        Ok(RuntimeStep::Advanced(ref effects)) if effects.is_empty()
-    ));
+    assert!(matches!(runtime.step(now), Ok(RuntimeStep::Idle)));
     let retained = runtime
         .take_last_scheduler_ownership()
         .expect("future PrepareQC retry retains scheduler ownership");
-    assert_eq!(
-        retained.selected,
-        RuntimeSelectedOwnerKind::FifoRetryRetained
-    );
+    assert_eq!(retained.selected, RuntimeSelectedOwnerKind::Idle);
     assert_eq!(retained.validate_exact(), Ok(()));
     assert_eq!(runtime.take_effect_ownership(0), Ok(Vec::new()));
 
@@ -578,17 +658,13 @@ fn ordinary_step_skips_future_prepare_qc_for_higher_view_commit_qc() {
     let scheduler = runtime
         .take_last_scheduler_ownership()
         .expect("terminal CommitQC retains scheduler ownership");
-    assert_eq!(
-        scheduler.selected,
-        RuntimeSelectedOwnerKind::PacemakerProgress
-    );
-    assert!(scheduler.view_blocked_progress_authorization.is_some());
+    assert_eq!(scheduler.selected, RuntimeSelectedOwnerKind::Fifo);
     let RuntimeSelectedCandidateOwnership::Exact(candidate) = &scheduler.candidate else {
         panic!("terminal CommitQC owns one exact authenticated candidate")
     };
     assert_eq!(
         candidate.selection_seal.kind,
-        RuntimeQueueSelectionKind::OrdinaryViewProgress
+        RuntimeQueueSelectionKind::Ordinary
     );
     assert_eq!(scheduler.validate_exact(), Ok(()));
     runtime
@@ -1484,13 +1560,14 @@ fn decision_commitment_mismatch_fails_closed_before_retirement() {
         HashOf::new(&manifest),
     );
     let validated = ValidatedBodyReceipt::for_test(durable.clone());
-    let conflicting_commitment = wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
-        Hash::new(b"decision mismatch parent state"),
-        Hash::new(b"decision mismatch post state"),
-        Hash::new(b"decision mismatch ordinary writes"),
-        1,
-        Hash::new(b"decision mismatch executed block"),
-    );
+    let conflicting_commitment =
+        wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+            Hash::new(b"decision mismatch parent state"),
+            Hash::new(b"decision mismatch post state"),
+            Hash::new(b"decision mismatch ordinary writes"),
+            1,
+            Hash::new(b"decision mismatch executed block"),
+        );
     assert_ne!(validated.execution_commitment(), conflicting_commitment);
     stage_completion_for_queue_test(
         &mut runtime,
@@ -1668,13 +1745,14 @@ fn unbound_direct_prepare_and_commit_votes_are_recoverable_from_durable_validati
             runtime.can_admit_network_message(&signed_vote),
             "the retained fair-ingress {phase:?} vote becomes drainable after validation"
         );
-        let conflicting_commitment = wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
-            Hash::new(b"conflicting early vote parent state"),
-            Hash::new(b"conflicting early vote post state"),
-            Hash::new(b"conflicting early vote ordinary writes"),
-            1,
-            Hash::new(b"conflicting early vote executed block"),
-        );
+        let conflicting_commitment =
+            wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+                Hash::new(b"conflicting early vote parent state"),
+                Hash::new(b"conflicting early vote post state"),
+                Hash::new(b"conflicting early vote ordinary writes"),
+                1,
+                Hash::new(b"conflicting early vote executed block"),
+            );
         assert_ne!(
             conflicting_commitment,
             validated.execution_commitment(),
@@ -2054,7 +2132,6 @@ fn retiring_the_sole_certificate_does_not_fake_completion_headroom() {
         .pop_pacemaker_progress_with_ownership(
             |_| true,
             |command| command.is_certified_fence_escape(),
-            false,
             None,
         )
         .expect("the certified priority seam remains exact")
@@ -2180,7 +2257,7 @@ fn pacemaker_retry_marks_excludes_and_reconciles_exact_fifo_occurrence() {
     .expect("admit one unblocked retryable Progress root");
     bind_fake_local_deferred_target_for_test(&mut runtime, b"pacemaker-retry-target");
     let first = runtime
-        .dispatch_one_pacemaker_progress(start, None)
+        .dispatch_one_pacemaker_progress(start)
         .expect("retryable pacemaker dispatch remains exact")
         .expect("the unmarked occurrence owns one bounded turn");
     assert!(matches!(first, RuntimeStep::Advanced(ref effects) if effects.is_empty()));
@@ -2208,7 +2285,7 @@ fn pacemaker_retry_marks_excludes_and_reconciles_exact_fifo_occurrence() {
     );
     assert!(
         runtime
-            .dispatch_one_pacemaker_progress(start, None)
+            .dispatch_one_pacemaker_progress(start)
             .expect("marked pacemaker selection remains valid")
             .is_none(),
         "the same retryable occurrence cannot spin on the next turn"
@@ -2303,51 +2380,6 @@ fn stale_certified_escape_preserves_same_fence_retry_exclusion() {
         RuntimeQueueConfig::new(6, 2, 1),
         Some(0),
     );
-    let now = Instant::now();
-    runtime
-        .arm_live_clocks(now)
-        .expect("arm runtime before installing two certified views");
-    for certificate_view in [0_u64, 1] {
-        runtime
-            .enqueue_network(wire::ConsensusMessageV2::new(
-                wire::ConsensusMessageV2Payload::TimeoutCertificate(
-                    signed_runtime_timeout_certificate_for_view(&context, &keys, certificate_view),
-                ),
-            ))
-            .expect("admit the next exact view certificate");
-        let advanced = runtime
-            .try_step_pacemaker_escape(now)
-            .expect("certified view installation remains exact")
-            .expect("the next TC owns one pacemaker turn");
-        let RuntimeStep::Advanced(effects) = advanced else {
-            panic!("certified view installation unexpectedly idled")
-        };
-        assert!(matches!(
-            effects.as_slice(),
-            [AdapterEffect::EnterView { tag, .. }]
-                if tag.view() == certificate_view + 1
-        ));
-        runtime
-            .take_last_scheduler_ownership()
-            .expect("view installation retains exact scheduler evidence");
-        runtime
-            .take_effect_ownership(effects.len())
-            .expect("consume the installed view's effect ownership");
-    }
-    let signer_tag = runtime.round_tag();
-    assert_eq!(signer_tag.view(), 2);
-    let timeout = runtime
-        .driver
-        .timeout_elapsed(signer_tag)
-        .expect("open the view-two local TimeoutVote signer");
-    assert!(matches!(
-        timeout.effects(),
-        [AdapterEffect::Sign {
-            request: SignRequest::TimeoutVote(_),
-            ..
-        }]
-    ));
-    assert!(runtime.driver.signature_fence_is_active());
     let prepare = |marker| {
         wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::QuorumCertificate(
             signed_runtime_quorum_certificate_for_phase_at_view(
@@ -2355,23 +2387,10 @@ fn stale_certified_escape_preserves_same_fence_retry_exclusion() {
                 &keys,
                 marker,
                 wire::GlobalPhase::Prepare,
-                2,
+                0,
             ),
         ))
     };
-    runtime
-        .enqueue_network(prepare(0xE7))
-        .expect("admit the deferred PrepareQC target");
-    let deferred = runtime
-        .try_step_pacemaker_escape(now)
-        .expect("PrepareQC Busy handoff remains exact")
-        .expect("the first PrepareQC owns one pacemaker turn");
-    assert!(matches!(deferred, RuntimeStep::Advanced(ref effects) if effects.is_empty()));
-    runtime
-        .take_last_scheduler_ownership()
-        .expect("Busy PrepareQC retains exact scheduler evidence");
-    assert_eq!(runtime.deferred_lifecycle_ownership.len(), 1);
-    assert!(!runtime.driver.deferred_work_is_serviceable());
     let highest_prepare = signed_runtime_quorum_certificate_for_phase_at_view(
         &context,
         &keys,
@@ -2418,20 +2437,90 @@ fn stale_certified_escape_preserves_same_fence_retry_exclusion() {
         },
     ));
     let marked_prepare = prepare(0xE8);
+    let target_prepare = prepare(0xE7);
     let marked_source = context.roster[1].validator.clone();
     let stale_source = context.roster[2].validator.clone();
     let (_leader_wire_directory, _leader_wire_ingress, ownerships) =
-        preowned_leader_wire_ownerships(
-            &context,
+        preowned_runtime_wal_ownerships(
+            &runtime,
+            &directory,
             &[
                 (marked_prepare.clone(), marked_source),
+                (target_prepare.clone(), context.roster[0].validator.clone()),
                 (stale.clone(), stale_source),
             ],
-            runtime.ingress.lifecycle_ordinals.clone(),
+            false,
         );
-    let [marked_ownership, stale_ownership]: [FairV2IngressOwnershipEvidence; 2] = ownerships
-        .try_into()
-        .expect("fixture creates one pre-cut marker and one post-cut certified owner");
+    let [marked_ownership, target_ownership, stale_ownership]: [FairV2IngressOwnershipEvidence; 3] =
+        ownerships
+            .try_into()
+            .expect("fixture creates physically ordered marker, target, and stale certified owners");
+    let now = Instant::now();
+    runtime
+        .arm_live_clocks(now)
+        .expect("arm runtime before installing two certified views");
+    for certificate_view in [0_u64, 1] {
+        runtime
+            .enqueue_network(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::TimeoutCertificate(
+                    signed_runtime_timeout_certificate_for_view(&context, &keys, certificate_view),
+                ),
+            ))
+            .expect("admit the next exact view certificate");
+        let advanced = runtime
+            .try_step_pacemaker_escape(now)
+            .expect("certified view installation remains exact")
+            .expect("the next TC owns one pacemaker turn");
+        let RuntimeStep::Advanced(effects) = advanced else {
+            panic!("certified view installation unexpectedly idled")
+        };
+        assert!(matches!(
+            effects.as_slice(),
+            [AdapterEffect::EnterView { tag, .. }]
+                if tag.view() == certificate_view + 1
+        ));
+        runtime
+            .take_last_scheduler_ownership()
+            .expect("view installation retains exact scheduler evidence");
+        runtime
+            .take_effect_ownership(effects.len())
+            .expect("consume the installed view's effect ownership");
+    }
+    _leader_wire_ingress
+        .advance_leader_wire_recovery_cut(
+            runtime
+                .driver
+                .leader_wire_recovery_authority()
+                .expect("actual installed view-two WAL frontier"),
+        )
+        .expect("publish view two without reminting the three preowned occurrences");
+    let signer_tag = runtime.round_tag();
+    assert_eq!(signer_tag.view(), 2);
+    let timeout = runtime
+        .driver
+        .timeout_elapsed(signer_tag)
+        .expect("open the view-two local TimeoutVote signer");
+    assert!(matches!(
+        timeout.effects(),
+        [AdapterEffect::Sign {
+            request: SignRequest::TimeoutVote(_),
+            ..
+        }]
+    ));
+    assert!(runtime.driver.signature_fence_is_active());
+    runtime
+        .enqueue_network_with_ingress_ownership(target_prepare, target_ownership)
+        .expect("admit the deferred PrepareQC target");
+    let deferred = runtime
+        .try_step_pacemaker_escape(now)
+        .expect("PrepareQC Busy handoff remains exact")
+        .expect("the first PrepareQC owns one pacemaker turn");
+    assert!(matches!(deferred, RuntimeStep::Advanced(ref effects) if effects.is_empty()));
+    runtime
+        .take_last_scheduler_ownership()
+        .expect("Busy PrepareQC retains exact scheduler evidence");
+    assert_eq!(runtime.deferred_lifecycle_ownership.len(), 1);
+    assert!(!runtime.driver.deferred_work_is_serviceable());
     let target_cut = runtime
         .deferred_lifecycle_ownership
         .values()
@@ -2784,4 +2873,1049 @@ fn admitted_progress_cannot_be_starved_by_older_normal_churn() {
     assert_eq!(queue.normal.max_service_debt, 0);
     assert_eq!(queue.progress.depth, 0);
     assert_eq!(queue.completion.depth, 0);
+}
+
+fn rehash_snapshot_with_changed_unselected_rank(
+    original: &RuntimeQueueOwnershipSnapshot,
+    index: usize,
+) -> RuntimeQueueOwnershipSnapshot {
+    assert!(original.validate_identity());
+    let mut changed = original.clone();
+    let previous = changed.occurrence_lifecycle_ordinals[index];
+    let replacement = if previous > 1 { previous - 1 } else { 2 };
+    assert!(replacement <= changed.occurrence_owners[index].admission_ordinal);
+    changed.occurrence_lifecycle_ordinals[index] = replacement;
+    changed.minimum_lifecycle_ordinal = changed.occurrence_lifecycle_ordinals.iter().copied().min();
+    changed.maximum_lifecycle_ordinal = changed.occurrence_lifecycle_ordinals.iter().copied().max();
+    let stats = |class| {
+        changed
+            .occurrence_owners
+            .iter()
+            .enumerate()
+            .filter(|(position, owner)| {
+                owner.class == class && !changed.consumer_waits_at(*position)
+            })
+            .fold((None, 0u64), |(minimum, count), (position, _)| {
+                let ordinal = changed.occurrence_lifecycle_ordinals[position];
+                (
+                    Some(minimum.map_or(ordinal, |value: u128| value.min(ordinal))),
+                    count + 1,
+                )
+            })
+    };
+    let completion = stats(SERVICE_CLASS_COMPLETION);
+    let progress = stats(SERVICE_CLASS_PROGRESS);
+    let normal = stats(SERVICE_CLASS_NORMAL);
+    (
+        changed.completion_minimum_lifecycle_ordinal,
+        changed.completion_count,
+    ) = completion;
+    (
+        changed.progress_minimum_lifecycle_ordinal,
+        changed.progress_count,
+    ) = progress;
+    (
+        changed.normal_minimum_lifecycle_ordinal,
+        changed.normal_count,
+    ) = normal;
+    changed.consumer_pending_count = changed.projection.len
+        - changed.completion_count
+        - changed.progress_count
+        - changed.normal_count;
+    changed.projection_hash = runtime_queue_ownership_snapshot_projection_hash(&changed);
+    assert!(
+        changed.validate_identity(),
+        "the substituted rank is individually valid"
+    );
+    assert_eq!(changed.occurrence_owners, original.occurrence_owners);
+    assert_ne!(
+        changed.occurrence_lifecycle_ordinals,
+        original.occurrence_lifecycle_ordinals
+    );
+    changed
+}
+
+fn assert_scheduler_rejects_unselected_rank_substitution(
+    evidence: &RuntimeSchedulerOwnershipEvidence,
+    unselected_after_index: usize,
+    retry_retained: bool,
+) {
+    assert_eq!(evidence.validate_exact(), Ok(()));
+    let RuntimeSelectedCandidateOwnership::Exact(candidate) = &evidence.candidate else {
+        panic!("the transition must have a real selected occurrence")
+    };
+    assert_ne!(
+        evidence.queue_after_snapshot.occurrence_owners[unselected_after_index].admission_ordinal,
+        candidate.admission_ordinal,
+        "only a retained, unselected occurrence is changed"
+    );
+    assert!(candidate.selection_seal.matches_scheduler_occurrence(
+        candidate,
+        &evidence.queue_before_snapshot,
+        &evidence.queue_after_snapshot,
+        candidate.selection_seal.kind,
+        retry_retained,
+    ));
+    let changed = rehash_snapshot_with_changed_unselected_rank(
+        &evidence.queue_after_snapshot,
+        unselected_after_index,
+    );
+    assert!(
+        !candidate.selection_seal.matches_scheduler_occurrence(
+            candidate,
+            &evidence.queue_before_snapshot,
+            &changed,
+            candidate.selection_seal.kind,
+            retry_retained,
+        ),
+        "ordinary retry/removal cannot rebase any remaining owner's logical rank"
+    );
+    let mut forged = evidence.clone();
+    forged.queue_after_snapshot = changed;
+    forged.projection_hash = runtime_scheduler_projection_hash(&forged);
+    assert!(forged.validate_exact().is_err());
+}
+
+#[test]
+fn retry_scheduler_rejects_rehashed_unselected_logical_rank_change() {
+    let start = Instant::now();
+    let owner_tag = tag(0);
+    let mut driver = FakeDriver::new(owner_tag);
+    driver.retry_once.insert(0xE2);
+    driver.signature_fence_active = true;
+    let mut runtime = runtime(driver, start, RuntimeQueueConfig::new(6, 2, 1));
+    enqueue_fake(
+        &mut runtime,
+        owner_tag,
+        CommandClass::Progress,
+        FakeCommand::record(0xE2),
+    )
+    .expect("admit the exact retryable Progress occurrence");
+    enqueue_fake(
+        &mut runtime,
+        owner_tag,
+        CommandClass::Normal,
+        FakeCommand::record(0xE3),
+    )
+    .expect("admit a separate unselected Normal occurrence");
+    bind_fake_local_deferred_target_for_test(&mut runtime, b"unselected-rank-retry-target");
+    let step = runtime
+        .dispatch_one_pacemaker_progress(start)
+        .expect("the original retry transition is exact")
+        .expect("Progress owns one bounded turn");
+    assert!(matches!(step, RuntimeStep::Advanced(ref effects) if effects.is_empty()));
+    let evidence = runtime
+        .take_last_scheduler_ownership()
+        .expect("retained retry evidence");
+    assert_eq!(
+        evidence.selected,
+        RuntimeSelectedOwnerKind::PacemakerProgressRetryRetained
+    );
+    assert_eq!(evidence.queue_after_snapshot.occurrence_owners.len(), 2);
+    assert_scheduler_rejects_unselected_rank_substitution(&evidence, 1, true);
+    assert!(!runtime.fail_closed);
+}
+
+fn exact_retained_runtime_queue_owners(
+    runtime: &SerializedV2Runtime<SumeragiV2Adapter>,
+) -> Vec<RuntimeQueueOccurrenceOwner> {
+    runtime
+        .ingress
+        .commands
+        .iter()
+        .map(|queued| {
+            let owner = queued
+                .cached_queue_occurrence_owner(&runtime.ingress.selection_source_identity)
+                .expect("real admission installs an exact physical occurrence")
+                .clone();
+            assert!(owner.validate_exact());
+            owner
+        })
+        .collect()
+}
+
+fn publish_selected_runtime_wire_terminals(
+    runtime: &mut SerializedV2Runtime<SumeragiV2Adapter>,
+    ingress: &super::super::FairV2Ingress,
+    selected: &LeaderWireLifecycleRuntimeReceipt,
+) {
+    let terminals = runtime.take_leader_wire_runtime_terminals();
+    assert_eq!(
+        terminals.len(),
+        1,
+        "one selected physical occurrence reaches its terminal"
+    );
+    for terminal in terminals {
+        match terminal {
+            LeaderWireRuntimeTerminal::Volatile(receipt) => {
+                assert_eq!(&receipt, selected);
+                ingress
+                    .mark_leader_wire_volatile_terminal(&receipt)
+                    .expect("publish only the selected volatile terminal");
+            }
+            LeaderWireRuntimeTerminal::Producer {
+                runtime: receipt,
+                terminal,
+            } => {
+                assert_eq!(&receipt, selected);
+                ingress
+                    .mark_leader_wire_producer_terminal(&receipt, terminal)
+                    .expect("publish only the selected durable producer terminal");
+            }
+        }
+    }
+}
+
+#[test]
+fn far_future_timeout_vote_retains_exact_wal_owner_without_blocking_eligible_progress() {
+    for pacemaker in [false, true] {
+        let directory = TempDir::new().expect("future TimeoutVote consumer directory");
+        let (mut runtime, context, keys) =
+            authenticated_network_runtime(&directory, RuntimeQueueConfig::new(8, 1, 1));
+        let future = signed_runtime_timeout_vote(&context, &keys, 100, 0);
+        let honest_first = signed_runtime_timeout_vote(&context, &keys, 0, 1);
+        let honest_second = signed_runtime_timeout_vote(&context, &keys, 0, 2);
+        let timeout = signed_runtime_timeout_certificate(&context, &keys);
+        let timeout_message = wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::TimeoutCertificate(timeout.clone()),
+        );
+        let commit = signed_runtime_quorum_certificate_for_phase_at_view(
+            &context,
+            &keys,
+            0xEC,
+            wire::GlobalPhase::Commit,
+            1,
+        );
+        let commit_message = wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::QuorumCertificate(commit.clone()),
+        );
+        let messages = vec![
+            (future.clone(), context.roster[0].validator.clone()),
+            (honest_first, context.roster[1].validator.clone()),
+            (honest_second, context.roster[2].validator.clone()),
+            (timeout_message, context.roster[2].validator.clone()),
+            (commit_message, context.roster[3].validator.clone()),
+        ];
+        for (message, _) in &messages {
+            runtime
+                .driver
+                .authenticate(message.clone())
+                .expect("each input has real authority");
+        }
+        let (_ingress_directory, ingress, ownerships) =
+            preowned_runtime_wal_ownerships(&runtime, &directory, &messages, false);
+        let receipts = ownerships
+            .iter()
+            .map(|ownership| {
+                ownership
+                    .leader_wire_runtime_receipt()
+                    .expect("actual WAL runtime receipt")
+                    .clone()
+            })
+            .collect::<Vec<_>>();
+        let future_physical = ownerships[0].physical_admission_ordinal().unwrap();
+        let future_cut = ownerships[0].runtime_physical_cut().unwrap();
+        let gate = Arc::clone(
+            ingress
+                .state
+                .lock()
+                .leader_wire_lifecycle_gate
+                .as_ref()
+                .expect("real safety-WAL-owned lifecycle gate"),
+        );
+        let baseline = gate
+            .restore()
+            .expect("read actual durable source inventory");
+        let future_record = baseline
+            .records()
+            .iter()
+            .find(|record| record.token() == receipts[0].token())
+            .expect("far-future vote owns a real durable record")
+            .clone();
+        let mut admissions = messages.into_iter().zip(ownerships);
+        let ((first, _), ownership) = admissions.next().unwrap();
+        runtime
+            .enqueue_network_with_ingress_ownership(first, ownership)
+            .expect("retain authenticated far-future input");
+        assert_eq!(
+            runtime.ingress.commands.front().unwrap().class,
+            CommandClass::Progress
+        );
+        let pending_owner = exact_retained_runtime_queue_owners(&runtime)[0].clone();
+        let pending_skips = runtime.ingress.commands.front().unwrap().eligible_skips;
+        let initial_cursor = runtime.ingress.next_class;
+        let initial_capacity = runtime.ingress.config.capacity;
+        let now = Instant::now();
+        runtime.arm_live_clocks(now).expect("arm actual runtime");
+        for _ in 0..3 {
+            assert!(matches!(runtime.step(now), Ok(RuntimeStep::Idle)));
+            let evidence = runtime
+                .take_last_scheduler_ownership()
+                .expect("typed idle evidence");
+            assert_eq!(evidence.selected, RuntimeSelectedOwnerKind::Idle);
+            assert_eq!(evidence.validate_exact(), Ok(()));
+            assert_eq!(runtime.take_effect_ownership(0), Ok(Vec::new()));
+            assert!(
+                runtime
+                    .try_step_pacemaker_escape(now)
+                    .expect("pending-only pacemaker probe remains valid")
+                    .is_none()
+            );
+            assert!(runtime.last_scheduler_ownership().is_none());
+            assert_eq!(
+                exact_retained_runtime_queue_owners(&runtime),
+                vec![pending_owner.clone()]
+            );
+            assert_eq!(
+                runtime.ingress.commands.front().unwrap().eligible_skips,
+                pending_skips
+            );
+            assert_eq!(runtime.ingress.next_class, initial_cursor);
+            assert!(runtime.take_leader_wire_runtime_terminals().is_empty());
+        }
+        for ((message, _), ownership) in admissions {
+            runtime
+                .enqueue_network_with_ingress_ownership(message, ownership)
+                .expect("eligible honest input receives its preowned physical position");
+        }
+        let all_owners = exact_retained_runtime_queue_owners(&runtime);
+        assert_eq!(all_owners.len(), 5);
+        assert_eq!(all_owners[0], pending_owner);
+        assert!(
+            runtime
+                .ingress
+                .commands
+                .iter()
+                .all(|queued| queued.class == CommandClass::Progress)
+        );
+        let mut malformed = future;
+        let wire::ConsensusMessageV2Payload::TimeoutVote(vote) = &mut malformed.payload else {
+            unreachable!()
+        };
+        vote.signature[0] ^= 1;
+        assert!(runtime.driver.authenticate(malformed).is_err());
+        assert_eq!(exact_retained_runtime_queue_owners(&runtime), all_owners);
+        for selected_index in 1..5 {
+            let step = if pacemaker {
+                runtime
+                    .try_step_pacemaker_escape(now)
+                    .expect("exact eligible Progress remains a pacemaker source")
+                    .expect("future vote cannot hide honest Progress")
+            } else {
+                runtime
+                    .step(now)
+                    .expect("ordinary FIFO services the earliest eligible Progress")
+            };
+            let RuntimeStep::Advanced(effects) = step else {
+                panic!("honest Progress unexpectedly idled")
+            };
+            let evidence = runtime
+                .take_last_scheduler_ownership()
+                .expect("exact selected scheduler owner");
+            assert_eq!(
+                evidence.selected,
+                if pacemaker {
+                    RuntimeSelectedOwnerKind::PacemakerProgress
+                } else {
+                    RuntimeSelectedOwnerKind::Fifo
+                }
+            );
+            assert_eq!(evidence.validate_exact(), Ok(()));
+            let RuntimeSelectedCandidateOwnership::Exact(candidate) = &evidence.candidate else {
+                panic!("honest Progress must consume an exact FIFO occurrence")
+            };
+            assert_eq!(
+                candidate.admission_ordinal,
+                all_owners[selected_index].admission_ordinal
+            );
+            assert_eq!(
+                candidate.selection_seal.selected_position, 1,
+                "the retained future owner stays at physical position zero"
+            );
+            if selected_index == 1 {
+                assert_scheduler_rejects_unselected_rank_substitution(&evidence, 1, false);
+            }
+            match selected_index {
+                1 | 2 => assert!(
+                    effects.is_empty(),
+                    "individual honest votes are processed before the TC"
+                ),
+                3 => assert!(effects.iter().any(|effect| matches!(effect,
+                    AdapterEffect::EnterView { tag, certificate, .. }
+                        if tag.view() == 1 && certificate == &timeout))),
+                4 => assert!(effects.iter().any(|effect| matches!(effect,
+                    AdapterEffect::FetchBody { certificate: Some(certificate), .. }
+                        if certificate == &commit))),
+                _ => unreachable!(),
+            }
+            runtime
+                .take_effect_ownership(effects.len())
+                .expect("transfer actual selected effects");
+            publish_selected_runtime_wire_terminals(
+                &mut runtime,
+                &ingress,
+                &receipts[selected_index],
+            );
+            ingress
+                .advance_leader_wire_recovery_cut(
+                    runtime
+                        .driver
+                        .leader_wire_recovery_authority()
+                        .expect("actual post-consumption WAL authority"),
+                )
+                .expect("refresh the actual consumer without reminting retained ingress");
+            let remaining = exact_retained_runtime_queue_owners(&runtime);
+            let expected = std::iter::once(pending_owner.clone())
+                .chain(all_owners.iter().skip(selected_index + 1).cloned())
+                .collect::<Vec<_>>();
+            assert_eq!(remaining, expected);
+            assert_eq!(
+                runtime.ingress.commands.front().unwrap().eligible_skips,
+                pending_skips
+            );
+            assert_eq!(runtime.ingress.config.capacity, initial_capacity);
+            assert_eq!(
+                runtime
+                    .leader_wire_runtime_receipts
+                    .get(&receipts[0].owner().admission_ordinal()),
+                Some(&receipts[0])
+            );
+            assert_eq!(receipts[0].token().admission_ordinal(), future_physical);
+            assert!(u128::from(future_physical) < future_cut);
+            let durable = gate
+                .restore()
+                .expect("read durable owner after honest progress");
+            // EnterView retires the two consumed old-view votes and TC.
+            // Decision then retires its own carrierless CommitQC. The future
+            // Runtime owner and every not-yet-serviced owner remain exact.
+            let retained_indices: &[usize] = match selected_index {
+                1 | 2 => &[0, 1, 2, 3, 4],
+                3 => &[0, 4],
+                4 => &[0],
+                _ => unreachable!(),
+            };
+            assert_eq!(durable.records().len(), retained_indices.len());
+            for (index, receipt) in receipts.iter().enumerate() {
+                assert_eq!(
+                    durable
+                        .records()
+                        .iter()
+                        .any(|record| record.token() == receipt.token()),
+                    retained_indices.contains(&index),
+                    "only permanently retired carrierless records leave at step {selected_index}"
+                );
+            }
+            assert_eq!(
+                durable.last_admission_ordinal(),
+                baseline.last_admission_ordinal()
+            );
+            assert_eq!(
+                durable.scheduler_ordinal_high_watermark(),
+                baseline.scheduler_ordinal_high_watermark()
+            );
+            assert_eq!(
+                durable
+                    .records()
+                    .iter()
+                    .find(|record| record.token() == receipts[0].token()),
+                Some(&future_record)
+            );
+            assert!(!runtime.fail_closed);
+        }
+        assert_eq!(runtime.round_tag().view(), 1);
+        assert_eq!(runtime.queued_commands(), 1);
+    }
+}
+
+#[test]
+fn future_proposal_keeps_exact_normal_owner_while_current_proposal_fetches_body() {
+    let directory = TempDir::new().expect("future Normal consumer directory");
+    let (expected_context, _) = authenticated_runtime_context();
+    let (mut runtime, context, keys) = authenticated_network_runtime_with_local_validator(
+        &directory,
+        RuntimeQueueConfig::new(8, 1, 1),
+        Some(expected_context.leader(0)),
+    );
+    let round = wire::ConsensusRound {
+        context_id: context.id(),
+        height: context.height,
+        view: 1,
+    };
+    let subject = wire::BlockSubject {
+        parent_block_hash: None,
+        block_hash: HashOf::from_untyped_unchecked(Hash::new(b"retained future Normal subject")),
+        payload_hash: Hash::new(b"retained future Normal body"),
+    };
+    let proposer = context.leader(round.view);
+    let mut future = wire::Proposal {
+        round,
+        proposer,
+        subject,
+        manifest: encode_payload(&context, round, subject, b"retained future Normal body")
+            .expect("real future proposal payload manifest")
+            .manifest()
+            .clone(),
+        justification: wire::ProposalJustification::Timeout(wire::TimeoutJustification {
+            timeout_certificate: signed_runtime_timeout_certificate(&context, &keys),
+            highest_prepare_qc: None,
+        }),
+        signature: Vec::new(),
+    };
+    future.signature = Signature::new(
+        keys[usize::try_from(proposer).unwrap()].private_key(),
+        &future.signature_preimage(),
+    )
+    .payload()
+    .to_vec();
+    let future = wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Proposal(future));
+    let current = signed_runtime_proposal(&context, &keys, 0xED);
+    let wire::ConsensusMessageV2Payload::Proposal(current_proposal) = &current.payload else {
+        unreachable!()
+    };
+    let current_manifest = current_proposal.manifest.clone();
+    assert_ne!(
+        proposer, current_proposal.proposer,
+        "independent actual leader source slots"
+    );
+    runtime
+        .driver
+        .authenticate(future.clone())
+        .expect("future proposal has actual signature and TC");
+    runtime
+        .driver
+        .authenticate(current.clone())
+        .expect("current proposal has actual authority");
+    let (_ingress_directory, ingress, ownerships) = preowned_runtime_wal_ownerships(
+        &runtime,
+        &directory,
+        &[
+            (
+                future.clone(),
+                context.roster[usize::try_from(proposer).unwrap()]
+                    .validator
+                    .clone(),
+            ),
+            (
+                current.clone(),
+                context.roster[usize::try_from(current_proposal.proposer).unwrap()]
+                    .validator
+                    .clone(),
+            ),
+        ],
+        false,
+    );
+    let [future_owner, current_owner]: [FairV2IngressOwnershipEvidence; 2] = ownerships
+        .try_into()
+        .expect("two independently authenticated physical owners");
+    let future_receipt = future_owner.leader_wire_runtime_receipt().unwrap().clone();
+    let current_receipt = current_owner.leader_wire_runtime_receipt().unwrap().clone();
+    let future_physical = future_owner.physical_admission_ordinal().unwrap();
+    let future_cut = future_owner.runtime_physical_cut().unwrap();
+    let gate = Arc::clone(
+        ingress
+            .state
+            .lock()
+            .leader_wire_lifecycle_gate
+            .as_ref()
+            .unwrap(),
+    );
+    let baseline = gate.restore().expect("actual two-source WAL inventory");
+    let future_record = baseline
+        .records()
+        .iter()
+        .find(|record| record.token() == future_receipt.token())
+        .unwrap()
+        .clone();
+    runtime
+        .enqueue_network_with_ingress_ownership(future, future_owner)
+        .expect("retain future Normal owner");
+    runtime
+        .enqueue_network_with_ingress_ownership(current, current_owner)
+        .expect("enqueue current Normal owner");
+    assert!(
+        runtime
+            .ingress
+            .commands
+            .iter()
+            .all(|queued| queued.class == CommandClass::Normal)
+    );
+    let owners_before = exact_retained_runtime_queue_owners(&runtime);
+    let initial_capacity = runtime.ingress.config.capacity;
+    let future_skips = runtime.ingress.commands.front().unwrap().eligible_skips;
+    let now = Instant::now();
+    runtime
+        .arm_live_clocks(now)
+        .expect("arm exact normal runtime");
+    let RuntimeStep::Advanced(effects) = runtime
+        .step(now)
+        .expect("current proposal is eligible Normal work")
+    else {
+        panic!("future proposal blocked its current-view dependency")
+    };
+    assert!(
+        matches!(effects.as_slice(), [AdapterEffect::FetchBody { manifest: Some(manifest), .. }]
+        if manifest == &current_manifest)
+    );
+    let evidence = runtime
+        .take_last_scheduler_ownership()
+        .expect("current proposal keeps exact scheduler evidence");
+    assert_eq!(evidence.selected, RuntimeSelectedOwnerKind::Fifo);
+    assert_eq!(evidence.validate_exact(), Ok(()));
+    let RuntimeSelectedCandidateOwnership::Exact(candidate) = &evidence.candidate else {
+        panic!("exact Normal selection")
+    };
+    assert_eq!(
+        candidate.admission_ordinal,
+        owners_before[1].admission_ordinal
+    );
+    assert_eq!(candidate.selection_seal.selected_position, 1);
+    runtime
+        .take_effect_ownership(effects.len())
+        .expect("transfer current body-fetch effect");
+    publish_selected_runtime_wire_terminals(&mut runtime, &ingress, &current_receipt);
+    assert_eq!(
+        exact_retained_runtime_queue_owners(&runtime),
+        vec![owners_before[0].clone()]
+    );
+    assert_eq!(
+        runtime.ingress.commands.front().unwrap().eligible_skips,
+        future_skips
+    );
+    assert_eq!(runtime.ingress.config.capacity, initial_capacity);
+    assert_eq!(
+        runtime
+            .leader_wire_runtime_receipts
+            .get(&future_receipt.owner().admission_ordinal()),
+        Some(&future_receipt)
+    );
+    assert_eq!(future_receipt.token().admission_ordinal(), future_physical);
+    assert!(u128::from(future_physical) < future_cut);
+    let after = gate
+        .restore()
+        .expect("durable future owner survives actual current proposal progress");
+    assert_eq!(after.records().len(), baseline.records().len());
+    assert_eq!(
+        after.last_admission_ordinal(),
+        baseline.last_admission_ordinal()
+    );
+    assert_eq!(
+        after.scheduler_ordinal_high_watermark(),
+        baseline.scheduler_ordinal_high_watermark()
+    );
+    assert_eq!(
+        after
+            .records()
+            .iter()
+            .find(|record| record.token() == future_receipt.token()),
+        Some(&future_record)
+    );
+    assert_eq!(runtime.round_tag().view(), 0);
+    assert!(!runtime.fail_closed);
+}
+
+#[test]
+fn future_timeout_owner_cannot_suppress_periodic_retry_or_bypass_timeout_signer() {
+    let directory = TempDir::new().expect("periodic pending-consumer directory");
+    let (mut runtime, context, keys) = authenticated_network_runtime_with_local_validator(
+        &directory,
+        RuntimeQueueConfig::new(8, 2, 2),
+        Some(0),
+    );
+    let future = signed_runtime_timeout_vote(&context, &keys, 100, 1);
+    runtime
+        .driver
+        .authenticate(future.clone())
+        .expect("future vote carries an actual validator signature");
+    let (_ingress_directory, ingress, ownerships) = preowned_runtime_wal_ownerships(
+        &runtime,
+        &directory,
+        &[(future.clone(), context.roster[1].validator.clone())],
+        false,
+    );
+    let [ownership]: [FairV2IngressOwnershipEvidence; 1] = ownerships
+        .try_into()
+        .expect("one actual WAL-backed physical occurrence");
+    let receipt = ownership
+        .leader_wire_runtime_receipt()
+        .expect("actual WAL runtime receipt")
+        .clone();
+    let gate = Arc::clone(
+        ingress
+            .state
+            .lock()
+            .leader_wire_lifecycle_gate
+            .as_ref()
+            .expect("real safety-WAL-owned lifecycle gate"),
+    );
+    let baseline = gate.restore().expect("actual durable source inventory");
+    let retained_record = baseline
+        .records()
+        .iter()
+        .find(|record| record.token() == receipt.token())
+        .expect("future vote owns an authenticated durable record")
+        .clone();
+    runtime
+        .enqueue_network_with_ingress_ownership(future, ownership)
+        .expect("retain the future physical occurrence before timer admission");
+    let retained_owners = exact_retained_runtime_queue_owners(&runtime);
+    let retained_rank = runtime.ingress.commands[0].lifecycle_ordinal;
+    let retained_debt = runtime.ingress.commands[0].eligible_skips;
+    let capacity = runtime.ingress.config.capacity;
+    let cursor = runtime.ingress.next_class;
+    let start = Instant::now();
+    runtime.arm_live_clocks(start).expect("arm actual runtime");
+
+    // This Progress owner precedes even the first frozen periodic cut. Its
+    // current consumer is unavailable, so it must remain passive without
+    // converting the due timer into an idle turn.
+    let first_periodic_at = start + runtime.retransmit_interval();
+    let RuntimeStep::Advanced(first_effects) = runtime
+        .step(first_periodic_at)
+        .expect("passive future ingress cannot suppress the first periodic turn")
+    else {
+        panic!("future TimeoutVote suppressed a due periodic owner")
+    };
+    assert!(first_effects.is_empty());
+    let first_periodic = runtime
+        .take_last_scheduler_ownership()
+        .expect("periodic turn retains exact scheduler ownership");
+    assert_eq!(
+        first_periodic.selected,
+        RuntimeSelectedOwnerKind::PeriodicTimer
+    );
+    assert_eq!(
+        first_periodic.queue_before_snapshot.consumer_pending_count,
+        1
+    );
+    assert_eq!(first_periodic.validate_exact(), Ok(()));
+    runtime
+        .take_effect_ownership(first_effects.len())
+        .expect("consume periodic ownership without retiring future input");
+    assert_eq!(
+        exact_retained_runtime_queue_owners(&runtime),
+        retained_owners
+    );
+    assert_eq!(runtime.ingress.next_class, cursor);
+
+    let deadline = start + runtime.round_timeout();
+    let RuntimeStep::Advanced(timeout_effects) = runtime
+        .step(deadline)
+        .expect("absolute timeout still creates its real durable signing intent")
+    else {
+        panic!("absolute timeout unexpectedly idled")
+    };
+    let timeout_scheduler = runtime
+        .take_last_scheduler_ownership()
+        .expect("timeout retains exact scheduler ownership");
+    assert_eq!(
+        timeout_scheduler.selected,
+        RuntimeSelectedOwnerKind::Timeout
+    );
+    assert_eq!(timeout_scheduler.validate_exact(), Ok(()));
+    let timeout_ownership = runtime
+        .take_effect_ownership(timeout_effects.len())
+        .expect("retain the exact timeout signer capability");
+    let (signature_tag, signature_preimage) = match timeout_effects.as_slice() {
+        [
+            AdapterEffect::Sign {
+                tag,
+                request: SignRequest::TimeoutVote(vote),
+            },
+        ] => (*tag, vote.signature_preimage()),
+        effects => panic!("unexpected timeout effects: {effects:?}"),
+    };
+    assert_eq!(timeout_ownership.len(), 1);
+    runtime
+        .set_external_lifecycle_owners(vec![timeout_ownership[0].owner().clone()])
+        .expect("publish the actual pending timeout signer owner");
+    assert!(runtime.driver.signature_fence_is_active());
+
+    // The eligibility exception applies only to retained authenticated
+    // ingress. The younger retry must still wait for the exact local signer.
+    let retry_at = deadline + runtime.retransmit_interval();
+    for _ in 0..2 {
+        assert!(matches!(runtime.step(retry_at), Ok(RuntimeStep::Idle)));
+        let pending = runtime
+            .take_last_scheduler_ownership()
+            .expect("pending signer retains exact idle evidence");
+        assert_eq!(pending.selected, RuntimeSelectedOwnerKind::Idle);
+        assert_eq!(pending.validate_exact(), Ok(()));
+        runtime
+            .take_effect_ownership(0)
+            .expect("idle effect ownership");
+        assert!(runtime.retransmit_owner.is_some());
+        assert!(runtime.driver.signature_fence_is_active());
+        assert_eq!(
+            exact_retained_runtime_queue_owners(&runtime),
+            retained_owners
+        );
+        assert!(runtime.take_leader_wire_runtime_terminals().is_empty());
+    }
+    let frozen_retry = runtime.retransmit_owner.clone();
+    let frozen_cut = runtime.retransmit_owner_physical_cut;
+    let signature = Signature::new(keys[0].private_key(), &signature_preimage)
+        .payload()
+        .to_vec();
+    runtime
+        .enqueue_signature_with_owner(signature_tag, signature, &timeout_ownership[0])
+        .expect("enqueue the matching signature under its exact physical owner");
+    runtime
+        .set_external_lifecycle_owners(Vec::new())
+        .expect("retire signer only after its completion is queued");
+    let RuntimeStep::Advanced(completion_effects) = runtime
+        .step(retry_at)
+        .expect("the exact older signature completion precedes periodic retry")
+    else {
+        panic!("actual signature completion unexpectedly idled")
+    };
+    let completion_scheduler = runtime
+        .take_last_scheduler_ownership()
+        .expect("signature completion owns an exact FIFO turn");
+    assert_eq!(
+        completion_scheduler.selected,
+        RuntimeSelectedOwnerKind::Fifo
+    );
+    assert_eq!(completion_scheduler.validate_exact(), Ok(()));
+    let initial_broadcast = match completion_effects.as_slice() {
+        [AdapterEffect::Broadcast(message)]
+            if matches!(&message.payload, wire::ConsensusMessageV2Payload::TimeoutVote(vote)
+                if vote.round.view == 0 && vote.signer == 0) =>
+        {
+            message.clone()
+        }
+        effects => panic!("unexpected signed timeout effects: {effects:?}"),
+    };
+    runtime
+        .take_effect_ownership(completion_effects.len())
+        .expect("transfer the actual signed TimeoutVote broadcast");
+    assert!(!runtime.driver.signature_fence_is_active());
+    assert_eq!(runtime.retransmit_owner, frozen_retry);
+    assert_eq!(runtime.retransmit_owner_physical_cut, frozen_cut);
+
+    // Treat the first broadcast as lost. The same already-frozen retry now
+    // emits the exact durable vote while the future ingress owner stays put.
+    let RuntimeStep::Advanced(retry_effects) = runtime
+        .step(retry_at)
+        .expect("retained future vote cannot suppress durable TimeoutVote retry")
+    else {
+        panic!("future TimeoutVote suppressed the post-signature retransmission")
+    };
+    let retry_scheduler = runtime
+        .take_last_scheduler_ownership()
+        .expect("retry owns its exact periodic scheduler turn");
+    assert_eq!(
+        retry_scheduler.selected,
+        RuntimeSelectedOwnerKind::PeriodicTimer
+    );
+    assert_eq!(retry_scheduler.validate_exact(), Ok(()));
+    assert!(
+        matches!(retry_effects.as_slice(), [AdapterEffect::Broadcast(message)]
+        if message == &initial_broadcast)
+    );
+    runtime
+        .take_effect_ownership(retry_effects.len())
+        .expect("transfer the repeated durable TimeoutVote");
+    assert_eq!(
+        exact_retained_runtime_queue_owners(&runtime),
+        retained_owners
+    );
+    assert_eq!(runtime.ingress.commands[0].lifecycle_ordinal, retained_rank);
+    assert_eq!(runtime.ingress.commands[0].eligible_skips, retained_debt);
+    assert_eq!(runtime.ingress.config.capacity, capacity);
+    assert_eq!(
+        runtime
+            .leader_wire_runtime_receipts
+            .get(&receipt.owner().admission_ordinal()),
+        Some(&receipt)
+    );
+    assert!(runtime.take_leader_wire_runtime_terminals().is_empty());
+    let durable = gate
+        .restore()
+        .expect("read retained physical owner after retry");
+    assert_eq!(durable.records().len(), baseline.records().len());
+    assert_eq!(
+        durable.last_admission_ordinal(),
+        baseline.last_admission_ordinal()
+    );
+    assert_eq!(
+        durable.scheduler_ordinal_high_watermark(),
+        baseline.scheduler_ordinal_high_watermark()
+    );
+    assert_eq!(
+        durable
+            .records()
+            .iter()
+            .find(|record| record.token() == receipt.token()),
+        Some(&retained_record)
+    );
+    assert!(!runtime.fail_closed);
+}
+
+#[test]
+fn persisted_decision_retires_future_prepare_qc_before_later_terminal_control() {
+    for pacemaker in [false, true] {
+        let directory = TempDir::new().expect("decided consumer terminal-order directory");
+        let (mut runtime, context, keys) =
+            authenticated_network_runtime(&directory, RuntimeQueueConfig::new(8, 1, 1));
+        let prepare = signed_runtime_quorum_certificate_for_phase_at_view(
+            &context,
+            &keys,
+            0xD1,
+            wire::GlobalPhase::Prepare,
+            3,
+        );
+        let prepare_message = wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::QuorumCertificate(prepare),
+        );
+        let commit = signed_runtime_quorum_certificate_for_phase_at_view(
+            &context,
+            &keys,
+            0xD2,
+            wire::GlobalPhase::Commit,
+            0,
+        );
+        let commit_message = wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::QuorumCertificate(commit.clone()),
+        );
+        let timeout_message =
+            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::TimeoutCertificate(
+                signed_runtime_timeout_certificate(&context, &keys),
+            ));
+        let messages = vec![
+            (prepare_message, context.roster[1].validator.clone()),
+            (commit_message, context.roster[2].validator.clone()),
+            (timeout_message, context.roster[3].validator.clone()),
+        ];
+        for (message, _) in &messages {
+            runtime
+                .driver
+                .authenticate(message.clone())
+                .expect("each queued control has exact BLS quorum authority");
+        }
+        let (_ingress_directory, ingress, ownerships) =
+            preowned_runtime_wal_ownerships(&runtime, &directory, &messages, false);
+        let receipts = ownerships
+            .iter()
+            .map(|ownership| {
+                ownership
+                    .leader_wire_runtime_receipt()
+                    .expect("actual WAL-backed runtime receipt")
+                    .clone()
+            })
+            .collect::<Vec<_>>();
+        for ((message, _), ownership) in messages.into_iter().zip(ownerships) {
+            runtime
+                .enqueue_network_with_ingress_ownership(message, ownership)
+                .expect("queue each independent authenticated physical occurrence");
+        }
+        let original = exact_retained_runtime_queue_owners(&runtime);
+        let prepare_rank = runtime.ingress.commands[0].lifecycle_ordinal;
+        let prepare_debt = runtime.ingress.commands[0].eligible_skips;
+        let now = Instant::now();
+        runtime.arm_live_clocks(now).expect("arm real runtime");
+        let RuntimeStep::Advanced(decision_effects) = runtime
+            .step(now)
+            .expect("current CommitQC passes the retained future PrepareQC")
+        else {
+            panic!("current CommitQC unexpectedly idled")
+        };
+        assert!(decision_effects.iter().any(|effect| matches!(effect,
+            AdapterEffect::FetchBody { certificate: Some(certificate), .. }
+                if certificate == &commit)));
+        let decision_scheduler = runtime
+            .take_last_scheduler_ownership()
+            .expect("exact Decision source scheduling evidence");
+        assert_eq!(decision_scheduler.selected, RuntimeSelectedOwnerKind::Fifo);
+        assert_eq!(decision_scheduler.validate_exact(), Ok(()));
+        let RuntimeSelectedCandidateOwnership::Exact(decision_candidate) =
+            &decision_scheduler.candidate
+        else {
+            panic!("Decision must consume its exact authenticated occurrence")
+        };
+        assert_eq!(
+            decision_candidate.admission_ordinal,
+            original[1].admission_ordinal
+        );
+        assert_eq!(decision_candidate.selection_seal.selected_position, 1);
+        let decision_ownership = runtime
+            .take_effect_ownership(decision_effects.len())
+            .expect("take actual durable Decision effect authority");
+        assert!(decision_ownership.iter().any(|ownership| {
+            ownership.binds_durable_decision_authority(
+                commit.round,
+                commit.proposal_round,
+                commit.subject,
+                commit.execution_commitment,
+            )
+        }));
+        publish_selected_runtime_wire_terminals(&mut runtime, &ingress, &receipts[1]);
+        assert_eq!(
+            exact_retained_runtime_queue_owners(&runtime),
+            vec![original[0].clone(), original[2].clone()]
+        );
+        assert_eq!(runtime.ingress.commands[0].lifecycle_ordinal, prepare_rank);
+        assert_eq!(runtime.ingress.commands[0].eligible_skips, prepare_debt);
+
+        // The already-persisted Decision closes both controls. Neither needs
+        // a later certificate to install its old view, and the older exact
+        // PrepareQC must retire first under either service entry point.
+        for expected_index in [0, 2] {
+            let step = if pacemaker {
+                runtime
+                    .try_step_pacemaker_escape(now)
+                    .expect("typed pacemaker can retire terminal controls")
+                    .expect("terminal control is runnable")
+            } else {
+                runtime
+                    .step(now)
+                    .expect("ordinary FIFO retires terminal controls in order")
+            };
+            let RuntimeStep::Advanced(effects) = step else {
+                panic!("terminal control unexpectedly idled")
+            };
+            assert!(
+                effects.is_empty(),
+                "terminal controls create no new authority"
+            );
+            let scheduler = runtime
+                .take_last_scheduler_ownership()
+                .expect("terminal retirement retains exact scheduler evidence");
+            assert_eq!(scheduler.validate_exact(), Ok(()));
+            assert_eq!(
+                scheduler.selected,
+                if pacemaker {
+                    RuntimeSelectedOwnerKind::PacemakerProgress
+                } else {
+                    RuntimeSelectedOwnerKind::Fifo
+                }
+            );
+            assert_eq!(scheduler.queue_before_snapshot.consumer_pending_count, 0);
+            let RuntimeSelectedCandidateOwnership::Exact(candidate) = &scheduler.candidate else {
+                panic!("terminal retirement must consume an exact physical occurrence")
+            };
+            assert_eq!(
+                candidate.admission_ordinal,
+                original[expected_index].admission_ordinal
+            );
+            assert_eq!(candidate.selection_seal.selected_position, 0);
+            runtime
+                .take_effect_ownership(0)
+                .expect("terminal effect ownership");
+            publish_selected_runtime_wire_terminals(
+                &mut runtime,
+                &ingress,
+                &receipts[expected_index],
+            );
+            let remaining = if expected_index == 0 {
+                vec![original[2].clone()]
+            } else {
+                Vec::new()
+            };
+            assert_eq!(exact_retained_runtime_queue_owners(&runtime), remaining);
+            assert_eq!(runtime.driver.current_tag().view(), 0);
+        }
+        assert_eq!(runtime.queued_commands(), 0);
+        assert!(runtime.leader_wire_runtime_receipts.is_empty());
+        assert!(!runtime.fail_closed);
+    }
 }

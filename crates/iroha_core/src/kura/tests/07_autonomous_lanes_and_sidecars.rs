@@ -169,10 +169,31 @@ pub(crate) fn autonomous_lane_startup_fixture_for_carrier(
         "startup fixture State catalog and runtime geometry must agree"
     );
     let state_incarnations = state.lane_incarnations_snapshot();
-    let expected_incarnations = crate::state::derive_static_lane_incarnations(&nexus.lane_catalog);
+    // State anchors the physical primary from the authenticated primary-only
+    // catalog before it journals the configured secondary lane. Preserve that
+    // exact primary identity when checking the resulting two-lane projection.
+    let primary_catalog = LaneCatalog::new(
+        nexus.lane_catalog.lane_count(),
+        vec![
+            nexus
+                .lane_catalog
+                .lanes()
+                .iter()
+                .find(|lane| lane.id == LaneId::SINGLE)
+                .expect("configured physical primary lane")
+                .clone(),
+        ],
+    )
+    .expect("derive the configured primary anchor catalog");
+    let mut expected_incarnations =
+        crate::state::derive_static_lane_incarnations(&nexus.lane_catalog);
+    expected_incarnations.insert(
+        LaneId::SINGLE,
+        crate::state::derive_static_lane_incarnations(&primary_catalog)[&LaneId::SINGLE],
+    );
     assert_eq!(
         state_incarnations, expected_incarnations,
-        "startup fixture State must retain the exact static two-lane incarnations"
+        "startup State must retain the configured primary anchor and exact secondary incarnation"
     );
     let kura = state.kura_handle();
     for lane_id in [LaneId::SINGLE, LaneId::new(1)] {
@@ -226,12 +247,9 @@ pub(crate) fn certified_autonomous_lane_startup_fixture(
         std::path::Path::new("unused-certified-autonomous-lane-startup-root"),
         BLOCKS_IN_MEMORY,
     );
-    let kura = Kura::new_temporary_with_configured_lane_catalog(
-        &config,
-        &lane_config,
-        &lane_catalog,
-    )
-    .expect("initialize authenticated temporary autonomous-lane Kura");
+    let kura =
+        Kura::new_temporary_with_configured_lane_catalog(&config, &lane_config, &lane_catalog)
+            .expect("initialize authenticated temporary autonomous-lane Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
     let mut fixture = CertifiedAutonomousLaneStartupFixture { kura, payload };
     fixture.certify_with_hint(
@@ -599,6 +617,7 @@ fn autonomous_claim_startup_inventory_bound_fails_before_temp_reconciliation() {
         autonomous_lane_payload_for_kura(lane.lane_id, lane.dataspace_id, 1, &signer);
     let (kura, _) =
         Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).expect("Kura");
+    install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
     let main = write_autonomous_claim_inventory_fixture(
         temp_dir.path(),
         &payload,
@@ -3559,4 +3578,159 @@ fn autonomous_completion_selected_view_rejects_corruption_and_foreign_suffix() {
             "{kind}: read cannot repair input"
         );
     }
+}
+
+#[test]
+fn current_autonomous_reader_preserves_corruption_and_authenticated_retirement() {
+    let (temp_dir, config, lane_config) = autonomous_lane_storage_fixture();
+    let lane_id = LaneId::new(1);
+    let lane = lane_config.entry(lane_id).expect("configured lane");
+    let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+    let (network, epoch, payload) =
+        autonomous_lane_payload_for_kura(lane_id, lane.dataspace_id, 1, &signer);
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).expect("Kura");
+    install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
+    assert!(
+        kura.read_current_autonomous_lane_block_artifact(lane_id, 1, network, epoch)
+            .expect("authenticate absent private attempt namespace")
+            .is_none()
+    );
+    kura.persist_lane_executable_payload(&payload, network, epoch)
+        .expect("persist exact payload");
+    let (actual, cursor) = kura
+        .read_current_autonomous_lane_payload(lane_id, 1, network, epoch)
+        .expect("authenticate active attempt")
+        .expect("active payload");
+    assert_eq!(actual, payload);
+    assert_eq!(cursor, payload.origin_proposal);
+    let pointer_path =
+        Kura::autonomous_lane_block_latest_attempt_path_for_entry(lane, temp_dir.path(), 1);
+    let original = fs::read(&pointer_path).expect("read current pointer");
+    let mut stale = Kura::decode_autonomous_lane_block_latest_attempt(&pointer_path, &original)
+        .expect("decode current pointer");
+    stale.lane_incarnation = Hash::new(b"foreign-occupied-current-attempt");
+    let stale_bytes = norito::to_bytes(&stale).expect("encode occupied foreign pointer");
+    for damaged in [vec![0xFF, 0x00, 0xAA], stale_bytes] {
+        fs::write(&pointer_path, &damaged).expect("damage occupied current pointer");
+        assert!(
+            kura.read_current_autonomous_lane_block_artifact(lane_id, 1, network, epoch)
+                .is_err()
+        );
+        assert!(
+            kura.read_current_autonomous_lane_payload(lane_id, 1, network, epoch)
+                .is_err()
+        );
+        assert_eq!(
+            fs::read(&pointer_path).unwrap(),
+            damaged,
+            "read must preserve the exact damaged pointer"
+        );
+    }
+    fs::write(&pointer_path, original).expect("restore fixture authority");
+    kura.persist_autonomous_lane_slot_retirement(
+        &AutonomousLaneSlotRetirementV1::from_payload(&payload),
+        network,
+        epoch,
+    )
+    .expect("authenticate terminal retirement");
+    assert!(
+        kura.read_current_autonomous_lane_block_artifact(lane_id, 1, network, epoch)
+            .expect("authenticate retired attempt")
+            .is_none()
+    );
+    let view_path = Kura::autonomous_lane_block_attempt_view_state_path_for_entry(
+        lane,
+        temp_dir.path(),
+        1,
+        payload.origin_proposal.descriptor.proposal_height,
+    );
+    let damaged = [0xFF, 0x00, 0xAA];
+    fs::write(&view_path, damaged).expect("damage occupied retirement evidence");
+    assert!(
+        kura.read_current_autonomous_lane_block_artifact(lane_id, 1, network, epoch)
+            .is_err()
+    );
+    assert_eq!(fs::read(view_path).unwrap(), damaged);
+}
+
+#[test]
+fn corrupted_receipt_aborts_lane_mutation_before_view_recovery() {
+    let (temp_dir, config, lane_config) = autonomous_lane_storage_fixture();
+    let lane_id = LaneId::new(1);
+    let lane = lane_config.entry(lane_id).expect("configured lane");
+    let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+    let (network, epoch, payload) =
+        autonomous_lane_payload_for_kura(lane_id, lane.dataspace_id, 1, &signer);
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).expect("Kura");
+    install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
+    kura.persist_lane_executable_payload(&payload, network, epoch)
+        .expect("persist exact payload with no receipt");
+    let recovered = kura
+        .recover_autonomous_lane_block_payload(&payload.origin_proposal, network, epoch)
+        .expect("recover the exact input before injecting receipt damage");
+    let first = next_durable_lane_view_certificate_for_kura(
+        &payload.origin_proposal,
+        &payload,
+        &signer,
+        network,
+        epoch,
+    );
+    kura.persist_lane_new_view_certificate(lane_id, 1, first, network, epoch)
+        .expect("genuine receipt absence permits the first NewView");
+    let (_, current) = kura
+        .read_current_autonomous_lane_payload(lane_id, 1, network, epoch)
+        .expect("read exact current cursor")
+        .expect("current payload");
+    let next =
+        next_durable_lane_view_certificate_for_kura(&current, &payload, &signer, network, epoch);
+    let view_path = Kura::autonomous_lane_block_attempt_view_state_path_for_entry(
+        lane,
+        temp_dir.path(),
+        1,
+        payload.origin_proposal.descriptor.proposal_height,
+    );
+    let temp_path = Kura::autonomous_lane_block_view_state_temp_path(&view_path);
+    fs::rename(&view_path, &temp_path).expect("stage a valid crash-temp NewView owner");
+    fs::write(&view_path, b"torn main view state")
+        .expect("stage a torn main beside the valid owner");
+    let (receipt_data, receipt_index) =
+        Kura::lane_block_application_receipt_paths_for_entry(lane, temp_dir.path());
+    fs::write(&receipt_data, b"occupied damaged application receipt")
+        .expect("damage the occupied receipt data");
+    fs::write(&receipt_index, b"occupied damaged receipt index")
+        .expect("damage the occupied receipt index");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        for path in [&view_path, &receipt_data, &receipt_index] {
+            fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+                .expect("keep fault files private");
+        }
+    }
+    let before = snapshot_regular_files_recursively(temp_dir.path());
+    assert!(
+        kura.persist_lane_new_view_certificate(lane_id, 1, next, network, epoch)
+            .is_err()
+    );
+    assert_eq!(
+        snapshot_regular_files_recursively(temp_dir.path()),
+        before,
+        "receipt corruption must abort before promoting the valid temp or deleting its owner"
+    );
+    assert!(kura.persist_lane_block_execution_input(&recovered).is_err());
+    assert_eq!(
+        snapshot_regular_files_recursively(temp_dir.path()),
+        before,
+        "execution-input publication must not interpret the same occupied receipt as absence"
+    );
+    assert_eq!(
+        kura.read_current_autonomous_lane_payload(lane_id, 1, network, epoch)
+            .expect("read-only access preserves the recoverable current view")
+            .expect("current payload")
+            .1,
+        current
+    );
+    assert_eq!(snapshot_regular_files_recursively(temp_dir.path()), before);
 }

@@ -1,3 +1,6 @@
+import { createNoritoRecordDecoder } from "./noritoRecordDecoder.js";
+import { rejectError, rejectRange, rejectType } from "./validationThrow.js";
+import { kaigiScalarBytesV1 } from "./kaigiScalarV1.js";
 import { Buffer } from "buffer";
 import {
   BASE58_ALPHABET_TEXT,
@@ -41,13 +44,16 @@ import {
 } from "./nativeRuntime.js";
 import {
   createNoritoContractCodecs,
-  createNoritoProofValueCodecs,
+  createNoritoMerkleProofCodecs,
+  createNoritoConfidentialMemoCodecs,
 } from "./noritoContractCodecs.js";
 import {
   createNoritoGovernanceInstructionBoundary,
   parseStrictGovernanceInstructionJson,
 } from "./noritoGovernanceBoundary.js";
 import { computeHashLiteralCrc } from "./hashLiteralCrc.js";
+import { createNoritoNftMarketCodecs, NFT_MARKET_INSTRUCTION_NAMES_V1, NFT_MARKET_INSTRUCTION_WIRE_IDS_V1 } from "./noritoNftMarketCodecs.js";
+import { createNoritoGameCodecs, GAME_INSTRUCTION_NAMES_V1, GAME_INSTRUCTION_WIRE_IDS_V1, gameValueMaximumBytesV1 } from "./noritoGameCodecs.js";
 import { KotodamaQuantity, NumericV1 } from "./numericV1.js";
 import {
   PRIVACY_EXACT12_TRANSACTION_PAYLOAD_FIELD_NAMES_V1,
@@ -279,6 +285,9 @@ const PRIVACY_EXACT12_CATALOG_COMMITMENT_V1 = /* @__PURE__ */ Buffer.from(
   "e037f13904a0307c00db15d85cfb406bd79772d20144a949def0f3fda78e342e747f65787cbfbffac94f11c369e2bbff",
   "hex",
 );
+const PRIVACY_EXACT12_PROOF_ENGINE_TAGS_V1 = /* @__PURE__ */ Object.freeze([
+  0, 2, 3, 1, 4, 0, 5, 8, 6, 7, 0, 0,
+]);
 const TRANSACTION_PAYLOAD_BATCH_SCHEMA_HASH = /* @__PURE__ */ schemaHashForTypeName(
   "alloc::vec::Vec<alloc::vec::Vec<u8>>",
 );
@@ -342,6 +351,8 @@ const KAGEMUSHA_TOP_UP_REQUEST_SCHEMA_HASH = /* @__PURE__ */ schemaHashForTypeNa
 const KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES = 16 * 1024;
 const KAGEMUSHA_TOP_UP_REQUEST_HEADER_PADDING = 8;
 const INNER_TYPE_NAME_BY_WIRE_ID = Object.freeze({
+  ...Object.fromEntries(NFT_MARKET_INSTRUCTION_NAMES_V1.map((name, index) => [NFT_MARKET_INSTRUCTION_WIRE_IDS_V1[index], `iroha_data_model::isi::nft_market::${name}`])),
+  ...Object.fromEntries(GAME_INSTRUCTION_NAMES_V1.map((name, index) => [GAME_INSTRUCTION_WIRE_IDS_V1[index], `iroha_data_model::isi::game::${name}`])),
   "iroha.mint": "iroha_data_model::isi::mint_burn::MintBox",
   "iroha.burn": "iroha_data_model::isi::mint_burn::BurnBox",
   "iroha.register": "iroha_data_model::isi::register::RegisterBox",
@@ -429,12 +440,12 @@ const INNER_TYPE_NAME_BY_WIRE_ID = Object.freeze({
     "iroha_data_model::isi::verifying_keys::UpdateVerifyingKey",
   [TOP_UP_KAGEMUSHA_WIRE_ID]: TOP_UP_KAGEMUSHA_INNER_TYPE_NAME,
 });
-const INSTRUCTION_WIRE_SCHEMA_BINDINGS = Object.freeze(
+const INSTRUCTION_WIRE_SCHEMA_BINDINGS = /* @__PURE__ */ (() => Object.freeze(
   Object.entries(INNER_TYPE_NAME_BY_WIRE_ID).map(
     ([outerWireId, innerTypeName]) =>
       Object.freeze({ outerWireId, innerTypeName }),
   ),
-);
+))();
 const INNER_SCHEMA_HASH_BY_WIRE_ID = Object.freeze(
   Object.fromEntries(
     Object.entries(INNER_TYPE_NAME_BY_WIRE_ID).map(([wireId, typeName]) => [
@@ -507,17 +518,13 @@ class BufferReader {
 
   assertEof() {
     if (this.offset !== this.buffer.length) {
-      throw new Error(
-        `${this.context} has ${this.buffer.length - this.offset} trailing bytes`,
-      );
+      rejectError(`${this.context} has ${this.buffer.length - this.offset} trailing bytes`);
     }
   }
 
   #ensureAvailable(length, name) {
     if (this.offset + length > this.buffer.length) {
-      throw new Error(
-        `${this.context}.${name} overran payload (${length} bytes requested, ${this.buffer.length - this.offset} remaining)`,
-      );
+      rejectError(`${this.context}.${name} overran payload (${length} bytes requested, ${this.buffer.length - this.offset} remaining)`);
     }
   }
 }
@@ -570,7 +577,7 @@ function normalizeInstructionJsonValue(value) {
 function resolveNative(method, nativeRuntime) {
   const native = resolveNativeRuntimeBinding(nativeRuntime);
   if (typeof native[method] !== JS_TYPE_FUNCTION) {
-    throw new Error(`Native binding does not expose ${method}`);
+    rejectError(`Native binding does not expose ${method}`);
   }
   return native;
 }
@@ -604,9 +611,7 @@ function rejectRetiredGenericZkInstruction(instruction) {
   }
   for (const variant of RETIRED_GENERIC_ZK_VARIANTS) {
     if (Object.prototype.hasOwnProperty.call(instruction.zk, variant)) {
-      throw new TypeError(
-        `zk.${variant} is retired in ABI V1; use the typed KAGEMUSHA flow`,
-      );
+      rejectType(`zk.${variant} is retired in ABI V1; use the typed KAGEMUSHA flow`);
     }
   }
 }
@@ -681,10 +686,10 @@ export function noritoEncodeInstruction(instruction) {
  */
 export function noritoEncodeTransactionPayloadBatch(payloads) {
   if (!Array.isArray(payloads)) {
-    throw new TypeError("transaction payload batch must be an array");
+    rejectType("transaction payload batch must be an array");
   }
   if (payloads.length === 0) {
-    throw new TypeError("transaction payload batch must contain at least one payload");
+    rejectType("transaction payload batch must contain at least one payload");
   }
   const payload = withNoritoCompactLengths(() =>
     encodeNoritoVec(payloads, (item, index) =>
@@ -709,9 +714,7 @@ export function noritoEncodeTransactionPayloadBatch(payloads) {
  */
 export function noritoEncodeSorafsBillingAcknowledgementProofV1(proof) {
   if (!isPlainObject(proof)) {
-    throw new TypeError(
-      "SoraFS billing acknowledgement proof must be an object",
-    );
+    rejectType("SoraFS billing acknowledgement proof must be an object");
   }
   const keys = Object.keys(proof);
   if (
@@ -719,9 +722,7 @@ export function noritoEncodeSorafsBillingAcknowledgementProofV1(proof) {
     !Object.prototype.hasOwnProperty.call(proof, "requestNonceHex") ||
     !Object.prototype.hasOwnProperty.call(proof, "authenticationProof")
   ) {
-    throw new TypeError(
-      "SoraFS billing acknowledgement proof must contain exactly requestNonceHex and authenticationProof",
-    );
+    rejectType("SoraFS billing acknowledgement proof must contain exactly requestNonceHex and authenticationProof");
   }
   const requestNonceHex = proof.requestNonceHex;
   if (
@@ -729,9 +730,7 @@ export function noritoEncodeSorafsBillingAcknowledgementProofV1(proof) {
     !/^[0-9a-f]{64}$/u.test(requestNonceHex) ||
     /^0{64}$/u.test(requestNonceHex)
   ) {
-    throw new TypeError(
-      "SoraFS billing acknowledgement requestNonceHex must be one non-zero lowercase 32-byte hexadecimal digest",
-    );
+    rejectType("SoraFS billing acknowledgement requestNonceHex must be one non-zero lowercase 32-byte hexadecimal digest");
   }
   const authenticationProof = proof.authenticationProof;
   if (
@@ -739,9 +738,7 @@ export function noritoEncodeSorafsBillingAcknowledgementProofV1(proof) {
     !ArrayBuffer.isView(authenticationProof) &&
     !(authenticationProof instanceof ArrayBuffer)
   ) {
-    throw new TypeError(
-      "SoraFS billing acknowledgement authenticationProof must be binary bytes",
-    );
+    rejectType("SoraFS billing acknowledgement authenticationProof must be binary bytes");
   }
   const proofBytes = Buffer.isBuffer(authenticationProof)
     ? Buffer.from(authenticationProof)
@@ -757,9 +754,7 @@ export function noritoEncodeSorafsBillingAcknowledgementProofV1(proof) {
     proofBytes.length >
       SORAFS_BILLING_ACKNOWLEDGEMENT_PROOF_MAX_BYTES_V1
   ) {
-    throw new RangeError(
-      `SoraFS billing acknowledgement authenticationProof must contain 1..=${SORAFS_BILLING_ACKNOWLEDGEMENT_PROOF_MAX_BYTES_V1} bytes`,
-    );
+    rejectRange(`SoraFS billing acknowledgement authenticationProof must contain 1..=${SORAFS_BILLING_ACKNOWLEDGEMENT_PROOF_MAX_BYTES_V1} bytes`);
   }
   const payload = withNoritoCompactLengths(() =>
     encodeStructValue([
@@ -810,15 +805,15 @@ export function noritoEncodeContractManifestSignaturePayload(manifest) {
 
 function encodeFeePaymentIntentValue(intent, context) {
   if (!isPlainObject(intent)) {
-    throw new TypeError(`${context} must be an object`);
+    rejectType(`${context} must be an object`);
   }
   assertOnlyObjectKeys(intent, ["payer", "value"], context);
   const payer = assertNonEmptyString(intent.payer, `${context}.payer`);
   if (payer !== "authority" && payer !== "sponsor") {
-    throw new TypeError(`${context}.payer must be authority or sponsor`);
+    rejectType(`${context}.payer must be authority or sponsor`);
   }
   if (!isPlainObject(intent.value)) {
-    throw new TypeError(`${context}.value must be an object`);
+    rejectType(`${context}.value must be an object`);
   }
   const allowedValueFields = ["charge_limits", "gas_limit"];
   if (payer === "sponsor") {
@@ -826,17 +821,17 @@ function encodeFeePaymentIntentValue(intent, context) {
   }
   assertOnlyObjectKeys(intent.value, allowedValueFields, `${context}.value`);
   if (!Array.isArray(intent.value.charge_limits)) {
-    throw new TypeError(`${context}.value.charge_limits must be an array`);
+    rejectType(`${context}.value.charge_limits must be an array`);
   }
   let previousKind = -1;
   const chargeLimits = encodeNoritoVec(
     Array.from(intent.value.charge_limits, (limit, index) => {
       const itemContext = `${context}.value.charge_limits[${index}]`;
       if (!Object.prototype.hasOwnProperty.call(intent.value.charge_limits, index)) {
-        throw new TypeError(`${context}.value.charge_limits must not contain holes`);
+        rejectType(`${context}.value.charge_limits must not contain holes`);
       }
       if (!isPlainObject(limit)) {
-        throw new TypeError(`${itemContext} must be an object`);
+        rejectType(`${itemContext} must be an object`);
       }
       assertOnlyObjectKeys(
         limit,
@@ -844,25 +839,21 @@ function encodeFeePaymentIntentValue(intent, context) {
         itemContext,
       );
       if (!isPlainObject(limit.kind)) {
-        throw new TypeError(`${itemContext}.kind must be a tagged unit object`);
+        rejectType(`${itemContext}.kind must be a tagged unit object`);
       }
       assertOnlyObjectKeys(limit.kind, ["kind", "value"], `${itemContext}.kind`);
       const kind = assertNonEmptyString(limit.kind.kind, `${itemContext}.kind.kind`);
       const kindTag = kind === "nexus" ? 0 : kind === "pipeline_gas" ? 1 : -1;
       if (kindTag < 0 || limit.kind.value !== null) {
-        throw new TypeError(
-          `${itemContext}.kind must be the canonical nexus or pipeline_gas tagged unit`,
-        );
+        rejectType(`${itemContext}.kind must be the canonical nexus or pipeline_gas tagged unit`);
       }
       if (kindTag <= previousKind) {
-        throw new TypeError(
-          `${context}.value.charge_limits must be unique and ordered nexus before pipeline_gas`,
-        );
+        rejectType(`${context}.value.charge_limits must be unique and ordered nexus before pipeline_gas`);
       }
       previousKind = kindTag;
       const quantity = NumericV1.decodeQuantityJson(limit.max_amount);
       if (quantity.mantissa <= 0n) {
-        throw new TypeError(`${itemContext}.max_amount must be greater than zero`);
+        rejectType(`${itemContext}.max_amount must be greater than zero`);
       }
       return encodeStructValue([
         [encodeEnumTagValue(kindTag)],
@@ -888,7 +879,7 @@ function encodeFeePaymentIntentValue(intent, context) {
       `${context}.value.gas_limit`,
     );
     if (normalizedGas === 0n) {
-      throw new TypeError(`${context}.value.gas_limit must be non-zero`);
+      rejectType(`${context}.value.gas_limit must be non-zero`);
     }
   }
   if (payer === "authority") {
@@ -897,7 +888,7 @@ function encodeFeePaymentIntentValue(intent, context) {
     );
   }
   if (!isPlainObject(intent.value.program_id)) {
-    throw new TypeError(`${context}.value.program_id must be an object`);
+    rejectType(`${context}.value.program_id must be an object`);
   }
   assertOnlyObjectKeys(
     intent.value.program_id,
@@ -913,14 +904,14 @@ function encodeFeePaymentIntentValue(intent, context) {
     name.normalize("NFC") !== name ||
     /[\s@#$\/]/u.test(name)
   ) {
-    throw new TypeError(`${context}.value.program_id.name must be a canonical Iroha Name`);
+    rejectType(`${context}.value.program_id.name must be a canonical Iroha Name`);
   }
   const revision = normalizeU64Input(
     intent.value.program_revision,
     `${context}.value.program_revision`,
   );
   if (revision === 0n) {
-    throw new TypeError(`${context}.value.program_revision must be non-zero`);
+    rejectType(`${context}.value.program_revision must be non-zero`);
   }
   const programId = encodeStructValue([
     [
@@ -968,9 +959,7 @@ function rejectInlinePrivateKeyFields(request, context) {
     INLINE_PRIVATE_KEY_FIELDS.has(key),
   );
   if (fields.length !== 0) {
-    throw new TypeError(
-      `${context} does not accept private-key fields (${fields.join(", ")}); sign the returned transaction draft locally`,
-    );
+    rejectType(`${context} does not accept private-key fields (${fields.join(", ")}); sign the returned transaction draft locally`);
   }
 }
 
@@ -986,10 +975,10 @@ function rejectInlinePrivateKeyFields(request, context) {
  */
 function encodeMultisigProposeRequest(request, nativeRuntime) {
   if (!isPlainObject(request)) {
-    throw new TypeError("MultisigProposeDto request must be an object");
+    rejectType("MultisigProposeDto request must be an object");
   }
   if (!Array.isArray(request.instructions)) {
-    throw new TypeError("MultisigProposeDto.instructions must be an array");
+    rejectType("MultisigProposeDto.instructions must be an array");
   }
   rejectInlinePrivateKeyFields(request, "MultisigProposeDto");
   const validationFeeMetadata = normalizeMultisigProposeValidationFeeMetadata(request);
@@ -1103,29 +1092,19 @@ function normalizeMultisigProposeValidationFeeMetadata(request) {
   const hasInstructionIndex = instructionIndex !== null && instructionIndex !== undefined;
   const hasTransferEntryIndex = transferEntryIndex !== null && transferEntryIndex !== undefined;
   if (hasPolicyVersion !== hasPolicyHash) {
-    throw new TypeError(
-      "MultisigProposeDto.validation_fee_policy_version and validation_fee_policy_hash must be provided together",
-    );
+    rejectType("MultisigProposeDto.validation_fee_policy_version and validation_fee_policy_hash must be provided together");
   }
   if (!hasPolicyVersion && hasHijiriFeeQuoteHash) {
-    throw new TypeError(
-      "MultisigProposeDto.validation_fee_hijiri_fee_quote_hash requires validation fee policy metadata",
-    );
+    rejectType("MultisigProposeDto.validation_fee_hijiri_fee_quote_hash requires validation fee policy metadata");
   }
   if (!hasPolicyVersion && hasInstructionIndex) {
-    throw new TypeError(
-      "MultisigProposeDto.validation_fee_instruction_index requires validation fee policy metadata",
-    );
+    rejectType("MultisigProposeDto.validation_fee_instruction_index requires validation fee policy metadata");
   }
   if (!hasPolicyVersion && hasTransferEntryIndex) {
-    throw new TypeError(
-      "MultisigProposeDto.validation_fee_transfer_entry_index requires validation fee policy metadata",
-    );
+    rejectType("MultisigProposeDto.validation_fee_transfer_entry_index requires validation fee policy metadata");
   }
   if (hasTransferEntryIndex && !hasInstructionIndex) {
-    throw new TypeError(
-      "MultisigProposeDto.validation_fee_transfer_entry_index requires validation_fee_instruction_index",
-    );
+    rejectType("MultisigProposeDto.validation_fee_transfer_entry_index requires validation_fee_instruction_index");
   }
   if (!hasPolicyVersion) {
     return {
@@ -1175,21 +1154,19 @@ function rejectValidationFeeCamelCaseDtoFields(request) {
     ["validationFeeTransferEntryIndex", "validation_fee_transfer_entry_index"],
   ]) {
     if (Object.prototype.hasOwnProperty.call(request, camelName)) {
-      throw new TypeError(
-        `MultisigProposeDto uses unsupported camelCase validation fee field ${camelName}; use ${snakeName}`,
-      );
+      rejectType(`MultisigProposeDto uses unsupported camelCase validation fee field ${camelName}; use ${snakeName}`);
     }
   }
 }
 
 function normalizeValidationFeePolicyHashString(value, context) {
   if (typeof value !== JS_TYPE_STRING) {
-    throw new TypeError(`${context} must be a 32-byte hex string`);
+    rejectType(`${context} must be a 32-byte hex string`);
   }
   const trimmed = value.trim().toLowerCase();
   const normalized = trimmed.startsWith("0x") ? trimmed.slice(2) : trimmed;
   if (!/^[0-9a-f]{64}$/.test(normalized)) {
-    throw new TypeError(`${context} must be a 32-byte hex string`);
+    rejectType(`${context} must be a 32-byte hex string`);
   }
   return normalized;
 }
@@ -1205,15 +1182,13 @@ function normalizeValidationFeePolicyHashString(value, context) {
  */
 export function noritoEncodeMultisigContractCallProposeRequest(request) {
   if (!isPlainObject(request)) {
-    throw new TypeError("MultisigContractCallProposeDto request must be an object");
+    rejectType("MultisigContractCallProposeDto request must be an object");
   }
   rejectInlinePrivateKeyFields(request, "MultisigContractCallProposeDto");
   const contractAddress = request.contract_address ?? request.contractAddress ?? null;
   const contractAlias = request.contract_alias ?? request.contractAlias ?? null;
   if ((contractAddress == null) === (contractAlias == null)) {
-    throw new TypeError(
-      "MultisigContractCallProposeDto requires exactly one of contract_address or contract_alias",
-    );
+    rejectType("MultisigContractCallProposeDto requires exactly one of contract_address or contract_alias");
   }
   const payloadValue = request.payload ?? request.contractPayload ?? null;
   const payload = withNoritoCompactLengths(() =>
@@ -1301,15 +1276,13 @@ export function noritoEncodeMultisigContractCallProposeRequest(request) {
  */
 export function noritoEncodeMultisigContractCallApproveRequest(request) {
   if (!isPlainObject(request)) {
-    throw new TypeError("MultisigContractCallApproveDto request must be an object");
+    rejectType("MultisigContractCallApproveDto request must be an object");
   }
   rejectInlinePrivateKeyFields(request, "MultisigContractCallApproveDto");
   const proposalId = request.proposal_id ?? request.proposalId ?? null;
   const instructionsHash = request.instructions_hash ?? request.instructionsHash ?? null;
   if (proposalId == null && instructionsHash == null) {
-    throw new TypeError(
-      "MultisigContractCallApproveDto requires proposal_id or instructions_hash",
-    );
+    rejectType("MultisigContractCallApproveDto requires proposal_id or instructions_hash");
   }
   const payload = withNoritoCompactLengths(() =>
     encodeStructValue([
@@ -1378,9 +1351,7 @@ function encodeMultisigAccountSelectorFields(request, context) {
   const multisigAccountAlias =
     request.multisig_account_alias ?? request.multisigAccountAlias ?? null;
   if ((multisigAccountId == null) === (multisigAccountAlias == null)) {
-    throw new TypeError(
-      `${context} requires exactly one of multisig_account_id or multisig_account_alias`,
-    );
+    rejectType(`${context} requires exactly one of multisig_account_id or multisig_account_alias`);
   }
   return [
     [
@@ -1484,7 +1455,7 @@ export function noritoDecodeInstructionBoxArchive(bytes) {
   );
   const canonical = noritoEncodeInstructionBoxArchive(decoded);
   if (!archive.equals(canonical)) {
-    throw new Error("instruction archive is not canonical Norito");
+    rejectError("instruction archive is not canonical Norito");
   }
   return decoded;
 }
@@ -1549,7 +1520,7 @@ function validateDecodedInstructionProofAttachments(instruction) {
       continue;
     }
     if (!Object.prototype.hasOwnProperty.call(payload, field)) {
-      throw new TypeError(`zk.${variant}.${field} is required`);
+      rejectType(`zk.${variant}.${field} is required`);
     }
     normalizeCanonicalProofAttachmentValue(
       payload[field],
@@ -1575,9 +1546,7 @@ function inspectTriggerAction(encodedAction, nativeRuntime) {
     encodedAction.length === 0 ||
     encodedAction.trim() !== encodedAction
   ) {
-    throw new TypeError(
-      "inspectSubscriptionTriggerAction encodedAction must be a canonical non-empty string",
-    );
+    rejectType("inspectSubscriptionTriggerAction encodedAction must be a canonical non-empty string");
   }
   const native = resolveNative(
     "inspectSubscriptionTriggerAction",
@@ -1587,11 +1556,9 @@ function inspectTriggerAction(encodedAction, nativeRuntime) {
   try {
     return JSON.parse(payload);
   } catch (error) {
-    throw new Error(
-      `native subscription trigger inspection returned invalid JSON: ${
+    rejectError(`native subscription trigger inspection returned invalid JSON: ${
         error instanceof Error ? error.message : String(error)
-      }`,
-    );
+      }`);
   }
 }
 
@@ -1637,7 +1604,7 @@ function decodeBlockMerkleCommitmentValue(payload, context) {
   const fields = decodeStructFields(payload, context, ["root", "leaf_count"]);
   const leafCount = decodeU64Value(fields.leaf_count, `${context}.leaf_count`);
   if (leafCount === "0") {
-    throw new Error(`${context}.leaf_count must be non-zero`);
+    rejectError(`${context}.leaf_count must be non-zero`);
   }
   return {
     root: decodeHashValue(fields.root, `${context}.root`),
@@ -1645,13 +1612,14 @@ function decodeBlockMerkleCommitmentValue(payload, context) {
   };
 }
 
-function decodeBlockReceiptProofValue(payload, context) {
-  const fields = decodeStructFields(payload, context, ["leaf", "proof"]);
-  return {
-    leaf: decodeHashValue(fields.leaf, `${context}.leaf`),
-    proof: decodeBlockMerkleProofValue(fields.proof, `${context}.proof`),
-  };
-}
+const BlockReceiptProofValueFields = [
+    ["leaf", decodeHashValue, 0],
+    ["proof", decodeBlockMerkleProofValue, 0],
+  ];
+
+  function decodeBlockReceiptProofValue(payload, context) {
+    return decodeRecordFields(payload, context, BlockReceiptProofValueFields);
+  }
 
 function decodeTransferSmtWitnessValue(payload, context) {
   const fields = decodeStructFields(payload, context, [
@@ -1689,80 +1657,33 @@ function decodeTransferSmtWitnessValue(payload, context) {
   };
 }
 
-function decodeTransferDeltaTranscriptValue(payload, context) {
-  const fields = decodeStructFields(payload, context, [
-    "from_account",
-    "to_account",
-    "asset_definition",
-    "amount",
-    "from_balance_before",
-    "from_balance_after",
-    "to_balance_before",
-    "to_balance_after",
-    "from_smt_witness",
-    "to_smt_witness",
-  ]);
-  return {
-    from_account: decodeAccountIdValue(fields.from_account, `${context}.from_account`),
-    to_account: decodeAccountIdValue(fields.to_account, `${context}.to_account`),
-    asset_definition: decodeAssetDefinitionIdValue(
-      fields.asset_definition,
-      `${context}.asset_definition`,
-    ),
-    amount: decodeQuantityValue(fields.amount, `${context}.amount`),
-    from_balance_before: decodeQuantityValue(
-      fields.from_balance_before,
-      `${context}.from_balance_before`,
-    ),
-    from_balance_after: decodeQuantityValue(
-      fields.from_balance_after,
-      `${context}.from_balance_after`,
-    ),
-    to_balance_before: decodeQuantityValue(
-      fields.to_balance_before,
-      `${context}.to_balance_before`,
-    ),
-    to_balance_after: decodeQuantityValue(
-      fields.to_balance_after,
-      `${context}.to_balance_after`,
-    ),
-    from_smt_witness: decodeTransferSmtWitnessValue(
-      fields.from_smt_witness,
-      `${context}.from_smt_witness`,
-    ),
-    to_smt_witness: decodeTransferSmtWitnessValue(
-      fields.to_smt_witness,
-      `${context}.to_smt_witness`,
-    ),
-  };
-}
+const TransferDeltaTranscriptValueFields = [
+    ["from_account", decodeAccountIdValue, 0],
+    ["to_account", decodeAccountIdValue, 0],
+    ["asset_definition", decodeAssetDefinitionIdValue, 0],
+    ["amount", decodeQuantityValue, 0],
+    ["from_balance_before", decodeQuantityValue, 0],
+    ["from_balance_after", decodeQuantityValue, 0],
+    ["to_balance_before", decodeQuantityValue, 0],
+    ["to_balance_after", decodeQuantityValue, 0],
+    ["from_smt_witness", decodeTransferSmtWitnessValue, 0],
+    ["to_smt_witness", decodeTransferSmtWitnessValue, 0],
+  ];
 
-function decodeTransferTranscriptValue(payload, context) {
-  const fields = decodeStructFields(payload, context, [
-    "batch_hash",
-    "deltas",
-    "authority_digest",
-    "poseidon_preimage_digest",
-  ]);
-  return {
-    batch_hash: decodeHashValue(fields.batch_hash, `${context}.batch_hash`),
-    deltas: decodeNoritoVec(
-      fields.deltas,
-      (entry, index) =>
-        decodeTransferDeltaTranscriptValue(entry, `${context}.deltas[${index}]`),
-      `${context}.deltas`,
-    ),
-    authority_digest: decodeHashValue(
-      fields.authority_digest,
-      `${context}.authority_digest`,
-    ),
-    poseidon_preimage_digest: decodeOptionValue(
-      fields.poseidon_preimage_digest,
-      decodeHashValue,
-      `${context}.poseidon_preimage_digest`,
-    ),
-  };
-}
+  function decodeTransferDeltaTranscriptValue(payload, context) {
+    return decodeRecordFields(payload, context, TransferDeltaTranscriptValueFields);
+  }
+
+const TransferTranscriptValueFields = [
+    ["batch_hash", decodeHashValue, 0],
+    ["deltas", decodeTransferDeltaTranscriptValue, 2],
+    ["authority_digest", decodeHashValue, 0],
+    ["poseidon_preimage_digest", decodeHashValue, 1],
+  ];
+
+  function decodeTransferTranscriptValue(payload, context) {
+    return decodeRecordFields(payload, context, TransferTranscriptValueFields);
+  }
 
 function decodeFastpqTranscriptMap(payload, context) {
   const reader = new BufferReader(payload, context);
@@ -1774,7 +1695,7 @@ function decodeFastpqTranscriptMap(payload, context) {
     const valuePayload = readNoritoField(reader, `value${index}`);
     const keyBytes = decodeFixedBytesValue(keyPayload, 32, `${context}.key[${index}]`);
     if (previousKey !== null && Buffer.compare(previousKey, keyBytes) >= 0) {
-      throw new Error(`${context} keys are not in canonical strict order`);
+      rejectError(`${context} keys are not in canonical strict order`);
     }
     previousKey = keyBytes;
     const key = decodeHashValue(keyPayload, `${context}.key[${index}]`);
@@ -1807,7 +1728,7 @@ export function noritoDecodeBlockProofs(bytes) {
     requireNonEmptyPayload: true,
   });
   if ((frame.flags & (NORITO_PACKED_SEQ_FLAG | NORITO_PACKED_STRUCT_FLAG | NORITO_FIELD_BITSET_FLAG)) !== 0) {
-    throw new Error("BlockProofs uses an unsupported packed Norito layout");
+    rejectError("BlockProofs uses an unsupported packed Norito layout");
   }
   return withNoritoLengthFlags(frame.flags & COMPACT_LEN_FLAG, () => {
     const fields = decodeStructFields(frame.payload, "BlockProofs", [
@@ -1823,7 +1744,7 @@ export function noritoDecodeBlockProofs(bytes) {
     ]);
     const blockHeight = decodeU64Value(fields.block_height, "BlockProofs.block_height");
     if (blockHeight === "0") {
-      throw new Error("BlockProofs.block_height must be non-zero");
+      rejectError("BlockProofs.block_height must be non-zero");
     }
     const entryCommitment = decodeBlockMerkleCommitmentValue(
       fields.entry_commitment,
@@ -1834,7 +1755,7 @@ export function noritoDecodeBlockProofs(bytes) {
       "BlockProofs.result_commitment",
     );
     if (entryCommitment.leaf_count !== resultCommitment.leaf_count) {
-      throw new Error("BlockProofs entry/result commitment leaf counts must match");
+      rejectError("BlockProofs entry/result commitment leaf counts must match");
     }
     return {
       block_height: blockHeight,
@@ -1918,9 +1839,7 @@ export function noritoDecodePrivacyExact12FixtureBundleBase64V1(value) {
   const maximumBase64Length =
     Math.ceil(PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1 / 3) * 4;
   if (typeof value !== JS_TYPE_STRING || value.length > maximumBase64Length) {
-    throw new RangeError(
-      `PrivacyExact12FixtureBundleV1 base64 exceeds the ${PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1}-byte archive limit`,
-    );
+    rejectRange(`PrivacyExact12FixtureBundleV1 base64 exceeds the ${PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1}-byte archive limit`);
   }
   const archive = decodeExactStandardBase64(
     value,
@@ -1940,12 +1859,10 @@ export function noritoDecodePrivacyExact12FixtureBundleBase64V1(value) {
 export function noritoDecodePrivacyExact12FixtureBundleV1(bytes) {
   const view = toBuffer(bytes);
   if (view.length === 0) {
-    throw new TypeError("PrivacyExact12FixtureBundleV1 archive must not be empty");
+    rejectType("PrivacyExact12FixtureBundleV1 archive must not be empty");
   }
   if (view.length > PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1) {
-    throw new RangeError(
-      `PrivacyExact12FixtureBundleV1 archive exceeds ${PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1} bytes`,
-    );
+    rejectRange(`PrivacyExact12FixtureBundleV1 archive exceeds ${PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1} bytes`);
   }
   const archive = Buffer.from(view);
   const frame = validateNoritoFrame(archive, {
@@ -1955,18 +1872,14 @@ export function noritoDecodePrivacyExact12FixtureBundleV1(bytes) {
     requireNonEmptyPayload: true,
   });
   if (frame.flags !== COMPACT_LEN_FLAG) {
-    throw new Error(
-      `PrivacyExact12FixtureBundleV1 must use canonical layout flags 0x${COMPACT_LEN_FLAG.toString(16)}`,
-    );
+    rejectError(`PrivacyExact12FixtureBundleV1 must use canonical layout flags 0x${COMPACT_LEN_FLAG.toString(16)}`);
   }
   const bundle = withNoritoCompactLengths(() =>
     decodePrivacyExact12FixtureBundlePayloadV1(frame.payload),
   );
   const canonical = encodePrivacyExact12FixtureBundleCanonicalV1(bundle);
   if (!canonical.equals(archive)) {
-    throw new Error(
-      "PrivacyExact12FixtureBundleV1 archive is not canonical or contains trailing data",
-    );
+    rejectError("PrivacyExact12FixtureBundleV1 archive is not canonical or contains trailing data");
   }
   return externalizePrivacyExact12FixtureBundleV1(bundle);
 }
@@ -1995,7 +1908,7 @@ export function noritoEncodePrivacyExact12FixtureBundleV1(value) {
  */
 export function noritoEncodeConfidentialMemoEnvelopeV1(value) {
   return Uint8Array.from(
-    encodeConfidentialMemoEnvelopeV1Value(value, "ConfidentialMemoEnvelopeV1"),
+    confidentialMemoValueCodecs[0](value, "ConfidentialMemoEnvelopeV1"),
   );
 }
 
@@ -2009,7 +1922,7 @@ export function noritoDecodeConfidentialMemoEnvelopeV1(bytes) {
   const payload = Buffer.from(
     normalizeFlexibleBytes(bytes, "ConfidentialMemoEnvelopeV1 wire"),
   );
-  return decodeConfidentialMemoEnvelopeV1Value(payload, "ConfidentialMemoEnvelopeV1");
+  return confidentialMemoValueCodecs[1](payload, "ConfidentialMemoEnvelopeV1");
 }
 
 function decodePrivacyExact12FixtureBundlePayloadV1(payload) {
@@ -2022,7 +1935,7 @@ function decodePrivacyExact12FixtureBundlePayloadV1(payload) {
     "PrivacyExact12FixtureBundleV1.version",
   );
   if (version !== 1) {
-    throw new RangeError("PrivacyExact12FixtureBundleV1.version must be exactly 1");
+    rejectRange("PrivacyExact12FixtureBundleV1.version must be exactly 1");
   }
   const reader = new BufferReader(
     fields.rows,
@@ -2034,9 +1947,7 @@ function decodePrivacyExact12FixtureBundlePayloadV1(payload) {
     "PrivacyExact12FixtureBundleV1.rows.count",
   );
   if (count !== PRIVACY_EXACT12_PROTOCOL_IDS_V1.length) {
-    throw new RangeError(
-      `PrivacyExact12FixtureBundleV1.rows must contain exactly ${PRIVACY_EXACT12_PROTOCOL_IDS_V1.length} rows`,
-    );
+    rejectRange(`PrivacyExact12FixtureBundleV1.rows must contain exactly ${PRIVACY_EXACT12_PROTOCOL_IDS_V1.length} rows`);
   }
   const rows = [];
   for (let index = 0; index < count; index += 1) {
@@ -2067,7 +1978,7 @@ function decodePrivacyExact12FixtureRowV1(payload, rowIndex) {
       protocolDiscriminant < PRIVACY_EXACT12_PROTOCOL_IDS_V1.length
         ? `duplicate, substituted, or reordered protocol ${PRIVACY_EXACT12_PROTOCOL_IDS_V1[protocolDiscriminant]}`
         : `unknown protocol discriminant ${protocolDiscriminant}`;
-    throw new TypeError(`${context}.protocol_id contains ${description}`);
+    rejectType(`${context}.protocol_id contains ${description}`);
   }
   const row = {
     protocolId: PRIVACY_EXACT12_PROTOCOL_IDS_V1[rowIndex],
@@ -2124,7 +2035,7 @@ function decodePrivacyExact12NonEmptyByteVectorV1(payload, context) {
     PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1,
   );
   if (bytes.length === 0) {
-    throw new TypeError(`${context} must not be empty`);
+    rejectType(`${context} must not be empty`);
   }
   return bytes;
 }
@@ -2141,12 +2052,10 @@ function validatePrivacyExact12FixtureRowBindingsCompactV1(
   context,
 ) {
   if (row.protocolId !== PRIVACY_EXACT12_PROTOCOL_IDS_V1[rowIndex]) {
-    throw new TypeError(`${context}.protocolId is unknown, duplicated, or out of order`);
+    rejectType(`${context}.protocolId is unknown, duplicated, or out of order`);
   }
   if (row.submitProofWireId !== PRIVACY_EXACT12_SUBMIT_PROOF_WIRE_ID_V1) {
-    throw new TypeError(
-      `${context}.submitProofWireId must be exactly ${PRIVACY_EXACT12_SUBMIT_PROOF_WIRE_ID_V1}`,
-    );
+    rejectType(`${context}.submitProofWireId must be exactly ${PRIVACY_EXACT12_SUBMIT_PROOF_WIRE_ID_V1}`);
   }
 
   const statementFrame = validatePrivacyExact12NestedFrameV1(
@@ -2160,7 +2069,7 @@ function validatePrivacyExact12FixtureRowBindingsCompactV1(
     `${context}.statementNorito.payload`,
   );
   if (statement.tag !== rowIndex) {
-    throw new TypeError(`${context}.statementNorito carries a substituted protocol`);
+    rejectType(`${context}.statementNorito carries a substituted protocol`);
   }
 
   const envelopeFrame = validatePrivacyExact12NestedFrameV1(
@@ -2183,10 +2092,16 @@ function validatePrivacyExact12FixtureRowBindingsCompactV1(
     `${context}.envelopeNorito.payload`,
   );
   if (!envelopeFields.wire_magic.equals(PRIVACY_EXACT12_WIRE_MAGIC_V1)) {
-    throw new TypeError(`${context}.envelopeNorito carries an invalid final V1 wire marker`);
+    rejectType(`${context}.envelopeNorito carries an invalid final V1 wire marker`);
   }
   if (!envelopeFields.catalog_commitment.equals(PRIVACY_EXACT12_CATALOG_COMMITMENT_V1)) {
-    throw new TypeError(`${context}.envelopeNorito carries a substituted Exact12 catalog commitment`);
+    rejectType(`${context}.envelopeNorito carries a substituted Exact12 catalog commitment`);
+  }
+  for (const field of ["proof_system_id", "engine_id"]) {
+    if (decodeU32Value(envelopeFields[field], `${context}.${field}`) !==
+        PRIVACY_EXACT12_PROOF_ENGINE_TAGS_V1[rowIndex]) {
+      rejectType(`${context}.envelopeNorito carries a substituted ${field}`);
+    }
   }
   if (
     decodeU32Value(
@@ -2194,17 +2109,17 @@ function validatePrivacyExact12FixtureRowBindingsCompactV1(
       `${context}.envelopeNorito.protocol_id`,
     ) !== rowIndex
   ) {
-    throw new TypeError(`${context}.envelopeNorito carries a substituted protocol`);
+    rejectType(`${context}.envelopeNorito carries a substituted protocol`);
   }
   if (!envelopeFields.statement.equals(statementFrame.payload)) {
-    throw new TypeError(`${context}.envelopeNorito does not contain statementNorito`);
+    rejectType(`${context}.envelopeNorito does not contain statementNorito`);
   }
   const proof = decodePrivacyExact12TaggedPayloadV1(
     envelopeFields.proof,
     `${context}.envelopeNorito.proof`,
   );
   if (proof.tag !== rowIndex) {
-    throw new TypeError(`${context}.envelopeNorito proof carries a substituted protocol`);
+    rejectType(`${context}.envelopeNorito proof carries a substituted protocol`);
   }
 
   const instructionFrame = validatePrivacyExact12NestedFrameV1(
@@ -2227,9 +2142,7 @@ function validatePrivacyExact12FixtureRowBindingsCompactV1(
     `${context}.submitProofInstructionNorito.payload`,
   );
   if (!instructionFields.envelope.equals(envelopeFrame.payload)) {
-    throw new TypeError(
-      `${context}.submitProofInstructionNorito does not contain envelopeNorito`,
-    );
+    rejectType(`${context}.submitProofInstructionNorito does not contain envelopeNorito`);
   }
 
   const projectionFrame = validatePrivacyExact12NestedFrameV1(
@@ -2255,18 +2168,14 @@ function validatePrivacyExact12FixtureRowBindingsCompactV1(
   });
   for (const field of PRIVACY_EXACT12_TRANSACTION_PAYLOAD_FIELD_NAMES_V1) {
     if (field !== "instructions" && !projectionFields[field].equals(unsignedFields[field])) {
-      throw new TypeError(
-        `${context}.transaction intent projection changed independent field ${field}`,
-      );
+      rejectType(`${context}.transaction intent projection changed independent field ${field}`);
     }
   }
   if (
     unsignedFields.admission_intent.length !== 4 ||
     unsignedFields.admission_intent.readUInt32LE(0) !== 0
   ) {
-    throw new TypeError(
-      `${context}.unsignedTransactionPayloadNorito.admission_intent must be TransactionAdmissionIntent::Ordinary`,
-    );
+    rejectType(`${context}.unsignedTransactionPayloadNorito.admission_intent must be TransactionAdmissionIntent::Ordinary`);
   }
   const expectedCreationTime = 1_700_000_000_000n + BigInt(rowIndex);
   if (
@@ -2275,7 +2184,7 @@ function validatePrivacyExact12FixtureRowBindingsCompactV1(
       `${context}.unsignedTransactionPayloadNorito.creation_time_ms`,
     ) !== expectedCreationTime.toString()
   ) {
-    throw new TypeError(`${context} carries a substituted transaction creation time`);
+    rejectType(`${context} carries a substituted transaction creation time`);
   }
   const nonce = decodeOptionValue(
     unsignedFields.nonce,
@@ -2283,7 +2192,7 @@ function validatePrivacyExact12FixtureRowBindingsCompactV1(
     `${context}.unsignedTransactionPayloadNorito.nonce`,
   );
   if (nonce !== rowIndex + 1) {
-    throw new TypeError(`${context} carries a substituted transaction nonce`);
+    rejectType(`${context} carries a substituted transaction nonce`);
   }
   const attachments = decodeOptionValue(
     unsignedFields.attachments,
@@ -2291,25 +2200,21 @@ function validatePrivacyExact12FixtureRowBindingsCompactV1(
     `${context}.unsignedTransactionPayloadNorito.attachments`,
   );
   if (attachments !== null) {
-    throw new TypeError(`${context} must not carry transaction attachments`);
+    rejectType(`${context} must not carry transaction attachments`);
   }
 
   const instructionOffset = row.unsignedTransactionPayloadNorito.indexOf(
     row.submitProofInstructionNorito,
   );
   if (instructionOffset < 0) {
-    throw new TypeError(
-      `${context}.unsignedTransactionPayloadNorito does not contain the byte-complete instruction`,
-    );
+    rejectType(`${context}.unsignedTransactionPayloadNorito does not contain the byte-complete instruction`);
   }
   if (
     row.unsignedTransactionPayloadNorito.indexOf(
       Buffer.from(PRIVACY_EXACT12_SUBMIT_PROOF_WIRE_ID_V1, UTF8_ENCODING),
     ) < 0
   ) {
-    throw new TypeError(
-      `${context}.unsignedTransactionPayloadNorito does not contain the exact submission wire id`,
-    );
+    rejectType(`${context}.unsignedTransactionPayloadNorito does not contain the exact submission wire id`);
   }
 
   const expectedIntentDigest = Buffer.from(
@@ -2322,7 +2227,7 @@ function validatePrivacyExact12FixtureRowBindingsCompactV1(
     ),
   );
   if (!expectedIntentDigest.equals(row.transactionIntentDigest)) {
-    throw new TypeError(`${context}.transactionIntentDigest does not match its projection`);
+    rejectType(`${context}.transactionIntentDigest does not match its projection`);
   }
 
   validatePrivacyExact12SignedTransactionV1(row, context);
@@ -2335,9 +2240,7 @@ function validatePrivacyExact12FixtureRowBindingsCompactV1(
   const expectedTransactionHash = Buffer.from(blake2b256(transactionHashPreimage));
   expectedTransactionHash[31] |= 1;
   if (!expectedTransactionHash.equals(row.signedTransactionHash)) {
-    throw new TypeError(
-      `${context}.signedTransactionHash does not match the unsigned transaction intent`,
-    );
+    rejectType(`${context}.signedTransactionHash does not match the unsigned transaction intent`);
   }
 }
 
@@ -2354,7 +2257,7 @@ function validatePrivacyExact12NestedFrameV1(
     requireNonEmptyPayload: true,
   });
   if (frame.flags !== COMPACT_LEN_FLAG) {
-    throw new Error(`${context} must use canonical compact-length layout flags`);
+    rejectError(`${context} must use canonical compact-length layout flags`);
   }
   const canonical = frameNoritoPayload(
     frame.payload,
@@ -2363,7 +2266,7 @@ function validatePrivacyExact12NestedFrameV1(
     expectedPaddingLength,
   );
   if (!canonical.equals(bytes)) {
-    throw new Error(`${context} is not a canonical uncompressed Norito frame`);
+    rejectError(`${context} is not a canonical uncompressed Norito frame`);
   }
   return frame;
 }
@@ -2379,7 +2282,7 @@ function decodePrivacyExact12TaggedPayloadV1(payload, context) {
     content,
   ]);
   if (!canonical.equals(payload)) {
-    throw new Error(`${context} is not a canonical tagged payload`);
+    rejectError(`${context} is not a canonical tagged payload`);
   }
   return { tag, content };
 }
@@ -2411,16 +2314,14 @@ function assertPrivacyExact12CanonicalStructPayloadV1(
     encodeStructValue(fieldNames.map((field) => [fields[field]])),
   );
   if (!canonical.equals(payload)) {
-    throw new Error(`${context} contains a non-canonical field layout`);
+    rejectError(`${context} contains a non-canonical field layout`);
   }
 }
 
 function validatePrivacyExact12SignedTransactionV1(row, context) {
   const signed = row.signedTransactionVersionedNorito;
   if (signed[0] !== 1) {
-    throw new TypeError(
-      `${context}.signedTransactionVersionedNorito must use version 1`,
-    );
+    rejectType(`${context}.signedTransactionVersionedNorito must use version 1`);
   }
   const payload = signed.subarray(1);
   const fields = withNoritoCompactLengths(() =>
@@ -2437,12 +2338,10 @@ function validatePrivacyExact12SignedTransactionV1(row, context) {
     `${context}.signedTransactionVersionedNorito.payload`,
   );
   if (fields.signature.length === 0) {
-    throw new TypeError(`${context}.signedTransactionVersionedNorito has no signature`);
+    rejectType(`${context}.signedTransactionVersionedNorito has no signature`);
   }
   if (!fields.payload.equals(row.unsignedTransactionPayloadNorito)) {
-    throw new TypeError(
-      `${context}.signedTransactionVersionedNorito does not contain the unsigned payload`,
-    );
+    rejectType(`${context}.signedTransactionVersionedNorito does not contain the unsigned payload`);
   }
   const multisig = decodeOptionValue(
     fields.multisig_signatures,
@@ -2450,24 +2349,20 @@ function validatePrivacyExact12SignedTransactionV1(row, context) {
     `${context}.signedTransactionVersionedNorito.multisig_signatures`,
   );
   if (multisig !== null) {
-    throw new TypeError(
-      `${context}.signedTransactionVersionedNorito must not carry multisig signatures`,
-    );
+    rejectType(`${context}.signedTransactionVersionedNorito must not carry multisig signatures`);
   }
 }
 
 function normalizePrivacyExact12FixtureBundleInputV1(value) {
   assertExactObjectKeys(value, ["version", "rows"], "PrivacyExact12FixtureBundleV1");
   if (value.version !== 1) {
-    throw new TypeError("PrivacyExact12FixtureBundleV1.version must be exactly 1");
+    rejectType("PrivacyExact12FixtureBundleV1.version must be exactly 1");
   }
   if (
     !Array.isArray(value.rows) ||
     value.rows.length !== PRIVACY_EXACT12_PROTOCOL_IDS_V1.length
   ) {
-    throw new TypeError(
-      `PrivacyExact12FixtureBundleV1.rows must contain exactly ${PRIVACY_EXACT12_PROTOCOL_IDS_V1.length} rows`,
-    );
+    rejectType(`PrivacyExact12FixtureBundleV1.rows must contain exactly ${PRIVACY_EXACT12_PROTOCOL_IDS_V1.length} rows`);
   }
   preflightPrivacyExact12FixtureBundleInputV1(value.rows);
   const rows = value.rows.map((row, rowIndex) => {
@@ -2511,7 +2406,7 @@ function normalizePrivacyExact12FixtureBundleInputV1(value) {
       ),
     };
     if (typeof normalized.submitProofWireId !== JS_TYPE_STRING) {
-      throw new TypeError(`${context}.submitProofWireId must be a string`);
+      rejectType(`${context}.submitProofWireId must be a string`);
     }
     validatePrivacyExact12FixtureRowBindingsV1(normalized, rowIndex, context);
     return normalized;
@@ -2531,23 +2426,19 @@ function preflightPrivacyExact12FixtureBundleInputV1(rows) {
       }
       const length = binaryByteLength(row[field]);
       if (length === null) {
-        throw new TypeError(`${context}.${field} must be an exact byte sequence`);
+        rejectType(`${context}.${field} must be an exact byte sequence`);
       }
       declaredBytes += length;
       if (declaredBytes > PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1) {
-        throw new RangeError(
-          `PrivacyExact12FixtureBundleV1 fields exceed the ${PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1}-byte archive limit`,
-        );
+        rejectRange(`PrivacyExact12FixtureBundleV1 fields exceed the ${PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1}-byte archive limit`);
       }
     }
     if (typeof row.submitProofWireId !== JS_TYPE_STRING) {
-      throw new TypeError(`${context}.submitProofWireId must be a string`);
+      rejectType(`${context}.submitProofWireId must be a string`);
     }
     declaredBytes += Buffer.byteLength(row.submitProofWireId, UTF8_ENCODING);
     if (declaredBytes > PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1) {
-      throw new RangeError(
-        `PrivacyExact12FixtureBundleV1 fields exceed the ${PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1}-byte archive limit`,
-      );
+      rejectRange(`PrivacyExact12FixtureBundleV1 fields exceed the ${PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1}-byte archive limit`);
     }
   }
 }
@@ -2566,18 +2457,18 @@ function normalizePrivacyExact12InputBytesV1(value, context, exactLength = null)
     for (let index = 0; index < value.length; index += 1) {
       const byte = value[index];
       if (!Number.isInteger(byte) || byte < 0 || byte > 0xff) {
-        throw new TypeError(`${context}[${index}] must be an unsigned byte`);
+        rejectType(`${context}[${index}] must be an unsigned byte`);
       }
       bytes[index] = byte;
     }
   } else {
-    throw new TypeError(`${context} must be an exact byte sequence`);
+    rejectType(`${context} must be an exact byte sequence`);
   }
   if (exactLength === null && bytes.length === 0) {
-    throw new TypeError(`${context} must not be empty`);
+    rejectType(`${context} must not be empty`);
   }
   if (exactLength !== null && bytes.length !== exactLength) {
-    throw new TypeError(`${context} must contain exactly ${exactLength} bytes`);
+    rejectType(`${context} must contain exactly ${exactLength} bytes`);
   }
   return bytes;
 }
@@ -2600,9 +2491,7 @@ function encodePrivacyExact12FixtureBundleCanonicalV1(bundle) {
     0,
   );
   if (archive.length > PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1) {
-    throw new RangeError(
-      `PrivacyExact12FixtureBundleV1 archive exceeds ${PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1} bytes`,
-    );
+    rejectRange(`PrivacyExact12FixtureBundleV1 archive exceeds ${PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1} bytes`);
   }
   return archive;
 }
@@ -2699,7 +2588,7 @@ function toBuffer(value) {
   if (value instanceof ArrayBuffer) {
     return Buffer.from(value);
   }
-  throw new TypeError("bytes must be a Buffer, ArrayBuffer, or typed array");
+  rejectType("bytes must be a Buffer, ArrayBuffer, or typed array");
 }
 
 function encodePureJsInstruction(instruction) {
@@ -2711,9 +2600,7 @@ function encodePureJsInstruction(instruction) {
 function decodeCanonicalKagemushaTopUpRequestArchive(value, context) {
   const archive = toBuffer(value);
   if (archive.length === 0 || archive.length > KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES) {
-    throw new RangeError(
-      `${context} must be a non-empty canonical KAGEMUSHA top-up request no larger than ${KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES} bytes`,
-    );
+    rejectRange(`${context} must be a non-empty canonical KAGEMUSHA top-up request no larger than ${KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES} bytes`);
   }
   const decoded = validateNoritoFrame(archive, {
     context,
@@ -2722,7 +2609,7 @@ function decodeCanonicalKagemushaTopUpRequestArchive(value, context) {
     requireNonEmptyPayload: true,
   });
   if (decoded.flags !== COMPACT_LEN_FLAG) {
-    throw new Error(`${context} must use the canonical compact-length Norito layout`);
+    rejectError(`${context} must use the canonical compact-length Norito layout`);
   }
   const canonical = frameNoritoPayload(
     decoded.payload,
@@ -2731,7 +2618,7 @@ function decodeCanonicalKagemushaTopUpRequestArchive(value, context) {
     KAGEMUSHA_TOP_UP_REQUEST_HEADER_PADDING,
   );
   if (!archive.equals(canonical)) {
-    throw new Error(`${context} is not canonical Norito`);
+    rejectError(`${context} is not canonical Norito`);
   }
   return decoded.payload;
 }
@@ -2750,7 +2637,7 @@ function encodeTopUpKagemushaInstruction(value) {
 
 function decodeTopUpKagemushaInstructionPayload(payload, innerFlags) {
   if (innerFlags !== COMPACT_LEN_FLAG) {
-    throw new Error("TopUpKagemushaV1 must use the canonical compact-length Norito layout");
+    rejectError("TopUpKagemushaV1 must use the canonical compact-length Norito layout");
   }
   const reader = new BufferReader(payload, "TopUpKagemushaV1", innerFlags);
   const requestPayload = readNoritoField(reader, "request");
@@ -2769,13 +2656,25 @@ function decodeTopUpKagemushaInstructionPayload(payload, innerFlags) {
 }
 
 function encodePureJsInstructionPayload(instruction) {
+  const nftNames = NFT_MARKET_INSTRUCTION_NAMES_V1.filter(name => Object.prototype.hasOwnProperty.call(instruction, name));
+  if (nftNames.length) {
+    const name = nftNames[0]; assertExactObjectKeys(instruction, [name], "instruction");
+    return encodeInstructionEnvelope(NFT_MARKET_INSTRUCTION_WIRE_IDS_V1[NFT_MARKET_INSTRUCTION_NAMES_V1.indexOf(name)], nftMarketCodecsV1.encode(name, instruction[name]));
+  }
+
+  const gameNames = GAME_INSTRUCTION_NAMES_V1.filter((name) => Object.prototype.hasOwnProperty.call(instruction, name));
+  if (gameNames.length > 0) {
+    assertExactObjectKeys(instruction, [gameNames[0]], "instruction");
+    const name = gameNames[0];
+    return encodeInstructionEnvelope(GAME_INSTRUCTION_WIRE_IDS_V1[GAME_INSTRUCTION_NAMES_V1.indexOf(name)], gameCodecsV1.encode(name, instruction[name]));
+  }
   if (!isPlainObject(instruction)) {
-    throw new TypeError("instruction must be a JSON object");
+    rejectType("instruction must be a JSON object");
   }
   if (Object.prototype.hasOwnProperty.call(instruction, "TopUpKagemushaV1")) {
     assertOnlyObjectKeys(instruction, ["TopUpKagemushaV1"], "instruction");
     if (!isPlainObject(instruction.TopUpKagemushaV1)) {
-      throw new TypeError("TopUpKagemushaV1 must be an object");
+      rejectType("TopUpKagemushaV1 must be an object");
     }
     return encodeTopUpKagemushaInstruction(instruction.TopUpKagemushaV1);
   }
@@ -3057,6 +2956,14 @@ function decodePureJsInstruction(buffer) {
 }
 
 function decodePureJsInstructionPayload(wireId, payload, innerFlags) {
+  const nftIndex = NFT_MARKET_INSTRUCTION_WIRE_IDS_V1.indexOf(wireId);
+  if (nftIndex >= 0) { const name = NFT_MARKET_INSTRUCTION_NAMES_V1[nftIndex]; return { [name]: nftMarketCodecsV1.decode(name, payload) }; }
+
+  const gameIndex = GAME_INSTRUCTION_WIRE_IDS_V1.indexOf(wireId);
+  if (gameIndex >= 0) {
+    const name = GAME_INSTRUCTION_NAMES_V1[gameIndex];
+    return { [name]: gameCodecsV1.decode(name, payload) };
+  }
   switch (wireId) {
     case "iroha.mint":
       return { Mint: decodeMintPayload(payload) };
@@ -3184,9 +3091,7 @@ function encodeInstructionBoxPayload(
   } else if (decodedInnerFrame !== null) {
     innerFrame = Buffer.from(decodedInnerFrame);
   } else {
-    throw new Error(
-      `${context} uses unsupported instruction wire id ${wireId}; native embedding requires a schema hash`,
-    );
+    rejectError(`${context} uses unsupported instruction wire id ${wireId}; native embedding requires a schema hash`);
   }
   const innerFieldPayload = withNoritoU64Lengths(() => encodeNoritoField(innerFrame));
   return withNoritoLengthFlags(outerFlags, () =>
@@ -3224,7 +3129,7 @@ function recordSccpPayloadBytes(input) {
     input.payload_bytes_hex ??
     input.payloadBytesHex;
   if (selected === undefined || selected === null) {
-    throw new TypeError("RecordSccpMessage.payload_bytes is required");
+    rejectType("RecordSccpMessage.payload_bytes is required");
   }
   return Buffer.from(normalizeBytes(selected));
 }
@@ -3261,7 +3166,7 @@ function decodeRecordSccpMessagePayload(payload, innerFlags) {
   const field = readNoritoField(reader, "payload_bytes");
   reader.assertEof();
   if (field.length < 8) {
-    throw new Error("RecordSccpMessage.payload_bytes is too short");
+    rejectError("RecordSccpMessage.payload_bytes is too short");
   }
   const count = bigintToSafeNumber(
     field.readBigUInt64LE(0),
@@ -3269,7 +3174,7 @@ function decodeRecordSccpMessagePayload(payload, innerFlags) {
   );
   const payloadBytes = field.subarray(8);
   if (payloadBytes.length !== count) {
-    throw new Error("RecordSccpMessage.payload_bytes length mismatch");
+    rejectError("RecordSccpMessage.payload_bytes length mismatch");
   }
   return { payload_bytes: Array.from(payloadBytes) };
 }
@@ -3280,11 +3185,11 @@ function assertWellFormedUtf16(value, context) {
     if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
       const next = value.charCodeAt(index + 1);
       if (!(next >= 0xdc00 && next <= 0xdfff)) {
-        throw new TypeError(`${context} must not contain unpaired UTF-16 surrogates`);
+        rejectType(`${context} must not contain unpaired UTF-16 surrogates`);
       }
       index += 1;
     } else if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) {
-      throw new TypeError(`${context} must not contain unpaired UTF-16 surrogates`);
+      rejectType(`${context} must not contain unpaired UTF-16 surrogates`);
     }
   }
 }
@@ -3298,7 +3203,7 @@ function normalizeStrictCancelAssetLockV1(value) {
     prototype !== Object.prototype &&
     prototype !== null
   ) {
-    throw new TypeError("CancelAssetLockV1 must be a plain object");
+    rejectType("CancelAssetLockV1 must be a plain object");
   }
   const keys = Reflect.ownKeys(value);
   if (
@@ -3306,41 +3211,31 @@ function normalizeStrictCancelAssetLockV1(value) {
     !keys.includes("escrow_id") ||
     !keys.includes("expected_remaining_amount")
   ) {
-    throw new TypeError(
-      "CancelAssetLockV1 must contain exactly escrow_id and expected_remaining_amount",
-    );
+    rejectType("CancelAssetLockV1 must contain exactly escrow_id and expected_remaining_amount");
   }
 
   const { escrow_id: escrowId, expected_remaining_amount: expectedRemainingAmount } =
     value;
   if (typeof escrowId !== JS_TYPE_STRING) {
-    throw new TypeError("CancelAssetLockV1.escrow_id must be a string");
+    rejectType("CancelAssetLockV1.escrow_id must be a string");
   }
   assertWellFormedUtf16(escrowId, "CancelAssetLockV1.escrow_id");
   const hashMatch = CANONICAL_HASH_LITERAL_RE.exec(escrowId);
   if (hashMatch === null) {
-    throw new TypeError(
-      "CancelAssetLockV1.escrow_id must be one canonical uppercase checksummed hash literal",
-    );
+    rejectType("CancelAssetLockV1.escrow_id must be one canonical uppercase checksummed hash literal");
   }
   const [, hashBody, checksum] = hashMatch;
   const expectedChecksum = computeHashLiteralCrc("hash", hashBody);
   if (checksum !== expectedChecksum) {
-    throw new TypeError(
-      `CancelAssetLockV1.escrow_id has invalid checksum; expected ${expectedChecksum}`,
-    );
+    rejectType(`CancelAssetLockV1.escrow_id has invalid checksum; expected ${expectedChecksum}`);
   }
   const hashBytes = Buffer.from(hashBody, HEX_ENCODING);
   if ((hashBytes[hashBytes.length - 1] & 1) === 0) {
-    throw new TypeError(
-      "CancelAssetLockV1.escrow_id must use a native hash with its marker bit set",
-    );
+    rejectType("CancelAssetLockV1.escrow_id must use a native hash with its marker bit set");
   }
 
   if (typeof expectedRemainingAmount !== JS_TYPE_STRING) {
-    throw new TypeError(
-      "CancelAssetLockV1.expected_remaining_amount must be a canonical quantity string",
-    );
+    rejectType("CancelAssetLockV1.expected_remaining_amount must be a canonical quantity string");
   }
   assertWellFormedUtf16(
     expectedRemainingAmount,
@@ -3348,9 +3243,7 @@ function normalizeStrictCancelAssetLockV1(value) {
   );
   const quantity = NumericV1.decodeQuantityJson(expectedRemainingAmount);
   if (quantity.mantissa <= 0n) {
-    throw new RangeError(
-      "CancelAssetLockV1.expected_remaining_amount must be greater than zero",
-    );
+    rejectRange("CancelAssetLockV1.expected_remaining_amount must be greater than zero");
   }
 
   return {
@@ -3361,7 +3254,7 @@ function normalizeStrictCancelAssetLockV1(value) {
 
 function encodeCancelAssetLockPayload(value) {
   if (!isPlainObject(value)) {
-    throw new TypeError("CancelAssetLock must be an object");
+    rejectType("CancelAssetLock must be an object");
   }
   assertOnlyObjectKeys(
     value,
@@ -3370,7 +3263,7 @@ function encodeCancelAssetLockPayload(value) {
   );
   for (const field of ["escrow_id", "expected_remaining_amount"]) {
     if (!Object.prototype.hasOwnProperty.call(value, field)) {
-      throw new TypeError(`CancelAssetLock.${field} is required`);
+      rejectType(`CancelAssetLock.${field} is required`);
     }
   }
   const expected = parseNumericLiteral(
@@ -3378,9 +3271,7 @@ function encodeCancelAssetLockPayload(value) {
     CANCEL_LOCK_REMAINING_CONTEXT,
   );
   if (expected.mantissa <= 0n) {
-    throw new RangeError(
-      CANCEL_LOCK_REMAINING_MESSAGE,
-    );
+    rejectRange(CANCEL_LOCK_REMAINING_MESSAGE);
   }
   const payload = encodeStructValue([
     [
@@ -3418,9 +3309,7 @@ function decodeCancelAssetLockInstructionPayload(payload) {
   if (
     NumericV1.decodeQuantityJson(expectedRemainingAmount).mantissa <= 0n
   ) {
-    throw new RangeError(
-      CANCEL_LOCK_REMAINING_MESSAGE,
-    );
+    rejectRange(CANCEL_LOCK_REMAINING_MESSAGE);
   }
   return {
     CancelAssetLock: {
@@ -3492,17 +3381,13 @@ function isExactOwnedUint8Array(value) {
  */
 export function decodeCancelAssetLockV1(bytes) {
   if (!isExactOwnedUint8Array(bytes)) {
-    throw new TypeError(
-      "CancelAssetLockV1 archive must be an owned, full-span Uint8Array",
-    );
+    rejectType("CancelAssetLockV1 archive must be an owned, full-span Uint8Array");
   }
   if (
     bytes.byteLength < CANCEL_ASSET_LOCK_V1_MIN_ARCHIVE_BYTES ||
     bytes.byteLength > CANCEL_ASSET_LOCK_V1_MAX_ARCHIVE_BYTES
   ) {
-    throw new RangeError(
-      `CancelAssetLockV1 archive must contain between ${CANCEL_ASSET_LOCK_V1_MIN_ARCHIVE_BYTES} and ${CANCEL_ASSET_LOCK_V1_MAX_ARCHIVE_BYTES} canonical bytes`,
-    );
+    rejectRange(`CancelAssetLockV1 archive must contain between ${CANCEL_ASSET_LOCK_V1_MIN_ARCHIVE_BYTES} and ${CANCEL_ASSET_LOCK_V1_MAX_ARCHIVE_BYTES} canonical bytes`);
   }
   const archive = Buffer.from(bytes.buffer);
   const frame = validateNoritoFrame(archive, {
@@ -3512,9 +3397,7 @@ export function decodeCancelAssetLockV1(bytes) {
     requireNonEmptyPayload: true,
   });
   if (frame.flags !== COMPACT_LEN_FLAG) {
-    throw new Error(
-      "CancelAssetLockV1 must use exactly the compact-length Norito flag",
-    );
+    rejectError("CancelAssetLockV1 must use exactly the compact-length Norito flag");
   }
   const decoded = withNoritoCompactLengths(
     () => decodeCancelAssetLockInstructionPayload(frame.payload).CancelAssetLock,
@@ -3522,7 +3405,7 @@ export function decodeCancelAssetLockV1(bytes) {
   const canonical = normalizeStrictCancelAssetLockV1(decoded);
   const reencoded = encodeCancelAssetLockV1(canonical);
   if (!archive.equals(reencoded)) {
-    throw new Error("CancelAssetLockV1 archive is not byte-canonical");
+    rejectError("CancelAssetLockV1 archive is not byte-canonical");
   }
   return canonical;
 }
@@ -3534,7 +3417,7 @@ function encodeAssetTransferAvailabilityValue(value, context) {
   if (value === "Disabled") {
     return encodeEnumTagValue(1);
   }
-  throw new TypeError(`${context} must be exactly "Enabled" or "Disabled"`);
+  rejectType(`${context} must be exactly "Enabled" or "Disabled"`);
 }
 
 function decodeAssetTransferAvailabilityValue(payload, context) {
@@ -3547,7 +3430,7 @@ function decodeAssetTransferAvailabilityValue(payload, context) {
   if (tag === 1) {
     return "Disabled";
   }
-  throw new Error(`${context} uses unsupported availability tag ${tag}`);
+  rejectError(`${context} uses unsupported availability tag ${tag}`);
 }
 
 function validateAssetTransferAvailabilityReason(reason, context) {
@@ -3559,24 +3442,22 @@ function validateAssetTransferAvailabilityReason(reason, context) {
     reason.length === 0 ||
     reason.trim() !== reason
   ) {
-    throw new TypeError(
-      `${context} must be non-empty unpadded text when provided`,
-    );
+    rejectType(`${context} must be non-empty unpadded text when provided`);
   }
   if (/[\u0000-\u001f\u007f-\u009f]/u.test(reason)) {
-    throw new TypeError(`${context} must not contain control characters`);
+    rejectType(`${context} must not contain control characters`);
   }
   if (
     Buffer.byteLength(reason, UTF8_ENCODING) >
     ASSET_TRANSFER_AVAILABILITY_MAX_REASON_BYTES_V1
   ) {
-    throw new RangeError(`${context} exceeds 512 UTF-8 bytes`);
+    rejectRange(`${context} exceeds 512 UTF-8 bytes`);
   }
 }
 
 function encodeSetAssetTransferAvailabilityInstruction(value) {
   if (!isPlainObject(value)) {
-    throw new TypeError("SetAssetTransferAvailability must be an object");
+    rejectType("SetAssetTransferAvailability must be an object");
   }
   const fields = [
     "account_id",
@@ -3589,7 +3470,7 @@ function encodeSetAssetTransferAvailabilityInstruction(value) {
   assertOnlyObjectKeys(value, fields, SET_ASSET_TRANSFER_AVAILABILITY_VARIANT);
   for (const field of fields.slice(0, 5)) {
     if (!Object.prototype.hasOwnProperty.call(value, field)) {
-      throw new TypeError(`SetAssetTransferAvailability.${field} is required`);
+      rejectType(`SetAssetTransferAvailability.${field} is required`);
     }
   }
   const reason = value.reason ?? null;
@@ -3689,13 +3570,13 @@ function decodeSetAssetTransferAvailabilityInstructionPayload(payload) {
 
 function encodeSetAssetTransferBlacklistInstruction(value) {
   if (!isPlainObject(value)) {
-    throw new TypeError("SetAssetTransferBlacklist must be an object");
+    rejectType("SetAssetTransferBlacklist must be an object");
   }
   const fields = ["account_id", "asset_definition_id", "blacklisted"];
   assertOnlyObjectKeys(value, fields, SET_ASSET_TRANSFER_BLACKLIST_VARIANT);
   for (const field of fields) {
     if (!Object.prototype.hasOwnProperty.call(value, field)) {
-      throw new TypeError(`SetAssetTransferBlacklist.${field} is required`);
+      rejectType(`SetAssetTransferBlacklist.${field} is required`);
     }
   }
   return encodeInstructionEnvelope(
@@ -3756,7 +3637,7 @@ function encodeAssetTransferControlWindowValue(value, context) {
     case "Month":
       return encodeEnumTagValue(2);
     default:
-      throw new TypeError(`${context} must be exactly "Day", "Week", or "Month"`);
+      rejectType(`${context} must be exactly "Day", "Week", or "Month"`);
   }
 }
 
@@ -3772,19 +3653,19 @@ function decodeAssetTransferControlWindowValue(payload, context) {
     case 2:
       return "Month";
     default:
-      throw new Error(`${context} uses unsupported transfer-control window tag ${tag}`);
+      rejectError(`${context} uses unsupported transfer-control window tag ${tag}`);
   }
 }
 
 function encodeAssetTransferLimitValue(value, context) {
   if (!isPlainObject(value)) {
-    throw new TypeError(`${context} must be an object`);
+    rejectType(`${context} must be an object`);
   }
   const fields = ["window", "cap_amount"];
   assertOnlyObjectKeys(value, fields, context);
   for (const field of fields) {
     if (!Object.prototype.hasOwnProperty.call(value, field)) {
-      throw new TypeError(`${context}.${field} is required`);
+      rejectType(`${context}.${field} is required`);
     }
   }
   return encodeStructValue([
@@ -3799,38 +3680,32 @@ function encodeAssetTransferLimitValue(value, context) {
   ]);
 }
 
-function decodeAssetTransferLimitValue(payload, context) {
-  const fields = decodeStructFields(payload, context, ["window", "cap_amount"]);
-  return {
-    window: decodeAssetTransferControlWindowValue(
-      fields.window,
-      `${context}.window`,
-    ),
-    cap_amount: decodeOptionValue(
-      fields.cap_amount,
-      decodeQuantityValue,
-      `${context}.cap_amount`,
-    ),
-  };
-}
+const AssetTransferLimitValueFields = [
+    ["window", decodeAssetTransferControlWindowValue, 0],
+    ["cap_amount", decodeQuantityValue, 1],
+  ];
+
+  function decodeAssetTransferLimitValue(payload, context) {
+    return decodeRecordFields(payload, context, AssetTransferLimitValueFields);
+  }
 
 function encodeSetAssetTransferControlInstruction(value) {
   if (!isPlainObject(value)) {
-    throw new TypeError("SetAssetTransferControl must be an object");
+    rejectType("SetAssetTransferControl must be an object");
   }
   const fields = ["account_id", "asset_definition_id", "limits"];
   assertOnlyObjectKeys(value, fields, SET_ASSET_TRANSFER_CONTROL_VARIANT);
   for (const field of fields) {
     if (!Object.prototype.hasOwnProperty.call(value, field)) {
-      throw new TypeError(`SetAssetTransferControl.${field} is required`);
+      rejectType(`SetAssetTransferControl.${field} is required`);
     }
   }
   if (!Array.isArray(value.limits)) {
-    throw new TypeError("SetAssetTransferControl.limits must be an array");
+    rejectType("SetAssetTransferControl.limits must be an array");
   }
   for (let index = 0; index < value.limits.length; index += 1) {
     if (!Object.prototype.hasOwnProperty.call(value.limits, index)) {
-      throw new TypeError("SetAssetTransferControl.limits must not contain holes");
+      rejectType("SetAssetTransferControl.limits must not contain holes");
     }
   }
   return encodeInstructionEnvelope(
@@ -3902,7 +3777,7 @@ function decodeMintPayload(payload) {
         TriggerRepetitions: decodeTriggerRepetitionsBody(body, "Mint.TriggerRepetitions"),
       };
     default:
-      throw new Error(`Internal Norito decoder does not support Mint variant ${variantIndex}`);
+      rejectError(`Internal Norito decoder does not support Mint variant ${variantIndex}`);
   }
 }
 
@@ -3919,7 +3794,7 @@ function decodeBurnPayload(payload) {
         TriggerRepetitions: decodeTriggerRepetitionsBody(body, "Burn.TriggerRepetitions"),
       };
     default:
-      throw new Error(`Internal Norito decoder does not support Burn variant ${variantIndex}`);
+      rejectError(`Internal Norito decoder does not support Burn variant ${variantIndex}`);
   }
 }
 
@@ -3962,9 +3837,7 @@ function decodeTransferPayload(payload) {
         ),
       };
     default:
-      throw new Error(
-        `Internal Norito decoder does not support Transfer variant ${variantIndex}.`,
-      );
+      rejectError(`Internal Norito decoder does not support Transfer variant ${variantIndex}.`);
   }
 }
 
@@ -3996,9 +3869,7 @@ function decodeRegisterPayload(payload) {
         ),
       };
     default:
-      throw new Error(
-        `Internal Norito decoder does not support Register variant ${variantIndex}.`,
-      );
+      rejectError(`Internal Norito decoder does not support Register variant ${variantIndex}.`);
   }
 }
 
@@ -4086,7 +3957,7 @@ function decodeGovernanceInstructionPayload(wireId, payload) {
       };
     }
     default:
-      throw new Error(`unsupported governance wire id ${wireId}`);
+      rejectError(`unsupported governance wire id ${wireId}`);
   }
 }
 
@@ -4124,7 +3995,7 @@ function decodeSocialInstructionPayload(wireId, payload) {
       };
     }
     default:
-      throw new Error(`unsupported social wire id ${wireId}`);
+      rejectError(`unsupported social wire id ${wireId}`);
   }
 }
 
@@ -4391,7 +4262,7 @@ function decodeSmartContractInstructionPayload(wireId, payload) {
       };
     }
     default:
-      throw new Error(`unsupported smart-contract wire id ${wireId}`);
+      rejectError(`unsupported smart-contract wire id ${wireId}`);
   }
 }
 
@@ -4540,7 +4411,7 @@ function decodeKaigiInstructionPayload(wireId, payload) {
             ),
             usage_commitment: decodeOptionValue(
               fields.usage_commitment,
-              decodeHashValue,
+              decodeKaigiScalarValue,
               "Kaigi.RecordKaigiUsage.usage_commitment",
             ),
             proof: decodeOptionValue(
@@ -4638,7 +4509,7 @@ function decodeKaigiInstructionPayload(wireId, payload) {
       };
     }
     default:
-      throw new Error(`unsupported Kaigi wire id ${wireId}`);
+      rejectError(`unsupported Kaigi wire id ${wireId}`);
   }
 }
 
@@ -4811,7 +4682,7 @@ function decodeZkInstructionPayload(wireId, payload) {
       };
     }
     default:
-      throw new Error(`unsupported zk wire id ${wireId}`);
+      rejectError(`unsupported zk wire id ${wireId}`);
   }
 }
 
@@ -4917,7 +4788,7 @@ function decodeRwaInstructionPayload(payload) {
       };
     }
     default:
-      throw new Error(`Internal Norito decoder does not support RWA variant ${variantIndex}`);
+      rejectError(`Internal Norito decoder does not support RWA variant ${variantIndex}`);
   }
 }
 
@@ -5006,17 +4877,17 @@ function encodeOptionValue(value, encode, context) {
 
 function decodeOptionValue(payload, decode, context) {
   if (payload.length === 0) {
-    throw new Error(`${context} option payload is empty`);
+    rejectError(`${context} option payload is empty`);
   }
   const tag = payload[0];
   if (tag === 0) {
     if (payload.length !== 1) {
-      throw new Error(`${context} None option contained trailing bytes`);
+      rejectError(`${context} None option contained trailing bytes`);
     }
     return null;
   }
   if (tag !== 1) {
-    throw new Error(`${context} option tag ${tag} is invalid`);
+    rejectError(`${context} option tag ${tag} is invalid`);
   }
   const reader = new BufferReader(payload.subarray(1), `${context}.some`);
   const inner = readNoritoField(reader, "value");
@@ -5026,14 +4897,14 @@ function decodeOptionValue(payload, decode, context) {
 
 function encodeBoolValue(value, context) {
   if (typeof value !== "boolean") {
-    throw new TypeError(`${context} must be a boolean`);
+    rejectType(`${context} must be a boolean`);
   }
   return Buffer.of(value ? 1 : 0);
 }
 
 function decodeBoolValue(payload, context) {
   if (payload.length !== 1 || (payload[0] !== 0 && payload[0] !== 1)) {
-    throw new Error(`${context} must contain a canonical boolean byte`);
+    rejectError(`${context} must contain a canonical boolean byte`);
   }
   return payload[0] === 1;
 }
@@ -5041,14 +4912,14 @@ function decodeBoolValue(payload, context) {
 function encodeFixedBytesValue(value, length, context) {
   const bytes = Buffer.from(normalizeBytes(value));
   if (bytes.length !== length) {
-    throw new TypeError(`${context} must contain exactly ${length} bytes`);
+    rejectType(`${context} must contain exactly ${length} bytes`);
   }
   return bytes;
 }
 
 function decodeFixedBytesValue(payload, length, context) {
   if (payload.length !== length) {
-    throw new Error(`${context} must contain exactly ${length} bytes`);
+    rejectError(`${context} must contain exactly ${length} bytes`);
   }
   return Buffer.from(payload);
 }
@@ -5084,9 +4955,7 @@ function decodeByteVecValue(payload, context, maxLength = null) {
   const reader = new BufferReader(payload, context);
   const length = bigintToSafeNumber(reader.readU64LE("length"), `${context}.length`);
   if (maxLength !== null && length > maxLength) {
-    throw new RangeError(
-      `${context} exceeds its ${maxLength}-byte decoding limit`,
-    );
+    rejectRange(`${context} exceeds its ${maxLength}-byte decoding limit`);
   }
   const bytes = reader.readBytes(length, "payload");
   reader.assertEof();
@@ -5119,11 +4988,11 @@ function decodeU64NumberValue(payload, context) {
 function encodeDomainIdValue(value, context) {
   const literal = assertExactNonEmptyString(value, context);
   if (literal.trim() !== literal) {
-    throw new TypeError(`${context} must not contain surrounding whitespace`);
+    rejectType(`${context} must not contain surrounding whitespace`);
   }
   const segments = literal.split(".");
   if (segments.length !== 2 || segments.some((segment) => segment.length === 0)) {
-    throw new TypeError(`${context} must use the exact domain.dataspace form`);
+    rejectType(`${context} must use the exact domain.dataspace form`);
   }
   const [name, dataspace] = segments.map((segment) =>
     canonicalizeDomainIdLabel(segment, `${context} label`),
@@ -5153,10 +5022,10 @@ function decodeArchivedDomainIdValue(payload, context) {
 function encodeNameValue(value, context) {
   const literal = assertExactNonEmptyString(value, context);
   if (/\p{White_Space}/u.test(literal)) {
-    throw new TypeError(`${context} must not contain whitespace`);
+    rejectType(`${context} must not contain whitespace`);
   }
   if (/[@#$]/u.test(literal)) {
-    throw new TypeError(`${context} contains a reserved Name character`);
+    rejectType(`${context} contains a reserved Name character`);
   }
   return encodeNoritoStringValue(literal.normalize("NFC"));
 }
@@ -5164,10 +5033,10 @@ function encodeNameValue(value, context) {
 function decodeNameValue(payload, context) {
   const literal = decodeStringValue(payload, context);
   if (literal.length === 0 || /\p{White_Space}/u.test(literal)) {
-    throw new TypeError(`${context} must be a non-empty Name without whitespace`);
+    rejectType(`${context} must be a non-empty Name without whitespace`);
   }
   if (/[@#$]/u.test(literal)) {
-    throw new TypeError(`${context} contains a reserved Name character`);
+    rejectType(`${context} contains a reserved Name character`);
   }
   return literal.normalize("NFC");
 }
@@ -5184,7 +5053,7 @@ function encodeNftIdValue(value, context) {
   const literal = assertExactNonEmptyString(value, context);
   const separator = literal.indexOf("$");
   if (separator <= 0 || separator === literal.length - 1) {
-    throw new Error(`${context} must use name$domain`);
+    rejectError(`${context} must use name$domain`);
   }
   const domain = literal.slice(separator + 1);
   return encodeTupleValue([
@@ -5208,7 +5077,7 @@ function encodeRwaIdValue(value, context) {
   const literal = assertExactNonEmptyString(value, context);
   const separator = literal.indexOf("$");
   if (separator <= 0 || separator === literal.length - 1) {
-    throw new Error(`${context} must use hash$domain`);
+    rejectError(`${context} must use hash$domain`);
   }
   return encodeStructValue([
     [encodeArchivedDomainIdValue(literal.slice(separator + 1), `${context}.domain`)],
@@ -5223,7 +5092,7 @@ function decodeRwaIdValue(payload, context) {
 
 function encodeCustomInstructionPayload(value) {
   if (!isPlainObject(value)) {
-    throw new TypeError("Custom must be an object");
+    rejectType("Custom must be an object");
   }
   return encodeStructValue([
     [encodeNoritoField(encodeNoritoJsonValue(value.payload ?? null))],
@@ -5243,14 +5112,15 @@ function encodeNewDomainValue(value, context) {
   ]);
 }
 
-function decodeNewDomainValue(payload, context) {
-  const fields = decodeStructFields(payload, context, ["id", "logo", "metadata"]);
-  return {
-    id: decodeDomainIdValue(fields.id, `${context}.id`),
-    logo: decodeOptionValue(fields.logo, decodeSorafsUriValue, `${context}.logo`),
-    metadata: decodeMetadataValue(fields.metadata, `${context}.metadata`),
-  };
-}
+const NewDomainValueFields = [
+    ["id", decodeDomainIdValue, 0],
+    ["logo", decodeSorafsUriValue, 1],
+    ["metadata", decodeMetadataValue, 0],
+  ];
+
+  function decodeNewDomainValue(payload, context) {
+    return decodeRecordFields(payload, context, NewDomainValueFields);
+  }
 
 function encodeNewAccountValue(value, context) {
   return encodeStructValue([
@@ -5264,46 +5134,37 @@ function encodeNewAccountValue(value, context) {
   ]);
 }
 
-function decodeNewAccountValue(payload, context) {
-  const fields = decodeStructFields(
-    payload,
-    context,
-    ["id", "metadata", "label", "uaid", "opaque_ids"],
-  );
-  return {
-    id: decodeAccountIdValue(fields.id, `${context}.id`),
-    metadata: decodeMetadataValue(fields.metadata, `${context}.metadata`),
-    label: decodeOptionValue(fields.label, decodeStringValue, `${context}.label`),
-    uaid: decodeOptionValue(fields.uaid, decodeJsonValue, `${context}.uaid`),
-    opaque_ids: decodeNoritoVec(
-      fields.opaque_ids,
-      (entry, index) => decodeJsonValue(entry, `${context}.opaque_ids[${index}]`),
-      `${context}.opaque_ids`,
-    ),
-  };
-}
+const NewAccountValueFields = [
+    ["id", decodeAccountIdValue, 0],
+    ["metadata", decodeMetadataValue, 0],
+    ["label", decodeStringValue, 1],
+    ["uaid", decodeJsonValue, 1],
+    ["opaque_ids", decodeJsonValue, 2],
+  ];
+
+  function decodeNewAccountValue(payload, context) {
+    return decodeRecordFields(payload, context, NewAccountValueFields);
+  }
 
 function encodeNewAssetDefinitionValue(value, context) {
   if (!isPlainObject(value)) {
-    throw new TypeError(`${context} must be an object`);
+    rejectType(`${context} must be an object`);
   }
   const hasOwningDomain = Object.prototype.hasOwnProperty.call(value, "owning_domain");
   const hasCamelOwningDomain = Object.prototype.hasOwnProperty.call(value, "owningDomain");
   if (!hasOwningDomain && !hasCamelOwningDomain) {
-    throw new TypeError(
-      `${context}.owning_domain is required; use null for an intentionally unowned global definition`,
-    );
+    rejectType(`${context}.owning_domain is required; use null for an intentionally unowned global definition`);
   }
   if (
     hasOwningDomain &&
     hasCamelOwningDomain &&
     value.owning_domain !== value.owningDomain
   ) {
-    throw new TypeError(`${context} ownership aliases disagree`);
+    rejectType(`${context} ownership aliases disagree`);
   }
   const owningDomain = hasOwningDomain ? value.owning_domain : value.owningDomain;
   if (owningDomain === undefined) {
-    throw new TypeError(`${context}.owning_domain must be a domain identifier or null`);
+    rejectType(`${context}.owning_domain must be a domain identifier or null`);
   }
   const hasBalanceScopePolicy = Object.prototype.hasOwnProperty.call(
     value,
@@ -5314,30 +5175,26 @@ function encodeNewAssetDefinitionValue(value, context) {
     "balanceScopePolicy",
   );
   if (!hasBalanceScopePolicy && !hasCamelBalanceScopePolicy) {
-    throw new TypeError(`${context}.balance_scope_policy is required`);
+    rejectType(`${context}.balance_scope_policy is required`);
   }
   if (
     hasBalanceScopePolicy &&
     hasCamelBalanceScopePolicy &&
     value.balance_scope_policy !== value.balanceScopePolicy
   ) {
-    throw new TypeError(`${context} balance-scope policy aliases disagree`);
+    rejectType(`${context} balance-scope policy aliases disagree`);
   }
   const balanceScopePolicy = hasBalanceScopePolicy
     ? value.balance_scope_policy
     : value.balanceScopePolicy;
   if (balanceScopePolicy === "DataspaceRestricted" && owningDomain === null) {
-    throw new TypeError(
-      `${context}.owning_domain is required for DataspaceRestricted balances`,
-    );
+    rejectType(`${context}.owning_domain is required for DataspaceRestricted balances`);
   }
   if (
     Object.prototype.hasOwnProperty.call(value, "confidential_policy") ||
     Object.prototype.hasOwnProperty.call(value, "confidentialPolicy")
   ) {
-    throw new TypeError(
-      `${context} cannot carry confidential policy; use RegisterZkAsset with canonical verifier bindings`,
-    );
+    rejectType(`${context} cannot carry confidential policy; use RegisterZkAsset with canonical verifier bindings`);
   }
   return encodeStructValue([
     [encodeAssetDefinitionIdValue(value.id, `${context}.id`)],
@@ -5364,47 +5221,26 @@ function encodeNewAssetDefinitionValue(value, context) {
   ]);
 }
 
-function decodeNewAssetDefinitionValue(payload, context) {
-  const fields = decodeStructFields(payload, context, [
-    "id",
-    "name",
-    "description",
-    "alias",
-    "spec",
-    "mintable",
-    "logo",
-    "metadata",
-    "balance_scope_policy",
-    "owning_domain",
-  ]);
-  return {
-    id: decodeAssetDefinitionIdValue(fields.id, `${context}.id`),
-    name: decodeStringValue(fields.name, `${context}.name`),
-    description: decodeOptionValue(fields.description, decodeStringValue, `${context}.description`),
-    alias: decodeOptionValue(
-      fields.alias,
-      decodeAssetDefinitionAliasValue,
-      `${context}.alias`,
-    ),
-    spec: decodeNumericSpecValue(fields.spec, `${context}.spec`),
-    mintable: decodeMintableValue(fields.mintable, `${context}.mintable`),
-    logo: decodeOptionValue(fields.logo, decodeSorafsUriValue, `${context}.logo`),
-    metadata: decodeMetadataValue(fields.metadata, `${context}.metadata`),
-    balance_scope_policy: decodeAssetBalancePolicyValue(
-      fields.balance_scope_policy,
-      `${context}.balance_scope_policy`,
-    ),
-    owning_domain: decodeOptionValue(
-      fields.owning_domain,
-      decodeDomainIdValue,
-      `${context}.owning_domain`,
-    ),
-  };
-}
+const NewAssetDefinitionValueFields = [
+    ["id", decodeAssetDefinitionIdValue, 0],
+    ["name", decodeStringValue, 0],
+    ["description", decodeStringValue, 1],
+    ["alias", decodeAssetDefinitionAliasValue, 1],
+    ["spec", decodeNumericSpecValue, 0],
+    ["mintable", decodeMintableValue, 0],
+    ["logo", decodeSorafsUriValue, 1],
+    ["metadata", decodeMetadataValue, 0],
+    ["balance_scope_policy", decodeAssetBalancePolicyValue, 0],
+    ["owning_domain", decodeDomainIdValue, 1],
+  ];
+
+  function decodeNewAssetDefinitionValue(payload, context) {
+    return decodeRecordFields(payload, context, NewAssetDefinitionValueFields);
+  }
 
 function encodeMetadataValue(value, context) {
   if (!isPlainObject(value)) {
-    throw new TypeError(`${context} must be an object`);
+    rejectType(`${context} must be an object`);
   }
   const entries = Object.keys(value)
     .sort()
@@ -5448,12 +5284,10 @@ function decodeNestedValue(payload, decode, context) {
 
 function decodeCanonicalReplicationId(value, context) {
   if (typeof value !== JS_TYPE_STRING || !/^[0-9a-f]{64}$/u.test(value)) {
-    throw new TypeError(
-      `${context} must contain exactly 64 lowercase hexadecimal characters`,
-    );
+    rejectType(`${context} must contain exactly 64 lowercase hexadecimal characters`);
   }
   if (/^0{64}$/u.test(value)) {
-    throw new TypeError(`${context} must not be the zero identifier`);
+    rejectType(`${context} must not be the zero identifier`);
   }
   return Buffer.from(value, HEX_ENCODING);
 }
@@ -5469,39 +5303,39 @@ function decodeReplicationIdValue(payload, context) {
     `${context}.value`,
   );
   if (bytes.every((byte) => byte === 0)) {
-    throw new TypeError(`${context} must not be the zero identifier`);
+    rejectType(`${context} must not be the zero identifier`);
   }
   return bytes.toString(HEX_ENCODING);
 }
 
 function assertExactObjectKeys(value, expectedKeys, context) {
   if (!isPlainObject(value)) {
-    throw new TypeError(`${context} must be an object`);
+    rejectType(`${context} must be an object`);
   }
   assertOnlyObjectKeys(value, expectedKeys, context);
   const missing = expectedKeys.find(
     (key) => !Object.prototype.hasOwnProperty.call(value, key),
   );
   if (missing !== undefined) {
-    throw new TypeError(`${context} is missing field ${missing}`);
+    rejectType(`${context} is missing field ${missing}`);
   }
 }
 
 function decodeNonzeroFixedBytesHex(payload, context) {
   const bytes = decodeFixedBytesValue(payload, 32, context);
   if (bytes.every((byte) => byte === 0)) {
-    throw new TypeError(`${context} must not be zero`);
+    rejectType(`${context} must not be zero`);
   }
   return bytes.toString(HEX_ENCODING);
 }
 
 function encodeExactAccountIdValue(value, context) {
   if (typeof value !== JS_TYPE_STRING || value.trim() !== value) {
-    throw new TypeError(`${context} must be an exact canonical I105 account id`);
+    rejectType(`${context} must be an exact canonical I105 account id`);
   }
   const canonical = normalizeAccountId(value, context);
   if (canonical !== value) {
-    throw new TypeError(`${context} must be an exact canonical I105 account id`);
+    rejectType(`${context} must be an exact canonical I105 account id`);
   }
   return encodeAccountIdValue(canonical, context);
 }
@@ -5514,17 +5348,13 @@ function encodeProviderIngestCompletionSignerPolicyValue(value, context) {
   );
   const revision = normalizeU64Input(value.revision, `${context}.revision`);
   if (revision === 0n) {
-    throw new TypeError(`${context}.revision must be greater than zero`);
+    rejectType(`${context}.revision must be greater than zero`);
   }
   if (revision === 1n && value.predecessor_digest !== null) {
-    throw new TypeError(
-      `${context}.predecessor_digest must be null at revision 1`,
-    );
+    rejectType(`${context}.predecessor_digest must be null at revision 1`);
   }
   if (revision > 1n && value.predecessor_digest === null) {
-    throw new TypeError(
-      `${context}.predecessor_digest is required after revision 1`,
-    );
+    rejectType(`${context}.predecessor_digest is required after revision 1`);
   }
   const policyId = decodeCanonicalReplicationId(
     value.policy_id,
@@ -5562,28 +5392,24 @@ function decodeProviderIngestCompletionSignerPolicyValue(payload, context) {
   ]);
   const revision = decodeU64NumberValue(fields.revision, `${context}.revision`);
   if (revision === 0) {
-    throw new TypeError(`${context}.revision must be greater than zero`);
+    rejectType(`${context}.revision must be greater than zero`);
   }
   const predecessorDigest = decodeOptionValue(
     fields.predecessor_digest,
     (entry, innerContext) => {
       const bytes = decodeFixedByteArrayArchiveValue(entry, 32, innerContext);
       if (bytes.every((byte) => byte === 0)) {
-        throw new TypeError(`${innerContext} must not be zero`);
+        rejectType(`${innerContext} must not be zero`);
       }
       return bytes.toString(HEX_ENCODING);
     },
     `${context}.predecessor_digest`,
   );
   if (revision === 1 && predecessorDigest !== null) {
-    throw new TypeError(
-      `${context}.predecessor_digest must be null at revision 1`,
-    );
+    rejectType(`${context}.predecessor_digest must be null at revision 1`);
   }
   if (revision > 1 && predecessorDigest === null) {
-    throw new TypeError(
-      `${context}.predecessor_digest is required after revision 1`,
-    );
+    rejectType(`${context}.predecessor_digest is required after revision 1`);
   }
   return {
     policy_id: decodeNonzeroFixedBytesHex(
@@ -5621,28 +5447,20 @@ function encodeProviderIngestCompletionAuthorityValue(value, context) {
   ]);
 }
 
-function decodeProviderIngestCompletionAuthorityValue(payload, context) {
-  const fields = decodeStructFields(payload, context, [
-    "provider_owner",
-    "signer_policy",
-  ]);
-  return {
-    provider_owner: decodeAccountIdValue(
-      fields.provider_owner,
-      `${context}.provider_owner`,
-    ),
-    signer_policy: decodeProviderIngestCompletionSignerPolicyValue(
-      fields.signer_policy,
-      `${context}.signer_policy`,
-    ),
-  };
-}
+const ProviderIngestCompletionAuthorityValueFields = [
+    ["provider_owner", decodeAccountIdValue, 0],
+    ["signer_policy", decodeProviderIngestCompletionSignerPolicyValue, 0],
+  ];
+
+  function decodeProviderIngestCompletionAuthorityValue(payload, context) {
+    return decodeRecordFields(payload, context, ProviderIngestCompletionAuthorityValueFields);
+  }
 
 function encodeProviderIngestFinalizedAnchorValue(value, context) {
   assertExactObjectKeys(value, ["height", "block_hash"], context);
   const height = normalizeU64Input(value.height, `${context}.height`);
   if (height === 0n) {
-    throw new TypeError(`${context}.height must be greater than zero`);
+    rejectType(`${context}.height must be greater than zero`);
   }
   return encodeStructValue([
     [encodeU64Value(height, `${context}.height`)],
@@ -5659,7 +5477,7 @@ function decodeProviderIngestFinalizedAnchorValue(payload, context) {
   const fields = decodeStructFields(payload, context, ["height", "block_hash"]);
   const height = decodeU64NumberValue(fields.height, `${context}.height`);
   if (height === 0) {
-    throw new TypeError(`${context}.height must be greater than zero`);
+    rejectType(`${context}.height must be greater than zero`);
   }
   return {
     height,
@@ -5682,11 +5500,11 @@ function decodeReplicationAssignmentValue(payload, context) {
     `${context}.provider_id`,
   );
   if (providerId.every((byte) => byte === 0)) {
-    throw new TypeError(`${context}.provider_id must not be zero`);
+    rejectType(`${context}.provider_id must not be zero`);
   }
   const sliceGib = decodeU64Value(fields.slice_gib, `${context}.slice_gib`);
   if (sliceGib === "0") {
-    throw new TypeError(`${context}.slice_gib must be greater than zero`);
+    rejectType(`${context}.slice_gib must be greater than zero`);
   }
   const lane = decodeOptionValue(
     fields.lane,
@@ -5699,7 +5517,7 @@ function decodeReplicationAssignmentValue(payload, context) {
       Buffer.byteLength(lane, UTF8_ENCODING) > 64 ||
       !/^[a-z0-9._-]+$/u.test(lane))
   ) {
-    throw new TypeError(`${context}.lane must be a canonical lane label`);
+    rejectType(`${context}.lane must be a canonical lane label`);
   }
   return {
     providerIdHex: providerId.toString(HEX_ENCODING),
@@ -5727,7 +5545,7 @@ function decodeReplicationOrderSlaValue(payload, context) {
     `${context}.min_por_success_percent_milli`,
   );
   if (ingestDeadlineSecs === 0) {
-    throw new TypeError(`${context}.ingest_deadline_secs must be greater than zero`);
+    rejectType(`${context}.ingest_deadline_secs must be greater than zero`);
   }
   if (
     minAvailabilityPercentMilli === 0 ||
@@ -5735,7 +5553,7 @@ function decodeReplicationOrderSlaValue(payload, context) {
     minPorSuccessPercentMilli === 0 ||
     minPorSuccessPercentMilli > 100_000
   ) {
-    throw new TypeError(`${context} percentage thresholds must be in 1..=100000`);
+    rejectType(`${context} percentage thresholds must be in 1..=100000`);
   }
   return {
     ingestDeadlineSecs,
@@ -5754,7 +5572,7 @@ function decodeReplicationOrderMetadataValue(payload, context) {
     Buffer.byteLength(key, UTF8_ENCODING) > 128 ||
     !/^[a-z0-9._-]+$/u.test(key)
   ) {
-    throw new TypeError(`${context}.key must be a canonical metadata key`);
+    rejectType(`${context}.key must be a canonical metadata key`);
   }
   if (
     value.length === 0 ||
@@ -5762,7 +5580,7 @@ function decodeReplicationOrderMetadataValue(payload, context) {
     Buffer.byteLength(value, UTF8_ENCODING) > 4096 ||
     /\p{Cc}/u.test(value)
   ) {
-    throw new TypeError(`${context}.value must be canonical and at most 4096 bytes`);
+    rejectType(`${context}.value must be canonical and at most 4096 bytes`);
   }
   return { key, value };
 }
@@ -5784,9 +5602,7 @@ export function validateSorafsReplicationOrderPayloadV1(
     bytes.length === 0 ||
     bytes.length > SORAFS_REPLICATION_ORDER_MAX_PAYLOAD_BYTES_V1
   ) {
-    throw new TypeError(
-      `ReplicationOrderV1 payload must contain 1..${SORAFS_REPLICATION_ORDER_MAX_PAYLOAD_BYTES_V1} bytes`,
-    );
+    rejectType(`ReplicationOrderV1 payload must contain 1..${SORAFS_REPLICATION_ORDER_MAX_PAYLOAD_BYTES_V1} bytes`);
   }
   const frame = decodeNoritoFrame(
     bytes,
@@ -5799,9 +5615,7 @@ export function validateSorafsReplicationOrderPayloadV1(
     frame.flags,
   );
   if (!canonical.equals(bytes)) {
-    throw new TypeError(
-      "ReplicationOrderV1 payload must use canonical unpadded Norito framing",
-    );
+    rejectType("ReplicationOrderV1 payload must use canonical unpadded Norito framing");
   }
 
   return withNoritoLengthFlags(frame.flags, () => {
@@ -5819,7 +5633,7 @@ export function validateSorafsReplicationOrderPayloadV1(
       "metadata",
     ]);
     if (decodeU8Value(fields.version, "ReplicationOrderV1.version") !== 1) {
-      throw new TypeError("ReplicationOrderV1.version must be 1");
+      rejectType("ReplicationOrderV1.version must be 1");
     }
     const orderIdBytes = decodeFixedBytesValue(
       fields.order_id,
@@ -5827,7 +5641,7 @@ export function validateSorafsReplicationOrderPayloadV1(
       "ReplicationOrderV1.order_id",
     );
     if (orderIdBytes.every((byte) => byte === 0)) {
-      throw new TypeError("ReplicationOrderV1.order_id must not be zero");
+      rejectType("ReplicationOrderV1.order_id must not be zero");
     }
     const orderId = orderIdBytes.toString(HEX_ENCODING);
     if (expectedOrderId !== null) {
@@ -5836,9 +5650,7 @@ export function validateSorafsReplicationOrderPayloadV1(
         ISSUE_ORDER_ID_CONTEXT,
       );
       if (!expected.equals(orderIdBytes)) {
-        throw new TypeError(
-          "IssueReplicationOrder.order_id must match ReplicationOrderV1.order_id",
-        );
+        rejectType("IssueReplicationOrder.order_id must match ReplicationOrderV1.order_id");
       }
     }
 
@@ -5855,9 +5667,7 @@ export function validateSorafsReplicationOrderPayloadV1(
       manifestCid[3] !== 32 ||
       manifestCid.subarray(4).every((byte) => byte === 0)
     ) {
-      throw new TypeError(
-        "ReplicationOrderV1.manifest_cid must be canonical CIDv1/dag-cbor/BLAKE3-256 bytes",
-      );
+      rejectType("ReplicationOrderV1.manifest_cid must be canonical CIDv1/dag-cbor/BLAKE3-256 bytes");
     }
     const manifestDigestHex = decodeNonzeroFixedBytesHex(
       fields.manifest_digest,
@@ -5868,9 +5678,7 @@ export function validateSorafsReplicationOrderPayloadV1(
       "ReplicationOrderV1.chunking_profile",
     );
     if (!SORAFS_REPLICATION_ORDER_CHUNKER_HANDLES_V1.has(chunkingProfile)) {
-      throw new TypeError(
-        "ReplicationOrderV1.chunking_profile must be a canonical registered handle",
-      );
+      rejectType("ReplicationOrderV1.chunking_profile must be a canonical registered handle");
     }
 
     const targetReplicas = decodeU16Value(
@@ -5878,7 +5686,7 @@ export function validateSorafsReplicationOrderPayloadV1(
       "ReplicationOrderV1.target_replicas",
     );
     if (targetReplicas === 0) {
-      throw new TypeError("ReplicationOrderV1.target_replicas must be greater than zero");
+      rejectType("ReplicationOrderV1.target_replicas must be greater than zero");
     }
     const assignments = decodeNoritoVec(
       fields.assignments,
@@ -5894,15 +5702,11 @@ export function validateSorafsReplicationOrderPayloadV1(
       assignments.length > 1024 ||
       targetReplicas > assignments.length
     ) {
-      throw new TypeError(
-        "ReplicationOrderV1 assignments must contain 1..1024 entries and cover target_replicas",
-      );
+      rejectType("ReplicationOrderV1 assignments must contain 1..1024 entries and cover target_replicas");
     }
     for (let index = 1; index < assignments.length; index += 1) {
       if (assignments[index - 1].providerIdHex >= assignments[index].providerIdHex) {
-        throw new TypeError(
-          "ReplicationOrderV1 assignments must use unique, strictly increasing provider_id values",
-        );
+        rejectType("ReplicationOrderV1 assignments must use unique, strictly increasing provider_id values");
       }
     }
 
@@ -5915,18 +5719,14 @@ export function validateSorafsReplicationOrderPayloadV1(
       "ReplicationOrderV1.deadline_at",
     );
     if (BigInt(deadlineAt) <= BigInt(issuedAt)) {
-      throw new TypeError(
-        "ReplicationOrderV1.deadline_at must be greater than issued_at",
-      );
+      rejectType("ReplicationOrderV1.deadline_at must be greater than issued_at");
     }
     const sla = decodeReplicationOrderSlaValue(
       fields.sla,
       "ReplicationOrderV1.sla",
     );
     if (BigInt(sla.ingestDeadlineSecs) > BigInt(deadlineAt) - BigInt(issuedAt)) {
-      throw new TypeError(
-        "ReplicationOrderV1.sla.ingest_deadline_secs exceeds the order window",
-      );
+      rejectType("ReplicationOrderV1.sla.ingest_deadline_secs exceeds the order window");
     }
     const metadata = decodeNoritoVec(
       fields.metadata,
@@ -5942,7 +5742,7 @@ export function validateSorafsReplicationOrderPayloadV1(
     let metadataBytes = 0;
     for (const entry of metadata) {
       if (metadataKeys.has(entry.key)) {
-        throw new TypeError("ReplicationOrderV1.metadata contains a duplicate key");
+        rejectType("ReplicationOrderV1.metadata contains a duplicate key");
       }
       metadataKeys.add(entry.key);
       metadataBytes +=
@@ -5950,7 +5750,7 @@ export function validateSorafsReplicationOrderPayloadV1(
         Buffer.byteLength(entry.value, UTF8_ENCODING);
     }
     if (metadataBytes > 64 * 1024) {
-      throw new TypeError("ReplicationOrderV1.metadata exceeds the 65536-byte limit");
+      rejectType("ReplicationOrderV1.metadata exceeds the 65536-byte limit");
     }
     return {
       orderId,
@@ -5997,9 +5797,7 @@ function encodeReplicationOrderInstruction(instruction) {
       ISSUE_ORDER_DEADLINE_CONTEXT,
     );
     if (deadlineEpoch <= issuedEpoch) {
-      throw new TypeError(
-        ISSUE_ORDER_DEADLINE_MESSAGE,
-      );
+      rejectType(ISSUE_ORDER_DEADLINE_MESSAGE);
     }
     return encodeInstructionEnvelope(
       ISSUE_REPLICATION_ORDER_WIRE_ID,
@@ -6047,9 +5845,7 @@ function encodeReplicationOrderInstruction(instruction) {
       COMPLETE_ORDER_REVISION_CONTEXT,
     );
     if (expectedAssignmentRevision === 0n) {
-      throw new TypeError(
-        COMPLETE_ORDER_REVISION_MESSAGE,
-      );
+      rejectType(COMPLETE_ORDER_REVISION_MESSAGE);
     }
     return encodeInstructionEnvelope(
       COMPLETE_REPLICATION_ORDER_WIRE_ID,
@@ -6115,7 +5911,7 @@ function encodeReplicationOrderInstruction(instruction) {
       ]),
     );
   }
-  throw new TypeError("unsupported SoraFS replication-order instruction");
+  rejectType("unsupported SoraFS replication-order instruction");
 }
 
 function decodeReplicationOrderInstructionPayload(wireId, payload) {
@@ -6150,9 +5946,7 @@ function decodeReplicationOrderInstructionPayload(wireId, payload) {
       "IssueReplicationOrder.musubi_archive",
     );
     if (deadlineEpoch <= issuedEpoch) {
-      throw new TypeError(
-        ISSUE_ORDER_DEADLINE_MESSAGE,
-      );
+      rejectType(ISSUE_ORDER_DEADLINE_MESSAGE);
     }
     return {
       IssueReplicationOrder: {
@@ -6178,9 +5972,7 @@ function decodeReplicationOrderInstructionPayload(wireId, payload) {
       COMPLETE_ORDER_REVISION_CONTEXT,
     );
     if (expectedAssignmentRevision === 0) {
-      throw new TypeError(
-        COMPLETE_ORDER_REVISION_MESSAGE,
-      );
+      rejectType(COMPLETE_ORDER_REVISION_MESSAGE);
     }
     return {
       CompleteReplicationOrder: {
@@ -6245,9 +6037,7 @@ function encodeGovernanceInstruction(instruction) {
       encodeCastPlainBallotPayload(instruction.CastPlainBallot),
     );
   }
-  throw new Error(
-    `Internal Norito canonicalization does not support governance instruction ${describeInstructionShape(instruction)}`,
-  );
+  rejectError(`Internal Norito canonicalization does not support governance instruction ${describeInstructionShape(instruction)}`);
 }
 
 function encodeSocialInstruction(instruction) {
@@ -6282,9 +6072,7 @@ function encodeSocialInstruction(instruction) {
       ]),
     );
   }
-  throw new Error(
-    `Internal Norito canonicalization does not support social instruction ${describeInstructionShape(instruction)}`,
-  );
+  rejectError(`Internal Norito canonicalization does not support social instruction ${describeInstructionShape(instruction)}`);
 }
 
 function encodeContractLifecycleOwnerValue(value, context) {
@@ -6295,11 +6083,11 @@ function encodeContractLifecycleOwnerValue(value, context) {
   }
   if (value.owner === "Parliament") {
     if (value.value !== null) {
-      throw new TypeError(`${context}.value must be null for Parliament`);
+      rejectType(`${context}.value must be null for Parliament`);
     }
     return encodeEnumTagValue(1);
   }
-  throw new TypeError(`${context}.owner must be Account or Parliament`);
+  rejectType(`${context}.owner must be Account or Parliament`);
 }
 
 function decodeContractLifecycleOwnerValue(payload, context) {
@@ -6317,7 +6105,7 @@ function decodeContractLifecycleOwnerValue(payload, context) {
     reader.assertEof();
     return { owner: "Parliament", value: null };
   }
-  throw new TypeError(`${context}.owner contains unsupported variant ${tag}`);
+  rejectType(`${context}.owner contains unsupported variant ${tag}`);
 }
 
 function encodeSmartContractInstruction(instruction) {
@@ -6560,9 +6348,7 @@ function encodeSmartContractInstructionCompact(instruction) {
       ]),
     );
   }
-  throw new Error(
-    `Internal Norito canonicalization does not support smart-contract instruction ${describeInstructionShape(instruction)}`,
-  );
+  rejectError(`Internal Norito canonicalization does not support smart-contract instruction ${describeInstructionShape(instruction)}`);
 }
 
 const GOVERNANCE_HASH32_WIRE_VERSION_V1 = 1;
@@ -6575,7 +6361,7 @@ function encodeGovernanceHash32Value(value, context) {
     value !== value.toLowerCase() ||
     !/^[0-9a-f]{64}$/u.test(value)
   ) {
-    throw new TypeError(`${context} must be exactly 32 bytes of lowercase hexadecimal`);
+    rejectType(`${context} must be exactly 32 bytes of lowercase hexadecimal`);
   }
   return encodeStructValue([
     [encodeU16Value(GOVERNANCE_HASH32_WIRE_VERSION_V1, `${context}.version`)],
@@ -6592,11 +6378,11 @@ function decodeGovernanceHash32Value(payload, context) {
   ]);
   const version = decodeU16Value(fields.version, `${context}.version`);
   if (version !== GOVERNANCE_HASH32_WIRE_VERSION_V1) {
-    throw new Error(`${context}.version must be ${GOVERNANCE_HASH32_WIRE_VERSION_V1}`);
+    rejectError(`${context}.version must be ${GOVERNANCE_HASH32_WIRE_VERSION_V1}`);
   }
   const declaredLength = decodeU16Value(fields.declared_len, `${context}.declared_len`);
   if (declaredLength !== GOVERNANCE_HASH32_LENGTH) {
-    throw new Error(`${context}.declared_len must be ${GOVERNANCE_HASH32_LENGTH}`);
+    rejectError(`${context}.declared_len must be ${GOVERNANCE_HASH32_LENGTH}`);
   }
   return decodeFixedBytesValue(
     fields.bytes,
@@ -6708,9 +6494,7 @@ function encodeKaigiInstruction(instruction) {
       encodeReportKaigiRelayHealthPayload(instruction.ReportKaigiRelayHealth),
     );
   }
-  throw new Error(
-    `Internal Norito canonicalization does not support Kaigi instruction ${describeInstructionShape(instruction)}`,
-  );
+  rejectError(`Internal Norito canonicalization does not support Kaigi instruction ${describeInstructionShape(instruction)}`);
 }
 
 function encodeCreateKaigiPayload(value) {
@@ -6750,7 +6534,7 @@ function encodeRecordKaigiUsagePayload(value) {
     [encodeKaigiIdValue(value.call_id, "Kaigi.RecordKaigiUsage.call_id")],
     [encodeU64NumberValue(value.duration_ms, "Kaigi.RecordKaigiUsage.duration_ms")],
     [encodeU64NumberValue(value.billed_gas, "Kaigi.RecordKaigiUsage.billed_gas")],
-    [encodeOptionValue(value.usage_commitment, encodeHashValue, "Kaigi.RecordKaigiUsage.usage_commitment")],
+    [encodeOptionValue(value.usage_commitment, encodeKaigiScalarValue, "Kaigi.RecordKaigiUsage.usage_commitment")],
     [encodeOptionValue(value.proof, encodeByteVecValue, "Kaigi.RecordKaigiUsage.proof")],
   ]);
 }
@@ -6821,9 +6605,7 @@ function encodeVerifyingKeyInstruction(instruction) {
       );
     }
   }
-  throw new Error(
-    `Internal Norito canonicalization does not support verifying-key instruction ${describeInstructionShape(instruction)}`,
-  );
+  rejectError(`Internal Norito canonicalization does not support verifying-key instruction ${describeInstructionShape(instruction)}`);
 }
 
 function encodeVerifyingKeyInstructionPayload(value, context) {
@@ -6869,9 +6651,7 @@ function encodeZkInstruction(instruction) {
       return encodeInstructionEnvelope(wireId, encode(instruction[key], `zk.${key}`));
     }
   }
-  throw new Error(
-    `Internal Norito canonicalization does not support zk instruction ${describeInstructionShape(instruction)}`,
-  );
+  rejectError(`Internal Norito canonicalization does not support zk instruction ${describeInstructionShape(instruction)}`);
 }
 
 function encodeRegisterZkAssetPayload(value) {
@@ -6965,9 +6745,7 @@ function encodeRwaInstruction(instruction) {
       return encodeEnumInstruction("iroha.rwa", index, encode(instruction[key], key));
     }
   }
-  throw new Error(
-    `Internal Norito canonicalization does not support RWA instruction ${describeInstructionShape(instruction)}`,
-  );
+  rejectError(`Internal Norito canonicalization does not support RWA instruction ${describeInstructionShape(instruction)}`);
 }
 
 function encodeKaigiIdValue(value, context) {
@@ -6977,7 +6755,7 @@ function encodeKaigiIdValue(value, context) {
   );
   const separator = literal.indexOf(":");
   if (separator <= 0 || separator === literal.length - 1) {
-    throw new Error(`${context} must use domain:call format`);
+    rejectError(`${context} must use domain:call format`);
   }
   return encodeStructValue([
     [encodeDomainIdValue(literal.slice(0, separator), `${context}.domain_id`)],
@@ -6985,13 +6763,14 @@ function encodeKaigiIdValue(value, context) {
   ]);
 }
 
-function decodeKaigiIdValue(payload, context) {
-  const fields = decodeStructFields(payload, context, ["domain_id", "call_name"]);
-  return {
-    domain_id: decodeDomainIdValue(fields.domain_id, `${context}.domain_id`),
-    call_name: decodeNameValue(fields.call_name, `${context}.call_name`),
-  };
-}
+const KaigiIdValueFields = [
+    ["domain_id", decodeDomainIdValue, 0],
+    ["call_name", decodeNameValue, 0],
+  ];
+
+  function decodeKaigiIdValue(payload, context) {
+    return decodeRecordFields(payload, context, KaigiIdValueFields);
+  }
 
 function encodeNewKaigiValue(value, context) {
   return encodeStructValue([
@@ -7010,92 +6789,66 @@ function encodeNewKaigiValue(value, context) {
   ]);
 }
 
-function decodeNewKaigiPayload(payload, context) {
-  const fields = decodeStructFields(payload, context, [
-    "id",
-    "host",
-    "title",
-    "description",
-    "max_participants",
-    "gas_rate_per_minute",
-    "metadata",
-    "scheduled_start_ms",
-    "billing_account",
-    "privacy_mode",
-    "room_policy",
-    "relay_manifest",
-  ]);
-  return {
-    id: decodeKaigiIdValue(fields.id, `${context}.id`),
-    host: decodeAccountIdValue(fields.host, `${context}.host`),
-    title: decodeOptionValue(fields.title, decodeStringValue, `${context}.title`),
-    description: decodeOptionValue(
-      fields.description,
-      decodeStringValue,
-      `${context}.description`,
-    ),
-    max_participants: decodeOptionValue(
-      fields.max_participants,
-      decodeU32Value,
-      `${context}.max_participants`,
-    ),
-    gas_rate_per_minute: decodeU64NumberValue(
-      fields.gas_rate_per_minute,
-      `${context}.gas_rate_per_minute`,
-    ),
-    metadata: decodeMetadataValue(fields.metadata, `${context}.metadata`),
-    scheduled_start_ms: decodeOptionValue(
-      fields.scheduled_start_ms,
-      decodeU64NumberValue,
-      `${context}.scheduled_start_ms`,
-    ),
-    billing_account: decodeOptionValue(
-      fields.billing_account,
-      decodeAccountIdValue,
-      `${context}.billing_account`,
-    ),
-    privacy_mode: decodeKaigiPrivacyModeValue(
-      fields.privacy_mode,
-      `${context}.privacy_mode`,
-    ),
-    room_policy: decodeKaigiRoomPolicyValue(fields.room_policy, `${context}.room_policy`),
-    relay_manifest: decodeOptionValue(
-      fields.relay_manifest,
-      decodeKaigiRelayManifestValue,
-      `${context}.relay_manifest`,
-    ),
-  };
+const NewKaigiPayloadFields = [
+    ["id", decodeKaigiIdValue, 0],
+    ["host", decodeAccountIdValue, 0],
+    ["title", decodeStringValue, 1],
+    ["description", decodeStringValue, 1],
+    ["max_participants", decodeU32Value, 1],
+    ["gas_rate_per_minute", decodeU64NumberValue, 0],
+    ["metadata", decodeMetadataValue, 0],
+    ["scheduled_start_ms", decodeU64NumberValue, 1],
+    ["billing_account", decodeAccountIdValue, 1],
+    ["privacy_mode", decodeKaigiPrivacyModeValue, 0],
+    ["room_policy", decodeKaigiRoomPolicyValue, 0],
+    ["relay_manifest", decodeKaigiRelayManifestValue, 1],
+  ];
+
+  function decodeNewKaigiPayload(payload, context) {
+    return decodeRecordFields(payload, context, NewKaigiPayloadFields);
+  }
+
+function encodeKaigiScalarValue(value, context) {
+  return Buffer.from(kaigiScalarBytesV1(value, context));
+}
+
+function decodeKaigiScalarValue(payload, context) {
+  return Array.from(kaigiScalarBytesV1(payload, context));
 }
 
 function encodeKaigiParticipantCommitmentValue(value, context) {
+  if (Object.keys(value).length !== 1 || !("commitment" in value)) {
+    rejectType(`${context} requires only commitment`);
+  }
   return encodeStructValue([
-    [encodeHashValue(value.commitment, `${context}.commitment`)],
-    [encodeOptionValue(value.alias_tag, encodeNoritoStringValue, `${context}.alias_tag`)],
+    [encodeKaigiScalarValue(value.commitment, `${context}.commitment`)],
   ]);
 }
 
-function decodeKaigiParticipantCommitmentValue(payload, context) {
-  const fields = decodeStructFields(payload, context, ["commitment", "alias_tag"]);
-  return {
-    commitment: decodeHashValue(fields.commitment, `${context}.commitment`),
-    alias_tag: decodeOptionValue(fields.alias_tag, decodeStringValue, `${context}.alias_tag`),
-  };
-}
+const KaigiParticipantCommitmentValueFields = [
+    ["commitment", decodeKaigiScalarValue, 0],
+  ];
+
+  function decodeKaigiParticipantCommitmentValue(payload, context) {
+    return decodeRecordFields(payload, context, KaigiParticipantCommitmentValueFields);
+  }
 
 function encodeKaigiParticipantNullifierValue(value, context) {
+  if (Object.keys(value).length !== 1 || !("digest" in value)) {
+    rejectType(`${context} requires only digest`);
+  }
   return encodeStructValue([
-    [encodeHashValue(value.digest, `${context}.digest`)],
-    [encodeU64NumberValue(value.issued_at_ms, `${context}.issued_at_ms`)],
+    [encodeKaigiScalarValue(value.digest, `${context}.digest`)],
   ]);
 }
 
-function decodeKaigiParticipantNullifierValue(payload, context) {
-  const fields = decodeStructFields(payload, context, ["digest", "issued_at_ms"]);
-  return {
-    digest: decodeHashValue(fields.digest, `${context}.digest`),
-    issued_at_ms: decodeU64NumberValue(fields.issued_at_ms, `${context}.issued_at_ms`),
-  };
-}
+const KaigiParticipantNullifierValueFields = [
+    ["digest", decodeKaigiScalarValue, 0],
+  ];
+
+  function decodeKaigiParticipantNullifierValue(payload, context) {
+    return decodeRecordFields(payload, context, KaigiParticipantNullifierValueFields);
+  }
 
 function encodeKaigiRelayManifestValue(value, context) {
   return encodeStructValue([
@@ -7106,17 +6859,14 @@ function encodeKaigiRelayManifestValue(value, context) {
   ]);
 }
 
-function decodeKaigiRelayManifestValue(payload, context) {
-  const fields = decodeStructFields(payload, context, ["hops", "expiry_ms"]);
-  return {
-    hops: decodeNoritoVec(
-      fields.hops,
-      (entry, index) => decodeKaigiRelayHopValue(entry, `${context}.hops[${index}]`),
-      `${context}.hops`,
-    ),
-    expiry_ms: decodeU64NumberValue(fields.expiry_ms, `${context}.expiry_ms`),
-  };
-}
+const KaigiRelayManifestValueFields = [
+    ["hops", decodeKaigiRelayHopValue, 2],
+    ["expiry_ms", decodeU64NumberValue, 0],
+  ];
+
+  function decodeKaigiRelayManifestValue(payload, context) {
+    return decodeRecordFields(payload, context, KaigiRelayManifestValueFields);
+  }
 
 function encodeKaigiRelayHopValue(value, context) {
   return encodeStructValue([
@@ -7126,21 +6876,15 @@ function encodeKaigiRelayHopValue(value, context) {
   ]);
 }
 
-function decodeKaigiRelayHopValue(payload, context) {
-  const fields = decodeStructFields(payload, context, [
-    "relay_id",
-    "hpke_public_key",
-    "weight",
-  ]);
-  return {
-    relay_id: decodeAccountIdValue(fields.relay_id, `${context}.relay_id`),
-    hpke_public_key: decodeByteVecAsBase64(
-      fields.hpke_public_key,
-      `${context}.hpke_public_key`,
-    ),
-    weight: decodeU8Value(fields.weight, `${context}.weight`),
-  };
-}
+const KaigiRelayHopValueFields = [
+    ["relay_id", decodeAccountIdValue, 0],
+    ["hpke_public_key", decodeByteVecAsBase64, 0],
+    ["weight", decodeU8Value, 0],
+  ];
+
+  function decodeKaigiRelayHopValue(payload, context) {
+    return decodeRecordFields(payload, context, KaigiRelayHopValueFields);
+  }
 
 function encodeKaigiRelayRegistrationValue(value, context) {
   return encodeStructValue([
@@ -7150,21 +6894,15 @@ function encodeKaigiRelayRegistrationValue(value, context) {
   ]);
 }
 
-function decodeKaigiRelayRegistrationValue(payload, context) {
-  const fields = decodeStructFields(payload, context, [
-    "relay_id",
-    "hpke_public_key",
-    "bandwidth_class",
-  ]);
-  return {
-    relay_id: decodeAccountIdValue(fields.relay_id, `${context}.relay_id`),
-    hpke_public_key: decodeByteVecAsBase64(
-      fields.hpke_public_key,
-      `${context}.hpke_public_key`,
-    ),
-    bandwidth_class: decodeU8Value(fields.bandwidth_class, `${context}.bandwidth_class`),
-  };
-}
+const KaigiRelayRegistrationValueFields = [
+    ["relay_id", decodeAccountIdValue, 0],
+    ["hpke_public_key", decodeByteVecAsBase64, 0],
+    ["bandwidth_class", decodeU8Value, 0],
+  ];
+
+  function decodeKaigiRelayRegistrationValue(payload, context) {
+    return decodeRecordFields(payload, context, KaigiRelayRegistrationValueFields);
+  }
 
 function encodeKaigiRelayHealthStatusValue(value, context) {
   const status = typeof value === JS_TYPE_STRING ? value : value?.status;
@@ -7176,9 +6914,7 @@ function encodeKaigiRelayHealthStatusValue(value, context) {
     case "Unavailable":
       return encodeEnumTagValue(2);
     default:
-      throw new TypeError(
-        `${context} must be Healthy, Degraded, or Unavailable`,
-      );
+      rejectType(`${context} must be Healthy, Degraded, or Unavailable`);
   }
 }
 
@@ -7198,14 +6934,14 @@ function decodeKaigiRelayHealthStatusValue(payload, context) {
       status = "Unavailable";
       break;
     default:
-      throw new Error(`${context} uses unsupported relay health status ${tag}`);
+      rejectError(`${context} uses unsupported relay health status ${tag}`);
   }
   return { status, state: null };
 }
 
 function validateKaigiRelayHealthNotesValue(value, context) {
   if (typeof value !== JS_TYPE_STRING) {
-    throw new TypeError(`${context} must be a string`);
+    rejectType(`${context} must be a string`);
   }
   assertWellFormedUtf16(value, context);
   let scalarCount = 0;
@@ -7216,9 +6952,7 @@ function validateKaigiRelayHealthNotesValue(value, context) {
     }
     scalarCount += 1;
     if (scalarCount > 512) {
-      throw new RangeError(
-        `${context} must not exceed 512 Unicode scalar values`,
-      );
+      rejectRange(`${context} must not exceed 512 Unicode scalar values`);
     }
   }
   return value;
@@ -7341,35 +7075,20 @@ function encodeNewRwaValue(value, context) {
   ]);
 }
 
-function decodeNewRwaValue(payload, context) {
-  const fields = decodeStructFields(payload, context, [
-    "domain",
-    "quantity",
-    "spec",
-    "primary_reference",
-    "status",
-    "metadata",
-    "parents",
-    "controls",
-  ]);
-  return {
-    domain: decodeArchivedDomainIdValue(fields.domain, `${context}.domain`),
-    quantity: decodeQuantityValue(fields.quantity, `${context}.quantity`),
-    spec: decodeNumericSpecValue(fields.spec, `${context}.spec`),
-    primary_reference: decodeStringValue(
-      fields.primary_reference,
-      `${context}.primary_reference`,
-    ),
-    status: decodeOptionValue(fields.status, decodeNameValue, `${context}.status`),
-    metadata: decodeMetadataValue(fields.metadata, `${context}.metadata`),
-    parents: decodeNoritoVec(
-      fields.parents,
-      (entry, index) => decodeRwaParentRefValue(entry, `${context}.parents[${index}]`),
-      `${context}.parents`,
-    ),
-    controls: decodeRwaControlPolicyValue(fields.controls, `${context}.controls`),
-  };
-}
+const NewRwaValueFields = [
+    ["domain", decodeArchivedDomainIdValue, 0],
+    ["quantity", decodeQuantityValue, 0],
+    ["spec", decodeNumericSpecValue, 0],
+    ["primary_reference", decodeStringValue, 0],
+    ["status", decodeNameValue, 1],
+    ["metadata", decodeMetadataValue, 0],
+    ["parents", decodeRwaParentRefValue, 2],
+    ["controls", decodeRwaControlPolicyValue, 0],
+  ];
+
+  function decodeNewRwaValue(payload, context) {
+    return decodeRecordFields(payload, context, NewRwaValueFields);
+  }
 
 function encodeRwaParentRefValue(value, context) {
   return encodeStructValue([
@@ -7378,13 +7097,14 @@ function encodeRwaParentRefValue(value, context) {
   ]);
 }
 
-function decodeRwaParentRefValue(payload, context) {
-  const fields = decodeStructFields(payload, context, ["rwa", "quantity"]);
-  return {
-    rwa: decodeRwaIdValue(fields.rwa, `${context}.rwa`),
-    quantity: decodeQuantityValue(fields.quantity, `${context}.quantity`),
-  };
-}
+const RwaParentRefValueFields = [
+    ["rwa", decodeRwaIdValue, 0],
+    ["quantity", decodeQuantityValue, 0],
+  ];
+
+  function decodeRwaParentRefValue(payload, context) {
+    return decodeRecordFields(payload, context, RwaParentRefValueFields);
+  }
 
 function encodeRwaControlPolicyValue(value, context) {
   return encodeStructValue([
@@ -7401,36 +7121,18 @@ function encodeRwaControlPolicyValue(value, context) {
   ]);
 }
 
-function decodeRwaControlPolicyValue(payload, context) {
-  const fields = decodeStructFields(payload, context, [
-    "controller_accounts",
-    "controller_roles",
-    "freeze_enabled",
-    "hold_enabled",
-    "force_transfer_enabled",
-    "redeem_enabled",
-  ]);
-  return {
-    controller_accounts: decodeNoritoVec(
-      fields.controller_accounts,
-      (entry, index) =>
-        decodeAccountIdValue(entry, `${context}.controller_accounts[${index}]`),
-      `${context}.controller_accounts`,
-    ),
-    controller_roles: decodeNoritoVec(
-      fields.controller_roles,
-      (entry, index) => decodeRoleIdValue(entry, `${context}.controller_roles[${index}]`),
-      `${context}.controller_roles`,
-    ),
-    freeze_enabled: decodeBoolValue(fields.freeze_enabled, `${context}.freeze_enabled`),
-    hold_enabled: decodeBoolValue(fields.hold_enabled, `${context}.hold_enabled`),
-    force_transfer_enabled: decodeBoolValue(
-      fields.force_transfer_enabled,
-      `${context}.force_transfer_enabled`,
-    ),
-    redeem_enabled: decodeBoolValue(fields.redeem_enabled, `${context}.redeem_enabled`),
-  };
-}
+const RwaControlPolicyValueFields = [
+    ["controller_accounts", decodeAccountIdValue, 2],
+    ["controller_roles", decodeRoleIdValue, 2],
+    ["freeze_enabled", decodeBoolValue, 0],
+    ["hold_enabled", decodeBoolValue, 0],
+    ["force_transfer_enabled", decodeBoolValue, 0],
+    ["redeem_enabled", decodeBoolValue, 0],
+  ];
+
+  function decodeRwaControlPolicyValue(payload, context) {
+    return decodeRecordFields(payload, context, RwaControlPolicyValueFields);
+  }
 
 function encodeAssetInstructionBody(value, context) {
   return Buffer.concat([
@@ -7499,7 +7201,7 @@ function decodeTriggerRepetitionsBody(payload, context) {
 
 function encodeExecuteTriggerPayload(value) {
   if (!isPlainObject(value)) {
-    throw new TypeError("ExecuteTrigger must be an object");
+    rejectType("ExecuteTrigger must be an object");
   }
   const trigger = assertNonEmptyString(value.trigger, "ExecuteTrigger.trigger");
   return Buffer.concat([
@@ -7533,7 +7235,7 @@ function encodeAccountIdValue(value, context) {
   const address = AccountAddress.fromI105(literal);
   const controller = address._controller;
   if (!controller || typeof controller.tag !== JS_TYPE_NUMBER) {
-    throw new Error(`${context} could not resolve account controller information`);
+    rejectError(`${context} could not resolve account controller information`);
   }
   switch (controller.tag) {
     case 0:
@@ -7547,7 +7249,7 @@ function encodeAccountIdValue(value, context) {
         encodeNoritoField(encodeMultisigPolicyPayload(controller, context)),
       ]);
     default:
-      throw new Error(`${context} uses unsupported account controller tag ${controller.tag}`);
+      rejectError(`${context} uses unsupported account controller tag ${controller.tag}`);
   }
 }
 
@@ -7585,7 +7287,7 @@ function decodeAccountIdValue(payload, context) {
     header = { version: 0, classId: 1, normVersion: 1, extFlag: false };
     controller = { tag: 1, ...policy };
   } else {
-    throw new Error(`${context} uses unsupported account controller variant ${kind}`);
+    rejectError(`${context} uses unsupported account controller variant ${kind}`);
   }
   return new AccountAddress(header, controller).toI105();
 }
@@ -7602,7 +7304,7 @@ function encodePublicKeyValue(controller, context) {
 function decodePublicKeyValue(payload, context) {
   const bytes = decodeConstVecU8Value(payload, `${context}.publicKey`);
   if (bytes.length === 0) {
-    throw new Error(`${context}.publicKey payload is empty`);
+    rejectError(`${context}.publicKey payload is empty`);
   }
   const curve = curveIdForAlgorithmTag(bytes[0], `${context}.publicKey.algorithm`);
   const publicKey = bytes.subarray(1);
@@ -7626,7 +7328,7 @@ function decodeConstVecU8Value(payload, context) {
   for (let index = 0; index < count; index += 1) {
     const item = readNoritoField(reader, `item${index}`);
     if (item.length !== 1) {
-      throw new Error(`${context}[${index}] must contain exactly one byte`);
+      rejectError(`${context}[${index}] must contain exactly one byte`);
     }
     bytes[index] = item[0];
   }
@@ -7660,7 +7362,7 @@ function algorithmTagForCurveId(curve, context) {
     case "sm2":
       return 10;
     default:
-      throw new Error(`${context} uses unsupported public-key algorithm ${algorithm}`);
+      rejectError(`${context} uses unsupported public-key algorithm ${algorithm}`);
   }
 }
 
@@ -7689,13 +7391,13 @@ function curveIdForAlgorithmTag(tag, context) {
     case 10:
       return curveIdFromAlgorithm("sm2");
     default:
-      throw new Error(`${context} uses unsupported public-key algorithm tag ${tag}`);
+      rejectError(`${context} uses unsupported public-key algorithm tag ${tag}`);
   }
 }
 
 function encodeMultisigPolicyPayload(policy, context) {
   if (!Array.isArray(policy.members) || policy.members.length === 0) {
-    throw new Error(`${context} multisig policy must contain at least one member`);
+    rejectError(`${context} multisig policy must contain at least one member`);
   }
   return Buffer.concat([
     encodeNoritoField(encodeU8Value(policy.version, `${context}.version`)),
@@ -7772,15 +7474,15 @@ function encodeAssetDefinitionIdValue(value, context) {
   const literal = normalizeAssetId(value, context);
   const payload = decodeBase58(literal, context);
   if (payload.length !== 21) {
-    throw new Error(`${context} must decode to exactly 21 bytes`);
+    rejectError(`${context} must decode to exactly 21 bytes`);
   }
   if (payload[0] !== ASSET_DEFINITION_ADDRESS_VERSION) {
-    throw new Error(`${context} version byte ${payload[0]} is not supported`);
+    rejectError(`${context} version byte ${payload[0]} is not supported`);
   }
   const checksum = payload.subarray(17);
   const expected = assetDefinitionChecksum(payload.subarray(0, 17));
   if (!checksum.equals(expected)) {
-    throw new Error(`${context} checksum is invalid`);
+    rejectError(`${context} checksum is invalid`);
   }
   return encodeFixedByteArrayArchiveValue(payload.subarray(1, 17), 16, context);
 }
@@ -7810,7 +7512,7 @@ function encodeAssetBalanceScopeValue(scopeLiteral, context) {
   }
   const match = /^dataspace:(\d+)$/.exec(scopeLiteral);
   if (!match) {
-    throw new Error(`${context} must use dataspace:<id> when present`);
+    rejectError(`${context} must use dataspace:<id> when present`);
   }
   return Buffer.concat([
     u32ToLittleEndianBuffer(1),
@@ -7838,7 +7540,7 @@ function decodeAssetBalanceScopeValue(payload, context) {
     reader.assertEof();
     return `#dataspace:${dataspace}`;
   }
-  throw new Error(`${context} uses unsupported scope variant ${kind}`);
+  rejectError(`${context} uses unsupported scope variant ${kind}`);
 }
 
 function encodeHashValue(value, context) {
@@ -7851,7 +7553,7 @@ function decodeHashValue(payload, context) {
 
 function encodeEscrowIdValue(value, context) {
   if (typeof value !== JS_TYPE_STRING) {
-    throw new TypeError(`${context} must be a canonical checksummed hash literal`);
+    rejectType(`${context} must be a canonical checksummed hash literal`);
   }
   const match = HASH_LITERAL_RE.exec(value);
   if (
@@ -7859,27 +7561,25 @@ function encodeEscrowIdValue(value, context) {
     match[1] !== match[1].toUpperCase() ||
     match[2] !== match[2].toUpperCase()
   ) {
-    throw new TypeError(
-      `${context} must use canonical uppercase hash:<hex>#<checksum> syntax`,
-    );
+    rejectType(`${context} must use canonical uppercase hash:<hex>#<checksum> syntax`);
   }
   const bytes = encodeHashValue(value, context);
   if ((bytes[bytes.length - 1] & 1) === 0) {
-    throw new TypeError(`${context} must use a native hash with its marker bit set`);
+    rejectType(`${context} must use a native hash with its marker bit set`);
   }
   return bytes;
 }
 
 function decodeEscrowIdValue(payload, context) {
   if (payload.length !== 32 || (payload[payload.length - 1] & 1) === 0) {
-    throw new TypeError(`${context} must use a native hash with its marker bit set`);
+    rejectType(`${context} must use a native hash with its marker bit set`);
   }
   return decodeHashValue(payload, context);
 }
 
 function encodeStringValue(value, context) {
   if (typeof value !== JS_TYPE_STRING) {
-    throw new TypeError(`${context} must be a string`);
+    rejectType(`${context} must be a string`);
   }
   return encodeNoritoStringValue(value);
 }
@@ -7896,17 +7596,17 @@ function encodeHashLiteralBytes(value, context) {
       const upper = body.toUpperCase();
       const expected = computeHashLiteralCrc("hash", upper);
       if (checksum.toUpperCase() !== expected) {
-        throw new Error(`${context} has invalid checksum; expected ${expected}`);
+        rejectError(`${context} has invalid checksum; expected ${expected}`);
       }
       bytes = Buffer.from(upper, HEX_ENCODING);
     } else if (/^[0-9A-Fa-f]{64}$/.test(literal)) {
       bytes = Buffer.from(literal, HEX_ENCODING);
     } else {
-      throw new Error(`${context} must be a 32-byte hash literal or hex string`);
+      rejectError(`${context} must be a 32-byte hash literal or hex string`);
     }
   }
   if ((bytes[bytes.length - 1] & 1) === 0) {
-    throw new TypeError(`${context} must use a native hash with its marker bit set`);
+    rejectType(`${context} must use a native hash with its marker bit set`);
   }
   return bytes;
 }
@@ -7914,7 +7614,7 @@ function encodeHashLiteralBytes(value, context) {
 function decodeHashLiteral(payload, context) {
   const bytes = decodeFixedBytesValue(payload, 32, context);
   if ((bytes[bytes.length - 1] & 1) === 0) {
-    throw new TypeError(`${context} must use a native hash with its marker bit set`);
+    rejectType(`${context} must use a native hash with its marker bit set`);
   }
   const body = bytes.toString(HEX_ENCODING).toUpperCase();
   return `hash:${body}#${computeHashLiteralCrc("hash", body)}`;
@@ -7922,7 +7622,7 @@ function decodeHashLiteral(payload, context) {
 
 function encodeKeyedHashValue(value, context) {
   if (!isPlainObject(value)) {
-    throw new TypeError(`${context} must be an object`);
+    rejectType(`${context} must be an object`);
   }
   return encodeStructValue([
     [encodeNoritoStringValue(assertNonEmptyString(value.pepper_id, `${context}.pepper_id`))],
@@ -7930,13 +7630,14 @@ function encodeKeyedHashValue(value, context) {
   ]);
 }
 
-function decodeKeyedHashValue(payload, context) {
-  const fields = decodeStructFields(payload, context, ["pepper_id", "digest"]);
-  return {
-    pepper_id: decodeStringValue(fields.pepper_id, `${context}.pepper_id`),
-    digest: decodeHashValue(fields.digest, `${context}.digest`),
-  };
-}
+const KeyedHashValueFields = [
+    ["pepper_id", decodeStringValue, 0],
+    ["digest", decodeHashValue, 0],
+  ];
+
+  function decodeKeyedHashValue(payload, context) {
+    return decodeRecordFields(payload, context, KeyedHashValueFields);
+  }
 
 function encodeNumericSpecValue(value, context) {
   const scale = value?.scale ?? null;
@@ -7963,7 +7664,7 @@ function encodeMintableValue(value, context) {
         encodeStructValue([[encodeU32Value(normalized.tokens, `${context}.tokens`)]]),
       );
     default:
-      throw new Error(`${context} uses unsupported mintability ${normalized.kind}`);
+      rejectError(`${context} uses unsupported mintability ${normalized.kind}`);
   }
 }
 
@@ -7975,14 +7676,14 @@ function decodeMintableValue(payload, context) {
     return ["Infinitely", "Once", "Not"][tag];
   }
   if (tag !== 3) {
-    throw new Error(`${context} uses unsupported mintability ${tag}`);
+    rejectError(`${context} uses unsupported mintability ${tag}`);
   }
   const body = readNoritoField(reader, "tokens");
   reader.assertEof();
   const fields = decodeStructFields(body, `${context}.tokens`, ["value"]);
   const tokens = decodeU32Value(fields.value, `${context}.tokens.value`);
   if (tokens === 0) {
-    throw new Error(`${context}.tokens must be non-zero`);
+    rejectError(`${context}.tokens must be non-zero`);
   }
   return `Limited(${tokens})`;
 }
@@ -7996,16 +7697,16 @@ function parseMintableLabel(value, context) {
   if (match) {
     return { kind: "Limited", tokens: parseMintabilityTokens(match[1], `${context}.tokens`) };
   }
-  throw new Error(`${context} must be Infinitely, Once, Not, or Limited(n)`);
+  rejectError(`${context} must be Infinitely, Once, Not, or Limited(n)`);
 }
 
 function parseMintabilityTokens(value, context) {
   if (typeof value !== JS_TYPE_STRING || !/^\d+$/.test(value)) {
-    throw new TypeError(`${context} must be a positive unsigned 32-bit integer`);
+    rejectType(`${context} must be a positive unsigned 32-bit integer`);
   }
   const normalized = Number(value);
   if (!Number.isInteger(normalized) || normalized <= 0 || normalized > 0xffff_ffff) {
-    throw new TypeError(`${context} must be a positive unsigned 32-bit integer`);
+    rejectType(`${context} must be a positive unsigned 32-bit integer`);
   }
   return normalized;
 }
@@ -8018,7 +7719,7 @@ function encodeAssetBalancePolicyValue(value, context) {
   if (normalized === "DataspaceRestricted") {
     return encodeEnumTagValue(1);
   }
-  throw new Error(`${context} must be Global or DataspaceRestricted`);
+  rejectError(`${context} must be Global or DataspaceRestricted`);
 }
 
 function decodeAssetBalancePolicyValue(payload, context) {
@@ -8031,14 +7732,14 @@ function decodeAssetBalancePolicyValue(payload, context) {
     case 1:
       return "DataspaceRestricted";
     default:
-      throw new Error(`${context} uses unsupported balance policy ${tag}`);
+      rejectError(`${context} uses unsupported balance policy ${tag}`);
   }
 }
 
 function encodeAssetDefinitionAliasValue(value, context) {
   const literal = assertNonEmptyString(value, context);
   if (!literal.includes("#")) {
-    throw new Error(`${context} must use <name>#<dataspace> or <name>#<domain>.<dataspace>`);
+    rejectError(`${context} must use <name>#<dataspace> or <name>#<domain>.<dataspace>`);
   }
   return encodeStructValue([[encodeNoritoStringValue(literal)]]);
 }
@@ -8049,13 +7750,13 @@ function decodeAssetDefinitionAliasValue(payload, context) {
 
 function encodeSorafsUriValue(value, context) {
   if (typeof value !== JS_TYPE_STRING) {
-    throw new TypeError(`${context} must be a string`);
+    rejectType(`${context} must be a string`);
   }
   if (value.trim() !== value || value.includes("\u0000") || /[\u0001-\u001f\u007f]/u.test(value)) {
-    throw new Error(`${context} must not contain whitespace padding or control characters`);
+    rejectError(`${context} must not contain whitespace padding or control characters`);
   }
   if (!value.startsWith("sorafs://") || value.length === "sorafs://".length) {
-    throw new Error(`${context} must use a non-empty sorafs:// URI`);
+    rejectError(`${context} must use a non-empty sorafs:// URI`);
   }
   return encodeStructValue([[encodeNoritoStringValue(value)]]);
 }
@@ -8079,7 +7780,7 @@ function encodeKaigiPrivacyModeValue(value, context) {
   if (normalized === "zkrosterv1") {
     return encodeEnumTagValue(1);
   }
-  throw new Error(`${context} must be Transparent or ZkRosterV1`);
+  rejectError(`${context} must be Transparent or ZkRosterV1`);
 }
 
 function decodeKaigiPrivacyModeValue(payload, context) {
@@ -8092,7 +7793,7 @@ function decodeKaigiPrivacyModeValue(payload, context) {
     case 1:
       return { mode: "ZkRosterV1", state: null };
     default:
-      throw new Error(`${context} uses unsupported privacy mode ${tag}`);
+      rejectError(`${context} uses unsupported privacy mode ${tag}`);
   }
 }
 
@@ -8105,7 +7806,7 @@ function encodeKaigiRoomPolicyValue(value, context) {
   if (normalized === "authenticated") {
     return encodeEnumTagValue(1);
   }
-  throw new Error(`${context} must be Public or Authenticated`);
+  rejectError(`${context} must be Public or Authenticated`);
 }
 
 function decodeKaigiRoomPolicyValue(payload, context) {
@@ -8118,7 +7819,7 @@ function decodeKaigiRoomPolicyValue(payload, context) {
     case 1:
       return { policy: "Authenticated", state: null };
     default:
-      throw new Error(`${context} uses unsupported room policy ${tag}`);
+      rejectError(`${context} uses unsupported room policy ${tag}`);
   }
 }
 
@@ -8133,7 +7834,7 @@ function encodeConfidentialPolicyModeValue(value, context) {
   if (normalized === "convertible") {
     return encodeEnumTagValue(2);
   }
-  throw new Error(`${context} must be TransparentOnly, ShieldedOnly, or Convertible`);
+  rejectError(`${context} must be TransparentOnly, ShieldedOnly, or Convertible`);
 }
 
 function decodeConfidentialPolicyModeValue(payload, context) {
@@ -8148,13 +7849,13 @@ function decodeConfidentialPolicyModeValue(payload, context) {
     case 2:
       return "Convertible";
     default:
-      throw new Error(`${context} uses unsupported confidential policy mode ${tag}`);
+      rejectError(`${context} uses unsupported confidential policy mode ${tag}`);
   }
 }
 
 function encodeVerifyingKeyIdValue(value, context) {
   if (!isPlainObject(value)) {
-    throw new TypeError(`${context} must be an object`);
+    rejectType(`${context} must be an object`);
   }
   return encodeStructValue([
     [encodeNoritoStringValue(assertNonEmptyString(value.backend, `${context}.backend`))],
@@ -8162,17 +7863,18 @@ function encodeVerifyingKeyIdValue(value, context) {
   ]);
 }
 
-function decodeVerifyingKeyIdValue(payload, context) {
-  const fields = decodeStructFields(payload, context, ["backend", "name"]);
-  return {
-    backend: decodeStringValue(fields.backend, `${context}.backend`),
-    name: decodeStringValue(fields.name, `${context}.name`),
-  };
-}
+const VerifyingKeyIdValueFields = [
+    ["backend", decodeStringValue, 0],
+    ["name", decodeStringValue, 0],
+  ];
+
+  function decodeVerifyingKeyIdValue(payload, context) {
+    return decodeRecordFields(payload, context, VerifyingKeyIdValueFields);
+  }
 
 function encodeBackendBytesBoxValue(value, context) {
   if (!isPlainObject(value)) {
-    throw new TypeError(`${context} must be an object`);
+    rejectType(`${context} must be an object`);
   }
   return encodeStructValue([
     [encodeNoritoStringValue(assertNonEmptyString(value.backend, `${context}.backend`))],
@@ -8211,7 +7913,7 @@ function encodeBackendTagValue(value, context) {
     case "stark":
       return encodeEnumTagValue(1);
     default:
-      throw new Error(`${context} uses unknown or non-canonical backend label ${backend}`);
+      rejectError(`${context} uses unknown or non-canonical backend label ${backend}`);
   }
 }
 
@@ -8225,7 +7927,7 @@ function decodeBackendTagValue(payload, context) {
     case 1:
       return "stark";
     default:
-      throw new Error(`${context} uses unsupported backend tag ${tag}`);
+      rejectError(`${context} uses unsupported backend tag ${tag}`);
   }
 }
 
@@ -8239,7 +7941,7 @@ function encodeConfidentialStatusValue(value, context) {
     case "withdrawn":
       return encodeU8Value(2, context);
     default:
-      throw new Error(`${context} must be Proposed, Active, or Withdrawn`);
+      rejectError(`${context} must be Proposed, Active, or Withdrawn`);
   }
 }
 
@@ -8253,13 +7955,13 @@ function decodeConfidentialStatusValue(payload, context) {
     case 2:
       return "Withdrawn";
     default:
-      throw new Error(`${context} uses unsupported confidential status ${tag}`);
+      rejectError(`${context} uses unsupported confidential status ${tag}`);
   }
 }
 
 function encodeVerifyingKeyRecordValue(value, context) {
   if (!isPlainObject(value)) {
-    throw new TypeError(`${context} must be an object`);
+    rejectType(`${context} must be an object`);
   }
   return encodeStructValue([
     [encodeU32Value(value.version, `${context}.version`)],
@@ -8364,7 +8066,7 @@ function decodeVerifyingKeyRecordValue(payload, context) {
 
 function encodeOpenVerifyEnvelopePayload(value, context) {
   if (!isPlainObject(value)) {
-    throw new TypeError(`${context} must be an object`);
+    rejectType(`${context} must be an object`);
   }
   assertOnlyObjectKeys(
     value,
@@ -8376,9 +8078,7 @@ function encodeOpenVerifyEnvelopePayload(value, context) {
     `${context}.circuit_id`,
   );
   if (circuitId.trim() !== circuitId) {
-    throw new TypeError(
-      `${context}.circuit_id must not contain surrounding whitespace`,
-    );
+    rejectType(`${context}.circuit_id must not contain surrounding whitespace`);
   }
   return encodeStructValue([
     [encodeBackendTagValue(value.backend, `${context}.backend`)],
@@ -8503,7 +8203,7 @@ function decodeProofAttachmentValue(payload, context) {
 
 function normalizeCanonicalProofAttachmentValue(value, context) {
   if (!isPlainObject(value)) {
-    throw new TypeError(`${context} must be an object`);
+    rejectType(`${context} must be an object`);
   }
   assertOnlyObjectKeys(
     value,
@@ -8512,7 +8212,7 @@ function normalizeCanonicalProofAttachmentValue(value, context) {
   );
   for (const field of ["backend", "proof", "vk_ref"]) {
     if (!Object.prototype.hasOwnProperty.call(value, field)) {
-      throw new TypeError(`${context}.${field} is required`);
+      rejectType(`${context}.${field} is required`);
     }
   }
   const backend = assertPortableProofIdField(value.backend, `${context}.backend`);
@@ -8522,7 +8222,7 @@ function normalizeCanonicalProofAttachmentValue(value, context) {
     `${context}.vk_ref`,
   );
   if (vkRef.backend !== backend) {
-    throw new TypeError(`${context}.vk_ref.backend must match ${context}.backend`);
+    rejectType(`${context}.vk_ref.backend must match ${context}.backend`);
   }
 
   const normalized = { backend, proof, vk_ref: vkRef };
@@ -8540,7 +8240,7 @@ function normalizeCanonicalProofAttachmentValue(value, context) {
     const expected = Array.from(blake2b256(Buffer.from(proof.bytes)));
     expected[31] |= 1;
     if (!envelopeHash.every((byte, index) => byte === expected[index])) {
-      throw new TypeError(`${context}.envelope_hash must match proof bytes`);
+      rejectType(`${context}.envelope_hash must match proof bytes`);
     }
     normalized.envelope_hash = envelopeHash;
   }
@@ -8555,37 +8255,33 @@ function normalizeCanonicalProofAttachmentValue(value, context) {
 
 function normalizeCanonicalProofBoxValue(value, backend, context) {
   if (!isPlainObject(value)) {
-    throw new TypeError(`${context} must be an object`);
+    rejectType(`${context} must be an object`);
   }
   assertExactObjectKeys(value, ["backend", "bytes"], context);
   const proofBackend = assertPortableProofIdField(value.backend, `${context}.backend`);
   if (proofBackend !== backend) {
-    throw new TypeError(`${context}.backend must match the attachment backend`);
+    rejectType(`${context}.backend must match the attachment backend`);
   }
   if (typeof value.bytes === JS_TYPE_STRING) {
-    throw new TypeError(`${context}.bytes must be an exact non-empty byte sequence`);
+    rejectType(`${context}.bytes must be an exact non-empty byte sequence`);
   }
   const declaredLength = binaryByteLength(value.bytes);
   if (declaredLength !== null && declaredLength > proofBoxMaxProofBytes(backend)) {
-    throw new RangeError(
-      `${context} exceeds the complete ${PROOF_BOX_MAX_ENCODED_BYTES}-byte ProofBox limit`,
-    );
+    rejectRange(`${context} exceeds the complete ${PROOF_BOX_MAX_ENCODED_BYTES}-byte ProofBox limit`);
   }
   const bytes = Array.from(normalizeBytes(value.bytes));
   if (bytes.length === 0) {
-    throw new TypeError(`${context}.bytes must not be empty`);
+    rejectType(`${context}.bytes must not be empty`);
   }
   if (!proofBoxFitsEncodedBudget(backend, bytes.length)) {
-    throw new RangeError(
-      `${context} exceeds the complete ${PROOF_BOX_MAX_ENCODED_BYTES}-byte ProofBox limit`,
-    );
+    rejectRange(`${context} exceeds the complete ${PROOF_BOX_MAX_ENCODED_BYTES}-byte ProofBox limit`);
   }
   return { backend: proofBackend, bytes };
 }
 
 function normalizeCanonicalProofVerifyingKeyId(value, context) {
   if (!isPlainObject(value)) {
-    throw new TypeError(`${context} must be an object`);
+    rejectType(`${context} must be an object`);
   }
   assertExactObjectKeys(value, ["backend", "name"], context);
   return {
@@ -8596,7 +8292,7 @@ function normalizeCanonicalProofVerifyingKeyId(value, context) {
 
 function assertPortableProofIdField(value, context) {
   if (!isPortableVerifyingKeyIdField(value)) {
-    throw new TypeError(`${context} must use portable verifier-key registry syntax`);
+    rejectType(`${context} must use portable verifier-key registry syntax`);
   }
   return value;
 }
@@ -8604,14 +8300,14 @@ function assertPortableProofIdField(value, context) {
 function normalizeNonZeroProofDigest(value, context) {
   const bytes = Array.from(encodeFixedBytesValue(value, 32, context));
   if (bytes.every((byte) => byte === 0)) {
-    throw new TypeError(`${context} must be non-zero`);
+    rejectType(`${context} must be non-zero`);
   }
   return bytes;
 }
 
 function normalizeCanonicalLanePrivacyProofValue(value, context) {
   if (!isPlainObject(value)) {
-    throw new TypeError(`${context} must be an object`);
+    rejectType(`${context} must be an object`);
   }
   assertExactObjectKeys(value, ["commitment_id", "witness"], context);
   if (
@@ -8619,7 +8315,7 @@ function normalizeCanonicalLanePrivacyProofValue(value, context) {
     value.commitment_id < 0 ||
     value.commitment_id > 0xffff
   ) {
-    throw new RangeError(`${context}.commitment_id must fit within a u16`);
+    rejectRange(`${context}.commitment_id must fit within a u16`);
   }
   return {
     commitment_id: value.commitment_id,
@@ -8632,21 +8328,21 @@ function normalizeCanonicalLanePrivacyProofValue(value, context) {
 
 function normalizeCanonicalLanePrivacyWitnessValue(value, context) {
   if (!isPlainObject(value)) {
-    throw new TypeError(`${context} must be an object`);
+    rejectType(`${context} must be an object`);
   }
   assertExactObjectKeys(value, ["kind", "payload"], context);
   if (value.kind !== "merkle") {
-    throw new TypeError(`${context}.kind must be exactly merkle`);
+    rejectType(`${context}.kind must be exactly merkle`);
   }
   if (!isPlainObject(value.payload)) {
-    throw new TypeError(`${context}.payload must be an object`);
+    rejectType(`${context}.payload must be an object`);
   }
   assertExactObjectKeys(value.payload, ["leaf", "proof"], `${context}.payload`);
   const leaf = Array.from(
     encodeFixedBytesValue(value.payload.leaf, 32, `${context}.payload.leaf`),
   );
   if (!isPlainObject(value.payload.proof)) {
-    throw new TypeError(`${context}.payload.proof must be an object`);
+    rejectType(`${context}.payload.proof must be an object`);
   }
   assertExactObjectKeys(
     value.payload.proof,
@@ -8660,35 +8356,27 @@ function normalizeCanonicalLanePrivacyWitnessValue(value, context) {
     auditPath.length < 1 ||
     auditPath.length > LANE_PRIVACY_MERKLE_MAX_DEPTH
   ) {
-    throw new RangeError(
-      `${context}.payload.proof.audit_path must contain 1..=${LANE_PRIVACY_MERKLE_MAX_DEPTH} siblings`,
-    );
+    rejectRange(`${context}.payload.proof.audit_path must contain 1..=${LANE_PRIVACY_MERKLE_MAX_DEPTH} siblings`);
   }
   if (!laneMerkleLeafIndexFitsDepth(leafIndex, auditPath.length)) {
-    throw new RangeError(
-      `${context}.payload.proof.leaf_index is impossible for the Merkle path depth`,
-    );
+    rejectRange(`${context}.payload.proof.leaf_index is impossible for the Merkle path depth`);
   }
   const canonicalPath = auditPath.map((entry, index) => {
     if (entry === null || entry === undefined) {
-      throw new TypeError(
-        `${context}.payload.proof.audit_path[${index}] must contain a sibling`,
-      );
+      rejectType(`${context}.payload.proof.audit_path[${index}] must contain a sibling`);
     }
     const siblingContext = `${context}.payload.proof.audit_path[${index}]`;
     const siblingBytes = encodeHashLiteralBytes(entry, siblingContext);
     if (typeof entry === JS_TYPE_STRING) {
       const canonical = decodeHashLiteral(siblingBytes, siblingContext);
       if (entry !== canonical) {
-        throw new TypeError(`${siblingContext} must be a canonical HashOf literal`);
+        rejectType(`${siblingContext} must be a canonical HashOf literal`);
       }
       return canonical;
     }
     const sibling = Array.from(siblingBytes);
     if ((sibling[31] & 1) === 0) {
-      throw new TypeError(
-        `${siblingContext} is not a canonical prehashed HashOf`,
-      );
+      rejectType(`${siblingContext} is not a canonical prehashed HashOf`);
     }
     return sibling;
   });
@@ -8718,29 +8406,28 @@ function encodeLanePrivacyProofValue(value, context) {
   ]);
 }
 
-function decodeLanePrivacyProofValue(payload, context) {
-  const fields = decodeStructFields(payload, context, ["commitment_id", "witness"]);
-  return {
-    commitment_id: decodeU16Value(fields.commitment_id, `${context}.commitment_id`),
-    witness: decodeLanePrivacyWitnessValue(fields.witness, `${context}.witness`),
-  };
-}
+const LanePrivacyProofValueFields = [
+    ["commitment_id", decodeU16Value, 0],
+    ["witness", decodeLanePrivacyWitnessValue, 0],
+  ];
+
+  function decodeLanePrivacyProofValue(payload, context) {
+    return decodeRecordFields(payload, context, LanePrivacyProofValueFields);
+  }
 
 function encodeLanePrivacyWitnessValue(value, context) {
   if (!isPlainObject(value)) {
-    throw new TypeError(`${context} must be an object`);
+    rejectType(`${context} must be an object`);
   }
   const kind = assertNonEmptyString(value.kind, `${context}.kind`).toLowerCase();
   if (kind === "merkle") {
     const auditPath =
       value.payload?.proof?.audit_path ?? value.payload?.proof?.auditPath;
     if (!Array.isArray(auditPath) || auditPath.length === 0) {
-      throw new Error(
-        `${context}.payload.proof.audit_path must contain at least one sibling`,
-      );
+      rejectError(`${context}.payload.proof.audit_path must contain at least one sibling`);
     }
     if (auditPath.some((entry) => entry === null || entry === undefined)) {
-      throw new Error(`${context}.payload.proof.audit_path must not omit siblings`);
+      rejectError(`${context}.payload.proof.audit_path must not omit siblings`);
     }
     return encodeEnumTagValue(0, () =>
       encodeStructValue([
@@ -8749,7 +8436,7 @@ function encodeLanePrivacyWitnessValue(value, context) {
       ]),
     );
   }
-  throw new Error(`${context}.kind must be merkle`);
+  rejectError(`${context}.kind must be merkle`);
 }
 
 function decodeLanePrivacyWitnessValue(payload, context) {
@@ -8765,12 +8452,10 @@ function decodeLanePrivacyWitnessValue(payload, context) {
       ]);
       const proof = decodeMerkleProofValue(fields.proof, `${context}.payload.proof`);
       if (proof.audit_path.length === 0) {
-        throw new Error(
-          `${context}.payload.proof.audit_path must contain at least one sibling`,
-        );
+        rejectError(`${context}.payload.proof.audit_path must contain at least one sibling`);
       }
       if (proof.audit_path.some((entry) => entry === null)) {
-        throw new Error(`${context}.payload.proof.audit_path must not omit siblings`);
+        rejectError(`${context}.payload.proof.audit_path must not omit siblings`);
       }
       return {
         kind: "merkle",
@@ -8781,23 +8466,26 @@ function decodeLanePrivacyWitnessValue(payload, context) {
       };
     }
     default:
-      throw new Error(`${context} uses unsupported lane privacy witness ${tag}`);
+      rejectError(`${context} uses unsupported lane privacy witness ${tag}`);
   }
 }
 
-const [
-  encodeMerkleProofValue,
-  decodeMerkleProofValue,
-  encodeConfidentialMemoEnvelopeV1Value,
-  decodeConfidentialMemoEnvelopeV1Value,
-] = /* @__PURE__ */ createNoritoProofValueCodecs(
-  BufferReader, LANE_PRIVACY_MERKLE_MAX_DEPTH, decodeHashValue,
-  decodeNoritoVec, decodeOptionValue, decodeTupleFields,
-  decodeU32Value, decodeUnsignedLeb128, encodeCompactLength,
-  encodeFixedBytesValue, encodeHashLiteralBytes, encodeNoritoVec,
-  encodeOptionValue, encodeTupleValue, encodeU32Value,
-  encodeU8Value, isPlainObject, normalizeFlexibleBytes,
-);
+  const decodeRecordFields = /* @__PURE__ */ createNoritoRecordDecoder(
+    decodeStructFields, decodeOptionValue, decodeNoritoVec,
+  );
+
+const [encodeMerkleProofValue, decodeMerkleProofValue] =
+  /* @__PURE__ */ createNoritoMerkleProofCodecs(
+    LANE_PRIVACY_MERKLE_MAX_DEPTH, decodeHashValue, decodeNoritoVec,
+    decodeOptionValue, decodeTupleFields, decodeU32Value, encodeHashLiteralBytes,
+    encodeNoritoVec, encodeOptionValue, encodeTupleValue, encodeU32Value,
+  );
+
+const confidentialMemoValueCodecs =
+  /* @__PURE__ */ createNoritoConfidentialMemoCodecs(
+    BufferReader, decodeUnsignedLeb128, encodeCompactLength, encodeFixedBytesValue,
+    encodeU8Value, isPlainObject, normalizeFlexibleBytes,
+  );
 
 const [
   encodeContractManifestSignaturePayloadValue,
@@ -8821,14 +8509,70 @@ const [
   encodeU8Value, isPlainObject, parsePublicKeyLiteral,
   publicKeyLiteralFromParts, readNoritoField,
 );
+const nftMarketCodecsV1 = /* @__PURE__ */ createNoritoNftMarketCodecs({
+  encodeStructValue, decodeStructFields, encodeEscrowIdValue, decodeEscrowIdValue,
+  encodeNftIdValue, decodeNftIdValue, encodeAccountIdValue, decodeAccountIdValue,
+  encodeAssetDefinitionIdValue, decodeAssetDefinitionIdValue, encodeQuantityValue, decodeQuantityValue,
+  encodeMetadataValue, decodeMetadataValue, encodeU16Value, decodeU16Value, encodeU32Value, encodeU64Value, decodeU64Value,
+  encodeOptionValue, decodeOptionValue,
+});
+/** Canonical bounded native NFT offer and metadata value encoding. */
+export function noritoEncodeNftMarketValueV1(name, value) {
+  return withNoritoLengthFlags(COMPACT_LEN_FLAG, () => {
+    const bytes = nftMarketCodecsV1.encode(name, value);
+    if (bytes.length > 64 * 1024) throw new RangeError("native NFT value exceeds bound");
+    return bytes;
+  });
+}
+/** Exact decode, rejecting trailing bytes, alternate layouts and unknown fields. */
+export function noritoDecodeNftMarketValueV1(name, value) {
+  const bytes = toBuffer(value);
+  if (bytes.length > 64 * 1024) throw new RangeError("native NFT value exceeds bound");
+  return withNoritoLengthFlags(COMPACT_LEN_FLAG, () => {
+    const decoded = nftMarketCodecsV1.decode(name, bytes);
+    if (!nftMarketCodecsV1.encode(name, decoded).equals(bytes)) throw new TypeError("native NFT value is not byte-canonical");
+    return decoded;
+  });
+}
+const gameCodecsV1 = /* @__PURE__ */ createNoritoGameCodecs({
+  encodeNftIdValue, decodeNftIdValue,
+  encodeStructValue, decodeStructFields, encodeNoritoVec, decodeNoritoVec,
+  encodeEscrowIdValue, decodeEscrowIdValue,
+  encodeAssetDefinitionIdValue, decodeAssetDefinitionIdValue,
+  encodeQuantityValue, decodeQuantityValue, encodeBoolValue, decodeBoolValue,
+  encodeU8Value, encodeU16Value, encodeU32Value, encodeU64Value,
+  decodeU8Value, decodeU16Value, decodeU32Value, decodeU64Value,
+  encodePublicKeyValue, decodePublicKeyValue, parsePublicKeyLiteral, publicKeyLiteralFromParts,
+  encodeConstVecU8Value, decodeConstVecU8Value, encodeByteVecValue, decodeByteVecValue,
+  encodeOptionValue, decodeOptionValue, encodeAccountIdValue, decodeAccountIdValue, encodeEnumTagValue,
+});
+
+/** Encode one exact native game or compiled adapter value with the consensus bare compact layout. */
+export function noritoEncodeGameValueV1(name, value) {
+  return withNoritoLengthFlags(COMPACT_LEN_FLAG, () => {
+    const bytes = gameCodecsV1.encode(name, value);
+    if (bytes.length > gameValueMaximumBytesV1(name)) throw new RangeError("native game value exceeds its compiled payload limit");
+    return bytes;
+  });
+}
+
+/** Decode an exact native game or compiled adapter value and reject noncanonical byte encodings. */
+export function noritoDecodeGameValueV1(name, value) {
+  const bytes = toBuffer(value);
+  if (bytes.length > gameValueMaximumBytesV1(name)) throw new RangeError("native game value exceeds its compiled payload limit");
+  return withNoritoLengthFlags(COMPACT_LEN_FLAG, () => {
+    const decoded = gameCodecsV1.decode(name, bytes);
+    if (!gameCodecsV1.encode(name, decoded).equals(bytes)) throw new TypeError("native game value is not byte-canonical");
+    return decoded;
+  });
+}
+
 function encodeEventFilterBoxFramePayload(value, context) {
   const frameBytes = decodeExactStandardBase64(value, context);
   const frame = decodeNoritoFrame(frameBytes, context, EVENT_FILTER_BOX_SCHEMA_HASH);
   const expectedFlags = noritoLengthFlags & COMPACT_LEN_FLAG;
   if (frame.flags !== expectedFlags) {
-    throw new Error(
-      `${context} uses Norito layout flags ${frame.flags}; expected ${expectedFlags}`,
-    );
+    rejectError(`${context} uses Norito layout flags ${frame.flags}; expected ${expectedFlags}`);
   }
   const canonical = frameNoritoPayload(
     frame.payload,
@@ -8836,7 +8580,7 @@ function encodeEventFilterBoxFramePayload(value, context) {
     frame.flags,
   );
   if (!canonical.equals(frameBytes)) {
-    throw new Error(`${context} must be a canonical unpadded EventFilterBox frame`);
+    rejectError(`${context} must be a canonical unpadded EventFilterBox frame`);
   }
   return frame.payload;
 }
@@ -8857,11 +8601,11 @@ function decodeExactStandardBase64(value, context) {
     value.length % 4 !== 0 ||
     !/^[A-Za-z0-9+/]*={0,2}$/u.test(value)
   ) {
-    throw new TypeError(`${context} must be exact standard-base64`);
+    rejectType(`${context} must be exact standard-base64`);
   }
   const bytes = Buffer.from(value, BASE64_ENCODING);
   if (bytes.length === 0 || bytes.toString(BASE64_ENCODING) !== value) {
-    throw new TypeError(`${context} must be exact standard-base64`);
+    rejectType(`${context} must be exact standard-base64`);
   }
   return bytes;
 }
@@ -8870,7 +8614,7 @@ function assertOnlyObjectKeys(value, allowedKeys, context) {
   const allowed = new Set(allowedKeys);
   const unknown = Object.keys(value).find((key) => !allowed.has(key));
   if (unknown !== undefined) {
-    throw new TypeError(`${context} contains unknown field ${unknown}`);
+    rejectType(`${context} contains unknown field ${unknown}`);
   }
 }
 
@@ -8904,19 +8648,19 @@ function decodeNumericValue(payload, context) {
   const mantissaReader = new BufferReader(mantissaPayload, `${context}.mantissa`);
   const byteLength = mantissaReader.readU32LE("byteLength");
   if (byteLength > NumericV1.MAX_MANTISSA_BYTES) {
-    throw new RangeError(`${context}.mantissa exceeds the signed 512-bit bound`);
+    rejectRange(`${context}.mantissa exceeds the signed 512-bit bound`);
   }
   const bytes = mantissaReader.readBytes(byteLength, "bytes");
   mantissaReader.assertEof();
   if (bytes.length === 1 && bytes[0] === 0) {
-    throw new TypeError(`${context}.mantissa uses a noncanonical zero encoding`);
+    rejectType(`${context}.mantissa uses a noncanonical zero encoding`);
   }
   if (bytes.length > 1) {
     const last = bytes[bytes.length - 1];
     const previous = bytes[bytes.length - 2];
     if ((last === 0 && (previous & 0x80) === 0)
       || (last === 0xff && (previous & 0x80) !== 0)) {
-      throw new TypeError(`${context}.mantissa has redundant sign extension`);
+      rejectType(`${context}.mantissa has redundant sign extension`);
     }
   }
 
@@ -8924,7 +8668,7 @@ function decodeNumericValue(payload, context) {
   const scale = scaleReader.readU32LE("value");
   scaleReader.assertEof();
   if (scale > NumericV1.MAX_SCALE) {
-    throw new RangeError(`${context}.scale exceeds ${NumericV1.MAX_SCALE}`);
+    rejectRange(`${context}.scale exceeds ${NumericV1.MAX_SCALE}`);
   }
 
   const mantissa = twosBytesToBigInt(bytes);
@@ -8939,14 +8683,14 @@ function decodeQuantityValue(payload, context) {
 function encodeU8Value(value, context) {
   const normalized = Number(value);
   if (!Number.isInteger(normalized) || normalized < 0 || normalized > 0xff) {
-    throw new TypeError(`${context} must be an unsigned 8-bit integer`);
+    rejectType(`${context} must be an unsigned 8-bit integer`);
   }
   return Buffer.of(normalized);
 }
 
 function decodeU8Value(payload, context) {
   if (payload.length !== 1) {
-    throw new Error(`${context} must contain exactly one byte`);
+    rejectError(`${context} must contain exactly one byte`);
   }
   return payload[0];
 }
@@ -8954,14 +8698,14 @@ function decodeU8Value(payload, context) {
 function encodeU16Value(value, context) {
   const normalized = Number(value);
   if (!Number.isInteger(normalized) || normalized < 0 || normalized > 0xffff) {
-    throw new TypeError(`${context} must be an unsigned 16-bit integer`);
+    rejectType(`${context} must be an unsigned 16-bit integer`);
   }
   return u16ToLittleEndianBuffer(normalized);
 }
 
 function decodeU16Value(payload, context) {
   if (payload.length !== 2) {
-    throw new Error(`${context} must contain exactly two bytes`);
+    rejectError(`${context} must contain exactly two bytes`);
   }
   return payload.readUInt16LE(0);
 }
@@ -8969,14 +8713,14 @@ function decodeU16Value(payload, context) {
 function encodeU32Value(value, context) {
   const normalized = Number(value);
   if (!Number.isInteger(normalized) || normalized < 0 || normalized > 0xffff_ffff) {
-    throw new TypeError(`${context} must be an unsigned 32-bit integer`);
+    rejectType(`${context} must be an unsigned 32-bit integer`);
   }
   return u32ToLittleEndianBuffer(normalized);
 }
 
 function decodeU32Value(payload, context) {
   if (payload.length !== 4) {
-    throw new Error(`${context} must contain exactly four bytes`);
+    rejectError(`${context} must contain exactly four bytes`);
   }
   return payload.readUInt32LE(0);
 }
@@ -8988,7 +8732,7 @@ function encodeU64Value(value, context) {
 
 function decodeU64Value(payload, context) {
   if (payload.length !== 8) {
-    throw new Error(`${context} must contain exactly eight bytes`);
+    rejectError(`${context} must contain exactly eight bytes`);
   }
   return payload.readBigUInt64LE(0).toString();
 }
@@ -8999,17 +8743,17 @@ function encodeNoritoStringValue(value) {
 
 function encodeExactBase64StringValue(value, context) {
   if (typeof value !== JS_TYPE_STRING) {
-    throw new TypeError(`${context} must be a string`);
+    rejectType(`${context} must be a string`);
   }
   if (value.length === 0 || value.trim() !== value || /\s/u.test(value)) {
-    throw new TypeError(`${context} must be exact standard-base64`);
+    rejectType(`${context} must be exact standard-base64`);
   }
   if (!/^[A-Za-z0-9+/]*={0,2}$/u.test(value) || value.length % 4 !== 0) {
-    throw new TypeError(`${context} must be exact standard-base64`);
+    rejectType(`${context} must be exact standard-base64`);
   }
   const decoded = Buffer.from(value, BASE64_ENCODING);
   if (decoded.length === 0 || decoded.toString(BASE64_ENCODING) !== value) {
-    throw new TypeError(`${context} must be exact standard-base64`);
+    rejectType(`${context} must be exact standard-base64`);
   }
   return encodeNoritoStringValue(value);
 }
@@ -9079,7 +8823,7 @@ function decodeNoritoVec(payload, decode, context, maxCount = null) {
   const reader = new BufferReader(payload, context, noritoLengthFlags);
   const count = bigintToSafeNumber(reader.readU64LE("count"), `${context}.count`);
   if (maxCount !== null && count > maxCount) {
-    throw new RangeError(`${context} exceeds the ${maxCount}-item limit`);
+    rejectRange(`${context} exceeds the ${maxCount}-item limit`);
   }
   const values = [];
   for (let index = 0; index < count; index += 1) {
@@ -9123,28 +8867,26 @@ export function validateNoritoFrame(bytes, options = {}) {
   const context = options.context ?? "Norito frame";
   const buffer = toBuffer(bytes);
   if (buffer.length < NORITO_FRAME_HEADER_LENGTH) {
-    throw new Error(
-      `${context} is shorter than the ${NORITO_FRAME_HEADER_LENGTH}-byte Norito header`,
-    );
+    rejectError(`${context} is shorter than the ${NORITO_FRAME_HEADER_LENGTH}-byte Norito header`);
   }
   if (buffer.subarray(0, 4).toString("ascii") !== "NRT0") {
-    throw new Error(`${context} is not an NRT0 frame`);
+    rejectError(`${context} is not an NRT0 frame`);
   }
   const major = buffer[4];
   const minor = buffer[5];
   if (major !== 0 || minor !== 0) {
-    throw new Error(`${context} uses unsupported NRT0 version ${major}.${minor}`);
+    rejectError(`${context} uses unsupported NRT0 version ${major}.${minor}`);
   }
 
   const schemaHash = buffer.subarray(6, 22);
   if (schemaHash.every((byte) => byte === 0)) {
-    throw new Error(`${context} uses the reserved all-zero schema hash`);
+    rejectError(`${context} uses the reserved all-zero schema hash`);
   }
   let expectedSchemaHash = null;
   if (options.expectedSchemaHash !== undefined) {
     expectedSchemaHash = toBuffer(options.expectedSchemaHash);
     if (expectedSchemaHash.length !== 16) {
-      throw new TypeError(`${context} expected schema hash must contain exactly 16 bytes`);
+      rejectType(`${context} expected schema hash must contain exactly 16 bytes`);
     }
   }
   if (options.expectedTypeName !== undefined) {
@@ -9152,50 +8894,48 @@ export function validateNoritoFrame(bytes, options = {}) {
       typeof options.expectedTypeName !== JS_TYPE_STRING ||
       options.expectedTypeName.length === 0
     ) {
-      throw new TypeError(`${context} expected Rust type name must be non-empty`);
+      rejectType(`${context} expected Rust type name must be non-empty`);
     }
     const fromTypeName = /* @__PURE__ */ schemaHashForTypeName(options.expectedTypeName);
     if (expectedSchemaHash !== null && !expectedSchemaHash.equals(fromTypeName)) {
-      throw new TypeError(`${context} expected schema constraints contradict each other`);
+      rejectType(`${context} expected schema constraints contradict each other`);
     }
     expectedSchemaHash = fromTypeName;
   }
   if (expectedSchemaHash !== null && !schemaHash.equals(expectedSchemaHash)) {
-    throw new Error(`${context} schema hash did not match the expected type`);
+    rejectError(`${context} schema hash did not match the expected type`);
   }
 
   const compression = buffer[22];
   if (compression !== 0) {
-    throw new Error(`${context} must use uncompressed Norito payload encoding`);
+    rejectError(`${context} must use uncompressed Norito payload encoding`);
   }
   const payloadLength = bigintToSafeNumber(
     buffer.readBigUInt64LE(23),
     `${context}.payloadLength`,
   );
   if (options.requireNonEmptyPayload === true && payloadLength === 0) {
-    throw new Error(`${context} must contain a non-empty Norito payload`);
+    rejectError(`${context} must contain a non-empty Norito payload`);
   }
   const expectedCrc = buffer.readBigUInt64LE(31);
   const flags = buffer[39];
   if ((flags & ~NORITO_SUPPORTED_HEADER_FLAGS) !== 0) {
-    throw new Error(`${context} uses unsupported Norito header flags 0x${flags.toString(16)}`);
+    rejectError(`${context} uses unsupported Norito header flags 0x${flags.toString(16)}`);
   }
   if (
     (flags & NORITO_FIELD_BITSET_FLAG) !== 0 &&
     (flags & (NORITO_PACKED_STRUCT_FLAG | COMPACT_LEN_FLAG)) !==
       (NORITO_PACKED_STRUCT_FLAG | COMPACT_LEN_FLAG)
   ) {
-    throw new Error(`${context} uses an invalid Norito header flag combination`);
+    rejectError(`${context} uses an invalid Norito header flag combination`);
   }
 
   const paddingLength = buffer.length - NORITO_FRAME_HEADER_LENGTH - payloadLength;
   if (paddingLength < 0) {
-    throw new Error(`${context} payload length exceeds the available frame bytes`);
+    rejectError(`${context} payload length exceeds the available frame bytes`);
   }
   if (paddingLength > NORITO_MAX_HEADER_PADDING) {
-    throw new Error(
-      `${context} exceeds the ${NORITO_MAX_HEADER_PADDING}-byte Norito header-padding bound`,
-    );
+    rejectError(`${context} exceeds the ${NORITO_MAX_HEADER_PADDING}-byte Norito header-padding bound`);
   }
   if (options.expectedPaddingLength !== undefined) {
     if (
@@ -9203,28 +8943,24 @@ export function validateNoritoFrame(bytes, options = {}) {
       options.expectedPaddingLength < 0 ||
       options.expectedPaddingLength > NORITO_MAX_HEADER_PADDING
     ) {
-      throw new TypeError(
-        `${context} expected padding length must be an integer from 0 through ${NORITO_MAX_HEADER_PADDING}`,
-      );
+      rejectType(`${context} expected padding length must be an integer from 0 through ${NORITO_MAX_HEADER_PADDING}`);
     }
     if (paddingLength !== options.expectedPaddingLength) {
-      throw new Error(
-        `${context} must contain exactly ${options.expectedPaddingLength} bytes of header padding`,
-      );
+      rejectError(`${context} must contain exactly ${options.expectedPaddingLength} bytes of header padding`);
     }
   }
   const payloadStart = NORITO_FRAME_HEADER_LENGTH + paddingLength;
   const padding = buffer.subarray(NORITO_FRAME_HEADER_LENGTH, payloadStart);
   if (padding.some((byte) => byte !== 0)) {
-    throw new Error(`${context} contains non-zero alignment padding or trailing bytes`);
+    rejectError(`${context} contains non-zero alignment padding or trailing bytes`);
   }
   const payload = buffer.subarray(payloadStart, payloadStart + payloadLength);
   if (payload.length !== payloadLength || payloadStart + payload.length !== buffer.length) {
-    throw new Error(`${context} contains trailing bytes outside the declared payload`);
+    rejectError(`${context} contains trailing bytes outside the declared payload`);
   }
   const actualCrc = crc64Xz(payload);
   if (actualCrc !== expectedCrc) {
-    throw new Error(`${context} CRC64 mismatch`);
+    rejectError(`${context} CRC64 mismatch`);
   }
   return { payload, schemaHash, flags };
 }
@@ -9233,7 +8969,7 @@ function decodeNoritoFrame(buffer, context, expectedSchemaHash) {
   if (buffer.length < NORITO_FRAME_HEADER_LENGTH) {
     // Preserve the established decoder diagnostic while the exported preflight
     // helper reports the more specific SCCP-facing short-header error.
-    throw new Error(`${context} reader overran payload while reading Norito header`);
+    rejectError(`${context} reader overran payload while reading Norito header`);
   }
   return validateNoritoFrame(buffer, {
     context,
@@ -9275,29 +9011,29 @@ function u64ToLittleEndianBuffer(value) {
 function normalizeU64Input(value, context) {
   if (typeof value === JS_TYPE_BIGINT) {
     if (value < 0n || value > UINT64_MASK) {
-      throw new RangeError(`${context} must fit in an unsigned 64-bit integer`);
+      rejectRange(`${context} must fit in an unsigned 64-bit integer`);
     }
     return value;
   }
   if (typeof value === JS_TYPE_NUMBER) {
     if (!Number.isInteger(value) || value < 0 || !Number.isSafeInteger(value)) {
-      throw new TypeError(`${context} must be a non-negative safe integer or bigint`);
+      rejectType(`${context} must be a non-negative safe integer or bigint`);
     }
     return BigInt(value);
   }
   if (typeof value === JS_TYPE_STRING && /^\d+$/.test(value.trim())) {
     const parsed = BigInt(value.trim());
     if (parsed > UINT64_MASK) {
-      throw new RangeError(`${context} must fit in an unsigned 64-bit integer`);
+      rejectRange(`${context} must fit in an unsigned 64-bit integer`);
     }
     return parsed;
   }
-  throw new TypeError(`${context} must be a bigint, integer number, or decimal string`);
+  rejectType(`${context} must be a bigint, integer number, or decimal string`);
 }
 
 function bigintToSafeNumber(value, context) {
   if (value > BigInt(Number.MAX_SAFE_INTEGER)) {
-    throw new RangeError(`${context} exceeds JavaScript's safe integer range`);
+    rejectRange(`${context} exceeds JavaScript's safe integer range`);
   }
   return Number(value);
 }
@@ -9311,9 +9047,7 @@ function parseNumericLiteral(value, context) {
   } else if (typeof value === JS_TYPE_BIGINT) {
     quantity = new KotodamaQuantity(value, 0);
   } else {
-    throw new TypeError(
-      `${context} must be a KotodamaQuantity, canonical quantity string, or bigint; JavaScript numbers are rejected`,
-    );
+    rejectType(`${context} must be a KotodamaQuantity, canonical quantity string, or bigint; JavaScript numbers are rejected`);
   }
   return { mantissa: quantity.mantissa, scale: quantity.scale };
 }
@@ -9385,7 +9119,7 @@ function publicKeyLiteralFromParts(curve, publicKey, context) {
   validatePublicKeyForCurve(curve, bytes, context);
   const multicodec = publicKeyMulticodecForCurveId(curve);
   if (multicodec === null) {
-    throw new Error(`${context} uses unsupported public-key curve ${curve}`);
+    rejectError(`${context} uses unsupported public-key curve ${curve}`);
   }
   const prefixHex = Buffer.concat([
     encodeUnsignedLeb128(multicodec),
@@ -9397,7 +9131,7 @@ function publicKeyLiteralFromParts(curve, publicKey, context) {
 function parsePublicKeyLiteral(literal, context) {
   const normalized = assertNonEmptyString(literal, context);
   if (!MULTIHASH_LITERAL_RE.test(normalized) || normalized.length % 2 !== 0) {
-    throw new Error(`${context} must be a canonical public-key multihash literal`);
+    rejectError(`${context} must be a canonical public-key multihash literal`);
   }
   const bytes = Buffer.from(normalized, HEX_ENCODING);
   let offset = 0;
@@ -9407,7 +9141,7 @@ function parsePublicKeyLiteral(literal, context) {
   offset += payloadLengthBytes;
   const remaining = bytes.subarray(offset);
   if (remaining.length !== payloadLength) {
-    throw new Error(`${context} public-key multihash length header is invalid`);
+    rejectError(`${context} public-key multihash length header is invalid`);
   }
   const curve = curveIdForMulticodec(multicodec, context);
   const publicKey = remaining;
@@ -9435,30 +9169,30 @@ function decodeUnsignedLeb128(buffer, offset, context) {
     const byte = BigInt(buffer[cursor]);
     cursor += 1;
     if (used === 9 && (byte & 0xfen) !== 0n) {
-      throw new RangeError(`${context} varint exceeds an unsigned 64-bit integer`);
+      rejectRange(`${context} varint exceeds an unsigned 64-bit integer`);
     }
     value |= (byte & 0x7fn) << shift;
     if ((byte & 0x80n) === 0n) {
       if (used > 0 && byte === 0n) {
-        throw new Error(`${context} varint is not minimally encoded`);
+        rejectError(`${context} varint is not minimally encoded`);
       }
       if (value > BigInt(Number.MAX_SAFE_INTEGER)) {
-        throw new RangeError(`${context} exceeds JavaScript's safe integer range`);
+        rejectRange(`${context} exceeds JavaScript's safe integer range`);
       }
       return [Number(value), cursor - offset];
     }
     shift += 7n;
   }
   if (cursor >= buffer.length) {
-    throw new Error(`${context} varint is truncated`);
+    rejectError(`${context} varint is truncated`);
   }
-  throw new RangeError(`${context} varint exceeds an unsigned 64-bit integer`);
+  rejectRange(`${context} varint exceeds an unsigned 64-bit integer`);
 }
 
 function curveIdForMulticodec(multicodec, context) {
   const entry = getCurveEntryByPublicKeyMulticodec(multicodec);
   if (!entry) {
-    throw new Error(`${context} uses unsupported public-key multicodec ${multicodec}`);
+    rejectError(`${context} uses unsupported public-key multicodec ${multicodec}`);
   }
   return entry.id;
 }
@@ -9483,7 +9217,7 @@ function decodeBase58(value, context) {
   for (const char of value) {
     const digit = BASE58_LOOKUP.get(char);
     if (digit === undefined) {
-      throw new Error(`${context} must be valid Base58`);
+      rejectError(`${context} must be valid Base58`);
     }
     number = number * 58n + digit;
   }
@@ -9549,14 +9283,14 @@ function canonicalizeJsonValue(value) {
 
 function assertNonEmptyString(value, context) {
   if (typeof value !== JS_TYPE_STRING || value.trim().length === 0) {
-    throw new TypeError(`${context} must be a non-empty string`);
+    rejectType(`${context} must be a non-empty string`);
   }
   return value.trim();
 }
 
 function assertExactNonEmptyString(value, context) {
   if (typeof value !== JS_TYPE_STRING || value.length === 0) {
-    throw new TypeError(`${context} must be a non-empty string`);
+    rejectType(`${context} must be a non-empty string`);
   }
   return value;
 }

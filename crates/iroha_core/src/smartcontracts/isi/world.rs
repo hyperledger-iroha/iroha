@@ -9167,6 +9167,86 @@ pub mod isi {
         Ok(candidates)
     }
 
+    /// Derive the complete initial generation from one consensus-owned snapshot.
+    /// No candidate, body, seat, height, pulse, or election ID is caller supplied.
+    fn canonical_initial_parliament_sortition_v1(
+        attempt: &ParliamentAttemptStateV1,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<(gov::ParliamentRegisterSortitionRequestV1, Vec<AccountId>), Error> {
+        let governance_attempt_id = attempt.attempt().id;
+        attempt
+            .ensure_initial_sortition_ready_v1(governance_attempt_id)
+            .map_err(parliament_reducer_error)?;
+        let candidates = canonical_parliament_eligible_candidates_v1(state_transaction)?;
+        let candidate_count = u32::try_from(candidates.len()).map_err(|_| {
+            InstructionExecutionError::InvariantViolation(
+                "initial Parliament candidate count exceeds the V1 domain".into(),
+            )
+        })?;
+        let request_height = state_transaction.block_height();
+        let pulse_height = request_height
+            .checked_add(attempt.sortition_pulse_delay_blocks())
+            .ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation(
+                    "initial Parliament sortition pulse height overflow".into(),
+                )
+            })?;
+        let beacon_session_id =
+            iroha_data_model::governance::types::BeaconSessionId::for_network_v1(
+                &state_transaction.network_id,
+            );
+        let requests = attempt
+            .required_bodies()
+            .iter()
+            .filter(|required| required.body != ParliamentBody::ConfirmationJury)
+            .map(|required| {
+                let body = required.body;
+                let target_seats = u32::try_from(body_committee_size(&state_transaction.gov, body))
+                    .map_err(|_| {
+                        InstructionExecutionError::InvariantViolation(
+                            "configured Parliament body size exceeds the V1 request domain".into(),
+                        )
+                    })?;
+                // Zero citizens is a typed capacity failure, not an ordinary
+                // request. The shared native static/reducer checks below admit
+                // that narrow case without weakening any other binding.
+                let mut request = SortitionRequestV1 {
+                    id: iroha_data_model::governance::types::SortitionRequestId::new([0; 32]),
+                    governance_attempt_id,
+                    body_election_attempt_id: BodyElectionAttemptId::derive_v1(
+                        governance_attempt_id,
+                        body,
+                        0,
+                    ),
+                    body,
+                    candidate_root: parliament_candidate_root_v1(
+                        governance_attempt_id,
+                        body,
+                        &candidates,
+                    ),
+                    candidate_count,
+                    target_seats,
+                    request_height,
+                    pulse_height,
+                    beacon_session_id,
+                };
+                request.id = request.canonical_id();
+                Ok(gov::ParliamentSortitionRequestRegistrationV1 {
+                    sequence: 0,
+                    request,
+                })
+            })
+            .collect::<Result<Vec<_>, Error>>()?;
+        let payload = gov::ParliamentRegisterSortitionRequestV1 { requests };
+        validate_parliament_transition_static_v1(&gov::SubmitParliamentLifecycleTransitionV1 {
+            governance_attempt_id,
+            transition: gov::ParliamentLifecycleTransitionV1::RegisterSortitionRequest(
+                payload.clone(),
+            ),
+        })?;
+        Ok((payload, candidates))
+    }
+
     fn canonical_confirmation_sortition_request_v1(
         attempt: &ParliamentAttemptStateV1,
         candidates: &[AccountId],
@@ -9234,6 +9314,77 @@ pub mod isi {
             )
             .into()
         })
+    }
+
+    fn apply_parliament_sortition_request_batch_v1(
+        attempt: &mut ParliamentAttemptStateV1,
+        payload: gov::ParliamentRegisterSortitionRequestV1,
+        expected_candidates: Vec<AccountId>,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<Option<iroha_data_model::governance::types::ParliamentNoResultKindV1>, Error> {
+        let governance_attempt_id = attempt.attempt().id;
+        let current_height = state_transaction.block_height();
+        let mut no_result_kind = None;
+        for entry in &payload.requests {
+            if entry.request.request_height != current_height {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "Parliament sortition request height must equal the containing block height"
+                        .into(),
+                ));
+            }
+            ensure_parliament_logical_beacon_v1(
+                entry.request.beacon_session_id,
+                state_transaction,
+            )?;
+            let configured_target = u32::try_from(body_committee_size(
+                &state_transaction.gov,
+                entry.request.body,
+            ))
+            .map_err(|_| {
+                InstructionExecutionError::InvariantViolation(
+                    "configured Parliament body size exceeds the V1 request domain".into(),
+                )
+            })?;
+            if entry.request.target_seats != configured_target {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "Parliament sortition target seats must equal the configured body size".into(),
+                ));
+            }
+        }
+        let hidden_body_requested = payload.requests.iter().any(|entry| {
+            attempt.required_bodies().iter().any(|required| {
+                required.body == entry.request.body
+                    && required.decision_mode == ParliamentDecisionModeV1::HiddenBindingBallot
+            })
+        });
+        if !crate::governance::parliament::hidden_ballot_population_meets_anonymity_floor_v1(
+            expected_candidates.len(),
+        ) && hidden_body_requested
+        {
+            attempt
+                .record_hidden_sortition_capacity_failure_batch(
+                    governance_attempt_id,
+                    payload.requests,
+                    expected_candidates,
+                )
+                .map_err(parliament_reducer_error)?;
+            if attempt.attempt().status
+                == iroha_data_model::governance::types::GovernanceAttemptStatusV1::Rejected
+            {
+                no_result_kind = Some(
+                    iroha_data_model::governance::types::ParliamentNoResultKindV1::SortitionRetriesExhausted,
+                );
+            }
+        } else {
+            attempt
+                .register_sortition_request_batch(
+                    governance_attempt_id,
+                    payload.requests,
+                    expected_candidates,
+                )
+                .map_err(parliament_reducer_error)?;
+        }
+        Ok(no_result_kind)
     }
 
     fn ensure_parliament_logical_beacon_v1(
@@ -9486,6 +9637,16 @@ pub mod isi {
                 gov::ParliamentLifecycleTransitionV1::CompleteQualification => attempt
                     .complete_qualification(governance_attempt_id)
                     .map_err(parliament_reducer_error)?,
+                gov::ParliamentLifecycleTransitionV1::RegisterInitialSortition => {
+                    let (payload, candidates) =
+                        canonical_initial_parliament_sortition_v1(&attempt, state_transaction)?;
+                    no_result_kind = apply_parliament_sortition_request_batch_v1(
+                        &mut attempt,
+                        payload,
+                        candidates,
+                        state_transaction,
+                    )?;
+                }
                 gov::ParliamentLifecycleTransitionV1::RegisterSortitionRequest(payload) => {
                     let first = payload.requests.first().ok_or_else(|| {
                         InstructionExecutionError::InvariantViolation(
@@ -9497,68 +9658,12 @@ pub mod isi {
                         &attempt,
                         state_transaction,
                     )?;
-                    for entry in &payload.requests {
-                        if entry.request.request_height != current_height {
-                            return Err(InstructionExecutionError::InvariantViolation(
-                                "Parliament sortition request height must equal the containing block height"
-                                    .into(),
-                            ));
-                        }
-                        ensure_parliament_logical_beacon_v1(
-                            entry.request.beacon_session_id,
-                            state_transaction,
-                        )?;
-                        let configured_target = u32::try_from(body_committee_size(
-                            &state_transaction.gov,
-                            entry.request.body,
-                        ))
-                        .map_err(|_| {
-                            InstructionExecutionError::InvariantViolation(
-                                "configured Parliament body size exceeds the V1 request domain"
-                                    .into(),
-                            )
-                        })?;
-                        if entry.request.target_seats != configured_target {
-                            return Err(InstructionExecutionError::InvariantViolation(
-                                "Parliament sortition target seats must equal the configured body size"
-                                    .into(),
-                            ));
-                        }
-                    }
-                    let hidden_body_requested = payload.requests.iter().any(|entry| {
-                        attempt.required_bodies().iter().any(|required| {
-                            required.body == entry.request.body
-                                && required.decision_mode
-                                    == ParliamentDecisionModeV1::HiddenBindingBallot
-                        })
-                    });
-                    if !crate::governance::parliament::hidden_ballot_population_meets_anonymity_floor_v1(
-                        expected_candidates.len(),
-                    ) && hidden_body_requested
-                    {
-                        attempt
-                            .record_hidden_sortition_capacity_failure_batch(
-                                governance_attempt_id,
-                                payload.requests,
-                                expected_candidates,
-                            )
-                            .map_err(parliament_reducer_error)?;
-                        if attempt.attempt().status
-                            == iroha_data_model::governance::types::GovernanceAttemptStatusV1::Rejected
-                        {
-                            no_result_kind = Some(
-                                iroha_data_model::governance::types::ParliamentNoResultKindV1::SortitionRetriesExhausted,
-                            );
-                        }
-                    } else {
-                        attempt
-                            .register_sortition_request_batch(
-                                governance_attempt_id,
-                                payload.requests,
-                                expected_candidates,
-                            )
-                            .map_err(parliament_reducer_error)?;
-                    }
+                    no_result_kind = apply_parliament_sortition_request_batch_v1(
+                        &mut attempt,
+                        payload,
+                        expected_candidates,
+                        state_transaction,
+                    )?;
                 }
                 gov::ParliamentLifecycleTransitionV1::ConsumeSortitionPulseBatch(payload) => {
                     let pulse_output = parliament_finalized_pulse_seed_v1(
@@ -12320,7 +12425,6 @@ pub mod isi {
     #[derive(Debug)]
     struct ValidatedSccpNativeBridgeMessageV1 {
         admission: iroha_sccp::ValidatedSccpNativeInboundMessageV1,
-        route_configuration_hash: [u8; 32],
         settlement: SccpInboundSettlementV1,
         replay_accumulator_id: iroha_data_model::bridge::SccpReplayAccumulatorIdV1,
         replay_domain: iroha_data_model::bridge::SccpReplayDomainV1,
@@ -12584,7 +12688,6 @@ pub mod isi {
         };
         Ok(ValidatedSccpNativeBridgeMessageV1 {
             admission: validated,
-            route_configuration_hash: route.route_configuration_hash,
             settlement,
             replay_accumulator_id,
             replay_domain,
@@ -19794,6 +19897,10 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let domain_id = self.object().clone();
+            crate::smartcontracts::isi::nft_custody::ensure_nft_domain_unreserved(
+                &state_transaction.world,
+                &domain_id,
+            )?;
             crate::smartcontracts::isi::kaigi::ensure_kaigi_domain_can_unregister(
                 state_transaction,
                 &domain_id,
@@ -19812,6 +19919,20 @@ pub mod isi {
                 .get(&domain_id)
                 .cloned()
                 .unwrap_or_default();
+            // Domain teardown removes balances and definitions directly, so it
+            // must preserve the same game reserves as individual unregistration.
+            // Check the bounded domain index before staging any teardown writes.
+            if let Some(asset_definition_id) = remove_asset_definitions.iter().find(|id| {
+                crate::smartcontracts::isi::game::retained_game_asset(state_transaction.world(), id)
+            }) {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "cannot unregister domain {domain_id}: asset definition {asset_definition_id} secures an outstanding native game stake or payout claim"
+                    )
+                    .into(),
+                )
+                .into());
+            }
             crate::smartcontracts::isi::asset::isi::ensure_asset_definitions_not_retained_by_transfer_controls(
                 state_transaction,
                 &remove_asset_definitions,
@@ -21526,6 +21647,7 @@ pub mod isi {
                 Kind::EscalateRisk,
                 Kind::CompleteQualification,
                 Kind::RegisterSortitionRequest,
+                Kind::RegisterInitialSortition,
                 Kind::AdvanceBodyPhase,
                 Kind::RegisterBallotAttempt,
             ] {
@@ -25482,6 +25604,7 @@ pub mod isi {
         }
         include!("world_validation_fee_tests.rs");
         include!("world_parliament_due_effect_tests.rs");
+        include!("world_parliament_initial_sortition_tests.rs");
         world_test!(set_parameter_rejects_malformed_governed_gas_rates_but_accepts_zero_rate {
             use iroha_data_model::parameter::{CustomParameter, CustomParameterId};
             blank_test_state_transaction!(checked state, block, stx);
@@ -33474,7 +33597,7 @@ seiyaku GovernanceLifecycle {
         world_test!(unregister_domain_removes_kagemusha_reserve_mappings_for_domain_asset_definitions {
             let state = blank_state();
             let domain_id: DomainId =
-                DomainId::try_new("cleanup", "world").expect("domain id parses");
+                DomainId::try_new("cleanup", "universal").expect("domain id parses");
             state_transaction!(state, block, state_block, stx);
             Register::domain(Domain::new(domain_id.clone()))
                 .expect_execute(&ALICE_ID, &mut stx, "register cleanup domain");
@@ -33492,9 +33615,16 @@ seiyaku GovernanceLifecycle {
                 logo: None,
                 metadata: Metadata::default(),
                 balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
-                owning_domain: None,
+                owning_domain: Some(domain_id.clone()),
             })
             .expect_execute(&ALICE_ID, &mut stx, "register cleanup-domain asset definition");
+            assert!(
+                stx.world
+                    .domain_asset_definitions
+                    .get(&domain_id)
+                    .is_some_and(|definitions| definitions.contains(&reward_def)),
+                "fixture must register the asset definition in the cleanup domain"
+            );
             let escrow = crate::smartcontracts::isi::domain::isi::kagemusha_reserve_account_id(
                 stx.network_id(),
                 &reward_def,
@@ -33529,9 +33659,9 @@ seiyaku GovernanceLifecycle {
         world_test!(unregister_domain_preserves_accounts_with_active_settlement_oracle_and_kagemusha_state {
             let state = blank_state();
             let domain_id: DomainId =
-                DomainId::try_new("cleanup", "world").expect("domain id parses");
+                DomainId::try_new("cleanup", "universal").expect("domain id parses");
             let external_domain: DomainId =
-                DomainId::try_new("external", "world").expect("domain id parses");
+                DomainId::try_new("external", "universal").expect("domain id parses");
             state_transaction!(state, block, state_block, stx);
             Register::domain(Domain::new(domain_id.clone()))
                 .expect_execute(&ALICE_ID, &mut stx, "register cleanup domain");
@@ -37100,7 +37230,7 @@ seiyaku GovernanceLifecycle {
                 DomainId::try_new("endorsed", "universal").expect("domain id parses");
             let mut new_domain = Domain::new(domain_id.clone());
             let canonical_label =
-                name::canonicalize_domain_label(domain_id.name.as_ref()).expect("canonical");
+                name::canonicalize_domain_label(domain_id.name().as_ref()).expect("canonical");
             let canonical_id = DomainId::try_new(&canonical_label, domain_id.dataspace().as_ref())
                 .expect("canonical domain");
             let statement_hash = Hash::new(canonical_id.to_string().as_bytes());
@@ -37152,7 +37282,7 @@ seiyaku GovernanceLifecycle {
             let domain_id: DomainId =
                 DomainId::try_new("endorsed", "universal").expect("domain id parses");
             let canonical_label =
-                name::canonicalize_domain_label(domain_id.name.as_ref()).expect("canonical");
+                name::canonicalize_domain_label(domain_id.name().as_ref()).expect("canonical");
             let canonical_id = DomainId::try_new(&canonical_label, domain_id.dataspace().as_ref())
                 .expect("canonical domain");
             let statement_hash = Hash::new(canonical_id.to_string().as_bytes());
@@ -37225,7 +37355,7 @@ seiyaku GovernanceLifecycle {
                 DomainId::try_new("endorse-expired", "universal").expect("domain id parses");
             let mut new_domain = Domain::new(domain_id.clone());
             let canonical_label =
-                name::canonicalize_domain_label(domain_id.name.as_ref()).expect("canonical");
+                name::canonicalize_domain_label(domain_id.name().as_ref()).expect("canonical");
             let canonical_id = DomainId::try_new(&canonical_label, domain_id.dataspace().as_ref())
                 .expect("canonical domain");
             let statement_hash = Hash::new(canonical_id.to_string().as_bytes());

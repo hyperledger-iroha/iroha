@@ -212,6 +212,7 @@ fn assemble_bounded_canonical_frame_template_v1<F: KagemushaPoseidonFieldV1>(
 /// derived in-circuit, so values 127 and 128 retain identical topology while using their unique
 /// minimal encodings. The caller must equality-bind `length` to the exact byte stream or field
 /// whose prefix this represents; this primitive proves the encoding, not that external binding.
+#[cfg(test)]
 pub(super) fn canonical_compact_length_u14_stream_v1<F: KagemushaPoseidonFieldV1>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,

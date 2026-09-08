@@ -15,9 +15,16 @@ This file focuses on getting a .NET application connected safely.
 - The exact genesis-derived `NetworkId` for authenticated requests
 - A canonical, domainless I105 account ID and its 32-byte Ed25519 seed for signing
 
-The managed HTTP, address, transaction, query, and Norito surfaces do not require a
-native library. Privacy and native SoraFS validation features use the packaged native
-bridge for the current runtime identifier.
+Account construction, parsing, and every operation that admits account identities
+require the packaged ABI-23 Rust bridge for the current runtime identifier. Privacy
+and native SoraFS validation use the same bridge. Transport-only anonymous reads do
+not construct account identities.
+
+Exact12 capability admission requires authenticated HTTPS Torii reads, the configured
+`NetworkId`, and native validation of the complete signed qualification. The SDK
+retains that exact network on the manifest and admission token, checks the deployment
+network against its genesis hash, and revalidates native evidence and network identity
+at construction. Offline decoded archives are inspection data and cannot grant admission.
 
 ## Add the SDK
 
@@ -216,3 +223,58 @@ Repository layout:
 - `tests/Hyperledger.Iroha.Sdk.Tests` — unit and protocol-contract tests
 - `tests/Hyperledger.Iroha.Sdk.IntegrationTests` — live Torii smoke tests
 - `samples/Hyperledger.Iroha.Sdk.Sample` — minimal executable example
+
+## Kaigi V1
+
+`Hyperledger.Iroha.Kaigi` owns the final managed Kaigi call configuration,
+relay manifest, authorization/usage artifact bundles, and retained record JSON
+projection. Use `TransactionInstruction.CreateKaigi`, `JoinKaigi`, `LeaveKaigi`,
+`EndKaigi`, and `RecordKaigiUsage` to encode canonical Norito InstructionBoxes.
+Private create requires a complete `KaigiAuthorizationArtifactsV1`; private
+join, leave and end pass the same complete bundle type. Usage accepts a
+`KaigiUsageArtifactsV1`. The node determines the call's privacy mode and verifies
+the supplied proof against trusted state.
+
+`KaigiAuthorizationScalarV1` retains exactly 32 little-endian bytes below the
+Pasta Fp modulus, including zero. Commitment and nullifier wrappers each have
+one field. Scalar JSON is an exact 32-element byte array. No hash marker,
+reduction, alias tag, or issued-at timestamp is part of these values. Roster
+roots retain their separate canonical Iroha Hash encoding.
+
+`KaigiRecordV1.FromJson` reads the full retained model, including the original
+`host`, private ownership sequences, current roster, nullifier history and usage
+commitments. It rejects missing/unknown/duplicate fields, noncanonical scalars,
+invalid sequence bounds, effective participant limits, lifecycle mismatches and
+inconsistent roster ownership. Active private records reserve nullifier capacity
+for every live leave and host end. Identity comparisons retain the complete
+controller, including multisig policy, while ignoring network display prefixes. The redacted Torii
+application call view does not provide this retained model. Decoding does not
+verify the response's authenticity, roster root, proof, canonical account order,
+or account-rekey authority; those remain with the trusted ledger and verifier.
+
+Managed identity names currently require canonical ASCII Name/domain labels,
+matching the Kotlin Kaigi encoder's fail-closed scope until the Rust pinned
+NFC/UTS-46 owner is shared. Display text supports UTF-8. Account instruction
+encoding covers all eleven published controller curve IDs and complete canonical
+multisig policies with a u16 member count. Address decoding checks key envelopes;
+every public address constructor and parser additionally requires the ABI-23
+Rust address owner for complete key and policy admission. Missing native
+validation raises `NativeBridgeUnavailable`; structural checks cannot admit an
+account by themselves. Canonical I105 parsing rejects surrounding Unicode
+whitespace. SCCP preserves extended single-key envelopes and full multisig
+AccountId bytes within its 65,535-byte principal limit. Signature verification
+remains a separate operation.
+The C# SDK does not yet generate Kaigi proofs or expose a native Kaigi prover.
+
+The five transparent instructions and complex private-create bytes are pinned
+against the shared Rust-decoded and re-encoded fixture at
+`python/iroha_python/tests/fixtures/kaigi_instruction_wire_v1.json`. All five
+private actions also match the exact scalar fixture at
+`tests/Hyperledger.Iroha.Sdk.Tests/Fixtures/kaigi_private_instruction_wire_v1.json`.
+The retained
+record fixture at `tests/Hyperledger.Iroha.Sdk.Tests/Fixtures/kaigi_record_v1.json`
+was emitted and round-tripped by the final Rust data-model owner, with its
+participation ledger checked against its roster; SHA-256 is
+`0e54e88cd17476645d0bc88d307e49dc3237d0adda5c652357759ce66b65667d`.
+These are model fixtures with synthetic artifacts, not proof-generation,
+four-validator, hardware or release-qualification evidence.

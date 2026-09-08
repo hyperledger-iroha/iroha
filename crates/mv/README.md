@@ -8,3 +8,7 @@ Features:
 - single writer/multiple readers
 - transactional properties of transactions and blocks (rollback changes on drop or explicitly commit)
 - ability to revert changes created in the latest block
+
+The storage layer uses concread's B-tree maps and epoch cells. Its dependency
+enables `maps`, `ebr`, and the existing `foldhash` backend explicitly; unused
+async and adaptive-cache defaults are disabled.

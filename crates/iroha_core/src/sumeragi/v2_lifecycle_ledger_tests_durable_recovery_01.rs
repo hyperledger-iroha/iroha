@@ -168,7 +168,7 @@ impl RecoveryFixture {
         ordinal: u128,
         certified_sources: Option<Vec<PeerId>>,
         corrupt_qc: bool,
-        block_signature_override: Option<(u64, usize)>,
+        block_signer: Option<(u64, usize)>,
     ) -> LifecycleLedgerRecordV1 {
         let context = self.verified.context();
         let round = wire::ConsensusRound {
@@ -179,7 +179,7 @@ impl RecoveryFixture {
         let leader = context.leader(view);
         let leader_index = usize::try_from(leader).expect("fixture leader fits usize");
         let (block_signature_index, block_signer_index) =
-            block_signature_override.unwrap_or((u64::from(leader), leader_index));
+            block_signer.unwrap_or((u64::from(leader), leader_index));
         let header = BlockHeader::new(
             NonZeroU64::new(context.height).expect("fixture height is non-zero"),
             None,
@@ -3652,7 +3652,14 @@ pub(crate) fn complete_tip_retirement_survives_completed_serve_body_cleanup_with
         panic!("Completed Serve must own the selected turn")
     };
     let completed = payload_store
-        .persist_completed_with_exact_body(&request, &durable_body, &body_store, &response)
+        .persist_completed_with_worker_readback(
+            &request,
+            body_store
+                .read_durable_body_for_certified_serve(&durable_body)
+                .expect("worker reads exact completed-Serve body"),
+            &body_store.instance_identity(),
+            &response,
+        )
         .expect("persist exact Completed-Serve tombstone");
     let serve_ordinal = lease.ordinal();
     let producer_ordinal = coordinator.producer_debts[&serve_ordinal];

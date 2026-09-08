@@ -24,12 +24,13 @@ use super::{
     LANE_BLOCK_EXECUTION_INPUTS_INDEX_FILE, LANE_BLOCK_EXECUTION_PREFLIGHTS_DATA_FILE,
     LANE_BLOCK_EXECUTION_PREFLIGHTS_INDEX_FILE, LANE_MERGE_APPLICATION_FRONTIER_FILE,
     LATEST_CERTIFIED_LANE_BLOCK_FRONTIER_BUILD_FILE, LATEST_CERTIFIED_LANE_BLOCK_FRONTIER_FILE,
-    LaneBlockApplicationReceiptArtifact, LaneBlockApplicationReceiptArtifactFormat,
-    LaneBlockArtifact, LaneBlockExecutionInputArtifact, LaneBlockExecutionPreflightArtifact,
-    LaneBlockExecutionSourceV1, LaneHistoryCompactionOutcome, LaneMergeApplicationFrontierV1,
-    MAX_AUTONOMOUS_LANE_ATTEMPT_NAMESPACE_FILES, MAX_MERGE_EXECUTION_AUTONOMOUS_SOURCE_BYTES,
-    MergeLedgerCarrierRecord, NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_FILE,
-    NativeAmxEvidenceKind, NativeAmxParticipantApplicationManifestArtifactV1,
+    LaneArtifactPhysicalTarget, LaneBlockApplicationReceiptArtifact,
+    LaneBlockApplicationReceiptArtifactFormat, LaneBlockArtifact, LaneBlockExecutionInputArtifact,
+    LaneBlockExecutionPreflightArtifact, LaneBlockExecutionSourceV1, LaneHistoryCompactionOutcome,
+    LaneMergeApplicationFrontierV1, MAX_AUTONOMOUS_LANE_ATTEMPT_NAMESPACE_FILES,
+    MAX_MERGE_EXECUTION_AUTONOMOUS_SOURCE_BYTES, MergeLedgerCarrierRecord,
+    NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_FILE, NativeAmxEvidenceKind,
+    NativeAmxParticipantApplicationManifestArtifactV1, NativeAmxParticipantApplicationObservation,
     NativeAmxParticipantApplicationReceiptArtifact, RecoveredLaneBlockPayload, Result,
     STRICT_INIT_MAX_BLOCK_BYTES, bounded_historical_autonomous_recovery_entries,
     create_dir_all_with_context, sync_dir,
@@ -49,10 +50,7 @@ use super::{
 use crate::secure_file_metadata::{self, SecureMetadata};
 #[cfg(test)]
 use crate::{
-    queue::{
-        LaneQueueReservationGroupBindingV1,
-        canonical_lane_queue_reservation_group_identity_projection,
-    },
+    queue::canonical_lane_queue_reservation_group_identity_projection,
     sumeragi::v2_core::{
         IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_TOMBSTONED,
         IN_FLIGHT_FIRST_RELEASE_RESERVATION_COMMIT_FORGOTTEN,
@@ -2418,7 +2416,7 @@ impl Kura {
             transition_height,
         )
     }
-    fn validate_certified_lane_drain_frontier(
+    pub(super) fn validate_certified_lane_drain_frontier(
         &self,
         lane_id: LaneId,
         dataspace_id: DataSpaceId,
@@ -2434,21 +2432,31 @@ impl Kura {
             ));
         }
         if let Some(expected_native) = frontier.native_application {
-            let receipt = self
-                .read_native_amx_participant_application_receipt(
-                    lane_id,
-                    dataspace_id,
-                    lane_incarnation,
-                    frontier.lane_block_height,
-                )
-                .ok_or_else(|| {
-                    self.geometry_error(
+            // Unknown or mismatched candidate routes are not local storage faults.
+            let configured = self.lane_storage_entry(lane_id)?;
+            if configured.dataspace_id != dataspace_id {
+                return Err(self.geometry_error(
+                    ErrorKind::InvalidInput,
+                    "certified Native-derived drain frontier targets another configured route",
+                ));
+            }
+            let history = self.consensus_storage_read(
+                self.read_native_amx_participant_application_history(lane_id),
+            )?;
+            let receipt =
+                match history.get(frontier.lane_block_height) {
+                    Some(NativeAmxParticipantApplicationObservation::Applied(receipt)) => receipt,
+                    _ => return Err(self.geometry_error(
                         ErrorKind::InvalidData,
                         "certified Native-derived drain frontier lacks its exact durable receipt",
-                    )
-                })?;
-            if self.native_amx_participant_application_drain_evidence(&receipt)
-                != Some(expected_native)
+                    )),
+                };
+            let descriptor = &receipt.participant_proposal.descriptor;
+            if descriptor.lane_id != lane_id
+                || descriptor.dataspace_id != dataspace_id
+                || descriptor.lane_incarnation != lane_incarnation
+                || Some(descriptor.descriptor_hash) != frontier.lane_block_descriptor_hash
+                || history.drain_evidence(frontier.lane_block_height) != Some(&expected_native)
             {
                 return Err(self.geometry_error(
                     ErrorKind::InvalidData,
@@ -11684,6 +11692,138 @@ impl Kura {
             ));
         }
         Ok((marker.incarnation, marker.activation_height))
+    }
+    /// Resolve the exact physical bindings selected by durable journal phases.
+    /// This is used only for an already committed canonical association stage
+    /// before State restores the active catalog; it never publishes that catalog.
+    pub(super) fn canonical_association_physical_targets_from_journal(
+        &self,
+        artifacts: &[LaneBlockArtifact],
+    ) -> Result<Vec<LaneArtifactPhysicalTarget>> {
+        let journal = self.read_lane_geometry_journal()?;
+        if journal.configured_catalog_hash.is_none() || journal.configured_primary_binding.is_none()
+        {
+            return Err(self.geometry_error(
+                ErrorKind::InvalidData,
+                "canonical association recovery has no admitted physical geometry journal",
+            ));
+        }
+        let applied = journal
+            .records
+            .iter()
+            .take_while(|record| {
+                matches!(
+                    record.phase,
+                    LaneGeometryPhase::FilesApplied | LaneGeometryPhase::CatalogPublished,
+                )
+            })
+            .count();
+        if journal.records[applied..].iter().any(|record| {
+            !matches!(
+                record.phase,
+                LaneGeometryPhase::Intent | LaneGeometryPhase::RolledBack
+            )
+        }) {
+            return Err(self.geometry_error(
+                ErrorKind::InvalidData,
+                "canonical association recovery has a discontinuous physical geometry prefix",
+            ));
+        }
+        let bindings: &[LaneGeometryBinding] = if applied > 0 {
+            &journal.records[applied - 1].updated_bindings
+        } else if let Some(first) = journal.records.first() {
+            &first.previous_bindings
+        } else if let Some(checkpoint) = journal.checkpoint.as_ref() {
+            &checkpoint.bindings
+        } else {
+            std::slice::from_ref(
+                journal
+                    .configured_primary_binding
+                    .as_ref()
+                    .expect("checked primary binding"),
+            )
+        };
+        let mut targets = Vec::with_capacity(artifacts.len());
+        for artifact in artifacts {
+            let ownership = &artifact.ownership;
+            ownership.validate_replay_material().map_err(|error| {
+                self.geometry_error_owned(
+                    ErrorKind::InvalidData,
+                    format!("canonical association ownership is invalid: {error}"),
+                )
+            })?;
+            let binding = bindings
+                .iter()
+                .find(|binding| binding.lane_id == ownership.lane_id)
+                .ok_or_else(|| {
+                    self.geometry_error(
+                        ErrorKind::InvalidData,
+                        "canonical association lane has no selected physical journal binding",
+                    )
+                })?;
+            if binding.incarnation != ownership.lane_incarnation
+                || ownership.proposal_height <= binding.activation_height
+            {
+                return Err(self.geometry_error(
+                    ErrorKind::InvalidData,
+                    "canonical association ownership differs from its selected physical binding",
+                ));
+            }
+            self.require_complete_geometry_binding_at(
+                binding,
+                &self.binding_blocks_path(binding),
+                &self.binding_merge_path(binding),
+            )?;
+            targets.push(LaneArtifactPhysicalTarget {
+                lane_id: binding.lane_id,
+                dataspace_id: ownership.dataspace_id,
+                incarnation: binding.incarnation,
+                activation_height: binding.activation_height,
+                blocks_path: self.binding_blocks_path(binding),
+            });
+        }
+        Ok(targets)
+    }
+    pub(super) fn require_lane_artifact_physical_target_marker(
+        &self,
+        target: &LaneArtifactPhysicalTarget,
+    ) -> Result<()> {
+        let path = target.blocks_path.join(MARKER_FILE_NAME);
+        let marker = self.read_lane_marker(&path)?;
+        if marker.version != MARKER_VERSION
+            || marker.lane_id != target.lane_id
+            || marker.incarnation != target.incarnation
+            || marker.activation_height != target.activation_height
+            || marker.move_target_blocks.is_some()
+            || marker.move_target_merge.is_some()
+        {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "lane artifact physical target marker changed",
+                ),
+                path,
+            ));
+        }
+        Ok(())
+    }
+    pub(super) fn require_lane_artifact_physical_target_ownership(
+        &self,
+        target: &LaneArtifactPhysicalTarget,
+        ownership: &SumeragiLanePayloadOwnership,
+    ) -> Result<()> {
+        self.require_lane_artifact_physical_target_marker(target)?;
+        if ownership.lane_id != target.lane_id
+            || ownership.dataspace_id != target.dataspace_id
+            || ownership.lane_incarnation != target.incarnation
+            || ownership.proposal_height <= target.activation_height
+        {
+            return Err(self.geometry_error(
+                ErrorKind::InvalidData,
+                "lane ownership artifact differs from its physical target",
+            ));
+        }
+        Ok(())
     }
     /// Install the exact active lane marker required by an isolated test fixture.
     pub(crate) fn install_lane_incarnation_marker_for_test(

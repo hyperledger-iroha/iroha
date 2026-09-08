@@ -80,7 +80,7 @@ fn find_asset(
     };
     let asset_id = AssetId::new(asset_definition_id.clone(), account_id.clone());
     let query = FindAssetById::new(asset_id);
-    match peer.client().query_single(query) {
+    match peer.client().client().query_single(query) {
         Ok(asset) => Ok(Some(asset)),
         Err(QueryError::Validation(ValidationFail::QueryFailed(QueryExecutionFail::Find(
             FindError::Asset(_),

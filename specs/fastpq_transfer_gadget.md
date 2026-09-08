@@ -73,16 +73,37 @@ performing out-of-band queries. Public inputs (`dsid`, `slot`, roots,
 count bookkeeping. Missing, malformed, unpaired, or root-mismatched SMT
 witnesses are rejected before proof construction.
 
-V1 uses a 32-bit path for each full `asset/{asset}/{account}` balance key. For
+The `fastpq_json` and `fastpq_fixture_rebind` tools accept only the canonical
+`FastpqTransitionBatch` frame at their batch boundary. Internal prover structs,
+bare payloads, alternate layouts, and trailing bytes are rejected. JSON-tool
+proofs, relay references, touch-manifest commitments, and emitted Norito objects
+use the canonical V1 frame independently of ambient layout guards.
+Torii recovery emits the same public batch frame, counting the borrowed source
+before model conversion and enforcing the per-batch and aggregate byte budgets.
+The Core prover lane canonically encodes persisted proofs within the smaller of
+the configured sidecar budget and the production verifier's proof-byte cap;
+`proof_digest` hashes the exact admitted frame.
+
+V1 uses a 32-bit path for each canonical `FastpqBalanceKeyV1` Norito frame. The
+`iroha_data_model::fastpq::transfer_balance_key` owner frames the typed asset definition
+followed by the complete domainless `AccountId`, with schema identity
+`iroha_data_model::fastpq::FastpqBalanceKeyV1` and the canonical declared V1 layout.
+The host and prover share this owner. Display prefixes, aliases, and ambient
+codec flags do not affect its bytes; alternate frames and raw display strings
+are rejected at trace admission. Asset columns project the canonical UUID bytes. For
 one `transfer_transcripts` vector, materialization and verification first sort
 the distinct full balance-key bytes lexicographically. Each key keeps the first
 four little-endian bytes of its domain-separated key hash when that path is
 free; a collision advances with wrapping `u32` linear probing to the first free
 path. The probe window is bounded by the number of distinct keys. The verifier
 reconstructs this allocation from the complete transcript vector and rejects a
-witness whose `path_bits` selects any other path. Consequently existing
-non-colliding roots remain unchanged, while colliding full keys receive distinct
-deterministic leaves on every peer.
+witness whose `path_bits` selects any other path. Consequently colliding full keys receive distinct deterministic leaves on every peer.
+
+`fixtures/fastpq/balance_key_v1.json` pins the exact canonical frames for all
+eleven supported single-key algorithms, weighted/threshold-sensitive multisig
+policies, a policy combining all algorithms, and a 256-member policy. The Rust
+`kotlin-fixture-gen fastpq-balance-keys-v1` command regenerates these frames from
+the independently validated complete-controller fixture.
 
 ## Gadget Layout
 

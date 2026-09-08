@@ -24,6 +24,7 @@ use norito::codec::{Decode, Encode};
 #[cfg_attr(feature = "json", norito(tag = "event", content = "payload"))]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::events::data::escrow::EscrowEvent")]
+#[event_set(schema_name = "iroha_data_model::events::data::escrow::EscrowEventSet")]
 pub enum EscrowEvent {
     /// Escrow opened and funded.
     Opened(AssetEscrowRecord),

@@ -85,6 +85,7 @@ iroha_crypto = { workspace = true, default-features = false, features = ["sm"] }
 iroha_core = { workspace = true, default-features = false }
 fastpq_prover = { path = "../fastpq_prover" }
 iroha_config = { workspace = true }
+iroha_config_base = { workspace = true }
 iroha_zkp_halo2 = { workspace = true }
 iroha_data_model = { workspace = true, default-features = false }
 iroha_torii_shared = { workspace = true }
@@ -117,7 +118,7 @@ time = { workspace = true }
 zeroize = { version = "1.8.2", default-features = false, features = ["std"] }
 blake3 = { workspace = true }
 reqwest = { workspace = true, features = ["blocking", "rustls-tls"] }
-rustix = { version = "1.1.4", features = ["fs", "process"] }
+rustix = { version = "1.1.4", features = ["event", "fs", "process"] }
 toml = { workspace = true }
 tiny-keccak = { workspace = true }
 sha2 = { version = "0.10.9", default-features = false, features = ["std"] }

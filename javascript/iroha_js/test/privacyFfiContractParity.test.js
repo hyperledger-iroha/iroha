@@ -83,7 +83,18 @@ test("only a fresh committed Torii view supplies authoritative privacy readiness
     "javascript/iroha_js/src/privacyCapabilities.js",
   );
   assert.match(javascriptParser, /PrivacyExact12CapabilityManifestV1/);
-  assert.match(javascriptParser, /privacyExact12CapabilityManifestTransportV1/);
+  assert.match(javascriptParser, /fetchPrivacyExact12CapabilityManifestTransportV1/);
+  assert.match(javascriptParser, /consumePrivacyExact12CapabilityManifestTransportV1/);
+  const manifestConstructor = javascriptParser.slice(
+    javascriptParser.indexOf("export class PrivacyExact12CapabilityManifestV1"),
+    javascriptParser.indexOf("export function compiledProfileCatalogV1"),
+  );
+  assert.doesNotMatch(manifestConstructor, /bindPrivacyExact12CapabilityAdmissionV1/);
+  assert.match(javascriptParser, /Uint8Array\.from\(state\.expectedNetworkId\)/);
+  const transport = source("javascript/iroha_js/src/privacyCapabilityTransport.js");
+  assert.match(transport, /const transports = new WeakMap\(\)/);
+  assert.match(transport, /receipts\.delete\(receipt\)/);
+  assert.doesNotMatch(transport, /Symbol\(/);
   assert.doesNotMatch(javascriptParser, /parsePrivacyCapabilitySnapshotV1/);
   assert.doesNotMatch(javascriptParser, /privacyCapabilityTransportV1/);
   for (const client of [

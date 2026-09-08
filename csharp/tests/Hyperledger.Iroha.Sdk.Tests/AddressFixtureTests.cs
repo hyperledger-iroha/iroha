@@ -333,7 +333,7 @@ public sealed class AddressFixtureTests
     public void UnknownCurveIdentifiersAreRejected()
     {
         var publicKey = Enumerable.Repeat((byte)0x11, 32).ToArray();
-        foreach (var curveIdentifier in new byte[] { 0, 3, 4, 5, 9, 16, byte.MaxValue })
+        foreach (var curveIdentifier in new byte[] { 0, 6, 7, 8, 9, 16, byte.MaxValue })
         {
             var exception = Assert.Throws<AccountAddressException>(() =>
                 AccountAddress.FromPublicKey(publicKey, (CurveId)curveIdentifier));

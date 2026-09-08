@@ -280,6 +280,9 @@ impl ProviderIngestCompletedMusubiSignedCaptureLedgerV1 for CaptureCoordinatorPr
     }
 }
 fn capture_coordinator_test_handle(root: &std::path::Path) -> NodeHandle {
+    let root = root
+        .canonicalize()
+        .expect("canonical coordinator test root");
     NodeHandle::try_new(
         StorageConfig::builder()
             .enabled(true)
@@ -294,7 +297,6 @@ fn capture_coordinator_test_handle(root: &std::path::Path) -> NodeHandle {
 fn completed_musubi_capture_coordinator_tenure_is_take_once_and_reader_stable() {
     let first_root = tempfile::tempdir().expect("first coordinator root");
     let second_root = tempfile::tempdir().expect("second coordinator root");
-    let failed_root = tempfile::tempdir().expect("failed coordinator root");
     let handle = capture_coordinator_test_handle(first_root.path());
     let cloned_handle = handle.clone();
     let retained_reader = Arc::new(CaptureCoordinatorProbeLedgerV1::new(false, 0xC1));
@@ -353,30 +355,41 @@ fn completed_musubi_capture_coordinator_tenure_is_take_once_and_reader_stable() 
         .try_activate()
         .expect("bind reader under independent restarted handle");
     assert_eq!(substituted_reader.binding_calls.load(Ordering::SeqCst), 1);
-    let failed_handle = capture_coordinator_test_handle(failed_root.path());
-    let never_read = Arc::new(CaptureCoordinatorProbeLedgerV1::new(true, 0xC3));
-    assert!(matches!(
-        failed_handle.take_provider_ingest_completed_musubi_capture_coordinator(
-            NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
-                Hash::prehashed([0; 32]),
-            )),
+    for (network_id, max_page_rows, expected_error) in [
+        (
+            unmarked_test_network_id(),
             1,
-            never_read.clone(),
+            ProviderIngestRuntimeErrorV1::InvalidNetworkId,
         ),
-        Err(FinalizedProviderIngestError::Runtime(
-            ProviderIngestRuntimeErrorV1::InvalidNetworkId
-        ))
-    ));
-    assert!(matches!(
-        failed_handle.take_provider_ingest_completed_musubi_capture_coordinator(
+        (
             test_network_id(),
-            1,
-            never_read.clone(),
+            0,
+            ProviderIngestRuntimeErrorV1::InvalidPolicy,
         ),
-        Err(FinalizedProviderIngestError::CompletedMusubiCaptureCoordinatorTaken)
-    ));
-    assert_eq!(never_read.binding_calls.load(Ordering::SeqCst), 0);
-    assert_eq!(never_read.page_reads.load(Ordering::SeqCst), 0);
+    ] {
+        let failed_root = tempfile::tempdir().expect("failed coordinator root");
+        let failed_handle = capture_coordinator_test_handle(failed_root.path());
+        let never_read = Arc::new(CaptureCoordinatorProbeLedgerV1::new(true, 0xC3));
+        assert!(matches!(
+            failed_handle.take_provider_ingest_completed_musubi_capture_coordinator(
+                network_id,
+                max_page_rows,
+                never_read.clone(),
+            ),
+            Err(FinalizedProviderIngestError::Runtime(error))
+                if std::mem::discriminant(&error) == std::mem::discriminant(&expected_error)
+        ));
+        assert!(matches!(
+            failed_handle.take_provider_ingest_completed_musubi_capture_coordinator(
+                test_network_id(),
+                1,
+                never_read.clone(),
+            ),
+            Err(FinalizedProviderIngestError::CompletedMusubiCaptureCoordinatorTaken)
+        ));
+        assert_eq!(never_read.binding_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(never_read.page_reads.load(Ordering::SeqCst), 0);
+    }
 }
 #[tokio::test]
 async fn completed_musubi_capture_reconciliation_retries_without_skipping_and_enqueues_once() {
@@ -884,19 +897,36 @@ fn completed_musubi_capture_ledger_never_receives_claim_minting_capabilities() {
     assert!(!trait_source.contains("ProviderIngestFinalizedAssignmentPageV1"));
 }
 #[test]
+fn completed_musubi_capture_network_wire_rejects_unmarked_identity() {
+    let network_id = test_network_id();
+    let mut raw_network = *network_id.as_bytes();
+    assert_eq!(
+        norito::codec::Encode::encode(&network_id),
+        raw_network,
+        "the raw carrier must preserve the entire valid network payload"
+    );
+    assert_eq!(
+        <NetworkId as norito::codec::Decode>::decode(&mut raw_network.as_slice())
+            .expect("decode valid network"),
+        network_id
+    );
+    raw_network[Hash::LENGTH - 1] &= !1;
+    assert!(matches!(
+        <NetworkId as norito::codec::Decode>::decode(&mut raw_network.as_slice()),
+        Err(norito::Error::Message(message)) if message == "invalid hash lsb"
+    ));
+}
+#[test]
 fn completed_musubi_capture_scanner_enforces_identity_and_page_bounds() {
     let ledger = Arc::new(CaptureScannerLedgerV1::new(
         Vec::new(),
         8,
         CaptureScannerLedgerFaultV1::None,
     ));
-    let unmarked_network_id = NetworkId::from_genesis_hash(
-        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0; 32])),
-    );
     for (provider_id, network_id, max_page_rows, expected) in [
         ([0; 32], test_network_id(), 1, "provider"),
         (LOCAL_PROVIDER, foreign_test_network_id(), 1, "binding"),
-        (LOCAL_PROVIDER, unmarked_network_id, 1, "network"),
+        (LOCAL_PROVIDER, unmarked_test_network_id(), 1, "network"),
         (LOCAL_PROVIDER, test_network_id(), 0, "policy"),
         (
             LOCAL_PROVIDER,

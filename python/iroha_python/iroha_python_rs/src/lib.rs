@@ -4,6 +4,7 @@
 mod connect_key_bindings;
 #[cfg(test)]
 mod crypto_admission_tests;
+mod identity_codec_v1;
 mod privacy_capability_manifest;
 pub mod privacy_native_actions;
 pub mod privacy_wallet_bundle;
@@ -18,7 +19,6 @@ use core::{
 };
 use futures::executor::block_on;
 use hex::{encode as hex_encode, encode_upper as hex_encode_upper};
-use iroha_config::parameters::actual::SorafsAliasCachePolicy;
 use iroha_core::{
     privacy_engines::vega::{VegaMdlConsensusBindingV1, derive_device_authentication_digest_v1},
     privacy_profiles::{
@@ -35,10 +35,7 @@ use iroha_crypto::{
 };
 use iroha_data_model::{
     NetworkId,
-    account::{
-        Account,
-        address::{AccountAddress, AccountAddressError},
-    },
+    account::{Account, address::AccountAddress},
     alias_setup::{
         AccountAliasName, AccountAliasRoleV1, AccountProvisionV1, AliasFramedInstructionV1,
         AliasIntentV1, AliasLeaseAcquisitionV1, AliasPlanAnchorV1, AliasPlanDispositionV1,
@@ -156,6 +153,10 @@ use iroha_primitives::{
     numeric::{NumericSpec, Quantity, XorQuantity},
 };
 use iroha_schema::Ident;
+use iroha_service_model::{
+    sorafs,
+    soranet::{AnonymityPolicy, RolloutPhase, TransportPolicy},
+};
 use iroha_torii_shared::{
     connect::{
         AppMeta, ConnectCiphertextV1, ConnectControlV1, ConnectFrameV1, ConnectPayloadV1,
@@ -239,8 +240,7 @@ use sorafs_manifest::{
     validate_pdp_proof_bytes,
 };
 use sorafs_orchestrator::{
-    AnonymityPolicy, DEFAULT_LOCAL_PROXY_BRIDGE_SPOOL_DIR, OrchestratorConfig, RolloutPhase,
-    TransportPolicy, fetch_via_gateway,
+    DEFAULT_LOCAL_PROXY_BRIDGE_SPOOL_DIR, OrchestratorConfig, fetch_via_gateway,
     proxy::{
         LocalQuicProxyConfig, ProxyCarBridgeConfig, ProxyKaigiBridgeConfig, ProxyMode,
         ProxyNoritoBridgeConfig,
@@ -457,15 +457,7 @@ fn require_non_blank_unpadded(value: &str, field: &str) -> PyResult<()> {
     Ok(())
 }
 fn parse_account_id(value: &str) -> PyResult<AccountId> {
-    let raw = value.trim();
-    let parsed = match AccountAddress::parse_encoded(raw, None) {
-        Ok(address) => address.to_account_id().map_err(|err| err.to_string()),
-        Err(AccountAddressError::UnsupportedAddressFormat) => {
-            AccountId::parse_encoded(raw).map_err(|err| err.to_string())
-        }
-        Err(err) => Err(err.to_string()),
-    };
-    parsed.map_err(|err| PyValueError::new_err(format!("invalid account id: {err}")))
+    parse_exact_i105_account_id(value, "account_id")
 }
 fn parse_exact_i105_account_id(value: &str, field: &str) -> PyResult<AccountId> {
     require_non_blank_unpadded(value, field)?;
@@ -670,7 +662,6 @@ fn parse_fee_sponsor_program_id(value: &str) -> PyResult<FeeSponsorProgramId> {
             "fee sponsor program id must use its exact canonical encoding",
         ));
     }
-    ensure_ed25519_account(&program_id.sponsor)?;
     Ok(program_id)
 }
 fn parse_fee_payment_intent_json(value: &str) -> PyResult<FeePaymentIntent> {
@@ -1934,16 +1925,15 @@ fn decode_connect_frame_bytes(bytes: &[u8]) -> PyResult<ConnectFrameV1> {
     Ok(frame)
 }
 fn sorafs_default_policy() -> AliasCachePolicy {
-    let defaults = SorafsAliasCachePolicy::default();
     AliasCachePolicy::new(
-        defaults.positive_ttl,
-        defaults.refresh_window,
-        defaults.hard_expiry,
-        defaults.negative_ttl,
-        defaults.revocation_ttl,
-        defaults.rotation_max_age,
-        defaults.successor_grace,
-        defaults.governance_grace,
+        Duration::from_secs(sorafs::DEFAULT_ALIAS_POSITIVE_TTL_SECS),
+        Duration::from_secs(sorafs::DEFAULT_ALIAS_REFRESH_WINDOW_SECS),
+        Duration::from_secs(sorafs::DEFAULT_ALIAS_HARD_EXPIRY_SECS),
+        Duration::from_secs(sorafs::DEFAULT_ALIAS_NEGATIVE_TTL_SECS),
+        Duration::from_secs(sorafs::DEFAULT_ALIAS_REVOCATION_TTL_SECS),
+        Duration::from_secs(sorafs::DEFAULT_ALIAS_ROTATION_MAX_AGE_SECS),
+        Duration::from_secs(sorafs::DEFAULT_ALIAS_SUCCESSOR_GRACE_SECS),
+        Duration::from_secs(sorafs::DEFAULT_ALIAS_GOVERNANCE_GRACE_SECS),
     )
 }
 fn policy_override_u64<'py>(
@@ -2164,7 +2154,7 @@ fn sorafs_alias_proof_fixture_py(
     } else {
         now.saturating_sub(60)
     };
-    let expires_default = generated + sorafs_default_policy().positive_ttl().as_secs();
+    let expires_default = generated + sorafs::DEFAULT_ALIAS_POSITIVE_TTL_SECS;
     let expires = if let Some(opts) = mapping {
         if let Some(value) = opts.get_item("expires_at_unix")? {
             let secs: u64 = value.extract().map_err(|_| {
@@ -5544,6 +5534,31 @@ mod tests {
         PyNetworkId::from_exact_bytes(&[0xA5; Hash::LENGTH]).expect("marked test NetworkId")
     }
     #[test]
+    fn privacy_capability_native_builder_rejects_offline_inspection() {
+        ensure_python();
+        let private_key = parse_private_key(&[0x11; 32]).expect("seeded private key");
+        let authority = AccountId::new(PublicKey::from(private_key))
+            .canonical_i105()
+            .expect("canonical authority");
+        let mut builder = TransactionBuilder::new(
+            &python_test_network_id(),
+            &authority,
+            authority_fee_payment_json(),
+        )
+        .expect("ordinary transaction builder");
+        let inspected = privacy_capability_manifest::PyPrivacyExact12CapabilityManifestV1::test_binding_for_protocol(
+            PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
+        );
+        Python::attach(|py| {
+            let manifest = Py::new(py, inspected).expect("native inspection object");
+            let error = builder
+                .bind_privacy_exact12_capability_manifest_v1(manifest.bind(py).borrow())
+                .expect_err("public native builder must reject an offline archive");
+            assert!(error.to_string().contains("inspection-only"));
+        });
+        assert!(builder.privacy_capability_manifest.is_none());
+    }
+    #[test]
     fn prepared_binding_parser_accepts_only_the_exact_v1_shape() {
         let binding = r#"{
             "schema":"iroha.taira.public-reset.mutation-binding.v1",
@@ -5624,8 +5639,7 @@ mod tests {
         Python::attach(|py| err.value(py).to_string())
     }
     #[test]
-    fn sorafs_alias_defaults_match_the_canonical_config_policy() {
-        let expected = SorafsAliasCachePolicy::default();
+    fn sorafs_alias_defaults_match_the_canonical_service_policy() {
         let actual = sorafs_default_policy();
         assert_eq!(
             [
@@ -5639,14 +5653,14 @@ mod tests {
                 actual.governance_grace(),
             ],
             [
-                expected.positive_ttl,
-                expected.refresh_window,
-                expected.hard_expiry,
-                expected.negative_ttl,
-                expected.revocation_ttl,
-                expected.rotation_max_age,
-                expected.successor_grace,
-                expected.governance_grace,
+                Duration::from_secs(sorafs::DEFAULT_ALIAS_POSITIVE_TTL_SECS),
+                Duration::from_secs(sorafs::DEFAULT_ALIAS_REFRESH_WINDOW_SECS),
+                Duration::from_secs(sorafs::DEFAULT_ALIAS_HARD_EXPIRY_SECS),
+                Duration::from_secs(sorafs::DEFAULT_ALIAS_NEGATIVE_TTL_SECS),
+                Duration::from_secs(sorafs::DEFAULT_ALIAS_REVOCATION_TTL_SECS),
+                Duration::from_secs(sorafs::DEFAULT_ALIAS_ROTATION_MAX_AGE_SECS),
+                Duration::from_secs(sorafs::DEFAULT_ALIAS_SUCCESSOR_GRACE_SECS),
+                Duration::from_secs(sorafs::DEFAULT_ALIAS_GOVERNANCE_GRACE_SECS),
             ]
         );
     }
@@ -8493,7 +8507,6 @@ fn parse_transfer_asset_batch_entries(
                 )));
             }
             let destination = parse_account_id(&json_object_string(&mut fields, "to", &context)?)?;
-            ensure_ed25519_account(&destination)?;
             let amount = parse_typed_quantity(
                 &json_object_string(&mut fields, "amount", &context)?,
                 "payment amount",
@@ -8659,7 +8672,6 @@ fn parse_settlement_leg(
     let from_account = parse_account_id(&from_str).map_err(|err| {
         PyValueError::new_err(format!("invalid {name} `from` account `{from_str}`: {err}"))
     })?;
-    ensure_ed25519_account(&from_account)?;
     let to_obj = dict
         .get_item("to")?
         .ok_or_else(|| PyValueError::new_err(format!("{name} requires `to`")))?;
@@ -8669,7 +8681,6 @@ fn parse_settlement_leg(
     let to_account = parse_account_id(&to_str).map_err(|err| {
         PyValueError::new_err(format!("invalid {name} `to` account `{to_str}`: {err}"))
     })?;
-    ensure_ed25519_account(&to_account)?;
     let metadata = match dict.get_item("metadata")? {
         Some(meta) => py_to_metadata(py, Some(&meta))?,
         None => Metadata::default(),
@@ -8795,7 +8806,7 @@ fn asset_definition_id_to_py(
     from_py_object,
     frozen,
     name = "NetworkId",
-    module = "iroha_python._crypto"
+    module = "iroha_native._crypto"
 )]
 #[derive(Clone, Copy)]
 pub(crate) struct PyNetworkId {
@@ -8878,7 +8889,7 @@ impl PyNetworkId {
         *self
     }
 }
-#[pyclass(from_py_object, name = "DomainId", module = "iroha_python._crypto")]
+#[pyclass(from_py_object, name = "DomainId", module = "iroha_native._crypto")]
 #[derive(Clone)]
 struct PyDomainId {
     inner: DomainId,
@@ -8908,7 +8919,7 @@ impl PyDomainId {
         self.clone()
     }
 }
-#[pyclass(from_py_object, name = "AccountId", module = "iroha_python._crypto")]
+#[pyclass(from_py_object, name = "AccountId", module = "iroha_native._crypto")]
 #[derive(Clone)]
 struct PyAccountId {
     inner: AccountId,
@@ -8917,8 +8928,7 @@ struct PyAccountId {
 impl PyAccountId {
     #[new]
     fn new(value: &str) -> PyResult<Self> {
-        let id = parse_account_id(value)?;
-        ensure_ed25519_account(&id)?;
+        let id = parse_exact_i105_account_id(value, "AccountId")?;
         Ok(Self { inner: id })
     }
     #[getter]
@@ -8928,8 +8938,7 @@ impl PyAccountId {
     #[getter]
     fn public_key_hex(&self) -> PyResult<String> {
         let signatory = require_single_signatory(&self.inner, "AccountId")?;
-        let (algorithm, bytes) = public_key_to_bytes(signatory, "account signatory public key")?;
-        algorithm_guard(algorithm)?;
+        let (_, bytes) = public_key_to_bytes(signatory, "account signatory public key")?;
         Ok(hex::encode(bytes))
     }
     fn __str__(&self) -> String {
@@ -8948,7 +8957,7 @@ impl PyAccountId {
 #[pyclass(
     from_py_object,
     name = "AssetDefinitionId",
-    module = "iroha_python._crypto"
+    module = "iroha_native._crypto"
 )]
 #[derive(Clone)]
 struct PyAssetDefinitionId {
@@ -8995,7 +9004,7 @@ impl PyAssetDefinitionId {
         self.clone()
     }
 }
-#[pyclass(from_py_object, name = "AssetId", module = "iroha_python._crypto")]
+#[pyclass(from_py_object, name = "AssetId", module = "iroha_native._crypto")]
 #[derive(Clone)]
 struct PyAssetId {
     inner: AssetId,
@@ -9053,7 +9062,7 @@ fn numeric_spec_from_optional_scale(scale: Option<u32>) -> PyResult<NumericSpec>
         None => Ok(NumericSpec::unconstrained()),
     }
 }
-#[pyclass(from_py_object, module = "iroha_python._crypto")]
+#[pyclass(from_py_object, module = "iroha_native._crypto")]
 #[derive(Clone)]
 struct Instruction {
     inner: InstructionBox,
@@ -9303,13 +9312,11 @@ impl Instruction {
         let sponsor: AccountId = parse_account_id(sponsor).map_err(|err| {
             PyValueError::new_err(format!("invalid fee sponsor account `{sponsor}`: {err}"))
         })?;
-        ensure_ed25519_account(&sponsor)?;
         let payout_account = parse_account_id(payout_account).map_err(|err| {
             PyValueError::new_err(format!(
                 "invalid fee sponsor payout account `{payout_account}`: {err}"
             ))
         })?;
-        ensure_ed25519_account(&payout_account)?;
         let program_name: Name = program_name.parse().map_err(|err| {
             PyValueError::new_err(format!(
                 "invalid fee sponsor program `{program_name}`: {err}"
@@ -9404,7 +9411,6 @@ impl Instruction {
         beneficiary: &str,
     ) -> PyResult<Self> {
         let beneficiary = parse_account_id(beneficiary)?;
-        ensure_ed25519_account(&beneficiary)?;
         Ok(Instruction::new(
             iroha_data_model::isi::nexus::EnrollFeeSponsorBeneficiary {
                 program_id: parse_fee_sponsor_program_id(program_id)?,
@@ -9421,7 +9427,6 @@ impl Instruction {
         beneficiary: &str,
     ) -> PyResult<Self> {
         let beneficiary = parse_account_id(beneficiary)?;
-        ensure_ed25519_account(&beneficiary)?;
         Ok(Instruction::new(
             iroha_data_model::isi::nexus::UnenrollFeeSponsorBeneficiary {
                 program_id: parse_fee_sponsor_program_id(program_id)?,
@@ -9509,7 +9514,6 @@ impl Instruction {
         metadata: Option<&Bound<'py, PyAny>>,
     ) -> PyResult<Self> {
         let account_id: AccountId = parse_account_id(account_id)?;
-        ensure_ed25519_account(&account_id)?;
         let metadata = py_to_metadata(py, metadata)?;
         let mut new_account = Account::new(account_id);
         new_account.metadata = metadata;
@@ -9644,7 +9648,6 @@ impl Instruction {
     ) -> PyResult<Self> {
         let asset_id = parse_asset_id(asset_id)?;
         let destination: AccountId = parse_account_id(destination)?;
-        ensure_ed25519_account(&destination)?;
         let quantity = parse_asset_quantity(quantity, "asset quantity")?;
         let instruction = Transfer::asset_quantity(asset_id, quantity, destination);
         Ok(Instruction::new(instruction.into()))
@@ -9659,7 +9662,6 @@ impl Instruction {
         mode: &str,
     ) -> PyResult<Self> {
         let source = parse_account_id(source_account)?;
-        ensure_ed25519_account(&source)?;
         let asset_definition: AssetDefinitionId = asset_definition_id.parse().map_err(|error| {
             PyValueError::new_err(format!(
                 "invalid asset definition id `{asset_definition_id}`: {error}"
@@ -9692,7 +9694,6 @@ impl Instruction {
         reason: Option<String>,
     ) -> PyResult<Self> {
         let account_id = parse_account_id(account_id)?;
-        ensure_ed25519_account(&account_id)?;
         let asset_definition_id: AssetDefinitionId =
             asset_definition_id.parse().map_err(|error| {
                 PyValueError::new_err(format!(
@@ -9730,7 +9731,6 @@ impl Instruction {
         blacklisted: bool,
     ) -> PyResult<Self> {
         let account_id = parse_account_id(account_id)?;
-        ensure_ed25519_account(&account_id)?;
         let asset_definition_id: AssetDefinitionId =
             asset_definition_id.parse().map_err(|error| {
                 PyValueError::new_err(format!(
@@ -9749,7 +9749,6 @@ impl Instruction {
         limits: &Bound<'_, PyAny>,
     ) -> PyResult<Self> {
         let account_id = parse_account_id(account_id)?;
-        ensure_ed25519_account(&account_id)?;
         let asset_definition_id: AssetDefinitionId =
             asset_definition_id.parse().map_err(|error| {
                 PyValueError::new_err(format!(
@@ -9773,7 +9772,6 @@ impl Instruction {
         holding_limit: Option<&str>,
     ) -> PyResult<Self> {
         let account_id = parse_account_id(account_id)?;
-        ensure_ed25519_account(&account_id)?;
         let asset_definition_id: AssetDefinitionId =
             asset_definition_id.parse().map_err(|error| {
                 PyValueError::new_err(format!(
@@ -9807,11 +9805,9 @@ impl Instruction {
             ))
         })?;
         let destination = parse_account_id(destination)?;
-        ensure_ed25519_account(&destination)?;
         let release_authority = match release_authority {
             Some(value) => {
                 let account = parse_account_id(value)?;
-                ensure_ed25519_account(&account)?;
                 Some(account)
             }
             None => None,
@@ -9856,7 +9852,6 @@ impl Instruction {
             ))
         })?;
         let beneficiary = parse_account_id(beneficiary)?;
-        ensure_ed25519_account(&beneficiary)?;
         let amount = parse_typed_quantity(amount, "conditional escrow amount")?;
         if amount.is_zero() {
             return Err(PyValueError::new_err(
@@ -9972,7 +9967,6 @@ impl Instruction {
         payload: Option<&Bound<'py, PyAny>>,
     ) -> PyResult<Self> {
         let destination: AccountId = parse_account_id(destination)?;
-        ensure_ed25519_account(&destination)?;
         let permission_name: Ident = name.parse().map_err(|err| {
             PyValueError::new_err(format!("invalid permission name `{name}`: {err}"))
         })?;
@@ -9990,7 +9984,6 @@ impl Instruction {
         payload: Option<&Bound<'py, PyAny>>,
     ) -> PyResult<Self> {
         let destination: AccountId = parse_account_id(destination)?;
-        ensure_ed25519_account(&destination)?;
         let permission_name: Ident = name.parse().map_err(|err| {
             PyValueError::new_err(format!("invalid permission name `{name}`: {err}"))
         })?;
@@ -10008,7 +10001,6 @@ impl Instruction {
         value: Option<&Bound<'py, PyAny>>,
     ) -> PyResult<Self> {
         let account_id = parse_account_id(account_id)?;
-        ensure_ed25519_account(&account_id)?;
         let key: Name = key
             .parse()
             .map_err(|err| PyValueError::new_err(format!("invalid metadata key `{key}`: {err}")))?;
@@ -10023,7 +10015,6 @@ impl Instruction {
         key: &str,
     ) -> PyResult<Self> {
         let account_id = parse_account_id(account_id)?;
-        ensure_ed25519_account(&account_id)?;
         let key: Name = key
             .parse()
             .map_err(|err| PyValueError::new_err(format!("invalid metadata key `{key}`: {err}")))?;
@@ -10060,13 +10051,10 @@ impl Instruction {
             PyValueError::new_err(format!("invalid repo agreement id `{agreement_id}`: {err}"))
         })?;
         let initiator = parse_account_id(initiator)?;
-        ensure_ed25519_account(&initiator)?;
         let counterparty = parse_account_id(counterparty)?;
-        ensure_ed25519_account(&counterparty)?;
         let custodian = match custodian {
             Some(value) => {
                 let account = parse_account_id(value)?;
-                ensure_ed25519_account(&account)?;
                 Some(account)
             }
             None => None,
@@ -10181,9 +10169,7 @@ impl Instruction {
         destination: &str,
     ) -> PyResult<Self> {
         let source = parse_account_id(source)?;
-        ensure_ed25519_account(&source)?;
         let destination = parse_account_id(destination)?;
-        ensure_ed25519_account(&destination)?;
         let domain_id = DomainId::parse_fully_qualified(domain_id).map_err(|err| {
             PyValueError::new_err(format!("invalid domain id `{domain_id}`: {err}"))
         })?;
@@ -10198,9 +10184,7 @@ impl Instruction {
         destination: &str,
     ) -> PyResult<Self> {
         let source = parse_account_id(source)?;
-        ensure_ed25519_account(&source)?;
         let destination = parse_account_id(destination)?;
-        ensure_ed25519_account(&destination)?;
         let definition_id: AssetDefinitionId = definition_id.parse().map_err(|err| {
             PyValueError::new_err(format!(
                 "invalid asset definition id `{definition_id}`: {err}"
@@ -10217,9 +10201,7 @@ impl Instruction {
         destination: &str,
     ) -> PyResult<Self> {
         let source = parse_account_id(source)?;
-        ensure_ed25519_account(&source)?;
         let destination = parse_account_id(destination)?;
-        ensure_ed25519_account(&destination)?;
         let nft_id: NftId = nft_id
             .parse()
             .map_err(|err| PyValueError::new_err(format!("invalid NFT id `{nft_id}`: {err}")))?;
@@ -10235,9 +10217,7 @@ impl Instruction {
         destination: &str,
     ) -> PyResult<Self> {
         let source = parse_account_id(source)?;
-        ensure_ed25519_account(&source)?;
         let destination = parse_account_id(destination)?;
-        ensure_ed25519_account(&destination)?;
         let rwa_id: RwaId = rwa_id
             .parse()
             .map_err(|err| PyValueError::new_err(format!("invalid RWA id `{rwa_id}`: {err}")))?;
@@ -10310,7 +10290,6 @@ impl Instruction {
         destination: &str,
     ) -> PyResult<Self> {
         let destination = parse_account_id(destination)?;
-        ensure_ed25519_account(&destination)?;
         let rwa_id: RwaId = rwa_id
             .parse()
             .map_err(|err| PyValueError::new_err(format!("invalid RWA id `{rwa_id}`: {err}")))?;
@@ -10386,7 +10365,6 @@ impl Instruction {
             PyValueError::new_err(format!("invalid trigger id `{trigger_id}`: {err}"))
         })?;
         let authority = parse_account_id(authority)?;
-        ensure_ed25519_account(&authority)?;
         if start_ms == 0 {
             return Err(PyValueError::new_err("start_ms must be greater than zero"));
         }
@@ -10450,7 +10428,6 @@ impl Instruction {
             PyValueError::new_err(format!("invalid trigger id `{trigger_id}`: {err}"))
         })?;
         let authority = parse_account_id(authority)?;
-        ensure_ed25519_account(&authority)?;
         let repeats = match repeats {
             Some(0) => {
                 return Err(PyValueError::new_err(
@@ -10660,7 +10637,7 @@ fn python_vega_statement_v1(
 ///
 /// Generic privacy proving is intentionally absent: the Rust-owned wallet
 /// worker accepts an owner-only credential path and returns signed public wire.
-#[pyclass(from_py_object, module = "iroha_python._crypto")]
+#[pyclass(from_py_object, module = "iroha_native._crypto")]
 #[derive(Clone)]
 struct TransactionBuilder {
     network_id: NetworkId,
@@ -10706,6 +10683,7 @@ impl TransactionBuilder {
                 "native {protocol_label} construction requires a validated Torii Exact12 capability manifest"
             ))
         })?;
+        manifest.require_authenticated_network(self.network_id)?;
         manifest.require_network_profile(protocol_id)?;
         Ok(())
     }
@@ -10875,7 +10853,6 @@ impl TransactionBuilder {
     fn new(network_id: &PyNetworkId, authority: &str, fee_payment_json: &str) -> PyResult<Self> {
         require_non_blank_unpadded(authority, "authority")?;
         let authority = parse_account_id(authority)?;
-        ensure_ed25519_account(&authority)?;
         let fee_payment = parse_fee_payment_intent_json(fee_payment_json)?;
         let creation_time = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -10906,6 +10883,7 @@ impl TransactionBuilder {
         &mut self,
         manifest: PyRef<'_, privacy_capability_manifest::PyPrivacyExact12CapabilityManifestV1>,
     ) -> PyResult<()> {
+        manifest.require_authenticated_network(self.network_id)?;
         if self.privacy_capability_manifest.is_some() {
             return Err(PyValueError::new_err(
                 "transaction builder already has an Exact12 capability manifest binding",
@@ -11165,6 +11143,7 @@ impl TransactionBuilder {
     }
     /// Sign the transaction, returning an envelope with Norito payloads and hash.
     fn sign(&mut self, private_key: &[u8]) -> PyResult<SignedTransactionEnvelope> {
+        ensure_ed25519_account(&self.authority)?;
         self.validate_executable()?;
         let private_key = parse_private_key(private_key)?;
         let signed = self
@@ -11205,6 +11184,14 @@ impl TransactionBuilder {
                     error.stage()
                 ))
             })?;
+        let mut resolved_statement = PrivacyStatementV1::IrohaZkX509StarkP256V1(statement);
+        resolved_statement.context_mut().transaction_intent_digest = intent;
+        self.privacy_capability_manifest
+            .as_ref()
+            .ok_or_else(|| {
+                PyRuntimeError::new_err("privacy preparation requires an admitted manifest")
+            })?
+            .require_governed_statement(&resolved_statement)?;
         Ok(PyBytes::new(py, intent.as_bytes()))
     }
     /// Validate and sign one canonical, intent-bound ZK-X509 identity presentation.
@@ -11232,6 +11219,12 @@ impl TransactionBuilder {
         }
         let canonical_genesis_hash = *self.network_id.as_bytes();
         let statement = python_zk_x509_statement_archive_v1(canonical_statement_archive)?;
+        self.privacy_capability_manifest
+            .as_ref()
+            .ok_or_else(|| {
+                PyRuntimeError::new_err("privacy signing requires an admitted manifest")
+            })?
+            .require_governed_x509_action(&statement, credential_proof)?;
         let private_key = parse_private_key(private_key)?;
         self.validate_privacy_action_signing_authority_v1(&private_key)?;
         let proof = crate::privacy_native_actions::ZkX509CredentialProofBytesV1::try_new(
@@ -11265,6 +11258,7 @@ impl TransactionBuilder {
         quoted_fee_payment_json: &str,
         private_key: &[u8],
     ) -> PyResult<SignedTransactionEnvelope> {
+        ensure_ed25519_account(&self.authority)?;
         self.validate_executable()?;
         let mut draft =
             json::from_str::<TransactionPayload>(draft_payload_json).map_err(|err| {
@@ -11300,6 +11294,7 @@ impl TransactionBuilder {
     }
     /// Finalize the transaction using a wallet-provided external signature.
     fn build_with_signature(&mut self, signature: &[u8]) -> PyResult<SignedTransactionEnvelope> {
+        ensure_ed25519_account(&self.authority)?;
         self.validate_executable()?;
         if signature.len() != 64 {
             return Err(PyValueError::new_err(format!(
@@ -11347,7 +11342,7 @@ const ZK_X509_LEDGER_EFFECT_V1: &str = "zk_x509_certificate_nullifier";
 /// Secret-bearing bundle buffers are held in zeroizing storage around their
 /// decoder boundary. The result exposes only the authenticated public
 /// envelope, digests, and byte counts; witness material is never returned.
-#[pyclass(frozen, module = "iroha_python._crypto")]
+#[pyclass(frozen, module = "iroha_native._crypto")]
 struct PrivacyNativeActionBuildResultV1 {
     envelope: Py<SignedTransactionEnvelope>,
     protocol_id: String,
@@ -11414,7 +11409,7 @@ impl PrivacyNativeActionBuildResultV1 {
     }
 }
 /// Signed transaction outputs exposed to Python.
-#[pyclass(module = "iroha_python._crypto")]
+#[pyclass(module = "iroha_native._crypto")]
 struct SignedTransactionEnvelope {
     network_id: NetworkId,
     authority: String,
@@ -15205,6 +15200,7 @@ fn canonical_genesis_header_hash_v1_py(
 }
 #[pymodule]
 fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
+    identity_codec_v1::register(module)?;
     module.add(
         "SorafsMultiFetchError",
         _py.get_type::<SorafsMultiFetchError>(),
@@ -15501,6 +15497,10 @@ fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(privacy_bridge_abi_version_py, module)?)?;
     module.add_function(wrap_pyfunction!(
         privacy_capability_manifest::privacy_exact12_capability_manifest_v1_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        privacy_capability_manifest::privacy_fetch_exact12_capability_manifest_v1_py,
         module
     )?)?;
     module.add_function(wrap_pyfunction!(

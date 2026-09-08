@@ -461,17 +461,31 @@ def test_provider_ingest_docs_separate_pool_closure_from_external_blockers() -> 
 def test_provider_ingest_clippy_shapes_preserve_the_durable_codec() -> None:
     outbox = _read(NODE_OUTBOX)
     node_lib = _read(NODE_LIB)
+    completion_codec = _read(
+        NODE_OUTBOX.parent / "provider_ingest_outbox" / "completion_codec.rs"
+    )
+    assert "mod completion_codec;" in outbox, "boxed-completion codec module is disconnected"
 
     for contract in (
         "struct ProviderIngestExposedCompletionExpiryV1<'a>",
         "request: ProviderIngestExposedCompletionExpiryV1<'_>",
         "struct BoxedStoredCompletionDeliveryV1(Box<StoredCompletionDeliveryV1>);",
-        "NoritoSerialize for BoxedStoredCompletionDeliveryV1",
-        "NoritoDeserialize<'a> for BoxedStoredCompletionDeliveryV1",
         "fn boxed_completion_codec_preserves_prior_bytes()",
         "assert_eq!(actual, expected);",
     ):
         assert contract in outbox
+
+    for contract in (
+        "use super::{BoxedStoredCompletionDeliveryV1, StoredCompletionDeliveryV1};",
+        "NoritoSerialize for BoxedStoredCompletionDeliveryV1",
+        "NoritoDeserialize<'a> for BoxedStoredCompletionDeliveryV1",
+        "SerializePayload for BoxedStoredCompletionDeliveryV1",
+        "<StoredCompletionDeliveryV1 as norito::core::NoritoSerialize>::schema_hash()",
+        "<StoredCompletionDeliveryV1 as norito::core::NoritoDeserialize<'a>>::schema_hash()",
+        "norito::core::SerializePayload::serialize(self.0.as_ref(), writer)",
+        "archived.cast::<StoredCompletionDeliveryV1>()",
+    ):
+        assert contract in completion_codec, f"missing boxed-completion codec contract: {contract}"
 
     assert "completion: Box<StoredCompletionDeliveryV1>" not in outbox
     assert "pub type FinalizedProviderIngestRuntimeResultV1<" in node_lib

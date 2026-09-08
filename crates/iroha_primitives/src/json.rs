@@ -23,6 +23,17 @@ pub const MAX_JSON_NESTING_DEPTH: usize = json::MAX_JSON_VALUE_NESTING_DEPTH;
 /// canonical rendering of a valid JSON document.
 ///
 /// Use [`Json::new`] to serialize a value and establish the canonical lexical invariant.
+///
+/// Arbitrary JSON documents are values, not typed object keys. Use a canonical
+/// scalar key type when serializing a map.
+///
+/// ```compile_fail
+/// use std::collections::BTreeMap;
+/// use iroha_primitives::json::Json;
+///
+/// let values = BTreeMap::from([(Json::new("key"), 1_u8)]);
+/// let _ = norito::json::to_json(&values);
+/// ```
 #[derive(Debug, Display, Clone, PartialOrd, PartialEq, Ord, Eq)]
 #[display("{_0}")]
 #[derive(norito::NoritoSchema)]
@@ -63,17 +74,19 @@ impl norito::core::NoritoSerialize for Json {
     fn schema_hash() -> [u8; 16] {
         norito::core::type_name_schema_hash::<Self>()
     }
+}
+impl norito::core::SerializePayload for Json {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let wire = JsonWireRef(Cow::Borrowed(self.0.as_str()));
-        norito::core::NoritoSerialize::serialize(&wire, writer)
+        norito::core::SerializePayload::serialize(&wire, writer)
     }
     fn encoded_len_hint(&self) -> Option<usize> {
         let wire = JsonWireRef(Cow::Borrowed(self.0.as_str()));
-        norito::core::NoritoSerialize::encoded_len_hint(&wire)
+        norito::core::SerializePayload::encoded_len_hint(&wire)
     }
     fn encoded_len_exact(&self) -> Option<usize> {
         let wire = JsonWireRef(Cow::Borrowed(self.0.as_str()));
-        norito::core::NoritoSerialize::encoded_len_exact(&wire)
+        norito::core::SerializePayload::encoded_len_exact(&wire)
     }
 }
 impl<'a> norito::core::NoritoDeserialize<'a> for Json {
@@ -347,11 +360,6 @@ impl json::JsonDeserialize for Json {
             .map_err(|error| json::Error::Message(error.to_string()))?;
         Json::try_from_canonical_string(canonical).map_err(json::Error::from_decode_resource)
     }
-    fn json_from_map_key(key: &str) -> Result<Self, json::Error> {
-        let canonical = json::to_json_bounded(key, MAX_JSON_BYTES)
-            .map_err(|error| json::Error::Message(error.to_string()))?;
-        Json::try_from_canonical_string(canonical).map_err(json::Error::from_decode_resource)
-    }
 }
 impl From<&Value> for Json {
     fn from(value: &Value) -> Self {
@@ -543,7 +551,7 @@ mod tests {
                 let _flags = norito::core::DecodeFlagsGuard::enter(flags);
                 let mut payload = Vec::new();
                 let mut encoder = norito::core::Encoder::for_buffer(&mut payload);
-                norito::core::NoritoSerialize::serialize(&json, &mut encoder)
+                norito::core::SerializePayload::serialize(&json, &mut encoder)
                     .expect("encode packed Json payload");
                 payload
             };
@@ -687,14 +695,11 @@ mod tests {
         assert_eq!(parsed, value);
     }
     #[test]
-    fn semantic_value_and_map_key_conversions_use_canonical_bounded_output() {
+    fn semantic_value_conversion_uses_canonical_bounded_output() {
         let value = norito::json!({"z": 2u64, "a": [true, null]});
         let converted = <Json as json::JsonDeserialize>::json_from_value(&value)
             .expect("convert semantic JSON value");
         assert_eq!(converted.get(), r#"{"a":[true,null],"z":2}"#);
-        let key = <Json as json::JsonDeserialize>::json_from_map_key("quote\"line\n")
-            .expect("convert JSON map key");
-        assert_eq!(key.get(), r#""quote\"line\n""#);
     }
     #[test]
     fn json_wrapper_has_closed_output_bound_without_reparsing() {

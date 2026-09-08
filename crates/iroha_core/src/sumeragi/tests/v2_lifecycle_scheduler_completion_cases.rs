@@ -577,9 +577,7 @@ mod recovered_sign_capacity_tests {
             .collect::<Vec<_>>();
         let network_id = crate::sumeragi::synthetic_network_id("v2-worker-test");
         let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
-            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
-                network_id, 0, &roster,
-            );
+            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(network_id, 0, &roster);
         let context = wire::HeightContext {
             network_id,
             protocol_version: wire::PROTOCOL_VERSION,
@@ -2573,6 +2571,15 @@ impl ProductionLifecycleOwnerV1 {
         >,
         crate::sumeragi::v2_worker::tests::LifecyclePlannerIoFixture,
     ) {
+        assert_eq!(
+            runtime.driver().wire_context(),
+            self.verified.context(),
+            "Completion fixture runtime must use the exact owner context"
+        );
+        let recovery_authority = runtime
+            .driver()
+            .leader_wire_recovery_authority()
+            .expect("project the Completion fixture's actual replayed WAL authority");
         let body_store = self
             .body_store
             .take()
@@ -2636,6 +2643,10 @@ impl ProductionLifecycleOwnerV1 {
                 identity.clone(),
                 class_capacity,
             );
+        crate::sumeragi::v2_worker::tests::install_completion_runtime_wal_authority_for_test(
+            services,
+            recovery_authority,
+        );
         self.body_store_identity = Some(identity);
         (executor, fixture)
     }

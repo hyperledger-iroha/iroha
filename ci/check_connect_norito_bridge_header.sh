@@ -16,6 +16,7 @@ SELF_TESTS=(
   --self-test-missing-kagemusha-header-symbol
   --self-test-missing-kagemusha-rust-symbol
   --self-test-bad-kagemusha-signature
+  --self-test-missing-kagemusha-command-binding
   --self-test-bad-kagemusha-error-code
   --self-test-missing-kagemusha-mint-stage-header-symbol
   --self-test-bad-kagemusha-mint-stage-signature
@@ -101,7 +102,7 @@ KAGEMUSHA_EXPORTS = {
     "connect_norito_kagemusha_core_coordinator_invoke_v1",
     "connect_norito_kagemusha_device_capabilities_v1",
     "connect_norito_kagemusha_device_execute_v1",
-    "connect_norito_kagemusha_device_response_authenticator_v1_verify",
+    "connect_norito_kagemusha_device_command_response_v1_verify",
     "connect_norito_kagemusha_device_mint_stage_command_v1_validate",
     "connect_norito_kagemusha_device_mint_stage_result_v1_validate",
 }
@@ -672,6 +673,11 @@ if [[ "${MODE}" == --self-test-* ]]; then
       replace_regex_once "${tmp_header}" \
         '(connect_norito_kagemusha_v1_payment_validate\s*\([^;]*?)unsigned long payment_len' \
         '\g<1>uint32_t payment_len'
+      ;;
+    --self-test-missing-kagemusha-command-binding)
+      replace_regex_once "${tmp_header}" \
+        '(connect_norito_kagemusha_device_command_response_v1_verify\s*\([^;]*?)const uint8_t\* canonical_command,\s*size_t canonical_command_len,\s*' \
+        '\g<1>'
       ;;
     --self-test-bad-kagemusha-error-code)
       replace_once "${tmp_header}" \

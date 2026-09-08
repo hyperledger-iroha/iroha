@@ -8,6 +8,7 @@ isi! {
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
+    #[norito_schema(name = "iroha_data_model::isi::defi::SubmitDefiIntent")]
     pub struct SubmitDefiIntent {
         /// Caller-selected intent identifier.
         pub intent_id: Name,
@@ -34,6 +35,7 @@ isi! {
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize),
         norito(tag = "kind", content = "value")
     )]
+    #[norito_schema(name = "iroha_data_model::isi::defi::SettleDefiIntent")]
     pub struct SettleDefiIntent {
         /// Intent owner.
         pub owner: AccountId,
@@ -55,6 +57,7 @@ isi! {
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
+    #[norito_schema(name = "iroha_data_model::isi::defi::RegisterDefiVault")]
     pub struct RegisterDefiVault {
         /// Vault identifier.
         pub vault_id: Name,
@@ -74,6 +77,7 @@ isi! {
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
+    #[norito_schema(name = "iroha_data_model::isi::defi::RecordDefiVaultRequest")]
     pub struct RecordDefiVaultRequest {
         /// Vault identifier.
         pub vault_id: Name,
@@ -95,6 +99,7 @@ isi! {
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
+    #[norito_schema(name = "iroha_data_model::isi::defi::RegisterDefiOperator")]
     pub struct RegisterDefiOperator {
         /// Operator account.
         pub operator: AccountId,
@@ -112,6 +117,7 @@ isi! {
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
+    #[norito_schema(name = "iroha_data_model::isi::defi::RecordDefiOperatorHeartbeat")]
     pub struct RecordDefiOperatorHeartbeat {
         /// Operator account.
         pub operator: AccountId,
@@ -131,6 +137,7 @@ isi! {
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
+    #[norito_schema(name = "iroha_data_model::isi::defi::ConfigureDefiAmmHook")]
     pub struct ConfigureDefiAmmHook {
         /// Pool identifier.
         pub pool_id: Name,
@@ -152,6 +159,7 @@ isi! {
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
+    #[norito_schema(name = "iroha_data_model::isi::defi::RecordDefiHookExecution")]
     pub struct RecordDefiHookExecution {
         /// Pool identifier.
         pub pool_id: Name,
@@ -175,6 +183,7 @@ isi! {
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
+    #[norito_schema(name = "iroha_data_model::isi::defi::RegisterDefiMarginMarket")]
     pub struct RegisterDefiMarginMarket {
         /// Market identifier.
         pub market_id: Name,
@@ -194,6 +203,7 @@ isi! {
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
+    #[norito_schema(name = "iroha_data_model::isi::defi::UpdateDefiMarginAccount")]
     pub struct UpdateDefiMarginAccount {
         /// Account whose margin ledger is updated.
         pub account: AccountId,
@@ -215,6 +225,7 @@ isi! {
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
+    #[norito_schema(name = "iroha_data_model::isi::defi::RegisterDefiRwaMarket")]
     pub struct RegisterDefiRwaMarket {
         /// Market identifier.
         pub market_id: Name,
@@ -234,6 +245,7 @@ isi! {
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
+    #[norito_schema(name = "iroha_data_model::isi::defi::ReportDefiRwaNav")]
     pub struct ReportDefiRwaNav {
         /// Market identifier.
         pub market_id: Name,
@@ -347,6 +359,7 @@ isi_box! {
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize),
         norito(tag = "kind", content = "value")
     )]
+    #[norito_schema(name = "iroha_data_model::isi::defi::DeFiInstructionBox")]
     pub enum DeFiInstructionBox {
         /// Submit a solver intent.
         SubmitIntent(SubmitDefiIntent),

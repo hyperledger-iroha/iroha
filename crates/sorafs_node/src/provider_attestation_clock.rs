@@ -3149,18 +3149,110 @@ mod tests {
         );
     }
     #[test]
+    fn clock_scope_wire_rejects_unmarked_network_in_every_layout() {
+        struct RawNetwork([u8; Hash::LENGTH]);
+        impl norito::SerializePayload for RawNetwork {
+            fn serialize(
+                &self,
+                writer: &mut norito::core::Encoder<'_>,
+            ) -> Result<(), norito::Error> {
+                std::io::Write::write_all(writer, &self.0)?;
+                Ok(())
+            }
+        }
+        #[derive(norito::SerializePayload)]
+        struct RawScope {
+            network_id: RawNetwork,
+            provider_id: ProviderId,
+        }
+        fn payload(value: &impl norito::SerializePayload) -> Vec<u8> {
+            let mut bytes = Vec::new();
+            value
+                .serialize(&mut norito::core::Encoder::for_buffer(&mut bytes))
+                .expect("serialize scope payload");
+            bytes
+        }
+        let valid = scope(9);
+        for flags in (0..=norito::core::supported_header_flags())
+            .filter(|flags| norito::core::validate_header_flags(*flags).is_ok())
+        {
+            let _flags = norito::core::DecodeFlagsGuard::enter(flags);
+            let mut raw = RawScope {
+                network_id: RawNetwork(*valid.network_id.as_bytes()),
+                provider_id: valid.provider_id,
+            };
+            assert_eq!(payload(&raw), payload(&valid), "layout {flags:#04x}");
+            let frame = norito::core::frame_bare_with_header_flags::<
+                MusubiProviderAttestationClockScopeV1,
+            >(&payload(&raw), flags)
+            .expect("frame valid scope");
+            assert_eq!(
+                norito::decode_from_bytes::<MusubiProviderAttestationClockScopeV1>(&frame)
+                    .expect("decode valid scope"),
+                valid
+            );
+            raw.network_id.0[Hash::LENGTH - 1] &= !1;
+            let invalid = norito::core::frame_bare_with_header_flags::<
+                MusubiProviderAttestationClockScopeV1,
+            >(&payload(&raw), flags)
+            .expect("frame malformed scope payload");
+            assert!(matches!(
+                norito::decode_from_bytes::<MusubiProviderAttestationClockScopeV1>(&invalid),
+                Err(norito::Error::Message(message)) if message == "invalid hash lsb"
+            ));
+        }
+    }
+    #[test]
     fn public_scope_digest_revalidates_decoded_shape() {
         let mut raw_fixture = scope(9);
-        // Model a structurally decoded value that bypassed `try_new` with an unmarked hash.
-        raw_fixture.network_id = NetworkId::from_genesis_hash(
-            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0; 32])),
-        );
+        assert!(raw_fixture.scope_digest().is_ok());
+        // ProviderId permits zero bytes structurally; the scope must reject that inert identity.
+        raw_fixture.provider_id = ProviderId::new([0; 32]);
         let bytes = norito::encode_canonical(&raw_fixture).expect("encode raw invalid fixture");
         let invalid = norito::decode_canonical::<MusubiProviderAttestationClockScopeV1>(&bytes)
-            .expect("decode raw invalid fixture");
+            .expect("decode structurally valid scope");
+        assert_eq!(invalid.provider_id(), ProviderId::new([0; 32]));
         assert_eq!(
             invalid.scope_digest(),
             Err(MusubiProviderAttestationClockErrorV1::InvalidScope)
+        );
+    }
+    #[test]
+    fn public_scope_rejects_unmarked_network_wire_and_preserves_marked_prehash() {
+        let mut fixture = scope(9);
+        let mut hash = Hash::prehashed([0; 32]);
+        assert_eq!(
+            hash.as_ref()[31] & 1,
+            1,
+            "prehashed always applies the marker"
+        );
+        fixture.network_id =
+            NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(hash));
+        let bytes = norito::encode_canonical(&fixture).expect("encode marked network scope");
+        let decoded = norito::decode_canonical::<MusubiProviderAttestationClockScopeV1>(&bytes)
+            .expect("recover marked network scope");
+        assert_eq!(decoded.network_id(), fixture.network_id());
+        assert_eq!(decoded.scope_digest(), fixture.scope_digest());
+        assert!(decoded.scope_digest().is_ok());
+        iroha_crypto::zeroize_value_for_confidential_discard(&mut hash);
+        assert_eq!(
+            hash.as_ref()[31] & 1,
+            0,
+            "negative fixture is actually unmarked"
+        );
+        fixture.network_id =
+            NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(hash));
+        assert_eq!(
+            fixture.scope_digest(),
+            Err(MusubiProviderAttestationClockErrorV1::InvalidScope)
+        );
+        let bytes =
+            norito::encode_canonical(&fixture).expect("encode raw unmarked network fixture");
+        let error = norito::decode_canonical::<MusubiProviderAttestationClockScopeV1>(&bytes)
+            .expect_err("unmarked hash must fail before constructing an owned scope");
+        assert!(
+            matches!(error, norito::Error::Message(ref message) if message == "invalid hash lsb"),
+            "{error:?}"
         );
     }
 }

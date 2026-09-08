@@ -155,7 +155,6 @@ class InrouRuntimePackagerTests(unittest.TestCase):
                 Path("/"),
                 owner_uid=root_metadata.st_uid,
                 owner_gid=root_metadata.st_gid,
-                allow_final_symlink=False,
                 label="filesystem root",
             ),
             Path("/"),
@@ -178,9 +177,165 @@ class InrouRuntimePackagerTests(unittest.TestCase):
                     path,
                     owner_uid=0,
                     owner_gid=0,
-                    allow_final_symlink=True,
                     label="runtime executable",
                 )
+
+    def test_distro_sources_resolve_merged_usr_loader_and_alternatives(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            library_dir = root / "usr/lib/aarch64-linux-gnu"
+            library_dir.mkdir(parents=True, mode=0o755)
+            alternatives = root / "etc/alternatives"
+            alternatives.mkdir(parents=True, mode=0o755)
+            loader = _write(library_dir / "ld-linux-aarch64.so.1", b"loader", 0o755)
+            (root / "lib").symlink_to("usr/lib", target_is_directory=True)
+            (root / "usr/lib/ld-linux-aarch64.so.1").symlink_to(
+                "aarch64-linux-gnu/ld-linux-aarch64.so.1"
+            )
+            library = _write(library_dir / "libexample.so.1", b"library", 0o644)
+            (alternatives / "libexample.so.1").symlink_to(library)
+            (root / "usr/lib/libexample.so.1").symlink_to(
+                "../../etc/alternatives/libexample.so.1"
+            )
+            for alias, resolved, executable in (
+                (root / "lib/ld-linux-aarch64.so.1", loader, True),
+                (root / "usr/lib/ld-linux-aarch64.so.1", loader, True),
+                (root / "lib/libexample.so.1", library, False),
+            ):
+                with self.subTest(alias=alias):
+                    self.assertEqual(
+                        MODULE.validate_regular_source(
+                            alias,
+                            owner_uid=os.getuid(),
+                            owner_gid=os.getgid(),
+                            executable=executable,
+                            allow_symlink=True,
+                            label="distro source",
+                        ),
+                        resolved,
+                    )
+
+    def test_distro_source_aliases_never_hide_untrusted_intermediate_custody(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            resolved = _write(root / "trusted-library", b"library", 0o644)
+            intermediate = root / "intermediate"
+            intermediate.mkdir(mode=0o755)
+            link = intermediate / "library"
+            link.symlink_to(resolved)
+            alias = root / "library"
+            alias.symlink_to(link)
+            kwargs = dict(
+                owner_uid=os.getuid(), owner_gid=os.getgid(), executable=False,
+                allow_symlink=True, label="distro source",
+            )
+            intermediate.chmod(0o777)
+            with self.assertRaisesRegex(MODULE.PackagingError, "owner-custodied"):
+                MODULE.validate_regular_source(alias, **kwargs)
+            intermediate.chmod(0o755)
+            real_lstat = MODULE.os.lstat
+
+            def untrusted_link(path):
+                metadata = real_lstat(path)
+                if Path(path) != link:
+                    return metadata
+                return SimpleNamespace(
+                    st_mode=metadata.st_mode, st_uid=os.getuid() + 1,
+                    st_gid=metadata.st_gid, st_nlink=metadata.st_nlink,
+                )
+
+            with mock.patch.object(MODULE.os, "lstat", side_effect=untrusted_link):
+                with self.assertRaisesRegex(MODULE.PackagingError, "owner-custodied"):
+                    MODULE.validate_regular_source(alias, **kwargs)
+
+    def test_distro_source_resolution_rejects_cycles_dangling_and_invalid_links(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            source = _write(root / "source", b"source", 0o644)
+            alias = root / "alias"
+            for target in ("alias", "missing", "source/.", "source/", "source//x", "bad\\name"):
+                with self.subTest(target=target):
+                    alias.symlink_to(target)
+                    with self.assertRaises(MODULE.PackagingError):
+                        MODULE.validate_regular_source(
+                            alias, owner_uid=os.getuid(), owner_gid=os.getgid(),
+                            executable=False, allow_symlink=True, label="distro source",
+                        )
+                    alias.unlink()
+            self.assertEqual(source.read_bytes(), b"source")
+
+    def test_distro_source_resolution_rejects_changed_alias_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            _write(root / "source", b"source", 0o644)
+            alias = root / "alias"
+            alias.symlink_to("source")
+            real_readlink = MODULE.os.readlink
+            calls = 0
+
+            def changing_link(path):
+                nonlocal calls
+                if Path(path) != alias:
+                    return real_readlink(path)
+                calls += 1
+                return "source" if calls == 1 else "other-source"
+
+            with mock.patch.object(MODULE.os, "readlink", side_effect=changing_link):
+                with self.assertRaisesRegex(MODULE.PackagingError, "changed during resolution"):
+                    MODULE.validate_regular_source(
+                        alias, owner_uid=os.getuid(), owner_gid=os.getgid(),
+                        executable=False, allow_symlink=True, label="distro source",
+                    )
+
+    def test_distro_alias_targets_retain_regular_file_custody(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            source = _write(root / "source", b"source", 0o755)
+            alias = root / "alias"
+            alias.symlink_to(source)
+            kwargs = dict(
+                owner_uid=os.getuid(), owner_gid=os.getgid(), executable=True,
+                allow_symlink=True, label="distro executable",
+            )
+            for mode in (0o777, 0o4755, 0o2755, 0o644):
+                source.chmod(mode)
+                with self.subTest(mode=mode), self.assertRaises(MODULE.PackagingError):
+                    MODULE.validate_regular_source(alias, **kwargs)
+            source.chmod(0o755)
+            os.link(source, root / "hardlink")
+            with self.assertRaisesRegex(MODULE.PackagingError, "singly-linked"):
+                MODULE.validate_regular_source(alias, **kwargs)
+
+    def test_fixed_host_tools_admit_socat_package_alias_only(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            tools = root / "usr/bin"
+            tools.mkdir(parents=True, mode=0o755)
+            for name in ("bwrap", "nsenter", "socat1"):
+                _write(tools / name, name.encode("ascii"), 0o755)
+            (tools / "socat").symlink_to("socat1")
+            validate = MODULE.validate_regular_source
+            calls = []
+
+            def validate_fixture(path, **kwargs):
+                calls.append(path)
+                return validate(tools / path.name, **kwargs)
+
+            with mock.patch.object(MODULE, "validate_regular_source", side_effect=validate_fixture):
+                MODULE._validate_fixed_host_tools(owner_uid=os.getuid(), owner_gid=os.getgid())
+                self.assertEqual(tuple(calls), MODULE.FIXED_HOST_TOOLS)
+                for name in ("bwrap", "nsenter"):
+                    tool = tools / name
+                    tool.rename(tools / (name + "-real"))
+                    tool.symlink_to(name + "-real")
+                    with self.subTest(name=name), self.assertRaisesRegex(
+                        MODULE.PackagingError, "symbolic link"
+                    ):
+                        MODULE._validate_fixed_host_tools(
+                            owner_uid=os.getuid(), owner_gid=os.getgid()
+                        )
+                    tool.unlink()
+                    (tools / (name + "-real")).rename(tool)
 
     def test_atomic_materialization_matches_the_rust_manifest_contract(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

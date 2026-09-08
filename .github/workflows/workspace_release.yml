@@ -90,6 +90,11 @@ jobs:
         with:
           cache-on-failure: "true"
           shared-key: workspace-release-build-1.93.1
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.11"
+      - name: Check Taira CLI release boundaries before workspace build
+        run: python3 scripts/taira_release_check.py
       - name: Build the full workspace
         run: cargo build --locked --workspace
 

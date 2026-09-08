@@ -34,14 +34,6 @@ private val IROHA_POEM_KANA_HALFWIDTH = arrayOf(
 )
 private val I105_ALPHABET = BASE58_ALPHABET + IROHA_POEM_KANA_HALFWIDTH
 
-@Volatile
-private var allowMlDsa = false
-@Volatile
-private var allowBls = false
-@Volatile
-private var allowGost = false
-@Volatile
-private var allowSm2 = false
 
 private fun lookupI105Digit(symbol: String): Int? {
     val canonicalIndex = I105_ALPHABET.indexOf(symbol)
@@ -54,6 +46,10 @@ private fun lookupI105Digit(symbol: String): Int? {
 class AccountAddress private constructor(canonicalBytes: ByteArray) {
 
     private val _canonicalBytes: ByteArray = canonicalBytes.copyOf()
+
+    init {
+        AccountAddressNative.validateCanonical(_canonicalBytes)
+    }
 
     val canonicalBytes: ByteArray get() = _canonicalBytes.copyOf()
 
@@ -82,14 +78,9 @@ class AccountAddress private constructor(canonicalBytes: ByteArray) {
     @Throws(AccountAddressException::class)
     fun singleKeyPayload(): SingleKeyPayload? {
         parseCanonical(_canonicalBytes)
-        return extractSingleKeyPayload(_canonicalBytes, false)
+        return extractSingleKeyPayload(_canonicalBytes)
     }
 
-    @Throws(AccountAddressException::class)
-    fun singleKeyPayloadIgnoringCurveSupport(): SingleKeyPayload? {
-        parseCanonical(_canonicalBytes, true)
-        return extractSingleKeyPayload(_canonicalBytes, true)
-    }
 
     /**
      * Returns the multisig policy payload when this address encodes a multisig controller.
@@ -99,14 +90,9 @@ class AccountAddress private constructor(canonicalBytes: ByteArray) {
     @Throws(AccountAddressException::class)
     fun multisigPolicyPayload(): MultisigPolicyPayload? {
         parseCanonical(_canonicalBytes)
-        return extractMultisigPayload(_canonicalBytes, false)
+        return extractMultisigPayload(_canonicalBytes)
     }
 
-    @Throws(AccountAddressException::class)
-    fun multisigPolicyPayloadIgnoringCurveSupport(): MultisigPolicyPayload? {
-        parseCanonical(_canonicalBytes, true)
-        return extractMultisigPayload(_canonicalBytes, true)
-    }
 
     companion object {
         const val DEFAULT_I105_DISCRIMINANT = 753
@@ -121,35 +107,46 @@ class AccountAddress private constructor(canonicalBytes: ByteArray) {
             algorithm: String,
         ): AccountAddress {
             val curveId = curveIdForAlgorithm(algorithm).toInt() and 0xFF
-            validateControllerPublicKey(curveId, publicKey)
             if (publicKey.size > 0xFFFF) {
                 throw AccountAddressException(
                     AccountAddressErrorCode.KEY_PAYLOAD_TOO_LONG,
                     "key payload too long: ${publicKey.size}",
                 )
             }
+            val ownedKey = publicKey.copyOf()
+            validateControllerPublicKey(curveId, ownedKey)
             val header = encodeHeader(0, ADDRESS_CLASS_SINGLE_KEY, 1)
 
             val out = ByteArrayOutputStream()
             out.write(header.toInt())
-            if (publicKey.size <= 0xFF) {
+            if (ownedKey.size <= 0xFF) {
                 out.write(CONTROLLER_SINGLE_KEY_TAG)
                 out.write(curveId)
-                out.write(publicKey.size)
+                out.write(ownedKey.size)
             } else {
                 out.write(CONTROLLER_SINGLE_KEY_EXTENDED_TAG)
                 out.write(curveId)
-                out.write((publicKey.size shr 8) and 0xFF)
-                out.write(publicKey.size and 0xFF)
+                out.write((ownedKey.size shr 8) and 0xFF)
+                out.write(ownedKey.size and 0xFF)
             }
-            out.write(publicKey, 0, publicKey.size)
+            out.write(ownedKey, 0, ownedKey.size)
 
             return fromCanonicalBytes(out.toByteArray())
         }
 
+        /**
+         * Constructs the Rust-compatible V1 identity by sorting complete keys without changing
+         * caller members or their weights. Duplicate keys and invalid V1 policies are rejected.
+         */
         @JvmStatic
         @Throws(AccountAddressException::class)
         fun fromMultisigPolicy(policy: MultisigPolicyPayload): AccountAddress {
+            if (policy.version != 1 || policy.threshold !in 1..0xFFFF) {
+                throw AccountAddressException(
+                    AccountAddressErrorCode.INVALID_MULTISIG_POLICY,
+                    "InvalidMultisigPolicy: expected version 1 and a nonzero u16 threshold",
+                )
+            }
             val members = policy.members
             if (members.isEmpty()) {
                 throw AccountAddressException(
@@ -178,7 +175,7 @@ class AccountAddress private constructor(canonicalBytes: ByteArray) {
                         "InvalidMultisigPolicy: weight too large",
                     )
                 }
-                ensureCurveEnabled(member.curveId, "curve id ${member.curveId}")
+                ensureKnownCurve(member.curveId, "curve id ${member.curveId}")
                 if (member.publicKey.isEmpty()) {
                     throw AccountAddressException(
                         AccountAddressErrorCode.INVALID_MULTISIG_POLICY,
@@ -206,6 +203,15 @@ class AccountAddress private constructor(canonicalBytes: ByteArray) {
                     "InvalidMultisigPolicy: threshold exceeds total weight",
                 )
             }
+            val sortedMembers = members.sortedWith(::compareMultisigMemberKeys)
+            for (index in 1 until sortedMembers.size) {
+                if (compareMultisigMemberKeys(sortedMembers[index - 1], sortedMembers[index]) == 0) {
+                    throw AccountAddressException(
+                        AccountAddressErrorCode.INVALID_MULTISIG_POLICY,
+                        "InvalidMultisigPolicy: duplicate member",
+                    )
+                }
+            }
 
             val header = encodeHeader(0, ADDRESS_CLASS_MULTISIG, 1)
             val out = ByteArrayOutputStream()
@@ -218,7 +224,7 @@ class AccountAddress private constructor(canonicalBytes: ByteArray) {
             out.write((members.size shr 8) and 0xFF)
             out.write(members.size and 0xFF)
 
-            for (member in members) {
+            for (member in sortedMembers) {
                 val curveId = member.curveId and 0xFF
                 val weight = member.weight
                 val keyBytes = member.publicKey
@@ -236,6 +242,7 @@ class AccountAddress private constructor(canonicalBytes: ByteArray) {
         @JvmStatic
         @Throws(AccountAddressException::class)
         fun fromCanonicalBytes(canonical: ByteArray): AccountAddress {
+            AccountAddressNative.requireCanonicalSize(canonical.size)
             val copy = canonical.copyOf()
             parseCanonical(copy)
             return AccountAddress(copy)
@@ -244,15 +251,17 @@ class AccountAddress private constructor(canonicalBytes: ByteArray) {
         @JvmStatic
         @Throws(AccountAddressException::class)
         fun fromI105(encoded: String, expectedDiscriminant: Int?): AccountAddress {
+            requireExactAccountLiteral(encoded)
             val canonical = decodeI105(encoded, expectedDiscriminant)
             val address = fromCanonicalBytes(canonical)
-            ensureCanonicalI105Literal(encoded.trim(), address)
+            ensureCanonicalI105Literal(encoded, address)
             return address
         }
 
         @JvmStatic
         @Throws(AccountAddressException::class)
         fun parseEncoded(input: String, expectedPrefix: Int?): AccountAddress {
+            requireExactAccountLiteral(input)
             val trimmed = input.trim()
             if (trimmed.isEmpty()) {
                 throw AccountAddressException(
@@ -275,50 +284,22 @@ class AccountAddress private constructor(canonicalBytes: ByteArray) {
         }
 
         @JvmStatic
-        @Throws(AccountAddressException::class)
-        fun parseEncodedIgnoringCurveSupport(input: String, expectedPrefix: Int?): AccountAddress {
-            val trimmed = input.trim()
-            if (trimmed.isEmpty()) {
-                throw AccountAddressException(
-                    AccountAddressErrorCode.INVALID_LENGTH, "address string is empty",
-                )
-            }
-            if (trimmed.contains("@")) {
-                throw AccountAddressException(
-                    AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT,
-                    "account address literals must not include @domain; use canonical I105 form",
-                )
-            }
-            if (trimmed.startsWith("0x") || trimmed.startsWith("0X")) {
-                throw AccountAddressException(
-                    AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT,
-                    "canonical hex account addresses are not accepted; use canonical I105 form",
-                )
-            }
-            val canonical = decodeI105(trimmed, expectedPrefix)
-            parseCanonical(canonical, true)
-            val address = AccountAddress(canonical)
-            ensureCanonicalI105Literal(trimmed, address)
-            return address
-        }
-
-        @JvmStatic
         fun detectI105Discriminant(input: String): Int? =
             parseI105SentinelAndPayload(input.trim())?.first
 
-        @JvmStatic
-        fun configureCurveSupport(config: CurveSupportConfig) {
-            allowMlDsa = config.allowMlDsa
-            allowBls = config.allowBls
-            allowGost = config.allowGost
-            allowSm2 = config.allowSm2
-        }
     }
 }
 
 // -- Private helper classes --
 
 private class I105PrefixResult(val discriminant: Int, val prefixLength: Int)
+
+private fun requireExactAccountLiteral(input: String) {
+    if (input != input.trim()) {
+        throw AccountAddressException(AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT,
+            "account address must not contain surrounding whitespace")
+    }
+}
 
 @Throws(AccountAddressException::class)
 private fun ensureCanonicalI105Literal(literal: String, address: AccountAddress) {
@@ -335,7 +316,7 @@ private fun ensureCanonicalI105Literal(literal: String, address: AccountAddress)
 // -- Canonical decoding helpers --
 
 @Throws(AccountAddressException::class)
-private fun parseCanonical(canonical: ByteArray, ignoreCurveSupport: Boolean = false) {
+private fun parseCanonical(canonical: ByteArray) {
     if (canonical.size < 4) {
         throw AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length")
     }
@@ -363,9 +344,7 @@ private fun parseCanonical(canonical: ByteArray, ignoreCurveSupport: Boolean = f
                 throw AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length")
             }
             val curveId = canonical[cursor++].toInt() and 0xFF
-            if (!ignoreCurveSupport) {
-                ensureCurveEnabled(curveId, "curve id $curveId")
-            }
+            ensureKnownCurve(curveId, "curve id $curveId")
             val keyLen = canonical[cursor++].toInt() and 0xFF
             val end = cursor + keyLen
             if (end > canonical.size) {
@@ -384,9 +363,7 @@ private fun parseCanonical(canonical: ByteArray, ignoreCurveSupport: Boolean = f
                 throw AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length")
             }
             val curveId = canonical[cursor++].toInt() and 0xFF
-            if (!ignoreCurveSupport) {
-                ensureCurveEnabled(curveId, "curve id $curveId")
-            }
+            ensureKnownCurve(curveId, "curve id $curveId")
             val keyLen = ((canonical[cursor].toInt() and 0xFF) shl 8) or
                 (canonical[cursor + 1].toInt() and 0xFF)
             cursor += 2
@@ -412,7 +389,13 @@ private fun parseCanonical(canonical: ByteArray, ignoreCurveSupport: Boolean = f
             if (cursor + 5 > canonical.size) {
                 throw AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length")
             }
-            cursor++ // version
+            val version = canonical[cursor++].toInt() and 0xFF
+            if (version != 1) {
+                throw AccountAddressException(
+                    AccountAddressErrorCode.INVALID_MULTISIG_POLICY,
+                    "InvalidMultisigPolicy: unsupported version $version",
+                )
+            }
             val threshold = ((canonical[cursor].toInt() and 0xFF) shl 8) or
                 (canonical[cursor + 1].toInt() and 0xFF)
             cursor += 2
@@ -426,6 +409,7 @@ private fun parseCanonical(canonical: ByteArray, ignoreCurveSupport: Boolean = f
                 )
             }
             var totalWeight = 0L
+            var previousMember: MultisigMemberPayload? = null
             for (i in 0 until memberCount) {
                 if (cursor + 5 > canonical.size) {
                     throw AccountAddressException(
@@ -433,9 +417,7 @@ private fun parseCanonical(canonical: ByteArray, ignoreCurveSupport: Boolean = f
                     )
                 }
                 val curveId = canonical[cursor++].toInt() and 0xFF
-                if (!ignoreCurveSupport) {
-                    ensureCurveEnabled(curveId, "curve id $curveId")
-                }
+                ensureKnownCurve(curveId, "curve id $curveId")
                 val weight = ((canonical[cursor].toInt() and 0xFF) shl 8) or
                     (canonical[cursor + 1].toInt() and 0xFF)
                 cursor += 2
@@ -459,7 +441,16 @@ private fun parseCanonical(canonical: ByteArray, ignoreCurveSupport: Boolean = f
                         AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length",
                     )
                 }
-                validateControllerPublicKey(curveId, canonical.copyOfRange(cursor, cursor + keyLen))
+                val key = canonical.copyOfRange(cursor, cursor + keyLen)
+                validateControllerPublicKey(curveId, key)
+                val member = MultisigMemberPayload(curveId, weight, key)
+                if (previousMember != null && compareMultisigMemberKeys(previousMember, member) >= 0) {
+                    throw AccountAddressException(
+                        AccountAddressErrorCode.INVALID_MULTISIG_POLICY,
+                        "InvalidMultisigPolicy: members must be unique and in canonical key order",
+                    )
+                }
+                previousMember = member
                 cursor += keyLen
                 totalWeight += weight
             }
@@ -513,7 +504,6 @@ private fun validateControllerPublicKey(curveId: Int, publicKey: ByteArray) {
 @Throws(AccountAddressException::class)
 private fun extractSingleKeyPayload(
     canonical: ByteArray,
-    ignoreCurveSupport: Boolean,
 ): SingleKeyPayload? {
     if (canonical.size < 4) {
         throw AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length")
@@ -533,9 +523,7 @@ private fun extractSingleKeyPayload(
         throw AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length")
     }
     val curveId = canonical[cursor++].toInt() and 0xFF
-    if (!ignoreCurveSupport) {
-        ensureCurveEnabled(curveId, "curve id $curveId")
-    }
+    ensureKnownCurve(curveId, "curve id $curveId")
     val keyLen = if (controllerTag == CONTROLLER_SINGLE_KEY_TAG) {
         canonical[cursor++].toInt() and 0xFF
     } else {
@@ -568,7 +556,6 @@ private fun extractSingleKeyPayload(
 @Throws(AccountAddressException::class)
 private fun extractMultisigPayload(
     canonical: ByteArray,
-    ignoreCurveSupport: Boolean,
 ): MultisigPolicyPayload? {
     if (canonical.size < 4) {
         throw AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length")
@@ -604,9 +591,7 @@ private fun extractMultisigPayload(
             throw AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length")
         }
         val curveId = canonical[cursor++].toInt() and 0xFF
-        if (!ignoreCurveSupport) {
-            ensureCurveEnabled(curveId, "curve id $curveId")
-        }
+        ensureKnownCurve(curveId, "curve id $curveId")
         val weight = ((canonical[cursor].toInt() and 0xFF) shl 8) or
             (canonical[cursor + 1].toInt() and 0xFF)
         cursor += 2
@@ -726,50 +711,18 @@ private fun curveIdForAlgorithm(algorithm: String): Byte {
             "unsupported signing algorithm: $algorithm",
         )
     }
-    ensureCurveEnabled(curveId, "signing algorithm: $normalized")
+    ensureKnownCurve(curveId, "signing algorithm: $normalized")
     return curveId.toByte()
 }
 
 @Throws(AccountAddressException::class)
-private fun ensureCurveEnabled(curveId: Int, context: String) {
-    if (!isCurveEnabled(curveId)) {
-        val known = isKnownCurveId(curveId)
-        val code = if (known) AccountAddressErrorCode.UNSUPPORTED_ALGORITHM
-        else AccountAddressErrorCode.UNKNOWN_CURVE
-        val reason = if (known) "$context disabled by configuration: ${curveName(curveId)}"
-        else "unknown curve id: ${curveName(curveId)}"
-        throw AccountAddressException(code, reason)
+private fun ensureKnownCurve(curveId: Int, context: String) {
+    if (algorithmForCurveId(curveId) == null) {
+        throw AccountAddressException(
+            AccountAddressErrorCode.UNKNOWN_CURVE,
+            "$context: unknown curve id $curveId",
+        )
     }
-}
-
-private fun isCurveEnabled(curveId: Int): Boolean = when (curveId and 0xFF) {
-    0x01 -> true
-    0x02 -> allowMlDsa
-    0x03, 0x05 -> allowBls
-    0x04 -> true
-    0x0A, 0x0B, 0x0C, 0x0D, 0x0E -> allowGost
-    0x0F -> allowSm2
-    else -> false
-}
-
-private fun isKnownCurveId(curveId: Int): Boolean = when (curveId and 0xFF) {
-    0x01, 0x02, 0x03, 0x04, 0x05, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F -> true
-    else -> false
-}
-
-private fun curveName(curveId: Int): String = when (curveId and 0xFF) {
-    0x01 -> "ed25519"
-    0x02 -> "ml-dsa"
-    0x03 -> "bls_normal"
-    0x04 -> "secp256k1"
-    0x05 -> "bls_small"
-    0x0A -> "gost256a"
-    0x0B -> "gost256b"
-    0x0C -> "gost256c"
-    0x0D -> "gost512a"
-    0x0E -> "gost512b"
-    0x0F -> "sm2"
-    else -> "0x${Integer.toHexString(curveId and 0xFF)}"
 }
 
 @Throws(AccountAddressException::class)

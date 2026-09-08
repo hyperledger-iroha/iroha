@@ -102,7 +102,7 @@ fn queue_plan_nonleader_handoff_targets_frozen_leader_with_exact_bytes() {
     assert!(
         adapter
             .refresh_pending_queue_plan_admission_handoffs(view)
-            .expect("reconcile durable admissions for the current leader")
+            .expect("service the separately scheduled durable admission handoff")
     );
     let effect = adapter
         .drain_effects(usize::MAX)
@@ -725,4 +725,57 @@ fn queue_plan_handoff_preserves_materialized_fifo_before_height_adapter_rollover
     );
     assert_queue_plan_kura_source(&adapter, &certificate);
     assert_eq!(queue.fifo_snapshot_for_test(), before_fifo);
+}
+
+#[test]
+fn queue_plan_handoff_retains_new_admission_while_worker_height_is_obsolete() {
+    let (mut adapter, keys) = fixture_with_durable_parent(wire::ConsensusMode::Permissioned);
+    prepare_queue_plan_test(&mut adapter, &keys);
+    let old_worker_height = adapter.context.height;
+    let successor_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+        b"queue-plan-canonical-successor-before-worker-handoff",
+    ));
+    {
+        let mut hashes = adapter.state.block_hashes.block();
+        hashes.push_for_tests(successor_hash);
+        hashes.commit_for_tests();
+    }
+    assert_eq!(adapter.state.committed_height() as u64, old_worker_height);
+    let (_, certificate) = queue_plan_test_certificate_at_height(
+        &adapter,
+        &keys,
+        0x4a,
+        old_worker_height,
+        Some(successor_hash),
+    );
+    adapter
+        .kura
+        .persist_pending_queue_plan_admission_certificate(&certificate)
+        .expect("admission arrives after State commit and before worker handoff");
+    let effects_before = adapter.effect_count();
+    for view in [0, queue_plan_remote_leader_view(&adapter)] {
+        assert!(
+            adapter
+                .reconcile_pending_queue_plan_admissions(view)
+                .expect("an obsolete worker defers without attempting queue retirement")
+                .is_empty()
+        );
+        assert_queue_plan_kura_source(&adapter, &certificate);
+        assert_eq!(
+            adapter.effect_count(),
+            effects_before,
+            "old workers cannot route the new certificate using their frozen leader"
+        );
+    }
+    assert_eq!(
+        adapter
+            .state
+            .classify_pending_queue_plan_admission(
+                &certificate,
+                old_worker_height.checked_add(1).expect("successor worker"),
+            )
+            .expect("successor carrier can consume the exact retained admission")
+            .1,
+        PendingQueuePlanAdmissionDisposition::EligibleAbsent
+    );
 }

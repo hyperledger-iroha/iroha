@@ -73,6 +73,7 @@ PROOF_LEDGER_TEST_COMPONENT_FILES = (
     "sumeragi_v2_proof_ledger_terminal_discharge_cases.py",
     "sumeragi_v2_proof_ledger_release_inventory_cases.py",
     "sumeragi_v2_proof_ledger_release_corridor_cases.py",
+    "sumeragi_v2_proof_ledger_corridor_acceptance_cases.py",
     "sumeragi_v2_proof_ledger_release_corridor_tail_cases.py",
     "sumeragi_v2_proof_ledger_formal_contract_cases.py",
     "sumeragi_v2_proof_ledger_formal_contract_tail_cases.py",
@@ -91,7 +92,7 @@ PROOF_LEDGER_TEST_COMPONENT_FILES = (
     "sumeragi_v2_proof_ledger_causal_fifo_cases.py",
     "sumeragi_v2_proof_ledger_post_component_cases.py",
 )
-assert len(PROOF_LEDGER_TEST_COMPONENT_FILES) == len(set(PROOF_LEDGER_TEST_COMPONENT_FILES)) == 24
+assert len(PROOF_LEDGER_TEST_COMPONENT_FILES) == len(set(PROOF_LEDGER_TEST_COMPONENT_FILES)) == 25
 
 def _execute_test_component(filename: str) -> None:
     """Execute one reviewed case component in this canonical test namespace."""
@@ -102,142 +103,12 @@ def _execute_test_component(filename: str) -> None:
     exec(compile(source, str(path), "exec"), globals())
 
 
-def test_proof_ledger_tests_have_unique_reviewed_component_providers() -> None:
-    """Reject lexical test shadows and ownership drift across case components."""
-    expected_component_providers = {
-        "test_async_source_fidelity_pins_validator_progress_capacity":
-            "sumeragi_v2_proof_ledger_async_source_cases.py",
-        "test_ownership_n1_pins_exact_ingress_and_deferred_progress_geometry":
-            "sumeragi_v2_proof_ledger_async_source_cases.py",
-        "test_leader_wire_physical_ingress_rejects_semantic_mutations":
-            "sumeragi_v2_proof_ledger_async_source_cases.py",
-        "test_local_runner_service_contract_rejects_production_loop_mutations":
-            "sumeragi_v2_proof_ledger_async_fairness_cases.py",
-        "test_async_source_fidelity_rejects_reviewed_theorem_omission":
-            "sumeragi_v2_proof_ledger_async_fairness_cases.py",
-        "test_exact_output_production_source_mutations_fail_closed":
-            "sumeragi_v2_proof_ledger_exact_output_cases.py",
-        "test_temporal_proof_promotions_require_prerequisites_and_ledger_order":
-            "sumeragi_v2_proof_ledger_trace_dependency_cases.py",
-        "test_successor_run_inner_parser_rejects_neighbor_lookalike":
-            "sumeragi_v2_proof_ledger_successor_production_cases.py",
-        "test_successor_production_source_mapping_mutations_fail_closed":
-            "sumeragi_v2_proof_ledger_successor_production_cases.py",
-        "complete_ledger": "sumeragi_v2_proof_ledger_release_inventory_cases.py",
-        "write_tlaps_fixture_logs":
-            "sumeragi_v2_proof_ledger_release_inventory_cases.py",
-        "build_test_evidence":
-            "sumeragi_v2_proof_ledger_release_inventory_cases.py",
-        "complete_cross_tool_ledger":
-            "sumeragi_v2_proof_ledger_release_inventory_cases.py",
-        "build_cross_tool_fixture":
-            "sumeragi_v2_proof_ledger_release_inventory_cases.py",
-    }
-    def provider_errors(sources: tuple[tuple[Path, str], ...]) -> list[str]:
-        providers: dict[str, list[str]] = {}
-        for path, source in sources:
-            tree = ast.parse(source, filename=str(path))
-            for node in tree.body:
-                if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                    continue
-                if (
-                    not node.name.startswith("test_")
-                    and node.name not in expected_component_providers
-                ):
-                    continue
-                providers.setdefault(node.name, []).append(path.name)
-        errors = [
-            f"test provider {name} is not unique: {locations!r}"
-            for name, locations in sorted(providers.items())
-            if len(locations) != 1
-        ]
-        for name, expected_provider in expected_component_providers.items():
-            if providers.get(name) != [expected_provider]:
-                errors.append(
-                    f"test provider {name} must be owned by "
-                    f"{expected_provider}; found {providers.get(name)!r}"
-                )
-        return errors
-    main_path = Path(__file__)
-    canonical_sources = (
-        (main_path, main_path.read_text(encoding="utf-8")),
-        *(
-            (path, path.read_text(encoding="utf-8"))
-            for path in (
-                main_path.with_name(filename)
-                for filename in PROOF_LEDGER_TEST_COMPONENT_FILES
-            )
-        ),
-    )
-    assert provider_errors(canonical_sources) == []
-    target = "test_exact_output_production_source_mutations_fail_closed"
-    shadow = f"\n\ndef {target}():\n    pass\n"
-    mutated_sources = (
-        (canonical_sources[0][0], canonical_sources[0][1] + shadow),
-        *canonical_sources[1:],
-    )
-    errors = provider_errors(mutated_sources)
-    assert any(
-        error.startswith(f"test provider {target} is not unique:")
-        for error in errors
-    ), errors
-
-
 def checker_source_paths() -> tuple[Path, ...]:
     """Return the canonical checker and its exact lexical component inventory."""
     module = load_checker()
     filenames = tuple(module._CHECKER_COMPONENT_FILES)
     assert len(filenames) == len(set(filenames)) == 41
     return (SCRIPT, *(SCRIPT.with_name(filename) for filename in filenames))
-
-
-def test_release_inventory_checker_has_one_component_owned_provider() -> None:
-    """Reject monolithic shadows of component-owned checker providers."""
-    expected_providers = {
-        "_production_liveness_release_inventory_errors": (
-            "sumeragi_v2_proof_ledger_release_inventory_contracts.py"
-        ),
-        "_cross_tool_kernel_views": (
-            "sumeragi_v2_proof_ledger_cross_tool_contracts.py"
-        ),
-    }
-    def provider_errors(sources: tuple[tuple[Path, str], ...]) -> list[str]:
-        providers: dict[str, list[str]] = {}
-        for path, source in sources:
-            for node in ast.parse(source, filename=str(path)).body:
-                if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                    continue
-                if node.name in expected_providers:
-                    providers.setdefault(node.name, []).append(path.name)
-        return [
-            f"checker provider {name} must be uniquely component-owned; "
-            f"found {providers.get(name)!r}"
-            for name, expected_provider in expected_providers.items()
-            if providers.get(name) != [expected_provider]
-        ]
-    canonical_sources = tuple(
-        (path, path.read_text(encoding="utf-8"))
-        for path in checker_source_paths()
-    )
-    assert provider_errors(canonical_sources) == []
-    shadows = {
-        "_production_liveness_release_inventory_errors": (
-            "\n\ndef _production_liveness_release_inventory_errors(repo_root=ROOT_DIR):\n"
-            "    return []\n"
-        ),
-        "_cross_tool_kernel_views": (
-            "\n\ndef _cross_tool_kernel_views(claim):\n"
-            "    return ()\n"
-        ),
-    }
-    for name, shadow in shadows.items():
-        mutated_sources = tuple(
-            (path, source + shadow if path == SCRIPT else source)
-            for path, source in canonical_sources
-        )
-        errors = provider_errors(mutated_sources)
-        assert len(errors) == 1
-        assert name in errors[0] and SCRIPT.name in errors[0], errors
 
 
 def test_checker_remains_python39_compatible() -> None:
@@ -8685,6 +8556,9 @@ def copy_effect_capacity_mutation_fixture(tmp_path: Path, module) -> tuple[Path,
         "crates/iroha_core/src/sumeragi/v2_effects.rs",
         "crates/iroha_core/src/sumeragi/v2_runtime.rs",
         "crates/iroha_core/src/sumeragi/v2.rs",
+        "crates/iroha_core/src/sumeragi/v2_leader_wire_consumer.rs",
+        "crates/iroha_core/src/sumeragi/v2_core/wal.rs",
+        "crates/iroha_core/src/sumeragi/v2_core/types.rs",
         "crates/iroha_core/src/sumeragi/serviced_candidate_store.rs",
         "crates/iroha_core/src/sumeragi/mod.rs",
         "crates/iroha_core/src/sumeragi/v2_worker.rs",

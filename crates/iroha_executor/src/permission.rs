@@ -1946,7 +1946,7 @@ mod tests {
     };
     use crate::permission::test_override;
     use crate::{
-        data_model::ValidationFail,
+        data_model::{Registrable as _, ValidationFail},
         prelude::Context,
         smart_contract::{
             Iroha,
@@ -2173,7 +2173,7 @@ mod tests {
             asset_definition: target,
         };
         let sibling = CanManageAssetDefinitionConfidentialPolicy {
-            asset_definition: other,
+            asset_definition: other.clone(),
         };
         let held: PermissionObject = exact.clone().into();
         let exact_dispatched =
@@ -2183,7 +2183,17 @@ mod tests {
         let previous = test_override::replace_permissions(vec![held]);
         let exact_grant = exact_dispatched.validate_grant(&authority, &context, &Iroha);
         let exact_revoke = exact_dispatched.validate_revoke(&authority, &context, &Iroha);
-        let sibling_grant = sibling_dispatched.validate_grant(&authority, &context, &Iroha);
+        let sibling_definition = crate::data_model::asset::AssetDefinition::numeric(
+            other,
+            "USD",
+            crate::data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&make_other_account_id());
+        let sibling_grant =
+            crate::tests::with_mock_asset_definitions(vec![sibling_definition], || {
+                sibling_dispatched.validate_grant(&authority, &context, &Iroha)
+            });
         test_override::replace_permissions(previous);
         assert!(exact_grant.is_ok());
         assert!(exact_revoke.is_ok());
@@ -2895,7 +2905,10 @@ mod tests {
         let payload = norito::json::to_json(&token).expect("serialize enrollment permission");
         assert_eq!(
             payload,
-            format!(r#"{{"program_id":"{}"}}"#, token.program_id),
+            format!(
+                r#"{{"program_id":{{"sponsor":"{}","name":"{}"}}}}"#,
+                token.program_id.sponsor, token.program_id.name,
+            ),
         );
         assert_eq!(
             norito::json::from_str::<CanEnrollFeeSponsorProgram>(&payload)

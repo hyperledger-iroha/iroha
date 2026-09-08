@@ -440,6 +440,45 @@ class ParliamentApiV1Test {
     }
 
     @Test
+    fun initialSortitionDraftUsesOnlyTheEnclosingAttempt() {
+        val layout = ParliamentApiV1.PUBLIC_TRANSITIONS.single {
+            it.jsonTag == "RegisterInitialSortition"
+        }
+        assertEquals(21, layout.noritoIndex)
+        assertEquals(24, layout.eventKindIndex)
+        assertEquals(false, layout.jsonPayloadRequired)
+        val transition = bytes("""{"transition":"RegisterInitialSortition"}""")
+        val request = objectValue(ParliamentApiV1.transitionDraftRequestJson(attemptId, transition))
+        assertEquals(setOf("version", "governance_attempt_id", "transition"), request.keys)
+        assertEquals(1L, request["version"])
+        assertEquals(attemptId, request["governance_attempt_id"])
+        assertEquals(mapOf("transition" to "RegisterInitialSortition"), request["transition"])
+        assertFailsWith<IllegalArgumentException> {
+            ParliamentApiV1.transitionDraftRequestJson("00".repeat(32), transition)
+        }
+        for (payload in listOf("null", "{}", "{\"target_seats\":1}")) {
+            assertFailsWith<IllegalArgumentException>("unit intent accepted payload $payload") {
+                ParliamentApiV1.transitionDraftRequestJson(
+                    attemptId,
+                    bytes("""{"transition":"RegisterInitialSortition","payload":$payload}"""),
+                )
+            }
+        }
+        for (field in listOf(
+            "candidates", "candidate_root", "candidate_count", "target_seats",
+            "request_height", "pulse_height", "beacon_session_id", "body",
+            "body_election_attempt_id", "sequence",
+        )) {
+            assertFailsWith<IllegalArgumentException>("unit intent accepted caller field $field") {
+                ParliamentApiV1.transitionDraftRequestJson(
+                    attemptId,
+                    bytes("""{"transition":"RegisterInitialSortition","$field":"caller selected"}"""),
+                )
+            }
+        }
+    }
+
+    @Test
     fun transitionBuilderRejectsRemovedOutcomeTagsAndPayloadAliases() {
         for (tag in listOf(
             "ConstructCertificate",

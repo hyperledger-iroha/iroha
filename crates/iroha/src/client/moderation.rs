@@ -73,26 +73,36 @@ mod tests {
         Level,
         isi::{InstructionBox, Log, sorafs::SubmitSorafsModerationCommit},
         metadata::Metadata,
-        transaction::{
-            Executable, FeePaymentIntent, IvmBytecode, SignedTransaction, TransactionBuilder,
-        },
+        transaction::{Executable, FeePaymentIntent, IvmBytecode, SignedTransaction},
     };
     use std::num::NonZeroU64;
     fn sign_executable(client: &super::super::Client, executable: Executable) -> SignedTransaction {
         let gas_limit = executable
             .requires_transaction_gas_limit()
             .then(|| NonZeroU64::new(1).expect("non-zero gas limit"));
-        let mut builder = TransactionBuilder::new(
-            client.network_id,
-            client.account.clone(),
-            FeePaymentIntent::authority(Vec::new(), gas_limit),
-        )
-        .with_executable(executable)
-        .with_metadata(Metadata::default());
-        builder.set_ttl(SORAFS_MODERATION_TRANSACTION_TTL);
-        client
-            .try_sign_transaction(builder)
+        let account = client
+            .account_client()
+            .expect("bind moderation fixture account");
+        account
+            .prepare_transaction(
+                crate::client::AccountTransactionDraft::new(
+                    executable,
+                    FeePaymentIntent::authority(Vec::new(), gas_limit),
+                    Metadata::default(),
+                )
+                .with_time_to_live(SORAFS_MODERATION_TRANSACTION_TTL),
+            )
+            .and_then(|payload| account.sign_transaction(payload))
             .expect("sign moderation route validation fixture")
+    }
+    fn sign_instruction(
+        client: &super::super::Client,
+        instruction: impl Into<InstructionBox>,
+    ) -> SignedTransaction {
+        sign_executable(
+            client,
+            Executable::Instructions(vec![instruction.into()].into()),
+        )
     }
     fn assert_rejected_before_http(
         client: &super::super::Client,
@@ -104,15 +114,18 @@ mod tests {
                 "SoraFS moderation route requires exactly one `{}` native instruction",
                 route.expected_instruction_label()
             ),
-            || client.post_sorafs_moderation_transaction(route, transaction),
+            |transport| {
+                client
+                    .clone()
+                    .with_test_http_transport(transport)
+                    .post_sorafs_moderation_transaction(route, transaction)
+            },
         );
     }
     #[test]
     fn moderation_route_validation_accepts_exact_instruction_and_rejects_mismatch_before_http() {
         let client = client_with_base_url(base_url());
-        let transaction = client
-            .try_build_sorafs_moderation_transaction(SubmitSorafsModerationCommit::new(vec![0xA5]))
-            .expect("build exact commit transaction");
+        let transaction = sign_instruction(&client, SubmitSorafsModerationCommit::new(vec![0xA5]));
         validate_transaction_route(SorafsModerationCommandRoute::SubmitCommit, &transaction)
             .expect("matching moderation route");
         assert_rejected_before_http(
@@ -124,12 +137,10 @@ mod tests {
     #[test]
     fn moderation_route_validation_rejects_non_native_and_non_singleton_before_http() {
         let client = client_with_base_url(base_url());
-        let wrong_instruction = client
-            .try_build_sorafs_moderation_transaction(Log::new(
-                Level::INFO,
-                "not a moderation instruction".into(),
-            ))
-            .expect("build wrong-instruction transaction");
+        let wrong_instruction = sign_instruction(
+            &client,
+            Log::new(Level::INFO, "not a moderation instruction".into()),
+        );
         assert_rejected_before_http(
             &client,
             SorafsModerationCommandRoute::SubmitCommit,

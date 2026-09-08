@@ -1295,8 +1295,6 @@ fn client() -> (Client, KeyPair) {
         account,
         basic_auth: None,
         transaction_add_nonce: false,
-        connect_queue_root: std::path::PathBuf::new(),
-        soracloud_http_witness_file: None,
         sorafs_alias_cache: sorafs_manifest::alias_cache::AliasCachePolicy::new(
             Duration::from_secs(1),
             Duration::from_secs(1),

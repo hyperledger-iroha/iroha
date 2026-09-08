@@ -3,6 +3,7 @@ package circuit
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -98,11 +99,12 @@ func TestCheckedInKATInventoryAuthenticatesEveryVector(t *testing.T) {
 
 func TestCheckedInConstraintCountInventoryCoversEveryProfile(t *testing.T) {
 	type toolchain struct {
-		Go         string `json:"go"`
-		Gnark      string `json:"gnark"`
-		Builder    string `json:"builder"`
-		ModuleMode string `json:"module_mode"`
-		Network    string `json:"network"`
+		Go            string `json:"go"`
+		Gnark         string `json:"gnark"`
+		Builder       string `json:"builder"`
+		ModuleMode    string `json:"module_mode"`
+		Network       string `json:"network"`
+		Serialization string `json:"r1cs_serialization"`
 	}
 	type entry struct {
 		Profile     string        `json:"profile"`
@@ -110,6 +112,8 @@ func TestCheckedInConstraintCountInventoryCoversEveryProfile(t *testing.T) {
 		OuterCurve  profile.Curve `json:"outer_curve"`
 		Constraints int           `json:"constraints"`
 		KATSHA256   string        `json:"kat_sha256"`
+		R1CSBytes   int64         `json:"r1cs_size_bytes"`
+		R1CSSHA256  string        `json:"r1cs_sha256"`
 	}
 	type artifactState struct {
 		R1CSIdentitiesCurrent      bool     `json:"r1cs_identities_current"`
@@ -119,14 +123,15 @@ func TestCheckedInConstraintCountInventoryCoversEveryProfile(t *testing.T) {
 		Reason                     string   `json:"reason"`
 	}
 	var inventory struct {
-		Schema               string        `json:"schema"`
-		Version              int           `json:"version"`
-		Toolchain            toolchain     `json:"toolchain"`
-		DefinitionState      string        `json:"definition_state"`
-		Profiles             []entry       `json:"profiles"`
-		ArtifactState        artifactState `json:"artifact_state"`
-		ProductionAdmissible bool          `json:"production_admissible"`
-		Note                 string        `json:"note"`
+		Schema                 string        `json:"schema"`
+		Version                int           `json:"version"`
+		Toolchain              toolchain     `json:"toolchain"`
+		DefinitionState        string        `json:"definition_state"`
+		DefinitionSourceSHA256 string        `json:"definition_source_closure_sha256"`
+		Profiles               []entry       `json:"profiles"`
+		ArtifactState          artifactState `json:"artifact_state"`
+		ProductionAdmissible   bool          `json:"production_admissible"`
+		Note                   string        `json:"note"`
 	}
 	encoded, err := os.ReadFile(filepath.Join("..", "..", "manifests", "constraint-counts-final-v1.json"))
 	if err != nil {
@@ -147,16 +152,24 @@ func TestCheckedInConstraintCountInventoryCoversEveryProfile(t *testing.T) {
 		t.Fatalf("constraint-count inventory header/length mismatch: %#v", inventory)
 	}
 	if inventory.Toolchain != (toolchain{
-		Go:         "go1.25.7",
-		Gnark:      "v0.16.3",
-		Builder:    "frontend.Compile+r1cs.NewBuilder",
-		ModuleMode: "vendor",
-		Network:    "none",
+		Go:            "go1.25.7",
+		Gnark:         "v0.16.3",
+		Builder:       "frontend.Compile+r1cs.NewBuilder",
+		ModuleMode:    "vendor",
+		Network:       "none",
+		Serialization: "gnark-v0.16.3-constraint-system-writeto",
 	}) {
 		t.Fatalf("constraint-count inventory toolchain drift: %#v", inventory.Toolchain)
 	}
-	if inventory.DefinitionState != "final-v1-wire-identifiers-aligned" {
+	if inventory.DefinitionState != "post-canonical-wire-and-checkpoint-binding" {
 		t.Fatalf("unexpected constraint-count definition state %q", inventory.DefinitionState)
+	}
+	definitionHash, err := definitionSourceClosure(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inventory.DefinitionSourceSHA256 != definitionHash {
+		t.Fatalf("R1CS source closure changed (manifest %s, current %s): invalidate and remeasure affected identities before updating the manifest", inventory.DefinitionSourceSHA256, definitionHash)
 	}
 	state := inventory.ArtifactState
 	expectedInvalidatedRoles := []string{
@@ -173,20 +186,13 @@ func TestCheckedInConstraintCountInventoryCoversEveryProfile(t *testing.T) {
 		"reproducibility_ceremony_audit",
 		"destination_integration_audit",
 	}
-	expectedFreshR1CS := []string{
-		"sccp-final-v1-bsc-mainnet-message",
-		"sccp-final-v1-ethereum-mainnet-message",
-		"sccp-final-v1-ton-mainnet-epoch-anchor-update",
-		"sccp-final-v1-ton-mainnet-message",
-		"sccp-final-v1-tron-mainnet-epoch-anchor-update",
-		"sccp-final-v1-tron-mainnet-message",
-	}
-	if state.R1CSIdentitiesCurrent || state.Reason == "" ||
+	if state.Reason == "" ||
 		!reflect.DeepEqual(state.InvalidatedArtifactRoles, expectedInvalidatedRoles) ||
-		!reflect.DeepEqual(state.FreshClosureRequired, expectedFreshClosure) ||
-		!reflect.DeepEqual(state.ProfilesRequiringFreshR1CS, expectedFreshR1CS) {
-		t.Fatalf("wire-alignment invalidation policy drift: %#v", state)
+		!reflect.DeepEqual(state.FreshClosureRequired, expectedFreshClosure) {
+		t.Fatalf("circuit artifact invalidation policy drift: %#v", state)
 	}
+	unmeasured := make([]string, 0)
+	identities := make(map[string]string, len(configs))
 	for index, cfg := range configs {
 		entry := inventory.Profiles[index]
 		if entry.Profile != cfg.ID || entry.Role != cfg.Role || entry.OuterCurve != cfg.Curve {
@@ -203,6 +209,24 @@ func TestCheckedInConstraintCountInventoryCoversEveryProfile(t *testing.T) {
 		if entry.KATSHA256 != fmt.Sprintf("%x", digest) {
 			t.Fatalf("constraint-count inventory KAT digest mismatch for %q", cfg.ID)
 		}
+		if entry.R1CSBytes == 0 && entry.R1CSSHA256 == "" {
+			unmeasured = append(unmeasured, cfg.ID)
+			continue
+		}
+		identity, err := hex.DecodeString(entry.R1CSSHA256)
+		if err != nil || len(identity) != sha256.Size || entry.R1CSBytes <= 0 ||
+			hex.EncodeToString(identity) != entry.R1CSSHA256 ||
+			bytes.Equal(identity, make([]byte, sha256.Size)) {
+			t.Fatalf("constraint-count inventory has invalid R1CS identity for %q", cfg.ID)
+		}
+		if previous, exists := identities[entry.R1CSSHA256]; exists {
+			t.Fatalf("R1CS identity is shared by independent profiles %q and %q", previous, cfg.ID)
+		}
+		identities[entry.R1CSSHA256] = cfg.ID
+	}
+	if state.R1CSIdentitiesCurrent != (len(unmeasured) == 0) ||
+		!reflect.DeepEqual(state.ProfilesRequiringFreshR1CS, unmeasured) {
+		t.Fatalf("R1CS freshness does not match measured identities: state=%#v unmeasured=%v", state, unmeasured)
 	}
 }
 

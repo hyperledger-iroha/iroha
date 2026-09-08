@@ -99,7 +99,7 @@ pub fn has_origin_derive(input: TokenStream) -> TokenStream {
 }
 #[doc = include_str!("lib_docs/event_set.md")]
 #[manyhow]
-#[proc_macro_derive(EventSet)]
+#[proc_macro_derive(EventSet, attributes(event_set))]
 pub fn event_set_derive(input: TokenStream) -> TokenStream {
     let mut emitter = Emitter::new();
     let Some(input) = emitter.handle(syn::parse2(input)) else {

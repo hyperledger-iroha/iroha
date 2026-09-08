@@ -727,8 +727,8 @@ fn zk_roots_are_bounded_in_world_state() {
                 defaults::zk::proof::BRIDGE_MAX_FUTURE_DRIFT_BLOCKS,
             poseidon_params_id: defaults::confidential::POSEIDON_PARAMS_ID,
             pedersen_params_id: defaults::confidential::PEDERSEN_PARAMS_ID,
-            kaigi_roster_join_vk: None,
-            kaigi_roster_leave_vk: None,
+            kaigi_authorization_vk: None,
+
             kaigi_usage_vk: None,
             max_proof_size_bytes: defaults::confidential::MAX_PROOF_SIZE_BYTES,
             max_nullifiers_per_tx: defaults::confidential::MAX_NULLIFIERS_PER_TX,
@@ -872,8 +872,8 @@ fn frontier_checkpoints_respect_reorg_depth_bound() {
                 defaults::zk::proof::BRIDGE_MAX_FUTURE_DRIFT_BLOCKS,
             poseidon_params_id: defaults::confidential::POSEIDON_PARAMS_ID,
             pedersen_params_id: defaults::confidential::PEDERSEN_PARAMS_ID,
-            kaigi_roster_join_vk: None,
-            kaigi_roster_leave_vk: None,
+            kaigi_authorization_vk: None,
+
             kaigi_usage_vk: None,
             max_proof_size_bytes: defaults::confidential::MAX_PROOF_SIZE_BYTES,
             max_nullifiers_per_tx: defaults::confidential::MAX_NULLIFIERS_PER_TX,

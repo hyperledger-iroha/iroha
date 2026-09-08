@@ -7,6 +7,10 @@ pub const FASTPQ_FINAL_V1_ID: &str = "fastpq-state-transition-stark-v1";
 pub const FASTPQ_CATALOG_V1: &str = "iroha-privacy-exact12-v1";
 /// Required aggregate qROM security for the first release.
 pub const FASTPQ_REQUIRED_SECURITY_BITS_V1: u32 = 128;
+/// Conservative exclusive V1 quotient degree bound relative to the trace length.
+pub const FASTPQ_COMPOSITION_DEGREE_EXPANSION_V1: u32 = 2;
+/// Evaluation count retained by the current V1 complete terminal FRI opening.
+pub const FASTPQ_FRI_TERMINAL_DOMAIN_SIZE_V1: u32 = 4;
 /// Number of independently generated Goldilocks digest lanes.
 pub const FASTPQ_DIGEST_LANES_V1: u32 = 6;
 /// Bits in each canonical Goldilocks digest lane.
@@ -104,6 +108,8 @@ pub const POSEIDON_X7_GOLDILOCKS_DIGEST384_V1: HashDescriptor = HashDescriptor {
 /// Fail-closed reasons preventing a parameter set from claiming production qualification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum FastpqProductionQualificationBlockerV1 {
+    /// The candidate query count does not meet the required aggregate arithmetic bound.
+    ArithmeticTargetNotMet,
     /// The repository lacks an independently reviewed, protocol-specific qROM reduction linking
     /// the exact arithmetic accounting to the complete FASTPQ adversary.
     MissingProtocolSpecificQromReduction,
@@ -125,6 +131,16 @@ pub enum FastpqProductionQualificationV1 {
 pub struct FastpqQromBoundInputsV1 {
     /// LDE blowup factor; V1 requires a power of two.
     pub blowup_factor: u32,
+    /// Exclusive composition-degree bound divided by the trace length.
+    ///
+    /// The intended inverse code rate is `blowup_factor / composition_degree_expansion`;
+    /// the terminal schedule can weaken it further.
+    pub composition_degree_expansion: u32,
+    /// Number of evaluations retained when the binary FRI schedule stops.
+    ///
+    /// Rounding the reduced exclusive degree bound up to one limits the
+    /// effective inverse code rate to this terminal-domain size.
+    pub terminal_domain_size: u32,
     /// Total proof targets covered by the release union bound.
     pub aggregate_targets: u64,
     /// Log₂ upper bound on quantum random-oracle queries.
@@ -159,9 +175,11 @@ pub struct FastpqQromBoundReportV1 {
     pub production_qualification: FastpqProductionQualificationV1,
 }
 
-/// Default arithmetic inputs frozen for the first-release manifest.
+/// Arithmetic inputs accounting for the currently implemented first-release profile.
 pub const FASTPQ_QROM_BOUND_INPUTS_V1: FastpqQromBoundInputsV1 = FastpqQromBoundInputsV1 {
     blowup_factor: 8,
+    composition_degree_expansion: FASTPQ_COMPOSITION_DEGREE_EXPANSION_V1,
+    terminal_domain_size: FASTPQ_FRI_TERMINAL_DOMAIN_SIZE_V1,
     aggregate_targets: FASTPQ_AGGREGATE_TARGETS_V1,
     quantum_oracle_query_log2_bound: FASTPQ_QUANTUM_ORACLE_QUERY_LOG2_BOUND_V1,
     digest_bits: FASTPQ_DIGEST_LANES_V1 * FASTPQ_DIGEST_LANE_BITS_V1,
@@ -240,12 +258,25 @@ fn qrom_bound_terms(
     inputs: FastpqQromBoundInputsV1,
     queries: u32,
 ) -> Option<(ExactDyadicBoundV1, ExactDyadicBoundV1)> {
-    if !inputs.blowup_factor.is_power_of_two() || !queries.is_multiple_of(2) {
+    if inputs.aggregate_targets == 0
+        || !inputs.blowup_factor.is_power_of_two()
+        || !inputs.composition_degree_expansion.is_power_of_two()
+        || inputs.composition_degree_expansion >= inputs.blowup_factor
+        || !inputs.terminal_domain_size.is_power_of_two()
+        || inputs.terminal_domain_size < 2
+        || !queries.is_multiple_of(2)
+    {
         return None;
     }
-    let blowup_log2 = inputs.blowup_factor.ilog2();
+    let inverse_rate_log2 = (inputs.blowup_factor.ilog2()
+        - inputs.composition_degree_expansion.ilog2())
+    .min(inputs.terminal_domain_size.ilog2());
     // The square-root loss is represented exactly by halving the classical proximity exponent.
-    let sampling_denominator_log2 = queries.checked_mul(blowup_log2)?.checked_div(2)?;
+    // The quotient composition has degree < 2 * N_trace, so the physical
+    // LDE blowup alone would overstate this model's sampling exponent. The
+    // four-point terminal preserves that bound; smaller terminal domains would
+    // round the degree bound upward and must retain that loss in the model.
+    let sampling_denominator_log2 = queries.checked_mul(inverse_rate_log2)?.checked_div(2)?;
     let oracle_square_shift = inputs.quantum_oracle_query_log2_bound.checked_mul(2)?;
     let sampling_numerator =
         checked_shift(u128::from(inputs.aggregate_targets), oracle_square_shift)?;
@@ -313,18 +344,20 @@ pub fn calculate_fastpq_qrom_bound_v1(
         return None;
     }
     let (sampling_term, collision_term) = qrom_bound_terms(inputs, queries)?;
+    let arithmetic_target_met =
+        exact_sum_below_target(sampling_term, collision_term, inputs.required_security_bits);
     Some(FastpqQromBoundReportV1 {
         queries,
         sampling_term,
         collision_term,
-        arithmetic_target_met: exact_sum_below_target(
-            sampling_term,
-            collision_term,
-            inputs.required_security_bits,
-        ),
+        arithmetic_target_met,
         // Arithmetic does not substitute for the missing protocol-specific reduction.
         production_qualification: FastpqProductionQualificationV1::Unavailable(
-            FastpqProductionQualificationBlockerV1::MissingProtocolSpecificQromReduction,
+            if arithmetic_target_met {
+                FastpqProductionQualificationBlockerV1::MissingProtocolSpecificQromReduction
+            } else {
+                FastpqProductionQualificationBlockerV1::ArithmeticTargetNotMet
+            },
         ),
     })
 }
@@ -342,7 +375,12 @@ pub fn select_fastpq_query_count_v1(inputs: FastpqQromBoundInputsV1) -> Option<u
         })
 }
 
-/// Query count selected by [`select_fastpq_query_count_v1`] for the frozen V1 inputs.
+/// Query count currently frozen in V1 wires and fixtures.
+///
+/// TODO: migrate parameters and release artifacts together after protocol review.
+/// Accounting for the quotient degree bound and four-point FRI terminal makes
+/// the current count fail the arithmetic target. [`select_fastpq_query_count_v1`]
+/// selects 200; that arithmetic result still does not establish qualification.
 pub const FASTPQ_QUERY_COUNT_V1: u32 = 136;
 
 /// Sole canonical FASTPQ first-release parameter set.
@@ -360,7 +398,7 @@ pub const FASTPQ_FINAL_V1: StarkParameterSet = StarkParameterSet {
     fri: FriParameters {
         arity: 2,
         blowup_factor: 8,
-        max_reductions: 18,
+        max_reductions: 17,
         queries: FASTPQ_QUERY_COUNT_V1,
     },
 };
@@ -499,27 +537,85 @@ mod tests {
     }
 
     #[test]
-    fn exact_calculator_selects_the_frozen_query_count() {
+    fn exact_calculator_accounts_for_composition_and_terminal_rounding() {
         assert_eq!(
             select_fastpq_query_count_v1(FASTPQ_QROM_BOUND_INPUTS_V1),
-            Some(FASTPQ_QUERY_COUNT_V1)
+            Some(200)
         );
         let previous = calculate_fastpq_qrom_bound_v1(
             FASTPQ_QROM_BOUND_INPUTS_V1,
-            FASTPQ_QUERY_COUNT_V1 - FASTPQ_QUERY_COUNT_GRANULARITY_V1,
+            200 - FASTPQ_QUERY_COUNT_GRANULARITY_V1,
         )
         .expect("previous multiple of eight is admissible input");
-        let selected =
-            calculate_fastpq_qrom_bound_v1(FASTPQ_QROM_BOUND_INPUTS_V1, FASTPQ_QUERY_COUNT_V1)
-                .expect("selected count is admissible input");
+        let selected = calculate_fastpq_qrom_bound_v1(FASTPQ_QROM_BOUND_INPUTS_V1, 200)
+            .expect("selected count is admissible input");
         assert!(!previous.arithmetic_target_met);
         assert!(selected.arithmetic_target_met);
+        assert_eq!(selected.sampling_term.denominator_log2, 200);
+        assert_eq!(selected.sampling_term.numerator, 54_u128 << 64);
         assert_eq!(
             selected.production_qualification,
             FastpqProductionQualificationV1::Unavailable(
                 FastpqProductionQualificationBlockerV1::MissingProtocolSpecificQromReduction
             )
         );
+    }
+
+    #[test]
+    fn frozen_query_count_reports_arithmetic_shortfall() {
+        let frozen =
+            calculate_fastpq_qrom_bound_v1(FASTPQ_QROM_BOUND_INPUTS_V1, FASTPQ_QUERY_COUNT_V1)
+                .expect("frozen query count is admissible input");
+        assert_eq!(frozen.sampling_term.denominator_log2, 136);
+        assert!(!frozen.arithmetic_target_met);
+        assert_eq!(
+            frozen.production_qualification,
+            FastpqProductionQualificationV1::Unavailable(
+                FastpqProductionQualificationBlockerV1::ArithmeticTargetNotMet
+            )
+        );
+    }
+
+    #[test]
+    fn calculator_rejects_invalid_composition_degree_expansion() {
+        for expansion in [0, 3, 8, 16] {
+            let invalid = FastpqQromBoundInputsV1 {
+                composition_degree_expansion: expansion,
+                ..FASTPQ_QROM_BOUND_INPUTS_V1
+            };
+            assert!(calculate_fastpq_qrom_bound_v1(invalid, 200).is_none());
+        }
+    }
+
+    #[test]
+    fn four_point_terminal_preserves_the_intended_quadratic_degree_bound() {
+        let four_point = FASTPQ_QROM_BOUND_INPUTS_V1;
+        assert_eq!(four_point.terminal_domain_size, 4);
+        let overfolded = FastpqQromBoundInputsV1 {
+            terminal_domain_size: 2,
+            ..four_point
+        };
+        assert_eq!(select_fastpq_query_count_v1(overfolded), Some(400));
+        assert_eq!(select_fastpq_query_count_v1(four_point), Some(200));
+        let report = calculate_fastpq_qrom_bound_v1(four_point, 200).unwrap();
+        assert_eq!(report.sampling_term.denominator_log2, 200);
+        assert_eq!(
+            report.production_qualification,
+            FastpqProductionQualificationV1::Unavailable(
+                FastpqProductionQualificationBlockerV1::MissingProtocolSpecificQromReduction
+            )
+        );
+    }
+
+    #[test]
+    fn calculator_rejects_invalid_terminal_domain_size() {
+        for terminal_domain_size in [0, 1, 3] {
+            let invalid = FastpqQromBoundInputsV1 {
+                terminal_domain_size,
+                ..FASTPQ_QROM_BOUND_INPUTS_V1
+            };
+            assert!(calculate_fastpq_qrom_bound_v1(invalid, 400).is_none());
+        }
     }
 
     #[test]
@@ -530,6 +626,50 @@ mod tests {
         let mut invalid = FASTPQ_QROM_BOUND_INPUTS_V1;
         invalid.blowup_factor = 12;
         assert!(calculate_fastpq_qrom_bound_v1(invalid, FASTPQ_QUERY_COUNT_V1).is_none());
+    }
+
+    #[test]
+    fn checked_shift_rejects_discarded_high_bits() {
+        assert_eq!(checked_shift(0, 127), Some(0));
+        assert_eq!(checked_shift(1, 127), Some(1_u128 << 127));
+        assert_eq!(checked_shift(u128::MAX, 0), Some(u128::MAX));
+        assert_eq!(checked_shift(u128::MAX >> 1, 1), Some(u128::MAX - 1));
+        assert_eq!(checked_shift(2, 127), None);
+        assert_eq!(checked_shift(u128::MAX, 1), None);
+        assert_eq!(checked_shift(1, 128), None);
+    }
+
+    #[test]
+    fn calculator_rejects_overflow_in_either_adversarial_numerator() {
+        // The sampling numerator fits, but the ordered-target collision term
+        // needs 161 bits. Truncating that term to zero formerly admitted 160
+        // queries with a false passing arithmetic report.
+        let collision_overflow = FastpqQromBoundInputsV1 {
+            aggregate_targets: 1_u64 << 32,
+            ..FASTPQ_QROM_BOUND_INPUTS_V1
+        };
+        assert!(calculate_fastpq_qrom_bound_v1(collision_overflow, 160).is_none());
+        assert_eq!(select_fastpq_query_count_v1(collision_overflow), None);
+
+        // Both products used to truncate to zero even though both are larger
+        // than the u128 accumulator, making every query count appear safe.
+        let sampling_overflow = FastpqQromBoundInputsV1 {
+            aggregate_targets: 1_u64 << 63,
+            quantum_oracle_query_log2_bound: 40,
+            ..FASTPQ_QROM_BOUND_INPUTS_V1
+        };
+        assert!(calculate_fastpq_qrom_bound_v1(sampling_overflow, FASTPQ_QUERY_COUNT_V1).is_none());
+        assert_eq!(select_fastpq_query_count_v1(sampling_overflow), None);
+    }
+
+    #[test]
+    fn calculator_rejects_empty_target_accounting() {
+        let no_targets = FastpqQromBoundInputsV1 {
+            aggregate_targets: 0,
+            ..FASTPQ_QROM_BOUND_INPUTS_V1
+        };
+        assert!(calculate_fastpq_qrom_bound_v1(no_targets, FASTPQ_QUERY_COUNT_V1).is_none());
+        assert_eq!(select_fastpq_query_count_v1(no_targets), None);
     }
 
     #[test]

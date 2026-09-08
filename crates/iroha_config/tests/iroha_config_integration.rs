@@ -13,6 +13,8 @@ mod fixtures;
 mod governance_alternates_parse;
 #[path = "governance_citizen_service_parse.rs"]
 mod governance_citizen_service_parse;
+#[path = "kaigi_authorization_config_v1.rs"]
+mod kaigi_authorization_config_v1;
 #[path = "kura_retention_hard_cut.rs"]
 mod kura_retention_hard_cut;
 #[path = "minamoto_profile.rs"]

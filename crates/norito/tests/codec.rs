@@ -18,7 +18,8 @@ static TRACKED_SERIALIZE_CALLS: AtomicUsize = AtomicUsize::new(0);
 #[derive(Debug, PartialEq, Eq)]
 struct AccessTrackedByte(u8);
 
-impl norito::NoritoSerialize for AccessTrackedByte {
+impl norito::NoritoSerialize for AccessTrackedByte {}
+impl norito::SerializePayload for AccessTrackedByte {
     fn serialize(&self, encoder: &mut norito::core::Encoder<'_>) -> Result<(), norito::Error> {
         TRACKED_SERIALIZE_CALLS.fetch_add(1, Ordering::Relaxed);
         encoder.write_all(&[self.0])?;
@@ -43,7 +44,8 @@ impl<'a> norito::NoritoDeserialize<'a> for AccessTrackedByte {
 #[derive(Debug, PartialEq, Eq)]
 struct PartiallyReadPair(u8);
 
-impl norito::NoritoSerialize for PartiallyReadPair {
+impl norito::NoritoSerialize for PartiallyReadPair {}
+impl norito::SerializePayload for PartiallyReadPair {
     fn serialize(&self, encoder: &mut norito::core::Encoder<'_>) -> Result<(), norito::Error> {
         encoder.write_all(&[self.0, 0])?;
         Ok(())

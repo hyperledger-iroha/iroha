@@ -450,6 +450,7 @@ object ParliamentApiV1 {
         ParliamentTransitionLayoutV1(18, "RegisterBallotParticipant", true, 21),
         ParliamentTransitionLayoutV1(19, "RecordBallotDropout", true, 22),
         ParliamentTransitionLayoutV1(20, "FailPublicFindingNoResult", true, 23),
+        ParliamentTransitionLayoutV1(21, "RegisterInitialSortition", false, 24),
     )
 
     @JvmField

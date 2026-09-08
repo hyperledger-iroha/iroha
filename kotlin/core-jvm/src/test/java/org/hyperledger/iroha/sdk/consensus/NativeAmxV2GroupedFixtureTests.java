@@ -29,6 +29,67 @@ import org.junit.jupiter.api.Test;
 
 /** Shared grouped Native AMX v2 fixture-consumption tests. */
 public final class NativeAmxV2GroupedFixtureTests {
+  private static Map<String, Object> flatParticipantSettlement() {
+    final Map<String, Object> value = new java.util.LinkedHashMap<>();
+    value.put("lane_id", 0L);
+    value.put("dataspace_id", 0L);
+    value.put("lane_incarnation", "hash:0101010101010101010101010101010101010101010101010101010101010101#B86C");
+    value.put("participant_lane_block_height", 1L);
+    value.put("authority_context_height", 2L);
+    value.put("previous_native_settlement_hash", null);
+    value.put("source_ids", Arrays.asList(String.join("", java.util.Collections.nCopies(32, "F0")), String.join("", java.util.Collections.nCopies(32, "10"))));
+    return value;
+  }
+
+  @Test
+  public void participantSettlementPreservesFifoAndHasNoRetiredShape() {
+    final Map<String, Object> wire = flatParticipantSettlement();
+    final NativeAmxV2.ParticipantSettlement parsed = NativeAmxV2.parseParticipantSettlement(wire);
+    assertEquals(0L, parsed.getLaneId());
+    assertEquals(BigInteger.ZERO, parsed.getDataspaceId());
+    assertEquals(BigInteger.ONE, parsed.getParticipantLaneBlockHeight());
+    assertEquals(BigInteger.valueOf(2L), parsed.getAuthorityContextHeight());
+    assertEquals(String.join("", java.util.Collections.nCopies(32, "F0")), parsed.getSourceIds().get(0).getValue());
+    assertEquals(String.join("", java.util.Collections.nCopies(32, "10")), parsed.getSourceIds().get(1).getValue());
+    assertEquals("hash:350CB3C0D8728E39820775AC522B345C84631FA81BA164F72FB70043657012CF#EB51", parsed.computedHash().getValue());
+    final Map<String, Object> reversed = new java.util.LinkedHashMap<>(wire);
+    reversed.put("source_ids", Arrays.asList(parsed.getSourceIds().get(1).getValue(), parsed.getSourceIds().get(0).getValue()));
+    assertFalse(parsed.computedHash().equals(NativeAmxV2.parseParticipantSettlement(reversed).computedHash()));
+    assertEquals(null, parsed.getPreviousNativeSettlementHash());
+    final Map<String, Object> firstWithPrevious = new java.util.LinkedHashMap<>(wire);
+    firstWithPrevious.put("previous_native_settlement_hash", wire.get("lane_incarnation"));
+    assertThrows(IllegalArgumentException.class, () -> NativeAmxV2.parseParticipantSettlement(firstWithPrevious));
+    final Map<String, Object> later = new java.util.LinkedHashMap<>(firstWithPrevious);
+    later.put("participant_lane_block_height", 2L);
+    assertEquals(wire.get("lane_incarnation"), NativeAmxV2.parseParticipantSettlement(later).getPreviousNativeSettlementHash().getValue());
+    later.put("previous_native_settlement_hash", null);
+    assertEquals(null, NativeAmxV2.parseParticipantSettlement(later).getPreviousNativeSettlementHash());
+    assertThrows(UnsupportedOperationException.class, () -> parsed.getSourceIds().clear());
+    for (final String field : new ArrayList<>(wire.keySet())) {
+      final Map<String, Object> invalid = new java.util.LinkedHashMap<>(wire);
+      invalid.remove(field);
+      assertThrows(IllegalArgumentException.class, () -> NativeAmxV2.parseParticipantSettlement(invalid));
+    }
+    for (final String retired : Arrays.asList("block_height", "tx_count", "receipts", "native_amx_receipts",
+        "total_local_amount", "total_xor_due", "total_xor_after_haircut", "total_xor_variance", "swap_metadata", "nexus_fee_receipts")) {
+      final Map<String, Object> invalid = new java.util.LinkedHashMap<>(wire);
+      invalid.put(retired, null);
+      assertThrows(IllegalArgumentException.class, () -> NativeAmxV2.parseParticipantSettlement(invalid));
+    }
+    for (final String height : Arrays.asList("participant_lane_block_height", "authority_context_height")) {
+      final Map<String, Object> invalid = new java.util.LinkedHashMap<>(wire);
+      invalid.put(height, 0L);
+      assertThrows(IllegalArgumentException.class, () -> NativeAmxV2.parseParticipantSettlement(invalid));
+    }
+    for (final List<String> sources : Arrays.asList(java.util.Collections.<String>emptyList(),
+        Arrays.asList(String.format("%064X", 0L)),
+        Arrays.asList(String.format("%064X", 1L), String.format("%064X", 1L)))) {
+      final Map<String, Object> invalid = new java.util.LinkedHashMap<>(wire);
+      invalid.put("source_ids", sources);
+      assertThrows(IllegalArgumentException.class, () -> NativeAmxV2.parseParticipantSettlement(invalid));
+    }
+  }
+
   private static final BigInteger U64_MAX =
       BigInteger.ONE.shiftLeft(Long.SIZE).subtract(BigInteger.ONE);
   private static final byte[] MERKLE_LEAF_NODE_DOMAIN =
@@ -62,11 +123,11 @@ public final class NativeAmxV2GroupedFixtureTests {
         firstLeg.getParticipantProposal().getProposalHash().getValue());
     assertEquals(null, firstLeg.getParticipantProposal().getPayloadBlockHint());
     assertEquals(
-        "hash:2DA510B86888B5D77EA760618AF06BE5511D39E8588156639EEAB566A91F2F5D#5534",
+        "hash:32950D237EC6ACA2B345D3EFFBD0FE7E30C6E9AF9BD90EE18F8FBFDBDE2A8699#E813",
         firstLeg.getParticipantSettlementHash().getValue());
     final NativeAmxV2.Leg remoteLeg = group.getReceipts().get(0).getLegs().get(1);
     assertEquals(
-        "hash:0CDECBD738386DFB71F6ADB85E49799EC6982634632C99E6E81149E7F7F42FA5#B635",
+        "hash:954C813DA9EC5BE63036F21582293E718CF706A2275B25DA96E061FED76492CB#3240",
         remoteLeg.getParticipantSettlementHash().getValue());
     assertTrue(
         NativeAmxV2.isCanonicalBlsNormalPeerId(
@@ -163,6 +224,7 @@ public final class NativeAmxV2GroupedFixtureTests {
   public void rustOwnedNegativeCorpusIsConsumable() throws Exception {
     final Map<String, Object> canonical = fixture();
     final List<Object> controls = array(canonical, "negative_controls");
+    assertEquals(58, controls.size());
     final Set<String> identifiers = new HashSet<>();
     for (final Object controlValue : controls) {
       identifiers.add(string(object(controlValue), "id"));
@@ -177,6 +239,8 @@ public final class NativeAmxV2GroupedFixtureTests {
                 "coherent_duplicate_validator_set",
                 "coherent_over_quorum_requirement",
                 "manifest_leaf_hash_tampering",
+                "missing_previous_native_settlement_hash",
+                "manifest_missing_previous_native_settlement_hash",
                 "non_canonical_validator_peer_id",
                 "execution_commitment_merge_carrier_wrong_version",
                 "execution_commitment_missing_merge_carrier_field")));
@@ -297,6 +361,12 @@ public final class NativeAmxV2GroupedFixtureTests {
         manifestCount == artifacts.size() && artifacts.size() == 1);
     final Map<String, Object> artifact = object(artifacts.get(0));
     final Map<String, Object> leaf = object(artifact, "leaf");
+    require(leaf.containsKey("previous_native_settlement_hash"));
+    final Object previousNativeHash = leaf.get("previous_native_settlement_hash");
+    if (previousNativeHash != null) {
+      new NativeAmxV2.ConsensusHash(string(leaf, "previous_native_settlement_hash"));
+      require(number(leaf, "participant_height") > 1);
+    }
     final Map<String, Object> proof = object(artifact, "proof");
     require(number(artifact, "version") == 1L && number(leaf, "version") == 1L);
     require(number(artifact, "leaf_index") == 0L && number(proof, "leaf_index") == 0L);
@@ -378,6 +448,9 @@ public final class NativeAmxV2GroupedFixtureTests {
           Objects.equals(matchingLeg.get("participant_settlement_hash"), leaf.get("settlement_hash")));
       final Map<String, Object> body =
           object(object(matchingLeg, "prepare_qc"), "body");
+      final Map<String, Object> settlement = object(matchingLeg, "participant_settlement");
+      require(settlement.containsKey("previous_native_settlement_hash"));
+      require(Objects.equals(settlement.get("previous_native_settlement_hash"), previousNativeHash));
       require(Objects.equals(body.get("source_id"), member.get("source_id")));
       require(
           Objects.equals(body.get("tx_entrypoint_hash"), member.get("entrypoint_hash")));

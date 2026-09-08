@@ -27,8 +27,8 @@ use super::transparent_stark::{
     sample_trace_mask_v1,
 };
 #[cfg(any(test, feature = "privacy-release-evidence"))]
-use fastpq_prover::fastpq_isi_v1::GoldilocksDigest384LastFieldStreamV1;
-use fastpq_prover::fastpq_isi_v1::{FASTPQ_QUERY_COUNT_V1, GOLDILOCKS_DIGEST384_BYTES_V1};
+use fastpq_isi::GoldilocksDigest384LastFieldStreamV1;
+use fastpq_isi::{FASTPQ_QUERY_COUNT_V1, GOLDILOCKS_DIGEST384_BYTES_V1};
 #[cfg(test)]
 use iroha_data_model::privacy::PrivacyProtocolIdV1;
 use rand::TryRngCore;
@@ -1767,7 +1767,9 @@ pub(crate) struct StreamingTraceMaskSetV1 {
 }
 /// Owner of one secret-bearing field column that overwrites every cell on
 /// every return path.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) struct ZeroizingFieldColumnV1(Vec<F>);
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ZeroizingFieldColumnV1 {
     /// Transfer ownership to another zeroizing container without duplicating
     /// the secret-bearing allocation.
@@ -1779,12 +1781,14 @@ impl ZeroizingFieldColumnV1 {
         zeroize_field_column_v1(&mut self.0);
     }
 }
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl core::ops::Deref for ZeroizingFieldColumnV1 {
     type Target = [F];
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for ZeroizingFieldColumnV1 {
     fn drop(&mut self) {
         self.zeroize_v1();

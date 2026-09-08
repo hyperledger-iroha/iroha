@@ -48,6 +48,10 @@ use crate::zk::pasta_cycle_loader::{
     LIMBS, PastaCycleEccChip, constrain_reciprocal_poseidon_v1, pasta_poseidon_domain_elements_v1,
 };
 use crate::zk::pasta_dense_msm::PastaDenseMsmJobsV1;
+use crate::zk::{
+    kagemusha_v1_poseidon::KagemushaPoseidonFieldV1,
+    pasta_native_poseidon::PastaNativePoseidonJobsV1,
+};
 
 // These scalar and reciprocal helpers are shared by the production state, GuardBundle, and
 // mint-authority composites. Each accepting circuit carries every resulting opening claim into
@@ -87,15 +91,29 @@ mod proof_bytes;
 pub(super) use proof_bytes::canonical_loaded_proof_bytes_v1;
 pub(super) use proof_bytes::verify_hybrid_ordinary_proof_and_stream_v1;
 use proof_bytes::verify_ordinary_proof_and_stream_v1;
+pub(in crate::zk::kagemusha_v1_recursion) use proof_bytes::verify_ordinary_proof_with_canonical_bytes_v1;
 pub(super) use proof_bytes::verify_two_carrier_hybrid_ordinary_proof_and_stream_v1;
-pub(in crate::zk::kagemusha_v1_recursion) use proof_bytes::{
-    verify_ordinary_proof_with_canonical_bytes_v1,
-    verify_ordinary_proof_with_transcript_binding_at_k_v1,
-};
 
 #[cfg(test)]
 #[path = "deferred_parent_proof_bytes_tests.rs"]
 mod proof_bytes_tests;
+#[cfg(test)]
+#[path = "deferred_parent_protocol_identity_tests.rs"]
+mod protocol_identity_tests;
+
+#[path = "deferred_claim_fold_transcript.rs"]
+mod claim_fold_transcript;
+pub(super) use claim_fold_transcript::{
+    ClaimFoldTranscriptPlanV1, verify_claim_fold_with_transcript_binding_v1,
+};
+
+#[path = "ordinary_poseidon_schedule.rs"]
+mod ordinary_poseidon_schedule;
+pub(super) use ordinary_poseidon_schedule::ClaimProofTranscriptPlanV1;
+pub(super) use proof_bytes::{
+    verify_ordinary_proof_with_native_binding_at_k_v1,
+    verify_two_carrier_hybrid_ordinary_proof_with_native_v1,
+};
 
 const KAGEMUSHA_PROTOCOL_STRUCTURE_DOMAIN_V1: &[u8] =
     b"iroha:kagemusha:v1:compiled-protocol-structure";
@@ -167,23 +185,15 @@ where
         .ok_or_else(|| "Kagemusha witness-commitment count overflowed".to_owned())?;
     let quotient_commitments = protocol.quotient.num_chunk();
     let evaluations = protocol.evaluations.len();
-    // The BGH19 parser groups queries by their evaluation-point shifts, not
-    // by the source `Rotation` integers.  Rotations that differ by the domain
-    // order therefore share one transcript evaluation (for example `-1` and
-    // `2^k - 1`).  Normalize modulo the authenticated domain order so this
-    // inventory exactly matches `query_sets` in snark-verifier.
-    let mut rotations_by_polynomial = BTreeMap::<usize, BTreeSet<i64>>::new();
-    for query in &protocol.queries {
-        rotations_by_polynomial
-            .entry(query.poly)
-            .or_default()
-            .insert(canonical_rotation_v1(protocol.domain.k, query.rotation.0));
-    }
-    let bgh19_rotation_sets = rotations_by_polynomial
-        .into_values()
-        .map(|rotations| rotations.into_iter().collect::<Vec<_>>())
-        .collect::<BTreeSet<_>>()
-        .len();
+    // The pinned BGH19 reader receives `Query<Rotation>` from `empty_queries`.
+    // Its grouping compares the signed rotation integers, before evaluating
+    // domain shifts. Preserve that exact inventory even for domain aliases.
+    let bgh19_rotation_sets = ordinary_ipa_rotation_set_count_v1(
+        protocol
+            .queries
+            .iter()
+            .map(|query| (query.poly, query.rotation.0)),
+    );
     ordinary_ipa_proof_profile_from_counts_v1(
         expected_k,
         witness_commitments,
@@ -193,8 +203,18 @@ where
     )
 }
 
-fn canonical_rotation_v1(domain_k: usize, rotation: i32) -> i64 {
-    i64::from(rotation).rem_euclid(1_i64 << domain_k)
+fn ordinary_ipa_rotation_set_count_v1(queries: impl IntoIterator<Item = (usize, i32)>) -> usize {
+    let mut rotations_by_polynomial = BTreeMap::<usize, BTreeSet<i32>>::new();
+    for (polynomial, rotation) in queries {
+        rotations_by_polynomial
+            .entry(polynomial)
+            .or_default()
+            .insert(rotation);
+    }
+    rotations_by_polynomial
+        .into_values()
+        .collect::<BTreeSet<_>>()
+        .len()
 }
 
 fn validate_ordinary_ipa_protocol_shape_v1(
@@ -339,6 +359,74 @@ where
     C::Base: BigPrimeField,
     C::ScalarExt: BigPrimeField + halo2_base::utils::ScalarField,
 {
+    load_and_constrain_parent_protocol_with_digest_v1(
+        loader,
+        protocol,
+        parity,
+        fixed_structure_digest,
+        expected_limbs,
+        enabled,
+        |loader, assigned| Ok(poseidon_digest_assigned(loader, assigned)),
+    )
+}
+
+/// Bind one Claim protocol identity through the containing circuit's native Poseidon queue.
+///
+/// This uses the same witness-loaded points, fixed structure descriptor, exact raw preimage and
+/// canonical public limbs as the Base implementation. The caller must retain and synthesize the
+/// mandatory queue, together with every other Claim-native permutation, in its existing lanes.
+pub(super) fn load_and_constrain_claim_protocol_native_v1<'chip, C>(
+    loader: &DeferredLoader<'chip, C>,
+    protocol: &PlonkProtocol<C>,
+    parity: KagemushaPastaParityV1,
+    fixed_structure_digest: [u8; 32],
+    expected_limbs: &[AssignedValue<C::ScalarExt>; 2],
+    native_poseidon_jobs: &mut PastaNativePoseidonJobsV1<C::ScalarExt>,
+) -> Result<KagemushaLoadedParentProtocolV1<'chip, C>, Error>
+where
+    C: CurveAffineExt,
+    C::Base: BigPrimeField,
+    C::ScalarExt: KagemushaPoseidonFieldV1,
+{
+    load_and_constrain_parent_protocol_with_digest_v1(
+        loader,
+        protocol,
+        parity,
+        fixed_structure_digest,
+        expected_limbs,
+        None,
+        |loader, assigned| {
+            let prefix = pasta_poseidon_domain_elements_v1::<C::ScalarExt>(
+                KAGEMUSHA_PROTOCOL_IDENTITY_DOMAIN_V1,
+                KAGEMUSHA_PROTOCOL_IDENTITY_VERSION_V1,
+            );
+            let chip = loader.ecc_chip();
+            let mut ctx = loader.ctx_mut();
+            native_poseidon_jobs
+                .queue_raw(ctx.main(), chip.range().gate(), assigned, &prefix)
+                .map_err(transcript_error)
+        },
+    )
+}
+
+/// Share the complete identity encoding and public equality between the two constrained hashes.
+fn load_and_constrain_parent_protocol_with_digest_v1<'chip, C>(
+    loader: &DeferredLoader<'chip, C>,
+    protocol: &PlonkProtocol<C>,
+    parity: KagemushaPastaParityV1,
+    fixed_structure_digest: [u8; 32],
+    expected_limbs: &[AssignedValue<C::ScalarExt>; 2],
+    enabled: Option<AssignedValue<C::ScalarExt>>,
+    constrain_digest: impl FnOnce(
+        &DeferredLoader<'chip, C>,
+        Vec<AssignedValue<C::ScalarExt>>,
+    ) -> Result<AssignedValue<C::ScalarExt>, Error>,
+) -> Result<KagemushaLoadedParentProtocolV1<'chip, C>, Error>
+where
+    C: CurveAffineExt,
+    C::Base: BigPrimeField,
+    C::ScalarExt: BigPrimeField + halo2_base::utils::ScalarField,
+{
     if protocol.preprocessed.is_empty()
         || protocol
             .preprocessed
@@ -381,7 +469,7 @@ where
     assigned.push(*transcript_state.assigned());
     drop(ctx);
     drop(chip);
-    let digest = poseidon_digest_assigned(loader, assigned);
+    let digest = constrain_digest(loader, assigned)?;
     let limbs = assigned_scalar_u128_limbs(loader, digest);
     for (actual, expected) in limbs.iter().zip(expected_limbs) {
         if let Some(enabled) = enabled {
@@ -763,6 +851,10 @@ where
     C::ScalarExt: BigPrimeField + halo2_base::utils::ScalarField,
 {
     pub(super) batch: DeferredBatchedEquationWitnessV1<C>,
+    #[expect(
+        dead_code,
+        reason = "Constrained challenge is retained with the batch for transcript qualification"
+    )]
     pub(super) challenge: AssignedValue<C::ScalarExt>,
     pub(super) challenge_limbs: [AssignedValue<C::ScalarExt>; 2],
     pub(super) source_commitments: Vec<[AssignedValue<C::ScalarExt>; 2]>,
@@ -819,6 +911,10 @@ where
 /// The fixed 544-byte successor history is appended to the parity proof's public instance column
 /// as 34 injective `u128` limbs. The compiled-protocol identity and deferred-equation audit are
 /// equality-bound to the common positions already assigned by the state relation.
+#[expect(
+    dead_code,
+    reason = "Retained authenticated scalar-pass composition entry point; shipping composites bind each phase separately"
+)]
 pub(super) fn constrain_authenticated_scalar_parent_pass_v1<C>(
     builder: &mut BaseCircuitBuilder<C::ScalarExt>,
     succinct_vk: &IpaSuccinctVerifyingKey<C>,
@@ -1223,6 +1319,10 @@ where
 ///
 /// The assigned selectors are constrained circuit values. The parallel booleans are their exact
 /// witnesses and are replayed by the reciprocal parity when it enforces the curve equations.
+#[expect(
+    dead_code,
+    reason = "Retained unbound audit adapter for reciprocal relation qualification"
+)]
 pub(super) fn finalize_deferred_audit_plan_v1<C>(
     builder: &mut BaseCircuitBuilder<C::ScalarExt>,
     loader: DeferredLoader<'_, C>,
@@ -1322,6 +1422,10 @@ where
 /// intentionally stops before cross-parity authentication; callers must bind
 /// every returned field before using the compact host witness in a reciprocal
 /// circuit.
+#[expect(
+    dead_code,
+    reason = "Retained standalone tagged-batch adapter for reciprocal relation qualification"
+)]
 pub(super) fn finalize_tagged_native_deferred_batch_v1<C>(
     builder: &mut BaseCircuitBuilder<C::ScalarExt>,
     loader: DeferredLoader<'_, C>,
@@ -1461,11 +1565,12 @@ pub(super) fn derive_mint_hash_claim_native_deferred_batch_v1<C>(
     assigned_selectors: Vec<AssignedValue<C::ScalarExt>>,
     verifier_input_binding: &[AssignedValue<C::ScalarExt>],
     bound_values: &[AssignedValue<C::ScalarExt>],
+    native_poseidon_jobs: &mut PastaNativePoseidonJobsV1<C::ScalarExt>,
 ) -> Result<KagemushaNativeDeferredBatchV1<C>, Error>
 where
     C: CurveAffineExt,
     C::Base: BigPrimeField,
-    C::ScalarExt: BigPrimeField + halo2_base::utils::ScalarField,
+    C::ScalarExt: KagemushaPoseidonFieldV1,
 {
     let equation_count = loader.ecc_chip().equation_count();
     if equation_count == 0
@@ -1545,7 +1650,24 @@ where
         (elements, source_commitments, bound_u128_values)
     };
 
-    let challenge = poseidon_digest_assigned(&loader, elements);
+    // The queue retains the exact existing raw transcript and every permutation bridge.
+    // The containing Claim circuit must synthesize it after Base; this witness alone is not
+    // an authenticated digest. The domain prefix is already present and is constrained in place.
+    let challenge = {
+        let fixed_prefix = pasta_poseidon_domain_elements_v1::<C::ScalarExt>(
+            KAGEMUSHA_MINT_HASH_CLAIM_BATCH_DOMAIN_V1,
+            KAGEMUSHA_MINT_HASH_CLAIM_BATCH_VERSION_V1,
+        );
+        let mut ctx = loader.ctx_mut();
+        native_poseidon_jobs
+            .queue_raw(
+                ctx.main(),
+                loader.ecc_chip().range().gate(),
+                elements,
+                &fixed_prefix,
+            )
+            .map_err(transcript_error)?
+    };
     let challenge_limbs = assigned_scalar_u128_limbs(&loader, challenge);
     let (batch, aggregate_coefficients, aggregate_coefficient_limbs) = {
         let chip = loader.ecc_chip();
@@ -1593,6 +1715,10 @@ const KAGEMUSHA_MINT_HASH_CLAIM_BATCH_EQUATIONS_TAG_V1: u64 = u64::from_le_bytes
 /// emitted source and coefficient, recomputes the identical field-native Poseidon audit, binds its
 /// canonical two-`u128` limbs to the shared public instance, and evaluates the complete batched
 /// curve equation through the dedicated dense MSM machine.
+#[expect(
+    dead_code,
+    reason = "Retained complete parent-audit composition entry point alongside bound production audits"
+)]
 pub(super) fn constrain_reciprocal_parent_audit_v1<C>(
     builder: &mut BaseCircuitBuilder<C::Base>,
     witness: &DeferredEquationWitness<C>,
@@ -1616,6 +1742,10 @@ where
 }
 
 /// Constrain one tagged scalar-verifier audit in the reciprocal Pasta parity.
+#[expect(
+    dead_code,
+    reason = "Retained tagged-audit adapter alongside bound production audits"
+)]
 pub(super) fn constrain_reciprocal_tagged_audit_v1<C>(
     builder: &mut BaseCircuitBuilder<C::Base>,
     witness: &DeferredEquationWitness<C>,
@@ -1968,43 +2098,6 @@ where
     Ok(())
 }
 
-/// Consume one opposite-parity scalar pass inside a state-relation builder.
-///
-/// The expected digest is selected by the proof curve whose equations are being consumed, not by
-/// the outer circuit field. This makes Eq equations bind `EQ_DEFERRED_AUDIT_*` in the Ep circuit
-/// and Ep equations bind `EP_DEFERRED_AUDIT_*` in the Eq circuit.
-pub(super) fn constrain_reciprocal_parent_pass_v1<C>(
-    builder: &mut BaseCircuitBuilder<C::Base>,
-    parity: KagemushaPastaParityV1,
-    output: &KagemushaDeferredParentOutputV1<C>,
-    dense_jobs: &mut PastaDenseMsmJobsV1<C>,
-) -> Result<(), String>
-where
-    C: CurveAffineExt,
-    C::Base: BigPrimeField + halo2_base::utils::ScalarField + ff::WithSmallOrderMulGroup<3>,
-    C::ScalarExt: BigPrimeField + ff::WithSmallOrderMulGroup<3>,
-{
-    let offset = match parity {
-        KagemushaPastaParityV1::Eq => public_instance::EQ_DEFERRED_AUDIT_LO,
-        KagemushaPastaParityV1::Ep => public_instance::EP_DEFERRED_AUDIT_LO,
-    };
-    let expected: [AssignedValue<C::Base>; 2] = builder
-        .assigned_instances
-        .first()
-        .and_then(|public| public.get(offset..offset + 2))
-        .ok_or_else(|| "Kagemusha reciprocal public audit is missing".to_owned())?
-        .try_into()
-        .map_err(|_| "Kagemusha reciprocal public audit has the wrong shape".to_owned())?;
-    constrain_reciprocal_audit_plan_v1(
-        builder,
-        &output.audit,
-        &output.equation_tags,
-        &output.equation_selectors,
-        &expected,
-        dense_jobs,
-    )
-}
-
 fn poseidon_digest_assigned<'chip, C>(
     loader: &DeferredLoader<'chip, C>,
     elements: Vec<AssignedValue<C::ScalarExt>>,
@@ -2108,6 +2201,10 @@ where
 ///
 /// Every proof contributes equations to the same loader. The caller must subsequently invoke
 /// [`finalize_deferred_audit_v1`] exactly once so the reciprocal parity constrains the union.
+#[expect(
+    dead_code,
+    reason = "Retained batch ordinary-proof adapter for private recursive circuit composition"
+)]
 pub(super) fn verify_ordinary_proofs_v1<'chip, C>(
     loader: &DeferredLoader<'chip, C>,
     succinct_vk: &IpaSuccinctVerifyingKey<C>,
@@ -2320,6 +2417,10 @@ const _: () = {
 };
 
 #[cfg(test)]
+#[path = "deferred_parent_rotation_inventory_tests.rs"]
+mod rotation_inventory_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -2333,13 +2434,17 @@ mod tests {
     }
 
     #[test]
-    fn bgh19_rotation_inventory_uses_domain_shifts() {
-        let k = KAGEMUSHA_RECURSION_IPA_K_V1 as usize;
+    fn bgh19_rotation_inventory_preserves_reader_rotation_integers() {
         assert_eq!(
-            canonical_rotation_v1(k, -1),
-            canonical_rotation_v1(k, 65_535)
+            ordinary_ipa_rotation_set_count_v1([(0, -1), (1, 65_535)]),
+            2
         );
-        assert_ne!(canonical_rotation_v1(k, -1), canonical_rotation_v1(k, 0));
+        assert_eq!(ordinary_ipa_rotation_set_count_v1([(0, -1), (1, -1)]), 1);
+        assert_eq!(ordinary_ipa_rotation_set_count_v1([(0, -1), (0, -1)]), 1);
+        assert_eq!(
+            ordinary_ipa_rotation_set_count_v1([(0, -1), (0, 1), (1, 1), (1, -1)]),
+            1,
+        );
     }
 
     #[test]

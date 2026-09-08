@@ -62,10 +62,10 @@ public sealed class TransactionBuilder
     /// Shared mandatory guard for every retained Exact12 construction method added to this
     /// builder. A local catalog or legacy capability snapshot can never satisfy this boundary.
     /// </summary>
-    internal static void RequireExact12CapabilityAdmission(
+    internal void RequireExact12CapabilityAdmission(
         PrivacyExact12CapabilityTupleAdmissionV1 admission,
         PrivacyProtocolIdV1 protocol) =>
-        PrivacyExact12CapabilityAdmissionV1.RequireForConstruction(admission, protocol);
+        PrivacyExact12CapabilityAdmissionV1.RequireForConstruction(admission, protocol, NetworkId);
 
     public TransactionBuilder AddInstruction(TransactionInstruction instruction)
     {

@@ -61,6 +61,8 @@ mod model {
     )]
     #[display("{id}@{address}")]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::peer::model::Peer")]
     pub struct Peer {
         /// Address of the [`Peer`]'s entrypoint.
         #[getset(get = "pub")]
@@ -191,8 +193,48 @@ impl JsonDeserialize for PeerId {
         };
         peer_id_from_json_str(value)
     }
+}
+#[cfg(feature = "json")]
+impl norito::json::JsonObjectKey for Peer {
+    fn visit_json_key_text<E>(
+        &self,
+        mut visitor: impl FnMut(&str) -> Result<(), E>,
+    ) -> Result<(), E> {
+        let canonical = self.to_string();
+        visitor(&canonical)
+    }
 
-    fn json_from_map_key(key: &str) -> Result<Self, json::Error> {
+    fn visit_json_key_text_checked(
+        &self,
+        mut visitor: impl FnMut(&str) -> Result<(), json::BoundedJsonError>,
+    ) -> Result<(), json::BoundedJsonError> {
+        norito::json::JsonObjectKey::visit_json_key_text_checked(self.id(), &mut visitor)?;
+        visitor("@")?;
+        json::visit_json_display_text(self.address(), visitor)
+    }
+}
+#[cfg(feature = "json")]
+impl norito::json::JsonObjectKeyOwned for Peer {
+    fn from_json_key_text(key: &str) -> Result<Self, json::Error> {
+        peer_from_json_str(key)
+    }
+}
+
+#[cfg(feature = "json")]
+impl norito::json::JsonObjectKey for PeerId {
+    fn visit_json_key_text<E>(&self, visitor: impl FnMut(&str) -> Result<(), E>) -> Result<(), E> {
+        norito::json::JsonObjectKey::visit_json_key_text(&self.public_key, visitor)
+    }
+    fn visit_json_key_text_checked(
+        &self,
+        visitor: impl FnMut(&str) -> Result<(), json::BoundedJsonError>,
+    ) -> Result<(), json::BoundedJsonError> {
+        norito::json::JsonObjectKey::visit_json_key_text_checked(&self.public_key, visitor)
+    }
+}
+#[cfg(feature = "json")]
+impl norito::json::JsonObjectKeyOwned for PeerId {
+    fn from_json_key_text(key: &str) -> Result<Self, json::Error> {
         peer_id_from_json_str(key)
     }
 }
@@ -241,10 +283,6 @@ impl JsonDeserialize for Peer {
             return Err(invalid_peer_json());
         };
         peer_from_json_str(value)
-    }
-
-    fn json_from_map_key(key: &str) -> Result<Self, json::Error> {
-        peer_from_json_str(key)
     }
 }
 
@@ -414,7 +452,7 @@ mod tests {
         assert_eq!(peer_id.expect("PeerId value").public_key.to_string(), key);
         assert_eq!(usage.total_allocated_bytes(), key_bytes);
         let (peer_id, usage) = norito::core::with_decode_limits_measured(limits(key_bytes), || {
-            <PeerId as JsonDeserialize>::json_from_map_key(key)
+            <PeerId as norito::json::JsonObjectKeyOwned>::from_json_key_text(key)
         });
         assert_eq!(peer_id.expect("PeerId map key").public_key.to_string(), key);
         assert_eq!(usage.total_allocated_bytes(), key_bytes);
@@ -423,7 +461,7 @@ mod tests {
         let peer_text = format!("{key}@{host}:1337");
         let exact = key_bytes + host.len();
         let (peer, usage) = norito::core::with_decode_limits_measured(limits(exact), || {
-            <Peer as JsonDeserialize>::json_from_map_key(&peer_text)
+            <Peer as norito::json::JsonObjectKeyOwned>::from_json_key_text(&peer_text)
         });
         assert_eq!(
             peer.expect("Peer map key").address().to_string(),
@@ -442,7 +480,7 @@ mod tests {
 
         let (rejected, usage) =
             norito::core::with_decode_limits_measured(limits(exact - 1), || {
-                <Peer as JsonDeserialize>::json_from_map_key(&peer_text)
+                <Peer as norito::json::JsonObjectKeyOwned>::from_json_key_text(&peer_text)
             });
         assert!(matches!(rejected, Err(json::Error::DecodeResourceLimit)));
         assert_eq!(usage.total_allocated_bytes(), key_bytes);
@@ -460,6 +498,62 @@ mod tests {
             json::to_json_bounded(&peer_id, expected.len() - 1),
             Err(json::BoundedJsonError::BodyTooLarge)
         ));
+        let map = std::collections::BTreeMap::from([(&peer_id, 3_u8)]);
+        let expected_map = format!("{{\"{literal}\":3}}");
+        assert_eq!(
+            json::to_json_bounded(&map, expected_map.len())
+                .expect("serialize borrowed PeerId key at exact bound"),
+            expected_map
+        );
+        assert!(matches!(
+            json::to_json_bounded(&map, expected_map.len() - 1),
+            Err(json::BoundedJsonError::BodyTooLarge)
+        ));
+    }
+
+    #[test]
+    fn peer_checked_map_key_validates_id_before_streaming_address() {
+        use norito::json::JsonObjectKey;
+
+        let literal = "ed01201C61FAF8FE94E253B93114240394F79A607B7FA55F9E5A41EBEC74B88055768B";
+        let address = "127.0.0.1:1337"
+            .parse::<SocketAddr>()
+            .expect("valid address");
+        let valid = Peer::new(
+            address.clone(),
+            literal.parse::<PublicKey>().expect("valid key"),
+        );
+        let expected = format!("{{\"{valid}\":3}}");
+        let map = std::collections::BTreeMap::from([(valid.clone(), 3_u8)]);
+        assert_eq!(
+            json::to_json_bounded(&map, expected.len()).expect("exact checked Peer map key"),
+            expected
+        );
+        assert!(matches!(
+            json::to_json_bounded(&map, expected.len() - 1),
+            Err(json::BoundedJsonError::BodyTooLarge)
+        ));
+
+        let mut calls = 0;
+        let error = JsonObjectKey::visit_json_key_text_checked(&valid, |_| {
+            calls += 1;
+            Err(json::BoundedJsonError::BodyTooLarge)
+        })
+        .expect_err("first visitor error must stop checked key output");
+        assert!(matches!(error, json::BoundedJsonError::BodyTooLarge));
+        assert_eq!(calls, 1);
+
+        let mut invalid_key = literal.parse::<PublicKey>().expect("valid key");
+        invalid_key.zeroize_for_confidential_discard();
+        let invalid = Peer::new(address, invalid_key);
+        let mut emitted = false;
+        let error = JsonObjectKey::visit_json_key_text_checked(&invalid, |_| {
+            emitted = true;
+            Ok(())
+        })
+        .expect_err("invalid peer key must fail before output");
+        assert!(matches!(error, json::BoundedJsonError::Unsupported));
+        assert!(!emitted);
     }
 
     #[test]

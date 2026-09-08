@@ -607,6 +607,34 @@ class SorafsReferenceValidatorsTest {
     }
 
     @Test
+    fun popMembershipStructuralFixturesRequirePresentationBinding() {
+        requireNativeBridge()
+        // These shared fixtures exercise native structural validation, not Halo2 authorization.
+        val profiles = listOf(
+            Triple("pop_membership_current_v1", "Ok", "SFS-OK-000"),
+            Triple("pop_membership_missing_binding_v1", "Error", "SFS-NORITO-001"),
+            Triple("pop_membership_zero_binding_v1", "Error", "SFS-VAL-001"),
+        )
+        for ((name, status, code) in profiles) {
+            val outcome = SorafsReferenceValidators.validatePopPayloadJson(
+                SorafsPopPayloadKind.MEMBERSHIP_PROOF,
+                fixture("sorafs_manifest", "reference_sdk", "$name.to"),
+                label = "$name.to",
+                generatedAtUnix = 123,
+            )
+            val fields = Json.parseToJsonElement(outcome).jsonObject
+            assertEquals(status, fields.getValue("status").jsonPrimitive.content, name)
+            assertEquals(code, fields.getValue("code").jsonPrimitive.content, name)
+            assertEquals(
+                fixture("sorafs_manifest", "reference_sdk", "${name}_validation_outcome.json")
+                    .toString(Charsets.UTF_8),
+                outcome,
+                name,
+            )
+        }
+    }
+
+    @Test
     fun validatesOrderbookFixtureWhenNativeBridgeIsAvailable() {
         requireNativeBridge()
         val payload = fixture("sorafs_manifest", "orderbook", "order_request_v1.to")

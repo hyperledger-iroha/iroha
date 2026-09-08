@@ -653,10 +653,15 @@ impl V2EffectServices for ProductionV2Services {
                 "Sumeragi v2 service rejected non-monotonic certified view ownership".to_owned(),
             );
         }
-        if tag != self.leader_wire_recovery_authority.consumer_tag() {
-            return Err("entered view lacks the actual published adapter WAL consumer".to_owned());
+        if !self
+            .leader_wire_recovery_authority
+            .matches_entered_view(tag, protected_lock)
+        {
+            return Err(
+                "entered view changed the published adapter WAL consumer or protected lock"
+                    .to_owned(),
+            );
         }
-        let _ = protected_lock;
         // The old view's active Sign command may still complete after its
         // executor owner is cancelled. Prune first and publish the new owner
         // second; completion handling classifies the old work ID before it is

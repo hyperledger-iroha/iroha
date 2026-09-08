@@ -7,7 +7,10 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -18,9 +21,10 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
+import java.util.function.Consumer;
 import org.junit.jupiter.api.Test;
 
-/** Java callers cannot mutate validated canonical consensus evidence through collection aliases. */
+/** Canonical consensus vectors own their validated inputs and bound allocation by encoded bytes. */
 final class SumeragiV2WireOwnershipTest {
   @Test
   void quorumCertificateOwnsItsSignerOrderAfterConstruction() throws IOException {
@@ -160,6 +164,96 @@ final class SumeragiV2WireOwnershipTest {
         () -> manifestWithHashes(manifest, emptyUntraversableList())).getMessage());
   }
 
+  @Test
+  void everyConsensusVectorRejectsCountsWithoutEnoughEncodedFields() throws IOException {
+    byte[] certificate = fixture("message", "quorum_certificate");
+    assertHostileVectorCounts("qc.signers", vector ->
+        SumeragiV2Wire.ConsensusMessageV2.decodeCanonical(
+            replaceMessageBodyField(certificate, vector, 5)));
+
+    byte[] timeout = fixture("message", "timeout_certificate");
+    assertHostileVectorCounts("tc.groups", vector ->
+        SumeragiV2Wire.ConsensusMessageV2.decodeCanonical(
+            replaceMessageBodyField(timeout, vector, 1)));
+    byte[] group = new SumeragiV2Wire.TimeoutVoteGroup(
+        null, Collections.singletonList(0L), new byte[] {1}).encode();
+    assertHostileVectorCounts("timeout_group.signers", vector ->
+        SumeragiV2Wire.ConsensusMessageV2.decodeCanonical(replaceMessageBodyField(timeout,
+            concatenate(u64(1), compact(replaceCompactField(group, vector, 1))), 1)));
+
+    byte[] proposal = fixture("message", "proposal");
+    assertHostileVectorCounts("manifest.chunk_hashes", vector ->
+        SumeragiV2Wire.ConsensusMessageV2.decodeCanonical(
+            replaceMessageBodyField(proposal, vector, 3, 4)));
+  }
+
+  @Test
+  void everyLivenessVectorRejectsCountsWithoutEnoughEncodedFields() throws IOException {
+    byte[] status = fixture("status", "compact");
+    int[] fields = {1, 2, 3, 4, 6, 10};
+    String[] labels = {"prepare", "commit", "timeout", "outbound", "queues", "ignore_counts"};
+    for (int index = 0; index < fields.length; index++) {
+      final int field = fields[index];
+      assertHostileVectorCounts("status.liveness." + labels[index], vector ->
+          SumeragiV2Wire.SumeragiV2Status.decodeCanonical(
+              replaceCompactField(status, vector, 19, field)));
+    }
+  }
+
+  @Test
+  void zeroCountVectorsRemainCanonicalWhenTheirModelAllowsEmptyCollections() throws IOException {
+    byte[] certificate = replaceMessageBodyField(
+        fixture("message", "quorum_certificate"), u64(0), 5);
+    SumeragiV2Wire.ConsensusMessageV2 decodedCertificate =
+        SumeragiV2Wire.ConsensusMessageV2.decodeCanonical(certificate);
+    assertEquals(Collections.emptyList(),
+        ((SumeragiV2Wire.ConsensusPayload.QuorumCertificateMessage)
+            decodedCertificate.payload).value.signers);
+    assertArrayEquals(certificate, decodedCertificate.encode());
+
+    byte[] status = fixture("status", "compact");
+    for (int field : new int[] {1, 2, 3, 4, 6, 10}) {
+      status = replaceCompactField(status, u64(0), 19, field);
+    }
+    SumeragiV2Wire.SumeragiV2Status decodedStatus =
+        SumeragiV2Wire.SumeragiV2Status.decodeCanonical(status);
+    for (List<?> values : Arrays.asList(decodedStatus.liveness.prepareQuorums,
+        decodedStatus.liveness.commitQuorums, decodedStatus.liveness.timeoutQuorums,
+        decodedStatus.liveness.outboundIntents, decodedStatus.liveness.queues,
+        decodedStatus.liveness.ignoreCounts)) {
+      assertEquals(Collections.emptyList(), values);
+    }
+    assertArrayEquals(status, decodedStatus.encode());
+  }
+
+  @Test
+  void elementLengthPrefixCountsEvenWhenItsPayloadIsEmpty() throws IOException {
+    byte[] certificate = fixture("message", "quorum_certificate");
+    byte[] emptyElement = concatenate(u64(1), compact(new byte[0]));
+    // The generic vector bound accepts the one encoded field. The u32 element
+    // decoder then rejects its empty payload according to that element's schema.
+    assertEquals("qc.signer is truncated", assertThrows(IllegalArgumentException.class,
+        () -> SumeragiV2Wire.ConsensusMessageV2.decodeCanonical(
+            replaceMessageBodyField(certificate, emptyElement, 5))).getMessage());
+  }
+
+  private static void assertHostileVectorCounts(String label, Consumer<byte[]> decode) {
+    for (long count : new long[] {1, 2, 1_048_576, Integer.MAX_VALUE}) {
+      assertEquals(label + " count exceeds remaining encoded fields",
+          assertThrows(IllegalArgumentException.class, () -> decode.accept(u64(count))).getMessage(),
+          label + " rejects count " + count + " from an eight-byte vector before allocation");
+    }
+    assertEquals(label + " count exceeds remaining encoded fields",
+        assertThrows(IllegalArgumentException.class,
+            () -> decode.accept(concatenate(u64(2), compact(new byte[0])))).getMessage(),
+        label + " requires one length prefix for each declared element");
+    for (long count : new long[] {1L + Integer.MAX_VALUE, Long.MAX_VALUE, -1L}) {
+      assertEquals(label + " count exceeds JVM range",
+          assertThrows(IllegalArgumentException.class, () -> decode.accept(u64(count))).getMessage(),
+          label + " retains unsigned count and JVM range validation");
+    }
+  }
+
   private static <T> List<T> emptyUntraversableList() {
     return new AbstractList<T>() {
       @Override public int size() { return 0; }
@@ -196,6 +290,73 @@ final class SumeragiV2WireOwnershipTest {
     return SumeragiV2Wire.SumeragiV2Status.decodeCanonical(fixture("status", "compact"));
   }
 
+  private static byte[] replaceMessageBodyField(byte[] message, byte[] value, int... fields) {
+    byte[] payload = compactFieldBytes(message, 1);
+    byte[] body = compactFieldBytes(Arrays.copyOfRange(payload, 4, payload.length), 0);
+    return replaceCompactField(message, concatenate(Arrays.copyOf(payload, 4),
+        compact(replaceCompactField(body, value, fields))), 1);
+  }
+
+  private static byte[] replaceCompactField(byte[] bytes, byte[] value, int... fields) {
+    if (fields.length == 0) throw new AssertionError("empty compact field path");
+    int[] range = compactFieldRange(bytes, fields[0]);
+    byte[] replacement = fields.length == 1 ? value : replaceCompactField(
+        Arrays.copyOfRange(bytes, range[1], range[2]), value,
+        Arrays.copyOfRange(fields, 1, fields.length));
+    return concatenate(Arrays.copyOf(bytes, range[0]), compact(replacement),
+        Arrays.copyOfRange(bytes, range[2], bytes.length));
+  }
+
+  private static byte[] compactFieldBytes(byte[] bytes, int field) {
+    int[] range = compactFieldRange(bytes, field);
+    return Arrays.copyOfRange(bytes, range[1], range[2]);
+  }
+
+  private static int[] compactFieldRange(byte[] bytes, int field) {
+    int offset = 0;
+    for (int index = 0; index <= field; index++) {
+      int start = offset;
+      long length = 0;
+      int shift = 0;
+      int next;
+      do {
+        if (offset == bytes.length || shift > 28) {
+          throw new AssertionError("invalid fixture compact field length");
+        }
+        next = bytes[offset++] & 0xff;
+        length |= ((long) (next & 0x7f)) << shift;
+        shift += 7;
+      } while ((next & 0x80) != 0);
+      if (length > bytes.length - offset) throw new AssertionError("truncated fixture compact field");
+      int end = offset + (int) length;
+      if (index == field) return new int[] {start, offset, end};
+      offset = end;
+    }
+    throw new AssertionError("invalid fixture field index");
+  }
+
+  private static byte[] compact(byte[] bytes) {
+    ByteArrayOutputStream output = new ByteArrayOutputStream();
+    int remaining = bytes.length;
+    while (remaining >= 0x80) {
+      output.write((remaining & 0x7f) | 0x80);
+      remaining >>>= 7;
+    }
+    output.write(remaining);
+    output.write(bytes, 0, bytes.length);
+    return output.toByteArray();
+  }
+
+  private static byte[] concatenate(byte[]... parts) {
+    ByteArrayOutputStream output = new ByteArrayOutputStream();
+    for (byte[] part : parts) output.write(part, 0, part.length);
+    return output.toByteArray();
+  }
+
+  private static byte[] u64(long value) {
+    return ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putLong(value).array();
+  }
+
   private static byte[] fixture(String kind, String name) throws IOException {
     Path current = Paths.get("").toAbsolutePath();
     while (current != null) {
@@ -203,7 +364,8 @@ final class SumeragiV2WireOwnershipTest {
       if (Files.isRegularFile(fixture)) {
         for (String line : Files.readAllLines(fixture, StandardCharsets.UTF_8)) {
           String[] fields = line.split("\\t", -1);
-          if (fields.length != 3 || !fields[0].equals(kind) || !fields[1].equals(name)) continue;
+          if (fields.length != 4 || !fields[0].equals(kind) || !fields[1].equals(name)) continue;
+          assertEquals("accept", fields[3], "ownership tests require a canonical positive fixture");
           byte[] bytes = new byte[fields[2].length() / 2];
           for (int index = 0; index < bytes.length; index++) {
             bytes[index] = (byte) Integer.parseInt(fields[2].substring(index * 2, index * 2 + 2), 16);

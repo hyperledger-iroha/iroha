@@ -9,12 +9,14 @@ TEST_MODE="${PRIVACY_PYTHON_SDK_TEST_MODE:-0}"
 TEST_VENV_OVERRIDE="${PRIVACY_PYTHON_SDK_TEST_VENV:-}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REQUIREMENTS_LOCKFILE="${ROOT_DIR}/python/iroha_python/requirements-ci.lock"
-CHECKOUT_NATIVE_DIR="${ROOT_DIR}/python/iroha_python/src"
+CHECKOUT_NATIVE_DIR="${ROOT_DIR}/python"
 FROZEN_CARGO_LOCK_SHA256="cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79"
-TRACKED_ROOT_CARGO_LOCK_SHA256="d5b8bf5efbdc3ce2a8b1c0d2d75e1c5d1a343a072f836cfb76205bc6ea4cf15f"
+TRACKED_ROOT_CARGO_LOCK_SHA256="051423addf3830895e208c6276429a0e8f46c61954159b0ef913e8cfed33d3aa"
 ABI23_CHECKER="${ROOT_DIR}/scripts/check_native_sdk_abi23_artifact.py"
 WHEEL_PATH=""
 WHEEL_SEAL=""
+SDK_WHEEL_PATH=""
+SDK_WHEEL_SEAL=""
 TEMPORARY_WORKSPACE_LOCK=0
 
 export PYTHONDONTWRITEBYTECODE=1
@@ -344,7 +346,7 @@ PY
 }
 
 resolve_private_wheel() {
-  "${PYTHON_BIN}" -I - "${PRIVATE_WHEEL_DIR}" <<'PY'
+  "${PYTHON_BIN}" -I - "$1" <<'PY'
 import os
 import stat
 import sys
@@ -478,7 +480,7 @@ if not locked:
     raise SystemExit("error: requirements lock contains no pinned distributions")
 expected = baseline | locked
 if include_sdk:
-    expected.add("iroha-python")
+    expected.update(("iroha-native", "iroha-python"))
 
 site_roots = sorted(
     path.resolve(strict=True)
@@ -506,7 +508,7 @@ PY
 
 validate_repository_cargo_configuration() {
   "${PYTHON_BIN}" -I - "${ROOT_DIR}" \
-    "${ROOT_DIR}/python/iroha_python" <<'PY'
+    "${ROOT_DIR}/python/iroha_native" <<'PY'
 import os
 import stat
 import sys
@@ -685,15 +687,15 @@ verify_installed_wheel() {
     "${WHEEL_PATH}" \
     "${WHEEL_SEAL}" \
     "${ROOT_DIR}/python/norito_py/src" \
-    "${ROOT_DIR}/python/iroha_torii_client"
+    "${ROOT_DIR}/python/iroha_torii_client" \
+    "${SDK_WHEEL_PATH}" \
+    "${SDK_WHEEL_SEAL}"
 }
 
 preflight_private_wheel() {
   "${VENV_DIR}/bin/python" -I -B \
     "${SCRIPT_DIR}/verify_privacy_python_wheel.py" \
-    --preflight \
-    "${WHEEL_PATH}" \
-    "${WHEEL_SEAL}"
+    --preflight "$1" "$2" "$3"
 }
 
 if [[ -n "${LEGACY_VENV_OVERRIDE}" ]]; then
@@ -772,6 +774,8 @@ privacy_sdk_assert_authenticated_toolchain_state \
   "${ROOT_DIR}" "${ROOT_DIR}" "${PYTHON_BIN}"
 privacy_sdk_assert_authenticated_toolchain_state \
   "${ROOT_DIR}" "${ROOT_DIR}/python/iroha_python" "${PYTHON_BIN}"
+privacy_sdk_assert_authenticated_toolchain_state \
+  "${ROOT_DIR}" "${ROOT_DIR}/python/iroha_native" "${PYTHON_BIN}"
 SELECTED_CARGO_LOCKFILE="$(
   privacy_sdk_resolve_cargo_lockfile "${ROOT_DIR}" "${PYTHON_BIN}"
 )"
@@ -844,12 +848,14 @@ PRIVATE_CARGO_WRAPPER_DIR="$(
 PRIVATE_CARGO_WRAPPER_DIR="$(cd "${PRIVATE_CARGO_WRAPPER_DIR}" && pwd -P)"
 PRIVATE_CARGO_AUDIT_PATH="${PRIVATE_CARGO_WRAPPER_DIR}/invocations"
 PRIVATE_CARGO_TARGET_DIR="${PRIVATE_CARGO_WRAPPER_DIR}/target"
-PRIVATE_WHEEL_DIR="${PRIVATE_CARGO_WRAPPER_DIR}/wheels"
+PRIVATE_WHEEL_DIR="${PRIVATE_CARGO_WRAPPER_DIR}/native-wheels"
+PRIVATE_SDK_WHEEL_DIR="${PRIVATE_CARGO_WRAPPER_DIR}/sdk-wheels"
 : >"${PRIVATE_CARGO_AUDIT_PATH}"
 chmod 600 "${PRIVATE_CARGO_AUDIT_PATH}"
-mkdir -m 700 "${PRIVATE_CARGO_TARGET_DIR}" "${PRIVATE_WHEEL_DIR}"
+mkdir -m 700 "${PRIVATE_CARGO_TARGET_DIR}" "${PRIVATE_WHEEL_DIR}" "${PRIVATE_SDK_WHEEL_DIR}"
 PRIVATE_CARGO_TARGET_DIR="$(cd "${PRIVATE_CARGO_TARGET_DIR}" && pwd -P)"
 PRIVATE_WHEEL_DIR="$(cd "${PRIVATE_WHEEL_DIR}" && pwd -P)"
+PRIVATE_SDK_WHEEL_DIR="$(cd "${PRIVATE_SDK_WHEEL_DIR}" && pwd -P)"
 configure_private_cargo_home
 export IROHA_PRIVACY_AUTHENTICATED_CARGO_HOME="${CARGO_HOME}"
 export IROHA_PRIVACY_AUTHENTICATED_CARGO_HOME_DIRECTORY_STATE="$(
@@ -903,6 +909,13 @@ assert_checkout_native_artifacts_unchanged() {
 
 assert_private_wheel_unchanged() {
   local observed_seal
+  if [[ -n "${SDK_WHEEL_SEAL}" ]]; then
+    observed_seal="$(privacy_python_sdk_file_seal "${SDK_WHEEL_PATH}")" || return 1
+    if [[ "${observed_seal}" != "${SDK_WHEEL_SEAL}" ]]; then
+      echo "error: fresh private SDK wheel changed while the guard was running" >&2
+      return 1
+    fi
+  fi
   if [[ -z "${WHEEL_SEAL}" ]]; then
     return 0
   fi
@@ -946,6 +959,8 @@ assert_privacy_sdk_inputs_unchanged() {
     "${ROOT_DIR}" \
     "${ROOT_DIR}/python/iroha_python" \
     "${PYTHON_BIN}" || status=1
+  privacy_sdk_assert_authenticated_toolchain_state \
+    "${ROOT_DIR}" "${ROOT_DIR}/python/iroha_native" "${PYTHON_BIN}" || status=1
   return "${status}"
 }
 
@@ -1036,7 +1051,7 @@ case "${IROHA_PRIVACY_AUTHENTICATED_RUST_TOOLCHAIN_SELECTOR}" in
   1.93.1-aarch64-apple-darwin)
     AUTHENTICATED_RUST_HOST_TRIPLE="aarch64-apple-darwin"
     export IROHA_PRIVACY_AUTHENTICATED_MATURIN_ENCODED_RUSTFLAGS=$'-C\x1flink-arg=-undefined\x1f-C\x1flink-arg=dynamic_lookup'
-    export IROHA_PRIVACY_AUTHENTICATED_MATURIN_RUSTC_LINK_ARG="link-args=-Wl,-install_name,@rpath/iroha_python._crypto.abi3.so"
+    export IROHA_PRIVACY_AUTHENTICATED_MATURIN_RUSTC_LINK_ARG="link-args=-Wl,-install_name,@rpath/iroha_native._crypto.abi3.so"
     export IROHA_PRIVACY_AUTHENTICATED_MACOSX_DEPLOYMENT_TARGET="11.0"
     ;;
   *)
@@ -1056,7 +1071,7 @@ export IROHA_PRIVACY_AUTHENTICATED_PYTHON_BUILD_POLICY="$(
     "${IROHA_PRIVACY_AUTHENTICATED_MATURIN_VERSION}"
 )"
 
-cd "${ROOT_DIR}/python/iroha_python"
+cd "${ROOT_DIR}/python/iroha_native"
 "${VENV_DIR}/bin/python" -I -m maturin build \
   --release \
   --locked \
@@ -1072,11 +1087,28 @@ if ! printf '%s\n' metadata rustc | cmp -s - "${PRIVATE_CARGO_AUDIT_PATH}"; then
 fi
 assert_privacy_sdk_inputs_unchanged
 
-WHEEL_PATH="$(resolve_private_wheel)"
+# The pure SDK is built offline by the hash-locked setuptools/wheel backend.
+cd "${ROOT_DIR}/python/iroha_python"
+PIP_CONFIG_FILE=/dev/null "${VENV_DIR}/bin/python" -I -B -m pip \
+  --isolated --disable-pip-version-check --no-input --no-cache-dir \
+  wheel --no-deps --no-index --no-build-isolation \
+  --wheel-dir "${PRIVATE_SDK_WHEEL_DIR}" .
+assert_privacy_sdk_inputs_unchanged
+
+WHEEL_PATH="$(resolve_private_wheel "${PRIVATE_WHEEL_DIR}")"
+SDK_WHEEL_PATH="$(resolve_private_wheel "${PRIVATE_SDK_WHEEL_DIR}")"
+SDK_WHEEL_SEAL="$(privacy_python_sdk_file_seal "${SDK_WHEEL_PATH}")"
 WHEEL_SEAL="$(privacy_python_sdk_file_seal "${WHEEL_PATH}")"
+export IROHA_PRIVACY_AUTHENTICATED_SDK_WHEEL_PATH="${SDK_WHEEL_PATH}"
+export IROHA_PRIVACY_AUTHENTICATED_SDK_WHEEL_SEAL="${SDK_WHEEL_SEAL}"
 export IROHA_PRIVACY_AUTHENTICATED_WHEEL_PATH="${WHEEL_PATH}"
 export IROHA_PRIVACY_AUTHENTICATED_WHEEL_SEAL="${WHEEL_SEAL}"
-PREFLIGHT_WHEEL_PATH="$(preflight_private_wheel)"
+PREFLIGHT_WHEEL_PATH="$(preflight_private_wheel native "${WHEEL_PATH}" "${WHEEL_SEAL}")"
+PREFLIGHT_SDK_WHEEL_PATH="$(preflight_private_wheel sdk "${SDK_WHEEL_PATH}" "${SDK_WHEEL_SEAL}")"
+if [[ "${PREFLIGHT_SDK_WHEEL_PATH}" != "${SDK_WHEEL_PATH}" ]]; then
+  echo "error: private SDK wheel preflight returned an unexpected path" >&2
+  exit 1
+fi
 if [[ "${PREFLIGHT_WHEEL_PATH}" != "${WHEEL_PATH}" ]]; then
   echo "error: private wheel preflight returned an unexpected path" >&2
   exit 1
@@ -1093,7 +1125,7 @@ PIP_CONFIG_FILE=/dev/null \
   --no-deps \
   --no-index \
   --force-reinstall \
-  "${WHEEL_PATH}"
+  "${WHEEL_PATH}" "${SDK_WHEEL_PATH}"
 assert_no_python_startup_injection
 if [[ "${TEST_MODE}" == "0" ]]; then
   assert_expected_venv_distributions 1
@@ -1104,7 +1136,7 @@ INSTALLED_NATIVE_PATH="$(verify_installed_wheel)"
 case "${INSTALLED_NATIVE_PATH}" in
   "${VENV_DIR}/"*) ;;
   *)
-    echo "error: installed iroha_python._crypto escaped the private venv" >&2
+    echo "error: installed iroha_native._crypto escaped the private venv" >&2
     exit 1
     ;;
 esac

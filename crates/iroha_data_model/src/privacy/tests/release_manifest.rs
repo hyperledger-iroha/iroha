@@ -520,6 +520,21 @@ fn exact12_qualification_links_full_manifests_and_all_twelve_activations() {
     );
 }
 
+/// Reuse the complete signed test evidence for the generated instruction fixture.
+#[cfg(feature = "json")]
+pub(crate) fn generated_instruction_qualification() -> PrivacyExact12QualificationRecordV1 {
+    let release_manifest = synthetic_valid_release_manifest();
+    let deployment_qualification = synthetic_valid_deployment(release_manifest.manifest_digest);
+    let qualification = PrivacyExact12QualificationRecordV1 {
+        release_manifest,
+        deployment_qualification,
+    };
+    qualification
+        .validate()
+        .expect("complete synthetic qualification");
+    qualification
+}
+
 #[test]
 fn qualified_capability_archive_accepts_complete_signed_evidence() {
     let release = synthetic_valid_release_manifest();

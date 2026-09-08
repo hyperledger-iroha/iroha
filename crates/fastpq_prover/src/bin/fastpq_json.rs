@@ -21,7 +21,7 @@ use iroha_data_model::{
 };
 use norito::{
     derive::{JsonDeserialize, JsonSerialize},
-    json, to_bytes,
+    encode_canonical, json,
 };
 use sha2::{Digest, Sha256};
 use std::{
@@ -394,7 +394,7 @@ fn handle_verify(input: VerifyInput) -> Result<VerifyResponse, String> {
     let proof_bytes = BASE64_STANDARD
         .decode(input.proof_bytes_base64.as_bytes())
         .map_err(|err| format!("invalid proof_bytes_base64: {err}"))?;
-    let proof: Proof = norito::decode_from_bytes(&proof_bytes)
+    let proof: Proof = norito::decode_canonical(&proof_bytes)
         .map_err(|err| format!("failed to decode proof bytes: {err}"))?;
     let started = Instant::now();
     verify_axt_bound_batch(&batch, &proof, &binding)
@@ -512,7 +512,7 @@ fn prove_request(
         .map_err(|err| format!("FASTPQ verification failed: {err}"))?;
     let verify_time = verify_started.elapsed();
     let proof_bytes =
-        norito::to_bytes(&proof).map_err(|err| format!("proof encode failed: {err}"))?;
+        encode_canonical(&proof).map_err(|err| format!("proof encode failed: {err}"))?;
     Ok((
         proof_bytes,
         prove_time,
@@ -554,12 +554,10 @@ fn decode_request_batch(encoded: &str) -> Result<TransitionBatch, String> {
     let bytes = BASE64_STANDARD
         .decode(encoded.as_bytes())
         .map_err(|err| format!("invalid batch_base64: {err}"))?;
-    if let Ok(dto) = norito::decode_from_bytes::<FastpqTransitionBatch>(&bytes) {
-        return Ok(transition_batch_from_model(&dto));
-    }
-    norito::decode_from_bytes::<TransitionBatch>(&bytes).map_err(|err| {
-        format!("failed to decode batch_base64 as FastpqTransitionBatch or TransitionBatch: {err}")
-    })
+    let dto = norito::decode_canonical::<FastpqTransitionBatch>(&bytes).map_err(|err| {
+        format!("failed to decode batch_base64 as canonical FastpqTransitionBatch: {err}")
+    })?;
+    Ok(transition_batch_from_model(&dto))
 }
 fn build_axt_materials(request: &ProofRequest, proof_bytes: &[u8]) -> Result<AxtArtifacts, String> {
     let dsid = DataSpaceId::new(request.source_dsid);
@@ -574,7 +572,7 @@ fn build_axt_materials(request: &ProofRequest, proof_bytes: &[u8]) -> Result<Axt
     };
     let manifest_root_hex = Hash::prehashed(manifest_root).to_string();
     let batch = build_batch_from_request(request)?;
-    let proof: Proof = norito::decode_from_bytes(proof_bytes)
+    let proof: Proof = norito::decode_canonical(proof_bytes)
         .map_err(|err| format!("failed to decode proof bytes for AXT payload: {err}"))?;
     let da_commitment = Some(hex_digest32(
         &batch_manifest_sha256(request),
@@ -664,8 +662,8 @@ fn build_lane_relay_proof_blob(
         .lane_finality_statement_hash()
         .map_err(|err| format!("lane relay finality statement failed: {err}"))?;
     let relay_ref = envelope.relay_ref();
-    let relay_ref_bytes =
-        to_bytes(&relay_ref).map_err(|err| format!("lane relay ref encode failed: {err}"))?;
+    let relay_ref_bytes = encode_canonical(&relay_ref)
+        .map_err(|err| format!("lane relay ref encode failed: {err}"))?;
     let source_tx_commitment = digest32_with_domain(
         b"fastpq-json:lane-relay-source-tx:v1",
         &[relay_ref_bytes.as_slice()],
@@ -781,12 +779,12 @@ fn axt_touch_manifest_and_root(
 ) -> Result<(TouchManifest, [u8; 32]), String> {
     let (read_key, write_key) = axt_manifest_keys(request);
     let manifest = TouchManifest::from_read_write([read_key], [write_key]);
-    let encoded =
-        to_bytes(&manifest).map_err(|err| format!("touch manifest encode failed: {err}"))?;
+    let encoded = encode_canonical(&manifest)
+        .map_err(|err| format!("touch manifest encode failed: {err}"))?;
     Ok((manifest, Hash::new(encoded).into()))
 }
 fn norito_hex<T: norito::NoritoSerialize>(value: &T) -> Result<String, String> {
-    let bytes = to_bytes(value).map_err(|err| format!("Norito encode failed: {err}"))?;
+    let bytes = encode_canonical(value).map_err(|err| format!("Norito encode failed: {err}"))?;
     Ok(hex::encode(bytes))
 }
 fn hex_digest32(value: &str, field: &str) -> Result<[u8; 32], String> {
@@ -987,7 +985,10 @@ mod tests {
                 tx_set_hash: [4; 32],
             },
         );
-        BASE64_STANDARD.encode(to_bytes(&batch).expect("encode transition batch"))
+        BASE64_STANDARD.encode(
+            encode_canonical(&fastpq_prover::transition_batch_to_model(&batch))
+                .expect("encode canonical transition batch"),
+        )
     }
     fn remote_spend_claim(sub_nonce: u64) -> AxtRemoteSpendClaimV1 {
         AxtRemoteSpendClaimV1::new(
@@ -1051,7 +1052,51 @@ mod tests {
         batch
             .metadata
             .insert("entry_hash".to_owned(), source_tx_commitment.to_vec());
-        BASE64_STANDARD.encode(to_bytes(&batch).expect("encode captured transition batch"))
+        BASE64_STANDARD.encode(
+            encode_canonical(&fastpq_prover::transition_batch_to_model(&batch))
+                .expect("encode canonical captured transition batch"),
+        )
+    }
+    #[test]
+    fn request_batch_accepts_only_the_canonical_model_frame() {
+        use norito::codec::Encode;
+        let encoded = captured_batch_base64(12, [0x11; 32]);
+        let canonical = BASE64_STANDARD.decode(&encoded).unwrap();
+        let model: FastpqTransitionBatch = norito::decode_canonical(&canonical).unwrap();
+        let batch = transition_batch_from_model(&model);
+        assert_eq!(decode_request_batch(&encoded).unwrap(), batch);
+        let alternate = {
+            let _layout = norito::core::DecodeFlagsGuard::enter(0);
+            norito::to_bytes(&model).unwrap()
+        };
+        assert_ne!(alternate, canonical);
+        let mut trailing = canonical;
+        trailing.push(0);
+        for invalid in [
+            encode_canonical(&batch).unwrap(),
+            model.encode(),
+            alternate,
+            trailing,
+        ] {
+            assert!(decode_request_batch(&BASE64_STANDARD.encode(invalid)).is_err());
+        }
+    }
+    #[test]
+    fn axt_manifest_and_output_frames_ignore_ambient_layout() {
+        let request = proof_request(captured_batch_base64(12, [0x11; 32]));
+        let (manifest, root) = axt_touch_manifest_and_root(&request).unwrap();
+        let encoded = norito_hex(&manifest).unwrap();
+        let expected_root: [u8; 32] = Hash::new(hex::decode(&encoded).unwrap()).into();
+        assert_eq!(root, expected_root);
+        for flags in [0, 1, 2, 3, 4, 5, 6, 7, 0x1b, 0x3f] {
+            let _layout = norito::core::DecodeFlagsGuard::enter(flags);
+            let effective_flags = norito::core::get_decode_flags();
+            let (actual_manifest, actual_root) = axt_touch_manifest_and_root(&request).unwrap();
+            assert_eq!(actual_manifest, manifest);
+            assert_eq!(actual_root, root);
+            assert_eq!(norito_hex(&actual_manifest).unwrap(), encoded);
+            assert_eq!(norito::core::get_decode_flags(), effective_flags);
+        }
     }
     #[test]
     fn prove_and_verify_batch_builder_rejects_missing_execution_capture() {
@@ -1097,6 +1142,25 @@ mod tests {
         request.verifier_version = "v1".to_owned();
 
         let (proof_bytes, ..) = prove_request(&request).expect("prove captured AXT batch");
+        let proof: Proof = norito::decode_canonical(&proof_bytes).expect("canonical proof");
+        use norito::codec::Encode;
+        let alternate = {
+            let _layout = norito::core::DecodeFlagsGuard::enter(0);
+            assert_eq!(norito_hex(&proof).unwrap(), hex::encode(&proof_bytes));
+            norito::to_bytes(&proof).unwrap()
+        };
+        assert_ne!(alternate, proof_bytes);
+        let mut trailing = proof_bytes.clone();
+        trailing.push(0);
+        for invalid in [proof.encode(), alternate, trailing] {
+            let verify_error = handle_verify(VerifyInput {
+                request: request.clone(),
+                proof_bytes_base64: BASE64_STANDARD.encode(&invalid),
+            })
+            .expect_err("public verifier rejects noncanonical proof frames");
+            assert!(verify_error.starts_with("failed to decode proof bytes:"));
+            assert!(build_axt_materials(&request, &invalid).is_err());
+        }
         let artifacts =
             build_axt_materials(&request, &proof_bytes).expect("build checked AXT materials");
         let encoded_blob = hex::decode(artifacts.effect_proof_blob).expect("decode proof blob hex");

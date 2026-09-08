@@ -1160,6 +1160,7 @@ final class SccpV1Tests: XCTestCase {
             { $0["protocol_version"] = "3" },
             { $0["protocol_version"] = true },
             { $0["epoch"] = 0 },
+            { $0["epoch_end_height"] = 0 },
             { $0["epoch_end_height"] = 6 },
             { $0["roster_commitment"] = $0["chain_id_hash"] },
             { $0.removeValue(forKey: "epoch") },

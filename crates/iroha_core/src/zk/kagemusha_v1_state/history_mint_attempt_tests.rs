@@ -79,6 +79,12 @@ fn mint_fold_abandon_preserves_credit_and_requires_a_fresh_bound_attempt() {
     )
     .expect("empty authenticated history");
     let mut machine = KagemushaStateMachineV1 {
+        recovery_metadata: snapshot_initial_metadata(
+            &state,
+            &proof_release,
+            old_credential.clone(),
+        ),
+        published_checkpoint: None,
         state,
         journal_revision: 0,
         inbox_revision: 0,
@@ -95,6 +101,7 @@ fn mint_fold_abandon_preserves_credit_and_requires_a_fresh_bound_attempt() {
         recursive_verifier: AcceptSnapshotRecursiveVerifierV1,
         guard_verifier: AcceptSnapshotGuardVerifierV1,
     };
+    machine = snapshot_initial_publish(machine);
 
     let mint_amount = 4;
     let (mint_authorization, mint_credit, mint_opening) = snapshot_mint_credit(

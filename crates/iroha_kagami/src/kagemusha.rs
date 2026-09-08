@@ -1,4 +1,7 @@
-//! Fail-closed authentication for the sole KAGEMUSHA V1 proof release.
+//! Fail-closed KAGEMUSHA V1 release authentication and public authority provisioning.
+
+#[cfg(unix)]
+mod derive_mint_finality_next_epoch_v1;
 
 use crate::{Outcome, RunArgs, json_macros::JsonDeserialize};
 use clap::{Args as ClapArgs, Subcommand};
@@ -76,7 +79,7 @@ const REQUIRED_C_JNI_SYMBOLS_V1: [&str; 48] = [
     "connect_norito_kagemusha_core_coordinator_invoke_v1",
     "connect_norito_kagemusha_device_capabilities_v1",
     "connect_norito_kagemusha_device_execute_v1",
-    "connect_norito_kagemusha_device_response_authenticator_v1_verify",
+    "connect_norito_kagemusha_device_command_response_v1_verify",
     "connect_norito_validation_fee_hijiri_quote_request_v1",
     "connect_norito_validation_fee_hijiri_quote_response_verify_v1",
     "connect_norito_private_settlement_committee_proof_response_verify_v1",
@@ -93,14 +96,14 @@ const REQUIRED_C_JNI_SYMBOLS_V1: [&str; 48] = [
     "Java_org_hyperledger_iroha_sdk_offline_KagemushaDeviceLifecycleBridgeV1_00024NativeEndpoint_nativeCapabilitiesV1",
     "Java_org_hyperledger_iroha_sdk_offline_KagemushaDeviceLifecycleBridgeV1_00024NativeEndpoint_nativeContractVectorV1",
     "Java_org_hyperledger_iroha_sdk_offline_KagemushaDeviceLifecycleBridgeV1_00024NativeEndpoint_nativeExecuteV1",
-    "Java_org_hyperledger_iroha_sdk_offline_KagemushaDeviceLifecycleBridgeV1_00024NativeEndpoint_nativeVerifyResponseAuthenticatorV1",
+    "Java_org_hyperledger_iroha_sdk_offline_KagemushaDeviceLifecycleBridgeV1_00024NativeEndpoint_nativeVerifyCommandResponseV1",
     "Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoordinatorJniV1_nativeContractV1",
     "Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoordinatorJniV1_nativeOpenV1",
     "Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoordinatorJniV1_nativeInvokeV1",
     "connect_norito_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json",
 ];
 
-/// Authenticate the sole first-release KAGEMUSHA release format.
+/// Authenticate the first-release format or derive a public next-epoch authority parameter.
 #[derive(Debug, ClapArgs)]
 pub struct Args {
     #[command(subcommand)]
@@ -112,6 +115,10 @@ enum Command {
     /// Authenticate one complete KAGEMUSHA V1 release and its deployment evidence.
     #[command(name = "authenticate-release-v1")]
     AuthenticateReleaseV1(AuthenticateReleaseV1Args),
+    /// Derive the typed next-epoch parameter from four inherited private seed blocks.
+    #[cfg(unix)]
+    #[command(name = "derive-mint-finality-next-epoch-v1")]
+    DeriveMintFinalityNextEpochV1(derive_mint_finality_next_epoch_v1::Args),
 }
 
 #[derive(Debug, ClapArgs)]
@@ -155,6 +162,10 @@ impl<T: Write> RunArgs<T> for Args {
     fn run(self, writer: &mut std::io::BufWriter<T>) -> Outcome {
         match self.command {
             Command::AuthenticateReleaseV1(args) => authenticate_release_v1(&args, writer),
+            #[cfg(unix)]
+            Command::DeriveMintFinalityNextEpochV1(args) => {
+                derive_mint_finality_next_epoch_v1::run(args, writer)
+            }
         }
     }
 }
@@ -567,15 +578,19 @@ fn normalize_release_projection_value(value: JsonValue) -> color_eyre::Result<Js
             for (field, value) in values {
                 let value = if is_release_digest_field(&field) {
                     JsonValue::String(fixed_byte_array_to_hex(value, 32, &field)?)
-                } else if field == "governance_credential_public_key" {
+                } else if matches!(
+                    field.as_str(),
+                    "governance_credential_public_key" | "issuer_signature"
+                ) {
                     let mut tuple = value
                         .as_array()
-                        .ok_or_else(|| eyre!("governance credential key must be a JSON tuple"))?
+                        .ok_or_else(|| eyre!("{field} must be a JSON tuple"))?
                         .clone();
                     if tuple.len() != 1 {
-                        bail!("governance credential key JSON tuple is malformed");
+                        bail!("{field} JSON tuple is malformed");
                     }
-                    JsonValue::String(fixed_byte_array_to_hex(tuple.remove(0), 65, &field)?)
+                    let width = if field == "issuer_signature" { 64 } else { 65 };
+                    JsonValue::String(fixed_byte_array_to_hex(tuple.remove(0), width, &field)?)
                 } else if let Some(tag) = release_unit_enum_tag(&field) {
                     JsonValue::String(tagged_unit_enum_name(value, tag, &field)?)
                 } else {
@@ -596,10 +611,13 @@ fn is_release_digest_field(field: &str) -> bool {
             | "source_tree_digest"
             | "cargo_lock_digest"
             | "profile_digest"
+            | "native_profile_digest"
             | "eq_protocol_digest"
             | "ep_protocol_digest"
             | "artifact_set_digest"
             | "hardware_policy_digest"
+            | "provider_policy_root"
+            | "provider_authority_commitment"
             | "verification_records_digest"
             | "candidate_context_digest"
             | "hardware_profile_id"
@@ -990,6 +1008,11 @@ fn authenticated_release_report_v1(
     )?;
     insert_json_field(
         &mut report,
+        "native_profile_digest",
+        &hex::encode(inputs.receipt.native_profile_digest),
+    )?;
+    insert_json_field(
+        &mut report,
         "artifact_set_digest",
         &hex::encode(inputs.receipt.artifact_set_digest),
     )?;
@@ -997,6 +1020,11 @@ fn authenticated_release_report_v1(
         &mut report,
         "hardware_policy_digest",
         &hex::encode(inputs.receipt.hardware_policy_digest),
+    )?;
+    insert_json_field(
+        &mut report,
+        "provider_policy_root",
+        &hex::encode(inputs.receipt.provider_policy_root),
     )?;
     insert_json_field(
         &mut report,
@@ -1268,6 +1296,26 @@ mod tests {
         let mut duplicate = inventory;
         duplicate[41].sha256 = duplicate[40].sha256;
         assert!(validate_exact_release_inventory_v1(&duplicate).is_err());
+    }
+
+    #[test]
+    fn provider_issuer_signature_projection_requires_exact_raw_tuple_width() {
+        let raw = norito::json!({ "issuer_signature": (vec![vec![1_u8; 64]]) });
+        let normalized = normalize_release_projection_value(raw).unwrap();
+        assert_eq!(
+            normalized
+                .get("issuer_signature")
+                .and_then(JsonValue::as_str),
+            Some("01".repeat(64).as_str())
+        );
+        for value in [
+            norito::json!({ "issuer_signature": (vec![vec![1_u8; 63]]) }),
+            norito::json!({ "issuer_signature": (vec![vec![1_u8; 65]]) }),
+            norito::json!({ "issuer_signature": [] }),
+            norito::json!({ "issuer_signature": [[1_u8], [1_u8]] }),
+        ] {
+            assert!(normalize_release_projection_value(value).is_err());
+        }
     }
 
     #[test]

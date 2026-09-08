@@ -5092,7 +5092,7 @@ impl Kura {
         let _canonical_chain_guard = self.canonical_chain_lock.lock();
         let proposal = &authority.bootstrap.body.executable_payload.origin_proposal;
         let already_terminal = self
-            .lane_block_application_receipt_available_under_prune_and_canonical_guards(proposal);
+            .lane_block_application_receipt_available_under_prune_and_canonical_guards(proposal)?;
         let _geometry_guard = self.lane_geometry_lock.lock();
         let descriptor = &proposal.descriptor;
         let entry = self.lane_storage_entry(descriptor.lane_id)?;

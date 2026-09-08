@@ -128,8 +128,8 @@ fn transition_facts(projection: TransitionProjection<'_>) -> TransitionFacts {
 /// This is diagnostic-only: every field is derived from the same primitive
 /// projection and production predicates as the commit gate. It neither grants
 /// capabilities nor participates in acceptance.
-#[derive(Clone, Copy)]
-pub(crate) struct TransitionDiagnostic {
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct TransitionDiagnostic {
     facts: TransitionFacts,
     safety_before: SafetyProjection,
     safety_after: SafetyProjection,

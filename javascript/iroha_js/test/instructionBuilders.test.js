@@ -1639,8 +1639,8 @@ test("noritoDecodeInstruction decodes Kaigi manifests", () => {
 });
 
 test("buildCreateKaigiInstruction accepts privacy artifacts", () => {
-  const commitmentBytes = Buffer.alloc(32, 0x44);
-  const nullifierBytes = Buffer.alloc(32, 0x55);
+  const commitmentBytes = Buffer.alloc(32, 0x14);
+  const nullifierBytes = Buffer.alloc(32, 0x25);
   const rosterRootBytes = Buffer.alloc(32, 0x66);
   const proofBytes = Buffer.from([0xca, 0xfe]);
   const instruction = buildCreateKaigiInstruction({
@@ -1648,7 +1648,7 @@ test("buildCreateKaigiInstruction accepts privacy artifacts", () => {
     host: ACCOUNT_ID,
     privacyMode: "ZkRosterV1",
     commitment: { commitment: commitmentBytes },
-    nullifier: { digest: nullifierBytes, issuedAtMs: 0 },
+    nullifier: { digest: nullifierBytes },
     rosterRoot: rosterRootBytes,
     proof: proofBytes,
   });
@@ -1670,12 +1670,10 @@ test("buildCreateKaigiInstruction accepts privacy artifacts", () => {
           relay_manifest: null,
         },
         commitment: {
-          commitment: normalizedHashHex(commitmentBytes),
-          alias_tag: null,
+          commitment: Array.from(commitmentBytes),
         },
         nullifier: {
-          digest: normalizedHashHex(nullifierBytes),
-          issued_at_ms: 0,
+          digest: Array.from(nullifierBytes),
         },
         roster_root: normalizedHashHex(rosterRootBytes),
         proof: proofBytes.toString("base64"),
@@ -1699,7 +1697,6 @@ test("buildJoinKaigiInstruction normalizes buffers and hashes", () => {
     },
     nullifier: {
       digest: nullifierBytes,
-      issuedAtMs: 0,
     },
     rosterRoot: rosterRootBytes,
     proof: proofBytes,
@@ -1710,12 +1707,10 @@ test("buildJoinKaigiInstruction normalizes buffers and hashes", () => {
         call_id: { domain_id: "wonderland.sora", call_name: "weekly-sync" },
         participant: ACCOUNT_ID_CANONICAL,
         commitment: {
-          commitment: normalizedHashHex(commitmentBytes),
-          alias_tag: null,
+          commitment: Array.from(commitmentBytes),
         },
         nullifier: {
-          digest: normalizedHashHex(nullifierBytes),
-          issued_at_ms: 0,
+          digest: Array.from(nullifierBytes),
         },
         roster_root: normalizedHashHex(rosterRootBytes),
         proof: proofBytes.toString("base64"),
@@ -1747,21 +1742,84 @@ test("buildLeaveKaigiInstruction accepts minimal payload", () => {
   assert.deepEqual(encodeAndDecode(instruction), expected);
 });
 
-baseTest("buildLeaveKaigiInstruction rejects reserved V1 privacy artifacts", () => {
-  assert.throws(
-    () =>
-      buildLeaveKaigiInstruction({
-        callId: "wonderland.sora:weekly-sync",
-        participant: ACCOUNT_ID,
-        proof: Buffer.from([0x01]),
-      }),
-    (error) => {
-      assert.equal(error?.code, ValidationErrorCode.INVALID_OBJECT);
-      assert.equal(error?.path, "leaveKaigi");
-      assert.match(error?.message ?? "", /privacy artifacts are reserved/u);
-      return true;
-    },
-  );
+baseTest("final Kaigi V1 instructions match the native scalar wire fixture", () => {
+  const fixture = JSON.parse(fs.readFileSync(new URL(
+    "./fixtures/kaigi_authorization_scalar_wire_v1.json", import.meta.url,
+  ), "utf8"));
+  assert.equal(fixture.length, 5);
+  withPureJsInstructionCodec(({ noritoEncodeInstruction: encode, noritoDecodeInstruction: decode }) => {
+    for (const { instruction, wire_base64: wire } of fixture) {
+      const bytes = Buffer.from(wire, "base64");
+      assert.deepEqual(encode(instruction), bytes);
+      assert.deepEqual(decode(bytes), instruction);
+    }
+  });
+});
+
+baseTest("final Kaigi V1 scalar codec preserves every bit and rejects field mutations", () => {
+  const modulus = Buffer.from("01000000ed302d991bf94c09fc98462200000000000000000000000000000040", "hex");
+  const maximum = Buffer.from(modulus);
+  maximum[0] -= 1;
+  const commitment = Buffer.alloc(32, 0x12);
+  const nullifier = Buffer.alloc(32, 0x24);
+  const cases = [
+    buildCreateKaigiInstruction({ id: "wonderland.sora:scalars", host: ACCOUNT_ID,
+      commitment: { commitment }, nullifier: { digest: nullifier } }),
+    buildJoinKaigiInstruction({ callId: "wonderland.sora:scalars", participant: ACCOUNT_ID,
+      commitment: { commitment: maximum }, nullifier: { digest: Buffer.alloc(32) } }),
+    buildEndKaigiInstruction({ callId: "wonderland.sora:scalars",
+      commitment: { commitment }, nullifier: { digest: nullifier } }),
+    buildRecordKaigiUsageInstruction({ callId: "wonderland.sora:scalars", durationMs: 1,
+      usageCommitment: maximum }),
+  ];
+  withPureJsInstructionCodec(({ noritoEncodeInstruction: encode, noritoDecodeInstruction: decode }) => {
+    for (const instruction of cases) {
+      assert.deepEqual(decode(encode(instruction)), instruction);
+    }
+    for (const invalid of [modulus, Buffer.alloc(32, 0xff), Buffer.alloc(31),
+      Buffer.alloc(33), "12".repeat(32), new Array(32), Array(32).fill(256)]) {
+      assert.throws(() => buildJoinKaigiInstruction({ callId: "wonderland.sora:scalars",
+        participant: ACCOUNT_ID, commitment: { commitment: invalid } }));
+      assert.throws(() => buildEndKaigiInstruction({ callId: "wonderland.sora:scalars",
+        nullifier: { digest: invalid } }));
+      assert.throws(() => buildRecordKaigiUsageInstruction({ callId: "wonderland.sora:scalars",
+        durationMs: 1, usageCommitment: invalid }));
+      const malformed = structuredClone(cases[0]);
+      malformed.Kaigi.CreateKaigi.commitment.commitment = invalid;
+      assert.throws(() => encode(malformed));
+    }
+    for (const field of ["alias_tag", "aliasTag", "unknown"]) {
+      const malformed = structuredClone(cases[0]);
+      malformed.Kaigi.CreateKaigi.commitment[field] = null;
+      assert.throws(() => encode(malformed), /requires only commitment/u);
+    }
+    for (const field of ["issued_at_ms", "issuedAtMs", "issuedAt", "hash"]) {
+      assert.throws(() => buildJoinKaigiInstruction({ callId: "wonderland.sora:scalars",
+        participant: ACCOUNT_ID, nullifier: { digest: nullifier, [field]: 0 } }),
+      /requires only digest/u);
+      const malformed = structuredClone(cases[0]);
+      malformed.Kaigi.CreateKaigi.nullifier[field] = 0;
+      assert.throws(() => encode(malformed), /requires only digest/u);
+    }
+  });
+});
+
+baseTest("final Kaigi V1 leave carries exact authorization artifacts", () => {
+  const commitment = Buffer.alloc(32, 0x12);
+  const nullifier = Buffer.alloc(32, 0x24);
+  const instruction = buildLeaveKaigiInstruction({
+    callId: "wonderland.sora:weekly-sync",
+    participant: ACCOUNT_ID,
+    commitment: { commitment },
+    nullifier: { digest: nullifier },
+    rosterRoot: Buffer.alloc(32, 0x31),
+    proof: Buffer.from([0x01]),
+  });
+  assert.deepEqual(instruction.Kaigi.LeaveKaigi.commitment, { commitment: Array.from(commitment) });
+  assert.deepEqual(instruction.Kaigi.LeaveKaigi.nullifier, { digest: Array.from(nullifier) });
+  withPureJsInstructionCodec(({ noritoEncodeInstruction: encode, noritoDecodeInstruction: decode }) => {
+    assert.deepEqual(decode(encode(instruction)), instruction);
+  });
 });
 
 baseTest("Kaigi builders preserve full-width u64 values and the participant limit", () => {
@@ -1862,14 +1920,14 @@ test("buildEndKaigiInstruction normalizes optional timestamp", () => {
 });
 
 test("buildEndKaigiInstruction accepts privacy artifacts", () => {
-  const commitmentBytes = Buffer.alloc(32, 0x77);
-  const nullifierBytes = Buffer.alloc(32, 0x88);
+  const commitmentBytes = Buffer.alloc(32, 0x17);
+  const nullifierBytes = Buffer.alloc(32, 0x28);
   const rosterRootBytes = Buffer.alloc(32, 0x99);
   const proofBytes = Buffer.from([0xaa, 0xbb, 0xcc]);
   const instruction = buildEndKaigiInstruction({
     callId: "wonderland.sora:weekly-sync",
     commitment: { commitment: commitmentBytes },
-    nullifier: { digest: nullifierBytes, issuedAtMs: 0 },
+    nullifier: { digest: nullifierBytes },
     rosterRoot: rosterRootBytes,
     proof: proofBytes,
   });
@@ -1879,12 +1937,10 @@ test("buildEndKaigiInstruction accepts privacy artifacts", () => {
         call_id: { domain_id: "wonderland.sora", call_name: "weekly-sync" },
         ended_at_ms: null,
         commitment: {
-          commitment: normalizedHashHex(commitmentBytes),
-          alias_tag: null,
+          commitment: Array.from(commitmentBytes),
         },
         nullifier: {
-          digest: normalizedHashHex(nullifierBytes),
-          issued_at_ms: 0,
+          digest: Array.from(nullifierBytes),
         },
         roster_root: normalizedHashHex(rosterRootBytes),
         proof: proofBytes.toString("base64"),
@@ -1906,7 +1962,7 @@ baseTest("Kaigi privacy builders reject ledger-visible identity hints", () => {
         privacyMode: "ZkRosterV1",
         commitment: { commitment, aliasTag: "host" },
       }),
-    /aliasTag is off-chain only and must be omitted/u,
+    /requires only commitment/u,
   );
   assert.throws(
     () =>
@@ -1914,7 +1970,7 @@ baseTest("Kaigi privacy builders reject ledger-visible identity hints", () => {
         callId: "wonderland.sora:private-room",
         nullifier: { digest: nullifier, issuedAtMs: 1 },
       }),
-    /issuedAtMs is off-chain only and must be zero/u,
+    /requires only digest/u,
   );
   assert.throws(
     () =>
@@ -1922,11 +1978,10 @@ baseTest("Kaigi privacy builders reject ledger-visible identity hints", () => {
         callId: "wonderland.sora:private-room",
         nullifier: {
           digest: nullifier,
-          issued_at_ms: 0,
           issuedAtMs: 1,
         },
       }),
-    /issuedAtMs is off-chain only and must be zero/u,
+    /requires only digest/u,
   );
   assert.throws(
     () =>
@@ -1949,7 +2004,7 @@ baseTest("Kaigi privacy builders reject ledger-visible identity hints", () => {
 });
 
 test("buildRecordKaigiUsageInstruction handles optional commitment", () => {
-  const usageCommitment = Buffer.alloc(32, 0x55);
+  const usageCommitment = Buffer.alloc(32, 0x25);
   const proof = Buffer.from([0xde, 0xad]);
   const instruction = buildRecordKaigiUsageInstruction({
     callId: "wonderland.sora:weekly-sync",
@@ -1964,7 +2019,7 @@ test("buildRecordKaigiUsageInstruction handles optional commitment", () => {
         call_id: { domain_id: "wonderland.sora", call_name: "weekly-sync" },
         duration_ms: 60000,
         billed_gas: 512,
-        usage_commitment: normalizedHashHex(usageCommitment),
+        usage_commitment: Array.from(usageCommitment),
         proof: proof.toString("base64"),
       },
     },

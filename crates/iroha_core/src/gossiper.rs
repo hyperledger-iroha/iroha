@@ -37,7 +37,7 @@ use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 use iroha_p2p::{Broadcast, Post, Priority};
 use iroha_primitives::time::TimeSource;
 use norito::{
-    NoritoDeserialize, NoritoSerialize,
+    NoritoDeserialize, NoritoSerialize, SerializePayload,
     codec::{Decode, Encode},
     core as ncore,
 };
@@ -144,6 +144,7 @@ fn validate_queue_plan_gossip_certificate(
             QueuePlanGossipCertificateDisposition::Applied
         }
         PendingQueuePlanAdmissionDisposition::Future
+        | PendingQueuePlanAdmissionDisposition::DeferredCarrier
         | PendingQueuePlanAdmissionDisposition::DefinitiveConflict
         | PendingQueuePlanAdmissionDisposition::Stale => {
             unreachable!("non-live QueuePlan gossip dispositions returned above")
@@ -3053,16 +3054,16 @@ fn decode_transaction_gossip_payload(
         offset,
     ))
 }
-impl NoritoSerialize for TransactionGossip {
+impl NoritoSerialize for TransactionGossip {}
+impl SerializePayload for TransactionGossip {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
         ensure_transaction_gossip_sequence_len(self.txs.len())?;
         ensure_transaction_gossip_sequence_len(self.routes.len())?;
         ensure_transaction_gossip_sequence_len(self.plans.len())?;
-        let mut tmp = ncore::DeriveSmallBuf::new();
-        ncore::write_len_prefixed(writer, &self.txs, &mut tmp)?;
-        ncore::write_len_prefixed(writer, &self.routes, &mut tmp)?;
-        ncore::write_len_prefixed(writer, &self.plans, &mut tmp)?;
-        ncore::write_len_prefixed(writer, &self.plane, &mut tmp)?;
+        ncore::write_len_prefixed(writer, &self.txs)?;
+        ncore::write_len_prefixed(writer, &self.routes)?;
+        ncore::write_len_prefixed(writer, &self.plans)?;
+        ncore::write_len_prefixed(writer, &self.plane)?;
         Ok(())
     }
     fn encoded_len_hint(&self) -> Option<usize> {
@@ -3509,11 +3510,11 @@ impl From<SignedTransaction> for GossipTransaction {
         }
     }
 }
-impl NoritoSerialize for GossipTransaction {
+impl NoritoSerialize for GossipTransaction {}
+impl SerializePayload for GossipTransaction {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
         writer.write_all(self.encoded.as_slice())?;
-        let mut tmp = ncore::DeriveSmallBuf::new();
-        ncore::write_len_prefixed(writer, &self.queue_plan_certificate, &mut tmp)?;
+        ncore::write_len_prefixed(writer, &self.queue_plan_certificate)?;
         Ok(())
     }
     fn encoded_len_hint(&self) -> Option<usize> {
@@ -4265,6 +4266,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             max_frame_bytes_tx_gossip: defaults::network::MAX_FRAME_BYTES_TX_GOSSIP.get(),
             max_frame_bytes_peer_gossip: defaults::network::MAX_FRAME_BYTES_PEER_GOSSIP.get(),
             max_frame_bytes_health: defaults::network::MAX_FRAME_BYTES_HEALTH.get(),
+            max_frame_bytes_connect: iroha_config::parameters::defaults::network::MAX_FRAME_BYTES_CONNECT.get(),
             max_frame_bytes_other: defaults::network::MAX_FRAME_BYTES_OTHER.get(),
             quic_max_idle_timeout: None,
         }

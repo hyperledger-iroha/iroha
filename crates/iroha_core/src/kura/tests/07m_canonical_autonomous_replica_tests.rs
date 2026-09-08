@@ -466,26 +466,46 @@ fn canonical_terminal_payload_for_replica_network_test(
 fn canonical_terminal_projection_for_binding_test(
     group: LaneQueueReservationGroupBindingV1,
     binding: &AutonomousLifecycleAttemptBindingV1,
+    source: &DurableAutonomousLaneMergeSource,
 ) -> ProductionInFlightFirstReleaseStateProjection {
-    let mut projection = canonical_terminal_projection_for_test(group);
-    let (_, _, validator_count) = binding.validator_set_identity();
-    let producer = binding.producer_actor_projection();
-    let validator_count =
-        u8::try_from(validator_count).expect("terminal binding validator count fits u8");
-    let validator_mask = if validator_count == 128 {
-        u128::MAX
-    } else {
-        (1_u128 << validator_count) - 1
-    };
-    projection.validator_count = validator_count;
-    projection.producer = producer;
-    projection.producer_selected_owner = producer;
-    projection.replicated_carrier_owners = validator_mask & !producer;
-    projection.payload_binding_a = producer;
-    projection.history.ever_ready_authorized = validator_mask;
-    projection.history.ready_signed = validator_mask;
-    projection.decision.lane_commit_owner = producer;
-    projection.decision.applied_by = producer;
+    binding
+        .validate_for_payload(source.bundle.executable_payload())
+        .expect("terminal binding authenticates the exact source payload");
+    assert_eq!(binding.reservation_group_binding(), group);
+    let lane_commit =
+        Kura::authorize_autonomous_lane_commit_persistence(source, &source.bundle.certified)
+            .expect("derive terminal custody from the real READY and Commit certificates")
+            .consume_for_persistence(&source.bundle.certified)
+            .expect("consume the exact certified source projection");
+    let mut projection = check_production_in_flight_first_release_transition(lane_commit)
+        .expect("authenticated lane Commit projection passes the production kernel")
+        .into_projection()
+        .after;
+    let ready_bitmap = &source
+        .bundle
+        .certified
+        .prepare_qc
+        .payload_availability_qc
+        .as_ref()
+        .expect("authenticated terminal source carries its READY certificate")
+        .signers_bitmap;
+    let mut ready_bytes = [0_u8; 16];
+    ready_bytes[..ready_bitmap.len()].copy_from_slice(ready_bitmap);
+    let ready_signers = u128::from_le_bytes(ready_bytes);
+    assert_eq!(projection.history.ready_signed, ready_signers);
+    assert_eq!(
+        projection.payload_binding_a,
+        binding.producer_actor_projection() | ready_signers,
+        "terminal custody includes only the authenticated producer and actual READY signers",
+    );
+    projection.queue.plan_state = IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_TOMBSTONED;
+    projection.queue.reservation_state = IN_FLIGHT_FIRST_RELEASE_RESERVATION_COMMIT_FORGOTTEN;
+    projection.history.reservation_committed_prefix = group.reservation_count;
+    projection.history.queue_plan_tombstoned_prefix = group.reservation_count;
+    projection.history.reservation_commit_forgotten_prefix = group.reservation_count;
+    projection.decision.wsv_committed = true;
+    projection.decision.application_count = 1;
+    projection.decision.applied_by = projection.decision.lane_commit_owner;
     assert!(production_in_flight_first_release_state_kernel(projection));
     projection
 }
@@ -880,7 +900,7 @@ fn canonical_replica_terminal_outcome_uses_nonowning_basis_without_private_custo
         AutonomousLifecycleTerminalOutcomeDurableStage::Pending,
     );
     let terminal_projection =
-        canonical_terminal_projection_for_binding_test(group, pending.binding());
+        canonical_terminal_projection_for_binding_test(group, pending.binding(), &fixture.source);
     fixture
         .kura
         .complete_autonomous_lifecycle_terminal_outcome(
@@ -986,7 +1006,7 @@ fn canonical_replica_terminal_outcome_uses_nonowning_basis_without_private_custo
                 epoch,
             )
             .expect("read exact replica after terminal restart"),
-        Some(source),
+        Some(source.clone()),
     );
     let mut retry = reopened
         .persist_autonomous_lifecycle_canonical_terminal_outcomes_pending(&merge_entry)
@@ -1008,6 +1028,7 @@ fn canonical_replica_terminal_outcome_uses_nonowning_basis_without_private_custo
             canonical_terminal_projection_for_binding_test(
                 retry_group,
                 reopened_complete.binding(),
+                &source,
             ),
             true,
             retry_source_outcome_hash,
@@ -1097,6 +1118,7 @@ fn canonical_replica_pending_survives_prebind_restart_and_rejects_committee_bind
         kura,
         network_id,
         validators,
+        source,
         ..
     } = fixture;
     drop(kura);
@@ -1147,7 +1169,7 @@ fn canonical_replica_pending_survives_prebind_restart_and_rejects_committee_bind
     reopened
         .complete_autonomous_lifecycle_terminal_outcome(
             group,
-            canonical_terminal_projection_for_binding_test(group, pending.binding()),
+            canonical_terminal_projection_for_binding_test(group, pending.binding(), &source),
             true,
             source_outcome_hash,
         )
@@ -1287,7 +1309,11 @@ fn canonical_replica_pending_and_complete_pin_corrupt_carrier_on_strict_restart(
                 .kura
                 .complete_autonomous_lifecycle_terminal_outcome(
                     group,
-                    canonical_terminal_projection_for_binding_test(group, pending.binding()),
+                    canonical_terminal_projection_for_binding_test(
+                        group,
+                        pending.binding(),
+                        &fixture.source,
+                    ),
                     true,
                     source_outcome_hash,
                 )
@@ -1485,7 +1511,11 @@ fn canonical_replica_terminal_only_capacity_is_exact_and_restart_stable() {
         .kura
         .complete_autonomous_lifecycle_terminal_outcome(
             group,
-            canonical_terminal_projection_for_binding_test(group, pending.binding()),
+            canonical_terminal_projection_for_binding_test(
+                group,
+                pending.binding(),
+                &fixture.source,
+            ),
             true,
             source_outcome_hash,
         )
@@ -1567,6 +1597,15 @@ fn canonical_carrier_keeps_owned_and_replica_terminal_bases_distinct() {
         .expect("claim mixed-carrier owned lifecycle generation");
     let owned_execution =
         canonical_terminal_merge_execution_for_test(&fixture.kura, &owned_payload, &owner);
+    let owned_source = fixture
+        .kura
+        .durable_autonomous_lane_merge_source(
+            owned_payload.origin_proposal.descriptor.lane_id,
+            owned_payload.origin_proposal.descriptor.lane_block_height,
+            owned_payload.network_id,
+            owned_payload.epoch,
+        )
+        .expect("retain the exact locally owned source for its terminal projection");
     let (_, owned_group) = install_live_lifecycle_cursor_for_terminal_test(
         &fixture.kura,
         &generation,
@@ -1614,11 +1653,16 @@ fn canonical_carrier_keeps_owned_and_replica_terminal_bases_distinct() {
         )
         .expect("decode mixed-carrier Pending outcome");
         observed_bases.push((group.identity.lane_id, outcome.basis()));
+        let source = if group == owned_group {
+            &owned_source
+        } else {
+            &fixture.source
+        };
         fixture
             .kura
             .complete_autonomous_lifecycle_terminal_outcome(
                 group,
-                canonical_terminal_projection_for_binding_test(group, outcome.binding()),
+                canonical_terminal_projection_for_binding_test(group, outcome.binding(), source),
                 true,
                 outcome_hash,
             )

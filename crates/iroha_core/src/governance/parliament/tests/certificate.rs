@@ -489,6 +489,14 @@ fn parliament_pulse_slot_uses_one_canonical_json_map_key() {
     let map = BTreeMap::from([(slot, pulse_id(14))]);
     let json = norito::json::to_json(&map).expect("encode pulse-slot map");
     assert!(json.contains(&format!("\"{}:20\"", "0d".repeat(32))));
+    assert_eq!(
+        norito::json::to_json_bounded(&map, json.len()).expect("exact pulse-slot map bound"),
+        json
+    );
+    assert_eq!(
+        norito::json::to_json_bounded(&map, json.len() - 1),
+        Err(norito::json::BoundedJsonError::BodyTooLarge)
+    );
     let decoded: BTreeMap<ParliamentPulseSlotV1, BeaconPulseId> =
         norito::json::from_json(&json).expect("decode pulse-slot map");
     assert_eq!(decoded, map);
@@ -502,6 +510,51 @@ fn parliament_pulse_slot_uses_one_canonical_json_map_key() {
             .is_err(),
         "zero-padded heights must not alias the canonical map key"
     );
+}
+
+#[test]
+fn parliament_pulse_slot_json_key_is_bounded_and_cancellable() {
+    use norito::json::{JsonObjectKey, JsonObjectKeyOwned};
+
+    for height in [0, 1, u64::MAX] {
+        let slot = ParliamentPulseSlotV1::new(beacon_session(0xab), height);
+        let key = slot.canonical_json_key();
+        let limits =
+            norito::core::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX);
+        let (decoded, usage) = norito::core::with_decode_limits_measured(limits, || {
+            ParliamentPulseSlotV1::from_json_key_text(&key)
+        });
+        assert_eq!(decoded.expect("fixed-size key without a heap budget"), slot);
+        assert_eq!(usage.total_allocated_bytes(), 0);
+
+        let mut streamed = String::new();
+        slot.visit_json_key_text(|chunk| {
+            streamed.push_str(chunk);
+            Ok::<_, ()>(())
+        })
+        .expect("collect canonical key");
+        assert_eq!(streamed, key);
+        let mut calls = 0;
+        assert_eq!(
+            slot.visit_json_key_text(|_| {
+                calls += 1;
+                Err("stop")
+            }),
+            Err("stop")
+        );
+        assert_eq!(calls, 1, "stop after the first visitor error");
+    }
+
+    let session = "ab".repeat(32);
+    for height in ["", "00", "+1", "-1", "1:2", " 1", "18446744073709551616"] {
+        assert!(
+            ParliamentPulseSlotV1::from_json_key_text(&format!("{session}:{height}")).is_err(),
+            "reject noncanonical or overflowing height: {height:?}"
+        );
+    }
+    for malformed in ["ab".repeat(31), "AB".repeat(32), "ab".repeat(4096)] {
+        assert!(ParliamentPulseSlotV1::from_json_key_text(&format!("{malformed}:0")).is_err());
+    }
 }
 
 #[test]

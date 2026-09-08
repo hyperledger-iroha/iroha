@@ -5,12 +5,15 @@
 # Supply the reviewed deployment's supply-chain source root, public provenance
 # trust tuple, and independently administered topology trust tuple for the same
 # deployment context.
-# Signed evidence must bind signing_provider=authenticated_external_signer and
-# signing_backend=software; accepted output is software-key-qualified.
+# Signed-manifest evidence requires independently pinned source inputs.
+# Raw Ed25519 alone cannot qualify hardware custody; the ReleaseManifest
+# hardware receipt verifier remains a required prerequisite.
 --evidence-dir /var/tmp/sorafs/reference-sdk-release
 --summary-out /var/tmp/sorafs/reference-sdk-release/release-summary.json
 --require-kind release_archive,signed_manifest,supply_chain,downstream_bindings,cookbook_smoke,ffi_header_contract,governance_approval
 --now-unix 1800400000
+--signed-manifest-source-context /operator-runtime/reviewed-release/signed-manifest-sources.json
+--signed-manifest-source-context-sha256 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 --max-evidence-age-secs 1209600
 --min-release-targets 5
 --min-downstream-packages 6

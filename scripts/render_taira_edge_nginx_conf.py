@@ -848,7 +848,7 @@ def render_edge_nginx_conf(
     lines.extend(
         _render_connect_stateful_locations(
             public_validator_upstream,
-            host_expr=public_upstream_host,
+            host_expr="$host",
             forwarded_host_expr="$host",
         )
     )
@@ -857,7 +857,7 @@ def render_edge_nginx_conf(
             _render_prefix_proxy_location(
                 path,
                 "taira_public_edge_upstream",
-                host_expr=public_upstream_host,
+                host_expr="$host",
                 forwarded_host_expr="$host",
             )
         )
@@ -866,7 +866,7 @@ def render_edge_nginx_conf(
         _render_prefix_proxy_location(
             "/",
             "taira_public_edge_upstream",
-            host_expr=public_upstream_host,
+            host_expr="$host",
             forwarded_host_expr="$host",
             retry_non_idempotent=True,
         )
@@ -1050,7 +1050,7 @@ def main(argv: list[str] | None = None) -> int:
         "--public-upstream-host",
         default=None,
         help=(
-            "Host header used when proxying the public convenience host to Torii "
+            "Validator hostname selecting the public Torii upstream; preserve the incoming Host "
             "(defaults to the first validator hostname)"
         ),
     )

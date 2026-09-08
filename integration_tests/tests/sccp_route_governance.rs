@@ -214,7 +214,7 @@ async fn wait_for_route_states(
         let mut converged = true;
         let mut reference = None;
         for (peer_index, peer) in network.peers().iter().enumerate() {
-            match peer.client().get_sccp_registry() {
+            match peer.client().client().get_sccp_registry() {
                 Ok(registry) => {
                     let activations = expected
                         .iter()
@@ -293,7 +293,7 @@ async fn direct_sccp_route_governance_is_rejected_on_four_peers() -> Result<()> 
     let initial_registry = wait_for_route_states(&network, &[(&key, None)]).await?;
     assert!(initial_registry.lanes.is_empty());
     let unauthorized = bob
-        .submit_blocking(
+        .submit(
             register_action(route.clone()),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -306,7 +306,7 @@ async fn direct_sccp_route_governance_is_rejected_on_four_peers() -> Result<()> 
     let after_unauthorized = wait_for_route_states(&network, &[(&key, None)]).await?;
     assert_eq!(after_unauthorized, initial_registry);
     let legacy_manager = alice
-        .submit_blocking(
+        .submit(
             register_action(route.clone()),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )

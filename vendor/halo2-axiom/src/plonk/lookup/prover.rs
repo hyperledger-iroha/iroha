@@ -6,8 +6,7 @@ use super::Argument;
 use crate::multicore::{self, IntoParallelIterator};
 #[cfg(feature = "multicore")]
 use crate::multicore::{
-    IndexedParallelIterator, IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator,
-    ParallelSliceMut,
+    IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator, ParallelSliceMut,
 };
 use crate::plonk::evaluation::evaluate;
 use crate::{
@@ -402,6 +401,28 @@ impl<C: CurveAffine> Evaluated<C> {
 
 type ExpressionPair<F> = (Polynomial<F, LagrangeCoeff>, Polynomial<F, LagrangeCoeff>);
 
+/// Order lookup groups canonically before assigning their output rows. Hash-table
+/// seeds and parallel merge order must not become unseeded proof randomness.
+fn canonical_input_unique_ranges<F: PrimeField + Ord>(
+    input_uniques: &HashMap<ScalarKey<F>, usize>,
+) -> Vec<(F, std::ops::Range<usize>)> {
+    let mut groups = input_uniques
+        .iter()
+        .map(|(&ScalarKey(value), &count)| (value, 0..count))
+        .collect::<Vec<_>>();
+    #[cfg(feature = "multicore")]
+    groups.par_sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
+    #[cfg(not(feature = "multicore"))]
+    groups.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
+    let mut offset = 0;
+    for (_, range) in &mut groups {
+        let count = range.end;
+        *range = offset..offset + count;
+        offset += count;
+    }
+    groups
+}
+
 /// Given a vector of input values A and a vector of table values S,
 /// this method permutes A and S to produce A' and S', such that:
 /// - like values in A' are vertically adjacent to each other; and
@@ -470,43 +491,7 @@ fn permute_expression_pair<'params, C: CurveAffine, P: Params<'params, C>, R: Rn
     #[cfg(feature = "profile")]
     let timer = start_timer!(|| "permute_par input unique ranges (cpu par)");
 
-    #[cfg(feature = "multicore")]
-    let input_unique_ranges = input_uniques
-        .par_iter()
-        .fold(
-            || Vec::with_capacity(capacity),
-            |mut input_ranges, (&ScalarKey(coeff), &count)| {
-                if input_ranges.is_empty() {
-                    input_ranges.push((coeff, 0..count));
-                } else {
-                    let prev_end = input_ranges.last().unwrap().1.end;
-                    input_ranges.push((coeff, prev_end..prev_end + count));
-                }
-                input_ranges
-            },
-        )
-        .reduce_with(|r1, mut r2| {
-            let r1_end = r1.last().unwrap().1.end;
-            r2.par_iter_mut().for_each(|r2| {
-                r2.1.start += r1_end;
-                r2.1.end += r1_end;
-            });
-            [r1, r2].concat()
-        })
-        .unwrap();
-    #[cfg(not(feature = "multicore"))]
-    let input_unique_ranges = input_uniques.iter().fold(
-        Vec::with_capacity(capacity),
-        |mut input_ranges, (&ScalarKey(coeff), &count)| {
-            if input_ranges.is_empty() {
-                input_ranges.push((coeff, 0..count));
-            } else {
-                let prev_end = input_ranges.last().unwrap().1.end;
-                input_ranges.push((coeff, prev_end..prev_end + count));
-            }
-            input_ranges
-        },
-    );
+    let input_unique_ranges = canonical_input_unique_ranges(&input_uniques);
     #[cfg(feature = "profile")]
     end_timer!(timer);
 
@@ -660,3 +645,7 @@ fn permute_expression_pair_seq<'params, C: CurveAffine, P: Params<'params, C>, R
         domain.lagrange_from_vec(permuted_table_coeffs),
     ))
 }
+
+#[cfg(test)]
+#[path = "deterministic_recovery_tests.rs"]
+mod deterministic_recovery_tests;

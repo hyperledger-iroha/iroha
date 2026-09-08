@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-import importlib
+from iroha_native import load_crypto_extension
+
+import pytest
 
 from iroha_python.crypto import (
     PRIVACY_COMPILED_PROFILE_CATALOG_VALIDATION_STATUS_V1,
@@ -14,7 +16,7 @@ from iroha_python.crypto import (
 
 
 def test_authenticated_pyo3_abi23_executes_the_privacy_catalog_contract() -> None:
-    native = importlib.import_module("iroha_python._crypto")
+    native = load_crypto_extension()
     assert native.connect_norito_bridge_abi_version() == PRIVACY_REQUIRED_BRIDGE_ABI_VERSION
     assert native.privacy_bridge_abi_version() == PRIVACY_REQUIRED_BRIDGE_ABI_VERSION
     assert callable(native.privacy_compiled_profile_catalog_v1)
@@ -42,3 +44,18 @@ def test_authenticated_pyo3_abi23_executes_the_privacy_catalog_contract() -> Non
             native.privacy_validate_compiled_profile_catalog_v1(archive)
             != PRIVACY_COMPILED_PROFILE_CATALOG_VALIDATION_STATUS_V1["VALID"]
         )
+
+
+def test_native_capability_fetch_requires_the_transport_owner_and_rejects_archives() -> None:
+    native = load_crypto_extension()
+    assert callable(native._privacy_fetch_exact12_capability_manifest_v1)
+    assert callable(native.privacy_validate_exact12_capability_manifest_v1)
+    # An archive, duck-typed object, or locally available catalog cannot stand in
+    # for the actual SDK transport owner at the native authority boundary.
+    for owner in (b"archived-response", object(), {"authenticated": True}):
+        with pytest.raises(ValueError, match="ToriiClient transport owner"):
+            native._privacy_fetch_exact12_capability_manifest_v1(owner, None)
+    for archive in (b"", b"archived-response", native.privacy_compiled_profile_catalog_v1()):
+        assert native.privacy_validate_exact12_capability_manifest_v1(archive) != 0
+        with pytest.raises(ValueError, match="invalid canonical Exact12"):
+            native.privacy_exact12_capability_manifest_v1(archive)

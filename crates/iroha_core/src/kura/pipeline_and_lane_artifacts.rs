@@ -349,7 +349,7 @@ impl FastpqProofSnapshot {
             "batch".to_string(),
             norito::json::to_value(
                 &BASE64_STANDARD
-                    .encode(norito::to_bytes(&self.batch).expect("encode FASTPQ batch")),
+                    .encode(norito::encode_canonical(&self.batch).expect("encode FASTPQ batch")),
             )
             .expect("serialize FASTPQ batch"),
         );
@@ -2261,6 +2261,7 @@ impl AutonomousLifecycleTerminalOutcomeV1 {
         norito::decode_canonical(bytes)
     }
     /// Decode and validate the canonical basis-bearing V1 frame.
+    #[cfg(test)]
     pub(crate) fn decode_framed(bytes: &[u8]) -> Result<Self, norito::Error> {
         let outcome = Self::decode_framed_unvalidated(bytes)?;
         outcome
@@ -4197,6 +4198,12 @@ impl LaneBlockArtifactConflictPolicy {
 impl<'a> LaneBlockArtifactWriteBatch<'a> {
     fn new(kura: &'a Kura) -> Self {
         let geometry_guard = kura.lane_geometry_lock.lock();
+        Self::with_geometry_guard(kura, geometry_guard)
+    }
+    fn with_geometry_guard(
+        kura: &'a Kura,
+        geometry_guard: parking_lot::MutexGuard<'a, ()>,
+    ) -> Self {
         let sidecar_guard = kura.sidecar_lock.lock();
         Self {
             kura,

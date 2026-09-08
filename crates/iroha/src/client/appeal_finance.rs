@@ -85,7 +85,7 @@ fn settlement_payload(escrow_byte: &str, case_id: &str, outcome: &str) -> Vec<u8
     norito::json::to_vec(&norito::json!({
         "escrow_id_hex": escrow_id_hex,
         "case_id": case_id,
-        "outcome": outcome,
+        "outcome": outcome
     }))
     .expect("encode settlement payload")
 }

@@ -56,7 +56,7 @@ def _copy_fixture_tree(destination: Path) -> Path:
 def test_checked_in_inventory_seals_current_consumers() -> None:
     stats = checker.validate_manifest(ROOT, MANIFEST)
     assert stats.fixtures == 302
-    assert stats.tests == 587
+    assert stats.tests == 589
 
 
 def test_payload_corruption_fails_closed(tmp_path: Path) -> None:

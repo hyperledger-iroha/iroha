@@ -38,19 +38,22 @@ fn client_sends_transaction_with_invalid_instruction_should_not_see_any_changes(
         200u32,
         AssetId::new(wrong_asset_definition_id.clone(), account_id.clone()),
     );
-    let _ = client.submit_all_blocking::<InstructionBox>(
+    let _ = client.submit_all::<InstructionBox>(
         [create_asset.into(), mint_asset.into()],
         iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     );
     //Then;
-    let query_result = client.query(FindAssets::new()).execute_all()?;
+    let query_result = client.client().query(FindAssets::new()).execute_all()?;
     assert!(
         query_result
             .iter()
             .filter(|asset| *asset.id().account() == account_id)
             .all(|asset| *asset.id().definition() != wrong_asset_definition_id)
     );
-    let definition_query_result = client.query(FindAssetsDefinitions::new()).execute_all()?;
+    let definition_query_result = client
+        .client()
+        .query(FindAssetsDefinitions::new())
+        .execute_all()?;
     assert!(
         definition_query_result
             .iter()

@@ -20,24 +20,29 @@ pub(super) async fn run_mixed_dataspace_native_amx_routes_and_commits_with_recei
             DomainId::try_new("bankvault", "bank").expect("bank vault domain");
         let acme_dataspace = DataSpaceId::new(ACME_DATASPACE);
         let bank_dataspace = DataSpaceId::new(BANK_DATASPACE);
-        let transaction = submitter.build_transaction(
+        let transaction ={
+    let account = submitter.account_client();
+    account
+        .prepare_transaction(iroha::client::AccountTransactionDraft::new(
             [
-                dataspace_setup_instruction("acme", acme_dataspace, &submitter.account)?,
-                dataspace_setup_instruction("bank", bank_dataspace, &submitter.account)?,
+                dataspace_setup_instruction("acme", acme_dataspace, &submitter.client().account)?,
+                dataspace_setup_instruction("bank", bank_dataspace, &submitter.client().account)?,
                 domain_setup_instruction_in_dataspace(
                     &merchant_domain,
                     acme_dataspace,
-                    &submitter.account,
+                    &submitter.client().account,
                 )?,
                 domain_setup_instruction_in_dataspace(
                     &treasury_domain,
                     bank_dataspace,
-                    &submitter.account,
+                    &submitter.client().account,
                 )?,
             ],
             FeePaymentIntent::authority(Vec::new(), None),
             Metadata::default(),
-        );
+        ))
+        .and_then(|payload| account.sign_transaction(payload))
+}.expect("build integration-test transaction");
         let entrypoint_hash = transaction.hash_as_entrypoint();
         let approved_route =
             submit_and_wait_for_approval(&submitter, transaction.clone()).await?;
@@ -103,24 +108,38 @@ pub(super) async fn run_native_amx_queue_journal_replays_plan_after_restart() ->
             DomainId::try_new("journalbankvault", "bank").expect("bank vault domain");
         let acme_dataspace = DataSpaceId::new(ACME_DATASPACE);
         let bank_dataspace = DataSpaceId::new(BANK_DATASPACE);
-        let transaction = submitter.build_transaction(
-            [
-                dataspace_setup_instruction("acme", acme_dataspace, &submitter.account)?,
-                dataspace_setup_instruction("bank", bank_dataspace, &submitter.account)?,
-                domain_setup_instruction_in_dataspace(
-                    &merchant_domain,
-                    acme_dataspace,
-                    &submitter.account,
-                )?,
-                domain_setup_instruction_in_dataspace(
-                    &treasury_domain,
-                    bank_dataspace,
-                    &submitter.account,
-                )?,
-            ],
-            FeePaymentIntent::authority(Vec::new(), None),
-            Metadata::default(),
-        );
+        let transaction = {
+            let account = submitter.account_client();
+            account
+                .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                    [
+                        dataspace_setup_instruction(
+                            "acme",
+                            acme_dataspace,
+                            &submitter.client().account,
+                        )?,
+                        dataspace_setup_instruction(
+                            "bank",
+                            bank_dataspace,
+                            &submitter.client().account,
+                        )?,
+                        domain_setup_instruction_in_dataspace(
+                            &merchant_domain,
+                            acme_dataspace,
+                            &submitter.client().account,
+                        )?,
+                        domain_setup_instruction_in_dataspace(
+                            &treasury_domain,
+                            bank_dataspace,
+                            &submitter.client().account,
+                        )?,
+                    ],
+                    FeePaymentIntent::authority(Vec::new(), None),
+                    Metadata::default(),
+                ))
+                .and_then(|payload| account.sign_transaction(payload))
+        }
+        .expect("build integration-test transaction");
         let entrypoint_hash = transaction.hash_as_entrypoint();
         let submitter_for_submit = submitter.clone();
         let transaction_for_submit = transaction.clone();
@@ -193,14 +212,28 @@ pub(super) async fn run_musubi_publication_below_quorum_queue_crash_replay_keeps
         let acme_dataspace = DataSpaceId::new(ACME_DATASPACE);
         let domain =
             DomainId::try_new(MUSUBI_FAULT_DOMAIN, "acme").expect("Musubi fault namespace domain");
-        let namespace_home_transaction = submitter.build_transaction(
-            [
-                dataspace_setup_instruction("acme", acme_dataspace, &submitter.account)?,
-                domain_setup_instruction_in_dataspace(&domain, acme_dataspace, &submitter.account)?,
-            ],
-            FeePaymentIntent::authority(Vec::new(), None),
-            Metadata::default(),
-        );
+        let namespace_home_transaction = {
+            let account = submitter.account_client();
+            account
+                .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                    [
+                        dataspace_setup_instruction(
+                            "acme",
+                            acme_dataspace,
+                            &submitter.client().account,
+                        )?,
+                        domain_setup_instruction_in_dataspace(
+                            &domain,
+                            acme_dataspace,
+                            &submitter.client().account,
+                        )?,
+                    ],
+                    FeePaymentIntent::authority(Vec::new(), None),
+                    Metadata::default(),
+                ))
+                .and_then(|payload| account.sign_transaction(payload))
+        }
+        .expect("build integration-test transaction");
         submit_approved_and_wait_for_all_peers(
             &network,
             &submitter,
@@ -209,14 +242,20 @@ pub(super) async fn run_musubi_publication_below_quorum_queue_crash_replay_keeps
         )
         .await?;
         let binding = musubi_fault_namespace_binding();
-        let binding_transaction = submitter.build_transaction(
-            [InstructionBox::from(RegisterMusubiNamespaceBindingV1::new(
-                binding.clone(),
-                1,
-            ))],
-            FeePaymentIntent::authority(Vec::new(), None),
-            Metadata::default(),
-        );
+        let binding_transaction = {
+            let account = submitter.account_client();
+            account
+                .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                    [InstructionBox::from(RegisterMusubiNamespaceBindingV1::new(
+                        binding.clone(),
+                        1,
+                    ))],
+                    FeePaymentIntent::authority(Vec::new(), None),
+                    Metadata::default(),
+                ))
+                .and_then(|payload| account.sign_transaction(payload))
+        }
+        .expect("build integration-test transaction");
         let binding_block = submit_approved_and_wait_for_all_peers(
             &network,
             &submitter,
@@ -231,15 +270,21 @@ pub(super) async fn run_musubi_publication_below_quorum_queue_crash_replay_keeps
         let (_, latest_time_ms) = musubi_fault_snapshot_and_time(&submitter)?;
         let staging_receipt =
             musubi_fault_staging_receipt(&submitter, latest_time_ms, &commitment, &manifest);
-        let archive_transaction = submitter.build_transaction(
-            [InstructionBox::from(RegisterMusubiArchiveV1::new(
-                commitment,
-                staging_receipt,
-                1,
-            ))],
-            FeePaymentIntent::authority(Vec::new(), None),
-            Metadata::default(),
-        );
+        let archive_transaction = {
+            let account = submitter.account_client();
+            account
+                .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                    [InstructionBox::from(RegisterMusubiArchiveV1::new(
+                        commitment,
+                        staging_receipt,
+                        1,
+                    ))],
+                    FeePaymentIntent::authority(Vec::new(), None),
+                    Metadata::default(),
+                ))
+                .and_then(|payload| account.sign_transaction(payload))
+        }
+        .expect("build integration-test transaction");
         submit_approved_and_wait_for_all_peers(
             &network,
             &submitter,
@@ -264,17 +309,23 @@ pub(super) async fn run_musubi_publication_below_quorum_queue_crash_replay_keeps
                 &format!("pre-crash peer {index}"),
             )?;
         }
-        let publish_transaction = submitter.build_transaction(
-            [InstructionBox::from(PublishMusubiReleaseV1::new(
-                binding.namespace,
-                publication,
-                None,
-                1,
-                None,
-            ))],
-            FeePaymentIntent::authority(Vec::new(), None),
-            Metadata::default(),
-        );
+        let publish_transaction = {
+            let account = submitter.account_client();
+            account
+                .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                    [InstructionBox::from(PublishMusubiReleaseV1::new(
+                        binding.namespace,
+                        publication,
+                        None,
+                        1,
+                        None,
+                    ))],
+                    FeePaymentIntent::authority(Vec::new(), None),
+                    Metadata::default(),
+                ))
+                .and_then(|payload| account.sign_transaction(payload))
+        }
+        .expect("build integration-test transaction");
         let publish_entrypoint = publish_transaction.hash_as_entrypoint();
         // Stop every other validator before Torii acceptance so the publication cannot
         // acquire a consensus QC. The final peer durably queues the exact publication
@@ -306,14 +357,20 @@ pub(super) async fn run_musubi_publication_below_quorum_queue_crash_replay_keeps
             "replayed Musubi publication",
         )
         .await?;
-        let barrier_transaction = restarted_client.build_transaction(
-            [InstructionBox::from(Log::new(
-                Level::INFO,
-                "Musubi publication crash-replay visibility barrier".to_owned(),
-            ))],
-            FeePaymentIntent::authority(Vec::new(), None),
-            Metadata::default(),
-        );
+        let barrier_transaction = {
+            let account = restarted_client.account_client();
+            account
+                .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                    [InstructionBox::from(Log::new(
+                        Level::INFO,
+                        "Musubi publication crash-replay visibility barrier".to_owned(),
+                    ))],
+                    FeePaymentIntent::authority(Vec::new(), None),
+                    Metadata::default(),
+                ))
+                .and_then(|payload| account.sign_transaction(payload))
+        }
+        .expect("build integration-test transaction");
         submit_approved_and_wait_for_all_peers(
             &network,
             &restarted_client,
@@ -339,7 +396,7 @@ pub(super) async fn run_musubi_publication_below_quorum_queue_crash_replay_keeps
             } else {
                 canonical_snapshot = Some(snapshot);
             }
-            let blocks = client.query(FindBlocks).execute_all()?;
+            let blocks = client.client().query(FindBlocks).execute_all()?;
             let occurrences = blocks
                 .iter()
                 .flat_map(|block| {
@@ -541,7 +598,7 @@ pub(super) async fn run_native_amx_rotating_validator_fault_soak_preserves_indep
                     &format!("iteration {iteration}: peer {peer_index}"),
                 )
                 .await?;
-                let diagnostics = client.get_sumeragi_diagnostics().wrap_err_with(|| {
+                let diagnostics = client.client().get_sumeragi_diagnostics().wrap_err_with(|| {
                     format!("iteration {iteration}: peer {peer_index} diagnostics")
                 })?;
                 let same_route_rows = diagnostics

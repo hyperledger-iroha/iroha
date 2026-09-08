@@ -135,7 +135,7 @@ struct TransactionInputValidator {
         }
         do {
             let prefix = try AccountAddress.inspectI105NetworkPrefix(checked).chainDiscriminant
-            let address = try AccountAddress.parseEncodedSwiftOnly(
+            let address = try AccountAddress.parseCanonicalI105(
                 checked,
                 expectedPrefix: prefix
             )
@@ -519,7 +519,7 @@ enum SingleInstructionSwiftNoritoEncoder {
             networkId: networkId,
             authorityId: authority
         )
-        let executable = try encodeBatchExecutable(entries)
+        let executable = try encodeBatchExecutable(entries, expectedNetworkId: networkId)
         var networkDomain = CompactNoritoWriter()
         networkDomain.writeUInt32LE(0)
         networkDomain.writeField(ids.networkId.bytes)
@@ -770,7 +770,10 @@ enum SingleInstructionSwiftNoritoEncoder {
         return executable.data
     }
 
-    private static func encodeBatchExecutable(_ entries: [TransactionBatchEntry]) throws -> Data {
+    private static func encodeBatchExecutable(
+        _ entries: [TransactionBatchEntry],
+        expectedNetworkId: NetworkId
+    ) throws -> Data {
         var sequence = CompactNoritoWriter()
         sequence.writeUInt64LE(UInt64(entries.count))
         for entry in entries {
@@ -778,7 +781,7 @@ enum SingleInstructionSwiftNoritoEncoder {
             switch entry {
             case let .instruction(frame):
                 item.writeUInt32LE(0)
-                item.writeField(try frame.compactInstructionBoxPayload())
+                item.writeField(try frame.compactInstructionBoxPayload(expectedNetworkId: expectedNetworkId))
             case let .contractCall(invocation):
                 item.writeUInt32LE(1)
                 var call = CompactNoritoWriter()

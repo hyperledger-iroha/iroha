@@ -82,6 +82,10 @@ public final class KagemushaDeviceLifecycleBridgeV1Tests {
           new byte[0]);
       final org.hyperledger.iroha.sdk.offline.KagemushaDeviceLifecycleBridgeV1.Result decoded =
           codec.decodeResponse(response, kotlinOperation, requestId);
+      assertArrayEquals(response, decoded.canonicalResponseFrame());
+      final byte[] callerFrame = decoded.canonicalResponseFrame();
+      Arrays.fill(callerFrame, (byte) 0);
+      assertArrayEquals(response, decoded.canonicalResponseFrame());
       assertEquals(operation, KagemushaDeviceLifecycleBridgeV1.Operation.valueOf(
           decoded.getOperation().name()));
       assertEquals(KagemushaDeviceLifecycleBridgeV1.Status.UNAVAILABLE,

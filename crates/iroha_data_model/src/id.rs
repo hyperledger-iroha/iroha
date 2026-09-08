@@ -20,7 +20,7 @@ const NETWORK_ID_LITERAL_BYTES: usize =
 ///
 /// Chain identifiers are ASCII, so this is also the maximum character count. The bound keeps every
 /// signed, configured, and peer-advertised chain identity small before any allocation is performed.
-pub const MAX_CHAIN_ID_BYTES: usize = 128;
+pub use iroha_primitives::chain_id::MAX_CHAIN_ID_BYTES;
 #[model]
 mod model {
     use super::*;
@@ -150,26 +150,7 @@ mod model {
     pub struct ChainId(Box<str>);
     impl ChainId {
         fn parse(value: &str) -> Result<Self, ParseError> {
-            if value.is_empty() {
-                return Err(ParseError::new("`ChainId` must not be empty"));
-            }
-            if value.len() > MAX_CHAIN_ID_BYTES {
-                return Err(ParseError::new(
-                    "`ChainId` exceeds the 128-byte ASCII limit",
-                ));
-            }
-            let bytes = value.as_bytes();
-            if !bytes.first().is_some_and(u8::is_ascii_alphanumeric)
-                || !bytes.last().is_some_and(u8::is_ascii_alphanumeric)
-                || bytes.iter().any(|byte| {
-                    !byte.is_ascii_alphanumeric() && !matches!(byte, b'.' | b'_' | b':' | b'-')
-                })
-            {
-                return Err(ParseError::new(
-                    "`ChainId` must be exact ASCII text beginning and ending with an \
-                     alphanumeric byte and containing only alphanumerics, `.`, `_`, `:`, or `-`",
-                ));
-            }
+            iroha_primitives::chain_id::validate_chain_id(value).map_err(ParseError::new)?;
             Ok(Self(value.into()))
         }
         pub(super) fn decode_text_wire(bytes: &[u8]) -> Result<(Self, usize), NoritoError> {
@@ -305,9 +286,10 @@ mod model {
         RepoAgreementId(repo::RepoAgreementId),
     }
 }
-impl norito::core::NoritoSerialize for NetworkId {
+impl norito::core::NoritoSerialize for NetworkId {}
+impl norito::core::SerializePayload for NetworkId {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
-        norito::core::NoritoSerialize::serialize(self.as_genesis_hash(), writer)
+        norito::core::SerializePayload::serialize(self.as_genesis_hash(), writer)
     }
     fn encoded_len_hint(&self) -> Option<usize> {
         Some(iroha_crypto::Hash::LENGTH)
@@ -341,15 +323,16 @@ impl<'a> DecodeFromSlice<'a> for NetworkId {
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::id::ChainIdText")]
 struct ChainIdText(ChainId);
-impl norito::core::NoritoSerialize for ChainIdText {
+impl norito::core::NoritoSerialize for ChainIdText {}
+impl norito::core::SerializePayload for ChainIdText {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
-        <&str as norito::core::NoritoSerialize>::serialize(&self.0.as_str(), writer)
+        <&str as norito::core::SerializePayload>::serialize(&self.0.as_str(), writer)
     }
     fn encoded_len_hint(&self) -> Option<usize> {
-        <&str as norito::core::NoritoSerialize>::encoded_len_hint(&self.0.as_str())
+        <&str as norito::core::SerializePayload>::encoded_len_hint(&self.0.as_str())
     }
     fn encoded_len_exact(&self) -> Option<usize> {
-        <&str as norito::core::NoritoSerialize>::encoded_len_exact(&self.0.as_str())
+        <&str as norito::core::SerializePayload>::encoded_len_exact(&self.0.as_str())
     }
 }
 impl<'a> norito::core::NoritoDeserialize<'a> for ChainIdText {
@@ -453,13 +436,14 @@ mod id_box_codec {
             }
         }
     }
-    impl norito::core::NoritoSerialize for IdBox {
+    impl norito::core::NoritoSerialize for IdBox {}
+    impl norito::core::SerializePayload for IdBox {
         fn serialize(
             &self,
             writer: &mut norito::core::Encoder<'_>,
         ) -> Result<(), norito::core::Error> {
             let candidate: IdBoxCandidate = self.clone().into();
-            norito::core::NoritoSerialize::serialize(&candidate, writer)
+            norito::core::SerializePayload::serialize(&candidate, writer)
         }
     }
     impl<'de> norito::core::NoritoDeserialize<'de> for IdBox {

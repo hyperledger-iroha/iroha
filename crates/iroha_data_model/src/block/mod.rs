@@ -1039,7 +1039,7 @@ pub mod stream {
     use iroha_schema::IntoSchema;
     use norito::{
         codec::{Decode, Encode},
-        core::{Error as NoritoError, NoritoSerialize},
+        core::{Error as NoritoError, NoritoSerialize, SerializePayload},
     };
     use std::{num::NonZeroU64, sync::Arc};
     #[model]
@@ -1053,6 +1053,8 @@ pub mod stream {
             derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
         )]
         #[repr(transparent)]
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(name = "iroha_data_model::block::stream::model::BlockSubscriptionRequest")]
         pub struct BlockSubscriptionRequest(pub NonZeroU64);
         /// Message sent by the stream producer containing block.
         #[derive(Debug, Clone, Decode, Encode, IntoSchema)]
@@ -1061,6 +1063,8 @@ pub mod stream {
             derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
         )]
         #[repr(transparent)]
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(name = "iroha_data_model::block::stream::model::BlockMessage")]
         pub struct BlockMessage(pub SignedBlock);
     }
     impl From<BlockMessage> for SignedBlock {
@@ -1073,14 +1077,24 @@ pub mod stream {
     #[derive(Debug, Clone)]
     #[repr(transparent)]
     pub struct BlockMessageSend(pub Arc<SignedBlock>);
+    impl norito::NoritoSchema for BlockMessageSend {
+        fn nominal_name() -> String {
+            "iroha_data_model::block::stream::BlockMessageSend".to_owned()
+        }
+        fn frame_name() -> String {
+            <BlockMessage as norito::NoritoSchema>::frame_name()
+        }
+    }
     impl NoritoSerialize for BlockMessageSend {
         fn schema_hash() -> [u8; 16] {
             <BlockMessage as NoritoSerialize>::schema_hash()
         }
+    }
+    impl SerializePayload for BlockMessageSend {
         fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), NoritoError> {
             // Serialize as a BlockMessage wrapper to keep schema and layout consistent
             let msg = BlockMessage(self.0.as_ref().clone());
-            NoritoSerialize::serialize(&msg, writer)
+            SerializePayload::serialize(&msg, writer)
         }
     }
     /// Exports common structs and enums from this module.
@@ -2889,16 +2903,24 @@ mod tests {
             &alternate_entrypoint,
         );
 
-        let structurally_decoded: SignedBlock =
-            iroha_version::codec::decode_exact_versioned(&alternate_block)
-                .expect("the alternate nested alias remains structurally decodable");
-        assert_eq!(structurally_decoded, block);
+        let canonical_decoded: SignedBlock =
+            iroha_version::codec::decode_exact_versioned(&canonical_block)
+                .expect("canonical nested instruction identifiers decode");
+        assert_eq!(canonical_decoded, block);
+        let structural_error =
+            iroha_version::codec::decode_exact_versioned::<SignedBlock>(&alternate_block)
+                .expect_err("the instruction registry rejects removed aliases directly");
+        assert!(matches!(
+            structural_error,
+            iroha_version::error::Error::NoritoCodec(reason)
+                if reason == "unknown instruction wire identifier"
+        ));
         let bare_error = SignedBlock::decode_all_versioned(&alternate_block)
             .expect_err("bare V1 blocks must reject nested instruction aliases");
         assert!(matches!(
             bare_error,
             iroha_version::error::Error::NoritoCodec(reason)
-                if reason == "non-canonical encoding"
+                if reason == "unknown instruction wire identifier"
         ));
         let framed = frame_versioned_signed_block_bytes(&alternate_block)
             .expect("frame alternate versioned block");
@@ -2907,7 +2929,7 @@ mod tests {
         assert!(matches!(
             framed_error,
             iroha_version::error::Error::NoritoCodec(reason)
-                if reason == "non-canonical encoding"
+                if reason == "unknown instruction wire identifier"
         ));
     }
     #[test]

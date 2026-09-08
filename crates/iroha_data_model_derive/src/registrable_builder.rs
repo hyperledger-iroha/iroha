@@ -2,8 +2,7 @@ use manyhow::{Emitter, emit};
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 use syn::{
-    Attribute, Data, DeriveInput, Expr, ExprLit, Field, Fields, Lit, LitStr, parse_quote,
-    spanned::Spanned,
+    Attribute, Data, DeriveInput, Expr, ExprLit, Field, Fields, Lit, parse_quote, spanned::Spanned,
 };
 struct FieldInfo {
     ident: syn::Ident,
@@ -84,54 +83,14 @@ fn normalize_value_expr(expr: Expr) -> syn::Result<Expr> {
     }
 }
 
-/// Read the single declared identity of the generated registration builder.
-fn child_schema_name(input: &DeriveInput) -> syn::Result<LitStr> {
-    let mut name = None;
-    let mut declaration_seen = false;
-    for attribute in &input.attrs {
-        if !attribute.path().is_ident("registrable_builder") {
-            continue;
-        }
-        if declaration_seen {
-            return Err(syn::Error::new_spanned(
-                attribute,
-                "duplicate registration builder identity declaration",
-            ));
-        }
-        declaration_seen = true;
-        attribute.parse_nested_meta(|nested| {
-            if !nested.path.is_ident("schema_name") {
-                return Err(nested.error("unsupported registration builder identity option"));
-            }
-            if name.is_some() {
-                return Err(nested.error("duplicate registration builder schema_name"));
-            }
-            let literal: LitStr = nested.value()?.parse()?;
-            let value = literal.value();
-            if value.is_empty()
-                || value.trim() != value
-                || value.chars().any(char::is_control)
-            {
-                return Err(syn::Error::new_spanned(
-                    literal,
-                    "registration builder schema_name must be nonempty without surrounding whitespace or control characters",
-                ));
-            }
-            name = Some(literal);
-            Ok(())
-        })?;
-    }
-    name.ok_or_else(|| {
-        syn::Error::new_spanned(
-            &input.ident,
-            "RegistrableBuilder requires #[registrable_builder(schema_name = \"captured child identity\")]",
-        )
-    })
-}
-
 #[allow(clippy::too_many_lines)]
 pub fn impl_registrable_builder(emitter: &mut Emitter, input: &DeriveInput) -> TokenStream {
-    let schema_name = match child_schema_name(input) {
+    let schema_name = match crate::utils::required_child_schema_name(
+        input,
+        "registrable_builder",
+        "RegistrableBuilder",
+        "registration builder",
+    ) {
         Ok(name) => name,
         Err(error) => {
             emit!(emitter, error.span(), "{}", error);

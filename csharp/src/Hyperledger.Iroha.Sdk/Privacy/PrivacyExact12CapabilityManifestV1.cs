@@ -143,6 +143,7 @@ public sealed class PrivacyExact12DeploymentQualificationV1
 
     internal PrivacyExact12DeploymentQualificationV1(
         ushort version,
+        NetworkId networkId,
         byte[] releaseManifestDigest,
         IReadOnlyList<PrivacyDeploymentActivationV1> activations,
         ulong convergenceHeight,
@@ -150,6 +151,7 @@ public sealed class PrivacyExact12DeploymentQualificationV1
         byte[] canonicalBytes)
     {
         Version = version;
+        NetworkId = networkId;
         this.releaseManifestDigest = (byte[])releaseManifestDigest.Clone();
         Activations = new ReadOnlyCollection<PrivacyDeploymentActivationV1>(activations.ToArray());
         ConvergenceHeight = convergenceHeight;
@@ -158,6 +160,8 @@ public sealed class PrivacyExact12DeploymentQualificationV1
     }
 
     public ushort Version { get; }
+    /// <summary>Exact genesis-derived network authenticated by the deployment evidence.</summary>
+    public NetworkId NetworkId { get; }
     public byte[] ReleaseManifestDigest => (byte[])releaseManifestDigest.Clone();
     public IReadOnlyList<PrivacyDeploymentActivationV1> Activations { get; }
     public ulong ConvergenceHeight { get; }
@@ -301,8 +305,10 @@ public sealed class PrivacyExact12CapabilityManifestV1
         PrivacyExact12QualificationRecordV1? qualification,
         IReadOnlyList<PrivacyExact12CapabilityRowV1> protocols,
         byte[] manifestDigest,
-        byte[] canonicalArchive)
+        byte[] canonicalArchive,
+        NetworkId networkId)
     {
+        NetworkId = networkId;
         Version = version;
         CommittedHeight = committedHeight;
         this.consensusPolicy = (byte[])consensusPolicy.Clone();
@@ -313,6 +319,9 @@ public sealed class PrivacyExact12CapabilityManifestV1
     }
 
     public uint Version { get; }
+
+    /// <summary>Immutable expected network from the authenticated Torii client.</summary>
+    public NetworkId NetworkId { get; }
 
     public ulong CommittedHeight { get; }
 
@@ -361,6 +370,9 @@ public sealed class PrivacyExact12CapabilityManifestV1
                 "Exact12 privacy capabilities require canonical request credentials.");
         }
 
+        var expectedNetworkId = client.Options.NetworkId ?? throw new InvalidOperationException(
+            "Exact12 privacy capabilities require the configured exact network identity.");
+
         // Resolve and native-validate the immutable local tuple before any authority-bearing read.
         var localCatalog = PrivacyNative.CompiledProfileCatalogV1().NoritoBytes;
         var expectedUri = new Uri(client.BaseUri, CapabilitiesPath.TrimStart('/'));
@@ -382,6 +394,8 @@ public sealed class PrivacyExact12CapabilityManifestV1
         var decoded = PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(
             archive,
             localCatalog);
+        PrivacyExact12CapabilityManifestCodecV1.RequireDeploymentNetwork(
+            decoded.Qualification, expectedNetworkId);
         return new PrivacyExact12CapabilityManifestV1(
             decoded.Version,
             decoded.CommittedHeight,
@@ -389,7 +403,8 @@ public sealed class PrivacyExact12CapabilityManifestV1
             decoded.Qualification,
             decoded.Protocols,
             decoded.ManifestDigest,
-            decoded.CanonicalArchive);
+            decoded.CanonicalArchive,
+            expectedNetworkId);
     }
 
     private static void RequireExactNoritoContentType(MediaTypeHeaderValue? contentType)
@@ -447,14 +462,19 @@ public sealed class PrivacyExact12CapabilityTupleAdmissionV1
 {
     private static readonly object AdmissionSeal = new();
     private readonly byte[] manifestDigest;
+    private readonly byte[] manifestArchive;
     private readonly object seal;
 
     private PrivacyExact12CapabilityTupleAdmissionV1(
         PrivacyProtocolIdV1 protocolId,
         ulong committedHeight,
         byte[] manifestDigest,
-        PrivacyOperationSchemaV1 operationSchema)
+        PrivacyOperationSchemaV1 operationSchema,
+        NetworkId networkId,
+        byte[] manifestArchive)
     {
+        NetworkId = networkId;
+        this.manifestArchive = (byte[])manifestArchive.Clone();
         ProtocolId = protocolId;
         CommittedHeight = committedHeight;
         this.manifestDigest = (byte[])manifestDigest.Clone();
@@ -470,12 +490,21 @@ public sealed class PrivacyExact12CapabilityTupleAdmissionV1
 
     public PrivacyOperationSchemaV1 OperationSchema { get; }
 
+    /// <summary>Exact network this token may authorize at construction time.</summary>
+    public NetworkId NetworkId { get; }
+
     internal static PrivacyExact12CapabilityTupleAdmissionV1 IssueValidated(
         PrivacyExact12CapabilityManifestV1 manifest,
         PrivacyProtocolIdV1 protocol)
     {
         ArgumentNullException.ThrowIfNull(manifest);
-        var row = manifest.RowFor(protocol);
+        _ = manifest.RowFor(protocol);
+        PrivacyNative.RequireValidCapabilityArchive(manifest.CanonicalBytes);
+        var decoded = PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(
+            manifest.CanonicalBytes, PrivacyNative.CompiledProfileCatalogV1().NoritoBytes);
+        PrivacyExact12CapabilityManifestCodecV1.RequireDeploymentNetwork(
+            decoded.Qualification, manifest.NetworkId, requireQualification: true);
+        var row = decoded.Protocols[checked((int)protocol)];
         if (!row.IsNetworkAvailable)
         {
             throw new InvalidOperationException(
@@ -490,15 +519,30 @@ public sealed class PrivacyExact12CapabilityTupleAdmissionV1
             row.ProtocolId,
             manifest.CommittedHeight,
             manifest.ManifestDigest,
-            row.OperationSchema);
+            row.OperationSchema,
+            manifest.NetworkId,
+            manifest.CanonicalBytes);
     }
 
-    internal void RequireAuthentic(PrivacyProtocolIdV1 protocol)
+    internal void RequireAuthentic(PrivacyProtocolIdV1 protocol, NetworkId expectedNetworkId)
     {
-        if (!ReferenceEquals(seal, AdmissionSeal) || ProtocolId != protocol)
+        if (!ReferenceEquals(seal, AdmissionSeal) || ProtocolId != protocol
+            || !NetworkId.Equals(expectedNetworkId))
         {
             throw new InvalidOperationException(
-                "Exact12 capability admission is absent, invalid, or protocol-substituted.");
+                "Exact12 capability admission is absent, invalid, or protocol/network-substituted.");
+        }
+        PrivacyNative.RequireValidCapabilityArchive(manifestArchive);
+        var decoded = PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(
+            manifestArchive, PrivacyNative.CompiledProfileCatalogV1().NoritoBytes);
+        PrivacyExact12CapabilityManifestCodecV1.RequireDeploymentNetwork(
+            decoded.Qualification, expectedNetworkId, requireQualification: true);
+        var row = decoded.Protocols[checked((int)protocol)];
+        if (decoded.CommittedHeight != CommittedHeight
+            || !decoded.ManifestDigest.AsSpan().SequenceEqual(manifestDigest)
+            || !row.IsNetworkAvailable || !row.LocalCompiledTupleMatches)
+        {
+            throw new InvalidOperationException("Exact12 capability admission no longer validates.");
         }
     }
 }
@@ -517,10 +561,12 @@ public static class PrivacyExact12CapabilityAdmissionV1
     /// <summary>Verify a sealed token immediately before retained privacy construction.</summary>
     public static void RequireForConstruction(
         PrivacyExact12CapabilityTupleAdmissionV1 admission,
-        PrivacyProtocolIdV1 protocol)
+        PrivacyProtocolIdV1 protocol,
+        NetworkId expectedNetworkId)
     {
         ArgumentNullException.ThrowIfNull(admission);
-        admission.RequireAuthentic(protocol);
+        ArgumentNullException.ThrowIfNull(expectedNetworkId);
+        admission.RequireAuthentic(protocol, expectedNetworkId);
     }
 }
 
@@ -1400,10 +1446,21 @@ internal static class PrivacyExact12CapabilityManifestCodecV1
             throw Invalid("Exact12 deployment version must be 1.");
         }
         _ = reader.ReadField("qualification.deployment.chain_id", out _);
-        _ = reader.ReadField("qualification.deployment.network_id", out _);
-        _ = ReadNonzeroDigestNewtype(
-            reader.ReadField("qualification.deployment.genesis_hash", out _),
-            "qualification.deployment.genesis_hash");
+        NetworkId networkId;
+        try
+        {
+            networkId = NetworkId.FromBytes(
+                reader.ReadField("qualification.deployment.network_id", out _));
+        }
+        catch (ArgumentException)
+        {
+            throw Invalid("Deployment network id must be exactly 32 marked hash bytes.");
+        }
+        var genesisHash = reader.ReadField("qualification.deployment.genesis_hash", out _);
+        if (!genesisHash.SequenceEqual(networkId.AsSpan()))
+        {
+            throw Invalid("Deployment genesis hash differs from its exact network identity.");
+        }
         var releaseManifestDigest = ReadNonzeroDigestNewtype(
             reader.ReadField("qualification.deployment.release_manifest_digest", out _),
             "qualification.deployment.release_manifest_digest");
@@ -1466,11 +1523,32 @@ internal static class PrivacyExact12CapabilityManifestCodecV1
         activationsReader.RequireEnd("qualification.deployment.activations");
         return new PrivacyExact12DeploymentQualificationV1(
             version,
+            networkId,
             releaseManifestDigest,
             activations,
             convergenceHeight,
             qualificationDigest,
             encoded);
+    }
+
+    internal static void RequireDeploymentNetwork(
+        PrivacyExact12QualificationRecordV1? qualification,
+        NetworkId expectedNetworkId,
+        bool requireQualification = false)
+    {
+        ArgumentNullException.ThrowIfNull(expectedNetworkId);
+        if (qualification is null)
+        {
+            if (requireQualification)
+            {
+                throw Invalid("Exact12 admission requires network deployment qualification.");
+            }
+            return;
+        }
+        if (!qualification.DeploymentQualification.NetworkId.Equals(expectedNetworkId))
+        {
+            throw Invalid("Exact12 deployment differs from the configured network identity.");
+        }
     }
 
     private static bool QualificationMatches(

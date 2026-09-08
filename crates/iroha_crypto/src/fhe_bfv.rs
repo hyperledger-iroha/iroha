@@ -195,7 +195,8 @@ impl AsRef<[u8; BFV_GOLDILOCKS_DIGEST384_BYTES_V1]> for BfvGoldilocksDigest384V1
     }
 }
 
-impl norito::core::NoritoSerialize for BfvGoldilocksDigest384V1 {
+impl norito::core::NoritoSerialize for BfvGoldilocksDigest384V1 {}
+impl norito::core::SerializePayload for BfvGoldilocksDigest384V1 {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         writer.write_all(&self.0)?;
         Ok(())
@@ -8066,7 +8067,7 @@ where
     validate(&material)?;
     Ok(material)
 }
-fn bfv_canonical_material_digest_v1<T: Encode>(
+fn bfv_canonical_material_digest_v1<T: norito::NoritoSerialize>(
     label: &str,
     domain: &[u8],
     material: &T,
@@ -10537,7 +10538,7 @@ pub fn encode_bfv_full_bootstrap_circuit_artifact_payload_v1(
     );
     Ok(bytes)
 }
-fn validate_full_bootstrap_artifact_payload_canonical_bytes_v1<T: Encode>(
+fn validate_full_bootstrap_artifact_payload_canonical_bytes_v1<T: norito::NoritoSerialize>(
     label: &str,
     payload: &[u8],
     value: &T,
@@ -38938,7 +38939,6 @@ fn rotation_steps_mod_slot_count(
 #[cfg(test)]
 mod first_release_hard_cut_tests {
     use super::*;
-    use digest::Digest as _;
     use sha3::Sha3_256;
 
     #[derive(Encode)]
@@ -39252,3 +39252,6 @@ mod tests;
 
 #[cfg(test)]
 mod captured_schema_tests;
+
+#[cfg(test)]
+mod conformance;

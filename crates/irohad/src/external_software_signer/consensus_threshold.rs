@@ -15,7 +15,7 @@
 //! back this operational retirement. Core's committed-state retirement gates
 //! remain the authority for deciding when an old share may be removed.
 
-use super::unix::{SoftwareSignerCredentialErrorV1, load_bounded_software_signer_credential_v1};
+use crate::runtime_credential::{RuntimeCredentialErrorV1, load_bounded_runtime_credential_v1};
 use crate::{
     ConsensusSignerProviderQualificationV1, GlobalBeaconPartialSignerBrokerBackendErrorV1,
     GlobalBeaconPartialSignerBrokerBackendV1, IrohaRuntimeProviderBindingV1,
@@ -40,7 +40,7 @@ use iroha_data_model::{
     NetworkId,
     consensus::{GlobalThresholdBeaconKeySessionV1, GlobalThresholdBeaconPartialSignatureV1},
 };
-use norito::{DecodeLimits, NoritoDeserialize, NoritoSerialize};
+use norito::{DecodeLimits, NoritoDeserialize, NoritoSerialize, SerializePayload};
 use std::{fmt, io::Read as _, path::Path, sync::Arc};
 use zeroize::{Zeroize as _, Zeroizing};
 
@@ -912,17 +912,16 @@ fn load_fixed_credential_v1(
     directory: &Path,
     name: &str,
 ) -> Result<Zeroizing<Vec<u8>>, RuntimeConsensusThresholdSignerCredentialErrorV1> {
-    load_bounded_software_signer_credential_v1(
+    load_bounded_runtime_credential_v1(
         &directory.join(name),
         1,
         MAX_CONSENSUS_THRESHOLD_CREDENTIAL_BYTES_V1,
     )
     .map_err(|error| match error {
-        SoftwareSignerCredentialErrorV1::Unavailable => {
+        RuntimeCredentialErrorV1::Unavailable => {
             RuntimeConsensusThresholdSignerCredentialErrorV1::Unavailable
         }
-        SoftwareSignerCredentialErrorV1::InvalidSource
-        | SoftwareSignerCredentialErrorV1::InvalidLength => {
+        RuntimeCredentialErrorV1::InvalidSource | RuntimeCredentialErrorV1::InvalidLength => {
             RuntimeConsensusThresholdSignerCredentialErrorV1::Rejected
         }
     })

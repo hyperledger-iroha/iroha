@@ -1,7 +1,7 @@
 //! Focused tests for the Norito core codec.
 use super::*;
 use crate::{
-    NoritoDeserialize, NoritoSerialize, codec,
+    NoritoDeserialize, NoritoSerialize, SerializePayload, codec,
     codec::{encode_adaptive, encode_with_header_flags},
 };
 use crc64fast::Digest;
@@ -345,7 +345,8 @@ impl Drop for DropAfterLengthMismatch {
         FIELD_SLOT_DROPS.fetch_add(1, Ordering::Relaxed);
     }
 }
-impl NoritoSerialize for DropAfterLengthMismatch {
+impl NoritoSerialize for DropAfterLengthMismatch {}
+impl SerializePayload for DropAfterLengthMismatch {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         writer.write_all(&[0])?;
         Ok(())
@@ -368,7 +369,8 @@ fn erased_field_slot_drops_value_after_consumption_error() {
 fn erased_field_decoder_preserves_panic_type_name() {
     #[derive(Debug)]
     struct PanicDuringFieldDecode;
-    impl NoritoSerialize for PanicDuringFieldDecode {
+    impl NoritoSerialize for PanicDuringFieldDecode {}
+    impl SerializePayload for PanicDuringFieldDecode {
         fn serialize(&self, _encoder: &mut Encoder<'_>) -> Result<(), Error> {
             Ok(())
         }
@@ -569,6 +571,87 @@ fn decode_vec_u8_from_slice_serial_reports_prefix_used() {
     reset_decode_state();
 }
 #[test]
+fn decode_generic_u8_sequence_preserves_element_lengths_and_prefix_boundary() {
+    reset_decode_state();
+    let _guard = DecodeFlagsGuard::enter(0);
+    let value = [3_u8, 5, 8, 13];
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&(value.len() as u64).to_le_bytes());
+    for byte in value {
+        bytes.extend_from_slice(&1_u64.to_le_bytes());
+        bytes.push(byte);
+    }
+    let sequence_len = bytes.len();
+    bytes.extend_from_slice(&[0xAA, 0xBB]);
+    let (decoded, used) = decode_element_sequence_from_slice_serial::<u8>(&bytes)
+        .expect("decode generic byte element sequence");
+    assert_eq!(decoded, value);
+    assert_eq!(used, sequence_len);
+    assert!(matches!(
+        decode_field_canonical::<Vec<u8>>(&bytes[..sequence_len]),
+        Err(Error::LengthMismatch)
+    ));
+    reset_decode_state();
+}
+#[test]
+fn generic_sequence_decode_charges_count_once_and_has_an_exact_allocation_boundary() {
+    reset_decode_state();
+    let _guard = DecodeFlagsGuard::enter(0);
+    let value = [3_u16, 5, 8, 13];
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&(value.len() as u64).to_le_bytes());
+    for element in value {
+        bytes.extend_from_slice(&2_u64.to_le_bytes());
+        bytes.extend_from_slice(&element.to_le_bytes());
+    }
+
+    let permissive = DecodeLimits::new(
+        value.len(),
+        usize::MAX,
+        value.len(),
+        usize::MAX,
+        MAX_VALUE_NESTING_DEPTH,
+    );
+    let (decoded, usage) = with_decode_limits_measured(permissive, || {
+        decode_element_sequence_from_slice_serial::<u16>(&bytes)
+    });
+    assert_eq!(decoded.expect("decode measured generic sequence").0, value);
+    assert_eq!(usage.total_elements(), value.len());
+    let allocation_bytes = usage.total_allocated_bytes();
+    assert!(allocation_bytes > 0);
+
+    let exact = DecodeLimits::new(
+        value.len(),
+        usize::MAX,
+        value.len(),
+        allocation_bytes,
+        MAX_VALUE_NESTING_DEPTH,
+    );
+    let decoded = with_decode_limits(exact, || {
+        decode_element_sequence_from_slice_serial::<u16>(&bytes)
+    })
+    .expect("the measured allocation budget must be sufficient");
+    assert_eq!(decoded.0, value);
+
+    let one_byte_short = DecodeLimits::new(
+        value.len(),
+        usize::MAX,
+        value.len(),
+        allocation_bytes - 1,
+        MAX_VALUE_NESTING_DEPTH,
+    );
+    let error = with_decode_limits(one_byte_short, || {
+        decode_element_sequence_from_slice_serial::<u16>(&bytes)
+    })
+    .expect_err("one byte less than the measured allocation must fail");
+    assert!(matches!(
+        error,
+        Error::TotalAllocationExceeded { attempted, limit }
+            if attempted == allocation_bytes as u64 && limit == (allocation_bytes - 1) as u64
+    ));
+    reset_decode_state();
+}
+#[test]
 fn decode_vec_u8_from_slice_reports_prefix_used() {
     reset_decode_state();
     let value = vec![3_u8, 5, 8, 13];
@@ -635,7 +718,8 @@ struct CanonicalStruct {
 #[repr(transparent)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct CanonicalStructNoRecompute(CanonicalStruct);
-impl NoritoSerialize for CanonicalStructNoRecompute {
+impl NoritoSerialize for CanonicalStructNoRecompute {}
+impl SerializePayload for CanonicalStructNoRecompute {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         if PANIC_ON_SERIALIZE.load(Ordering::Relaxed) {
             panic!("serialize called during canonical decode recompute");
@@ -684,7 +768,8 @@ enum CanonicalEnum {
 #[repr(transparent)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct CanonicalEnumNoRecompute(CanonicalEnum);
-impl NoritoSerialize for CanonicalEnumNoRecompute {
+impl NoritoSerialize for CanonicalEnumNoRecompute {}
+impl SerializePayload for CanonicalEnumNoRecompute {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         if PANIC_ON_SERIALIZE.load(Ordering::Relaxed) {
             panic!("serialize called during canonical decode recompute");
@@ -897,9 +982,10 @@ fn byte_sink_with_headroom_from_preserves_capacity() {
 }
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct BadExactLen(u32);
-impl crate::NoritoSerialize for BadExactLen {
+impl crate::NoritoSerialize for BadExactLen {}
+impl crate::SerializePayload for BadExactLen {
     fn serialize(&self, encoder: &mut Encoder<'_>) -> Result<(), Error> {
-        crate::NoritoSerialize::serialize(&self.0, encoder)
+        crate::SerializePayload::serialize(&self.0, encoder)
     }
     fn encoded_len_exact(&self) -> Option<usize> {
         Some(1)
@@ -925,7 +1011,8 @@ impl<'a> DecodeFromSlice<'a> for BadExactLen {
 const HOSTILE_GROWTH_CHUNK_BYTES: usize = 4 * 1024;
 const HOSTILE_GROWTH_WRITES: usize = 256;
 struct HostileGrowingSecondPass(std::cell::Cell<usize>);
-impl NoritoSerialize for HostileGrowingSecondPass {
+impl NoritoSerialize for HostileGrowingSecondPass {}
+impl SerializePayload for HostileGrowingSecondPass {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         let pass = self.0.get();
         self.0.set(pass + 1);
@@ -976,7 +1063,8 @@ fn bounded_frame_matches_canonical_bytes_at_exact_limit() {
 fn bounded_frame_rejects_one_byte_below_real_count_before_second_pass() {
     use std::cell::Cell;
     struct CountCalls(Cell<usize>);
-    impl NoritoSerialize for CountCalls {
+    impl NoritoSerialize for CountCalls {}
+    impl SerializePayload for CountCalls {
         fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
             self.0.set(self.0.get() + 1);
             writer.write_all(&[0xA5])?;
@@ -1002,7 +1090,8 @@ fn bounded_frame_rejects_one_byte_below_real_count_before_second_pass() {
 fn bounded_frame_rejects_second_pass_growth_past_counted_capacity() {
     use std::cell::Cell;
     struct GrowingSecondPass(Cell<usize>);
-    impl NoritoSerialize for GrowingSecondPass {
+    impl NoritoSerialize for GrowingSecondPass {}
+    impl SerializePayload for GrowingSecondPass {
         fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
             let pass = self.0.get();
             self.0.set(pass + 1);
@@ -1022,7 +1111,8 @@ fn bounded_frame_rejects_second_pass_growth_past_counted_capacity() {
 fn bounded_frame_rejects_second_pass_shrinkage() {
     use std::cell::Cell;
     struct ShrinkingSecondPass(Cell<usize>);
-    impl NoritoSerialize for ShrinkingSecondPass {
+    impl NoritoSerialize for ShrinkingSecondPass {}
+    impl SerializePayload for ShrinkingSecondPass {
         fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
             let pass = self.0.get();
             self.0.set(pass + 1);
@@ -1042,32 +1132,80 @@ fn bounded_frame_rejects_second_pass_shrinkage() {
 fn write_len_prefixed_uses_actual_length() {
     let value = BadExactLen(0xDEADBEEF);
     let mut out = Vec::new();
-    let mut tmp: DeriveSmallBuf = DeriveSmallBuf::new();
     let mut encoder = Encoder::for_buffer(&mut out);
-    write_len_prefixed(&mut encoder, &value, &mut tmp).expect("write len prefixed");
+    write_len_prefixed(&mut encoder, &value).expect("write len prefixed");
     let (len, hdr) = read_len_from_slice(&out).expect("read len");
     assert_eq!(len, out.len() - hdr);
 }
 #[test]
-fn write_len_prefixed_does_not_materialize_an_unhinted_field() {
-    struct UnhintedField(Vec<u8>);
-    impl NoritoSerialize for UnhintedField {
+fn write_len_prefixed_streams_unhinted_field_without_staging() {
+    struct UnhintedField<'a> {
+        bytes: &'a [u8],
+        visits: std::cell::Cell<usize>,
+    }
+    impl NoritoSerialize for UnhintedField<'_> {}
+    impl SerializePayload for UnhintedField<'_> {
         fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
-            writer.write_all(&self.0)?;
+            self.visits.set(self.visits.get() + 1);
+            writer.write_all(self.bytes)?;
             Ok(())
         }
     }
-    let value = UnhintedField(vec![0x5a; DERIVE_SMALLBUF_SIZE * 4]);
-    let mut out = Vec::new();
-    let mut tmp: DeriveSmallBuf = DeriveSmallBuf::new();
-    let mut encoder = Encoder::for_buffer(&mut out);
-    write_len_prefixed(&mut encoder, &value, &mut tmp).expect("write unhinted field");
-    let (len, header_bytes) = read_len_from_slice(&out).expect("read field length");
-    assert_eq!(len, value.0.len());
-    assert_eq!(&out[header_bytes..], value.0.as_slice());
-    assert!(
-        !tmp.spilled && tmp.spill.capacity() == 0,
-        "count-first direct serialization must not retain a field-sized spill buffer"
+    struct DirectFieldWriter<'a> {
+        payload: &'a [u8],
+        prefix: [u8; 9],
+        prefix_len: usize,
+        payload_writes: usize,
+    }
+    impl Write for DirectFieldWriter<'_> {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            if bytes.len() == self.payload.len() {
+                assert!(
+                    core::ptr::eq(bytes.as_ptr(), self.payload.as_ptr()),
+                    "the original payload slice must reach the destination directly"
+                );
+                assert_eq!(bytes, self.payload);
+                self.payload_writes += 1;
+            } else {
+                assert_eq!(
+                    self.payload_writes, 0,
+                    "the length must precede the payload"
+                );
+                let end = self.prefix_len + bytes.len();
+                self.prefix[self.prefix_len..end].copy_from_slice(bytes);
+                self.prefix_len = end;
+            }
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let bytes = vec![0x5a; 1536];
+    let value = UnhintedField {
+        bytes: &bytes,
+        visits: std::cell::Cell::new(0),
+    };
+    assert_eq!(value.encoded_len_exact(), None);
+    let mut destination = DirectFieldWriter {
+        payload: &bytes,
+        prefix: [0; 9],
+        prefix_len: 0,
+        payload_writes: 0,
+    };
+    {
+        let mut encoder = Encoder::new(&mut destination);
+        write_len_prefixed(&mut encoder, &value).expect("write unhinted field");
+    }
+    let (len, header_bytes) = read_len_from_slice(&destination.prefix[..destination.prefix_len])
+        .expect("read field length");
+    assert_eq!(len, bytes.len());
+    assert_eq!(header_bytes, destination.prefix_len);
+    assert_eq!(destination.payload_writes, 1);
+    assert_eq!(
+        value.visits.get(),
+        2,
+        "one measurement and one checked write"
     );
 }
 #[test]
@@ -1075,11 +1213,9 @@ fn write_len_prefixed_rejects_a_changed_second_pass() {
     let value = HostileGrowingSecondPass(std::cell::Cell::new(0));
     let mut out = Vec::with_capacity(32);
     let initial_capacity = out.capacity();
-    let mut tmp: DeriveSmallBuf = DeriveSmallBuf::new();
     let error = {
         let mut encoder = Encoder::for_buffer(&mut out);
-        write_len_prefixed(&mut encoder, &value, &mut tmp)
-            .expect_err("second-pass growth must fail")
+        write_len_prefixed(&mut encoder, &value).expect_err("second-pass growth must fail")
     };
     assert!(matches!(error, Error::LengthMismatch));
     assert_eq!(value.0.get(), 2);
@@ -1188,15 +1324,16 @@ fn result_uses_actual_length_prefix() {
 }
 #[derive(Clone, Copy)]
 struct RootAware(u32);
-impl crate::NoritoSerialize for RootAware {
+impl crate::NoritoSerialize for RootAware {}
+impl crate::SerializePayload for RootAware {
     fn serialize(&self, encoder: &mut Encoder<'_>) -> Result<(), Error> {
-        crate::NoritoSerialize::serialize(&self.0, encoder)
+        crate::SerializePayload::serialize(&self.0, encoder)
     }
     fn encoded_len_hint(&self) -> Option<usize> {
-        crate::NoritoSerialize::encoded_len_hint(&self.0)
+        crate::SerializePayload::encoded_len_hint(&self.0)
     }
     fn encoded_len_exact(&self) -> Option<usize> {
-        crate::NoritoSerialize::encoded_len_exact(&self.0)
+        crate::SerializePayload::encoded_len_exact(&self.0)
     }
 }
 impl<'de> crate::NoritoDeserialize<'de> for RootAware {
@@ -1933,6 +2070,76 @@ fn array_and_tuple_serialization_use_compact_element_lengths() {
     assert_eq!(tuple_bytes, [1, 5, 1, 7]);
     assert_eq!(tuple.encoded_len_hint(), Some(tuple_bytes.len()));
     assert_eq!(tuple.encoded_len_exact(), Some(tuple_bytes.len()));
+    reset_decode_state();
+}
+#[test]
+fn tuple_serialization_preserves_explicit_flags_in_nested_containers() {
+    type NestedTuple = (Vec<Vec<u16>>, Vec<String>);
+
+    fn serialize(value: &dyn SerializePayload) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        serialize_to_buffer(value, &mut bytes).expect("serialize nested tuple fixture");
+        bytes
+    }
+
+    let value: NestedTuple = (
+        vec![vec![0x0102, 0x0304], vec![0x0506]],
+        vec![String::from("alpha"), String::from("beta")],
+    );
+
+    reset_decode_state();
+    let default_payload = serialize(&value);
+    reset_decode_state();
+    let explicit_default_payload = {
+        let _guard = DecodeFlagsGuard::enter(default_encode_flags());
+        serialize(&value)
+    };
+    assert_eq!(
+        default_payload, explicit_default_payload,
+        "an absent layout override must retain the canonical default bytes"
+    );
+
+    for flags in [
+        0,
+        header_flags::PACKED_SEQ,
+        header_flags::COMPACT_LEN,
+        header_flags::PACKED_SEQ | header_flags::COMPACT_LEN,
+        header_flags::PACKED_STRUCT,
+        header_flags::PACKED_SEQ | header_flags::PACKED_STRUCT,
+        header_flags::PACKED_STRUCT | header_flags::COMPACT_LEN,
+        header_flags::PACKED_SEQ | header_flags::PACKED_STRUCT | header_flags::COMPACT_LEN,
+    ] {
+        reset_decode_state();
+        let (tuple_payload, expected_payload) = {
+            let _guard = DecodeFlagsGuard::enter(flags);
+            assert_eq!(tuple_serialization_flags(), flags);
+
+            let first = serialize(&value.0);
+            let second = serialize(&value.1);
+            let tuple_payload = serialize(&value);
+            assert_eq!(value.encoded_len_hint(), Some(tuple_payload.len()));
+            assert_eq!(value.encoded_len_exact(), Some(tuple_payload.len()));
+
+            let mut expected = Vec::new();
+            write_len_to_vec_with_flags(&mut expected, first.len() as u64, flags);
+            expected.extend_from_slice(&first);
+            write_len_to_vec_with_flags(&mut expected, second.len() as u64, flags);
+            expected.extend_from_slice(&second);
+            (tuple_payload, expected)
+        };
+        assert_eq!(
+            tuple_payload, expected_payload,
+            "tuple fields changed the explicit nested layout for flags 0x{flags:02x}"
+        );
+
+        let frame = frame_bare_with_header_flags::<NestedTuple>(&tuple_payload, flags)
+            .expect("frame nested tuple with its explicit flags");
+        let archived = from_bytes::<NestedTuple>(&frame)
+            .expect("validate nested tuple frame with its explicit flags");
+        let decoded = NestedTuple::try_deserialize(archived)
+            .expect("decode nested tuple with its explicit flags");
+        assert_eq!(decoded, value, "roundtrip changed flags 0x{flags:02x}");
+    }
     reset_decode_state();
 }
 #[test]

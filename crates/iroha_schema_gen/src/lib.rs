@@ -45,6 +45,13 @@ macro_rules! schema_types {
             iroha_data_model::fastpq::TransferTranscriptBundle,
             iroha_data_model::fastpq::FastpqTransitionBatch,
             iroha_data_model::fastpq::FastpqStateTransition,
+            iroha_data_model::fastpq::FastpqBalanceKeyV1,
+            iroha_data_model::fastpq::FastpqOrdinaryCompactArtifactV1,
+            iroha_data_model::fastpq::FastpqAxtCompactArtifactV1,
+            iroha_data_model::fastpq::FastpqArtifactIdentityDescriptionV1,
+            iroha_data_model::fastpq::FastpqOrdinarySourceStatementOpeningV1,
+            iroha_data_model::fastpq::FastpqOrdinarySourceStatementArchiveV1,
+            iroha_data_model::fastpq::FastpqSourceExecutionEntryV1,
             // Never referenced, but present in type signature. Like `PhantomData<X>`
             MerkleTree<SignedTransaction>,
             // Default permissions
@@ -127,8 +134,8 @@ pub mod complete_data_model {
         events::pipeline::{BlockEventFilter, TransactionEventFilter},
         executor::{Executor, ExecutorDataModel},
         fastpq::{
-            FastpqStateTransition, FastpqTransitionBatch, TransferDeltaTranscript,
-            TransferTranscript, TransferTranscriptBundle,
+            FastpqBalanceKeyV1, FastpqStateTransition, FastpqTransitionBatch,
+            TransferDeltaTranscript, TransferTranscript, TransferTranscriptBundle,
         },
         ipfs::IpfsPath,
         isi::{
@@ -261,7 +268,7 @@ mod tests {
     #[test]
     fn fastpq_types_have_schema_entries() {
         use iroha_data_model::fastpq::{
-            FastpqTransitionBatch, TransferTranscript, TransferTranscriptBundle,
+            FastpqBalanceKeyV1, FastpqTransitionBatch, TransferTranscript, TransferTranscriptBundle,
         };
         let schemas = super::build_schemas();
         let has_transcript = schemas.contains_key::<TransferTranscript>();
@@ -273,5 +280,40 @@ mod tests {
             "TransferTranscriptBundle missing from schema map"
         );
         assert!(has_batch, "FastpqTransitionBatch missing from schema map");
+        assert!(
+            schemas.contains_key::<FastpqBalanceKeyV1>(),
+            "FastpqBalanceKeyV1 missing from schema map"
+        );
+        assert!(
+            schemas.contains_key::<iroha_data_model::fastpq::FastpqOrdinaryCompactArtifactV1>()
+        );
+        assert!(schemas.contains_key::<iroha_data_model::fastpq::FastpqAxtCompactArtifactV1>());
+        assert!(
+            schemas.contains_key::<iroha_data_model::fastpq::FastpqArtifactIdentityDescriptionV1>()
+        );
+        assert!(
+            schemas.contains_key::<iroha_data_model::fastpq::FastpqPublicTransferStatementV1>()
+        );
+        assert!(
+            schemas
+                .contains_key::<iroha_data_model::fastpq::FastpqOrdinarySourceStatementOpeningV1>()
+        );
+        assert!(
+            schemas.contains_key::<iroha_data_model::fastpq::FastpqOrdinarySourceStatementLeafV1>()
+        );
+        assert!(
+            schemas
+                .contains_key::<iroha_data_model::fastpq::FastpqOrdinarySourceStatementManifestV1>(
+                )
+        );
+        assert!(
+            schemas
+                .contains_key::<iroha_data_model::fastpq::FastpqOrdinarySourceStatementArchiveV1>()
+        );
+        assert!(schemas.contains_key::<iroha_data_model::fastpq::FastpqSourceStatementContextV1>());
+        assert!(schemas.contains_key::<iroha_data_model::fastpq::FastpqSourceRouteV1>());
+        assert!(schemas.contains_key::<iroha_data_model::fastpq::FastpqSourceLaneV1>());
+        assert!(schemas.contains_key::<iroha_data_model::fastpq::FastpqSourceExecutionKindV1>());
+        assert!(schemas.contains_key::<iroha_data_model::fastpq::FastpqSourceExecutionEntryV1>());
     }
 }

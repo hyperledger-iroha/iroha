@@ -184,20 +184,7 @@ impl MochiApp {
                 ui.add_space(12.0);
                 ui.horizontal_wrapped(|ui| {
                     if ui.button("Copy shell env").clicked() {
-                        match self.bootstrap_inputs(supervisor, peer_rows) {
-                            Some(inputs) => {
-                                Self::copy_text(ui, inputs.render_shell_exports());
-                                self.last_info =
-                                    Some("Copied local app bootstrap exports.".to_owned());
-                                self.last_error = None;
-                            }
-                            None => {
-                                self.last_info = None;
-                                self.last_error = Some(
-                                    "No peer available to render local app exports.".to_owned(),
-                                );
-                            }
-                        }
+                        self.copy_app_env_recipe(ui, supervisor, peer_rows);
                     }
                     if mcp_url.is_some()
                         && ui.button("Copy MCP add command").clicked()

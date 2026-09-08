@@ -454,7 +454,6 @@ EXPLICIT_OPT_IN_FEATURES: dict[str, tuple[str, ...]] = {
         "ids_projection",
         "iroha-core-tests",
         "kagemusha-real-proof-harness",
-        "kaigi_privacy_mocks",
         "privacy-release-evidence",
         "profiling",
         "proofs-full",

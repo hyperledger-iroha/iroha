@@ -63,11 +63,8 @@ fn certified_sources(fixture: &Fixture, _certificate: &wire::QuorumCertificate) 
         .collect()
 }
 fn signed_payload_chunk(fixture: &Fixture) -> wire::PayloadChunk {
-    let validated = wire::ValidatedPayloadManifest::new(
-        &fixture.context,
-        fixture.manifest.clone(),
-    )
-    .expect("validate chunk manifest once");
+    let validated = wire::ValidatedPayloadManifest::new(&fixture.context, fixture.manifest.clone())
+        .expect("validate chunk manifest once");
     let mut chunk = wire::PayloadChunk {
         manifest_hash: validated.manifest_hash(),
         index: 0,
@@ -291,7 +288,8 @@ fn proposal_a_distinct_prepare_qc_b_and_timeout_sign_progress_at_capacity_two() 
         .validate(&fixture.context)
         .expect("Proposal A manifest is structurally valid");
     executor
-        .consume_effects(
+        .consume_admitted_fixture_effects(
+            &fixture,
             vec![AdapterEffect::FetchBody {
                 tag: tag(0),
                 round: fixture.manifest.round,
@@ -314,7 +312,8 @@ fn proposal_a_distinct_prepare_qc_b_and_timeout_sign_progress_at_capacity_two() 
         .validate(&fixture.context)
         .expect("distinct PrepareQC B is structurally valid");
     executor
-        .consume_effects(
+        .consume_admitted_fixture_effects(
+            &fixture,
             vec![AdapterEffect::FetchBody {
                 tag: tag(0),
                 round: prepare_b.round,
@@ -332,7 +331,11 @@ fn proposal_a_distinct_prepare_qc_b_and_timeout_sign_progress_at_capacity_two() 
     // lower-evidence Proposal A fetch and owns the released slot.
     assert_eq!(
         executor
-            .consume_effects(vec![timeout_sign(&fixture, 0)], &mut services)
+            .consume_admitted_fixture_effects(
+                &fixture,
+                vec![timeout_sign(&fixture, 0)],
+                &mut services
+            )
             .expect("timeout signing preempts reconstructible work"),
         1
     );
@@ -362,13 +365,14 @@ fn passive_fetch_does_not_block_prepare_qc_or_timeout_in_serialized_runtime() {
                 .expect("validator proof of possession")
         })
         .collect::<Vec<_>>();
+    let local_validator = context.leader(0);
     let verified =
         VerifiedHeightContext::genesis(context.clone(), proofs).expect("verified context");
     let directory = TempDir::new().expect("serialized capacity-trace directory");
     let (adapter, startup_effects) = SumeragiV2Adapter::open(
         directory.path().join("capacity-trace-safety.wal"),
         verified,
-        Some(0),
+        Some(local_validator),
         Generation::new(1),
         [0x74; 32],
         AdapterFingerprints {
@@ -395,7 +399,7 @@ fn passive_fetch_does_not_block_prepare_qc_or_timeout_in_serialized_runtime() {
         BTreeMap::new(),
         context.clone(),
         PeerId::new(requester_key.public_key().clone()),
-        Some(0),
+        Some(local_validator),
         EffectQueueConfig::new(2, 4, 1 << 20, 4),
     )
     .expect("capacity-two executor");
@@ -1506,10 +1510,13 @@ fn request_bound_rotated_archive_completes_fetch_without_leader_wire_slot() {
     assert!(!fixture.executor.output_guard.restart_required());
     planner_io.detach(&mut production_services);
 }
-#[test]
-fn certified_request_pressure_cannot_suppress_timeout_signing_or_lose_fetch_owner() {
-    let mut fixture = ProductionTransportFixture::new_validator();
-    fixture.executor.config = EffectQueueConfig::new(2, 4, 1 << 20, 1);
+fn assert_certified_request_pressure_preserves_timeout_and_fetch_owners(saturate_work: bool) {
+    // This test needs an immediately eligible certified-body consumer. Set B
+    // deliberately defers this Fetch until fallback; that role is exercised by
+    // the separate adversarial transport matrix.
+    let mut fixture = ProductionTransportFixture::new_set_a_validator();
+    fixture.executor.config =
+        EffectQueueConfig::new(if saturate_work { 1 } else { 2 }, 4, 1 << 20, 1);
     fixture.executor.outstanding_requests =
         OutstandingCertifiedBodyRequests::new(1).expect("one certified-request slot");
     fixture.executor.recovered_bodies.clear();
@@ -1529,22 +1536,30 @@ fn certified_request_pressure_cannot_suppress_timeout_signing_or_lose_fetch_owne
         fixture.quorum_certificate(wire::GlobalPhase::Prepare, fixture.canonical_commitment);
     let tag_a = fixture.executor.current_tag();
     let sources_a = fixture.certified_sources(&certificate_a);
+    let initial_effects = vec![AdapterEffect::FetchBody {
+        tag: tag_a,
+        round: fixture.round,
+        subject: fixture.subject,
+        manifest: Some(fixture.manifest.clone()),
+        certified_sources: sources_a,
+        certificate: Some(certificate_a),
+    }];
     fixture
         .executor
-        .consume_effects(
-            vec![AdapterEffect::FetchBody {
-                tag: tag_a,
-                round: fixture.round,
-                subject: fixture.subject,
-                manifest: Some(fixture.manifest.clone()),
-                certified_sources: sources_a,
-                certificate: Some(certificate_a),
-            }],
-            &mut services,
-        )
+        .runtime
+        .retain_retransmit_effect_ownership_for_test(&initial_effects)
+        .expect("retain the runtime-owned initial certified Fetch batch");
+    fixture
+        .executor
+        .consume_effects(initial_effects, &mut services)
         .expect("A occupies the sole certified-request slot");
     let task_a = services.fetch_tasks[0].clone();
     assert_eq!(fixture.executor.outstanding_requests.len(), 1);
+    assert_eq!(fixture.executor.pending_work(), 1);
+    assert_eq!(
+        fixture.executor.pending_work() == fixture.executor.config.max_pending_work,
+        saturate_work
+    );
     let body_b = b"source-faithful certified-request debt B".to_vec();
     let subject_b = wire::BlockSubject {
         parent_block_hash: None,
@@ -1594,10 +1609,9 @@ fn certified_request_pressure_cannot_suppress_timeout_signing_or_lose_fetch_owne
         .expect("request-saturated Fetch B retains its exact runtime owner")
         .ownership
         .clone();
-    // Fetch B remains exact ordinary debt, but transport capacity is not
-    // pacemaker authority. The absolute timeout gets one typed turn,
-    // preempts the reconstructible Fetch A slot, and leaves B parked with
-    // its original lifecycle owner.
+    // The typed timeout turn preserves B's exact parked owner. It retires A
+    // only when both the pending-work and certified-request bounds are full;
+    // a spare signing slot must preserve the active reconstruction owner.
     let timeout_now = started + Duration::from_secs(30);
     assert_eq!(
         fixture
@@ -1608,8 +1622,19 @@ fn certified_request_pressure_cannot_suppress_timeout_signing_or_lose_fetch_owne
     );
     assert_eq!(fixture.executor.pending_signatures.len(), 1);
     assert_eq!(services.sign_tasks.len(), 1);
-    assert_eq!(services.cancelled_fetches, vec![task_a.id()]);
-    assert_eq!(fixture.executor.outstanding_requests.len(), 0);
+    assert_eq!(
+        services.cancelled_fetches,
+        if saturate_work {
+            vec![task_a.id()]
+        } else {
+            Vec::new()
+        }
+    );
+    assert_eq!(
+        fixture.executor.outstanding_requests.len(),
+        usize::from(!saturate_work)
+    );
+    assert!(fixture.executor.pending_work() <= fixture.executor.config.max_pending_work);
     assert!(fixture.executor.retained_effect_batch.is_none());
     assert!(fixture.executor.parked_effect_batch.is_some());
     assert_eq!(fixture.executor.status().effect_dispatch_queue.depth, 1);
@@ -1621,6 +1646,41 @@ fn certified_request_pressure_cannot_suppress_timeout_signing_or_lose_fetch_owne
             .max_service_debt,
         1
     );
+    if saturate_work {
+        let task = services.sign_tasks[0].clone();
+        let SignRequest::TimeoutVote(vote) = &task.request else {
+            panic!("the control turn owns a TimeoutVote")
+        };
+        let key = &fixture.validator_keys[usize::try_from(vote.signer).expect("bounded validator")];
+        let signature = Signature::new(key.private_key(), &task.request.signature_preimage())
+            .payload()
+            .to_vec();
+        assert_eq!(
+            fixture
+                .executor
+                .complete_consensus_signature(task.id(), signature, &mut services)
+                .expect("the real timeout signature releases the sole pending-work slot"),
+            CompletionDisposition::Accepted
+        );
+        assert!(fixture.executor.pending_signatures.is_empty());
+    } else {
+        assert_eq!(fixture.executor.pending_fetches[&task_a.id()].task, task_a);
+        assert_eq!(
+            fixture
+                .executor
+                .complete_body_reconstruction(
+                    &task_a,
+                    fixture.manifest.clone(),
+                    fixture.body.clone(),
+                    &mut services
+                )
+                .expect("A completes normally and releases the sole request slot"),
+            CompletionDisposition::Accepted
+        );
+        assert!(services.cancelled_fetches.is_empty());
+        assert_eq!(fixture.executor.pending_signatures.len(), 1);
+    }
+    assert!(fixture.executor.outstanding_requests.is_empty());
     assert_eq!(
         fixture
             .executor
@@ -1643,5 +1703,15 @@ fn certified_request_pressure_cannot_suppress_timeout_signing_or_lose_fetch_owne
     assert_eq!(services.sign_tasks.len(), 1);
     assert!(fixture.executor.retained_effect_batch.is_none());
     assert!(fixture.executor.parked_effect_batch.is_none());
+    assert!(fixture.executor.pending_work() <= fixture.executor.config.max_pending_work);
     assert!(!fixture.executor.status().fail_closed);
+}
+
+#[test]
+fn certified_request_pressure_cannot_suppress_timeout_signing_or_lose_fetch_owner() {
+    assert_certified_request_pressure_preserves_timeout_and_fetch_owners(true);
+}
+#[test]
+fn certified_request_pressure_preserves_fetch_when_timeout_has_a_spare_work_slot() {
+    assert_certified_request_pressure_preserves_timeout_and_fetch_owners(false);
 }

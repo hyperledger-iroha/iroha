@@ -230,6 +230,112 @@ def test_live_python_pyo3_admission_is_included_in_source_parity() -> None:
     assert report["sdk"]["python-pyo3"]["ready"] is True
 
 
+@pytest.mark.parametrize("sdk", tuple(MODULE._NETWORK_AUTHORITY_REQUIREMENTS))
+def test_live_sdk_binds_transport_authority_to_expected_network(sdk: str) -> None:
+    assert MODULE._authenticated_network_authority(ROOT, sdk) is True
+    assert MODULE.audit(ROOT)["sdk"][sdk]["gates"]["authenticated_network_authority"] is True
+
+
+@pytest.mark.parametrize(
+    ("sdk", "relative", "needle", "replacement"),
+    (
+        ("javascript-napi", "javascript/iroha_js/src/privacyCapabilityTransport.js",
+         "receipts.delete(receipt);", "// reusable receipt"),
+        ("javascript-napi", "javascript/iroha_js/src/privacyCapabilityTransport.js",
+         "const transport = transports.get(client);", "const transport = client.transport;"),
+        ("javascript-napi", MODULE._JAVASCRIPT_CAPABILITIES,
+         "protocolId, Uint8Array.from(state.expectedNetworkId)", "protocolId"),
+        ("javascript-napi", "javascript/iroha_js/src/toriiClient.js",
+         "responseRedirected || responseUrl !== expectedUrl", "false"),
+        ("javascript-napi", "javascript/iroha_js/src/toriiClient.js",
+         'const response = await this.#request("GET", "/v1/privacy/capabilities", {',
+         'const response = await this._request("GET", "/v1/privacy/capabilities", {'),
+        ("javascript-napi", "javascript/iroha_js/src/toriiClient.js",
+         "await this.#expectStatus(response, [200], { signal });",
+         "await this._expectStatus(response, [200], { signal });"),
+        ("javascript-napi", "javascript/iroha_js/src/toriiClient.js",
+         "const { bytes } = await this.#readBoundedResponseBytes(",
+         "const { bytes } = await this._readBoundedResponseBytes("),
+        ("javascript-napi", "javascript/iroha_js/src/toriiClient.js",
+         "(auth, context) => ToriiClient.#normalizeCanonicalAuth(auth, context)",
+         "(auth, context) => ToriiClient._normalizeCanonicalAuth(auth, context)"),
+        ("javascript-napi", "crates/iroha_js_host/src/lib.rs",
+         "if actual != expected || genesis_hash != expected.as_bytes()", "if false"),
+        ("python-pyo3", MODULE._PYTHON_RUST_MANIFEST,
+         "authenticated_network_id: None,", "authenticated_network_id: Some(network),"),
+        ("python-pyo3", MODULE._PYTHON_RUST_MANIFEST,
+         "if network_id != expected_network_id", "if false"),
+        ("python-pyo3", MODULE._PYTHON_RUST_MANIFEST,
+         'client.get_type().is(&owner.getattr("ToriiClient")?)', "true"),
+        ("python-pyo3", MODULE._PYTHON_RUST_BRIDGE,
+         "manifest.require_authenticated_network(self.network_id)?;", "// unbound builder"),
+        ("python-pyo3", MODULE._PYTHON_CLIENT,
+         "canonical_auth.network_id != expected_network.literal", "False"),
+        ("jvm-android", MODULE._JVM_MODEL,
+         "private val authenticatedNetworkId: NetworkId? = null,", "val authenticatedNetworkId: NetworkId? = null,"),
+        ("jvm-android", MODULE._JVM_MODEL,
+         "val networkId = manifest.requireAuthenticatedNetwork()", "val networkId = caller.networkId"),
+        ("jvm-android", MODULE._JVM_KOTLIN_TRANSACTION_ADAPTER,
+         "it.requirePrivacyExact12Network(value.networkId)", "Unit"),
+        ("jvm-android", MODULE._JVM_KOTLIN_TRANSACTION_ADAPTER,
+         "it.instruction.requirePrivacyExact12Network(value.networkId)", "Unit"),
+        ("jvm-android", MODULE._JVM_KOTLIN_INSTRUCTION,
+         "is WirePayload -> WireInstructionPayload(payload.wireName, payload.payloadBytes)", "is WirePayload -> payload"),
+        ("jvm-android", MODULE._JVM_KOTLIN_TRANSPORT,
+         "requireExactResponseProvenance = true,", "requireExactResponseProvenance = false,"),
+        ("jvm-android", MODULE._RUST_BRIDGE_PLATFORM_JNI_PARTS[1],
+         "genesis_hash == expected_network", "true"),
+        ("jvm-android", MODULE._RUST_BRIDGE_PLATFORM_JNI_PARTS[2],
+         "nativeRequireExact12CapabilityTupleForNetworkV1(", "nativeRequireExact12CapabilityTuple("),
+        ("swift", MODULE._SWIFT_MODEL,
+         "deployment.networkId == expectedNetworkId,", "true,"),
+        ("swift", MODULE._SWIFT_MODEL,
+         "deployment.genesisHash == expectedNetworkId.bytes else", "true else"),
+        ("swift", MODULE._SWIFT_MODEL,
+         "for index in 0..<13", "for index in 0..<11"),
+        ("swift", MODULE._SWIFT_MODEL,
+         "guard fields[0] == proofWireMagic, fields[1] == exact12CatalogCommitment else", "guard true else"),
+        ("swift", MODULE._SWIFT_MODEL,
+         "fields[11], protocolId: row.protocolId, expectedNetworkId: expectedNetworkId", "fields[11], protocolId: row.protocolId, expectedNetworkId: callerNetworkId"),
+        ("swift", MODULE._SWIFT_ENCODER,
+         "encodeBatchExecutable(entries, expectedNetworkId: networkId)", "encodeBatchExecutable(entries, expectedNetworkId: anotherNetwork)"),
+        ("swift", MODULE._SWIFT_TORII,
+         '"Cache-Control": "no-cache, no-store",', '"Cache-Control": "max-age=600",'),
+        ("swift", MODULE._SWIFT_TORII,
+         "request.cachePolicy = .reloadIgnoringLocalCacheData", "request.cachePolicy = .useProtocolCachePolicy"),
+    ),
+)
+def test_sdk_origin_network_or_final_wire_regressions_fail_source_gate(
+    monkeypatch: pytest.MonkeyPatch,
+    sdk: str,
+    relative: str,
+    needle: str,
+    replacement: str,
+) -> None:
+    original_read = MODULE._read
+    original = original_read(ROOT, relative)
+    assert needle in original
+    monkeypatch.setattr(
+        MODULE, "_read",
+        lambda root, path: original.replace(needle, replacement)
+        if path == relative else original_read(root, path),
+    )
+    assert MODULE._authenticated_network_authority(ROOT, sdk) is False
+
+
+def test_javascript_offline_decoder_cannot_install_admission_callback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_read = MODULE._read
+    path = MODULE._JAVASCRIPT_CAPABILITIES
+    source = original_read(ROOT, path)
+    marker = "export async function getPrivacyExact12CapabilityManifestV1("
+    assert marker in source
+    source = source.replace(marker, "bindPrivacyExact12CapabilityAdmissionV1(archive);\n" + marker)
+    monkeypatch.setattr(MODULE, "_read", lambda root, p: source if p == path else original_read(root, p))
+    assert MODULE._authenticated_network_authority(ROOT, "javascript-napi") is False
+
+
 @pytest.mark.parametrize(
     ("relative", "needle", "replacement", "failed_gate"),
     (
@@ -387,6 +493,36 @@ def test_live_swift_cutover_satisfies_strict_source_contract() -> None:
             "transaction_admission_guard",
         ),
         (
+            MODULE._SWIFT_MODEL,
+            "fileprivate let authenticatedNetworkId: NetworkId?",
+            "public var authenticatedNetworkId: NetworkId?",
+            "transaction_admission_guard",
+        ),
+        (
+            MODULE._SWIFT_MODEL,
+            "authenticatedNetworkId: NetworkId? = nil",
+            "authenticatedNetworkId: NetworkId? = .unchecked",
+            "transaction_admission_guard",
+        ),
+        (
+            MODULE._SWIFT_MODEL,
+            "    static func fromAuthenticatedToriiResponseV1(",
+            "    public static func fromAuthenticatedToriiResponseV1(",
+            "transaction_admission_guard",
+        ),
+        (
+            MODULE._SWIFT_MODEL,
+            "let validated = try PrivacyNativeBridge.validateExact12CapabilityManifestV1(archive)",
+            "let validated = try uncheckedManifest(archive)",
+            "transaction_admission_guard",
+        ),
+        (
+            MODULE._SWIFT_MODEL,
+            "guard let expectedNetworkId = manifest.authenticatedNetworkId else {",
+            "guard true else {",
+            "transaction_admission_guard",
+        ),
+        (
             MODULE._SWIFT_TRANSACTION,
             "TransactionInstructionFrame: Equatable, Sendable",
             "TransactionInstructionFrame: Equatable, Codable, Sendable",
@@ -411,8 +547,14 @@ def test_live_swift_cutover_satisfies_strict_source_contract() -> None:
             "transaction_admission_guard",
         ),
         (
+            MODULE._SWIFT_TORII,
+            "return try PrivacyExact12CapabilityManifestV1.fromAuthenticatedToriiResponseV1(",
+            "return try PrivacyNativeBridge.validateExact12CapabilityManifestV1(data)",
+            "transaction_admission_guard",
+        ),
+        (
             MODULE._SWIFT_ENCODER,
-            "try frame.compactInstructionBoxPayload()",
+            "try frame.compactInstructionBoxPayload(expectedNetworkId: expectedNetworkId)",
             "frame.framedPayload",
             "transaction_admission_guard",
         ),
@@ -508,3 +650,54 @@ def test_jvm_cutover_hostile_source_regressions_fail_closed(
     sources[relative] = sources[relative].replace(needle, replacement)
     monkeypatch.setattr(MODULE, "_read", lambda _root, path: sources.get(path, ""))
     assert MODULE._jvm_cutover_gates(ROOT)[failed_gate] is False
+
+
+@pytest.mark.parametrize(
+    ("file_kind", "needle", "replacement"),
+    (
+        ("model", "client.Options.NetworkId ?? throw", "guessedNetworkId ?? throw"),
+        ("model", "decoded.Qualification, expectedNetworkId", "decoded.Qualification, guessedNetworkId"),
+        ("model", "|| !NetworkId.Equals(expectedNetworkId)", "|| false"),
+        ("model", "PrivacyNative.RequireValidCapabilityArchive(manifestArchive);", "SkipEvidence(manifestArchive);"),
+        ("model", "if (!genesisHash.SequenceEqual(networkId.AsSpan()))", "if (false)"),
+        ("model", "if (!qualification.DeploymentQualification.NetworkId.Equals(expectedNetworkId))", "if (false)"),
+        ("transaction", "RequireForConstruction(admission, protocol, NetworkId)", "RequireForConstruction(admission, protocol, guessedNetworkId)"),
+    ),
+)
+def test_csharp_authenticated_network_boundary_cannot_be_removed(
+    monkeypatch: pytest.MonkeyPatch, file_kind: str, needle: str, replacement: str
+) -> None:
+    contract = next(contract for contract in MODULE.SDK_CONTRACTS if contract.name == "csharp")
+    sources = {
+        path: (ROOT / path).read_text(encoding="utf-8")
+        for path in (*contract.model_files, *contract.native_files, *contract.transaction_files)
+    }
+    monkeypatch.setattr(MODULE, "_read", lambda _root, path: sources.get(path, ""))
+    assert MODULE._sdk_result(ROOT, contract)["gates"]["authenticated_network_authority"] is True
+    target = contract.model_files[0] if file_kind == "model" else contract.transaction_files[0]
+    assert needle in sources[target]
+    sources[target] = sources[target].replace(needle, replacement)
+    assert MODULE._sdk_result(ROOT, contract)["gates"]["authenticated_network_authority"] is False
+
+
+def test_live_c_privacy_inventory_matches_its_single_approved_owner() -> None:
+    MODULE._require_exact_abi23(ROOT)
+    assert len(MODULE.APPROVED_PRIVACY_EXPORTS) == 6
+
+
+def test_missing_c_capability_validator_is_rejected(tmp_path: Path) -> None:
+    root = _minimal_safe_tree(tmp_path)
+    header = root / MODULE.C_HEADER
+    declaration = "void iroha_privacy_validate_exact12_capability_manifest_v1(void);"
+    assert declaration in header.read_text()
+    header.write_text(header.read_text().replace(declaration, ""), encoding="utf-8")
+    with pytest.raises(MODULE.AuditError, match="C ABI23.*exact approved six"):
+        MODULE._require_exact_abi23(root)
+
+
+def test_unapproved_c_privacy_export_is_rejected(tmp_path: Path) -> None:
+    root = _minimal_safe_tree(tmp_path)
+    header = root / MODULE.C_HEADER
+    header.write_text(header.read_text() + "\nvoid iroha_privacy_unapproved_v1(void);\n", encoding="utf-8")
+    with pytest.raises(MODULE.AuditError, match="C ABI23.*exact approved six"):
+        MODULE._require_exact_abi23(root)

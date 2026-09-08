@@ -8,6 +8,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "run_sorafs_reference_sdk_release_evidence.py"
 SPEC = importlib.util.spec_from_file_location(
@@ -105,6 +107,14 @@ def topology_args(tmp_path: Path) -> list[str]:
     ]
 
 
+def manifest_source_args(tmp_path: Path) -> list[str]:
+    # Command-plan fixture only. The real checker rejects this unauthenticated
+    # context; planner tests never claim native or hardware qualification.
+    context = write_payload(tmp_path / "signed-manifest-sources.json")
+    return ["--signed-manifest-source-context", str(context),
+            "--signed-manifest-source-context-sha256", hashlib.sha256(context.read_bytes()).hexdigest()]
+
+
 def complete_args(tmp_path: Path) -> list[str]:
     payload_dir = tmp_path / "payloads"
     payload_dir.mkdir(parents=True, exist_ok=True)
@@ -124,6 +134,7 @@ def complete_args(tmp_path: Path) -> list[str]:
         "--max-smoke-duration-secs",
         "1800",
         *topology_args(tmp_path),
+        *manifest_source_args(tmp_path),
         "--supply-chain-source-root",
         str(source_root),
         "--provenance-certificate-identity",
@@ -226,7 +237,7 @@ def test_dry_run_prints_complete_reference_sdk_release_plan(tmp_path: Path, caps
         "sorafs.reference_sdk.signed_manifest_canary.v1"
     )
     assert (
-        "private_key_absent"
+        "hardware_custody_verified"
         in plan["evidence_contract"]["signed_manifest"]["required_payload_fields"]
     )
     assert plan["evidence_contract"]["supply_chain"]["schema"] == (
@@ -667,6 +678,7 @@ def test_plan_json_rejects_unrequired_external_evidence_and_contracts(
             "--now-unix",
             "1800700000",
             *topology_args(tmp_path),
+            *manifest_source_args(tmp_path),
             "--require-kind",
             "release_archive",
             "--release-archive-evidence",
@@ -675,13 +687,13 @@ def test_plan_json_rejects_unrequired_external_evidence_and_contracts(
     )
     plan = MODULE.build_command_plan(args)
     rendered = MODULE.plan_json(plan, args)
-    rendered["external_evidence"]["signed_manifest"] = [
-        str(tmp_path / "signed-manifest.json")
+    rendered["external_evidence"]["governance_approval"] = [
+        str(tmp_path / "governance-approval.json")
     ]
-    rendered["evidence_contract"]["signed_manifest"] = {
-        "schema": MODULE.KIND_BY_NAME["signed_manifest"].schema,
+    rendered["evidence_contract"]["governance_approval"] = {
+        "schema": MODULE.KIND_BY_NAME["governance_approval"].schema,
         "required_payload_fields": list(
-            MODULE.EVIDENCE_REQUIRED_FIELDS["signed_manifest"]
+            MODULE.EVIDENCE_REQUIRED_FIELDS["governance_approval"]
         ),
     }
 
@@ -696,7 +708,8 @@ def test_plan_json_rejects_unrequired_external_evidence_and_contracts(
         "reference SDK release runner plan evidence_contract must contain only required kinds"
         in diagnostics
     )
-    assert "signed_manifest" not in diagnostics
+    assert "governance_approval" not in diagnostics
+
 
 
 def test_execution_rejects_plan_validation_drift_before_running(
@@ -900,7 +913,7 @@ def test_supply_chain_source_root_must_exist_and_not_be_a_symlink(
         assert captured.out == ""
 
 
-def test_subset_gate_requires_only_selected_kind(tmp_path: Path, capsys) -> None:
+def test_subset_gate_always_requires_signed_manifest_anchor(tmp_path: Path, capsys) -> None:
     payload = write_payload(tmp_path / "release-archive.json")
 
     exit_code = MODULE.main(
@@ -910,18 +923,20 @@ def test_subset_gate_requires_only_selected_kind(tmp_path: Path, capsys) -> None
             "--now-unix",
             "1800700000",
             *topology_args(tmp_path),
+            *manifest_source_args(tmp_path),
             "--require-kind",
             "release_archive",
             "--release-archive-evidence",
             str(payload),
+            "--signed-manifest-evidence", str(write_payload(tmp_path / "signed-manifest.json")),
             "--dry-run",
         ]
     )
 
     assert exit_code == 0
     plan = json.loads(capsys.readouterr().out)
-    assert plan["required_kinds"] == ["release_archive"]
-    assert list(plan["evidence_contract"]) == ["release_archive"]
+    assert plan["required_kinds"] == ["signed_manifest", "release_archive"]
+    assert set(plan["evidence_contract"]) == {"signed_manifest", "release_archive"}
     assert plan["supply_chain_source"] == {
         "provenance_certificate_identity": None,
         "provenance_oidc_issuer": None,
@@ -930,9 +945,67 @@ def test_subset_gate_requires_only_selected_kind(tmp_path: Path, capsys) -> None
         "source_root": None,
     }
     verifier = plan["steps"][0]["command"]
-    assert verifier.count("--require-kind") == 1
+    assert verifier.count("--require-kind") == 2
     assert "release_archive" in verifier
     assert "--supply-chain-source-root" not in verifier
+
+
+@pytest.mark.parametrize("mutation", ("missing_path", "missing_pin", "zero_pin", "wrong_pin", "whitespace_hex", "relative_path", "oversized", "symlink"))
+def test_signed_manifest_source_trust_is_required_before_plan(tmp_path, capsys, mutation):
+    argv = complete_args(tmp_path)
+    path_index = argv.index("--signed-manifest-source-context")
+    pin_index = argv.index("--signed-manifest-source-context-sha256")
+    path = Path(argv[path_index + 1])
+    if mutation == "missing_path":
+        del argv[path_index:path_index + 2]
+    elif mutation == "missing_pin":
+        del argv[pin_index:pin_index + 2]
+    elif mutation == "zero_pin":
+        argv[pin_index + 1] = "0" * 64
+    elif mutation == "wrong_pin":
+        argv[pin_index + 1] = "11" * 32
+    elif mutation == "whitespace_hex":
+        argv[pin_index + 1] = " " * 2 + "11" * 31
+    elif mutation == "relative_path":
+        argv[path_index + 1] = "sources.json"
+    elif mutation == "oversized":
+        path.write_bytes(b"x" * (MODULE.MAX_SOURCE_CONTEXT_BYTES + 1))
+        argv[pin_index + 1] = hashlib.sha256(path.read_bytes()).hexdigest()
+    else:
+        original = path.with_suffix(".original")
+        path.rename(original)
+        path.symlink_to(original)
+    assert MODULE.main([*argv, "--dry-run"]) == 2
+    assert capsys.readouterr().out == ""
+    assert not (tmp_path / "evidence" / "release-summary.json").exists()
+
+
+@pytest.mark.parametrize("mutation", ("missing", "extra", "retarget_path", "retarget_pin", "omit_command_path", "omit_command_pin"))
+def test_closed_plan_cannot_drop_or_retarget_independent_signed_manifest_trust(tmp_path, mutation):
+    args = MODULE.parse_args(complete_args(tmp_path))
+    plan = MODULE.build_command_plan(args)
+    rendered = MODULE.plan_json(plan, args)
+    expected_path = str(args.signed_manifest_source_context)
+    expected_pin = args.signed_manifest_source_context_sha256
+    assert rendered["signed_manifest_source"] == {"context_path": expected_path, "context_sha256": expected_pin}
+    command = rendered["steps"][0]["command"]
+    assert command[command.index("--signed-manifest-source-context") + 1] == expected_path
+    assert command[command.index("--signed-manifest-source-context-sha256") + 1] == expected_pin
+    assert MODULE.validate_plan_json(rendered, plan, args) == []
+    if mutation == "missing":
+        del rendered["signed_manifest_source"]
+    elif mutation == "extra":
+        rendered["signed_manifest_source"]["verified"] = True
+    elif mutation == "retarget_path":
+        rendered["signed_manifest_source"]["context_path"] = "/untrusted/sources.json"
+    elif mutation == "retarget_pin":
+        rendered["signed_manifest_source"]["context_sha256"] = "12" * 32
+    else:
+        flag = "--signed-manifest-source-context" + ("-sha256" if mutation == "omit_command_pin" else "")
+        index = command.index(flag)
+        del command[index:index + 2]
+    assert MODULE.validate_plan_json(rendered, plan, args)
+
 
 
 def test_subset_gate_rejects_supply_chain_source_inputs(
@@ -950,6 +1023,7 @@ def test_subset_gate_rejects_supply_chain_source_inputs(
             "--now-unix",
             "1800700000",
             *topology_args(tmp_path),
+            *manifest_source_args(tmp_path),
             "--require-kind",
             "release_archive",
             "--release-archive-evidence",
@@ -975,6 +1049,7 @@ def test_subset_gate_rejects_supply_chain_source_inputs(
     assert PROVENANCE_CERTIFICATE_IDENTITY not in captured.err
     assert PROVENANCE_VERIFICATION_PUBLIC_KEY_HEX not in captured.err
     assert captured.out == ""
+
 
 
 def test_supply_chain_verification_key_must_be_canonical_nonzero_ed25519_hex(
@@ -1038,7 +1113,7 @@ def test_subset_gate_rejects_evidence_for_unrequired_kind(
     tmp_path: Path, capsys
 ) -> None:
     release_payload = write_payload(tmp_path / "release-archive.json")
-    extra_payload = write_payload(tmp_path / "signed-manifest.json")
+    extra_payload = write_payload(tmp_path / "governance-approval.json")
 
     exit_code = MODULE.main(
         [
@@ -1047,11 +1122,12 @@ def test_subset_gate_rejects_evidence_for_unrequired_kind(
             "--now-unix",
             "1800700000",
             *topology_args(tmp_path),
+            *manifest_source_args(tmp_path),
             "--require-kind",
             "release_archive",
             "--release-archive-evidence",
             str(release_payload),
-            "--signed-manifest-evidence",
+            "--governance-approval-evidence",
             str(extra_payload),
             "--dry-run",
         ]
@@ -1060,9 +1136,10 @@ def test_subset_gate_rejects_evidence_for_unrequired_kind(
     assert exit_code == 2
     captured = capsys.readouterr()
     assert "release evidence supplied for unrequired kind" in captured.err
-    assert "signed_manifest" not in captured.err
+    assert "governance_approval" not in captured.err
     assert str(extra_payload) not in captured.err
     assert captured.out == ""
+
 
 
 def test_unknown_required_kind_fails_before_plan(tmp_path: Path, capsys) -> None:
@@ -1074,6 +1151,7 @@ def test_unknown_required_kind_fails_before_plan(tmp_path: Path, capsys) -> None
                 "--now-unix",
                 "1800700000",
                 *topology_args(tmp_path),
+            *manifest_source_args(tmp_path),
                 "--require-kind",
                 "unknown",
                 "--dry-run",

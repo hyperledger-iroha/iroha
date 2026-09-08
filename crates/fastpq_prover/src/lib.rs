@@ -1,10 +1,11 @@
 //! FASTPQ lane prover.
 //!
-//! This crate provides the production FASTPQ-ISI prover and verifier
-//! implementation.  It exposes deterministic commitments, wiring to the
-//! sole V1 parameter set, and the backend that drives the
-//! end-to-end STARK pipeline.  Downstream callers interact with the canonical
-//! constructor which initialises the production backend.
+//! This crate implements the FASTPQ-ISI prover and verifier under development.
+//! It exposes deterministic commitments, the sole first-release V1 parameter
+//! set, and the backend that drives the STARK pipeline. Production qualification
+//! is unavailable: verification still replays the complete statement because
+//! the transfer AIR and cryptographic qualification are incomplete. See the
+//! repository's `specs/fastpq_production_readiness.md` for the completion gates.
 //!
 //! The public API is intentionally narrow and uses Norito-friendly types so
 //! callers can persist artifacts without pulling in Serde.
@@ -12,6 +13,7 @@
 #![deny(unsafe_code)]
 #![deny(missing_docs)]
 #![allow(unexpected_cfgs)]
+mod artifact_dispatch;
 mod axt_binding;
 mod backend;
 mod batch;
@@ -22,6 +24,10 @@ mod bn254_poseidon;
 mod bn254_poseidon_params;
 mod cyclotomic;
 mod digest;
+mod digest384_batch;
+#[cfg(feature = "fastpq-gpu")]
+mod digest384_gpu;
+mod digest_executor;
 mod error;
 #[cfg(any(test, feature = "dev-tools", feature = "fastpq-gpu"))]
 mod fastpq_cuda;
@@ -56,11 +62,14 @@ pub use axt_binding::{
     canonicalize_binding, embedded_axt_binding, encode_axt_fastpq_payload,
     set_axt_remote_spend_claims, transition_batch_from_model, transition_batch_to_model,
     validate_axt_transfer_claim_binding, verify_axt_bound_batch, verify_axt_proof_blob,
-    verify_axt_proof_envelope, verify_axt_proof_envelope_with_outer_metadata,
+    verify_axt_proof_envelope, verify_axt_proof_envelope_against_anchor_v1,
+    verify_axt_proof_envelope_with_outer_metadata,
 };
+/// Fixed offline quantity-artifact verification; no production admission is granted.
+pub use backend::offline_compact;
 pub use backend::{
     ExecutionMode, PoseidonExecutionMode, clear_execution_mode_observer,
-    set_execution_mode_observer,
+    preflight_native_v1_gpu_backend, set_execution_mode_observer,
 };
 #[cfg(feature = "dev-tools")]
 #[doc(hidden)]
@@ -75,6 +84,11 @@ pub use bn254_poseidon::{
     try_hash_bn254_poseidon_word_batches, try_submit_bn254_poseidon_word_batches,
 };
 pub use digest::trace_commitment;
+#[cfg(feature = "fastpq-gpu")]
+pub use digest384_gpu::{
+    Digest384GpuBackendV1, Digest384GpuErrorV1, MAX_DIGEST384_GPU_FRAMES_V1,
+    MAX_DIGEST384_GPU_WORDS_V1, try_hash_digest384_frames_v1,
+};
 pub use error::{Error, Result};
 #[cfg(feature = "dev-tools")]
 #[doc(hidden)]

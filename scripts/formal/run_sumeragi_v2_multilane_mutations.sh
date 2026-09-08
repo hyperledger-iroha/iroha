@@ -3,8 +3,9 @@ set -euo pipefail
 
 # Run the bounded multilane lifecycle/evidence/carrier negative-control corpus.
 # Prerequisites: the pinned TLA2Tools jar installed by
-# install_sumeragi_v2_tla2tools.sh and a working Java runtime. No environment
-# variables are required; TLA2TOOLS_JAR and JAVA_BIN may override safe defaults.
+# install_sumeragi_v2_tla2tools.sh (TLA2TOOLS_JAR) and a working Java runtime
+# (optionally JAVA_BIN). Retain every invocation under the existing
+# SUMERAGI_V2_FORMAL_EVIDENCE_DIR, or a private temp directory for local runs.
 
 if (($#)); then
   if (($# == 1)) && [[ "$1" == "--help" ]]; then
@@ -19,9 +20,27 @@ readonly TLA2TOOLS_VERSION="1.7.4"
 readonly TLA2TOOLS_SHA256="936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88"
 readonly REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 readonly FORMAL_DIR="${REPO_ROOT}/formal/sumeragi_v2"
-readonly TLA2TOOLS_JAR="${TLA2TOOLS_JAR:?TLA2TOOLS_JAR must name the authenticated external tool}"
 readonly CONTRACT_CHECKER="${REPO_ROOT}/scripts/formal/check_sumeragi_v2_multilane_models.py"
 source "${REPO_ROOT}/scripts/formal/sumeragi_v2_tlc_result_contract.sh"
+run_dir="$(python3 -I -S "${REPO_ROOT}/scripts/formal/sumeragi_v2_tlc_artifacts.py" init \
+  --parent "${SUMERAGI_V2_FORMAL_EVIDENCE_DIR:-${TMPDIR:-/tmp}}" \
+  --runner "${BASH_SOURCE[0]}" --expected-cases 106 \
+  --support "${REPO_ROOT}/scripts/formal/sumeragi_v2_tlc_result_contract.sh" \
+  --support "${REPO_ROOT}/scripts/formal/resolve_java.sh" \
+  --support "$CONTRACT_CHECKER")"
+readonly run_dir
+readonly ARTIFACT_RECORDER="$run_dir/support/sumeragi_v2_tlc_artifacts.py"
+echo "[tlc] retained artifacts: $run_dir" >&2
+finish_artifacts() {
+  local status=$?
+  trap - EXIT
+  echo "[tlc] retained artifacts: $run_dir" >&2
+  python3 -I -S "$ARTIFACT_RECORDER" finish --run-dir "$run_dir" --status "$status" \
+    || exit 1
+  exit "$status"
+}
+trap finish_artifacts EXIT
+readonly TLA2TOOLS_JAR="${TLA2TOOLS_JAR:?TLA2TOOLS_JAR must name the authenticated external tool}"
 if [[ -n "${JAVA_BIN:-}" ]]; then
   resolved_java_bin="$("${REPO_ROOT}/scripts/formal/resolve_java.sh" "$JAVA_BIN")"
 else
@@ -54,11 +73,11 @@ actual_sha256="$(hash_file "$TLA2TOOLS_JAR")"
   exit 1
 }
 
-run_dir="$(mktemp -d "${TMPDIR:-/tmp}/sumeragi-v2-multilane.XXXXXX")"
-trap 'rm -rf -- "$run_dir"' EXIT
+python3 -I -S "$ARTIFACT_RECORDER" tools --run-dir "$run_dir" \
+  --java "$JAVA_BIN" --jar "$TLA2TOOLS_JAR" --jar-sha256 "$TLA2TOOLS_SHA256"
 
 common=(
-  "$JAVA_BIN" -XX:+UseParallelGC -cp "$TLA2TOOLS_JAR" tlc2.TLC
+  "$JAVA_BIN" -XX:+UseParallelGC -cp "$run_dir/tools/tla2tools.jar" tlc2.TLC
   -cleanup -workers 1 -fp 94 -seed 20260723
 )
 
@@ -67,15 +86,15 @@ run_mutant() {
   local module="$2"
   local config="$3"
   local invariant="$4"
-  local log="$run_dir/${name}.log"
+  local log="$run_dir/cases/${name}/stdout.log"
   local invariant_marker="Error: Invariant ${invariant} is violated."
   local primary_diagnostic_count
   set +e
-  (
-    cd "$FORMAL_DIR"
-    "${common[@]}" -metadir "$run_dir/${name}" \
-      -config "$config" "$module"
-  ) >"$log" 2>&1
+  python3 -I -S "$ARTIFACT_RECORDER" capture --run-dir "$run_dir" \
+    --name "$name" --formal-dir "$FORMAL_DIR" --module "$module" \
+    --config "$config" --expectation "$invariant" -- \
+    "${common[@]}" -metadir "$run_dir/cases/${name}/tlc" \
+    -config "$config" "$module"
   local status=$?
   set -e
   if [[ "$status" -ne 12 ]]; then
@@ -103,6 +122,7 @@ run_mutant() {
     cat "$log" >&2
     exit 1
   }
+  python3 -I -S "$ARTIFACT_RECORDER" accept --run-dir "$run_dir" --name "$name"
   echo "[tlc] observed ${name}: ${invariant}"
 }
 

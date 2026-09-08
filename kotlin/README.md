@@ -10,6 +10,17 @@ APIs using the JDK 21 toolchain. Run the Norito consumer suite with:
 ./gradlew :core-jvm:test --tests 'org.hyperledger.iroha.sdk.norito.*' --console=plain
 ```
 
+Account and public-key admission requires the ABI-23 `connect_norito_bridge`
+native library, including `nativeValidateAccountAddressCanonical`. Address
+construction and parsing use Rust to validate every key and complete multisig
+policy, then require identical canonical bytes. The V1 identity catalog includes
+all eleven algorithms without a process-global curve selector. Missing native
+admission returns `ERR_NATIVE_BRIDGE_UNAVAILABLE`; account literals must be exact
+I105 strings without surrounding whitespace. For host tests, set
+`IROHA_NATIVE_LIBRARY_PATH` to the absolute directory containing the freshly
+built bridge. Android packages the bridge through the generated native artifact
+pipeline described in `CLAUDE.md`.
+
 ## Artifacts
 
 Not published to Maven Central yet. Build locally and consume via `mavenLocal()`.
@@ -295,7 +306,11 @@ participant rows, and inconsistent carrier identities.
 Diagnostics are immutable values for Kotlin and Java callers. Construction owns
 the NPoS seed, evidence vectors and nested JSON maps/arrays; changing supplied
 collections cannot change validated evidence. Constructors enforce unsigned
-counters, vector limits and the parser's nesting bound.
+counters, vector limits and the parser's nesting bound. Canonical wire values
+also own their signer, manifest and liveness vectors; decoders reject element
+counts that cannot fit the remaining frame before allocating. Direct Native AMX
+round construction enforces the same positive height and unsigned view bounds
+as parsing. Java-source fixture and mutation tests run in this module.
 
 ### KAGEMUSHA peer transports
 
@@ -318,12 +333,50 @@ identity before executing a device operation. Payment and redemption reservation
 carry the canonical tagged `iroha.kagemusha.device.v1.sender-public-inputs` Norito
 archive, shared with the native outgoing-operation index.
 
+Authenticated provider construction requires an app-owned `KagemushaOperationIntentStoreV1`
+and an explicit current onboarding-approval callback. The store must synchronously retain
+immutable account/runtime scope, operation identity, exact typed command, and creation
+qualification before dispatch; after Core accepts the response it retains the exact reply,
+original authenticator, and reply qualification. Its shared reentrant lock and durable storage
+must exclude multiple owners across providers and processes. There is no in-memory default.
+The SDK resumes unfinished bootstrap, fold, and rotation commands before another transition.
+Rotation retries use their retained original response key, while fresh qualification and state
+reads use the current epoch. Coordinator method 11 begins each transient native observation
+for operations 1, 13, 18, and 21; those reads never enter the operation intent store or durable
+reservation method. Native recreation requires a fresh challenge, and each new challenge
+invalidates its predecessor. Historical read replies are never treated as current state.
+Bootstrap admission is checked again immediately before
+dispatch, including a retry when fresh authenticated state remains uninitialized.
+
+Apps call `acknowledgeDurableResult(operationId, canonicalResult)` only after syncing and
+reopening the exact request, payment, acknowledgement, or redemption transcript. Receiver ACK
+completion uses its credit identity. Internal transitions are acknowledged after a fresh
+authenticated snapshot proves the accepted aggregate installed; its exact command, challenge,
+reply, authenticator, and qualification are retained as immutable evidence on that mutation
+before acknowledgement. Sender installation retains the same evidence on its operation-10
+record. Such evidence never restores a read challenge.
+Acknowledgement retains immutable history; errors, sign-out, and lost approval must not delete
+uncertain obligations. Acknowledged history is not charged against a lifetime operation limit.
+
 `KagemushaCoreCoordinatorBridgeV1.open(storagePath)` in `client-android` provides
 the strict schema-2 JNI transport, backed by the pure `core-jvm` frame codec.
 It checks the complete ABI-23 inventory and rejects substituted response bindings;
-missing JNI or an absent qualified native coordinator fails closed. Its opaque
-archives do not implement the typed wallet coordinator: the remaining native-owned
-archive schemas and integration are recorded in [the source contract](../specs/kagemusha_device_bridge_v1.md).
+missing JNI or an absent qualified native coordinator fails closed.
+`KagemushaNativeCoreCoordinatorAdapterV1.open(storagePath)` implements the typed
+wallet coordinator over that transport. Its pure `KagemushaCoreCoordinatorArchiveV1`
+codec handles bounded canonical preparation, candidate, recovery, and redemption
+receipt projections. The adapter checks public-input digests, operation identities,
+qualified creation context, retained recovery scope, and installed aggregate scope.
+Device-reply admission retains the original 64-byte response authenticator so
+native Core independently verifies the exact response transcript.
+The sole JNI verifier is `nativeVerifyCommandResponseV1`: its response signature
+binds the exact canonical command body digest as well as the response header and
+payload digest, hardware policy, and qualification report. The Android bridge
+captures the dispatched command and request identity before execution and passes
+those detached bytes to verification; no old verifier symbol or overload remains.
+Those projections remain selectors: the qualified native backend must authenticate
+the journal, release, Core authorization, and actual recursive proof. No software
+backend or stock provider factory is supplied. See [the source contract](../specs/kagemusha_device_bridge_v1.md).
 
 Online reserve top-ups use the same payer authority as the debit. Build one
 `TopUpKagemushaV1Instruction` from the proof-bearing request, put that sole
@@ -468,7 +521,15 @@ have a gap.
 generic proof request/build/verify ABI and free-form algorithm selectors are
 absent; proofs must use protocol-specific typed APIs. The local catalog never
 establishes activation or readiness; proof submission requires a fresh
-committed `/v1/privacy/capabilities` snapshot from live Torii.
+committed `/v1/privacy/capabilities` manifest from live Torii.
+`HttpClientTransport.getPrivacyCapabilities(canonicalAuth)` performs a one-shot
+authenticated HTTPS fetch for `ClientConfig`'s immutable local network, verifies
+the exact response URL and bounded Norito body, and native-validates its signatures
+and deployment network before privately binding its origin. Public archive decoding
+is inspection-only and cannot mint admission. Native construction validates the
+selected activation and limits; the transaction encoder also requires the token's
+network to equal the enclosing transaction network. Java consumers use this same
+Kotlin-owned boundary.
 
 Genesis `confidential_features` and `zk_policy_hash` values are opaque consensus
 fingerprints, never client-side proof or backend selectors.

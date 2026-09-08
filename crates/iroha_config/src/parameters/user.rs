@@ -4625,10 +4625,9 @@ pub struct Zk {
     /// Pedersen parameter set identifier to embed into confidential policies (if any).
     #[config(env = "ZK_PEDERSEN_PARAMS_ID")]
     pub pedersen_params_id: Option<u32>,
-    /// Optional verifying key reference used for Kaigi roster join proofs.
-    pub kaigi_roster_join_vk: Option<VerifyingKeyRef>,
-    /// Optional verifying key reference used for Kaigi roster leave proofs.
-    pub kaigi_roster_leave_vk: Option<VerifyingKeyRef>,
+    /// Governed verifying key for every final Kaigi authorization action.
+    pub kaigi_authorization_vk: Option<VerifyingKeyRef>,
+
     /// Optional verifying key reference used for Kaigi usage commitment proofs.
     pub kaigi_usage_vk: Option<VerifyingKeyRef>,
 }
@@ -4650,8 +4649,8 @@ impl Zk {
             bridge_proof_max_future_drift_blocks: self.bridge_proof_max_future_drift_blocks,
             poseidon_params_id: self.poseidon_params_id,
             pedersen_params_id: self.pedersen_params_id,
-            kaigi_roster_join_vk: self.kaigi_roster_join_vk.map(VerifyingKeyRef::parse),
-            kaigi_roster_leave_vk: self.kaigi_roster_leave_vk.map(VerifyingKeyRef::parse),
+            kaigi_authorization_vk: self.kaigi_authorization_vk.map(VerifyingKeyRef::parse),
+
             kaigi_usage_vk: self.kaigi_usage_vk.map(VerifyingKeyRef::parse),
             max_proof_size_bytes: defaults::confidential::MAX_PROOF_SIZE_BYTES,
             max_nullifiers_per_tx: defaults::confidential::MAX_NULLIFIERS_PER_TX,
@@ -8193,6 +8192,9 @@ pub struct Network {
     /// Maximum frame size for health monitoring traffic.
     #[config(default = "defaults::network::MAX_FRAME_BYTES_HEALTH")]
     pub max_frame_bytes_health: NonZeroUsize,
+    /// Maximum frame size for authenticated Connect relay traffic.
+    #[config(default = "defaults::network::MAX_FRAME_BYTES_CONNECT")]
+    pub max_frame_bytes_connect: NonZeroUsize,
     /// Maximum frame size for miscellaneous topics.
     #[config(default = "defaults::network::MAX_FRAME_BYTES_OTHER")]
     pub max_frame_bytes_other: NonZeroUsize,
@@ -8317,6 +8319,7 @@ impl Network {
             max_frame_bytes_tx_gossip,
             max_frame_bytes_peer_gossip,
             max_frame_bytes_health,
+            max_frame_bytes_connect,
             max_frame_bytes_other,
             quic_max_idle_timeout_ms,
             ..
@@ -8551,6 +8554,7 @@ impl Network {
                 max_frame_bytes_tx_gossip: max_frame_bytes_tx_gossip.get(),
                 max_frame_bytes_peer_gossip: max_frame_bytes_peer_gossip.get(),
                 max_frame_bytes_health: max_frame_bytes_health.get(),
+                max_frame_bytes_connect: max_frame_bytes_connect.get(),
                 max_frame_bytes_other: max_frame_bytes_other.get(),
                 quic_max_idle_timeout: quic_max_idle_timeout_ms
                     .map(iroha_config_base::util::DurationMs::get),
@@ -13338,10 +13342,10 @@ impl SnapshotResourcePolicy {
     /// Relationships stay fail-closed so values cannot exceed the authenticated
     /// payload or the total transient-allocation budget.
     fn validate(&self, max_payload_bytes: NonZeroUsize) -> core::result::Result<(), String> {
-        if self.max_decode_depth.get() > norito::json::MAX_JSON_VALUE_NESTING_DEPTH {
+        if self.max_decode_depth.get() > norito::core::MAX_VALUE_NESTING_DEPTH {
             return Err(format!(
                 "snapshot.resources.max_decode_depth must not exceed Norito's structural limit of {}",
-                norito::json::MAX_JSON_VALUE_NESTING_DEPTH
+                norito::core::MAX_VALUE_NESTING_DEPTH
             ));
         }
         if self.max_string_bytes > self.max_blob_bytes {
@@ -15681,7 +15685,7 @@ mod torii_push_tests {
         for config in [partial_fcm, partial_apns, padded, empty_path] {
             let mut emitter = Emitter::new();
             let _ = config.parse(&mut emitter);
-            emitter
+            let _ = emitter
                 .into_result()
                 .expect_err("invalid provider binding must fail closed");
         }
@@ -16636,7 +16640,7 @@ mod torii_recipient_lookup_tests {
             };
             let mut emitter = Emitter::new();
             assert!(route.parse(0, &mut emitter).is_none(), "{base_url}");
-            emitter
+            let _ = emitter
                 .into_result()
                 .expect_err("unsafe recipient lookup URL must fail closed");
         }
@@ -16659,7 +16663,7 @@ mod torii_recipient_lookup_tests {
             };
             let mut emitter = Emitter::new();
             assert!(route.parse(0, &mut emitter).is_none());
-            emitter
+            let _ = emitter
                 .into_result()
                 .expect_err("noncanonical recipient lookup token must fail closed");
         }
@@ -35613,7 +35617,7 @@ policy_digest_hex = "{policy_digest_hex}"
             let error = actual::Root::from_toml_source(TomlSource::inline(table))
                 .expect_err("retired pre-release settlement keys must be rejected");
             assert!(
-                format!("{error:?}").contains(key),
+                format!("{error:?}").contains("`settlement.offline`"),
                 "unexpected error: {error:?}"
             );
         }
@@ -37857,6 +37861,46 @@ publish_delay_seconds = 17
         );
     }
     #[test]
+    fn execution_proof_transport_overlay_preserves_ordinary_defaults() {
+        let default = load_root(base_table());
+        assert_eq!(default.network.max_frame_bytes_health, 32_768);
+        assert_eq!(default.network.max_frame_bytes_connect, 131_072);
+        assert_eq!(default.network.max_frame_bytes_tx_gossip, 262_144);
+        assert_eq!(default.torii.connect.frame_max_bytes, 64_000);
+        let overlay: Table = toml::from_str(include_str!(
+            "../../../../configs/soranexus/execution-proof-transport.toml"
+        ))
+        .expect("execution transport overlay TOML");
+        let mut table = base_table();
+        for (key, value) in overlay {
+            let fields = value.as_table().expect("overlay section");
+            let target = table
+                .entry(key)
+                .or_insert_with(|| Value::Table(Table::new()))
+                .as_table_mut()
+                .expect("runtime section");
+            for (name, value) in fields {
+                target.insert(name.clone(), value.clone());
+            }
+        }
+        let configured = load_root(table);
+        assert_eq!(configured.network.max_frame_bytes_health, 32_768);
+        assert_eq!(configured.network.max_frame_bytes_connect, 8 * 1024 * 1024);
+        assert_eq!(
+            configured.network.max_frame_bytes_tx_gossip,
+            8 * 1024 * 1024
+        );
+        assert_eq!(
+            configured.torii.connect.frame_max_bytes,
+            4 * 1024 * 1024 + 4096
+        );
+        assert_eq!(
+            configured.torii.connect.session_buffer_max_bytes,
+            8 * 1024 * 1024
+        );
+        assert_eq!(configured.torii.connect.ws_max_sessions, 16);
+    }
+    #[test]
     fn trusted_peer_full_fanout_must_fit_the_effective_network_capacity() {
         let set_connection_capacity = |table: &mut Table, capacity: usize| {
             table
@@ -38076,7 +38120,16 @@ publish_delay_seconds = 17
             Value::Integer(101),
         );
         queues.insert("bodies".into(), Value::Integer(310));
-        queues.insert("body_bytes".into(), Value::Integer(103 * 33 * 1024 * 1024));
+        let body_bytes = actual::sumeragi_v2_body_ingress_required_byte_capacity(
+            1,
+            101,
+            defaults::sumeragi::QUEUE_BODY_SOURCE_BYTES.get(),
+        )
+        .expect("fixture source-byte geometry is representable");
+        queues.insert(
+            "body_bytes".into(),
+            Value::Integer(i64::try_from(body_bytes).expect("fixture byte capacity fits TOML")),
+        );
         let error = actual::Root::from_toml_source(TomlSource::inline(table))
             .expect_err("height-local lifecycle capacity must fit its physical-slot space");
         let report = format!("{error:?}");
@@ -38128,7 +38181,16 @@ publish_delay_seconds = 17
             Value::Integer(33),
         );
         queues.insert("bodies".into(), Value::Integer(106));
-        queues.insert("body_bytes".into(), Value::Integer(35 * 33 * 1024 * 1024));
+        let body_bytes = actual::sumeragi_v2_body_ingress_required_byte_capacity(
+            1,
+            33,
+            defaults::sumeragi::QUEUE_BODY_SOURCE_BYTES.get(),
+        )
+        .expect("fixture source-byte geometry is representable");
+        queues.insert(
+            "body_bytes".into(),
+            Value::Integer(i64::try_from(body_bytes).expect("fixture byte capacity fits TOML")),
+        );
         let error = actual::Root::from_toml_source(TomlSource::inline(table))
             .expect_err("home profile admits at most 32 independent authenticated sources");
         let report = format!("{error:?}");
@@ -38208,11 +38270,26 @@ publish_delay_seconds = 17
     }
     include!("user/kura_and_snapshot_tests.rs");
     #[test]
+    fn snapshot_resource_defaults_fit_decoder_limits() {
+        let actual = load_root(base_table());
+        assert_eq!(
+            actual.snapshot.resources.max_decode_depth.get(),
+            norito::core::MAX_VALUE_NESTING_DEPTH
+        );
+        assert!(
+            actual
+                .snapshot
+                .resources
+                .validate(actual.snapshot.max_payload_bytes)
+                .is_ok()
+        );
+    }
+    #[test]
     fn snapshot_resource_policy_rejects_incoherent_budgets() {
         let invalid_resources = [
             (
                 "max_decode_depth",
-                i64::try_from(norito::json::MAX_JSON_VALUE_NESTING_DEPTH + 1)
+                i64::try_from(norito::core::MAX_VALUE_NESTING_DEPTH + 1)
                     .expect("Norito depth limit fits i64"),
             ),
             ("max_string_bytes", 65),
@@ -38231,7 +38308,7 @@ publish_delay_seconds = 17
             resources.insert(
                 "max_decode_depth".into(),
                 Value::Integer(
-                    i64::try_from(norito::json::MAX_JSON_VALUE_NESTING_DEPTH)
+                    i64::try_from(norito::core::MAX_VALUE_NESTING_DEPTH)
                         .expect("Norito depth limit fits i64"),
                 ),
             );

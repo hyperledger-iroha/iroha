@@ -95,13 +95,15 @@ pub struct ProviderAdvertSignaturePayloadV1 {
     pub allow_unknown_capabilities: bool,
 }
 mod borrowed_norito {
-    use norito::core::NoritoSerialize;
+    use norito::core::{NoritoSerialize, SerializePayload};
     /// Borrowed value that delegates canonical Norito serialization.
     pub(super) struct Value<'a, T>(pub(super) &'a T);
     impl<T: NoritoSerialize> NoritoSerialize for Value<'_, T> {
         fn schema_hash() -> [u8; 16] {
             T::schema_hash()
         }
+    }
+    impl<T: NoritoSerialize> SerializePayload for Value<'_, T> {
         fn serialize(
             &self,
             writer: &mut norito::core::Encoder<'_>,
@@ -121,6 +123,8 @@ mod borrowed_norito {
         fn schema_hash() -> [u8; 16] {
             <std::vec::Vec<T>>::schema_hash()
         }
+    }
+    impl<T: NoritoSerialize> SerializePayload for Vec<'_, T> {
         fn serialize(
             &self,
             writer: &mut norito::core::Encoder<'_>,
@@ -165,6 +169,8 @@ impl norito::core::NoritoSerialize for ProviderAdvertSignaturePayloadViewV1<'_> 
     fn schema_hash() -> [u8; 16] {
         ProviderAdvertSignaturePayloadV1::schema_hash()
     }
+}
+impl norito::core::SerializePayload for ProviderAdvertSignaturePayloadViewV1<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         self.0.serialize(writer)
     }
@@ -1222,7 +1228,9 @@ fn preflight_provider_advert_len(
     advert: &ProviderAdvertV1,
     maximum: usize,
 ) -> Result<usize, AdvertValidationError> {
-    if let Some(found) = norito::core::NoritoSerialize::encoded_len_exact(advert)
+    let _canonical_flags =
+        norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+    if let Some(found) = norito::core::SerializePayload::encoded_len_exact(advert)
         && found > maximum
     {
         return Err(AdvertValidationError::AdvertTooLarge { found, maximum });
@@ -1249,27 +1257,25 @@ pub fn decode_provider_advert_v1(bytes: &[u8]) -> Result<ProviderAdvertV1, norit
             bytes.len()
         )));
     }
-    let advert: ProviderAdvertV1 = norito::decode_from_bytes_with_limits(
+    let advert: ProviderAdvertV1 = norito::decode_canonical_with_limits(
         bytes,
         norito::DecodeLimits::new(
             PROVIDER_ADVERT_CAPABILITY_PAYLOAD_MAX_BYTES_V1,
-            PROVIDER_ADVERT_CAPABILITY_PAYLOAD_MAX_BYTES_V1,
+            // Field budgets include the whole nested body, not just its leaf buffers.
+            // Per-capability sequence limits and body leaf/aggregate validation are separate.
+            PROVIDER_ADVERT_MAX_CANONICAL_BYTES_V1,
             400_000,
             PROVIDER_ADVERT_MAX_CANONICAL_BYTES_V1 * 4,
             64,
         ),
     )?;
+    let _canonical_flags =
+        norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
     let exact = norito::core::encoded_payload_len(&advert)?;
     if exact > PROVIDER_ADVERT_MAX_CANONICAL_BYTES_V1 {
         return Err(norito::core::Error::Message(format!(
             "provider advert has {exact} canonical bytes; maximum is {PROVIDER_ADVERT_MAX_CANONICAL_BYTES_V1}"
         )));
-    }
-    let canonical = norito::to_bytes(&advert)?;
-    if canonical != bytes {
-        return Err(norito::core::Error::Message(
-            "provider advert is not canonically encoded".to_owned(),
-        ));
     }
     Ok(advert)
 }
@@ -1534,6 +1540,8 @@ impl ProviderAdvertV1 {
     /// signature algorithm and public key, strict-verification policy, and
     /// unknown-capability policy. Signature bytes themselves are excluded.
     pub fn signature_payload_bytes(&self) -> Result<Vec<u8>, AdvertSignatureError> {
+        let _canonical_flags =
+            norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
         preflight_provider_advert_len(self, PROVIDER_ADVERT_MAX_CANONICAL_BYTES_V1)
             .map_err(|error| AdvertSignatureError::EnvelopeEncoding(error.to_string()))?;
         let envelope = ProviderAdvertSignaturePayloadViewV1::from(self);
@@ -1545,7 +1553,7 @@ impl ProviderAdvertV1 {
                 maximum: PROVIDER_ADVERT_MAX_CANONICAL_BYTES_V1,
             });
         }
-        let envelope_bytes = norito::to_bytes(&envelope)
+        let envelope_bytes = norito::encode_canonical(&envelope)
             .map_err(|err| AdvertSignatureError::EnvelopeEncoding(err.to_string()))?;
         let mut payload =
             Vec::with_capacity(PROVIDER_ADVERT_SIGNATURE_DOMAIN_V1.len() + envelope_bytes.len());
@@ -1646,7 +1654,7 @@ mod tests {
     use super::*;
     use ed25519_dalek::{Signer, SigningKey};
     use iroha_crypto::{Algorithm, KeyPair};
-    use norito::{NoritoSerialize as _, decode_from_bytes, to_bytes};
+    use norito::{NoritoSerialize as _, SerializePayload as _, decode_from_bytes, to_bytes};
     fn encode_bare_with_flags<T: norito::core::NoritoSerialize>(value: &T, flags: u8) -> Vec<u8> {
         let _guard = norito::core::DecodeFlagsGuard::enter(flags);
         let mut bytes = Vec::new();
@@ -1670,6 +1678,7 @@ mod tests {
             PACKED_SEQ | PACKED_STRUCT | COMPACT_LEN | FIELD_BITSET,
         ]
     }
+    include!("provider_advert/canonical_tests.rs");
     fn sample_advert(now: u64) -> ProviderAdvertV1 {
         let issued_at = now;
         let expires_at = now + REFRESH_RECOMMENDATION_SECS * 2;
@@ -1768,9 +1777,7 @@ mod tests {
         let bytes = norito::to_bytes(&advert).expect("serialize advert");
         let decoded = decode_provider_advert_v1(&bytes).expect("decode bounded canonical advert");
         assert_eq!(decoded, advert);
-        let compressed =
-            norito::to_compressed_bytes(&advert, Some(norito::CompressionConfig::default()))
-                .expect("compress advert");
+        let compressed = crate::canonical_test_support::with_compression_tag(&advert);
         assert!(decode_provider_advert_v1(&compressed).is_err());
         assert!(
             decode_provider_advert_v1(&vec![0; PROVIDER_ADVERT_MAX_CANONICAL_BYTES_V1 + 1])
@@ -1832,7 +1839,8 @@ mod tests {
             <ProviderAdvertSignaturePayloadViewV1<'_> as norito::core::NoritoSerialize>::schema_hash(),
             ProviderAdvertSignaturePayloadV1::schema_hash()
         );
-        let owned_frame = norito::to_bytes(&owned).expect("encode owned signature envelope");
+        let owned_frame =
+            norito::encode_canonical(&owned).expect("encode owned signature envelope");
         assert_eq!(
             norito::to_bytes(&borrowed).expect("encode borrowed signature envelope"),
             owned_frame
@@ -1869,13 +1877,11 @@ mod tests {
                 owned_frame,
                 "borrowed provider-advert canonical frame or layout flags changed for flags 0x{flags:02x}"
             );
-            let mut expected_payload = PROVIDER_ADVERT_SIGNATURE_DOMAIN_V1.to_vec();
-            expected_payload.extend_from_slice(&owned_frame);
             assert_eq!(
                 advert
                     .signature_payload_bytes()
                     .expect("encode borrowed provider-advert signing payload"),
-                expected_payload,
+                expected_domain_separated,
                 "provider-advert signature payload changed for flags 0x{flags:02x}"
             );
         }
@@ -1975,12 +1981,32 @@ mod tests {
         capability_boundary
             .validate()
             .expect("exact capability aggregate boundary validates");
+        let mut capability_advert = sample_advert(1_700_000_000);
+        capability_advert.body = capability_boundary.clone();
+        let capability_bytes = norito::encode_canonical(&capability_advert).unwrap();
+        let decoded = decode_provider_advert_v1(&capability_bytes).unwrap();
+        assert_eq!(decoded, capability_advert);
+        decoded
+            .body
+            .validate()
+            .expect("maximum aggregate survives bounded decode");
         capability_boundary.capabilities.push(CapabilityTlv {
             cap_type: CapabilityType::VendorReserved,
             payload: vec![1],
         });
         assert_eq!(
             capability_boundary.validate(),
+            Err(AdvertValidationError::CapabilityPayloadAggregateTooLarge {
+                found: PROVIDER_ADVERT_CAPABILITY_PAYLOAD_TOTAL_MAX_BYTES_V1 + 1,
+                maximum: PROVIDER_ADVERT_CAPABILITY_PAYLOAD_TOTAL_MAX_BYTES_V1,
+            })
+        );
+        capability_advert.body = capability_boundary;
+        let decoded =
+            decode_provider_advert_v1(&norito::encode_canonical(&capability_advert).unwrap())
+                .unwrap();
+        assert_eq!(
+            decoded.body.validate(),
             Err(AdvertValidationError::CapabilityPayloadAggregateTooLarge {
                 found: PROVIDER_ADVERT_CAPABILITY_PAYLOAD_TOTAL_MAX_BYTES_V1 + 1,
                 maximum: PROVIDER_ADVERT_CAPABILITY_PAYLOAD_TOTAL_MAX_BYTES_V1,
@@ -2024,6 +2050,13 @@ mod tests {
                 ..
             })
         ));
+        boundary_advert.body = oversized_capability;
+        assert!(matches!(
+            decode_provider_advert_v1(&norito::encode_canonical(&boundary_advert).unwrap()),
+            Err(norito::core::Error::SequenceLengthExceeded { length, limit })
+                if length == (PROVIDER_ADVERT_CAPABILITY_PAYLOAD_MAX_BYTES_V1 + 1) as u64
+                    && limit == PROVIDER_ADVERT_CAPABILITY_PAYLOAD_MAX_BYTES_V1 as u64
+        ));
         let mut oversized_host = body.clone();
         oversized_host.endpoints[0].host_pattern.push('h');
         assert_eq!(
@@ -2044,6 +2077,17 @@ mod tests {
         });
         assert_eq!(
             aggregate_overflow.validate(),
+            Err(AdvertValidationError::EndpointMetadataAggregateTooLarge {
+                found: PROVIDER_ADVERT_ENDPOINT_METADATA_TOTAL_MAX_BYTES_V1 + 1,
+                maximum: PROVIDER_ADVERT_ENDPOINT_METADATA_TOTAL_MAX_BYTES_V1,
+            })
+        );
+        boundary_advert.body = aggregate_overflow;
+        let decoded =
+            decode_provider_advert_v1(&norito::encode_canonical(&boundary_advert).unwrap())
+                .unwrap();
+        assert_eq!(
+            decoded.body.validate(),
             Err(AdvertValidationError::EndpointMetadataAggregateTooLarge {
                 found: PROVIDER_ADVERT_ENDPOINT_METADATA_TOTAL_MAX_BYTES_V1 + 1,
                 maximum: PROVIDER_ADVERT_ENDPOINT_METADATA_TOTAL_MAX_BYTES_V1,

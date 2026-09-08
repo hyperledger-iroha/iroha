@@ -36,26 +36,39 @@ async fn trigger_completion_success_should_produce_event_scenario(network: &Netw
         .expect("trigger action fixture satisfies validation invariants"),
     ));
     let client = network.client();
-    let register_tx = client.build_transaction(
-        [register_trigger],
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        <_>::default(),
-    );
-    spawn_blocking(move || client.submit_transaction_blocking(&register_tx)).await??;
+    let register_tx = {
+        let account = client.account_client();
+        account
+            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                [register_trigger],
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                <_>::default(),
+            ))
+            .and_then(|payload| account.sign_transaction(payload))
+    }
+    .expect("build integration-test transaction");
+    spawn_blocking(move || client.submit_transaction_and_wait(&register_tx)).await??;
     network.ensure_blocks(2).await?;
     let event_timeout = network.sync_timeout();
-    let ready_tx = network.client().build_transaction(
-        [Log::new(
-            Level::INFO,
-            "trigger_completion_event_stream_ready".to_string(),
-        )],
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        Metadata::default(),
-    );
+    let ready_client = network.client();
+    let ready_tx = {
+        let account = ready_client.account_client();
+        account
+            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                [Log::new(
+                    Level::INFO,
+                    "trigger_completion_event_stream_ready".to_string(),
+                )],
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                Metadata::default(),
+            ))
+            .and_then(|payload| account.sign_transaction(payload))
+    }
+    .expect("build integration-test transaction");
     let ready_hash = ready_tx.hash();
     let mut events = tokio::time::timeout(
         event_timeout,
-        network.client().listen_for_events_async(vec![
+        network.client().client().listen_for_events(vec![
             EventFilterBox::from(
                 TriggerCompletedEventFilter::new()
                     .for_trigger(trigger_id.clone())
@@ -100,13 +113,19 @@ async fn trigger_completion_success_should_produce_event_scenario(network: &Netw
     })??;
     let call_trigger = ExecuteTrigger::new(trigger_id.clone());
     let client = network.client();
-    let trigger_tx = client.build_transaction(
-        [Instruction::into_instruction_box(Box::new(call_trigger))],
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        Metadata::default(),
-    );
+    let trigger_tx = {
+        let account = client.account_client();
+        account
+            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                [Instruction::into_instruction_box(Box::new(call_trigger))],
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                Metadata::default(),
+            ))
+            .and_then(|payload| account.sign_transaction(payload))
+    }
+    .expect("build integration-test transaction");
     let submit_trigger = async {
-        spawn_blocking(move || client.submit_transaction_blocking(&trigger_tx)).await??;
+        spawn_blocking(move || client.submit_transaction_and_wait(&trigger_tx)).await??;
         Ok::<(), eyre::Report>(())
     };
     let wait_event = async {
@@ -161,7 +180,7 @@ async fn trigger_completion_failure_reports_error_scenario(network: &Network) ->
     ));
     let client = network.client();
     spawn_blocking(move || {
-        client.submit_blocking(
+        client.submit(
             register_trigger,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -174,7 +193,7 @@ async fn trigger_completion_failure_reports_error_scenario(network: &Network) ->
         let call_trigger = ExecuteTrigger::new(trigger_id.clone());
         let client = network.client();
         let err = spawn_blocking(move || {
-            client.submit_blocking(
+            client.submit(
                 call_trigger,
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )

@@ -71,6 +71,26 @@ class JniSdkAndroidPairGuardTests(unittest.TestCase):
         with self.assertRaisesRegex(GUARD.AuditError, "macro expansion contract changed"):
             GUARD.audit_source(mutated)
 
+    def test_rejects_retired_privacy_methods_without_network_binding(self) -> None:
+        for method in (
+            "nativeValidateExact12CapabilityManifest",
+            "nativeRequireExact12CapabilityTuple",
+            "nativeValidateExact12SubmitProofConstruction",
+        ):
+            with self.subTest(method=method):
+                mutated = SOURCE.replace(method + "ForNetworkV1", method)
+                self.assertNotEqual(SOURCE, mutated)
+                with self.assertRaisesRegex(GUARD.AuditError, "inventory changed"):
+                    GUARD.audit_source(mutated)
+
+    def test_rejects_dropped_expected_network_parameter(self) -> None:
+        mutated = SOURCE.replace(
+            "    expected_network: jni::objects::JByteArray<'_>,\n", "", 1,
+        )
+        self.assertNotEqual(SOURCE, mutated)
+        with self.assertRaisesRegex(GUARD.AuditError, "signature/body contract changed"):
+            GUARD.audit_source(mutated)
+
 
 if __name__ == "__main__":
     unittest.main()

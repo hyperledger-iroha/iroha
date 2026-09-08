@@ -125,6 +125,8 @@ const TRANSACTION_ARTIFACT_NAMES = new Set([
 ]);
 
 export const REQUIRED_NATIVE_EXPORTS = Object.freeze([
+  "accountAddressParseEncoded",
+  "accountAddressRender",
   "blockProofsVerifyAuthenticatedV1",
   "connectNoritoBridgeAbiVersion",
   "noritoEncodeInstruction",
@@ -132,6 +134,8 @@ export const REQUIRED_NATIVE_EXPORTS = Object.freeze([
   "inspectSorafsOrderbookSubmissionForDiscriminantV1",
   "verifySorafsOrderbookSubmissionReceiptV1",
   "compileKotodama",
+  "buildKaigiAuthorizationProofV1",
+  "buildKaigiUsageProofV1",
   "privacyCompiledProfileCatalogV1",
   "privacyExact12CapabilityManifestJsonV1",
   "privacyRequireExact12CapabilityTupleV1",

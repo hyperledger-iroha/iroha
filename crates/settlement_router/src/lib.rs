@@ -26,7 +26,7 @@
     clippy::missing_panics_doc
 )]
 use norito::{
-    Archived, Error, NoritoDeserialize, NoritoSerialize,
+    Archived, Error, NoritoDeserialize, NoritoSerialize, SerializePayload,
     core::DecodeFromSlice,
     json::{self, FastJsonWrite, JsonDeserialize, JsonSerialize, Parser},
 };
@@ -84,7 +84,8 @@ impl From<TimestampMs> for OffsetDateTime {
         value.0
     }
 }
-impl NoritoSerialize for TimestampMs {
+impl NoritoSerialize for TimestampMs {}
+impl SerializePayload for TimestampMs {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), Error> {
         self.as_unix_millis().serialize(writer)
     }
@@ -161,7 +162,8 @@ impl From<DurationSeconds> for Duration {
         value.0
     }
 }
-impl NoritoSerialize for DurationSeconds {
+impl NoritoSerialize for DurationSeconds {}
+impl SerializePayload for DurationSeconds {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), Error> {
         self.0.whole_seconds().serialize(writer)
     }

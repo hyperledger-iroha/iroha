@@ -130,35 +130,13 @@ def _leg(
         "descriptor_hash": _hash(0xB9 if lane_id == 7 else 0xBB),
     }
     settlement = {
-        "block_height": 42,
         "lane_id": lane_id,
-        "lane_incarnation": lane_incarnation,
         "dataspace_id": dataspace_id,
-        "tx_count": 2,
-        "total_local_amount": "0",
-        "total_xor_due": "0",
-        "total_xor_after_haircut": "0",
-        "total_xor_variance": "0",
-        "swap_metadata": None,
-        "receipts": [
-            {
-                "source_id": "AB" * 32,
-                "local_amount": "0",
-                "xor_due": "0",
-                "xor_after_haircut": "0",
-                "xor_variance": "0",
-                "timestamp_ms": 40,
-            },
-            {
-                "source_id": "CD" * 32,
-                "local_amount": "0",
-                "xor_due": "0",
-                "xor_after_haircut": "0",
-                "xor_variance": "0",
-                "timestamp_ms": 40,
-            },
-        ],
-        "nexus_fee_receipts": [],
+        "lane_incarnation": lane_incarnation,
+        "participant_lane_block_height": 42,
+        "authority_context_height": 40,
+        "previous_native_settlement_hash": None,
+        "source_ids": ["AB" * 32, "CD" * 32],
     }
     return {
         "lane_id": lane_id,
@@ -379,16 +357,8 @@ def test_lane_commitment_preserves_exact_native_amx_and_fee_evidence() -> None:
         receipt.legs[0].participant_settlement_hash
         == receipt.legs[0].commit_qc.body.participant_settlement_commitment
     )
-    assert receipt.legs[0].participant_settlement.block_height == 42
-    assert isinstance(
-        receipt.legs[0].participant_settlement,
-        SumeragiNativeAmxParticipantSettlement,
-    )
-    assert not hasattr(
-        receipt.legs[0].participant_settlement,
-        "native_amx_receipts",
-    )
-    assert len(receipt.legs[0].participant_settlement.receipts) == 2
+    assert receipt.legs[0].participant_settlement.participant_lane_block_height == 42
+    assert len(receipt.legs[0].participant_settlement.source_ids) == 2
     assert receipt.legs[0].prepare_qc.body.source_id == "AB" * 32
     assert receipt.legs[0].prepare_qc.body.tx_entrypoint_hash == _hash(0xAD)
     assert not receipt.legs[0].requires_mixed_role_anchor_validation
@@ -445,7 +415,7 @@ def test_native_amx_parser_accepts_first_participant_lane_block_predecessor_shap
     descriptor["previous_lane_block_height"] = 0
     del descriptor["previous_lane_block_descriptor_hash"]
     descriptor["lane_block_height"] = 1
-    leg["participant_settlement"]["block_height"] = 1
+    leg["participant_settlement"]["participant_lane_block_height"] = 1
     _seal_native_amx_receipt(payload["native_amx_receipts"][0])
 
     parsed = SumeragiLaneSettlementCommitment.from_payload(payload)
@@ -474,15 +444,43 @@ def test_native_amx_parser_accepts_mixed_role_proposal_without_current_entrypoin
     assert parsed_leg.requires_mixed_role_anchor_validation
 
 
-def test_native_amx_parser_rejects_unordered_participant_source_group() -> None:
+def test_native_amx_parser_preserves_fifo_sources_in_all_participant_roles() -> None:
+    payload = _commitment()
+    payload["native_amx_receipts"].reverse()
+    for receipt in payload["native_amx_receipts"]:
+        for leg in receipt["legs"]:
+            leg["participant_settlement"]["source_ids"].reverse()
+            leg["participant_proposal"]["descriptor"]["accepted_transaction_hashes"].reverse()
+        _seal_native_amx_receipt(receipt)
+    parsed = SumeragiLaneSettlementCommitment.from_payload(payload)
+    assert [receipt.source_id for receipt in parsed.native_amx_receipts] == ["CD" * 32, "AB" * 32]
+    assert all(leg.participant_settlement.source_ids == ("CD" * 32, "AB" * 32)
+               for receipt in parsed.native_amx_receipts for leg in receipt.legs)
+
+
+def test_native_amx_parser_accepts_route_local_participant_source_subgroups() -> None:
+    payload = _commitment()
+    for index, receipt in enumerate(payload["native_amx_receipts"]):
+        leg = receipt["legs"][1]
+        leg["participant_settlement"]["source_ids"] = [receipt["source_id"]]
+        descriptor = leg["participant_proposal"]["descriptor"]
+        descriptor["accepted_transaction_hashes"] = [descriptor["accepted_transaction_hashes"][index]]
+        descriptor["accepted_candidate_indices"] = [index]
+        _seal_native_amx_receipt(receipt)
+    parsed = SumeragiLaneSettlementCommitment.from_payload(payload)
+    assert all(leg.participant_settlement.source_ids == (receipt.source_id,)
+               for receipt in parsed.native_amx_receipts for leg in receipt.legs[1:])
+
+
+def test_native_amx_parser_rejects_participant_source_order_misaligned_with_proposal() -> None:
     payload = _commitment()
     receipts = payload["native_amx_receipts"][0]["legs"][0][
         "participant_settlement"
-    ]["receipts"]
+    ]["source_ids"]
     receipts[0], receipts[1] = receipts[1], receipts[0]
     _seal_native_amx_receipt(payload["native_amx_receipts"][0])
 
-    with pytest.raises(ValueError, match="strictly ordered and unique"):
+    with pytest.raises(ValueError, match="not aligned|exact ordered source group"):
         SumeragiLaneSettlementCommitment.from_payload(payload)
 
 
@@ -521,7 +519,7 @@ def _drift_same_route_height(leg: dict[str, Any]) -> None:
     descriptor = leg["participant_proposal"]["descriptor"]
     descriptor["previous_lane_block_height"] = 42
     descriptor["lane_block_height"] = 43
-    leg["participant_settlement"]["block_height"] = 43
+    leg["participant_settlement"]["participant_lane_block_height"] = 43
     for qc in (leg["prepare_qc"], leg["commit_qc"]):
         qc["body"]["participant_previous_block_height"] = 42
         qc["body"]["participant_lane_block_height"] = 43
@@ -559,11 +557,11 @@ def test_native_amx_parser_rejects_same_route_coordinator_identity_drift(
         SumeragiLaneSettlementCommitment.from_payload(payload)
 
 
-def test_native_amx_parser_rejects_unordered_outer_source_group() -> None:
+def test_native_amx_parser_rejects_outer_source_order_misaligned_with_same_route_leg() -> None:
     payload = _commitment()
     payload["native_amx_receipts"].reverse()
 
-    with pytest.raises(ValueError, match="strictly ordered and unique"):
+    with pytest.raises(ValueError, match="not aligned|exact ordered source group"):
         SumeragiLaneSettlementCommitment.from_payload(payload)
 
 
@@ -578,8 +576,8 @@ def test_native_amx_parser_rejects_outer_source_group_overflow_before_decode() -
 def test_native_amx_parser_rejects_participant_group_different_from_outer_group() -> None:
     payload = _commitment()
     payload["native_amx_receipts"][0]["legs"][0]["participant_settlement"][
-        "receipts"
-    ][1]["source_id"] = "EF" * 32
+        "source_ids"
+    ][1] = "EF" * 32
     _seal_native_amx_receipt(payload["native_amx_receipts"][0])
 
     with pytest.raises(ValueError, match="exact ordered source group"):
@@ -653,7 +651,7 @@ def test_native_amx_parser_rejects_participant_finality_tampering() -> None:
         descriptor["previous_lane_block_height"] = 0
         descriptor["previous_lane_block_descriptor_hash"] = None
         descriptor["lane_block_height"] = 1
-        leg["participant_settlement"]["block_height"] = 1
+        leg["participant_settlement"]["participant_lane_block_height"] = 1
 
     def mismatch_proposal_route(leg: dict[str, Any]) -> None:
         leg["participant_proposal"]["descriptor"]["lane_id"] = 99
@@ -671,22 +669,23 @@ def test_native_amx_parser_rejects_participant_finality_tampering() -> None:
         leg["participant_settlement"]["total_local_amount"] = "1"
 
     def mismatch_settlement_source(leg: dict[str, Any]) -> None:
-        leg["participant_settlement"]["receipts"][0]["source_id"] = "EF" * 32
+        leg["participant_settlement"]["source_ids"][0] = "EF" * 32
 
     def duplicate_settlement_source(leg: dict[str, Any]) -> None:
-        leg["participant_settlement"]["receipts"][1]["source_id"] = "AB" * 32
+        leg["participant_settlement"]["source_ids"][1] = "AB" * 32
 
     def wrong_settlement_tx_count(leg: dict[str, Any]) -> None:
         leg["participant_settlement"]["tx_count"] = 1
 
     def empty_settlement(leg: dict[str, Any]) -> None:
-        leg["participant_settlement"]["tx_count"] = 0
-        leg["participant_settlement"]["receipts"] = []
+        leg["participant_settlement"]["source_ids"] = []
 
     def oversized_settlement(leg: dict[str, Any]) -> None:
-        receipt = deepcopy(leg["participant_settlement"]["receipts"][0])
-        leg["participant_settlement"]["tx_count"] = 4097
-        leg["participant_settlement"]["receipts"] = [receipt] * 4097
+        receipt = deepcopy(leg["participant_settlement"]["source_ids"][0])
+        leg["participant_settlement"]["source_ids"] = [receipt] * 4097
+
+    def empty_recursive_settlement(leg: dict[str, Any]) -> None:
+        leg["participant_settlement"]["native_amx_receipts"] = []
 
     def recursive_settlement(leg: dict[str, Any]) -> None:
         leg["participant_settlement"]["native_amx_receipts"] = [{}]
@@ -721,6 +720,7 @@ def test_native_amx_parser_rejects_participant_finality_tampering() -> None:
         wrong_settlement_tx_count,
         empty_settlement,
         oversized_settlement,
+        empty_recursive_settlement,
         recursive_settlement,
     )
     for mutate in mutations:

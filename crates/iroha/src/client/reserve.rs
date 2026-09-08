@@ -784,9 +784,7 @@ mod tests {
                 ReservePolicyV1, ReserveProviderAccountV1, ReserveProviderTermsV1, ReserveTier,
             },
         },
-        transaction::{
-            Executable, FeePaymentIntent, IvmBytecode, SignedTransaction, TransactionBuilder,
-        },
+        transaction::{Executable, FeePaymentIntent, IvmBytecode, SignedTransaction},
     };
     use std::{num::NonZeroU64, sync::Arc, time::Duration};
     const EXACT_RESERVE_TTL: Duration = Duration::from_secs(300);
@@ -1009,16 +1007,19 @@ mod tests {
         let gas_limit = executable
             .requires_transaction_gas_limit()
             .then(|| NonZeroU64::new(1).expect("non-zero gas limit"));
-        let mut builder = TransactionBuilder::new(
-            client.network_id,
-            client.account.clone(),
-            FeePaymentIntent::authority(Vec::new(), gas_limit),
-        )
-        .with_executable(executable)
-        .with_metadata(Metadata::default());
-        builder.set_ttl(EXACT_RESERVE_TTL);
-        client
-            .try_sign_transaction(builder)
+        let account = client
+            .account_client()
+            .expect("bind reserve fixture account");
+        account
+            .prepare_transaction(
+                crate::client::AccountTransactionDraft::new(
+                    executable,
+                    FeePaymentIntent::authority(Vec::new(), gas_limit),
+                    Metadata::default(),
+                )
+                .with_time_to_live(EXACT_RESERVE_TTL),
+            )
+            .and_then(|payload| account.sign_transaction(payload))
             .expect("sign reserve route validation fixture")
     }
     fn sign_instruction(
@@ -1110,7 +1111,12 @@ mod tests {
                 "SoraFS reserve route requires exactly one `{}` native instruction",
                 route.expected_instruction_label()
             ),
-            || client.post_sorafs_reserve_transaction(route, transaction),
+            |transport| {
+                client
+                    .clone()
+                    .with_test_http_transport(transport)
+                    .post_sorafs_reserve_transaction(route, transaction)
+            },
         );
     }
     fn assert_reserve_route_contract() {
@@ -1699,7 +1705,11 @@ mod tests {
         };
         let error = with_mock_http(
             respond_with(&snapshots, empty_response(StatusCode::OK)),
-            || {
+            |mock_transport| {
+                let client = client
+                    .clone()
+                    .with_test_http_transport(mock_transport.clone());
+
                 client
                     .get_sorafs_reserve_events(incomplete)
                     .expect_err("incomplete event cursor")
@@ -1737,7 +1747,11 @@ mod tests {
         let snapshots: SnapshotStore = Arc::default();
         with_mock_http(
             respond_with(&snapshots, empty_response(StatusCode::NOT_FOUND)),
-            || {
+            |mock_transport| {
+                let client = client
+                    .clone()
+                    .with_test_http_transport(mock_transport.clone());
+
                 for response in [
                     client.get_sorafs_reserve_policy(SorafsReserveFinalizedAnchor::default()),
                     client.get_sorafs_reserve_providers(

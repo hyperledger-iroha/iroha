@@ -34,6 +34,33 @@ fn sample_noncanonical_i105_literal(seed: u8) -> String {
     sample_canonical_i105_literal(seed).replacen("sora", "ｓｏｒａ", 1)
 }
 #[test]
+fn local_sorafs_pack_accepts_no_config_and_rejects_transaction_globals() {
+    let args = Args::try_parse_from([
+        "iroha",
+        "--machine",
+        "app",
+        "sorafs",
+        "toolkit",
+        "pack",
+        "public-assets",
+    ])
+    .expect("parse local CAR pack");
+    assert!(matches!(
+        &args.command,
+        Command::App(app::Command::Sorafs(commands::sorafs::Command::Toolkit(
+            commands::sorafs::toolkit::Command::Pack(_)
+        )))
+    ));
+    reject_irrelevant_local_tool_globals(&args, "app sorafs toolkit pack")
+        .expect("local pack needs no client context");
+    let mut with_config = args;
+    with_config.config = Some(PathBuf::from("must-not-read.toml"));
+    assert!(reject_irrelevant_local_tool_globals(&with_config, "app sorafs toolkit pack").is_err());
+    with_config.config = None;
+    with_config.output = true;
+    assert!(reject_irrelevant_local_tool_globals(&with_config, "app sorafs toolkit pack").is_err());
+}
+#[test]
 fn bounded_cli_input_accepts_exact_limit() {
     let input = [0xA5; 32];
     let mut reader = input.as_slice();
@@ -205,6 +232,7 @@ fn test_context(output_format: CliOutputFormat) -> PrintJsonContext<Vec<u8>, Vec
         write: Vec::new(),
         err_write: Vec::new(),
         config: fallback_config(),
+        filesystem_config: client_config::FilesystemConfig::default(),
         operator_key_pair: None,
         transaction_metadata: None,
         fee_payment: FeePaymentArgs::default(),
@@ -487,6 +515,10 @@ fn fallback_config_is_limited_to_kagemusha_commands() {
     .expect("parse local contract manifest build");
     assert!(args.command.allows_fallback_config());
     assert!(args.command.allows_fallback_config_in_machine_mode());
+    let network_id = iroha::data_model::NetworkId::from_genesis_hash(
+        iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::new(b"local-contract-test")),
+    )
+    .to_string();
     for command in [
         vec!["iroha", "--machine", "contract", "app", "build"],
         vec!["iroha", "--machine", "contract", "dev", "check"],
@@ -502,8 +534,10 @@ fn fallback_config_is_limited_to_kagemusha_commands() {
             "fixture-authority",
             "--deploy-nonce",
             "1",
-            "--chain-id",
-            "local-contract-test",
+            "--network-id",
+            &network_id,
+            "--chain-discriminant",
+            "753",
         ],
         vec![
             "iroha",
@@ -769,6 +803,37 @@ fn taira_doctor_cli_parses_public_root_and_json() {
     assert_eq!(cmd.public_root, "https://taira.sora.org");
     assert!(cmd.json);
 }
+#[test]
+fn taira_public_reset_exports_source_without_runtime_signing_arguments() {
+    let args = Args::try_parse_from([
+        "iroha",
+        "taira",
+        "public-reset",
+        "source-manifest",
+        "--source-root",
+        "/private/source/iroha",
+    ])
+    .expect("parse read-only typed source export");
+    assert!(matches!(
+        args.command,
+        Command::Taira(crate::taira::Command::PublicReset(_))
+    ));
+    assert!(
+        Args::try_parse_from([
+            "iroha",
+            "taira",
+            "public-reset",
+            "source-manifest",
+            "--source-root",
+            "/private/source/iroha",
+            "--ssh-identity",
+            "/private/id_ed25519",
+        ])
+        .is_err(),
+        "local source export must reject unrelated signing inputs"
+    );
+}
+
 #[test]
 fn taira_public_reset_exposes_strict_preflight_and_apply() {
     let args = Args::try_parse_from([
@@ -1055,7 +1120,7 @@ fn taira_inrou_stage_cli_requires_mode_and_parses_explicit_upgrade() {
 }
 #[test]
 fn taira_inrou_canary_cli_requires_mode_and_parses_explicit_upgrade() {
-    let args = Args::try_parse_from([
+    let command = [
         "iroha",
         "taira",
         "inrou-canary",
@@ -1063,12 +1128,27 @@ fn taira_inrou_canary_cli_requires_mode_and_parses_explicit_upgrade() {
         "/tmp/taira-inrou-stage",
         "--mode",
         "upgrade",
+        "--operation",
+        "bundle-pin",
+        "--authorization-sha256",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "--authorization-nonce",
+        "cccccccccccccccccccccccccccccccc",
+        "--mutation-phase",
+        "pre_edge",
+        "--execution-expires-at-unix-ms",
+        "2000000000000",
         "--idempotency-key",
         "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "--timeout-secs",
         "90",
         "--json",
-    ])
+    ];
+    let args = Args::try_parse_from(command.into_iter().chain([
+        "--prepare-envelope",
+        "--prepared-output-fd",
+        "3",
+    ]))
     .expect("parse Taira Inrou canary args");
     let Command::Taira(crate::taira::Command::InrouCanary(cmd)) = args.command else {
         panic!("expected taira inrou-canary command");
@@ -1078,6 +1158,9 @@ fn taira_inrou_canary_cli_requires_mode_and_parses_explicit_upgrade() {
         std::path::PathBuf::from("/tmp/taira-inrou-stage")
     );
     assert_eq!(cmd.mode, crate::taira::InrouCanaryMode::Upgrade);
+    assert_eq!(cmd.operation, crate::taira::InrouCanaryOperation::BundlePin);
+    assert!(cmd.prepare_envelope);
+    assert_eq!(cmd.prepared_output_fd, Some(3));
     assert_eq!(
         cmd.idempotency_key,
         "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -1085,13 +1168,45 @@ fn taira_inrou_canary_cli_requires_mode_and_parses_explicit_upgrade() {
     assert_eq!(cmd.timeout_secs, 90);
     assert!(cmd.json);
 
-    let error = Args::try_parse_from([
-        "iroha",
-        "taira",
-        "inrou-canary",
-        "--stage-dir",
-        "/tmp/taira-inrou-stage",
-    ])
+    let error = Args::try_parse_from(command)
+        .expect_err("Inrou canary must require an exact prepared action");
+    assert_eq!(error.kind(), ErrorKind::MissingRequiredArgument);
+    let error = Args::try_parse_from(command.into_iter().chain(["--prepare-envelope"]))
+        .expect_err("preparation must require its output descriptor");
+    assert_eq!(error.kind(), ErrorKind::MissingRequiredArgument);
+    for action in [
+        "--submit-prepared-envelope-fd",
+        "--recover-prepared-envelope-fd",
+    ] {
+        let args = Args::try_parse_from(command.into_iter().chain([action, "3"]))
+            .expect("exact submission or recovery descriptor must parse");
+        let Command::Taira(crate::taira::Command::InrouCanary(cmd)) = args.command else {
+            panic!("expected taira inrou-canary command");
+        };
+        assert!(!cmd.prepare_envelope);
+        assert_eq!(
+            cmd.submit_prepared_envelope_fd,
+            (action == "--submit-prepared-envelope-fd").then_some(3)
+        );
+        assert_eq!(
+            cmd.recover_prepared_envelope_fd,
+            (action == "--recover-prepared-envelope-fd").then_some(3)
+        );
+    }
+    let error = Args::try_parse_from(command.into_iter().chain([
+        "--submit-prepared-envelope-fd",
+        "3",
+        "--recover-prepared-envelope-fd",
+        "4",
+    ]))
+    .expect_err("prepared actions must be mutually exclusive");
+    assert_eq!(error.kind(), ErrorKind::ArgumentConflict);
+    let error = Args::try_parse_from(
+        command
+            .into_iter()
+            .filter(|argument| !matches!(*argument, "--mode" | "upgrade"))
+            .chain(["--submit-prepared-envelope-fd", "3"]),
+    )
     .expect_err("Inrou canary must require an explicit mutation mode");
     assert_eq!(error.kind(), ErrorKind::MissingRequiredArgument);
 }
@@ -1215,6 +1330,8 @@ fn soracloud_service_model_hf_and_agent_parsers_are_namespaced() {
         "openai/gpt-oss",
         "--revision",
         "0123456789abcdef0123456789abcdef01234567",
+        "--storage-class",
+        "warm",
         "--lease-term-ms",
         "60000",
     ])
@@ -1596,7 +1713,8 @@ fn fee_quote_signing_rejects_invalid_semantics_and_response_media_type() {
             stream.write_all(&body).expect("write fee-quote response");
         });
         config.torii_api_url = Url::parse(&format!("http://{address}/")).expect("fee-quote URL");
-        let client = Client::new(config);
+        let client = BlockingClient::from_client(Client::new(config))
+            .expect("blocking fee-quote fixture client");
         let result = quote_and_sign_transaction(
             &client,
             Executable::Instructions(Vec::<InstructionBox>::new().into()),
@@ -1613,26 +1731,11 @@ fn fee_quote_signing_rejects_invalid_semantics_and_response_media_type() {
 
     let error =
         invoke(1, "text/plain").expect_err("signing must reject a non-JSON successful response");
-    assert!(format!("{error:#}").contains("Content-Type must be application/json"));
-}
-#[test]
-fn fee_quote_rejection_surfaces_capacity_and_remediation() {
-    let body = br#"{
-            "code":"fee_payment_rejected",
-            "message":"program capacity exhausted",
-            "details":{"fee":{
-                "code":"program_block_limit_exceeded",
-                "retryable":true,
-                "required":"12",
-                "available":"7",
-                "remediation":"retry in the next block"
-            }}
-        }"#;
-    let message = fee_quote_rejection_message(reqwest::StatusCode::CONFLICT, body);
-    assert!(message.contains("program_block_limit_exceeded"));
-    assert!(message.contains("required=12"));
-    assert!(message.contains("available=7"));
-    assert!(message.contains("retry in the next block"));
+    let error = format!("{error:#}");
+    assert!(
+        error.contains("fee quote response has invalid content-type (expected application/json)"),
+        "unexpected fee-quote media-type error: {error}"
+    );
 }
 #[test]
 fn account_admission_rejected_message_includes_hint() {
@@ -1766,6 +1869,83 @@ status_timeout_ms = 3400
         Duration::from_millis(3400)
     );
 }
+
+#[test]
+fn inherited_config_cli_requires_explicit_provenance_and_rejects_mixed_sources() {
+    let valid = [
+        "iroha",
+        "--config-fd",
+        "19",
+        "--config-source-path",
+        "/private/runtime/client.toml",
+        "ops",
+        "sumeragi",
+        "status",
+    ];
+    let args = Args::try_parse_from(valid).expect("explicit descriptor CLI");
+    assert_eq!(args.config_fd, Some(19));
+    assert_eq!(
+        args.config_source_path,
+        Some(PathBuf::from("/private/runtime/client.toml"))
+    );
+    for invalid in [
+        vec!["iroha", "--config-fd", "19", "ops", "sumeragi", "status"],
+        vec![
+            "iroha",
+            "--config-source-path",
+            "/private/runtime/client.toml",
+            "ops",
+            "sumeragi",
+            "status",
+        ],
+        vec![
+            "iroha",
+            "--config-fd",
+            "2",
+            "--config-source-path",
+            "/private/runtime/client.toml",
+            "ops",
+            "sumeragi",
+            "status",
+        ],
+        vec![
+            "iroha",
+            "--config-fd",
+            "19",
+            "--config-source-path",
+            "/private/runtime/client.toml",
+            "--config",
+            "/private/runtime/other.toml",
+            "ops",
+            "sumeragi",
+            "status",
+        ],
+    ] {
+        assert!(Args::try_parse_from(invalid).is_err());
+    }
+}
+
+#[test]
+fn cli_loader_owns_filesystem_sections_before_sdk_validation() {
+    let file = NamedTempFile::new().expect("client configuration file");
+    let source = format!(
+        "{}\n[connect]\nqueue_root = \"queue-state\"\n\n[soracloud]\nhttp_witness_file = \"witness.json\"\n",
+        include_str!("../../../defaults/client.toml")
+    );
+    fs::write(file.path(), source).expect("write composite CLI configuration");
+    let (config, filesystem) = load_cli_client_config(LoadPath::Explicit(file.path().into()))
+        .expect("CLI-owned sections are removed before SDK validation");
+    assert_eq!(config.torii_api_url.as_str(), "http://127.0.0.1:8080/");
+    let source_dir = file.path().parent().expect("configuration directory");
+    assert_eq!(
+        filesystem.connect_queue_root,
+        source_dir.join("queue-state")
+    );
+    assert_eq!(
+        filesystem.soracloud_http_witness_file,
+        Some(source_dir.join("witness.json"))
+    );
+}
 #[test]
 fn apply_transaction_overrides_ignores_legacy_top_level_keys() {
     let mut config = fallback_config();
@@ -1806,8 +1986,6 @@ impl CaptureContext {
             transaction_ttl: iroha::config::DEFAULT_TRANSACTION_TIME_TO_LIVE,
             transaction_status_timeout: iroha::config::DEFAULT_TRANSACTION_STATUS_TIMEOUT,
             transaction_add_nonce: iroha::config::DEFAULT_TRANSACTION_NONCE,
-            connect_queue_root: iroha::config::default_connect_queue_root(),
-            soracloud_http_witness_file: None,
             sorafs_alias_cache: crate::config_utils::default_alias_cache_policy(),
             sorafs_anonymity_policy: crate::config_utils::default_anonymity_policy(),
             sorafs_rollout_phase: crate::config_utils::default_rollout_phase(),

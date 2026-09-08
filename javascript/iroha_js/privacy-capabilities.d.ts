@@ -303,6 +303,8 @@ export declare class PrivacyExact12CapabilityManifestV1 {
 
 export interface PrivacyExact12CapabilityAdmissionV1 {
   readonly manifest_digest: PrivacyFixed32BytesV1;
+  readonly network_id: PrivacyFixed32BytesV1;
+  readonly torii_origin: string;
   readonly committed_height: PrivacyU64V1;
   readonly protocol_id: PrivacyProtocolIdV1;
   readonly operation_schema: PrivacyOperationSchemaV1;
@@ -318,9 +320,11 @@ export const PRIVACY_EXACT12_CAPABILITY_MANIFEST_MAX_BYTES_V1: 262144;
 
 /** Local native catalog bytes; never sufficient to authorize network use. */
 export function compiledProfileCatalogV1(): Uint8Array;
+/** Inspection-only decoding; archived bytes never grant admission. */
 export function decodePrivacyExact12CapabilityManifestV1(
   canonicalArchive: ArrayBufferView | ArrayBuffer,
 ): PrivacyExact12CapabilityManifestV1;
+/** Authenticated HTTPS transport with immutable LocalSigningContext; custom fetch implementations are trusted transport dependencies. */
 export function getPrivacyExact12CapabilityManifestV1(
   client: PrivacyExact12CapabilityManifestNodeClientV1,
   options: PrivacyExact12CapabilityManifestRequestOptions,

@@ -5,7 +5,7 @@ use futures_util::StreamExt;
 use integration_tests::sandbox;
 use iroha::nexus;
 use iroha::{
-    client::Client,
+    blocking::Client,
     crypto::{Hash, HashOf, SignatureOf},
     data_model::{
         Level, ValidationFail,
@@ -640,7 +640,7 @@ fn musubi_fault_replication_order(
     }
 }
 fn musubi_fault_finalized_anchor(client: &Client) -> Result<ProviderIngestFinalizedAnchorV1> {
-    let blocks = client.query(FindBlocks).execute_all()?;
+    let blocks = client.client().query(FindBlocks).execute_all()?;
     // `FindBlocks` is newest-first, so the first row is the exact finalized
     // prefix on which the completion transaction is prepared.
     let latest = blocks
@@ -664,11 +664,11 @@ fn musubi_fault_provider_attestations(
             let payload = MusubiProviderBundleVerificationPayloadV1 {
                 version: MUSUBI_REGISTRY_VERSION_V1,
                 binding: MusubiProviderBundleVerificationBindingV1 {
-                    network_id: client.network_id,
+                    network_id: client.client().network_id,
                     provider_id: provider,
-                    completed_by: client.account.clone(),
+                    completed_by: client.client().account.clone(),
                     completion_authority: musubi_fault_completion_authority(
-                        &client.account,
+                        &client.client().account,
                         provider,
                     ),
                     replication_order: order_id,
@@ -685,9 +685,9 @@ fn musubi_fault_provider_attestations(
             };
             MusubiProviderBundleVerificationAttestationV1 {
                 approvals: vec![MusubiProviderBundleVerificationApprovalV1 {
-                    public_key: client.key_pair.public_key().clone(),
+                    public_key: client.client().key_pair.public_key().clone(),
                     signature: SignatureOf::try_from_hash(
-                        client.key_pair.private_key(),
+                        client.client().key_pair.private_key(),
                         payload.signing_hash(),
                     )
                     .expect("sign selectable Musubi provider attestation"),
@@ -704,7 +704,9 @@ async fn submit_and_wait_for_approval(
     let tx_hash = transaction.hash();
     let mut events = timeout(
         STATUS_WAIT_TIMEOUT,
-        submitter.listen_for_events_async([TransactionEventFilter::default().for_hash(tx_hash)]),
+        submitter
+            .client()
+            .listen_for_events([TransactionEventFilter::default().for_hash(tx_hash)]),
     )
     .await
     .map_err(|_| eyre!("timed out opening transaction event stream"))??;
@@ -753,7 +755,7 @@ async fn wait_for_block_with_entrypoint(
     let started = Instant::now();
     let mut last_error: Option<String> = None;
     while started.elapsed() <= STATUS_WAIT_TIMEOUT {
-        match client.query(FindBlocks).execute_all() {
+        match client.client().query(FindBlocks).execute_all() {
             Ok(blocks) => {
                 if let Some(block) = blocks.into_iter().find(|block| {
                     block
@@ -875,9 +877,10 @@ async fn wait_for_rejected_transaction(
     let mut last_status: Option<String> = None;
     while started.elapsed() <= STATUS_WAIT_TIMEOUT {
         let client = client.clone();
-        let response = spawn_blocking(move || client.get_transaction_status_response(hash))
-            .await
-            .map_err(|error| eyre!("{context}: status task join error: {error}"))??;
+        let response =
+            spawn_blocking(move || client.client().get_transaction_status_response(hash))
+                .await
+                .map_err(|error| eyre!("{context}: status task join error: {error}"))??;
         if let Some(response) = response {
             let kind = response.status.kind.clone();
             if kind == "Rejected" {
@@ -893,8 +896,9 @@ async fn wait_for_rejected_transaction(
     ))
 }
 fn musubi_fault_snapshot_and_time(client: &Client) -> Result<(MusubiRegistrySnapshotV1, u64)> {
-    let resolver =
-        client.query_single(FindMusubiResolverIndexV1::new(MusubiResolverIndexQueryV1 {
+    let resolver = client
+        .client()
+        .query_single(FindMusubiResolverIndexV1::new(MusubiResolverIndexQueryV1 {
             package: musubi_fault_package(),
             requirement: None,
             page: musubi_fault_page(),
@@ -904,10 +908,10 @@ fn musubi_fault_snapshot_and_time(client: &Client) -> Result<(MusubiRegistrySnap
         "Musubi fault package unexpectedly exists before publication"
     );
     ensure!(
-        resolver.network_id == client.network_id,
+        resolver.network_id == client.client().network_id,
         "Musubi resolver page used a different network identity"
     );
-    let blocks = client.query(FindBlocks).execute_all()?;
+    let blocks = client.client().query(FindBlocks).execute_all()?;
     let latest = blocks
         .first()
         .ok_or_else(|| eyre!("Musubi fault fixture has no finalized block"))?;
@@ -925,9 +929,9 @@ fn musubi_fault_staging_receipt(
     let payload = MusubiSeedIngressReceiptPayloadV1 {
         version: MUSUBI_REGISTRY_VERSION_V1,
         binding: MusubiSeedIngressReceiptBindingV1 {
-            network_id: client.network_id,
-            publisher: client.account.clone(),
-            ingress_broker: client.account.clone(),
+            network_id: client.client().network_id,
+            publisher: client.client().account.clone(),
+            ingress_broker: client.client().account.clone(),
             seed_provider: musubi_fault_provider(),
             semantic_release_manifest_digest: manifest.semantic_digest(),
             archive_id: commitment.archive_id(),
@@ -942,9 +946,9 @@ fn musubi_fault_staging_receipt(
     };
     MusubiSeedIngressReceiptV1 {
         approvals: vec![MusubiSeedIngressReceiptApprovalV1 {
-            public_key: client.key_pair.public_key().clone(),
+            public_key: client.client().key_pair.public_key().clone(),
             signature: SignatureOf::try_from_hash(
-                client.key_pair.private_key(),
+                client.client().key_pair.private_key(),
                 payload.signing_hash(),
             )
             .expect("sign Musubi fault receipt"),
@@ -974,15 +978,21 @@ async fn prepare_selectable_musubi_publication(
             SetProviderIngestCompletionAuthority::new(
                 provider,
                 None,
-                musubi_fault_completion_authority(&submitter.account, provider),
+                musubi_fault_completion_authority(&submitter.client().account, provider),
             ),
         ));
     }
-    let provider_transaction = submitter.build_transaction(
-        provider_instructions,
-        FeePaymentIntent::authority(Vec::new(), None),
-        Metadata::default(),
-    );
+    let provider_transaction = {
+        let account = submitter.account_client();
+        account
+            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                provider_instructions,
+                FeePaymentIntent::authority(Vec::new(), None),
+                Metadata::default(),
+            ))
+            .and_then(|payload| account.sign_transaction(payload))
+    }
+    .expect("build integration-test transaction");
     submit_approved_and_wait_for_all_peers(
         network,
         submitter,
@@ -993,14 +1003,28 @@ async fn prepare_selectable_musubi_publication(
     let acme_dataspace = DataSpaceId::new(ACME_DATASPACE);
     let domain =
         DomainId::try_new(MUSUBI_FAULT_DOMAIN, "acme").expect("Musubi fault namespace domain");
-    let namespace_home_transaction = submitter.build_transaction(
-        [
-            dataspace_setup_instruction("acme", acme_dataspace, &submitter.account)?,
-            domain_setup_instruction_in_dataspace(&domain, acme_dataspace, &submitter.account)?,
-        ],
-        FeePaymentIntent::authority(Vec::new(), None),
-        Metadata::default(),
-    );
+    let namespace_home_transaction = {
+        let account = submitter.account_client();
+        account
+            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                [
+                    dataspace_setup_instruction(
+                        "acme",
+                        acme_dataspace,
+                        &submitter.client().account,
+                    )?,
+                    domain_setup_instruction_in_dataspace(
+                        &domain,
+                        acme_dataspace,
+                        &submitter.client().account,
+                    )?,
+                ],
+                FeePaymentIntent::authority(Vec::new(), None),
+                Metadata::default(),
+            ))
+            .and_then(|payload| account.sign_transaction(payload))
+    }
+    .expect("build integration-test transaction");
     submit_approved_and_wait_for_all_peers(
         network,
         submitter,
@@ -1009,14 +1033,20 @@ async fn prepare_selectable_musubi_publication(
     )
     .await?;
     let binding = musubi_fault_namespace_binding();
-    let binding_transaction = submitter.build_transaction(
-        [InstructionBox::from(RegisterMusubiNamespaceBindingV1::new(
-            binding.clone(),
-            1,
-        ))],
-        FeePaymentIntent::authority(Vec::new(), None),
-        Metadata::default(),
-    );
+    let binding_transaction = {
+        let account = submitter.account_client();
+        account
+            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                [InstructionBox::from(RegisterMusubiNamespaceBindingV1::new(
+                    binding.clone(),
+                    1,
+                ))],
+                FeePaymentIntent::authority(Vec::new(), None),
+                Metadata::default(),
+            ))
+            .and_then(|payload| account.sign_transaction(payload))
+    }
+    .expect("build integration-test transaction");
     let binding_block = submit_approved_and_wait_for_all_peers(
         network,
         submitter,
@@ -1031,15 +1061,21 @@ async fn prepare_selectable_musubi_publication(
     let (_, latest_time_ms) = musubi_fault_snapshot_and_time(submitter)?;
     let staging_receipt =
         musubi_fault_staging_receipt(submitter, latest_time_ms, &commitment, &manifest);
-    let archive_transaction = submitter.build_transaction(
-        [InstructionBox::from(RegisterMusubiArchiveV1::new(
-            commitment.clone(),
-            staging_receipt,
-            1,
-        ))],
-        FeePaymentIntent::authority(Vec::new(), None),
-        Metadata::default(),
-    );
+    let archive_transaction = {
+        let account = submitter.account_client();
+        account
+            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                [InstructionBox::from(RegisterMusubiArchiveV1::new(
+                    commitment.clone(),
+                    staging_receipt,
+                    1,
+                ))],
+                FeePaymentIntent::authority(Vec::new(), None),
+                Metadata::default(),
+            ))
+            .and_then(|payload| account.sign_transaction(payload))
+    }
+    .expect("build integration-test transaction");
     submit_approved_and_wait_for_all_peers(
         network,
         submitter,
@@ -1048,17 +1084,23 @@ async fn prepare_selectable_musubi_publication(
     )
     .await?;
     let (pin_manifest, pin_manifest_digest) = musubi_fault_pin_manifest(&commitment)?;
-    let pin_transaction = submitter.build_transaction(
-        [InstructionBox::from(RegisterPinManifest::new(
-            pin_manifest
-                .encode()
-                .wrap_err("encode selectable Musubi pin manifest")?,
-            None,
-            None,
-        ))],
-        FeePaymentIntent::authority(Vec::new(), None),
-        Metadata::default(),
-    );
+    let pin_transaction = {
+        let account = submitter.account_client();
+        account
+            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                [InstructionBox::from(RegisterPinManifest::new(
+                    pin_manifest
+                        .encode()
+                        .wrap_err("encode selectable Musubi pin manifest")?,
+                    None,
+                    None,
+                ))],
+                FeePaymentIntent::authority(Vec::new(), None),
+                Metadata::default(),
+            ))
+            .and_then(|payload| account.sign_transaction(payload))
+    }
+    .expect("build integration-test transaction");
     submit_approved_and_wait_for_all_peers(
         network,
         submitter,
@@ -1072,20 +1114,26 @@ async fn prepare_selectable_musubi_publication(
     canonical_order
         .validate()
         .wrap_err("validate selectable Musubi replication order")?;
-    let issue_transaction = submitter.build_transaction(
-        [InstructionBox::from(
-            IssueReplicationOrder::new(
-                replication_order,
-                norito::encode_canonical(&canonical_order)
-                    .wrap_err("encode selectable Musubi replication order")?,
-                2,
-                MUSUBI_FAULT_RETENTION_EPOCH,
-            )
-            .for_musubi_archive(commitment.archive_id()),
-        )],
-        FeePaymentIntent::authority(Vec::new(), None),
-        Metadata::default(),
-    );
+    let issue_transaction = {
+        let account = submitter.account_client();
+        account
+            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                [InstructionBox::from(
+                    IssueReplicationOrder::new(
+                        replication_order,
+                        norito::encode_canonical(&canonical_order)
+                            .wrap_err("encode selectable Musubi replication order")?,
+                        2,
+                        MUSUBI_FAULT_RETENTION_EPOCH,
+                    )
+                    .for_musubi_archive(commitment.archive_id()),
+                )],
+                FeePaymentIntent::authority(Vec::new(), None),
+                Metadata::default(),
+            ))
+            .and_then(|payload| account.sign_transaction(payload))
+    }
+    .expect("build integration-test transaction");
     submit_approved_and_wait_for_all_peers(
         network,
         submitter,
@@ -1094,20 +1142,26 @@ async fn prepare_selectable_musubi_publication(
     )
     .await?;
     let anchor = musubi_fault_finalized_anchor(submitter)?;
-    let completion_transaction = submitter.build_transaction(
-        musubi_fault_replica_providers().map(|provider| {
-            InstructionBox::from(CompleteReplicationOrder::new(
-                replication_order,
-                provider,
-                3,
-                musubi_fault_completion_authority(&submitter.account, provider),
-                1,
-                anchor,
+    let completion_transaction = {
+        let account = submitter.account_client();
+        account
+            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                musubi_fault_replica_providers().map(|provider| {
+                    InstructionBox::from(CompleteReplicationOrder::new(
+                        replication_order,
+                        provider,
+                        3,
+                        musubi_fault_completion_authority(&submitter.client().account, provider),
+                        1,
+                        anchor,
+                    ))
+                }),
+                FeePaymentIntent::authority(Vec::new(), None),
+                Metadata::default(),
             ))
-        }),
-        FeePaymentIntent::authority(Vec::new(), None),
-        Metadata::default(),
-    );
+            .and_then(|payload| account.sign_transaction(payload))
+    }
+    .expect("build integration-test transaction");
     submit_approved_and_wait_for_all_peers(
         network,
         submitter,
@@ -1123,16 +1177,22 @@ async fn prepare_selectable_musubi_publication(
         replication_order,
         anchor,
     );
-    let provider_attestation_transaction = submitter.build_transaction(
-        provider_attestations.iter().cloned().map(|attestation| {
-            InstructionBox::from(RegisterMusubiProviderBundleAttestationV1::new(
-                attestation,
-                1,
+    let provider_attestation_transaction = {
+        let account = submitter.account_client();
+        account
+            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                provider_attestations.iter().cloned().map(|attestation| {
+                    InstructionBox::from(RegisterMusubiProviderBundleAttestationV1::new(
+                        attestation,
+                        1,
+                    ))
+                }),
+                FeePaymentIntent::authority(Vec::new(), None),
+                Metadata::default(),
             ))
-        }),
-        FeePaymentIntent::authority(Vec::new(), None),
-        Metadata::default(),
-    );
+            .and_then(|payload| account.sign_transaction(payload))
+    }
+    .expect("build integration-test transaction");
     submit_approved_and_wait_for_all_peers(
         network,
         submitter,
@@ -1149,20 +1209,26 @@ async fn prepare_selectable_musubi_publication(
         replication_order,
         &provider_attestation_references,
     )?;
-    let location_transaction = submitter.build_transaction(
-        [InstructionBox::from(AddMusubiArchiveLocationV1 {
-            archive_id,
-            location_id,
-            pin_manifest: pin_manifest_digest,
-            replication_order,
-            provider_attestation_set_digest,
-            renew_after_epoch: MUSUBI_FAULT_RENEW_EPOCH,
-            expires_at_epoch: MUSUBI_FAULT_RETENTION_EPOCH,
-            expected_location_revision: 1,
-        })],
-        FeePaymentIntent::authority(Vec::new(), None),
-        Metadata::default(),
-    );
+    let location_transaction = {
+        let account = submitter.account_client();
+        account
+            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                [InstructionBox::from(AddMusubiArchiveLocationV1 {
+                    archive_id,
+                    location_id,
+                    pin_manifest: pin_manifest_digest,
+                    replication_order,
+                    provider_attestation_set_digest,
+                    renew_after_epoch: MUSUBI_FAULT_RENEW_EPOCH,
+                    expires_at_epoch: MUSUBI_FAULT_RETENTION_EPOCH,
+                    expected_location_revision: 1,
+                })],
+                FeePaymentIntent::authority(Vec::new(), None),
+                Metadata::default(),
+            ))
+            .and_then(|payload| account.sign_transaction(payload))
+    }
+    .expect("build integration-test transaction");
     submit_approved_and_wait_for_all_peers(
         network,
         submitter,
@@ -1178,17 +1244,23 @@ async fn prepare_selectable_musubi_publication(
     publication
         .validate()
         .wrap_err("validate selectable Musubi publication")?;
-    let transaction = submitter.build_transaction(
-        [InstructionBox::from(PublishMusubiReleaseV1::new(
-            binding.namespace.clone(),
-            publication,
-            None,
-            1,
-            None,
-        ))],
-        FeePaymentIntent::authority(Vec::new(), None),
-        Metadata::default(),
-    );
+    let transaction = {
+        let account = submitter.account_client();
+        account
+            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                [InstructionBox::from(PublishMusubiReleaseV1::new(
+                    binding.namespace.clone(),
+                    publication,
+                    None,
+                    1,
+                    None,
+                ))],
+                FeePaymentIntent::authority(Vec::new(), None),
+                Metadata::default(),
+            ))
+            .and_then(|payload| account.sign_transaction(payload))
+    }
+    .expect("build integration-test transaction");
     Ok(SelectableMusubiPublicationFixture {
         transaction,
         binding,
@@ -1213,6 +1285,7 @@ fn assert_musubi_publication_absent(
     context: &str,
 ) -> Result<MusubiRegistrySnapshotV1> {
     let package_error = client
+        .client()
         .query_single(FindMusubiExactPackageV1::new(MusubiExactPackageQueryV1 {
             package: release.package.clone(),
         }))
@@ -1222,6 +1295,7 @@ fn assert_musubi_publication_absent(
         "{context}: exact package query failed unexpectedly: {package_error:?}"
     );
     let release_error = client
+        .client()
         .query_single(FindMusubiExactReleaseV1::new(MusubiExactReleaseQueryV1 {
             release: release.clone(),
         }))
@@ -1230,8 +1304,9 @@ fn assert_musubi_publication_absent(
         is_query_not_found(&release_error),
         "{context}: exact release query failed unexpectedly: {release_error:?}"
     );
-    let resolver =
-        client.query_single(FindMusubiResolverIndexV1::new(MusubiResolverIndexQueryV1 {
+    let resolver = client
+        .client()
+        .query_single(FindMusubiResolverIndexV1::new(MusubiResolverIndexQueryV1 {
             package: release.package.clone(),
             requirement: None,
             page: musubi_fault_page(),
@@ -1241,8 +1316,9 @@ fn assert_musubi_publication_absent(
         "{context}: faulted publication left a universal resolver row"
     );
     let directory_prefix = format!("{MUSUBI_FAULT_NAMESPACE}/");
-    let directory =
-        client.query_single(FindMusubiOrderedPrefixV1::new(MusubiOrderedPrefixQueryV1 {
+    let directory = client
+        .client()
+        .query_single(FindMusubiOrderedPrefixV1::new(MusubiOrderedPrefixQueryV1 {
             prefix: MusubiOrderedPrefixV1::new(&directory_prefix)
                 .expect("Musubi fault directory prefix"),
             page: musubi_fault_page(),
@@ -1253,24 +1329,28 @@ fn assert_musubi_publication_absent(
             && directory.next_cursor.is_none(),
         "{context}: faulted publication changed its binding or public-directory projection"
     );
-    let locations = client.query_single(FindMusubiArchiveLocationsV1::new(
-        MusubiArchiveLocationQueryV1 {
-            archive_id,
-            page: musubi_fault_page(),
-        },
-    ))?;
+    let locations = client
+        .client()
+        .query_single(FindMusubiArchiveLocationsV1::new(
+            MusubiArchiveLocationQueryV1 {
+                archive_id,
+                page: musubi_fault_page(),
+            },
+        ))?;
     ensure!(
         locations.archive.archive_id == archive_id
             && locations.items.is_empty()
             && locations.next_cursor.is_none(),
         "{context}: fault fixture archive registration or location state changed"
     );
-    let retention = client.query_single(FindMusubiArchiveRetentionV1::new(
-        MusubiArchiveRetentionQueryV1 {
-            archive_ids: vec![archive_id],
-            expected_snapshot: None,
-        },
-    ))?;
+    let retention = client
+        .client()
+        .query_single(FindMusubiArchiveRetentionV1::new(
+            MusubiArchiveRetentionQueryV1 {
+                archive_ids: vec![archive_id],
+                expected_snapshot: None,
+            },
+        ))?;
     let [decision] = retention.items.as_slice() else {
         return Err(eyre!(
             "{context}: exact archive-retention query returned the wrong item count"
@@ -1302,6 +1382,7 @@ fn assert_selectable_musubi_archive_without_release(
     context: &str,
 ) -> Result<MusubiRegistrySnapshotV1> {
     let package_error = client
+        .client()
         .query_single(FindMusubiExactPackageV1::new(MusubiExactPackageQueryV1 {
             package: fixture.release.package.clone(),
         }))
@@ -1311,6 +1392,7 @@ fn assert_selectable_musubi_archive_without_release(
         "{context}: exact package query failed unexpectedly: {package_error:?}"
     );
     let release_error = client
+        .client()
         .query_single(FindMusubiExactReleaseV1::new(MusubiExactReleaseQueryV1 {
             release: fixture.release.clone(),
         }))
@@ -1319,8 +1401,9 @@ fn assert_selectable_musubi_archive_without_release(
         is_query_not_found(&release_error),
         "{context}: exact release query failed unexpectedly: {release_error:?}"
     );
-    let resolver =
-        client.query_single(FindMusubiResolverIndexV1::new(MusubiResolverIndexQueryV1 {
+    let resolver = client
+        .client()
+        .query_single(FindMusubiResolverIndexV1::new(MusubiResolverIndexQueryV1 {
             package: fixture.release.package.clone(),
             requirement: None,
             page: musubi_fault_page(),
@@ -1330,8 +1413,9 @@ fn assert_selectable_musubi_archive_without_release(
         "{context}: unpublished selectable fixture has a resolver row"
     );
     let directory_prefix = format!("{MUSUBI_FAULT_NAMESPACE}/");
-    let directory =
-        client.query_single(FindMusubiOrderedPrefixV1::new(MusubiOrderedPrefixQueryV1 {
+    let directory = client
+        .client()
+        .query_single(FindMusubiOrderedPrefixV1::new(MusubiOrderedPrefixQueryV1 {
             prefix: MusubiOrderedPrefixV1::new(&directory_prefix)
                 .expect("Musubi fault directory prefix"),
             page: musubi_fault_page(),
@@ -1342,12 +1426,14 @@ fn assert_selectable_musubi_archive_without_release(
             && directory.next_cursor.is_none(),
         "{context}: unpublished selectable fixture changed its directory projection"
     );
-    let locations = client.query_single(FindMusubiArchiveLocationsV1::new(
-        MusubiArchiveLocationQueryV1 {
-            archive_id: fixture.archive_id,
-            page: musubi_fault_page(),
-        },
-    ))?;
+    let locations = client
+        .client()
+        .query_single(FindMusubiArchiveLocationsV1::new(
+            MusubiArchiveLocationQueryV1 {
+                archive_id: fixture.archive_id,
+                page: musubi_fault_page(),
+            },
+        ))?;
     let [location] = locations.items.as_slice() else {
         return Err(eyre!(
             "{context}: selectable fixture returned {} locations instead of one",
@@ -1363,12 +1449,14 @@ fn assert_selectable_musubi_archive_without_release(
             && location.state == MusubiArchiveLocationStateV1::Healthy,
         "{context}: selectable archive location differs from finalized evidence: {location:?}"
     );
-    let retention = client.query_single(FindMusubiArchiveRetentionV1::new(
-        MusubiArchiveRetentionQueryV1 {
-            archive_ids: vec![fixture.archive_id],
-            expected_snapshot: None,
-        },
-    ))?;
+    let retention = client
+        .client()
+        .query_single(FindMusubiArchiveRetentionV1::new(
+            MusubiArchiveRetentionQueryV1 {
+                archive_ids: vec![fixture.archive_id],
+                expected_snapshot: None,
+            },
+        ))?;
     let [decision] = retention.items.as_slice() else {
         return Err(eyre!(
             "{context}: selectable fixture retention query returned the wrong item count"
@@ -1401,9 +1489,11 @@ fn assert_selectable_musubi_publication_present(
     context: &str,
 ) -> Result<MusubiRegistrySnapshotV1> {
     let package =
-        client.query_single(FindMusubiExactPackageV1::new(MusubiExactPackageQueryV1 {
-            package: fixture.release.package.clone(),
-        }))?;
+        client
+            .client()
+            .query_single(FindMusubiExactPackageV1::new(MusubiExactPackageQueryV1 {
+                package: fixture.release.package.clone(),
+            }))?;
     ensure!(
         package.package == fixture.release.package
             && package.claimed_namespace == fixture.binding.namespace
@@ -1412,9 +1502,11 @@ fn assert_selectable_musubi_publication_present(
         "{context}: home package record is incomplete: {package:?}"
     );
     let release =
-        client.query_single(FindMusubiExactReleaseV1::new(MusubiExactReleaseQueryV1 {
-            release: fixture.release.clone(),
-        }))?;
+        client
+            .client()
+            .query_single(FindMusubiExactReleaseV1::new(MusubiExactReleaseQueryV1 {
+                release: fixture.release.clone(),
+            }))?;
     ensure!(
         release.home_release.manifest == fixture.manifest
             && release.home_release.release_digest == fixture.manifest.release_digest()
@@ -1422,8 +1514,9 @@ fn assert_selectable_musubi_publication_present(
             && !release.home_release.yank.yanked,
         "{context}: home release record is incomplete: {release:?}"
     );
-    let resolver =
-        client.query_single(FindMusubiResolverIndexV1::new(MusubiResolverIndexQueryV1 {
+    let resolver = client
+        .client()
+        .query_single(FindMusubiResolverIndexV1::new(MusubiResolverIndexQueryV1 {
             package: fixture.release.package.clone(),
             requirement: None,
             page: musubi_fault_page(),
@@ -1447,8 +1540,9 @@ fn assert_selectable_musubi_publication_present(
         "{context}: universal resolver row is incomplete: {row:?}"
     );
     let directory_prefix = format!("{MUSUBI_FAULT_NAMESPACE}/");
-    let directory =
-        client.query_single(FindMusubiOrderedPrefixV1::new(MusubiOrderedPrefixQueryV1 {
+    let directory = client
+        .client()
+        .query_single(FindMusubiOrderedPrefixV1::new(MusubiOrderedPrefixQueryV1 {
             prefix: MusubiOrderedPrefixV1::new(&directory_prefix)
                 .expect("Musubi fault directory prefix"),
             page: musubi_fault_page(),
@@ -1468,12 +1562,14 @@ fn assert_selectable_musubi_publication_present(
             && entry.latest_selectable.as_ref() == Some(&fixture.release.version),
         "{context}: universal directory entry is incomplete: {entry:?}"
     );
-    let locations = client.query_single(FindMusubiArchiveLocationsV1::new(
-        MusubiArchiveLocationQueryV1 {
-            archive_id: fixture.archive_id,
-            page: musubi_fault_page(),
-        },
-    ))?;
+    let locations = client
+        .client()
+        .query_single(FindMusubiArchiveLocationsV1::new(
+            MusubiArchiveLocationQueryV1 {
+                archive_id: fixture.archive_id,
+                page: musubi_fault_page(),
+            },
+        ))?;
     let [location] = locations.items.as_slice() else {
         return Err(eyre!(
             "{context}: published archive returned {} locations instead of one",
@@ -1488,12 +1584,14 @@ fn assert_selectable_musubi_publication_present(
             && location.state == MusubiArchiveLocationStateV1::Healthy,
         "{context}: published archive location is incomplete: {location:?}"
     );
-    let retention = client.query_single(FindMusubiArchiveRetentionV1::new(
-        MusubiArchiveRetentionQueryV1 {
-            archive_ids: vec![fixture.archive_id],
-            expected_snapshot: None,
-        },
-    ))?;
+    let retention = client
+        .client()
+        .query_single(FindMusubiArchiveRetentionV1::new(
+            MusubiArchiveRetentionQueryV1 {
+                archive_ids: vec![fixture.archive_id],
+                expected_snapshot: None,
+            },
+        ))?;
     let [decision] = retention.items.as_slice() else {
         return Err(eyre!(
             "{context}: published retention query returned the wrong item count"
@@ -1659,7 +1757,7 @@ fn next_universal_autonomous_lane_author_peer(
         .map(|(index, peer)| {
             let diagnostics = peer
                 .client()
-                .get_sumeragi_diagnostics()
+                .client().get_sumeragi_diagnostics()
                 .wrap_err_with(|| format!("{context}: query pre-cut peer {index} diagnostics"))?;
             let ownership = diagnostics
                 .lane_payload_ownerships
@@ -1800,43 +1898,28 @@ fn assert_grouped_native_amx_execution(
             .ok_or_else(|| eyre!("grouped Native AMX execution produced no receipt"))?,
     )?
     .clone();
+    ensure!(
+        canonical_bank_leg.participant_settlement.computed_hash()?
+            == canonical_bank_leg.participant_settlement_hash,
+        "BANK participant settlement hash must bind the exact finite settlement record"
+    );
     let descriptor = &canonical_bank_leg.participant_proposal.descriptor;
     ensure!(
         descriptor.accepted_transaction_hashes == ordered_entrypoints,
         "BANK participant proposal did not bind the exact ordered two-source entrypoint group"
     );
     ensure!(
-        canonical_bank_leg.participant_settlement.tx_count == u64::try_from(NATIVE_AMX_GROUP_SIZE)?
-            && canonical_bank_leg
-                .participant_settlement
-                .receipts
-                .iter()
-                .map(|receipt| receipt.source_id)
-                .collect::<Vec<_>>()
-                == ordered_sources,
+        canonical_bank_leg.participant_settlement.tx_count()
+            == u64::try_from(NATIVE_AMX_GROUP_SIZE)?
+            && canonical_bank_leg.participant_settlement.source_ids() == ordered_sources.as_slice(),
         "BANK participant settlement did not bind the exact ordered two-source group"
     );
     ensure!(
         canonical_bank_leg
             .participant_settlement
-            .receipts
-            .iter()
-            .all(|receipt| {
-                receipt.local_amount == Quantity::zero()
-                    && receipt.xor_due == Quantity::zero()
-                    && receipt.xor_after_haircut == Quantity::zero()
-                    && receipt.xor_variance == Quantity::zero()
-                    && receipt.timestamp_ms == block.header().height().get()
-            })
-            && canonical_bank_leg
-                .participant_settlement
-                .nexus_fee_receipts
-                .is_empty()
-            && canonical_bank_leg
-                .participant_settlement
-                .native_amx_receipts
-                .is_empty(),
-        "BANK participant settlement must remain zero-effect and contain no nested receipts"
+            .authority_context_height()
+            == block.header().height().get(),
+        "BANK participant control did not bind its exact application authority height"
     );
     for (transaction, receipt) in transactions.iter().zip(&receipts) {
         let leg = bank_participant_leg(receipt)?;
@@ -1888,7 +1971,7 @@ async fn wait_for_grouped_native_amx_durable_application(
     let descriptor = &evidence.bank_leg.participant_proposal.descriptor;
     while started.elapsed() <= STATUS_WAIT_TIMEOUT {
         let client = client.clone();
-        match spawn_blocking(move || client.get_sumeragi_diagnostics()).await {
+        match spawn_blocking(move || client.client().get_sumeragi_diagnostics()).await {
             Ok(Ok(diagnostics)) => {
                 let application_rows = diagnostics
                     .native_amx_participant_applications
@@ -2143,7 +2226,7 @@ async fn wait_for_diagnostics_native_amx_evidence(
     let mut last_error: Option<String> = None;
     while started.elapsed() <= STATUS_WAIT_TIMEOUT {
         let client = client.clone();
-        match spawn_blocking(move || client.get_sumeragi_diagnostics()).await {
+        match spawn_blocking(move || client.client().get_sumeragi_diagnostics()).await {
             Ok(Ok(status)) => {
                 let commitment = status
                     .lane_settlement_commitments
@@ -2227,7 +2310,7 @@ async fn wait_for_all_peers_to_observe_native_amx_evidence(
         .ok_or_else(|| eyre!("{context}: four-peer network returned no native AMX relay"))
 }
 async fn fetch_sumeragi_diagnostics_json(client: &Client) -> Result<JsonValue> {
-    let diagnostics_url = client.torii_url.join("v1/sumeragi/diagnostics")?;
+    let diagnostics_url = client.client().torii_url.join("v1/sumeragi/diagnostics")?;
     let response = reqwest::Client::new()
         .get(diagnostics_url)
         .send()
@@ -2439,24 +2522,30 @@ fn native_amx_bootstrap_transaction(submitter: &Client) -> Result<SignedTransact
     let acme_dataspace = DataSpaceId::new(ACME_DATASPACE);
     let bank_dataspace = DataSpaceId::new(BANK_DATASPACE);
     let instructions = vec![
-        dataspace_setup_instruction("acme", acme_dataspace, &submitter.account)?,
-        dataspace_setup_instruction("bank", bank_dataspace, &submitter.account)?,
+        dataspace_setup_instruction("acme", acme_dataspace, &submitter.client().account)?,
+        dataspace_setup_instruction("bank", bank_dataspace, &submitter.client().account)?,
         domain_setup_instruction_in_dataspace(
             &DomainId::try_new("soakbootstrapmerchant", "acme")?,
             acme_dataspace,
-            &submitter.account,
+            &submitter.client().account,
         )?,
         domain_setup_instruction_in_dataspace(
             &DomainId::try_new("soakbootstrapvault", "bank")?,
             bank_dataspace,
-            &submitter.account,
+            &submitter.client().account,
         )?,
     ];
-    Ok(submitter.build_transaction(
-        instructions,
-        FeePaymentIntent::authority(Vec::new(), None),
-        Metadata::default(),
-    ))
+    Ok({
+        let account = submitter.account_client();
+        account
+            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                instructions,
+                FeePaymentIntent::authority(Vec::new(), None),
+                Metadata::default(),
+            ))
+            .and_then(|payload| account.sign_transaction(payload))
+    }
+    .expect("build integration-test transaction"))
 }
 fn native_amx_soak_transactions(
     submitter: &Client,
@@ -2476,19 +2565,25 @@ fn native_amx_soak_transactions(
                 domain_setup_instruction_in_dataspace(
                     &merchant_domain,
                     acme_dataspace,
-                    &submitter.account,
+                    &submitter.client().account,
                 )?,
                 domain_setup_instruction_in_dataspace(
                     &treasury_domain,
                     bank_dataspace,
-                    &submitter.account,
+                    &submitter.client().account,
                 )?,
             ];
-            Ok(submitter.build_transaction(
-                instructions,
-                FeePaymentIntent::authority(Vec::new(), None),
-                Metadata::default(),
-            ))
+            Ok({
+                let account = submitter.account_client();
+                account
+                    .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                        instructions,
+                        FeePaymentIntent::authority(Vec::new(), None),
+                        Metadata::default(),
+                    ))
+                    .and_then(|payload| account.sign_transaction(payload))
+            }
+            .expect("build integration-test transaction"))
         })
         .collect::<Result<Vec<_>>>()?;
     transactions.sort_by_key(native_amx_source_id);
@@ -2505,10 +2600,11 @@ async fn submit_grouped_native_amx_transactions(
     );
     let payloads = transactions
         .iter()
-        .map(Client::prepare_transaction_payload)
+        .map(iroha::client::PreparedTransactionPayload::from_transaction)
         .collect::<Vec<_>>();
     submitter
-        .submit_prepared_transaction_payload_batch_async(&payloads)
+        .account_client()
+        .submit_prepared_transaction_payload_batch(&payloads)
         .await
         .wrap_err_with(|| format!("{context}: submit exact two-source Torii batch"))?;
     let first_entrypoint = transactions[0].hash_as_entrypoint();
@@ -2532,14 +2628,20 @@ async fn advance_past_native_amx_eviction_tail(
     let mut last_height = target_height;
     let mut final_barrier = None;
     for offset in 0..3 {
-        let transaction = submitter.build_transaction(
-            [InstructionBox::from(Log::new(
-                Level::INFO,
-                format!("{context}: post-carrier eviction-tail barrier {offset}"),
-            ))],
-            FeePaymentIntent::authority(Vec::new(), None),
-            Metadata::default(),
-        );
+        let transaction = {
+            let account = submitter.account_client();
+            account
+                .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                    [InstructionBox::from(Log::new(
+                        Level::INFO,
+                        format!("{context}: post-carrier eviction-tail barrier {offset}"),
+                    ))],
+                    FeePaymentIntent::authority(Vec::new(), None),
+                    Metadata::default(),
+                ))
+                .and_then(|payload| account.sign_transaction(payload))
+        }
+        .expect("build integration-test transaction");
         let entrypoint_hash = transaction.hash_as_entrypoint();
         submit_and_wait_for_approval(submitter, transaction).await?;
         let block = wait_for_block_with_entrypoint(
@@ -2776,6 +2878,7 @@ fn ensure_entrypoint_committed_once(
     context: &str,
 ) -> Result<()> {
     let occurrences = client
+        .client()
         .query(FindBlocks)
         .execute_all()
         .wrap_err_with(|| format!("{context}: query canonical blocks"))?

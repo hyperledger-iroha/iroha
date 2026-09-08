@@ -356,6 +356,10 @@ enum CommandKind {
     FastpqBenchManifest {
         options: Box<BenchManifestOptions>,
     },
+    FastpqVerifyBenchManifest {
+        manifest: PathBuf,
+        trusted_public_key: String,
+    },
     FastpqStageProfile {
         options: Box<fastpq::StageProfileOptions>,
     },
@@ -1585,6 +1589,12 @@ fn entrypoint() -> Result<(), Box<dyn Error>> {
         }
         CommandKind::FastpqBenchManifest { options } => {
             fastpq::write_bench_manifest(*options)?;
+        }
+        CommandKind::FastpqVerifyBenchManifest {
+            manifest,
+            trusted_public_key,
+        } => {
+            fastpq::verify_bench_manifest(&manifest, &trusted_public_key)?;
         }
         CommandKind::FastpqStageProfile { options } => {
             fastpq::run_stage_profile(&options)?;
@@ -5635,6 +5645,43 @@ where
             };
             Ok(CommandKind::SoranetTestnetDrillBundle {
                 options: Box::new(options),
+            })
+        }
+        "fastpq-verify-bench-manifest" => {
+            let mut manifest = None;
+            let mut trusted_public_key = None;
+            let mut pending = args.peekable();
+            while let Some(arg) = pending.next() {
+                match arg.as_str() {
+                    "--manifest" => {
+                        let path = pending.next().ok_or("expected path after --manifest")?;
+                        if manifest.is_some() {
+                            return Err("duplicate --manifest".into());
+                        }
+                        manifest = Some(normalize_path(Path::new(&path))?);
+                    }
+                    "--trusted-public-key" => {
+                        if trusted_public_key.is_some() {
+                            return Err("duplicate --trusted-public-key".into());
+                        }
+                        trusted_public_key = Some(
+                            pending
+                                .next()
+                                .ok_or("expected hex key after --trusted-public-key")?,
+                        );
+                    }
+                    flag => {
+                        return Err(format!(
+                            "unknown flag for fastpq-verify-bench-manifest: {flag}"
+                        )
+                        .into());
+                    }
+                }
+            }
+            Ok(CommandKind::FastpqVerifyBenchManifest {
+                manifest: manifest.ok_or("fastpq-verify-bench-manifest requires --manifest")?,
+                trusted_public_key: trusted_public_key
+                    .ok_or("fastpq-verify-bench-manifest requires --trusted-public-key")?,
             })
         }
         "fastpq-bench-manifest" => {
@@ -10734,7 +10781,6 @@ fn git_source_provenance(
         return Err("git rev-parse returned an empty HEAD".into());
     }
     let generated_unix_ms = git_head_timestamp_ms(repo_root)?;
-    let committed_source_sha256_hex = git_openapi_generator_input_tree_sha256(repo_root, head)?;
     let pathspecs = git_source_pathspecs(repo_root, excluded_paths)?;
     let mut status_args = vec![
         OsString::from("status"),
@@ -10744,6 +10790,15 @@ fn git_source_provenance(
     ];
     status_args.extend(pathspecs.iter().cloned());
     let status = git_stdout(repo_root, &status_args)?;
+    let committed_source_sha256_hex = git_openapi_generator_input_tree_sha256_with_pin_source(
+        repo_root,
+        head,
+        if status.is_empty() {
+            OpenApiCargoLockPinSource::Committed
+        } else {
+            OpenApiCargoLockPinSource::WorkingDirtyUnsigned
+        },
+    )?;
     if status.is_empty() {
         return Ok(OpenApiGeneratorProvenance {
             generated_unix_ms,
@@ -10799,9 +10854,26 @@ fn git_source_provenance(
         source_sha256_hex: Some(hex::encode(source_digest.finalize())),
     })
 }
+#[cfg(test)]
 fn git_openapi_generator_input_tree_sha256(
     repo_root: &Path,
     commit: &str,
+) -> Result<String, Box<dyn Error>> {
+    git_openapi_generator_input_tree_sha256_with_pin_source(
+        repo_root,
+        commit,
+        OpenApiCargoLockPinSource::Committed,
+    )
+}
+#[derive(Clone, Copy)]
+enum OpenApiCargoLockPinSource {
+    Committed,
+    WorkingDirtyUnsigned,
+}
+fn git_openapi_generator_input_tree_sha256_with_pin_source(
+    repo_root: &Path,
+    commit: &str,
+    pin_source: OpenApiCargoLockPinSource,
 ) -> Result<String, Box<dyn Error>> {
     if !is_lower_hex_digest(commit, 20) {
         return Err(
@@ -10897,7 +10969,12 @@ fn git_openapi_generator_input_tree_sha256(
         None => return Err(format!("OpenAPI Cargo.lock is missing at commit {commit}").into()),
     }
     let cargo_lock_blob_oid = cargo_lock_blob_oid.ok_or("OpenAPI Cargo.lock blob is missing")?;
-    let pin = read_git_openapi_cargo_lock_pin(repo_root, commit)?;
+    let pin = match pin_source {
+        OpenApiCargoLockPinSource::Committed => read_git_openapi_cargo_lock_pin(repo_root, commit)?,
+        OpenApiCargoLockPinSource::WorkingDirtyUnsigned => {
+            read_working_openapi_cargo_lock_pin(repo_root)?
+        }
+    };
     let tracked_input =
         read_openapi_generator_tracked_input(repo_root, commit, &cargo_lock_blob_oid, &pin)?;
     Ok(openapi_generator_input_closure_sha256(
@@ -11032,6 +11109,24 @@ fn read_git_openapi_cargo_lock_pin(
         );
     }
     parse_openapi_cargo_lock_pin(&committed_pin)
+}
+fn read_working_openapi_cargo_lock_pin(
+    repo_root: &Path,
+) -> Result<OpenApiCargoLockPinV1, Box<dyn Error>> {
+    let path = repo_root.join(OPENAPI_CARGO_LOCK_PIN_PATH);
+    let working_pin = read_openapi_input_stable_with_policy(
+        &path,
+        "working OpenAPI Cargo.lock pin",
+        OPENAPI_CARGO_LOCK_PIN_MAX_BYTES,
+        true,
+        true,
+    )?;
+    if working_pin != OPENAPI_CARGO_LOCK_PIN {
+        return Err(
+            "working OpenAPI Cargo.lock pin differs from the pin compiled into xtask".into(),
+        );
+    }
+    parse_openapi_cargo_lock_pin(&working_pin)
 }
 fn read_openapi_generator_tracked_input(
     repo_root: &Path,
@@ -11391,6 +11486,34 @@ mod acceleration_state_tests {
                 format: AccelerationOutputFormat::Json,
             } => {}
             _ => panic!("expected acceleration-state command"),
+        }
+    }
+    #[test]
+    fn parse_fastpq_manifest_verification_requires_external_trust() {
+        let args = [
+            "xtask",
+            "fastpq-verify-bench-manifest",
+            "--manifest",
+            "capture.json",
+        ];
+        assert!(parse_command(args.into_iter().map(String::from)).is_err());
+        let args = [
+            "xtask",
+            "fastpq-verify-bench-manifest",
+            "--manifest",
+            "capture.json",
+            "--trusted-public-key",
+            "external-release-key",
+        ];
+        match parse_command(args.into_iter().map(String::from)).expect("verification command") {
+            CommandKind::FastpqVerifyBenchManifest {
+                manifest,
+                trusted_public_key,
+            } => {
+                assert!(manifest.ends_with("capture.json"));
+                assert_eq!(trusted_public_key, "external-release-key");
+            }
+            _ => panic!("expected manifest verification"),
         }
     }
     #[test]
@@ -12668,6 +12791,50 @@ mod openapi_tests {
         assert_ne!(
             untracked_two.source_sha256_hex, untracked_one.source_sha256_hex,
             "untracked non-output contents must be provenance-bound"
+        );
+    }
+    #[test]
+    fn dirty_unsigned_provenance_accepts_only_a_compiled_pin_repair_for_the_committed_lock() {
+        let fixture = tempdir().expect("pin-repair tempdir");
+        initialize_git_fixture(fixture.path());
+        let pin_path = fixture.path().join(OPENAPI_CARGO_LOCK_PIN_PATH);
+        let stale_pin = format!(
+            "{OPENAPI_CARGO_LOCK_PIN_SCHEMA}\nbytes=1\nsha256_hex={}\n",
+            "11".repeat(32)
+        );
+        fs::write(&pin_path, stale_pin).expect("write stale committed pin");
+        git_stdout(fixture.path(), &["add", "--", OPENAPI_CARGO_LOCK_PIN_PATH])
+            .expect("stage stale pin");
+        git_stdout(
+            fixture.path(),
+            &[
+                "-c",
+                "user.name=OpenAPI Test",
+                "-c",
+                "user.email=openapi-test@example.invalid",
+                "commit",
+                "--quiet",
+                "-m",
+                "stale pin",
+            ],
+        )
+        .expect("commit stale pin");
+        fs::write(&pin_path, OPENAPI_CARGO_LOCK_PIN).expect("restore compiled working pin");
+
+        let provenance = git_source_provenance(fixture.path(), &[])
+            .expect("dirty unsigned provenance with an exact compiled pin repair");
+        assert!(provenance.dirty);
+        assert_eq!(provenance.commit, None);
+        assert!(provenance.source_sha256_hex.is_some());
+
+        fs::write(&pin_path, b"not-the-compiled-pin\n").expect("substitute working pin");
+        let error = git_source_provenance(fixture.path(), &[])
+            .expect_err("an uncompiled working pin substitution must fail");
+        assert!(
+            error
+                .to_string()
+                .contains("differs from the pin compiled into xtask"),
+            "unexpected working-pin substitution error: {error}"
         );
     }
     include!("tests/openapi_tracked_lock.rs");

@@ -2876,6 +2876,8 @@ pub fn msg_validate() -> bool {
 /// prefixed with an `iroha_crypto::Algorithm` tag; secp256k1 signing requires the
 /// `Algorithm::Secp256k1` tag to disambiguate 32-byte secret keys. The function signs the
 /// serialized message bytes and returns the signature or an empty vector if signing fails.
+/// ML-DSA retains its typed-key decoding, empty context, and direct OS randomness;
+/// unsupported AArch64 acceleration uses the shared CLEAN signing path.
 #[allow(unused_variables)]
 pub fn msg_sign(key: &[u8]) -> Vec<u8> {
     let msg = match msg_serialize("XML") {
@@ -2883,7 +2885,7 @@ pub fn msg_sign(key: &[u8]) -> Vec<u8> {
         Err(_) => return Vec::new(),
     };
     use pqcrypto_mldsa::mldsa65 as dilithium;
-    use pqcrypto_traits::sign::{DetachedSignature as _, SecretKey as _};
+    use pqcrypto_traits::sign::SecretKey as _;
     if let Some((tag, rest)) = key.split_first() {
         if *tag == Algorithm::Ed25519 as u8 && rest.len() == 32 {
             let Ok(sk_bytes) = <[u8; 32]>::try_from(rest) else {
@@ -2905,8 +2907,7 @@ pub fn msg_sign(key: &[u8]) -> Vec<u8> {
             let Ok(sk) = dilithium::SecretKey::from_bytes(rest) else {
                 return Vec::new();
             };
-            let sig = dilithium::detached_sign(&msg, &sk);
-            return sig.as_bytes().to_vec();
+            return iroha_crypto::sign_mldsa65_detached(&msg, &sk);
         }
     }
     if let Ok(sk_bytes) = <[u8; 32]>::try_from(key) {
@@ -2916,8 +2917,7 @@ pub fn msg_sign(key: &[u8]) -> Vec<u8> {
     if key.len() == dilithium::secret_key_bytes()
         && let Ok(sk) = dilithium::SecretKey::from_bytes(key)
     {
-        let sig = dilithium::detached_sign(&msg, &sk);
-        return sig.as_bytes().to_vec();
+        return iroha_crypto::sign_mldsa65_detached(&msg, &sk);
     }
     Vec::new()
 }
@@ -4948,16 +4948,28 @@ mod tests {
     }
     #[test]
     fn msg_sign_and_verify_roundtrip_dilithium() {
-        use pqcrypto_mldsa::mldsa65 as dilithium;
-        use pqcrypto_traits::sign::{PublicKey, SecretKey};
+        use iroha_crypto::KeyPair;
         reset();
         msg_parse("pacs.008", b"field=value").unwrap();
-        let (pk, sk) = dilithium::keypair();
-        let mut tagged = Vec::with_capacity(1 + sk.as_bytes().len());
+        let keypair = KeyPair::try_from_seed(vec![0x93; 32], Algorithm::MlDsa)
+            .expect("fixed portable ML-DSA keypair");
+        let (_, secret_key) = keypair.private_key().to_bytes();
+        let (_, public_key) = keypair.public_key().try_to_bytes().unwrap();
+        let mut tagged = Vec::with_capacity(1 + secret_key.len());
         tagged.push(Algorithm::MlDsa as u8);
-        tagged.extend_from_slice(sk.as_bytes());
-        let sig = msg_sign(&tagged);
-        assert!(msg_verify_sig(&sig, pk.as_bytes()));
+        tagged.extend_from_slice(&secret_key);
+        for key in [secret_key.as_slice(), tagged.as_slice()] {
+            let signature = msg_sign(key);
+            assert_eq!(signature.len(), pqcrypto_mldsa::mldsa65::signature_bytes());
+            assert!(msg_verify_sig(&signature, public_key));
+        }
+        for key in [
+            &[][..],
+            &tagged[..tagged.len() - 2],
+            &secret_key[..secret_key.len() - 1],
+        ] {
+            assert!(msg_sign(key).is_empty());
+        }
     }
     #[test]
     fn msg_sign_and_verify_roundtrip_secp256k1() {

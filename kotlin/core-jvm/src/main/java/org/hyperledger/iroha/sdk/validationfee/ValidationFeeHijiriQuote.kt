@@ -299,7 +299,7 @@ internal fun requireCanonicalQuoteAccountId(value: String, field: String): Strin
         "$field must use one canonical domainless I105 account id"
     }
     val address = try {
-        AccountAddress.parseEncodedIgnoringCurveSupport(value, null)
+        AccountAddress.parseEncoded(value, null)
     } catch (error: AccountAddressException) {
         throw IllegalArgumentException(
             "$field must use one canonical domainless I105 account id",

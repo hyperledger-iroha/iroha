@@ -262,6 +262,8 @@ fn error_to_json(err: &AccountAddressError) -> Value {
 fn policy_error_to_string(err: MultisigPolicyError) -> &'static str {
     match err {
         MultisigPolicyError::EmptyMembers => "EmptyMembers",
+        MultisigPolicyError::TooManyMembers(_) => "TooManyMembers",
+        MultisigPolicyError::NonCanonicalMemberOrder => "NonCanonicalMemberOrder",
         MultisigPolicyError::ZeroThreshold => "ZeroThreshold",
         MultisigPolicyError::MemberWeightZero => "MemberWeightZero",
         MultisigPolicyError::DuplicateMember => "DuplicateMember",

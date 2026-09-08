@@ -71,6 +71,7 @@ tasks.test {
             .file("fixtures/musubi/instructions_v1.json"),
     )
     inputs.file(rootProject.layout.projectDirectory.dir("..").file("fixtures/crypto/ed25519_public_key_admission_v1.json"))
+    inputs.file(rootProject.layout.projectDirectory.dir("..").file("fixtures/account/multisig_wire_v1.json"))
     inputs.file(rootProject.layout.projectDirectory.dir("..").file("fixtures/sumeragi_v2/wire_v2.tsv"))
     inputs.file(
         rootProject.layout.projectDirectory
@@ -79,8 +80,11 @@ tasks.test {
     )
     inputs.file(rootProject.layout.projectDirectory.dir("..").file("fixtures/numeric_v1_golden.json"))
     inputs.file(rootProject.layout.projectDirectory.dir("..").file("fixtures/offline/kagemusha_v1.json"))
+    inputs.file(rootProject.layout.projectDirectory.dir("..").file("fixtures/offline/kagemusha_enrolled_open_selector_v1.json"))
+    inputs.file(rootProject.layout.projectDirectory.dir("..").file("fixtures/offline/kagemusha_enrolled_open_challenge_v1.json"))
     inputs.file(rootProject.layout.projectDirectory.dir("..").file("fixtures/offline/kagemusha_sender_reservation_v1.json"))
     inputs.file(rootProject.layout.projectDirectory.dir("..").file("fixtures/offline/kagemusha_core_coordinator_frame_v1.tsv"))
+    inputs.file(rootProject.layout.projectDirectory.dir("..").file("fixtures/offline/kagemusha_core_coordinator_archives_v1.json"))
     inputs.file(
         rootProject.layout.projectDirectory
             .dir("..")

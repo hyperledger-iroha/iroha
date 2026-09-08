@@ -60,12 +60,38 @@ fn initially_absent_configured_validator_claims_one_process_generation() {
     assert_eq!(claim.local_peer_id(), &local_peer);
     assert_eq!(claim.network_id(), context.network_id);
     let mut later_context = context.clone();
+    let retired = later_context.roster.remove(0);
     later_context.roster.push(wire::ValidatorPower {
         validator: local_peer.clone(),
         power: 1,
     });
+    later_context
+        .roster
+        .sort_by(|left, right| left.validator.cmp(&right.validator));
+    assert_eq!(
+        later_context.roster.len(),
+        context.roster.len(),
+        "rotation preserves exact 3f+1 geometry"
+    );
+    assert!(
+        later_context
+            .roster
+            .iter()
+            .all(|entry| entry.validator != retired.validator)
+    );
     later_context.quorum = wire::DualQuorum::from_roster(&later_context.roster)
         .expect("rotated-in roster has a valid dual quorum");
+    (
+        later_context.kagemusha_mint_finality_epoch_id,
+        later_context.kagemusha_mint_finality_epoch_roster,
+    ) = crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
+        later_context.network_id,
+        later_context.epoch,
+        &later_context.roster,
+    );
+    later_context
+        .validate()
+        .expect("rotated-in context carries its exact mint authority");
     assert!(
         local_validator_index(&later_context, &local_peer, NodeRole::Validator)
             .expect("the same configured process can rotate into a later roster")
@@ -172,7 +198,11 @@ fn pre_submit_lane_binding_rejection_arms_one_non_empty_retry() {
 fn quiet_retransmission_tick_services_one_retained_historical_session() {
     let mut lane_work = super::super::v2_lane_work::tests::quiet_historical_recovery_fixture();
     let (services, _) = super::super::v2_worker::tests::fixture();
-    assert!(lane_work.has_pending_historical_recovery());
+    assert!(
+        lane_work
+            .has_pending_historical_recovery()
+            .expect("inspect retained historical recovery")
+    );
     let outcome = service_historical_recovery_tick(&mut lane_work, &services)
         .expect("quiet retransmission tick advances retained history");
     let HistoricalRecoveryServiceOutcome::Waiting(wait) = outcome else {
@@ -184,7 +214,9 @@ fn quiet_retransmission_tick_services_one_retained_historical_session() {
     );
     assert!(wait.first_observation());
     assert!(
-        lane_work.has_pending_historical_recovery(),
+        lane_work
+            .has_pending_historical_recovery()
+            .expect("inspect historical owner after bounded wait"),
         "one bounded wait turn must retain the exact historical owner"
     );
 }

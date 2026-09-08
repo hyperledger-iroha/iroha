@@ -4,7 +4,7 @@ use super::localnet_npos::npos_override_transactions;
 use eyre::{Result, WrapErr, ensure, eyre};
 use integration_tests::sandbox;
 use iroha::{
-    client::Client,
+    blocking::Client,
     crypto::Hash,
     data_model::{
         Level, NetworkId, ValidationFail,
@@ -491,6 +491,7 @@ fn wait_for_active_lane_validators(
     let mut last_active = BTreeSet::new();
     while started.elapsed() <= STATUS_WAIT_TIMEOUT {
         let snapshot = client
+            .client()
             .get_public_lane_validators(lane_id)
             .map_err(|err| eyre!(err))?;
         let (total, active) = lane_validator_snapshot(&snapshot, context)?;
@@ -514,7 +515,7 @@ fn wait_for_height(client: &Client, target_height: u64, context: &str) -> Result
     let mut last_height = 0;
     let mut last_error: Option<String> = None;
     while started.elapsed() <= STATUS_WAIT_TIMEOUT {
-        match client.get_sumeragi_status() {
+        match client.client().get_sumeragi_status() {
             Ok(status) => {
                 last_height = status.last_committed_height;
                 if status.last_committed_height >= target_height {
@@ -535,7 +536,10 @@ fn wait_for_height(client: &Client, target_height: u64, context: &str) -> Result
     ))
 }
 fn asset_balance(client: &Client, asset_id: &AssetId) -> Result<Quantity> {
-    match client.query_single(FindAssetById::new(asset_id.clone())) {
+    match client
+        .client()
+        .query_single(FindAssetById::new(asset_id.clone()))
+    {
         Ok(asset) => Ok(asset.value().clone()),
         Err(QueryError::Validation(ValidationFail::QueryFailed(
             QueryExecutionFail::Find(FindError::Asset(_)) | QueryExecutionFail::NotFound,
@@ -609,7 +613,7 @@ fn add_client_headers(
     include_content_type: bool,
     include_account_header: bool,
 ) -> reqwest::RequestBuilder {
-    for (name, value) in &client.headers {
+    for (name, value) in &client.client().headers {
         if !include_content_type && name.eq_ignore_ascii_case("content-type") {
             continue;
         }
@@ -634,7 +638,7 @@ async fn torii_json_get(
     path_segments: &[String],
     query_pairs: &[(String, String)],
 ) -> Result<RoutedJsonResponse> {
-    let mut url = client.torii_url.clone();
+    let mut url = client.client().torii_url.clone();
     let torii_url_literal = url.to_string();
     {
         let mut segments = url
@@ -683,7 +687,7 @@ async fn torii_json_get_as_account(
     path_segments: &[String],
     query_pairs: &[(String, String)],
 ) -> Result<RoutedJsonResponse> {
-    let mut url = client.torii_url.clone();
+    let mut url = client.client().torii_url.clone();
     let torii_url_literal = url.to_string();
     {
         let mut segments = url
@@ -712,7 +716,7 @@ async fn torii_json_get_as_account(
         .unwrap_or(u64::MAX);
     let nonce = format!("nexus-app-api-{timestamp_ms}-{}", Hash::new(url.as_str()));
     let message = canonical_network_request_signature_message(
-        &client.network_id,
+        &client.client().network_id,
         &Method::GET,
         &uri,
         &[],
@@ -720,7 +724,7 @@ async fn torii_json_get_as_account(
         &nonce,
     )
     .wrap_err("construct canonical app-api request")?;
-    let signature = Signature::try_new(client.key_pair.private_key(), &message)
+    let signature = Signature::try_new(client.client().key_pair.private_key(), &message)
         .wrap_err("sign canonical app-api request")?;
     let response = routed_http_client()
         .get(url)
@@ -819,6 +823,7 @@ async fn submit_transaction_raw(
     let request = routed_http_client()
         .post(
             client
+                .client()
                 .torii_url
                 .join("v1/pipeline/transactions")
                 .wrap_err("compose /v1/pipeline/transactions URL")?,
@@ -1139,6 +1144,7 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
         "ds2 lane validator activation",
     )?;
     let lane_sync_height = alice
+        .client()
         .get_sumeragi_status()
         .map_err(|err| eyre!(err))?
         .last_committed_height;
@@ -1205,14 +1211,20 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
     let alice_ds1_asset = AssetId::new(ds1_asset_definition_id.clone(), ALICE_ID.clone());
     let bob_ds2_asset = AssetId::new(ds2_asset_definition_id.clone(), BOB_ID.clone());
     rt.block_on(async {
-        let alice_probe = alice_via_ds2.build_transaction(
-            [InstructionBox::from(Log::new(
-                Level::INFO,
-                "wrong ingress route probe ds1".to_owned(),
-            ))],
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-            Metadata::default(),
-        );
+        let alice_probe = {
+            let account = alice_via_ds2.account_client();
+            account
+                .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                    [InstructionBox::from(Log::new(
+                        Level::INFO,
+                        "wrong ingress route probe ds1".to_owned(),
+                    ))],
+                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                    Metadata::default(),
+                ))
+                .and_then(|payload| account.sign_transaction(payload))
+        }
+        .expect("build integration-test transaction");
         submit_transaction_and_expect_route(
             &alice_via_ds2,
             &alice_on_ds1,
@@ -1222,14 +1234,20 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
             "alice tx via ds2 should route to ds1",
         )
         .await?;
-        let bob_probe = bob_via_ds1.build_transaction(
-            [InstructionBox::from(Log::new(
-                Level::INFO,
-                "wrong ingress route probe ds2".to_owned(),
-            ))],
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-            Metadata::default(),
-        );
+        let bob_probe = {
+            let account = bob_via_ds1.account_client();
+            account
+                .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                    [InstructionBox::from(Log::new(
+                        Level::INFO,
+                        "wrong ingress route probe ds2".to_owned(),
+                    ))],
+                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                    Metadata::default(),
+                ))
+                .and_then(|payload| account.sign_transaction(payload))
+        }
+        .expect("build integration-test transaction");
         submit_transaction_and_expect_route(
             &bob_via_ds1,
             &bob_on_ds2,
@@ -1444,13 +1462,19 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
         )?,
         "bob should not expose ds2 manifest publish permission before grant"
     );
-    let unauthorized_publish_tx = bob_via_ds1.build_transaction(
-        [InstructionBox::from(PublishSpaceDirectoryManifest {
-            manifest: ds2_manifest.clone(),
-        })],
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        Metadata::default(),
-    );
+    let unauthorized_publish_tx = {
+        let account = bob_via_ds1.account_client();
+        account
+            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                [InstructionBox::from(PublishSpaceDirectoryManifest {
+                    manifest: ds2_manifest.clone(),
+                })],
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                Metadata::default(),
+            ))
+            .and_then(|payload| account.sign_transaction(payload))
+    }
+    .expect("build integration-test transaction");
     rt.block_on(submit_transaction_and_expect_route(
         &bob_via_ds1,
         &bob_on_ds2,

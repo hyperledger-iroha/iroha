@@ -19,6 +19,7 @@ let manifest = ManifestBuilder::new()
     .dag_codec(DagCodecId(0x71)) // dag-cbor
     .chunking_from_profile(ChunkProfile::DEFAULT, BLAKE3_256_MULTIHASH_CODE)
     .chunk_digest_sha3_256([0x41; 32]) // SHA3-256 of ordered chunk metadata
+    .por_root([0x43; 32]) // root of the exact payload's PoR tree
     .content_length(1_048_576)
     .car_digest([0x42; 32]) // BLAKE3-256 of the entire canonical CARv2 archive
     .car_size(1_111_111) // complete CARv2 archive bytes
@@ -33,6 +34,12 @@ let manifest = ManifestBuilder::new()
 let bytes = manifest.encode().expect("serialize manifest");
 let digest = manifest.digest().expect("hash manifest");
 ```
+
+`ManifestV1::encode` and `digest` use the uncompressed canonical V1 frame even
+inside a caller's Norito layout guard. Replication signing payloads, repair/GC
+audit digests, and deal/snapshot/settlement identifiers have the same invariant.
+Use `norito::canonical_frame_len` when enforcing a full canonical frame-size
+limit; payload length hints and ambient-layout encoders do not define that size.
 
 ### CLI helper
 

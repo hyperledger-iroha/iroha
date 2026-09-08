@@ -60,6 +60,9 @@ fn try_visit_non_sorafs_singular_query<V: Visit + ?Sized>(
         visit_find_asset_by_id(FindAssetById),
         visit_find_asset_definition_by_id(FindAssetDefinitionById),
         visit_find_nft_by_id(FindNftById),
+        visit_find_nft_sale_offer_by_id(FindNftSaleOfferById),
+        visit_find_game_session_by_id(FindGameSessionById),
+        visit_find_execution_proof_verification_by_id(FindExecutionProofVerificationById),
         visit_find_trigger_by_id(FindTriggerById),
         visit_find_oracle_feed_by_id(FindOracleFeedById),
         visit_find_oracle_dispute_by_id(FindOracleDisputeById),
@@ -320,6 +323,9 @@ macro_rules! query_visitors {
                 &$crate::query::asset::prelude::FindAssetDefinitionById
             ),
             visit_find_nft_by_id(&$crate::query::nft::prelude::FindNftById),
+            visit_find_nft_sale_offer_by_id(&$crate::query::nft_market::prelude::FindNftSaleOfferById),
+            visit_find_game_session_by_id(&$crate::query::game::prelude::FindGameSessionById),
+            visit_find_execution_proof_verification_by_id(&$crate::query::game::prelude::FindExecutionProofVerificationById),
             visit_find_trigger_by_id(&$crate::query::trigger::prelude::FindTriggerById),
             visit_find_oracle_feed_by_id(
                 &$crate::query::oracle::prelude::FindOracleFeedById
@@ -629,6 +635,7 @@ mod tests {
             SingularQueryBox::FindAssetById(_) => {}
             SingularQueryBox::FindAssetDefinitionById(_) => {}
             SingularQueryBox::FindNftById(_) => {}
+            SingularQueryBox::FindNftSaleOfferById(_) => {}
             SingularQueryBox::FindAssetEscrowById(_) => {}
             SingularQueryBox::FindTriggerById(_) => {}
             SingularQueryBox::FindOracleFeedById(_) => {}
@@ -711,6 +718,8 @@ mod tests {
             SingularQueryBox::FindFeeSponsorProgramById(_) => {}
             SingularQueryBox::FindFxCorridorPolicyRegistry(_) => {}
             SingularQueryBox::FindFxCorridorPolicyById(_) => {}
+            SingularQueryBox::FindGameSessionById(_) => {}
+            SingularQueryBox::FindExecutionProofVerificationById(_) => {}
             SingularQueryBox::FindDomainEndorsements(_) => {}
             SingularQueryBox::FindDomainEndorsementPolicy(_) => {}
             SingularQueryBox::FindDomainCommittee(_) => {}
@@ -746,6 +755,47 @@ mod tests {
     }
     struct NoopVisitor;
     impl Visit for NoopVisitor {}
+    #[test]
+    fn game_and_nft_queries_reach_their_exact_typed_policy_visitors() {
+        let _guard = singular_query_tests_guard();
+        reset_singular_query_fallback_guard();
+        #[derive(Default)]
+        struct GameVisitor([usize; 3]);
+        impl Visit for GameVisitor {
+            fn visit_find_game_session_by_id(&mut self, _: &query_mod::game::FindGameSessionById) {
+                self.0[0] += 1;
+            }
+            fn visit_find_execution_proof_verification_by_id(
+                &mut self,
+                _: &query_mod::game::FindExecutionProofVerificationById,
+            ) {
+                self.0[1] += 1;
+            }
+            fn visit_find_nft_sale_offer_by_id(
+                &mut self,
+                _: &query_mod::nft_market::FindNftSaleOfferById,
+            ) {
+                self.0[2] += 1;
+            }
+        }
+        let id = iroha_crypto::Hash::new(b"typed generic game query policy");
+        let queries = [
+            SingularQueryBox::FindGameSessionById(query_mod::game::FindGameSessionById::new(id)),
+            SingularQueryBox::FindExecutionProofVerificationById(
+                query_mod::game::FindExecutionProofVerificationById::new(id),
+            ),
+            SingularQueryBox::FindNftSaleOfferById(
+                query_mod::nft_market::FindNftSaleOfferById::new(id),
+            ),
+        ];
+        let mut visitor = GameVisitor::default();
+        for query in &queries {
+            assert_singular_query_variant(query);
+            visitor.visit_singular_query(query);
+        }
+        assert_eq!(visitor.0, [1, 1, 1]);
+        assert!(!singular_query_fallback_triggered());
+    }
     #[derive(Default)]
     struct MusubiVisitor {
         seen: [bool; 11],

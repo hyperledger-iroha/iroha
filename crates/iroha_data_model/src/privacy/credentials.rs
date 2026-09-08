@@ -1854,18 +1854,20 @@ impl From<PrivacyX509KeyUsageRequirementV1> for bool {
         requirement.is_required()
     }
 }
-impl norito::core::NoritoSerialize for PrivacyX509KeyUsageRequirementV1 {
-    fn schema_hash() -> [u8; 16] {
+impl norito::core::NoritoSerialize for PrivacyX509KeyUsageRequirementV1 {fn schema_hash() -> [u8; 16] {
         <bool as norito::core::NoritoSerialize>::schema_hash()
     }
+}
+impl norito::core::SerializePayload for PrivacyX509KeyUsageRequirementV1 {
+
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
-        norito::core::NoritoSerialize::serialize(&self.0, writer)
+        norito::core::SerializePayload::serialize(&self.0, writer)
     }
     fn encoded_len_hint(&self) -> Option<usize> {
-        norito::core::NoritoSerialize::encoded_len_hint(&self.0)
+        norito::core::SerializePayload::encoded_len_hint(&self.0)
     }
     fn encoded_len_exact(&self) -> Option<usize> {
-        norito::core::NoritoSerialize::encoded_len_exact(&self.0)
+        norito::core::SerializePayload::encoded_len_exact(&self.0)
     }
 }
 impl<'de> norito::core::NoritoDeserialize<'de> for PrivacyX509KeyUsageRequirementV1 {
@@ -1911,8 +1913,17 @@ impl norito::json::JsonDeserialize for PrivacyX509KeyUsageRequirementV1 {
     fn json_from_value(value: &norito::json::Value) -> Result<Self, norito::json::Error> {
         <bool as norito::json::JsonDeserialize>::json_from_value(value).map(Self)
     }
-    fn json_from_map_key(key: &str) -> Result<Self, norito::json::Error> {
-        <bool as norito::json::JsonDeserialize>::json_from_map_key(key).map(Self)
+}
+#[cfg(feature = "json")]
+impl norito::json::JsonObjectKey for PrivacyX509KeyUsageRequirementV1 {
+    fn visit_json_key_text<E>(&self, visitor: impl FnMut(&str) -> Result<(), E>) -> Result<(), E> {
+        norito::json::JsonObjectKey::visit_json_key_text(&self.0, visitor)
+    }
+}
+#[cfg(feature = "json")]
+impl norito::json::JsonObjectKeyOwned for PrivacyX509KeyUsageRequirementV1 {
+    fn from_json_key_text(key: &str) -> Result<Self, norito::json::Error> {
+        <bool as norito::json::JsonObjectKeyOwned>::from_json_key_text(key).map(Self)
     }
 }
 #[cfg(all(test, feature = "json"))]

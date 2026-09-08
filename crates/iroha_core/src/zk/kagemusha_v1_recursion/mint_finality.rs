@@ -34,7 +34,7 @@ use std::{
     sync::Arc,
 };
 use thiserror::Error;
-use zeroize::Zeroizing;
+use zeroize::{DefaultIsZeroes, Zeroizing};
 
 use crate::zk::kagemusha_v1_poseidon::{
     KagemushaPoseidonFieldV1, decode, digest_limbs, encode, from_u128, hash,
@@ -426,10 +426,10 @@ pub fn derive_kagemusha_mint_finality_validator_keys_v1(
     Ok(KagemushaMintFinalityValidatorKeysV1 {
         validator,
         eq_proof_public_key: encode_point::<EpAffine>(
-            (<EpAffine as CurveAffine>::CurveExt::generator() * eq_secret).to_affine(),
+            (<EpAffine as CurveAffine>::CurveExt::generator() * eq_secret.value).to_affine(),
         ),
         ep_proof_public_key: encode_point::<EqAffine>(
-            (<EqAffine as CurveAffine>::CurveExt::generator() * ep_secret).to_affine(),
+            (<EqAffine as CurveAffine>::CurveExt::generator() * ep_secret.value).to_affine(),
         ),
     })
 }
@@ -478,6 +478,37 @@ impl KagemushaMintFinalityLocalAuthorityV1 {
         let signer =
             KagemushaMintFinalitySignerV1::from_seed(seed, validator_index, epoch.as_ref())?;
         Ok(Self { epoch, signer })
+    }
+
+    /// Rebind the held private seed to this validator in an authenticated epoch roster.
+    ///
+    /// The caller must obtain `epoch` from its verified height context. Network identity and
+    /// local validator identity remain fixed; every epoch's published keys must exactly match
+    /// private derivation. Historical contexts remain usable for authenticated recovery.
+    ///
+    /// # Errors
+    ///
+    /// Rejects another network, an absent local validator, malformed roster, or changed keys.
+    pub fn signer_for_epoch(
+        &self,
+        epoch: &KagemushaMintFinalityEpochRosterV1,
+    ) -> Result<KagemushaMintFinalitySignerV1, KagemushaMintFinalityErrorV1> {
+        if epoch.network_id != self.signer.network_id {
+            return Err(KagemushaMintFinalityErrorV1::InvalidSigner(
+                "epoch does not belong to the signer's admitted network".to_owned(),
+            ));
+        }
+        let index = epoch
+            .validators
+            .iter()
+            .position(|entry| entry.validator == self.signer.validator)
+            .and_then(|index| u32::try_from(index).ok())
+            .ok_or_else(|| {
+                KagemushaMintFinalityErrorV1::InvalidSigner(
+                    "local validator is absent from the authenticated epoch roster".to_owned(),
+                )
+            })?;
+        KagemushaMintFinalitySignerV1::from_seed(Zeroizing::new(*self.signer.seed), index, epoch)
     }
 
     /// Borrow the mandatory epoch authority.
@@ -603,7 +634,7 @@ impl KagemushaMintFinalitySignerV1 {
                 &validator_bytes,
                 self.validator_index,
                 EQ_PARITY_TAG,
-                eq_secret,
+                &eq_secret,
                 signing_digest,
             )?,
             ep_proof_signature: schnorr_sign::<EqAffine>(
@@ -613,7 +644,7 @@ impl KagemushaMintFinalitySignerV1 {
                 &validator_bytes,
                 self.validator_index,
                 EP_PARITY_TAG,
-                ep_secret,
+                &ep_secret,
                 signing_digest,
             )?,
         })
@@ -1023,14 +1054,14 @@ fn schnorr_sign<C>(
     validator_bytes: &[u8],
     validator_index: u32,
     parity: u8,
-    secret: C::ScalarExt,
+    secret: &ScalarToZeroize<C::ScalarExt>,
     signing_digest: [u8; 32],
 ) -> Result<KagemushaPastaSchnorrSignatureV1, KagemushaMintFinalityErrorV1>
 where
     C: CurveAffine,
     C::ScalarExt: FromUniformBytes<64> + PrimeField,
 {
-    let public = (C::CurveExt::generator() * secret).to_affine();
+    let public = (C::CurveExt::generator() * secret.value).to_affine();
     let public_bytes = encode_point(public);
     for counter in 0..u32::MAX {
         let nonce = derive_nonzero_nonce_scalar::<C::ScalarExt>(
@@ -1041,7 +1072,7 @@ where
             validator_bytes,
             &[&signing_digest[..], &counter.to_le_bytes()].concat(),
         )?;
-        let nonce_point = (C::CurveExt::generator() * nonce).to_affine();
+        let nonce_point = (C::CurveExt::generator() * nonce.value).to_affine();
         let nonce_commitment = encode_point(nonce_point);
         let challenge = schnorr_challenge::<C::ScalarExt>(
             parity,
@@ -1050,7 +1081,7 @@ where
             nonce_commitment,
             public_bytes,
         );
-        let response = nonce + challenge * secret;
+        let response = nonce.value + challenge * secret.value;
         if !bool::from(response.is_zero()) {
             return Ok(KagemushaPastaSchnorrSignatureV1 {
                 nonce_commitment,
@@ -1113,12 +1144,32 @@ where
     Ok(())
 }
 
+/// Field storage whose zeroization result is the additive identity.
+///
+/// Keep secret values in `Zeroizing<ScalarToZeroize<_>>`: the field types are
+/// `Copy`, so this wrapper alone does not erase copies or wipe on drop. The
+/// retained owner is cleared using `zeroize`'s volatile write and fence. This
+/// does not erase SHA-512 internals, arithmetic temporaries, or copies made
+/// when Rust moves a value between storage locations.
+#[derive(Clone, Copy)]
+struct ScalarToZeroize<F: Field> {
+    value: F,
+}
+
+impl<F: Field> Default for ScalarToZeroize<F> {
+    fn default() -> Self {
+        Self { value: F::ZERO }
+    }
+}
+
+impl<F: Field> DefaultIsZeroes for ScalarToZeroize<F> {}
+
 fn derive_nonzero_key_scalar<F>(
     parity: u8,
     seed: &[u8; 32],
     epoch: u64,
     validator_bytes: &[u8],
-) -> Result<F, KagemushaMintFinalityErrorV1>
+) -> Result<Zeroizing<ScalarToZeroize<F>>, KagemushaMintFinalityErrorV1>
 where
     F: Field + FromUniformBytes<64>,
 {
@@ -1135,9 +1186,14 @@ where
         );
         hasher.update(validator_bytes);
         hasher.update(counter.to_le_bytes());
-        let uniform: [u8; 64] = hasher.finalize().into();
-        let scalar = F::from_uniform_bytes(&uniform);
-        if !bool::from(scalar.is_zero()) {
+        let mut uniform = Zeroizing::new([0_u8; 64]);
+        hasher.finalize_into(sha2::digest::Output::<Sha512>::from_mut_slice(
+            &mut uniform[..],
+        ));
+        let scalar = Zeroizing::new(ScalarToZeroize {
+            value: F::from_uniform_bytes(&uniform),
+        });
+        if !bool::from(scalar.value.is_zero()) {
             return Ok(scalar);
         }
     }
@@ -1154,7 +1210,7 @@ fn derive_nonzero_nonce_scalar<F>(
     epoch: u64,
     validator_bytes: &[u8],
     extra: &[u8],
-) -> Result<F, KagemushaMintFinalityErrorV1>
+) -> Result<Zeroizing<ScalarToZeroize<F>>, KagemushaMintFinalityErrorV1>
 where
     F: Field + FromUniformBytes<64>,
 {
@@ -1178,9 +1234,14 @@ where
         );
         hasher.update(extra);
         hasher.update(counter.to_le_bytes());
-        let uniform: [u8; 64] = hasher.finalize().into();
-        let scalar = F::from_uniform_bytes(&uniform);
-        if !bool::from(scalar.is_zero()) {
+        let mut uniform = Zeroizing::new([0_u8; 64]);
+        hasher.finalize_into(sha2::digest::Output::<Sha512>::from_mut_slice(
+            &mut uniform[..],
+        ));
+        let scalar = Zeroizing::new(ScalarToZeroize {
+            value: F::from_uniform_bytes(&uniform),
+        });
+        if !bool::from(scalar.value.is_zero()) {
             return Ok(scalar);
         }
     }
@@ -1262,6 +1323,145 @@ mod tests {
         PeerId::new(key_pair.public_key().clone())
     }
 
+    // These fixtures use a synthetic seed/context and an independent integer
+    // model of the V1 SHA transcripts, Pasta moduli, generator, and point codec.
+    fn assert_secret_hygiene_vector<C>(
+        parity: u8,
+        expected_key: [u8; 32],
+        expected_nonce: [u8; 32],
+        expected_public: [u8; 32],
+        expected_commitment: [u8; 32],
+        expected_response: [u8; 32],
+    ) where
+        C: CurveAffine,
+        C::ScalarExt: FromUniformBytes<64> + PrimeField,
+    {
+        let seed = [0xA5; 32];
+        let network_id = NetworkId::from_genesis_hash(
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA7; 32])),
+        );
+        let validator_bytes = b"mint-secret-hygiene-v1";
+        let digest = [0xA9; 32];
+        let key = derive_nonzero_key_scalar::<C::ScalarExt>(parity, &seed, 7, validator_bytes)
+            .expect("derive fixed key vector");
+        assert_eq!(encode_scalar(key.value), expected_key);
+        assert_eq!(
+            encode_point::<C>((C::CurveExt::generator() * key.value).to_affine()),
+            expected_public,
+        );
+        let mut nonce_context = [0; 36];
+        nonce_context[..32].copy_from_slice(&digest);
+        let nonce = derive_nonzero_nonce_scalar::<C::ScalarExt>(
+            parity,
+            &seed,
+            &network_id,
+            7,
+            validator_bytes,
+            &nonce_context,
+        )
+        .expect("derive fixed first nonce vector");
+        assert_eq!(encode_scalar(nonce.value), expected_nonce);
+        let signature = schnorr_sign::<C>(
+            &seed,
+            &network_id,
+            7,
+            validator_bytes,
+            3,
+            parity,
+            &key,
+            digest,
+        )
+        .expect("sign fixed vector with borrowed protected key");
+        assert_eq!(signature.nonce_commitment, expected_commitment);
+        assert_eq!(signature.response, expected_response);
+        schnorr_verify::<C>(parity, 3, expected_public, &signature, digest)
+            .expect("verify unchanged V1 signature vector");
+        assert!(schnorr_verify::<C>(parity, 3, expected_public, &signature, [0xAA; 32]).is_err());
+    }
+
+    #[test]
+    fn retained_secret_scalars_zeroize_to_pasta_zero() {
+        use zeroize::{Zeroize as _, ZeroizeOnDrop};
+
+        fn assert_drop_owner<T: ZeroizeOnDrop>() {}
+        assert_drop_owner::<Zeroizing<ScalarToZeroize<Fp>>>();
+        assert_drop_owner::<Zeroizing<ScalarToZeroize<Fq>>>();
+        let mut fp = derive_nonzero_key_scalar::<Fp>(1, &[0xA5; 32], 7, b"wipe-test")
+            .expect("derive nonzero Fp owner");
+        let mut fq = derive_nonzero_key_scalar::<Fq>(0, &[0xA5; 32], 7, b"wipe-test")
+            .expect("derive nonzero Fq owner");
+        assert!(!bool::from(fp.value.is_zero()));
+        assert!(!bool::from(fq.value.is_zero()));
+        fp.zeroize();
+        fq.zeroize();
+        assert_eq!(fp.value, Fp::ZERO);
+        assert_eq!(fq.value, Fq::ZERO);
+    }
+
+    #[test]
+    fn protected_fq_key_nonce_and_signature_match_v1_vector() {
+        assert_secret_hygiene_vector::<EpAffine>(
+            0,
+            [
+                0xc6, 0x06, 0x42, 0x05, 0xbd, 0x16, 0xfb, 0xc0, 0x4d, 0x2c, 0x5c, 0x24, 0xe0, 0x63,
+                0x5a, 0x8e, 0xda, 0x94, 0x69, 0x41, 0x19, 0xc0, 0x6b, 0x05, 0x00, 0xf5, 0xb9, 0xf4,
+                0x9d, 0x4a, 0x9e, 0x1f,
+            ],
+            [
+                0xff, 0x41, 0x16, 0x55, 0x14, 0xe5, 0x67, 0x8b, 0x53, 0x75, 0x81, 0xb0, 0xdc, 0x1a,
+                0x61, 0x60, 0xbd, 0xf4, 0xff, 0xfe, 0x09, 0x1e, 0x9f, 0xbb, 0x54, 0xed, 0x29, 0xe1,
+                0x1e, 0xa5, 0x6b, 0x1e,
+            ],
+            [
+                0xf2, 0xa7, 0x46, 0x3a, 0x87, 0x6d, 0x0d, 0x73, 0xed, 0xaf, 0xe5, 0x9d, 0xa1, 0x57,
+                0x2f, 0xf1, 0x53, 0x64, 0x5d, 0x45, 0x7e, 0x41, 0xcb, 0x4c, 0x9f, 0xde, 0x55, 0x0f,
+                0x19, 0x11, 0xb8, 0x86,
+            ],
+            [
+                0xb3, 0x90, 0x6e, 0x6b, 0xdf, 0xba, 0x3a, 0xc3, 0x19, 0x81, 0xfb, 0x41, 0xc4, 0x7d,
+                0xdf, 0x61, 0x9c, 0xdc, 0x77, 0xdb, 0x16, 0x0f, 0x29, 0x8e, 0xe5, 0xe1, 0xf8, 0x98,
+                0x9c, 0x54, 0xa6, 0xbd,
+            ],
+            [
+                0xa4, 0xe6, 0xa1, 0x7a, 0x0b, 0x80, 0x16, 0x60, 0xba, 0xeb, 0xa1, 0xbf, 0x06, 0xe2,
+                0x2f, 0x11, 0x3b, 0xaa, 0x47, 0xee, 0x9a, 0x21, 0xeb, 0x97, 0xfb, 0x95, 0xd7, 0x45,
+                0x61, 0x95, 0x34, 0x1c,
+            ],
+        );
+    }
+
+    #[test]
+    fn protected_fp_key_nonce_and_signature_match_v1_vector() {
+        assert_secret_hygiene_vector::<EqAffine>(
+            1,
+            [
+                0x18, 0x7b, 0x15, 0x7e, 0x29, 0x76, 0x0c, 0xc5, 0x9f, 0x2a, 0xdd, 0x01, 0x04, 0x7f,
+                0xaa, 0xac, 0xab, 0x36, 0xd4, 0x37, 0xd1, 0x1a, 0x71, 0x89, 0x13, 0x84, 0xd9, 0xa5,
+                0xb2, 0x6b, 0xc3, 0x04,
+            ],
+            [
+                0x52, 0xc7, 0xf9, 0xec, 0x2d, 0xb0, 0x0d, 0x95, 0xce, 0x57, 0xcb, 0x3c, 0x81, 0x83,
+                0x82, 0x99, 0x2c, 0x34, 0xa8, 0xd9, 0xc5, 0xd1, 0x3c, 0xc9, 0x89, 0xef, 0x0e, 0x10,
+                0x3f, 0x2b, 0x7f, 0x1a,
+            ],
+            [
+                0x36, 0x89, 0x33, 0xef, 0xbd, 0xa9, 0x85, 0x48, 0x22, 0x45, 0x94, 0x1a, 0x7f, 0x4b,
+                0x0a, 0xb8, 0x51, 0x00, 0xd8, 0x0c, 0xc0, 0xe6, 0x82, 0xee, 0x5f, 0x2d, 0x29, 0x4d,
+                0xb0, 0xa7, 0x44, 0x2f,
+            ],
+            [
+                0x1a, 0x1c, 0xca, 0xe2, 0xc8, 0x8b, 0xea, 0xc7, 0x39, 0x1d, 0x99, 0x40, 0x25, 0x50,
+                0x43, 0xab, 0xf0, 0x01, 0xd4, 0xb5, 0xc7, 0xb1, 0xd0, 0x7f, 0x76, 0x18, 0xf0, 0x38,
+                0x42, 0xa0, 0x76, 0x9d,
+            ],
+            [
+                0xa5, 0xa7, 0xc0, 0x1b, 0x52, 0x1c, 0xf5, 0x0f, 0x17, 0x4b, 0x53, 0x9a, 0xf5, 0xdc,
+                0x36, 0xd7, 0x79, 0x89, 0x39, 0x56, 0x8a, 0x9b, 0xa3, 0xef, 0xd1, 0x84, 0xfc, 0x42,
+                0xcf, 0xc3, 0xdc, 0x07,
+            ],
+        );
+    }
+
     #[test]
     fn validator_key_derivation_is_deterministic_and_context_separated() {
         let seed = [0xA5; 32];
@@ -1289,6 +1489,94 @@ mod tests {
             derive_kagemusha_mint_finality_validator_keys_v1(&seed, 7, peer(2))
                 .expect("derive for another validator")
         );
+    }
+
+    fn runtime_epoch_fixture(epoch: u64) -> KagemushaMintFinalityEpochRosterV1 {
+        let mut validators = (1_u8..=4).map(peer).collect::<Vec<_>>();
+        validators.sort();
+        KagemushaMintFinalityEpochRosterV1 {
+            version: KAGEMUSHA_CHAIN_VERSION_V1,
+            network_id: NetworkId::from_genesis_hash(
+                HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"runtime epoch fixture")),
+            ),
+            epoch,
+            validators: validators
+                .into_iter()
+                .enumerate()
+                .map(|(index, validator)| {
+                    derive_kagemusha_mint_finality_validator_keys_v1(
+                        &[0xB0 + u8::try_from(index).expect("four validators"); 32],
+                        epoch,
+                        validator,
+                    )
+                    .expect("derive exact epoch fixture")
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn runtime_authority_rebinds_private_seed_to_each_exact_epoch_roster() {
+        let epoch_zero = runtime_epoch_fixture(0);
+        let authority = KagemushaMintFinalityLocalAuthorityV1::new(
+            Arc::new(epoch_zero.clone()),
+            Zeroizing::new([0xB1; 32]),
+            1,
+        )
+        .expect("bind epoch zero");
+        let epoch_one = runtime_epoch_fixture(1);
+        let signer = authority
+            .signer_for_epoch(&epoch_one)
+            .expect("bind authenticated next epoch");
+        assert_eq!(signer.validator_index(), 1);
+        assert_eq!(signer.validator, epoch_zero.validators[1].validator);
+        assert_eq!(signer.epoch, 1);
+        assert_eq!(
+            signer.finality_epoch_id,
+            epoch_one.finality_epoch_id().expect("epoch id")
+        );
+        assert!(
+            authority.signer_for_epoch(&epoch_zero).is_ok(),
+            "exact recovery context remains valid"
+        );
+    }
+
+    #[test]
+    fn runtime_epoch_rebinding_rejects_network_keys_epoch_and_missing_validator() {
+        let epoch_zero = runtime_epoch_fixture(0);
+        let authority = KagemushaMintFinalityLocalAuthorityV1::new(
+            Arc::new(epoch_zero.clone()),
+            Zeroizing::new([0xB1; 32]),
+            1,
+        )
+        .expect("bind epoch zero");
+        let mut foreign = runtime_epoch_fixture(1);
+        foreign.network_id = NetworkId::from_genesis_hash(
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"foreign runtime epoch")),
+        );
+        assert!(authority.signer_for_epoch(&foreign).is_err());
+        let mut wrong_epoch = epoch_zero.clone();
+        wrong_epoch.epoch = 1;
+        assert!(authority.signer_for_epoch(&wrong_epoch).is_err());
+        let mut wrong_key = runtime_epoch_fixture(1);
+        wrong_key.validators[1] = derive_kagemusha_mint_finality_validator_keys_v1(
+            &[0xDD; 32],
+            1,
+            wrong_key.validators[1].validator.clone(),
+        )
+        .expect("wrong seed keys");
+        assert!(authority.signer_for_epoch(&wrong_key).is_err());
+        let mut absent = runtime_epoch_fixture(1);
+        absent.validators[1] =
+            derive_kagemusha_mint_finality_validator_keys_v1(&[0xDD; 32], 1, peer(99))
+                .expect("replacement validator keys");
+        absent
+            .validators
+            .sort_by(|left, right| left.validator.cmp(&right.validator));
+        absent
+            .validate()
+            .expect("valid roster without local validator");
+        assert!(authority.signer_for_epoch(&absent).is_err());
     }
 
     #[test]

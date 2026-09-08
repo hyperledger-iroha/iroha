@@ -45,10 +45,6 @@
     clippy::useless_let_if_seq
 )]
 #![cfg_attr(test, allow(clippy::large_stack_arrays))]
-#[cfg(all(feature = "kaigi_privacy_mocks", not(test)))]
-compile_error!(
-    "`kaigi_privacy_mocks` is a unit-test-only feature and cannot be enabled in a production library"
-);
 #[cfg(not(feature = "zk-halo2"))]
 compile_error!(
     "Halo2 backends are mandatory; enable `zk-halo2` (default) when building iroha_core"
@@ -75,6 +71,8 @@ pub mod bridge;
 pub mod compliance;
 /// Data availability orchestration and ingest helpers.
 pub mod da;
+/// Native transparent execution proofs and bounded deterministic race relations.
+pub mod execution_proofs;
 /// Runtime executor integration and helpers.
 pub mod executor;
 /// FASTPQ transcript helpers and host plumbing.
@@ -143,6 +141,8 @@ pub mod query;
 /// Transaction queue and mempool logic.
 pub mod queue;
 pub(crate) mod receiver_snapshot;
+/// Shared compiled validator identity and signed genesis input validation.
+pub mod release_identity;
 mod secure_file_metadata;
 /// Unified XOR settlement engine.
 pub mod settlement;
@@ -995,10 +995,10 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
             },
             NetworkMessage::PeersGossiper(_) => T::PeerGossip,
             NetworkMessage::PeerTrustGossip(_) => T::TrustGossip,
-            NetworkMessage::Health
-            | NetworkMessage::TimePing(_)
-            | NetworkMessage::TimePong(_)
-            | NetworkMessage::Connect(_) => T::Health,
+            NetworkMessage::Health | NetworkMessage::TimePing(_) | NetworkMessage::TimePong(_) => {
+                T::Health
+            }
+            NetworkMessage::Connect(_) => T::Connect,
         }
     }
     fn subscriber_route(&self) -> iroha_p2p::network::message::SubscriberRoute {
@@ -1060,7 +1060,8 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
             6 => inbound_transaction_gossip_topic(field, flags)?,
             7 => Topic::PeerGossip,
             8 => Topic::TrustGossip,
-            10..=12 => Topic::Health,
+            10..=11 => Topic::Health,
+            12 => Topic::Connect,
             13..=16 => Topic::Control,
             _ => {
                 return Err(norito::core::Error::Message(
@@ -1318,9 +1319,6 @@ pub mod prelude {
 #[cfg(test)]
 extern crate self as iroha_core;
 #[cfg(test)]
-#[path = "../tests/admission_batching.rs"]
-mod admission_batching_tests;
-#[cfg(test)]
 #[path = "../tests/adversarial_block_rejections.rs"]
 mod adversarial_block_rejections_tests;
 #[cfg(test)]
@@ -1542,7 +1540,7 @@ mod tests {
                     },
                 ))),
                 12,
-                NetworkTopic::Health,
+                NetworkTopic::Connect,
                 SubscriberRoute::Connect,
             ),
             (
@@ -1611,7 +1609,7 @@ mod tests {
             (8, NetworkTopic::TrustGossip),
             (10, NetworkTopic::Health),
             (11, NetworkTopic::Health),
-            (12, NetworkTopic::Health),
+            (12, NetworkTopic::Connect),
             (13, NetworkTopic::Control),
             (14, NetworkTopic::Control),
             (15, NetworkTopic::Control),

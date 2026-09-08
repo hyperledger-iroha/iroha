@@ -46,10 +46,9 @@ pub const KAGEMUSHA_REDEMPTION_REQUEST_SCHEMA_NAME_V1: &str =
     "iroha.torii.v1.kagemusha.redeem.request";
 /// Exact number of siblings in a proof against the ordinary-write sparse tree.
 pub const KAGEMUSHA_RESERVE_RECEIPT_WITNESS_SIBLINGS_V1: usize = 256;
-/// Reserved ordinary-write key tag for a finalized KAGEMUSHA operation.
-pub const KAGEMUSHA_RESERVE_RECEIPT_WITNESS_KEY_TAG_V1: u8 = 0xD5;
-/// Exact tagged key length: one tag byte followed by the operation identifier.
-pub const KAGEMUSHA_RESERVE_RECEIPT_WITNESS_KEY_BYTES_V1: usize = 33;
+pub use crate::execution_witness::{
+    KAGEMUSHA_RESERVE_RECEIPT_WITNESS_KEY_BYTES_V1, KAGEMUSHA_RESERVE_RECEIPT_WITNESS_KEY_TAG_V1,
+};
 
 const TOP_UP_ISSUANCE_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:top-up-issuance";
 const TOP_UP_REQUEST_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:top-up-request";
@@ -792,7 +791,10 @@ impl KagemushaTopUpRequestV1 {
         committed_at_ms: u64,
     ) -> Result<KagemushaMintCreditStatementV1, KagemushaIsiValidationErrorV1> {
         self.validate_shape()?;
-        if committed_at_ms == 0 {
+        if committed_at_ms == 0
+            || committed_at_ms < self.hardware_credential.issued_at_ms
+            || committed_at_ms >= self.hardware_credential.expires_at_ms
+        {
             return Err(invalid("top_up.committed_at_ms"));
         }
         let mint_authorization_digest = self
@@ -814,19 +816,26 @@ impl KagemushaTopUpRequestV1 {
     ///
     /// `committed_at_ms` must come from the certified reserve receipt. It is not
     /// accepted from a client and does not participate in the pre-commit credit ID.
+    /// That certified time must be at or after both validity starts and strictly before both
+    /// expirations. Recovering an existing receipt uses its original certified time even if
+    /// the credential or profile has since expired; the current wall clock is irrelevant.
     /// `profile` must be the enabled profile resolved from the authenticated
     /// release; the caller must also exact-match the request's release, suite,
     /// verifying-key, and artifact-manifest bindings to that release.
     ///
     /// # Errors
     ///
-    /// Returns an error unless this request and its profile credential are valid.
+    /// Returns an error unless this request and its profile credential are valid at the
+    /// authoritative reserve commit time.
     pub fn mint_statement_against_profile(
         &self,
         profile: &KagemushaHardwareProfileV1,
         committed_at_ms: u64,
     ) -> Result<KagemushaMintCreditStatementV1, KagemushaIsiValidationErrorV1> {
         self.validate_against_profile(profile)?;
+        if committed_at_ms < profile.valid_from_ms || committed_at_ms >= profile.expires_at_ms {
+            return Err(invalid("top_up.committed_at_ms"));
+        }
         self.mint_statement_shape(committed_at_ms)
     }
 
@@ -1489,7 +1498,7 @@ impl KagemushaMintFinalitySealBundleV1 {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct KagemushaReserveReceiptWitnessV1 {
-    /// Exact `0xD5 || operation_id` execution-witness key.
+    /// Exact `0xD6 || operation_id` execution-witness key.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
     pub key: Vec<u8>,
     /// Typed canonical value stored under `key`.
@@ -1502,10 +1511,7 @@ impl KagemushaReserveReceiptWitnessV1 {
     /// Derive the sole ordinary-write key for an operation.
     #[must_use]
     pub fn expected_key(operation_id: [u8; 32]) -> Vec<u8> {
-        let mut key = Vec::with_capacity(KAGEMUSHA_RESERVE_RECEIPT_WITNESS_KEY_BYTES_V1);
-        key.push(KAGEMUSHA_RESERVE_RECEIPT_WITNESS_KEY_TAG_V1);
-        key.extend_from_slice(&operation_id);
-        key
+        crate::execution_witness::kagemusha_reserve_receipt_witness_key_v1(operation_id).to_vec()
     }
 
     /// Reconstruct the ordinary-write sparse-Merkle root.
@@ -2016,6 +2022,7 @@ impl KagemushaOperationLookupV1 {
 isi! {
     /// Atomically debit online funds, increase the pooled reserve, and accept one fixed issuance.
     #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+    #[norito_schema(name = "iroha_data_model::isi::kagemusha_v1::TopUpKagemushaV1")]
     pub struct TopUpKagemushaV1 {
         /// Complete deterministic pre-finality issuance intent.
         pub request: KagemushaTopUpRequestV1,
@@ -2025,6 +2032,7 @@ isi! {
 isi! {
     /// Verify and settle one full or partial hardware-bound redemption voucher.
     #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+    #[norito_schema(name = "iroha_data_model::isi::kagemusha_v1::RedeemKagemushaV1")]
     pub struct RedeemKagemushaV1 {
         /// Complete terminal redemption request.
         pub request: KagemushaRedemptionRequestV1,
@@ -2172,7 +2180,7 @@ fn wire_error(error: impl core::fmt::Display) -> KagemushaIsiValidationErrorV1 {
     KagemushaIsiValidationErrorV1::InvalidWire(error.to_string())
 }
 
-fn digest_encoded<T: Encode>(
+fn digest_encoded<T: norito::NoritoSerialize>(
     domain: &[u8],
     value: &T,
 ) -> Result<[u8; 32], KagemushaIsiValidationErrorV1> {
@@ -2194,6 +2202,8 @@ fn ordinary_smt_node_hash(left: Hash, right: Hash) -> Hash {
     Hash::new(preimage)
 }
 
+#[cfg(all(test, feature = "json"))]
+pub(crate) mod generated_identity_values;
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2423,6 +2433,38 @@ mod tests {
         credential
     }
 
+    #[test]
+    fn hardware_credential_requires_positive_epoch_even_with_authentic_governance_signature() {
+        let profile = hardware_profile();
+        let original = hardware_credential(&profile);
+        for generation in [0, 1, u64::MAX] {
+            let mut credential = original;
+            credential.hardware_epoch_generation = generation;
+            credential = credential.seal_credential_id().unwrap();
+            let message = credential.canonical_signing_bytes().unwrap();
+            credential.governance_signature = sign(&signing_key(0x31), &message);
+            credential
+                .governance_signature
+                .verify(&profile.governance_credential_public_key, &message)
+                .unwrap();
+            assert_eq!(
+                credential.credential_id,
+                credential.expected_credential_id().unwrap()
+            );
+            let encoded = norito::encode_canonical(&credential).unwrap();
+            let decoded: KagemushaHardwareCredentialV1 =
+                norito::decode_canonical(&encoded).unwrap();
+            assert_eq!(decoded, credential);
+            if generation == 0 {
+                assert!(decoded.validate_shape().is_err());
+                assert!(decoded.validate_against_profile(&profile).is_err());
+            } else {
+                decoded.validate_shape().unwrap();
+                decoded.validate_against_profile(&profile).unwrap();
+            }
+        }
+    }
+
     fn encrypted_credit_fixture(recipient_one_time_key: [u8; 32], tag: u8) -> Vec<u8> {
         let mut ephemeral_x25519_public_key = [0; 32];
         ephemeral_x25519_public_key[0] = 9;
@@ -2473,7 +2515,7 @@ mod tests {
             .expect("attach mint authorization")
     }
 
-    fn top_up_request() -> KagemushaTopUpRequestV1 {
+    pub(super) fn top_up_request() -> KagemushaTopUpRequestV1 {
         let profile = hardware_profile();
         let network_id = network();
         let asset = asset();
@@ -2513,7 +2555,7 @@ mod tests {
         attach_test_mint_authorization(request)
     }
 
-    fn redemption_request() -> KagemushaRedemptionRequestV1 {
+    pub(super) fn redemption_request() -> KagemushaRedemptionRequestV1 {
         let network_id = network();
         let asset = asset();
         let asset_incarnation = asset_incarnation(1);
@@ -2767,6 +2809,80 @@ mod tests {
             .validate()
             .expect("self-consistent fake profile");
         assert!(request.validate_against_profile(&fake_profile).is_err());
+    }
+
+    #[test]
+    fn top_up_mint_statement_checks_certified_time_inside_credential_lifetime() {
+        let profile = hardware_profile();
+        let request = top_up_request();
+        let before = norito::encode_canonical(&request).expect("canonical request");
+        for committed_at_ms in [500, 10_000, 89_999] {
+            let statement = request
+                .mint_statement_against_profile(&profile, committed_at_ms)
+                .expect("certified time inside credential and governed profile");
+            assert_eq!(statement.minted_at_ms, committed_at_ms);
+            assert_eq!(
+                statement,
+                request.mint_statement_shape(committed_at_ms).unwrap()
+            );
+            let bytes =
+                norito::encode_canonical(&statement).expect("encode bounded mint statement");
+            assert_eq!(
+                norito::decode_canonical::<KagemushaMintCreditStatementV1>(&bytes).unwrap(),
+                statement
+            );
+        }
+        for committed_at_ms in [0, 1, 499, 90_000, 100_000, u64::MAX] {
+            assert_eq!(
+                request.mint_statement_against_profile(&profile, committed_at_ms),
+                Err(invalid("top_up.committed_at_ms"))
+            );
+            assert_eq!(
+                request.mint_statement_shape(committed_at_ms),
+                Err(invalid("top_up.committed_at_ms"))
+            );
+        }
+        // A future failed attempt does not change the original request or a historical statement.
+        assert_eq!(norito::encode_canonical(&request).unwrap(), before);
+        assert_eq!(
+            request
+                .mint_statement_against_profile(&profile, 10_000)
+                .unwrap()
+                .minted_at_ms,
+            10_000
+        );
+    }
+
+    #[test]
+    fn top_up_mint_statement_observes_governed_profile_start_and_exclusive_expiry() {
+        let mut profile = hardware_profile();
+        profile.valid_from_ms = 500;
+        profile.expires_at_ms = 90_000;
+        let profile = profile
+            .seal_hardware_profile_id()
+            .expect("exact validity-bound profile");
+        let mut request = top_up_request();
+        request.hardware_credential = hardware_credential(&profile);
+        request.mint_authorization = None;
+        let request = attach_test_mint_authorization(
+            request.seal_identifiers().expect("bound profile request"),
+        );
+        for committed_at_ms in [profile.valid_from_ms, profile.expires_at_ms - 1] {
+            request
+                .mint_statement_against_profile(&profile, committed_at_ms)
+                .expect("inside governed interval");
+        }
+        for committed_at_ms in [profile.valid_from_ms - 1, profile.expires_at_ms, u64::MAX] {
+            assert_eq!(
+                request.mint_statement_against_profile(&profile, committed_at_ms),
+                Err(invalid("top_up.committed_at_ms"))
+            );
+        }
+        assert!(
+            request
+                .mint_statement_against_profile(&hardware_profile(), 10_000)
+                .is_err()
+        );
     }
 
     #[test]
@@ -3173,10 +3289,21 @@ mod tests {
         };
         let root = witness.reconstructed_root().expect("reconstruct root");
         assert!(witness.verify(root));
+        assert_eq!(witness.key[0], 0xD6);
+        let encoded = norito::encode_canonical(&witness).expect("encode receipt witness");
+        let decoded: KagemushaReserveReceiptWitnessV1 =
+            norito::decode_canonical(&encoded).expect("decode receipt witness");
+        assert_eq!(decoded, witness);
 
-        let mut wrong_key = witness.clone();
-        wrong_key.key[0] ^= 1;
-        assert!(!wrong_key.verify(root));
+        for wrong_tag in [
+            crate::execution_witness::VALIDATION_FEE_POLICY_WITNESS_KEY_V1[0],
+            crate::execution_witness::PARLIAMENT_TIMED_OVN_CASTING_WITNESS_KEY_V1[0],
+            crate::execution_witness::FASTPQ_ORDINARY_SOURCE_STATEMENTS_WITNESS_KEY_V1[0],
+        ] {
+            let mut wrong_key = witness.clone();
+            wrong_key.key[0] = wrong_tag;
+            assert!(!wrong_key.verify(root));
+        }
 
         let mut short = witness;
         short.siblings.pop();

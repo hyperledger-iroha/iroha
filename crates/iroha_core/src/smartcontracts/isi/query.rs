@@ -801,6 +801,15 @@ impl ExecuteSingularQuery for SingularQueryBox {
             SingularQueryBox::FindAssetDefinitionById(q) => {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
+            SingularQueryBox::FindNftSaleOfferById(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
+            SingularQueryBox::FindGameSessionById(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
+            SingularQueryBox::FindExecutionProofVerificationById(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
             SingularQueryBox::FindAssetEscrowById(q) => {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
@@ -3365,6 +3374,7 @@ mod tests {
     use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, gen_account_in};
     use mv::storage::StorageReadOnly as _;
     use nonzero_ext::nonzero;
+    use norito::core::SerializePayload;
     use std::{borrow::Cow, num::NonZeroUsize, sync::Arc};
     fn checked_keypair() -> KeyPair {
         KeyPair::try_random().expect("query fixture key generation should succeed")
@@ -3926,7 +3936,8 @@ mod tests {
             }
         }
     }
-    impl NoritoSerialize for StatefulLengthHint {
+    impl NoritoSerialize for StatefulLengthHint {}
+    impl SerializePayload for StatefulLengthHint {
         fn serialize(
             &self,
             encoder: &mut norito::core::Encoder<'_>,
@@ -3941,7 +3952,8 @@ mod tests {
         }
     }
     struct ErrorSwallowingSerializer;
-    impl NoritoSerialize for ErrorSwallowingSerializer {
+    impl NoritoSerialize for ErrorSwallowingSerializer {}
+    impl SerializePayload for ErrorSwallowingSerializer {
         fn serialize(
             &self,
             encoder: &mut norito::core::Encoder<'_>,
@@ -7323,12 +7335,20 @@ mod tests {
             .kura()
             .get_block(latest_height)
             .expect("latest seeded carrier");
-        let (appended, entry) =
-            crate::smartcontracts::isi::tx::tests::certified_query_carrier(&latest, 17, true);
+        let (appended, entry) = crate::smartcontracts::isi::tx::tests::certified_query_carrier(
+            &latest,
+            17,
+            true,
+            Some(&fixture.latest_lane_descriptor),
+        );
         state_view
             .kura()
             .store_block_with_merge_entry(appended, &entry)
             .expect("append carrier after query start");
+        crate::kura::tests::persist_v2_finality_chain_through(
+            state_view.kura(),
+            NonZeroUsize::new(18).expect("appended query carrier"),
+        );
         while let Some(current) = cursor {
             let next = query_handle
                 .handle_iter_continue(current, &ALICE_ID)

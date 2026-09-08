@@ -704,11 +704,16 @@ exact quorum-cardinality checks remain admission-time semantic validation.
 Local formation validates every supplied vote and deterministically selects
 the canonical first quorum; an otherwise valid signer superset is not a wire QC.
 
-Grouped participant application is atomic and bounded to 1–4,096 ordered,
-unique sources. The group must match the exact transaction count and timestamp,
-contain the current source exactly once, and carry zero participant effects,
-zero nested fee receipts, and zero nested Native receipts. A block in which one
-route has mixed coordinator and participant roles uses the same block-wide
+Grouped participant application is atomic and bounded to 1–4,096 unique sources
+in candidate order. The participant settlement has exactly seven fields:
+`lane_id`, `dataspace_id`, `lane_incarnation`, `participant_lane_block_height`,
+`authority_context_height`, `previous_native_settlement_hash`, and `source_ids`.
+It has no economic, timestamp, transaction-count, or nested-receipt fields;
+retired fields are rejected even when zero or empty. The current source occurs
+exactly once. A same-route coordinator leg requires its complete ordered source
+vector; a separate participant group may span coordinator groups and is checked
+against the complete block. A block in which one route has mixed coordinator
+and participant roles uses the same block-wide
 anchor and defers the role-sensitive check until the complete group is
 available.
 
@@ -728,9 +733,13 @@ that view until the global safety WAL installs a strictly newer certified numeri
 same-view crash safety without letting uncertified Prepare choices split honest validators forever
 across view changes. V5 is the only accepted signing-journal layout; unsupported pre-release
 journals fail closed before the canonical signer directory is created.
-Before Prepare or Commit signing, and again at admission, the guard requires
+Before Prepare or Commit signing, and again at admission, validation requires
 the active incarnation, exact predecessor height and descriptor hash,
-and the contiguous next lane height. Commit repeats the complete participant identity certified by
+the contiguous next lane height, and the exact previous Native settlement hash.
+The required nullable Native link is absent only for the first Native control
+in an incarnation, which may follow ordinary lane blocks. Lane height one
+requires null; State authenticates null or a nonzero hash at later heights.
+Commit repeats the complete participant identity certified by
 Prepare and carries the exact matching PrepareQC. A committed source, session, proposal,
 predecessor, or settlement conflict fails closed across restart. Global round view monotonicity
 remains independent from the participant lane view.
@@ -739,10 +748,11 @@ Participant finality is control-only. Exactly one coordinator ownership executes
 and commits its state transition; participant proposals are not executable-payload handoffs and
 cannot appear as independent merge executions. Participant committees may deterministically
 preflight the settlement against the frozen state, but preflight cannot mutate State. The signed
-participant settlement binds the proposal, included sources, resulting effect commitment, and
-participant coordinates. The wire value is `NativeAmxParticipantSettlement`; its typed hash uses
-the `iroha.consensus.native-amx.participant-settlement.v1` domain. It does not recursively contain
-the Native AMX receipt whose leg commits its hash, avoiding a receipt-to-settlement hash cycle.
+attestation binds the participant proposal and the separate settlement hash.
+The settlement hash commits the exact seven-field canonical Norito frame under
+`iroha:native-amx:participant-settlement:v1`, including the Native history link
+and ordered sources. Economic results are authenticated by the global executed
+block and application manifest; they are not participant-settlement fields.
 One shared participant-application predicate is used by block validation,
 Kura, State frontiers, recovery, diagnostics, drain, and retirement. A
 coordinator leg on the same route is not a separate participant application
@@ -750,7 +760,8 @@ and produces no marker, receipt, latest-pointer update, diagnostic row, or
 drain blocker.
 
 The globally finalized execution commitment contains a canonical Native application manifest root.
-Each route/incarnation leaf binds the predecessor, proposal, settlement, ordered source/result
+Each route/incarnation leaf binds the shared-lane predecessor, proposal, settlement,
+required nullable previous Native settlement hash, ordered source/result
 membership, and canonical application-block identity. Kura retains each leaf and Merkle proof in
 one immutable versioned manifest file named by participant height, and stores the matching
 idempotent application receipt in a separate immutable versioned per-height file. Publication
@@ -780,13 +791,21 @@ temporary-only or stable intent, resumes after each individual manifest/receipt 
 the complete pair unlink, and reconciles identical stable plus temporary intents idempotently. The
 exact pair named by the latest pointer cannot be pruned.
 
+The Native hash chain links adjacent retained Native controls independently of
+shared lane heights, so ordinary blocks may intervene without hiding an omitted
+Native control. Prefix pruning authenticates the exact removed settlement
+preimages through the retained chain to the protected latest pair.
+
 A crash after global application but before the receipt or latest pointer leaves the old frontier
 blocked. Startup repair revalidates the block, checkpoint, finality, manifest root/proof, and exact
 group under the sidecar publication guard, then idempotently completes the missing standalone
 files without executing the transaction again. A valid lone publication temporary is promoted and
 a byte-identical duplicate beside a stable file is removed; malformed, conflicting, or oversized
 temporaries fail closed. Startup reconstructs the bounded exact-latest pointer explicitly;
-steady-state lookup does not reverse-scan history. Obsolete dense Native data/index layouts and
+steady-state authority derives from a bounded, fully authenticated typed history.
+An exact highest manifest-only or receipt-only publication remains pending repair;
+malformed or conflicting occupied evidence is an error. Obsolete dense Native
+data/index layouts and
 unexpected, malformed, oversized, non-regular, hardlinked, or symlinked artifacts are rejected
 before mutation.
 

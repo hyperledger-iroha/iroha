@@ -445,7 +445,7 @@ public struct SorafsProviderIngestCompletionAuthorityV1: Equatable, Sendable {
         do {
             let prefix = try AccountAddress
                 .inspectI105NetworkPrefix(providerOwner).chainDiscriminant
-            let address = try AccountAddress.parseEncodedSwiftOnly(
+            let address = try AccountAddress.parseCanonicalI105(
                 providerOwner,
                 expectedPrefix: prefix
             )

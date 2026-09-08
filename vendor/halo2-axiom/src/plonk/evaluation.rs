@@ -5,7 +5,7 @@ use crate::plonk::{Any, ProvingKey, lookup, permutation};
 use crate::poly::Basis;
 use crate::{
     arithmetic::{CurveAffine, parallelize},
-    poly::{Coeff, ExtendedLagrangeCoeff, LagrangeCoeff, Polynomial, Rotation},
+    poly::{Coeff, EvaluationDomain, ExtendedLagrangeCoeff, LagrangeCoeff, Polynomial, Rotation},
 };
 #[cfg(feature = "profile")]
 use ark_std::{end_timer, start_timer};
@@ -17,6 +17,68 @@ use std::{
 };
 
 use super::{ConstraintSystem, Expression};
+
+/// A quotient evaluator either borrows immutable coefficients or owns the complete advice bank.
+/// Owned parts move their scalar buffers through each transform; on unwind the current owner
+/// drops them. No borrowed coefficient slice is ever exposed while its values are on a coset.
+enum AdviceCosetSource<'a, F: WithSmallOrderMulGroup<3>> {
+    Borrowed(&'a [&'a [Polynomial<F, Coeff>]]),
+    Owned(Vec<Vec<Polynomial<F, Coeff>>>),
+}
+
+impl<F: WithSmallOrderMulGroup<3>> AdviceCosetSource<'_, F> {
+    fn prepare_part(
+        &mut self,
+        domain: &EvaluationDomain<F>,
+        factor: F,
+    ) -> Vec<Vec<Polynomial<F, LagrangeCoeff>>> {
+        match self {
+            // Retain the original borrowed/reference preparation and immutable coefficient bank.
+            Self::Borrowed(advice_polys) => (*advice_polys)
+                .into_par_iter()
+                .map(|advice_polys| {
+                    advice_polys
+                        .iter()
+                        .map(|poly| domain.coeff_to_extended_part(poly.clone(), factor))
+                        .collect()
+                })
+                .collect(),
+            // Each FFT may use native parallelism. Transform columns serially to avoid retaining
+            // a separate per-column scratch bank; the consuming public prover has one instance.
+            Self::Owned(advice_polys) => std::mem::take(advice_polys)
+                .into_iter()
+                .map(|bank| {
+                    bank.into_iter()
+                        .map(|poly| domain.coeff_to_extended_part(poly, factor))
+                        .collect()
+                })
+                .collect(),
+        }
+    }
+
+    fn finish_part(
+        &mut self,
+        domain: &EvaluationDomain<F>,
+        factor: F,
+        cosets: Vec<Vec<Polynomial<F, LagrangeCoeff>>>,
+    ) {
+        if let Self::Owned(advice_polys) = self {
+            assert!(
+                advice_polys.is_empty(),
+                "coset part owns all advice buffers"
+            );
+            *advice_polys = cosets
+                .into_iter()
+                .map(|bank| {
+                    bank.into_iter()
+                        .map(|poly| domain.extended_part_to_coeff(poly, factor))
+                        .collect()
+                })
+                .collect();
+        }
+        // Borrowed preparation has a temporary cloned bank; drop it as before.
+    }
+}
 
 /// Return the index in the polynomial of size `isize` after rotation `rot`.
 fn get_rotation_idx(idx: usize, rot: i32, rot_scale: i32, isize: i32) -> usize {
@@ -392,6 +454,78 @@ impl<C: CurveAffine> Evaluator<C> {
         permutations: &[permutation::prover::Committed<C>],
         stream_permutation_cosets: bool,
     ) -> Polynomial<C::ScalarExt, ExtendedLagrangeCoeff> {
+        let mut advice_source = AdviceCosetSource::Borrowed(advice_polys);
+        self.evaluate_h_with_advice_source(
+            &mut advice_source,
+            pk,
+            instance_polys,
+            challenges,
+            y,
+            beta,
+            gamma,
+            theta,
+            lookups,
+            permutations,
+            stream_permutation_cosets,
+        )
+    }
+
+    /// Evaluate the same quotient while moving owned advice buffers through each coset part.
+    /// Every coefficient is restored before the next part and before returning for openings.
+    /// This eliminates the separately retained advice coset bank, at the cost of one inverse
+    /// FFT per column and part. Existing transform scratch and all other quotient banks remain.
+    pub(in crate::plonk) fn evaluate_h_consuming_advice(
+        &self,
+        pk: &ProvingKey<C>,
+        advice_polys: Vec<Vec<Polynomial<C::ScalarExt, Coeff>>>,
+        instance_polys: &[&[Polynomial<C::ScalarExt, Coeff>]],
+        challenges: &[C::ScalarExt],
+        y: C::ScalarExt,
+        beta: C::ScalarExt,
+        gamma: C::ScalarExt,
+        theta: C::ScalarExt,
+        lookups: &[Vec<lookup::prover::Committed<C>>],
+        permutations: &[permutation::prover::Committed<C>],
+        stream_permutation_cosets: bool,
+    ) -> (
+        Polynomial<C::ScalarExt, ExtendedLagrangeCoeff>,
+        Vec<Vec<Polynomial<C::ScalarExt, Coeff>>>,
+    ) {
+        let mut advice_source = AdviceCosetSource::Owned(advice_polys);
+        let quotient = self.evaluate_h_with_advice_source(
+            &mut advice_source,
+            pk,
+            instance_polys,
+            challenges,
+            y,
+            beta,
+            gamma,
+            theta,
+            lookups,
+            permutations,
+            stream_permutation_cosets,
+        );
+        let AdviceCosetSource::Owned(restored) = advice_source else {
+            unreachable!("consuming quotient evaluation retains owned advice")
+        };
+        (quotient, restored)
+    }
+
+    // Equations, query rotations and per-row Horner order are shared unchanged by both owners.
+    fn evaluate_h_with_advice_source(
+        &self,
+        advice_source: &mut AdviceCosetSource<'_, C::ScalarExt>,
+        pk: &ProvingKey<C>,
+        instance_polys: &[&[Polynomial<C::ScalarExt, Coeff>]],
+        challenges: &[C::ScalarExt],
+        y: C::ScalarExt,
+        beta: C::ScalarExt,
+        gamma: C::ScalarExt,
+        theta: C::ScalarExt,
+        lookups: &[Vec<lookup::prover::Committed<C>>],
+        permutations: &[permutation::prover::Committed<C>],
+        stream_permutation_cosets: bool,
+    ) -> Polynomial<C::ScalarExt, ExtendedLagrangeCoeff> {
         let domain = &pk.vk.domain;
         let size = 1 << domain.k() as usize;
         let rot_scale = 1;
@@ -423,17 +557,7 @@ impl<C: CurveAffine> Evaluator<C> {
             #[cfg(feature = "profile")]
             let advice_timer = start_timer!(|| "Advice coeff_to_extended_part");
             // Calculate the advice and instance cosets
-            let advice: Vec<Vec<Polynomial<C::Scalar, LagrangeCoeff>>> = advice_polys
-                .into_par_iter()
-                .map(|advice_polys| {
-                    advice_polys
-                        .iter()
-                        .map(|poly| {
-                            domain.coeff_to_extended_part(poly.clone(), current_extended_omega)
-                        })
-                        .collect()
-                })
-                .collect();
+            let advice = advice_source.prepare_part(domain, current_extended_omega);
             #[cfg(feature = "profile")]
             end_timer!(advice_timer);
             #[cfg(feature = "profile")]
@@ -805,6 +929,7 @@ impl<C: CurveAffine> Evaluator<C> {
                 #[cfg(feature = "profile")]
                 end_timer!(timer);
             }
+            advice_source.finish_part(domain, current_extended_omega, advice);
             current_extended_omega *= extended_omega;
             store_extended_lagrange_part(&mut extended_values, &values, part_index, num_parts);
         });
@@ -1372,3 +1497,7 @@ pub fn evaluate<F: Field, B: Basis>(
     });
     values
 }
+
+#[cfg(test)]
+#[path = "advice_coset_tests.rs"]
+mod advice_coset_tests;

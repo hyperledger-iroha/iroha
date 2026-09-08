@@ -70,6 +70,17 @@ impl StatePath {
         }
         Ok(Self(ConstString::from(candidate)))
     }
+
+    /// Parse one canonical JSON object-key spelling with bounded decode accounting.
+    #[cfg(feature = "json")]
+    pub(crate) fn parse_json_object_key(candidate: &str) -> Result<Self, norito::json::Error> {
+        Self::validate_str(candidate)
+            .map_err(|error| norito::json::Error::Message(error.reason().into()))?;
+        Name::ensure_nfc_for_json_decode(candidate)?;
+        let value = ConstString::try_from_str_for_decode(candidate)
+            .map_err(norito::json::Error::from_decode_resource)?;
+        Ok(Self(value))
+    }
     fn decode_wire(bytes: &[u8]) -> Result<(Self, usize), NoritoError> {
         let (len, header_len) = norito::core::inspect_len_from_slice(bytes)?;
         if len > MAX_STATE_PATH_BYTES {
@@ -90,15 +101,16 @@ impl StatePath {
         Ok((path, end))
     }
 }
-impl norito::core::NoritoSerialize for StatePath {
+impl norito::core::NoritoSerialize for StatePath {}
+impl norito::core::SerializePayload for StatePath {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
-        <&str as norito::core::NoritoSerialize>::serialize(&self.as_ref(), writer)
+        <&str as norito::core::SerializePayload>::serialize(&self.as_ref(), writer)
     }
     fn encoded_len_hint(&self) -> Option<usize> {
-        <&str as norito::core::NoritoSerialize>::encoded_len_hint(&self.as_ref())
+        <&str as norito::core::SerializePayload>::encoded_len_hint(&self.as_ref())
     }
     fn encoded_len_exact(&self) -> Option<usize> {
-        <&str as norito::core::NoritoSerialize>::encoded_len_exact(&self.as_ref())
+        <&str as norito::core::SerializePayload>::encoded_len_exact(&self.as_ref())
     }
 }
 impl<'a> norito::core::NoritoDeserialize<'a> for StatePath {

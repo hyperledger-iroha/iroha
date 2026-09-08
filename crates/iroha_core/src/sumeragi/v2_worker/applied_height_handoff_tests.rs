@@ -1,10 +1,36 @@
+fn install_applied_height_ranked_backpressure(
+    service: &mut ProductionV2Services,
+) -> Arc<Mutex<Vec<NetworkActorAdmissionTicketTestFixture>>> {
+    let fixtures = Arc::new(Mutex::new(Vec::new()));
+    let retained = Arc::clone(&fixtures);
+    service.set_exact_output_admission_hook(move |post, ticket| {
+        let ticket = ticket.unwrap_or_else(|| {
+            let (fixture, ticket) = NetworkActorAdmissionTicketTestFixture::for_topology(&post);
+            retained
+                .lock()
+                .expect("retain applied-height actor waiter")
+                .push(fixture);
+            ticket
+        });
+        let rank = ticket
+            .rank()
+            .expect("applied-height output retains actor rank");
+        Err(NetworkActorAdmissionError::Backpressured {
+            message: post,
+            ticket: Some(ticket),
+            rank,
+        })
+    });
+    fixtures
+}
+
 #[test]
 fn final_exact_output_seal_is_one_shot_and_blocks_late_enqueue() {
     let (mut service, keys) = fixture();
     let (receipt, artifact) = durable_finality_fixture(&service, &keys);
     let target = service.context.roster[1].validator.clone();
     let (request, _) = certified_sidecar_outputs(&service.local_peer, &target);
-    let attempts = install_counting_exact_output_backpressure(&mut service);
+    let ranked_tickets = install_applied_height_ranked_backpressure(&mut service);
     let lane_authority = DurableLaneRolloverAuthority::missing_winning_witness_for_test(
         &artifact,
         Hash::new(b"empty exact-output final seal lane witness"),
@@ -21,9 +47,12 @@ fn final_exact_output_seal_is_one_shot_and_blocks_late_enqueue() {
             ExactFanoutOwnership::Owned
         );
         assert_eq!(
-            attempts.load(Ordering::Relaxed),
+            ranked_tickets
+                .lock()
+                .expect("inspect exact actor admission reservations")
+                .len(),
             expected_attempts,
-            "each pre-seal pass reaches actor admission exactly once"
+            "each pre-seal pass acquires one actual actor admission reservation"
         );
         assert_eq!(
             service
@@ -39,6 +68,14 @@ fn final_exact_output_seal_is_one_shot_and_blocks_late_enqueue() {
             !service
                 .has_pending_exact_output()
                 .expect("inspect the repeatable handoff")
+        );
+        assert!(
+            ranked_tickets
+                .lock()
+                .expect("inspect the completed handoff's actor reservations")
+                .iter()
+                .all(|ticket| ticket.waiter_count() == 0),
+            "each durable handoff releases the exact ranked occurrence"
         );
     }
     let handoff = service
@@ -65,7 +102,10 @@ fn final_exact_output_seal_is_one_shot_and_blocks_late_enqueue() {
             .contains("sealed after durable finality handoff")
     );
     assert_eq!(
-        attempts.load(Ordering::Relaxed),
+        ranked_tickets
+            .lock()
+            .expect("inspect exact actor admission reservations")
+            .len(),
         2,
         "post-seal output never reaches actor admission"
     );
@@ -397,6 +437,14 @@ fn autonomous_retirement_handoff_fixture(
     context.epoch = attempt.payload.epoch;
     context.height = attempt.payload.origin_proposal.descriptor.proposal_height;
     context.parent_commit_qc = None;
+    (
+        context.kagemusha_mint_finality_epoch_id,
+        context.kagemusha_mint_finality_epoch_roster,
+    ) = crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
+        context.network_id,
+        context.epoch,
+        &context.roster,
+    );
     context
         .validate()
         .expect("retired autonomous handoff context is valid");
@@ -426,13 +474,14 @@ fn autonomous_retirement_handoff_fixture(
         .kura
         .store_block(block)
         .expect("persist control-only canonical carrier");
-    let execution_commitment = wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
-        Hash::new(b"autonomous handoff parent state"),
-        Hash::new(b"autonomous handoff post state"),
-        Hash::new(b"autonomous handoff ordinary writes"),
-        1,
-        Hash::new(b"autonomous handoff executed block wire"),
-    );
+    let execution_commitment =
+        wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+            Hash::new(b"autonomous handoff parent state"),
+            Hash::new(b"autonomous handoff post state"),
+            Hash::new(b"autonomous handoff ordinary writes"),
+            1,
+            Hash::new(b"autonomous handoff executed block wire"),
+        );
     let artifact = signed_worker_finality_artifact(
         &context,
         validators,
@@ -1066,7 +1115,7 @@ fn applied_height_handoff_accepts_kura_applied_ordinary_historical_lane_output()
     let (receipt, applied_artifact) = durable_finality_fixture(&service, &lane_validators);
     let target = service.context.roster[1].validator.clone();
     let historical_output = BlockMessage::LaneBlockQc(certificate.commit_qc.clone());
-    install_exact_output_backpressure(&mut service);
+    let actor_owners = install_applied_height_ranked_backpressure(&mut service);
     service
         .post_lane_block(target.clone(), historical_output.clone())
         .expect("retain exact ordinary historical lane output");
@@ -1074,6 +1123,10 @@ fn applied_height_handoff_accepts_kura_applied_ordinary_historical_lane_output()
         .lock_pending_exact_output()
         .expect("inspect historical lane certification claim");
     assert_eq!(pending.fanouts.len(), 1);
+    assert_eq!(
+        actor_owners.lock().expect("inspect owned handoff waiter")[0].waiter_count(),
+        1
+    );
     assert!(matches!(
         &pending.fanouts[0].rollover_claim,
         ExactOutputRolloverClaim::HistoricalLaneCertification {
@@ -1102,6 +1155,11 @@ fn applied_height_handoff_accepts_kura_applied_ordinary_historical_lane_output()
             .expect("ordinary historical output rereads its certificate and application receipt"),
         1
     );
+    let owners = actor_owners.lock().expect("inspect handoff ticket release");
+    assert_eq!(owners.len(), 1);
+    assert_eq!(owners[0].waiter_count(), 0);
+    assert_eq!(owners[0].ticket_drop_cancellations(), 1);
+    drop(owners);
     assert!(
         !service
             .has_pending_exact_output()
@@ -1142,7 +1200,7 @@ fn applied_height_handoff_accepts_record_backed_autonomous_historical_lane_certi
     let (receipt, applied_artifact) = durable_finality_fixture(&service, &lane_validators);
     let target = service.context.roster[1].validator.clone();
     let historical_output = BlockMessage::LaneBlockCertificate(Box::new(certificate.clone()));
-    install_exact_output_backpressure(&mut service);
+    let actor_owners = install_applied_height_ranked_backpressure(&mut service);
     service
         .post_lane_block(target.clone(), historical_output.clone())
         .expect("retain exact autonomous historical lane certificate");
@@ -1150,6 +1208,10 @@ fn applied_height_handoff_accepts_record_backed_autonomous_historical_lane_certi
         .lock_pending_exact_output()
         .expect("inspect autonomous historical lane certification claim");
     assert_eq!(pending.fanouts.len(), 1);
+    assert_eq!(
+        actor_owners.lock().expect("inspect owned handoff waiter")[0].waiter_count(),
+        1
+    );
     assert!(matches!(
         &pending.fanouts[0].rollover_claim,
         ExactOutputRolloverClaim::HistoricalLaneCertification {
@@ -1178,6 +1240,11 @@ fn applied_height_handoff_accepts_record_backed_autonomous_historical_lane_certi
             .expect("autonomous historical output rereads its immutable recovery record"),
         1
     );
+    let owners = actor_owners.lock().expect("inspect handoff ticket release");
+    assert_eq!(owners.len(), 1);
+    assert_eq!(owners[0].waiter_count(), 0);
+    assert_eq!(owners[0].ticket_drop_cancellations(), 1);
+    drop(owners);
     assert!(
         !service
             .has_pending_exact_output()

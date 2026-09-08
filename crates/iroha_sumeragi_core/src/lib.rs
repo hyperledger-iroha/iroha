@@ -42,8 +42,8 @@ pub use committee::{
 pub use quorum::{Quorum, QuorumError};
 pub use reducer::{
     BodyState, DurableCommitReceipt, Effect, EquivocationEvidence, EquivocationKind, Event,
-    FinalizedHeight, IgnoreReason, Reducer, ReducerError, SignableMessage, StepDisposition,
-    StepOutcome,
+    FinalizedHeight, IgnoreReason, Reducer, ReducerError, RefinementFailure, SignableMessage,
+    StepDisposition, StepOutcome,
 };
 pub use scheduler::{ScheduleState, ScheduledWork};
 pub use types::{

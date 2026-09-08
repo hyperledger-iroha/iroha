@@ -141,6 +141,7 @@ fn recv_cleanup_completion(
             mpsc::RecvTimeoutError::Disconnected => CleanupCompletionWaitError::Disconnected,
         })
 }
+#[cfg(test)]
 fn sign_consensus_task(
     body_store: &V2BodyStore,
     context: &wire::HeightContext,
@@ -190,6 +191,7 @@ fn sign_consensus_task_with_kagemusha_authority(
         outbound_payload,
     })
 }
+#[cfg(test)]
 fn sign_recovered_lifecycle_task(
     body_store: &V2BodyStore,
     context: &wire::HeightContext,
@@ -265,22 +267,21 @@ fn sign_consensus_request_with_kagemusha_authority(
         "Kagemusha V1 top-up or epoch-boundary Commit vote requires a provisioned Pasta epoch authority"
             .to_owned()
     })?;
-    let message =
-        crate::zk::kagemusha_v1_recursion::build_kagemusha_mint_finality_seal_message_v1(
-            authority.epoch(),
-            context,
-            vote,
-        )
-        .map_err(|error| error.to_string())?
-        .ok_or_else(|| {
-            "Kagemusha V1 authoritative Commit vote produced no mint-finality statement"
-                .to_owned()
-        })?;
-    let seal = crate::zk::kagemusha_v1_recursion::sign_kagemusha_mint_finality_seal_v1(
-        authority.signer(),
-        &message,
+    let message = crate::zk::kagemusha_v1_recursion::build_kagemusha_mint_finality_seal_message_v1(
+        &context.kagemusha_mint_finality_epoch_roster,
+        context,
+        vote,
     )
-    .map_err(|error| error.to_string())?;
+    .map_err(|error| error.to_string())?
+    .ok_or_else(|| {
+        "Kagemusha V1 authoritative Commit vote produced no mint-finality statement".to_owned()
+    })?;
+    let signer = authority
+        .signer_for_epoch(&context.kagemusha_mint_finality_epoch_roster)
+        .map_err(|error| error.to_string())?;
+    let seal =
+        crate::zk::kagemusha_v1_recursion::sign_kagemusha_mint_finality_seal_v1(&signer, &message)
+            .map_err(|error| error.to_string())?;
     let auxiliary = super::v2::encode_kagemusha_commit_vote_seal_share_v1(message, seal);
     wire::encode_kagemusha_consensus_signature_envelope_v1(
         wire::KAGEMUSHA_COMMIT_VOTE_SIGNATURE_ENVELOPE_KIND_V1,

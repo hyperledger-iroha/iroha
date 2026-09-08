@@ -187,23 +187,64 @@ impl sorafs_node::ModerationQuarantineKeyWrapper for PrebuiltQuarantineKeyWrappe
         Ok(PREBUILT_QUARANTINE_PROVIDER_QUALIFICATION)
     }
     fn active_key_id(&self) -> &str {
-        "kms:test/torii-prebuilt-quarantine"
+        "software://moderation/quarantine/key-v1"
     }
     fn wrap_dek(
         &self,
-        _context_digest: [u8; 32],
-        _dek: &[u8; 32],
+        context_digest: [u8; 32],
+        dek: &[u8; 32],
     ) -> Result<Vec<u8>, sorafs_node::ModerationQuarantineKeyOperationErrorV1> {
-        Err(sorafs_node::ModerationQuarantineKeyOperationErrorV1::Rejected)
+        use iroha_crypto::encryption::{ChaCha20Poly1305, SymmetricEncryptor};
+        // Deterministic fixture key and nonce; this wrapper exists only in tests.
+        SymmetricEncryptor::<ChaCha20Poly1305>::new_with_key([0xA6; 32])
+            .expect("test wrapping key has the required size")
+            .encrypt(&context_digest[..12], &context_digest, dek)
+            .map_err(|_| sorafs_node::ModerationQuarantineKeyOperationErrorV1::Rejected)
     }
     fn unwrap_dek(
         &self,
-        _key_id: &str,
-        _context_digest: [u8; 32],
-        _wrapped_dek: &[u8],
+        key_id: &str,
+        context_digest: [u8; 32],
+        wrapped_dek: &[u8],
     ) -> Result<[u8; 32], sorafs_node::ModerationQuarantineKeyOperationErrorV1> {
-        Err(sorafs_node::ModerationQuarantineKeyOperationErrorV1::Rejected)
+        use iroha_crypto::encryption::{ChaCha20Poly1305, SymmetricEncryptor};
+        if key_id != self.active_key_id() {
+            return Err(sorafs_node::ModerationQuarantineKeyOperationErrorV1::StaleOrRevoked);
+        }
+        SymmetricEncryptor::<ChaCha20Poly1305>::new_with_key([0xA6; 32])
+            .expect("test wrapping key has the required size")
+            .decrypt(&context_digest[..12], &context_digest, wrapped_dek)
+            .map_err(|_| sorafs_node::ModerationQuarantineKeyOperationErrorV1::Rejected)?
+            .try_into()
+            .map_err(|_| sorafs_node::ModerationQuarantineKeyOperationErrorV1::Rejected)
     }
+}
+#[test]
+fn prebuilt_quarantine_key_wrapper_binds_key_context_and_ciphertext() {
+    use sorafs_node::ModerationQuarantineKeyWrapper as _;
+    let wrapper = PrebuiltQuarantineKeyWrapper;
+    let context = [0x51; 32];
+    let dek = [0x63; 32];
+    let wrapped = wrapper.wrap_dek(context, &dek).expect("wrap fixture DEK");
+    assert_eq!(
+        wrapper
+            .unwrap_dek(wrapper.active_key_id(), context, &wrapped)
+            .expect("unwrap fixture DEK"),
+        dek,
+    );
+    assert!(wrapper.unwrap_dek("wrong-key", context, &wrapped).is_err());
+    assert!(
+        wrapper
+            .unwrap_dek(wrapper.active_key_id(), [0x52; 32], &wrapped)
+            .is_err()
+    );
+    let mut tampered = wrapped;
+    tampered[0] ^= 1;
+    assert!(
+        wrapper
+            .unwrap_dek(wrapper.active_key_id(), context, &tampered)
+            .is_err()
+    );
 }
 fn prebuilt_quarantine_provider_config(
     qualification: sorafs_node::ModerationQuarantineKeyProviderQualificationV1,
@@ -1514,7 +1555,9 @@ use crate::{
 use iroha_core::smartcontracts::Execute;
 #[test]
 fn stark_fri_backend_label_is_singular_and_exact() {
-    assert!(is_stark_fri_v1_backend("stark/fri/poseidon-x7-goldilocks-6x64-v1"));
+    assert!(is_stark_fri_v1_backend(
+        "stark/fri/poseidon-x7-goldilocks-6x64-v1"
+    ));
     assert!(!is_stark_fri_v1_backend("stark/fri"));
     assert!(!is_stark_fri_v1_backend("stark/fri/poseidon2-goldilocks"));
     assert!(!is_stark_fri_v1_backend("stark/fri/sha256_goldilocks.v1"));
@@ -1693,15 +1736,14 @@ async fn iso_audit_messages_endpoint_exports_digest_bound_manifest() {
             .public_key()
             .clone(),
     );
-    let (status, JsonBody(body)) =
-        handler_iso_audit_messages(
-            State(app),
-            Extension(operator),
-            HeaderMap::new(),
-            local_connect_info(),
-        )
-            .await
-            .expect("audit endpoint");
+    let (status, JsonBody(body)) = handler_iso_audit_messages(
+        State(app),
+        Extension(operator),
+        HeaderMap::new(),
+        local_connect_info(),
+    )
+    .await
+    .expect("audit endpoint");
     assert_eq!(status, StatusCode::OK);
     let body = body.as_object().expect("audit manifest object");
     assert_eq!(
