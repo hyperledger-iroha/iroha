@@ -367,12 +367,22 @@ workloads have disjoint write sets and no read‑after‑write conflicts.
 - Built‑ins implement `fn access_set(&self) -> StateAccessSet` (exact or
   conservative) using known semantics (e.g., asset transfer touches two
   balances; domain/account registration touches unique IDs).
+- Core asset-definition registration reads the signed `owning_domain` and
+  any alias routing domain independently. Opaque asset IDs do not supply
+  domain ownership. Mint, burn, and asset-transfer instructions retain a
+  global fence for their dynamic policy and routing accesses; trigger access
+  sets retain that fence when they contain these instructions.
 - IVM nodes derive access sets using:
   - Declared hints (preferred): Kotodama compiler and IVM metadata include
     read/write keys when available (e.g., IDs passed as immediate/parameters).
   - Dry‑run logging (fallback): a deterministic simulation in read‑only mode
     that logs all touched keys without mutating state. This executes with a
     bounded step limit to prevent DoS; outcomes are discarded after logging.
+  - Execution context: dynamic prepasses and overlays use the candidate
+    `StateBlock` timestamp, or an authenticated committed ledger timestamp.
+    A fresh pre-genesis `StateView` supplies no authenticated time, so it is
+    not an executable fixture. Contract fixtures must also materialize the
+    canonical subject account and explicit lifecycle binding.
 
 Kotodama integration
 - Kotodama emits `.to` IVM bytecode and metadata describing static resource

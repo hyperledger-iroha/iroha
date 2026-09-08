@@ -1046,14 +1046,9 @@ pub fn decode_certified_merge_sidecar(
             actual: bytes.len(),
         });
     }
+    // The model decoder enforces the sole supported first-release entry version.
     let entry = norito::decode_from_bytes::<MergeLedgerEntry>(bytes)
         .map_err(|error| MergeSidecarError::Decode(error.to_string()))?;
-    if !entry.has_current_version() {
-        return Err(MergeSidecarError::Decode(format!(
-            "unsupported merge ledger entry version {}",
-            entry.version
-        )));
-    }
     if entry.canonical_bytes() != bytes {
         return Err(MergeSidecarError::NonCanonicalEncoding);
     }
@@ -17430,8 +17425,19 @@ mod tests {
                 closed_through: 1,
                 acknowledged_through: 0,
             });
-        let mut fresh = MergeSidecarTransport::with_limits(reply_source_capacity, limits)
-            .expect("construct fresh restore target");
+        let mut fresh = MergeSidecarTransport::with_limits_and_server_stream_capacity(
+            reply_source_capacity,
+            limits,
+            restarted.server_stream_capacity,
+            restarted.server_roster_digest.clone(),
+        )
+        .expect("construct restore target with the exact certified roster geometry");
+        fresh
+            .restore_lifecycle_snapshot(snapshot.clone(), now)
+            .expect("the valid snapshot restores under the exact certified roster geometry");
+        let before_oversized_restore = fresh
+            .lifecycle_snapshot()
+            .expect("snapshot restored lifecycle before capacity rejection");
         assert!(matches!(
             fresh.restore_lifecycle_snapshot(
                 MergeSidecarLifecycleSnapshotV3::new(oversized_requesters),
@@ -17461,6 +17467,13 @@ mod tests {
             Err(MergeSidecarError::LifecycleJournal(ref error))
                 if error.contains("exceeds configured source geometry")
         ));
+        assert_eq!(
+            fresh
+                .lifecycle_snapshot()
+                .expect("snapshot after rejected oversized lifecycle journals"),
+            before_oversized_restore,
+            "oversized requester and responder tables must not mutate restored lifecycle state"
+        );
     }
     #[test]
     fn service_generation_rollover_journal_failure_is_fail_atomic() {
@@ -19370,14 +19383,33 @@ mod tests {
             validator_set_hash: merge_qc.validator_set_hash,
         };
         let mut entry = signing_candidate(&context, b"unsupported-version").into_entry(merge_qc);
-        entry.version = MergeLedgerEntry::VERSION + 1;
-        let bytes = entry.canonical_bytes();
         let reference = CertifiedMergeLedgerReference::new(&entry);
-        assert!(matches!(
-            decode_certified_merge_sidecar(&reference, &bytes),
-            Err(MergeSidecarError::Decode(ref message))
-                if message.contains("unsupported merge ledger entry version")
-        ));
+        assert_eq!(
+            decode_certified_merge_sidecar(&reference, &entry.canonical_bytes())
+                .expect("current entry version matches its canonical reference"),
+            entry
+        );
+        for version in [
+            0,
+            MergeLedgerEntry::VERSION - 1,
+            MergeLedgerEntry::VERSION + 1,
+        ] {
+            entry.version = version;
+            let bytes = entry.canonical_bytes();
+            let error = decode_certified_merge_sidecar(&reference, &bytes)
+                .expect_err("unsupported versions must fail before reference matching");
+            assert!(
+                matches!(
+                    &error,
+                    MergeSidecarError::Decode(message)
+                        if message == &format!(
+                            "unsupported merge-ledger entry version {version}; expected {}",
+                            MergeLedgerEntry::VERSION
+                        )
+                ),
+                "version {version} must be rejected by the model decoder: {error:?}"
+            );
+        }
     }
     include!("merge_sidecar_signing_guard_tests.rs");
 }
