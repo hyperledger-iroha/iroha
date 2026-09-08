@@ -157,6 +157,15 @@ It holds the native coordinator lock, keeps the original nonce and prestart
 record, and archives incomplete observations before repeating postconditions.
 It performs no retirement, assembly, authorization or apply.
 
+Seed verification uses `taira_seed_observation.py` to read the public committed
+height and request a fresh challenge-bound finality attestation. The attestation
+supplies the applied status; the check needs no operator credentials. It retains
+process, executable, listener and configuration identity checks. Only native
+`sha256sum` consumes the held configuration descriptor; Python never reads the
+private TOML. Transient startup responses have three attempts within a shared
+30-second deadline, while invalid identities and successful malformed responses
+fail immediately.
+
 Because the deployment's files already exist, the completed route admits only
 64 MiB for remaining evidence plus guest/backing reserves, instead of charging
 another full rollout. A conflicting or missing native terminal cannot receive
@@ -186,4 +195,5 @@ Run the focused offline tests without Cargo or SSH:
 
 ```sh
 python3 -B -m unittest discover -s scripts/tests -p 'taira_retry_test.py'
+python3 -B -m unittest discover -s scripts/tests -p 'taira_seed_observation_test.py'
 ```

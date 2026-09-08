@@ -2302,6 +2302,21 @@ def _continuity_reconcile(args):
     node_class = _continuity_load_public_module(
         Path(args.local_node_module), args.local_node_sha256
     )["LocalNode"]
+    _continuity_need(
+        isinstance(getattr(args, "seed_observation_source", None), str)
+        and len(args.seed_observation_source) <= 350 * 1024
+        and isinstance(getattr(args, "seed_observation_sha256", None), str)
+        and re.fullmatch("[0-9a-f]{64}", args.seed_observation_sha256),
+        "Explicit maintained seed observation helper required",
+    )
+    observation_raw = base64.b64decode(args.seed_observation_source, validate=True)
+    _continuity_need(
+        len(observation_raw) <= 256 * 1024
+        and hashlib.sha256(observation_raw).hexdigest() == args.seed_observation_sha256,
+        "Exact maintained seed observation helper required",
+    )
+    observation = {"__name__": "reviewed_seed_observation"}
+    exec(compile(observation_raw, "<maintained-seed-observation>", "exec"), observation)
     receipt_rows = []
     observations = []
     genesis_block_hash = None
@@ -2325,65 +2340,15 @@ def _continuity_reconcile(args):
             len(fields) >= 20 and int(fields[19]) >= before["earliest_start_ticks"],
             "Running daemon predates continuity capture",
         )
-        node = node_class(row["binding"])
-        node.assert_identity()
-        status = node.get_json("/v1/sumeragi/status")
-        _continuity_need(
-            status["protocol_version"] == 4
-            and status["restart_required"] is False
-            and (status["last_committed_height"] >= 1)
-            and all(
-                (
-                    _continuity_checked_hash_body(status[name]) == row[name]
-                    for name in (
-                        "node_fingerprint",
-                        "build_fingerprint",
-                        "config_fingerprint",
-                    )
-                )
-            ),
-            "Native applied status differs from authenticated assembled identity",
+        node, status, attestation = observation["observe_attested_status"](
+            node_class, row["binding"], row, before["network_id"], args.genesis_hash
         )
-        challenge = secrets.token_bytes(32)
-        attestation = node.get_json(
-            "/v1/bridge/finality/attestation/" + str(status["last_committed_height"]),
-            {"x-iroha-finality-challenge": challenge.hex()},
-        )
-        body = attestation["body"]
-        _continuity_need(
-            body["version"] == 1
-            and body["challenge"] == list(challenge)
-            and (body["network_id"] == before["network_id"])
-            and (body["node_id"] == row["peer_id"]),
-            "Native challenge attestation is not bound to this deployed process/network",
-        )
-        native_hash = body["genesis_block_hash"]
-        _continuity_need(
-            native_hash == before["network_id"]
-            and _continuity_checked_hash_body(native_hash) == args.genesis_hash,
-            "Native authenticated genesis block hash differs",
-        )
+        native_hash = attestation["body"]["genesis_block_hash"]
         if genesis_block_hash is None:
             genesis_block_hash = native_hash
         _continuity_need(
             genesis_block_hash == native_hash,
             "Validators disagree on native genesis identity",
-        )
-        _continuity_need(
-            body["status"]["last_committed_height"] == status["last_committed_height"]
-            and all(
-                (
-                    _continuity_checked_hash_body(body["status"][name]) == row[name]
-                    for name in (
-                        "node_fingerprint",
-                        "build_fingerprint",
-                        "config_fingerprint",
-                    )
-                )
-            )
-            and isinstance(body["genesis_finality_proof"], dict)
-            and isinstance(body["finality_proof"], dict),
-            "Native challenge response lacks the same applied identity and genesis/tip finality evidence",
         )
         node.assert_identity()
         _continuity_need(
@@ -3952,6 +3917,8 @@ def guest_locked(request, capacity, root):
             prestart_sha256=None,
             local_node_module=plan["local_node"]["path"],
             local_node_sha256=plan["local_node"]["sha256"],
+            seed_observation_source=request.get("seed_observation_source"),
+            seed_observation_sha256=request.get("seed_observation_sha256"),
         )
         call_phase(phase, lambda: _continuity_capture(seed_args), attempt)
         seed_args.prestart_sha256 = hashlib.sha256(
@@ -4289,6 +4256,8 @@ def resume_postconditions(request, attempt, terminal_path):
             ).hexdigest(),
             local_node_module=plan["local_node"]["path"],
             local_node_sha256=plan["local_node"]["sha256"],
+            seed_observation_source=request.get("seed_observation_source"),
+            seed_observation_sha256=request.get("seed_observation_sha256"),
         )
         preserve_postcondition_outputs(attempt)
         completed = list(PHASES[: PHASES.index("seed-post")])
@@ -4510,7 +4479,12 @@ def main():
     capacity_source = public_record(
         Path(__file__).resolve().with_name("taira_disk_capacity.py"), limit=1024 * 1024
     )
+    seed_observation_source = public_record(
+        Path(__file__).resolve().with_name("taira_seed_observation.py"), limit=256 * 1024
+    )
     request = {
+        "seed_observation_source": base64.b64encode(seed_observation_source).decode(),
+        "seed_observation_sha256": hashlib.sha256(seed_observation_source).hexdigest(),
         "plan": plan["guest"],
         "commit": commit,
         "build": records["preparation"],
