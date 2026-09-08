@@ -52,7 +52,10 @@ async fn torii_start_blocks_until_shutdown_signal() {
         cfg.common.key_pair.clone(),
         OnlinePeersProvider::new(peers_rx),
         None,
-        MaybeTelemetry::disabled(),
+        iroha_torii::ToriiRuntimeDeps::new(
+            build_identity_test_fixture::build_identity(),
+            MaybeTelemetry::disabled(),
+        ),
     )
     .expect("valid Torii startup fixture");
     let shutdown = ShutdownSignal::new();
@@ -73,3 +76,6 @@ async fn torii_start_blocks_until_shutdown_signal() {
         panic!("Torii::start should terminate successfully: {err:?}");
     }
 }
+
+#[path = "../src/build_identity_test_fixture.rs"]
+mod build_identity_test_fixture;

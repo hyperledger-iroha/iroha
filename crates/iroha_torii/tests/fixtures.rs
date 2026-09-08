@@ -162,7 +162,10 @@ impl ToriiHarness {
             cfg.common.key_pair.clone(),
             OnlinePeersProvider::new(peers_rx),
             None,
-            telemetry,
+            iroha_torii::ToriiRuntimeDeps::new(
+                build_identity_test_fixture::build_identity(),
+                telemetry,
+            ),
         )
         .expect("valid Torii integration-test fixture")
         .with_local_peer_id(local_peer_id.clone());
@@ -441,3 +444,6 @@ pub fn app_signed_request(
     );
     request
 }
+
+#[path = "../src/build_identity_test_fixture.rs"]
+mod build_identity_test_fixture;

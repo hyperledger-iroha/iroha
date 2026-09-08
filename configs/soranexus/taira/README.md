@@ -144,6 +144,21 @@ root-owned, single-link executables at these exact paths:
 - `/usr/bin/nsenter`
 - `/usr/bin/socat`
 
+QEMU must implement `-run-with exit-with-parent=on`; the stock Debian 13
+QEMU 10 package lacks this required lifecycle capability. With the official
+`trixie-backports` APT source enabled, install the supported QEMU packages
+before packaging the closure:
+
+```bash
+sudo apt-get update
+sudo apt-get install -t trixie-backports qemu-system-arm qemu-utils
+```
+
+The packager probes the exact executable with `-run-with help` and requires
+`exit-with-parent=<bool (on/off)>` before publishing the immutable closure.
+An older package must be upgraded; keep the lifecycle option enabled. Run this
+host dependency preparation before starting a release build or rollout.
+
 QEMU, `setpriv`, `ldd`, `bwrap`, and `nsenter` must be direct files. The `socat`
 entry may resolve through package-managed symlinks. The QEMU and `setpriv` ELF
 interpreters and dynamic-library closure may use merged `/usr` and alternatives

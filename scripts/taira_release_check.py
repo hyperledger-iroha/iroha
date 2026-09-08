@@ -103,6 +103,36 @@ STAGES = (
     ("read-only host preflight", (
         "taira_public_reset::host::tests::preflight_dispatches_five_read_only_hosts_without_runtime_custody",
     )),
+    ("candidate qualification before edge cutover", (
+        "taira_public_reset::executor_model::tests::candidate_qualification_completes_before_public_cutover",
+        "taira_public_reset::executor_model::tests::candidate_failure_never_exposes_the_public_edge",
+        "taira_public_reset::executor_model::tests::candidate_probe_origins_reject_cross_host_or_substituted_sockets",
+        "taira_public_reset::executor_model::tests::public_verification_failure_rolls_back_edge_before_validators",
+        "taira_public_reset::executor_model::tests::every_classifier_reachable_recovery_phase_reopens_with_exact_cursor",
+        "taira::tests::candidate_inrou_qualifies_runtime_before_public_discovery_exists",
+        "taira::tests::candidate_inrou_scope_rejects_remote_or_implicit_probe_destinations",
+        "taira::tests::inrou_check_separates_selected_status_origin_from_public_route_origin",
+        "taira_public_reset::host::tests::candidate_client_fd_preserves_signer_and_expires_with_child_custody",
+        "taira_public_reset::host::tests::candidate_probe_host_key_rejects_another_host_before_mutation",
+        "taira_public_reset::host::tests::prepared_candidate_write_cannot_be_reinterpreted_as_public_evidence",
+        "taira_public_reset::host::tests::inrou_restart_evidence_binds_ordered_host_and_exact_guest_transition",
+        "taira_public_reset::host::tests::prepared_inrou_report_rejects_every_missing_or_extra_v1_field",
+        "taira_public_reset::host::tests::journaled_restart_waits_for_four_http_backends_before_onboarding",
+        "taira_public_reset::host::tests::journaled_restart_readiness_preserves_its_pre_restart_deadline",
+        "taira_public_reset::host::tests::journaled_restart_readiness_stops_on_expired_authorization_or_ambiguous_restart",
+    )),
+    ("stopped owner runtime cleanup", (
+        "taira_public_reset::host::stopped_runtime::tests::stopped_owner_cleanup_releases_only_empty_own_workers_and_replays",
+        "taira_public_reset::host::stopped_runtime::tests::stopped_owner_cleanup_rejects_live_nested_forged_and_replaced_workers",
+        "taira_public_reset::host::stopped_runtime::tests::stopped_owner_cleanup_keeps_barriers_when_process_absence_is_unproven",
+        "taira_public_reset::host::stopped_runtime::tests::stopped_owner_cleanup_lock_rejects_replaced_or_shared_custody",
+        "taira_public_reset::host::stopped_runtime::tests::stopped_owner_cleanup_authority_requires_exact_config_slot",
+        "taira_public_reset::host::stopped_runtime::tests::stopped_firewall_accepts_only_exact_crash_cuts",
+        "taira_public_reset::host::stopped_runtime::tests::stopped_firewall_rejects_foreign_references_and_rule_drift",
+        "taira_public_reset::host::stopped_runtime::tests::stopped_firewall_cleanup_is_exact_and_idempotent",
+        "taira_public_reset::host::stopped_runtime::tests::stopped_firewall_stops_after_command_failure_or_snapshot_drift",
+        "taira_public_reset::host::stopped_runtime::tests::stopped_firewall_read_only_never_mutates",
+    )),
 )
 
 if sys.platform == "linux":

@@ -151,9 +151,10 @@ fn derive_inventory(inventory: &mut InventoryV1, inputs: &LocalInputs) -> Result
     inventory.revision.profile = BUILD_PROFILE.to_owned();
     validate_revision(&inventory.revision)?;
     validate_source_closure(&inventory.revision)?;
-    if iroha_core::release_identity::source_commit() != Some(inventory.revision.commit.as_str()) {
+    let build_identity = crate::compiled_build_identity()?;
+    if build_identity.release_source_commit()? != inventory.revision.commit {
         return Err(eyre!(
-            "compiled Core source differs from the release revision"
+            "compiled executable source differs from the release revision"
         ));
     }
     for artifact in inventory
@@ -187,7 +188,7 @@ fn derive_inventory(inventory: &mut InventoryV1, inputs: &LocalInputs) -> Result
         validator.systemd_unit_sha256 = unit_hash(path)?;
     }
     inventory.edge.systemd_unit_sha256 = unit_hash(&inputs.edge_unit)?;
-    derive_validator_identities(inventory)?;
+    derive_validator_identities(inventory, build_identity)?;
     derive_runtime_stage(inventory, inputs)?;
     inventory.artifact_closure_sha256 = artifact_closure_sha256(inventory);
     validate_inventory(inventory)?;
@@ -213,7 +214,10 @@ fn unit_hash(path: &Path) -> Result<String> {
 }
 
 #[cfg(unix)]
-fn derive_validator_identities(inventory: &mut InventoryV1) -> Result<()> {
+fn derive_validator_identities(
+    inventory: &mut InventoryV1,
+    build_identity: iroha_core::release_identity::BuildIdentity,
+) -> Result<()> {
     use iroha_config::{
         base::toml::{MAX_TOML_SOURCE_BYTES, TomlSource},
         parameters::actual,
@@ -255,6 +259,11 @@ fn derive_validator_identities(inventory: &mut InventoryV1) -> Result<()> {
         ))
         .map_err(|_| eyre!("validator config failed current typed admission"))?;
         revalidate_pinned(&input, "validator config")?;
+        host::stopped_runtime::validate_config_slot(
+            &validator.slug,
+            &config.soracloud_runtime.inrou,
+        )?;
+        validate_candidate_probe_bind(&client.probe_origin, config.torii.address.value())?;
         if config.common.chain.to_string() != inventory.chain_id
             || config.common.peer.id.to_string() != client.peer_id
         {
@@ -285,7 +294,7 @@ fn derive_validator_identities(inventory: &mut InventoryV1) -> Result<()> {
             .validate_ingress_roster_capacity(4)
             .map_err(|_| eyre!("validator cannot admit the four-member roster"))?;
         validator.node_fingerprint = Hash::new(config.common.peer.id.encode()).to_string();
-        validator.build_fingerprint = iroha_core::release_identity::build_fingerprint().to_string();
+        validator.build_fingerprint = build_identity.build_fingerprint().to_string();
         validator.config_fingerprint = shared.fingerprint().to_string();
     }
     revalidate_pinned(&genesis, "signed genesis")?;
@@ -293,7 +302,10 @@ fn derive_validator_identities(inventory: &mut InventoryV1) -> Result<()> {
 }
 
 #[cfg(not(unix))]
-fn derive_validator_identities(_: &mut InventoryV1) -> Result<()> {
+fn derive_validator_identities(
+    _: &mut InventoryV1,
+    _: iroha_core::release_identity::BuildIdentity,
+) -> Result<()> {
     Err(eyre!("public reset input assembly requires Unix"))
 }
 

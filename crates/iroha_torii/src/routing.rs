@@ -72995,6 +72995,7 @@ pub fn handle_status_peers(telemetry: &MaybeTelemetry, online_peer_count: u64) -
 #[cfg(feature = "telemetry")]
 /// Render the complete status document with content negotiation.
 pub async fn handle_status(
+    build: &iroha_torii_shared::status::BuildStatus,
     telemetry: &MaybeTelemetry,
     accept: Option<axum::http::HeaderValue>,
     nexus_routing_policy: ActualLaneRoutingPolicy,
@@ -73020,7 +73021,7 @@ pub async fn handle_status(
                     "status metrics could not reach a fresh classified frontier: {error}"
                 ),
             })?;
-    let mut status = metrics.status_snapshot();
+    let mut status = metrics.status_snapshot(build);
     ensure_status_metrics_match_authoritative_height(&status, authoritative_block_height)?;
     status.nexus = Some(iroha_torii_shared::status::NexusStatus::from(
         &nexus_routing_policy,

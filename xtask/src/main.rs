@@ -13817,7 +13817,18 @@ async fn generate_router_openapi_async() -> Result<Option<Vec<u8>>, Box<dyn Erro
         cfg.common.key_pair.clone(),
         OnlinePeersProvider::new(peers_rx),
         None,
-        MaybeTelemetry::disabled(),
+        iroha_torii::ToriiRuntimeDeps::new(
+            // This in-process schema fixture never owns a deployed node or release identity.
+            iroha_core::release_identity::BuildIdentity::from_compiled_parts(
+                env!("CARGO_PKG_VERSION"),
+                Some("local-fast-build"),
+                None,
+                None,
+                None,
+                None,
+            )?,
+            MaybeTelemetry::disabled(),
+        ),
     )?;
     let router_runtime = torii
         .api_router_for_tests()

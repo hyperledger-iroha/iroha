@@ -731,6 +731,8 @@ struct ValidatorV1 {
 struct ValidatorClientV1 {
     slug: String,
     torii_origin: String,
+    /// Direct local candidate Torii origin, bound to the admitted validator socket.
+    probe_origin: String,
     account_id: String,
     peer_id: String,
 }
@@ -1416,9 +1418,16 @@ fn validate_inventory(inventory: &InventoryV1) -> Result<()> {
     }
     let mut client_accounts = BTreeSet::new();
     let mut client_peers = BTreeSet::new();
+    let mut probe_origins = BTreeSet::new();
     let mut client_placement_targets = BTreeSet::new();
     for (client, expected_slug) in inventory.validator_clients.iter().zip(VALIDATOR_SLUGS) {
         let expected_origin = format!("https://{expected_slug}.sora.org/");
+        validate_candidate_probe_origin(&client.probe_origin)?;
+        if !probe_origins.insert(&client.probe_origin) {
+            return Err(eyre!(
+                "candidate Torii origins must bind four distinct sockets"
+            ));
+        }
         if client.slug != expected_slug
             || client.torii_origin != expected_origin
             || client.account_id.is_empty()
@@ -1555,7 +1564,7 @@ fn validate_revision(revision: &RevisionV1) -> Result<()> {
         Path::new(&revision.source_manifest_path),
         "source manifest path",
     )?;
-    let compiled_sha = crate::VERGEN_GIT_SHA;
+    let compiled_sha = crate::compiled_build_identity()?.release_source_commit()?;
     validate_lower_hex("compiled CLI Git SHA", compiled_sha, 40)
         .wrap_err("compiled CLI has unknown or dirty source provenance")?;
     if revision.target != BUILD_TARGET
@@ -1647,7 +1656,7 @@ fn validate_git_provenance(root: &Path, revision: &RevisionV1) -> Result<()> {
     let [branch, head, tree] = source::clean_git_identity(root)?;
     if branch != revision.branch
         || head != revision.commit
-        || head != crate::VERGEN_GIT_SHA
+        || head != crate::compiled_build_identity()?.release_source_commit()?
         || tree != revision.tree
     {
         return Err(eyre!(
@@ -1926,6 +1935,37 @@ fn validate_platform(platform: &PlatformV1, require_kvm: bool) -> Result<()> {
     {
         return Err(eyre!(
             "validators require KVM API 12 and the edge must declare KVM API 0"
+        ));
+    }
+    Ok(())
+}
+
+/// Candidate probes stay on the authenticated deployment host and bypass public DNS/edge.
+fn validate_candidate_probe_origin(origin: &str) -> Result<std::net::SocketAddr> {
+    let url = url::Url::parse(origin).wrap_err("candidate Torii origin is invalid")?;
+    let port = url
+        .port()
+        .filter(|port| *port != 0)
+        .ok_or_else(|| eyre!("candidate Torii origin requires an explicit nonzero port"))?;
+    if origin != format!("http://127.0.0.1:{port}/") {
+        return Err(eyre!(
+            "candidate Torii origin must be one exact loopback HTTP origin"
+        ));
+    }
+    Ok(std::net::SocketAddr::from(([127, 0, 0, 1], port)))
+}
+
+fn validate_candidate_probe_bind(
+    origin: &str,
+    bind: &iroha_primitives::addr::SocketAddr,
+) -> Result<()> {
+    let probe = validate_candidate_probe_origin(origin)?;
+    let bind_ip = bind.ip().map(std::net::IpAddr::from);
+    if bind.port() != probe.port()
+        || !(bind_ip == Some(probe.ip()) || bind_ip == Some(std::net::Ipv4Addr::UNSPECIFIED.into()))
+    {
+        return Err(eyre!(
+            "candidate Torii origin differs from its signed validator bind address"
         ));
     }
     Ok(())
@@ -3554,6 +3594,18 @@ mod executor_model {
             .take(actual.touched_validators.len())
             .copied()
             .collect::<Vec<_>>();
+        let edge_stage_index = EXECUTION_STEPS
+            .iter()
+            .position(|step| *step == ExecutionStep::EdgeStage)
+            .expect("the canonical plan contains edge staging");
+        if matches!(actual.status.as_str(), "in_progress" | "recovery_pending")
+            && ((usize::from(actual.next_step) < edge_stage_index && actual.edge_touched)
+                || (usize::from(actual.next_step) > edge_stage_index && !actual.edge_touched))
+        {
+            return Err(eyre!(
+                "journal edge custody differs from the candidate qualification frontier"
+            ));
+        }
         let valid_recovery = if actual.status == "recovery_pending" {
             EXECUTION_STEPS
                 .get(usize::from(actual.next_step))
@@ -4301,11 +4353,11 @@ mod executor_model {
         ExecutionStep::Reset,
         ExecutionStep::Preseed,
         ExecutionStep::Start,
-        ExecutionStep::EdgeStage,
-        ExecutionStep::EdgeCutover,
         ExecutionStep::Convergence,
         ExecutionStep::Canary,
         ExecutionStep::RestartProof,
+        ExecutionStep::EdgeStage,
+        ExecutionStep::EdgeCutover,
         ExecutionStep::EdgeVerify,
         ExecutionStep::Seal,
         ExecutionStep::Cleanup,
@@ -6323,7 +6375,7 @@ mod executor_model {
                     .iter()
                     .map(|slug| (*slug).to_owned())
                     .collect();
-                state.edge_touched = true;
+                state.edge_touched = step == ExecutionStep::EdgeVerify;
                 journal.replace(state).expect("persist prepared recovery");
                 let mut progress = JournalRecoveryProgress {
                     journal: &mut journal,
@@ -6422,7 +6474,7 @@ mod executor_model {
                 .iter()
                 .map(|slug| (*slug).to_owned())
                 .collect();
-            pending.edge_touched = true;
+            pending.edge_touched = false;
             journal
                 .replace(pending)
                 .expect("persist applied recovery boundary");
@@ -6435,6 +6487,10 @@ mod executor_model {
             assert_eq!(journal.state().status, "in_progress");
             assert_eq!(usize::from(journal.state().next_step), step_index + 1);
             assert_eq!(journal.state().phase, ExecutionStep::RestartProof.label());
+            assert!(
+                !journal.state().edge_touched,
+                "candidate replay cannot establish public edge custody"
+            );
             drop(journal);
 
             let resumed = match DurableJournal::classify(&canonical, &admitted)
@@ -7438,27 +7494,7 @@ mod executor_model {
         }
 
         #[test]
-        fn canonical_plan_establishes_edge_before_public_checks_and_restarts() {
-            assert_eq!(
-                EXECUTION_STEPS,
-                [
-                    ExecutionStep::Preflight,
-                    ExecutionStep::Stage,
-                    ExecutionStep::Stop,
-                    ExecutionStep::Install,
-                    ExecutionStep::Reset,
-                    ExecutionStep::Preseed,
-                    ExecutionStep::Start,
-                    ExecutionStep::EdgeStage,
-                    ExecutionStep::EdgeCutover,
-                    ExecutionStep::Convergence,
-                    ExecutionStep::Canary,
-                    ExecutionStep::RestartProof,
-                    ExecutionStep::EdgeVerify,
-                    ExecutionStep::Seal,
-                    ExecutionStep::Cleanup,
-                ]
-            );
+        fn candidate_qualification_completes_before_public_cutover() {
             let (inventory, mut journal) = journal(vacant_execution_fixture());
             let mut transport = MockTransport::default();
             execute_plan(&inventory, &mut transport, &mut journal).expect("vacant model completes");
@@ -7469,38 +7505,59 @@ mod executor_model {
                     .position(|value| value == event)
                     .expect(event)
             };
-            assert!(at("start:taira-validator-4") < at("edge_stage"));
-            assert!(at("edge_stage") < at("edge_cutover"));
-            assert!(at("edge_cutover") < at("convergence"));
+            assert!(at("start:taira-validator-4") < at("convergence"));
             assert!(at("convergence") < at("canary"));
             assert!(at("canary") < at("restart_proof"));
-            assert!(at("restart_proof") < at("edge_verify"));
+            assert!(at("restart_proof") < at("edge_stage"));
+            assert!(at("edge_stage") < at("edge_cutover"));
+            assert!(at("edge_cutover") < at("edge_verify"));
             assert!(journal.finished);
         }
 
         #[test]
-        fn failed_first_public_check_rolls_back_initial_edge_before_validators() {
+        fn candidate_failure_never_exposes_the_public_edge() {
+            for phase in ["convergence", "canary", "restart_proof"] {
+                let (inventory, mut journal) = journal(vacant_execution_fixture());
+                let mut transport = MockTransport {
+                    fail: Some(phase.to_owned()),
+                    ..MockTransport::default()
+                };
+                execute_plan(&inventory, &mut transport, &mut journal)
+                    .expect_err("candidate fails");
+                assert!(!journal.state.edge_touched, "{phase}");
+                assert!(
+                    !transport
+                        .events
+                        .iter()
+                        .any(|event| event.starts_with("edge_") || event == "rollback:edge"),
+                    "{phase}"
+                );
+                assert_eq!(journal.state.status, "rolled_back", "{phase}");
+            }
+        }
+
+        #[test]
+        fn public_verification_failure_rolls_back_edge_before_validators() {
             let (inventory, mut journal) = journal(vacant_execution_fixture());
             let mut transport = MockTransport {
-                fail: Some("convergence".to_owned()),
+                fail: Some("edge_verify".to_owned()),
                 ..MockTransport::default()
             };
-            let _ = execute_plan(&inventory, &mut transport, &mut journal)
-                .expect_err("failed first public check");
-            let rollback = transport
-                .events
-                .iter()
-                .filter(|event| event.starts_with("rollback:"))
-                .map(String::as_str)
-                .collect::<Vec<_>>();
+            execute_plan(&inventory, &mut transport, &mut journal)
+                .expect_err("public verification fails");
             assert_eq!(
-                rollback,
+                transport
+                    .events
+                    .iter()
+                    .filter(|event| event.starts_with("rollback:"))
+                    .map(String::as_str)
+                    .collect::<Vec<_>>(),
                 [
                     "rollback:edge",
                     "rollback:taira-validator-4",
                     "rollback:taira-validator-3",
                     "rollback:taira-validator-2",
-                    "rollback:taira-validator-1",
+                    "rollback:taira-validator-1"
                 ]
             );
             assert!(journal.state.edge_touched);
@@ -7509,40 +7566,52 @@ mod executor_model {
         }
 
         #[test]
-        fn resumed_convergence_keeps_initial_edge_in_the_rollback_set() {
-            let (inventory, mut journal) = journal(vacant_execution_fixture());
-            journal.state.next_step = u16::try_from(
-                EXECUTION_STEPS
-                    .iter()
-                    .position(|step| *step == ExecutionStep::Convergence)
-                    .expect("convergence index"),
-            )
-            .expect("bounded step index");
-            journal.state.phase = ExecutionStep::Convergence.label().to_owned();
-            journal.state.touched_validators = VALIDATOR_SLUGS
-                .iter()
-                .map(|slug| (*slug).to_owned())
-                .collect();
-            journal.state.edge_touched = true;
-            let mut transport = MockTransport {
-                fail: Some("convergence".to_owned()),
-                ..MockTransport::default()
+        fn candidate_probe_origins_reject_cross_host_or_substituted_sockets() {
+            for origin in [
+                "https://127.0.0.1:8080/",
+                "http://localhost:8080/",
+                "http://192.0.2.1:8080/",
+                "http://127.0.0.1:8080/path",
+                "http://user@127.0.0.1:8080/",
+                "http://127.0.0.1:8080/?redirect=1",
+            ] {
+                assert!(validate_candidate_probe_origin(origin).is_err(), "{origin}");
+            }
+            let origin = "http://127.0.0.1:8080/";
+            validate_candidate_probe_bind(origin, &"127.0.0.1:8080".parse().unwrap())
+                .expect("exact loopback");
+            validate_candidate_probe_bind(origin, &"0.0.0.0:8080".parse().unwrap())
+                .expect("same wildcard socket");
+            assert!(
+                validate_candidate_probe_bind(origin, &"127.0.0.1:8081".parse().unwrap()).is_err()
+            );
+            assert!(
+                validate_candidate_probe_bind(origin, &"192.0.2.1:8080".parse().unwrap()).is_err()
+            );
+            let mut inventory = sample_inventory();
+            inventory.validator_clients[1].probe_origin =
+                inventory.validator_clients[0].probe_origin.clone();
+            assert!(validate_inventory(&inventory).is_err());
+        }
+
+        #[test]
+        fn revision_admission_requires_the_compiled_executable_identity() {
+            let identity = crate::compiled_build_identity().expect("compiled executable identity");
+            let mut revision = sample_inventory().revision;
+            assert_eq!(revision.commit, identity.release_source_commit().unwrap());
+            validate_revision(&revision).expect("the exact compiled revision is admissible");
+            revision.commit = if revision.commit == "ffffffffffffffffffffffffffffffffffffffff" {
+                "0000000000000000000000000000000000000000".to_owned()
+            } else {
+                "ffffffffffffffffffffffffffffffffffffffff".to_owned()
             };
-            let _ = execute_plan(&inventory, &mut transport, &mut journal)
-                .expect_err("resumed first public check");
-            assert_eq!(
-                transport.events.first().map(String::as_str),
-                Some("convergence")
+            revision.build_id.clone_from(&revision.commit);
+            assert!(
+                validate_revision(&revision)
+                    .expect_err("reject another valid source revision")
+                    .to_string()
+                    .contains("compiled CLI SHA")
             );
-            assert_eq!(
-                transport
-                    .events
-                    .iter()
-                    .find(|event| event.starts_with("rollback:"))
-                    .map(String::as_str),
-                Some("rollback:edge")
-            );
-            assert_eq!(journal.state.status, "rolled_back");
         }
 
         #[test]
@@ -7647,6 +7716,7 @@ mod executor_model {
                     ValidatorClientV1 {
                         slug: (*slug).to_owned(),
                         torii_origin: format!("https://taira-validator-{}.sora.org/", index + 1),
+                        probe_origin: format!("http://127.0.0.1:{}/", 8080 + index),
                         account_id: AccountId::new(account_key.public_key().clone()).to_string(),
                         peer_id: PeerId::from(peer_key.public_key().clone()).to_string(),
                     }
@@ -7932,4 +8002,12 @@ mod signed_genesis_startup_tests {
         let missing = format!("[genesis]\nfile = {:?}\n", path.to_str().unwrap());
         assert!(validate_validator_genesis_config(missing.as_bytes(), &path, &hash).is_err());
     }
+}
+
+#[cfg(test)]
+pub(crate) fn validate_inrou_checks_for_test(
+    report: &norito::json::Value,
+    scope: crate::taira::InrouProbeScope,
+) -> Result<()> {
+    host::validate_inrou_checks_for_test(report, scope)
 }

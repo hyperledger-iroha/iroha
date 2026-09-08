@@ -836,7 +836,11 @@ fn prebuilt_sorafs_node_accepts_exact_privacy_provider_bindings() {
     .expect("start prebuilt SoraFS node with exact privacy bindings");
     preflight_sorafs_fenced_privacy_runtime(
         &config,
-        &ToriiRuntimeDeps::new(routing::MaybeTelemetry::disabled()).with_sorafs_node(node.clone()),
+        &ToriiRuntimeDeps::new(
+            crate::build_identity_test_fixture::build_identity(),
+            routing::MaybeTelemetry::disabled(),
+        )
+        .with_sorafs_node(node.clone()),
     )
     .expect("live-revalidate the prebuilt SoraFS fused privacy runtime");
     validate_prebuilt_sorafs_privacy_provider_bindings(
@@ -866,7 +870,11 @@ fn fused_privacy_preflight_rejects_substituted_signed_governance_root() {
     );
     let error = preflight_sorafs_fenced_privacy_runtime(
         &substituted_config,
-        &ToriiRuntimeDeps::new(routing::MaybeTelemetry::disabled()).with_sorafs_node(node),
+        &ToriiRuntimeDeps::new(
+            crate::build_identity_test_fixture::build_identity(),
+            routing::MaybeTelemetry::disabled(),
+        )
+        .with_sorafs_node(node),
     )
     .expect_err("prebuilt signed Governance root substitution must fail preflight");
     assert!(
@@ -883,11 +891,14 @@ fn fused_privacy_preflight_live_qualifies_exact_raw_pair() {
         .expect("canonical raw privacy preflight temp dir");
     let config = prebuilt_privacy_storage_config(root.join("storage"), 1, 1);
     let (publisher, head_reader) = prebuilt_fenced_transparency_runtime();
-    let runtime_deps = ToriiRuntimeDeps::new(routing::MaybeTelemetry::disabled())
-        .with_sorafs_fenced_transparency_publisher(publisher)
-        .with_sorafs_fenced_transparency_head_reader(head_reader)
-        .with_sorafs_governance_dag_signer(prebuilt_governance_dag_runtime_signer())
-        .with_sorafs_governance_dag_checkpoint_store(prebuilt_governance_dag_checkpoint_store());
+    let runtime_deps = ToriiRuntimeDeps::new(
+        crate::build_identity_test_fixture::build_identity(),
+        routing::MaybeTelemetry::disabled(),
+    )
+    .with_sorafs_fenced_transparency_publisher(publisher)
+    .with_sorafs_fenced_transparency_head_reader(head_reader)
+    .with_sorafs_governance_dag_signer(prebuilt_governance_dag_runtime_signer())
+    .with_sorafs_governance_dag_checkpoint_store(prebuilt_governance_dag_checkpoint_store());
     preflight_sorafs_fenced_privacy_runtime(&config, &runtime_deps)
         .expect("live-qualify the exact raw fused privacy pair");
 }
@@ -900,10 +911,13 @@ fn fused_privacy_preflight_requires_raw_governance_signer() {
         .expect("canonical signer preflight temp dir");
     let config = prebuilt_privacy_storage_config(root.join("storage"), 1, 1);
     let (publisher, head_reader) = prebuilt_fenced_transparency_runtime();
-    let runtime_deps = ToriiRuntimeDeps::new(routing::MaybeTelemetry::disabled())
-        .with_sorafs_fenced_transparency_publisher(publisher)
-        .with_sorafs_fenced_transparency_head_reader(head_reader)
-        .with_sorafs_governance_dag_checkpoint_store(prebuilt_governance_dag_checkpoint_store());
+    let runtime_deps = ToriiRuntimeDeps::new(
+        crate::build_identity_test_fixture::build_identity(),
+        routing::MaybeTelemetry::disabled(),
+    )
+    .with_sorafs_fenced_transparency_publisher(publisher)
+    .with_sorafs_fenced_transparency_head_reader(head_reader)
+    .with_sorafs_governance_dag_checkpoint_store(prebuilt_governance_dag_checkpoint_store());
     let error = preflight_sorafs_fenced_privacy_runtime(&config, &runtime_deps)
         .expect_err("standalone signed Governance publication must require its raw signer");
     assert!(
@@ -922,11 +936,14 @@ fn fused_privacy_preflight_rejects_substituted_raw_governance_signer() {
     let (publisher, head_reader) = prebuilt_fenced_transparency_runtime();
     let substituted_signer: Arc<dyn sorafs_node::GovernanceDagRuntimeSigner> =
         Arc::new(PrebuiltGovernanceDagSigner::from_seed(0x98));
-    let runtime_deps = ToriiRuntimeDeps::new(routing::MaybeTelemetry::disabled())
-        .with_sorafs_fenced_transparency_publisher(publisher)
-        .with_sorafs_fenced_transparency_head_reader(head_reader)
-        .with_sorafs_governance_dag_signer(substituted_signer)
-        .with_sorafs_governance_dag_checkpoint_store(prebuilt_governance_dag_checkpoint_store());
+    let runtime_deps = ToriiRuntimeDeps::new(
+        crate::build_identity_test_fixture::build_identity(),
+        routing::MaybeTelemetry::disabled(),
+    )
+    .with_sorafs_fenced_transparency_publisher(publisher)
+    .with_sorafs_fenced_transparency_head_reader(head_reader)
+    .with_sorafs_governance_dag_signer(substituted_signer)
+    .with_sorafs_governance_dag_checkpoint_store(prebuilt_governance_dag_checkpoint_store());
     let error = preflight_sorafs_fenced_privacy_runtime(&config, &runtime_deps)
         .expect_err("substituted raw Governance signer must fail preflight");
     assert!(
@@ -942,8 +959,11 @@ fn governance_checkpoint_preflight_rejects_missing_raw_store() {
         .canonicalize()
         .expect("canonical checkpoint preflight temp dir");
     let config = prebuilt_governance_storage_config(root.join("storage"));
-    let runtime_deps = ToriiRuntimeDeps::new(routing::MaybeTelemetry::disabled())
-        .with_sorafs_governance_dag_signer(prebuilt_governance_dag_runtime_signer());
+    let runtime_deps = ToriiRuntimeDeps::new(
+        crate::build_identity_test_fixture::build_identity(),
+        routing::MaybeTelemetry::disabled(),
+    )
+    .with_sorafs_governance_dag_signer(prebuilt_governance_dag_runtime_signer());
     let error = preflight_sorafs_fenced_privacy_runtime(&config, &runtime_deps)
         .expect_err("configured producer must require its raw sealed checkpoint store");
     assert!(
@@ -967,9 +987,12 @@ fn governance_checkpoint_preflight_rejects_substituted_raw_store() {
                 PREBUILT_GOVERNANCE_CHECKPOINT_STORE_POLICY_DIGEST,
             ),
         ));
-    let runtime_deps = ToriiRuntimeDeps::new(routing::MaybeTelemetry::disabled())
-        .with_sorafs_governance_dag_signer(prebuilt_governance_dag_runtime_signer())
-        .with_sorafs_governance_dag_checkpoint_store(substituted_store);
+    let runtime_deps = ToriiRuntimeDeps::new(
+        crate::build_identity_test_fixture::build_identity(),
+        routing::MaybeTelemetry::disabled(),
+    )
+    .with_sorafs_governance_dag_signer(prebuilt_governance_dag_runtime_signer())
+    .with_sorafs_governance_dag_checkpoint_store(substituted_store);
     let error = preflight_sorafs_fenced_privacy_runtime(&config, &runtime_deps)
         .expect_err("substituted raw checkpoint store must fail preflight");
     assert!(
@@ -993,9 +1016,12 @@ fn governance_checkpoint_preflight_rejects_ambiguous_prebuilt_and_raw_store() {
             .with_governance_dag_checkpoint_store(prebuilt_governance_dag_checkpoint_store()),
     )
     .expect("start prebuilt SoraFS node with exact checkpoint binding");
-    let runtime_deps = ToriiRuntimeDeps::new(routing::MaybeTelemetry::disabled())
-        .with_sorafs_node(node)
-        .with_sorafs_governance_dag_checkpoint_store(prebuilt_governance_dag_checkpoint_store());
+    let runtime_deps = ToriiRuntimeDeps::new(
+        crate::build_identity_test_fixture::build_identity(),
+        routing::MaybeTelemetry::disabled(),
+    )
+    .with_sorafs_node(node)
+    .with_sorafs_governance_dag_checkpoint_store(prebuilt_governance_dag_checkpoint_store());
     let error = preflight_sorafs_fenced_privacy_runtime(&config, &runtime_deps)
         .expect_err("prebuilt node and raw checkpoint store must be mutually exclusive");
     assert!(
@@ -1014,9 +1040,12 @@ fn standalone_node_retains_and_live_revalidates_raw_governance_checkpoint_store(
     let checkpoint_store = Arc::new(PrebuiltGovernanceDagCheckpointStore::exact());
     let runtime_checkpoint_store: Arc<dyn sorafs_node::GovernanceDagSealedCheckpointStore> =
         checkpoint_store.clone();
-    let runtime_deps = ToriiRuntimeDeps::new(routing::MaybeTelemetry::disabled())
-        .with_sorafs_governance_dag_signer(prebuilt_governance_dag_runtime_signer())
-        .with_sorafs_governance_dag_checkpoint_store(runtime_checkpoint_store);
+    let runtime_deps = ToriiRuntimeDeps::new(
+        crate::build_identity_test_fixture::build_identity(),
+        routing::MaybeTelemetry::disabled(),
+    )
+    .with_sorafs_governance_dag_signer(prebuilt_governance_dag_runtime_signer())
+    .with_sorafs_governance_dag_checkpoint_store(runtime_checkpoint_store);
     preflight_sorafs_fenced_privacy_runtime(&config, &runtime_deps)
         .expect("exact raw checkpoint store passes early preflight");
     let node_runtime_deps = sorafs_node::NodeRuntimeDeps::default()
@@ -1063,9 +1092,12 @@ fn fused_privacy_preflight_rejects_missing_raw_pair() {
         .canonicalize()
         .expect("canonical raw privacy preflight temp dir");
     let config = prebuilt_privacy_storage_config(root.join("storage"), 1, 1);
-    let runtime_deps = ToriiRuntimeDeps::new(routing::MaybeTelemetry::disabled())
-        .with_sorafs_governance_dag_signer(prebuilt_governance_dag_runtime_signer())
-        .with_sorafs_governance_dag_checkpoint_store(prebuilt_governance_dag_checkpoint_store());
+    let runtime_deps = ToriiRuntimeDeps::new(
+        crate::build_identity_test_fixture::build_identity(),
+        routing::MaybeTelemetry::disabled(),
+    )
+    .with_sorafs_governance_dag_signer(prebuilt_governance_dag_runtime_signer())
+    .with_sorafs_governance_dag_checkpoint_store(prebuilt_governance_dag_checkpoint_store());
     let error = preflight_sorafs_fenced_privacy_runtime(&config, &runtime_deps)
         .expect_err("configured fused privacy target must require both raw roles");
     assert!(
@@ -1082,11 +1114,14 @@ fn fused_privacy_preflight_rejects_substituted_raw_writer() {
         .expect("canonical raw privacy preflight temp dir");
     let config = prebuilt_privacy_storage_config(root.join("storage"), 1, 2);
     let (publisher, head_reader) = prebuilt_fenced_transparency_runtime();
-    let runtime_deps = ToriiRuntimeDeps::new(routing::MaybeTelemetry::disabled())
-        .with_sorafs_fenced_transparency_publisher(publisher)
-        .with_sorafs_fenced_transparency_head_reader(head_reader)
-        .with_sorafs_governance_dag_signer(prebuilt_governance_dag_runtime_signer())
-        .with_sorafs_governance_dag_checkpoint_store(prebuilt_governance_dag_checkpoint_store());
+    let runtime_deps = ToriiRuntimeDeps::new(
+        crate::build_identity_test_fixture::build_identity(),
+        routing::MaybeTelemetry::disabled(),
+    )
+    .with_sorafs_fenced_transparency_publisher(publisher)
+    .with_sorafs_fenced_transparency_head_reader(head_reader)
+    .with_sorafs_governance_dag_signer(prebuilt_governance_dag_runtime_signer())
+    .with_sorafs_governance_dag_checkpoint_store(prebuilt_governance_dag_checkpoint_store());
     let error = preflight_sorafs_fenced_privacy_runtime(&config, &runtime_deps)
         .expect_err("substituted raw writer must fail preflight");
     assert!(
@@ -1103,13 +1138,14 @@ fn fused_privacy_preflight_rejects_substituted_raw_head_reader() {
         .expect("canonical raw privacy preflight temp dir");
     let config = prebuilt_privacy_storage_config(root.join("storage"), 1, 1);
     let (publisher, _) = prebuilt_fenced_transparency_runtime();
-    let runtime_deps = ToriiRuntimeDeps::new(routing::MaybeTelemetry::disabled())
-        .with_sorafs_fenced_transparency_publisher(publisher)
-        .with_sorafs_fenced_transparency_head_reader(Arc::new(
-            SubstitutedFencedTransparencyHeadReader,
-        ))
-        .with_sorafs_governance_dag_signer(prebuilt_governance_dag_runtime_signer())
-        .with_sorafs_governance_dag_checkpoint_store(prebuilt_governance_dag_checkpoint_store());
+    let runtime_deps = ToriiRuntimeDeps::new(
+        crate::build_identity_test_fixture::build_identity(),
+        routing::MaybeTelemetry::disabled(),
+    )
+    .with_sorafs_fenced_transparency_publisher(publisher)
+    .with_sorafs_fenced_transparency_head_reader(Arc::new(SubstitutedFencedTransparencyHeadReader))
+    .with_sorafs_governance_dag_signer(prebuilt_governance_dag_runtime_signer())
+    .with_sorafs_governance_dag_checkpoint_store(prebuilt_governance_dag_checkpoint_store());
     let error = preflight_sorafs_fenced_privacy_runtime(&config, &runtime_deps)
         .expect_err("substituted raw head reader must fail preflight");
     assert!(
@@ -1251,9 +1287,12 @@ fn fused_privacy_preflight_rejects_prebuilt_and_raw_ambiguity() {
     )
     .expect("start prebuilt SoraFS node with exact privacy bindings");
     let (publisher, _) = prebuilt_fenced_transparency_runtime();
-    let runtime_deps = ToriiRuntimeDeps::new(routing::MaybeTelemetry::disabled())
-        .with_sorafs_node(node)
-        .with_sorafs_fenced_transparency_publisher(publisher);
+    let runtime_deps = ToriiRuntimeDeps::new(
+        crate::build_identity_test_fixture::build_identity(),
+        routing::MaybeTelemetry::disabled(),
+    )
+    .with_sorafs_node(node)
+    .with_sorafs_fenced_transparency_publisher(publisher);
     let error = preflight_sorafs_fenced_privacy_runtime(&config, &runtime_deps)
         .expect_err("prebuilt and raw fused runtimes must be mutually exclusive");
     assert!(
@@ -1274,9 +1313,12 @@ fn fused_privacy_preflight_rejects_prebuilt_and_raw_governance_signer() {
         prebuilt_privacy_runtime_deps(),
     )
     .expect("start prebuilt SoraFS node with exact privacy bindings");
-    let runtime_deps = ToriiRuntimeDeps::new(routing::MaybeTelemetry::disabled())
-        .with_sorafs_node(node)
-        .with_sorafs_governance_dag_signer(prebuilt_governance_dag_runtime_signer());
+    let runtime_deps = ToriiRuntimeDeps::new(
+        crate::build_identity_test_fixture::build_identity(),
+        routing::MaybeTelemetry::disabled(),
+    )
+    .with_sorafs_node(node)
+    .with_sorafs_governance_dag_signer(prebuilt_governance_dag_runtime_signer());
     let error = preflight_sorafs_fenced_privacy_runtime(&config, &runtime_deps)
         .expect_err("prebuilt node and raw Governance signer must be mutually exclusive");
     assert!(
@@ -1307,12 +1349,12 @@ fn standalone_sorafs_node_rejects_incomplete_fenced_privacy_pairs() {
             .expect("canonical standalone privacy temp dir");
         let config = prebuilt_privacy_storage_config(root.join(format!("storage-{label}")), 1, 1);
         let (publisher, reader) = prebuilt_fenced_transparency_runtime();
-        let mut torii_runtime_deps =
-            ToriiRuntimeDeps::new(routing::MaybeTelemetry::disabled())
-                .with_sorafs_governance_dag_signer(prebuilt_governance_dag_runtime_signer())
-                .with_sorafs_governance_dag_checkpoint_store(
-                    prebuilt_governance_dag_checkpoint_store(),
-                );
+        let mut torii_runtime_deps = ToriiRuntimeDeps::new(
+            crate::build_identity_test_fixture::build_identity(),
+            routing::MaybeTelemetry::disabled(),
+        )
+        .with_sorafs_governance_dag_signer(prebuilt_governance_dag_runtime_signer())
+        .with_sorafs_governance_dag_checkpoint_store(prebuilt_governance_dag_checkpoint_store());
         if inject_publisher {
             torii_runtime_deps = torii_runtime_deps
                 .with_sorafs_fenced_transparency_publisher(Arc::clone(&publisher));
@@ -1353,9 +1395,12 @@ fn standalone_sorafs_node_rejects_unexpected_fenced_privacy_pair() {
         .data_dir(root.join("storage"))
         .build();
     let (publisher, reader) = prebuilt_fenced_transparency_runtime();
-    let torii_runtime_deps = ToriiRuntimeDeps::new(routing::MaybeTelemetry::disabled())
-        .with_sorafs_fenced_transparency_publisher(Arc::clone(&publisher))
-        .with_sorafs_fenced_transparency_head_reader(Arc::clone(&reader));
+    let torii_runtime_deps = ToriiRuntimeDeps::new(
+        crate::build_identity_test_fixture::build_identity(),
+        routing::MaybeTelemetry::disabled(),
+    )
+    .with_sorafs_fenced_transparency_publisher(Arc::clone(&publisher))
+    .with_sorafs_fenced_transparency_head_reader(Arc::clone(&reader));
     let preflight_error = preflight_sorafs_fenced_privacy_runtime(&config, &torii_runtime_deps)
         .expect_err("disabled privacy publication must fail Torii preflight");
     assert!(
@@ -1379,11 +1424,14 @@ fn standalone_sorafs_node_rejects_unexpected_fenced_privacy_pair() {
 #[test]
 fn torii_runtime_deps_retain_fenced_privacy_pair() {
     let (publisher, reader) = prebuilt_fenced_transparency_runtime();
-    let runtime_deps = ToriiRuntimeDeps::new(routing::MaybeTelemetry::disabled())
-        .with_sorafs_fenced_transparency_publisher(publisher)
-        .with_sorafs_fenced_transparency_head_reader(reader)
-        .with_sorafs_governance_dag_signer(prebuilt_governance_dag_runtime_signer())
-        .with_sorafs_governance_dag_checkpoint_store(prebuilt_governance_dag_checkpoint_store());
+    let runtime_deps = ToriiRuntimeDeps::new(
+        crate::build_identity_test_fixture::build_identity(),
+        routing::MaybeTelemetry::disabled(),
+    )
+    .with_sorafs_fenced_transparency_publisher(publisher)
+    .with_sorafs_fenced_transparency_head_reader(reader)
+    .with_sorafs_governance_dag_signer(prebuilt_governance_dag_runtime_signer())
+    .with_sorafs_governance_dag_checkpoint_store(prebuilt_governance_dag_checkpoint_store());
     assert!(runtime_deps.sorafs_fenced_transparency_publisher.is_some());
     assert!(
         runtime_deps
@@ -1418,8 +1466,11 @@ async fn new_with_handle_preflights_fused_privacy_before_startup() {
     let queue = Arc::new(Queue::from_config(queue_cfg, queue_events));
     let (_peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
     let (publisher, _) = prebuilt_fenced_transparency_runtime();
-    let runtime_deps = ToriiRuntimeDeps::new(routing::MaybeTelemetry::disabled())
-        .with_sorafs_fenced_transparency_publisher(publisher);
+    let runtime_deps = ToriiRuntimeDeps::new(
+        crate::build_identity_test_fixture::build_identity(),
+        routing::MaybeTelemetry::disabled(),
+    )
+    .with_sorafs_fenced_transparency_publisher(publisher);
     let error = Torii::new_with_handle(
         ChainId::from("fused-privacy-preflight-test"),
         signed_query_test_network_id(),

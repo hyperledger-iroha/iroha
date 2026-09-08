@@ -295,6 +295,11 @@ class RetryTests(unittest.TestCase):
             "authorization_nonce": "0" * 32,
             "revision": {"commit": "a" * 40},
             "validators": [{"artifact": "same-config"}],
+            "validator_clients": [
+                {"slug": f"taira-validator-{index}",
+                 "probe_origin": f"http://127.0.0.1:{18080 + index}/"}
+                for index in range(1, 5)
+            ],
         }
         expected = copy.deepcopy(previous)
         actual = retry.fresh_inventory(
@@ -312,6 +317,27 @@ class RetryTests(unittest.TestCase):
             retry.fresh_inventory(
                 previous, "retry-1788850000000000000-1234abcd", "0" * 32
             )
+
+    def test_candidate_probe_inventory_rejects_obsolete_or_ambiguous_drafts(self):
+        valid = {"validator_clients": [
+            {"slug": f"taira-validator-{index}",
+             "probe_origin": f"http://127.0.0.1:{18080 + index}/"}
+            for index in range(1, 5)
+        ]}
+        retry.require_candidate_probe_inventory(valid)
+        for origin in (None, "https://taira.sora.org/", "http://localhost:8080/",
+                       "http://127.0.0.1/", "http://127.0.0.1:0/",
+                       "http://127.0.0.1:80/", 8080,
+                       "http://127.0.0.1:65536/", "http://127.0.0.1:08080/",
+                       "http://127.0.0.1:18082/", "http://127.0.0.1:8080/path"):
+            value = copy.deepcopy(valid)
+            value["validator_clients"][0]["probe_origin"] = origin
+            with self.subTest(origin=origin), self.assertRaises(retry.RetryError):
+                retry.require_candidate_probe_inventory(value)
+        for value in ({}, {"validator_clients": []},
+                      {"validator_clients": list(reversed(valid["validator_clients"]))}):
+            with self.assertRaises(retry.RetryError):
+                retry.require_candidate_probe_inventory(value)
 
     def test_actual_artifact_identity_is_separate_from_attempt(self):
         build, binary, source = artifact_receipts()
@@ -927,6 +953,11 @@ class WorkflowTests(unittest.TestCase):
             "authorization_nonce": "0" * 32,
             "next_genesis_hash": "c" * 64,
             "validators": [],
+            "validator_clients": [
+                {"slug": f"taira-validator-{index}",
+                 "probe_origin": f"http://127.0.0.1:{18080 + index}/"}
+                for index in range(1, 5)
+            ],
         }
         for index in range(1, 5):
             self.inventory["validators"].append(
@@ -1153,6 +1184,16 @@ class WorkflowTests(unittest.TestCase):
             retry.CONTINUITY_OUT / "seed-authority-receipt.json",
             {"public_fixture": True},
         )
+
+    def test_missing_candidate_origin_stops_before_retirement_or_native_calls(self):
+        del self.inventory["validator_clients"][0]["probe_origin"]
+        Path(self.plan["previous_inventory"]).write_text(json.dumps(self.inventory))
+        with self.assertRaisesRegex(retry.RetryError, "candidate probe origin"):
+            retry.guest_locked(self.request, self.capacity, self.attempts)
+        retry._retire_retained_state.assert_not_called()
+        retry._retire_apply.assert_not_called()
+        self.assertEqual(self.calls, [])
+        self.assertEqual(list(self.attempts.iterdir()), [])
 
     def test_complete_workflow_submits_one_apply_after_durable_frontier(self):
         result = retry.guest_locked(self.request, self.capacity, self.attempts)

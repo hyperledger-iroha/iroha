@@ -7,7 +7,7 @@ reports build, stage and test durations. Python 3.11+ and the repository Rust
 and Cargo toolchain are required. Use an existing `CARGO_TARGET_DIR` only for
 an established separate native build lane; no clean or per-run target is needed.
 
-The check runs 51 regressions for secure inherited configuration and signing FDs,
+The check runs focused regressions for secure inherited configuration and signing FDs,
 network-369 inventory decoding, aggregate timeout admission before custody,
 required preseed budgets, per-host carrier verification and the exact action ledger,
 native genesis-path rebasing with secret-free errors and owner-only output,
@@ -31,6 +31,16 @@ pending jobs, malformed evidence and read-only recovery after a deadline.
 Start and restart also wait for the signed Python launcher to execute the exact
 daemon within the original deadline, without submitting another manager job.
 Changed launcher commands remain immediate failures.
+The active journaled restart path also waits for four actual Torii backends before
+onboarding, using the deadline captured before its one restart submission.
+Candidate tests exercise the real HTTP producer and strict host receipt consumer,
+direct signed probe origins, private signer descriptor lifetime, ordered recovery
+and failure before edge cutover. Stopped-owner tests preserve the slot lock while
+releasing exact empty worker cgroups, reject live or substituted runtime state,
+and verify idempotent cleanup before a stop receipt can be reused. Firewall
+fixtures admit only exact slot-owned rules and real construction/deletion cuts;
+foreign references or changed rules keep the barrier in place. Cleanup removes
+each admitted rule explicitly and never flushes a chain.
 Linux also runs a real OpenSSH
 configuration-only check that verifies parent-held descriptor paths survive its
 descriptor cleanup and replacement of the original paths. Every selected test

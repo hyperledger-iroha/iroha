@@ -62,7 +62,10 @@ fn build_router(cfg: iroha_config::parameters::actual::Root) -> iroha_torii::Tes
         cfg.common.key_pair.clone(),
         OnlinePeersProvider::new(peers_rx),
         None,
-        MaybeTelemetry::disabled(),
+        iroha_torii::ToriiRuntimeDeps::new(
+            build_identity_test_fixture::build_identity(),
+            MaybeTelemetry::disabled(),
+        ),
     )
     .expect("valid Torii MCP fixture");
     torii
@@ -4744,3 +4747,6 @@ async fn mcp_jsonrpc_connect_session_create_derives_sid_from_exact_identity() {
 }
 include!("mcp_endpoints/connect_session_lifecycle_test.rs");
 include!("mcp_endpoints/connect_and_registration_tests.rs");
+
+#[path = "../src/build_identity_test_fixture.rs"]
+mod build_identity_test_fixture;

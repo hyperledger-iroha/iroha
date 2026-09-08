@@ -347,8 +347,30 @@ def run_native(argv, directory, *, phase, pass_fds=(), env=None, journal_path=No
     return result
 
 
+def require_candidate_probe_inventory(inventory):
+    """Reject obsolete or ambiguous public drafts before any retirement mutation."""
+    clients = inventory.get("validator_clients")
+    require(isinstance(clients, list) and len(clients) == 4,
+            "four explicit validator candidate probe origins are required")
+    origins = set()
+    for index, client in enumerate(clients, 1):
+        require(isinstance(client, dict)
+                and client.get("slug") == f"taira-validator-{index}",
+                "candidate probe clients must use the exact validator order")
+        origin = client.get("probe_origin")
+        match = (re.fullmatch(r"http://127\.0\.0\.1:([1-9][0-9]{0,4})/", origin)
+                 if isinstance(origin, str) else None)
+        # The native Url parser omits HTTP's default port; candidate inventory
+        # requires the port to remain explicit in its canonical URL.
+        require(match is not None and int(match[1]) <= 65535 and int(match[1]) != 80,
+                "candidate probe origin requires an explicit IPv4 loopback socket")
+        require(origin not in origins, "candidate probe sockets must be distinct")
+        origins.add(origin)
+
+
 def fresh_inventory(previous, attempt_id, nonce):
     """Native Assemble owns all derived fields; change only the public operation identity."""
+    require_candidate_probe_inventory(previous)
     require(
         re.fullmatch(r"retry-[0-9]{16,24}-[0-9a-f]{8}", attempt_id) is not None,
         "fresh generated attempt identity required",
@@ -3432,6 +3454,7 @@ def guest_locked(request, capacity, root):
     if resume_id is not None and terminal_path.parent.name == "completed":
         return resume_postconditions(request, root / resume_id, terminal_path)
     inventory = decode(public_record(inventory_path, owner=0, private=True))
+    require_candidate_probe_inventory(inventory)
     require_same_inventory_artifacts(inventory, binary, source)
     args, arguments = local_arguments(public_record(args_path, owner=0, private=True))
     require(

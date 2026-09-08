@@ -1029,6 +1029,8 @@ include!("main/runtime_deps.rs");
 /// Error(s) that might occur while starting [`Iroha`]
 #[derive(Debug, Copy, Clone)]
 pub enum StartError {
+    /// Invalid or contradictory executable build metadata.
+    BuildIdentity,
     /// Failed to start the P2P network layer
     StartP2p,
     /// Failed to initialize block storage (Kura)
@@ -1068,6 +1070,7 @@ impl std::error::Error for MainError {}
 impl std::fmt::Display for StartError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let key = match self {
+            StartError::BuildIdentity => return f.write_str("invalid executable build identity"),
             StartError::StartP2p => "error.start_p2p",
             StartError::InitKura => "error.init_kura",
             StartError::ListenOsSignal => "error.listen_os_signal",
@@ -7392,6 +7395,8 @@ impl Iroha {
         ),
         StartError,
     > {
+        let build_identity = compiled_build_identity()
+            .map_err(|error| Report::new(StartError::BuildIdentity).attach(error))?;
         // Compile and validate immutable privacy profiles before any public
         // service begins accepting requests. In particular, the ZK-X.509
         // profile validates six fixed algebraic schedules; doing that work in
@@ -9275,6 +9280,7 @@ impl Iroha {
             .map_err(|message| Report::new(StartError::StartP2p).attach(message))?;
             log_startup_trace("irohad.sumeragi.starting", startup_trace_started_at);
             let (sumeragi, child) = SumeragiStartArgs {
+                build_identity,
                 config: config.sumeragi.clone(),
                 common_config: config.common.clone(),
                 events_sender: events_sender.clone(),
@@ -10226,7 +10232,7 @@ impl Iroha {
             .transpose()
             .map_err(|error| Report::new(StartError::StartTorii).attach(error))?
             .map(Arc::new);
-        let runtime_deps = iroha_torii::ToriiRuntimeDeps::new(torii_telemetry)
+        let runtime_deps = iroha_torii::ToriiRuntimeDeps::new(build_identity, torii_telemetry)
             .with_parliament_tle_release_coordinator(parliament_tle_release_coordinator)
             .with_torii_proxy_bridge_signer(config.common.key_pair.clone())
             .with_vpn_relay_trust(vpn_relay_trust);
@@ -16094,7 +16100,7 @@ mod tests {
             )
             .expect("private publication context construction");
         let torii_runtime_deps = startup_source
-            .find("letruntime_deps=iroha_torii::ToriiRuntimeDeps::new(torii_telemetry)")
+            .find("letruntime_deps=iroha_torii::ToriiRuntimeDeps::new(")
             .expect("Torii runtime dependency construction");
         let signal_setup = startup_source
             .find("supervisor.setup_shutdown_on_os_signals()")
@@ -19614,6 +19620,12 @@ mod tests {
 }
 /// Result type returned by daemon launcher and startup operations.
 pub type ReportResult<T, E> = core::result::Result<T, Report<E>>;
+fn compiled_build_identity() -> core::result::Result<
+    iroha_core::release_identity::BuildIdentity,
+    iroha_core::release_identity::BuildIdentityError,
+> {
+    iroha_core::compiled_build_identity!()
+}
 const VERGEN_GIT_SHA: &str = match option_env!("VERGEN_GIT_SHA") {
     Some(value) => value,
     None => "unknown",

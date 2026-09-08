@@ -1,5 +1,8 @@
 //! Authenticated OpenSSH transport and compiled remote host dispatcher for public Taira reset.
 
+#[path = "taira_public_reset_stopped_runtime.rs"]
+pub(super) mod stopped_runtime;
+
 use super::executor_model::{ExecutionStep, RecoveryProgress, ResetTransport};
 use super::{
     AdmittedReset, ArtifactV1, AuthorizationEnvelopeV1, EdgeV1, EndpointV1, InventoryV1,
@@ -1390,6 +1393,7 @@ fn validate_prepared_mutation_envelope(
                 "schema",
                 "binding",
                 "public_root",
+                "probe_scope",
                 "chain_id",
                 "network_id",
                 "authority",
@@ -1462,7 +1466,10 @@ fn validate_prepared_mutation_envelope(
         || root
             .get("public_root")
             .and_then(norito::json::Value::as_str)
-            != Some(admitted.inventory.inrou_canary.public_root.as_str())
+            != Some(mutation_probe_root(
+                &admitted.inventory,
+                &admitted.request.mutation_phase,
+            )?)
         || root.get("chain_id").and_then(norito::json::Value::as_str)
             != Some(admitted.inventory.chain_id.as_str())
         || canonical_network_id != *network_id_value
@@ -1472,6 +1479,17 @@ fn validate_prepared_mutation_envelope(
     {
         return Err(eyre!(
             "prepared mutation envelope differs from the signed public Taira canary identity"
+        ));
+    }
+    if is_inrou
+        && (admitted.request.mutation_phase != "pre_edge"
+            || root
+                .get("probe_scope")
+                .and_then(norito::json::Value::as_str)
+                != Some("candidate"))
+    {
+        return Err(eyre!(
+            "prepared Inrou envelope requires the exact candidate phase and scope"
         ));
     }
     let operation = root
@@ -2321,7 +2339,7 @@ fn validate_prepared_mutation_applied_evidence(
             "taira_write_canary"
         }
         || string("status")? != "ok"
-        || string("public_root")? != admitted.inventory.inrou_canary.public_root
+        || string("public_root")? != mutation_probe_root(&admitted.inventory, &prepared.phase)?
         || string("authorization_sha256")? != admitted.authorization_sha256
         || string("authorization_nonce")? != admitted.inventory.authorization_nonce
         || string("mutation_kind")? != prepared.kind
@@ -2349,6 +2367,11 @@ fn validate_prepared_mutation_applied_evidence(
         "prepared mutation Applied committed evidence",
     )?;
     if is_inrou {
+        if prepared.phase != "pre_edge" || string("probe_scope")? != "candidate" {
+            return Err(eyre!(
+                "Applied Inrou evidence requires the exact candidate phase and scope"
+            ));
+        }
         if string("evidence")? != prepared.transaction_hash || string("mutation_mode")? != "deploy"
         {
             return Err(eyre!(
@@ -2417,7 +2440,7 @@ fn validate_prepared_mutation_proof_required_evidence(
         || !prepared.transaction_hash.is_empty()
         || string("command")? != "taira_write_canary"
         || string("status")? != "ok"
-        || string("public_root")? != admitted.inventory.inrou_canary.public_root
+        || string("public_root")? != mutation_probe_root(&admitted.inventory, &prepared.phase)?
         || string("authorization_sha256")? != admitted.authorization_sha256
         || string("authorization_nonce")? != admitted.inventory.authorization_nonce
         || string("mutation_kind")? != "onboarding"
@@ -2514,17 +2537,14 @@ fn prove_fresh_onboarding_current_state(
     }
     let root = Url::parse(&format!(
         "{}/",
-        admitted
-            .inventory
-            .inrou_canary
-            .public_root
-            .trim_end_matches('/')
+        mutation_probe_root(&admitted.inventory, &admitted.request.mutation_phase,)?
     ))
-    .wrap_err("signed public Taira root is invalid")?;
+    .wrap_err("signed Taira mutation probe root is invalid")?;
     let proof_url = root
         .join("v1/accounts/onboarding/current-state")
         .wrap_err("failed to construct atomic onboarding state URL")?;
     let http = HttpClient::builder()
+        .no_proxy()
         .timeout(timeout)
         .connect_timeout(timeout)
         .redirect(reqwest::redirect::Policy::none())
@@ -4095,7 +4115,8 @@ fn require_vacant_rollback_postcondition(admitted: &HostAdmission) -> Result<()>
             )?;
         }
     }
-    require_vacant_unit(admitted, true)
+    require_vacant_unit(admitted, true)?;
+    stopped_runtime::reconcile(admitted, false)
 }
 
 fn host_preflight(admitted: &HostAdmission) -> Result<()> {
@@ -4721,6 +4742,13 @@ fn host_forward_plan(admitted: &HostAdmission) -> Vec<HostActionKeyV1> {
             artifact_role: String::new(),
         });
     }
+    for validator in &validators {
+        plan.push(HostActionKeyV1 {
+            host_slug: validator.slug.clone(),
+            action: HostAction::Restart.label().to_owned(),
+            artifact_role: String::new(),
+        });
+    }
     if let Some(edge) = edge {
         for artifact in &edge.artifacts {
             plan.push(HostActionKeyV1 {
@@ -4736,13 +4764,6 @@ fn host_forward_plan(admitted: &HostAdmission) -> Vec<HostActionKeyV1> {
                 artifact_role: String::new(),
             });
         }
-    }
-    for validator in &validators {
-        plan.push(HostActionKeyV1 {
-            host_slug: validator.slug.clone(),
-            action: HostAction::Restart.label().to_owned(),
-            artifact_role: String::new(),
-        });
     }
     if let Some(edge) = edge {
         plan.push(HostActionKeyV1 {
@@ -5322,7 +5343,8 @@ fn revalidate_cached_action_postcondition(
                 "stop",
                 &validator.systemd_unit,
             )?;
-            require_unit_stopped(&validator.systemd_unit, admitted.action_deadline)
+            require_unit_stopped(&validator.systemd_unit, admitted.action_deadline)?;
+            stopped_runtime::reconcile(admitted, false)
         }
         HostAction::Install => {
             verify_installed_release(admitted, &candidate)?;
@@ -8200,7 +8222,8 @@ fn require_session_manager_operation_applied(
 
 fn stop_unit(admitted: &HostAdmission, label: &str, unit: &str) -> Result<()> {
     run_durable_manager_operation(admitted, label, "stop", unit)?;
-    require_unit_stopped(unit, admitted.action_deadline)
+    require_unit_stopped(unit, admitted.action_deadline)?;
+    stopped_runtime::reconcile(admitted, true)
 }
 
 fn require_unit_stopped(unit: &str, deadline: Instant) -> Result<()> {
@@ -11256,6 +11279,26 @@ fn require_doctor_success(output: ProcessOutput, public_root: &str) -> Result<Ve
     require_success(output, "same-revision Taira doctor")
 }
 
+/// Keep one restart and its HTTP readiness barrier inside the same deadline.
+/// The caller retains the durable Submitted/Applied transitions; this helper
+/// never retries a restart or submits a signed mutation.
+fn run_restart_with_validator_http_readiness(
+    origins: &[String],
+    timeout: Duration,
+    mut check_authorization: impl FnMut() -> Result<()>,
+    restart: impl FnOnce(Instant) -> Result<()>,
+) -> Result<()> {
+    let deadline = Instant::now()
+        .checked_add(timeout)
+        .ok_or_else(|| eyre!("restart readiness deadline overflow"))?;
+    check_authorization()?;
+    if Instant::now() >= deadline {
+        return Err(eyre!("restart readiness deadline elapsed before restart"));
+    }
+    restart(deadline)?;
+    wait_for_validator_http_readiness(origins, deadline, check_authorization)
+}
+
 /// A running systemd process can still be initializing storage and Torii.
 /// Wait only for HTTP availability here; the signed convergence and public
 /// doctor checks remain responsible for identity and protocol validation.
@@ -12195,6 +12238,152 @@ fn inherited_client_config_args(
     ))
 }
 
+/// Bind a child to the signed candidate socket without persisting another signer config.
+fn inherited_candidate_client_config_args(
+    input: &super::PinnedInput,
+    label: &str,
+    origin: &str,
+) -> Result<(Vec<OsString>, File, tempfile::NamedTempFile)> {
+    super::validate_candidate_probe_origin(origin)?;
+    revalidate_pinned(input, label)?;
+    let mut source = input.file.try_clone()?;
+    source.rewind()?;
+    let maximum = iroha_config_base::toml::MAX_TOML_SOURCE_BYTES;
+    let bytes = zeroize::Zeroizing::new(read_pinned_bytes(
+        &input.path,
+        label,
+        source,
+        &input.snapshot,
+        maximum,
+    )?);
+    let text =
+        std::str::from_utf8(&bytes).map_err(|_| eyre!("candidate client config is not UTF-8"))?;
+    let mut table: toml::Table =
+        toml::from_str(text).map_err(|_| eyre!("candidate client config is not TOML"))?;
+    let result = (|| {
+        table.insert(
+            "torii_url".to_owned(),
+            toml::Value::String(origin.to_owned()),
+        );
+        let encoded = zeroize::Zeroizing::new(
+            toml::to_string(&table).map_err(|_| eyre!("cannot encode candidate client config"))?,
+        );
+        if u64::try_from(encoded.len()).unwrap_or(u64::MAX) > maximum {
+            return Err(eyre!("candidate client config exceeds its size bound"));
+        }
+        let parent = input
+            .path
+            .parent()
+            .ok_or_else(|| eyre!("client config lacks a parent"))?;
+        validate_owner_private_dir(parent, "candidate client config directory")?;
+        // The owner-private temporary stays alive until the child closes its read-only
+        // descriptor, preserving the inherited config reader's exact one-link contract.
+        let mut custody = tempfile::Builder::new()
+            .prefix(".candidate-client-")
+            .tempfile_in(parent)?;
+        custody.as_file_mut().write_all(encoded.as_bytes())?;
+        let file = File::open(custody.path())?;
+        revalidate_pinned(input, label)?;
+        Ok((
+            vec![
+                "--config-fd".into(),
+                file.as_raw_fd().to_string().into(),
+                "--config-source-path".into(),
+                input.path.as_os_str().to_owned(),
+            ],
+            file,
+            custody,
+        ))
+    })();
+    crate::soracloud::zeroize_taira_toml_table(&mut table);
+    result
+}
+
+fn inrou_probe_root(inventory: &InventoryV1, scope: crate::taira::InrouProbeScope) -> &str {
+    match scope {
+        crate::taira::InrouProbeScope::Candidate => inventory.validator_clients[0]
+            .probe_origin
+            .trim_end_matches('/'),
+        crate::taira::InrouProbeScope::Public => &inventory.inrou_canary.public_root,
+    }
+}
+
+fn mutation_probe_root<'a>(inventory: &'a InventoryV1, phase: &str) -> Result<&'a str> {
+    let scope = match phase {
+        "pre_edge" | "restart-wave-1" | "restart-wave-2" | "restart-wave-3" | "restart-wave-4" => {
+            crate::taira::InrouProbeScope::Candidate
+        }
+        "post_edge" => crate::taira::InrouProbeScope::Public,
+        _ => {
+            return Err(eyre!(
+                "mutation probe phase is outside the candidate/public plan"
+            ));
+        }
+    };
+    Ok(inrou_probe_root(inventory, scope))
+}
+
+fn validate_candidate_probe_host_key(inventory: &InventoryV1, key: &str) -> Result<()> {
+    let fields = key.split_ascii_whitespace().collect::<Vec<_>>();
+    if fields.len() < 2 || fields[0] != "ssh-ed25519" || fields.len() > 3 {
+        return Err(eyre!(
+            "candidate coordinator host key is not canonical Ed25519"
+        ));
+    }
+    let identity = sha256_hex(format!("{} {}", fields[0], fields[1]).as_bytes());
+    if inventory
+        .validators
+        .iter()
+        .any(|validator| validator.endpoint.host_identity_sha256 != identity)
+        || inventory.edge.endpoint.host_identity_sha256 != identity
+    {
+        return Err(eyre!(
+            "candidate probes must execute on the exact authenticated deployment host"
+        ));
+    }
+    Ok(())
+}
+
+fn require_candidate_probe_host(inventory: &InventoryV1) -> Result<()> {
+    let path = Path::new("/etc/ssh/ssh_host_ed25519_key.pub");
+    let (mut file, snapshot) =
+        super::open_pinned_regular(path, "candidate coordinator public host key")?;
+    if snapshot.len == 0 || snapshot.len > 4096 {
+        return Err(eyre!(
+            "candidate coordinator public host key exceeds its bound"
+        ));
+    }
+    let mut key = String::new();
+    file.read_to_string(&mut key)?;
+    super::ensure_pinned_unchanged(
+        path,
+        "candidate coordinator public host key",
+        &file,
+        &snapshot,
+    )?;
+    validate_candidate_probe_host_key(inventory, &key)
+}
+
+#[cfg(test)]
+pub(super) fn validate_inrou_checks_for_test(
+    value: &norito::json::Value,
+    scope: crate::taira::InrouProbeScope,
+) -> Result<()> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| eyre!("Inrou report is not an object"))?;
+    if object
+        .get("probe_scope")
+        .and_then(norito::json::Value::as_str)
+        != Some(scope.label())
+    {
+        return Err(eyre!(
+            "Inrou report scope does not match the required proof"
+        ));
+    }
+    validate_prepared_report_common_arrays(object, true, "real Inrou producer report")
+}
+
 /// Keep SSH inputs in this launcher: OpenSSH closes every inherited descriptor
 /// above stderr before parsing its options. Parent proc paths name the pinned
 /// inodes across that sweep without reopening provenance or copying secrets.
@@ -12465,6 +12654,7 @@ impl<'a> OpenSshTransport<'a, RealProcessRunner> {
         revalidate_pinned(&admitted.ssh_identity, "OpenSSH identity")?;
         revalidate_pinned(&admitted.known_hosts, "OpenSSH known-hosts")?;
         validate_shared_cli(admitted)?;
+        require_candidate_probe_host(&admitted.inventory)?;
         let closure = LocalArtifactClosure::snapshot(journal_dir, admitted)?;
         let runtime = RuntimeCustody::admit(runtime, admitted, journal_dir)?;
         let local_receipt_parent = journal_dir.join("local-receipts-v1");
@@ -12489,6 +12679,7 @@ impl<'a> RecoverySshTransport<'a> {
         validator_client_configs: Vec<PathBuf>,
     ) -> Result<Self> {
         validate_owner_private_dir(journal_dir, "public-reset journal directory")?;
+        require_candidate_probe_host(&admitted.inventory)?;
         let runtime = RuntimeCustody::recover(
             runtime_client_config,
             validator_client_configs,
@@ -13361,81 +13552,6 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
         validate_doctor_report(&value, &self.admitted.inventory.inrou_canary.public_root)
     }
 
-    fn write_canary(&mut self, timeout_secs: u64) -> Result<()> {
-        self.write_canary_for_phase(timeout_secs, "pre_edge", "write-canary.json")
-    }
-
-    fn write_canary_for_phase(
-        &mut self,
-        timeout_secs: u64,
-        phase: &str,
-        _receipt_name: &str,
-    ) -> Result<()> {
-        for kind in ["onboarding", "faucet", "write_canary"] {
-            self.execute_write_canary_child(timeout_secs, phase, kind)?;
-        }
-        Ok(())
-    }
-
-    fn execute_write_canary_child(
-        &mut self,
-        timeout_secs: u64,
-        phase: &str,
-        kind: &str,
-    ) -> Result<()> {
-        let deadline = Instant::now()
-            .checked_add(Duration::from_secs(timeout_secs))
-            .ok_or_else(|| eyre!("prepared write child deadline overflow"))?;
-        let prepared =
-            self.prepare_write_canary_child_until(deadline, timeout_secs, phase, kind)?;
-        if prepared.state == "applied" {
-            return Ok(());
-        }
-        let proof_required = prepared.transaction_hash.is_empty();
-        let prepared = if proof_required {
-            prepared
-        } else {
-            self.coordinate_shared_prepared_mutation(
-                "submitted",
-                kind,
-                phase,
-                &child_mutation_idempotency_key(
-                    &self.admitted.inventory.authorization_nonce,
-                    phase,
-                    kind,
-                ),
-                None,
-                "",
-                "",
-                None,
-                false,
-                remaining_seconds(deadline)?,
-            )?
-        };
-        match self.run_write_canary_prepared_until(
-            deadline,
-            phase,
-            kind,
-            &prepared,
-            proof_required,
-        )? {
-            PreparedMutationOutcome::Applied { value, evidence } => {
-                self.mark_shared_prepared_applied(phase, kind, &prepared, &evidence, deadline)?;
-                self.publish_local_receipt(
-                    &format!("{}-{phase}.json", kind.replace('_', "-")),
-                    &value,
-                )
-            }
-            PreparedMutationOutcome::Pending => Err(LocalMutationRecoveryPending {
-                action: "write_canary_child",
-            }
-            .into()),
-            PreparedMutationOutcome::Rejected(class) => {
-                Err(eyre!("prepared write child was rejected: {class}"))
-            }
-        }
-    }
-
     fn run_journaled_write_canary_child(
         &mut self,
         progress: &mut dyn RecoveryProgress,
@@ -13813,7 +13929,7 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
             OsString::from("taira"),
             OsString::from("write-canary"),
             OsString::from("--public-root"),
-            OsString::from(&self.admitted.inventory.inrou_canary.public_root),
+            OsString::from(mutation_probe_root(&self.admitted.inventory, phase)?),
             OsString::from("--operation"),
             OsString::from(match kind {
                 "onboarding" => "onboarding",
@@ -14253,7 +14369,9 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
             OsString::from("taira"),
             OsString::from("inrou-canary"),
             OsString::from("--public-root"),
-            OsString::from(&self.admitted.inventory.inrou_canary.public_root),
+            OsString::from(mutation_probe_root(&self.admitted.inventory, phase)?),
+            OsString::from("--probe-scope"),
+            OsString::from("candidate"),
             OsString::from("--stage-dir"),
             self.runtime.inrou_stage_dir.as_os_str().to_owned(),
             OsString::from("--mode"),
@@ -14281,61 +14399,6 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
             OsString::from("--json"),
         ]);
         Ok((args, vec![config_file]))
-    }
-
-    fn inrou_canary(&mut self, timeout_secs: u64) -> Result<()> {
-        for kind in [
-            "inrou_bundle_pin",
-            "inrou_guest_pin",
-            "inrou_discovery_pin",
-            "inrou_canary",
-        ] {
-            let deadline = Instant::now()
-                .checked_add(Duration::from_secs(timeout_secs))
-                .ok_or_else(|| eyre!("prepared Inrou child deadline overflow"))?;
-            let prepared =
-                self.prepare_inrou_child_until(deadline, timeout_secs, "pre_edge", kind)?;
-            if prepared.state == "applied" {
-                continue;
-            }
-            let prepared = self.coordinate_shared_prepared_mutation(
-                "submitted",
-                kind,
-                "pre_edge",
-                &child_mutation_idempotency_key(
-                    &self.admitted.inventory.authorization_nonce,
-                    "pre_edge",
-                    kind,
-                ),
-                None,
-                "",
-                "",
-                None,
-                false,
-                remaining_seconds(deadline)?,
-            )?;
-            match self.run_inrou_prepared_until(deadline, "pre_edge", kind, &prepared, false)? {
-                PreparedMutationOutcome::Applied { value, evidence } => {
-                    self.mark_shared_prepared_applied(
-                        "pre_edge", kind, &prepared, &evidence, deadline,
-                    )?;
-                    self.publish_local_receipt(
-                        &format!("{}-pre-edge.json", kind.replace('_', "-")),
-                        &value,
-                    )?;
-                }
-                PreparedMutationOutcome::Pending => {
-                    return Err(LocalMutationRecoveryPending {
-                        action: "inrou_prepared_child",
-                    }
-                    .into());
-                }
-                PreparedMutationOutcome::Rejected(class) => {
-                    return Err(eyre!("prepared Inrou child was rejected: {class}"));
-                }
-            }
-        }
-        Ok(())
     }
 
     fn inrou_check(&mut self, timeout_secs: u64, wave: usize) -> Result<()> {
@@ -14604,17 +14667,29 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
                 "Taira runtime client config".to_owned(),
             )
         };
-        let (mut args, config_file) = inherited_client_config_args(config, &label)?;
+        let scope = if validator_index.is_some() {
+            crate::taira::InrouProbeScope::Candidate
+        } else {
+            crate::taira::InrouProbeScope::Public
+        };
+        let (mut args, config_file, _candidate_custody) = if let Some(index) = validator_index {
+            let (args, file, custody) = inherited_candidate_client_config_args(
+                config,
+                &label,
+                &self.admitted.inventory.validator_clients[index].probe_origin,
+            )?;
+            (args, file, Some(custody))
+        } else {
+            let (args, file) = inherited_client_config_args(config, &label)?;
+            (args, file, None)
+        };
         args.extend([
             "taira".into(),
             "inrou-check".into(),
             "--public-root".into(),
-            self.admitted
-                .inventory
-                .inrou_canary
-                .public_root
-                .clone()
-                .into(),
+            inrou_probe_root(&self.admitted.inventory, scope).into(),
+            "--probe-scope".into(),
+            scope.label().into(),
             "--stage-dir".into(),
             self.runtime.inrou_stage_dir.as_os_str().to_owned(),
             "--mode".into(),
@@ -14730,10 +14805,12 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
                         "four-validator convergence did not reach one atomic checkpoint"
                     ));
                 }
-                let (mut config_args, config_file) = inherited_client_config_args(
-                    &self.runtime.validator_client_configs[index],
-                    "validator client config",
-                )?;
+                let (mut config_args, config_file, _candidate_custody) =
+                    inherited_candidate_client_config_args(
+                        &self.runtime.validator_client_configs[index],
+                        "validator client config",
+                        &self.admitted.inventory.validator_clients[index].probe_origin,
+                    )?;
                 let poll_deadline = Instant::now()
                     .checked_add(Duration::from_secs(10))
                     .ok_or_else(|| eyre!("convergence poll deadline overflow"))?
@@ -15245,8 +15322,7 @@ impl<R: ProcessRunner> ResetTransport for OpenSshTransport<'_, R> {
                         self.convergence(inventory.timeouts.convergence_secs, wave, true)?;
                         self.inrou_check_with_mode(inventory.timeouts.canary_secs, wave, true)?;
                     }
-                    self.require_final_inrou_restart_sweep(inventory.timeouts.canary_secs, true)?;
-                    self.doctor_with_mode(inventory.timeouts.canary_secs, true)
+                    self.require_final_inrou_restart_sweep(inventory.timeouts.canary_secs, true)
                 })();
                 return classify_inrou_restart_recovery_outcome(result);
             }
@@ -15317,13 +15393,26 @@ impl<R: ProcessRunner> ResetTransport for OpenSshTransport<'_, R> {
                 for (index, validator) in inventory.validators.iter().enumerate() {
                     let wave = index + 1;
                     let restart_index = index * 4;
-                    progress.mark_submitted(restart_index)?;
-                    self.bootstrap_and_dispatch_validator(
-                        validator,
-                        HostAction::Restart,
-                        inventory.timeouts.restart_secs,
+                    let origins = inventory
+                        .validator_clients
+                        .iter()
+                        .map(|client| client.probe_origin.clone())
+                        .collect::<Vec<_>>();
+                    let admitted = self.admitted;
+                    run_restart_with_validator_http_readiness(
+                        &origins,
+                        Duration::from_secs(inventory.timeouts.restart_secs),
+                        || ensure_authorization_current(admitted),
+                        |deadline| {
+                            progress.mark_submitted(restart_index)?;
+                            self.bootstrap_and_dispatch_validator(
+                                validator,
+                                HostAction::Restart,
+                                remaining_seconds(deadline)?,
+                            )?;
+                            progress.mark_applied(restart_index)
+                        },
                     )?;
-                    progress.mark_applied(restart_index)?;
                     let phase = format!("restart-wave-{wave}");
                     for (offset, kind) in ["onboarding", "faucet", "write_canary"]
                         .into_iter()
@@ -15340,8 +15429,7 @@ impl<R: ProcessRunner> ResetTransport for OpenSshTransport<'_, R> {
                     self.convergence(inventory.timeouts.convergence_secs, wave, false)?;
                     self.inrou_check(inventory.timeouts.canary_secs, wave)?;
                 }
-                self.require_final_inrou_restart_sweep(inventory.timeouts.canary_secs, false)?;
-                self.doctor(inventory.timeouts.canary_secs)
+                self.require_final_inrou_restart_sweep(inventory.timeouts.canary_secs, false)
             }
             ExecutionStep::EdgeVerify => {
                 self.bootstrap_and_dispatch_edge(
@@ -15432,7 +15520,7 @@ impl<R: ProcessRunner> ResetTransport for OpenSshTransport<'_, R> {
                 let origins = inventory
                     .validator_clients
                     .iter()
-                    .map(|client| client.torii_origin.clone())
+                    .map(|client| client.probe_origin.clone())
                     .collect::<Vec<_>>();
                 wait_for_validator_http_readiness(&origins, deadline, || {
                     ensure_authorization_current(self.admitted)
@@ -15441,48 +15529,7 @@ impl<R: ProcessRunner> ResetTransport for OpenSshTransport<'_, R> {
                 if remaining == 0 {
                     return Err(eyre!("convergence deadline elapsed after Torii readiness"));
                 }
-                self.doctor(remaining)?;
-                let remaining = deadline.saturating_duration_since(Instant::now()).as_secs();
-                if remaining == 0 {
-                    return Err(eyre!("convergence deadline elapsed after public doctor"));
-                }
                 self.convergence(remaining, 0, false)
-            }
-            ExecutionStep::Canary => {
-                self.write_canary(timeout_secs)?;
-                self.inrou_canary(timeout_secs)
-            }
-            ExecutionStep::RestartProof => {
-                self.ensure_inrou_restart_baselines(inventory.timeouts.canary_secs)?;
-                for (index, validator) in inventory.validators.iter().enumerate() {
-                    let wave = index + 1;
-                    let ready_deadline = Instant::now()
-                        .checked_add(Duration::from_secs(inventory.timeouts.restart_secs))
-                        .ok_or_else(|| eyre!("restart readiness deadline overflow"))?;
-                    self.bootstrap_and_dispatch_validator(
-                        validator,
-                        HostAction::Restart,
-                        inventory.timeouts.restart_secs,
-                    )?;
-                    let origins = inventory
-                        .validator_clients
-                        .iter()
-                        .map(|client| client.torii_origin.clone())
-                        .collect::<Vec<_>>();
-                    wait_for_validator_http_readiness(&origins, ready_deadline, || {
-                        ensure_authorization_current(self.admitted)
-                    })?;
-                    self.write_canary_for_phase(
-                        inventory.timeouts.canary_secs,
-                        &format!("restart-wave-{wave}"),
-                        &format!("write-canary-restart-wave-{wave}.json"),
-                    )?;
-                    self.convergence(inventory.timeouts.convergence_secs, wave, false)?;
-                    self.inrou_check(inventory.timeouts.canary_secs, wave)?;
-                }
-                self.require_final_inrou_restart_sweep(inventory.timeouts.canary_secs, false)?;
-                self.doctor(inventory.timeouts.canary_secs)?;
-                Ok(())
             }
             ExecutionStep::Seal => {
                 for validator in &inventory.validators {
@@ -15524,20 +15571,9 @@ impl<R: ProcessRunner> ResetTransport for OpenSshTransport<'_, R> {
             ExecutionStep::Preflight => HostAction::Preflight,
             ExecutionStep::EdgeStage => HostAction::EdgeStage,
             ExecutionStep::EdgeCutover => HostAction::EdgeCutover,
-            ExecutionStep::EdgeVerify => HostAction::EdgeVerify,
             other => return Err(eyre!("edge received invalid step `{}`", other.label())),
         };
         self.bootstrap_and_dispatch_edge(&inventory.edge, action, timeout_secs)?;
-        if step == ExecutionStep::EdgeVerify {
-            let canary_timeout = inventory.timeouts.canary_secs;
-            self.doctor(canary_timeout)?;
-            self.write_canary_for_phase(
-                canary_timeout,
-                "post_edge",
-                "write-canary-post-edge.json",
-            )?;
-            self.require_fresh_inrou_check("inrou-post-edge.json", canary_timeout, false)?;
-        }
         Ok(())
     }
 
@@ -15654,6 +15690,7 @@ const PREPARED_INROU_REPORT_FIELDS: &[&str] = &[
     "command",
     "status",
     "public_root",
+    "probe_scope",
     "checks",
     "warnings",
     "failures",
@@ -15679,6 +15716,7 @@ const PREPARED_INROU_SERVICE_APPLIED_REPORT_FIELDS: &[&str] = &[
     "command",
     "status",
     "public_root",
+    "probe_scope",
     "checks",
     "warnings",
     "failures",
@@ -15828,7 +15866,7 @@ fn validate_prepared_report_common_arrays(
         .get("checks")
         .and_then(norito::json::Value::as_array)
         .ok_or_else(|| eyre!("{label} field `checks` must be an array"))?;
-    let expected = [
+    let public_checks = [
         (
             "inrou_authoritative_status",
             "active_adverts=4, hosted_replicas=4",
@@ -15842,12 +15880,20 @@ fn validate_prepared_report_common_arrays(
             "current and revision authority plus public path and CID-host bytes, headers, and hash are exact",
         ),
     ];
+    let expected = match object
+        .get("probe_scope")
+        .and_then(norito::json::Value::as_str)
+    {
+        Some("candidate") => &public_checks[..2],
+        Some("public") => public_checks.as_slice(),
+        _ => return Err(eyre!("Inrou report omits its exact probe scope")),
+    };
     if checks.len() != expected.len() {
         return Err(eyre!(
-            "{label} must contain the exact three successful Inrou checks"
+            "{label} must contain exactly the successful checks for its probe scope"
         ));
     }
-    for (check, (name, detail)) in checks.iter().zip(expected) {
+    for (check, &(name, detail)) in checks.iter().zip(expected) {
         let check = check
             .as_object()
             .ok_or_else(|| eyre!("{label} check must be an object"))?;
@@ -15960,7 +16006,7 @@ fn validate_prepared_write_report(
     validate_common_report(
         value,
         "taira_write_canary",
-        &admitted.inventory.inrou_canary.public_root,
+        mutation_probe_root(&admitted.inventory, phase)?,
     )?;
     let object = value.as_object().expect("common report checked object");
     require_exact_json_fields(
@@ -16112,9 +16158,19 @@ fn validate_prepared_inrou_report(
     validate_common_report(
         value,
         "taira_inrou_canary",
-        &admitted.inventory.inrou_canary.public_root,
+        mutation_probe_root(&admitted.inventory, phase)?,
     )?;
     let object = value.as_object().expect("common report checked object");
+    if object
+        .get("probe_scope")
+        .and_then(norito::json::Value::as_str)
+        != Some("candidate")
+        || phase != "pre_edge"
+    {
+        return Err(eyre!(
+            "prepared Inrou report requires the exact candidate phase and scope"
+        ));
+    }
     let service_applied = kind == "inrou_canary" && expected_outcome == "Applied";
     require_exact_json_fields(
         object,
@@ -16907,6 +16963,7 @@ const FRESH_INROU_CHECK_REPORT_FIELDS: &[&str] = &[
     "command",
     "status",
     "public_root",
+    "probe_scope",
     "checks",
     "warnings",
     "failures",
@@ -16939,6 +16996,7 @@ const RETAINED_INROU_CHECK_REPORT_FIELDS: &[&str] = &[
     "command",
     "status",
     "public_root",
+    "probe_scope",
     "checks",
     "warnings",
     "failures",
@@ -16970,7 +17028,13 @@ fn validate_fresh_inrou_check_report(
     value: &norito::json::Value,
     admitted: &AdmittedReset,
 ) -> Result<()> {
-    validate_exact_inrou_check_report(value, admitted, true).map(|_| ())
+    validate_exact_inrou_check_report_with_scope(
+        value,
+        admitted,
+        true,
+        crate::taira::InrouProbeScope::Public,
+    )
+    .map(|_| ())
 }
 
 fn validate_fresh_inrou_observation_window(
@@ -17001,7 +17065,13 @@ fn validate_retained_inrou_check_report(
     value: &norito::json::Value,
     admitted: &AdmittedReset,
 ) -> Result<()> {
-    validate_exact_inrou_check_report(value, admitted, false).map(|_| ())
+    validate_exact_inrou_check_report_with_scope(
+        value,
+        admitted,
+        false,
+        crate::taira::InrouProbeScope::Public,
+    )
+    .map(|_| ())
 }
 
 fn validate_exact_inrou_check_report(
@@ -17009,9 +17079,35 @@ fn validate_exact_inrou_check_report(
     admitted: &AdmittedReset,
     fresh: bool,
 ) -> Result<ValidatedInrouEvidence> {
-    let canary = &admitted.inventory.inrou_canary;
-    validate_common_report(value, "taira_inrou_check", &canary.public_root)?;
+    validate_exact_inrou_check_report_with_scope(
+        value,
+        admitted,
+        fresh,
+        crate::taira::InrouProbeScope::Candidate,
+    )
+}
+
+fn validate_exact_inrou_check_report_with_scope(
+    value: &norito::json::Value,
+    admitted: &AdmittedReset,
+    fresh: bool,
+    scope: crate::taira::InrouProbeScope,
+) -> Result<ValidatedInrouEvidence> {
+    validate_common_report(
+        value,
+        "taira_inrou_check",
+        inrou_probe_root(&admitted.inventory, scope),
+    )?;
     let object = value.as_object().expect("common report checked object");
+    if object
+        .get("probe_scope")
+        .and_then(norito::json::Value::as_str)
+        != Some(scope.label())
+    {
+        return Err(eyre!(
+            "Inrou check evidence differs from its required candidate/public scope"
+        ));
+    }
     require_exact_json_fields(
         object,
         if fresh {
@@ -17625,6 +17721,116 @@ mod tests {
             count
         });
         (origin, worker)
+    }
+
+    #[test]
+    fn journaled_restart_waits_for_four_http_backends_before_onboarding() {
+        let (origin, worker) = readiness_http_server(vec![502, 503, 504, 503, 200, 200, 200, 200]);
+        let mut restart_calls = 0;
+        let mut authorization_checks = 0;
+        run_restart_with_validator_http_readiness(
+            &vec![origin; 4],
+            Duration::from_secs(3),
+            || {
+                authorization_checks += 1;
+                Ok(())
+            },
+            |deadline| {
+                restart_calls += 1;
+                assert!(remaining_seconds(deadline).is_ok());
+                Ok(())
+            },
+        )
+        .expect("HTTP readiness follows process restart before onboarding may proceed");
+        assert_eq!(worker.join().expect("readiness server"), 8);
+        assert_eq!(
+            restart_calls, 1,
+            "cold HTTP must never restart the host again"
+        );
+        assert!(
+            authorization_checks >= 4,
+            "authorization remains current throughout readiness"
+        );
+    }
+
+    #[test]
+    fn journaled_restart_readiness_preserves_its_pre_restart_deadline() {
+        let mut restart_calls = 0;
+        let mut onboarding_calls = 0;
+        let result = run_restart_with_validator_http_readiness(
+            &vec!["http://127.0.0.1:1/".to_owned(); 4],
+            Duration::from_millis(20),
+            || Ok(()),
+            |deadline| {
+                restart_calls += 1;
+                std::thread::sleep(
+                    deadline.saturating_duration_since(Instant::now()) + Duration::from_millis(1),
+                );
+                Ok(())
+            },
+        )
+        .and_then(|()| {
+            onboarding_calls += 1;
+            Ok(())
+        });
+        assert!(
+            result
+                .expect_err("readiness cannot reset the expired restart budget")
+                .to_string()
+                .contains("deadline")
+        );
+        assert_eq!(restart_calls, 1);
+        assert_eq!(onboarding_calls, 0);
+    }
+
+    #[test]
+    fn journaled_restart_readiness_stops_on_expired_authorization_or_ambiguous_restart() {
+        let origins = vec!["http://127.0.0.1:1/".to_owned(); 4];
+        let mut restart_calls = 0;
+        let mut authorization_checks = 0;
+        let mut onboarding_calls = 0;
+        let result = run_restart_with_validator_http_readiness(
+            &origins,
+            Duration::from_secs(3),
+            || {
+                authorization_checks += 1;
+                if authorization_checks > 1 {
+                    Err(eyre!("authorization expired"))
+                } else {
+                    Ok(())
+                }
+            },
+            |_| {
+                restart_calls += 1;
+                Ok(())
+            },
+        )
+        .and_then(|()| {
+            onboarding_calls += 1;
+            Ok(())
+        });
+        assert_eq!(
+            result
+                .expect_err("expiry after restart blocks onboarding")
+                .to_string(),
+            "authorization expired"
+        );
+        assert_eq!(restart_calls, 1);
+        assert_eq!(onboarding_calls, 0);
+        let result = run_restart_with_validator_http_readiness(
+            &origins,
+            Duration::from_secs(3),
+            || Ok(()),
+            |_| {
+                Err(LocalMutationRecoveryPending {
+                    action: "remote_host_action",
+                }
+                .into())
+            },
+        );
+        assert!(is_local_mutation_recovery_pending(
+            &result.expect_err("ambiguous restart must retain read-only recovery")
+        ));
     }
 
     #[test]
@@ -20121,6 +20327,116 @@ time.sleep(30)
         assert!(load_client_config_from_pinned(&input, "test client config").is_err());
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn candidate_client_fd_preserves_signer_and_expires_with_child_custody() {
+        let directory = super::super::private_custody_test_dir("taira-candidate-client-");
+        let path = directory
+            .path()
+            .canonicalize()
+            .expect("fixture directory")
+            .join("client.toml");
+        let source = include_bytes!("../../../defaults/client.toml");
+        fs::write(&path, source).expect("public fixture config");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).expect("owner-only config");
+        let input = pin_owner_private_file(&path, "candidate fixture").expect("pin source");
+        let original =
+            load_client_config_from_pinned(&input, "candidate fixture").expect("source config");
+        let (args, child, custody) = inherited_candidate_client_config_args(
+            &input,
+            "candidate fixture",
+            "http://127.0.0.1:8083/",
+        )
+        .expect("native candidate descriptor");
+        assert_eq!(args[0], "--config-fd");
+        let (derived, _) = crate::client_config::load_inherited(
+            u32::try_from(child.as_raw_fd()).expect("descriptor"),
+            &path,
+        )
+        .expect("actual strict inherited reader accepts candidate descriptor");
+        assert_eq!(derived.torii_api_url.as_str(), "http://127.0.0.1:8083/");
+        assert_eq!(derived.account, original.account);
+        assert_eq!(derived.key_pair, original.key_pair);
+        assert_eq!(derived.chain, original.chain);
+        assert_eq!(derived.network_id, original.network_id);
+        assert_eq!(fs::read(&path).expect("original retained input"), source);
+        let ephemeral = custody.path().to_owned();
+        assert_eq!(child.metadata().unwrap().nlink(), 1);
+        drop(child);
+        drop(custody);
+        assert!(
+            !ephemeral.exists(),
+            "candidate config ends with native child custody"
+        );
+        assert!(
+            inherited_candidate_client_config_args(
+                &input,
+                "candidate fixture",
+                "http://192.0.2.1:8083/",
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn candidate_probe_host_key_rejects_another_host_before_mutation() {
+        let mut admitted = admitted_reset_fixture();
+        let key = "ssh-ed25519 candidate-public-key";
+        let identity = sha256_hex(key.as_bytes());
+        for validator in &mut admitted.inventory.validators {
+            validator.endpoint.host_identity_sha256 = identity.clone();
+        }
+        admitted.inventory.edge.endpoint.host_identity_sha256 = identity;
+        validate_candidate_probe_host_key(&admitted.inventory, key).expect("exact cohost identity");
+        assert!(
+            validate_candidate_probe_host_key(&admitted.inventory, "ssh-ed25519 other-public-key")
+                .is_err()
+        );
+        admitted.inventory.validators[3]
+            .endpoint
+            .host_identity_sha256 = "f".repeat(64);
+        assert!(validate_candidate_probe_host_key(&admitted.inventory, key).is_err());
+    }
+
+    #[test]
+    fn prepared_candidate_write_cannot_be_reinterpreted_as_public_evidence() {
+        let admitted = admitted_reset_fixture();
+        let key = "3".repeat(64);
+        let mut report = prepared_write_report_fixture(&admitted, "faucet", &key);
+        validate_prepared_write_report(
+            &report, &admitted, "pre_edge", "faucet", &key, "Prepared", None,
+        )
+        .expect("exact candidate route");
+        report.as_object_mut().unwrap().insert(
+            "public_root".to_owned(),
+            admitted.inventory.inrou_canary.public_root.clone().into(),
+        );
+        assert!(
+            validate_prepared_write_report(
+                &report, &admitted, "pre_edge", "faucet", &key, "Prepared", None
+            )
+            .is_err()
+        );
+        for phase in [
+            "pre_edge",
+            "restart-wave-1",
+            "restart-wave-2",
+            "restart-wave-3",
+            "restart-wave-4",
+        ] {
+            assert_eq!(
+                mutation_probe_root(&admitted.inventory, phase).unwrap(),
+                admitted.inventory.validator_clients[0]
+                    .probe_origin
+                    .trim_end_matches('/')
+            );
+        }
+        assert_eq!(
+            mutation_probe_root(&admitted.inventory, "post_edge").unwrap(),
+            admitted.inventory.inrou_canary.public_root
+        );
+    }
+
     fn prepared_write_report_fixture(
         admitted: &AdmittedReset,
         kind: &str,
@@ -20135,7 +20451,7 @@ time.sleep(30)
         let mut report = norito::json!({
             "command": "taira_write_canary",
             "status": "ok",
-            "public_root": (admitted.inventory.inrou_canary.public_root.clone()),
+            "public_root": (mutation_probe_root(&admitted.inventory, "pre_edge").unwrap()),
             "checks": [],
             "warnings": [],
             "failures": [],
@@ -20167,8 +20483,9 @@ time.sleep(30)
     ) -> norito::json::Value {
         norito::json!({
             "command": "taira_inrou_canary",
+            "probe_scope": "candidate",
             "status": "ok",
-            "public_root": (admitted.inventory.inrou_canary.public_root.clone()),
+            "public_root": (mutation_probe_root(&admitted.inventory, "pre_edge").unwrap()),
             "checks": [],
             "warnings": [],
             "failures": [],
@@ -20398,6 +20715,7 @@ time.sleep(30)
             "command": "taira_inrou_check",
             "status": "ok",
             "public_root": (canary.public_root.clone()),
+            "probe_scope": "public",
             "checks": [
                 {
                     "name": "inrou_authoritative_status",
@@ -20451,12 +20769,34 @@ time.sleep(30)
         })
     }
 
+    fn set_candidate_inrou_fixture_scope(
+        report: &mut norito::json::Value,
+        admitted: &AdmittedReset,
+    ) {
+        let object = report.as_object_mut().expect("fixture report");
+        object.insert(
+            "public_root".to_owned(),
+            inrou_probe_root(
+                &admitted.inventory,
+                crate::taira::InrouProbeScope::Candidate,
+            )
+            .into(),
+        );
+        object.insert("probe_scope".to_owned(), "candidate".into());
+        object
+            .get_mut("checks")
+            .and_then(norito::json::Value::as_array_mut)
+            .expect("fixture checks")
+            .truncate(2);
+    }
+
     fn set_inrou_fixture_local_placement(
         report: &mut norito::json::Value,
         admitted: &AdmittedReset,
         validator_index: usize,
         replica_slot: u64,
     ) {
+        set_candidate_inrou_fixture_scope(report, admitted);
         let validator_account_id = admitted.inventory.validator_clients[validator_index]
             .account_id
             .clone();
@@ -20743,6 +21083,7 @@ time.sleep(30)
     fn applied_inrou_service_evidence_accepts_the_current_producer_shape() {
         let admitted = admitted_reset_fixture();
         let mut applied = exact_inrou_check_report_fixture(&admitted);
+        set_candidate_inrou_fixture_scope(&mut applied, &admitted);
         let object = applied
             .as_object_mut()
             .expect("applied Inrou report object");
@@ -20979,6 +21320,8 @@ time.sleep(30)
         admitted.inventory.chain_id = "fixture-chain".to_owned();
         admitted.inventory.next_genesis_hash = hex::encode(network_id.as_bytes());
         admitted.inventory.inrou_canary.public_root = public_root.to_owned();
+        admitted.inventory.validator_clients[0].probe_origin =
+            format!("{}/", public_root.trim_end_matches('/'));
         admitted.inventory.canary_onboarding_request = typed_receipt.body.request.clone();
         let native_binding = crate::taira::PreparedMutationBindingV1 {
             schema: crate::taira::PreparedMutationBindingV1::SCHEMA.to_owned(),
@@ -21065,7 +21408,7 @@ time.sleep(30)
         let report = norito::json!({
             "command": "taira_write_canary",
             "status": "ok",
-            "public_root": (admitted.inventory.inrou_canary.public_root.clone()),
+            "public_root": (mutation_probe_root(&admitted.inventory, &prepared.phase).unwrap()),
             "checks": [],
             "warnings": [],
             "failures": [],
@@ -21951,10 +22294,7 @@ time.sleep(30)
                 .collect::<Vec<_>>(),
             super::super::VALIDATOR_SLUGS
         );
-        assert_eq!(
-            plan[first_restart - 1].action,
-            HostAction::EdgeCutover.label()
-        );
+        assert_eq!(plan[first_restart - 1].action, HostAction::Start.label());
         assert_eq!(plan[first_seal - 1].action, HostAction::EdgeVerify.label());
         for (phase, ordinal) in [
             ("pre_edge", first_restart),
@@ -21981,7 +22321,7 @@ time.sleep(30)
     }
 
     #[test]
-    fn shared_host_plan_cuts_over_edge_after_all_starts_before_any_restart() {
+    fn shared_host_plan_cuts_over_edge_after_all_candidate_restarts() {
         let admitted = progress_admission();
         let plan = host_forward_plan(&admitted);
         let first = |action: HostAction| {
@@ -21995,12 +22335,13 @@ time.sleep(30)
             .expect("last local validator start");
         assert!(last_start < first(HostAction::EdgeStage));
         assert!(first(HostAction::EdgeStage) < first(HostAction::EdgeCutover));
-        assert!(first(HostAction::EdgeCutover) < first(HostAction::Restart));
+        assert!(last_start < first(HostAction::Restart));
         let last_restart = plan
             .iter()
             .rposition(|key| key.action == HostAction::Restart.label())
             .expect("last local validator restart");
-        assert!(last_restart < first(HostAction::EdgeVerify));
+        assert!(last_restart < first(HostAction::EdgeStage));
+        assert!(first(HostAction::EdgeCutover) < first(HostAction::EdgeVerify));
     }
 
     #[test]

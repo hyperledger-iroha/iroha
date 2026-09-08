@@ -1124,6 +1124,8 @@ include!("runtime_governance_auth.rs");
 include!("zk_compute_auth.rs");
 mod block;
 mod bounded_replay_cache;
+#[cfg(test)]
+mod build_identity_test_fixture;
 #[cfg(feature = "connect")]
 mod connect;
 #[cfg(feature = "connect")]
@@ -2661,6 +2663,7 @@ mod mcp_dispatch_router_lifetime_tests {
 
 #[allow(clippy::struct_excessive_bools)]
 struct AppState {
+    build_status: iroha_torii_shared::status::BuildStatus,
     shutdown_signal: ShutdownSignal,
     events: EventsSender,
     kura: Arc<Kura>,
@@ -21565,6 +21568,7 @@ async fn handler_status_root(
     let authoritative_block_height = u64::try_from(app.state.committed_height())
         .expect("committed height must fit the canonical u64 wire field");
     routing::handle_status(
+        &app.build_status,
         &app.telemetry,
         accept.map(|e| e.0),
         nexus_routing_policy,
@@ -48070,6 +48074,7 @@ mod test_api_router_runtime_tests {
 
 /// Main network handler and the only entrypoint of Iroha's HTTP API.
 pub struct Torii {
+    build_identity: iroha_core::release_identity::BuildIdentity,
     chain_id: Arc<ChainId>,
     signed_query_admission: Arc<routing::SignedQueryAdmission>,
     kiso: KisoHandle,
@@ -48279,6 +48284,7 @@ pub struct Torii {
 /// container.
 #[derive(Clone)]
 pub struct ToriiRuntimeDeps {
+    build_identity: iroha_core::release_identity::BuildIdentity,
     telemetry: routing::MaybeTelemetry,
     #[cfg(feature = "app_api")]
     private_settlement_availability_signer:
@@ -48399,10 +48405,14 @@ pub struct ToriiRuntimeDeps {
     vpn_operator_signer: Option<KeyPair>,
 }
 impl ToriiRuntimeDeps {
-    /// Construct runtime dependencies from the resolved telemetry handle.
+    /// Construct dependencies from the owning executable identity and telemetry.
     #[must_use]
-    pub fn new(telemetry: routing::MaybeTelemetry) -> Self {
+    pub fn new(
+        build_identity: iroha_core::release_identity::BuildIdentity,
+        telemetry: routing::MaybeTelemetry,
+    ) -> Self {
         Self {
+            build_identity,
             telemetry,
             #[cfg(feature = "app_api")]
             private_settlement_availability_signer: None,
@@ -48497,7 +48507,7 @@ impl ToriiRuntimeDeps {
     /// signers while Torii is being constructed, so none of them may cross this
     /// boundary. The normal Strict restart reconstructs and validates them.
     fn into_emergency_fast(self) -> Self {
-        Self::new(self.telemetry)
+        Self::new(self.build_identity, self.telemetry)
     }
     /// Attach the deployment-owned Parliament TLE partial-release coordinator.
     ///
@@ -49001,8 +49011,11 @@ fn torii_runtime_deps_keep_vpn_and_proxy_signers_separate() {
         .expect("proxy signer fixture");
     let vpn_signer = KeyPair::try_from_seed(vec![0x92; 32], iroha_crypto::Algorithm::Ed25519)
         .expect("VPN signer fixture");
-    let proxy_only = ToriiRuntimeDeps::new(routing::MaybeTelemetry::disabled())
-        .with_torii_proxy_bridge_signer(proxy_signer.clone());
+    let proxy_only = ToriiRuntimeDeps::new(
+        crate::build_identity_test_fixture::build_identity(),
+        routing::MaybeTelemetry::disabled(),
+    )
+    .with_torii_proxy_bridge_signer(proxy_signer.clone());
     assert!(
         proxy_only.vpn_operator_signer.is_none(),
         "proxy signer must never fill the VPN signer role"
@@ -49029,15 +49042,23 @@ fn emergency_fast_runtime_deps_drop_external_services_and_signers() {
         .expect("proxy signer fixture");
     let vpn_signer = KeyPair::try_from_seed(vec![0x94; 32], iroha_crypto::Algorithm::Ed25519)
         .expect("VPN signer fixture");
-    let deps = ToriiRuntimeDeps::new(routing::MaybeTelemetry::disabled())
-        .with_torii_proxy_bridge_signer(proxy_signer)
-        .with_vpn_operator_signer(vpn_signer)
-        .into_emergency_fast();
+    let deps = ToriiRuntimeDeps::new(
+        crate::build_identity_test_fixture::build_identity(),
+        routing::MaybeTelemetry::disabled(),
+    )
+    .with_torii_proxy_bridge_signer(proxy_signer)
+    .with_vpn_operator_signer(vpn_signer)
+    .into_emergency_fast();
 
     assert!(deps.torii_proxy_bridge_signer.is_none());
     assert!(deps.vpn_operator_signer.is_none());
     assert!(deps.soracloud_runtime.is_none());
     assert!(deps.sorafs_node.is_none());
+    assert_eq!(
+        deps.build_identity,
+        crate::build_identity_test_fixture::build_identity(),
+        "emergency recovery retains the executable identity"
+    );
 }
 
 #[cfg(test)]
@@ -49069,17 +49090,17 @@ fn emergency_fast_uses_only_the_process_local_sorafs_facade() {
 fn emergency_fast_does_not_configure_or_start_the_background_zk_prover() {
     let source = include_str!("lib.rs");
     let app_services = source
-        .rsplit_once("// Configure app API subsystems (attachments) from Torii config")
-        .expect("app-service startup section")
+        .rsplit_once("torii.validate_startup_configuration()?;")
+        .expect("Torii configuration preflight")
         .1
-        .split_once("let query_rate = config")
-        .expect("end of app-service startup section")
+        .split_once("// Commit process-wide Torii policy")
+        .expect("process-wide publication boundary")
         .0;
     let fast_guard = app_services
         .find("if !emergency_fast")
         .expect("emergency Fast ZK-prover guard");
     let configure = app_services
-        .find("crate::zk_prover::configure(")
+        .find("crate::zk_prover::prepare_configuration(")
         .expect("ZK-prover configuration");
     assert!(fast_guard < configure);
     assert!(
@@ -49144,11 +49165,6 @@ fn torii_start_binds_before_launching_background_workers() {
     }
 }
 
-impl From<routing::MaybeTelemetry> for ToriiRuntimeDeps {
-    fn from(telemetry: routing::MaybeTelemetry) -> Self {
-        Self::new(telemetry)
-    }
-}
 #[cfg(feature = "app_api")]
 fn qualify_configured_sorafs_native_transaction_signer_for_startup<S>(
     role: SorafsNativeTransactionSignerRoleV1,
@@ -52320,6 +52336,7 @@ impl Torii {
     /// pass an explicit [`routing::MaybeTelemetry`] profile.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
+        build_identity: iroha_core::release_identity::BuildIdentity,
         chain_id: ChainId,
         network_id: NetworkId,
         kiso: KisoHandle,
@@ -52345,7 +52362,7 @@ impl Torii {
             da_receipt_signer,
             online_peers,
             None,
-            routing::MaybeTelemetry::disabled(),
+            ToriiRuntimeDeps::new(build_identity, routing::MaybeTelemetry::disabled()),
         )
     }
     /// Construct `Torii`.
@@ -52369,7 +52386,7 @@ impl Torii {
         da_receipt_signer: KeyPair,
         online_peers: OnlinePeersProvider,
         sumeragi: Option<iroha_core::sumeragi::SumeragiHandle>,
-        runtime_deps: impl Into<ToriiRuntimeDeps>,
+        runtime_deps: ToriiRuntimeDeps,
     ) -> Result<Self, ToriiBuildError> {
         if state.network_id != network_id {
             return Err(ToriiBuildError::invalid_configuration(
@@ -52438,7 +52455,6 @@ impl Torii {
                 ),
             ));
         }
-        let runtime_deps = runtime_deps.into();
         let runtime_deps = if emergency_fast {
             runtime_deps.into_emergency_fast()
         } else {
@@ -52497,6 +52513,7 @@ impl Torii {
                 None
             }
         };
+        let build_identity = runtime_deps.build_identity;
         let telemetry = runtime_deps.telemetry.clone();
         #[cfg(feature = "app_api")]
         let parliament_tle_release_coordinator =
@@ -53883,6 +53900,7 @@ impl Torii {
             })?;
 
         let torii = Self {
+            build_identity,
             chain_id: Arc::new(chain_id),
             signed_query_admission,
             kiso,
@@ -54090,6 +54108,33 @@ impl Torii {
 
         torii.validate_startup_configuration()?;
 
+        #[cfg(feature = "app_api")]
+        let prepared_prover = if !emergency_fast {
+            Some(
+                crate::zk_prover::prepare_configuration(
+                    build_identity,
+                    config.zk_prover_enabled,
+                    config.zk_prover_scan_period_secs,
+                    config.zk_prover_reports_ttl_secs,
+                    config.zk_prover_reports_max_count,
+                    config.zk_prover_reports_max_bytes,
+                    config.zk_prover_max_inflight,
+                    config.zk_prover_max_scan_bytes,
+                    config.zk_prover_max_scan_millis,
+                    config.zk_prover_keys_dir.clone(),
+                    config.zk_prover_allowed_backends.clone(),
+                    config.zk_prover_allowed_circuits.clone(),
+                    Some(state.clone()),
+                    telemetry.clone(),
+                )
+                .map_err(|error| {
+                    ToriiBuildError::invalid_configuration("zk_prover.build_identity", error)
+                })?,
+            )
+        } else {
+            None
+        };
+
         // Commit process-wide Torii policy only after every configuration value and durable
         // component above has been validated successfully.
         crate::app_auth::configure(app_auth_config).map_err(|error| {
@@ -54135,23 +54180,10 @@ impl Torii {
                     telemetry.clone(),
                 );
             }
-            if !emergency_fast {
-                crate::zk_prover::configure(
-                    config.zk_prover_enabled,
-                    config.zk_prover_scan_period_secs,
-                    config.zk_prover_reports_ttl_secs,
-                    config.zk_prover_reports_max_count,
-                    config.zk_prover_reports_max_bytes,
-                    config.zk_prover_max_inflight,
-                    config.zk_prover_max_scan_bytes,
-                    config.zk_prover_max_scan_millis,
-                    config.zk_prover_keys_dir.clone(),
-                    config.zk_prover_allowed_backends.clone(),
-                    config.zk_prover_allowed_circuits.clone(),
-                    Some(state),
-                    telemetry.clone(),
-                );
-            }
+        }
+        #[cfg(feature = "app_api")]
+        if let Some(prepared_prover) = prepared_prover {
+            prepared_prover.commit();
         }
         #[cfg(all(feature = "telemetry", feature = "app_api"))]
         telemetry.with_metrics(|tel| {
@@ -54860,6 +54892,7 @@ impl Torii {
         let da_runtime = self.prepare_da_runtime_services()?;
         let mcp_inflight_requests = Arc::new(mcp::McpInflightRegistry::default());
         let app_state: SharedAppState = Arc::new(AppState {
+            build_status: self.build_identity.status(),
             shutdown_signal,
             events: self.events.clone(),
             kura: self.kura.clone(),
@@ -57148,10 +57181,13 @@ mod gateway_runtime_config_tests {
                     .verifying_key()
                     .to_bytes(),
             });
-        let dependencies = ToriiRuntimeDeps::new(routing::MaybeTelemetry::disabled())
-            .with_sorafs_stream_token_signer(Arc::clone(&stream_token_signer))
-            .with_sorafs_gateway_acme_client(Arc::clone(&acme_client))
-            .with_sorafs_gateway_compliance_feed_transport(Arc::clone(&compliance_transport));
+        let dependencies = ToriiRuntimeDeps::new(
+            crate::build_identity_test_fixture::build_identity(),
+            routing::MaybeTelemetry::disabled(),
+        )
+        .with_sorafs_stream_token_signer(Arc::clone(&stream_token_signer))
+        .with_sorafs_gateway_acme_client(Arc::clone(&acme_client))
+        .with_sorafs_gateway_compliance_feed_transport(Arc::clone(&compliance_transport));
         assert!(Arc::ptr_eq(
             dependencies
                 .sorafs_stream_token_signer

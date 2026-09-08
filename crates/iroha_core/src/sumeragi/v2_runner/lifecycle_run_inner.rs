@@ -1863,6 +1863,7 @@ fn run_lifecycle_active_height(
 /// authority here after finalization.
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 pub(super) fn run_non_pending_lifecycle_loop(
+    build_identity: crate::release_identity::BuildIdentity,
     config: iroha_config::parameters::actual::Sumeragi,
     common_config: iroha_config::parameters::actual::Common,
     events_sender: crate::EventsSender,
@@ -1940,7 +1941,7 @@ pub(super) fn run_non_pending_lifecycle_loop(
             .map_err(ingress_capacity_error)?;
         super::super::status::set_v2_network_ingress(context.id(), context.height, &block_rx);
         let shared_config = config.v2_config(block_cadence, context.mode)?;
-        let fingerprints = adapter_fingerprints(&local_peer, &shared_config);
+        let fingerprints = adapter_fingerprints(build_identity, &local_peer, &shared_config);
         let control_queue_capacity = usize::try_from(shared_config.limits.control_queue_capacity)?;
         let body_queue_capacity = usize::try_from(shared_config.limits.body_queue_capacity)?;
         let chunk_queue_capacity = usize::try_from(shared_config.limits.chunk_queue_capacity)?;

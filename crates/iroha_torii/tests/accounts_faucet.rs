@@ -247,6 +247,7 @@ fn build_faucet_test_context_with_registration(
     let _ = peers_tx;
     let da_receipt_signer = cfg.common.key_pair.clone();
     let torii = Torii::new(
+        build_identity_test_fixture::build_identity(),
         chain_id.clone(),
         network_id,
         kiso,
@@ -1170,3 +1171,6 @@ async fn accounts_faucet_puzzle_raises_difficulty_after_recent_claim() {
     assert!(queued > 0);
     app.shutdown().await;
 }
+
+#[path = "../src/build_identity_test_fixture.rs"]
+mod build_identity_test_fixture;

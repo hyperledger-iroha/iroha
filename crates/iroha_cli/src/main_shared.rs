@@ -66,6 +66,12 @@ use iroha_service_model::soranet::AnonymityPolicy;
 use norito::json::{self, JsonDeserialize, JsonSerialize};
 use sorafs_manifest::alias_cache::AliasCachePolicy;
 use url::Url;
+fn compiled_build_identity() -> core::result::Result<
+    iroha_core::release_identity::BuildIdentity,
+    iroha_core::release_identity::BuildIdentityError,
+> {
+    iroha_core::compiled_build_identity!()
+}
 const VERGEN_GIT_SHA: &str = match option_env!("VERGEN_GIT_SHA") {
     Some(value) => value,
     None => "unknown",

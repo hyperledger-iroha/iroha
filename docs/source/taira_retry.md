@@ -63,6 +63,22 @@ artifact identity and endpoint guard pins remain exact. Native assemble derives
 and validates every new inventory field; cloning JSON alone never admits an
 attempt. No per-attempt directory names, nonces or capacity figures need editing.
 
+Each of the four ordered `validator_clients` requires an explicit public
+`probe_origin`, for example `http://127.0.0.1:18081/`. Use four distinct actual
+Torii ports on the approved cohosted validator machine. Native assembly joins
+each origin to its signed validator config; the retry producer rejects missing
+or ambiguous origins before retirement. Configs bind validator slots 1–4 to
+the dedicated Inrou UID/GID pairs 70000–70003. Old inventories and journals do
+not gain a compatibility path: prepare the current first-release inventory and
+use a fresh attempt for the current execution plan.
+
+Native apply qualifies four-peer convergence, prepared application mutations,
+Inrou runtime health and all four recovery restarts through these direct
+endpoints before staging or switching the public edge. The same retained
+mutations and restart evidence flow into the release proof. After cutover,
+`EdgeVerify` proves public HTTPS, discovery and doctor checks. Candidate failures
+therefore complete rollback before the public edge can expose the candidate.
+
 Read-only admission measures current artifact lengths and the public stage tree.
 It reads the small public container/service manifests and bounded bundle archive
 metadata. It never reads peer config contents. The three tiny SoraFS manifest

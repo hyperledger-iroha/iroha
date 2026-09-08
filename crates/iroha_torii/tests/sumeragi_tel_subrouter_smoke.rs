@@ -62,7 +62,10 @@ async fn sumeragi_tel_subrouter_rejects_retired_endpoints() {
         cfg.common.key_pair.clone(),
         iroha_torii::OnlinePeersProvider::new(peers_rx),
         None,
-        telemetry_handle,
+        iroha_torii::ToriiRuntimeDeps::new(
+            build_identity_test_fixture::build_identity(),
+            telemetry_handle,
+        ),
     )
     .expect("valid Torii Sumeragi-telemetry fixture");
     let runtime = torii
@@ -88,3 +91,6 @@ async fn sumeragi_tel_subrouter_rejects_retired_endpoints() {
     }
     runtime.shutdown().await;
 }
+
+#[path = "../src/build_identity_test_fixture.rs"]
+mod build_identity_test_fixture;

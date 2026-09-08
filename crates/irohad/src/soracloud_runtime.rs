@@ -1176,7 +1176,12 @@ fn run_inrou_portable_vm_startup_probe(
         worker_cgroup.attestation().expected_proc_path(),
     )?;
     append_inrou_startup_probe_qemu_args(&mut command, guest_isa, &netdev, probe);
-    command.stderr(Stdio::null());
+    let (stderr_reader, stderr_writer) = UnixStream::pair()
+        .wrap_err("create the anonymous Inrou startup-probe stderr socketpair")?;
+    let stderr_cancellation = stderr_reader
+        .try_clone()
+        .wrap_err("retain the Inrou startup-probe stderr cancellation handle")?;
+    command.stderr(Stdio::from(OwnedFd::from(stderr_writer)));
     let qmp_stream = configure_inrou_qmp_stdio(&mut command)
         .wrap_err("create the Inrou startup-probe QMP socketpair")?;
     ensure_no_process_with_inrou_identity(&child_identity)
@@ -1190,41 +1195,11 @@ fn run_inrou_portable_vm_startup_probe(
     })?;
     drop(command);
     launch_barrier.child_spawned();
-    if let Err(error) = worker_cgroup.place_launcher(child.id()) {
-        let termination = terminate_inrou_startup_probe_bounded(
-            &mut child,
-            &mut worker_cgroup,
-            &mut loopback_firewall,
-        );
-        return Err(error).wrap_err_with(|| {
-            format!(
-                "place and attest the Inrou startup-probe launcher{}",
-                inrou_termination_error_suffix(&termination)
-            )
-        });
-    }
-    if let Err(error) = launch_barrier.release() {
-        let termination = terminate_inrou_startup_probe_bounded(
-            &mut child,
-            &mut worker_cgroup,
-            &mut loopback_firewall,
-        );
-        return Err(error).wrap_err_with(|| {
-            format!(
-                "release the Inrou startup probe after cgroup placement{}",
-                inrou_termination_error_suffix(&termination)
-            )
-        });
-    }
-    let (forward, mut qmp_control, namespace_attestation) = match query_inrou_qmp_host_forward(
-        &mut child,
-        qmp_stream,
-        &namespace_plan,
-        &child_identity,
-        worker_cgroup.attestation(),
-        PROBE_GUEST_PORT,
-    ) {
-        Ok(attested) => attested,
+    let stderr_drain = match thread::Builder::new()
+        .name("inrou-startup-probe-stderr".to_owned())
+        .spawn(move || drain_host_command_stdout_bounded(stderr_reader, 16 * 1024))
+    {
+        Ok(drain) => drain,
         Err(error) => {
             let termination = terminate_inrou_startup_probe_bounded(
                 &mut child,
@@ -1233,26 +1208,17 @@ fn run_inrou_portable_vm_startup_probe(
             );
             return Err(error).wrap_err_with(|| {
                 format!(
-                    "attest the artifact-free Inrou QEMU/KVM probe{}",
+                    "start bounded Inrou startup-probe stderr capture{}",
                     inrou_termination_error_suffix(&termination)
                 )
             });
         }
     };
-    if forward != expected_backend {
-        let termination = terminate_inrou_startup_probe_bounded(
-            &mut child,
-            &mut worker_cgroup,
-            &mut loopback_firewall,
-        );
-        eyre::bail!(
-            "Inrou startup probe published host forward {forward} instead of {expected_backend}{}",
-            inrou_termination_error_suffix(&termination)
-        );
-    }
-    match namespace_attestation.connect_private_loopback(worker_cgroup.attestation(), forward) {
-        Ok(stream) => drop(stream),
-        Err(error) => {
+    // Capture only the artifact-free helper/QEMU probe's diagnostics. Its
+    // environment is cleared, and no workload, signing, or secret inputs exist.
+    // Drain concurrently even after the retained bound to avoid pipe deadlock.
+    let result: eyre::Result<()> = (|| {
+        if let Err(error) = worker_cgroup.place_launcher(child.id()) {
             let termination = terminate_inrou_startup_probe_bounded(
                 &mut child,
                 &mut worker_cgroup,
@@ -1260,55 +1226,33 @@ fn run_inrou_portable_vm_startup_probe(
             );
             return Err(error).wrap_err_with(|| {
                 format!(
-                    "exercise the attested Inrou private-network connector{}",
+                    "place and attest the Inrou startup-probe launcher{}",
                     inrou_termination_error_suffix(&termination)
                 )
             });
         }
-    }
-    if let Err(error) = namespace_attestation.attest_live(worker_cgroup.attestation()) {
-        let termination = terminate_inrou_startup_probe_bounded(
-            &mut child,
-            &mut worker_cgroup,
-            &mut loopback_firewall,
-        );
-        return Err(error).wrap_err_with(|| {
-            format!(
-                "re-attest the live Inrou startup probe before shutdown{}",
-                inrou_termination_error_suffix(&termination)
-            )
-        });
-    }
-    if let Err(error) = request_inrou_qmp_quit(
-        &mut qmp_control,
-        SORACLOUD_INROU_QMP_POWERDOWN_REQUEST_TIMEOUT,
-    ) {
-        let termination = terminate_inrou_startup_probe_bounded(
-            &mut child,
-            &mut worker_cgroup,
-            &mut loopback_firewall,
-        );
-        return Err(error).wrap_err_with(|| {
-            format!(
-                "shut down the Inrou startup probe over QMP{}",
-                inrou_termination_error_suffix(&termination)
-            )
-        });
-    }
-    let status =
-        match wait_for_inrou_child_exit_bounded(&mut child, SORACLOUD_INROU_CHILD_STOP_TIMEOUT) {
-            Ok(Some(status)) => status,
-            Ok(None) => {
-                let termination = terminate_inrou_startup_probe_bounded(
-                    &mut child,
-                    &mut worker_cgroup,
-                    &mut loopback_firewall,
-                );
-                eyre::bail!(
-                    "Inrou startup probe ignored its QMP quit request{}",
+        if let Err(error) = launch_barrier.release() {
+            let termination = terminate_inrou_startup_probe_bounded(
+                &mut child,
+                &mut worker_cgroup,
+                &mut loopback_firewall,
+            );
+            return Err(error).wrap_err_with(|| {
+                format!(
+                    "release the Inrou startup probe after cgroup placement{}",
                     inrou_termination_error_suffix(&termination)
-                );
-            }
+                )
+            });
+        }
+        let (forward, mut qmp_control, namespace_attestation) = match query_inrou_qmp_host_forward(
+            &mut child,
+            qmp_stream,
+            &namespace_plan,
+            &child_identity,
+            worker_cgroup.attestation(),
+            PROBE_GUEST_PORT,
+        ) {
+            Ok(attested) => attested,
             Err(error) => {
                 let termination = terminate_inrou_startup_probe_bounded(
                     &mut child,
@@ -1317,44 +1261,137 @@ fn run_inrou_portable_vm_startup_probe(
                 );
                 return Err(error).wrap_err_with(|| {
                     format!(
-                        "attest bounded Inrou startup-probe shutdown{}",
+                        "attest the artifact-free Inrou QEMU/KVM probe{}",
                         inrou_termination_error_suffix(&termination)
                     )
                 });
             }
         };
-    let empty_cgroup = match worker_cgroup.kill_and_attest_empty_bounded() {
-        Ok(empty_cgroup) => empty_cgroup,
-        Err(error) => {
+        if forward != expected_backend {
+            let termination = terminate_inrou_startup_probe_bounded(
+                &mut child,
+                &mut worker_cgroup,
+                &mut loopback_firewall,
+            );
+            eyre::bail!(
+                "Inrou startup probe published host forward {forward} instead of {expected_backend}{}",
+                inrou_termination_error_suffix(&termination)
+            );
+        }
+        match namespace_attestation.connect_private_loopback(worker_cgroup.attestation(), forward) {
+            Ok(stream) => drop(stream),
+            Err(error) => {
+                let termination = terminate_inrou_startup_probe_bounded(
+                    &mut child,
+                    &mut worker_cgroup,
+                    &mut loopback_firewall,
+                );
+                return Err(error).wrap_err_with(|| {
+                    format!(
+                        "exercise the attested Inrou private-network connector{}",
+                        inrou_termination_error_suffix(&termination)
+                    )
+                });
+            }
+        }
+        if let Err(error) = namespace_attestation.attest_live(worker_cgroup.attestation()) {
+            let termination = terminate_inrou_startup_probe_bounded(
+                &mut child,
+                &mut worker_cgroup,
+                &mut loopback_firewall,
+            );
+            return Err(error).wrap_err_with(|| {
+                format!(
+                    "re-attest the live Inrou startup probe before shutdown{}",
+                    inrou_termination_error_suffix(&termination)
+                )
+            });
+        }
+        if let Err(error) = request_inrou_qmp_quit(
+            &mut qmp_control,
+            SORACLOUD_INROU_QMP_POWERDOWN_REQUEST_TIMEOUT,
+        ) {
+            let termination = terminate_inrou_startup_probe_bounded(
+                &mut child,
+                &mut worker_cgroup,
+                &mut loopback_firewall,
+            );
+            return Err(error).wrap_err_with(|| {
+                format!(
+                    "shut down the Inrou startup probe over QMP{}",
+                    inrou_termination_error_suffix(&termination)
+                )
+            });
+        }
+        let status =
+            match wait_for_inrou_child_exit_bounded(&mut child, SORACLOUD_INROU_CHILD_STOP_TIMEOUT)
+            {
+                Ok(Some(status)) => status,
+                Ok(None) => {
+                    let termination = terminate_inrou_startup_probe_bounded(
+                        &mut child,
+                        &mut worker_cgroup,
+                        &mut loopback_firewall,
+                    );
+                    eyre::bail!(
+                        "Inrou startup probe ignored its QMP quit request{}",
+                        inrou_termination_error_suffix(&termination)
+                    );
+                }
+                Err(error) => {
+                    let termination = terminate_inrou_startup_probe_bounded(
+                        &mut child,
+                        &mut worker_cgroup,
+                        &mut loopback_firewall,
+                    );
+                    return Err(error).wrap_err_with(|| {
+                        format!(
+                            "attest bounded Inrou startup-probe shutdown{}",
+                            inrou_termination_error_suffix(&termination)
+                        )
+                    });
+                }
+            };
+        let empty_cgroup = match worker_cgroup.kill_and_attest_empty_bounded() {
+            Ok(empty_cgroup) => empty_cgroup,
+            Err(error) => {
+                if let Some(firewall) = loopback_firewall.take() {
+                    // QMP quit reaped the direct child, but an uncleared cgroup
+                    // leaves descendant termination unproven. Keep the barrier
+                    // fail-closed.
+                    std::mem::forget(firewall);
+                }
+                return Err(error)
+                    .wrap_err("prove the QMP-stopped Inrou startup-probe cgroup is empty");
+            }
+        };
+        if let Err(error) = worker_cgroup.release_attested_empty(empty_cgroup) {
             if let Some(firewall) = loopback_firewall.take() {
-                // QMP quit reaped the direct child, but an uncleared cgroup
-                // leaves descendant termination unproven. Keep the barrier
-                // fail-closed.
                 std::mem::forget(firewall);
             }
-            return Err(error)
-                .wrap_err("prove the QMP-stopped Inrou startup-probe cgroup is empty");
+            return Err(error).wrap_err(
+                "release the empty Inrou startup-probe cgroup after direct-child exit attestation",
+            );
         }
-    };
-    if let Err(error) = worker_cgroup.release_attested_empty(empty_cgroup) {
-        if let Some(firewall) = loopback_firewall.take() {
-            std::mem::forget(firewall);
+        if !status.success() {
+            eyre::bail!("Inrou startup probe exited with non-success status {status}");
         }
-        return Err(error).wrap_err(
-            "release the empty Inrou startup-probe cgroup after direct-child exit attestation",
-        );
+        loopback_firewall
+            .as_mut()
+            .expect("startup-probe firewall remains installed")
+            .cleanup()
+            .wrap_err("remove the Inrou startup-probe firewall")?;
+        ensure_no_process_with_inrou_identity(&child_identity)
+            .wrap_err("prove the dedicated Inrou identity is vacant after startup qualification")?;
+        Ok(())
+    })();
+    let diagnostics = finish_inrou_startup_probe_stderr_bounded(stderr_drain, &stderr_cancellation);
+    match result {
+        Ok(()) => diagnostics
+            .map(|_| ())
+            .wrap_err("finish Inrou startup-probe stderr capture"),
+        Err(error) => Err(error).wrap_err(inrou_startup_probe_stderr_context(&diagnostics)),
     }
-    if !status.success() {
-        eyre::bail!("Inrou startup probe exited with non-success status {status}");
-    }
-    loopback_firewall
-        .as_mut()
-        .expect("startup-probe firewall remains installed")
-        .cleanup()
-        .wrap_err("remove the Inrou startup-probe firewall")?;
-    ensure_no_process_with_inrou_identity(&child_identity)
-        .wrap_err("prove the dedicated Inrou identity is vacant after startup qualification")?;
-    Ok(())
 }
 #[cfg(target_os = "linux")]
 fn ensure_portable_vm_backend_statically_available(
@@ -17205,6 +17242,68 @@ fn configure_inrou_qmp_stdio(command: &mut Command) -> io::Result<UnixStream> {
         .stdout(Stdio::from(OwnedFd::from(child_output)));
     Ok(supervisor)
 }
+#[cfg(any(target_os = "linux", all(test, unix)))]
+fn finish_inrou_startup_probe_stderr_bounded(
+    drain: thread::JoinHandle<io::Result<(Vec<u8>, bool)>>,
+    cancellation: &std::os::unix::net::UnixStream,
+) -> eyre::Result<(Vec<u8>, bool)> {
+    let deadline = std::time::Instant::now() + SORACLOUD_INROU_LOG_DRAIN_STOP_TIMEOUT;
+    while !drain.is_finished() && std::time::Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(10));
+    }
+    if !drain.is_finished() {
+        // A failed cgroup cleanup may leave a descendant holding stderr open.
+        // Cancel its anonymous read endpoint so this probe cannot leave a
+        // permanently blocked drain thread behind, even without peer EOF.
+        cancellation
+            .shutdown(Shutdown::Read)
+            .wrap_err("cancel unfinished Inrou startup-probe stderr capture")?;
+    }
+    finish_inrou_stdout_drain_bounded(drain)
+}
+#[cfg(any(target_os = "linux", test))]
+fn require_inrou_launcher_running(child: &mut std::process::Child) -> eyre::Result<()> {
+    if let Some(status) = child
+        .try_wait()
+        .wrap_err("poll the Inrou namespace launcher")?
+    {
+        eyre::bail!("Inrou namespace launcher exited before QMP attestation with status {status}");
+    }
+    Ok(())
+}
+#[cfg(any(target_os = "linux", test))]
+fn inrou_startup_probe_stderr_context(diagnostics: &eyre::Result<(Vec<u8>, bool)>) -> String {
+    match diagnostics {
+        Ok((bytes, truncated)) => {
+            // Keep a single readable diagnostic line; never emit terminal controls.
+            let text = String::from_utf8_lossy(bytes)
+                .chars()
+                .map(|character| {
+                    if character.is_control() {
+                        ' '
+                    } else {
+                        character
+                    }
+                })
+                .collect::<String>();
+            let text = text.trim();
+            format!(
+                "Inrou startup-probe diagnostics: {}{}",
+                if text.is_empty() {
+                    "(stderr was empty)"
+                } else {
+                    text
+                },
+                if *truncated {
+                    " [stderr truncated at 16384 bytes]"
+                } else {
+                    ""
+                },
+            )
+        }
+        Err(error) => format!("Inrou startup-probe stderr capture failed: {error:#}"),
+    }
+}
 fn drain_host_command_stdout_bounded(
     mut reader: impl io::Read,
     maximum_bytes: usize,
@@ -18898,15 +18997,9 @@ fn query_inrou_qmp_host_forward(
     inrou_namespace::InrouNamespaceAttestation,
 )> {
     let deadline = std::time::Instant::now() + SORACLOUD_INROU_QMP_ATTEST_TIMEOUT;
-    let namespace_attestation = namespace_plan.discover_and_attest_qemu(
-        child.id(),
-        cgroup_attestation,
-        identity,
-        deadline,
-    )?;
-    if let Some(status) = child.try_wait()? {
-        eyre::bail!("Inrou namespace launcher exited before QMP attestation with status {status}");
-    }
+    let namespace_attestation =
+        namespace_plan.discover_and_attest_qemu(child, cgroup_attestation, identity, deadline)?;
+    require_inrou_launcher_running(child)?;
     let mut control = PortableVmQmpControl {
         reader: io::BufReader::new(stream),
     };
@@ -34328,6 +34421,47 @@ mod tests {
             .map(|argument| argument.to_string_lossy().into_owned())
             .collect::<Vec<_>>();
         assert_eq!(qmp_args, ["-qmp", "stdio", "-serial", "none"]);
+        Ok(())
+    }
+    #[cfg(unix)]
+    #[test]
+    fn inrou_startup_probe_stderr_stops_with_an_open_descendant_writer() -> Result<()> {
+        let (reader, _retained_descendant_writer) = std::os::unix::net::UnixStream::pair()?;
+        let cancellation = reader.try_clone()?;
+        let drain = thread::spawn(move || drain_host_command_stdout_bounded(reader, 16 * 1024));
+        let started = std::time::Instant::now();
+        let captured = finish_inrou_startup_probe_stderr_bounded(drain, &cancellation)?;
+        assert_eq!(captured, (vec![], false));
+        assert!(started.elapsed() < SORACLOUD_INROU_LOG_DRAIN_STOP_TIMEOUT * 3);
+        Ok(())
+    }
+    #[cfg(not(windows))]
+    #[test]
+    fn inrou_startup_probe_reports_the_actual_launcher_exit() -> Result<()> {
+        let mut child = Command::new("/bin/sh").args(["-c", "exit 42"]).spawn()?;
+        child.wait()?;
+        let error = require_inrou_launcher_running(&mut child)
+            .expect_err("an exited launcher cannot become ready");
+        assert!(error.to_string().contains("status"));
+        assert!(error.to_string().contains("42"));
+        Ok(())
+    }
+    #[test]
+    fn inrou_startup_probe_stderr_retains_bounded_failure_and_sanitizes_controls() -> Result<()> {
+        let prefix = b"qemu: Invalid parameter 'exit-with-parent'\n\x1b[31m";
+        let mut bytes = prefix.to_vec();
+        bytes.extend(std::iter::repeat_n(b'x', 32 * 1024));
+        let captured = drain_host_command_stdout_bounded(io::Cursor::new(bytes), 16 * 1024)?;
+        assert_eq!(captured.0.len(), 16 * 1024);
+        assert!(captured.1);
+        let message = inrou_startup_probe_stderr_context(&Ok(captured));
+        assert!(message.contains("Invalid parameter 'exit-with-parent'"));
+        assert!(message.contains("stderr truncated"));
+        assert!(!message.chars().any(char::is_control));
+        let empty = inrou_startup_probe_stderr_context(&Ok((vec![], false)));
+        assert!(empty.contains("stderr was empty"));
+        let failed = inrou_startup_probe_stderr_context(&Err(eyre::eyre!("drain failed")));
+        assert!(failed.contains("drain failed"));
         Ok(())
     }
     #[cfg(not(windows))]

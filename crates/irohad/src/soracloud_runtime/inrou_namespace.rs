@@ -451,13 +451,14 @@ impl InrouNamespacePlan {
 
     pub(super) fn discover_and_attest_qemu(
         self: &Arc<Self>,
-        launcher_pid: u32,
+        child: &mut std::process::Child,
         cgroup: &InrouCgroupAttestation,
         identity: &PortableVmChildIdentity,
         deadline: std::time::Instant,
     ) -> eyre::Result<InrouNamespaceAttestation> {
         loop {
-            let last_mismatch = match self.try_discover_qemu(launcher_pid, cgroup, identity) {
+            super::require_inrou_launcher_running(child)?;
+            let last_mismatch = match self.try_discover_qemu(child.id(), cgroup, identity) {
                 Ok(attestation) => return Ok(attestation),
                 Err(error) => error.to_string(),
             };

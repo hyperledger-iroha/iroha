@@ -834,6 +834,46 @@ pub enum InrouCanaryMode {
     /// Replace an already-deployed canary revision.
     Upgrade,
 }
+/// Select runtime qualification before cutover or full public qualification after cutover.
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InrouProbeScope {
+    /// Probe the admitted local candidate without public discovery.
+    Candidate,
+    /// Require runtime, routed service, and public discovery evidence.
+    Public,
+}
+impl InrouProbeScope {
+    pub(super) fn label(self) -> &'static str {
+        match self {
+            Self::Candidate => "candidate",
+            Self::Public => "public",
+        }
+    }
+
+    pub(super) fn check_names(self) -> &'static [&'static str] {
+        match self {
+            Self::Candidate => &["inrou_authoritative_status", "inrou_public_routes"],
+            Self::Public => &[
+                "inrou_authoritative_status",
+                "inrou_public_routes",
+                "inrou_public_discovery",
+            ],
+        }
+    }
+
+    fn validate_root(self, root: &str) -> Result<()> {
+        if self == Self::Candidate {
+            let root = Url::parse(&normalize_root_url(root)?)?;
+            if root.scheme() != "http"
+                || root.host_str() != Some("127.0.0.1")
+                || root.port().is_none()
+            {
+                eyre::bail!("candidate Inrou probes require an explicit HTTP loopback port");
+            }
+        }
+        Ok(())
+    }
+}
 /// Canonical offline Taira Inrou artifact staging.
 #[derive(clap::Args, Debug)]
 pub struct InrouStage {
@@ -1089,6 +1129,7 @@ impl From<&crate::soracloud::TairaInrouStageIdentity> for PreparedInrouStageIden
 #[norito(deny_unknown_fields)]
 struct PreparedInrouEnvelopeV1 {
     schema: String,
+    probe_scope: String,
     binding: crate::soracloud::TairaMutationBindingV1,
     public_root: String,
     chain_id: String,
@@ -1118,7 +1159,10 @@ struct ValidatedPreparedInrouV1 {
         ])
 ))]
 pub struct InrouCanary {
-    /// Public Torii root URL used for mutation, status, and route probes.
+    /// Candidate runtime qualification or complete public qualification.
+    #[arg(long, value_enum, default_value = "public")]
+    pub probe_scope: InrouProbeScope,
+    /// Public or admitted loopback Torii root used for mutation, status, and route probes.
     #[arg(long, default_value = DEFAULT_PUBLIC_ROOT)]
     pub public_root: String,
     /// Owner-only stage created by `iroha taira inrou-stage` and preseeded into all validators.
@@ -1257,6 +1301,7 @@ fn run_inrou_canary_exact<C: RunContext>(context: &mut C, args: &InrouCanary) ->
     ensure_canonical_taira_client_identity(context.config())?;
     let _chain_discriminant = ChainDiscriminantGuard::enter(DEFAULT_CHAIN_DISCRIMINANT);
     let public_root = normalize_root_url(&args.public_root)?;
+    args.probe_scope.validate_root(&public_root)?;
     let binding = args.binding()?;
     let action = args.prepared_action()?;
     args.validate_prerequisite_action(action)?;
@@ -1292,6 +1337,7 @@ fn run_inrou_canary_exact<C: RunContext>(context: &mut C, args: &InrouCanary) ->
             let envelope = make_prepared_inrou_envelope(
                 context.config(),
                 &public_root,
+                args.probe_scope,
                 args.operation,
                 &stage,
                 &expected_fee_payment,
@@ -1362,6 +1408,7 @@ fn require_inrou_binding_current(binding: &crate::soracloud::TairaMutationBindin
 fn make_prepared_inrou_envelope(
     config: &Config,
     public_root: &str,
+    probe_scope: InrouProbeScope,
     operation: InrouCanaryOperation,
     stage: &crate::soracloud::TairaInrouStageIdentity,
     expected_fee_payment: &FeePaymentIntent,
@@ -1414,6 +1461,7 @@ fn make_prepared_inrou_envelope(
     };
     Ok(PreparedInrouEnvelopeV1 {
         schema: PREPARED_ENVELOPE_SCHEMA_V1.to_owned(),
+        probe_scope: probe_scope.label().to_owned(),
         binding: prepared.binding,
         public_root: public_root.to_owned(),
         chain_id: config.chain.to_string(),
@@ -1470,6 +1518,7 @@ fn load_and_validate_prepared_inrou(
         crate::soracloud::load_taira_inrou_stage_identity(config, &args.stage_dir, args.mode)?;
     let operation = envelope.operation.transaction();
     if envelope.schema != PREPARED_ENVELOPE_SCHEMA_V1
+        || envelope.probe_scope != args.probe_scope.label()
         || &envelope.binding != expected_binding
         || envelope.public_root != public_root
         || envelope.chain_id != config.chain.to_string()
@@ -1756,7 +1805,13 @@ fn prepared_inrou_report(
             .wrap_err("failed to bind prepared Inrou status client")?;
         status_config.torii_request_timeout = Duration::from_secs(args.timeout_secs.max(1));
         let status_client = IrohaClient::new(status_config);
-        verify_inrou_check(public_root, &status_client, stage, args.timeout_secs)?
+        verify_inrou_check(
+            public_root,
+            &status_client,
+            stage,
+            args.timeout_secs,
+            args.probe_scope,
+        )?
     } else {
         report_value(
             "taira_inrou_canary",
@@ -1771,6 +1826,10 @@ fn prepared_inrou_report(
     let object = report
         .as_object_mut()
         .ok_or_else(|| eyre!("prepared Inrou report root is not an object"))?;
+    object.insert(
+        "probe_scope".to_owned(),
+        Value::String(args.probe_scope.label().to_owned()),
+    );
     object.insert(
         "command".to_owned(),
         Value::String("taira_inrou_canary".to_owned()),
@@ -1899,6 +1958,8 @@ fn prove_inrou_predecessor_applied(
             .and_then(Value::as_u64)
             != Some(binding.execution_expires_at_unix_ms)
         || root.get("public_root").and_then(Value::as_str) != Some(public_root)
+        || (expected_kind != "write_canary"
+            && root.get("probe_scope").and_then(Value::as_str) != Some(args.probe_scope.label()))
         || root.get("chain_id").and_then(Value::as_str) != Some(DEFAULT_CHAIN_ID)
         || root.get("network_id").and_then(Value::as_str)
             != Some(config.network_id.to_string().as_str())
@@ -2184,7 +2245,10 @@ fn verify_exact_committed_transaction(
 /// Read-only verification of one retained canonical Taira Inrou stage.
 #[derive(clap::Args, Debug)]
 pub struct InrouCheck {
-    /// Public Torii root URL used for network preflight and public route reads.
+    /// Candidate runtime qualification or complete public qualification.
+    #[arg(long, value_enum, default_value = "public")]
+    pub probe_scope: InrouProbeScope,
+    /// Public or admitted loopback Torii root used for network preflight and route reads.
     ///
     /// Signed Soracloud status reads continue to use the Torii URL from the selected client
     /// configuration so validator-specific restart checks cannot collapse onto the public edge.
@@ -2214,12 +2278,14 @@ impl Run for InrouCheck {
             self.mode,
         )?;
         let public_root = normalize_root_url(&self.public_root)?;
+        self.probe_scope.validate_root(&public_root)?;
         preflight_taira_network_identity(&public_root, context.config())?;
         let receipt = verify_inrou_check_from_selected_status_origin(
             &public_root,
             context.config(),
             &stage,
             self.timeout_secs,
+            self.probe_scope,
         )?;
         render_report(context, self.json, &receipt)?;
         if report_status(&receipt) != Some("ok") {
@@ -2234,9 +2300,16 @@ fn verify_inrou_check_from_selected_status_origin(
     status_config: &Config,
     stage: &crate::soracloud::TairaInrouStageIdentity,
     timeout_secs: u64,
+    probe_scope: InrouProbeScope,
 ) -> Result<Value> {
     let status_client = IrohaClient::new(status_config.clone());
-    verify_inrou_check(public_root, &status_client, stage, timeout_secs)
+    verify_inrou_check(
+        public_root,
+        &status_client,
+        stage,
+        timeout_secs,
+        probe_scope,
+    )
 }
 fn ensure_canonical_taira_client_identity(config: &Config) -> Result<()> {
     if config.chain.to_string() != DEFAULT_CHAIN_ID {
@@ -3291,9 +3364,12 @@ fn probe_inrou_service(
     status_client: &IrohaClient,
     deployment: &InrouProbeIdentity,
     timeout_secs: u64,
+    probe_scope: InrouProbeScope,
 ) -> Result<InrouProbeObservation> {
     validate_inrou_canary_timeout(timeout_secs)?;
+    probe_scope.validate_root(public_root)?;
     let http = HttpClient::builder()
+        .no_proxy()
         .timeout(Duration::from_secs(timeout_secs.min(5)))
         .user_agent("iroha-taira-inrou-probe/1")
         .redirect(reqwest::redirect::Policy::none())
@@ -3313,7 +3389,7 @@ fn probe_inrou_service(
     let mut last_route_code = 0_u16;
     let mut last_route_error = "route not observed".to_owned();
     let mut current_route_ready = false;
-    let mut discovery_ready = false;
+    let mut discovery_ready = probe_scope == InrouProbeScope::Candidate;
     let mut last_discovery_code = 0_u16;
     let mut last_discovery_error = "public discovery not observed".to_owned();
     let mut health_identity_conflict = false;
@@ -3401,7 +3477,11 @@ fn probe_inrou_service(
             }
             Err(error) => last_route_error = format!("{error:#}"),
         }
-        if status_ready && current_route_ready && identities.len() == 4 && !health_identity_conflict
+        if probe_scope == InrouProbeScope::Public
+            && status_ready
+            && current_route_ready
+            && identities.len() == 4
+            && !health_identity_conflict
         {
             match verify_inrou_public_discovery(&http, public_root, deployment) {
                 Ok(status) => {
@@ -3429,18 +3509,6 @@ fn probe_inrou_service(
             format!("active_adverts={active_adverts}, hosted_replicas={hosted_replicas}")
         } else {
             last_status_error.clone()
-        }),
-    );
-    push_check(
-        &mut checks,
-        "inrou_public_discovery",
-        last_discovery_code,
-        discovery_ready,
-        Some(if discovery_ready {
-            "current and revision authority plus public path and CID-host bytes, headers, and hash are exact"
-                .to_owned()
-        } else {
-            last_discovery_error.clone()
         }),
     );
     let marker_count = identities
@@ -3474,6 +3542,20 @@ fn probe_inrou_service(
             )
         }),
     );
+    if probe_scope == InrouProbeScope::Public {
+        push_check(
+            &mut checks,
+            "inrou_public_discovery",
+            last_discovery_code,
+            discovery_ready,
+            Some(if discovery_ready {
+                "current and revision authority plus public path and CID-host bytes, headers, and hash are exact"
+                .to_owned()
+            } else {
+                last_discovery_error.clone()
+            }),
+        );
+    }
     let mut failures = Vec::new();
     if !status_ready {
         failures.push(format!(
@@ -3520,9 +3602,16 @@ fn verify_inrou_check(
     status_client: &IrohaClient,
     stage: &crate::soracloud::TairaInrouStageIdentity,
     timeout_secs: u64,
+    probe_scope: InrouProbeScope,
 ) -> Result<Value> {
     let expected = InrouProbeIdentity::from(stage);
-    let observation = probe_inrou_service(public_root, status_client, &expected, timeout_secs)?;
+    let observation = probe_inrou_service(
+        public_root,
+        status_client,
+        &expected,
+        timeout_secs,
+        probe_scope,
+    )?;
     let observed_at_unix_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .wrap_err("system clock predates the Unix epoch; refusing stale-looking Inrou evidence")?
@@ -3530,6 +3619,10 @@ fn verify_inrou_check(
     let observed_at_unix_ms = u64::try_from(observed_at_unix_ms)
         .wrap_err("Inrou evidence timestamp exceeds the V1 u64 range")?;
     let mut extra = Map::new();
+    extra.insert(
+        "probe_scope".to_owned(),
+        Value::String(probe_scope.label().to_owned()),
+    );
     extra.insert(
         "service_name".to_owned(),
         Value::from(stage.service_name.clone()),
@@ -5396,6 +5489,7 @@ fn read_onboarding_token_file(path: &Path) -> Result<Zeroizing<String>> {
 }
 fn http_client() -> Result<HttpClient> {
     HttpClient::builder()
+        .no_proxy()
         .timeout(Duration::from_secs(30))
         .user_agent("iroha-taira-devex/1")
         .redirect(reqwest::redirect::Policy::none())
@@ -7409,6 +7503,7 @@ mod tests {
     fn inrou_canary_binding_and_prerequisite_are_child_exact() {
         let nonce = "n".repeat(32);
         let mut args = InrouCanary {
+            probe_scope: InrouProbeScope::Public,
             public_root: DEFAULT_PUBLIC_ROOT.to_owned(),
             stage_dir: PathBuf::from("/private/runtime/inrou-stage"),
             mode: InrouCanaryMode::Deploy,
@@ -10112,8 +10207,14 @@ mod tests {
             Url::parse(&format!("{}/", server.base_url)).expect("mock Torii URL");
         let client = IrohaClient::new(config);
 
-        let observation = probe_inrou_service(&server.base_url, &client, &deployment, 3)
-            .expect("probe converges after a final current route success");
+        let observation = probe_inrou_service(
+            &server.base_url,
+            &client,
+            &deployment,
+            3,
+            InrouProbeScope::Public,
+        )
+        .expect("probe converges after a final current route success");
         assert!(
             observation.failures.is_empty(),
             "unexpected probe failures: {:?}",
@@ -10178,8 +10279,11 @@ mod tests {
             &status_config,
             &stage,
             2,
+            InrouProbeScope::Public,
         )
         .expect("status and route probes use their distinct configured origins");
+        crate::taira_public_reset::validate_inrou_checks_for_test(&report, InrouProbeScope::Public)
+            .expect("active public probe output satisfies the host receipt contract");
         assert_eq!(report_status(&report), Some("ok"));
         assert_eq!(route_index.load(Ordering::Acquire), 4);
 
@@ -10200,6 +10304,138 @@ mod tests {
             4
         );
     }
+    #[test]
+    fn candidate_inrou_qualifies_runtime_before_public_discovery_exists() {
+        let _chain_discriminant = ChainDiscriminantGuard::enter(DEFAULT_CHAIN_DISCRIMINANT);
+        for scope in [InrouProbeScope::Candidate, InrouProbeScope::Public] {
+            let service_version = inrou_canary_artifact_version(0x26);
+            let stage = inrou_canary_stage_identity("deploy", &service_version);
+            let status = exact_inrou_status(&service_version, "Deploy", 1);
+            let route_index = Arc::new(AtomicUsize::new(0));
+            let server_route_index = Arc::clone(&route_index);
+            let server = spawn_mock_http(100, move |request| {
+                assert_eq!(request.method, "GET");
+                match path_only(&request.path) {
+                    "/v1/soracloud/status" => {
+                        assert!(
+                            !request.header_values("x-iroha-signature").is_empty(),
+                            "authoritative status must retain account authentication"
+                        );
+                        MockResponse::json(200, status.clone())
+                    }
+                    "/api/v1/inrou-canary/health" => {
+                        let slot = u64::try_from(
+                            server_route_index.fetch_add(1, Ordering::AcqRel) % 4 + 1,
+                        )
+                        .expect("bounded replica slot");
+                        MockResponse::json(200, exact_inrou_health_response(&service_version, slot))
+                    }
+                    _ => MockResponse::json(404, norito::json!({"error": "edge not installed"})),
+                }
+            });
+            let key_pair = fixture_key_pair(0x44);
+            let mut config = crate::fallback_config();
+            config.account = AccountId::new(key_pair.public_key().clone());
+            config.key_pair = key_pair;
+            config.torii_api_url =
+                Url::parse(&format!("{}/", server.base_url)).expect("candidate Torii URL");
+            let report = verify_inrou_check_from_selected_status_origin(
+                &server.base_url,
+                &config,
+                &stage,
+                2,
+                scope,
+            )
+            .expect("probe report");
+            assert_eq!(
+                report.get("probe_scope").and_then(Value::as_str),
+                Some(scope.label())
+            );
+            assert_eq!(
+                report
+                    .get("replica_identities")
+                    .and_then(Value::as_array)
+                    .map(Vec::len),
+                Some(4)
+            );
+            let checks = report
+                .get("checks")
+                .and_then(Value::as_array)
+                .expect("probe checks");
+            assert_eq!(
+                checks
+                    .iter()
+                    .map(|check| check
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .expect("check name"))
+                    .collect::<Vec<_>>(),
+                scope.check_names()
+            );
+            let accepted =
+                crate::taira_public_reset::validate_inrou_checks_for_test(&report, scope);
+            let requests = finish_mock(server);
+            if scope == InrouProbeScope::Candidate {
+                assert_eq!(report_status(&report), Some("ok"));
+                accepted.expect("actual candidate producer output satisfies the host contract");
+                assert_eq!(requests.len(), 8);
+                assert!(requests.iter().all(|request| matches!(
+                    path_only(&request.path),
+                    "/v1/soracloud/status" | "/api/v1/inrou-canary/health"
+                )));
+                assert!(
+                    crate::taira_public_reset::validate_inrou_checks_for_test(
+                        &report,
+                        InrouProbeScope::Public
+                    )
+                    .is_err(),
+                    "candidate evidence must never qualify public cutover"
+                );
+            } else {
+                assert_eq!(report_status(&report), Some("fail"));
+                assert!(
+                    accepted.is_err(),
+                    "missing public discovery must block public qualification"
+                );
+                assert!(requests.iter().any(|request| !matches!(
+                    path_only(&request.path),
+                    "/v1/soracloud/status" | "/api/v1/inrou-canary/health"
+                )));
+                assert_eq!(
+                    checks
+                        .last()
+                        .and_then(|check| check.get("ok"))
+                        .and_then(Value::as_bool),
+                    Some(false)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn candidate_inrou_scope_rejects_remote_or_implicit_probe_destinations() {
+        InrouProbeScope::Candidate
+            .validate_root("http://127.0.0.1:8080")
+            .expect("inventory can bind an explicit local Torii port");
+        for root in [
+            "https://taira.sora.org",
+            "http://127.0.0.1",
+            "http://localhost:8080",
+            "http://192.0.2.1:8080",
+            "http://127.0.0.1:8080/redirect",
+            "http://127.0.0.1:8080?route=other",
+            "http://user@127.0.0.1:8080",
+        ] {
+            assert!(
+                InrouProbeScope::Candidate.validate_root(root).is_err(),
+                "candidate root accepted {root}"
+            );
+        }
+        InrouProbeScope::Public
+            .validate_root(DEFAULT_PUBLIC_ROOT)
+            .expect("public endpoint");
+    }
+
     #[test]
     fn inrou_health_identity_requires_exact_v1_shape_and_version() {
         let service_version = inrou_canary_artifact_version(0x22);

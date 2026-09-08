@@ -223,6 +223,7 @@ struct ProverReportSummary {
 }
 #[derive(Clone)]
 struct ProverCfg {
+    build_identity: iroha_core::release_identity::BuildIdentity,
     enabled: bool,
     scan_period_secs: u64,
     reports_ttl_secs: u64,
@@ -240,6 +241,21 @@ struct ProverCfg {
     verification_attempts: Arc<AtomicUsize>,
 }
 static PROVER_CFG: OnceLock<RwLock<ProverCfg>> = OnceLock::new();
+// A preparation owns reconfiguration until commit/drop; readers retain their snapshot.
+static PROVER_RECONFIGURE: Mutex<()> = Mutex::new(());
+
+/// Validated prover configuration reserved before process-wide startup effects.
+pub(crate) struct PreparedProverConfiguration {
+    cfg: ProverCfg,
+    _reservation: parking_lot::MutexGuard<'static, ()>,
+}
+impl PreparedProverConfiguration {
+    /// Publish the validated configuration while retaining reconfiguration custody.
+    pub(crate) fn commit(self) {
+        let lock = PROVER_CFG.get_or_init(|| RwLock::new(self.cfg.clone()));
+        *lock.write() = self.cfg;
+    }
+}
 #[cfg(test)]
 static TEST_PROCESSING_DELAY_MS: AtomicU64 = AtomicU64::new(0);
 #[cfg(test)]
@@ -248,9 +264,12 @@ static TEST_SNAPSHOT_LOAD_DELAY_MS: AtomicU64 = AtomicU64::new(0);
 static TEST_MAX_SCAN_MILLIS_OVERRIDE: AtomicU64 = AtomicU64::new(0);
 #[cfg(test)]
 static MAX_INFLIGHT_OBSERVED: AtomicUsize = AtomicUsize::new(0);
-/// Configure prover scheduling, bounded report retention, verifier scope, and telemetry.
+/// Prepare prover scheduling, bounded retention, verifier scope and identity.
+/// Reject a contradictory executable identity before any process-wide policy changes.
+/// Dropping the preparation preserves the published configuration.
 #[allow(clippy::too_many_arguments)]
-pub fn configure(
+pub(crate) fn prepare_configuration(
+    build_identity: iroha_core::release_identity::BuildIdentity,
     enabled: bool,
     scan_period_secs: u64,
     reports_ttl_secs: u64,
@@ -264,7 +283,7 @@ pub fn configure(
     allowed_circuits: Vec<String>,
     state: Option<Arc<CoreState>>,
     telemetry: MaybeTelemetry,
-) {
+) -> Result<PreparedProverConfiguration, &'static str> {
     assert!(
         reports_max_count > 0,
         "prover report retention count must be greater than zero"
@@ -273,7 +292,12 @@ pub fn configure(
         reports_max_bytes >= REPORT_FILE_MAX_BYTES.saturating_add(REPORT_SUMMARY_FILE_MAX_BYTES),
         "prover report retention bytes must fit one maximum-size report and summary"
     );
+    let reservation = PROVER_RECONFIGURE.lock();
+    if with_cfg(|cfg| cfg.build_identity != build_identity).unwrap_or(false) {
+        return Err("prover executable build identity cannot change during this process");
+    }
     let cfg = ProverCfg {
+        build_identity,
         enabled,
         scan_period_secs,
         reports_ttl_secs,
@@ -290,18 +314,12 @@ pub fn configure(
         #[cfg(test)]
         verification_attempts: Arc::new(AtomicUsize::new(0)),
     };
-    if let Some(lock) = PROVER_CFG.get() {
-        let mut guard = lock.write();
-        *guard = cfg;
-        return;
-    }
-    if PROVER_CFG.set(RwLock::new(cfg.clone())).is_err() {
-        if let Some(lock) = PROVER_CFG.get() {
-            let mut guard = lock.write();
-            *guard = cfg;
-        }
-    }
+    Ok(PreparedProverConfiguration {
+        cfg,
+        _reservation: reservation,
+    })
 }
+
 fn with_cfg<R>(f: impl FnOnce(&ProverCfg) -> R) -> Option<R> {
     PROVER_CFG.get().map(|lock| {
         let guard = lock.read();
@@ -344,25 +362,6 @@ fn cfg_max_scan_millis() -> u64 {
     }
     with_cfg(|c| c.max_scan_millis)
         .unwrap_or(iroha_config::parameters::defaults::torii::ZK_PROVER_MAX_SCAN_MILLIS)
-}
-fn cfg_keys_dir() -> PathBuf {
-    with_cfg(|c| c.keys_dir.clone())
-        .unwrap_or_else(iroha_config::parameters::defaults::torii::zk_prover_keys_dir)
-}
-fn cfg_allowed_backends() -> Vec<String> {
-    with_cfg(|c| c.allowed_backends.clone())
-        .unwrap_or_else(iroha_config::parameters::defaults::torii::zk_prover_allowed_backends)
-}
-fn cfg_allowed_circuits() -> Vec<String> {
-    with_cfg(|c| c.allowed_circuits.clone())
-        .unwrap_or_else(iroha_config::parameters::defaults::torii::zk_prover_allowed_circuits)
-}
-fn cfg_state() -> Option<Arc<CoreState>> {
-    with_cfg(|c| c.state.clone()).flatten()
-}
-#[cfg(test)]
-fn cfg_verification_attempts() -> Option<Arc<AtomicUsize>> {
-    with_cfg(|cfg| Arc::clone(&cfg.verification_attempts))
 }
 #[cfg(test)]
 fn proof_verification_attempt_count() -> usize {
@@ -1467,6 +1466,7 @@ fn try_gc_reports_once() -> std::io::Result<usize> {
 }
 #[derive(Clone)]
 struct ProverContext {
+    build_identity: iroha_core::release_identity::BuildIdentity,
     keys_dir: PathBuf,
     allowed_backends: Vec<String>,
     allowed_circuits: Vec<String>,
@@ -1635,8 +1635,8 @@ fn proof_processing_context_hash(
 ) -> String {
     let mut hasher = Sha256::new();
     processing_context_put_bytes(&mut hasher, b"iroha:torii:zk-prover-retry-context:v1");
-    processing_context_put_str(&mut hasher, env!("CARGO_PKG_VERSION"));
-    processing_context_put_option_str(&mut hasher, option_env!("VERGEN_GIT_SHA"));
+    processing_context_put_str(&mut hasher, ctx.build_identity.version());
+    processing_context_put_option_str(&mut hasher, Some(ctx.build_identity.source_commit()));
     hasher.update([
         cfg!(feature = "zk-halo2") as u8,
         cfg!(feature = "zk-halo2-ipa") as u8,
@@ -2040,6 +2040,15 @@ struct CompletedProofCache {
     indices: Vec<u16>,
     context_hash: Option<String>,
 }
+impl CompletedProofCache {
+    fn successes_for_context(&self, context_hash: &str) -> HashSet<u16> {
+        self.context_hash
+            .as_deref()
+            .filter(|hash| *hash == context_hash)
+            .map(|_| self.indices.iter().copied().collect())
+            .unwrap_or_default()
+    }
+}
 fn completed_proof_cache_for_retry(id: &str) -> std::io::Result<CompletedProofCache> {
     let durable = try_load_prover_processing_receipt(id)?.filter(|receipt| !receipt.terminal);
     let committed = try_load_report(id)?
@@ -2131,6 +2140,18 @@ fn process_attachment_snapshot_at(
     loc: &AttachmentLocation,
     snapshot: AttachmentSnapshot,
 ) -> std::io::Result<Option<ProverReport>> {
+    // One atomic configuration snapshot supplies every verifier input, including
+    // the executable identity, before this attempt can publish durable state.
+    let ctx = with_cfg(|cfg| ProverContext {
+        build_identity: cfg.build_identity,
+        keys_dir: cfg.keys_dir.clone(),
+        allowed_backends: cfg.allowed_backends.clone(),
+        allowed_circuits: cfg.allowed_circuits.clone(),
+        state: cfg.state.clone(),
+        #[cfg(test)]
+        verification_attempts: Some(Arc::clone(&cfg.verification_attempts)),
+    })
+    .ok_or_else(|| IoError::other("prover executable identity is not configured"))?;
     // A direct request and the background scan may race. Only one claimant may
     // verify a content id; later claimants observe its durable receipt/report.
     let Some(_claim) = AttachmentProcessingClaim::acquire(&loc.id) else {
@@ -2167,14 +2188,6 @@ fn process_attachment_snapshot_at(
             None
         }
     };
-    let ctx = ProverContext {
-        keys_dir: cfg_keys_dir(),
-        allowed_backends: cfg_allowed_backends(),
-        allowed_circuits: cfg_allowed_circuits(),
-        state: cfg_state(),
-        #[cfg(test)]
-        verification_attempts: cfg_verification_attempts(),
-    };
     let mut proofs: Vec<ProofReportEntry> = Vec::new();
     let (
         ok,
@@ -2206,12 +2219,8 @@ fn process_attachment_snapshot_at(
                 let verifier_view = ctx.state.as_ref().map(|state| state.query_view());
                 let current_processing_context_hash =
                     proof_processing_context_hash(&ctx, verifier_view.as_ref(), &attachments);
-                let cached_successes: HashSet<u16> = previous_completed_proofs
-                    .context_hash
-                    .as_deref()
-                    .filter(|hash| *hash == current_processing_context_hash)
-                    .map(|_| previous_completed_proofs.indices.iter().copied().collect())
-                    .unwrap_or_default();
+                let cached_successes = previous_completed_proofs
+                    .successes_for_context(&current_processing_context_hash);
                 let mut completed_proof_indices = Vec::with_capacity(attachments.len());
                 for (index, attachment) in attachments.into_iter().enumerate() {
                     let index = u16::try_from(index).ok();
@@ -2741,6 +2750,123 @@ mod tests {
     use iroha_data_model::proof::{ProofAttachment, ProofBox};
     const TEST_SCAN_BUDGET_MARGIN_BYTES: u64 = 1024;
 
+    fn prepare_identity_fixture(
+        identity: iroha_core::release_identity::BuildIdentity,
+        scan_period_secs: u64,
+    ) -> Result<PreparedProverConfiguration, &'static str> {
+        prepare_configuration(
+            identity,
+            true,
+            scan_period_secs,
+            60,
+            iroha_config::parameters::defaults::torii::ZK_PROVER_REPORTS_MAX_COUNT,
+            iroha_config::parameters::defaults::torii::ZK_PROVER_REPORTS_MAX_BYTES,
+            2,
+            1024,
+            1000,
+            PathBuf::new(),
+            Vec::new(),
+            Vec::new(),
+            None,
+            MaybeTelemetry::disabled(),
+        )
+    }
+
+    fn other_build_identity() -> iroha_core::release_identity::BuildIdentity {
+        iroha_core::release_identity::BuildIdentity::from_compiled_parts(
+            "test-executable",
+            Some("3333333333333333333333333333333333333333"),
+            None,
+            None,
+            Some("test-features"),
+            Some("test-target"),
+        )
+        .expect("valid second executable identity")
+    }
+
+    #[test]
+    fn prover_identity_reservation_drop_and_conflict_preserve_published_configuration() {
+        let _env = TestDataDirGuard::new();
+        let identity = crate::build_identity_test_fixture::build_identity();
+        prepare_identity_fixture(identity, 11).unwrap().commit();
+        let pending = prepare_identity_fixture(identity, 22).unwrap();
+        assert!(PROVER_RECONFIGURE.try_lock().is_none());
+        assert_eq!(
+            with_cfg(|cfg| (cfg.build_identity, cfg.scan_period_secs)),
+            Some((identity, 11))
+        );
+        // A later Torii validation failure drops the reserved candidate without
+        // publishing any of its configuration or changing the process identity.
+        drop(pending);
+        assert!(PROVER_RECONFIGURE.try_lock().is_some());
+        assert_eq!(with_cfg(|cfg| cfg.scan_period_secs), Some(11));
+        assert!(prepare_identity_fixture(other_build_identity(), 33).is_err());
+        assert!(PROVER_RECONFIGURE.try_lock().is_some());
+        assert_eq!(
+            with_cfg(|cfg| (cfg.build_identity, cfg.scan_period_secs)),
+            Some((identity, 11))
+        );
+        prepare_identity_fixture(identity, 44).unwrap().commit();
+        assert_eq!(with_cfg(|cfg| cfg.scan_period_secs), Some(44));
+    }
+
+    #[test]
+    fn prover_identity_reservations_serialize_across_threads() {
+        let _env = TestDataDirGuard::new();
+        let identity = crate::build_identity_test_fixture::build_identity();
+        prepare_identity_fixture(identity, 51).unwrap().commit();
+        let pending = prepare_identity_fixture(identity, 52).unwrap();
+        let (observed_tx, observed_rx) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            observed_tx
+                .send(PROVER_RECONFIGURE.try_lock().is_none())
+                .unwrap();
+            prepare_identity_fixture(identity, 53).unwrap().commit();
+        });
+        assert!(observed_rx.recv_timeout(Duration::from_secs(5)).unwrap());
+        assert_eq!(with_cfg(|cfg| cfg.scan_period_secs), Some(51));
+        pending.commit();
+        worker.join().unwrap();
+        assert_eq!(
+            with_cfg(|cfg| (cfg.build_identity, cfg.scan_period_secs)),
+            Some((identity, 53))
+        );
+    }
+
+    #[test]
+    fn prover_retry_cache_reuses_only_the_same_executable_context() {
+        let ctx = ProverContext {
+            build_identity: crate::build_identity_test_fixture::build_identity(),
+            keys_dir: PathBuf::new(),
+            allowed_backends: Vec::new(),
+            allowed_circuits: Vec::new(),
+            state: None,
+            verification_attempts: None,
+        };
+        let hash = proof_processing_context_hash(&ctx, None, &[]);
+        let cache = CompletedProofCache {
+            indices: vec![0, 2],
+            context_hash: Some(hash.clone()),
+        };
+        assert_eq!(
+            cache.successes_for_context(&proof_processing_context_hash(&ctx.clone(), None, &[])),
+            HashSet::from([0, 2])
+        );
+        let mut restarted = ctx.clone();
+        restarted.build_identity = other_build_identity();
+        let changed = proof_processing_context_hash(&restarted, None, &[]);
+        assert_ne!(hash, changed);
+        assert!(cache.successes_for_context(&changed).is_empty());
+        assert!(
+            CompletedProofCache {
+                indices: vec![0, 2],
+                context_hash: None,
+            }
+            .successes_for_context(&hash)
+            .is_empty()
+        );
+    }
+
     #[test]
     fn zk_key_store_paths_are_canonical_fixed_length_and_collision_resistant() {
         let slash = VerifyingKeyId::new("halo2/ipa", "a/b");
@@ -3000,7 +3126,8 @@ mod tests {
         state: Arc<CoreState>,
         max_scan_bytes: u64,
     ) {
-        let _ = super::configure(
+        super::prepare_configuration(
+            crate::build_identity_test_fixture::build_identity(),
             true,
             1,
             7 * 24 * 60 * 60,
@@ -3014,7 +3141,9 @@ mod tests {
             allowed_circuits,
             Some(state),
             MaybeTelemetry::disabled(),
-        );
+        )
+        .expect("same executable identity in prover fixture")
+        .commit();
         super::TEST_PROCESSING_DELAY_MS.store(0, AtomicOrdering::SeqCst);
         super::TEST_SNAPSHOT_LOAD_DELAY_MS.store(0, AtomicOrdering::SeqCst);
         super::MAX_INFLIGHT_OBSERVED.store(0, AtomicOrdering::SeqCst);
@@ -3402,6 +3531,7 @@ mod tests {
     #[test]
     fn prover_worker_rejects_verifier_outside_committed_height_window() {
         let ctx = ProverContext {
+            build_identity: crate::build_identity_test_fixture::build_identity(),
             keys_dir: PathBuf::new(),
             allowed_backends: Vec::new(),
             allowed_circuits: Vec::new(),
@@ -3417,6 +3547,7 @@ mod tests {
     #[test]
     fn prover_worker_does_not_classify_profileless_stark_prefix_as_stark() {
         let ctx = ProverContext {
+            build_identity: crate::build_identity_test_fixture::build_identity(),
             keys_dir: PathBuf::new(),
             allowed_backends: Vec::new(),
             allowed_circuits: Vec::new(),
@@ -3446,6 +3577,7 @@ mod tests {
     #[test]
     fn prover_worker_rejects_trusted_setup_backend_before_registry_lookup() {
         let ctx = ProverContext {
+            build_identity: crate::build_identity_test_fixture::build_identity(),
             keys_dir: PathBuf::new(),
             allowed_backends: vec!["halo2/".to_owned()],
             allowed_circuits: Vec::new(),
@@ -3473,6 +3605,7 @@ mod tests {
     #[test]
     fn prover_worker_rejects_developer_only_backend_before_registry_lookup() {
         let ctx = ProverContext {
+            build_identity: crate::build_identity_test_fixture::build_identity(),
             keys_dir: PathBuf::new(),
             allowed_backends: Vec::new(),
             allowed_circuits: Vec::new(),
@@ -3500,6 +3633,7 @@ mod tests {
     #[test]
     fn prover_worker_rejects_attachment_backend_mismatch_before_registry_lookup() {
         let ctx = ProverContext {
+            build_identity: crate::build_identity_test_fixture::build_identity(),
             keys_dir: PathBuf::new(),
             allowed_backends: Vec::new(),
             allowed_circuits: Vec::new(),
@@ -3525,6 +3659,7 @@ mod tests {
     #[test]
     fn terminal_proof_error_overrides_retryable_policy_error() {
         let ctx = ProverContext {
+            build_identity: crate::build_identity_test_fixture::build_identity(),
             keys_dir: PathBuf::new(),
             allowed_backends: vec!["stark/fri".to_owned()],
             allowed_circuits: Vec::new(),
@@ -3554,6 +3689,7 @@ mod tests {
     fn prover_worker_retries_after_halo2_is_reenabled() {
         let attachment = fixture_attachment();
         let disabled_ctx = ProverContext {
+            build_identity: crate::build_identity_test_fixture::build_identity(),
             keys_dir: PathBuf::new(),
             allowed_backends: Vec::new(),
             allowed_circuits: Vec::new(),
@@ -3577,6 +3713,7 @@ mod tests {
         );
 
         let undersized_ctx = ProverContext {
+            build_identity: crate::build_identity_test_fixture::build_identity(),
             keys_dir: PathBuf::new(),
             allowed_backends: Vec::new(),
             allowed_circuits: Vec::new(),
@@ -3601,6 +3738,7 @@ mod tests {
         );
 
         let enabled_ctx = ProverContext {
+            build_identity: crate::build_identity_test_fixture::build_identity(),
             keys_dir: PathBuf::new(),
             allowed_backends: Vec::new(),
             allowed_circuits: Vec::new(),
@@ -3617,6 +3755,7 @@ mod tests {
     #[test]
     fn prover_worker_still_reports_missing_registry_for_supported_backend() {
         let ctx = ProverContext {
+            build_identity: crate::build_identity_test_fixture::build_identity(),
             keys_dir: PathBuf::new(),
             allowed_backends: Vec::new(),
             allowed_circuits: Vec::new(),

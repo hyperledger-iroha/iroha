@@ -8,6 +8,7 @@ const VERGEN_GIT_SHA_ENV: &str = "VERGEN_GIT_SHA";
 const VERGEN_CARGO_FEATURES_ENV: &str = "VERGEN_CARGO_FEATURES";
 const VERGEN_CARGO_TARGET_TRIPLE_ENV: &str = "VERGEN_CARGO_TARGET_TRIPLE";
 const IROHA_DPN_VALIDATOR_RELEASE_COMMIT_ENV: &str = "IROHA_DPN_VALIDATOR_RELEASE_COMMIT";
+#[cfg(test)]
 const LOCAL_FAST_BUILD_GIT_SHA: &str = "local-fast-build";
 const GIT_RERUN_ENV_VARS: &[&str] = &[VERGEN_GIT_SHA_ENV, IROHA_DPN_VALIDATOR_RELEASE_COMMIT_ENV];
 #[derive(Debug)]
@@ -51,13 +52,25 @@ fn git_commit_hash() -> Option<String> {
     read_head_commit_hash(&git_dirs)
 }
 fn env_git_commit_hash() -> Option<String> {
-    let sha = env::var(VERGEN_GIT_SHA_ENV).ok()?;
-    let trimmed = sha.trim();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed.to_owned())
-    }
+    let sha = match env::var(VERGEN_GIT_SHA_ENV) {
+        Ok(sha) => sha,
+        Err(env::VarError::NotPresent) => return None,
+        Err(env::VarError::NotUnicode(_)) => panic!("VERGEN_GIT_SHA must be valid UTF-8"),
+    };
+    // Validate before emitting Cargo directives: padding or a newline must never
+    // be normalized into a different identity or inject another directive.
+    assert!(
+        valid_compiled_source_override(&sha),
+        "VERGEN_GIT_SHA must be an exact lowercase 40-digit commit or local-fast-build"
+    );
+    Some(sha)
+}
+fn valid_compiled_source_override(sha: &str) -> bool {
+    sha == "local-fast-build"
+        || (sha.len() == 40
+            && sha
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)))
 }
 fn emit_git_rerun_hints() {
     for env_var in GIT_RERUN_ENV_VARS {
@@ -114,7 +127,7 @@ fn git_filesystem_rerun_paths(git_dirs: &GitDirectories) -> Vec<PathBuf> {
     paths
 }
 fn should_emit_git_filesystem_rerun_hints(git_sha_override: Option<&str>) -> bool {
-    git_sha_override.is_none_or(|sha| sha.trim() != LOCAL_FAST_BUILD_GIT_SHA)
+    git_sha_override.is_none()
 }
 fn resolve_git_directories() -> Option<GitDirectories> {
     let worktree = resolve_git_dir()?;
@@ -315,15 +328,35 @@ mod tests {
         )));
     }
     #[test]
-    fn exact_git_sha_keeps_git_filesystem_rerun_hints() {
-        assert!(should_emit_git_filesystem_rerun_hints(Some(
+    fn compiled_source_override_rejects_normalization_and_directive_injection() {
+        for source in [
+            "",
+            "unknown",
+            " 1111111111111111111111111111111111111111",
+            "1111111111111111111111111111111111111111\n",
+            "1111111111111111111111111111111111111111\ncargo:rustc-env=VERGEN_GIT_SHA=local-fast-build",
+            "ABCDEF1111111111111111111111111111111111",
+            "local-fast-build ",
+        ] {
+            assert!(!valid_compiled_source_override(source));
+        }
+        assert!(valid_compiled_source_override(
+            "1111111111111111111111111111111111111111"
+        ));
+        assert!(valid_compiled_source_override("local-fast-build"));
+    }
+
+    #[test]
+    fn exact_git_sha_skips_git_filesystem_rerun_hints() {
+        assert!(!should_emit_git_filesystem_rerun_hints(Some(
             "6f4e5a2d3a9ab7cd61234b1234f8aadeadbeef00"
         )));
     }
     #[test]
-    fn missing_or_empty_git_sha_keeps_git_filesystem_rerun_hints() {
-        for git_sha_override in [None, Some(""), Some(" \n")] {
-            assert!(should_emit_git_filesystem_rerun_hints(git_sha_override));
+    fn only_missing_git_sha_uses_git_filesystem_rerun_hints() {
+        assert!(should_emit_git_filesystem_rerun_hints(None));
+        for git_sha_override in [Some(""), Some(" \n"), Some("unknown")] {
+            assert!(!should_emit_git_filesystem_rerun_hints(git_sha_override));
         }
     }
     #[test]

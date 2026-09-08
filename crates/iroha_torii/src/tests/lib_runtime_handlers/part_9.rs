@@ -1663,14 +1663,22 @@ impl RuntimeApiRouterFixture {
             kura.clone(),
             LiveQueryStore::start_test(),
         ));
-        Self::with_runtime(chain_id, kura, state, routing::MaybeTelemetry::disabled())
+        Self::with_runtime(
+            chain_id,
+            kura,
+            state,
+            ToriiRuntimeDeps::new(
+                crate::build_identity_test_fixture::build_identity(),
+                routing::MaybeTelemetry::disabled(),
+            ),
+        )
     }
 
     fn with_runtime(
         chain_id: &'static str,
         kura: Arc<Kura>,
         state: Arc<IrohaState>,
-        runtime_deps: impl Into<ToriiRuntimeDeps>,
+        runtime_deps: ToriiRuntimeDeps,
     ) -> Self {
         let cfg = crate::test_utils::mk_minimal_root_cfg();
         let (kiso, child) = KisoHandle::start(cfg.clone());
@@ -1810,8 +1818,11 @@ async fn retired_storage_pin_route_cannot_mutate_chain_or_local_storage() {
     let storage = sorafs_node.storage().expect("enabled storage");
     assert_eq!(storage.manifest_count(), 0);
     assert_eq!(state.view().world().pin_manifests().len(), 0);
-    let runtime_deps =
-        ToriiRuntimeDeps::new(routing::MaybeTelemetry::disabled()).with_sorafs_node(sorafs_node);
+    let runtime_deps = ToriiRuntimeDeps::new(
+        crate::build_identity_test_fixture::build_identity(),
+        routing::MaybeTelemetry::disabled(),
+    )
+    .with_sorafs_node(sorafs_node);
     let fixture = RuntimeApiRouterFixture::with_runtime(
         "sorafs-retired-storage-pin-router-test",
         kura,
@@ -2078,8 +2089,11 @@ async fn appeal_finance_publication_routes_are_read_only() {
     )
     .expect("initialise runtime-signed Governance DAG publisher");
     assert!(sorafs_node.has_governance_publisher());
-    let runtime_deps = ToriiRuntimeDeps::new(routing::MaybeTelemetry::disabled())
-        .with_sorafs_node(sorafs_node.clone());
+    let runtime_deps = ToriiRuntimeDeps::new(
+        crate::build_identity_test_fixture::build_identity(),
+        routing::MaybeTelemetry::disabled(),
+    )
+    .with_sorafs_node(sorafs_node.clone());
     let fixture = RuntimeApiRouterFixture::with_runtime(
         "sorafs-retired-appeal-publication-router-test",
         kura,

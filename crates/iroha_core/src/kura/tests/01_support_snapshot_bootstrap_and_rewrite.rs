@@ -1960,7 +1960,18 @@ fn v2_finality_summary_maps_to_public_status_without_regression() {
         .store_v2_finality_artifact(&artifacts[1])
         .expect("latest idempotent retry remains valid");
     assert_v2_finality_telemetry(&metrics, &artifacts[1]);
-    let status = metrics.status_snapshot();
+    let status = metrics.status_snapshot(
+        &crate::release_identity::BuildIdentity::from_compiled_parts(
+            "test-executable",
+            Some("1111111111111111111111111111111111111111"),
+            None,
+            None,
+            Some("telemetry"),
+            Some("test-target"),
+        )
+        .expect("explicit executable identity")
+        .status(),
+    );
     let sumeragi = status
         .sumeragi
         .expect("public status includes Sumeragi telemetry");
@@ -2031,7 +2042,18 @@ fn telemetry_attach_hydrates_authenticated_durable_tip_after_restart() {
     let metrics = Arc::new(Metrics::default());
     reopened.attach_telemetry(StateTelemetry::new(Arc::clone(&metrics), true));
     assert_v2_finality_telemetry(&metrics, &artifact);
-    let status = metrics.status_snapshot();
+    let status = metrics.status_snapshot(
+        &crate::release_identity::BuildIdentity::from_compiled_parts(
+            "test-executable",
+            Some("1111111111111111111111111111111111111111"),
+            None,
+            None,
+            Some("telemetry"),
+            Some("test-target"),
+        )
+        .expect("explicit executable identity")
+        .status(),
+    );
     let sumeragi = status
         .sumeragi
         .expect("public status includes hydrated Sumeragi telemetry");

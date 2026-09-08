@@ -8,22 +8,11 @@ The previous dirty working copies are preserved in the [dated historical archive
 
 ## Current implementation and local evidence
 
-The latest Taira rollout completed rollback after a mandatory Inrou startup
-probe failed. Linux rejected `io.max` for partition `254:2`; the whole device
-`254:0` accepted and retained the required finite limits in an actual empty
-cgroup regression. The resolver now follows validated sysfs device ownership to
-the whole device. Startup qualification moves before the consensus thread so a
-fatal host prerequisite cannot create consensus recovery work. The same rollout
-also exposed cold recovery rejecting an authenticated Proposal after its next
-Vote advanced; the bounded Proposal/Prepare/Commit recovery correction and its
-native tests are in progress. No live chain or application rollout is qualified.
+The latest Taira rollout rolled back because QEMU 10.0.11 rejected the required `exit-with-parent` option. QEMU 11.0.2 from Debian backports and its rebuilt immutable runtime closure pass actual four-slot KVM, namespace, identity, capability, QMP and empty-shutdown checks. Packaging now rejects unsupported QEMU before publishing a closure; startup reports the actual child exit and bounded stderr. Three native diagnostic tests and 28 packager tests pass. These probes do not qualify workload canaries, live finality or the application rollout.
 
-The maintained Taira retry command reuses completed build and transfer receipts,
-derives capacity from actual deployment inputs, and resumes postconditions after
-an authenticated completed apply. Its 35 offline tests and the 18 capacity tests
-pass. Unchanged retries require no new build or transfer. The latest changed
-native source build took 573 seconds, plus 216 seconds for captured CLI checks;
-these timings do not predict completion of a subsequent rollout.
+Taira candidate convergence, canaries and four ordered restart proofs now precede public cutover. The real Inrou producer/consumer check order is corrected; 29 focused endpoint, prepared-custody, replay and HTTP-producer tests pass. Rollback now reconciles stopped-owner cgroups and exact owned firewall rules under the slot lock, and cached stop evidence rechecks their absence. All 81 maintained CLI gates pass, including ten stopped-owner regressions. The current host residue has been retired under the native control and owner locks; no live chain or application rollout is qualified.
+
+[Executable build identity](docs/build_identity.md) removes revision stamping from shared Core, Torii and telemetry libraries. A controlled revision-only warm build completed in 25.073 seconds with all six production/test shared artifacts cached. The identity changes pass 31 native and 32 build-support tests; conflicting local/release metadata fails before compilation. This local measurement does not predict a full release build or rollout duration. The maintained retry command reuses completed build/transfer work and requires four candidate origins before retiring an attempt. Its 37 retry tests and the prior 18 capacity tests remain bounded offline evidence.
 
 The 110-path merge resolution retains the final StateScan/cursor ABI, validated seven-field Native AMX control, immutable asynchronous account contexts and shared signer custody. Current source bindings are checked before deferred-carrier classification. Fresh custody tests pass 23, snapshot resource tests pass 4, JavaScript selections pass 59 and all 55 consensus source contracts pass. Workspace formatting, scoped conflict-diff checks and codec retirement checks pass. Current IVM ABI/artifact/gas/pointer selections pass 17/58/2/4, including exact SDK fixture reproduction. SDK/Core/Torii/JS-host/CLI/Kagami/daemon production checks pass; workspace, native SDK and four-validator qualification remain open.
 

@@ -8041,7 +8041,18 @@ mod tests {
             0,
             0,
         );
-        let status = telemetry.status_snapshot();
+        let status = telemetry.status_snapshot(
+            &crate::release_identity::BuildIdentity::from_compiled_parts(
+                "test-executable",
+                Some("1111111111111111111111111111111111111111"),
+                None,
+                None,
+                Some("telemetry"),
+                Some("test-target"),
+            )
+            .expect("explicit executable identity")
+            .status(),
+        );
         let alpha = status
             .tx_gossip
             .targets

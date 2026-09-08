@@ -51,7 +51,10 @@ fn bootstrap_router(cfg: &Root) -> (TestApiRouterRuntime, Arc<State>) {
         cfg.common.key_pair.clone(),
         OnlinePeersProvider::new(peers_rx),
         None,
-        iroha_torii::MaybeTelemetry::disabled(),
+        iroha_torii::ToriiRuntimeDeps::new(
+            build_identity_test_fixture::build_identity(),
+            iroha_torii::MaybeTelemetry::disabled(),
+        ),
     )
     .expect("valid empty-ledger bootstrap fixture");
     (
@@ -236,3 +239,6 @@ fn account_capabilities_generated_openapi_preserves_exact_public_bootstrap_contr
             .all(|value| value.as_object().is_some_and(|object| !object.is_empty()))
     );
 }
+
+#[path = "../src/build_identity_test_fixture.rs"]
+mod build_identity_test_fixture;

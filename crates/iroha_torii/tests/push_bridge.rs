@@ -73,6 +73,7 @@ fn build_torii(
     let _ = peers_tx;
     let da_receipt_signer = cfg.common.key_pair.clone();
     let torii = Torii::new(
+        build_identity_test_fixture::build_identity(),
         ChainId::from("test-chain"),
         iroha_torii::test_utils::signed_query_network_id(),
         kiso,
@@ -169,3 +170,6 @@ async fn push_registration_succeeds_with_credentials() {
     assert_eq!(devices, 1);
     runtime.shutdown().await;
 }
+
+#[path = "../src/build_identity_test_fixture.rs"]
+mod build_identity_test_fixture;
