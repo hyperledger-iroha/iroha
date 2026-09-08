@@ -10,7 +10,7 @@ use super::verifier::upstream_verifier_available;
 /// Retains pqcrypto's length-only typed-key decoding and direct OS randomness
 /// behavior for the ISO 20022 signing API. Canonical key admission remains the
 /// caller's responsibility. Other signing APIs retain their existing explicit
-/// key validation and hedged randomness. On AArch64 without NEON or SHA3, this
+/// key validation and hedged randomness. On `AArch64` without NEON or SHA3, this
 /// uses the public CLEAN byte interface with the same entropy source.
 pub fn sign_mldsa65_detached(message: &[u8], secret_key: &mldsa65::SecretKey) -> Vec<u8> {
     sign_mldsa65_detached_with_upstream(message, secret_key, true)
@@ -35,7 +35,7 @@ fn sign_mldsa65_detached_with_upstream(
     let _status = unsafe {
         ffi::PQCLEAN_MLDSA65_CLEAN_crypto_sign_signature_ctx(
             signature.as_mut_ptr(),
-            &mut signature_len,
+            &raw mut signature_len,
             message.as_ptr(),
             message.len(),
             core::ptr::null(),

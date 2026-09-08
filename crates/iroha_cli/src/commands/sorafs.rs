@@ -181,7 +181,7 @@ macro_rules! impl_json_limit_run_with {
                 F: FnOnce(&Client, $filter) -> Result<Response<Vec<u8>>>,
             {
                 let filter = $filter { limit: self.limit };
-                let client = context.client_from_config();
+                let client = context.client_from_config()?;
                 let response = request(&client, filter)?;
                 render_json_response(context, response)
             }
@@ -212,7 +212,7 @@ macro_rules! impl_json_payload_run_with {
                 F: FnOnce(&Client, &[u8]) -> Result<Response<Vec<u8>>>,
             {
                 let payload = load_sorafs_json_payload(&self.$field, $label)?;
-                let client = context.client_from_config();
+                let client = context.client_from_config()?;
                 let response = submit(&client, &payload)?;
                 $render(context, response)
             }
@@ -605,7 +605,7 @@ impl BillingStatusArgs {
         C: RunContext,
         F: FnOnce(&Client) -> Result<Response<Vec<u8>>>,
     {
-        let client = context.client_from_config();
+        let client = context.client_from_config()?;
         render_json_response(context, get(&client)?)
     }
 }
@@ -644,7 +644,7 @@ impl BillingStatementsArgs {
             after_statement_id_hex: after_statement_id.as_deref(),
             limit,
         };
-        let client = context.client_from_config();
+        let client = context.client_from_config()?;
         hedging_billing_response::render(context, list(&client, filter)?, &checkpoint)
     }
 }
@@ -673,7 +673,7 @@ impl BillingStatementArgs {
             &self.expected_checkpoint_fingerprint,
             "--expected-checkpoint-fingerprint",
         )?;
-        let client = context.client_from_config();
+        let client = context.client_from_config()?;
         let response = get(&client, &statement_id, &checkpoint)?;
         write_billing_statement_response(
             context,
@@ -795,7 +795,7 @@ impl BillingAcknowledgeArgs {
             &self.request_nonce,
             authentication_proof,
         )?;
-        let client = context.client_from_config();
+        let client = context.client_from_config()?;
         render_json_response(
             context,
             acknowledge(&client, &statement_id, &checkpoint, &proof)?,
@@ -1049,7 +1049,7 @@ impl BillingReconciliationArgs {
         C: RunContext,
         F: FnOnce(&Client) -> Result<Response<Vec<u8>>>,
     {
-        let client = context.client_from_config();
+        let client = context.client_from_config()?;
         render_json_response(context, get(&client)?)
     }
 }
@@ -1103,7 +1103,7 @@ impl HedgingProjectionArgs {
             after_hex: after.as_deref(),
             limit,
         };
-        let client = context.client_from_config();
+        let client = context.client_from_config()?;
         hedging_billing_response::render(context, get(&client, filter)?, &checkpoint)
     }
 }
@@ -1131,7 +1131,7 @@ impl_run_for_subcommand!(AppealsPricingCommand => Config, Status, Quote);
 pub struct AppealsPricingConfigArgs;
 impl Run for AppealsPricingConfigArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let client = context.client_from_config();
+        let client = context.client_from_config()?;
         render_json_response(context, client.get_sorafs_appeal_pricing_config()?)
     }
 }
@@ -1139,7 +1139,7 @@ impl Run for AppealsPricingConfigArgs {
 pub struct AppealsPricingStatusArgs;
 impl Run for AppealsPricingStatusArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let client = context.client_from_config();
+        let client = context.client_from_config()?;
         render_json_response(context, client.get_sorafs_appeal_pricing_status()?)
     }
 }
@@ -1222,7 +1222,7 @@ impl AppealsFinanceDepositGetArgs {
         F: FnOnce(&Client, &str) -> Result<Response<Vec<u8>>>,
     {
         let escrow_id = required_trimmed_text(&self.escrow_id, "--escrow-id")?;
-        let client = context.client_from_config();
+        let client = context.client_from_config()?;
         let response = get(&client, &escrow_id)?;
         render_json_response(context, response)
     }
@@ -1305,7 +1305,7 @@ where
     F: FnOnce(&Client, &[u8]) -> Result<Response<Vec<u8>>>,
 {
     let payload = load_sorafs_json_payload(input, payload_label)?;
-    let client = context.client_from_config();
+    let client = context.client_from_config()?;
     let response = submit(&client, &payload)?;
     match accepted_status {
         StatusCode::ACCEPTED => render_json_response_ok_or_accepted(context, response),
@@ -1384,7 +1384,7 @@ impl TransparencyCyclesGetArgs {
     {
         let cycle_id = normalize_hex_16_lower(&self.cycle_id, "--cycle-id")?;
         let filter = SorafsTransparencyReadbackFilter { limit: self.limit };
-        let client = context.client_from_config();
+        let client = context.client_from_config()?;
         let response = get(&client, &cycle_id, filter)?;
         render_json_response(context, response)
     }
@@ -1410,7 +1410,7 @@ impl TransparencyCyclesEntryArgs {
     {
         let cycle_id = normalize_hex_16_lower(&self.cycle_id, "--cycle-id")?;
         let entry_id = normalize_hex_16_lower(&self.entry_id, "--entry-id")?;
-        let client = context.client_from_config();
+        let client = context.client_from_config()?;
         let response = get(&client, &cycle_id, &entry_id)?;
         render_json_response(context, response)
     }
@@ -1595,7 +1595,7 @@ impl TransparencyTokenIssuanceCanaryArgs {
         if self.issuances.is_empty() {
             return Err(eyre!("at least one --issuance payload is required"));
         }
-        let client = context.client_from_config();
+        let client = context.client_from_config()?;
         let mut probes = Vec::new();
         for path in &self.issuances {
             let payload =
@@ -1722,7 +1722,7 @@ impl TransparencyPrivacyAggregateCanaryArgs {
                 "at least one --source-event or --publish-due payload is required"
             ));
         }
-        let client = context.client_from_config();
+        let client = context.client_from_config()?;
         let mut probes = Vec::new();
         for path in &self.source_events {
             let payload = load_sorafs_json_payload(
@@ -1881,7 +1881,7 @@ impl ModerationBallotsGetArgs {
         let case_id = required_trimmed_text(&self.case_id, "--case-id")?;
         let round_id = required_trimmed_text(&self.round_id, "--round-id")?;
         let filter = SorafsModerationBallotsFilter { limit: self.limit };
-        let client = context.client_from_config();
+        let client = context.client_from_config()?;
         let response = get(&client, &case_id, &round_id, filter)?;
         render_json_response(context, response)
     }
@@ -1907,7 +1907,7 @@ impl ModerationBallotsNoShowPlanArgs {
     {
         let case_id = required_trimmed_text(&self.case_id, "--case-id")?;
         let round_id = required_trimmed_text(&self.round_id, "--round-id")?;
-        let client = context.client_from_config();
+        let client = context.client_from_config()?;
         let response = get(&client, &case_id, &round_id)?;
         render_json_response(context, response)
     }
@@ -1935,7 +1935,7 @@ impl ModerationBallotsEventsArgs {
             since: self.since,
             limit: self.limit,
         };
-        let client = context.client_from_config();
+        let client = context.client_from_config()?;
         let response = list(&client, filter)?;
         render_json_response(context, response)
     }
@@ -1960,7 +1960,7 @@ impl ModerationBallotsCommitArgs {
         F: FnOnce(&Client, &SignedTransaction) -> Result<HashOf<SignedTransaction>>,
     {
         let commit = load_moderation_ballot_commit_payload(&self.payload, self.format.as_str())?;
-        let client = context.client_from_config();
+        let client = context.client_from_config()?;
         let transaction = build_moderation_commit_transaction(&client, &commit)?;
         let hash = submit(&client, &transaction)?;
         render_moderation_transaction_hash(context, &hash)
@@ -1986,7 +1986,7 @@ impl ModerationBallotsRevealArgs {
         F: FnOnce(&Client, &SignedTransaction) -> Result<HashOf<SignedTransaction>>,
     {
         let reveal = load_moderation_ballot_reveal_payload(&self.payload, self.format.as_str())?;
-        let client = context.client_from_config();
+        let client = context.client_from_config()?;
         let transaction = build_moderation_reveal_transaction(&client, &reveal)?;
         let hash = submit(&client, &transaction)?;
         render_moderation_transaction_hash(context, &hash)
@@ -2013,7 +2013,7 @@ impl ModerationBallotsTallyArgs {
     {
         let case_id = required_trimmed_text(&self.case_id, "--case-id")?;
         let round_id = required_trimmed_text(&self.round_id, "--round-id")?;
-        let client = context.client_from_config();
+        let client = context.client_from_config()?;
         let transaction = build_moderation_finalization_transaction(&client, case_id, round_id)?;
         let hash = submit(&client, &transaction)?;
         render_moderation_transaction_hash(context, &hash)
@@ -2068,7 +2068,7 @@ impl ModerationBallotsExecuteArgs {
         }
         let status = load_moderation_commit_reveal_status_payload(&self.status)?;
         let coordination = moderation_commit_reveal_coordination_from_status(&status)?;
-        let client = context.client_from_config();
+        let client = context.client_from_config()?;
         let mut actions = Vec::new();
         for path in &self.commit_payloads {
             let commit = load_moderation_ballot_commit_payload(path, self.commit_format.as_str())?;
@@ -2277,7 +2277,7 @@ impl ModerationRegistrySubmitReproArgs {
     {
         let manifest_bytes =
             load_moderation_registry_repro_manifest_bytes(&self.manifest, self.format.as_str())?;
-        let client = context.client_from_config();
+        let client = context.client_from_config()?;
         let response = submit(&client, &manifest_bytes)?;
         render_json_response_ok_or_accepted(context, response)
     }
@@ -2303,7 +2303,7 @@ impl ModerationRegistrySubmitCorpusArgs {
     {
         let manifest_bytes =
             load_moderation_registry_corpus_manifest_bytes(&self.manifest, self.format.as_str())?;
-        let client = context.client_from_config();
+        let client = context.client_from_config()?;
         let response = submit(&client, &manifest_bytes)?;
         render_json_response_ok_or_accepted(context, response)
     }
@@ -2348,7 +2348,7 @@ impl ModerationScreeningSubmitArgs {
     {
         let payload = load_moderation_screening_submit_payload(&self.input)?;
         let request = payload.as_request();
-        let client = context.client_from_config();
+        let client = context.client_from_config()?;
         let response = submit(&client, &request)?;
         render_json_response_ok_or_accepted(context, response)
     }
@@ -2469,7 +2469,7 @@ impl ModerationQuarantineObjectStoreArgs {
             content_type: content_type.as_deref(),
             notes: notes.as_deref(),
         };
-        let client = context.client_from_config();
+        let client = context.client_from_config()?;
         let response = submit(&client, &quarantine_id, &request)?;
         render_json_response_ok_or_accepted(context, response)
     }
@@ -2491,7 +2491,7 @@ impl ModerationQuarantineObjectReadArgs {
         F: FnOnce(&Client, &str) -> Result<Response<Vec<u8>>>,
     {
         let quarantine_id = normalize_hex_digest::<16>(&self.quarantine_id, "--quarantine-id")?;
-        let client = context.client_from_config();
+        let client = context.client_from_config()?;
         let response = read(&client, &quarantine_id)?;
         render_json_response(context, response)
     }
@@ -2779,7 +2779,7 @@ impl ModerationQuarantineReviewArgs {
             reviewed_at_unix: Some(reviewed_at_unix),
             notes: notes.as_deref(),
         };
-        let client = context.client_from_config();
+        let client = context.client_from_config()?;
         let response = submit(&client, &quarantine_id, &request)?;
         render_json_response_ok_or_accepted(context, response)
     }
@@ -2826,7 +2826,7 @@ impl ModerationQuarantineReleaseArgs {
             released_at_unix: Some(released_at_unix),
             notes: notes.as_deref(),
         };
-        let client = context.client_from_config();
+        let client = context.client_from_config()?;
         let response = submit(&client, &quarantine_id, &request)?;
         render_json_response_ok_or_accepted(context, response)
     }
@@ -2853,7 +2853,7 @@ impl ModerationQuarantineAppealHandoffArgs {
         let quarantine_id = normalize_hex_digest::<16>(&self.quarantine_id, "--quarantine-id")?;
         let payload =
             load_sorafs_json_payload(&self.input, "moderation quarantine appeal handoff")?;
-        let client = context.client_from_config();
+        let client = context.client_from_config()?;
         let response = submit(&client, &quarantine_id, &payload)?;
         render_json_response(context, response)
     }
@@ -2879,7 +2879,7 @@ impl ModerationQuarantineOperatorPanelArgs {
     {
         let quarantine_id = normalize_hex_digest::<16>(&self.quarantine_id, "--quarantine-id")?;
         let filter = SorafsModerationQuarantineFilter { limit: self.limit };
-        let client = context.client_from_config();
+        let client = context.client_from_config()?;
         let response = get(&client, &quarantine_id, filter)?;
         render_json_response(context, response)
     }
@@ -2932,7 +2932,7 @@ pub struct ModerationQuarantineOperatorCanaryArgs {
 }
 impl Run for ModerationQuarantineOperatorServeArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let client = context.client_from_config();
+        let client = context.client_from_config()?;
         let service = self.service(
             Arc::new(client),
             context.config().torii_api_url.as_str().to_string(),
@@ -3041,7 +3041,7 @@ impl ModerationQuarantineBridgePlanArgs {
     {
         let quarantine_id = normalize_hex_digest::<16>(&self.quarantine_id, "--quarantine-id")?;
         let filter = SorafsModerationQuarantineFilter { limit: self.limit };
-        let client = context.client_from_config();
+        let client = context.client_from_config()?;
         let response = get(&client, &quarantine_id, filter)?;
         render_moderation_quarantine_bridge_plan_response(context, response, &quarantine_id)
     }
@@ -3118,7 +3118,7 @@ impl RepairListArgs {
             expected_finalized_height: self.expected_finalized_height,
             expected_finalized_block_hash_hex: finalized_block_hash.as_deref(),
         };
-        let client = context.client_from_config();
+        let client = context.client_from_config()?;
         let response = match self.ticket_id.as_deref() {
             Some(ticket_id) => {
                 if self.limit.is_some() || after_task_id.is_some() {
@@ -3177,7 +3177,7 @@ impl RepairClaimArgs {
             lease_duration_ms: self.lease_duration_ms,
             idempotency_key,
         });
-        let client = context.client_from_config();
+        let client = context.client_from_config()?;
         let transaction =
             build_repair_action_transaction(&client, &ticket_id, self.expected_revision, action)?;
         let hash = submit(&client, &transaction)?;
@@ -3225,7 +3225,7 @@ impl RepairRenewArgs {
             lease_duration_ms: self.lease_duration_ms,
             idempotency_key,
         });
-        let client = context.client_from_config();
+        let client = context.client_from_config()?;
         let transaction =
             build_repair_action_transaction(&client, &ticket_id, self.expected_revision, action)?;
         let hash = submit(&client, &transaction)?;
@@ -3271,7 +3271,7 @@ impl RepairCompleteArgs {
             evidence_digest,
             idempotency_key,
         });
-        let client = context.client_from_config();
+        let client = context.client_from_config()?;
         let transaction =
             build_repair_action_transaction(&client, &ticket_id, self.expected_revision, action)?;
         let hash = submit(&client, &transaction)?;
@@ -3317,7 +3317,7 @@ impl RepairFailArgs {
             failure_digest,
             idempotency_key,
         });
-        let client = context.client_from_config();
+        let client = context.client_from_config()?;
         let transaction =
             build_repair_action_transaction(&client, &ticket_id, self.expected_revision, action)?;
         let hash = submit(&client, &transaction)?;
@@ -3407,7 +3407,7 @@ impl RepairEscalateArgs {
                 .wrap_err("failed to encode canonical repair slash proposal")?,
             idempotency_key,
         });
-        let client = context.client_from_config();
+        let client = context.client_from_config()?;
         let transaction =
             build_repair_action_transaction(&client, &ticket_id, self.expected_revision, action)?;
         let hash = submit(&client, &transaction)?;
@@ -4552,7 +4552,7 @@ impl Run for FetchArgs {
             scoreboard: scoreboard_options,
             expected_cache_version: gateway_config.expected_cache_version.clone(),
         };
-        let client = context.client_from_config();
+        let client = context.client_from_config()?;
         let runtime = Runtime::new().wrap_err("failed to create Tokio runtime")?;
         let session = runtime
             .block_on(StorageClient::new(&client).sorafs_fetch_via_gateway(
@@ -8846,7 +8846,7 @@ fn build_moderation_commit_transaction(
             "moderation commit committed_at_unix_ms must be zero; the ledger records the accepted timestamp"
         ));
     }
-    if commit.juror_id != client.account.to_string() {
+    if commit.juror_id != client.account().to_string() {
         return Err(eyre!(
             "moderation commit juror_id must equal the configured transaction authority"
         ));
@@ -8867,7 +8867,7 @@ fn build_moderation_reveal_transaction(
             "moderation reveal revealed_at_unix_ms must be zero; the ledger records the accepted timestamp"
         ));
     }
-    if reveal.juror_id != client.account.to_string() {
+    if reveal.juror_id != client.account().to_string() {
         return Err(eyre!(
             "moderation reveal juror_id must equal the configured transaction authority"
         ));
@@ -10305,9 +10305,17 @@ impl Run for HandshakeCommand {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
             HandshakeCommand::Show => {
-                let client = context.client_from_config();
-                let config = client
-                    .get_config()
+                let operator_key_pair = context.operator_key_pair().cloned().ok_or_else(|| {
+                    eyre!("handshake configuration read requires --operator-private-key-file")
+                })?;
+                let operator = iroha::blocking::OperatorClient::from_client(
+                    context
+                        .client_from_config()?
+                        .operator_client(operator_key_pair)?,
+                )?;
+                let config = operator
+                    .configuration()
+                    .get()
                     .wrap_err("failed to fetch configuration")?;
                 render_handshake_summary(context, &config.network.soranet_handshake)?;
                 context.println(format_args!(
@@ -12479,7 +12487,7 @@ impl PinListArgs {
             .as_deref()
             .map(|digest| required_nonzero_lower_hex32(digest, "--after-digest-hex"))
             .transpose()?;
-        let client = context.client_from_config();
+        let client = context.client_from_config()?;
         let filter = SorafsPinListFilter {
             finalized: SorafsPinFinalizedAnchor {
                 expected_finalized_height: self.expected_finalized_height,
@@ -12516,7 +12524,7 @@ impl PinShowArgs {
         F: FnOnce(&Client, &str) -> Result<Response<Vec<u8>>>,
     {
         let digest = required_nonzero_lower_hex32(&self.digest, "--digest")?;
-        let client = context.client_from_config();
+        let client = context.client_from_config()?;
         let response = fetch(&client, &digest)?;
         let status = response.status();
         let body = response.into_body();
@@ -12636,7 +12644,7 @@ impl AliasListArgs {
             .as_deref()
             .map(|digest| required_nonzero_lower_hex32(digest, "--manifest-digest"))
             .transpose()?;
-        let client = context.client_from_config();
+        let client = context.client_from_config()?;
         let filter = SorafsAliasListFilter {
             limit: self.limit,
             offset: self.offset,
@@ -12707,7 +12715,7 @@ impl ReplicationListArgs {
             .as_deref()
             .map(|digest| required_nonzero_lower_hex32(digest, "--manifest-digest"))
             .transpose()?;
-        let client = context.client_from_config();
+        let client = context.client_from_config()?;
         let filter = SorafsReplicationListFilter {
             limit: self.limit,
             offset: self.offset,
@@ -12791,7 +12799,7 @@ impl StorageTokenIssueArgs {
             rate_limit_bytes: self.rate_limit_bytes,
             requests_per_minute: self.requests_per_minute,
         };
-        let client = context.client_from_config();
+        let client = context.client_from_config()?;
         let response = issue(
             &client,
             &self.manifest_id,
@@ -17122,6 +17130,15 @@ json_response_fixture!(StatusCode::OK, &norito::json!({
             &self.printed
         }
     }
+    #[test]
+    fn handshake_configuration_read_requires_explicit_operator_authority() {
+        let mut context = TestContext::new();
+        let error = HandshakeCommand::Show
+            .run(&mut context)
+            .expect_err("configuration reads require an operator key");
+        assert!(format!("{error:#}").contains("--operator-private-key-file"));
+        assert!(context.outputs().is_empty());
+    }
     fn checked_sorafs_ed25519_key_fixture() -> KeyPair {
         KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
             .expect("generate checked SoraFS fixture key")
@@ -19413,8 +19430,8 @@ json_response_fixture!(StatusCode::OK, &norito::json!({
         }
         fn moderation_native_juror_actions_reject_caller_timestamps() {
             let ctx = TestContext::new();
-            let client = ctx.client_from_config();
-            let juror_id = client.account.to_string();
+            let client = ctx.client_from_config().expect("valid moderation context");
+            let juror_id = client.account().to_string();
             let mut commit = moderation_ballot_commit_fixture_for_juror(&juror_id);
             commit.committed_at_unix_ms = 1;
             let commit_err = build_moderation_commit_transaction(&client, &commit)
@@ -19428,7 +19445,7 @@ json_response_fixture!(StatusCode::OK, &norito::json!({
         }
         fn moderation_native_juror_actions_require_transaction_authority() {
             let ctx = TestContext::new();
-            let client = ctx.client_from_config();
+            let client = ctx.client_from_config().expect("valid moderation context");
             let commit = moderation_ballot_commit_fixture_for_juror("other-juror@moderation");
             let commit_err = build_moderation_commit_transaction(&client, &commit)
                 .expect_err("substituted commit juror must be rejected");

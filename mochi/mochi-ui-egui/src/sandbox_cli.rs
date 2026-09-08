@@ -318,12 +318,20 @@ async fn prove_readiness(
             .default_readiness_smoke_plan()
             .map_err(|err| format!("failed while preparing readiness smoke for {stage}: {err}"))?;
         plan.status_options = readiness_options;
-        client.wait_for_readiness_smoke(plan).await.map_err(|err| {
-            format!(
-                "failed while waiting for readiness smoke in {stage}: {err} ({:?})",
-                err.summarize()
-            )
-        })?;
+        let reader = supervisor
+            .stream_reader(&session.peer_alias)
+            .map_err(|err| {
+                format!("failed while binding readiness stream authority for {stage}: {err}")
+            })?;
+        client
+            .wait_for_readiness_smoke(&reader, plan)
+            .await
+            .map_err(|err| {
+                format!(
+                    "failed while waiting for readiness smoke in {stage}: {err} ({:?})",
+                    err.summarize()
+                )
+            })?;
     } else {
         client
             .wait_for_ready(readiness_options)

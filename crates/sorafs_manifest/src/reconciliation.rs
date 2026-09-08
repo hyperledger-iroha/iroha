@@ -5,6 +5,8 @@ use thiserror::Error;
 /// Schema version for [`SorafsReconciliationReportV1`].
 pub const SORAFS_RECONCILIATION_REPORT_VERSION_V1: u8 = 1;
 /// Deterministic reconciliation summary published by a SoraFS node.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::reconciliation::SorafsReconciliationReportV1")]
 #[derive(
     Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
 )]
@@ -37,6 +39,8 @@ pub struct SorafsReconciliationReportV1 {
     pub appeal_finance: Option<AppealFinanceReconciliationSummaryV1>,
 }
 /// Appeal-finance rollup summary embedded in a SoraFS reconciliation report.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::reconciliation::AppealFinanceReconciliationSummaryV1")]
 #[derive(
     Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
 )]
@@ -184,3 +188,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+include!("reconciliation/captured_owner_identity_tests.rs");

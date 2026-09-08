@@ -1046,13 +1046,13 @@ impl DevDoctorArgs {
         let effective_config = profile_config.as_ref().unwrap_or_else(|| context.config());
         let client = dev_client_from_profile(context, profile_config.as_ref())?;
         let default_gas_limit = profile.default_gas_limit;
-        let server_version = client.client().get_server_version().wrap_err_with(|| {
+        let server_version = client.status().version().wrap_err_with(|| {
             format!(
                 "failed to contact Torii for profile `{}` at {}",
                 self.manifest.profile, effective_config.torii_api_url
             )
         })?;
-        let status = client.client().get_status().wrap_err_with(|| {
+        let status = client.status().get().wrap_err_with(|| {
             format!(
                 "failed to fetch Torii status for profile `{}` at {}",
                 self.manifest.profile, effective_config.torii_api_url
@@ -1454,10 +1454,10 @@ fn dev_client_from_profile<C: RunContext>(
     context: &C,
     profile_config: Option<&Config>,
 ) -> Result<BlockingClient> {
-    let client = profile_config
-        .cloned()
-        .map(Client::new)
-        .unwrap_or_else(|| context.client_from_config());
+    let client = match profile_config {
+        Some(config) => Client::builder(config.clone()).build()?,
+        None => context.client_from_config()?,
+    };
     BlockingClient::from_client(client)
 }
 fn resolve_dev_contract_authority<C: RunContext>(
@@ -2036,7 +2036,7 @@ pub struct CodeBytesGetArgs {
 }
 impl Run for CodeBytesGetArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let client = BlockingClient::from_client(context.client_from_config())?;
+        let client = BlockingClient::from_client(context.client_from_config()?)?;
         let code_hash = self.code_hash.trim_start_matches("0x");
         let bytes = client.client().get_contract_code_bytes(code_hash)?;
         std::fs::write(&self.out, &bytes)?;
@@ -2105,7 +2105,7 @@ impl Run for ContractAliasResolveArgs {
             .contract_alias
             .parse()
             .wrap_err("invalid contract alias")?;
-        let client: Client = context.client_from_config();
+        let client: Client = context.client_from_config()?;
         let response = client
             .post_contract_alias_resolve(&contract_alias)
             .wrap_err("failed to call `/v1/contracts/aliases/resolve`")?;
@@ -2318,7 +2318,7 @@ pub struct CallArgs {
 }
 impl Run for CallArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let client = BlockingClient::from_client(context.client_from_config())?;
+        let client = BlockingClient::from_client(context.client_from_config()?)?;
         let authority = resolve_contract_authority(context, self.authority.as_deref())?;
         let private_key = if self.simulate {
             None
@@ -2420,7 +2420,7 @@ pub struct ViewArgs {
 }
 impl Run for ViewArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let client: Client = context.client_from_config();
+        let client: Client = context.client_from_config()?;
         let authority = resolve_contract_authority(context, self.authority.as_deref())?;
         let target = resolve_contract_target(self.target)?;
         let payload = load_contract_payload_value(
@@ -5898,7 +5898,7 @@ pub struct ManifestArgs {
 }
 impl Run for ManifestArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let client: Client = context.client_from_config();
+        let client: Client = context.client_from_config()?;
         let code_hash = self.code_hash.trim_start_matches("0x");
         let v = client.get_contract_manifest_json(code_hash)?;
         if let Some(p) = self.out {

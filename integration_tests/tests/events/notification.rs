@@ -68,7 +68,7 @@ async fn trigger_completion_success_should_produce_event_scenario(network: &Netw
     let ready_hash = ready_tx.hash();
     let mut events = tokio::time::timeout(
         event_timeout,
-        network.client().client().listen_for_events(vec![
+        network.client().account_client().events().subscribe(vec![
             EventFilterBox::from(
                 TriggerCompletedEventFilter::new()
                     .for_trigger(trigger_id.clone())
@@ -102,7 +102,7 @@ async fn trigger_completion_success_should_produce_event_scenario(network: &Netw
                     }
                 }
                 Some(Ok(_)) => {}
-                Some(Err(err)) => break Err(err),
+                Some(Err(err)) => break Err(eyre::Report::from(err)),
                 None => break Err(eyre::eyre!("event stream ended unexpectedly")),
             }
         }
@@ -138,7 +138,7 @@ async fn trigger_completion_success_should_produce_event_scenario(network: &Netw
                         break Ok(());
                     }
                     Some(Ok(_)) => {}
-                    Some(Err(err)) => break Err(err),
+                    Some(Err(err)) => break Err(eyre::Report::from(err)),
                     None => break Err(eyre::eyre!("event stream ended unexpectedly")),
                 }
             }
@@ -157,7 +157,7 @@ async fn trigger_completion_success_should_produce_event_scenario(network: &Netw
         })?
     };
     let event_result = tokio::try_join!(submit_trigger, wait_event);
-    events.close().await;
+    events.close().await?;
     event_result?;
     Ok(())
 }

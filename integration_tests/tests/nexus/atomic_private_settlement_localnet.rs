@@ -2497,7 +2497,7 @@ fn run_n3_real_process_smoke() -> Result<()> {
             .block_on(peer.process_id())
             .ok_or_else(|| eyre!("smoke restart target #{peer_index} did not recover"))?;
         ensure!(
-            before_pid != after_pid && peer.client().client().get_status().is_ok(),
+            before_pid != after_pid && peer.client().status().get().is_ok(),
             "smoke restart target #{peer_index} lacks a healthy replacement process"
         );
         ensure!(

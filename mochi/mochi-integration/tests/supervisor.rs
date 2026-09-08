@@ -77,6 +77,7 @@ fn supervisor_real_kagami_preserves_first_release_hijiri_bootstrap() -> Result<(
 
     let mut parameter_operator = None;
     let mut hijiri_operators = Vec::new();
+    let mut ledger_readers = Vec::new();
     for instruction in manifest.instructions() {
         let Some(GrantBox::Permission(grant)) = instruction.as_any().downcast_ref::<GrantBox>()
         else {
@@ -88,10 +89,18 @@ fn supervisor_real_kagami_preserves_first_release_hijiri_bootstrap() -> Result<(
                 "real Kagami manifest must name exactly one parameter operator"
             );
             parameter_operator = Some(grant.destination().clone());
+        } else if grant.object().name() == "CanReadAllLedgerData" {
+            ledger_readers.push(grant.destination().clone());
         } else if grant.object().name() == "CanSetHijiriParameters" {
             hijiri_operators.push(grant.destination().clone());
         }
     }
+    let reader = supervisor.stream_reader("peer0")?;
+    assert_eq!(
+        ledger_readers.as_slice(),
+        std::slice::from_ref(reader.authority()),
+        "the source-built genesis must authorize exactly the owned stream account"
+    );
     let parameter_operator = parameter_operator
         .ok_or_else(|| eyre!("real Kagami manifest omitted the parameter operator"))?;
     assert_eq!(
@@ -118,7 +127,10 @@ async fn supervisor_reads_http_endpoints() -> Result<()> {
     let supervisor = build_supervisor(&temp, port, ProfilePreset::FourPeerBft)?;
     let addr = peer_addr(&supervisor);
     let data = MockToriiData::default();
-    let mock = MockToriiBuilder::new(addr).spawn().await?;
+    let mock = MockToriiBuilder::new(addr)
+        .stream_reader(&supervisor.stream_reader("peer0")?)
+        .spawn()
+        .await?;
     let client = supervisor
         .torii_client("peer0")
         .expect("supervisor exposes torii client");
@@ -153,7 +165,10 @@ async fn supervisor_streams_receive_binary_frames() -> Result<()> {
     let supervisor = build_supervisor(&temp, port, ProfilePreset::FourPeerBft)?;
     let addr = peer_addr(&supervisor);
     let data = MockToriiData::default();
-    let mock = MockToriiBuilder::new(addr).spawn().await?;
+    let mock = MockToriiBuilder::new(addr)
+        .stream_reader(&supervisor.stream_reader("peer0")?)
+        .spawn()
+        .await?;
     let handle = tokio::runtime::Handle::current();
     let block_stream = supervisor
         .managed_block_stream("peer0", &handle)
@@ -183,6 +198,7 @@ async fn supervisor_streams_receive_binary_frames() -> Result<()> {
         }
         other => panic!("unexpected event stream event: {other:?}"),
     }
+    assert_eq!(mock.authenticated_stream_count(), 2);
     block_stream.abort();
     event_stream.abort();
     let _ = mock.shutdown().await;
@@ -203,6 +219,7 @@ async fn supervisor_replays_torii_fixture_streams() -> Result<()> {
     let addr = peer_addr(&supervisor);
     let fixture_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/torii_replay");
     let mock = MockToriiBuilder::new(addr)
+        .stream_reader(&supervisor.stream_reader("peer0")?)
         .fixture_dir(&fixture_dir)?
         .spawn()
         .await?;
@@ -286,6 +303,7 @@ async fn supervisor_replays_torii_fixture_streams() -> Result<()> {
         }
         other => panic!("unexpected event stream event: {other:?}"),
     }
+    assert_eq!(mock.authenticated_stream_count(), 2);
     block_stream.abort();
     event_stream.abort();
     mock.shutdown().await?;
@@ -393,51 +411,37 @@ fn supervisor_templates_four_peer_profile() -> Result<()> {
 #[test]
 fn supervisor_allocates_ports_when_wrapping() -> Result<()> {
     let temp = TempDir::new()?;
-    // Force p2p allocator to collide with torii assignments and prove it keeps
-    // advancing the shared PortAllocator without reusing ports.
-    let torii_base = match reserve_port() {
-        Ok(port) => port,
+    // Both cursors start at the same actually occupied port. Exact cursor ordering and wrap
+    // behavior are checked with controlled availability in the core port-allocation tests.
+    let occupied = match TcpListener::bind(("127.0.0.1", 0)) {
+        Ok(listener) => listener,
         Err(err) if err.kind() == ErrorKind::PermissionDenied => {
             eprintln!("skipping supervisor_allocates_ports_when_wrapping: {err}");
             return Ok(());
         }
         Err(err) => return Err(err.into()),
     };
-    let p2p_base = torii_base.checked_add(2).unwrap_or(10_000);
-    let supervisor =
-        build_supervisor_with_bases(&temp, torii_base, p2p_base, ProfilePreset::FourPeerBft)?;
-    let mut torii_ports: Vec<u16> = Vec::new();
-    let mut p2p_ports: Vec<u16> = Vec::new();
+    let base = occupied.local_addr()?.port();
+    let supervisor = build_supervisor_with_bases(&temp, base, base, ProfilePreset::FourPeerBft)?;
     let mut all_ports = HashSet::new();
     for peer in supervisor.peers() {
         let torii = parse_port(peer.torii_address())?;
         let p2p = parse_port(peer.p2p_address())?;
-        torii_ports.push(torii);
-        p2p_ports.push(p2p);
         assert!(
             all_ports.insert(torii) && all_ports.insert(p2p),
             "ports should remain unique across torii/p2p assignments even when wrapping"
         );
+        assert_ne!(torii, base, "Torii must skip the held socket");
+        assert_ne!(p2p, base, "P2P must skip the held socket");
+        assert_ne!(torii, 0);
+        assert_ne!(p2p, 0);
     }
-    torii_ports.sort_unstable();
-    p2p_ports.sort_unstable();
-    let mut all_ports_sorted: Vec<u16> = all_ports.into_iter().collect();
-    all_ports_sorted.sort_unstable();
     assert_eq!(
-        all_ports_sorted,
-        (0..8).map(|offset| torii_base + offset).collect::<Vec<_>>(),
-        "allocators should cover the contiguous free range without reusing or skipping ports"
+        all_ports.len(),
+        8,
+        "four validators need eight unique ports"
     );
-    assert_eq!(
-        torii_ports.first().copied(),
-        Some(torii_base),
-        "torii allocator should start from the requested base"
-    );
-    assert_eq!(
-        p2p_ports.first().copied(),
-        Some(p2p_base),
-        "p2p allocator should start from its requested base before collision avoidance"
-    );
+    drop(occupied);
     Ok(())
 }
 #[test]

@@ -47,6 +47,8 @@ pub const POP_IDENTITY_TEXT_MAX_BYTES_V1: usize = 256;
 /// Maximum UTF-8 byte length of an attribute key.
 pub const POP_ATTRIBUTE_KEY_MAX_BYTES_V1: usize = 128;
 /// Proof-of-personhood credential class used for juror eligibility routing.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::pop_credentials::PopEligibilityClassV1")]
 #[derive(
     Debug,
     Clone,
@@ -74,6 +76,8 @@ pub enum PopEligibilityClassV1 {
     Observer,
 }
 /// Signature algorithm used by SFM-4b1 payload publishers.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::pop_credentials::PopSignatureAlgorithmV1")]
 #[derive(
     Debug,
     Clone,
@@ -91,6 +95,8 @@ pub enum PopSignatureAlgorithmV1 {
     Ed25519,
 }
 /// Membership proof system.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::pop_credentials::PopMembershipProofSystemV1")]
 #[derive(
     Debug,
     Clone,
@@ -108,6 +114,8 @@ pub enum PopMembershipProofSystemV1 {
     Halo2IpaPastaV1,
 }
 /// Credential attribute commitment.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::pop_credentials::PopCredentialAttributeV1")]
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
 )]
@@ -126,6 +134,8 @@ impl PopCredentialAttributeV1 {
     }
 }
 /// Detached signature attached to PoP credential payloads.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::pop_credentials::PopSignatureV1")]
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
 )]
@@ -168,6 +178,8 @@ impl PopSignatureV1 {
     }
 }
 /// Proof-of-personhood credential issued to a juror wallet.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::pop_credentials::PopCredentialV1")]
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
 )]
@@ -272,6 +284,8 @@ impl PopCredentialV1 {
     }
 }
 /// Published commitment root for the active PoP credential set.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::pop_credentials::PopCommitmentRootV1")]
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
 )]
@@ -350,6 +364,8 @@ impl PopCommitmentRootV1 {
     }
 }
 /// Governance reason attached to a revocation entry.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::pop_credentials::PopRevocationReasonV1")]
 #[derive(
     Debug,
     Clone,
@@ -375,6 +391,8 @@ pub enum PopRevocationReasonV1 {
     Expired,
 }
 /// Single PoP credential revocation entry.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::pop_credentials::PopRevocationEntryV1")]
 #[derive(
     Debug,
     Clone,
@@ -408,6 +426,8 @@ impl PopRevocationEntryV1 {
     }
 }
 /// Published revocation list for PoP credential nonces.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::pop_credentials::PopRevocationListV1")]
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
 )]
@@ -497,6 +517,8 @@ impl PopRevocationListV1 {
     }
 }
 /// Cohesive issuer publication emitted when a PoP credential is issued.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::pop_credentials::PopIssuedCredentialBundleV1")]
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
 )]
@@ -530,6 +552,8 @@ impl PopIssuedCredentialBundleV1 {
     }
 }
 /// Enrollment request submitted before credential issuance.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::pop_credentials::PopEnrollmentRequestV1")]
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
 )]
@@ -590,6 +614,8 @@ impl PopEnrollmentRequestV1 {
     }
 }
 /// Renewal request submitted before credential rotation.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::pop_credentials::PopRenewalRequestV1")]
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
 )]
@@ -645,6 +671,8 @@ impl PopRenewalRequestV1 {
     }
 }
 /// Pinned verifier metadata for the first-release PoP circuit.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::pop_credentials::PopMembershipVerifierMaterialV1")]
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
 )]
@@ -691,6 +719,8 @@ impl PopMembershipVerifierMaterialV1 {
 ///
 /// Credential identifiers, holder commitments, revocation nonces, and Merkle
 /// paths are deliberately absent. They exist only as Halo2 private witnesses.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::pop_credentials::PopMembershipProofV1")]
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
 )]
@@ -888,7 +918,7 @@ impl PopMembershipWitnessV1 {
     }
 }
 mod borrowed_norito {
-    use norito::core::{NoritoSerialize, SerializePayload};
+    use norito::core::SerializePayload;
     pub(super) struct Vec<'a, T>(Option<&'a std::vec::Vec<T>>);
     impl<'a, T> Vec<'a, T> {
         pub(super) fn borrowed(value: &'a std::vec::Vec<T>) -> Self {
@@ -898,12 +928,7 @@ mod borrowed_norito {
             Self(None)
         }
     }
-    impl<T: NoritoSerialize> NoritoSerialize for Vec<'_, T> {
-        fn schema_hash() -> [u8; 16] {
-            std::vec::Vec::<T>::schema_hash()
-        }
-    }
-    impl<T: NoritoSerialize> SerializePayload for Vec<'_, T> {
+    impl<T: SerializePayload> SerializePayload for Vec<'_, T> {
         fn serialize(
             &self,
             writer: &mut norito::core::Encoder<'_>,
@@ -927,7 +952,7 @@ mod borrowed_norito {
         }
     }
 }
-#[derive(NoritoSerialize)]
+#[derive(norito::derive::SerializePayload)]
 struct PopSignatureSigningViewWireV1<'a> {
     algorithm: PopSignatureAlgorithmV1,
     public_key: borrowed_norito::Vec<'a, u8>,
@@ -959,7 +984,7 @@ impl norito::core::SerializePayload for PopSignatureSigningViewV1<'_> {
         self.0.encoded_len_exact()
     }
 }
-#[derive(NoritoSerialize)]
+#[derive(norito::derive::SerializePayload)]
 struct PopCredentialSigningViewWireV1<'a> {
     version: u8,
     credential_id: [u8; 32],
@@ -1016,7 +1041,7 @@ impl norito::core::SerializePayload for PopCredentialSigningViewV1<'_> {
         self.0.encoded_len_exact()
     }
 }
-#[derive(NoritoSerialize)]
+#[derive(norito::derive::SerializePayload)]
 struct PopCommitmentRootSigningViewWireV1<'a> {
     version: u8,
     root_digest: [u8; 32],
@@ -1064,7 +1089,7 @@ impl norito::core::SerializePayload for PopCommitmentRootSigningViewV1<'_> {
         self.0.encoded_len_exact()
     }
 }
-#[derive(NoritoSerialize)]
+#[derive(norito::derive::SerializePayload)]
 struct PopRevocationListSigningViewWireV1<'a> {
     version: u8,
     list_version: u64,
@@ -3072,3 +3097,10 @@ mod tests {
         ));
     }
 }
+
+#[cfg(test)]
+include!("pop_credentials/captured_owner_identity_tests.rs");
+
+#[cfg(test)]
+#[path = "pop_credentials/borrowed_payload_tests.rs"]
+mod borrowed_payload_tests;

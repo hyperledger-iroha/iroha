@@ -35,5 +35,12 @@ fn collect_files_recursive(
     Ok(())
 }
 
+mod genesis;
+use genesis::{KagamiStub, StandaloneKagamiStub};
+
 include!("core_and_snapshot.rs");
 include!("generation_and_runtime.rs");
+
+mod stream_reader;
+
+mod port_allocation;

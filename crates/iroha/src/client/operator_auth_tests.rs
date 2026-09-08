@@ -65,7 +65,11 @@ fn operator_endpoint_requires_a_signing_key_before_dispatch() {
             let client = client
                 .clone()
                 .with_test_http_transport(mock_transport.clone());
-            client.get_config()
+            client.operator_signed_request(
+                HttpMethod::GET,
+                super::join_torii_url(&client.torii_url, iroha_torii_shared::uri::CONFIGURATION),
+                Vec::new(),
+            )
         },
     )
     .expect_err("operator endpoint must reject a missing local signer");

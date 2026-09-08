@@ -193,8 +193,7 @@ async fn read<T: Send + 'static>(
 }
 
 async fn height(client: &Client) -> Result<u64> {
-    let client = client.clone();
-    read(move || Ok(client.client().get_status()?.blocks)).await
+    Ok(client.client().status().get().await?.blocks)
 }
 
 async fn lane_lifecycle_status(client: &Client) -> Result<LaneLifecycleStatusV1> {
@@ -234,7 +233,7 @@ async fn observe_catalog_expansion(
     // prove this deliberately lane-free catalog addition.
     let url = client
         .client()
-        .torii_url
+        .endpoint()
         .join("v1/sns/names/account-alias/catalog-probe@mibank.bpng")?;
     let mut response = reqwest::Client::builder()
         .timeout(Duration::from_secs(20))
@@ -1273,9 +1272,9 @@ async fn assert_bpng_metadata(
 ) -> Result<()> {
     let client = client.clone();
     let domain = read(move || {
-        client
+        Ok(client
             .client()
-            .query_single(FindDomainById::new(DomainId::try_new("mibank", "bpng")?))
+            .query_single(FindDomainById::new(DomainId::try_new("mibank", "bpng")?))?)
     })
     .await?;
     ensure!(
@@ -2350,11 +2349,7 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
         .collect::<Vec<_>>();
     layers.push(Cow::Owned(dataspace_only_restart_layer(&grant)));
     try_join_all(network.peers().iter().map(|peer| async {
-        timeout(
-            NETWORK_TIMEOUT,
-            peer.start_checked(layers.iter().map(Cow::Borrowed), None),
-        )
-        .await??;
+        timeout(NETWORK_TIMEOUT, peer.start_checked(layers.iter(), None)).await??;
         Ok::<_, eyre::Report>(())
     }))
     .await?;
@@ -2621,11 +2616,7 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
     // Restart two deliberately reuses the same dataspace-only operator layer.
     // Lane 8 must come exclusively from the signed lifecycle replay.
     try_join_all(network.peers().iter().map(|peer| async {
-        timeout(
-            NETWORK_TIMEOUT,
-            peer.start_checked(layers.iter().map(Cow::Borrowed), None),
-        )
-        .await??;
+        timeout(NETWORK_TIMEOUT, peer.start_checked(layers.iter(), None)).await??;
         Ok::<_, eyre::Report>(())
     }))
     .await?;

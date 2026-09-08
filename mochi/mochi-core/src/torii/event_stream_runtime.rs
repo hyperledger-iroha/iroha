@@ -1,95 +1,65 @@
+// UI fanout for the canonical SDK event subscription.
+
+/// Broadcast fanout of SDK-decoded events and UI summaries.
+pub struct EventStream {
+    sender: broadcast::Sender<EventStreamEvent>,
+    initial_receiver: std::sync::Mutex<Option<broadcast::Receiver<EventStreamEvent>>>,
+    worker: JoinHandle<()>,
+}
 impl EventStream {
-    fn new(subscription: WsSubscription) -> Self {
-        let mut receiver = subscription.subscribe();
-        let (sender, _) = broadcast::channel(128);
-        let initial_receiver = sender.subscribe();
+    fn new(mut subscription: iroha::client::streams::EventStream) -> Self {
+        let (sender, initial_receiver) = broadcast::channel(128);
         let forwarder = sender.clone();
-        let decode_handle = tokio::spawn(async move {
-            loop {
-                match receiver.recv().await {
-                    Ok(WsFrame::Binary(frame)) => {
-                        let raw_len = frame.len();
-                        match norito::decode_from_bytes::<EventMessage>(&frame) {
-                            Ok(message) => {
-                                let event_box: EventBox = message.into();
-                                let summary = EventSummary::from_event(&event_box);
-                                let event = Arc::new(event_box);
-                                let _ = forwarder.send(EventStreamEvent::Event {
-                                    summary,
-                                    event,
-                                    raw_len,
-                                });
-                            }
-                            Err(err) => {
-                                let _ = forwarder.send(EventStreamEvent::DecodeError {
-                                    error: EventStreamDecodeError::new(
-                                        EventDecodeStage::Frame,
-                                        raw_len,
-                                        err.to_string(),
-                                    ),
-                                });
-                            }
-                        }
+        let worker = tokio::spawn(async move {
+            while let Some(item) = subscription.next().await {
+                let raw_len = subscription.last_message_bytes();
+                match item {
+                    Ok(value) => {
+                        let summary = EventSummary::from_event(&value);
+                        let _ = forwarder.send(EventStreamEvent::Event {
+                            summary,
+                            event: Arc::new(value),
+                            raw_len: raw_len
+                                .expect("decoded SDK items carry received message bytes"),
+                        });
                     }
-                    Ok(WsFrame::Text(text)) => {
-                        let truncated = if text.len() > 256 {
-                            format!("{}…", &text[..255])
+                    Err(error) => {
+                        let stage = if subscription.last_message_bytes().is_some() {
+                            EventDecodeStage::Frame
                         } else {
-                            text
+                            EventDecodeStage::Stream
                         };
-                        let _ = forwarder.send(EventStreamEvent::Text { text: truncated });
-                    }
-                    Ok(WsFrame::Error(message)) => {
-                        let _ = forwarder.send(EventStreamEvent::DecodeError {
-                            error: EventStreamDecodeError::new(
-                                EventDecodeStage::Stream,
-                                0,
-                                message,
-                            ),
-                        });
-                        break;
-                    }
-                    Ok(WsFrame::Closed) => {
-                        let _ = forwarder.send(EventStreamEvent::Closed);
-                        break;
-                    }
-                    Err(RecvError::Lagged(skipped)) => {
-                        let _ = forwarder.send(EventStreamEvent::Lagged {
-                            skipped: lag_to_usize(skipped),
-                        });
-                    }
-                    Err(RecvError::Closed) => {
-                        let _ = forwarder.send(EventStreamEvent::Closed);
-                        break;
+                        let mut failure =
+                            EventStreamDecodeError::new(stage, raw_len, error.to_string());
+                        failure.source = Some(Arc::new(error));
+                        let _ = forwarder.send(EventStreamEvent::DecodeError { error: failure });
+                        return;
                     }
                 }
             }
+            let _ = forwarder.send(EventStreamEvent::Closed);
         });
         Self {
-            subscription,
             sender,
             initial_receiver: std::sync::Mutex::new(Some(initial_receiver)),
-            decode_handle,
+            worker,
         }
     }
-    /// Acquire a receiver for decoded events.
+    /// Acquire a receiver; the first receiver retains events produced during construction.
     pub fn subscribe(&self) -> broadcast::Receiver<EventStreamEvent> {
         self.initial_receiver
             .lock()
-            .expect("event stream receiver lock poisoned")
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .take()
             .unwrap_or_else(|| self.sender.subscribe())
     }
-    /// Abort both the raw WebSocket subscription and decoder task.
+    /// Cancel the fanout task and release its owned SDK connection.
     pub fn abort(&self) {
-        self.subscription.abort();
-        if !self.decode_handle.is_finished() {
-            self.decode_handle.abort();
-        }
+        self.worker.abort();
     }
-    /// Check whether the underlying tasks finished.
+    /// Whether the fanout task has finished.
     pub fn is_finished(&self) -> bool {
-        self.subscription.is_finished() && self.decode_handle.is_finished()
+        self.worker.is_finished()
     }
 }
 impl Drop for EventStream {

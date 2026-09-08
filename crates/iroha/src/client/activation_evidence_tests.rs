@@ -43,7 +43,7 @@ fn canonical_executed_block_fixture() -> (NonZeroU64, SignedBlock, CommittedTran
 #[test]
 fn canonical_executed_block_reader_binds_route_wire_and_committed_evidence() {
     let mut client = client_with_base_url(base_url());
-    mark_data_model_compatible(&client);
+
     client
         .headers
         .insert("Accept".to_owned(), APPLICATION_JSON.to_owned());
@@ -58,6 +58,7 @@ fn canonical_executed_block_reader_binds_route_wire_and_committed_evidence() {
             let client = client
                 .clone()
                 .with_test_http_transport(mock_transport.clone());
+            mark_data_model_compatible(&client);
             client.get_canonical_executed_block_wire(height, &committed)
         },
     );
@@ -83,7 +84,7 @@ fn canonical_executed_block_reader_binds_route_wire_and_committed_evidence() {
 #[test]
 fn canonical_executed_block_reader_rejects_trailing_wire_and_wrong_carrier_hash() {
     let client = client_with_base_url(base_url());
-    mark_data_model_compatible(&client);
+
     let (height, block, committed) = canonical_executed_block_fixture();
     let mut trailing = block.encode_wire().expect("canonical executed block wire");
     trailing.push(0);
@@ -93,6 +94,7 @@ fn canonical_executed_block_reader_rejects_trailing_wire_and_wrong_carrier_hash(
             let client = client
                 .clone()
                 .with_test_http_transport(mock_transport.clone());
+            mark_data_model_compatible(&client);
             client.get_canonical_executed_block_wire(height, &committed)
         },
     )
@@ -117,6 +119,7 @@ fn canonical_executed_block_reader_rejects_trailing_wire_and_wrong_carrier_hash(
             let client = client
                 .clone()
                 .with_test_http_transport(mock_transport.clone());
+            mark_data_model_compatible(&client);
             client.get_canonical_executed_block_wire(height, &wrong_carrier)
         },
     )
@@ -347,6 +350,7 @@ fn rejected_next_bridge_finality_response(
         let client = client
             .clone()
             .with_test_http_transport(mock_transport.clone());
+        mark_data_model_compatible(&client);
 
         client.get_next_bridge_finality_proof(height, verifier)
     })
@@ -358,7 +362,7 @@ fn rejected_next_bridge_finality_response(
 #[test]
 fn bridge_finality_anchor_reader_returns_standalone_verified_proof_and_hash() {
     let mut client = client_with_base_url(base_url());
-    mark_data_model_compatible(&client);
+
     client
         .headers
         .insert("Accept".to_owned(), APPLICATION_JSON.to_owned());
@@ -374,6 +378,7 @@ fn bridge_finality_anchor_reader_returns_standalone_verified_proof_and_hash() {
             let client = client
                 .clone()
                 .with_test_http_transport(mock_transport.clone());
+            mark_data_model_compatible(&client);
             client.get_bridge_finality_anchor(proof.block_header.height(), test_network_id())
         },
     );
@@ -401,7 +406,7 @@ fn bridge_finality_anchor_reader_returns_standalone_verified_proof_and_hash() {
 #[test]
 fn bridge_finality_anchor_reader_rejects_wrong_network_and_invalid_signature() {
     let client = client_with_base_url(base_url());
-    mark_data_model_compatible(&client);
+
     let (proof, _, _) = bridge_finality_chain_fixture();
     let body = norito::to_bytes(&proof).expect("encode canonical bridge finality proof");
     let mismatched_height =
@@ -412,6 +417,7 @@ fn bridge_finality_anchor_reader_rejects_wrong_network_and_invalid_signature() {
             let client = client
                 .clone()
                 .with_test_http_transport(mock_transport.clone());
+            mark_data_model_compatible(&client);
             client.get_bridge_finality_anchor(mismatched_height, test_network_id())
         },
     );
@@ -432,6 +438,7 @@ fn bridge_finality_anchor_reader_rejects_wrong_network_and_invalid_signature() {
             let client = client
                 .clone()
                 .with_test_http_transport(mock_transport.clone());
+            mark_data_model_compatible(&client);
             client.get_bridge_finality_anchor(proof.block_header.height(), wrong_network_id)
         },
     )
@@ -448,6 +455,7 @@ fn bridge_finality_anchor_reader_rejects_wrong_network_and_invalid_signature() {
             let client = client
                 .clone()
                 .with_test_http_transport(mock_transport.clone());
+            mark_data_model_compatible(&client);
             client.get_bridge_finality_anchor(proof.block_header.height(), test_network_id())
         },
     )
@@ -459,7 +467,7 @@ fn bridge_finality_anchor_reader_rejects_wrong_network_and_invalid_signature() {
 #[test]
 fn bridge_finality_reader_checks_requested_binding_before_advancing_anchor() {
     let mut client = client_with_base_url(base_url());
-    mark_data_model_compatible(&client);
+
     client
         .headers
         .insert("Accept".to_owned(), APPLICATION_JSON.to_owned());
@@ -475,6 +483,7 @@ fn bridge_finality_reader_checks_requested_binding_before_advancing_anchor() {
             let client = client
                 .clone()
                 .with_test_http_transport(mock_transport.clone());
+            mark_data_model_compatible(&client);
 
             client
                 .get_bridge_finality_proof(proof.block_header.height(), wrong_hash, &mut verifier)
@@ -506,6 +515,7 @@ fn bridge_finality_reader_checks_requested_binding_before_advancing_anchor() {
             let client = client
                 .clone()
                 .with_test_http_transport(mock_transport.clone());
+            mark_data_model_compatible(&client);
 
             client.get_bridge_finality_proof(
                 proof.block_header.height(),
@@ -522,7 +532,7 @@ fn bridge_finality_reader_checks_requested_binding_before_advancing_anchor() {
 #[test]
 fn bridge_finality_next_reader_rejects_height_mismatch_before_advancing() {
     let client = client_with_base_url(base_url());
-    mark_data_model_compatible(&client);
+
     let (anchor, successor, mut verifier) = bridge_finality_chain_fixture();
     verifier
         .verify(&anchor)
@@ -535,6 +545,7 @@ fn bridge_finality_next_reader_rejects_height_mismatch_before_advancing() {
             let client = client
                 .clone()
                 .with_test_http_transport(mock_transport.clone());
+            mark_data_model_compatible(&client);
 
             client
                 .get_next_bridge_finality_proof(successor_height, &mut verifier)
@@ -553,6 +564,7 @@ fn bridge_finality_next_reader_rejects_height_mismatch_before_advancing() {
             let client = client
                 .clone()
                 .with_test_http_transport(mock_transport.clone());
+            mark_data_model_compatible(&client);
             client.get_next_bridge_finality_proof(successor_height, &mut verifier)
         },
     )
@@ -564,7 +576,7 @@ fn bridge_finality_next_reader_rejects_height_mismatch_before_advancing() {
 #[test]
 fn bridge_finality_next_reader_response_contract_failures_do_not_advance() {
     let client = client_with_base_url(base_url());
-    mark_data_model_compatible(&client);
+
     let (anchor, successor, mut verifier) = bridge_finality_chain_fixture();
     verifier
         .verify(&anchor)
@@ -634,6 +646,7 @@ fn bridge_finality_next_reader_response_contract_failures_do_not_advance() {
             let client = client
                 .clone()
                 .with_test_http_transport(mock_transport.clone());
+            mark_data_model_compatible(&client);
             client.get_next_bridge_finality_proof(height, &mut verifier)
         },
     )
@@ -645,7 +658,7 @@ fn bridge_finality_next_reader_response_contract_failures_do_not_advance() {
 #[test]
 fn bridge_finality_next_reader_verification_failure_does_not_advance() {
     let client = client_with_base_url(base_url());
-    mark_data_model_compatible(&client);
+
     let (anchor, successor, mut verifier) = bridge_finality_chain_fixture();
     verifier
         .verify(&anchor)
@@ -669,6 +682,7 @@ fn bridge_finality_next_reader_verification_failure_does_not_advance() {
             let client = client
                 .clone()
                 .with_test_http_transport(mock_transport.clone());
+            mark_data_model_compatible(&client);
             client.get_next_bridge_finality_proof(height, &mut verifier)
         },
     )

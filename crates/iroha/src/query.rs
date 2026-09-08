@@ -951,7 +951,7 @@ mod query_errors_handling {
             key_pair,
             request_timeout: crate::config::DEFAULT_TORII_REQUEST_TIMEOUT,
             accept_header: APPLICATION_NORITO,
-            transport: DefaultHttpTransport::new(),
+            transport: DefaultHttpTransport::new().expect("test HTTP transport"),
         };
         let cursor = ForwardCursor {
             query: "cursor".into(),
@@ -986,6 +986,7 @@ mod query_errors_handling {
     fn execute_signed_query_raw_sets_accept_header() {
         let (account_id, key_pair) = gen_account_in("wonderland");
         let client = Client {
+            account_chain_discriminant: iroha_torii_shared::MINAMOTO_CHAIN_DISCRIMINANT,
             chain: ChainId::from("00000000-0000-0000-0000-000000000000"),
             network_id: crate::client::test_network_id(),
             torii_url: Url::parse("http://localhost:8081").expect("torii url"),
@@ -1004,7 +1005,8 @@ mod query_errors_handling {
                 DataModelCompatibility::SubmitCompatible,
             )),
             compatibility_probe: Arc::new(CompatibilityProbeCoordinator::new()),
-            http_transport: DefaultHttpTransport::new(),
+            http_transport: DefaultHttpTransport::new().expect("test HTTP transport"),
+            stream_transport: std::sync::Arc::new(crate::stream::DefaultStreamTransport),
             wire_format_preference: crate::client::WireFormatPreference::default(),
         };
         let encoded_response = norito::to_bytes(&QueryResponse::Iterable(QueryOutput {
@@ -1033,6 +1035,11 @@ mod query_errors_handling {
                 let client = client
                     .clone()
                     .with_test_http_transport(mock_transport.clone());
+                *client
+                    .data_model_compatibility
+                    .lock()
+                    .expect("fixture compatibility cache") =
+                    DataModelCompatibility::SubmitCompatible;
 
                 let response = client.execute_signed_query_raw(&[]).expect("execute query");
                 assert!(matches!(response, QueryResponse::Iterable(_)));
@@ -1047,6 +1054,7 @@ mod query_errors_handling {
     fn execute_signed_query_raw_rejects_incompatible_data_model_version_before_query_request() {
         let (account_id, key_pair) = gen_account_in("wonderland");
         let client = Client {
+            account_chain_discriminant: iroha_torii_shared::MINAMOTO_CHAIN_DISCRIMINANT,
             chain: ChainId::from("00000000-0000-0000-0000-000000000000"),
             network_id: crate::client::test_network_id(),
             torii_url: Url::parse("http://localhost:8081").expect("torii url"),
@@ -1063,7 +1071,8 @@ mod query_errors_handling {
             rollout_phase: RolloutPhase::Default,
             data_model_compatibility: Arc::new(Mutex::new(DataModelCompatibility::Unchecked)),
             compatibility_probe: Arc::new(CompatibilityProbeCoordinator::new()),
-            http_transport: DefaultHttpTransport::new(),
+            http_transport: DefaultHttpTransport::new().expect("test HTTP transport"),
+            stream_transport: std::sync::Arc::new(crate::stream::DefaultStreamTransport),
             wire_format_preference: crate::client::WireFormatPreference::default(),
         };
         let query_seen = Arc::new(AtomicBool::new(false));
@@ -1121,6 +1130,7 @@ mod query_errors_handling {
         ] {
             let (account_id, key_pair) = gen_account_in("wonderland");
             let client = Client {
+                account_chain_discriminant: iroha_torii_shared::MINAMOTO_CHAIN_DISCRIMINANT,
                 chain: ChainId::from("00000000-0000-0000-0000-000000000000"),
                 network_id: crate::client::test_network_id(),
                 torii_url: Url::parse("http://localhost:8081").expect("torii url"),
@@ -1137,7 +1147,8 @@ mod query_errors_handling {
                 rollout_phase: RolloutPhase::Default,
                 data_model_compatibility: Arc::new(Mutex::new(DataModelCompatibility::Unchecked)),
                 compatibility_probe: Arc::new(CompatibilityProbeCoordinator::new()),
-                http_transport: DefaultHttpTransport::new(),
+                http_transport: DefaultHttpTransport::new().expect("test HTTP transport"),
+                stream_transport: std::sync::Arc::new(crate::stream::DefaultStreamTransport),
                 wire_format_preference: crate::client::WireFormatPreference::default(),
             };
             let request_paths = Arc::new(Mutex::new(Vec::new()));
@@ -1188,6 +1199,7 @@ mod query_errors_handling {
     fn compatible_client_with_conflicting_wire_headers() -> Client {
         let (account_id, key_pair) = gen_account_in("wonderland");
         Client {
+            account_chain_discriminant: iroha_torii_shared::MINAMOTO_CHAIN_DISCRIMINANT,
             chain: ChainId::from("00000000-0000-0000-0000-000000000000"),
             network_id: crate::client::test_network_id(),
             torii_url: Url::parse("http://localhost:8081").expect("torii url"),
@@ -1209,7 +1221,8 @@ mod query_errors_handling {
                 DataModelCompatibility::SubmitCompatible,
             )),
             compatibility_probe: Arc::new(CompatibilityProbeCoordinator::new()),
-            http_transport: DefaultHttpTransport::new(),
+            http_transport: DefaultHttpTransport::new().expect("test HTTP transport"),
+            stream_transport: std::sync::Arc::new(crate::stream::DefaultStreamTransport),
             wire_format_preference: crate::client::WireFormatPreference::default(),
         }
     }
@@ -1353,6 +1366,11 @@ mod query_errors_handling {
                 let client = client
                     .clone()
                     .with_test_http_transport(mock_transport.clone());
+                *client
+                    .data_model_compatibility
+                    .lock()
+                    .expect("fixture compatibility cache") =
+                    DataModelCompatibility::SubmitCompatible;
                 client.get_successful_transaction_details(entrypoint_hash)
             },
         )
@@ -1376,6 +1394,11 @@ mod query_errors_handling {
                 let client = client
                     .clone()
                     .with_test_http_transport(mock_transport.clone());
+                *client
+                    .data_model_compatibility
+                    .lock()
+                    .expect("fixture compatibility cache") =
+                    DataModelCompatibility::SubmitCompatible;
                 client.get_transaction_details(entrypoint_hash)
             },
         )
@@ -1408,6 +1431,11 @@ mod query_errors_handling {
                 let client = client
                     .clone()
                     .with_test_http_transport(mock_transport.clone());
+                *client
+                    .data_model_compatibility
+                    .lock()
+                    .expect("fixture compatibility cache") =
+                    DataModelCompatibility::SubmitCompatible;
                 client.get_successful_transaction_details(entrypoint_hash)
             },
         )
@@ -1437,6 +1465,11 @@ mod query_errors_handling {
                 let client = client
                     .clone()
                     .with_test_http_transport(mock_transport.clone());
+                *client
+                    .data_model_compatibility
+                    .lock()
+                    .expect("fixture compatibility cache") =
+                    DataModelCompatibility::SubmitCompatible;
                 client.get_successful_transaction_details(entrypoint_hash)
             },
         )
@@ -1457,6 +1490,11 @@ mod query_errors_handling {
                 let client = client
                     .clone()
                     .with_test_http_transport(mock_transport.clone());
+                *client
+                    .data_model_compatibility
+                    .lock()
+                    .expect("fixture compatibility cache") =
+                    DataModelCompatibility::SubmitCompatible;
                 client.get_successful_transaction_details(entrypoint_hash)
             },
         )
@@ -1481,6 +1519,11 @@ mod query_errors_handling {
                 let client = client
                     .clone()
                     .with_test_http_transport(mock_transport.clone());
+                *client
+                    .data_model_compatibility
+                    .lock()
+                    .expect("fixture compatibility cache") =
+                    DataModelCompatibility::SubmitCompatible;
                 client.get_successful_transaction_details(entrypoint_hash)
             },
         )

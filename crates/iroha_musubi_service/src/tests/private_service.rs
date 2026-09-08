@@ -430,15 +430,17 @@ fn receipt_verification_accepts_only_bounded_service_clock_lead() {
     reason = "the seed-ingress audit keeps exact metadata, authorization, framing, and secret-isolation checks together"
 )]
 fn seed_ingress_carries_exact_metadata_and_authorization_with_framed_plan_body() {
-    let (mut client, _) = client();
-    client.headers.insert(
+    let (client, _) = client();
+    let mut builder = client.to_builder();
+    builder.headers.insert(
         "Authorization".to_owned(),
         "Basic must-not-cross-boundary".to_owned(),
     );
-    client.headers.insert(
+    builder.headers.insert(
         "x-platform-secret".to_owned(),
         "must-not-cross-boundary".to_owned(),
     );
+    let client = builder.build().expect("valid isolated Torii headers");
     let runtime = AuthenticatedMusubiPublicationRuntimeClientV1::from_iroha_client(
         &client,
         Duration::from_secs(5),
@@ -2265,8 +2267,8 @@ fn restored_journal_preserves_completed_idempotency_and_replay_state() {
     let (client, _) = client();
     let binding = MusubiPublicationOperationBindingV1 {
         operation_id: [0x81; 32],
-        network_id: client.network_id,
-        publisher: client.account,
+        network_id: *client.network_id(),
+        publisher: client.account().clone(),
         archive_id: ArchiveId::new([0x82; 32]),
         car_body_digest: MusubiContentDigestV1::new([0x83; 32]),
         car_body_length: 99,

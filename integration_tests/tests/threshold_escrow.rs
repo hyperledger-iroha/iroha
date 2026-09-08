@@ -149,7 +149,7 @@ async fn call_contract_expect_status(
         .ok_or_else(|| eyre!("{stage}: missing tx_hash_hex in response: {response:?}"))?;
     let observed = wait_for_tx_terminal_status(
         http,
-        &client.client().torii_url,
+        client.client().endpoint(),
         tx_hash_hex,
         TX_TIMEOUT,
         stage,
@@ -174,7 +174,7 @@ async fn submit_contract_call_json(
     payload: Option<&norito::json::Value>,
     stage: &str,
 ) -> Result<norito::json::Value> {
-    let url = client.client().torii_url.join("v1/contracts/call")?;
+    let url = client.client().endpoint().join("v1/contracts/call")?;
     let deadline = Instant::now() + CONTRACT_CALL_ADMISSION_TIMEOUT;
     loop {
         let mut body = norito::json::Map::new();
@@ -463,7 +463,7 @@ async fn setup_ledger_for_sample(
                 ALICE_ID.clone(),
             );
             let tx = TransactionBuilder::new(
-                client.client().network_id,
+                *client.client().network_id(),
                 BOB_ID.clone(),
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
@@ -532,7 +532,7 @@ async fn threshold_escrow_releases_when_fully_funded() -> Result<()> {
     .await?;
     let opened_state = contract_state_values(
         &http,
-        &client.client().torii_url,
+        client.client().endpoint(),
         &contract_address,
         &threshold_state_paths(),
     )
@@ -596,7 +596,7 @@ async fn threshold_escrow_releases_when_fully_funded() -> Result<()> {
     assert_eq!(asset_value(&client, &recipient_asset)?, None);
     let partial_state = contract_state_values(
         &http,
-        &client.client().torii_url,
+        client.client().endpoint(),
         &contract_address,
         &[
             "funded_amount_value",
@@ -657,7 +657,7 @@ async fn threshold_escrow_releases_when_fully_funded() -> Result<()> {
     .await?;
     let early_release_state = contract_state_values(
         &http,
-        &client.client().torii_url,
+        client.client().endpoint(),
         &contract_address,
         &["funded_amount_value", "is_open", "is_released"],
     )
@@ -685,7 +685,7 @@ async fn threshold_escrow_releases_when_fully_funded() -> Result<()> {
     .await?;
     let funded_state = contract_state_values(
         &http,
-        &client.client().torii_url,
+        client.client().endpoint(),
         &contract_address,
         &["funded_amount_value", "is_open"],
     )
@@ -717,7 +717,7 @@ async fn threshold_escrow_releases_when_fully_funded() -> Result<()> {
     .await?;
     let released_state = contract_state_values(
         &http,
-        &client.client().torii_url,
+        client.client().endpoint(),
         &contract_address,
         &[
             "funded_amount_value",
@@ -876,7 +876,7 @@ async fn threshold_escrow_refunds_when_unresolved() -> Result<()> {
     .await?;
     let refunded_state = contract_state_values(
         &http,
-        &client.client().torii_url,
+        client.client().endpoint(),
         &contract_address,
         &[
             "funded_amount_value",

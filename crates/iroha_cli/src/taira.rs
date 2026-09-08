@@ -1673,7 +1673,7 @@ fn prepared_inrou_report(
         status_config.torii_api_url = Url::parse(&format!("{public_root}/"))
             .wrap_err("failed to bind prepared Inrou status client")?;
         status_config.torii_request_timeout = Duration::from_secs(args.timeout_secs.max(1));
-        let status_client = IrohaClient::new(status_config);
+        let status_client = IrohaClient::builder(status_config).build()?;
         verify_inrou_check(public_root, &status_client, stage, args.timeout_secs)?
     } else {
         report_value(
@@ -1975,7 +1975,7 @@ fn prove_inrou_predecessor_applied(
     let mut status_config = config.clone();
     status_config.torii_api_url = Url::parse(&format!("{public_root}/"))?;
     status_config.torii_request_timeout = Duration::from_secs(args.timeout_secs.max(1));
-    let client = IrohaClient::new(status_config);
+    let client = IrohaClient::builder(status_config).build()?;
     let status = client
         .get_transaction_status_response_global(transaction.hash())?
         .ok_or_else(|| eyre!("Inrou predecessor transaction is absent"))?;
@@ -2153,7 +2153,7 @@ fn verify_inrou_check_from_selected_status_origin(
     stage: &crate::soracloud::TairaInrouStageIdentity,
     timeout_secs: u64,
 ) -> Result<Value> {
-    let status_client = IrohaClient::new(status_config.clone());
+    let status_client = IrohaClient::builder(status_config.clone()).build()?;
     verify_inrou_check(public_root, &status_client, stage, timeout_secs)
 }
 fn ensure_canonical_taira_client_identity(config: &Config) -> Result<()> {
@@ -3670,14 +3670,15 @@ fn run_write_canary_exact<C: RunContext>(context: &mut C, args: &WriteCanary) ->
                 &expected_fee_payment,
                 PreparedLifetimeCheck::Structural,
             )?;
-            let client = IrohaClient::new(write_canary_config(
+            let client = IrohaClient::builder(write_canary_config(
                 context.config(),
                 &public_root,
                 &CanarySigner {
                     account_id: context.config().account.clone(),
                     key_pair: context.config().key_pair.clone(),
                 },
-            )?);
+            )?)
+            .build()?;
             let classification = classify_exact_prepared_operation(&client, &validated)?;
             report_prepared_classification(&public_root, args, &validated, classification)
         }
@@ -3771,7 +3772,8 @@ fn prove_predecessor_applied(
         account_id: config.account.clone(),
         key_pair: config.key_pair.clone(),
     };
-    let client = IrohaClient::new(write_canary_config(config, public_root, &signer)?);
+    let client =
+        IrohaClient::builder(write_canary_config(config, public_root, &signer)?).build()?;
     match classify_exact_prepared_operation(&client, &validated)? {
         PreparedRecoveryClassification::Applied { .. } => Ok(()),
         PreparedRecoveryClassification::Absent => {
@@ -3795,8 +3797,9 @@ fn prepare_final_canary_operation(
 ) -> Result<PreparedMutationEnvelopeV1> {
     let signer = resolve_canary_signer(config)?;
     let canary_config = write_canary_config(config, public_root, &signer)?;
-    let client = BlockingIrohaClient::from_client(IrohaClient::new(canary_config.clone()))
-        .wrap_err("failed to initialize blocking transaction client")?;
+    let client =
+        BlockingIrohaClient::from_client(IrohaClient::builder(canary_config.clone()).build()?)
+            .wrap_err("failed to initialize blocking transaction client")?;
     let message = prepared_canary_message(binding)?;
     let semantic_sha256 = prepared_semantic_sha256(binding, WRITE_CANARY_OPERATION, &message)?;
     let mut metadata = Metadata::default();
@@ -4072,7 +4075,8 @@ fn validate_prepared_operation(
         account_id: config.account.clone(),
         key_pair: config.key_pair.clone(),
     };
-    let client = IrohaClient::new(write_canary_config(config, public_root, &signer)?);
+    let client =
+        IrohaClient::builder(write_canary_config(config, public_root, &signer)?).build()?;
     let transaction = match operation {
         PreparedTransactionOperationV1::OnboardingPrepared(prepared) => {
             let expected_alias = canary_alias(signer.key_pair.public_key());
@@ -4449,11 +4453,9 @@ fn submit_exact_prepared_operation(
                 account_id: config.account.clone(),
                 key_pair: config.key_pair.clone(),
             };
-            let client = BlockingIrohaClient::from_client(IrohaClient::new(write_canary_config(
-                config,
-                public_root,
-                &signer,
-            )?))?;
+            let client = BlockingIrohaClient::from_client(
+                IrohaClient::builder(write_canary_config(config, public_root, &signer)?).build()?,
+            )?;
             let classification = classify_exact_prepared_operation(client.client(), validated)?;
             if !submit_required_after_classification(&validated.envelope.binding, &classification)?
             {
@@ -4817,7 +4819,7 @@ fn prepare_onboarding_operation(
     let token = args.read_onboarding_token()?;
     let signer = resolve_canary_signer(config)?;
     let canary_config = write_canary_config(config, public_root, &signer)?;
-    let client = IrohaClient::new(canary_config.clone());
+    let client = IrohaClient::builder(canary_config.clone()).build()?;
     let alias = canary_alias(signer.key_pair.public_key());
     let request =
         AccountOnboardingPlanRequestV1::try_new(alias, &signer.account_id, std::iter::empty())?;
@@ -4835,14 +4837,14 @@ fn prepare_onboarding_operation(
         .wrap_err("failed to prepare exact sponsored onboarding transaction")?
     {
         AccountOnboardingPrepareResponseV1::Prepared(prepared) => {
-            PreparedTransactionOperationV1::OnboardingPrepared(prepared)
+            PreparedTransactionOperationV1::OnboardingPrepared(*prepared)
         }
         AccountOnboardingPrepareResponseV1::ProofRequired(result) => {
             PreparedTransactionOperationV1::OnboardingProofRequired(
                 PreparedOnboardingProofRequiredV1 {
                     schema: PREPARED_ONBOARDING_PROOF_REQUIRED_SCHEMA_V1.to_owned(),
                     receipt,
-                    result,
+                    result: *result,
                 },
             )
         }
@@ -4883,7 +4885,7 @@ fn prepare_faucet_operation(
 ) -> Result<PreparedMutationEnvelopeV1> {
     let signer = resolve_canary_signer(config)?;
     let canary_config = write_canary_config(config, public_root, &signer)?;
-    let client = IrohaClient::new(canary_config.clone());
+    let client = IrohaClient::builder(canary_config.clone()).build()?;
     let faucet_policy = args.faucet_policy()?;
     let claim =
         solve_account_faucet_claim(public_root, &signer.account_id, &canary_config.network_id)?;
@@ -4923,7 +4925,8 @@ fn submit_server_prepared_operation(
     expected_fee_payment: &FeePaymentIntent,
 ) -> Result<PreparedRecoveryClassification> {
     let signer = resolve_canary_signer(config)?;
-    let client = IrohaClient::new(write_canary_config(config, public_root, &signer)?);
+    let client =
+        IrohaClient::builder(write_canary_config(config, public_root, &signer)?).build()?;
     let classification = classify_exact_prepared_operation(&client, validated)?;
     if !submit_required_after_classification(&validated.envelope.binding, &classification)? {
         return Ok(classification);
@@ -9948,7 +9951,9 @@ mod tests {
         config.key_pair = key_pair;
         config.torii_api_url =
             Url::parse(&format!("{}/", server.base_url)).expect("mock Torii URL");
-        let client = IrohaClient::new(config);
+        let client = IrohaClient::builder(config)
+            .build()
+            .expect("valid Taira fixture context");
 
         let observation = probe_inrou_service(&server.base_url, &client, &deployment, 3)
             .expect("probe converges after a final current route success");
@@ -10160,7 +10165,9 @@ mod tests {
         config.key_pair = key_pair;
         config.torii_api_url =
             Url::parse(&format!("{}/", server.base_url)).expect("mock Torii URL");
-        let client = IrohaClient::new(config);
+        let client = IrohaClient::builder(config)
+            .build()
+            .expect("valid Taira fixture context");
         let status = account_signed_soracloud_status(&client).expect("signed status response");
         assert_eq!(status.status, 200);
         assert_eq!(status.body, Some(norito::json!({ "schema_version": 1 })));

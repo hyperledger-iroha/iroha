@@ -15,6 +15,8 @@ pub const STREAM_TOKEN_MAX_WIRE_BYTES_V1: usize = 2_048;
 /// wire ceiling while remaining below common HTTP header budgets.
 pub const STREAM_TOKEN_MAX_BASE64_BYTES_V1: usize = 4_096;
 /// Canonical body for stream tokens issued by gateways.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::token::StreamTokenBodyV1")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct StreamTokenBodyV1 {
     pub token_id: String,
@@ -43,6 +45,8 @@ impl StreamTokenBodyV1 {
     }
 }
 /// Signed stream token payload.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::token::StreamTokenV1")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct StreamTokenV1 {
     pub body: StreamTokenBodyV1,
@@ -307,3 +311,6 @@ mod tests {
         assert!(matches!(err, StreamTokenError::InvalidSignatureFormat));
     }
 }
+
+#[cfg(test)]
+include!("token/captured_owner_identity_tests.rs");

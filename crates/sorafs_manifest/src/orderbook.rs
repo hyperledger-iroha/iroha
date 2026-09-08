@@ -61,6 +61,8 @@ const ORDERBOOK_CANCEL_SIGNATURE_DOMAIN_V1: &[u8] = b"sorafs.orderbook.cancel-si
 const SETTLEMENT_RECEIPT_SIGNATURE_DOMAIN_V1: &[u8] =
     b"sorafs.orderbook.settlement-receipt-signature.v1";
 /// Order side in the XOR orderbook.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::orderbook::OrderSideV1")]
 #[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 #[repr(u8)]
 pub enum OrderSideV1 {
@@ -70,6 +72,8 @@ pub enum OrderSideV1 {
     Ask = 2,
 }
 /// SoraFS storage tier used by orderbook pricing.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::orderbook::OrderTierV1")]
 #[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 #[repr(u8)]
 pub enum OrderTierV1 {
@@ -81,6 +85,8 @@ pub enum OrderTierV1 {
     Archive = 3,
 }
 /// Reason attached to an order-cancel request.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::orderbook::OrderCancelReasonV1")]
 #[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 #[repr(u8)]
 pub enum OrderCancelReasonV1 {
@@ -94,6 +100,8 @@ pub enum OrderCancelReasonV1 {
     Replaced = 4,
 }
 /// Settlement channel lifecycle status.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::orderbook::SettlementChannelStatusV1")]
 #[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 #[repr(u8)]
 pub enum SettlementChannelStatusV1 {
@@ -109,6 +117,8 @@ pub enum SettlementChannelStatusV1 {
     Refunded = 5,
 }
 /// Signature material attached to orderbook payloads.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::orderbook::OrderbookSignatureV1")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct OrderbookSignatureV1 {
     /// Signature algorithm identifier.
@@ -146,6 +156,8 @@ impl OrderbookSignatureV1 {
     }
 }
 /// Canonical order-submission payload.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::orderbook::OrderRequestV1")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct OrderRequestV1 {
     /// Schema version (`ORDERBOOK_ORDER_VERSION_V1`).
@@ -245,6 +257,8 @@ pub fn derive_orderbook_order_id_v1(owner_account: &[u8], nonce: u64) -> [u8; 32
     *hasher.finalize().as_bytes()
 }
 /// Canonical order-cancel payload.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::orderbook::OrderCancelV1")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct OrderCancelV1 {
     /// Schema version (`ORDERBOOK_CANCEL_VERSION_V1`).
@@ -348,6 +362,8 @@ pub fn sign_order_cancel_ed25519_v1(
     Ok(cancel)
 }
 /// Trade fill event emitted by a deterministic matcher/contract.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::orderbook::TradeEventV1")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct TradeEventV1 {
     /// Schema version (`ORDERBOOK_TRADE_EVENT_VERSION_V1`).
@@ -416,6 +432,8 @@ pub struct OrderFillOutcomeV1 {
     pub gross_value: XorQuantity,
 }
 /// Order plus canonical admission sequence used for price-time priority.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::orderbook::OrderBookEntryV1")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct OrderBookEntryV1 {
     /// Canonical order payload.
@@ -858,6 +876,8 @@ pub fn bid_order_escrow_requirement_v1(
         .map_err(OrderbookValidationError::Amount)
 }
 /// Half-open byte range `[start, end)` covered by a settlement receipt.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::orderbook::ByteRangeV1")]
 #[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct ByteRangeV1 {
     /// Start offset, inclusive.
@@ -883,6 +903,8 @@ impl ByteRangeV1 {
     }
 }
 /// Streaming settlement channel state.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::orderbook::SettlementChannelV1")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct SettlementChannelV1 {
     /// Schema version (`SETTLEMENT_CHANNEL_VERSION_V1`).
@@ -1056,6 +1078,8 @@ pub fn deterministic_settlement_split_v1(
     })
 }
 /// Signed streaming-settlement receipt for delivered bytes.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::orderbook::SettlementReceiptV1")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct SettlementReceiptV1 {
     /// Schema version (`SETTLEMENT_RECEIPT_VERSION_V1`).
@@ -1084,15 +1108,10 @@ pub struct SettlementReceiptV1 {
     pub settlement_signature: OrderbookSignatureV1,
 }
 mod borrowed_norito {
-    use norito::core::{NoritoSerialize, SerializePayload};
+    use norito::core::SerializePayload;
     /// Borrowed value that delegates canonical Norito serialization.
     pub(super) struct Value<'a, T>(pub(super) &'a T);
-    impl<T: NoritoSerialize> NoritoSerialize for Value<'_, T> {
-        fn schema_hash() -> [u8; 16] {
-            T::schema_hash()
-        }
-    }
-    impl<T: NoritoSerialize> SerializePayload for Value<'_, T> {
+    impl<T: SerializePayload> SerializePayload for Value<'_, T> {
         fn serialize(
             &self,
             writer: &mut norito::core::Encoder<'_>,
@@ -1118,12 +1137,7 @@ mod borrowed_norito {
             Self(None)
         }
     }
-    impl<T: NoritoSerialize> NoritoSerialize for Vec<'_, T> {
-        fn schema_hash() -> [u8; 16] {
-            <std::vec::Vec<T>>::schema_hash()
-        }
-    }
-    impl<T: NoritoSerialize> SerializePayload for Vec<'_, T> {
+    impl<T: SerializePayload> SerializePayload for Vec<'_, T> {
         fn serialize(
             &self,
             writer: &mut norito::core::Encoder<'_>,
@@ -1147,7 +1161,7 @@ mod borrowed_norito {
         }
     }
 }
-#[derive(NoritoSerialize)]
+#[derive(norito::derive::SerializePayload)]
 struct OrderbookSignatureSigningViewWireV1<'a> {
     algorithm: SignatureAlgorithm,
     public_key: borrowed_norito::Vec<'a, u8>,
@@ -1179,7 +1193,7 @@ impl norito::core::SerializePayload for OrderbookSignatureSigningViewV1<'_> {
         self.0.encoded_len_exact()
     }
 }
-#[derive(NoritoSerialize)]
+#[derive(norito::derive::SerializePayload)]
 struct OrderRequestSigningViewWireV1<'a> {
     version: u8,
     order_id: [u8; 32],
@@ -1233,7 +1247,7 @@ impl norito::core::SerializePayload for OrderRequestSigningViewV1<'_> {
         self.0.encoded_len_exact()
     }
 }
-#[derive(NoritoSerialize)]
+#[derive(norito::derive::SerializePayload)]
 struct OrderCancelSigningViewWireV1<'a> {
     version: u8,
     order_id: [u8; 32],
@@ -1271,7 +1285,7 @@ impl norito::core::SerializePayload for OrderCancelSigningViewV1<'_> {
         self.0.encoded_len_exact()
     }
 }
-#[derive(NoritoSerialize)]
+#[derive(norito::derive::SerializePayload)]
 struct SettlementReceiptSigningViewWireV1<'a> {
     version: u8,
     receipt_id: [u8; 32],
@@ -3593,3 +3607,10 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+include!("orderbook/captured_owner_identity_tests.rs");
+
+#[cfg(test)]
+#[path = "orderbook/borrowed_payload_tests.rs"]
+mod borrowed_payload_tests;

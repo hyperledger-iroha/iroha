@@ -4287,17 +4287,17 @@ fn tune_ingress_client(
     mode: SubmissionConfirmationMode,
     request_timeout: Duration,
 ) -> Result<Client> {
-    let mut inner = client.client().clone();
+    let mut inner = client.client().to_builder();
     inner.torii_request_timeout = request_timeout;
     if matches!(mode, SubmissionConfirmationMode::AcceptedByIngress) {
         inner
             .headers
-            .insert("Prefer".to_owned(), "return=minimal".to_owned());
+            .insert("prefer".to_owned(), "return=minimal".to_owned());
     }
     if matches!(mode, SubmissionConfirmationMode::BlockingApplied) {
         inner.transaction_status_timeout = Duration::from_millis(IZANAMI_INGRESS_STATUS_TIMEOUT_MS);
     }
-    Client::from_client(inner).wrap_err("failed to bind tuned ingress client")
+    Client::from_client(inner.build()?).wrap_err("failed to bind tuned ingress client")
 }
 async fn await_worker_shutdown_with_timeout(
     handles: Vec<JoinHandle<()>>,
@@ -4662,10 +4662,17 @@ async fn sample_sumeragi_status_digest(
         let mut last_error = None;
         for peer in peers {
             let client = peer.client();
-            let mut inner = client.client().clone();
-            inner.set_operator_key_pair(sumeragi_phase_operator_keypair());
-            inner.torii_request_timeout =
-                bounded_sumeragi_status_sample_request_timeout(inner.torii_request_timeout);
+            let mut builder = client.client().to_builder();
+            builder.operator_key_pair = Some(sumeragi_phase_operator_keypair());
+            builder.torii_request_timeout =
+                bounded_sumeragi_status_sample_request_timeout(builder.torii_request_timeout);
+            let inner = match builder.build() {
+                Ok(client) => client,
+                Err(error) => {
+                    last_error = Some(format!("invalid status sampling context: {error}"));
+                    continue;
+                }
+            };
             match inner.get_sumeragi_status_json() {
                 Ok(json) => {
                     let mut digest = SumeragiStatusDigest::from_json(&json);

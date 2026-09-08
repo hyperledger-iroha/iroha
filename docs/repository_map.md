@@ -31,7 +31,7 @@ boundaries and where to make changes.
 | `iroha_sccp`, `settlement_router`, `kaigi_zk` | Cross-chain protocol handling, settlement, and capability-specific proof support. |
 | `iroha_p2p`, `iroha_logger`, `iroha_telemetry` | Node networking, logging, and runtime metrics. Shared wire records belong below these implementations. |
 | `iroha_zkp_halo2`, `fastpq_prover`, `zk_ace_prover` | Proof primitives or execution engines according to their feature-resolved graph. Shipping SDK checks reject node proof-execution features. |
-| `iroha_test_network`, [`integration_tests`](../integration_tests), `izanami` | Real network test consumers. CI supplies the daemon and CLI artifacts explicitly. |
+| `iroha_test_network`, [`integration_tests`](../integration_tests), `izanami` | Real network test consumers. CI supplies the daemon and CLI explicitly; the first two also receive a separately compiled message-control daemon. Qualified corridors retain their own binary/provenance runners. |
 | [`mochi`](../mochi), [`xtask`](../xtask), [`tools`](../tools) | Local applications, repository automation, fixture generation, and deployment/service tools. Their manifests declare their actual runtime dependencies. |
 
 The approved `iroha_model_base` and `iroha_privacy_model` physical extractions

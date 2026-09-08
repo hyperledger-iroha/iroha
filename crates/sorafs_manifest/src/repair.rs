@@ -48,6 +48,8 @@ pub const GC_AUDIT_BLOCKED_SHARED_CHUNKS_V1: &str = "shared_chunks";
 /// Maximum length permitted for ticket identifiers and string fields.
 const MAX_STRING_BYTES: usize = 256;
 /// Identifier assigned to a repair ticket (e.g., `REP-351`).
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::repair::RepairTicketId")]
 #[derive(
     Clone,
     Debug,
@@ -98,6 +100,8 @@ impl fmt::Display for RepairTicketId {
     }
 }
 /// Proof-of-retrievability failure cause details.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::repair::RepairPorFailureCauseV1")]
 #[derive(
     Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
 )]
@@ -111,6 +115,8 @@ pub struct RepairPorFailureCauseV1 {
     pub proof_digest: Option<[u8; 32]>,
 }
 /// Stable PDP failure category used by repair automation and governance archives.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::repair::RepairPdpFailureKindV1")]
 #[derive(
     Clone,
     Copy,
@@ -138,6 +144,8 @@ pub enum RepairPdpFailureKindV1 {
     StorageUnavailable,
 }
 /// Proof-of-data-possession failure details handed to the repair scheduler.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::repair::RepairPdpFailureCauseV1")]
 #[derive(
     Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
 )]
@@ -155,6 +163,8 @@ pub struct RepairPdpFailureCauseV1 {
     pub failure_kind: RepairPdpFailureKindV1,
 }
 /// Latency SLA breach cause details.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::repair::RepairLatencySlaCauseV1")]
 #[derive(
     Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
 )]
@@ -166,6 +176,8 @@ pub struct RepairLatencySlaCauseV1 {
     pub receipt_digest: Option<[u8; 32]>,
 }
 /// Replica shortfall cause details.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::repair::RepairReplicaShortfallCauseV1")]
 #[derive(
     Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
 )]
@@ -174,6 +186,8 @@ pub struct RepairReplicaShortfallCauseV1 {
     pub missing_chunks: u32,
 }
 /// Manual repair cause details.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::repair::RepairManualCauseV1")]
 #[derive(
     Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
 )]
@@ -182,6 +196,8 @@ pub struct RepairManualCauseV1 {
     pub reason: String,
 }
 /// Root cause captured by an auditor when scheduling repairs.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::repair::RepairCauseV1")]
 #[allow(clippy::size_of_ref)]
 #[derive(
     Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
@@ -245,6 +261,8 @@ impl RepairCauseV1 {
     }
 }
 /// Evidence accompanying a repair ticket.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::repair::RepairEvidenceV1")]
 #[derive(
     Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
 )]
@@ -286,6 +304,8 @@ impl RepairEvidenceV1 {
     }
 }
 /// Auditor-submitted repair report.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::repair::RepairReportV1")]
 #[derive(
     Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
 )]
@@ -336,6 +356,8 @@ impl RepairReportV1 {
     }
 }
 /// Payload describing a queued repair ticket.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::repair::QueuedRepairStateV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct QueuedRepairStateV1 {
     /// Epoch when the ticket was enqueued.
@@ -345,6 +367,8 @@ pub struct QueuedRepairStateV1 {
     pub sla_deadline_unix: Option<u64>,
 }
 /// Payload describing an in-progress repair ticket.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::repair::InProgressRepairStateV1")]
 #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct InProgressRepairStateV1 {
     /// Epoch when the ticket was enqueued.
@@ -356,6 +380,8 @@ pub struct InProgressRepairStateV1 {
     pub repair_agent: Option<String>,
 }
 /// Payload describing a completed repair ticket.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::repair::CompletedRepairStateV1")]
 #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct CompletedRepairStateV1 {
     /// Epoch when the ticket was enqueued.
@@ -369,6 +395,8 @@ pub struct CompletedRepairStateV1 {
     pub resolution_notes: Option<String>,
 }
 /// Payload describing a failed repair ticket.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::repair::FailedRepairStateV1")]
 #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct FailedRepairStateV1 {
     /// Epoch when the ticket was enqueued.
@@ -379,6 +407,8 @@ pub struct FailedRepairStateV1 {
     pub reason: String,
 }
 /// Payload describing an escalated repair ticket.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::repair::EscalatedRepairStateV1")]
 #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct EscalatedRepairStateV1 {
     /// Epoch when the ticket was enqueued.
@@ -389,6 +419,8 @@ pub struct EscalatedRepairStateV1 {
     pub reason: String,
 }
 /// Lifecycle state for a repair ticket.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::repair::RepairTaskStateV1")]
 #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[norito(tag = "state", content = "details")]
 pub enum RepairTaskStateV1 {
@@ -537,6 +569,8 @@ impl RepairTaskStateV1 {
     }
 }
 /// Scheduler record describing the current state of a repair ticket.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::repair::RepairTaskRecordV1")]
 #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct RepairTaskRecordV1 {
     /// Schema version (`REPAIR_TASK_VERSION_V1`).
@@ -595,6 +629,8 @@ impl RepairTaskRecordV1 {
     }
 }
 /// Slash proposal generated after a repair escalation.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::repair::RepairTaskStatusV1")]
 #[derive(
     Clone,
     Copy,
@@ -635,6 +671,8 @@ impl fmt::Display for RepairTaskStatusV1 {
     }
 }
 /// Append-only event emitted whenever a repair ticket changes status.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::repair::RepairTaskEventV1")]
 #[derive(
     Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
 )]
@@ -681,6 +719,8 @@ impl RepairTaskEventV1 {
     }
 }
 /// Header metadata for audit trail payloads (ordering + signer + digest).
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::repair::SorafsAuditHeaderV1")]
 #[derive(
     Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
 )]
@@ -695,6 +735,8 @@ pub struct SorafsAuditHeaderV1 {
     pub payload_digest: [u8; 32],
 }
 /// Canonical audit event emitted for repair status transitions.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::repair::RepairAuditEventV1")]
 #[derive(
     Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
 )]
@@ -730,6 +772,8 @@ impl RepairAuditEventV1 {
     }
 }
 /// Canonical GC audit payload emitted when retention evicts data.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::repair::GcAuditPayloadV1")]
 #[derive(
     Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
 )]
@@ -788,6 +832,8 @@ impl GcAuditPayloadV1 {
     }
 }
 /// Canonical audit event emitted for GC/retention actions.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::repair::GcAuditEventV1")]
 #[derive(
     Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
 )]
@@ -830,6 +876,8 @@ pub fn gc_audit_payload_digest_v1(
     canonical_audit_payload_digest("GC audit payload", payload)
 }
 /// Governance policy applied to repair escalations and slash proposals.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::repair::RepairEscalationPolicyV1")]
 #[derive(
     Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
 )]
@@ -871,6 +919,8 @@ impl RepairEscalationPolicyV1 {
     }
 }
 /// Governance approval summary attached to an escalation proposal.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::repair::RepairEscalationApprovalV1")]
 #[derive(
     Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
 )]
@@ -917,6 +967,8 @@ impl RepairEscalationApprovalV1 {
     }
 }
 /// Slash proposal generated after a repair escalation.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::repair::RepairSlashProposalV1")]
 #[derive(
     Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
 )]
@@ -1414,6 +1466,8 @@ mod tests {
             );
         }
     }
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "sorafs_manifest::repair::tests::RawQuantityEscalationPolicyV1")]
     #[derive(NoritoSerialize)]
     struct RawQuantityEscalationPolicyV1 {
         version: u8,
@@ -1423,6 +1477,8 @@ mod tests {
         appeal_window_secs: u64,
         max_penalty: Quantity,
     }
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "sorafs_manifest::repair::tests::RawQuantitySlashProposalV1")]
     #[derive(NoritoSerialize)]
     struct RawQuantitySlashProposalV1 {
         version: u8,
@@ -1821,4 +1877,9 @@ mod tests {
             Err(RepairValidationError::InvalidAuditHeader { .. })
         ));
     }
+
+    include!("repair/captured_fixture_identity_tests.rs");
 }
+
+#[cfg(test)]
+include!("repair/captured_owner_identity_tests.rs");

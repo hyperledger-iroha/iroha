@@ -68,6 +68,11 @@ const PDP_STRUCTURAL_OK_CODE: &str = "SFS-PDP-DIAG-000";
 const PDP_TRUST_REQUIRED_CODE: &str = "SFS-PDP-004";
 const PDP_REFERENCE_DECODE_MAX_DEPTH_V1: usize = 64;
 const CANCEL_ASSET_LOCK_REFERENCE_MAX_BYTES_V1: usize = 4 * 1024;
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "sorafs_manifest::reference::CancelAssetLockWireV1",
+    frame = "iroha_data_model::isi::escrow::CancelAssetLock"
+)]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[norito(schema_name = "iroha_data_model::isi::escrow::CancelAssetLock")]
 struct CancelAssetLockWireV1 {
@@ -75,6 +80,8 @@ struct CancelAssetLockWireV1 {
     expected_remaining_amount: Quantity,
 }
 /// Structured key/value context attached to validation outcomes.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::reference::ValidationContextFieldV1")]
 #[derive(
     Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
 )]
@@ -95,6 +102,8 @@ impl ValidationContextFieldV1 {
     }
 }
 /// Input metadata attached to validation outcomes.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::reference::ValidationInputV1")]
 #[derive(
     Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
 )]
@@ -115,6 +124,8 @@ impl ValidationInputV1 {
     }
 }
 /// Deterministic validation result for SF-11 reference tooling.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::reference::ValidationOutcomeV1")]
 #[derive(
     Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
 )]
@@ -8660,3 +8671,6 @@ mod tests {
     include!("reference/tests/canonical_signed_frames.rs");
     include!("reference/tests/bounded_frames.rs");
 }
+
+#[cfg(test)]
+include!("reference/captured_owner_identity_tests.rs");

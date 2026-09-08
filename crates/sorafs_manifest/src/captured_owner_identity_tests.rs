@@ -1,0 +1,67 @@
+// Actual compiler observations for existing owners in sorafs_manifest.
+// This is a private include fragment; owning suites retain all payload controls.
+
+/// Verify every captured concrete identity in this ownership scope.
+#[test]
+fn captured_concrete_owner_identities() {
+    crate::captured_owner_identity_support::check_both::<self::ManifestV1>(
+        "sorafs_manifest::ManifestV1",
+        "sorafs_manifest::ManifestV1",
+        "76e2ac91139ca405eeb3c77226d0ed97",
+        "76e2ac91139ca405eeb3c77226d0ed97",
+    );
+    crate::captured_owner_identity_support::check_both::<self::DagCodecId>(
+        "sorafs_manifest::DagCodecId",
+        "sorafs_manifest::DagCodecId",
+        "223e38b546c5671574170552b124c0bb",
+        "223e38b546c5671574170552b124c0bb",
+    );
+    crate::captured_owner_identity_support::check_both::<self::ChunkingProfileV1>(
+        "sorafs_manifest::ChunkingProfileV1",
+        "sorafs_manifest::ChunkingProfileV1",
+        "8e28b3b89c9485655f869f3cf6e7965b",
+        "8e28b3b89c9485655f869f3cf6e7965b",
+    );
+    crate::captured_owner_identity_support::check_both::<self::ProfileId>(
+        "sorafs_manifest::ProfileId",
+        "sorafs_manifest::ProfileId",
+        "35c402b39d966c7ebd79838033820ff4",
+        "35c402b39d966c7ebd79838033820ff4",
+    );
+    crate::captured_owner_identity_support::check_both::<self::PinPolicy>(
+        "sorafs_manifest::PinPolicy",
+        "sorafs_manifest::PinPolicy",
+        "f04b1d2601f0d3743ebbaca13d769b61",
+        "f04b1d2601f0d3743ebbaca13d769b61",
+    );
+    crate::captured_owner_identity_support::check_both::<self::StorageClass>(
+        "sorafs_manifest::StorageClass",
+        "sorafs_manifest::StorageClass",
+        "a80f8655535913259b83f5380794426f",
+        "a80f8655535913259b83f5380794426f",
+    );
+    crate::captured_owner_identity_support::check_both::<self::GovernanceProofs>(
+        "sorafs_manifest::GovernanceProofs",
+        "sorafs_manifest::GovernanceProofs",
+        "a193e4921238d7f18f4f7a9bfa4de80d",
+        "a193e4921238d7f18f4f7a9bfa4de80d",
+    );
+    crate::captured_owner_identity_support::check_both::<self::CouncilSignature>(
+        "sorafs_manifest::CouncilSignature",
+        "sorafs_manifest::CouncilSignature",
+        "deace9c96308037ade1baa137eec1855",
+        "deace9c96308037ade1baa137eec1855",
+    );
+    crate::captured_owner_identity_support::check_both::<self::AliasClaim>(
+        "sorafs_manifest::AliasClaim",
+        "sorafs_manifest::AliasClaim",
+        "9c1802f3868525bcd97237886e9ed08a",
+        "9c1802f3868525bcd97237886e9ed08a",
+    );
+    crate::captured_owner_identity_support::check_both::<self::MetadataEntry>(
+        "sorafs_manifest::MetadataEntry",
+        "sorafs_manifest::MetadataEntry",
+        "b2fa1c8863fa2caefe50a022f9bb5bf4",
+        "b2fa1c8863fa2caefe50a022f9bb5bf4",
+    );
+}

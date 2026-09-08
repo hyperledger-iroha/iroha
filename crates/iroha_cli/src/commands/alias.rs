@@ -142,7 +142,7 @@ impl Run for SetupPlanArgs {
                 "alias setup intent must contain at least one resource"
             ));
         }
-        let client = context.client_from_config();
+        let client = context.client_from_config()?;
         let plan = client.plan_alias_setup(&request)?;
         if let Some(path) = &self.plan_file {
             write_secret_free_plan_file(path, &plan)?;
@@ -167,7 +167,7 @@ impl Run for SetupApplyArgs {
         }
         let plan: AliasTransactionPlanV1 =
             read_secret_free_json_file(&self.plan_file, "alias setup plan")?;
-        let client = context.client_from_config();
+        let client = context.client_from_config()?;
         let instructions = client.verify_alias_setup_plan(&plan)?;
         // `finish` constructs exactly one ordinary transaction from this full
         // ordered vector, quotes only its normal transaction fee, signs with the
@@ -190,7 +190,7 @@ impl Run for LeaseRenewPlanArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let request: AliasLeaseRenewPlanRequestV1 =
             read_secret_free_json_file(&self.intent_file, "alias lease renewal intent")?;
-        let client = context.client_from_config();
+        let client = context.client_from_config()?;
         let plan = client.plan_alias_lease_renewal(&request)?;
         if let Some(path) = &self.plan_file {
             write_secret_free_plan_file(path, &plan)?;
@@ -224,7 +224,7 @@ impl Run for LeaseRenewApplyArgs {
             ));
         }
         let instruction = context
-            .client_from_config()
+            .client_from_config()?
             .verify_alias_lifecycle_plan(&plan)?
             .ok_or_else(|| eyre!("alias lease renewal plan cannot be a no-op"))?;
         context.finish([instruction])
@@ -244,7 +244,7 @@ impl Run for AutoRenewPlanArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let request: AliasAutoRenewPlanRequestV1 =
             read_secret_free_json_file(&self.intent_file, "alias auto-renew intent")?;
-        let client = context.client_from_config();
+        let client = context.client_from_config()?;
         let plan = client.plan_alias_auto_renew(&request)?;
         if let Some(path) = &self.plan_file {
             write_secret_free_plan_file(path, &plan)?;
@@ -274,7 +274,7 @@ impl Run for AutoRenewApplyArgs {
                 "alias auto-renew apply requires a ConfigureAliasAutoRenew plan"
             ));
         }
-        let client = context.client_from_config();
+        let client = context.client_from_config()?;
         let Some(instruction) = client.verify_alias_lifecycle_plan(&plan)? else {
             let text = render_alias_lifecycle_plan_text("alias auto-renew", &plan, None);
             return print_with_optional_text(context, Some(text), &plan);
@@ -293,7 +293,7 @@ impl Run for DoctorArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let token = read_onboarding_token_file(&self.token_file)?;
         let report = context
-            .client_from_config()
+            .client_from_config()?
             .get_account_onboarding_readiness(&token)?;
         let text = render_alias_doctor_text(&report);
         print_with_optional_text(context, Some(text), &report)?;
@@ -580,7 +580,7 @@ where
         let text = "alias resolve dry-run completed".to_string();
         return print_with_optional_text(context, Some(text), &output);
     }
-    let client = context.client_from_config();
+    let client = context.client_from_config()?;
     let dto = call(&client, &alias)?.ok_or_else(|| eyre!("alias `{canonical_alias}` not found"))?;
     let text = render_alias_resolve_text(&dto);
     print_with_optional_text(context, Some(text), &dto)
@@ -591,7 +591,7 @@ where
     F: FnOnce(&Client, AliasIndex) -> Result<Option<AccountAliasIndexResolutionV1>>,
 {
     let index = AliasIndex(index);
-    let client = context.client_from_config();
+    let client = context.client_from_config()?;
     let dto =
         call(&client, index)?.ok_or_else(|| eyre!("account alias index {} not found", index.0))?;
     let text = render_alias_resolve_index_text(&dto);
@@ -620,7 +620,7 @@ where
     }
     let account = parsed;
     let request = AccountAliasesByAccountRequestV1::try_new(&account, dataspace, domain)?;
-    let client = context.client_from_config();
+    let client = context.client_from_config()?;
     let dto = call(&client, &request)?
         .ok_or_else(|| eyre!("no visible aliases found for account `{account_id}`"))?;
     let text = render_alias_by_account_text(&dto);

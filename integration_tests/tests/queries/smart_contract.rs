@@ -32,7 +32,7 @@ fn smart_contract_query_scenarios() -> Result<()> {
         return Ok(());
     };
     let client = network.client();
-    let torii = client.client().torii_url.clone();
+    let torii = client.client().endpoint().clone();
     let env_dir = network.env_dir().to_path_buf();
     // live_query_is_dropped_after_smart_contract_end
     {
@@ -56,7 +56,7 @@ fn smart_contract_query_scenarios() -> Result<()> {
             .query(FindAccounts)
             .execute_all()? // lightweight DSL: filter/select on client
             .into_iter()
-            .find(|account| account.id() == &client.client().account)
+            .find(|account| account.id() == client.client().account())
             .and_then(|account| account.metadata().get(&cursor_key).cloned())
             .expect("account metadata must contain cursor")
             .try_into_any_norito()?;

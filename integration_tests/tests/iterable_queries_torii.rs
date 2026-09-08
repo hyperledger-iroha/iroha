@@ -395,7 +395,7 @@ fn burn_then_execute_trigger_is_rejected() -> Result<()> {
         return Ok(());
     };
     let client = network.client();
-    let torii = client.client().torii_url.clone();
+    let torii = client.client().endpoint().clone();
     let env_dir = network.env_dir().to_path_buf();
     // Register a by-call trigger with Exactly(1) repeat
     let trig_id: TriggerId = "qtrig_burn_then_exec".parse()?;

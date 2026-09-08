@@ -25,17 +25,17 @@ pub(super) async fn run_mixed_dataspace_native_amx_routes_and_commits_with_recei
     account
         .prepare_transaction(iroha::client::AccountTransactionDraft::new(
             [
-                dataspace_setup_instruction("acme", acme_dataspace, &submitter.client().account)?,
-                dataspace_setup_instruction("bank", bank_dataspace, &submitter.client().account)?,
+                dataspace_setup_instruction("acme", acme_dataspace, submitter.client().account())?,
+                dataspace_setup_instruction("bank", bank_dataspace, submitter.client().account())?,
                 domain_setup_instruction_in_dataspace(
                     &merchant_domain,
                     acme_dataspace,
-                    &submitter.client().account,
+                    submitter.client().account(),
                 )?,
                 domain_setup_instruction_in_dataspace(
                     &treasury_domain,
                     bank_dataspace,
-                    &submitter.client().account,
+                    submitter.client().account(),
                 )?,
             ],
             FeePaymentIntent::authority(Vec::new(), None),
@@ -116,22 +116,22 @@ pub(super) async fn run_native_amx_queue_journal_replays_plan_after_restart() ->
                         dataspace_setup_instruction(
                             "acme",
                             acme_dataspace,
-                            &submitter.client().account,
+                            submitter.client().account(),
                         )?,
                         dataspace_setup_instruction(
                             "bank",
                             bank_dataspace,
-                            &submitter.client().account,
+                            submitter.client().account(),
                         )?,
                         domain_setup_instruction_in_dataspace(
                             &merchant_domain,
                             acme_dataspace,
-                            &submitter.client().account,
+                            submitter.client().account(),
                         )?,
                         domain_setup_instruction_in_dataspace(
                             &treasury_domain,
                             bank_dataspace,
-                            &submitter.client().account,
+                            submitter.client().account(),
                         )?,
                     ],
                     FeePaymentIntent::authority(Vec::new(), None),
@@ -220,12 +220,12 @@ pub(super) async fn run_musubi_publication_below_quorum_queue_crash_replay_keeps
                         dataspace_setup_instruction(
                             "acme",
                             acme_dataspace,
-                            &submitter.client().account,
+                            submitter.client().account(),
                         )?,
                         domain_setup_instruction_in_dataspace(
                             &domain,
                             acme_dataspace,
-                            &submitter.client().account,
+                            submitter.client().account(),
                         )?,
                     ],
                     FeePaymentIntent::authority(Vec::new(), None),

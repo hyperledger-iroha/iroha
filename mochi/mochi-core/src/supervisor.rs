@@ -23,6 +23,13 @@ use crate::{
     },
     vault::{SignerVault, SignerVaultError},
 };
+use iroha_config::parameters::{
+    actual::sumeragi_v2_body_ingress_required_byte_capacity,
+    defaults::sumeragi::{
+        QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY, QUEUE_BODY_BYTES,
+        QUEUE_BODY_SOURCE_BYTES,
+    },
+};
 use iroha_crypto::{
     Algorithm, ExposedPrivateKey, Hash, HashOf, KeyPair, PublicKey, bls_normal_pop_prove,
 };
@@ -69,6 +76,7 @@ mod generation_lifecycle;
 mod ownership;
 mod selected_storage;
 mod snapshot_label;
+mod stream_reader;
 use ownership::SupervisorOwnershipLock;
 #[cfg(test)]
 use selected_storage::resolve_selected_peer_storage_paths_with_hook;
@@ -119,11 +127,6 @@ const LOCAL_MULTI_PEER_POW_PUZZLE_MEMORY_KIB: i64 = 4_096;
 const LOCAL_MULTI_PEER_POW_PUZZLE_TIME_COST: i64 = 1;
 const LOCAL_MULTI_PEER_POW_PUZZLE_LANES: i64 = 1;
 const LOCAL_MULTI_PEER_POW_DIFFICULTY: i64 = 1;
-// Keep `iroha_config` out of Mochi's production dependency graph. A dev-only contract test pins
-// these generator literals and the checked formula below to the shared configuration defaults.
-const GENERATED_SUMERAGI_AUTHENTICATED_NON_VALIDATOR_SOURCES: usize = 2;
-const GENERATED_SUMERAGI_BODY_SOURCE_BYTES: usize = 33 * 1024 * 1024;
-const GENERATED_SUMERAGI_BODY_BYTES_FLOOR: usize = 231 * 1024 * 1024;
 const MANAGED_RANS_TABLE_RELATIVE_PATH: &str = "codec/rans/tables/rans_seed0.toml";
 const MANAGED_RANS_SEED0_TABLE: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -1352,12 +1355,12 @@ impl SupervisorBuilder {
         self
     }
     fn reserve_unique_port(
-        allocator: &mut PortAllocator,
+        mut allocate: impl FnMut() -> io::Result<u16>,
         reserved: &mut HashSet<u16>,
         label: &str,
     ) -> Result<u16> {
         loop {
-            let port = allocator.allocate().map_err(|err| {
+            let port = allocate().map_err(|err| {
                 SupervisorError::Config(format!("failed to allocate {label} port: {err}"))
             })?;
             if reserved.insert(port) {
@@ -1521,8 +1524,9 @@ impl SupervisorBuilder {
         for index in 0..self.profile.topology.peer_count {
             let alias = format!("peer{index}");
             let torii_port =
-                Self::reserve_unique_port(&mut torii_ports, &mut reserved_ports, "Torii")?;
-            let p2p_port = Self::reserve_unique_port(&mut p2p_ports, &mut reserved_ports, "P2P")?;
+                Self::reserve_unique_port(|| torii_ports.allocate(), &mut reserved_ports, "Torii")?;
+            let p2p_port =
+                Self::reserve_unique_port(|| p2p_ports.allocate(), &mut reserved_ports, "P2P")?;
             let storage_dir = generation_transaction.create_runtime_storage(&alias)?;
             specs.push(PeerSpec::new_in_generation(
                 &generation_root,
@@ -1685,15 +1689,6 @@ impl Drop for SecretTomlTable {
         zeroize_toml_table(&mut self.0);
     }
 }
-fn generated_sumeragi_body_ingress_required_byte_capacity(
-    validator_count: usize,
-    authenticated_non_validator_sources: usize,
-    body_source_bytes: usize,
-) -> Option<usize> {
-    validator_count
-        .checked_add(authenticated_non_validator_sources)
-        .and_then(|source_count| source_count.checked_mul(body_source_bytes))
-}
 fn generated_sumeragi_queue_capacity(
     queues: &toml::Table,
     field: &'static str,
@@ -1733,19 +1728,16 @@ fn ensure_generated_sumeragi_body_bytes(
     let authenticated_non_validator_sources = generated_sumeragi_queue_capacity(
         queues,
         "authenticated_non_validator_sources",
-        GENERATED_SUMERAGI_AUTHENTICATED_NON_VALIDATOR_SOURCES,
+        QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY.get(),
     )?;
     let body_source_bytes = generated_sumeragi_queue_capacity(
         queues,
         "body_source_bytes",
-        GENERATED_SUMERAGI_BODY_SOURCE_BYTES,
+        QUEUE_BODY_SOURCE_BYTES.get(),
     )?;
-    let configured_body_bytes = generated_sumeragi_queue_capacity(
-        queues,
-        "body_bytes",
-        GENERATED_SUMERAGI_BODY_BYTES_FLOOR,
-    )?;
-    let required_body_bytes = generated_sumeragi_body_ingress_required_byte_capacity(
+    let configured_body_bytes =
+        generated_sumeragi_queue_capacity(queues, "body_bytes", QUEUE_BODY_BYTES.get())?;
+    let required_body_bytes = sumeragi_v2_body_ingress_required_byte_capacity(
         validator_count,
         authenticated_non_validator_sources,
         body_source_bytes,
@@ -1757,7 +1749,7 @@ fn ensure_generated_sumeragi_body_bytes(
     })?;
     let effective_body_bytes = configured_body_bytes
         .max(required_body_bytes)
-        .max(GENERATED_SUMERAGI_BODY_BYTES_FLOOR);
+        .max(QUEUE_BODY_BYTES.get());
     if effective_body_bytes != configured_body_bytes || !queues.contains_key("body_bytes") {
         queues.insert(
             "body_bytes".into(),
@@ -2538,23 +2530,21 @@ impl Supervisor {
             .find(|peer| peer.alias() == alias)
             .map(|peer| peer.log_stream())
     }
-    /// Create a managed block stream handle for the specified peer using the provided runtime.
+    /// Create a managed block stream with this generation's explicit ledger reader.
     pub fn managed_block_stream(&self, alias: &str, handle: &Handle) -> Result<ManagedBlockStream> {
-        let client = self
-            .torii_client(alias)
-            .ok_or_else(|| SupervisorError::PeerUnknown {
-                alias: alias.to_owned(),
-            })?;
-        Ok(ManagedBlockStream::spawn(handle, alias.to_owned(), client))
+        Ok(ManagedBlockStream::spawn(
+            handle,
+            alias.to_owned(),
+            self.stream_reader(alias)?,
+        ))
     }
-    /// Create a managed event stream handle for the specified peer using the provided runtime.
+    /// Create a managed event stream with this generation's explicit ledger reader.
     pub fn managed_event_stream(&self, alias: &str, handle: &Handle) -> Result<ManagedEventStream> {
-        let client = self
-            .torii_client(alias)
-            .ok_or_else(|| SupervisorError::PeerUnknown {
-                alias: alias.to_owned(),
-            })?;
-        Ok(ManagedEventStream::spawn(handle, alias.to_owned(), client))
+        Ok(ManagedEventStream::spawn(
+            handle,
+            alias.to_owned(),
+            self.stream_reader(alias)?,
+        ))
     }
     /// Refresh peer process state by polling for exited children.
     pub fn refresh_peer_states(&mut self) {
@@ -4376,10 +4366,11 @@ impl Drop for TemporaryKagemushaMintFinalityParametersFile {
         }
     }
 }
-/// Build the canonical signed genesis body used by Mochi's Kagami test stub.
+/// Build the bound manifest and canonical signed genesis used by Mochi's Kagami test stub.
 ///
 /// This helper is intentionally available only to tests and consumers which
-/// opt into `test`; production supervision always invokes Kagami.
+/// opt into `test`; production supervision always invokes Kagami. It does not modify either input
+/// file. Callers must publish the returned manifest after writing the signed block successfully.
 ///
 /// # Errors
 ///
@@ -4391,8 +4382,15 @@ pub fn sign_kagami_stub_genesis_from_config(
     config_path: &Path,
     key_pair: &KeyPair,
     expected_consensus_mode: Option<SumeragiConsensusMode>,
-) -> Result<iroha_data_model::block::SignedBlock> {
-    sign_prepared_genesis_from_config(
+) -> Result<(RawGenesisTransaction, iroha_data_model::block::SignedBlock)> {
+    let bound_manifest = RawGenesisTransaction::from_path(manifest_path)
+        .map_err(|error| {
+            SupervisorError::KagamiInvocation(format!(
+                "test Kagami stub failed signing canonical genesis: {error:#}"
+            ))
+        })?
+        .with_consensus_meta();
+    let block = sign_prepared_genesis_from_config(
         manifest_path,
         config_path,
         key_pair,
@@ -4402,7 +4400,26 @@ pub fn sign_kagami_stub_genesis_from_config(
         SupervisorError::KagamiInvocation(format!(
             "test Kagami stub failed signing canonical genesis: {error:#}"
         ))
-    })
+    })?;
+    // Pre-execution records results and re-signs the block. Prove that the returned manifest
+    // still binds its actual instruction, authority, and consensus context before publishing it.
+    let wire = block.encode_wire().map_err(|error| {
+        SupervisorError::KagamiInvocation(format!(
+            "test Kagami stub failed encoding canonical genesis: {error}"
+        ))
+    })?;
+    iroha_genesis::validate_prepared_genesis_bundle(
+        &wire,
+        &bound_manifest,
+        key_pair.public_key(),
+        block.hash(),
+    )
+    .map_err(|error| {
+        SupervisorError::KagamiInvocation(format!(
+            "test Kagami stub produced inconsistent bound genesis: {error:#}"
+        ))
+    })?;
+    Ok((bound_manifest, block))
 }
 /// Derive the exact genesis policies selected by a finalized node config.
 ///
@@ -4654,7 +4671,7 @@ impl GenesisMaterial {
         config_path: &Path,
         consensus_mode: SumeragiConsensusMode,
     ) -> Result<()> {
-        let block = sign_kagami_stub_genesis_from_config(
+        let (bound_manifest, block) = sign_kagami_stub_genesis_from_config(
             &self.manifest_path,
             config_path,
             &self.key_pair,
@@ -4666,6 +4683,7 @@ impl GenesisMaterial {
             ))
         })?;
         fs::write(&self.block_path, wire)?;
+        fs::write(&self.manifest_path, json::to_vec_pretty(&bound_manifest)?)?;
         fs::write(
             &self.expected_hash_path,
             format!("{}\n", NetworkId::from_genesis_hash(block.hash())),

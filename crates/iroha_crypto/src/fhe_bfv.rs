@@ -1658,8 +1658,8 @@ pub const BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_CONSTRAINT_SYSTEM_MATERIAL_VERSION_V
 pub const BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_CONSTRAINT_SYSTEM_MATERIAL_FIELD_COUNT_V1: u16 = 37;
 /// Number of six-lane digest bytes reduced into each BFV full-bootstrap arithmetic AIR
 /// composition challenge.
-pub const BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_COMPOSITION_CHALLENGE_DIGEST_BYTES_V1: u16 =
-    BFV_GOLDILOCKS_DIGEST384_BYTES_V1 as u16;
+pub const BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_COMPOSITION_CHALLENGE_DIGEST_BYTES_V1: u16 = 48;
+const _: () = assert!(BFV_GOLDILOCKS_DIGEST384_BYTES_V1 == 48);
 const BFV_FULL_BOOTSTRAP_NATIVE_PROOF_CIRCUIT_FINGERPRINT_MATERIAL_VERSION_V1: u16 = 1;
 const BFV_FULL_BOOTSTRAP_NATIVE_PROOF_CIRCUIT_FINGERPRINT_MATERIAL_FIELD_COUNT_V1: u16 = 47;
 /// Canonical native proof system family for BFV full-bootstrap proof keys.
@@ -1683,7 +1683,7 @@ pub const BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_FOLD_ARITY_V1: u8 = 2;
 /// least larger certified count).
 pub const BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_QUERIES_V1: u16 = 64;
 const _: () = assert!(BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_QUERIES_V1 >= 64);
-const _: () = assert!(BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_QUERIES_V1 % 8 == 0);
+const _: () = assert!(BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_QUERIES_V1.is_multiple_of(8));
 /// Canonical native STARK binary Merkle arity for BFV full-bootstrap proof keys.
 pub const BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_MERKLE_ARITY_V1: u8 = 2;
 /// Native payload kind for transparent BFV full-bootstrap STARK prover parameters.

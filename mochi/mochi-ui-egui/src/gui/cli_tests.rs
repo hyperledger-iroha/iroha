@@ -1,38 +1,9 @@
 use super::*;
 use std::{
-    env,
     ffi::OsString,
     path::{Path, PathBuf},
-    sync::{Mutex, OnceLock},
 };
 const TEST_VRF_SEED_HEX: &str = "abababababababababababababababababababababababababababababababab";
-fn cli_env_lock() -> &'static Mutex<()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
-}
-struct CliEnvGuard {
-    key: &'static str,
-    prev: Option<String>,
-}
-impl CliEnvGuard {
-    fn set(key: &'static str, value: &str) -> Self {
-        let prev = env::var(key).ok();
-        // SAFETY: Tests serialise environment mutations via `cli_env_lock`.
-        unsafe { env::set_var(key, value) };
-        Self { key, prev }
-    }
-}
-impl Drop for CliEnvGuard {
-    fn drop(&mut self) {
-        if let Some(prev) = self.prev.as_ref() {
-            // SAFETY: Tests serialise environment mutations via `cli_env_lock`.
-            unsafe { env::set_var(self.key, prev) };
-        } else {
-            // SAFETY: Tests serialise environment mutations via `cli_env_lock`.
-            unsafe { env::remove_var(self.key) };
-        }
-    }
-}
 #[test]
 fn parse_cli_kagami_override_sets_path() {
     let args = vec![OsString::from("--kagami"), OsString::from("/tmp/kagami")];
@@ -458,8 +429,8 @@ fn parse_cli_unknown_flag_errors() {
 }
 #[test]
 fn env_profile_override_applies() {
-    let _guard = cli_env_lock().lock().expect("env lock");
-    let _profile = CliEnvGuard::set("MOCHI_PROFILE", "four-peer-bft");
+    let _guard = test_support::env_lock().lock().expect("env lock");
+    let _profile = test_support::TestEnvGuard::set("MOCHI_PROFILE", "four-peer-bft");
     let overrides = parse_env_overrides().expect("parse env overrides");
     assert_eq!(
         overrides.profile,
@@ -468,8 +439,8 @@ fn env_profile_override_applies() {
 }
 #[test]
 fn env_profile_override_rejects_unknown_fields() {
-    let _guard = cli_env_lock().lock().expect("env lock");
-    let _profile = CliEnvGuard::set(
+    let _guard = test_support::env_lock().lock().expect("env lock");
+    let _profile = test_support::TestEnvGuard::set(
         "MOCHI_PROFILE",
         "{ peer_count = 4, consensus_mode = \"npos\", peers = 4 }",
     );
@@ -478,22 +449,22 @@ fn env_profile_override_rejects_unknown_fields() {
 }
 #[test]
 fn environment_rejects_noncanonical_chain_and_vrf_values() {
-    let _guard = cli_env_lock().lock().expect("env lock");
+    let _guard = test_support::env_lock().lock().expect("env lock");
     {
-        let _chain = CliEnvGuard::set("MOCHI_CHAIN_ID", " mochi-local ");
+        let _chain = test_support::TestEnvGuard::set("MOCHI_CHAIN_ID", " mochi-local ");
         let error = parse_env_overrides().expect_err("padded chain id must fail closed");
         assert!(error.to_string().contains("invalid MOCHI_CHAIN_ID value"));
     }
     {
-        let _seed = CliEnvGuard::set("MOCHI_VRF_SEED_HEX", "abcd");
+        let _seed = test_support::TestEnvGuard::set("MOCHI_VRF_SEED_HEX", "abcd");
         let error = parse_env_overrides().expect_err("short VRF seed must fail closed");
         assert!(error.to_string().contains("exactly 64 hexadecimal"));
     }
 }
 #[test]
 fn env_workspace_root_override_applies() {
-    let _guard = cli_env_lock().lock().expect("env lock");
-    let _workspace = CliEnvGuard::set("MOCHI_WORKSPACE_ROOT", "/tmp/workspace");
+    let _guard = test_support::env_lock().lock().expect("env lock");
+    let _workspace = test_support::TestEnvGuard::set("MOCHI_WORKSPACE_ROOT", "/tmp/workspace");
     let overrides = parse_env_overrides().expect("parse env overrides");
     assert_eq!(
         overrides.workspace_root.as_deref(),
@@ -541,22 +512,22 @@ fn resolved_build_binaries_honors_explicit_config_disable() {
 }
 #[test]
 fn env_build_binaries_override_applies() {
-    let _guard = cli_env_lock().lock().expect("env lock");
-    let _build = CliEnvGuard::set("MOCHI_BUILD_BINARIES", "true");
+    let _guard = test_support::env_lock().lock().expect("env lock");
+    let _build = test_support::TestEnvGuard::set("MOCHI_BUILD_BINARIES", "true");
     let overrides = parse_env_overrides().expect("parse env overrides");
     assert_eq!(overrides.build_binaries, Some(true));
 }
 #[test]
 fn env_readiness_smoke_override_applies() {
-    let _guard = cli_env_lock().lock().expect("env lock");
-    let _smoke = CliEnvGuard::set("MOCHI_READINESS_SMOKE", "false");
+    let _guard = test_support::env_lock().lock().expect("env lock");
+    let _smoke = test_support::TestEnvGuard::set("MOCHI_READINESS_SMOKE", "false");
     let overrides = parse_env_overrides().expect("parse env overrides");
     assert_eq!(overrides.readiness_smoke, Some(false));
 }
 #[test]
 fn env_readiness_timeout_override_applies() {
-    let _guard = cli_env_lock().lock().expect("env lock");
-    let _timeout = CliEnvGuard::set("MOCHI_READINESS_TIMEOUT_MS", "45000");
+    let _guard = test_support::env_lock().lock().expect("env lock");
+    let _timeout = test_support::TestEnvGuard::set("MOCHI_READINESS_TIMEOUT_MS", "45000");
     let overrides = parse_env_overrides().expect("parse env overrides");
     assert_eq!(overrides.readiness_timeout, Some(Duration::from_secs(45)));
 }
@@ -575,8 +546,8 @@ fn cli_readiness_timeout_overrides_environment() {
 }
 #[test]
 fn cli_flags_override_env_values() {
-    let _guard = cli_env_lock().lock().expect("env lock");
-    let _profile = CliEnvGuard::set("MOCHI_PROFILE", "four-peer-bft");
+    let _guard = test_support::env_lock().lock().expect("env lock");
+    let _profile = test_support::TestEnvGuard::set("MOCHI_PROFILE", "four-peer-bft");
     let env_overrides = parse_env_overrides().expect("parse env overrides");
     let cli = parse_cli_overrides_from(vec![
         OsString::from("--profile"),

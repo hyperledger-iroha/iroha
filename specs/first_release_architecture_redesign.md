@@ -4,6 +4,287 @@ This record tracks implementation of the approved SDK and repository redesign.
 It is not a release qualification claim. The implementation retains one canonical
 first-release interface and does not add compatibility adapters.
 
+## Account-owned event and block streams
+
+`AccountClient::events().subscribe(filters).await` and
+`AccountClient::blocks().subscribe(height).await` own the canonical
+`events.stream_websocket` and `blocks.stream_websocket` operations. The old flat
+listeners, public flow handlers and direct socket connector are removed. Full
+block access retains Torii's account and global-reader permission checks.
+
+The context owns injectable HTTP and stream transports, selected explicitly by
+`http_transport(...)` and `stream_transport(...)`. Streams preserve the exact
+signed upgrade and initial Norito subscription. Establishment and initial send
+share one request deadline; redirects, retries and automatic resubscription are
+absent. Subscription encoding is fallible and bounds the complete frame before
+output allocation. Caller-constructed nested rejected-instruction filters return
+a typed invalid-request error instead of panicking on Norito's depth rejection;
+the same context can then encode and send a valid subscription with exact bytes.
+Initial subscriptions are bounded at 256 KiB, received messages at
+64 MiB including fragmentation, and upgrade bodies at 64 KiB. Control-frame work
+is bounded per poll. Protocol, decoding and abnormal close errors terminate the
+stream and retain typed diagnostics; close codes and reasons remain observable.
+
+Owned asynchronous streams outlive the account context. The explicit blocking
+facade drives the same implementation through its reusable runtime and rejects
+entry from an async runtime. Concurrent callers borrow that runtime without
+holding a mutex across pending I/O; an idle stream cannot block a sibling
+subscription, receive or close. A blocking receive deadline limits one wait without
+resubscribing; normal EOF and timeout are distinct. Explicit close has a bounded
+deadline and returns errors. CLI consumers retain both receive and close failures,
+and their four per-command runtime loops are removed. All 27 existing external
+SDK listener calls are migrated, preserving scenario assertions.
+
+The SDK library passes **776 tests and six doctests, with zero failures or ignored
+cases**, on the default stack. All 84 selected source/fixture inputs remain unchanged during the
+run. Its executable SHA-256 is
+`755f21fadab962228822ad952f0f88ed0d6dfd8c5803784fb27b5f2e041e8543`.
+Seventeen capability tests and nine real loopback adapter tests cover exact
+signing, isolation, cancellation, response/message bounds, ping/pong, fragmented
+messages, redirects, revocation and blocking-runtime behavior. Strict SDK library
+Clippy, the codec guard, all 16 dependency boundaries and eight route-inventory
+tests pass. Source budgets retain 239 findings and 172 exceptions.
+All targets of the eight selected SDK/consumer packages compile, retaining
+31 broader warnings and all 421 selected consumer inputs unchanged. The earlier
+773- and 774-test runtimes, notification-fixture type errors and encoder-correction
+syntax failure remain recorded on their preceding source; the final checks above
+include the runtime-lock and bounded-encoding corrections.
+All five CLI stream timeout/EOF/error-preservation helper tests pass on the
+default stack, with all 421 selected inputs unchanged. Their rebuilt executable
+SHA-256 is `2ef012fd7d20d323834b0457750c05fe09440f96a4a51b0e6a3d264a4a28e8e9`.
+All six integration replay/deadline/close helper tests pass on the default stack,
+with the same 421 selected inputs unchanged. Their rebuilt executable SHA-256 is
+`05d2f88204cb9daeaf705b42f7d166792c067102e049b4ae53dd3b4d7b1cabc5`.
+These helpers exercise finite streams without running node scenarios.
+
+The finite Native AMX participant settlement, hash-only schema expansion and
+maximum 4,096-source default-stack regression remain byte-for-byte unchanged.
+Evidence, failed diagnostic attempts and exact dirty beforeimages are retained
+under `target/architecture-redesign/sdk-stream-transport/`.
+
+Mochi now uses these canonical capabilities through a generation-bound
+supervisor reader carrying the exact genesis account, network and peer endpoint.
+Its raw socket API is removed; UI fanout preserves actual received-message sizes,
+typed errors, cancellation and a retained initial receiver. Arbitrary vault
+signers do not inherit the genesis account's global-reader grant. The
+[Mochi checkpoint](../docs/history/2026-09-08/mochi-sdk-streams.md) records the
+subsequent SDK and consumer evidence separately from the preceding results above.
+Remaining synchronous capabilities, real four-validator streams,
+workspace/native/device and pinned-memory release gates remain unqualified.
+
+## CI daemon ownership and affected tiers
+
+The Rust lane manifest now declares the message-control daemon required by
+`iroha_test_network` and `integration_tests`. The artifact builder compiles its
+test feature in a separate target directory and stages it under a distinct name;
+network jobs supply the exact `TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL` path.
+The shipping daemon remains a separate artifact with its own feature graph.
+Izanami still requests only the shipping daemon and CLI.
+
+Foundation-only changes defer the four affected daemon/network packages while
+retaining the library and local CLI reverse dependencies. The `daemon_packages`
+manifest entry prevents a bin-only `irohad` selection from building a daemon
+inside the nominally binary-free matrix. Classification records every deferred
+package and consumer. Direct consumer inputs, mixed source changes, unknown
+inputs and full selection retain their required jobs and artifacts. Package
+README prose no longer seeds Rust jobs; executable Kotodama document changes
+retain their independent source comparison and Koto selection.
+
+The Parliament lifecycle and both Nexus proof corridors now depend on explicit
+classification outputs. Their existing qualified runners, build protocols and
+job bodies remain intact. Required-result aggregation includes all three and
+rejects failures, cancellations, unexpected skips and inconsistent selection.
+The Parliament source contract follows the immutable client builder's exact
+timeout binding and rejects both a disabled timeout and a disconnected rebuild.
+
+All **197 focused router, workflow and corridor source tests pass**, including
+**218 subtests** and actual locked workspace ownership. All 147 selected inputs
+remain unchanged during that run. Actual Cargo graph checks retain 60 of 64
+affected packages for crypto-only changes and 81 of 85 for Norito-only changes,
+with no selected daemon command or external binary consumer. Package prose
+selects none; mixed and full changes restore the complete five-artifact union.
+Configured workflow lint and preserved runner shell syntax checks pass.
+
+Evidence, exact dirty beforeimages and replayable patches are retained under
+`target/architecture-redesign/ci-isolated-daemon-routing/`. These checks validate
+selection, command construction and existing source contracts. They do not
+execute GitHub jobs, compile the new isolated CI bundle or qualify real
+four-validator corridors, memory budgets or native/device release artifacts.
+
+## Operator configuration capability
+
+`OperatorClient::configuration().get().await` is the sole configuration operation
+for `operator.configuration.read`. Public and account contexts cannot access it;
+the old `Client::get_config` and gas-schedule projection getter are removed.
+Consumers obtain the gas schedule from the shared configuration DTO.
+
+The exact empty-body GET is signed with the bound operator key and network,
+excluding account and token authentication. The JSON-only route uses centralized
+asynchronous dispatch, the context deadline and an 8-MiB response ceiling. It
+issues no compatibility probe, representation fallback or automatic retry.
+The direct `blocking::OperatorClient::from_client` constructor owns a reusable
+runtime without binding an account; existing blocking clients can share their
+runtime with the operator. Runtime construction errors now use the common typed
+error family. Async-entry rejection and shutdown behavior remain unchanged.
+
+All eight external reads are migrated: two CLI commands and six integration
+readbacks, preserving operator credentials, restart contexts and every existing
+scenario assertion. Shared test transport ownership removes duplicated async-only
+test dispatch. The SDK passes **751 library tests and five doctests**, with zero
+failures or ignored cases. The two new CLI authority tests pass. Strict SDK library
+Clippy passes with dependencies excluded; all targets of the eight selected
+consumer packages compile, retaining 31 broader warnings.
+
+The final SDK executable SHA-256 is
+`b4a2dd6ce89427b6429b1020b497356b2fb26e4cde201e05c5ecead5e9c5dec8`;
+all 71 SDK/fixture inputs and 416 selected consumer inputs remain unchanged during
+their scoped checks. Eight new SDK regressions cover signatures, operator/network/
+endpoint isolation, bounded decoding, deadlines, structured errors and independent
+blocking authority. Two compile-fail doctests enforce the absent public/account API.
+Independent source review, formatting, codec checks, all 16 forbidden dependency
+boundaries and eight operation-inventory tests pass. Source budgets still report
+239 findings/172 exceptions; the existing manifest discrepancy remains unresolved.
+
+Evidence and exact dirty beforeimages are retained under
+`target/architecture-redesign/sdk-operator-configuration/`. The first 750-test
+candidate is retained separately from the final independent-operator constructor.
+These local checks do not qualify real node restarts, four-validator execution,
+strict workspace linting, pinned-runner memory or native/device release artifacts.
+
+## SDK validation and result ownership
+
+Multisig proposal validation now owns one typed intent containing instructions,
+metadata and their hash. Parsed fee metadata feeds the exact proposal marker and
+metadata projection; unsigned responses still match the complete requested
+payload before signing. A dedicated `QueuePlan` classifier preserves conservative
+submission ambiguity, canonical evidence and locally computed identities.
+Subscription validation separates resource/state binding from exact instruction
+checks. Private-settlement recovery uses an explicit phase context and shared
+borrowed inputs, preserving authenticated prepare/commit evidence and finality.
+
+Onboarding results and subscription payload drafts own their large variants through
+`Box`; the CLI consumes those canonical types directly. Subscription futures are
+`Send`, including injected-transport preparation. These result-storage changes are
+separate from the AMX overflow fix: the finite participant settlement and hash-only
+schema expansion remain unchanged and match the default-stack regression evidence.
+
+All **743 SDK library tests pass, with zero failures or ignored tests**, on the
+default stack. The executable SHA-256 is
+`aa3f6fa819561183a5e538e64324c8204ece25cca0f3ad649742c1fb2e01f909`;
+it and all 66 captured SDK/build inputs remain unchanged during the run. Six new
+tests cover fee binding, independent settlement authority checks, phase/digest
+recovery, subscription future mobility and result storage. Existing payload JSON,
+signing, rejection and ambiguous-submission assertions remain intact.
+
+Strict SDK library Clippy passes with `--no-deps -- -D warnings`, resolving the
+33 findings from the status checkpoint. All targets of the eight selected
+SDK/CLI/storage/Musubi/test-network/Izanami/integration packages compile with all
+411 captured consumer inputs unchanged; that broader check retains 31 warnings.
+Independent source review, formatting, codec checks, all 16 forbidden dependency
+boundaries and eight operation-inventory tests pass. Source budgets still report
+239 findings/172 exceptions; the recorded manifest-budget mismatch remains.
+
+The two initial compile/lint failures and their corrections, exact dirty
+beforeimages, source checks and compiler-artifact records are retained under
+`target/architecture-redesign/sdk-validation-boundaries/`. This scoped development
+result does not establish strict workspace linting, model memory reduction,
+four-validator execution, native/device qualification or release readiness.
+
+## Asynchronous public node diagnostics
+
+`Client::status().get().await` and `Client::status().version().await` own the
+canonical `diagnostic.status` and `core.api_version` routes. Their explicit
+blocking capabilities run the same implementation on the facade's reusable
+runtime. Flat getters and the raw status-request wrapper are removed.
+
+Status preserves negotiated JSON/Norito with an 8-MiB response ceiling; version
+requires UTF-8 text with a 16-KiB ceiling. Shared asynchronous dispatch owns the
+deadline, authoritative Accept header and structured transport errors. Ambiguous
+content types reject. Injected transports obey the same response bounds and
+deadline. These diagnostic reads neither probe compatibility nor replay failed
+requests under another representation. Subscription operations now use this
+same dispatch and media-type boundary; their signed bodies and tests remain.
+
+Transport errors retain standard I/O categories through wrapped causes. Startup
+and integration helpers use those categories for refusal, backpressure and
+permission-denial handling. Async peer polling and startup height checks use
+async contexts directly. One private injected status-source loop preserves the
+minimum applied-height barrier, with no status-only blocking runtime or worker.
+The 34-path caller migration covers 78 former status calls and three version
+calls, preserving existing scenario assertions and synchronous facade users.
+
+The status checkpoint passed **737 tests, zero failures or ignored tests**, on the
+default stack. The executable SHA-256 is
+`58c5f79235df85f566ece53e5a0f9572a8a7f80ffcec66b36f93bcede8a34f28`;
+it and all 62 captured SDK inputs remain unchanged during the run. Eleven new
+status tests cover executor responsiveness, injection, cancellation, bounded
+responses, negotiation, typed errors and blocking-runtime rejection. The final
+helper run passes **27 test-network and 18 integration-helper tests**, with zero
+failures or ignored cases and all 122 selected inputs unchanged. This includes
+the minimum-height barrier, immediate permission-denial termination and account,
+operator and endpoint binding. An earlier factory assertion compared normalized
+and raw URL strings; its failure remains retained, and the corrected assertion
+compares parsed URLs. All targets of the eight selected SDK/CLI/storage/Musubi/
+test-network/Izanami/integration packages compile on the final caller source.
+
+Independent review, formatting, codec checks, all 16 forbidden dependency
+boundaries and all eight operation-inventory tests pass; the inventory retains
+665 routes. At that checkpoint, strict SDK library Clippy retained 33 findings. Source budgets retain
+239 findings and 172 exceptions; manifest budgets retain the previously recorded
+SoraFS filesystem edge and vendor fingerprint discrepancy. These development
+checks do not qualify node binaries, four-validator execution, native/device
+targets, build-memory reduction or a complete release candidate. Beforeimages,
+failed runs and exact compiler-artifact identity records are retained under
+`target/architecture-redesign/sdk-status-capability/`.
+
+## Immutable SDK construction
+
+`Client::builder(config).build()` is the canonical fallible constructor. Endpoint,
+network, authority, headers and policies are private after construction; the old
+constructors and mutation setters are removed. Validation rejects malformed or
+ambiguous headers, embedded URL credentials, non-directory endpoints and invalid
+account/key bindings before transport construction. Diagnostics exclude header
+values. Default asynchronous transport initialization returns a structured error;
+an injected transport avoids default initialization.
+
+Clones share their compatibility decision and probe coordinator. Every builder
+build creates fresh state, including `to_builder()`; changing a transport or
+endpoint cannot inherit an old probe result. A copied builder retains the selected
+transport and explicit configuration, including the address discriminant. Test
+fixtures seed the newly constructed context rather than carrying over old cache
+state. Existing submission, rejection, finality and response assertions remain.
+
+The final SDK library passes **726 tests, zero failures or ignored tests**, on the
+default stack. Its executable SHA-256 is
+`af02c11c938bf3029bd40382240b39f1ed8b6b504430723d74a51bcd152e21fb`;
+it and every captured SDK input remain unchanged during execution. All three
+doctests pass, including the compile-fail guard for direct endpoint mutation.
+The eight selected SDK/CLI/storage/Musubi/test-network/Izanami/integration packages
+pass the combined all-targets check. Both CLI constructor runtime tests pass,
+covering typed construction failure and explicit operator binding. CLI factories
+propagate construction errors; endpoint changes construct new contexts. The native-game transaction helper now
+uses the asynchronous prepare/quote/sign/submit sequence directly.
+
+These are development checks, not a source-sealed release build. Strict SDK
+library Clippy still reports 34 findings; all 34 primary expressions occur in the
+retained pre-construction source. All 16 forbidden dependency boundaries pass;
+source-size checking retains 239 findings and 172 exceptions. Manifest budgets
+still reject the existing `sorafs_car -> rustix` filesystem edge and vendored
+profile fingerprint changes, both of which predate this SDK stage. No manifest,
+lockfile or budget limit changed here. Remaining synchronous reads in asynchronous
+integration scenarios are unqualified. TODO: Complete authority-free public
+clients, authority-owned operations, asynchronous capabilities and streams, and
+the unified error family before complete runtime/network release qualification.
+The retained beforeimages, compiler diagnostics and exact executable evidence
+are under `target/architecture-redesign/sdk-immutable-context/`.
+
+Eight crypto dependency lint findings have also been repaired in a separate
+six-file follow-up. The application/BLS library passes strict scoped Clippy and
+all 32 selected cryptography/parser tests pass on 2,219 unchanged inputs. The V1
+BFV digest length remains 48 bytes with a compile-time dimension assertion;
+truncated multihash prefixes and trailing bytes reject. This does not qualify
+other feature selections or close the six remaining SoraFS package lint sites.
+
 ## Musubi extraction prerequisites
 
 `iroha_primitives::fs` owns named libc open flags for the previously qualified
@@ -58,7 +339,7 @@ together on exit; witness authentication retains all existing bounds and checks.
 The SDK config suite passes 15 tests, with 13 CLI loader, filesystem, witness,
 authentication and context-restoration tests. The manifest adds only the CLI's
 direct `iroha_config_base` edge; the exact budget and all 15 dependency
-boundaries pass. Complete client immutability and async migration remain open.
+boundaries pass. Remaining authority ownership and asynchronous capability migration remain open.
 
 Integration status helpers and all CLI development binaries now use explicit
 blocking/client/account contexts after removal of the blocking facade's `Deref`.

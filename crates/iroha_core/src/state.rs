@@ -31310,6 +31310,11 @@ impl State {
     pub(crate) fn state_view_generation(&self) -> u64 {
         self.view_generation.load(Ordering::Acquire)
     }
+    /// Exclude committed State publication while consensus consumes a
+    /// generation-bound validation result and performs its private-key action.
+    pub(crate) fn consensus_publication_lease(&self) -> parking_lot::MutexGuard<'_, ()> {
+        self.state_commit_lock.lock()
+    }
     #[inline]
     fn note_view_generation_contention(&self, caller: &'static core::panic::Location<'static>) {
         let now = Instant::now();
@@ -61370,7 +61375,7 @@ fn publish_replay_receipt(
     bundle.verify_kura_boundary(kura.as_ref())?;
     let tiered_before = state.tiered_backend.lock().clone();
     apply_replay_geometry_receipts(state, &receipt.geometry)?;
-    let kura_publication_lease = kura.replay_publication_lease();
+    let kura_publication_lease = kura.canonical_publication_lease();
     if let Err(error) = bundle.verify_kura_boundary(kura.as_ref()) {
         drop(kura_publication_lease);
         return match rollback_replay_geometry(state, &receipt.geometry, &tiered_before) {

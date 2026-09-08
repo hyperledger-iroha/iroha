@@ -2133,8 +2133,9 @@ fn submit_leakage_carrier_with_event(
         let mut events = tokio::time::timeout(
             FAULT_CONTROL_TIMEOUT,
             client
-                .client()
-                .listen_for_events([TransactionEventFilter::default().for_hash(transaction_hash)]),
+                .account_client()
+                .events()
+                .subscribe([TransactionEventFilter::default().for_hash(transaction_hash)]),
         )
         .await
         .map_err(|_| eyre!("timed out opening leakage carrier event stream"))??;
@@ -2183,7 +2184,7 @@ fn submit_leakage_carrier_with_event(
         })
         .await
         .map_err(|_| eyre!("timed out waiting for leakage carrier event"))??;
-        events.close().await;
+        events.close().await?;
         Ok(record)
     })
 }
@@ -2230,9 +2231,9 @@ fn leakage_telemetry_records(
     let sources = network
         .all_peers()
         .map(|peer| {
-            let status = peer.client().client().get_status()?;
+            let status = peer.client().status().get()?;
             let status = norito::encode_canonical(&status)?;
-            let metrics_url = peer.client().client().torii_url.join("metrics")?;
+            let metrics_url = peer.client().client().endpoint().join("metrics")?;
             let metrics = runtime.block_on(async {
                 let response = reqwest::get(metrics_url)
                     .await
@@ -2393,7 +2394,7 @@ fn collect_process_inventory(
             pid,
             executable_sha256: actual_sha,
             revision: revision.to_owned(),
-            health_observed: peer.is_running() && peer.client().client().get_status().is_ok(),
+            health_observed: peer.is_running() && peer.client().status().get().is_ok(),
         });
     }
     ensure!(
@@ -2556,7 +2557,7 @@ fn smoke_process_inventory(
         ensure!(
             pids.insert(pid)
                 && peers.insert(peer.id().clone())
-                && peer.client().client().get_status().is_ok()
+                && peer.client().status().get().is_ok()
                 && sha256_regular_file(&executable_for_pid(pid)?)? == expected_sha,
             "smoke process inventory has duplicate, unhealthy or substituted validators"
         );
@@ -2807,29 +2808,29 @@ fn read_owner_only_bounded(path: &Path) -> Result<Vec<u8>> {
 fn coordinator_client_config(client: &Client) -> Result<Vec<u8>> {
     let client = client.client();
     let domain = iroha::data_model::domain::DomainId::try_new("default", "universal")?;
-    let private_key = iroha_crypto::ExposedPrivateKey(client.key_pair.private_key().clone());
+    let private_key = iroha_crypto::ExposedPrivateKey(client.key_pair().private_key().clone());
     let mut root = Table::new();
     root.insert(
         "chain".to_owned(),
-        TomlValue::String(client.chain.to_string()),
+        TomlValue::String(client.chain().to_string()),
     );
     root.insert(
         "network_id".to_owned(),
-        TomlValue::String(client.network_id.to_string()),
+        TomlValue::String(client.network_id().to_string()),
     );
     root.insert(
         "torii_url".to_owned(),
-        TomlValue::String(client.torii_url.to_string()),
+        TomlValue::String(client.endpoint().to_string()),
     );
     root.insert(
         "torii_request_timeout_ms".to_owned(),
-        TomlValue::Integer(i64::try_from(client.torii_request_timeout.as_millis())?),
+        TomlValue::Integer(i64::try_from(client.torii_request_timeout().as_millis())?),
     );
     let mut account = Table::new();
     account.insert("domain".to_owned(), TomlValue::String(domain.to_string()));
     account.insert(
         "public_key".to_owned(),
-        TomlValue::String(client.key_pair.public_key().to_string()),
+        TomlValue::String(client.key_pair().public_key().to_string()),
     );
     account.insert(
         "private_key".to_owned(),
@@ -2841,7 +2842,7 @@ fn coordinator_client_config(client: &Client) -> Result<Vec<u8>> {
         "time_to_live_ms".to_owned(),
         TomlValue::Integer(i64::try_from(
             client
-                .transaction_ttl
+                .transaction_ttl()
                 .unwrap_or(Duration::from_secs(60))
                 .as_millis(),
         )?),
@@ -2849,12 +2850,12 @@ fn coordinator_client_config(client: &Client) -> Result<Vec<u8>> {
     transaction.insert(
         "status_timeout_ms".to_owned(),
         TomlValue::Integer(i64::try_from(
-            client.transaction_status_timeout.as_millis(),
+            client.transaction_status_timeout().as_millis(),
         )?),
     );
     transaction.insert(
         "nonce".to_owned(),
-        TomlValue::Boolean(client.add_transaction_nonce),
+        TomlValue::Boolean(client.add_transaction_nonce()),
     );
     root.insert("transaction".to_owned(), TomlValue::Table(transaction));
     Ok(toml::to_string(&root)?.into_bytes())
@@ -5199,7 +5200,7 @@ fn restart_quorum_progress_peer(
         .block_on(stopped.peer.process_id())
         .ok_or_else(|| eyre!("quorum-progress restart has no live PID"))?;
     ensure!(
-        after_pid != stopped.before_pid && stopped.peer.client().client().get_status().is_ok(),
+        after_pid != stopped.before_pid && stopped.peer.client().status().get().is_ok(),
         "quorum-progress restart did not produce a healthy new process"
     );
     let acknowledgement = FaultRestartAckV1 {
@@ -5256,7 +5257,7 @@ fn restart_peer_with_evidence(
         .block_on(peer.process_id())
         .ok_or_else(|| eyre!("restarted target has no live PID"))?;
     ensure!(
-        after_pid != before_pid && peer.client().client().get_status().is_ok(),
+        after_pid != before_pid && peer.client().status().get().is_ok(),
         "validator restart did not produce a healthy new process"
     );
     let acknowledgement = FaultRestartAckV1 {
@@ -5365,7 +5366,7 @@ fn prepare_fault_bundle_with_normalization(
         alternate_first.ok_or_else(|| eyre!("fault normalization lacks leg 0"))?;
     let first_barrier = SdkClient::build_private_settlement_prepare_barrier_v1(
         bundle.manifest.clone(),
-        bundle.authorities.clone(),
+        &bundle.authorities,
         bundle.deltas.clone(),
         first_certificates.clone(),
     )?;
@@ -5373,7 +5374,7 @@ fn prepare_fault_bundle_with_normalization(
     second_certificates[0] = alternate_first.clone();
     let second_barrier = SdkClient::build_private_settlement_prepare_barrier_v1(
         bundle.manifest.clone(),
-        bundle.authorities.clone(),
+        &bundle.authorities,
         bundle.deltas.clone(),
         second_certificates,
     )?;
@@ -5389,7 +5390,7 @@ fn prepare_fault_bundle_with_normalization(
     changed_certificates[0] = changed_body;
     let changed_body_rejected = SdkClient::build_private_settlement_prepare_barrier_v1(
         bundle.manifest.clone(),
-        bundle.authorities.clone(),
+        &bundle.authorities,
         bundle.deltas.clone(),
         changed_certificates,
     )
@@ -5400,7 +5401,7 @@ fn prepare_fault_bundle_with_normalization(
     changed_index_certificates[0] = changed_index;
     let authority_index_binding_verified = SdkClient::build_private_settlement_prepare_barrier_v1(
         bundle.manifest.clone(),
-        bundle.authorities.clone(),
+        &bundle.authorities,
         bundle.deltas.clone(),
         changed_index_certificates,
     )
@@ -5411,7 +5412,7 @@ fn prepare_fault_bundle_with_normalization(
     changed_signed_certificates[0] = changed_signed_body;
     let signed_body_binding_verified = SdkClient::build_private_settlement_prepare_barrier_v1(
         bundle.manifest.clone(),
-        bundle.authorities.clone(),
+        &bundle.authorities,
         bundle.deltas.clone(),
         changed_signed_certificates,
     )
@@ -5589,8 +5590,8 @@ fn exercise_consensus_carrier_hold(
 ) -> Result<(Vec<FaultControlOccurrenceV1>, FaultStateSnapshotV1)> {
     observer.begin_phase("consensus_carrier_hold", &[], false)?;
     let height = sponsor
-        .client()
-        .get_status()?
+        .status()
+        .get()?
         .blocks
         .checked_add(1)
         .ok_or_else(|| eyre!("carrier control height overflow"))?;
@@ -5781,7 +5782,7 @@ where
         .block_on(peer.process_id())
         .ok_or_else(|| eyre!("recovered crash target has no PID"))?;
     ensure!(
-        before_pid != after_pid && peer.client().client().get_status().is_ok(),
+        before_pid != after_pid && peer.client().status().get().is_ok(),
         "crash recovery did not produce a healthy new process"
     );
     let restart_type = if peer_index < VALIDATORS_PER_LANE {
@@ -8119,7 +8120,7 @@ fn verify_committee_proof_views(
             // compatibility state and must not be retargeted by changing their public fields.
             let client = peer.client_for(
                 sponsor.account_client().authority(),
-                sponsor.client().key_pair.private_key().clone(),
+                sponsor.client().key_pair().private_key().clone(),
             );
             ensure!(
                 client.account_client().network_id() == sponsor.account_client().network_id()

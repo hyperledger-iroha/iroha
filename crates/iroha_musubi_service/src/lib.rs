@@ -3676,12 +3676,12 @@ impl AuthenticatedMusubiPublicationRuntimeClientV1 {
         timeout: Duration,
     ) -> Result<Self, MusubiPublicationRuntimeTransportErrorV1> {
         let signer = SoftwareMusubiPublicationRuntimeAuthorizationSignerV1::new(
-            client.account.clone(),
-            client.key_pair.clone(),
+            client.account().clone(),
+            client.key_pair().clone(),
         )?;
         Self::from_authorization_signer(
-            client.network_id,
-            client.account.clone(),
+            *client.network_id(),
+            client.account().clone(),
             Arc::new(signer),
             timeout,
         )

@@ -435,6 +435,15 @@ Collecting -> Audited -> Prepared -> CommitCertified -> Finalized
    finality and on restart. Only then do they mark the sidecar terminal and
    release its staged reservations.
 
+When participant effects enter the global carrier through an autonomous lane
+merge, the merge validator applies the publication fence defined in
+`specs/merge_ledger.md`. A State or Kura frontier advance during candidate
+revalidation makes that global round unavailable and preserves the durable
+signing journal for retry; it does not turn the already valid private-settlement
+effect into a semantic failure. The private-key action occurs only after the
+validator rechecks the exact State generation and durable Kura parent while
+both publication leases are held.
+
 The complete prepared-bundle digest commits to every certified Prepare body and
 authority-catalog index, but normalizes away the signer bitmap and aggregate
 signature. Every exact three-of-four subset over the same body is therefore

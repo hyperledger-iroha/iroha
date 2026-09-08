@@ -268,17 +268,17 @@ impl RegistryReadClientV1 {
         timeout: Duration,
         account_chain_discriminant: u16,
     ) -> Result<Self, RegistryErrorV1> {
-        if !matches!(client.client().torii_url.scheme(), "http" | "https")
-            || !client.client().torii_url.username().is_empty()
-            || client.client().torii_url.password().is_some()
+        if !matches!(client.client().endpoint().scheme(), "http" | "https")
+            || !client.client().endpoint().username().is_empty()
+            || client.client().endpoint().password().is_some()
             || timeout == Duration::ZERO
             || timeout > Duration::from_secs(60)
             || account_chain_discriminant == 0
-            || client.client().account.controller.single_signatory()
-                != Some(client.client().key_pair.public_key())
+            || client.client().account().controller.single_signatory()
+                != Some(client.client().key_pair().public_key())
             || client
                 .client()
-                .headers
+                .headers()
                 .keys()
                 .any(|name| name.eq_ignore_ascii_case("X-Iroha-Witness"))
         {
@@ -287,8 +287,9 @@ impl RegistryReadClientV1 {
                 "MUSUBI_REGISTRY_PUBLIC_CONFIG_INVALID",
             ));
         }
-        let mut async_client = client.client().clone();
-        async_client.torii_request_timeout = timeout;
+        let mut builder = client.client().to_builder();
+        builder.torii_request_timeout = timeout;
+        let async_client = builder.build().map_err(|_| invalid_public_config())?;
         let client = Client::from_client(async_client).map_err(|_| invalid_public_config())?;
         Ok(Self {
             client,
@@ -388,7 +389,7 @@ private_key = "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9
     /// Return the configured authenticated endpoint without exposing signer material.
     #[must_use]
     pub fn torii_url(&self) -> &Url {
-        &self.client.client().torii_url
+        self.client.client().endpoint()
     }
     /// Return the validated I105 account chain discriminant used by the request signer.
     #[must_use]
@@ -764,7 +765,7 @@ impl fmt::Debug for RegistrySigningClientV1 {
         let _chain_discriminant = ChainDiscriminantGuard::enter(self.account_chain_discriminant);
         formatter
             .debug_struct("RegistrySigningClientV1")
-            .field("authority", &self.client.client().account)
+            .field("authority", self.client.client().account())
             .field(
                 "account_chain_discriminant",
                 &self.account_chain_discriminant,
@@ -776,13 +777,13 @@ impl RegistrySigningClientV1 {
     /// Return the exact genesis-derived identity from the trusted signing configuration.
     #[must_use]
     pub(crate) fn network_id(&self) -> NetworkId {
-        self.client.client().network_id
+        *self.client.client().network_id()
     }
     /// Clone an authenticated registry reader from this exact signing configuration.
     pub(crate) fn authenticated_reader(&self) -> Result<RegistryReadClientV1, RegistryErrorV1> {
         RegistryReadClientV1::new(
             self.client.clone(),
-            self.client.client().torii_request_timeout,
+            self.client.client().torii_request_timeout(),
             self.account_chain_discriminant,
         )
     }
@@ -850,7 +851,7 @@ impl RegistrySigningClientV1 {
     /// Return the configured mutation authority.
     #[must_use]
     pub fn authority(&self) -> &iroha_data_model::account::AccountId {
-        &self.client.client().account
+        self.client.client().account()
     }
     /// Return the validated I105 account chain discriminant used by this signer.
     #[must_use]

@@ -212,7 +212,8 @@ fn transaction_wait_backpressure_does_not_retry_malformed_instructions_or_other_
         for response in &cases {
             let (client, snapshots) =
                 scripted_client(vec![response.clone(), status("Applied", "state")]);
-            wait(&client, asynchronous, Duration::from_secs(1)).expect_err("non-retryable error");
+            let _ = wait(&client, asynchronous, Duration::from_secs(1))
+                .expect_err("non-retryable error");
             assert_eq!(snapshots.lock().expect("snapshots").len(), 1);
         }
     }
@@ -238,7 +239,8 @@ fn transaction_wait_backpressure_preserves_fixed_failure_and_hash_binding() {
             )
             .into_bytes();
         let (client, snapshots) = scripted_client(vec![backpressure(None), wrong]);
-        wait(&client, asynchronous, Duration::from_secs(1)).expect_err("wrong hash must fail");
+        let _ =
+            wait(&client, asynchronous, Duration::from_secs(1)).expect_err("wrong hash must fail");
         assert_eq!(snapshots.lock().expect("snapshots").len(), 2);
     }
 }

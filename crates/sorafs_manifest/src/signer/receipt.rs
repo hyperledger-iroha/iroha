@@ -49,6 +49,8 @@ impl fmt::Debug for SignerReleaseManifestExpectedV1 {
 }
 
 /// Canonical public release request committing exactly one reviewed manifest and custody.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::signer::receipt::SignerReleaseManifestRequestV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct SignerReleaseManifestRequestV1 {
     /// Exact independently expected id; one durable operation per id.
@@ -111,6 +113,8 @@ impl SignerReleaseManifestRequestV1 {
 }
 
 /// Public provenance signed within the original reserved operation.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::signer::receipt::SignerOperationProvenanceV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct SignerOperationProvenanceV1 {
     /// Original independently qualified record and per-role control state.
@@ -136,6 +140,8 @@ impl SignerOperationProvenanceV1 {
 }
 
 /// Finalized authoritative operation-state anchor, distinct from per-role custody control state.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::signer::receipt::SignerOperationFinalizedAnchorV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct SignerOperationFinalizedAnchorV1 {
     /// Nonzero genuinely finalized block height including the completed operation.
@@ -150,6 +156,8 @@ pub struct SignerOperationFinalizedAnchorV1 {
 ///
 /// The record is a wire claim until a caller authenticates its inclusion and finality using the
 /// deployment's independently pinned state authority. Candidate self-signatures cannot do so.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::signer::receipt::SignerCompletedOperationV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct SignerCompletedOperationV1 {
     /// Original request's operation identity.
@@ -171,6 +179,8 @@ pub struct SignerCompletedOperationV1 {
 }
 
 /// Sole canonical first-release manifest signing receipt; contains no private key or credentials.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::signer::receipt::SignerReleaseManifestReceiptV1")]
 #[derive(Clone, PartialEq, Eq, Decode, Encode)]
 pub struct SignerReleaseManifestReceiptV1 {
     /// Exact [`SIGNER_RELEASE_MANIFEST_RECEIPT_MAGIC_V1`] marker.
@@ -567,3 +577,6 @@ fn validate_completion(
 
 #[cfg(test)]
 pub(crate) mod tests;
+
+#[cfg(test)]
+include!("receipt/captured_owner_identity_tests.rs");

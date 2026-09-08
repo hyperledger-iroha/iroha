@@ -1,13 +1,12 @@
 use super::test_support::{
     TestEnvGuard, env_lock, genesis_invocation_count, install_kagami_stub, install_noop_stub,
-    kagami_sign_invocation_count,
+    kagami_sign_invocation_count, test_app,
 };
 use super::{
     ActiveView, CliOverrides, InstructionPermission, MaintenanceCommand, MaintenanceState,
     MaintenanceTask, MochiApp, ProfilePreset, SignerEntryForm, SignerEntryState, StatePageCache,
     StateQueryKind, SupervisorBuilder, SupervisorError, compose_app_env_recipe,
-    compose_launch_recipe, ensure_http_base, filter_state_entries, reset_cli_overrides_for_tests,
-    shell_quote,
+    compose_launch_recipe, ensure_http_base, filter_state_entries, shell_quote,
 };
 use egui::{CentralPanel, Color32, Context, FontFamily, TextStyle};
 use iroha_data_model::{
@@ -59,7 +58,8 @@ fn snapshot_label_preview_matches_expectations() {
 }
 #[test]
 fn theme_palette_applied_to_visuals() {
-    let mut app = MochiApp::default();
+    let _lock = env_lock().lock().expect("env lock");
+    let mut app = test_app(CliOverrides::default());
     let ctx = Context::default();
     app.ensure_theme(&ctx);
     let visuals = &ctx.style().visuals;
@@ -134,7 +134,8 @@ fn compose_app_env_recipe_emits_local_bootstrap_exports() {
 }
 #[test]
 fn render_view_tabs_keeps_active_view() {
-    let mut app = MochiApp::default();
+    let _lock = env_lock().lock().expect("env lock");
+    let mut app = test_app(CliOverrides::default());
     app.active_view = ActiveView::Activity;
     let ctx = Context::default();
     let _ = ctx.run(Default::default(), |ctx| {
@@ -158,8 +159,14 @@ fn render_overview_bar_smoke() {
     let _irohad_guard = TestEnvGuard::set("MOCHI_IROHAD", &irohad_stub);
     let data_root = temp.path().join("ui-data");
     let _data_guard = TestEnvGuard::set("MOCHI_DATA_ROOT", &data_root);
-    reset_cli_overrides_for_tests();
-    let mut app = MochiApp::default();
+    let mut app = test_app(super::parse_env_overrides().expect("parse fixture environment"));
+    assert!(
+        app.supervisor.is_some(),
+        "fixture bootstrap failed: {:?}; data_root={:?}; config_path={:?}",
+        app.supervisor_error,
+        app.cli_overrides.data_root,
+        app.cli_overrides.config_path,
+    );
     let mut supervisor = app.supervisor.take().expect("supervisor ready");
     let peer_rows = app.build_peer_rows(&supervisor);
     let metrics = app.collect_dashboard_metrics(&peer_rows);
@@ -173,7 +180,66 @@ fn render_overview_bar_smoke() {
     app.supervisor = Some(supervisor);
 }
 #[test]
+fn explicit_app_contexts_keep_independent_roots_and_chains() {
+    if !super::socket_bind_available() {
+        eprintln!("Skipping app context test due to socket restrictions");
+        return;
+    }
+    let _lock = env_lock().lock().expect("env lock");
+    let temp = tempfile::tempdir().expect("tempdir");
+    let (kagami_stub, _signature_guard) = install_kagami_stub(temp.path());
+    let irohad_stub = install_noop_stub(temp.path(), "irohad_context_stub.sh");
+    let config_path = temp.path().join("local.toml");
+    fs::write(&config_path, "[supervisor]\n").expect("write empty fixture config");
+    let left_root = temp.path().join("left");
+    let right_root = temp.path().join("right");
+    let overrides = |root: &std::path::Path, chain: &str| CliOverrides {
+        data_root: Some(root.to_path_buf()),
+        chain_id: Some(chain.to_owned()),
+        config_path: Some(config_path.clone()),
+        binaries: super::BinaryOverrides {
+            irohad: Some(irohad_stub.clone()),
+            kagami: Some(kagami_stub.clone()),
+        },
+        build_binaries: Some(false),
+        ..CliOverrides::default()
+    };
+    let left = test_app(overrides(&left_root, "mochi-left"));
+    let right = test_app(overrides(&right_root, "mochi-right"));
+    assert!(
+        left.supervisor.is_some(),
+        "left bootstrap failed: {:?}",
+        left.supervisor_error
+    );
+    assert!(
+        right.supervisor.is_some(),
+        "right bootstrap failed: {:?}",
+        right.supervisor_error
+    );
+    let left_supervisor = left.supervisor.as_ref().expect("left supervisor");
+    let right_supervisor = right.supervisor.as_ref().expect("right supervisor");
+    assert_eq!(left_supervisor.chain_id(), "mochi-left");
+    assert_eq!(right_supervisor.chain_id(), "mochi-right");
+    assert!(left_supervisor.paths().root().starts_with(&left_root));
+    assert!(right_supervisor.paths().root().starts_with(&right_root));
+    assert_ne!(
+        left_supervisor.genesis_manifest(),
+        right_supervisor.genesis_manifest()
+    );
+    assert_eq!(
+        left.cli_overrides.data_root.as_deref(),
+        Some(left_root.as_path())
+    );
+    assert_eq!(
+        right.cli_overrides.data_root.as_deref(),
+        Some(right_root.as_path())
+    );
+    assert_eq!(left.settings_chain_id_input, "mochi-left");
+    assert_eq!(right.settings_chain_id_input, "mochi-right");
+}
+#[test]
 fn cli_profile_override_reconfigures_builder() {
+    let _lock = env_lock().lock().expect("env lock");
     let overrides = CliOverrides {
         profile: Some(NetworkProfile::from_preset(ProfilePreset::FourPeerBft)),
         ..Default::default()
@@ -332,6 +398,33 @@ fn toml_helpers_require_exact_toml_types() {
     assert_eq!(toml_u32(&TomlValue::String("12".to_owned())), None);
 }
 include!("gui/tests/lane_and_admission.rs");
+fn wait_for_maintenance_completion(
+    app: &mut MochiApp,
+    supervisor_slot: &mut Option<mochi_core::Supervisor>,
+) {
+    let task = app
+        .maintenance_inflight
+        .expect("maintenance worker must be scheduled before waiting");
+    let deadline = Duration::from_secs(60);
+    let runtime = app.runtime.handle().clone();
+    let received =
+        runtime.block_on(async { tokio::time::timeout(deadline, app.maintenance_rx.recv()).await });
+    let update = match received {
+        Ok(Some(update)) => update,
+        Ok(None) => panic!("maintenance {task:?} completion channel closed before a result"),
+        Err(_) => panic!(
+            "maintenance {task:?} completion was not delivered within {deadline:?}; state={:?}, last_error={:?}",
+            app.maintenance_state, app.last_error,
+        ),
+    };
+    // Return the exact owned worker result to its queue so the real GUI handler restores the
+    // supervisor and applies success or failure. No test-generated outcome bypasses that path.
+    assert!(
+        app.maintenance_tx.send(update).is_ok(),
+        "maintenance completion receiver must remain open"
+    );
+    app.poll_maintenance_updates(supervisor_slot);
+}
 #[test]
 fn maintenance_export_snapshot_creates_snapshot_directory() {
     if !super::socket_bind_available() {
@@ -348,7 +441,14 @@ fn maintenance_export_snapshot_creates_snapshot_directory() {
     let _irohad_guard = TestEnvGuard::set("MOCHI_IROHAD", &irohad_stub);
     let data_root = temp.path().join("snapshot-data");
     let _data_guard = TestEnvGuard::set("MOCHI_DATA_ROOT", &data_root);
-    let mut app = MochiApp::default();
+    let mut app = test_app(super::parse_env_overrides().expect("parse fixture environment"));
+    assert!(
+        app.supervisor.is_some(),
+        "fixture bootstrap failed: {:?}; data_root={:?}; config_path={:?}",
+        app.supervisor_error,
+        app.cli_overrides.data_root,
+        app.cli_overrides.config_path,
+    );
     let mut supervisor_slot = app.supervisor.take();
     let initial_invocations = genesis_invocation_count(&log_path);
     assert!(
@@ -360,13 +460,7 @@ fn maintenance_export_snapshot_creates_snapshot_directory() {
         label: Some(label.clone()),
     });
     app.schedule_pending_maintenance(&mut supervisor_slot);
-    for _ in 0..100 {
-        app.poll_maintenance_updates(&mut supervisor_slot);
-        if !matches!(app.maintenance_state, MaintenanceState::Running(_)) {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    wait_for_maintenance_completion(&mut app, &mut supervisor_slot);
     assert!(
         !matches!(app.maintenance_state, MaintenanceState::Running(_)),
         "snapshot maintenance did not finish in time"
@@ -429,7 +523,14 @@ fn maintenance_reset_invokes_kagami_and_cleans_storage() {
     let _irohad_guard = TestEnvGuard::set("MOCHI_IROHAD", &irohad_stub);
     let data_root = temp.path().join("reset-data");
     let _data_guard = TestEnvGuard::set("MOCHI_DATA_ROOT", &data_root);
-    let mut app = MochiApp::default();
+    let mut app = test_app(super::parse_env_overrides().expect("parse fixture environment"));
+    assert!(
+        app.supervisor.is_some(),
+        "fixture bootstrap failed: {:?}; data_root={:?}; config_path={:?}",
+        app.supervisor_error,
+        app.cli_overrides.data_root,
+        app.cli_overrides.config_path,
+    );
     let mut supervisor_slot = app.supervisor.take();
     {
         let supervisor = supervisor_slot.as_ref().expect("supervisor ready");
@@ -445,13 +546,7 @@ fn maintenance_reset_invokes_kagami_and_cleans_storage() {
     );
     app.maintenance_command = Some(MaintenanceCommand::Reset);
     app.schedule_pending_maintenance(&mut supervisor_slot);
-    for _ in 0..120 {
-        app.poll_maintenance_updates(&mut supervisor_slot);
-        if !matches!(app.maintenance_state, MaintenanceState::Running(_)) {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    wait_for_maintenance_completion(&mut app, &mut supervisor_slot);
     assert!(
         !matches!(app.maintenance_state, MaintenanceState::Running(_)),
         "reset maintenance did not finish in time"
@@ -520,7 +615,14 @@ fn maintenance_restore_snapshot_rehydrates_storage() {
     let _irohad_guard = TestEnvGuard::set("MOCHI_IROHAD", &irohad_stub);
     let data_root = temp.path().join("restore-data");
     let _data_guard = TestEnvGuard::set("MOCHI_DATA_ROOT", &data_root);
-    let mut app = MochiApp::default();
+    let mut app = test_app(super::parse_env_overrides().expect("parse fixture environment"));
+    assert!(
+        app.supervisor.is_some(),
+        "fixture bootstrap failed: {:?}; data_root={:?}; config_path={:?}",
+        app.supervisor_error,
+        app.cli_overrides.data_root,
+        app.cli_overrides.config_path,
+    );
     let mut supervisor_slot = app.supervisor.take();
     let supervisor = supervisor_slot.as_mut().expect("supervisor ready");
     let peer = supervisor.peers().first().expect("at least one peer");
@@ -543,13 +645,7 @@ fn maintenance_restore_snapshot_rehydrates_storage() {
     let target = slug.clone();
     app.maintenance_command = Some(MaintenanceCommand::Restore { target });
     app.schedule_pending_maintenance(&mut supervisor_slot);
-    for _ in 0..120 {
-        app.poll_maintenance_updates(&mut supervisor_slot);
-        if !matches!(app.maintenance_state, MaintenanceState::Running(_)) {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    wait_for_maintenance_completion(&mut app, &mut supervisor_slot);
     assert!(
         !matches!(app.maintenance_state, MaintenanceState::Running(_)),
         "restore maintenance did not finish in time"
@@ -1177,7 +1273,8 @@ fn save_logs_to_file_rejects_empty_entries() {
 }
 #[test]
 fn log_kind_filter_respects_settings() {
-    let mut app = MochiApp::default();
+    let _lock = env_lock().lock().expect("env lock");
+    let mut app = test_app(CliOverrides::default());
     app.settings_log_stdout = false;
     let stdout_event = PeerLogEvent::Line {
         alias: Arc::from("alpha"),
@@ -1330,7 +1427,8 @@ fn persisted_scalar_values_require_exact_first_release_spelling() {
 }
 #[test]
 fn collect_dashboard_metrics_counts_resources() {
-    let mut app = MochiApp::default();
+    let _lock = env_lock().lock().expect("env lock");
+    let mut app = test_app(CliOverrides::default());
     let peer_rows = vec![
         PeerRow {
             alias: "alpha".to_owned(),
@@ -1629,7 +1727,8 @@ fn lane_status_rows_surface_relay_lag_and_cursor() {
 }
 #[test]
 fn composer_update_success_records_message() {
-    let mut app = MochiApp::default();
+    let _lock = env_lock().lock().expect("env lock");
+    let mut app = test_app(CliOverrides::default());
     app.composer_submitting = true;
     app.handle_composer_update(ComposerSubmitUpdate {
         peer: "alpha".to_owned(),
@@ -1654,7 +1753,8 @@ fn composer_update_success_records_message() {
 }
 #[test]
 fn composer_update_failure_records_error() {
-    let mut app = MochiApp::default();
+    let _lock = env_lock().lock().expect("env lock");
+    let mut app = test_app(CliOverrides::default());
     app.composer_submitting = true;
     let info = ToriiErrorInfo::new(ToriiErrorKind::HttpTransport, "network error");
     app.handle_composer_update(ComposerSubmitUpdate {
@@ -1681,7 +1781,8 @@ fn composer_update_failure_records_error() {
 }
 #[test]
 fn add_instruction_to_batch_appends_draft() {
-    let mut app = MochiApp::default();
+    let _lock = env_lock().lock().expect("env lock");
+    let mut app = test_app(CliOverrides::default());
     app.composer_selected_signer = Some(0);
     let asset = AssetId::new(sample_rose_definition_id(), ALICE_ID.clone());
     app.composer_asset_id = asset_literal(&asset);
@@ -1692,7 +1793,8 @@ fn add_instruction_to_batch_appends_draft() {
 }
 #[test]
 fn transfer_without_destination_records_error() {
-    let mut app = MochiApp::default();
+    let _lock = env_lock().lock().expect("env lock");
+    let mut app = test_app(CliOverrides::default());
     app.composer_instruction_kind = ComposerInstructionKind::TransferAsset;
     app.composer_selected_signer = Some(0);
     let asset = AssetId::new(sample_rose_definition_id(), ALICE_ID.clone());
@@ -1710,7 +1812,8 @@ fn transfer_without_destination_records_error() {
 }
 #[test]
 fn add_instruction_respects_signer_permissions() {
-    let mut app = MochiApp::default();
+    let _lock = env_lock().lock().expect("env lock");
+    let mut app = test_app(CliOverrides::default());
     app.composer_instruction_kind = ComposerInstructionKind::RegisterAccount;
     app.composer_account_id = sample_account_id(SAMPLE_OTHER_PUBLIC_KEY);
     // Bob is the second development signer and lacks register-account permission.
@@ -1747,8 +1850,14 @@ fn composer_template_prefills_mint_inputs() {
     let _irohad_guard = TestEnvGuard::set("MOCHI_IROHAD", &irohad_stub);
     let _config_guard = TestEnvGuard::set("MOCHI_CONFIG", &config_path);
     let _data_guard = TestEnvGuard::set("MOCHI_DATA_ROOT", &data_root);
-    reset_cli_overrides_for_tests();
-    let mut app = MochiApp::default();
+    let mut app = test_app(super::parse_env_overrides().expect("parse fixture environment"));
+    assert!(
+        app.supervisor.is_some(),
+        "fixture bootstrap failed: {:?}; data_root={:?}; config_path={:?}",
+        app.supervisor_error,
+        app.cli_overrides.data_root,
+        app.cli_overrides.config_path,
+    );
     app.composer_selected_signer = Some(0);
     let signers = development_signing_authorities();
     app.apply_composer_template(ComposerTemplate::MintRoseToSigner, signers);
@@ -1796,8 +1905,14 @@ fn composer_template_prefills_burn_inputs() {
     let _irohad_guard = TestEnvGuard::set("MOCHI_IROHAD", &irohad_stub);
     let _config_guard = TestEnvGuard::set("MOCHI_CONFIG", &config_path);
     let _data_guard = TestEnvGuard::set("MOCHI_DATA_ROOT", &data_root);
-    reset_cli_overrides_for_tests();
-    let mut app = MochiApp::default();
+    let mut app = test_app(super::parse_env_overrides().expect("parse fixture environment"));
+    assert!(
+        app.supervisor.is_some(),
+        "fixture bootstrap failed: {:?}; data_root={:?}; config_path={:?}",
+        app.supervisor_error,
+        app.cli_overrides.data_root,
+        app.cli_overrides.config_path,
+    );
     app.composer_selected_signer = Some(0);
     let signers = development_signing_authorities();
     app.apply_composer_template(ComposerTemplate::BurnRoseFromSigner, signers);
@@ -1845,8 +1960,14 @@ fn composer_template_prefills_transfer_inputs() {
     let _irohad_guard = TestEnvGuard::set("MOCHI_IROHAD", &irohad_stub);
     let _config_guard = TestEnvGuard::set("MOCHI_CONFIG", &config_path);
     let _data_guard = TestEnvGuard::set("MOCHI_DATA_ROOT", &data_root);
-    reset_cli_overrides_for_tests();
-    let mut app = MochiApp::default();
+    let mut app = test_app(super::parse_env_overrides().expect("parse fixture environment"));
+    assert!(
+        app.supervisor.is_some(),
+        "fixture bootstrap failed: {:?}; data_root={:?}; config_path={:?}",
+        app.supervisor_error,
+        app.cli_overrides.data_root,
+        app.cli_overrides.config_path,
+    );
     app.composer_selected_signer = Some(0);
     let signers = development_signing_authorities();
     app.apply_composer_template(ComposerTemplate::TransferRoseToTeammate, signers);
@@ -1873,7 +1994,8 @@ fn composer_template_prefills_transfer_inputs() {
 }
 #[test]
 fn queue_plot_points_returns_points() {
-    let mut app = MochiApp::default();
+    let _lock = env_lock().lock().expect("env lock");
+    let mut app = test_app(CliOverrides::default());
     let base = Instant::now();
     let mut history = VecDeque::new();
     let status_a = TelemetryStatus {
@@ -1909,7 +2031,8 @@ fn queue_plot_points_returns_points() {
 }
 #[test]
 fn commit_latency_plot_points_require_multiple_samples() {
-    let mut app = MochiApp::default();
+    let _lock = env_lock().lock().expect("env lock");
+    let mut app = test_app(CliOverrides::default());
     assert!(
         app.commit_latency_plot_points("beta").is_none(),
         "no history should produce no plot"
@@ -1959,7 +2082,8 @@ fn commit_latency_plot_points_require_multiple_samples() {
 }
 #[test]
 fn throughput_plot_points_returns_points() {
-    let mut app = MochiApp::default();
+    let _lock = env_lock().lock().expect("env lock");
+    let mut app = test_app(CliOverrides::default());
     let base = Instant::now();
     let mut history = VecDeque::new();
     let status_a = TelemetryStatus {
@@ -1996,7 +2120,8 @@ fn throughput_plot_points_returns_points() {
 }
 #[test]
 fn consensus_queue_plot_points_require_metrics() {
-    let mut app = MochiApp::default();
+    let _lock = env_lock().lock().expect("env lock");
+    let mut app = test_app(CliOverrides::default());
     let base = Instant::now();
     let mut history = VecDeque::new();
     let status = TelemetryStatus::default();
@@ -2032,7 +2157,8 @@ fn consensus_queue_plot_points_require_metrics() {
 }
 #[test]
 fn view_change_plot_points_record_deltas() {
-    let mut app = MochiApp::default();
+    let _lock = env_lock().lock().expect("env lock");
+    let mut app = test_app(CliOverrides::default());
     let base = Instant::now();
     let mut history = VecDeque::new();
     let status_a = TelemetryStatus {

@@ -73,7 +73,7 @@ thread_local! {
 }
 
 /// Reuse only a complete canonical validation of these exact public-key bytes.
-pub(super) fn validate(algorithm: Algorithm, payload: &[u8]) -> Result<(), ParseError> {
+pub fn validate(algorithm: Algorithm, payload: &[u8]) -> Result<(), ParseError> {
     let cached = VALIDATED_KEYS
         .try_with(|cache| {
             cache

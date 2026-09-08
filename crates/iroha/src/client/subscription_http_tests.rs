@@ -852,6 +852,15 @@ async fn payload_drafts_preserve_all_quoted_charge_limits_for_review() {
             panic!("plan and usage operations must expose their exact payload");
         };
         assert_eq!(payload.fee_payment, fee);
+        let json = norito::json::to_value(draft.artifact()).unwrap();
+        assert_eq!(
+            json.get("kind").and_then(norito::json::Value::as_str),
+            Some("payload")
+        );
+        assert_eq!(
+            json.get("value"),
+            Some(&norito::json::to_value(payload.as_ref()).unwrap())
+        );
     }
     assert_eq!(calls.load(Ordering::SeqCst), 2);
 }
@@ -954,4 +963,26 @@ fn blocking_subscription_contexts_reuse_async_dispatch_and_reject_nested_runtime
         drop(public);
     });
     assert_eq!(calls.load(Ordering::SeqCst), 3);
+}
+
+#[test]
+fn subscription_context_futures_are_send_and_drafts_stay_compact() {
+    fn require_send<F: std::future::Future + Send>(_: F) {}
+
+    assert!(std::mem::size_of::<SubscriptionDraftArtifact>() <= 4 * std::mem::size_of::<usize>());
+    let client = client_with_base_url(base_url());
+    let account = client.account_client().unwrap();
+    let public = client.subscriptions();
+    let private = account.subscriptions();
+    require_send(public.list_plans(&SubscriptionPlanListParams::default()));
+    require_send(public.list(&SubscriptionListParams::default()));
+    require_send(public.get(&id()));
+    require_send(private.prepare_plan(&plan_id(), &plan(client.account.clone())));
+    require_send(private.prepare(&intent()));
+    require_send(private.prepare_pause(&id()));
+    require_send(private.prepare_resume(&id(), Some(2000)));
+    require_send(private.prepare_cancel(&id(), SubscriptionCancelMode::PeriodEnd));
+    require_send(private.prepare_keep(&id()));
+    require_send(private.prepare_charge(&id(), Some(3000)));
+    require_send(private.prepare_usage(&id(), &usage_intent()));
 }

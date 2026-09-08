@@ -31,6 +31,8 @@ const STATE_MAGIC: [u8; 8] = *b"IRSRES01";
 const STATE_DOMAIN: &[u8] = b"iroha.sorafs.release-manifest.finalized-state.v1\0";
 
 /// Independently reviewed request and exact public signer identity.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::signer::release_evidence::SignerReleaseEvidencePolicyV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct SignerReleaseEvidencePolicyV1 {
     /// Sole V1 marker; obtain it with [`Self::magic`].
@@ -54,6 +56,8 @@ impl SignerReleaseEvidencePolicyV1 {
 }
 
 /// Independently pinned observer and attestation trust; contains no runtime credentials.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::signer::release_evidence::SignerReleaseEvidenceTrustV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct SignerReleaseEvidenceTrustV1 {
     /// Sole V1 marker; obtain it with [`Self::magic`].
@@ -87,6 +91,10 @@ impl SignerReleaseEvidenceTrustV1 {
 }
 
 /// Exact current finalized state signed by the independently trusted observer.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "sorafs_manifest::signer::release_evidence::SignerReleaseStateObservationBodyV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct SignerReleaseStateObservationBodyV1 {
     /// Sole V1 marker; obtain it with [`Self::magic`].
@@ -167,6 +175,10 @@ impl SignerReleaseStateObservationBodyV1 {
 }
 
 /// Canonical signed finalized-state observation; its signing key is never selected from this file.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "sorafs_manifest::signer::release_evidence::SignerReleaseStateObservationV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct SignerReleaseStateObservationV1 {
     /// Exact signed observation.
@@ -400,3 +412,6 @@ fn validate_trust(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+include!("release_evidence/captured_owner_identity_tests.rs");

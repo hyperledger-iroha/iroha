@@ -319,7 +319,7 @@ def test_split_matrices_partition_reverse_dependency_closure(tmp_path: Path) -> 
     """Each selected package runs once, with binaries only for its own needs."""
 
     result = rust_ci.classify_paths(
-        ["crates/base/src/lib.rs"], metadata=_metadata(tmp_path),
+        ["crates/base/src/lib.rs", "crates/node/src/lib.rs"], metadata=_metadata(tmp_path),
         manifest=_manifest_with_binaries(), root=tmp_path,
     )
     document = result.as_dict()
@@ -363,7 +363,7 @@ def test_full_and_unknown_changes_select_all_binary_consumers(tmp_path: Path, pa
 
 @pytest.mark.parametrize(
     ("path", "binaries", "consumer"),
-    (("specs/index.md", (), None), ("specs/contracts/example.md", ("koto",), "kotodama_docs"),
+    (("specs/index.md", (), None), ("specs/contracts/example.ko", ("koto",), "kotodama_docs"),
      ("pytests/network/test_client.py", ("iroha", "iroha3d", "kagami"), "pytests")),
 )
 def test_non_rust_inputs_select_only_their_binary_consumer(
@@ -394,9 +394,11 @@ def test_checked_in_external_binary_requirements_are_package_scoped() -> None:
     """Only packages that start independent test nodes require release artifacts."""
 
     manifest = rust_ci.load_lane_manifest()
+    assert manifest.daemon_packages == ("irohad",)
     assert manifest.package_binaries == {
-        name: ("iroha", "iroha3d")
-        for name in ("integration_tests", "iroha_test_network", "izanami")
+        "integration_tests": ("iroha", "iroha3d", "iroha3d_message_control"),
+        "iroha_test_network": ("iroha", "iroha3d", "iroha3d_message_control"),
+        "izanami": ("iroha", "iroha3d"),
     }
     assert manifest.consumers["consistency"].binaries == ("iroha", "kagami")
     assert manifest.consumers["kotodama_docs"].binaries == ("koto",)
@@ -582,7 +584,7 @@ def test_misspelled_consumer_source_selector_is_rejected(tmp_path: Path) -> None
 def test_invalid_binary_requirements_fail_before_build(binary: str) -> None:
     """The artifact selection cannot inject package names or Cargo options."""
 
-    with pytest.raises(rust_ci.ClassificationError, match="shipping binaries"):
+    with pytest.raises(rust_ci.ClassificationError, match="binary artifacts"):
         rust_ci._binary_names([binary], "test")
 
 
@@ -590,6 +592,16 @@ def test_unknown_binary_requirement_owner_is_rejected(tmp_path: Path) -> None:
     """A stale consumer package cannot silently stop requesting its binaries."""
 
     manifest = replace(_manifest(), package_binaries={"removed": ("iroha",)})
+    with pytest.raises(rust_ci.ClassificationError, match="unknown packages"):
+        rust_ci.validate_manifest(
+            manifest, rust_ci.workspace_packages(_metadata(tmp_path), root=tmp_path)
+        )
+
+
+def test_unknown_daemon_owner_is_rejected(tmp_path: Path) -> None:
+    """A misspelled deferred daemon package cannot silently disable the foundation tier."""
+
+    manifest = replace(_manifest(), daemon_packages=("removed",))
     with pytest.raises(rust_ci.ClassificationError, match="unknown packages"):
         rust_ci.validate_manifest(
             manifest, rust_ci.workspace_packages(_metadata(tmp_path), root=tmp_path)
@@ -604,10 +616,11 @@ def test_selected_binaries_build_once_and_stage_only_requested_outputs(
     calls = []
     def fake_run(command: Any, **kwargs: Any) -> None:
         calls.append((command, kwargs))
-        target = tmp_path / "target" / "release"
+        target = Path(command[command.index("--target-dir") + 1]) / "release"
         target.mkdir(parents=True)
-        for name in rust_ci.BINARY_PACKAGES:
-            (target / name).write_text(name)
+        for name, artifact in rust_ci.BINARY_ARTIFACTS.items():
+            if artifact.target_group == "shipping":
+                (target / artifact.binary).write_text(name)
     monkeypatch.setattr(rust_ci, "_run", fake_run)
     output = tmp_path / "artifacts"
     rust_ci.build_binaries(("koto", "iroha"), output, root=tmp_path)
@@ -615,6 +628,7 @@ def test_selected_binaries_build_once_and_stage_only_requested_outputs(
     command, options = calls[0]
     assert command == [
         "cargo", "build", "--locked", "--release",
+        "--target-dir", str(tmp_path / "target/ci-binaries/shipping"),
         "-p", "iroha_cli", "--bin", "iroha", "-p", "ivm", "--bin", "koto",
     ]
     assert options == {"cwd": tmp_path, "capture_output": False}
@@ -622,3 +636,266 @@ def test_selected_binaries_build_once_and_stage_only_requested_outputs(
     with pytest.raises(rust_ci.ClassificationError, match="already exists"):
         rust_ci.build_binaries(("iroha",), output, root=tmp_path)
     assert len(calls) == 1
+
+
+def _real_owner_routing_fixture(root: Path) -> tuple[dict[str, Any], Any]:
+    """Use checked-in owners with explicit foundation-to-network reverse edges."""
+
+    manifest = rust_ci.load_lane_manifest()
+    # Executable document parsing has its own real-source tests above. This
+    # graph fixture isolates package routing without a temporary docs checkout.
+    manifest = replace(manifest, consumers={
+        name: replace(consumer, kotodama_document_inventory=None)
+        for name, consumer in manifest.consumers.items()
+    })
+    names = sorted(manifest.package_lane)
+    ids = {name: f"path+file:///{name}#0.1.0" for name in names}
+    dependencies = {
+        "iroha_core": ("iroha_crypto", "norito"),
+        "iroha": ("iroha_core",),
+        "iroha_cli": ("iroha",),
+        "irohad": ("iroha_core",),
+        "iroha_test_network": ("iroha", "iroha_core"),
+        "integration_tests": ("iroha_test_network",),
+    }
+    return {
+        "workspace_members": list(ids.values()),
+        "packages": [{
+            "id": ids[name], "name": name,
+            "manifest_path": str(root / (
+                name if name == "integration_tests" else f"crates/{name}"
+            ) / "Cargo.toml"),
+        } for name in names],
+        "resolve": {"nodes": [{
+            "id": ids[name],
+            "deps": [{"name": dependency, "pkg": ids[dependency]}
+                     for dependency in dependencies.get(name, ())],
+        } for name in names]},
+    }, manifest
+
+
+@pytest.mark.parametrize("owner", ("iroha_crypto", "norito"))
+def test_known_foundation_changes_defer_network_reverse_dependants(tmp_path: Path, owner: str) -> None:
+    """Real foundation owners retain the binary-free closure without daemon prebuilds."""
+
+    metadata, manifest = _real_owner_routing_fixture(tmp_path)
+    assert manifest.package_lane[owner] == "foundation"
+    result = rust_ci.classify_paths(
+        [f"crates/{owner}/src/lib.rs"], metadata=metadata, manifest=manifest, root=tmp_path,
+    )
+    document = result.as_dict()
+    assert result.foundation_only and not result.full
+    assert result.impacted_packages == tuple(sorted((
+        owner, "iroha_core", "iroha", "iroha_cli", "irohad",
+        "iroha_test_network", "integration_tests",
+    )))
+    assert result.lane_packages == {
+        "foundation": (owner,),
+        "node": ("iroha", "iroha_cli", "iroha_core"),
+    }
+    assert result.deferred_packages == ("integration_tests", "iroha_test_network", "irohad")
+    assert set(result.deferred_consumers) == {
+        "consistency", "pytests", "sora_parliament_lifecycle",
+        "nexus_cross_dataspace_localnet", "nexus_cross_lane_proofs",
+    }
+    assert result.binaries == () and not any(result.consumers.values())
+    assert document["binary_matrix"] == {"include": []}
+    assert not document["has_binary_rust"] and not document["has_binaries"]
+    assert document["has_binary_free_rust"]
+    selected = tuple(package for packages in result.lane_packages.values() for package in packages)
+    commands = rust_ci.commands_for_checks(selected, ("clippy", "build", "test", "doc"))
+    for command in commands:
+        assert "irohad" not in command and "--workspace" not in command
+        assert "iroha_cli" in command and "iroha_core" in command
+
+
+@pytest.mark.parametrize("owner", ("iroha_crypto", "norito"))
+def test_mixed_foundation_and_network_changes_select_complete_artifact_union(tmp_path: Path, owner: str) -> None:
+    """Adding a network owner restores its entire affected network/corridor tier."""
+
+    metadata, manifest = _real_owner_routing_fixture(tmp_path)
+    result = rust_ci.classify_paths(
+        [f"crates/{owner}/src/lib.rs", "crates/iroha_test_network/src/lib.rs"],
+        metadata=metadata, manifest=manifest, root=tmp_path,
+    )
+    assert not result.foundation_only and not result.full
+    assert result.deferred_packages == result.deferred_consumers == ()
+    assert "irohad" in result.lane_packages["node"]
+    assert result.binaries == ("iroha", "iroha3d", "iroha3d_message_control", "kagami")
+    assert result.as_dict()["binary_matrix"]["include"] == [
+        {"lane": "node", "packages": "iroha_test_network", "package_count": 1},
+        {"lane": "integration", "packages": "integration_tests", "package_count": 1},
+    ]
+    for name in ("sora_parliament_lifecycle", "nexus_cross_dataspace_localnet", "nexus_cross_lane_proofs"):
+        assert result.consumers[name]
+
+
+def test_foundation_and_direct_python_input_retains_python_network_consumer(tmp_path: Path) -> None:
+    """The foundation tier cannot hide another directly changed network input."""
+
+    metadata, manifest = _real_owner_routing_fixture(tmp_path)
+    result = rust_ci.classify_paths(
+        ["crates/norito/src/lib.rs", "pytests/iroha_torii_tests/test_status.py"],
+        metadata=metadata, manifest=manifest, root=tmp_path,
+    )
+    assert result.consumers["pytests"]
+    assert result.binaries == ("iroha", "iroha3d", "kagami")
+    assert "pytests" not in result.deferred_consumers
+
+
+@pytest.mark.parametrize("path", (
+    "docs/ordinary-prose.md", "specs/ordinary-prose.md",
+    "crates/iroha/README.md", "crates/iroha_cli/README.md", "crates/norito/README.md",
+    "defaults/README.md", "pytests/iroha_torii_tests/README.md",
+))
+def test_prose_only_changes_select_no_daemon_or_qualified_corridor(tmp_path: Path, path: str) -> None:
+    """A prose-only PR selects neither downloaded nor separately qualified daemons."""
+
+    metadata, manifest = _real_owner_routing_fixture(tmp_path)
+    result = rust_ci.classify_paths([path], metadata=metadata, manifest=manifest, root=tmp_path)
+    assert not result.has_rust
+    assert result.binaries == ()
+    assert not any(result.consumers.values())
+
+
+@pytest.mark.parametrize("path", ("new/unknown.rs", "Cargo.toml"))
+def test_full_selection_includes_isolated_and_qualified_daemon_owners(tmp_path: Path, path: str) -> None:
+    """Unknown changes and the ci/full input retain every explicit binary owner."""
+
+    metadata, manifest = _real_owner_routing_fixture(tmp_path)
+    result = rust_ci.classify_paths([path], metadata=metadata, manifest=manifest, root=tmp_path)
+    assert result.full and not result.foundation_only
+    assert result.binaries == tuple(sorted(rust_ci.BINARY_ARTIFACTS))
+    assert all(result.consumers.values())
+    assert result.deferred_packages == result.deferred_consumers == ()
+
+
+@pytest.mark.parametrize("name", (
+    "sora_parliament_lifecycle", "nexus_cross_dataspace_localnet", "nexus_cross_lane_proofs",
+))
+def test_qualified_runner_has_its_own_explicit_selection_and_binary_owner(tmp_path: Path, name: str) -> None:
+    """Runner ownership remains explicit even without the broad shared-CI fallback."""
+
+    metadata, manifest = _real_owner_routing_fixture(tmp_path)
+    manifest = replace(manifest, all_patterns=(), ignore_patterns=("ci/**",))
+    consumer = manifest.consumers[name]
+    assert consumer.binaries == ()
+    assert consumer.qualified_runner == f"ci/check_{name}.sh"
+    assert (ROOT / consumer.qualified_runner).is_file()
+    result = rust_ci.classify_paths(
+        [consumer.qualified_runner], metadata=metadata, manifest=manifest, root=tmp_path,
+    )
+    assert not result.full and not result.has_rust
+    assert result.binaries == ()
+    assert {name for name, selected in result.consumers.items() if selected} == {name}
+
+
+@pytest.mark.parametrize("runner", ("../outside.sh", "/ci/run.sh", "ci/run.py", "scripts/run.sh", ""))
+def test_qualified_runner_must_name_a_repository_ci_shell_owner(tmp_path: Path, runner: str) -> None:
+    """Invalid qualified owners cannot turn missing artifacts into a successful empty union."""
+
+    path = tmp_path / "lanes.toml"
+    path.write_text(rust_ci.DEFAULT_MANIFEST.read_text().replace(
+        'qualified_runner = "ci/check_sora_parliament_lifecycle.sh"',
+        f"qualified_runner = {json.dumps(runner)}",
+    ))
+    with pytest.raises(rust_ci.ClassificationError):
+        rust_ci.load_lane_manifest(path)
+
+
+def test_qualified_consumer_cannot_mix_downloaded_binary_ownership(tmp_path: Path) -> None:
+    """A separately qualified bundle cannot silently substitute PR shipping artifacts."""
+
+    path = tmp_path / "lanes.toml"
+    path.write_text(rust_ci.DEFAULT_MANIFEST.read_text().replace(
+        'binaries = []\nqualified_runner', 'binaries = ["iroha3d"]\nqualified_runner', 1,
+    ))
+    with pytest.raises(rust_ci.ClassificationError, match="cannot mix"):
+        rust_ci.load_lane_manifest(path)
+
+
+def test_empty_binary_union_requires_an_explicit_qualified_owner(tmp_path: Path) -> None:
+    """An accidental empty artifact list still fails before any binary build."""
+
+    path = tmp_path / "lanes.toml"
+    path.write_text(rust_ci.DEFAULT_MANIFEST.read_text().replace(
+        'qualified_runner = "ci/check_sora_parliament_lifecycle.sh"\n', "", 1,
+    ))
+    with pytest.raises(rust_ci.ClassificationError, match="binary artifacts"):
+        rust_ci.load_lane_manifest(path)
+
+
+def test_message_control_artifact_build_and_staging_preserve_shipping_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Same-named daemon binaries retain separate feature graphs, directories, and output bytes."""
+
+    calls = []
+    def fake_run(command: list[str], **kwargs: Any) -> None:
+        calls.append(command)
+        target = Path(command[command.index("--target-dir") + 1]) / "release"
+        target.mkdir(parents=True)
+        (target / "iroha3d").write_bytes(
+            b"message-control daemon" if "--features" in command else b"shipping daemon"
+        )
+    monkeypatch.setattr(rust_ci, "_run", fake_run)
+    output = tmp_path / "artifacts"
+    rust_ci.build_binaries(("iroha3d", "iroha3d_message_control"), output, root=tmp_path)
+    assert calls == [
+        ["cargo", "build", "--locked", "--release", "--target-dir",
+         str(tmp_path / "target/ci-binaries/message-control"),
+         "-p", "irohad", "--bin", "iroha3d", "--features", "irohad/test-network-message-control"],
+        ["cargo", "build", "--locked", "--release", "--target-dir",
+         str(tmp_path / "target/ci-binaries/shipping"), "-p", "irohad", "--bin", "iroha3d"],
+    ]
+    assert sorted(path.name for path in output.iterdir()) == ["iroha3d", "iroha3d_message_control"]
+    assert (output / "iroha3d").read_bytes() == b"shipping daemon"
+    assert (output / "iroha3d_message_control").read_bytes() == b"message-control daemon"
+
+
+def test_isolated_build_failure_never_publishes_a_partial_binary_bundle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No artifact directory is published when one required build fails."""
+
+    def fail_run(*args: Any, **kwargs: Any) -> None:
+        raise rust_ci.ClassificationError("isolated compile failed")
+    monkeypatch.setattr(rust_ci, "_run", fail_run)
+    output = tmp_path / "artifacts"
+    with pytest.raises(rust_ci.ClassificationError, match="isolated compile failed"):
+        rust_ci.build_binaries(("iroha3d", "iroha3d_message_control"), output, root=tmp_path)
+    assert not output.exists()
+
+
+@pytest.mark.parametrize("directory", ("python/node", "tools/node"))
+def test_rust_ownership_still_precedes_non_prose_directory_ignores(tmp_path: Path, directory: str) -> None:
+    """Skipping nested README prose does not hide Rust packages under ignored SDK/tool roots."""
+
+    metadata = _metadata(tmp_path)
+    metadata["packages"][1]["manifest_path"] = str(tmp_path / directory / "Cargo.toml")
+    manifest = replace(_manifest(), ignore_patterns=("python/**", "tools/**"))
+    result = rust_ci.classify_paths(
+        [f"{directory}/src/lib.rs"], metadata=metadata, manifest=manifest, root=tmp_path,
+    )
+    assert result.changed_packages == ("node",)
+    assert result.impacted_packages == ("integration", "node")
+    assert result.has_rust
+
+
+def test_isolated_only_union_does_not_build_shipping_daemon(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Selecting only the control artifact never widens to a shipping build."""
+
+    calls = []
+    def fake_run(command: list[str], **kwargs: Any) -> None:
+        calls.append(command)
+        target = Path(command[command.index("--target-dir") + 1]) / "release"
+        target.mkdir(parents=True)
+        (target / "iroha3d").write_bytes(b"control only")
+    monkeypatch.setattr(rust_ci, "_run", fake_run)
+    output = tmp_path / "artifacts"
+    rust_ci.build_binaries(("iroha3d_message_control",), output, root=tmp_path)
+    assert len(calls) == 1
+    assert calls[0][-2:] == ["--features", "irohad/test-network-message-control"]
+    assert sorted(path.name for path in output.iterdir()) == ["iroha3d_message_control"]
+    assert (output / "iroha3d_message_control").read_bytes() == b"control only"
+    assert not (tmp_path / "target/ci-binaries/shipping").exists()

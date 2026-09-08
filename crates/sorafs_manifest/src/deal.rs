@@ -40,6 +40,8 @@ pub const MAX_DEAL_METADATA_KEY_BYTES: usize = 64;
 /// Maximum metadata-value byte length.
 pub const MAX_DEAL_METADATA_VALUE_BYTES: usize = 1_024;
 /// Probability and payout configuration for probabilistic micropayments.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::deal::MicropaymentPolicyV1")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct MicropaymentPolicyV1 {
     /// Schema version (`MICROPAYMENT_POLICY_VERSION_V1`).
@@ -74,6 +76,8 @@ impl MicropaymentPolicyV1 {
     }
 }
 /// Deal metadata entry used for telemetry or policy hints.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::deal::DealMetadataEntry")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct DealMetadataEntry {
     /// Metadata key (ASCII lowercase recommended).
@@ -105,6 +109,8 @@ impl DealMetadataEntry {
     }
 }
 /// Storage or retrieval agreement recorded by governance.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::deal::DealTermsV1")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct DealTermsV1 {
     /// Schema version (`DEAL_TERMS_VERSION_V1`).
@@ -267,6 +273,8 @@ impl DealTermsV1 {
     }
 }
 /// Micropayment issued for a successful storage window.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::deal::DealMicropaymentV1")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct DealMicropaymentV1 {
     /// Schema version (`DEAL_MICROPAYMENT_VERSION_V1`).
@@ -379,6 +387,8 @@ pub fn derive_micropayment_hint(
     Ok(*hasher.finalize().as_bytes())
 }
 /// Provider/client ledger snapshot tracked for audit purposes.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::deal::DealLedgerSnapshotV1")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct DealLedgerSnapshotV1 {
     /// Schema version (`DEAL_LEDGER_VERSION_V1`).
@@ -702,6 +712,8 @@ fn validate_cumulative_delta(
     Ok(())
 }
 /// Canonical settlement record emitted after each deal billing window.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::deal::DealSettlementV1")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct DealSettlementV1 {
     /// Schema version (`DEAL_SETTLEMENT_VERSION_V1`).
@@ -846,6 +858,8 @@ impl DealSettlementV1 {
     }
 }
 /// Settlement outcome.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::deal::DealSettlementStatusV1")]
 #[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub enum DealSettlementStatusV1 {
     /// A non-terminal billing window was settled and the deal remains active.
@@ -1856,3 +1870,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+include!("deal/captured_owner_identity_tests.rs");

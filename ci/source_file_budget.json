@@ -111,7 +111,6 @@
     "crates/norito/src/core.rs": 8627,
     "crates/norito/src/lib.rs": 11226,
     "crates/sorafs_car/src/lib.rs": 9141,
-    "crates/sorafs_manifest/src/governance.rs": 7401,
     "crates/sorafs_manifest/src/reference.rs": 8641,
     "crates/sorafs_node/src/evidence_viewer.rs": 10665,
     "crates/sorafs_node/src/governance.rs": 16920,

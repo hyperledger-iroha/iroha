@@ -109,6 +109,8 @@ pub fn provider_vrf_input(
     input
 }
 /// Authenticated provider submission carrying one admission-bound BLS VRF proof.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::por::ProviderVrfSubmissionV1")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct ProviderVrfSubmissionV1 {
     /// Schema version (`POR_VRF_SUBMISSION_VERSION_V1`).
@@ -134,6 +136,8 @@ pub struct ProviderVrfSubmissionV1 {
     /// Current admission-approved Ed25519 advert key signature.
     pub signature: AdvertSignature,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::por::ProviderVrfSubmissionSigningPayloadV1")]
 #[derive(Debug, Clone, NoritoSerialize)]
 struct ProviderVrfSubmissionSigningPayloadV1 {
     domain: String,
@@ -403,6 +407,8 @@ pub fn derive_challenge_id(
     hasher.finalize().into()
 }
 /// PoR challenge issued to a storage provider.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::por::PorChallengeV1")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, PartialEq, Eq)]
 pub struct PorChallengeV1 {
     /// Schema version (`POR_CHALLENGE_VERSION_V1`).
@@ -655,6 +661,8 @@ fn preflight_por_challenge_len(
 ///
 /// `duplicate_samples` is encoded as a fixed-width integer and must exactly
 /// match the duplicate count in the validated challenge sample inventory.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::por::PorChallengePublicationV1")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, PartialEq, Eq)]
 pub struct PorChallengePublicationV1 {
     /// Schema version (`POR_CHALLENGE_PUBLICATION_VERSION_V1`).
@@ -862,6 +870,8 @@ where
     Ok(value)
 }
 /// Sample proof attached to a PoR response.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::por::PorProofSampleV1")]
 #[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, JsonSerialize, PartialEq, Eq)]
 pub struct PorProofSampleV1 {
     /// Leaf index sampled by the challenge.
@@ -896,6 +906,8 @@ impl PorProofSampleV1 {
     }
 }
 /// PoR proof submitted by the provider.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::por::PorProofV1")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, PartialEq, Eq)]
 pub struct PorProofV1 {
     /// Schema version (`POR_PROOF_VERSION_V1`).
@@ -915,6 +927,8 @@ pub struct PorProofV1 {
     /// Unix timestamp (seconds) when the proof was submitted.
     pub submitted_at: u64,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::por::PorProofSigningPayloadV1")]
 #[derive(Debug, Clone, NoritoSerialize)]
 struct PorProofSigningPayloadV1 {
     domain: String,
@@ -927,14 +941,9 @@ struct PorProofSigningPayloadV1 {
     submitted_at: u64,
 }
 mod borrowed_norito {
-    use norito::core::{NoritoSerialize, SerializePayload};
+    use norito::core::SerializePayload;
     /// Borrowed string that preserves the owned `String` wire representation.
     pub(super) struct String<'a>(pub(super) &'a str);
-    impl NoritoSerialize for String<'_> {
-        fn schema_hash() -> [u8; 16] {
-            <std::string::String>::schema_hash()
-        }
-    }
     impl SerializePayload for String<'_> {
         fn serialize(
             &self,
@@ -951,12 +960,7 @@ mod borrowed_norito {
     }
     /// Borrowed vector that preserves the owned `Vec<T>` wire representation.
     pub(super) struct Vec<'a, T>(pub(super) &'a std::vec::Vec<T>);
-    impl<T: NoritoSerialize> NoritoSerialize for Vec<'_, T> {
-        fn schema_hash() -> [u8; 16] {
-            <std::vec::Vec<T>>::schema_hash()
-        }
-    }
-    impl<T: NoritoSerialize> SerializePayload for Vec<'_, T> {
+    impl<T: SerializePayload> SerializePayload for Vec<'_, T> {
         fn serialize(
             &self,
             writer: &mut norito::core::Encoder<'_>,
@@ -972,12 +976,7 @@ mod borrowed_norito {
     }
     /// Borrowed option that preserves the owned `Option<T>` wire representation.
     pub(super) struct Option<'a, T>(pub(super) &'a std::option::Option<T>);
-    impl<T: NoritoSerialize> NoritoSerialize for Option<'_, T> {
-        fn schema_hash() -> [u8; 16] {
-            <std::option::Option<T>>::schema_hash()
-        }
-    }
-    impl<T: NoritoSerialize> SerializePayload for Option<'_, T> {
+    impl<T: SerializePayload> SerializePayload for Option<'_, T> {
         fn serialize(
             &self,
             writer: &mut norito::core::Encoder<'_>,
@@ -992,7 +991,7 @@ mod borrowed_norito {
         }
     }
 }
-#[derive(NoritoSerialize)]
+#[derive(norito::derive::SerializePayload)]
 struct PorProofSigningPayloadViewWireV1<'a> {
     domain: borrowed_norito::String<'a>,
     version: u8,
@@ -1277,6 +1276,8 @@ pub(crate) fn decode_por_proof_payload_v1(bytes: &[u8]) -> Result<PorProofV1, no
     )
 }
 /// Outcome recorded after challenge verification.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::por::AuditOutcomeV1")]
 #[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 #[repr(u8)]
 pub enum AuditOutcomeV1 {
@@ -1288,6 +1289,8 @@ pub enum AuditOutcomeV1 {
     Repaired = 3,
 }
 /// Audit verdict logged into the governance DAG.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::por::AuditVerdictV1")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct AuditVerdictV1 {
     /// Schema version (`AUDIT_VERDICT_VERSION_V1`).
@@ -1314,6 +1317,8 @@ pub struct AuditVerdictV1 {
     #[norito(default)]
     pub metadata: Vec<CapacityMetadataEntry>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::por::AuditVerdictSigningPayloadV1")]
 #[derive(Debug, Clone, NoritoSerialize)]
 struct AuditVerdictSigningPayloadV1 {
     domain: String,
@@ -1327,7 +1332,7 @@ struct AuditVerdictSigningPayloadV1 {
     decided_at: u64,
     metadata: Vec<CapacityMetadataEntry>,
 }
-#[derive(NoritoSerialize)]
+#[derive(norito::derive::SerializePayload)]
 struct AuditVerdictSigningPayloadViewWireV1<'a> {
     domain: borrowed_norito::String<'a>,
     version: u8,
@@ -1811,6 +1816,8 @@ fn verify_ed25519_signature(
 /// and complete `(epoch, issued_at, challenge_id)` boundary. Both servers and
 /// clients use this codec so accepting a syntactically valid but structurally
 /// different base64 payload is impossible.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::por::PorStatusCursorV1")]
 #[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct PorStatusCursorV1 {
     /// Cursor schema version.
@@ -1962,6 +1969,8 @@ pub enum PorStatusCursorCodecError {
     Validation(#[from] PorStatusCursorValidationError),
 }
 /// Lifecycle states emitted by the PoR coordinator.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::por::PorChallengeOutcome")]
 #[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 #[norito(tag = "outcome")]
 #[repr(u8)]
@@ -2040,6 +2049,8 @@ impl norito::json::JsonSerialize for PorChallengeOutcome {
     }
 }
 /// Status snapshot returned by the PoR coordinator.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::por::PorChallengeStatusV1")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, PartialEq, Eq)]
 pub struct PorChallengeStatusV1 {
     /// Schema version (`POR_CHALLENGE_STATUS_VERSION_V1`).
@@ -2343,6 +2354,8 @@ pub fn decode_por_challenge_status_page_v1(
     Ok(statuses)
 }
 /// ISO-8601 week identifier used by PoR reports.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::por::PorReportIsoWeek")]
 #[derive(
     Debug,
     Clone,
@@ -2386,6 +2399,8 @@ pub enum PorReportIsoWeekValidationError {
     InvalidWeek { week: u8 },
 }
 /// Aggregated provider summary used by weekly reports.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::por::PorProviderSummaryV1")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, PartialEq, Eq)]
 pub struct PorProviderSummaryV1 {
     /// Provider identifier.
@@ -2498,6 +2513,8 @@ pub enum PorProviderSummaryValidationError {
     InvalidTicketId,
 }
 /// Slashing event recorded during the reporting period.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::por::PorSlashingEventV1")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, PartialEq, Eq)]
 pub struct PorSlashingEventV1 {
     /// Provider identifier that was penalised.
@@ -2549,6 +2566,8 @@ pub enum PorSlashingEventValidationError {
     InvalidDecisionTimestamp,
 }
 /// Weekly PoR health report produced by the coordinator.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::por::PorWeeklyReportV1")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, PartialEq, Eq)]
 pub struct PorWeeklyReportV1 {
     /// Schema version (`POR_WEEKLY_REPORT_VERSION_V1`).
@@ -2865,6 +2884,8 @@ mod tests {
             PACKED_SEQ | PACKED_STRUCT | COMPACT_LEN | FIELD_BITSET,
         ]
     }
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "sorafs_manifest::por::tests::LegacyPorChallengeStatusV1")]
     #[derive(norito::derive::NoritoSerialize)]
     struct LegacyPorChallengeStatusV1 {
         version: u8,
@@ -2883,6 +2904,8 @@ mod tests {
         failure_reason: Option<String>,
         verifier_latency_ms: Option<u32>,
     }
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "sorafs_manifest::por::tests::MissingRepairTaskFieldStatusV1")]
     #[derive(norito::derive::NoritoSerialize)]
     struct MissingRepairTaskFieldStatusV1 {
         version: u8,
@@ -4716,4 +4739,13 @@ mod tests {
         let err = report.validate().expect_err("invalid totals rejected");
         assert_eq!(err, PorWeeklyReportValidationError::InvalidChallengeTotals);
     }
+
+    include!("por/captured_fixture_identity_tests.rs");
 }
+
+#[cfg(test)]
+include!("por/captured_owner_identity_tests.rs");
+
+#[cfg(test)]
+#[path = "por/borrowed_payload_tests.rs"]
+mod borrowed_payload_tests;

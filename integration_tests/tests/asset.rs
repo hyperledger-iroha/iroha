@@ -468,7 +468,7 @@ fn client_add_asset_quantities_should_increase_asset_amounts() -> Result<()> {
     };
     let env_dir = network.env_dir().to_path_buf();
     let mut clients = ClientPool::new(&network);
-    let torii = clients.current().client().torii_url.clone();
+    let torii = clients.current().client().endpoint().clone();
     if status_or_skip(
         get_status_with_retry_or_storage(&network, clients.next(), "initial status"),
         "initial status",
@@ -916,7 +916,7 @@ fn fail_if_dont_satisfy_spec() -> Result<()> {
         };
         let env_dir = network.env_dir().to_path_buf();
         let mut clients = ClientPool::new(&network);
-        let torii = clients.current().client().torii_url.clone();
+        let torii = clients.current().client().endpoint().clone();
         if status_or_skip(
             get_status_with_retry_or_storage(&network, clients.next(), "initial status"),
             "initial status",

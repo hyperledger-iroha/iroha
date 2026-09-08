@@ -28,7 +28,7 @@ pub mod kex;
 mod merkle;
 #[cfg(feature = "pqc")]
 mod mldsa_seed;
-/// ML-DSA-65 typed-key operations with the shared portable AArch64 fallback.
+/// ML-DSA-65 typed-key operations with the shared portable `AArch64` fallback.
 #[cfg(feature = "pqc")]
 pub use soranet_pq::{sign_mldsa65_detached, verify_mldsa65_detached};
 mod multihash;

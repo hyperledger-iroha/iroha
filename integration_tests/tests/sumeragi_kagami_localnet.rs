@@ -48,7 +48,7 @@ async fn kagami_localnet_bootstrap_produces_blocks() -> Result<()> {
         )?;
         let client = load_localnet_client(&out_dir)?;
         wait_for_status_ready(&client, &mut localnet, READY_TIMEOUT).await?;
-        let baseline = client.client().get_status()?.blocks_non_empty;
+        let baseline = client.client().status().get().await?.blocks_non_empty;
         client.submit(
             Log::new(Level::INFO, "kagami localnet smoke".to_string()),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
@@ -250,7 +250,7 @@ async fn wait_for_status_ready(
         if Instant::now() >= deadline {
             return Err(eyre!("timed out waiting for localnet status"));
         }
-        if client.client().get_status().is_ok() {
+        if client.client().status().get().await.is_ok() {
             return Ok(());
         }
         if let Some(report) = localnet.unexpected_exit_report()? {
@@ -276,7 +276,7 @@ async fn wait_for_blocks_non_empty(
 ) -> Result<iroha_torii_shared::status::Status> {
     let deadline = Instant::now() + timeout;
     loop {
-        let status = client.client().get_status()?;
+        let status = client.client().status().get().await?;
         if status.blocks_non_empty >= target {
             return Ok(status);
         }
@@ -303,7 +303,7 @@ async fn wait_for_validator_count_and_reducer(
                 "timed out waiting for validator count and reducer readiness: expected_peers={expected_peers}, last_validator_count={last_validator_count:?}, reducer_available={reducer_available}"
             ));
         }
-        if let Ok(status) = client.client().get_status() {
+        if let Ok(status) = client.client().status().get().await {
             last_status_peers = Some(status.peers);
             // Status.peers excludes the reporting peer, so add 1 for the validator count.
             if status.peers.saturating_add(1) == expected_peers

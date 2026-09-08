@@ -44,6 +44,8 @@ const REFERENCE_PRICE_DECISION_ID_DOMAIN_V1: &[u8] =
 const BILLING_LINE_ITEM_ID_DOMAIN_V1: &[u8] = b"sorafs.billing.line-item-id.v1";
 const BILLING_STATEMENT_ID_DOMAIN_V1: &[u8] = b"sorafs.billing.statement-id.v1";
 /// Feed status observed by the hedging decision engine.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::hedging::HedgingFeedStatusV1")]
 #[derive(
     Debug,
     Clone,
@@ -65,6 +67,8 @@ pub enum HedgingFeedStatusV1 {
     Rejected,
 }
 /// Direction of a billing line item.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::hedging::BillingLineDirectionV1")]
 #[derive(
     Debug,
     Clone,
@@ -84,6 +88,8 @@ pub enum BillingLineDirectionV1 {
     Credit,
 }
 /// Billing line item category.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::hedging::BillingLineItemKindV1")]
 #[derive(
     Debug,
     Clone,
@@ -113,6 +119,8 @@ pub enum BillingLineItemKindV1 {
     Adjustment,
 }
 /// Canonical XOR/USD feed sample normalized by a collector.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::hedging::HedgingPriceFeedV1")]
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
 )]
@@ -163,6 +171,8 @@ impl HedgingPriceFeedV1 {
     }
 }
 /// Deterministic reference-price decision used by SoraFS billing.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::hedging::HedgingReferencePriceDecisionV1")]
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
 )]
@@ -238,6 +248,8 @@ impl HedgingReferencePriceDecisionV1 {
     }
 }
 /// One canonical billing line in a SoraFS statement.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::hedging::BillingLineItemV1")]
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
 )]
@@ -291,6 +303,8 @@ impl BillingLineItemV1 {
     }
 }
 /// Weekly or ad-hoc SoraFS billing statement.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::hedging::BillingStatementV1")]
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
 )]
@@ -2005,3 +2019,6 @@ mod tests {
         assert!(decode_hedging_price_feed_v1(&encoded).is_err());
     }
 }
+
+#[cfg(test)]
+include!("hedging/captured_owner_identity_tests.rs");

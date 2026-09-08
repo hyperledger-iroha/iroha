@@ -311,13 +311,14 @@ fn domain_alias_record_visible_to_client(client: &Client, domain: &DomainId) -> 
         .get_name(iroha::sns::SnsNamespacePath::Domain, &domain_label)
     {
         Ok(record)
-            if record.owner == client.client().account && record.status == NameStatus::Active =>
+            if &record.owner == client.client().account()
+                && record.status == NameStatus::Active =>
         {
             Ok(true)
         }
         Ok(record) => Err(eyre!(
             "domain `{domain}` requires an active SNS lease owned by `{}`; found owner `{}` with status {:?}",
-            client.client().account,
+            client.client().account(),
             record.owner,
             record.status
         )),
@@ -327,12 +328,12 @@ fn domain_alias_record_visible_to_client(client: &Client, domain: &DomainId) -> 
 fn domain_setup_ready_to_client(client: &Client, domain: &DomainId) -> Result<bool> {
     let domain_exists = match client.client().query(FindDomains::new()).execute_all() {
         Ok(domains) => match domains.into_iter().find(|existing| existing.id() == domain) {
-            Some(existing) if existing.owned_by() == &client.client().account => true,
+            Some(existing) if existing.owned_by() == client.client().account() => true,
             Some(existing) => {
                 return Err(eyre!(
                     "domain `{domain}` is owned by `{}`, not setup authority `{}`",
                     existing.owned_by(),
-                    client.client().account
+                    client.client().account()
                 ));
             }
             None => false,
@@ -343,7 +344,7 @@ fn domain_setup_ready_to_client(client: &Client, domain: &DomainId) -> Result<bo
                 debug!(
                     err = %report,
                     %domain,
-                    torii_url = %client.client().torii_url,
+                    torii_url = %client.client().endpoint(),
                     "transient domain visibility query failed while checking SNS lease readiness"
                 );
                 false
@@ -377,7 +378,7 @@ pub fn ensure_domain_setup_in_dataspace(
         return Ok(());
     }
     match client.submit(
-        test_domain_setup_instruction(domain, dataspace_id, &client.client().account)?,
+        test_domain_setup_instruction(domain, dataspace_id, client.client().account())?,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     ) {
         Ok(_) => {
@@ -414,7 +415,7 @@ pub fn ensure_domain_setup_for_network(network: &Network, domain: &DomainId) -> 
         if !wait_for_domain_setup(client, domain)? {
             return Err(eyre!(
                 "domain `{domain}` declarative setup was not visible to peer `{}` within {:?}",
-                client.client().torii_url,
+                client.client().endpoint(),
                 TEST_SNS_LEASE_VISIBILITY_TIMEOUT
             ));
         }
@@ -436,7 +437,7 @@ pub fn submit_ensure_domain_for_network(
     client: &Client,
     domain: NewDomain,
 ) -> Result<()> {
-    if client.client().account != network.client().client().account {
+    if client.client().account() != network.client().client().account() {
         return Err(eyre!(
             "network domain setup must be submitted by the network client authority"
         ));
@@ -660,6 +661,14 @@ fn log_status_warning(gate: &StartupWarnGate, warn_log: impl FnOnce(), debug_log
 }
 fn status_error_is_connection_refused(err: &Report) -> bool {
     err.chain().any(|cause| {
+        if let Some(iroha::Error::Transport { kind, .. }) = cause.downcast_ref::<iroha::Error>()
+            && matches!(
+                kind,
+                iroha::TransportErrorKind::Io(ErrorKind::ConnectionRefused)
+            )
+        {
+            return true;
+        }
         cause
             .downcast_ref::<std::io::Error>()
             .is_some_and(|io_err| io_err.kind() == ErrorKind::ConnectionRefused)
@@ -667,6 +676,12 @@ fn status_error_is_connection_refused(err: &Report) -> bool {
 }
 fn status_error_is_torii_query_backpressure(err: &Report) -> bool {
     err.chain().any(|cause| {
+        if let Some(iroha::Error::Http { status, body, .. }) = cause.downcast_ref::<iroha::Error>()
+        {
+            return *status == 429
+                && std::str::from_utf8(body)
+                    .is_ok_and(|text| text.contains("Reached the limit of parallel queries"));
+        }
         let message = cause.to_string();
         message.contains("429 Too Many Requests")
             && message.contains("Reached the limit of parallel queries")
@@ -679,6 +694,24 @@ fn torii_request_error_is_transient(err: &Report) -> bool {
     let mut saw_http_transport = false;
     let mut saw_transient_transport = false;
     for cause in err.chain() {
+        if matches!(
+            cause.downcast_ref::<iroha::Error>(),
+            Some(
+                iroha::Error::Timeout { .. }
+                    | iroha::Error::Transport {
+                        kind: iroha::TransportErrorKind::Io(
+                            ErrorKind::ConnectionReset
+                                | ErrorKind::ConnectionAborted
+                                | ErrorKind::BrokenPipe
+                                | ErrorKind::UnexpectedEof
+                                | ErrorKind::TimedOut
+                        ),
+                        ..
+                    }
+            )
+        ) {
+            return true;
+        }
         let message = cause.to_string();
         saw_http_transport |= message.contains("Failed to send http")
             || message.contains("error sending request for url")
@@ -9077,7 +9110,7 @@ impl NetworkPeer {
         }
         {
             let tasks = &mut tasks;
-            let client = self.client();
+            let client = self.async_client_for(&ALICE_ID, ALICE_KEYPAIR.private_key().clone());
             let events_tx = self.events.clone();
             let block_height_tx = self.block_height.clone();
             let is_running = self.is_running.clone();
@@ -9111,7 +9144,7 @@ impl NetworkPeer {
                         return;
                     }
                     let warn_gate = startup_warn_gate.clone();
-                    // Retry get_status with exponential backoff (50ms ..= 1s); abort if it takes
+                    // Retry status reads with exponential backoff (50ms ..= 1s); abort if it takes
                     // longer than the configured timeout. If Torii is slow to accept connections,
                     // fall back to on-disk height observation so peers can still make progress.
                     let status_backoff = {
@@ -9128,10 +9161,7 @@ impl NetworkPeer {
                             let warn_gate = warn_gate.clone();
                             let http_seen = Arc::clone(&http_seen);
                             async move {
-                                let status = read_on_dedicated_thread(move || {
-                                    client.client().get_status()
-                                })
-                                .await;
+                                let status = client.status().get().await.map_err(Report::from);
                                 match status {
                                     Ok(status) => {
                                         let _ =
@@ -9299,10 +9329,7 @@ impl NetworkPeer {
                                         break;
                                     }
                                     let status = tokio::select! {
-                                        result = read_on_dedicated_thread({
-                                            let client = poll_client.clone();
-                                            move || client.client().get_status()
-                                        }) => result,
+                                        result = async { poll_client.status().get().await } => result.map_err(Report::from),
                                         changed = fatal_rx.changed() => {
                                             if changed.is_ok() && *fatal_rx.borrow() {
                                                 debug!("fatal notify received during status poll");
@@ -9861,6 +9888,14 @@ impl NetworkPeer {
     }
     /// Create a client to interact with this peer
     pub fn client_for(&self, account_id: &AccountId, account_private_key: PrivateKey) -> Client {
+        Client::from_client(self.async_client_for(account_id, account_private_key))
+            .expect("peer blocking client runtime should initialize")
+    }
+    fn async_client_for(
+        &self,
+        account_id: &AccountId,
+        account_private_key: PrivateKey,
+    ) -> AsyncClient {
         tracing::debug!(
             mnemonic = %self.mnemonic,
             port = %self.port_api,
@@ -9912,17 +9947,19 @@ impl NetworkPeer {
             .expect("peer client config should be valid")
             .parse()
             .expect("peer client config should be valid");
-        let mut client = AsyncClient::new(config);
-        client.set_operator_key_pair(self.key_pair.clone());
-        Client::from_client(client).expect("peer blocking client runtime should initialize")
+        let mut builder = AsyncClient::builder(config);
+        builder.operator_key_pair = Some(self.key_pair.clone());
+        builder
+            .build()
+            .expect("peer account context should be valid")
     }
     /// Client for Alice. ([`Self::client_for`] + [`Signatory::Alice`])
     pub fn client(&self) -> Client {
         self.client_for(&ALICE_ID, ALICE_KEYPAIR.private_key().clone())
     }
     pub async fn status(&self) -> Result<Status> {
-        let client = self.client();
-        let result = read_on_dedicated_thread(move || client.client().get_status()).await;
+        let client = self.async_client_for(&ALICE_ID, ALICE_KEYPAIR.private_key().clone());
+        let result = client.status().get().await.map_err(Report::from);
         match &result {
             Ok(status) => self.record_status_success(status),
             Err(error) => self.record_status_failure(error),
@@ -11464,6 +11501,28 @@ mod tests {
         assert!(gate.should_warn());
     }
     #[test]
+    fn status_error_is_connection_refused_checks_structured_transport_kind() {
+        for (kind, expected) in [
+            (
+                iroha::TransportErrorKind::Io(ErrorKind::ConnectionRefused),
+                true,
+            ),
+            (iroha::TransportErrorKind::Io(ErrorKind::AddrInUse), false),
+            (iroha::TransportErrorKind::Other, false),
+        ] {
+            let report = Report::from(iroha::Error::Transport {
+                operation: "diagnostic.status",
+                kind,
+                details: "Connection refused text must not decide classification".to_owned(),
+            });
+            assert_eq!(status_error_is_connection_refused(&report), expected);
+            let nested = Err::<(), Report>(report)
+                .wrap_err("client status probe failed")
+                .unwrap_err();
+            assert_eq!(status_error_is_connection_refused(&nested), expected);
+        }
+    }
+    #[test]
     fn status_error_is_connection_refused_detects_io_error() {
         let err = std::io::Error::new(ErrorKind::ConnectionRefused, "refused");
         let report = Report::from(err);
@@ -11494,6 +11553,31 @@ mod tests {
         .wrap_err("client status probe failed")
         .unwrap_err();
         assert!(!status_error_is_connection_refused(&report));
+    }
+    #[test]
+    fn status_error_is_torii_query_backpressure_checks_structured_status_and_body() {
+        for (status, body, expected) in [
+            (429, b"Reached the limit of parallel queries".to_vec(), true),
+            (
+                503,
+                b"Reached the limit of parallel queries".to_vec(),
+                false,
+            ),
+            (429, b"another rate limit".to_vec(), false),
+            (429, vec![0xff], false),
+        ] {
+            let report = Report::from(iroha::Error::Http {
+                operation: "diagnostic.status",
+                status,
+                body,
+                retry_after: None,
+            });
+            assert_eq!(status_error_is_torii_query_backpressure(&report), expected);
+            let nested = Err::<(), Report>(report)
+                .wrap_err("client status probe failed")
+                .unwrap_err();
+            assert_eq!(status_error_is_torii_query_backpressure(&nested), expected);
+        }
     }
     #[test]
     fn status_error_is_torii_query_backpressure_detects_status_throttle() {
@@ -11527,6 +11611,62 @@ mod tests {
             .wrap_err("Unexpected status response; status: 429 Too Many Requests")
             .unwrap_err();
         assert!(!status_error_is_torii_query_backpressure(&report));
+    }
+    #[test]
+    fn torii_request_error_is_transient_checks_structured_transport_causes() {
+        let deadline = iroha::Error::Timeout {
+            operation: "diagnostic.status",
+        };
+        let cases = std::iter::once((deadline, true)).chain(
+            [
+                (
+                    iroha::TransportErrorKind::Io(ErrorKind::ConnectionRefused),
+                    true,
+                ),
+                (
+                    iroha::TransportErrorKind::Io(ErrorKind::ConnectionReset),
+                    true,
+                ),
+                (
+                    iroha::TransportErrorKind::Io(ErrorKind::ConnectionAborted),
+                    true,
+                ),
+                (iroha::TransportErrorKind::Io(ErrorKind::BrokenPipe), true),
+                (
+                    iroha::TransportErrorKind::Io(ErrorKind::UnexpectedEof),
+                    true,
+                ),
+                (iroha::TransportErrorKind::Io(ErrorKind::TimedOut), true),
+                (
+                    iroha::TransportErrorKind::Io(ErrorKind::PermissionDenied),
+                    false,
+                ),
+                (iroha::TransportErrorKind::Io(ErrorKind::InvalidData), false),
+                (iroha::TransportErrorKind::Other, false),
+            ]
+            .into_iter()
+            .map(|(kind, expected)| {
+                (
+                    iroha::Error::Transport {
+                        operation: "diagnostic.status",
+                        kind,
+                        details: "opaque diagnostic".to_owned(),
+                    },
+                    expected,
+                )
+            }),
+        );
+        for (error, expected) in cases {
+            let report = Report::from(error);
+            assert_eq!(torii_request_error_is_transient(&report), expected);
+            let nested = report.wrap_err("status probe");
+            assert_eq!(torii_request_error_is_transient(&nested), expected);
+        }
+        let raw_timeout = Report::from(std::io::Error::new(
+            ErrorKind::TimedOut,
+            "operation timed out while applying local validation",
+        ));
+        assert!(!torii_request_error_is_transient(&raw_timeout));
     }
     #[test]
     fn torii_request_error_is_transient_detects_query_timeout() {
@@ -15994,15 +16134,55 @@ mod tests {
         let client = network.client();
         let async_client = client.client();
         let expected_host = expected.host_str();
-        assert_eq!(async_client.network_id, network.network_id());
+        assert_eq!(*async_client.network_id(), network.network_id());
         assert_eq!(
-            async_client.torii_url.host_str(),
+            async_client.endpoint().host_str(),
             Some(expected_host.as_ref())
         );
         assert_eq!(
-            async_client.torii_url.port_or_known_default(),
+            async_client.endpoint().port_or_known_default(),
             Some(expected.port())
         );
+    }
+    #[test]
+    fn peer_async_client_factory_preserves_account_operator_and_configuration() {
+        let network = build_with_isolated_permit(NetworkBuilder::new().with_peers(4));
+        let peer = &network.peers()[0];
+        let private_key = iroha_test_samples::BOB_KEYPAIR.private_key().clone();
+        let client = peer.async_client_for(&BOB_ID, private_key.clone());
+        let blocking = peer.client_for(&BOB_ID, private_key);
+        let config = client.to_builder();
+        assert_eq!(config.account, *BOB_ID);
+        assert_eq!(
+            config.key_pair.public_key(),
+            BOB_ID.expect_single_signatory()
+        );
+        assert_eq!(config.operator_key_pair.as_ref(), Some(&peer.key_pair));
+        assert_eq!(config.network_id, network.network_id());
+        assert_eq!(config.chain, config::chain_id());
+        assert_eq!(
+            config.torii_url,
+            peer.torii_url()
+                .parse::<url::Url>()
+                .expect("valid peer endpoint")
+        );
+        assert_eq!(
+            config.transaction_status_timeout,
+            client_status_timeout_env()
+        );
+        assert_eq!(config.torii_request_timeout, client_request_timeout_env());
+        assert_eq!(
+            config.transaction_ttl,
+            Some(client_ttl_env(config.transaction_status_timeout))
+        );
+        assert_eq!(blocking.client().account(), client.account());
+        assert_eq!(blocking.client().key_pair(), client.key_pair());
+        assert_eq!(
+            blocking.client().operator_key_pair(),
+            client.operator_key_pair()
+        );
+        assert_eq!(blocking.client().network_id(), client.network_id());
+        assert_eq!(blocking.client().endpoint(), client.endpoint());
     }
     #[test]
     fn http_start_gate_requires_http_source() {

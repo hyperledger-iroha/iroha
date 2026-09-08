@@ -1,7 +1,4 @@
-Handles forthcoming Iroha message and returns:
-
-- Decoded event;
-- Message to reply with.
+Decode one complete canonical Norito stream message.
 
 # Errors
-Implementation dependent.
+Returns the canonical codec validation failure.

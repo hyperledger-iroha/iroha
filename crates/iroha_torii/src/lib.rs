@@ -32057,7 +32057,10 @@ async fn execute_incoming_torii_proxy_request_with_admission_inner(
                                         &admission_binding.admission_context,
                                     );
                                 match context_disposition {
-                                    Ok(queue::QueuePlanAdmissionContextDisposition::Current) => {
+                                    Ok(
+                                        queue::QueuePlanAdmissionContextDisposition::Current
+                                        | queue::QueuePlanAdmissionContextDisposition::Historical,
+                                    ) => {
                                         let coordinator = admission_binding
                                             .admission_context
                                             .route_incarnations

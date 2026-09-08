@@ -140,6 +140,8 @@ pub enum ProviderAdmissionCouncilPolicyError {
     },
 }
 /// Norito payload submitted by candidate storage providers.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::provider_admission::ProviderAdmissionProposalV1")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct ProviderAdmissionProposalV1 {
     /// Schema version (`PROVIDER_ADMISSION_PROPOSAL_VERSION_V1`).
@@ -305,6 +307,8 @@ impl ProviderAdmissionProposalV1 {
     }
 }
 /// Council-approved BLS public-key variant for provider PoR VRF proofs.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::provider_admission::ProviderVrfPublicKeyV1")]
 #[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub enum ProviderVrfPublicKeyV1 {
     /// Normal BLS: a 48-byte compressed G1 public key and 96-byte G2 proof.
@@ -334,6 +338,8 @@ impl ProviderVrfPublicKeyV1 {
     }
 }
 /// Endpoint record paired with its attestation.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::provider_admission::EndpointAdmissionV1")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct EndpointAdmissionV1 {
     /// Advertised endpoint.
@@ -362,6 +368,8 @@ impl EndpointAdmissionV1 {
     }
 }
 /// Supported endpoint attestation modes.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::provider_admission::EndpointAttestationKind")]
 #[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 #[repr(u8)]
 pub enum EndpointAttestationKind {
@@ -371,6 +379,8 @@ pub enum EndpointAttestationKind {
     Quic = 2,
 }
 /// Remote-attestation report for a provider endpoint.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::provider_admission::EndpointAttestationV1")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct EndpointAttestationV1 {
     /// Schema version (`ENDPOINT_ATTESTATION_VERSION_V1`).
@@ -423,6 +433,8 @@ impl EndpointAttestationV1 {
     }
 }
 /// Governance envelope binding proposals, adverts, and council signatures.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::provider_admission::ProviderAdmissionEnvelopeV1")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct ProviderAdmissionEnvelopeV1 {
     /// Schema version (`PROVIDER_ADMISSION_ENVELOPE_VERSION_V1`).
@@ -1212,6 +1224,8 @@ pub enum ProviderAdmissionAdvertError {
     },
 }
 /// Governance-approved renewal of a provider admission envelope.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::provider_admission::ProviderAdmissionRenewalV1")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct ProviderAdmissionRenewalV1 {
     /// Schema version (`PROVIDER_ADMISSION_RENEWAL_VERSION_V1`).
@@ -1276,6 +1290,8 @@ pub enum ProviderAdmissionRenewalError {
     IssuedAtRegression { previous: u64, updated: u64 },
 }
 /// Governance-approved revocation of an admission envelope.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::provider_admission::ProviderAdmissionRevocationV1")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct ProviderAdmissionRevocationV1 {
     /// Schema version (`PROVIDER_ADMISSION_REVOCATION_VERSION_V1`).
@@ -2491,3 +2507,6 @@ mod tests {
     }
     include!("provider_admission/tests/canonical_preimages.rs");
 }
+
+#[cfg(test)]
+include!("provider_admission/captured_owner_identity_tests.rs");

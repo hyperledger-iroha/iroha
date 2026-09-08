@@ -425,7 +425,7 @@ fn role_permission_revoke_then_grant_last_wins_detached() -> Result<()> {
         return Ok(());
     };
     let test_client = network.client();
-    let metrics_url = test_client.client().torii_url.join("/metrics")?;
+    let metrics_url = test_client.client().endpoint().join("/metrics")?;
     let alice_id = ALICE_ID.clone();
     let role_id: RoleId = "PERM_LAST_WINS".parse()?;
     test_client.submit(

@@ -194,10 +194,11 @@ struct VegaFixture {
     witness_material: VegaPrivacyActionWitnessMaterialV1,
     device_signing_key: P256SigningKey,
 }
-fn bounded_client(mut client: Client) -> Client {
-    client.transaction_status_timeout = SUBMISSION_TIMEOUT;
-    client.torii_request_timeout = Duration::from_secs(30);
-    client
+fn bounded_client(client: Client) -> Client {
+    integration_tests::sync::rebind_blocking_client(&client, |builder| {
+        builder.transaction_status_timeout = SUBMISSION_TIMEOUT;
+        builder.torii_request_timeout = Duration::from_secs(30);
+    })
 }
 fn no_fee() -> FeePaymentIntent {
     FeePaymentIntent::authority(Vec::new(), None)
@@ -268,7 +269,9 @@ fn assert_exact_protocol_row(
 async fn canonical_genesis_hash(client: &Client) -> Result<[u8; 32]> {
     let genesis = timeout(CANONICAL_GENESIS_FETCH_TIMEOUT, async {
         let mut blocks = client
-            .listen_for_blocks(NonZeroU64::MIN)
+            .account_client()
+            .blocks()
+            .subscribe(NonZeroU64::MIN)
             .await
             .wrap_err("subscribe to canonical block replay from genesis")?;
         blocks
@@ -698,8 +701,8 @@ fn zk_ams_transaction_context(
     nonce: u32,
 ) -> ZkAmsPrivacyActionTransactionContextV1 {
     ZkAmsPrivacyActionTransactionContextV1 {
-        network_id: client.network_id,
-        authority: client.account.clone(),
+        network_id: *client.client().network_id(),
+        authority: client.client().account().clone(),
         creation_time,
         time_to_live: Some(ACTION_TTL),
         nonce: NonZeroU32::new(nonce),
@@ -734,7 +737,7 @@ fn build_transaction_from_envelope(
         .wrap_err("validate final ZK-AMS transaction intent")?;
     let signed = TransactionBuilder::from_payload(payload)
         .wrap_err("re-open final ZK-AMS payload for signing")?
-        .try_sign(client.key_pair.private_key())
+        .try_sign(client.client().key_pair().private_key())
         .wrap_err("sign final ZK-AMS transaction")?;
     signed
         .verify_signature()
@@ -1259,8 +1262,8 @@ fn build_vega_action(
         .map_err(|_| eyre!("Vega trusted timestamp exceeded u64"))?;
     let fixture = vega_fixture(trusted_timestamp_ms, challenge_byte)?;
     let context = VegaPrivacyActionTransactionContextV1 {
-        network_id: client.network_id,
-        authority: client.account.clone(),
+        network_id: *client.client().network_id(),
+        authority: client.client().account().clone(),
         creation_time,
         time_to_live: Some(ACTION_TTL),
         nonce: NonZeroU32::new(nonce),
@@ -1275,7 +1278,7 @@ fn build_vega_action(
         &fixture.device_signing_key,
         canonical_genesis_hash,
         trusted_timestamp_ms,
-        client.key_pair.private_key(),
+        client.client().key_pair().private_key(),
         &mut rng,
     )
     .map_err(|error| eyre!("build canonical signed Vega action: {error}"))?;
@@ -1303,7 +1306,7 @@ fn independently_resigned_stale_intent(
         Some(NonZeroU32::new(nonce).ok_or_else(|| eyre!("stale-intent nonce must be non-zero"))?);
     let stale = TransactionBuilder::from_payload(payload)
         .wrap_err("re-open stale-intent payload")?
-        .try_sign(client.key_pair.private_key())
+        .try_sign(client.client().key_pair().private_key())
         .wrap_err("independently sign stale-intent payload")?;
     stale
         .verify_signature()
@@ -1378,7 +1381,7 @@ fn independently_resigned_governance_tamper(
     );
     let tampered = TransactionBuilder::from_payload(payload)
         .wrap_err("re-open governance-tampered payload")?
-        .try_sign(client.key_pair.private_key())
+        .try_sign(client.client().key_pair().private_key())
         .wrap_err("independently sign governance-tampered payload")?;
     tampered
         .verify_signature()
@@ -1424,7 +1427,7 @@ fn independently_resigned_vega_proof_corruption(
     );
     let corrupt = TransactionBuilder::from_payload(payload)
         .wrap_err("re-open proof-corrupted Vega payload")?
-        .try_sign(client.key_pair.private_key())
+        .try_sign(client.client().key_pair().private_key())
         .wrap_err("independently sign proof-corrupted Vega payload")?;
     corrupt
         .verify_signature()
@@ -1503,7 +1506,10 @@ async fn canonical_zk_ams_and_vega_actions_survive_four_validator_activation_rep
         let vega_snapshot: PrivacyCompiledProfileSnapshotV1 = vega_compiled.into();
         submit_instruction(
             &client,
-            Grant::account_permission(Permission::from(CanEnactGovernance), client.account.clone()),
+            Grant::account_permission(
+                Permission::from(CanEnactGovernance),
+                client.client().account().clone(),
+            ),
             "grant CanEnactGovernance",
         )
         .await?;
@@ -2140,7 +2146,7 @@ async fn canonical_vega_action_survives_four_validator_activation_replay_and_res
             &client,
             Grant::account_permission(
                 Permission::from(CanEnactGovernance),
-                client.account.clone(),
+                client.client().account().clone(),
             ),
             "grant CanEnactGovernance for Vega",
         )

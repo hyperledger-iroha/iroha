@@ -87,7 +87,7 @@ use std::{
     process,
     str::FromStr,
     sync::{
-        Arc, LazyLock, Mutex,
+        Arc,
         atomic::{AtomicBool, Ordering},
     },
     time::{Duration, Instant, SystemTime, SystemTimeError, UNIX_EPOCH},
@@ -140,8 +140,6 @@ const SAMPLE_OTHER_PUBLIC_KEY: &str =
     "ed0120E9F632D3034BAB6BB26D92AC8FD93EF878D9C5E69E01B61B4C47101884EE2F99";
 const SAMPLE_ALICE_ACCOUNT_ID: &str = "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D";
 const SAMPLE_BOB_ACCOUNT_ID: &str = "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB";
-static CLI_OVERRIDES: LazyLock<Mutex<CliOverrides>> =
-    LazyLock::new(|| Mutex::new(CliOverrides::default()));
 #[derive(Debug, Default, Clone)]
 struct CliOverrides {
     workspace_root: Option<PathBuf>,
@@ -827,20 +825,6 @@ fn build_restart_policy_override(
             }))
         }
     }
-}
-fn cli_overrides() -> CliOverrides {
-    CLI_OVERRIDES
-        .lock()
-        .expect("cli overrides mutex poisoned")
-        .clone()
-}
-fn set_cli_overrides(overrides: CliOverrides) {
-    *CLI_OVERRIDES.lock().expect("cli overrides mutex poisoned") = overrides;
-}
-#[cfg(test)]
-fn reset_cli_overrides_for_tests() {
-    let env_overrides = parse_env_overrides().expect("parse env overrides");
-    set_cli_overrides(env_overrides);
 }
 fn print_cli_usage() {
     println!("MOCHI usage:");
@@ -1760,14 +1744,13 @@ pub fn run() -> eframe::Result<()> {
         }
         CliCommand::Gui => {}
     }
-    set_cli_overrides(parsed_cli.overrides);
     let options = NativeOptions::default();
     eframe::run_native(
         "MOCHI",
         options,
         Box::new(
-            |cc| -> Result<Box<dyn App>, Box<dyn std::error::Error + Send + Sync>> {
-                Ok(Box::new(MochiApp::new(cc)))
+            move |cc| -> Result<Box<dyn App>, Box<dyn std::error::Error + Send + Sync>> {
+                Ok(Box::new(MochiApp::new(cc, parsed_cli.overrides)))
             },
         ),
     )
@@ -2124,19 +2107,15 @@ fn prepare_supervisor_with_overrides(
         Err(err) => (None, Some(err), config),
     }
 }
-impl Default for MochiApp {
-    fn default() -> Self {
-        Self::with_persisted_ui(EventFilterState::default(), ActiveView::Dashboard, false)
-    }
-}
 impl MochiApp {
-    fn new(cc: &CreationContext<'_>) -> Self {
+    fn new(cc: &CreationContext<'_>, overrides: CliOverrides) -> Self {
         let filter = load_event_filter(cc.storage);
         let active_view = load_active_view(cc.storage).unwrap_or(ActiveView::Dashboard);
         let wizard_completed = load_first_run_completed(cc.storage);
-        Self::with_persisted_ui(filter, active_view, wizard_completed)
+        Self::with_persisted_ui(overrides, filter, active_view, wizard_completed)
     }
     fn with_persisted_ui(
+        app_overrides: CliOverrides,
         event_filter: EventFilterState,
         active_view: ActiveView,
         wizard_completed: bool,
@@ -2148,7 +2127,6 @@ impl MochiApp {
         let (readiness_tx, readiness_rx) = mpsc::unbounded_channel();
         let (dashboard_tx, dashboard_rx) = mpsc::unbounded_channel();
         let (chaos_tx, chaos_rx) = mpsc::unbounded_channel();
-        let app_overrides = cli_overrides();
         #[cfg(test)]
         let (prepare_overrides, test_data_root) =
             isolate_default_test_data_root(app_overrides.clone());
@@ -3456,13 +3434,33 @@ impl MochiApp {
                     continue;
                 }
             };
+            let reader = match supervisor.stream_reader(&alias) {
+                Ok(reader) => reader,
+                Err(error) => {
+                    let record = ReadinessRecord::failed(
+                        ToriiErrorInfo::with_detail(
+                            ToriiErrorKind::Sdk,
+                            "Failed to bind readiness stream authority",
+                            error.to_string(),
+                        ),
+                        0,
+                        Duration::ZERO,
+                        Instant::now(),
+                    );
+                    let _ = tx.send(ReadinessUpdate::Finished {
+                        alias: alias_clone,
+                        record,
+                    });
+                    continue;
+                }
+            };
             plan.status_options = status_options;
             plan.commit_options = SmokeCommitOptions::new(smoke_commit_timeout);
             plan.backoff = smoke_backoff;
             let attempts = plan.transactions.len().max(1);
             self.runtime.spawn(async move {
                 let started = Instant::now();
-                let record = match client.wait_for_readiness_smoke(plan).await {
+                let record = match client.wait_for_readiness_smoke(&reader, plan).await {
                     Ok(outcome) => ReadinessRecord::committed(outcome, Instant::now()),
                     Err(err) => ReadinessRecord::failed(
                         err.summarize(),
@@ -3815,7 +3813,9 @@ impl MochiApp {
             BlockStreamEvent::DecodeError { error } => format!(
                 "[{alias}] Decode error at stage {} ({} bytes): {}",
                 Self::format_decode_stage(error.stage),
-                error.raw_len,
+                error
+                    .raw_len
+                    .map_or_else(|| "unknown".to_owned(), |length| length.to_string()),
                 error.message
             ),
             BlockStreamEvent::Lagged { skipped } => {
@@ -3950,7 +3950,9 @@ impl MochiApp {
                 );
                 let detail = Some(format!(
                     "raw={}B • {}",
-                    error.raw_len,
+                    error
+                        .raw_len
+                        .map_or_else(|| "unknown".to_owned(), |length| length.to_string()),
                     truncate(&error.message, 200)
                 ));
                 RenderedEventLine::new(
@@ -4265,7 +4267,6 @@ impl MochiApp {
     fn format_decode_stage(stage: BlockDecodeStage) -> &'static str {
         match stage {
             BlockDecodeStage::Frame => "frame",
-            BlockDecodeStage::Block => "payload",
             BlockDecodeStage::Stream => "stream",
         }
     }
@@ -5283,6 +5284,9 @@ impl MochiApp {
         let network_id = client.network_id().ok_or_else(|| {
             format!("Torii client for {peer_alias} has no exact network identity")
         })?;
+        let reader = supervisor
+            .stream_reader(&peer_alias)
+            .map_err(|err| format!("Failed to bind lane lifecycle stream authority: {err}"))?;
         let lifecycle_result = handle.block_on(async {
             let options = ReadinessOptions::new(READINESS_TIMEOUT)
                 .with_poll_interval(READINESS_POLL_INTERVAL);
@@ -5291,7 +5295,7 @@ impl MochiApp {
                 .await
                 .map_err(|err| format!("Torii readiness failed: {err}"))?;
             client
-                .apply_lane_lifecycle(network_id, &signer, plan)
+                .apply_lane_lifecycle(&reader, network_id, &signer, plan)
                 .await
                 .map_err(|err| format!("Signed lane lifecycle transaction failed: {err}"))?;
             Ok::<(), String>(())
@@ -7374,7 +7378,8 @@ impl MochiApp {
                     let error_event = BlockStreamEvent::DecodeError {
                         error: BlockStreamDecodeError {
                             stage: BlockDecodeStage::Stream,
-                            raw_len: 0,
+                            raw_len: None,
+                            source: None,
                             message: err,
                         },
                     };
@@ -7548,7 +7553,8 @@ impl MochiApp {
                     let error_event = EventStreamEvent::DecodeError {
                         error: EventStreamDecodeError {
                             stage: EventDecodeStage::Stream,
-                            raw_len: 0,
+                            raw_len: None,
+                            source: None,
                             message: err,
                         },
                     };
@@ -11019,7 +11025,6 @@ fn load_event_filter(storage: Option<&dyn Storage>) -> EventFilterState {
 fn event_decode_stage_label(stage: EventDecodeStage) -> &'static str {
     match stage {
         EventDecodeStage::Frame => "frame",
-        EventDecodeStage::Event => "payload",
         EventDecodeStage::Stream => "stream",
     }
 }
@@ -11273,12 +11278,11 @@ impl ToriiErrorInfoUiExt for ToriiErrorInfo {
             ToriiErrorKind::SmokeRejected => Color32::from_rgb(200, 64, 64),
             ToriiErrorKind::HttpTransport
             | ToriiErrorKind::UnexpectedStatus
-            | ToriiErrorKind::WebSocket => Color32::from_rgb(200, 64, 64),
+            | ToriiErrorKind::Sdk => Color32::from_rgb(200, 64, 64),
             ToriiErrorKind::InvalidBaseUrl
             | ToriiErrorKind::InvalidEndpoint
             | ToriiErrorKind::UnsupportedScheme
             | ToriiErrorKind::InvalidHeader
-            | ToriiErrorKind::InvalidWebSocketRequest
             | ToriiErrorKind::SignedQueryContext => Color32::from_gray(150),
         }
     }

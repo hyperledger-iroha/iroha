@@ -1021,7 +1021,8 @@ def validate_fail_closed_npos_boundary(source: str) -> None:
         "status_poll_window.is_zero()",
         "let requests_per_sweep = u32::try_from(network.peers().len())",
         ".and_then(|peers| peers.checked_mul(2))",
-        "client.torii_request_timeout = status_poll_request_timeout;",
+        "integration_tests::sync::rebind_blocking_client(&peer.client(), |builder| {",
+        "builder.torii_request_timeout = status_poll_request_timeout;",
         "let activation_deadline = Instant::now()",
         "let mut last_activation_status_error = None;",
         "for (peer_index, peer_client) in status_poll_clients.iter().enumerate() {",
@@ -1636,10 +1637,15 @@ class SoraParliamentLifecycleCorridorSourceTests(unittest.TestCase):
                 "let unexpected_pulse_height = tokio::time::timeout(",
                 "let unexpected_pulse_height = passthrough(",
             ),
+            "per-request context rebuild disconnected": mutate_fail_closed_npos_test(
+                corridor,
+                "integration_tests::sync::rebind_blocking_client(&peer.client(), |builder| {",
+                "disconnected_context(&peer.client(), |builder| {",
+            ),
             "per-request timeout disabled": mutate_fail_closed_npos_test(
                 corridor,
-                "client.torii_request_timeout = status_poll_request_timeout;",
-                "client.torii_request_timeout = Duration::ZERO;",
+                "builder.torii_request_timeout = status_poll_request_timeout;",
+                "builder.torii_request_timeout = Duration::ZERO;",
             ),
             "pulse activation deadline omitted": mutate_fail_closed_npos_test(
                 corridor,

@@ -599,7 +599,7 @@ impl Run for TxCommand {
 }
 impl Run for QueryCommand {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let client = context.client_from_config();
+        let client = context.client_from_config()?;
         match self {
             Self::Feeds => {
                 let feeds = client.query(oracle_query::FindOracleFeeds).execute_all()?;

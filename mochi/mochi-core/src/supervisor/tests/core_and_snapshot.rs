@@ -2,98 +2,6 @@ struct EnvVarGuard {
     key: &'static str,
 }
 
-#[test]
-fn generated_genesis_record_reader_requires_exact_lf_framing() {
-    let temp = tempfile::tempdir().expect("tempdir");
-    let record = temp.path().join("record");
-    fs::write(&record, b"value\n").expect("write exact record");
-    assert_eq!(
-        read_generated_genesis_record(&record, "test record").expect("read exact record"),
-        "value\n"
-    );
-
-    fs::write(&record, b"value\r\n").expect("write CRLF record");
-    assert_eq!(
-        read_generated_genesis_record(&record, "test record")
-            .expect_err("CRLF must fail closed")
-            .kind(),
-        ErrorKind::InvalidData
-    );
-
-    fs::write(&record, b"value").expect("write unterminated record");
-    assert_eq!(
-        read_generated_genesis_record(&record, "test record")
-            .expect_err("unterminated record must fail closed")
-            .kind(),
-        ErrorKind::InvalidData
-    );
-}
-
-#[test]
-fn generated_genesis_record_reader_rejects_oversized_and_non_regular_inputs() {
-    let temp = tempfile::tempdir().expect("tempdir");
-    let oversized = temp.path().join("oversized");
-    fs::write(
-        &oversized,
-        vec![b'a'; GENERATED_GENESIS_RECORD_MAX_BYTES_V1 + 1],
-    )
-    .expect("write oversized record");
-    assert_eq!(
-        read_generated_genesis_record(&oversized, "test record")
-            .expect_err("oversized record must fail closed")
-            .kind(),
-        ErrorKind::InvalidData
-    );
-
-    let directory = temp.path().join("directory");
-    fs::create_dir(&directory).expect("create directory");
-    assert_eq!(
-        read_generated_genesis_record(&directory, "test record")
-            .expect_err("directory must fail closed")
-            .kind(),
-        ErrorKind::InvalidData
-    );
-
-    #[cfg(unix)]
-    {
-        let target = temp.path().join("target");
-        let link = temp.path().join("link");
-        fs::write(&target, b"value\n").expect("write symlink target");
-        symlink(&target, &link).expect("create record symlink");
-        assert_eq!(
-            read_generated_genesis_record(&link, "test record")
-                .expect_err("symlink must fail closed")
-                .kind(),
-            ErrorKind::InvalidData
-        );
-    }
-}
-
-#[test]
-#[cfg(unix)]
-fn generated_genesis_record_reader_rejects_raced_symlinks_and_fifos() {
-    let temp = tempfile::tempdir().expect("tempdir");
-    for replacement in ["symlink", "fifo"] {
-        let path = temp.path().join(format!("record-{replacement}"));
-        fs::write(&path, b"value\n").expect("write admitted record");
-        let target = temp.path().join(format!("target-{replacement}"));
-        fs::write(&target, b"replacement\n").expect("write replacement target");
-        read_generated_genesis_record_inner(&path, "test record", || {
-            fs::remove_file(&path).expect("remove admitted record path");
-            if replacement == "symlink" {
-                symlink(&target, &path).expect("install raced record symlink");
-            } else {
-                let result = Command::new("mkfifo")
-                    .arg(&path)
-                    .status()
-                    .expect("run mkfifo");
-                assert!(result.success(), "mkfifo failed");
-            }
-        })
-        .expect_err("raced non-regular record path must fail closed");
-    }
-}
-
 impl EnvVarGuard {
     fn set(key: &'static str, value: &std::ffi::OsStr) -> Self {
         // SAFETY: tests serialize environment mutation within a single thread.
@@ -296,7 +204,7 @@ fn copy_dir_recursive_rejects_missing_and_unsupported_sources() {
         fs::create_dir(&source).expect("create source");
         let outside = temp.path().join("outside");
         fs::write(&outside, b"outside").expect("write outside file");
-        symlink(&outside, source.join("linked")) .expect("create source symlink");
+        symlink(&outside, source.join("linked")).expect("create source symlink");
         let destination = temp.path().join("rejected");
         assert_eq!(
             copy_dir_recursive(&source, &destination)
@@ -340,354 +248,6 @@ fn copy_dir_recursive_enforces_injected_tree_limits_and_cleans_partial_output() 
             !destination.exists(),
             "a failed {label}-limited copy must remove its partial destination"
         );
-    }
-}
-const KAGAMI_STUB_NPOS_PARAMETERS: &str = r#","parameters":{"custom":{"sumeragi_npos_parameters":{"id":"sumeragi_npos_parameters","payload":{"activation_lag_blocks":1,"epoch_length_blocks":3600,"epoch_seed":"4D5FC075E21E35B005F84FB9A3810B339776C77DC1027BEA6A14CB2D300C9AC9","evidence_horizon_blocks":7200,"finality_margin_blocks":8,"max_entity_correlation_pct":25,"max_nominator_concentration_pct":25,"max_validators":31,"min_nomination_bond":"1","min_self_bond":"1000","seat_band_pct":5,"slashing_delay_blocks":3600}}}}"#;
-
-fn kagami_stub_manifest_json(
-    chain_id: &str,
-    consensus_mode: &str,
-    npos_parameters: &str,
-    consensus_fingerprint: Option<&str>,
-) -> String {
-    let fingerprint = consensus_fingerprint
-        .map(|value| format!(",\"consensus_fingerprint\":\"{value}\""))
-        .unwrap_or_default();
-    let chain_discriminant = iroha_data_model::account::address::chain_discriminant();
-    format!(
-        "{{\"chain\":\"{chain_id}\",\"chain_discriminant\":{chain_discriminant},\"ivm_dir\":\".\",\"consensus_mode\":\"{consensus_mode}\",\"wire_protocol_version\":4{fingerprint},\"sumeragi_v2\":{{\"da_layout\":{{\"encoding\":{{\"encoding\":\"reed_solomon16\",\"details\":null}},\"chunk_size_bytes\":262144,\"data_shards\":4,\"parity_shards\":2,\"max_payload_size_bytes\":16777216,\"max_chunk_count\":1024}},\"nexus_amx_context_hash\":\"6611CDC66348BEBFBD583F888864A747DCC828C5FE84F58DFB0346CCA27ABAF3\",\"execution_policy_hash\":\"3F947453758F8EE90B2C66437A128FC22D93C4D2E0CA60C261D828B7E0B897C3\"}},\"transactions\":[{{\"instructions\":[]{npos_parameters}}}]}}"
-    )
-}
-
-fn kagami_stub_consensus_fingerprint(consensus_mode: SumeragiConsensusMode) -> String {
-    let (mode, npos_parameters) = match consensus_mode {
-        SumeragiConsensusMode::Permissioned => ("Permissioned", ""),
-        SumeragiConsensusMode::Npos => ("Npos", KAGAMI_STUB_NPOS_PARAMETERS),
-    };
-    let manifest: RawGenesisTransaction = norito::json::from_str(&kagami_stub_manifest_json(
-        "mochi-stub-chain",
-        mode,
-        npos_parameters,
-        None,
-    ))
-    .expect("decode Kagami stub manifest");
-    manifest
-        .with_consensus_meta()
-        .consensus_fingerprint()
-        .expect("Kagami stub consensus fingerprint")
-        .to_string()
-}
-
-struct KagamiStub {
-    _path_guard: EnvVarGuard,
-    _log_guard: EnvVarGuard,
-    _irohad_guard: EnvVarGuard,
-    _signature_guard: EnvVarGuard,
-    log_path: PathBuf,
-}
-impl KagamiStub {
-    fn install(root: &Path) -> Self {
-        let script_path = root.join("kagami_stub.sh");
-        let manifest = kagami_stub_manifest_json(
-            "$chain_id",
-            "$consensus_mode",
-            "$npos_parameters",
-            Some("$consensus_fingerprint"),
-        );
-        let npos_parameters = KAGAMI_STUB_NPOS_PARAMETERS;
-        let permissioned_fingerprint =
-            kagami_stub_consensus_fingerprint(SumeragiConsensusMode::Permissioned);
-        let npos_fingerprint = kagami_stub_consensus_fingerprint(SumeragiConsensusMode::Npos);
-        let script = format!(
-            r#"#!/bin/sh
-if [ -n "$MOCHI_KAGAMI_LOG" ]; then
-  printf 'args:%s\n' "$*" >> "$MOCHI_KAGAMI_LOG"
-fi
-case "$1" in
-  verify)
-    exit 0
-    ;;
-  genesis)
-    case "$2" in
-      generate)
-        shift 2
-        chain_id=
-        consensus_mode=
-        while [ "$#" -gt 0 ]; do
-          case "$1" in
-            --chain-id)
-              chain_id="$2"
-              shift 2
-              ;;
-            --consensus-mode)
-              case "$2" in
-                permissioned)
-                  consensus_mode=Permissioned
-                  npos_parameters=
-                  consensus_fingerprint='{permissioned_fingerprint}'
-                  ;;
-                npos)
-                  consensus_mode=Npos
-                  npos_parameters='{npos_parameters}'
-                  consensus_fingerprint='{npos_fingerprint}'
-                  ;;
-                *) exit 1 ;;
-              esac
-              shift 2
-              ;;
-            *)
-              shift
-              ;;
-          esac
-        done
-        test -n "$chain_id"
-        test -n "$consensus_mode"
-        cat <<JSON
-{manifest}
-JSON
-        exit 0
-        ;;
-      sign)
-        if [ "$MOCHI_KAGAMI_FAIL_SIGN" = "1" ]; then
-          echo "requested kagami sign failure" >&2
-          exit 23
-        fi
-        manifest_path="$3"
-        shift 3
-        while [ "$#" -gt 0 ]; do
-          case "$1" in
-            --out-file)
-              out_file="$2"
-              shift 2
-              ;;
-            --bound-manifest-out)
-              bound_manifest_out="$2"
-              shift 2
-              ;;
-            --expected-hash-out)
-              expected_hash_out="$2"
-              shift 2
-              ;;
-            --private-key-file)
-              private_key_file="$2"
-              shift 2
-              ;;
-            --config)
-              config_file="$2"
-              shift 2
-              ;;
-            *)
-              echo "unsupported kagami genesis sign argument: $1" >&2
-              exit 1
-              ;;
-          esac
-        done
-        test -s "$private_key_file"
-        test -s "$config_file"
-        config_mode="$(stat -f %Lp "$config_file" 2>/dev/null || stat -c %a "$config_file")"
-        test "$config_mode" = "600"
-        grep -F 'expected_hash = "REPLACE_WITH_GENESIS_EXPECTED_HASH"' "$config_file" >/dev/null
-        printf 'stub-signed-genesis' > "$out_file"
-        printf 'hash:0000000000000000000000000000000000000000000000000000000000000001#C50E\n' > "$expected_hash_out"
-        if [ "$bound_manifest_out" != "$manifest_path" ]; then
-          cp "$manifest_path" "$bound_manifest_out"
-        fi
-        exit 0
-        ;;
-      *)
-        echo "unsupported kagami genesis command: $2" >&2
-        exit 1
-        ;;
-    esac
-    ;;
-  *)
-    echo "unsupported kagami stub command: $1" >&2
-    exit 1
-    ;;
-esac
-"#
-        );
-        fs::write(&script_path, script).expect("write kagami stub");
-        #[cfg(unix)]
-        {
-            let mut perms = fs::metadata(&script_path)
-                .expect("script metadata")
-                .permissions();
-            perms.set_mode(0o755);
-            fs::set_permissions(&script_path, perms).expect("set script perms");
-        }
-        let log_path = root.join("kagami_stub.log");
-        let irohad_stub = write_executable_stub(root, "iroha3d-stub");
-        let path_guard = EnvVarGuard::set("MOCHI_KAGAMI", script_path.as_os_str());
-        let log_guard = EnvVarGuard::set("MOCHI_KAGAMI_LOG", log_path.as_os_str());
-        let irohad_guard = EnvVarGuard::set("MOCHI_IROHAD", irohad_stub.as_os_str());
-        let signature_guard = EnvVarGuard::set(
-            TEST_FINALIZE_KAGAMI_STUB_SIGNATURE,
-            std::ffi::OsStr::new("1"),
-        );
-        let _ = fs::File::create(&log_path);
-        Self {
-            _path_guard: path_guard,
-            _log_guard: log_guard,
-            _irohad_guard: irohad_guard,
-            _signature_guard: signature_guard,
-            log_path,
-        }
-    }
-    fn log_path(&self) -> &Path {
-        &self.log_path
-    }
-}
-struct StandaloneKagamiStub {
-    script_path: PathBuf,
-    log_path: PathBuf,
-    _irohad_guard: EnvVarGuard,
-    _signature_guard: EnvVarGuard,
-}
-impl StandaloneKagamiStub {
-    fn create(root: &Path) -> Self {
-        let script_path = root.join("kagami_override.sh");
-        let log_path = root.join("kagami_override.log");
-        let manifest = kagami_stub_manifest_json(
-            "$chain_id",
-            "$consensus_mode",
-            "$npos_parameters",
-            Some("$consensus_fingerprint"),
-        );
-        let npos_parameters = KAGAMI_STUB_NPOS_PARAMETERS;
-        let permissioned_fingerprint =
-            kagami_stub_consensus_fingerprint(SumeragiConsensusMode::Permissioned);
-        let npos_fingerprint = kagami_stub_consensus_fingerprint(SumeragiConsensusMode::Npos);
-        let script = format!(
-            r#"#!/bin/sh
-set -e
-SCRIPT_DIR="$(CDPATH= cd -- "$(dirname "$0")" && pwd)"
-printf '%s\n' "$@" >> "$SCRIPT_DIR/kagami_override.log"
-case "$1" in
-  verify)
-    exit 0
-    ;;
-  genesis)
-    case "$2" in
-      generate)
-        shift 2
-        chain_id=
-        consensus_mode=
-        while [ "$#" -gt 0 ]; do
-          case "$1" in
-            --chain-id)
-              chain_id="$2"
-              shift 2
-              ;;
-            --consensus-mode)
-              case "$2" in
-                permissioned)
-                  consensus_mode=Permissioned
-                  npos_parameters=
-                  consensus_fingerprint='{permissioned_fingerprint}'
-                  ;;
-                npos)
-                  consensus_mode=Npos
-                  npos_parameters='{npos_parameters}'
-                  consensus_fingerprint='{npos_fingerprint}'
-                  ;;
-                *) exit 1 ;;
-              esac
-              shift 2
-              ;;
-            *)
-              shift
-              ;;
-          esac
-        done
-        test -n "$chain_id"
-        test -n "$consensus_mode"
-        cat <<JSON
-{manifest}
-JSON
-        exit 0
-        ;;
-      sign)
-        manifest_path="$3"
-        shift 3
-        while [ "$#" -gt 0 ]; do
-          case "$1" in
-            --out-file)
-              out_file="$2"
-              shift 2
-              ;;
-            --bound-manifest-out)
-              bound_manifest_out="$2"
-              shift 2
-              ;;
-            --expected-hash-out)
-              expected_hash_out="$2"
-              shift 2
-              ;;
-            --private-key-file)
-              private_key_file="$2"
-              shift 2
-              ;;
-            --config)
-              config_file="$2"
-              shift 2
-              ;;
-            *)
-              echo "unsupported kagami genesis sign argument: $1" >&2
-              exit 1
-              ;;
-          esac
-        done
-        test -s "$private_key_file"
-        test -s "$config_file"
-        grep -F 'expected_hash = "REPLACE_WITH_GENESIS_EXPECTED_HASH"' "$config_file" >/dev/null
-        printf 'stub-signed-genesis' > "$out_file"
-        printf 'hash:0000000000000000000000000000000000000000000000000000000000000001#C50E\n' > "$expected_hash_out"
-        if [ "$bound_manifest_out" != "$manifest_path" ]; then
-          cp "$manifest_path" "$bound_manifest_out"
-        fi
-        exit 0
-        ;;
-      *)
-        echo "unsupported kagami genesis command: $2" >&2
-        exit 1
-        ;;
-    esac
-    ;;
-  *)
-    echo "unsupported kagami stub command: $1" >&2
-    exit 1
-    ;;
-esac
-"#
-        );
-        fs::write(&script_path, script).expect("write standalone kagami stub");
-        #[cfg(unix)]
-        {
-            let mut perms = fs::metadata(&script_path)
-                .expect("standalone script metadata")
-                .permissions();
-            perms.set_mode(0o755);
-            fs::set_permissions(&script_path, perms).expect("set standalone script permissions");
-        }
-        let irohad_stub = write_executable_stub(root, "kagami-override-iroha3d");
-        let irohad_guard = EnvVarGuard::set("MOCHI_IROHAD", irohad_stub.as_os_str());
-        let signature_guard = EnvVarGuard::set(
-            TEST_FINALIZE_KAGAMI_STUB_SIGNATURE,
-            std::ffi::OsStr::new("1"),
-        );
-        Self {
-            script_path,
-            log_path,
-            _irohad_guard: irohad_guard,
-            _signature_guard: signature_guard,
-        }
-    }
-    fn script_path(&self) -> &Path {
-        &self.script_path
-    }
-    fn log_path(&self) -> &Path {
-        &self.log_path
     }
 }
 fn env_lock() -> &'static Mutex<()> {
@@ -1476,157 +1036,6 @@ fn profile_preset_preserves_consensus_mode() {
     );
 }
 #[test]
-fn genesis_profile_and_explicit_chain_are_order_independent() {
-    let expected_chain = GenesisProfile::Iroha3Dev.defaults().chain_id;
-    let chain_then_profile = SupervisorBuilder::new(ProfilePreset::FourPeerBft)
-        .chain_id(expected_chain)
-        .genesis_profile(GenesisProfile::Iroha3Dev);
-    let profile_then_chain = SupervisorBuilder::new(ProfilePreset::FourPeerBft)
-        .genesis_profile(GenesisProfile::Iroha3Dev)
-        .chain_id(expected_chain);
-    assert_eq!(chain_then_profile.chain_id, expected_chain);
-    assert_eq!(profile_then_chain.chain_id, expected_chain);
-
-    let temp = tempfile::tempdir().expect("tempdir");
-    for (name, builder) in [
-        (
-            "chain-then-profile",
-            SupervisorBuilder::new(ProfilePreset::FourPeerBft)
-                .chain_id("different.local")
-                .genesis_profile(GenesisProfile::Iroha3Dev),
-        ),
-        (
-            "profile-then-chain",
-            SupervisorBuilder::new(ProfilePreset::FourPeerBft)
-                .genesis_profile(GenesisProfile::Iroha3Dev)
-                .chain_id("different.local"),
-        ),
-    ] {
-        let data_root = temp.path().join(name);
-        let error = builder
-            .data_root(&data_root)
-            .build()
-            .expect_err("a profile/chain mismatch must fail");
-        assert!(
-            error.to_string().contains("requires chain id"),
-            "unexpected error: {error}"
-        );
-        assert!(
-            !data_root.exists(),
-            "invalid inputs must not create the data root"
-        );
-    }
-}
-#[test]
-fn invalid_first_release_inputs_fail_before_creating_the_data_root() {
-    let temp = tempfile::tempdir().expect("tempdir");
-    let valid_seed = "ab".repeat(32);
-
-    let mut zero_queues = toml::Table::new();
-    zero_queues.insert("body_bytes".to_owned(), toml::Value::Integer(0));
-    let mut invalid_sumeragi = toml::Table::new();
-    invalid_sumeragi.insert("queues".to_owned(), toml::Value::Table(zero_queues));
-
-    let mut managed_onboarding = toml::Table::new();
-    managed_onboarding.insert(
-        "account_onboarding".to_owned(),
-        toml::Value::Table(toml::Table::new()),
-    );
-
-    let mut disabled_mcp = toml::Table::new();
-    disabled_mcp.insert("enabled".to_owned(), toml::Value::Boolean(false));
-    let mut invalid_mcp = toml::Table::new();
-    invalid_mcp.insert("mcp".to_owned(), toml::Value::Table(disabled_mcp));
-
-    let mut lane_without_metadata = toml::Table::new();
-    lane_without_metadata.insert("index".to_owned(), toml::Value::Integer(0));
-    let mut invalid_nexus = toml::Table::new();
-    invalid_nexus.insert(
-        "lane_catalog".to_owned(),
-        toml::Value::Array(vec![toml::Value::Table(lane_without_metadata)]),
-    );
-
-    let cases = [
-        (
-            "invalid-chain",
-            SupervisorBuilder::new(ProfilePreset::FourPeerBft).chain_id(""),
-            "invalid chain id",
-        ),
-        (
-            "missing-required-seed",
-            SupervisorBuilder::new(ProfilePreset::FourPeerBft)
-                .genesis_profile(GenesisProfile::Iroha3Taira),
-            "requires a 32-byte hexadecimal VRF seed",
-        ),
-        (
-            "short-seed",
-            SupervisorBuilder::new(ProfilePreset::FourPeerBft)
-                .genesis_profile(GenesisProfile::Iroha3Dev)
-                .vrf_seed_hex("ab"),
-            "exactly 32 hexadecimal bytes",
-        ),
-        (
-            "seed-without-profile",
-            SupervisorBuilder::new(ProfilePreset::FourPeerBft).vrf_seed_hex(valid_seed),
-            "requires a genesis profile",
-        ),
-        (
-            "zero-queue-capacity",
-            SupervisorBuilder::new(ProfilePreset::FourPeerBft)
-                .sumeragi_config(invalid_sumeragi),
-            "must be a positive integer",
-        ),
-        (
-            "managed-onboarding-override",
-            SupervisorBuilder::new(ProfilePreset::FourPeerBft)
-                .torii_config(managed_onboarding),
-            "account_onboarding is managed by Mochi",
-        ),
-        (
-            "disabled-mcp",
-            SupervisorBuilder::new(ProfilePreset::FourPeerBft).torii_config(invalid_mcp),
-            "torii.mcp.enabled must be true",
-        ),
-        (
-            "lane-without-metadata",
-            SupervisorBuilder::new(ProfilePreset::FourPeerBft).nexus_config(invalid_nexus),
-            "lane_catalog[0].metadata must be an explicit table",
-        ),
-    ];
-    for (name, builder, expected_error) in cases {
-        let data_root = temp.path().join(name);
-        let error = builder
-            .data_root(&data_root)
-            .build()
-            .expect_err("invalid first-release input must fail");
-        assert!(
-            error.to_string().contains(expected_error),
-            "unexpected error for {name}: {error}"
-        );
-        assert!(
-            !data_root.exists(),
-            "invalid inputs must not create `{}`",
-            data_root.display()
-        );
-    }
-}
-#[test]
-fn kagami_manifest_chain_must_be_present_canonical_and_requested() {
-    let expected = GenesisProfile::Iroha3Taira.defaults().chain_id;
-    let uppercase = expected.to_ascii_uppercase();
-    validate_kagami_manifest_chain(&norito::json!({"chain": expected}), expected)
-        .expect("canonical requested chain must pass");
-
-    for value in [
-        norito::json!({}),
-        norito::json!({"chain": "different.local"}),
-        norito::json!({"chain": uppercase}),
-    ] {
-        validate_kagami_manifest_chain(&value, expected)
-            .expect_err("missing, mismatched, or non-canonical Kagami chain must fail");
-    }
-}
-#[test]
 fn toml_secret_zeroizer_clears_nested_strings() {
     let mut nested = toml::Table::new();
     nested.insert(
@@ -1656,305 +1065,6 @@ fn toml_secret_zeroizer_clears_nested_strings() {
             .and_then(toml::Value::as_str),
         Some("")
     );
-}
-#[test]
-fn build_rejects_genesis_profile_without_npos() {
-    let temp = tempfile::tempdir().expect("tempdir");
-    let profile = NetworkProfile::custom(4, SumeragiConsensusMode::Permissioned).expect("profile");
-    let builder = SupervisorBuilder::with_profile(profile)
-        .data_root(temp.path())
-        .genesis_profile(GenesisProfile::Iroha3Dev)
-        .set_profile(
-            NetworkProfile::custom(4, SumeragiConsensusMode::Permissioned).expect("profile"),
-        );
-    let err = builder
-        .build()
-        .expect_err("expected consensus mode mismatch");
-    assert!(
-        err.to_string()
-            .contains("genesis_profile requires consensus_mode npos"),
-        "unexpected error: {err}"
-    );
-}
-#[test]
-fn genesis_includes_topology() {
-    if !ports_available("genesis_includes_topology") {
-        return;
-    }
-    let _env = env_lock().lock().expect("env lock");
-    let temp = tempfile::tempdir().expect("tempdir");
-    let _stub = KagamiStub::install(temp.path());
-    let supervisor = SupervisorBuilder::new(ProfilePreset::FourPeerBft)
-        .data_root(temp.path())
-        .build()
-        .expect("build supervisor");
-    let bytes = fs::read(supervisor.genesis_manifest()).expect("genesis manifest readable");
-    let manifest: norito::json::Value =
-        norito::json::from_slice(&bytes).expect("parse genesis json");
-    let transactions = manifest
-        .get("transactions")
-        .and_then(norito::json::Value::as_array)
-        .expect("transactions array");
-    let contains_topology = transactions.iter().any(|tx| {
-        tx.get("topology")
-            .and_then(norito::json::Value::as_array)
-            .map(|entries| !entries.is_empty())
-            .unwrap_or(false)
-    });
-    assert!(
-        contains_topology,
-        "genesis manifest should include topology transaction"
-    );
-}
-#[test]
-fn genesis_generation_invokes_kagami() {
-    if !ports_available("genesis_generation_invokes_kagami") {
-        return;
-    }
-    let _env = env_lock().lock().expect("env lock");
-    let temp = tempfile::tempdir().expect("tempdir");
-    let stub = KagamiStub::install(temp.path());
-    let supervisor = SupervisorBuilder::new(ProfilePreset::FourPeerBft)
-        .data_root(temp.path())
-        .build()
-        .expect("build supervisor");
-    let log = fs::read_to_string(stub.log_path()).expect("kagami invocation log");
-    assert!(
-        log.contains("genesis") && log.contains("generate"),
-        "expected kagami invocation to record subcommand, got `{log}`"
-    );
-    assert!(
-        log.contains("--genesis-public-key"),
-        "expected kagami invocation to record genesis public key argument"
-    );
-    assert!(
-        log.contains("--consensus-mode") && log.contains("permissioned"),
-        "expected permissioned consensus mode to be pinned for kagami: {log}"
-    );
-    assert!(
-        log.contains("genesis sign")
-            && log.contains("--config")
-            && log.contains("--bound-manifest-out")
-            && log.contains("--private-key-file"),
-        "expected config-bound kagami signing with persisted manifest metadata: {log}"
-    );
-    assert!(
-        !log.split_whitespace()
-            .any(|argument| argument == "--private-key"),
-        "the genesis private key must never be exposed on the kagami command line: {log}"
-    );
-    let genesis_dir = supervisor
-        .genesis_manifest()
-        .parent()
-        .expect("genesis directory");
-    assert!(
-        fs::read_dir(genesis_dir)
-            .expect("read genesis directory")
-            .all(|entry| {
-                !entry
-                    .expect("genesis entry")
-                    .file_name()
-                    .to_string_lossy()
-                    .starts_with(".mochi-genesis-signing-key-")
-            }),
-        "temporary genesis signing keys must be removed after kagami exits"
-    );
-}
-#[test]
-fn generated_genesis_uses_first_release_block_cadence() {
-    if !ports_available("generated_genesis_uses_first_release_block_cadence") {
-        return;
-    }
-    let _env = env_lock().lock().expect("env lock");
-    let temp = tempfile::tempdir().expect("tempdir");
-    let _stub = KagamiStub::install(temp.path());
-    let preset = ProfilePreset::FourPeerBft;
-    let supervisor = SupervisorBuilder::new(preset)
-        .data_root(temp.path().join(format!("cadence-{}", preset.slug())))
-        .build()
-        .expect("build supervisor");
-    let manifest = RawGenesisTransaction::from_path(supervisor.genesis_manifest())
-        .expect("load generated genesis manifest");
-    let actual_cadence_ms = manifest
-        .effective_parameters()
-        .expect("derive effective genesis parameters")
-        .sumeragi()
-        .block_cadence_ms()
-        .get();
-    assert_eq!(
-        actual_cadence_ms,
-        1_000,
-        "{} must sign the first-release local cadence",
-        preset.slug()
-    );
-}
-#[cfg(unix)]
-#[test]
-fn temporary_genesis_key_file_is_owner_only_and_removed_on_drop() {
-    let temp = tempfile::tempdir().expect("tempdir");
-    let key_pair = KeyPair::random();
-    let key_file =
-        TemporaryGenesisKeyFile::create(temp.path(), &key_pair).expect("create key file");
-    let path = key_file.path().to_path_buf();
-    let metadata = fs::metadata(&path).expect("temporary key metadata");
-    assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
-    assert_eq!(
-        fs::read_to_string(&path).expect("read temporary key"),
-        format!("{}\n", ExposedPrivateKey(key_pair.private_key().clone()))
-    );
-    drop(key_file);
-    assert!(!path.exists(), "temporary key should be removed on drop");
-}
-#[cfg(unix)]
-#[test]
-fn temporary_genesis_key_file_resolves_symlinked_directory_components() {
-    let temp = tempfile::tempdir().expect("tempdir");
-    let real_genesis_dir = temp.path().join("real-genesis");
-    fs::create_dir(&real_genesis_dir).expect("create real genesis directory");
-    let linked_genesis_dir = temp.path().join("linked-genesis");
-    symlink(&real_genesis_dir, &linked_genesis_dir).expect("link genesis directory");
-    let key_file = TemporaryGenesisKeyFile::create(&linked_genesis_dir, &KeyPair::random())
-        .expect("create key through symlinked directory");
-    assert!(
-        key_file
-            .path()
-            .starts_with(fs::canonicalize(&real_genesis_dir).expect("canonical genesis dir")),
-        "private key path must contain no symlinked directory component: {}",
-        key_file.path().display()
-    );
-}
-#[test]
-fn kagami_sign_failure_is_reported_and_removes_temporary_key() {
-    if !ports_available("kagami_sign_failure_is_reported_and_removes_temporary_key") {
-        return;
-    }
-    let _env = env_lock().lock().expect("env lock");
-    let temp = tempfile::tempdir().expect("tempdir");
-    let _stub = KagamiStub::install(temp.path());
-    let _failure = EnvVarGuard::set("MOCHI_KAGAMI_FAIL_SIGN", OsStr::new("1"));
-    let error = match SupervisorBuilder::new(ProfilePreset::FourPeerBft)
-        .data_root(temp.path())
-        .build()
-    {
-        Ok(_) => panic!("requested kagami sign failure should fail supervisor build"),
-        Err(error) => error,
-    };
-    assert!(
-        matches!(error, SupervisorError::KagamiInvocation(ref message) if message.contains("`kagami genesis sign`") && message.contains("exit status: 23") && message.contains("requested kagami sign failure")),
-        "unexpected signing failure: {error}"
-    );
-    let mut files = Vec::new();
-    collect_files_recursive(temp.path(), &mut files).expect("collect temporary files");
-    assert!(
-        files.iter().all(|path| {
-            !path.file_name().is_some_and(|name| {
-                name.to_string_lossy()
-                    .starts_with(".mochi-genesis-signing-key-")
-            })
-        }),
-        "temporary genesis signing key leaked after failure: {files:?}"
-    );
-}
-#[test]
-fn genesis_profile_and_seed_forward_to_kagami() {
-    if !ports_available("genesis_profile_and_seed_forward_to_kagami") {
-        return;
-    }
-    let _env = env_lock().lock().expect("env lock");
-    let temp = tempfile::tempdir().expect("tempdir");
-    let stub = KagamiStub::install(temp.path());
-    let seed = "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20";
-    SupervisorBuilder::new(ProfilePreset::FourPeerBft)
-        .data_root(temp.path())
-        .genesis_profile(GenesisProfile::Iroha3Dev)
-        .vrf_seed_hex(seed)
-        .build()
-        .expect("build supervisor");
-    let log = fs::read_to_string(stub.log_path()).expect("kagami invocation log");
-    assert!(
-        log.contains("--profile") && log.contains("iroha3-dev"),
-        "profile should be forwarded to kagami: {log}"
-    );
-    assert!(
-        log.contains("--vrf-seed-hex") && log.contains(seed),
-        "vrf seed should be forwarded to kagami: {log}"
-    );
-    assert!(
-        log.contains("--consensus-mode") && log.contains("npos"),
-        "npos mode should be pinned when a genesis profile is used: {log}"
-    );
-}
-#[test]
-fn peer_config_records_chain_and_fingerprint_header() {
-    if !ports_available("peer_config_records_chain_and_fingerprint_header") {
-        return;
-    }
-    let _env = env_lock().lock().expect("env lock");
-    let temp = tempfile::tempdir().expect("tempdir");
-    let _stub = KagamiStub::install(temp.path());
-    let supervisor = SupervisorBuilder::new(ProfilePreset::FourPeerBft)
-        .data_root(temp.path())
-        .genesis_profile(GenesisProfile::Iroha3Dev)
-        .build()
-        .expect("build supervisor");
-    let manifest =
-        RawGenesisTransaction::from_path(supervisor.genesis_manifest()).expect("genesis");
-    let fingerprint = manifest
-        .consensus_fingerprint()
-        .map(|value| value.to_string())
-        .or_else(|| {
-            let normalized = manifest.clone().with_consensus_meta();
-            normalized
-                .consensus_fingerprint()
-                .map(|value| value.to_string())
-        })
-        .expect("consensus fingerprint");
-    let peer = supervisor.peers().first().expect("peer");
-    let config_text = fs::read_to_string(peer.config_path()).expect("read config");
-    let expected_chain = format!("# mochi.chain_id = {}", supervisor.chain_id());
-    let expected_fingerprint = format!("# mochi.consensus_fingerprint = {fingerprint}");
-    assert!(
-        config_text.contains(&expected_chain),
-        "config should record chain id header"
-    );
-    assert!(
-        config_text.contains(&expected_fingerprint),
-        "config should record consensus fingerprint header"
-    );
-}
-#[test]
-fn readiness_smoke_plan_uses_primary_signer_and_unique_nonces() {
-    if !ports_available("readiness_smoke_plan_uses_primary_signer_and_unique_nonces") {
-        return;
-    }
-    let _env = env_lock().lock().expect("env lock");
-    let temp = tempfile::tempdir().expect("tempdir");
-    let _stub = KagamiStub::install(temp.path());
-    let supervisor = SupervisorBuilder::new(ProfilePreset::FourPeerBft)
-        .data_root(temp.path())
-        .build()
-        .expect("build supervisor");
-    let plan = supervisor
-        .readiness_smoke_plan_with_offset(3, 2)
-        .expect("build readiness plan");
-    assert_eq!(plan.transactions.len(), 3);
-    let expected_authority = supervisor
-        .readiness_smoke_signer()
-        .expect("readiness signer available")
-        .account_id()
-        .clone();
-    let mut nonces = HashSet::new();
-    for (idx, tx) in plan.transactions.iter().enumerate() {
-        assert_eq!(tx.authority(), &expected_authority);
-        let nonce = tx.nonce().expect("nonce present");
-        let nonce_value = u32::from(nonce);
-        assert!(nonces.insert(nonce_value), "nonce should be unique");
-        assert_eq!(
-            nonce_value,
-            (idx as u32) + 3,
-            "nonce should incorporate offset"
-        );
-    }
 }
 #[test]
 fn export_snapshot_captures_storage_and_metadata() {
@@ -2666,8 +1776,8 @@ fn restore_snapshot_post_spawn_exit_rolls_back_before_commit() {
             format!("live-{index}")
         );
     }
-    assert!(!
-        supervisor
+    assert!(
+        !supervisor
             .paths()
             .root()
             .join(SNAPSHOT_RESTORE_COMMIT_FILE_NAME)
@@ -2715,15 +1825,27 @@ fn restore_snapshot_commit_publication_uncertainty_preserves_restored_state_for_
                 &transaction.commit_marker_path,
                 &transaction.network_root,
                 |_| Err(io::Error::other("injected commit marker removal failure")),
-                |_| Err(io::Error::other("injected commit marker directory sync failure")),
+                |_| {
+                    Err(io::Error::other(
+                        "injected commit marker directory sync failure",
+                    ))
+                },
             )
         })
         .expect_err("ambiguous commit marker publication must fail closed");
 
     assert!(error.to_string().contains("publication"));
     assert!(error.to_string().contains("uncertain"));
-    assert!(network_root.join(SNAPSHOT_RESTORE_JOURNAL_FILE_NAME).is_file());
-    assert!(network_root.join(SNAPSHOT_RESTORE_COMMIT_FILE_NAME).is_file());
+    assert!(
+        network_root
+            .join(SNAPSHOT_RESTORE_JOURNAL_FILE_NAME)
+            .is_file()
+    );
+    assert!(
+        network_root
+            .join(SNAPSHOT_RESTORE_COMMIT_FILE_NAME)
+            .is_file()
+    );
     for (index, peer) in supervisor.peers().iter().enumerate() {
         assert_eq!(
             fs::read_to_string(peer.storage_dir().join("publication-state.bin"))
@@ -2755,8 +1877,16 @@ fn restore_snapshot_commit_publication_uncertainty_preserves_restored_state_for_
             format!("snapshot-{index}")
         );
     }
-    assert!(!network_root.join(SNAPSHOT_RESTORE_JOURNAL_FILE_NAME).exists());
-    assert!(!network_root.join(SNAPSHOT_RESTORE_COMMIT_FILE_NAME).exists());
+    assert!(
+        !network_root
+            .join(SNAPSHOT_RESTORE_JOURNAL_FILE_NAME)
+            .exists()
+    );
+    assert!(
+        !network_root
+            .join(SNAPSHOT_RESTORE_COMMIT_FILE_NAME)
+            .exists()
+    );
 }
 fn snapshot_restore_recovery_fixture(network_root: &Path) -> SnapshotRestoreTransaction {
     snapshot_restore_recovery_fixture_with_generation(
@@ -2823,15 +1953,16 @@ fn pending_snapshot_restore_journal_recovers_each_swap_boundary() {
         let transaction = snapshot_restore_recovery_fixture(temp.path());
         let peer = &transaction.peers[0];
         if completed_swaps >= 1 {
-            fs::rename(&peer.live_storage, &peer.backup_storage)
-                .expect("backup original storage");
+            fs::rename(&peer.live_storage, &peer.backup_storage).expect("backup original storage");
             fs::rename(&peer.live_log, &peer.backup_log).expect("backup original log");
         }
         if completed_swaps == 2 {
-            fs::rename(&peer.staged_storage, &peer.live_storage)
-                .expect("install restored storage");
-            fs::rename(peer.staged_log.as_ref().expect("staged log"), &peer.live_log)
-                .expect("install restored log");
+            fs::rename(&peer.staged_storage, &peer.live_storage).expect("install restored storage");
+            fs::rename(
+                peer.staged_log.as_ref().expect("staged log"),
+                &peer.live_log,
+            )
+            .expect("install restored log");
         }
 
         recover_snapshot_restore_if_needed(temp.path()).expect("recover pending restore");
@@ -2857,8 +1988,11 @@ fn committed_snapshot_restore_journal_keeps_restored_state_and_finishes_cleanup(
     fs::rename(&peer.live_storage, &peer.backup_storage).expect("backup original storage");
     fs::rename(&peer.staged_storage, &peer.live_storage).expect("install restored storage");
     fs::rename(&peer.live_log, &peer.backup_log).expect("backup original log");
-    fs::rename(peer.staged_log.as_ref().expect("staged log"), &peer.live_log)
-        .expect("install restored log");
+    fs::rename(
+        peer.staged_log.as_ref().expect("staged log"),
+        &peer.live_log,
+    )
+    .expect("install restored log");
     write_restore_commit_marker(&transaction.commit_marker_path, temp.path())
         .expect("write commit marker");
 
@@ -3210,7 +2344,10 @@ fn restore_snapshot_rejects_unknown_metadata_and_extra_peer_hashes_before_mutati
         .restore_snapshot(&snapshot_root)
         .expect_err("unknown V1 metadata field must fail closed");
     assert!(error.to_string().contains("unknown V1 field"), "{error}");
-    assert_eq!(fs::read(&live_sentinel).expect("read sentinel"), b"live-state");
+    assert_eq!(
+        fs::read(&live_sentinel).expect("read sentinel"),
+        b"live-state"
+    );
 
     let mut extra_alias = original;
     let hashes = extra_alias
@@ -3229,10 +2366,15 @@ fn restore_snapshot_rejects_unknown_metadata_and_extra_peer_hashes_before_mutati
         .restore_snapshot(&snapshot_root)
         .expect_err("extra V1 peer hash alias must fail closed");
     assert!(
-        error.to_string().contains("exactly the managed peer aliases"),
+        error
+            .to_string()
+            .contains("exactly the managed peer aliases"),
         "{error}"
     );
-    assert_eq!(fs::read(&live_sentinel).expect("read sentinel"), b"live-state");
+    assert_eq!(
+        fs::read(&live_sentinel).expect("read sentinel"),
+        b"live-state"
+    );
 }
 #[test]
 fn restore_snapshot_rejects_missing_storage_layout() {

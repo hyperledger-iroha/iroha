@@ -74,10 +74,11 @@ struct ProtocolExpectationV1 {
     compiled: PrivacyCompiledProfileSnapshotV1,
     activation: Option<PrivacyProtocolActivationRecordV1>,
 }
-fn bounded_client(mut client: Client) -> Client {
-    client.transaction_status_timeout = SUBMISSION_TIMEOUT;
-    client.torii_request_timeout = Duration::from_secs(45);
-    client
+fn bounded_client(client: Client) -> Client {
+    integration_tests::sync::rebind_blocking_client(&client, |builder| {
+        builder.transaction_status_timeout = SUBMISSION_TIMEOUT;
+        builder.torii_request_timeout = Duration::from_secs(45);
+    })
 }
 fn no_fee() -> FeePaymentIntent {
     FeePaymentIntent::authority(Vec::new(), None)
@@ -442,7 +443,7 @@ fn independently_resign_corrupted_proof(
     let corrupted = TransactionBuilder::from_payload(valid.payload().clone())
         .wrap_err("re-open canonical retained-native payload")?
         .with_instructions([SubmitPrivacyProofV1::new(envelope)])
-        .try_sign(client.key_pair.private_key())
+        .try_sign(client.client().key_pair().private_key())
         .wrap_err("independently sign corrupted retained-native proof")?;
     corrupted
         .verify_signature()
@@ -515,8 +516,8 @@ fn action_context(
     nonce: u32,
 ) -> PrivacyReleaseTransactionContextV1 {
     PrivacyReleaseTransactionContextV1 {
-        network_id: client.network_id,
-        authority: client.account.clone(),
+        network_id: *client.client().network_id(),
+        authority: client.client().account().clone(),
         creation_time,
         time_to_live: Some(ACTION_TTL),
         nonce: NonZeroU32::new(nonce),
@@ -632,7 +633,7 @@ async fn canonical_orchard_and_pq_masp_actions_survive_four_peer_da_replay_and_r
             vec![
                 Grant::account_permission(
                     Permission::from(CanEnactGovernance),
-                    client.account.clone(),
+                    client.client().account().clone(),
                 )
                 .into(),
             ],
@@ -677,7 +678,7 @@ async fn canonical_orchard_and_pq_masp_actions_survive_four_peer_da_replay_and_r
         let creation_time = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .wrap_err("system clock is before the Unix epoch")?;
-        let signing_key = client.key_pair.private_key().clone();
+        let signing_key = client.client().key_pair().private_key().clone();
         let pre_orchard_context = action_context(
             &client,
             genesis_hash,

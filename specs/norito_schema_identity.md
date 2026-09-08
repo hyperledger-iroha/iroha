@@ -720,3 +720,65 @@ results qualify this captured selection, not other features, the concurrent
 root workspace or a release. Remaining model/service owners, atomic frame
 identity selection, physical extraction, memory reduction and full native/
 consensus/workspace qualification remain outstanding.
+
+## Parameter owner declaration closure
+
+All 17 ordinary parameter frame owners now declare their actual captured
+identities. The three private suites in
+`parameter/captured_parameter_identity_tests.rs` retain every nominal name and
+both independently observed codec hashes. Existing item bodies, field order,
+validation, JSON behavior and the 23 parameter unit tests are unchanged. The
+source patch is
+`f2c09252ef2881e2e701fad035ef048e0c67c6b7cb270bd4f9ee56c77538b3c5`.
+
+The isolated candidate passes 529 selected tests: 468 model, 21 public frame,
+39 grouped integration and one allocation test. This includes all 26 parameter
+unit tests, four defaults/transaction-parameter integration tests, unchanged
+signed RPC fixtures, 525 public frames, 189 base frames and 32 Native AMX
+regressions on the default stack. One existing operator-only KAT generator stays
+ignored. Eight build/runtime/guard commands bind 19,345 identical source inputs.
+Formatting and the codec guard pass. Strict Clippy still fails with the same
+225 reported library errors; source-size checking retains the same 235 findings
+and 173 exceptions. These are scoped candidate results; remaining model/service
+identities, atomic codec selection, physical extraction and release gates remain
+open. The local evidence is under `parameter-frame-closure/`.
+
+## SoraFS owner and field boundary closure
+
+All 284 captured concrete SoraFS owners now declare their nominal/frame identities,
+retaining 275 serializer/decoder pairs and nine serializer-only capabilities. The
+explicit CancelAssetLock projection keeps its observed aggregate instruction
+frame. Thirty-two private suites retain the independently captured names and
+hashes; no decoder is added to signing or negative-fixture carriers.
+
+Seventeen borrowed Wire records now implement only `SerializePayload`. Twelve
+private field helpers lose independent frame markers and accept payload-only
+fields. The outer signing-frame adapters, field ordering and canonical signatures
+are preserved. Six new tests compare bytes and exact/counting lengths across all
+eight supported layouts, including fields with no typed-frame capability.
+
+Governance's field codecs and tests have their own files without changing logical
+type or test-module paths. Production is 4,965 lines, tests 2,413, and the borrowed
+field module 65; its obsolete 7,401-line exception is removed. The existing
+integration callers use canonical admission/orderbook/repair CLI options and an
+explicit isolated PDP output directory. The replication fixture expectation now
+contains the actual 32-byte order id. Existing fixture assertions are retained.
+
+The final 78-path source patch is
+`ee222ee98beafaf121aeb960407ac0d63a4aa4959e03b8c2c76684348935c030`.
+Ten commands bind the same 19,699 inputs without source drift or a stack override.
+All 1,271 selected test executions pass: 946 default SoraFS library tests, 101
+fixture/CLI integration tests, 187 SoraNet cryptography tests, and 37 minimal-feature
+identity/field tests. The default inventory retains all 908 preceding tests plus
+38 new tests. Minimal features omit the existing PQC-only hybrid-envelope suite;
+that suite passes under default features. No selected test is ignored. Four
+SoraNet dependency lints are repaired without changing signing semantics.
+
+Formatting and the codec guard pass. The complete source-size guard still fails
+with 239 findings and 172 exceptions. Full strict Clippy stops on eight unchanged
+`iroha_crypto` errors; package-only strict Clippy retains six existing SoraFS lint
+sites. These remain failures. The source-bound evidence and independent reviews
+are under `sorafs-frame-closure/`; only `final-source-review-v3` is the qualified
+source patch. Atomic frame-identity selection, remaining manual projections,
+physical model extraction, measured memory reductions, and full workspace/native/
+consensus release qualification remain open.

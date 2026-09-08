@@ -65,6 +65,8 @@ const PDP_GOVERNANCE_ARCHIVE_DIGEST_DOMAIN_V1: &[u8] = b"sorafs.pdp.governance-a
 /// Domain under which providers sign canonical PDP proof digests.
 pub const PDP_PROOF_SIGNATURE_DOMAIN_V1: &[u8] = b"sorafs.pdp.proof.signature.v1\0";
 /// Supported hash algorithms for PDP commitments.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::pdp::HashAlgorithmV1")]
 #[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, JsonSerialize, PartialEq, Eq)]
 #[repr(u8)]
 #[norito(tag = "algorithm", content = "value")]
@@ -87,6 +89,8 @@ impl HashAlgorithmV1 {
     }
 }
 /// PDP commitment metadata embedded alongside manifests.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::pdp::PdpCommitmentV1")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, PartialEq, Eq)]
 pub struct PdpCommitmentV1 {
     /// Commitment schema version.
@@ -288,6 +292,8 @@ pub enum PdpCommitmentValidationError {
     CanonicalEncoding,
 }
 /// PDP sample selecting one segment and segment-local hot leaves.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::pdp::PdpSampleV1")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, PartialEq, Eq)]
 pub struct PdpSampleV1 {
     /// Global segment index being sampled.
@@ -327,6 +333,8 @@ impl PdpSampleV1 {
     }
 }
 /// PDP challenge describing the exact sample set for an epoch.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::pdp::PdpChallengeV1")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, PartialEq, Eq)]
 pub struct PdpChallengeV1 {
     /// Challenge schema version.
@@ -354,6 +362,8 @@ pub struct PdpChallengeV1 {
     /// Strictly ordered samples requested for this challenge.
     pub samples: Vec<PdpSampleV1>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::pdp::PdpChallengeIdPayloadV1")]
 #[derive(Debug, Clone, NoritoSerialize)]
 struct PdpChallengeIdPayloadV1 {
     version: u8,
@@ -566,6 +576,8 @@ pub enum PdpChallengeValidationError {
     CanonicalEncoding,
 }
 /// Inclusion proof for one sampled hot leaf.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::pdp::PdpHotLeafProofV1")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, PartialEq, Eq)]
 pub struct PdpHotLeafProofV1 {
     /// Segment-local hot-leaf index.
@@ -621,6 +633,8 @@ impl PdpHotLeafProofV1 {
     }
 }
 /// Inclusion proof for one challenged PDP segment.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::pdp::PdpProofLeafV1")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, PartialEq, Eq)]
 pub struct PdpProofLeafV1 {
     /// Global segment index being proven.
@@ -698,6 +712,8 @@ impl PdpProofLeafV1 {
     }
 }
 /// Fixed-size Ed25519 signature attached to a PDP proof.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::pdp::PdpEd25519SignatureV1")]
 #[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, JsonSerialize, PartialEq, Eq)]
 pub struct PdpEd25519SignatureV1 {
     /// Canonical strong Ed25519 public key.
@@ -715,6 +731,8 @@ impl PdpEd25519SignatureV1 {
     }
 }
 /// Provider response to a PDP challenge.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::pdp::PdpProofV1")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, PartialEq, Eq)]
 pub struct PdpProofV1 {
     /// Proof schema version.
@@ -736,6 +754,8 @@ pub struct PdpProofV1 {
     /// Provider Ed25519 signature over the canonical proof digest.
     pub signature: PdpEd25519SignatureV1,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::pdp::PdpProofSigningPayloadV1")]
 #[derive(Debug, Clone, NoritoSerialize)]
 struct PdpProofSigningPayloadV1 {
     version: u8,
@@ -1007,6 +1027,8 @@ pub enum PdpProofValidationError {
     CanonicalEncoding,
 }
 /// Stable rejection reason recorded for a terminal PDP challenge.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::pdp::PdpRejectionReasonV1")]
 #[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, JsonSerialize, PartialEq, Eq)]
 #[norito(tag = "reason", content = "details")]
 pub enum PdpRejectionReasonV1 {
@@ -1026,6 +1048,8 @@ pub enum PdpRejectionReasonV1 {
     StorageUnavailable,
 }
 /// Accepted or rejected terminal result for one PDP challenge.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::pdp::PdpTerminalDecisionV1")]
 #[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, JsonSerialize, PartialEq, Eq)]
 #[norito(tag = "decision", content = "details")]
 pub enum PdpTerminalDecisionV1 {
@@ -1035,6 +1059,8 @@ pub enum PdpTerminalDecisionV1 {
     Rejected(PdpRejectionReasonV1),
 }
 /// Canonical Governance DAG archive payload for one terminal PDP decision.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::pdp::PdpGovernanceArchiveV1")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, PartialEq, Eq)]
 pub struct PdpGovernanceArchiveV1 {
     /// Schema version.
@@ -2969,3 +2995,6 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+include!("pdp/captured_owner_identity_tests.rs");

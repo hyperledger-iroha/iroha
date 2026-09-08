@@ -87,7 +87,7 @@ async fn kaigi_operator_get(
     client: &iroha::blocking::Client,
     target: &str,
 ) -> Result<reqwest::Response> {
-    let url = client.client().torii_url.join(target)?;
+    let url = client.client().endpoint().join(target)?;
     let mut canonical_target = url.path().to_owned();
     if let Some(query) = url.query() {
         canonical_target.push('?');
@@ -98,12 +98,11 @@ async fn kaigi_operator_get(
         .wrap_err("parse exact Kaigi operator target")?;
     let operator_key_pair = client
         .client()
-        .operator_key_pair
-        .as_ref()
+        .operator_key_pair()
         .ok_or_else(|| eyre!("test-network client is missing its operator key"))?;
     let headers = iroha_torii::operator_signed_request_headers(
         operator_key_pair,
-        &client.client().network_id,
+        client.client().network_id(),
         &iroha_torii::Method::GET,
         &uri,
         &[],
@@ -435,7 +434,7 @@ async fn accounts_listing_emits_i105_identifiers() -> Result<()> {
     let url = network
         .client()
         .client()
-        .torii_url
+        .endpoint()
         .join("/v1/accounts?limit=32")
         .expect("join accounts url");
     let resp = http
@@ -481,7 +480,7 @@ async fn accounts_query_accepts_i105_filter_literals() -> Result<()> {
     let url = network
         .client()
         .client()
-        .torii_url
+        .endpoint()
         .join("/v1/accounts/query")
         .expect("join accounts query url");
     let resp = http
@@ -525,7 +524,7 @@ async fn accounts_listing_filter_rejects_dotted_i105_literals() -> Result<()> {
     let mut url = network
         .client()
         .client()
-        .torii_url
+        .endpoint()
         .join("/v1/accounts")
         .expect("join accounts url");
     {
@@ -573,7 +572,7 @@ async fn accounts_query_rejects_dotted_i105_filter_literals() -> Result<()> {
     let url = network
         .client()
         .client()
-        .torii_url
+        .endpoint()
         .join("/v1/accounts/query")
         .expect("join accounts query url");
     let resp = http
@@ -610,7 +609,7 @@ async fn accounts_listing_supports_i105_response() -> Result<()> {
     let url = network
         .client()
         .client()
-        .torii_url
+        .endpoint()
         .join("/v1/accounts?limit=8")
         .expect("join accounts url");
     let resp = http
@@ -652,7 +651,7 @@ async fn accounts_query_supports_i105_response() -> Result<()> {
     let url = network
         .client()
         .client()
-        .torii_url
+        .endpoint()
         .join("/v1/accounts/query")
         .expect("join accounts query url");
     let resp = http
@@ -700,7 +699,7 @@ async fn account_path_endpoints_reject_i105_literals() -> Result<()> {
     ];
     for (segments, query_pairs) in surfaces {
         let mut url = account_endpoint_url(
-            &network.client().client().torii_url,
+            network.client().client().endpoint(),
             literal.as_str(),
             segments,
         );
@@ -752,7 +751,7 @@ async fn account_path_endpoints_reject_selector_prefixed_literals() -> Result<()
     ];
     for (segments, query_pairs) in surfaces {
         let mut url = account_endpoint_url(
-            &network.client().client().torii_url,
+            network.client().client().endpoint(),
             literal.as_str(),
             segments,
         );
@@ -804,7 +803,7 @@ async fn account_path_endpoints_reject_public_key_literals() -> Result<()> {
     ];
     for (segments, query_pairs) in surfaces {
         let mut url = account_endpoint_url(
-            &network.client().client().torii_url,
+            network.client().client().endpoint(),
             literal.as_str(),
             segments,
         );
@@ -845,12 +844,12 @@ async fn asset_holders_get_supports_i105_response() -> Result<()> {
     network.ensure_blocks(1).await?;
     let http = http_client();
     let Some(definition_literal) =
-        find_asset_definition_with_holders(&http, &network.client().client().torii_url).await?
+        find_asset_definition_with_holders(&http, network.client().client().endpoint()).await?
     else {
         eprintln!("Skipping asset holder GET I105 coverage: holders endpoint unavailable.");
         return Ok(());
     };
-    let mut url = network.client().client().torii_url.clone();
+    let mut url = network.client().client().endpoint().clone();
     {
         let mut path = url
             .path_segments_mut()
@@ -906,12 +905,12 @@ async fn asset_holders_query_rejects_dotted_i105_filter_literals() -> Result<()>
     );
     let http = http_client();
     let Some(definition_literal) =
-        find_asset_definition_with_holders(&http, &network.client().client().torii_url).await?
+        find_asset_definition_with_holders(&http, network.client().client().endpoint()).await?
     else {
         eprintln!("Skipping asset holder query I105 coverage: holders endpoint unavailable.");
         return Ok(());
     };
-    let mut url = network.client().client().torii_url.clone();
+    let mut url = network.client().client().endpoint().clone();
     {
         let mut path = url
             .path_segments_mut()
@@ -998,7 +997,7 @@ async fn account_transactions_get_returns_i105_literals() -> Result<()> {
     let account_literal = ALICE_ID.to_string();
     let i105_literal = account_literal.clone();
     let base = account_endpoint_url(
-        &network.client().client().torii_url,
+        network.client().client().endpoint(),
         &account_literal,
         &["transactions"],
     );
@@ -1133,7 +1132,7 @@ async fn account_transactions_query_returns_i105_literals() -> Result<()> {
     let account_literal = ALICE_ID.to_string();
     let i105_literal = account_literal.clone();
     let url = account_endpoint_url(
-        &network.client().client().torii_url,
+        network.client().client().endpoint(),
         &account_literal,
         &["transactions", "query"],
     );
@@ -1220,7 +1219,7 @@ async fn explorer_transactions_emit_i105_literals() -> Result<()> {
     let base = network
         .client()
         .client()
-        .torii_url
+        .endpoint()
         .join("/v1/explorer/transactions")
         .expect("join explorer transactions url");
     let default_url = {
@@ -1335,7 +1334,7 @@ async fn explorer_instructions_emit_i105_literals() -> Result<()> {
     let base = network
         .client()
         .client()
-        .torii_url
+        .endpoint()
         .join("/v1/explorer/instructions")
         .expect("join explorer instructions url");
     let default_url = {
@@ -1445,7 +1444,7 @@ async fn explorer_account_qr_defaults_to_i105_for_discriminant() -> Result<()> {
     network.ensure_blocks(1).await?;
     let http = http_client();
     let canonical_literal = ALICE_ID.to_string();
-    let url = explorer_account_qr_url(&network.client().client().torii_url, &canonical_literal);
+    let url = explorer_account_qr_url(network.client().client().endpoint(), &canonical_literal);
     let resp = http
         .get(url)
         .header("Accept", "application/json")
@@ -1511,7 +1510,7 @@ async fn explorer_account_qr_accepts_i105_hint() -> Result<()> {
     network.ensure_blocks(1).await?;
     let http = http_client();
     let canonical_literal = ALICE_ID.to_string();
-    let url = explorer_account_qr_url(&network.client().client().torii_url, &canonical_literal);
+    let url = explorer_account_qr_url(network.client().client().endpoint(), &canonical_literal);
     let resp = http
         .get(url)
         .header("Accept", "application/json")
@@ -1560,7 +1559,7 @@ async fn accounts_query_rejects_selector_prefixed_filter_literals() -> Result<()
     let url = network
         .client()
         .client()
-        .torii_url
+        .endpoint()
         .join("/v1/accounts/query")
         .expect("join accounts query url");
     let resp = http
@@ -1605,7 +1604,7 @@ async fn accounts_query_rejects_public_key_filter_literals() -> Result<()> {
     let url = network
         .client()
         .client()
-        .torii_url
+        .endpoint()
         .join("/v1/accounts/query")
         .expect("join accounts query url");
     let resp = http
@@ -1655,7 +1654,7 @@ async fn accounts_query_accepts_alias_and_rejects_dotted_i105_filter_literals() 
     let client = network.client();
     let url = client
         .client()
-        .torii_url
+        .endpoint()
         .join("/v1/accounts/query")
         .expect("join accounts query url");
     let expected = account_id.to_string();
@@ -1790,7 +1789,7 @@ async fn repo_agreements_emit_i105_literals() -> Result<()> {
     }
     network.ensure_blocks(2).await?;
     let http = http_client();
-    let base = client.client().torii_url.clone();
+    let base = client.client().endpoint().clone();
     let i105_alice = ALICE_ID.to_string();
     let i105_bob = BOB_ID.to_string();
     let agreement_literal = agreement_id.to_string();
