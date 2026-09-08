@@ -63,6 +63,10 @@ Convergence treats a valid zero-height commit frontier as pending within that
 deadline; identity mismatches and restart requirements fail immediately. Tests
 keep pending startup status out of retained proof and preserve public progress
 fields in deadline errors.
+Converged certificates use Core's committed-decision comparison, allowing
+different re-proposal rounds for the same subject and execution commitment while
+retaining each validator's actual certificate and requiring a higher committed
+height after restart.
 Candidate tests exercise the real HTTP producer and strict host receipt consumer,
 direct signed probe origins, private signer descriptor lifetime, ordered recovery
 and failure before edge cutover. Stopped-owner tests preserve the slot lock while

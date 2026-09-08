@@ -134,6 +134,8 @@ STAGES = (
         "taira_public_reset::host::tests::public_reset_convergence_waits_for_first_commit_without_accepting_pending_proof",
         "taira_public_reset::host::tests::public_reset_convergence_rejects_fatal_identity_during_startup",
         "taira_public_reset::host::tests::public_reset_convergence_deadline_reports_last_public_progress",
+        "taira_public_reset::host::tests::public_reset_convergence_accepts_same_decision_across_certificate_rounds",
+        "taira_public_reset::host::tests::public_reset_convergence_rejects_changed_execution_or_subject_at_same_height",
         "taira_public_reset::host::tests::public_reset_convergence_rejects_omitted_nullable_status_fields",
         "taira_public_reset::host::tests::convergence_wave_receipt_rejects_unknown_first_release_fields",
         "taira_public_reset::executor_model::tests::candidate_qualification_completes_before_public_cutover",

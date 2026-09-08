@@ -14932,16 +14932,13 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
                         })?;
                 last_observations[index] = observed.progress;
                 match observed.checkpoint {
-                    Some(observed) => {
-                        if common
-                            .as_ref()
-                            .is_some_and(|expected| expected != &observed)
-                        {
+                    Some(observed) => match &common {
+                        Some(expected) if !same_convergence_checkpoint(expected, &observed)? => {
                             agrees = false;
-                        } else if common.is_none() {
-                            common = Some(observed);
                         }
-                    }
+                        None => common = Some(observed),
+                        Some(_) => {}
+                    },
                     None => agrees = false,
                 }
                 reports.push(value);
@@ -17397,6 +17394,22 @@ fn validate_convergence_status(
     })
 }
 
+/// Compare independently validated decisions without equating their certificate rounds.
+fn same_convergence_checkpoint(
+    left: &(u64, String, String, String),
+    right: &(u64, String, String, String),
+) -> Result<bool> {
+    if left.0 != right.0 || left.1 != right.1 || left.2 != right.2 {
+        return Ok(false);
+    }
+    let left: iroha::data_model::block::consensus_v2::SumeragiV2CommitQcStatus =
+        json::from_str(&left.3).wrap_err("validated left convergence CommitQC is not canonical")?;
+    let right: iroha::data_model::block::consensus_v2::SumeragiV2CommitQcStatus =
+        json::from_str(&right.3)
+            .wrap_err("validated right convergence CommitQC is not canonical")?;
+    Ok(left.certificate.same_commit_decision(right.certificate))
+}
+
 fn validate_convergence_wave(
     value: &norito::json::Value,
     expected_wave: usize,
@@ -17437,7 +17450,7 @@ fn validate_convergence_wave(
         let observed = validate_convergence_status(report, validator)?;
         match &common {
             None => common = Some(observed),
-            Some(expected) if expected == &observed => {}
+            Some(expected) if same_convergence_checkpoint(expected, &observed)? => {}
             Some(_) => return Err(eyre!("convergence-wave validator reports disagree")),
         }
     }
@@ -19328,6 +19341,111 @@ mod tests {
             assert!(
                 diagnostic.contains(field),
                 "missing retained diagnostic {field}"
+            );
+        }
+    }
+
+    fn reproposed_convergence_wave_fixture() -> (InventoryV1, norito::json::Value) {
+        let inventory = progress_admission().inventory;
+        let (_, canonical) = canonical_convergence_status_fixture();
+        let original: SumeragiV2Status = json::from_value(canonical).expect("canonical status");
+        let reports = inventory
+            .validators
+            .iter()
+            .enumerate()
+            .map(|(index, validator)| {
+                let mut status = original.clone();
+                status.node_fingerprint = validator.node_fingerprint.parse().unwrap();
+                status.build_fingerprint = validator.build_fingerprint.parse().unwrap();
+                status.config_fingerprint = validator.config_fingerprint.parse().unwrap();
+                let commit = status.last_commit_qc.as_mut().unwrap();
+                commit.certificate.round.view += u64::try_from(index).unwrap();
+                commit.certificate.proposal_round = commit.certificate.round;
+                status
+                    .validate()
+                    .expect("independent re-proposal certificate is valid");
+                json::to_value(&status).expect("re-proposal status")
+            })
+            .collect::<Vec<_>>();
+        let first = validate_convergence_status(&reports[0], &inventory.validators[0])
+            .expect("first checkpoint");
+        let wave = norito::json!({
+            "schema": "iroha.taira.public-reset.convergence-wave.v1",
+            "wave": 0,
+            "height": first.0,
+            "height_context_id": first.1,
+            "block_hash": first.2,
+            "last_commit_qc": (json::from_str::<norito::json::Value>(&first.3).unwrap()),
+            "validator_reports": reports,
+        });
+        (inventory, wave)
+    }
+
+    #[test]
+    fn public_reset_convergence_accepts_same_decision_across_certificate_rounds() {
+        let (inventory, wave) = reproposed_convergence_wave_fixture();
+        let reports = wave.get("validator_reports").unwrap().as_array().unwrap();
+        let first = validate_convergence_status(&reports[0], &inventory.validators[0]).unwrap();
+        let second = validate_convergence_status(&reports[1], &inventory.validators[1]).unwrap();
+        assert_ne!(
+            first.3, second.3,
+            "the actual certificates retain different rounds"
+        );
+        assert!(same_convergence_checkpoint(&first, &second).unwrap());
+        assert_eq!(
+            validate_convergence_wave(&wave, 0, &inventory).unwrap(),
+            first
+        );
+        assert!(
+            require_successor_checkpoint(Some(&first), &second).is_err(),
+            "a different certificate round at the same height is not restart progress"
+        );
+        let second_qc = reports[1].get("last_commit_qc").unwrap().clone();
+        let mut changed_summary = wave;
+        *changed_summary.get_mut("last_commit_qc").unwrap() = second_qc;
+        assert!(
+            validate_convergence_wave(&changed_summary, 0, &inventory).is_err(),
+            "the summary must preserve the exact first report certificate"
+        );
+    }
+
+    #[test]
+    fn public_reset_convergence_rejects_changed_execution_or_subject_at_same_height() {
+        let (inventory, original) = reproposed_convergence_wave_fixture();
+        let first = validate_convergence_status(
+            original.pointer("/validator_reports/0").unwrap(),
+            &inventory.validators[0],
+        )
+        .unwrap();
+        for changed_field in ["execution", "subject"] {
+            let mut wave = original.clone();
+            let mut status: SumeragiV2Status =
+                json::from_value(wave.pointer("/validator_reports/1").unwrap().clone()).unwrap();
+            let different = Hash::new(changed_field.as_bytes());
+            let commit = status.last_commit_qc.as_mut().unwrap();
+            if changed_field == "execution" {
+                commit.certificate.execution_commitment.post_state_root = different;
+            } else {
+                commit.certificate.subject.payload_hash = different;
+                status.last_committed_subject.as_mut().unwrap().payload_hash = different;
+            }
+            status
+                .validate()
+                .expect("each different decision is structurally valid");
+            let report = json::to_value(&status).unwrap();
+            let changed = validate_convergence_status(&report, &inventory.validators[1]).unwrap();
+            assert_eq!(
+                (&first.0, &first.1, &first.2),
+                (&changed.0, &changed.1, &changed.2)
+            );
+            assert!(
+                !same_convergence_checkpoint(&first, &changed).unwrap(),
+                "height, context and block hash must not hide changed {changed_field}"
+            );
+            *wave.pointer_mut("/validator_reports/1").unwrap() = report;
+            assert!(
+                validate_convergence_wave(&wave, 0, &inventory).is_err(),
+                "retained proof must reject changed {changed_field}"
             );
         }
     }
