@@ -6,10 +6,10 @@ import java.util.Objects;
 
 /** Response bound to one exact submitted prepared transaction. */
 public final class PreparedTransactionSubmitResponseV1 extends AliasJsonValue {
-  public static final String SCHEMA = "iroha.taira.prepared-transaction-submit.v1";
+  public static final String SCHEMA = "iroha.prepared-transaction-submit.v1";
 
   private final String schema;
-  private final TairaPublicResetMutationBindingV1 binding;
+  private final PreparedOperationBindingV1 binding;
   private final String operation;
   private final String transactionHashHex;
   private final PreparedTransactionOutcomeV1 outcome;
@@ -17,24 +17,24 @@ public final class PreparedTransactionSubmitResponseV1 extends AliasJsonValue {
   /** Constructs an exact submit reconciliation response. */
   public PreparedTransactionSubmitResponseV1(
       final String schema,
-      final TairaPublicResetMutationBindingV1 binding,
+      final PreparedOperationBindingV1 binding,
       final String operation,
       final String transactionHashHex,
       final PreparedTransactionOutcomeV1 outcome) {
     if (!SCHEMA.equals(schema)) throw new IllegalArgumentException("unsupported prepared submit schema");
-    if (!TairaPublicResetMutationBindingV1.ONBOARDING.equals(operation)
-        && !TairaPublicResetMutationBindingV1.FAUCET.equals(operation)) {
+    if (!PreparedOperationBindingV1.ONBOARDING.equals(operation)
+        && !PreparedOperationBindingV1.FAUCET.equals(operation)) {
       throw new IllegalArgumentException("unsupported prepared submit operation");
     }
     this.schema = schema;
     this.binding = Objects.requireNonNull(binding, "binding");
     this.operation = operation;
-    this.transactionHashHex = TairaPublicResetMutationBindingV1.requireTransactionHash(transactionHashHex, "transactionHashHex");
+    this.transactionHashHex = PreparedOperationBindingV1.requireTransactionHash(transactionHashHex, "transactionHashHex");
     this.outcome = Objects.requireNonNull(outcome, "outcome");
   }
 
   public String schema() { return schema; }
-  public TairaPublicResetMutationBindingV1 binding() { return binding; }
+  public PreparedOperationBindingV1 binding() { return binding; }
   public String operation() { return operation; }
   public String transactionHashHex() { return transactionHashHex; }
   public PreparedTransactionOutcomeV1 outcome() { return outcome; }

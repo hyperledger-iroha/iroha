@@ -37,6 +37,21 @@ class EarlyReleaseCheckTests(unittest.TestCase):
             self.assertIsNone(gate.test_artifact(json.dumps(event | changes)))
         self.assertIsNone(gate.test_artifact("[cargo-fast] normal progress"))
 
+    def test_torii_selection_requires_shipping_external_contract_harness(self):
+        command = gate.compile_command(Path("/repo"), {"CARGO": "/fixed/cargo"}, torii=True)
+        self.assertIn("iroha_torii", command)
+        self.assertIn("taira_app_contracts", command)
+        self.assertNotIn("--lib", command)
+        self.assertNotIn("--no-default-features", command)
+        event = {"reason": "compiler-artifact", "target": {"name": "taira_app_contracts", "kind": ["test"]},
+                 "profile": {"test": True}, "executable": "/warm/taira-contracts"}
+        self.assertEqual(gate.test_artifact(json.dumps(event), torii=True), event["executable"])
+        self.assertIsNone(gate.test_artifact(json.dumps(event)))
+        for changes in ({"profile": {"test": False}}, {"executable": None},
+                        {"target": {"name": "torii_core_routes", "kind": ["test"]}},
+                        {"target": {"name": "taira_app_contracts", "kind": ["lib"]}}):
+            self.assertIsNone(gate.test_artifact(json.dumps(event | changes), torii=True))
+
     def test_failed_build_preserves_rendered_compiler_error(self):
         diagnostic = "error[E0308]: synthetic fixture type mismatch\n"
         event = {"reason": "compiler-message", "message": {"rendered": diagnostic}}
@@ -104,7 +119,8 @@ class EarlyReleaseCheckTests(unittest.TestCase):
         with patch.object(gate.subprocess, "check_output", side_effect=AssertionError("must not inspect mutable Git")), \
              patch.object(gate, "compile_harness", return_value="/fixture/harness") as compile, \
              patch.object(gate.subprocess, "run", side_effect=[subprocess.CompletedProcess([], 0, "fixture: test\n", ""), subprocess.CompletedProcess([], 0, "test fixture ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored;\n", "")]) as run, \
-             patch.object(gate, "STAGES", (("fixtures", ("fixture",)),)), contextlib.redirect_stdout(io.StringIO()):
+             patch.object(gate, "STAGES", (("fixtures", ("fixture",)),)), \
+             patch.object(gate, "TORII_STAGES", ()), contextlib.redirect_stdout(io.StringIO()):
             gate.run_checks(Path("/frozen"), environment={"CARGO": "/fixed/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/warm"}, source_commit="a" * 40, lock_fds=(77, 88))
         self.assertEqual([call.kwargs["cwd"] for call in run.call_args_list], [Path("/warm"), Path("/warm")])
         self.assertNotIn("frozen", compile.call_args.kwargs)
@@ -118,13 +134,34 @@ class EarlyReleaseCheckTests(unittest.TestCase):
         with patch.object(gate.subprocess, "check_output", return_value="a" * 40) as git, \
              patch.object(gate, "compile_harness", return_value="/fixture/harness") as compile, \
              patch.object(gate.subprocess, "run", side_effect=results) as run, \
-             patch.object(gate, "STAGES", (("fixtures", ("fixture",)),)), contextlib.redirect_stdout(io.StringIO()):
+             patch.object(gate, "STAGES", (("fixtures", ("fixture",)),)), \
+             patch.object(gate, "TORII_STAGES", ()), contextlib.redirect_stdout(io.StringIO()):
             gate.run_checks(Path("/mutable"), environment=env, lock_fds=(77,))
         self.assertEqual(git.call_count, 2)
         self.assertTrue(all(call.kwargs["env"]["CARGO_HOME"] == "/isolated" for call in git.call_args_list))
         self.assertEqual(compile.call_args.kwargs, {"lock_fds": (77,)})
         self.assertTrue(all(call.kwargs["pass_fds"] == (77,) for call in run.call_args_list))
         self.assertTrue(all(call.kwargs["cwd"] == Path("/mutable") for call in run.call_args_list))
+
+    def test_torii_contract_failure_prevents_overall_pass_and_keeps_same_custody(self):
+        env = {"CARGO": "/fixed/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/warm"}
+        results = [subprocess.CompletedProcess([], 0, "cli: test\n", ""),
+                   subprocess.CompletedProcess([], 0, "test cli ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored;\n", ""),
+                   subprocess.CompletedProcess([], 0, "route: test\n", ""),
+                   subprocess.CompletedProcess([], 101, "test route ... FAILED\n", "")]
+        output = io.StringIO()
+        with patch.object(gate, "compile_harness", side_effect=["/warm/cli", "/warm/routes"]) as compile, \
+             patch.object(gate.subprocess, "run", side_effect=results) as run, \
+             patch.object(gate, "STAGES", (("CLI", ("cli",)),)), \
+             patch.object(gate, "TORII_STAGES", (("Torii", ("route",)),)), \
+             contextlib.redirect_stdout(output), contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaisesRegex(gate.CheckError, "route.*exit 101"):
+                gate.run_checks(Path("/frozen"), environment=env, source_commit="a" * 40, lock_fds=(77,))
+        self.assertEqual(compile.call_count, 2)
+        self.assertEqual(compile.call_args.kwargs, {"lock_fds": (77,), "torii": True})
+        self.assertTrue(all(call.kwargs["cwd"] == Path("/warm") and call.kwargs["pass_fds"] == (77,)
+                            for call in run.call_args_list))
+        self.assertNotIn("[taira-check] PASS:", output.getvalue())
 
     def test_unisolated_low_level_check_is_rejected_before_git_or_cargo(self):
         with patch.object(gate.subprocess, "check_output") as git, patch.object(gate, "compile_harness") as compile:

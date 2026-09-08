@@ -13,7 +13,7 @@ public final class AccountOnboardingProofRequiredPrepareResponseV1 extends Alias
   public static final String PROOF_KIND = "account_alias_current_state";
 
   private final String schema;
-  private final TairaPublicResetMutationBindingV1 binding;
+  private final PreparedOperationBindingV1 binding;
   private final String operation;
   private final String outcome;
   private final String proofKind;
@@ -26,7 +26,7 @@ public final class AccountOnboardingProofRequiredPrepareResponseV1 extends Alias
   /** Constructs an exact authenticated no-op response. */
   public AccountOnboardingProofRequiredPrepareResponseV1(
       final String schema,
-      final TairaPublicResetMutationBindingV1 binding,
+      final PreparedOperationBindingV1 binding,
       final String operation,
       final String outcome,
       final String proofKind,
@@ -49,7 +49,7 @@ public final class AccountOnboardingProofRequiredPrepareResponseV1 extends Alias
           "proofKind must require current account and alias state");
     }
     this.binding = Objects.requireNonNull(binding, "binding");
-    if (!TairaPublicResetMutationBindingV1.ONBOARDING.equals(binding.kind())) {
+    if (!PreparedOperationBindingV1.ONBOARDING.equals(binding.kind())) {
       throw new IllegalArgumentException("proof-required onboarding requires an onboarding binding");
     }
     this.disposition = Objects.requireNonNull(disposition, "disposition");
@@ -62,14 +62,14 @@ public final class AccountOnboardingProofRequiredPrepareResponseV1 extends Alias
     this.operation = operation;
     this.outcome = outcome;
     this.proofKind = proofKind;
-    this.semanticHashHex = TairaPublicResetMutationBindingV1.requireLowerHex32(semanticHashHex, "semanticHashHex");
+    this.semanticHashHex = PreparedOperationBindingV1.requireLowerHex32(semanticHashHex, "semanticHashHex");
     this.accountId = AccountIdLiteral.requireCanonicalI105Address(accountId, "accountId");
     this.alias = alias;
-    this.serverSignature = TairaPublicResetMutationBindingV1.requireHex(serverSignature, "serverSignature");
+    this.serverSignature = PreparedOperationBindingV1.requireHex(serverSignature, "serverSignature");
   }
 
   public String schema() { return schema; }
-  public TairaPublicResetMutationBindingV1 binding() { return binding; }
+  public PreparedOperationBindingV1 binding() { return binding; }
   public String operation() { return operation; }
   public String outcome() { return outcome; }
   public String proofKind() { return proofKind; }

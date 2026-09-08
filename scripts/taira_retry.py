@@ -1476,6 +1476,22 @@ def _retire_prune_scopes(g, context, inventory):
     staged = RETIRE_RUNTIME / "journal-v1/staged-artifacts-v1" / context["inventory_sha256"]
     runtime_stage = RETIRE_RUNTIME / "journal-v1/runtime-stage-v1" / context["authorization_sha256"]
     archives = {row["slug"]: Path(row["archive"]) for row in context["uploads"]}
+    physical_hosts = {host["endpoint"]["host_identity_sha256"]
+                      for host in inventory["validators"] + [inventory["edge"]]}
+    _retire_need(len(physical_hosts) == 1
+                 and re.fullmatch("[0-9a-f]{64}", next(iter(physical_hosts)))
+                 and context["coordination_relative"] == str(Path("hosts") / next(iter(physical_hosts))),
+                 "archived host stage coordination differs from the physical host")
+    host_stage = (RETIRE_WORK / "retired-control" / context["coordination_relative"]
+                  / "inrou-stage-v1" / context["nonce"])
+    if os.path.lexists(host_stage):
+        _retire_need(stat.S_IMODE(_retire_prune_info(host_stage, directory=True).st_mode) == 0o700,
+                     "archived host stage must remain owner-private")
+        carrier = next(host for host in inventory["validators"]
+                       if host["endpoint"]["host_identity_sha256"] == next(iter(physical_hosts)))
+        _retire_prune_marker(g, host_stage, context, carrier["slug"], "inrou_stage")
+        marker = host_stage / ".public-reset-generated-v1.json"
+        protected[str(marker)] = list(identity(_retire_prune_info(marker)))
     names = {"iroha_cli": ("iroha", "iroha"),
              "iroha3d": ("artifact-iroha3d", "iroha3d_taira"),
              "sorafs_node": ("artifact-sorafs_node", "sorafs-node")}
@@ -1513,6 +1529,8 @@ def _retire_prune_scopes(g, context, inventory):
         _retire_need(info.st_size > 0, "canonical guest image is empty")
         protected[str(source)] = list(identity(info))
         exact[runtime_stage / "payloads/guest/aarch64" / name] = (info.st_size, 0o400)
+        if os.path.lexists(host_stage):
+            exact[host_stage / "payloads/guest/aarch64" / name] = (info.st_size, 0o400)
     for store in stores:
         for role in ("bundle", "guest", "discovery"):
             manifest_id = inventory["inrou_canary"][role + "_manifest_digest_hex"]

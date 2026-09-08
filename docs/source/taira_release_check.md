@@ -2,9 +2,19 @@
 
 Run either `python3 scripts/taira_release.py check` or
 `python3 scripts/taira_release_check.py` before the Taira four-binary Linux
-release build. Both compile one native `iroha_cli` harness with six Cargo jobs
+release build. Both compile a native `iroha_cli` harness and the focused Torii
+`taira_app_contracts` integration harness with six Cargo jobs
 and report build, stage and test durations. Python 3.11+, the repository Rust
 toolchain, and previously fetched dependencies are required; Cargo runs offline.
+
+The Torii harness executes the shipping routes through plan, prepare and submit,
+checks SDK receipt verification, and applies queued fixture transactions. It
+covers a 33-hour-old committed anchor, expiry without a new block, exact replay,
+onboarding identity binding, faucet funding and proof-of-work anchor aging. A
+fresh onboarding receipt uses service time for its lifetime; committed height,
+hash and ledger time remain the anchor for state and lease observations. These
+contract tests use real route and ledger code with disposable inputs; they do
+not replace the deployed four-validator consensus and public application checks.
 
 Ordinary checks use the existing sibling `.taira-testnet-build-targets/routine`
 directory. `--target-dir` or `TAIRA_TESTNET_CARGO_TARGET_DIR` can select another

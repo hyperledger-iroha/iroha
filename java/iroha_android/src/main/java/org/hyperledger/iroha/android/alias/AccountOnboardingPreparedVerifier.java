@@ -29,7 +29,7 @@ public final class AccountOnboardingPreparedVerifier {
       final AccountOnboardingPreparedTransactionV1 prepared,
       final AccountOnboardingPlanRequestV1 request,
       final AccountOnboardingPlanReceiptV1 receipt,
-      final TairaPublicResetMutationBindingV1 binding,
+      final PreparedOperationBindingV1 binding,
       final FeePaymentIntent expectedFeePayment,
       final NetworkId expectedNetworkId,
       final String expectedAuthority) {
@@ -37,6 +37,7 @@ public final class AccountOnboardingPreparedVerifier {
     Objects.requireNonNull(expectedFeePayment, "expectedFeePayment");
     AccountOnboardingReceiptVerifier.requireValidForRequest(
         request, receipt, expectedNetworkId, expectedAuthority);
+    Objects.requireNonNull(binding, "binding").requireOnboardingReceipt(receipt);
     if (!sameBinding(prepared.binding(), binding) || !sameReceipt(prepared.receipt(), receipt)) {
       throw new IllegalArgumentException(
           "prepared onboarding envelope differs from the exact receipt or binding");
@@ -88,6 +89,7 @@ public final class AccountOnboardingPreparedVerifier {
           "prepared onboarding transaction hash differs from the envelope");
     }
     final TransactionPayload payload = SignedTransactionEncoder.decodeCanonicalPayload(transaction);
+    binding.requireTransactionLifetime(payload);
     if (!AccountOnboardingReceiptVerifier.verifyAuthoritySignature(
         payload.authority(),
         IrohaHash.prehash(transaction.encodedPayload()),
@@ -106,12 +108,12 @@ public final class AccountOnboardingPreparedVerifier {
     }
     final Map<String, JsonValue> expectedMetadata = new LinkedHashMap<>();
     expectedMetadata.put(
-        "taira_public_reset_binding",
+        "prepared_operation_binding",
         JsonValue.parse(JsonEncoder.encode(binding.toJsonMap())));
     expectedMetadata.put(
-        "taira_prepared_operation", JsonValue.string(AccountOnboardingPreparedTransactionV1.OPERATION));
+        "prepared_operation", JsonValue.string(AccountOnboardingPreparedTransactionV1.OPERATION));
     expectedMetadata.put(
-        "taira_prepared_semantic_hash", JsonValue.string(prepared.semanticHashHex()));
+        "prepared_semantic_hash", JsonValue.string(prepared.semanticHashHex()));
     if (!payload.metadata().equals(expectedMetadata)) {
       throw new IllegalArgumentException(
           "prepared onboarding transaction metadata differs from the envelope");
@@ -137,11 +139,12 @@ public final class AccountOnboardingPreparedVerifier {
       final AccountOnboardingProofRequiredPrepareResponseV1 proofRequired,
       final AccountOnboardingPlanRequestV1 request,
       final AccountOnboardingPlanReceiptV1 receipt,
-      final TairaPublicResetMutationBindingV1 binding,
+      final PreparedOperationBindingV1 binding,
       final NetworkId expectedNetworkId,
       final String expectedAuthority) {
     AccountOnboardingReceiptVerifier.requireValidForRequest(
         request, receipt, expectedNetworkId, expectedAuthority);
+    Objects.requireNonNull(binding, "binding").requireOnboardingReceipt(receipt);
     final byte[] receiptHash = AliasNameSupport.decodeHash(receipt.planHash());
     if (receiptHash == null
         || !sameBinding(proofRequired.binding(), binding)
@@ -228,8 +231,8 @@ public final class AccountOnboardingPreparedVerifier {
   }
 
   private static boolean sameBinding(
-      final TairaPublicResetMutationBindingV1 left,
-      final TairaPublicResetMutationBindingV1 right) {
+      final PreparedOperationBindingV1 left,
+      final PreparedOperationBindingV1 right) {
     return left.toJsonMap().equals(right.toJsonMap());
   }
 

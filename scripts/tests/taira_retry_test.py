@@ -1458,7 +1458,8 @@ class RetiredPublicPruneTests(unittest.TestCase):
         self.invpath = self.runtime / 'inventory.json'
         self.context = {'commit': 'a' * 40, 'inventory_sha256': 'b' * 64,
                         'terminal_sha256': 'c' * 64, 'authorization_sha256': 'd' * 64,
-                        'nonce': self.nonce, 'uploads': []}
+                        'nonce': self.nonce, 'uploads': [],
+                        'coordination_relative': 'hosts/' + 'e' * 64}
         roles = [('iroha_cli', 'iroha'), ('iroha3d', 'iroha3d_taira'),
                  ('sorafs_node', 'sorafs-node')]
         for _, name in roles:
@@ -1473,7 +1474,8 @@ class RetiredPublicPruneTests(unittest.TestCase):
             artifacts = [{'role': role, 'local_path': str(self.bins / name),
                           'size': len(b'public executable')} for role, name in
                          (roles[:1] if slug == 'taira-edge' else roles)]
-            host = {'slug': slug, 'artifacts': artifacts}
+            host = {'slug': slug, 'artifacts': artifacts,
+                    'endpoint': {'host_identity_sha256': 'e' * 64}}
             if slug == 'taira-edge': self.inventory['edge'] = host
             else: self.inventory['validators'].append(host)
             upload = self.work / 'uploads' / slug
@@ -1551,6 +1553,73 @@ class RetiredPublicPruneTests(unittest.TestCase):
 
     def prune(self):
         return retry._retire_prune_public(self.guard, self.context, self.result)
+
+    def archived_host_stage(self):
+        root = (self.work / 'retired-control' / self.context['coordination_relative']
+                / 'inrou-stage-v1' / self.nonce)
+        self.marker(root, retry.RETIRE_SLUGS[0], 'inrou_stage')
+        root.chmod(0o700)
+        for name in ('rootfs.ext4', 'vmlinux', 'initrd.img'):
+            self.file(root / 'payloads/guest/aarch64' / name, b'public guest', 0o400)
+        self.file(root / 'payloads/guest/aarch64/private-config', b'PRIVATE PRESERVE', 0o600)
+        self.file(root / 'manifests/aarch64.to', b'PUBLIC METADATA PRESERVE', 0o400)
+        return root
+
+    def test_archived_host_stage_three_payloads_are_pruned_and_resume_preserves_siblings(self):
+        root = self.archived_host_stage()
+        expected = {root / 'payloads/guest/aarch64' / name
+                    for name in ('rootfs.ext4', 'vmlinux', 'initrd.img')}
+        keep = {path: path.read_bytes() for path in root.rglob('*')
+                if path.is_file() and path not in expected}
+        first = self.prune()
+        self.assertEqual(first['file_count'], 56)
+        self.assertEqual(first, self.prune())
+        self.assertTrue(all(not path.exists() for path in expected))
+        self.assertTrue(all(path.read_bytes() == raw for path, raw in keep.items()))
+        self.assertTrue(all((self.prep / 'inrou-stage/payloads/guest/aarch64' / path.name).exists()
+                            for path in expected))
+
+    def test_archived_host_stage_requires_exact_carrier_and_nonce(self):
+        root = self.archived_host_stage()
+        marker = root / '.public-reset-generated-v1.json'
+        original = json.loads(marker.read_bytes())
+        for key, wrong in [('host_slug', retry.RETIRE_SLUGS[1]), ('authorization_nonce', '0' * 32),
+                           ('kind', 'release')]:
+            changed = {**original, key: wrong}
+            marker.write_text(json.dumps(changed))
+            with self.subTest(key=key), self.assertRaisesRegex(retry._retire_RebindError, 'closed attempt'):
+                self.prune()
+            self.assertFalse((self.work / 'public-prune-intent.json').exists())
+        marker.write_text(json.dumps(original))
+        self.context['coordination_relative'] = 'hosts/' + 'f' * 64
+        with self.assertRaisesRegex(retry._retire_RebindError, 'coordination differs'):
+            self.prune()
+
+    def test_archived_host_stage_rejects_wrong_copy_mode_and_symlink(self):
+        root = self.archived_host_stage()
+        payload = root / 'payloads/guest/aarch64/rootfs.ext4'
+        payload.chmod(0o600)
+        with self.assertRaisesRegex(retry._retire_RebindError, 'size or mode differs'):
+            self.prune()
+        payload.unlink()
+        payload.symlink_to(self.prep / 'inrou-stage/payloads/guest/aarch64/rootfs.ext4')
+        with self.assertRaises(retry.RetryError):
+            self.prune()
+        self.assertFalse((self.work / 'public-prune-intent.json').exists())
+
+    def test_archived_host_stage_resumes_partial_payload_unlink(self):
+        root = self.archived_host_stage()
+        real = Path.unlink
+        def interrupted(path, *args, **kwargs):
+            if path == root / 'payloads/guest/aarch64/rootfs.ext4':
+                raise OSError('interrupted archived stage cleanup')
+            return real(path, *args, **kwargs)
+        with mock.patch.object(Path, 'unlink', interrupted), self.assertRaises(OSError):
+            self.prune()
+        self.assertTrue((self.work / 'public-prune-intent.json').exists())
+        self.assertFalse((root / 'payloads/guest/aarch64/initrd.img').exists())
+        self.assertEqual(self.prune()['file_count'], 56)
+        self.assertTrue((root / 'payloads/guest/aarch64/private-config').exists())
 
     def test_closed_public_prune_preserves_private_siblings_and_is_idempotent(self):
         preserved = {path: path.read_bytes() for path in self.root.rglob('*')

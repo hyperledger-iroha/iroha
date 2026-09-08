@@ -10,11 +10,11 @@ import org.hyperledger.iroha.android.numeric.NumericV1;
 
 /** Authenticated exact faucet transaction prepared by Torii. */
 public final class AccountFaucetPreparedTransactionV1 extends AliasJsonValue {
-  public static final String SCHEMA = "iroha.taira.prepared-transaction.v1";
+  public static final String SCHEMA = "iroha.prepared-transaction.v1";
   public static final String OPERATION = "faucet";
 
   private final String schema;
-  private final TairaPublicResetMutationBindingV1 binding;
+  private final PreparedOperationBindingV1 binding;
   private final String operation;
   private final AccountFaucetClaimV1 claim;
   private final String semanticHashHex;
@@ -31,7 +31,7 @@ public final class AccountFaucetPreparedTransactionV1 extends AliasJsonValue {
   /** Constructs one exact parsed faucet prepared envelope. */
   public AccountFaucetPreparedTransactionV1(
       final String schema,
-      final TairaPublicResetMutationBindingV1 binding,
+      final PreparedOperationBindingV1 binding,
       final String operation,
       final AccountFaucetClaimV1 claim,
       final String semanticHashHex,
@@ -51,14 +51,14 @@ public final class AccountFaucetPreparedTransactionV1 extends AliasJsonValue {
       throw new IllegalArgumentException("prepared faucet operation must be faucet");
     }
     this.binding = Objects.requireNonNull(binding, "binding");
-    if (!TairaPublicResetMutationBindingV1.FAUCET.equals(binding.kind())) {
+    if (!PreparedOperationBindingV1.FAUCET.equals(binding.kind())) {
       throw new IllegalArgumentException("prepared faucet requires a faucet binding");
     }
     this.schema = schema;
     this.operation = operation;
     this.claim = Objects.requireNonNull(claim, "claim");
     this.semanticHashHex =
-        TairaPublicResetMutationBindingV1.requireLowerHex32(
+        PreparedOperationBindingV1.requireLowerHex32(
             semanticHashHex, "semanticHashHex");
     this.accountId = AccountIdLiteral.requireCanonicalI105Address(accountId, "accountId");
     if (!claim.accountId().equals(this.accountId)) {
@@ -79,21 +79,21 @@ public final class AccountFaucetPreparedTransactionV1 extends AliasJsonValue {
       throw new IllegalArgumentException("prepared faucet amount must be positive");
     }
     this.transactionHashHex =
-        TairaPublicResetMutationBindingV1.requireTransactionHash(
+        PreparedOperationBindingV1.requireTransactionHash(
             transactionHashHex, "transactionHashHex");
     this.signedTransactionWireHex =
-        TairaPublicResetMutationBindingV1.requireLowerHex(
+        PreparedOperationBindingV1.requireLowerHex(
             signedTransactionWireHex, "signedTransactionWireHex");
     this.signedTransactionWireSha256 =
-        TairaPublicResetMutationBindingV1.requireLowerHex32(
+        PreparedOperationBindingV1.requireLowerHex32(
             signedTransactionWireSha256, "signedTransactionWireSha256");
     this.feePayment = Objects.requireNonNull(feePayment, "feePayment");
     this.serverSignature =
-        TairaPublicResetMutationBindingV1.requireHex(serverSignature, "serverSignature");
+        PreparedOperationBindingV1.requireHex(serverSignature, "serverSignature");
   }
 
   public String schema() { return schema; }
-  public TairaPublicResetMutationBindingV1 binding() { return binding; }
+  public PreparedOperationBindingV1 binding() { return binding; }
   public String operation() { return operation; }
   public AccountFaucetClaimV1 claim() { return claim; }
   public String semanticHashHex() { return semanticHashHex; }

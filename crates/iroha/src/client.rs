@@ -1393,7 +1393,7 @@ pub struct AccountOnboardingPlanBodyV1 {
     /// follow-up is required.
     #[norito(required)]
     pub owner_auto_renew_instruction: Option<AliasFramedInstructionV1>,
-    /// Last block timestamp at which this receipt may be applied.
+    /// Service expiry and last execution-block timestamp allowed by the signed quote guard.
     pub valid_until_ms: u64,
 }
 impl AccountOnboardingPlanBodyV1 {

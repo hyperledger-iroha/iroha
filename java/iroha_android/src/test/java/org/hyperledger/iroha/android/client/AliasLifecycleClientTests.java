@@ -30,7 +30,7 @@ import org.hyperledger.iroha.android.alias.AccountOnboardingCurrentStateResponse
 import org.hyperledger.iroha.android.alias.AccountOnboardingCurrentStateV1;
 import org.hyperledger.iroha.android.alias.AccountOnboardingProofRequiredPrepareResponseV1;
 import org.hyperledger.iroha.android.alias.PreparedTransactionSignatureV1;
-import org.hyperledger.iroha.android.alias.TairaPublicResetMutationBindingV1;
+import org.hyperledger.iroha.android.alias.PreparedOperationBindingV1;
 import org.hyperledger.iroha.android.alias.AliasLeaseRenewPlanRequestV1;
 import org.hyperledger.iroha.android.alias.AliasLifecycleOperationV1;
 import org.hyperledger.iroha.android.alias.AliasLifecyclePlanDispositionV1;
@@ -65,7 +65,7 @@ public final class AliasLifecycleClientTests {
         new AliasSetupModels.AccountAliasTarget(alias);
     final AliasQuoteGuardV1 guard =
         new AliasQuoteGuardV1(
-            3, TestAssetDefinitionIds.PRIMARY, "5", 1_700_000_100_000L);
+            3, TestAssetDefinitionIds.PRIMARY, "5", 4_102_444_800_000L);
     final RenewAliasLease renewal =
         new RenewAliasLease(target, 1_800_000_000_000L, 1_900_000_000_000L, guard);
     final AliasLeaseRenewPlanRequestV1 requestBody =
@@ -221,7 +221,7 @@ public final class AliasLifecycleClientTests {
                 AliasSetupModels.AccountAliasRoleV1.PRIMARY));
     final AliasQuoteGuardV1 guard =
         new AliasQuoteGuardV1(
-            3, TestAssetDefinitionIds.PRIMARY, "5", 1_700_000_100_000L);
+            3, TestAssetDefinitionIds.PRIMARY, "5", System.currentTimeMillis() + 300_000L);
     final AccountOnboardingPlanBodyV1 body =
         new AccountOnboardingPlanBodyV1(
             1,
@@ -253,14 +253,9 @@ public final class AliasLifecycleClientTests {
         "POST",
         "https://torii.example/api/v1/accounts/onboard/plan");
 
-    final TairaPublicResetMutationBindingV1 binding =
-        new TairaPublicResetMutationBindingV1(
-            "11".repeat(32),
-            "onboarding-fixture-nonce-0000001",
-            TairaPublicResetMutationBindingV1.ONBOARDING,
-            "onboarding",
-            "22".repeat(32),
-            4_102_444_800_000L);
+    final PreparedOperationBindingV1 binding =
+        PreparedOperationBindingV1.onboarding(
+            receipt, "22".repeat(32), receipt.body().validUntilMs());
     final String retiredApplyResponse =
         "{\"account_id\":\""
             + account
@@ -471,14 +466,9 @@ public final class AliasLifecycleClientTests {
             guard.validUntilMs());
     final AccountOnboardingPlanReceiptV1 receipt =
         signedOnboardingReceipt(body, privateKey);
-    final TairaPublicResetMutationBindingV1 binding =
-        new TairaPublicResetMutationBindingV1(
-            "11".repeat(32),
-            "onboarding-fixture-nonce-0000001",
-            TairaPublicResetMutationBindingV1.ONBOARDING,
-            "onboarding",
-            "22".repeat(32),
-            4_102_444_800_000L);
+    final PreparedOperationBindingV1 binding =
+        PreparedOperationBindingV1.onboarding(
+            receipt, "22".repeat(32), receipt.body().validUntilMs());
     final AccountOnboardingProofRequiredPrepareResponseV1 unsigned =
         new AccountOnboardingProofRequiredPrepareResponseV1(
             AccountOnboardingProofRequiredPrepareResponseV1.SCHEMA,
@@ -577,7 +567,7 @@ public final class AliasLifecycleClientTests {
   private static final class AtomicOnboardingProofFixture {
     private final AccountOnboardingPlanRequestV1 request;
     private final AccountOnboardingPlanReceiptV1 receipt;
-    private final TairaPublicResetMutationBindingV1 binding;
+    private final PreparedOperationBindingV1 binding;
     private final AccountOnboardingProofRequiredPrepareResponseV1 proofRequired;
     private final String authority;
     private final String accountId;
@@ -586,7 +576,7 @@ public final class AliasLifecycleClientTests {
     private AtomicOnboardingProofFixture(
         final AccountOnboardingPlanRequestV1 request,
         final AccountOnboardingPlanReceiptV1 receipt,
-        final TairaPublicResetMutationBindingV1 binding,
+        final PreparedOperationBindingV1 binding,
         final AccountOnboardingProofRequiredPrepareResponseV1 proofRequired,
         final String authority,
         final String accountId,

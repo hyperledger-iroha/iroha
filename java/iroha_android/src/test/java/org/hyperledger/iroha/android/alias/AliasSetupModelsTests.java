@@ -638,37 +638,31 @@ public final class AliasSetupModelsTests {
     final byte[] encoded =
         JsonEncoder.encode(receipt.toJsonMap()).getBytes(StandardCharsets.UTF_8);
     assert receipt.equals(AccountOnboardingJsonParser.parseReceipt(encoded));
-    final TairaPublicResetMutationBindingV1 binding =
-        new TairaPublicResetMutationBindingV1(
-            "11".repeat(32),
-            "onboarding-fixture-nonce-0000001",
-            TairaPublicResetMutationBindingV1.ONBOARDING,
-            "onboarding",
-            "22".repeat(32),
-            50_000);
+    final PreparedOperationBindingV1 binding =
+        new PreparedOperationBindingV1(
+            "03".repeat(32), PreparedOperationBindingV1.ONBOARDING, "22".repeat(32), 50_000);
     final FeePaymentIntent feePayment = FeePaymentIntent.authority(Collections.emptyList());
     final String prepare =
         JsonEncoder.encode(
             new AccountOnboardingPrepareRequestV1(binding, receipt, feePayment).toJsonMap());
     assert prepare.contains(AccountOnboardingPrepareRequestV1.SCHEMA);
-    assert prepare.contains(TairaPublicResetMutationBindingV1.SCHEMA);
+    assert prepare.contains(PreparedOperationBindingV1.SCHEMA);
     assert prepare.contains("\"fee_payment\"");
     assert !prepare.contains("token");
     assert !prepare.contains("private_key");
+    assert !prepare.contains("authorization_sha256");
+    assert !prepare.contains("authorization_nonce");
+    assert !prepare.contains("idempotency_key");
+    assert !prepare.contains("phase");
+    assert binding.toJsonMap().size() == 5;
 
-    final TairaPublicResetMutationBindingV1 faucetBinding =
-        new TairaPublicResetMutationBindingV1(
-            "33".repeat(32),
-            "faucet-fixture-nonce-00000000001",
-            TairaPublicResetMutationBindingV1.FAUCET,
-            "faucet",
-            "44".repeat(32),
-            50_000);
     final String faucetAccount = account(0x22);
     final String faucetAuthority = account(0x11);
     final AccountFaucetClaimV1 faucetClaim =
         new AccountFaucetClaimV1(
             faucetAccount, BigInteger.valueOf(42), "0001020304050607");
+    final PreparedOperationBindingV1 faucetBinding =
+        PreparedOperationBindingV1.faucet(faucetClaim, "44".repeat(32), 50_000);
     final Map<String, Object> faucetPrepare =
         new AccountFaucetPrepareRequestV1(faucetBinding, faucetClaim, feePayment).toJsonMap();
     assert AccountFaucetPrepareRequestV1.SCHEMA.equals(faucetPrepare.get("schema"));

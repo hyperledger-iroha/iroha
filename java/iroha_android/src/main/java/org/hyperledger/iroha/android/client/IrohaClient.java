@@ -26,7 +26,7 @@ import org.hyperledger.iroha.android.alias.AccountFaucetClaimV1;
 import org.hyperledger.iroha.android.alias.AccountFaucetPolicyV1;
 import org.hyperledger.iroha.android.alias.AccountFaucetPreparedTransactionV1;
 import org.hyperledger.iroha.android.alias.PreparedTransactionSubmitResponseV1;
-import org.hyperledger.iroha.android.alias.TairaPublicResetMutationBindingV1;
+import org.hyperledger.iroha.android.alias.PreparedOperationBindingV1;
 import org.hyperledger.iroha.android.alias.AliasSetupModels;
 import org.hyperledger.iroha.android.SigningException;
 import org.hyperledger.iroha.android.crypto.Signer;
@@ -331,7 +331,7 @@ public interface IrohaClient {
   CompletableFuture<AccountOnboardingPrepareResponseV1> prepareSponsoredAccountOnboarding(
       final AccountOnboardingPlanRequestV1 request,
       final AccountOnboardingPlanReceiptV1 receipt,
-      final TairaPublicResetMutationBindingV1 binding,
+      final PreparedOperationBindingV1 binding,
       final FeePaymentIntent feePayment,
       final String onboardingToken,
       final String expectedAuthority,
@@ -343,7 +343,7 @@ public interface IrohaClient {
           final AccountOnboardingProofRequiredPrepareResponseV1 proofRequired,
           final AccountOnboardingPlanRequestV1 request,
           final AccountOnboardingPlanReceiptV1 receipt,
-          final TairaPublicResetMutationBindingV1 binding,
+          final PreparedOperationBindingV1 binding,
           final String expectedAuthority,
           final NetworkId expectedNetworkId,
           final ToriiCanonicalRequestAuth canonicalAuth);
@@ -361,7 +361,7 @@ public interface IrohaClient {
   CompletableFuture<AccountFaucetPreparedTransactionV1>
       prepareAccountFaucetTransaction(
           final AccountFaucetClaimV1 claim,
-          final TairaPublicResetMutationBindingV1 binding,
+          final PreparedOperationBindingV1 binding,
           final FeePaymentIntent feePayment,
           final AccountFaucetPolicyV1 policy,
           final NetworkId expectedNetworkId);

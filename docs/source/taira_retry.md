@@ -122,7 +122,9 @@ fail closed instead of silently omitting their capacity.
 Retirement first admits one dispatcher copy and up to 64 MiB of publication
 and cleanup records, plus the existing guest and backing reserves. After the
 native rolled-back terminal and retired custody are verified under their locks,
-it prunes disposable executable and guest-image copies and chunks belonging to
+it prunes disposable executable and guest-image copies, including the three
+public image payloads in the archived physical host's `inrou-stage-v1/<nonce>`,
+and chunks belonging to
 the three admitted public SoraFS manifests. Runtime keys and configs, unrelated
 manifests, storage metadata and native history remain intact. Unadmitted partial
 ingestion data is preserved. An owner-only intent makes interrupted unlink and

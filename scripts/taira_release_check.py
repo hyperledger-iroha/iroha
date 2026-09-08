@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Catch Taira CLI release regressions before expensive cross-compilation.
 
-Requires Python 3.11+ and the repository Rust toolchain. Compile one native CLI
-harness with isolated Cargo configuration, then run existing fixture-only tests.
+Requires Python 3.11+ and the repository Rust toolchain. Compile native CLI and
+Torii contract harnesses with isolated Cargo configuration and fixture-only inputs.
 The existing sibling .taira-testnet-build-targets/routine lane is the default;
 --target-dir or TAIRA_TESTNET_CARGO_TARGET_DIR may select another development
 lane. Both selectors must agree when supplied. No Cargo lane is created or cleaned.
@@ -181,18 +181,33 @@ if sys.platform == "linux":
     )),)
 
 
+TORII_STAGES = (("routed onboarding and faucet contracts", (
+    "accounts_onboard::sponsored_onboarding_fresh_receipt_and_submit_work_after_idle_anchor",
+    "accounts_onboard::sponsored_onboarding_rejects_signed_expired_receipt_without_block_progress",
+    "accounts_onboard::expired_onboarding_envelope_only_reconciles_an_already_known_hash",
+    "accounts_onboard::sponsored_onboarding_prepare_is_non_mutating_and_exact_submit_is_replay_safe",
+    "accounts_onboard::sponsored_onboarding_receipt_binds_exact_network_and_active_signer",
+    "accounts_onboard::sponsored_onboarding_submit_rejects_old_and_tampered_envelopes",
+    "accounts_faucet::accounts_faucet_transfers_starter_balance_to_empty_account",
+    "accounts_faucet::accounts_faucet_registers_missing_account_before_transfer",
+    "accounts_faucet::faucet_prepared_envelope_survives_pow_anchor_aging",
+    "accounts_faucet::faucet_submit_rejects_old_and_tampered_shapes_and_deduplicates_exact_replay",
+)),)
+
+
 class CheckError(Exception):
     """A build or selected regression did not pass."""
 
 
-def compile_command(root: Path, env: dict[str, str]) -> list[str]:
+def compile_command(root: Path, env: dict[str, str], *, torii: bool = False) -> list[str]:
+    selection = ["-p", "iroha_torii", "--test", "taira_app_contracts"] if torii else ["-p", "iroha_cli", "--bin", "iroha"]
     return [env["CARGO"], "--config", str(root / ".cargo/config.toml"), "test",
             "--manifest-path", str(root / "Cargo.toml"), "--locked", "--offline",
-            "-p", "iroha_cli", "--bin", "iroha", "--no-run",
+            *selection, "--no-run",
             "--message-format=json-render-diagnostics"]
 
 
-def test_artifact(line: str) -> str | None:
+def test_artifact(line: str, *, torii: bool = False) -> str | None:
     try:
         event = json.loads(line)
     except json.JSONDecodeError:
@@ -200,7 +215,8 @@ def test_artifact(line: str) -> str | None:
     if not isinstance(event, dict) or event.get("reason") != "compiler-artifact":
         return None
     target = event.get("target", {})
-    if (target.get("name") == "iroha" and "bin" in target.get("kind", [])
+    name, kind = ("taira_app_contracts", "test") if torii else ("iroha", "bin")
+    if (target.get("name") == name and kind in target.get("kind", [])
             and event.get("profile", {}).get("test") is True):
         executable = event.get("executable")
         if isinstance(executable, str) and executable:
@@ -224,9 +240,10 @@ def show_build_diagnostic(line: str) -> None:
             sys.stderr.flush()
 
 
-def compile_harness(root: Path, env: dict[str, str], *, lock_fds: tuple[int, ...] = ()) -> str:
-    command = compile_command(root, env)
-    print("[taira-check] build native CLI test harness", flush=True)
+def compile_harness(root: Path, env: dict[str, str], *, lock_fds: tuple[int, ...] = (), torii: bool = False) -> str:
+    command = compile_command(root, env, torii=torii)
+    label = "native Torii contracts" if torii else "native CLI"
+    print(f"[taira-check] build {label} test harness", flush=True)
     started = time.monotonic()
     artifacts: set[str] = set()
     with subprocess.Popen(command, cwd="/", env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
@@ -234,23 +251,23 @@ def compile_harness(root: Path, env: dict[str, str], *, lock_fds: tuple[int, ...
         assert child.stdout is not None
         for line in child.stdout:
             show_build_diagnostic(line)
-            artifact = test_artifact(line)
+            artifact = test_artifact(line, torii=torii)
             if artifact is not None:
                 artifacts.add(artifact)
         code = child.wait()
     elapsed = time.monotonic() - started
     if code:
-        raise CheckError(f"native CLI build failed (exit {code}, {elapsed:.1f}s)")
+        raise CheckError(f"{label} build failed (exit {code}, {elapsed:.1f}s)")
     if len(artifacts) != 1:
-        raise CheckError(f"native CLI build reported {len(artifacts)} test executables; expected one")
-    print(f"[taira-check] native CLI build passed in {elapsed:.1f}s", flush=True)
+        raise CheckError(f"{label} build reported {len(artifacts)} test executables; expected one")
+    print(f"[taira-check] {label} build passed in {elapsed:.1f}s", flush=True)
     return artifacts.pop()
 
 
-def require_tests(listing: str) -> None:
+def require_tests(listing: str, stages=None) -> None:
     available = {line.removesuffix(": test") for line in listing.splitlines()
                  if line.endswith(": test")}
-    missing = [name for _, names in STAGES for name in names if name not in available]
+    missing = [name for _, names in (STAGES if stages is None else stages) for name in names if name not in available]
     if missing:
         raise CheckError("required regressions missing from native harness: " + ", ".join(missing))
 
@@ -263,6 +280,27 @@ def require_one_pass(name: str, result: subprocess.CompletedProcess[str]) -> Non
         sys.stderr.write(result.stdout)
         sys.stderr.write(result.stderr)
         raise CheckError(f"regression did not execute and pass: {name} (exit {result.returncode})")
+
+
+def run_stages(harness: str, fixture_root: Path, env: dict[str, str], stages,
+               lock_fds: tuple[int, ...]) -> None:
+    listing = subprocess.run([harness, "--list", "--format", "terse"], cwd=fixture_root,
+                             env=env, stdin=subprocess.DEVNULL, text=True, capture_output=True, check=False, pass_fds=lock_fds)
+    if listing.returncode:
+        raise CheckError(f"cannot list native harness tests (exit {listing.returncode})")
+    require_tests(listing.stdout, stages)
+    for label, names in stages:
+        stage_start = time.monotonic()
+        print(f"[taira-check] start {label} ({len(names)} tests)", flush=True)
+        for name in names:
+            test_start = time.monotonic()
+            print(f"[taira-check] start {name}", flush=True)
+            result = subprocess.run([harness, name, "--exact", "--color", "never"],
+                                    cwd=fixture_root, env=env, stdin=subprocess.DEVNULL,
+                                    text=True, capture_output=True, check=False, pass_fds=lock_fds)
+            require_one_pass(name, result)
+            print(f"[taira-check] passed {name} ({time.monotonic() - test_start:.1f}s)", flush=True)
+        print(f"[taira-check] passed {label} ({time.monotonic() - stage_start:.1f}s)", flush=True)
 
 
 def run_checks(root: Path, *, environment: dict[str, str] | None = None,
@@ -282,27 +320,14 @@ def run_checks(root: Path, *, environment: dict[str, str] | None = None,
     print(f"[taira-check] source {head}; {root}", flush=True)
     harness = compile_harness(root, env, lock_fds=lock_fds)
     fixture_root = Path(env["CARGO_TARGET_DIR"]) if source_commit is not None else root
-    listing = subprocess.run([harness, "--list", "--format", "terse"], cwd=fixture_root,
-                             env=env, stdin=subprocess.DEVNULL, text=True, capture_output=True, check=False, pass_fds=lock_fds)
-    if listing.returncode:
-        raise CheckError(f"cannot list native harness tests (exit {listing.returncode})")
-    require_tests(listing.stdout)
-    for label, names in STAGES:
-        stage_start = time.monotonic()
-        print(f"[taira-check] start {label} ({len(names)} tests)", flush=True)
-        for name in names:
-            test_start = time.monotonic()
-            print(f"[taira-check] start {name}", flush=True)
-            result = subprocess.run([harness, name, "--exact", "--color", "never"],
-                                    cwd=fixture_root, env=env, stdin=subprocess.DEVNULL,
-                                    text=True, capture_output=True, check=False, pass_fds=lock_fds)
-            require_one_pass(name, result)
-            print(f"[taira-check] passed {name} ({time.monotonic() - test_start:.1f}s)", flush=True)
-        print(f"[taira-check] passed {label} ({time.monotonic() - stage_start:.1f}s)", flush=True)
+    run_stages(harness, fixture_root, env, STAGES, lock_fds)
+    if TORII_STAGES:
+        torii_harness = compile_harness(root, env, lock_fds=lock_fds, torii=True)
+        run_stages(torii_harness, fixture_root, env, TORII_STAGES, lock_fds)
     if source_commit is None and subprocess.check_output(["git", "--no-replace-objects", "rev-parse", "HEAD"], cwd=root, env=env,
                                stdin=subprocess.DEVNULL, text=True).strip() != head:
         raise CheckError("HEAD changed during checks; rerun against the intended source")
-    count = sum(len(names) for _, names in STAGES)
+    count = sum(len(names) for _, names in STAGES + TORII_STAGES)
     print(f"[taira-check] PASS: {count} regressions in {time.monotonic() - started:.1f}s", flush=True)
 
 

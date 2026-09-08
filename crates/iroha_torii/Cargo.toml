@@ -212,6 +212,11 @@ harness = false
 required-features = ["app_api", "bench"]
 
 [[test]]
+name = "taira_app_contracts"
+path = "tests/grouped/taira_app_contracts.rs"
+required-features = ["node-api"]
+
+[[test]]
 name = "torii_core_routes"
 path = "tests/grouped/core_routes.rs"
 required-features = ["app_api"]
