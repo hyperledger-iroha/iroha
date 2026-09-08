@@ -286,7 +286,7 @@ def capture_source(root: Path, source: Path, target_dir: Path, commit: str, entr
                     path.symlink_to(os.fsdecode(payload))
                     require(path.resolve(strict=False).is_relative_to(pending), "source symlink escapes capture")
                 else:
-                    exclusive_write_bytes(path, payload, mode=0o700 if mode == b"100755" else 0o600)
+                    exclusive_write_bytes(path, payload, mode=0o755 if mode == b"100755" else 0o600)
                     freeze(path)
                     previous = source / os.fsdecode(relative)
                     if state is not None and previous.is_file() and not previous.is_symlink():

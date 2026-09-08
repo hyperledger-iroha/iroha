@@ -469,11 +469,14 @@ class TairaPrepareTests(unittest.TestCase):
 
     def test_fixed_capture_reads_git_objects_and_survives_working_source_changes(self):
         entries = self.source_entries({"source.rs": ("100644", b"signed source"),
+                                       "run.sh": ("100755", b"#!/bin/sh\nexit 0\n"),
                                        "iroha-docs": ("160000", b"")})
         (self.root / "source.rs").write_bytes(b"concurrent unsaved edit")
         with release.source_lane(self.root, self.target) as (source, _fd):
             release.capture_source(self.root, source, self.target, "a" * 40, entries)
             self.assertEqual((source / "source.rs").read_bytes(), b"signed source")
+            self.assertEqual(stat.S_IMODE((source / "run.sh").stat().st_mode), 0o500)
+            subprocess.run([str(source / "run.sh")], check=True)
             self.assertFalse((source / ".git").exists())
             self.assertEqual(list((source / "iroha-docs").iterdir()), [])
             (self.root / "source.rs").write_bytes(b"another unrelated merge")
