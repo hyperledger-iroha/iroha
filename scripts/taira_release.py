@@ -3,7 +3,10 @@
 
 Requires Python 3.11+, Git, the repository Rust toolchain, a warm Cargo target,
 and explicitly hash-pinned Zig/cargo-zigbuild executables. `check` runs the
-maintained native CLI gate; `prepare` also builds the four Linux release binaries
+maintained native CLI gate in the existing sibling .taira-testnet-build-targets/routine
+lane (override with --target-dir or TAIRA_TESTNET_CARGO_TARGET_DIR; both must agree).
+`prepare` keeps repo target/ by default, ignoring the development-only environment
+selector, and also builds the four Linux release binaries
 from one fixed Git-object source capture with six jobs and captures read-only
 copies. Rerun the same prepare command to
 reuse completed checks/captures or retry an incomplete local build in the same
@@ -411,7 +414,8 @@ def build_command(root: Path, target_dir: Path, cargo: str) -> list[str]:
 
 
 def run_build(root: Path, command: list[str], env: dict[str, str], log: Path,
-              *, lock_fd: int | None = None, lane_lock_fd: int | None = None) -> None:
+              *, lock_fd: int | None = None, lane_lock_fd: int | None = None,
+              mode_lock_fd: int | None = None) -> None:
     failure = None
     started = time.monotonic()
     # Commit diagnostic output even on compiler failure; the result is published
@@ -420,7 +424,7 @@ def run_build(root: Path, command: list[str], env: dict[str, str], log: Path,
         try:
             child = subprocess.Popen(command, cwd="/", env=env, stdin=subprocess.DEVNULL,
                                      stdout=output, stderr=subprocess.STDOUT, start_new_session=True,
-                                     pass_fds=tuple(fd for fd in (lock_fd, lane_lock_fd) if fd is not None))
+                                     pass_fds=tuple(fd for fd in (lock_fd, lane_lock_fd, mode_lock_fd) if fd is not None))
             try:
                 while True:
                     try:
@@ -570,7 +574,7 @@ def write_record(path: Path, value: dict[str, object]) -> None:
 
 
 @contextlib.contextmanager
-def preparation_lock(output: Path):
+def preparation_lock(output: Path, *, purpose: str | None = None):
     info = output.lstat()
     require(stat.S_ISDIR(info.st_mode) and info.st_uid == os.geteuid()
             and stat.S_IMODE(info.st_mode) in (0o700, 0o500),
@@ -586,6 +590,8 @@ def preparation_lock(output: Path):
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as error:
+            if purpose is not None:
+                raise PrepareError(f"{purpose} is still running; lane coordination is {output}") from error
             raise PrepareError("preparation is still running; inspect retained attempt logs at "
                                + str(output / "attempts")) from error
         yield fd
@@ -615,10 +621,73 @@ def verify_capture(result: dict[str, object], base: dict[str, object], output: P
                 "captured artifact changed; retained output must be inspected: " + str(path))
 
 
+def routine_target(root: Path) -> Path:
+    return root.parent / ".taira-testnet-build-targets" / "routine"
+
+
+def development_target(root: Path, requested: Path | None, inherited: dict[str, str]) -> Path:
+    """Select an existing lane; ambient CARGO_TARGET_DIR never selects authority."""
+    configured = inherited.get("TAIRA_TESTNET_CARGO_TARGET_DIR")
+    require(configured is None or bool(configured), "TAIRA_TESTNET_CARGO_TARGET_DIR must not be empty")
+    explicit = real_path(requested) if requested is not None else None
+    environment = real_path(Path(configured)) if configured is not None else None
+    require(explicit is None or environment is None or explicit == environment,
+            "--target-dir conflicts with TAIRA_TESTNET_CARGO_TARGET_DIR")
+    return explicit or environment or real_path(routine_target(root))
+
+
+@contextlib.contextmanager
+def cargo_lane(root: Path, target_dir: Path, role: str):
+    """Keep diagnostic and authenticated modes separate for the whole native run."""
+    require(role in {"development", "release"}, "invalid Cargo lane role")
+    root = real_path(root)
+    real_path(target_dir)
+    info = target_dir.stat()
+    require(stat.S_ISDIR(info.st_mode) and info.st_uid == os.geteuid()
+            and not info.st_mode & 0o022, "target-dir must be an existing owner-held warm Cargo lane")
+    if role == "development":
+        require(target_dir != root / "target"
+                and "taira-release-sources" not in target_dir.parts
+                and not os.path.lexists(target_dir / "taira-release-sources"),
+                "development checks cannot use the authenticated release lane")
+    else:
+        require(not target_dir.is_relative_to(routine_target(root)),
+                "authenticated preparation cannot use the routine development lane")
+    coordination = target_dir / ".taira-build-lane"
+    coordination.mkdir(mode=0o700, exist_ok=True)
+    real_path(coordination)
+    with preparation_lock(coordination, purpose=f"{role} Cargo lane") as lock_fd:
+        marker = coordination / "role.json"
+        expected = canonical_json_bytes({"schema": "taira.cargo-lane.v1", "repo_root": str(root), "role": role})
+        require(len(expected) <= 16 * 1024, "Cargo lane ownership record is too large")
+        if not os.path.lexists(marker):
+            exclusive_write_bytes(marker, expected, mode=0o600)
+        fd = os.open(marker, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC)
+        try:
+            info = os.fstat(fd)
+            require(stat.S_ISREG(info.st_mode) and info.st_uid == os.geteuid()
+                    and info.st_nlink == 1 and stat.S_IMODE(info.st_mode) == 0o600,
+                    "Cargo lane role must remain owner-held")
+            require(info.st_size == len(expected) and os.read(fd, len(expected) + 1) == expected,
+                    "Cargo lane is assigned to a different build mode or repository")
+        finally:
+            os.close(fd)
+        yield lock_fd
+
+
+def development_check(root: Path, target: Path | None, inherited: dict[str, str]) -> None:
+    root = real_path(root)
+    target_dir = development_target(root, target, inherited)
+    with cargo_lane(root, target_dir, "development") as lock_fd:
+        env = child_environment(inherited, target_dir)
+        env, _ = isolated_cargo_environment(root, root, env)
+        print(f"[taira-check] development lane {target_dir}; mutable source; not release-qualified", flush=True)
+        gate.run_checks(root, environment=env, lock_fds=(lock_fd,))
+
+
 @contextlib.contextmanager
 def source_lane(root: Path, target_dir: Path):
-    # One source path per established Cargo lane keeps absolute compiler paths
-    # stable across releases. The same lock survives in any active Cargo child.
+    # Preserve the fixed-source custody lock even across preparer upgrades.
     key = hashlib.sha256(os.fsencode(target_dir)).hexdigest()[:24]
     parent = target_dir / "taira-release-sources" / key
     parent.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -630,11 +699,12 @@ def source_lane(root: Path, target_dir: Path):
 def prepare(args: argparse.Namespace) -> dict[str, object]:
     root, target_dir = real_path(args.repo_root), real_path(args.target_dir)
     require(target_dir.is_dir(), "target-dir must be an existing warm Cargo lane")
-    with source_lane(root, target_dir) as (source, lock_fd):
-        return prepare_in_lane(args, source, lock_fd)
+    with cargo_lane(root, target_dir, "release") as mode_lock_fd:
+        with source_lane(root, target_dir) as (source, lock_fd):
+            return prepare_in_lane(args, source, lock_fd, mode_lock_fd)
 
 
-def prepare_in_lane(args: argparse.Namespace, source: Path, lane_lock_fd: int) -> dict[str, object]:
+def prepare_in_lane(args: argparse.Namespace, source: Path, lane_lock_fd: int, mode_lock_fd: int) -> dict[str, object]:
     root, target_dir = real_path(args.repo_root), real_path(args.target_dir)
     output = real_path(args.output_dir, exists=False)
     require(Path(__file__).resolve() == root / "scripts/taira_release.py",
@@ -767,14 +837,14 @@ def prepare_in_lane(args: argparse.Namespace, source: Path, lane_lock_fd: int) -
             def run_native_checks():
                 try:
                     selected_gate.run_checks(source, environment=env, source_commit=args.expected_commit,
-                                             lock_fds=(lock_fd, lane_lock_fd))
+                                             lock_fds=(lock_fd, lane_lock_fd, mode_lock_fd))
                 except selected_gate.CheckError as error:
                     raise PrepareError(str(error)) from error
             stage("native CLI checks", run_native_checks)
             revalidate()
             if not checks.exists():
                 write_record(checks, {"request": request, "passed": True})
-        stage("Linux release build", lambda: run_build(source, command, env, attempt / "cargo.log", lock_fd=lock_fd, lane_lock_fd=lane_lock_fd))
+        stage("Linux release build", lambda: run_build(source, command, env, attempt / "cargo.log", lock_fd=lock_fd, lane_lock_fd=lane_lock_fd, mode_lock_fd=mode_lock_fd))
         with source_fingerprints(source, target_dir, TARGET, packages, repair=False):
             revalidate()
             artifacts = stage("read-only artifact capture", lambda: capture_artifacts(target_dir, attempt))
@@ -795,7 +865,7 @@ def parser() -> argparse.ArgumentParser:
     for name in ("check", "prepare"):
         command = commands.add_parser(name)
         command.add_argument("--repo-root", type=Path, default=Path(__file__).resolve().parents[1])
-        command.add_argument("--target-dir", type=Path, help="existing warm Cargo lane (default: repo target/)")
+        command.add_argument("--target-dir", type=Path, help="existing warm Cargo lane (check: sibling routine lane; prepare: repo target/)")
         if name == "prepare":
             command.add_argument("--expected-commit", required=True)
             command.add_argument("--expected-signer", required=True, help="independently reviewed signing-key fingerprint")
@@ -809,14 +879,12 @@ def parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     args = parser().parse_args()
-    args.target_dir = args.target_dir or args.repo_root / "target"
     try:
         require(sys.platform in {"darwin", "linux"}, "Taira preparation requires macOS or Linux")
         if args.command == "check":
-            target_dir = real_path(args.target_dir)
-            require(target_dir.is_dir(), "target-dir must be an existing warm Cargo lane")
-            gate.run_checks(real_path(args.repo_root), environment=child_environment(dict(os.environ), target_dir))
+            development_check(args.repo_root, args.target_dir, dict(os.environ))
         else:
+            args.target_dir = args.target_dir or args.repo_root / "target"
             prepared = prepare(args)
             print(f"[taira-release] prepared {prepared['commit']}: {args.output_dir / 'result.json'}", flush=True)
     except (PrepareError, ReleaseArtifactError, gate.CheckError, OSError, ValueError, subprocess.SubprocessError) as error:

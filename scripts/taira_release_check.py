@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """Catch Taira CLI release regressions before expensive cross-compilation.
 
-Requires Python 3.11+, the repository Rust toolchain and Cargo on PATH. Compile
-one native CLI test harness through scripts/cargo_fast.sh, then run existing
-fixture-only tests. Reuse the current warm Cargo target and native jobserver.
-No live configuration, runtime credentials, SSH, deployment or signing inputs
-are accepted. No report files are written; Cargo and test fixtures use their
-usual local scratch files. This focused check does not qualify release artifacts.
+Requires Python 3.11+ and the repository Rust toolchain. Compile one native CLI
+harness with isolated Cargo configuration, then run existing fixture-only tests.
+The existing sibling .taira-testnet-build-targets/routine lane is the default;
+--target-dir or TAIRA_TESTNET_CARGO_TARGET_DIR may select another development
+lane. Both selectors must agree when supplied. No Cargo lane is created or cleaned.
 
-Pass --repo-root to check another Iroha checkout. CARGO_TARGET_DIR may name an existing
-stable native build lane; this script never creates a per-run lane or cleans it.
+Configuration and compiler paths match authenticated preparation, while source
+remains the mutable checkout. These checks never qualify release artifacts and
+accept no live configuration, credentials, SSH, deployment or signing inputs.
 """
 
 from __future__ import annotations
@@ -145,8 +145,9 @@ class CheckError(Exception):
     """A build or selected regression did not pass."""
 
 
-def compile_command(root: Path) -> list[str]:
-    return [str(root / "scripts/cargo_fast.sh"), "--", "test", "--locked",
+def compile_command(root: Path, env: dict[str, str]) -> list[str]:
+    return [env["CARGO"], "--config", str(root / ".cargo/config.toml"), "test",
+            "--manifest-path", str(root / "Cargo.toml"), "--locked", "--offline",
             "-p", "iroha_cli", "--bin", "iroha", "--no-run",
             "--message-format=json-render-diagnostics"]
 
@@ -183,15 +184,12 @@ def show_build_diagnostic(line: str) -> None:
             sys.stderr.flush()
 
 
-def compile_harness(root: Path, env: dict[str, str], *, frozen: bool = False, lock_fds: tuple[int, ...] = ()) -> str:
-    command = ([env["CARGO"], "--config", str(root / ".cargo/config.toml"), "test",
-                "--manifest-path", str(root / "Cargo.toml"), "--locked", "--offline",
-                "-p", "iroha_cli", "--bin", "iroha", "--no-run",
-                "--message-format=json-render-diagnostics"] if frozen else compile_command(root))
+def compile_harness(root: Path, env: dict[str, str], *, lock_fds: tuple[int, ...] = ()) -> str:
+    command = compile_command(root, env)
     print("[taira-check] build native CLI test harness", flush=True)
     started = time.monotonic()
     artifacts: set[str] = set()
-    with subprocess.Popen(command, cwd="/" if frozen else root, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+    with subprocess.Popen(command, cwd="/", env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                           text=True, encoding="utf-8", errors="replace", pass_fds=lock_fds) as child:
         assert child.stdout is not None
         for line in child.stdout:
@@ -232,14 +230,17 @@ def run_checks(root: Path, *, environment: dict[str, str] | None = None,
     if sys.platform not in {"darwin", "linux"}:
         raise CheckError("the Taira descriptor/stage gate requires macOS or Linux")
     started = time.monotonic()
+    if environment is None or not all(environment.get(name) for name in ("CARGO", "CARGO_HOME", "CARGO_TARGET_DIR")):
+        raise CheckError("checks require the coordinated isolated Cargo environment; use either check CLI")
+    env = dict(environment)
     head = source_commit if source_commit is not None else subprocess.check_output(
-        ["git", "rev-parse", "HEAD"], cwd=root, stdin=subprocess.DEVNULL, text=True).strip()
-    env = dict(os.environ if environment is None else environment)
+        ["git", "--no-replace-objects", "rev-parse", "HEAD"], cwd=root, env=env,
+        stdin=subprocess.DEVNULL, text=True).strip()
     env.pop("CARGO_BUILD_TARGET", None)  # This check executes a host-native harness.
     env["VERGEN_GIT_SHA"] = head
     env["IROHA_GIT_COMMIT_HASH"] = head
     print(f"[taira-check] source {head}; {root}", flush=True)
-    harness = compile_harness(root, env, frozen=source_commit is not None, lock_fds=lock_fds)
+    harness = compile_harness(root, env, lock_fds=lock_fds)
     fixture_root = Path(env["CARGO_TARGET_DIR"]) if source_commit is not None else root
     listing = subprocess.run([harness, "--list", "--format", "terse"], cwd=fixture_root,
                              env=env, stdin=subprocess.DEVNULL, text=True, capture_output=True, check=False, pass_fds=lock_fds)
@@ -258,7 +259,7 @@ def run_checks(root: Path, *, environment: dict[str, str] | None = None,
             require_one_pass(name, result)
             print(f"[taira-check] passed {name} ({time.monotonic() - test_start:.1f}s)", flush=True)
         print(f"[taira-check] passed {label} ({time.monotonic() - stage_start:.1f}s)", flush=True)
-    if source_commit is None and subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root,
+    if source_commit is None and subprocess.check_output(["git", "--no-replace-objects", "rev-parse", "HEAD"], cwd=root, env=env,
                                stdin=subprocess.DEVNULL, text=True).strip() != head:
         raise CheckError("HEAD changed during checks; rerun against the intended source")
     count = sum(len(names) for _, names in STAGES)
@@ -269,10 +270,14 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo-root", type=Path, default=Path(__file__).resolve().parents[1],
                         help="repository root (default: this maintained script's parent repository)")
+    parser.add_argument("--target-dir", type=Path, help="existing development Cargo lane (default: sibling routine lane)")
     args = parser.parse_args()
+    # Lazy import keeps the low-level gate loadable from an authenticated source capture.
+    import taira_release as release
     try:
-        run_checks(args.repo_root.resolve(strict=True))
-    except (CheckError, OSError, subprocess.SubprocessError) as error:
+        release.development_check(args.repo_root, args.target_dir, dict(os.environ))
+    except (CheckError, release.PrepareError, release.ReleaseArtifactError,
+            release.gate.CheckError, OSError, ValueError, subprocess.SubprocessError) as error:
         print(f"[taira-check] FAIL: {error}", file=sys.stderr, flush=True)
         return 1
     return 0

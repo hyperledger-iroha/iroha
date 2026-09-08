@@ -77,7 +77,8 @@ Inrou runtime health and all four recovery restarts through these direct
 endpoints before staging or switching the public edge. The same retained
 mutations and restart evidence flow into the release proof. After cutover,
 `EdgeVerify` proves public HTTPS, discovery and doctor checks. Candidate failures
-therefore complete rollback before the public edge can expose the candidate.
+remain before public cutover; a failed rollback remains resumable and must be
+verified complete before another attempt is admitted.
 
 Read-only admission measures current artifact lengths and the public stage tree.
 It reads the small public container/service manifests and bounded bundle archive
@@ -95,9 +96,20 @@ physical backing plan charges the full additional guest allocation plus another
 allocation definitions. Unknown stage layouts or additional service artifacts
 fail closed instead of silently omitting their capacity.
 
-The command checks the backing host before entering the mutation corridor and
-checks the guest again before retirement, assembly, authorization and apply.
-It neither reserves space nor credits anticipated cleanup. During native apply,
+Retirement first admits one dispatcher copy and up to 64 MiB of publication
+and cleanup records, plus the existing guest and backing reserves. After the
+native rolled-back terminal and retired custody are verified under their locks,
+it prunes disposable executable and guest-image copies and chunks belonging to
+the three admitted public SoraFS manifests. Canonical inputs, runtime keys and
+configs, directories, unrelated manifests, storage metadata and native history
+remain intact. Unadmitted partial ingestion data is preserved. An owner-only
+intent makes interrupted unlink and trim operations resumable.
+
+After pruning and filesystem trim, fresh guest and physical backing observations
+must admit the full next-deployment peak before assembly or apply. Retirement
+admission cannot authorize deployment. The command checks the guest again before
+assembly, authorization and apply; it neither reserves space nor credits
+anticipated cleanup. During native apply,
 the 30-second heartbeat includes only the current native phase, step, touched
 validator count and edge flag. It never prints journal nonces or failure text,
 and progress reporting does not hash artifacts.
@@ -108,6 +120,9 @@ The remote `attempts_root/latest.json` tracks the attempt automatically. Repeati
 the command after a failure before native apply resumes that same attempt and
 nonce. Existing preapply evidence is retained before assemble and authorize run
 again. Completed retirement is reattested under the same custody locks.
+Native rollback failure history remains after a successful resume. Retirement
+requires the exact rolled-back terminal and completed host counters; historical
+failure entries do not turn a completed recovery into an unfinished rollback.
 
 An exclusive, durable `apply-started.json` is published before native apply is
 spawned. Once it exists, the command requires that exact attempt's real native

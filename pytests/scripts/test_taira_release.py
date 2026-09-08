@@ -1,6 +1,7 @@
 """Local preparation regressions; disposable files and a local Git index, no Cargo or network."""
 
 import argparse
+import ast
 import contextlib
 import hashlib
 import importlib.util
@@ -97,6 +98,13 @@ class TairaPrepareTests(unittest.TestCase):
         def check(_root, *, environment, source_commit, lock_fds):
             events.append("gate")
             self.assertEqual(environment["CARGO_TARGET_DIR"], str(self.target))
+            self.assertEqual(len(lock_fds), 3)
+            self.assertEqual(lock_fds[1], 88)  # Existing source-custody fixture descriptor.
+            os.fstat(lock_fds[0])
+            os.fstat(lock_fds[2])
+            with self.assertRaisesRegex(release.PrepareError, "still running"):
+                with release.cargo_lane(self.args.repo_root, self.target, "release"):
+                    self.fail("prepare mode lock must remain held through native checks")
         def build(_root, command, environment, log):
             events.append("build")
             self.assertEqual(environment["IROHA_GIT_COMMIT_HASH"], self.args.expected_commit)
@@ -631,9 +639,209 @@ class TairaPrepareTests(unittest.TestCase):
         class Child:
             def wait(self, timeout=None): return 0
         with patch.object(release.subprocess, "Popen", return_value=Child()) as spawn:
-            release.run_build(self.source, command, selected, self.root / "isolated.log", lock_fd=77, lane_lock_fd=88)
+            release.run_build(self.source, command, selected, self.root / "isolated.log", lock_fd=77, lane_lock_fd=88, mode_lock_fd=99)
         self.assertEqual(spawn.call_args.kwargs["cwd"], "/")
-        self.assertEqual(spawn.call_args.kwargs["pass_fds"], (77, 88))
+        self.assertEqual(spawn.call_args.kwargs["pass_fds"], (77, 88, 99))
+
+
+    def development_paths(self):
+        repo = self.root / "repo"
+        repo.mkdir()
+        (repo / "target").mkdir()
+        routine = release.routine_target(repo)
+        routine.mkdir(parents=True)
+        return repo, routine
+
+    def test_development_target_defaults_and_explicit_selectors_must_agree(self):
+        repo, routine = self.development_paths()
+        self.assertEqual(release.development_target(repo, None, {"CARGO_TARGET_DIR": str(repo / "target")}), routine)
+        selected = {"TAIRA_TESTNET_CARGO_TARGET_DIR": str(self.target)}
+        self.assertEqual(release.development_target(repo, None, selected), self.target)
+        self.assertEqual(release.development_target(repo, self.target, selected), self.target)
+        with self.assertRaisesRegex(release.PrepareError, "conflicts"):
+            release.development_target(repo, routine, selected)
+        with self.assertRaisesRegex(release.PrepareError, "empty"):
+            release.development_target(repo, None, {"TAIRA_TESTNET_CARGO_TARGET_DIR": ""})
+
+    def test_missing_and_symlinked_development_target_never_create_lane(self):
+        repo, _ = self.development_paths()
+        missing = self.root / "missing"
+        linked = self.root / "linked"
+        linked.symlink_to(self.target, target_is_directory=True)
+        for selected in (missing, linked):
+            with self.subTest(selected=selected), self.assertRaises((OSError, release.PrepareError)):
+                release.development_check(repo, selected, {})
+        self.assertFalse(missing.exists())
+
+    def test_reserved_and_marked_lanes_reject_mode_switches(self):
+        repo, routine = self.development_paths()
+        for lane, role in ((repo / "target", "development"), (routine, "release")):
+            with self.subTest(lane=lane), self.assertRaises(release.PrepareError):
+                with release.cargo_lane(repo, lane, role):
+                    self.fail("must reject reserved lane")
+            self.assertFalse((lane / ".taira-build-lane").exists())
+        for original, changed in (("development", "release"), ("release", "development")):
+            lane = self.root / original
+            lane.mkdir()
+            with release.cargo_lane(repo, lane, original):
+                pass
+            with self.assertRaisesRegex(release.PrepareError, "different build mode"):
+                with release.cargo_lane(repo, lane, changed):
+                    self.fail("must reject role switch")
+
+    def test_existing_capture_lane_rejects_development_without_new_marker(self):
+        repo, _ = self.development_paths()
+        capture = self.target / "taira-release-sources"
+        capture.mkdir()
+        for lane in (self.target, capture):
+            with self.assertRaisesRegex(release.PrepareError, "authenticated release lane"):
+                with release.cargo_lane(repo, lane, "development"):
+                    self.fail("must reject captured source lane")
+            self.assertFalse((lane / ".taira-build-lane").exists())
+
+    def test_lane_lock_is_held_through_the_gate_and_target_mode_is_unchanged(self):
+        repo, routine = self.development_paths()
+        target_mode = stat.S_IMODE(routine.stat().st_mode)
+        descriptors = []
+        def run(root, *, environment, lock_fds):
+            self.assertEqual(root, repo)
+            self.assertEqual(environment["CARGO_TARGET_DIR"], str(routine))
+            self.assertNotIn("PRIVATE_KEY", environment)
+            self.assertNotIn("RUSTFLAGS", environment)
+            self.assertNotIn("CARGO_BUILD_TARGET", environment)
+            descriptors.extend(lock_fds)
+            self.assertEqual(len(lock_fds), 1)
+            os.fstat(lock_fds[0])
+            with self.assertRaisesRegex(release.PrepareError, "still running"):
+                with release.cargo_lane(repo, routine, "development"):
+                    self.fail("must not admit competing check")
+        with patch.object(release, "isolated_cargo_environment", side_effect=lambda _r, _s, env: (env, [])), \
+             patch.object(release.gate, "run_checks", side_effect=run), contextlib.redirect_stdout(io.StringIO()):
+            release.development_check(repo, None, {"PRIVATE_KEY": "fixture must not cross", "RUSTFLAGS": "bad", "CARGO_BUILD_TARGET": "bad"})
+        with self.assertRaises(OSError):
+            os.fstat(descriptors[0])
+        self.assertEqual(stat.S_IMODE(routine.stat().st_mode), target_mode)
+        with release.cargo_lane(repo, routine, "development"):
+            pass
+
+    def test_both_check_clis_share_the_development_entrypoint(self):
+        repo, routine = self.development_paths()
+        argv = ["taira_release.py", "check", "--repo-root", str(repo), "--target-dir", str(routine)]
+        with patch.object(release.sys, "argv", argv), patch.object(release, "development_check") as check:
+            self.assertEqual(release.main(), 0)
+        self.assertEqual(check.call_args.args[:2], (repo, routine))
+        argv = ["taira_release_check.py", "--repo-root", str(repo), "--target-dir", str(routine)]
+        with patch.dict(sys.modules, {"taira_release": release}), patch.object(release.sys, "argv", argv), \
+             patch.object(release, "development_check") as check:
+            self.assertEqual(release.gate.main(), 0)
+        self.assertEqual(check.call_args.args[:2], (repo, routine))
+
+    def test_prepare_default_ignores_the_development_environment_selector(self):
+        repo, routine = self.development_paths()
+        argv = ["taira_release.py", "prepare", "--repo-root", str(repo), "--expected-commit", "a" * 40,
+                "--expected-signer", "A" * 40, "--output-dir", str(self.out), "--zig", str(self.zig),
+                "--zig-sha256", "b" * 64, "--cargo-zigbuild", str(self.zigbuild), "--cargo-zigbuild-sha256", "c" * 64]
+        with patch.object(release.sys, "argv", argv), patch.dict(os.environ, {"TAIRA_TESTNET_CARGO_TARGET_DIR": str(routine)}), \
+             patch.object(release, "prepare", return_value={"commit": "a" * 40}) as prepare, contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(release.main(), 0)
+        self.assertEqual(prepare.call_args.args[0].target_dir, repo / "target")
+
+    def test_development_and_release_share_exact_isolated_registry_paths(self):
+        repo, routine = self.development_paths()
+        (repo / "rust-toolchain.toml").write_text('[toolchain]\nchannel="1.93.1"\n')
+        source = repo / "target" / "captured-fixture"
+        source.mkdir()
+        (source / "rust-toolchain.toml").write_bytes((repo / "rust-toolchain.toml").read_bytes())
+        cache = self.root / "home" / ".cargo"
+        (cache / "registry").mkdir(parents=True)
+        (cache / "git").mkdir()
+        (cache / "config.toml").write_text("fixture must never be parsed")
+        inherited = {"HOME": str(cache.parent), "PATH": "/fixture", "RUSTFLAGS": "injected"}
+        with patch.object(release.subprocess, "check_output", return_value=str(self.zig) + "\n"), \
+             patch.object(release.shutil, "which", return_value=None):
+            development, _ = release.isolated_cargo_environment(repo, repo, release.child_environment(inherited, routine))
+            authenticated, _ = release.isolated_cargo_environment(repo, source, release.child_environment(inherited, repo / "target"))
+        self.assertEqual(development["CARGO_HOME"], authenticated["CARGO_HOME"])
+        self.assertEqual(development["CARGO_BUILD_JOBS"], "6")
+        self.assertEqual(development["CARGO_NET_OFFLINE"], "true")
+        self.assertEqual(development["CARGO"], authenticated["CARGO"])
+        self.assertEqual((Path(development["CARGO_HOME"]) / "registry").resolve(), cache / "registry")
+        self.assertFalse((Path(development["CARGO_HOME"]) / "config.toml").exists())
+        self.assertNotIn("RUSTFLAGS", development)
+
+    def test_development_lane_is_bound_to_the_canonical_repository(self):
+        repo, routine = self.development_paths()
+        other = self.root / "other-repository"
+        other.mkdir()
+        with release.cargo_lane(repo, routine, "development"):
+            pass
+        with self.assertRaisesRegex(release.PrepareError, "different build mode or repository"):
+            with release.cargo_lane(other, routine, "development"):
+                self.fail("another repository must select its own stable lane")
+
+    def test_invalid_lane_markers_fail_without_blocking_or_reading_aliases(self):
+        repo, _ = self.development_paths()
+        for kind in ("fifo", "symlink", "hardlink"):
+            lane = self.root / kind
+            lane.mkdir()
+            private = lane / ".taira-build-lane"
+            private.mkdir(mode=0o700)
+            marker = private / "role.json"
+            if kind == "fifo":
+                os.mkfifo(marker, 0o600)
+            else:
+                unrelated = lane / "unrelated"
+                unrelated.write_text("fixture contents must not be accepted")
+                unrelated.chmod(0o600)
+                if kind == "symlink":
+                    marker.symlink_to(unrelated)
+                else:
+                    os.link(unrelated, marker)
+            with self.subTest(kind=kind), self.assertRaises((release.PrepareError, OSError)):
+                with release.cargo_lane(repo, lane, "development"):
+                    self.fail("unsafe marker must fail")
+
+    def test_lane_contention_reports_the_actual_coordination_path(self):
+        repo, routine = self.development_paths()
+        with release.cargo_lane(repo, routine, "development"):
+            with self.assertRaises(release.PrepareError) as raised:
+                with release.cargo_lane(repo, routine, "development"):
+                    self.fail("must not overlap")
+        self.assertIn(str(routine / ".taira-build-lane"), str(raised.exception))
+        self.assertNotIn("/attempts", str(raised.exception))
+
+    def test_ci_selects_an_explicit_stable_development_target(self):
+        workflow = (SCRIPT.parent.parent / ".github/workflows/workspace_release.yml").read_text()
+        self.assertIn('mkdir -p "$GITHUB_WORKSPACE/target/taira-native-checks"', workflow)
+        self.assertIn('taira_release_check.py --target-dir "$GITHUB_WORKSPACE/target/taira-native-checks"', workflow)
+        self.assertLess(workflow.index('"fetch"'), workflow.index("python3 scripts/taira_release_check.py"))
+        fetch_step = workflow.split("- name: Check Taira CLI release boundaries before workspace build", 1)[1].split("- name: Build the full workspace", 1)[0]
+        fetch_python = fetch_step.split("python3 - <<'PY'\n", 1)[1].split("          PY", 1)[0]
+        ast.parse("\n".join(line.removeprefix("          ") for line in fetch_python.splitlines()), filename="workflow-isolated-fetch")
+        self.assertIn('release.isolated_cargo_environment(root, root, env)', fetch_python)
+        self.assertIn('env["CARGO_NET_OFFLINE"] = "false"', fetch_python)
+        self.assertIn('"--manifest-path", str(root / "Cargo.toml"), "--locked"', fetch_python)
+        self.assertIn('pass_fds=(lock_fd,)', fetch_python)
+        self.assertNotIn('"--offline"', fetch_python)
+        full_build = workflow.split("- name: Build the full workspace", 1)[1].split("\n  doc:", 1)[0]
+        for expected in ('target = root / "target/taira-native-checks"',
+                         'release.cargo_lane(root, target, "development")',
+                         'release.child_environment(dict(os.environ), target)',
+                         'release.isolated_cargo_environment(root, root, env)',
+                         'env["CARGO_INCREMENTAL"] = "0"',
+                         'env["CARGO"], "--config", str(root / ".cargo/config.toml"), "build"',
+                         '"--manifest-path", str(root / "Cargo.toml"), "--locked", "--offline", "--workspace"',
+                         'subprocess.run(command, cwd="/", env=env', 'pass_fds=(lock_fd,)'):
+            self.assertIn(expected, full_build)
+        python = full_build.split("python3 - <<'PY'\n", 1)[1].split("          PY", 1)[0]
+        ast.parse("\n".join(line.removeprefix("          ") for line in python.splitlines()), filename="workflow-full-build")
+        repo, _ = self.development_paths()
+        lane = repo / "target" / "taira-native-checks"
+        lane.mkdir()
+        with release.cargo_lane(repo, lane, "development"):
+            pass
+        with release.source_lane(repo, repo / "target"):
+            pass
 
 
 if __name__ == "__main__":

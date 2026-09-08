@@ -196,11 +196,13 @@ pub(crate) fn dispatch_inrou_internal_launcher_if_requested() {
     let arguments = arguments
         .take(inrou_cgroup::INROU_INTERNAL_LAUNCHER_MAX_ARGUMENTS + 1)
         .collect::<Vec<_>>();
-    if let Err(error) = inrou_cgroup::run_inrou_internal_launcher_v1(arguments) {
-        eprintln!("Inrou internal launcher failed: {error:#}");
-        std::process::exit(126);
+    match inrou_cgroup::run_inrou_internal_launcher_v1(arguments) {
+        Ok(status) => std::process::exit(status.code().unwrap_or(126)),
+        Err(error) => {
+            eprintln!("Inrou internal launcher failed: {error:#}");
+            std::process::exit(126);
+        }
     }
-    unreachable!("a successful Inrou internal launcher replaces the process")
 }
 
 #[cfg(target_os = "linux")]
@@ -1003,8 +1005,16 @@ fn terminate_inrou_confined_child_bounded(
     firewall: &mut Option<InrouLoopbackOwnerFirewall>,
     label: &str,
 ) -> eyre::Result<std::process::ExitStatus> {
-    let termination = terminate_inrou_child_bounded(child);
+    // Revoke the complete lifetime before waiting for the watchdog. Killing
+    // only the direct helper would remove the owner during namespace setup.
     let cgroup_empty = worker_cgroup.kill_and_attest_empty_bounded();
+    let termination = if cgroup_empty.is_ok() {
+        terminate_inrou_child_bounded(child)
+    } else {
+        child.try_wait().map_err(Into::into).and_then(|status| {
+            status.ok_or_else(|| eyre::eyre!("retaining the live Inrou watchdog because complete cgroup termination is unproven"))
+        })
+    };
     let attestations = InrouWorkerTeardownAttestations {
         direct_child_exited: termination.is_ok(),
         cgroup_empty: cgroup_empty.is_ok(),
@@ -11774,6 +11784,15 @@ impl HostedHttpWorker {
         }
         Some(self.egress_accounting.reporter_accounted_egress_bytes())
     }
+    fn force_stop_child(&mut self) -> eyre::Result<std::process::ExitStatus> {
+        #[cfg(target_os = "linux")]
+        self.cgroup
+            .as_ref()
+            .ok_or_else(|| eyre::eyre!("Inrou worker lost its lifetime cgroup"))?
+            .kill_and_attest_empty_bounded()
+            .wrap_err("terminate the complete Inrou lifetime before reaping its watchdog")?;
+        terminate_inrou_child_bounded(&mut self.child)
+    }
     fn stop(&mut self) {
         let _ = &self.stderr_log_path;
         if let Some(mut port_forward) = self.port_forward.take() {
@@ -11808,7 +11827,7 @@ impl HostedHttpWorker {
                                     stop_grace_ms = self.stop_grace.as_millis(),
                                     "Inrou PortableVM exceeded its effective graceful shutdown window; forcing bounded SIGKILL"
                                 );
-                                terminate_inrou_child_bounded(&mut self.child)
+                                self.force_stop_child()
                             }
                             Err(error) => {
                                 iroha_logger::error!(
@@ -11816,7 +11835,7 @@ impl HostedHttpWorker {
                                     pid = self.child.id(),
                                     "failed to attest Inrou PortableVM exit during graceful shutdown; forcing bounded SIGKILL"
                                 );
-                                terminate_inrou_child_bounded(&mut self.child)
+                                self.force_stop_child()
                             }
                         }
                     }
@@ -11826,7 +11845,7 @@ impl HostedHttpWorker {
                             pid = self.child.id(),
                             "Inrou QMP system_powerdown request failed; forcing bounded SIGKILL"
                         );
-                        terminate_inrou_child_bounded(&mut self.child)
+                        self.force_stop_child()
                     }
                 }
             }
@@ -11836,7 +11855,7 @@ impl HostedHttpWorker {
                     pid = self.child.id(),
                     "failed to poll Inrou PortableVM before graceful shutdown; forcing bounded SIGKILL"
                 );
-                terminate_inrou_child_bounded(&mut self.child)
+                self.force_stop_child()
             }
         };
         #[cfg(target_os = "linux")]
@@ -17104,7 +17123,7 @@ fn build_inrou_portable_vm_command(
         identity.gid,
     )?;
     let mut next_descriptor = 3;
-    let mut inherited_descriptors = Vec::with_capacity(namespace_plan.binding_files().len() + 2);
+    let mut inherited_descriptors = Vec::with_capacity(namespace_plan.binding_files().len() + 4);
     inherited_descriptors.push(duplicate_inrou_launcher_descriptor(
         launch_barrier.child_gate_reader()?,
         &mut next_descriptor,
@@ -17113,6 +17132,20 @@ fn build_inrou_portable_vm_command(
         launch_barrier.child_ack_writer()?,
         &mut next_descriptor,
     )?);
+    let supervisor = fs::File::from(
+        rustix::process::pidfd_open(
+            rustix::process::getpid(),
+            rustix::process::PidfdFlags::empty(),
+        )
+        .wrap_err("open the exact Inrou supervisor lifetime pidfd")?,
+    );
+    let cgroup_directory = inrou_cgroup::open_inrou_watchdog_directory(expected_cgroup_path)?;
+    for descriptor in [&supervisor, &cgroup_directory] {
+        inherited_descriptors.push(duplicate_inrou_launcher_descriptor(
+            descriptor,
+            &mut next_descriptor,
+        )?);
+    }
     for binding in namespace_plan.binding_files() {
         inherited_descriptors.push(duplicate_inrou_launcher_descriptor(
             binding,
@@ -17121,7 +17154,9 @@ fn build_inrou_portable_vm_command(
     }
     let gate_fd = inherited_descriptors[0].as_raw_fd();
     let acknowledgement_fd = inherited_descriptors[1].as_raw_fd();
-    let binding_fds = inherited_descriptors[2..]
+    let supervisor_pidfd = inherited_descriptors[2].as_raw_fd();
+    let cgroup_directory_fd = inherited_descriptors[3].as_raw_fd();
+    let binding_fds = inherited_descriptors[4..]
         .iter()
         .map(|descriptor| descriptor.as_raw_fd())
         .collect::<Vec<_>>();
@@ -17149,6 +17184,8 @@ fn build_inrou_portable_vm_command(
         .arg(gate_fd.to_string())
         .arg(acknowledgement_fd.to_string())
         .arg(expected_cgroup_path)
+        .arg(supervisor_pidfd.to_string())
+        .arg(cgroup_directory_fd.to_string())
         .arg(binding_map.len().to_string());
     for binding in binding_map {
         command

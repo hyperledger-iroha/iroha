@@ -1,11 +1,37 @@
 # Taira CLI release checks
 
-Run `python3 scripts/taira_release_check.py` before the existing Taira four-binary
-Linux release build. It compiles the native `iroha_cli` test harness once through
-`scripts/cargo_fast.sh`, reuses the warm Cargo target and native jobserver, and
-reports build, stage and test durations. Python 3.11+ and the repository Rust
-and Cargo toolchain are required. Use an existing `CARGO_TARGET_DIR` only for
-an established separate native build lane; no clean or per-run target is needed.
+Run either `python3 scripts/taira_release.py check` or
+`python3 scripts/taira_release_check.py` before the Taira four-binary Linux
+release build. Both compile one native `iroha_cli` harness with six Cargo jobs
+and report build, stage and test durations. Python 3.11+, the repository Rust
+toolchain, and previously fetched dependencies are required; Cargo runs offline.
+
+Ordinary checks use the existing sibling `.taira-testnet-build-targets/routine`
+directory. `--target-dir` or `TAIRA_TESTNET_CARGO_TARGET_DIR` can select another
+existing development lane; both must agree if supplied. Ambient
+`CARGO_TARGET_DIR` does not select this lane. Neither command creates or cleans
+a Cargo target. Keep a stable lane for repeated checks.
+
+Authenticated `prepare` retains the repository's `target/` lane and its fixed
+Git-object source capture. Its explicit `--target-dir` override remains available;
+the development environment selector does not affect preparation. Checks refuse
+the exact repository `target/`, existing source capture lanes, and lanes marked
+for release. Preparation refuses the routine lane and lanes marked for development.
+A stable `.taira-build-lane/` owner-private directory records the role and canonical
+repository root and holds a nonblocking mode lock through Cargo and every harness
+child. Another checkout must select its own stable lane, so alternating checkouts
+cannot churn the same lane's source paths. Preparation also
+retains its original source-custody and output locks. A busy lane fails before
+compilation. Existing target permissions remain unchanged.
+
+Both modes use the same isolated `target/taira-release-cargo-home`, including the
+same lexical registry paths, selected Rust toolchain, explicit repository Cargo
+configuration, optional persistent sccache and the existing linker selection.
+Cargo starts from `/` to exclude ancestor configuration. Ambient Cargo settings
+and runtime credentials are not inherited. Diagnostic checks still compile the
+mutable working tree and verify HEAD continuity; they never qualify a release.
+The mode locks coordinate these entry points only: arbitrary direct Cargo commands
+do not acquire them. Keep those commands out of an active preparation lane.
 
 The check runs focused regressions for secure inherited configuration and signing FDs,
 network-369 inventory decoding, aggregate timeout admission before custody,
@@ -48,10 +74,11 @@ must exist and execute exactly once. Missing,
 ignored, failed or empty selections fail the command. Fix the named failure and
 rerun the same command to reuse compiled dependencies.
 
-The native compile command is:
+The selected toolchain's Cargo executes this command from `/` with the isolated
+environment and selected `CARGO_TARGET_DIR`:
 
 ```sh
-scripts/cargo_fast.sh -- test --locked -p iroha_cli --bin iroha --no-run --message-format=json-render-diagnostics
+cargo --config /absolute/repo/.cargo/config.toml test --manifest-path /absolute/repo/Cargo.toml --locked --offline -p iroha_cli --bin iroha --no-run --message-format=json-render-diagnostics
 ```
 
 Only existing disposable test fixtures are used. The gate accepts no live
@@ -62,8 +89,17 @@ probes against actual Linux release binaries. Public readiness still requires
 the end-to-end live checks.
 
 The `build` job in `.github/workflows/workspace_release.yml` runs this check
-before its full workspace build using the same Cargo cache. The existing local
-Taira release caller should run it before cross-compilation. The canonical
+before its full workspace build. CI provisions the stable `target/taira-native-checks`
+subdirectory and passes it explicitly; the existing root target cache includes that
+independent diagnostic target. CI runs `cargo fetch --locked` first to initialize
+the same isolated registry cache, using the selected toolchain, explicit source
+configuration and mode lock. Only this fetch sets `CARGO_NET_OFFLINE=false`; the
+gate itself remains offline. The subsequent
+full workspace build acquires the same development lane lock and uses the same
+target, isolated Cargo home and explicit configuration. It explicitly preserves
+CI's `CARGO_INCREMENTAL=0` after sanitizing the environment. Matching dependencies can
+therefore reuse the gate's artifacts instead of being rebuilt into a second tree. The existing local Taira release caller should run
+it before cross-compilation. The canonical
 release artifact producer remains `scripts/run_release_pipeline.py`; it does
 not gain a hidden build step or additional runtime authority.
 

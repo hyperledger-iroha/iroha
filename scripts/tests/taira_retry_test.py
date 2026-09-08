@@ -391,11 +391,22 @@ class RetryTests(unittest.TestCase):
             mock.patch.object(retry, "RETIRE_RETAINED_DEPLOYMENT", "actual75"),
         ):
             retry._retire_validate_terminal(inventory, value)
+            recovered = dict(value, rollback_failures=[
+                "phase=rollback;target=taira-validator-3;class=operation_failed;sha256=" + "b" * 64
+            ])
+            retry._retire_validate_terminal(inventory, recovered)
+            for field, changed in (("rollback_next_validator", 3),
+                                   ("status", "rolling_back"),
+                                   ("edge_rollback_complete", False)):
+                with self.subTest(recovered=field), self.assertRaises(retry._retire_RebindError):
+                    retry._retire_validate_terminal(inventory, dict(recovered, **{field: changed}))
             for field, changed in (
                 ("edge_rollback_complete", False),
                 ("rollback_next_validator", 3),
                 ("recovery_intent", {}),
                 ("rollback_failures", ["failed"]),
+                ("rollback_failures", recovered["rollback_failures"] * 6),
+                ("rollback_failures", ["phase=rollback;target=other;class=operation_failed;sha256=" + "b" * 64]),
                 ("phase", "rolling_back"),
             ):
                 with (
@@ -1028,6 +1039,7 @@ class WorkflowTests(unittest.TestCase):
             "capacity_plan": full_plan(),
         }
         self.request = {
+            "intent": "deployment",
             "plan": self.plan,
             "binary": self.binary,
             "source": self.source,
@@ -1258,6 +1270,314 @@ class WorkflowTests(unittest.TestCase):
         with self.assertRaisesRegex(retry.RetryError, "pending mutation"):
             retry.guest_locked(self.request, self.capacity, self.attempts)
         self.assertEqual(self.calls.count("apply"), 1)
+
+
+    def test_retirement_returns_without_native_apply_and_resumes_same_attempt(self):
+        self.request["intent"] = "retirement"
+        first = retry.guest_locked(self.request, self.capacity, self.attempts)
+        attempt = self.attempts / first["attempt_id"]
+        self.assertEqual(first["schema"], "taira.retry-retirement.v1")
+        self.assertFalse(first["native_apply_started"])
+        self.assertEqual(self.calls, [])
+        self.assertFalse((attempt / "apply-started.json").exists())
+        self.assertFalse((attempt / "result.json").exists())
+        self.assertTrue((attempt / "retirement-ready.json").exists())
+        second = retry.guest_locked(self.request, self.capacity, self.attempts)
+        self.assertEqual(second, first)
+        self.request.update(intent="deployment", retirement_attempt_id=first["attempt_id"])
+        result = retry.guest_locked(self.request, self.capacity, self.attempts)
+        self.assertEqual(result["attempt_id"], first["attempt_id"])
+        self.assertEqual(self.calls.count("apply"), 1)
+
+    def test_changed_retirement_attempt_stops_before_any_native_call(self):
+        self.request["intent"] = "retirement"
+        retry.guest_locked(self.request, self.capacity, self.attempts)
+        self.request.update(intent="deployment", retirement_attempt_id="retry-1000000000000000-deadbeef")
+        with self.assertRaisesRegex(retry.RetryError, "retired attempt changed"):
+            retry.guest_locked(self.request, self.capacity, self.attempts)
+        self.assertEqual(self.calls, [])
+
+    def test_retirement_capacity_cannot_authorize_deployment(self):
+        bounded = retry.retirement_capacity_plans(self.plan["runtime_root"], "/backing", self.binary)
+        self.request.update(intent="retirement", backing_path="/backing")
+        self.plan["capacity_plan"] = bounded["guest_plan"]
+        retry.validate_execution_capacity(self.request, vars(capacity), False, None)
+        self.request["intent"] = "deployment"
+        with self.assertRaises(retry.RetryError):
+            retry.validate_execution_capacity(self.request, vars(capacity), False, None)
+        self.request["intent"] = "retirement"
+        self.plan["capacity_plan"]["allocations"][0]["bytes"] -= 1
+        with self.assertRaisesRegex(retry.RetryError, "exact bounded"):
+            retry.validate_execution_capacity(self.request, vars(capacity), False, None)
+
+    def test_execution_intent_and_completed_retirement_are_rejected(self):
+        for invalid in (None, "", "apply", True):
+            with self.assertRaisesRegex(retry.RetryError, "explicit retry"):
+                retry.execution_intent({"intent": invalid})
+        self.request.update(intent="retirement", backing_path="/backing")
+        with self.assertRaisesRegex(retry.RetryError, "cannot be retired"):
+            retry.validate_execution_capacity(self.request, vars(capacity), True, "completed")
+
+
+
+class MainOrderTests(unittest.TestCase):
+    def run_main(self, *, completed=False, backing_pass=True, retirement_schema=None):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            root.chmod(0o700)
+            build, binary, source = artifact_receipts()
+            plan = {
+                "guest": {"runtime_root": "/runtime", "expected_mac": "00:00:00:00:00:00"},
+                "guest_ssh": {"argv": ["approved-guest"]},
+                "backing_ssh": {"argv": ["approved-backing"]},
+                "backing_path": "/backing",
+                "binary_transfer": {"sha256": "1" * 64},
+                "source_transfer": {"sha256": "2" * 64},
+            }
+            planpath = root / "plan.json"
+            attempt_id = "retry-1000000000000000-deadbeef"
+            state = {"retired": False}
+            calls = []
+            def payload(_source, function, argument, *, print_result=False):
+                return {"function": function, "request": copy.deepcopy(argument)}
+            def remote(_argv, wire, _output, phase):
+                calls.append((phase, wire["function"]))
+                request = wire["request"]
+                if wire["function"] == "guest_admit":
+                    derived = dict(request["plan"], attempts_root="/runtime/retry-v1", capacity_plan={"fixture": request["intent"]})
+                    return {"schema": "taira.retry-admission.v1", "commit": build["commit"],
+                            "intent": request["intent"], "plan": derived,
+                            "backing_plan": {"fixture": request["intent"]},
+                            "postconditions_only": completed,
+                            "pending_attempt_id": attempt_id if state["retired"] or completed else None}
+                if wire["function"] == "evaluate":
+                    return {"passed": backing_pass if phase == "backing-capacity" else True}
+                if request["intent"] == "retirement":
+                    state["retired"] = True
+                    return {"schema": retirement_schema or "taira.retry-retirement.v1",
+                            "intent": "retirement", "passed": True, "commit": build["commit"],
+                            "attempt_id": attempt_id, "native_apply_started": False,
+                            "binary_manifest_sha256": request["binary_sha256"],
+                            "source_manifest_sha256": request["source_sha256"],
+                            "custody_plan_sha256": retry.custody_plan_digest(request["plan"])}
+                self.assertEqual(request["intent"], "deployment")
+                if not completed:
+                    self.assertEqual(request["retirement_attempt_id"], attempt_id)
+                return {"schema": retry.RESULT_SCHEMA, "passed": True, "commit": build["commit"]}
+            argv = ["taira_retry.py", "--plan", str(planpath), "--output-root", str(root)]
+            records = {"preparation": build, "binary_transfer": binary, "source_transfer": source}
+            with mock.patch.object(retry.sys, "argv", argv), \
+                 mock.patch.object(retry, "public_record", side_effect=lambda path, *a, **k: json.dumps(plan).encode() if Path(path) == planpath else b"# public source fixture"), \
+                 mock.patch.object(retry, "validate_plan", return_value=(build["commit"], records)), \
+                 mock.patch.object(retry, "remote_payload", side_effect=payload), \
+                 mock.patch.object(retry, "remote_command", side_effect=remote), \
+                 contextlib.redirect_stdout(io.StringIO()):
+                try:
+                    retry.main()
+                except retry.RetryError:
+                    return calls, False
+            return calls, True
+
+    def test_prune_precedes_fresh_guest_and_backing_admission(self):
+        calls, passed = self.run_main()
+        self.assertTrue(passed)
+        self.assertEqual([phase for phase, _ in calls], [
+            "retirement-admission", "retirement-backing-capacity", "retirement",
+            "admission", "backing-capacity", "native-retry"])
+
+    def test_failed_fresh_backing_admission_never_runs_native_deployment(self):
+        calls, passed = self.run_main(backing_pass=False)
+        self.assertFalse(passed)
+        self.assertEqual(calls[-1][0], "backing-capacity")
+        self.assertNotIn("native-retry", [phase for phase, _ in calls])
+
+    def test_retirement_receipt_cannot_be_a_deployment_success_receipt(self):
+        calls, passed = self.run_main(retirement_schema=retry.RESULT_SCHEMA)
+        self.assertFalse(passed)
+        self.assertEqual(calls[-1][0], "retirement")
+
+    def test_completed_deployment_skips_retirement_and_keeps_capacity_checks(self):
+        calls, passed = self.run_main(completed=True)
+        self.assertTrue(passed)
+        self.assertEqual([phase for phase, _ in calls], [
+            "retirement-admission", "admission", "backing-capacity", "native-retry"])
+
+
+
+class RetiredPublicPruneTests(unittest.TestCase):
+    def setUp(self):
+        # Parent custody is exercised by the real helper. Keep fixtures under
+        # this owner-controlled checkout instead of world-writable /tmp.
+        self.tmp = tempfile.TemporaryDirectory(dir=SCRIPT.parent)
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name).resolve()
+        self.runtime = self.root / 'runtime'
+        self.work = self.runtime / 'retry/retirement'
+        self.work.mkdir(parents=True, mode=0o700)
+        self.prep = self.runtime / 'prep'
+        self.bins = self.runtime / 'original/bin'
+        self.nonce = '1' * 32
+        self.invpath = self.runtime / 'inventory.json'
+        self.context = {'commit': 'a' * 40, 'inventory_sha256': 'b' * 64,
+                        'terminal_sha256': 'c' * 64, 'authorization_sha256': 'd' * 64,
+                        'nonce': self.nonce, 'uploads': []}
+        roles = [('iroha_cli', 'iroha'), ('iroha3d', 'iroha3d_taira'),
+                 ('sorafs_node', 'sorafs-node')]
+        for _, name in roles:
+            self.file(self.bins / name, b'public executable', 0o755)
+        self.inventory = {'validators': [], 'inrou_canary': {}}
+        for index, role in enumerate(('bundle', 'guest', 'discovery'), 1):
+            content = ('public ' + role + ' manifest').encode()
+            self.inventory['inrou_canary'][role + '_manifest_digest_hex'] = str(index) * 64
+            self.inventory['inrou_canary'][role + '_manifest_sha256'] = retry._retire_digest(content)
+        self.targets = []
+        for slug in retry.RETIRE_SLUGS:
+            artifacts = [{'role': role, 'local_path': str(self.bins / name),
+                          'size': len(b'public executable')} for role, name in
+                         (roles[:1] if slug == 'taira-edge' else roles)]
+            host = {'slug': slug, 'artifacts': artifacts}
+            if slug == 'taira-edge': self.inventory['edge'] = host
+            else: self.inventory['validators'].append(host)
+            upload = self.work / 'uploads' / slug
+            self.context['uploads'].append({'slug': slug, 'archive': str(upload)})
+            self.file(upload / 'artifact-config', b'PRIVATE CONFIG PRESERVE', 0o600)
+            for role, name in (roles[:1] if slug == 'taira-edge' else roles):
+                staged_name = 'iroha' if role == 'iroha_cli' else 'artifact-' + role
+                for path, mode in [(upload / staged_name, 0o755),
+                    (self.runtime / 'journal-v1/staged-artifacts-v1' / ('b' * 64) /
+                     slug / self.nonce / staged_name, 0o500 if role == 'iroha_cli' else 0o400)]:
+                    self.file(path, b'public executable', mode); self.targets.append(path)
+                if slug != 'taira-edge':
+                    release = self.work / 'retired-control' / slug / 'rollback' / self.nonce / 'first-release.after'
+                    self.marker(release, slug, 'release')
+                    path = release / 'bin' / name
+                    self.file(path, b'public executable', 0o755); self.targets.append(path)
+                    self.file(release / 'bin/private-config.toml', b'PRIVATE PRESERVE', 0o600)
+            if slug != 'taira-edge':
+                fresh = self.work / 'retired-control' / slug / 'rollback' / self.nonce / 'fresh-state.after'
+                self.marker(fresh, slug, 'fresh_state')
+                store = fresh / 'sorafs-data'; self.marker(store, slug, 'fresh_state_entry')
+                self.file(store / '.storage.lock', b'', 0o600)
+                for index, role in enumerate(('bundle', 'guest', 'discovery'), 1):
+                    manifest = store / 'manifests' / (str(index) * 64)
+                    self.file(manifest / 'manifest.to', ('public ' + role + ' manifest').encode(), 0o600)
+                    self.file(manifest / 'metadata.to', b'PRIVATE METADATA PRESERVE', 0o600)
+                    chunk = manifest / 'chunks/chunk_00000.bin'
+                    self.file(chunk, b'public chunk', 0o600); self.targets.append(chunk)
+                self.file(store / 'manifests' / ('f' * 64) / 'chunks/chunk_00000.bin', b'OTHER DATA PRESERVE', 0o600)
+                self.file(store / '.ingest-staging/unknown/chunk_00000.bin', b'UNADMITTED PRESERVE', 0o600)
+        for name in ('rootfs.ext4', 'vmlinux', 'initrd.img'):
+            self.file(self.prep / 'inrou-stage/payloads/guest/aarch64' / name, b'public guest', 0o600)
+            path = self.runtime / 'journal-v1/runtime-stage-v1' / ('d' * 64) / 'payloads/guest/aarch64' / name
+            self.file(path, b'public guest', 0o400); self.targets.append(path)
+        # The retained inventory digest is over its actual native bytes.
+        self.file(self.invpath, json.dumps(self.inventory, indent=2).encode(), 0o600)
+        prior_digest = self.context['inventory_sha256']
+        self.context['inventory_sha256'] = retry._retire_digest(self.invpath.read_bytes())
+        staged = self.runtime / 'journal-v1/staged-artifacts-v1'
+        (staged / prior_digest).rename(staged / self.context['inventory_sha256'])
+        self.targets = [Path(str(path).replace('/' + prior_digest + '/', '/' + self.context['inventory_sha256'] + '/')) for path in self.targets]
+        # Update generated markers to the final actual inventory binding.
+        for path in self.work.rglob('.public-reset-generated-v1.json'):
+            value = json.loads(path.read_bytes()); value['inventory_sha256'] = self.context['inventory_sha256']
+            path.write_text(json.dumps(value))
+        self.result = {'published': True, 'control_archived': True, 'native_rollback_completed': True,
+                       'inventory_sha256': self.context['inventory_sha256'],
+                       'terminal_sha256': self.context['terminal_sha256'],
+                       'retired_control_path': str(self.work / 'retired-control')}
+        self.stack = contextlib.ExitStack(); self.addCleanup(self.stack.close)
+        for name, value in [('RETIRE_RUNTIME', self.runtime), ('RETIRE_WORK', self.work),
+                            ('RETIRE_BINS', self.bins), ('CONTINUITY_PREP', self.prep),
+                            ('RETIRE_INVENTORY_PATH', self.invpath)]:
+            self.stack.enter_context(mock.patch.object(retry, name, value))
+        self.stack.enter_context(mock.patch.object(retry, '_retire_read_public', side_effect=lambda g,p,**k: Path(p).read_bytes()))
+        self.stack.enter_context(mock.patch.object(retry, '_retire_retained_state'))
+        self.stack.enter_context(mock.patch.object(retry, '_retire_live_references', return_value={'passed': True}))
+        self.trim = self.stack.enter_context(mock.patch.object(retry.subprocess, 'run', return_value=SimpleNamespace(returncode=0)))
+        self.guard = {'fresh_write': lambda path,data,mode: self.file(path,data,mode), 'sync_directory': lambda path: None}
+
+    def file(self, path, data, mode):
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        path.write_bytes(data); path.chmod(mode)
+
+    def marker(self, path, slug, kind):
+        self.file(path / '.public-reset-generated-v1.json', json.dumps({
+            'schema': 'iroha.taira.public-reset.generated-path.v1', 'kind': kind,
+            'host_slug': slug, 'inventory_sha256': self.context['inventory_sha256'],
+            'authorization_nonce': self.nonce, 'revision': self.context['commit']}).encode(), 0o600)
+
+    def prune(self):
+        return retry._retire_prune_public(self.guard, self.context, self.result)
+
+    def test_closed_public_prune_preserves_private_siblings_and_is_idempotent(self):
+        preserved = {path: path.read_bytes() for path in self.root.rglob('*')
+                     if path.is_file() and path not in self.targets}
+        directory_ids = {path: path.stat().st_ino for path in self.root.rglob('*') if path.is_dir()}
+        first = self.prune(); second = self.prune()
+        self.assertEqual(first, second); self.assertEqual(first['file_count'], 53)
+        self.assertTrue(all(not path.exists() for path in self.targets))
+        self.assertTrue(all(path.read_bytes() == data for path,data in preserved.items()))
+        self.assertTrue(all(path.stat().st_ino == inode for path,inode in directory_ids.items()))
+        self.assertEqual(self.trim.call_count, 2)
+
+    def test_closed_public_prune_resumes_an_interrupted_unlink_and_trim(self):
+        original = Path.unlink; count = 0
+        def interrupted(path, *args, **kwargs):
+            nonlocal count
+            count += 1
+            if count == 4: raise OSError('simulated unlink interruption')
+            return original(path, *args, **kwargs)
+        with mock.patch.object(Path, 'unlink', interrupted), self.assertRaises(OSError): self.prune()
+        self.assertTrue((self.work / 'public-prune-intent.json').exists())
+        self.assertFalse((self.work / 'public-prune-completed.json').exists())
+        self.trim.return_value = SimpleNamespace(returncode=1)
+        with self.assertRaisesRegex(retry._retire_RebindError, 'trim failed'): self.prune()
+        self.trim.return_value = SimpleNamespace(returncode=0)
+        self.assertEqual(self.prune()['file_count'], 53)
+
+    def test_closed_public_prune_rejects_forged_manifest_and_unpublished_retirement(self):
+        self.result['published'] = False
+        with self.assertRaises(retry._retire_RebindError): self.prune()
+        self.result['published'] = True
+        manifest = next(self.work.rglob('manifest.to')); manifest.write_bytes(b'forged public manifest')
+        with self.assertRaisesRegex(retry._retire_RebindError, 'admitted public manifest'): self.prune()
+        self.assertTrue(all(path.exists() for path in self.targets))
+
+    def test_closed_public_prune_rejects_links_unknown_chunks_and_live_references(self):
+        victim = self.targets[0]; original = victim.read_bytes(); victim.unlink()
+        victim.symlink_to(self.bins / 'iroha')
+        with self.assertRaises(retry.RetryError): self.prune()
+        victim.unlink(); self.file(victim, original, 0o755)
+        chunk = next(path for path in self.targets if path.name.startswith('chunk_'))
+        foreign = chunk.parent / 'private-key'; self.file(foreign, b'PRESERVE', 0o600)
+        with self.assertRaisesRegex(retry._retire_RebindError, 'unexpected entry'): self.prune()
+        foreign.unlink()
+        retry._retire_live_references.return_value = {'passed': False}
+        with self.assertRaisesRegex(retry._retire_RebindError, 'live reference'): self.prune()
+        self.assertTrue(all(path.exists() for path in self.targets))
+
+    def test_published_retirement_apply_finishes_prune_on_both_reopens(self):
+        self.context.update(old_dispatcher_sha256="e" * 64, new_dispatcher_sha256="e" * 64)
+        self.file(self.work / "manifest.json", retry._retire_canonical(self.context), 0o600)
+        self.file(self.work / "result.json", retry._retire_canonical(self.result), 0o600)
+        with (self.bins / "iroha").open("rb") as source, \
+             mock.patch.object(retry, "_retire_locks", side_effect=lambda *args: contextlib.nullcontext()), \
+             mock.patch.object(retry, "_retire_binary", side_effect=lambda *args: SimpleNamespace(fd=source.fileno(), close=lambda: None)), \
+             mock.patch.object(retry, "_retire_no_running_inode"), \
+             mock.patch.object(retry, "_retire_check_guards"):
+            first = retry._retire_apply(self.guard, self.context)
+            second = retry._retire_apply(self.guard, self.context)
+        self.assertEqual(first, self.result)
+        self.assertEqual(second, self.result)
+        self.assertTrue(all(not path.exists() for path in self.targets))
+        self.assertEqual(self.trim.call_count, 2)
+
+    def test_closed_public_prune_rejects_replacement_after_persisted_intent(self):
+        self.trim.return_value = SimpleNamespace(returncode=1)
+        with self.assertRaises(retry._retire_RebindError): self.prune()
+        self.file(self.targets[0], b'public executable', 0o755)
+        with self.assertRaisesRegex(retry._retire_RebindError, 'appeared or changed'): self.prune()
+        self.assertTrue(self.targets[0].exists())
 
 
 if __name__ == "__main__":

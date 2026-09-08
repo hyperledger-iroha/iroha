@@ -21,8 +21,9 @@ SPEC.loader.exec_module(gate)
 
 class EarlyReleaseCheckTests(unittest.TestCase):
     def test_command_reuses_native_cargo_lane_and_does_not_run_full_suite(self):
-        self.assertEqual(gate.compile_command(Path("/repo")), [
-            "/repo/scripts/cargo_fast.sh", "--", "test", "--locked", "-p", "iroha_cli",
+        self.assertEqual(gate.compile_command(Path("/repo"), {"CARGO": "/fixed/cargo"}), [
+            "/fixed/cargo", "--config", "/repo/.cargo/config.toml", "test",
+            "--manifest-path", "/repo/Cargo.toml", "--locked", "--offline", "-p", "iroha_cli",
             "--bin", "iroha", "--no-run", "--message-format=json-render-diagnostics",
         ])
 
@@ -47,7 +48,7 @@ class EarlyReleaseCheckTests(unittest.TestCase):
         stdout, stderr = io.StringIO(), io.StringIO()
         with patch.object(gate.subprocess, "Popen", return_value=process), contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
             with self.assertRaisesRegex(gate.CheckError, "native CLI build failed"):
-                gate.compile_harness(Path("/fixture-only"), {})
+                gate.compile_harness(Path("/fixture-only"), {"CARGO": "/fixed/cargo"})
         self.assertEqual(stderr.getvalue(), diagnostic)
         self.assertIn("[cargo-fast] warm lane", stdout.getvalue())
         self.assertNotIn("compiler-message", stdout.getvalue())
@@ -89,7 +90,7 @@ class EarlyReleaseCheckTests(unittest.TestCase):
         process = MagicMock()
         process.__enter__.return_value = child
         with patch.object(gate.subprocess, "Popen", return_value=process) as spawn, contextlib.redirect_stdout(io.StringIO()):
-            gate.compile_harness(Path("/frozen"), {"CARGO": "/fixed/cargo"}, frozen=True, lock_fds=(77, 88))
+            gate.compile_harness(Path("/frozen"), {"CARGO": "/fixed/cargo"}, lock_fds=(77, 88))
         self.assertEqual(spawn.call_args.args[0][:4], ["/fixed/cargo", "--config", "/frozen/.cargo/config.toml", "test"])
         self.assertEqual(spawn.call_args.kwargs["cwd"], "/")
         self.assertEqual(spawn.call_args.kwargs["pass_fds"], (77, 88))
@@ -97,10 +98,33 @@ class EarlyReleaseCheckTests(unittest.TestCase):
              patch.object(gate, "compile_harness", return_value="/fixture/harness") as compile, \
              patch.object(gate.subprocess, "run", side_effect=[subprocess.CompletedProcess([], 0, "fixture: test\n", ""), subprocess.CompletedProcess([], 0, "test fixture ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored;\n", "")]) as run, \
              patch.object(gate, "STAGES", (("fixtures", ("fixture",)),)), contextlib.redirect_stdout(io.StringIO()):
-            gate.run_checks(Path("/frozen"), environment={"CARGO": "/fixed/cargo", "CARGO_TARGET_DIR": "/warm"}, source_commit="a" * 40, lock_fds=(77, 88))
+            gate.run_checks(Path("/frozen"), environment={"CARGO": "/fixed/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/warm"}, source_commit="a" * 40, lock_fds=(77, 88))
         self.assertEqual([call.kwargs["cwd"] for call in run.call_args_list], [Path("/warm"), Path("/warm")])
-        self.assertTrue(compile.call_args.kwargs["frozen"])
+        self.assertNotIn("frozen", compile.call_args.kwargs)
         self.assertEqual(compile.call_args.args[1]["VERGEN_GIT_SHA"], "a" * 40)
+
+
+    def test_mutable_check_keeps_git_checks_and_inherits_lane_lock_in_every_child(self):
+        env = {"CARGO": "/fixed/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/routine"}
+        results = [subprocess.CompletedProcess([], 0, "fixture: test\n", ""),
+                   subprocess.CompletedProcess([], 0, "test fixture ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored;\n", "")]
+        with patch.object(gate.subprocess, "check_output", return_value="a" * 40) as git, \
+             patch.object(gate, "compile_harness", return_value="/fixture/harness") as compile, \
+             patch.object(gate.subprocess, "run", side_effect=results) as run, \
+             patch.object(gate, "STAGES", (("fixtures", ("fixture",)),)), contextlib.redirect_stdout(io.StringIO()):
+            gate.run_checks(Path("/mutable"), environment=env, lock_fds=(77,))
+        self.assertEqual(git.call_count, 2)
+        self.assertTrue(all(call.kwargs["env"]["CARGO_HOME"] == "/isolated" for call in git.call_args_list))
+        self.assertEqual(compile.call_args.kwargs, {"lock_fds": (77,)})
+        self.assertTrue(all(call.kwargs["pass_fds"] == (77,) for call in run.call_args_list))
+        self.assertTrue(all(call.kwargs["cwd"] == Path("/mutable") for call in run.call_args_list))
+
+    def test_unisolated_low_level_check_is_rejected_before_git_or_cargo(self):
+        with patch.object(gate.subprocess, "check_output") as git, patch.object(gate, "compile_harness") as compile:
+            with self.assertRaisesRegex(gate.CheckError, "isolated Cargo environment"):
+                gate.run_checks(Path("/mutable"), environment={})
+        git.assert_not_called()
+        compile.assert_not_called()
 
 
 if __name__ == "__main__":

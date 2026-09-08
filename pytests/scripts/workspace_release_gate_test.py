@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import json
 import os
 import re
@@ -46,6 +47,47 @@ REQUIRED_NUMERIC_TEST_COMMANDS = (
     "randomized_decimal_arithmetic_matches_independent_rational_reference",
 )
 
+
+ISOLATED_FETCH_PYTHON = """\
+import os
+from pathlib import Path
+import subprocess
+import sys
+
+root = Path.cwd().resolve(strict=True)
+sys.path.insert(0, str(root / "scripts"))
+import taira_release as release
+
+target = root / "target/taira-native-checks"
+with release.cargo_lane(root, target, "development") as lock_fd:
+    env = release.child_environment(dict(os.environ), target)
+    env, _ = release.isolated_cargo_environment(root, root, env)
+    env["CARGO_NET_OFFLINE"] = "false"
+    command = [env["CARGO"], "--config", str(root / ".cargo/config.toml"), "fetch",
+               "--manifest-path", str(root / "Cargo.toml"), "--locked"]
+    subprocess.run(command, cwd="/", env=env, stdin=subprocess.DEVNULL,
+                   check=True, pass_fds=(lock_fd,))
+"""
+ISOLATED_BUILD_PYTHON = """\
+import os
+from pathlib import Path
+import subprocess
+import sys
+
+root = Path.cwd().resolve(strict=True)
+sys.path.insert(0, str(root / "scripts"))
+import taira_release as release
+
+target = root / "target/taira-native-checks"
+with release.cargo_lane(root, target, "development") as lock_fd:
+    env = release.child_environment(dict(os.environ), target)
+    env, _ = release.isolated_cargo_environment(root, root, env)
+    env["CARGO_INCREMENTAL"] = "0"
+    command = [env["CARGO"], "--config", str(root / ".cargo/config.toml"), "build",
+               "--manifest-path", str(root / "Cargo.toml"), "--locked", "--offline", "--workspace"]
+    subprocess.run(command, cwd="/", env=env, stdin=subprocess.DEVNULL,
+                   check=True, pass_fds=(lock_fd,))
+"""
 
 def _job_block(workflow: str, name: str) -> str:
     """Return one top-level job block from a GitHub Actions workflow."""
@@ -183,7 +225,7 @@ def _validate_release_workflow(workflow: str) -> list[str]:
             "cargo metadata --locked --no-deps --format-version 1 > /dev/null",
             "cargo fmt --all -- --check",
         ),
-        "build": ("cargo build --locked --workspace",),
+        "build": ('python3 scripts/taira_release_check.py --target-dir "$GITHUB_WORKSPACE/target/taira-native-checks"',),
         "doc": ("cargo doc --locked --workspace --no-deps --all-features",),
         "test": (
             COMPILE_UNIT_GUARD_COMMAND,
@@ -232,6 +274,22 @@ def _validate_release_workflow(workflow: str) -> list[str]:
             )
         if f"toolchain: {PINNED_RUST}" not in job:
             errors.append(f"{job_name} must pin Rust {PINNED_RUST}")
+
+        if job_name == "build":
+            snippets = re.findall(r"(?ms)^          python3 - <<'PY'\n(.*?)^          PY\n", job)
+            try:
+                parsed = [ast.dump(ast.parse(textwrap.dedent(code)), include_attributes=False) for code in snippets]
+            except (SyntaxError, ValueError):
+                parsed = []
+            expected = [ast.dump(ast.parse(code), include_attributes=False)
+                        for code in (ISOLATED_FETCH_PYTHON, ISOLATED_BUILD_PYTHON)]
+            if parsed != expected:
+                errors.append("build must retain the isolated fetch and locked offline full-workspace runners")
+            fetch_position = job.find('"fetch"')
+            check_position = job.find("python3 scripts/taira_release_check.py")
+            full_position = job.find("- name: Build the full workspace")
+            if not 0 <= fetch_position < check_position < full_position:
+                errors.append("build must fetch dependencies before the offline gate and full workspace build")
 
         normalized_job = _normalized(job)
         for command in commands[job_name]:
@@ -428,6 +486,35 @@ def test_workspace_release_workflow_is_exact_sha_and_complete() -> None:
 
     workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
     assert _validate_release_workflow(workflow) == []
+
+
+@pytest.mark.parametrize("old,new", (
+    ('"--locked", "--offline", "--workspace"', '"--locked", "--offline", "-p", "iroha_cli"'),
+    ('"--locked", "--offline", "--workspace"', '"--locked", "--workspace"'),
+    ('env["CARGO_INCREMENTAL"] = "0"', 'env["CARGO_INCREMENTAL"] = "1"'),
+    ('env["CARGO_NET_OFFLINE"] = "false"', 'env["CARGO_NET_OFFLINE"] = "true"'),
+    ('target = root / "target/taira-native-checks"', 'target = root / "target"'),
+    ('env, _ = release.isolated_cargo_environment(root, root, env)', 'env = dict(os.environ)'),
+    ('command = [env["CARGO"], "--config", str(root / ".cargo/config.toml"), "fetch",', 'command = ["cargo", "fetch",'),
+    ('subprocess.run(command, cwd="/", env=env', 'subprocess.run(command, cwd=root, env=env'),
+    ('check=True, pass_fds=(lock_fd,)', 'check=True, pass_fds=()'),
+))
+def test_release_workflow_guard_rejects_isolation_or_workspace_drift(old: str, new: str) -> None:
+    """CI cannot silently change its cache namespace, source config, mode or scope."""
+    workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+    changed = _replace_once_in_job(workflow, "build", old, new)
+    assert "build must retain the isolated fetch and locked offline full-workspace runners" in _validate_release_workflow(changed)
+
+
+def test_release_workflow_guard_rejects_missing_or_reordered_isolated_fetch() -> None:
+    workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+    job = _job_block(workflow, "build")
+    fetch = re.search(r"(?ms)^          python3 - <<'PY'\n.*?^          PY\n", job)
+    assert fetch is not None
+    changed = job[:fetch.start()] + job[fetch.end():] + fetch.group(0)
+    errors = _validate_release_workflow(workflow.replace(job, changed))
+    assert "build must retain the isolated fetch and locked offline full-workspace runners" in errors
+    assert "build must fetch dependencies before the offline gate and full workspace build" in errors
 
 
 def test_pr_workflow_retains_locked_workspace_and_numeric_parity() -> None:

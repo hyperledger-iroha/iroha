@@ -94,9 +94,53 @@ jobs:
         with:
           python-version: "3.11"
       - name: Check Taira CLI release boundaries before workspace build
-        run: python3 scripts/taira_release_check.py
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/target/taira-native-checks"
+          # Initialize the same isolated registry cache; only fetch allows network.
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          import subprocess
+          import sys
+
+          root = Path.cwd().resolve(strict=True)
+          sys.path.insert(0, str(root / "scripts"))
+          import taira_release as release
+
+          target = root / "target/taira-native-checks"
+          with release.cargo_lane(root, target, "development") as lock_fd:
+              env = release.child_environment(dict(os.environ), target)
+              env, _ = release.isolated_cargo_environment(root, root, env)
+              env["CARGO_NET_OFFLINE"] = "false"
+              command = [env["CARGO"], "--config", str(root / ".cargo/config.toml"), "fetch",
+                         "--manifest-path", str(root / "Cargo.toml"), "--locked"]
+              subprocess.run(command, cwd="/", env=env, stdin=subprocess.DEVNULL,
+                             check=True, pass_fds=(lock_fd,))
+          PY
+          python3 scripts/taira_release_check.py --target-dir "$GITHUB_WORKSPACE/target/taira-native-checks"
       - name: Build the full workspace
-        run: cargo build --locked --workspace
+        run: |
+          # Reuse the gate's exact target, registry paths and mode lock.
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          import subprocess
+          import sys
+
+          root = Path.cwd().resolve(strict=True)
+          sys.path.insert(0, str(root / "scripts"))
+          import taira_release as release
+
+          target = root / "target/taira-native-checks"
+          with release.cargo_lane(root, target, "development") as lock_fd:
+              env = release.child_environment(dict(os.environ), target)
+              env, _ = release.isolated_cargo_environment(root, root, env)
+              env["CARGO_INCREMENTAL"] = "0"
+              command = [env["CARGO"], "--config", str(root / ".cargo/config.toml"), "build",
+                         "--manifest-path", str(root / "Cargo.toml"), "--locked", "--offline", "--workspace"]
+              subprocess.run(command, cwd="/", env=env, stdin=subprocess.DEVNULL,
+                             check=True, pass_fds=(lock_fd,))
+          PY
 
   doc:
     name: Workspace documentation
