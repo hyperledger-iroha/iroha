@@ -12,7 +12,8 @@ use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
     queue::Queue,
-    state::{State, StateReadOnly, World, WorldReadOnly},
+    smartcontracts::Execute,
+    state::{LaneAuthorityRoute, State, StateReadOnly, World, WorldReadOnly},
     tx::{AcceptedTransaction, TransactionBuilder},
 };
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
@@ -21,8 +22,9 @@ use iroha_data_model::{
     account::{AccountAddress, AccountId},
     asset::{AssetDefinitionId, AssetId},
     domain::DomainId,
+    isi::register::RegisterPeerWithPop,
     level::Level,
-    nexus::DataSpaceId,
+    nexus::{DataSpaceId, LaneId, PublicLaneValidatorRecord, PublicLaneValidatorStatus},
     peer::PeerId,
     permission::Permission,
     prelude::{Account, Asset, AssetDefinition, Domain, Log},
@@ -151,6 +153,10 @@ fn build_onboarding_test_context_at(
     cfg.torii.sorafs_storage.data_dir = data_dir.path().join("sorafs");
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
+    let validator_keys: Vec<_> = (0xD2..=0xD5)
+        .map(|seed| checked_key_pair(seed, Algorithm::BlsNormal, "derive onboarding validator"))
+        .collect();
+    cfg.common.key_pair = validator_keys[0].clone();
     let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
     let authority_key_pair = checked_key_pair(
         onboarding_signer_seed,
@@ -176,8 +182,33 @@ fn build_onboarding_test_context_at(
         AssetId::of(fee_asset_id.clone(), authority_id.clone()),
         Quantity::from(100_u32),
     );
-    let mut world = World::with_assets([domain], [authority], [fee_definition], [fee_asset], []);
-    fixtures::seed_peer(&mut world, local_peer_id.clone());
+    let mut accounts = vec![authority];
+    accounts.extend(validator_keys.iter().map(|key_pair| {
+        let account_id = AccountId::new(key_pair.public_key().clone());
+        Account::new(account_id.clone()).build(&account_id)
+    }));
+    let mut world = World::with_assets([domain], accounts, [fee_definition], [fee_asset], []);
+    // Route authority requires the same four live BLS validators and PoP-bound keys
+    // as consensus; a bare peer row is insufficient for a current-state response.
+    for key_pair in &validator_keys {
+        let validator = AccountId::new(key_pair.public_key().clone());
+        world.public_lane_validators_mut_for_testing().insert(
+            (LaneId::SINGLE, validator.clone()),
+            PublicLaneValidatorRecord {
+                lane_id: LaneId::SINGLE,
+                validator: validator.clone(),
+                peer_id: PeerId::new(key_pair.public_key().clone()),
+                stake_account: validator,
+                total_stake: Quantity::from(1_000_u32),
+                self_stake: Quantity::from(1_000_u32),
+                metadata: Default::default(),
+                status: PublicLaneValidatorStatus::Active,
+                activation_height: 1,
+                deactivation_height: None,
+                last_reward_epoch: None,
+            },
+        );
+    }
     install_account_alias_policy(&mut world, &authority_id, &fee_asset_id);
     install_universal_parent_lease(&mut world, &authority_id);
     world.account_permissions_mut_for_testing().insert(
@@ -209,11 +240,7 @@ fn build_onboarding_test_context_at(
     .with_instructions([Log::new(Level::INFO, "onboarding anchor".to_owned())]);
     seed_builder.set_creation_time(anchor_time);
     let seed_tx = seed_builder.sign(authority_key_pair.private_key());
-    let leader = checked_key_pair(
-        0xD2,
-        Algorithm::BlsNormal,
-        "derive onboarding block leader fixture",
-    );
+    let leader = &validator_keys[0];
     let unverified = BlockBuilder::new_with_time_source(
         vec![AcceptedTransaction::new_unchecked(Cow::Owned(seed_tx))],
         iroha_primitives::time::TimeSource::new_fixed(anchor_time),
@@ -223,11 +250,32 @@ fn build_onboarding_test_context_at(
     .unpack(|_| {});
     let mut state_block = state.block(unverified.header());
     state_block.chain_id = chain_id.clone();
+    {
+        let mut transaction = state_block.transaction();
+        for key_pair in &validator_keys {
+            RegisterPeerWithPop::new(
+                PeerId::new(key_pair.public_key().clone()),
+                iroha_crypto::bls_normal_pop_prove(key_pair.private_key())
+                    .expect("validator proof of possession"),
+            )
+            .execute(&authority_id, &mut transaction)
+            .expect("register fixture peer and its live consensus key");
+        }
+        transaction.apply();
+    }
     let valid = unverified
         .validate_and_record_transactions(&mut state_block)
         .unpack(|_| {});
     let committed = valid.commit_unchecked().unpack(|_| {});
     iroha_torii::test_utils::finalize_committed_block(&state, state_block, committed);
+    let committee = state
+        .resolve_lane_committee(LaneAuthorityRoute::new(
+            LaneId::SINGLE,
+            DataSpaceId::UNIVERSAL,
+        ))
+        .expect("committed fixture must resolve real lane authority");
+    assert_eq!(committee.validators().len(), 4);
+    assert!(committee.validators().contains(&local_peer_id));
     cfg.torii.account_onboarding = Some(iroha_config::parameters::actual::AccountOnboarding {
         authority: authority_id,
         private_key_file: ONBOARDING_SIGNER_PATH.into(),
@@ -1101,57 +1149,160 @@ async fn sponsored_onboarding_rejects_signed_expired_receipt_without_block_progr
 
 #[tokio::test]
 async fn expired_onboarding_envelope_only_reconciles_an_already_known_hash() {
-    let context = build_onboarding_test_context();
+    use iroha_torii_shared::prepared_transaction::{
+        OnboardingPreparedSignatureFieldsV1, PreparedOperationBindingRefV1,
+        onboarding_prepared_signature_transcript_v1, prepared_signature_digest_v1,
+    };
+    use sha2::{Digest as _, Sha256};
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time");
+    let context = build_onboarding_test_context_at(
+        iroha_torii::test_utils::signed_query_network_id(),
+        0xD1,
+        now - Duration::from_secs(33 * 60 * 60),
+    );
     let target = AccountId::new(
         checked_key_pair(0xD9, Algorithm::Ed25519, "derive expiry target")
             .public_key()
             .clone(),
     );
-    let plan = send_onboarding_request(
+    let request = onboarding_plan_request("expiryuser@universal", &target);
+    let plan = send_onboarding_request(&context.app, "/v1/accounts/onboard/plan", &request).await;
+    assert_eq!(plan.status, StatusCode::OK, "{}", plan.raw_body);
+    let prepared = send_onboarding_request(
         &context.app,
-        "/v1/accounts/onboard/plan",
-        &onboarding_plan_request("expiryuser@universal", &target),
+        "/v1/accounts/onboard/prepare",
+        &onboarding_prepare_request(plan.payload),
     )
     .await;
-    assert_eq!(plan.status, StatusCode::OK, "{}", plan.raw_body);
-    let now_ms: u64 = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("system clock")
-        .as_millis()
-        .try_into()
-        .expect("millisecond clock fits u64");
-    let deadline = now_ms.saturating_add(1_000);
-    let request = onboarding_prepare_request_with_expiry(plan.payload, deadline);
-    let known =
-        send_onboarding_request(&context.app, "/v1/accounts/onboard/prepare", &request).await;
-    tokio::time::sleep(std::time::Duration::from_millis(2)).await;
-    let unknown =
-        send_onboarding_request(&context.app, "/v1/accounts/onboard/prepare", &request).await;
-    for prepared in [&known, &unknown] {
-        assert_eq!(prepared.status, StatusCode::OK, "{}", prepared.raw_body);
-    }
-    let submitted =
-        send_onboarding_request(&context.app, "/v1/accounts/onboard", &known.payload).await;
-    assert_eq!(
-        submitted.status,
-        StatusCode::ACCEPTED,
-        "{}",
-        submitted.raw_body
+    assert_eq!(prepared.status, StatusCode::OK, "{}", prepared.raw_body);
+    let template: iroha::client::AccountOnboardingPreparedTransactionV1 =
+        norito::json::from_value(prepared.payload).expect("SDK prepared envelope");
+    let sdk_request: iroha::client::AccountOnboardingPlanRequestV1 =
+        norito::json::from_value(request).expect("SDK request");
+    let original = iroha::client::verify_account_onboarding_prepared_transaction_v1(
+        *context.state.network_id_ref(),
+        &sdk_request,
+        &template,
+        &template.receipt,
+        &template.binding,
+        &template.fee_payment,
+    )
+    .expect("real routed preparation has exact SDK closure");
+    let signer = checked_key_pair(
+        0xD1,
+        Algorithm::Ed25519,
+        "derive historical envelope signer",
     );
-    tokio::time::sleep(std::time::Duration::from_millis(1_050)).await;
-    let reconciled =
-        send_onboarding_request(&context.app, "/v1/accounts/onboard", &known.payload).await;
+    let creation = now - Duration::from_secs(120);
+    let deadline = u64::try_from((now - Duration::from_secs(60)).as_millis()).expect("deadline");
+    let historical = |offset: u64| {
+        let mut envelope = template.clone();
+        envelope.binding.execution_expires_at_unix_ms = deadline;
+        let mut payload = original.payload().clone();
+        payload.metadata.insert(
+            "prepared_operation_binding"
+                .parse()
+                .expect("binding metadata key"),
+            Json::from_norito_value_ref(
+                &norito::json::to_value(&envelope.binding).expect("binding JSON"),
+            )
+            .expect("canonical binding metadata"),
+        );
+        let mut builder = TransactionBuilder::from_payload(payload).expect("historical builder");
+        let creation = creation + Duration::from_millis(offset);
+        builder.set_creation_time(creation);
+        builder.set_ttl(Duration::from_millis(
+            deadline - u64::try_from(creation.as_millis()).expect("creation"),
+        ));
+        let transaction = builder
+            .try_sign(signer.private_key())
+            .expect("sign historical transaction");
+        let wire = transaction
+            .encode_wire_v1()
+            .expect("canonical historical wire");
+        envelope.transaction_hash_hex = hex::encode(transaction.hash().as_ref());
+        envelope.signed_transaction_wire_sha256 = hex::encode(Sha256::digest(&wire));
+        envelope.signed_transaction_wire_hex = hex::encode(&wire);
+        assert_eq!(
+            envelope.disposition,
+            iroha_data_model::alias_setup::AliasPlanDispositionV1::Create
+        );
+        let binding = &envelope.binding;
+        let transcript =
+            onboarding_prepared_signature_transcript_v1(OnboardingPreparedSignatureFieldsV1 {
+                envelope_schema: &envelope.schema,
+                binding: PreparedOperationBindingRefV1 {
+                    schema: &binding.schema,
+                    semantic_hash_hex: &binding.semantic_hash_hex,
+                    kind: &binding.kind,
+                    request_id: &binding.request_id,
+                    execution_expires_at_unix_ms: binding.execution_expires_at_unix_ms,
+                },
+                semantic_hash_hex: &envelope.semantic_hash_hex,
+                account_id: &envelope.account_id,
+                alias: &envelope.alias,
+                disposition: "create",
+                transaction_hash_hex: &envelope.transaction_hash_hex,
+                signed_transaction_wire_sha256: &envelope.signed_transaction_wire_sha256,
+                signed_transaction_wire: &wire,
+            });
+        envelope.server_signature = iroha_crypto::Signature::try_new(
+            signer.private_key(),
+            prepared_signature_digest_v1(&transcript).as_ref(),
+        )
+        .expect("sign historical envelope");
+        iroha::client::verify_account_onboarding_prepared_transaction_v1(
+            *context.state.network_id_ref(),
+            &sdk_request,
+            &envelope,
+            &envelope.receipt,
+            &envelope.binding,
+            &envelope.fee_payment,
+        )
+        .expect("historical envelope retains complete SDK authentication and lifetime closure");
+        (envelope, transaction)
+    };
+    let (known, known_transaction) = historical(0);
+    let (unknown, _) = historical(1);
+    assert_ne!(known.transaction_hash_hex, unknown.transaction_hash_hex);
+    // Admit the exact known transaction into historical committed state while its signed
+    // lifetime was valid. HTTP reconciliation now runs at the real, already-expired time.
+    let leader = checked_key_pair(0xD2, Algorithm::BlsNormal, "historical block leader");
+    let unverified = BlockBuilder::new_with_time_source(
+        vec![AcceptedTransaction::new_unchecked(Cow::Owned(
+            known_transaction,
+        ))],
+        iroha_primitives::time::TimeSource::new_fixed(creation + Duration::from_secs(5)),
+    )
+    .chain(0, context.state.view().latest_block().as_deref())
+    .sign(leader.private_key())
+    .unpack(|_| {});
+    let mut state_block = context.state.block(unverified.header());
+    state_block.chain_id = context.chain_id.clone();
+    let valid = unverified
+        .validate_and_record_transactions(&mut state_block)
+        .unpack(|_| {});
+    let committed = valid.commit_unchecked().unpack(|_| {});
+    iroha_torii::test_utils::finalize_committed_block(&context.state, state_block, committed);
+    assert!(context.state.view().world().account(&target).is_ok());
+    let known = norito::json::to_value(&known).expect("known envelope JSON");
+    let unknown = norito::json::to_value(&unknown).expect("unknown envelope JSON");
+    let reconciled = send_onboarding_request(&context.app, "/v1/accounts/onboard", &known).await;
     assert_eq!(reconciled.status, StatusCode::OK, "{}", reconciled.raw_body);
-    assert_eq!(response_field(&reconciled.payload, "outcome"), "Pending");
+    assert_eq!(response_field(&reconciled.payload, "outcome"), "Applied");
     let expired_unknown =
-        send_onboarding_request(&context.app, "/v1/accounts/onboard", &unknown.payload).await;
+        send_onboarding_request(&context.app, "/v1/accounts/onboard", &unknown).await;
     assert_eq!(
         expired_unknown.status,
         StatusCode::BAD_REQUEST,
         "{}",
         expired_unknown.raw_body
     );
-    assert_eq!(context.queue.active_len(), 1);
+    assert_eq!(context.queue.active_len(), 0);
+    assert_eq!(context.state.view().height(), 2);
     context.shutdown().await;
 }
 

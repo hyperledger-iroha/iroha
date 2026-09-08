@@ -182,16 +182,27 @@ if sys.platform == "linux":
 
 
 TORII_STAGES = (("routed onboarding and faucet contracts", (
-    "accounts_onboard::sponsored_onboarding_fresh_receipt_and_submit_work_after_idle_anchor",
-    "accounts_onboard::sponsored_onboarding_rejects_signed_expired_receipt_without_block_progress",
-    "accounts_onboard::expired_onboarding_envelope_only_reconciles_an_already_known_hash",
-    "accounts_onboard::sponsored_onboarding_prepare_is_non_mutating_and_exact_submit_is_replay_safe",
-    "accounts_onboard::sponsored_onboarding_receipt_binds_exact_network_and_active_signer",
-    "accounts_onboard::sponsored_onboarding_submit_rejects_old_and_tampered_envelopes",
-    "accounts_faucet::accounts_faucet_transfers_starter_balance_to_empty_account",
+    "accounts_faucet::accounts_faucet_accepts_alias_selector_config",
+    "accounts_faucet::accounts_faucet_adds_amount_to_prefunded_accounts",
+    "accounts_faucet::accounts_faucet_allows_repeated_claims_for_same_account",
+    "accounts_faucet::accounts_faucet_puzzle_exposes_current_anchor",
+    "accounts_faucet::accounts_faucet_puzzle_raises_difficulty_after_recent_claim",
     "accounts_faucet::accounts_faucet_registers_missing_account_before_transfer",
+    "accounts_faucet::accounts_faucet_rejects_missing_pow_when_required",
+    "accounts_faucet::accounts_faucet_transfers_starter_balance_to_empty_account",
+    "accounts_faucet::faucet_account_fixture_uses_checked_ed25519_key_generation",
+    "accounts_faucet::faucet_block_leader_fixture_uses_checked_bls_key_generation",
     "accounts_faucet::faucet_prepared_envelope_survives_pow_anchor_aging",
     "accounts_faucet::faucet_submit_rejects_old_and_tampered_shapes_and_deduplicates_exact_replay",
+    "accounts_onboard::expired_onboarding_envelope_only_reconciles_an_already_known_hash",
+    "accounts_onboard::sponsored_onboarding_catalog_contains_plan_prepare_submit_and_readiness",
+    "accounts_onboard::sponsored_onboarding_fresh_receipt_and_submit_work_after_idle_anchor",
+    "accounts_onboard::sponsored_onboarding_prepare_is_non_mutating_and_exact_submit_is_replay_safe",
+    "accounts_onboard::sponsored_onboarding_receipt_binds_exact_network_and_active_signer",
+    "accounts_onboard::sponsored_onboarding_receipt_rejects_genesis_and_retired_network_keys",
+    "accounts_onboard::sponsored_onboarding_rejects_signed_expired_receipt_without_block_progress",
+    "accounts_onboard::sponsored_onboarding_stale_create_receipt_returns_redacted_conflict",
+    "accounts_onboard::sponsored_onboarding_submit_rejects_old_and_tampered_envelopes",
 )),)
 
 
