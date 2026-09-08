@@ -3306,6 +3306,12 @@ mod tests {
                 max_keys: 1,
             },
             DynamicAccessHint {
+                base_key: "state:Orders".to_owned(),
+                key_type: "int".to_owned(),
+                bound_kind: "page".to_owned(),
+                max_keys: 64,
+            },
+            DynamicAccessHint {
                 base_key: "state:Victim".to_owned(),
                 key_type: "forged-key-type".to_owned(),
                 bound_kind: "forged-exact-bound".to_owned(),
@@ -4785,6 +4791,20 @@ seiyaku DynamicAccessCounter {
         assert_eq!(prepared_source, Some(AccessSetSource::ConservativeFallback));
     }
     #[test]
+    fn state_scan_and_retired_key_enumeration_keep_conservative_fences() {
+        for (syscall, expected) in [
+            (ivm::syscalls::SYSCALL_STATE_SCAN, "state:*"),
+            (0x01_0030, "*"),
+        ] {
+            let mut program = ivm::ProgramMetadata::default().encode();
+            program.extend_from_slice(&ivm::encoding::wide::encode_syscallx(syscall).to_le_bytes());
+            program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+            let mut set = AccessSet::new();
+            assert!(apply_unverified_ivm_access_fence(&program, &mut set));
+            assert_eq!(set.write_keys, BTreeSet::from([expected.to_owned()]));
+        }
+    }
+    #[test]
     fn syscall_access_registry_fails_closed_for_unknown_numbers() {
         use ivm::syscalls::SyscallAccess;
         assert_eq!(
@@ -4794,6 +4814,14 @@ seiyaku DynamicAccessCounter {
         assert_eq!(
             ivm::syscalls::syscall_access(ivm::syscalls::SYSCALL_STATE_GET),
             SyscallAccess::StateRead
+        );
+        assert_eq!(
+            ivm::syscalls::syscall_access(ivm::syscalls::SYSCALL_STATE_SCAN),
+            SyscallAccess::StateRead
+        );
+        assert_eq!(
+            ivm::syscalls::syscall_access(0x01_0030),
+            SyscallAccess::Dynamic
         );
         assert_eq!(
             ivm::syscalls::syscall_access(ivm::syscalls::SYSCALL_TRANSFER_ASSET_SCOPED),
@@ -4928,7 +4956,7 @@ seiyaku DynamicAccessCounter {
             iroha_data_model::smart_contract::manifest::DynamicAccessHint {
                 base_key: "state:Orders".to_owned(),
                 key_type: "int".to_owned(),
-                bound_kind: "range".to_owned(),
+                bound_kind: "page".to_owned(),
                 max_keys: 64,
             },
         ];
@@ -4981,9 +5009,11 @@ seiyaku DynamicAccessCounter {
         let valid = DynamicAccessHint {
             base_key: "state:Orders".to_owned(),
             key_type: "int".to_owned(),
-            bound_kind: "range".to_owned(),
+            bound_kind: "page".to_owned(),
             max_keys: 1,
         };
+        assert!(access_set_from_hint_keys(&[], &[], &[valid.clone()], &[]).is_some());
+        assert!(access_set_from_hint_keys(&[], &[], &[], &[valid.clone()]).is_some());
         let invalid = [
             DynamicAccessHint {
                 max_keys: 0,
@@ -5023,6 +5053,10 @@ seiyaku DynamicAccessCounter {
             },
             DynamicAccessHint {
                 bound_kind: "bounded".to_owned(),
+                ..valid.clone()
+            },
+            DynamicAccessHint {
+                bound_kind: "range".to_owned(),
                 ..valid.clone()
             },
         ];

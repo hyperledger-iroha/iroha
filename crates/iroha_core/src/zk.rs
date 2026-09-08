@@ -5966,11 +5966,11 @@ mod stark_backend_tag_tests {
     #[test]
     fn stark_open_verify_circuit_ids_are_bound_to_the_sole_production_profile() {
         let backend = ZK_BACKEND_STARK_FRI_V1;
-        for circuit_id in [
-            "binding-air".to_owned(),
-            format!("{backend}:binding-air"),
-        ] {
-            assert!(stark_open_verify_circuit_id_matches_backend(backend, &circuit_id));
+        for circuit_id in ["binding-air".to_owned(), format!("{backend}:binding-air")] {
+            assert!(stark_open_verify_circuit_id_matches_backend(
+                backend,
+                &circuit_id
+            ));
         }
         for circuit_id in [
             "stark/fri".to_owned(),
@@ -6613,8 +6613,7 @@ mod stark_prover_tests {
             )
             .expect_err("generic STARK prover must not target ZK-ACE circuit aliases");
             assert_eq!(
-                err,
-                "STARK circuit_id does not match backend family",
+                err, "STARK circuit_id does not match backend family",
                 "reserved privacy namespaces must reject before verifier-key decoding: {circuit_id}"
             );
         }
@@ -11871,23 +11870,11 @@ mod preverify_tests {
                 "sibling STARK profile",
                 "stark/fri/poseidon2-goldilocks:preverify-test",
             ),
-            (
-                "retired generic STARK prefix",
-                "stark/fri:preverify-test",
-            ),
+            ("retired generic STARK prefix", "stark/fri:preverify-test"),
             ("bare generic STARK family", "stark/fri"),
-            (
-                "halo2 circuit",
-                "halo2/ipa:preverify-test",
-            ),
-            (
-                "colon-form halo2 circuit",
-                "halo2:preverify-test",
-            ),
-            (
-                "colon-form kzg circuit",
-                "kzg:trusted-setup-spoof",
-            ),
+            ("halo2 circuit", "halo2/ipa:preverify-test"),
+            ("colon-form halo2 circuit", "halo2:preverify-test"),
+            ("colon-form kzg circuit", "kzg:trusted-setup-spoof"),
             ("bare trusted-setup curve circuit", "bn254"),
             (
                 "STARK-prefixed trusted-setup circuit",
