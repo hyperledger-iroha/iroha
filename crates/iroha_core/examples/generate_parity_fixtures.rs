@@ -145,10 +145,15 @@ fn run_block_and_events(
     // Execute and commit
     let mut sb = state.block(block.header());
     let vb = ValidBlock::validate_unchecked(block, &mut sb).unpack(|_| {});
+    let errors: Vec<_> = vb.as_ref().errors().collect();
+    assert!(
+        errors.is_empty(),
+        "parity fixture transactions failed: {errors:?}"
+    );
     let cb = vb.commit_unchecked().unpack(|_| {});
     // Apply block effects without re-executing transactions.
     let events = sb.apply_without_execution(&cb, Vec::<iroha_data_model::peer::PeerId>::new());
-    drop(sb);
+    sb.commit().expect("commit parity fixture state");
     Ok((events, state))
 }
 #[allow(clippy::too_many_lines)]

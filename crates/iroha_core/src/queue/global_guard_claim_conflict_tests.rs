@@ -106,23 +106,51 @@ fn globally_bound_gossip_waits_for_certificate_and_retains_it_after_exact_marker
         QueuePlanGossipAdmission::AwaitingCertificate
     ));
 
-    let validator_key =
-        iroha_crypto::KeyPair::from_seed(vec![0xB9; 32], iroha_crypto::Algorithm::BlsNormal);
+    let validator_keys = (0_u8..4)
+        .map(|offset| {
+            iroha_crypto::KeyPair::from_seed(
+                vec![0xB9_u8.wrapping_add(offset); 32],
+                iroha_crypto::Algorithm::BlsNormal,
+            )
+        })
+        .collect::<Vec<_>>();
     let binding_hash = fixture.binding.canonical_hash();
-    let preimage =
-        crate::torii_proxy::queue_plan_admission_attestation_signing_bytes_v1(binding_hash, 0)
+    let coordinator = &fixture.binding.admission_context.route_incarnations[0];
+    let attestations = coordinator
+        .validator_set
+        .iter()
+        .take(usize::from(coordinator.durability_threshold))
+        .enumerate()
+        .map(|(index, validator)| {
+            let validator_key = validator_keys
+                .iter()
+                .find(|key| key.public_key() == validator.public_key())
+                .expect("exact queue authority key");
+            let validator_index = u16::try_from(index).expect("bounded validator index");
+            let preimage = crate::torii_proxy::queue_plan_admission_attestation_signing_bytes_v1(
+                binding_hash,
+                validator_index,
+            )
             .expect("build exact QueuePlan attestation preimage");
+            crate::torii_proxy::QueuePlanAdmissionAttestationV1 {
+                version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_ATTESTATION_VERSION_V1,
+                validator_index,
+                signature: iroha_crypto::Signature::try_new(validator_key.private_key(), &preimage)
+                    .expect("sign exact QueuePlan attestation"),
+            }
+        })
+        .collect();
     let certificate = crate::torii_proxy::QueuePlanAdmissionCertificateV1 {
         version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_CERTIFICATE_VERSION_V1,
         binding: fixture.binding.clone(),
-        attestations: vec![crate::torii_proxy::QueuePlanAdmissionAttestationV1 {
-            version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_ATTESTATION_VERSION_V1,
-            validator_index: 0,
-            signature: iroha_crypto::Signature::try_new(validator_key.private_key(), &preimage)
-                .expect("sign exact QueuePlan attestation"),
-        }],
+        attestations,
     };
     let certificate = norito::encode_canonical(&certificate).expect("encode QueuePlan certificate");
+    crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v1(
+        fixture.state.network_id_ref(),
+        &certificate,
+    )
+    .expect("fixture must contain the exact four-validator durability quorum");
     fixture
         .state
         .kura()

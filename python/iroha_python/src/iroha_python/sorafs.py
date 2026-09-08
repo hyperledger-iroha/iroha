@@ -22,7 +22,7 @@ from typing import (
     Union,
 )
 
-from ._native import load_crypto_extension
+from iroha_native import load_crypto_extension
 from .numeric_v1 import NumericV1Codec
 
 try:
@@ -36,7 +36,7 @@ except RuntimeError as err:  # pragma: no cover - optional dependency
 
         def __getattr__(self, name: str) -> Any:
             raise RuntimeError(
-                f"{name} requires the compiled iroha_python._crypto extension module. "
+                f"{name} requires the compiled iroha_native._crypto extension module. "
                 "Run `maturin develop --release` inside `python/iroha_python` (or install the wheel)."
             ) from _CRYPTO_IMPORT_ERROR
 
@@ -813,12 +813,12 @@ def _require_sorafs_native_function(
     except (AttributeError, RuntimeError) as error:
         raise RuntimeError(
             f"SoraFS {capability} requires native function `{function_name}`. "
-            "Install or rebuild the iroha_python._crypto extension."
+            "Install or rebuild the iroha_native._crypto extension."
         ) from error
     if not callable(function):
         raise RuntimeError(
             f"SoraFS {capability} requires callable native function `{function_name}`. "
-            "Install or rebuild the iroha_python._crypto extension."
+            "Install or rebuild the iroha_native._crypto extension."
         )
     return function
 

@@ -13,7 +13,9 @@ RELEASE_SMOKE = REPO_ROOT / "python/iroha_python/scripts/release_smoke.sh"
 WHEEL_VERIFIER = REPO_ROOT / "ci/verify_privacy_python_wheel.py"
 
 
-def run_wheel_verifier(*arguments: str, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
+def run_wheel_verifier(
+    *arguments: str, cwd: Path | None = None
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [sys.executable, "-I", "-B", str(WHEEL_VERIFIER), *arguments],
         cwd=REPO_ROOT if cwd is None else cwd,
@@ -23,7 +25,9 @@ def run_wheel_verifier(*arguments: str, cwd: Path | None = None) -> subprocess.C
     )
 
 
-def test_wheel_seal_cli_emits_the_stable_authenticated_file_identity(tmp_path: Path) -> None:
+def test_wheel_seal_cli_emits_the_stable_authenticated_file_identity(
+    tmp_path: Path,
+) -> None:
     root = tmp_path.resolve(strict=True)
     wheel = root / "iroha_python-test.whl"
     payload = b"wheel-seal-fixture"
@@ -44,7 +48,9 @@ def test_wheel_seal_cli_emits_the_stable_authenticated_file_identity(tmp_path: P
     assert int(fields[6], 8) == (wheel.stat().st_mode & 0o7777)
 
 
-@pytest.mark.parametrize("kind", ["empty", "symlink", "hardlink", "relative", "parent-alias"])
+@pytest.mark.parametrize(
+    "kind", ["empty", "symlink", "hardlink", "relative", "parent-alias"]
+)
 def test_wheel_seal_cli_rejects_file_identity_aliases_and_empty_input(
     tmp_path: Path,
     kind: str,
@@ -88,15 +94,18 @@ def test_wheel_seal_cli_rejects_file_identity_aliases_and_empty_input(
     assert result.stderr.startswith("error: ")
 
 
-def test_release_smoke_authenticates_wheel_native_and_privacy_catalog_in_order() -> None:
+def test_release_smoke_authenticates_wheel_native_and_privacy_catalog_in_order() -> (
+    None
+):
     source = RELEASE_SMOKE.read_text(encoding="utf-8")
     required_markers = (
         "python -m build",
+        '--preflight sdk "${SDK_WHEEL}" "${SDK_WHEEL_SEAL}"',
         "release smoke requires an empty pre-existing dist directory",
         "release smoke requires exactly one wheel candidate",
-        "--seal \"${WHEEL}\"",
-        "--preflight \"${WHEEL}\" \"${WHEEL_SEAL}\"",
-        'pip install "${WHEEL}" --no-compile',
+        '--seal "${WHEEL}"',
+        '--preflight native "${WHEEL}" "${WHEEL_SEAL}"',
+        'pip install "${WHEEL}" "${SDK_WHEEL}" --no-compile',
         '"${SMOKE_TMP_DIR}/venv"',
         '"${PROJECT_ROOT}/python/norito_py/src"',
         '"${PROJECT_ROOT}/python/iroha_torii_client"',
@@ -114,9 +123,9 @@ def test_release_smoke_authenticates_wheel_native_and_privacy_catalog_in_order()
 
     ordered_markers = (
         "python -m build",
-        "--seal \"${WHEEL}\"",
-        "--preflight \"${WHEEL}\" \"${WHEEL_SEAL}\"",
-        'pip install "${WHEEL}" --no-compile',
+        '--seal "${WHEEL}"',
+        '--preflight native "${WHEEL}" "${WHEEL_SEAL}"',
+        'pip install "${WHEEL}" "${SDK_WHEEL}" --no-compile',
         "INSTALLED_NATIVE_PATH=",
         "assert sdk.PRIVACY_REQUIRED_BRIDGE_ABI_VERSION == 23",
         "python/iroha_python/scripts/run_norito_rpc_smoke.sh",
@@ -124,11 +133,11 @@ def test_release_smoke_authenticates_wheel_native_and_privacy_catalog_in_order()
     )
     positions = tuple(source.index(marker) for marker in ordered_markers)
     assert positions == tuple(sorted(positions))
-    assert "ls \"${DIST_DIR}\"/*.whl" not in source
+    assert 'ls "${DIST_DIR}"/*.whl' not in source
     assert "head -n 1" not in source
     assert 'SCRIPT_DIR="$(cd -P' in source
     assert 'PROJECT_ROOT="$(cd -P' in source
-    assert source.count("ci/verify_privacy_python_wheel.py") == 3
+    assert source.count("ci/verify_privacy_python_wheel.py") == 5
 
 
 def test_release_smoke_rejects_arguments_before_any_build_or_cleanup() -> None:
@@ -143,3 +152,17 @@ def test_release_smoke_rejects_arguments_before_any_build_or_cleanup() -> None:
     assert result.returncode == 1
     assert result.stdout == ""
     assert result.stderr == "Unknown argument: --legacy-wheel\n"
+
+
+def test_wheel_verifier_rejects_single_owner_release_invocation(tmp_path: Path) -> None:
+    result = run_wheel_verifier(str(tmp_path), "native.whl", "seal", "norito", "torii")
+    assert result.returncode != 0
+    assert result.stdout == ""
+    assert "SDK_WHEEL SDK_SEAL" in result.stderr
+
+
+def test_wheel_preflight_requires_an_explicit_owner_before_reading_bytes() -> None:
+    result = run_wheel_verifier("--preflight", "legacy", "native.whl", "seal")
+    assert result.returncode == 1
+    assert result.stdout == ""
+    assert "explicit native or sdk owner" in result.stderr

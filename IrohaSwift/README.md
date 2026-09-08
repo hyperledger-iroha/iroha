@@ -2288,6 +2288,10 @@ one scalar field. They have no hash marker, alias tag or issuance timestamp.
 The roster root remains a separate marked Iroha hash.
 
 Account-controller policies retain the full u16 member count (1–65,535). The
+public address constructors and parsers require the ABI-23 Rust address codec
+for complete key and policy admission. Canonical I105 parsers reject surrounding
+Unicode whitespace; unavailable native validation is an
+explicit error. The
 address decoder requires the single canonical count layout, V1 policy version,
 nonzero weights, reachable threshold and members ordered by algorithm name and
 full public-key bytes. `MultisigPolicyBuilder` sorts input members into that

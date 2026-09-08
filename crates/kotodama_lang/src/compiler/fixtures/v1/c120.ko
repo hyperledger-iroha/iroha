@@ -1,4 +1,4 @@
 
 seiyaku CompilerFixture {
-view fn account() -> AccountId { return ledger::account::resolve_alias("merchant@"); }
+view fn account() -> AccountId { return ledger::account::resolve_alias(alias: "merchant@"); }
 }

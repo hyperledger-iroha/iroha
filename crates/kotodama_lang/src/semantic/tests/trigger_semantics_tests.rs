@@ -48,7 +48,7 @@ fn trigger_metadata_json_parse_obeys_the_canonical_call_contract() {
             "#,
         )
     };
-    for value in [r#"Json::parse("{}")"#, r#"Json::parse(value: "{}")"#] {
+    for value in [r#"Json::parse("{}")"#] {
         let source = trigger_source(value);
         let program = parse(&source).expect("canonical Json::parse metadata should parse");
         analyze(&program).unwrap_or_else(|error| {
@@ -57,18 +57,23 @@ fn trigger_metadata_json_parse_obeys_the_canonical_call_contract() {
     }
     for (value, code, message) in [
         (
+            r#"Json::parse(value: "{}")"#,
+            "E_POSITIONAL_ARGUMENT_REQUIRED",
+            "parameter `value` of `Json::parse` is declared positional; omit its label",
+        ),
+        (
             r#"Json::parse(raw: "{}")"#,
             "E_UNKNOWN_NAMED_ARGUMENT",
             "call `Json::parse` has no parameter named `raw`",
         ),
-        ("Json::parse()", "K2003", "Json::parse expects one argument"),
+        ("Json::parse()", "E_MISSING_NAMED_ARGUMENT", "call `Json::parse` is missing required argument `value`"),
         (
             r#"Json::parse("{}", "{}")"#,
             "K2003",
-            "Json::parse expects one argument",
+            "call `Json::parse` expects at most 1 arguments, got 2",
         ),
         (
-            "Json::parse(value: dynamic)",
+            "Json::parse(dynamic)",
             "E_JSON_LITERAL_REQUIRED",
             JSON_LITERAL_REQUIRED_MESSAGE,
         ),

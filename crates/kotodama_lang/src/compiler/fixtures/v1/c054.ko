@@ -2,7 +2,7 @@
 seiyaku CompilerFixture {
 
 fn main() {
-  let _payload = context::public_input(1);
+  let _payload = context::public_input(name: 1);
 }
 
 }

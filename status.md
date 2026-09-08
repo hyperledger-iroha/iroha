@@ -16,7 +16,41 @@ counts, plans, dates, and former policies do not attest the current candidate.
 
 ## Current implementation and local evidence
 
-The merge resolves all 104 conflicted paths around the validated seven-field
+The 110-path merge resolution retains the final StateScan/cursor ABI, validated
+seven-field Native AMX control, immutable asynchronous account contexts and shared
+signer custody. Current source bindings are checked before deferred-carrier
+classification. Fresh custody tests pass 23, snapshot resource tests pass 4,
+JavaScript selections pass 59 and all 55 consensus source contracts pass.
+Workspace formatting, scoped conflict-diff checks and codec retirement checks pass.
+Current IVM ABI/artifact/gas/pointer selections pass 17/58/2/4, including exact SDK
+fixture reproduction. SDK/Core/Torii/JS-host/CLI/Kagami/daemon production checks pass;
+workspace, native SDK and four-validator qualification remain open.
+
+The earlier 26-path merge resolution keeps canonical participant control,
+public-model FASTPQ recovery and shared checkpoint custody. Its fresh FASTPQ
+transcript replay verifies and regenerates identical bytes; all 69 selected
+JavaScript participant/grouped-fixture tests pass. Formal checks pass the merged
+28-action source snapshot, binding inventory and strengthened partition controls.
+Workspace formatting, retired codec guards and archive verification pass. Full-candidate source budgets report
+238 findings, and the broader JavaScript diagnostics run requires a fresh native
+addon. Current Core/Torii/workspace execution remains unverified by this scope.
+
+Core validation retains its staged state on the heap through event delivery;
+the former stack-overflow regression and all 163 block-validation tests pass on
+the default thread stack, including explicit fixture cadence enforcement.
+Asset registration now uses the signed owning domain
+for authorization, with positive and alias/foreign-domain negative coverage.
+Admission and block fixtures use current signature policy, authenticated
+four-validator contexts, genesis asset incarnations and explicit contract
+lifecycle state. Removed test-only Soracloud callbacks no longer make block
+execution depend on a local mailbox runtime; the shipping mailbox admission
+gate still rejects execution without consensus reexecution. All 387 distinct
+focused regressions pass, including admission, block execution, fees and proof
+accounting. Daemon, Kagami and test-network consumer checks, formatting, codec
+guards and historical-archive verification pass. Full Core/workspace and network
+execution remain unverified by this scoped run.
+
+The prior branch merge integrated the validated seven-field
 Native AMX participant control, shared Torii configuration DTO, Kotlin-owned
 Java API and explicit Norito identities. FASTPQ retains the exact-integer and
 quotient/degree checks alongside the six-lane digest implementation; its current
@@ -29,25 +63,36 @@ The three OpenAPI schema copies agree, but release manifest provenance and
 artifact digests require the clean-candidate replay before release. Those checks
 do not qualify a release.
 
-Kaigi's final scalar/identity/retained-participation model passes 33 tests, and
-the authorization/usage circuit library passes 20 tests with real proofs and
-every public-row mutation. Retired circuit/seed/artifact-hint interfaces are
-removed. A fresh strict account-decoder run passes 42 cases across all ten
-Norito layouts. Kotlin/Java pass 40 scoped tests including the shared 16-positive,
-seven-negative full-controller fixture. Earlier Python wire results predate its
-new native identity adapter; installed-wheel verification is pending. Mandatory host authorization,
-leave/rejoin, usage and storage reservations await the shared Core verification
-build; final SDK artifacts, relay transport and deployment remain unqualified.
+Kaigi's final model passes 33 tests, its proof circuits pass 20, and the fresh
+JS-host native proof suite passes 21, including every 31/25-row mutation. All
+three real Core Kaigi integration tests pass; its unit selection passes 96/97,
+with a typed capacity-error assertion corrected for the next capture. Strict
+Rust account decoding passes 42 cases across all ten Norito layouts. Updated
+Kotlin/Java sources compile with JDK 8 API enforcement; three decoder/absence
+tests pass. Earlier managed full-controller passes predate mandatory native
+key admission. Python's separate native-owner test-target check passes, but
+installed SDK wheels/addon/JNI/XCFramework execution remains pending. Fresh
+Metal digest/Merkle/runtime tests pass 68 cases; complete GPU proofs, relay
+transport and four-validator deployment remain unqualified.
 See the [current privacy evidence](specs/privacy_first_release_closure.md).
 
 Production multilane work has [six implementation milestones under an active goal](specs/sumeragi_v2_multilane_completion_goals.md).
 No milestone or release gate is closed. The current source adds authenticated
 terminal replay, bounded atomic cache retirement, a real second autonomous
 application fixture and mandatory move-only authority for shipping Queue release.
-G-UNIT registers 531 tests; production registers 881 across 43 modules. Those
-runtime changes await the coordinated Core build; all original affected fixture
-assertions remain. The combined source manifest covers 17 Rust files and five
-model/configuration files under ignored `dist/multilane-validation-20260907/`.
+G-UNIT registers 531 tests; production registers 881 across 43 modules. The
+shared Core build passed with all 22 captured multilane inputs unchanged.
+Its first 89 direct runtime tests finished with 39 passes and 50 failures. The
+production witness still minted an old model identity and rejected otherwise
+valid transitions. That constant is corrected; the real wrapper test now covers
+25 producer/committee combinations and rejects altered witnesses. Nonzero BLS
+fixture seeds, matching network context and manifest-backed Queue initialization
+also repair distinct setup failures. All original assertions remain. Four changed
+files were captured for a second build, which failed on unrelated SoraFS/Torii
+compile errors before producing a Core executable. No post-fix runtime pass is
+claimed. The production trace audit also found an unwrapped 28th replica-release
+action; its witness wrapper and exhaustive registration are being repaired for
+the next batch. Evidence is under ignored `dist/multilane-validation-20260907/`.
 
 A fresh formal audit reproduced direct FIFO release with active Kura custody,
 then lane Commit and WSV application, in the former model and shared predicate.
@@ -56,17 +101,34 @@ activation and excludes Commit/application from every release disposition.
 Exhaustive TLC passes all 20 configured invariants over 280,818 distinct states;
 all 25 exact mutation controls produce their named counterexamples, including
 the new 4/19/4-action failures. Four explicit replica/application and release
-paths also pass. Current-model Apalache, Verus and Rust execution remain open.
-The running 18-step check uses the earlier frozen model and cannot qualify this
-repair. These model results do not establish live-network exploitability.
+paths also pass. Verus reports zero proof errors (1,690 and 221 verified), but
+its evidence driver rejects a changed input and the stale expected proof count.
+The scope audit and clean rerun remain open, as does current-model Apalache.
+The current model has its own 18-step Apalache run; the separate earlier-model
+run cannot qualify this repair. These results do not establish a live exploit.
 
 Fresh source evidence passes 69 terminal controls, 21 merge-cache semantic
 negatives with copied positives, all eight cache owners, and the complete
 QueuePlan contract with 14 release-authority negatives. The terminal baseline
-also passes after the custody correction. The broader source diagnostic still
-fails with 71 errors; ingress, lifecycle completion, worker ownership and
-finalization contracts remain under review. Four inputs changed during that
-run, so it is development evidence. Four retired-codec guards pass.
+also passes after the custody correction. The repaired model/source registration
+selection passes all 54 checks, including full production acceptance. Ordinary
+ingress passes 24 copied-source baselines, 24 rehashed negatives and its complete
+owner contract. Configuration geometry passes 24 rehashed controls; decided-body
+serving passes 72 copied baselines and 72 rehashed controls across 19 owners.
+Lifecycle certified serving passes all 46 selected checks; the four lane-output
+owners pass 43 rehashed controls before and after their seal updates. Ingress
+effects and tombstones pass 81 copied positives and 81 rehashed negatives. The last
+broader diagnostic reported 71 errors before these corrections; remaining worker
+ownership and finalization contracts are under review.
+Four inputs changed during that run, so it is development evidence. Four
+retired-codec guards pass.
+
+The strict scaling evidence contract now requires fixed-schedule transaction
+identities, authoritative Applied results, drained warmup and complete-cohort
+latency including the drain tail. Validator checks pass 56 tests/86 subcases;
+runner integration passes 13 tests/nine subcases, preserving all old assertions.
+The production collector, exact routing/resource observations and real paired
+trials remain open.
 
 The host restart deleted temporary raw artifacts and unfinished Core/Apple
 builds. Earlier SDK/formal/source observations are recorded in the linked goals
@@ -83,7 +145,8 @@ verification and all 145 Node tooling tests are recorded as passing.
 
 | Area | Observed evidence | Practical limit |
 | --- | --- | --- |
-| Taira reset and startup | Signed release64 built and transferred all four Linux binaries, passed descriptor and populated-inventory process checks, four native validator configuration checks, inventory assembly, seed custody capture, authorization and local preflight. The corrected timeout policy fits its full 13,140-second lease. All 195 focused successor CLI checks pass, including the complete generated stage frozen to owner-readonly files. | Native apply stopped before host mutation because the stage producer created mode0400 files while its consumer required mode0600. The reader now admits both private lifecycle modes while preserving ownership, type, link and content checks. Aggregate timeout validation now precedes source/artifact scans and custody reads. Release65 build and actual Linux staging/runtime verification remain pending. The prior journal is retained untouched; ingress was restored. Public signed canaries, application connectivity, epoch-boundary roster publication, storage growth and reboot qualification remain open. |
+| Kotodama V1 redesign | Fresh compiler library tests pass 1,090/1,090, compiler integration 77/77 and Koto/LSP 37/37. ABI values pass 172/172; Core completion/recovery 107/107 includes both actual cold-restart worker completions. Scoped Core contract tests pass 60/60; VM runtime/lists 50/50, ABI/artifacts 72/72, values/scan/test-driver 57/57, numeric/pointers 40/40, data-model contracts 57/57 and Torii public-state 5/5 pass. Offline record consumers pass Python 220, JavaScript 18, Kotlin/Java 17 and C# 21 tests. | C9 remains open. Local debug passes 9/9, including strict NFC keys and exact duplicate-JSON rejection. All ten scaffold tests and the complete actual offline project workflow pass, including three standalone success/exact-failure tests. Tutorials build and link-check with 12 GiB; immutable docs HEAD also exhausts the default 6 GiB heap. Native SDKs, final artifact admission, normal-release four-validator execution/restart and workspace qualification remain open. The failed formal checker has static attribution for 242 diagnostics against HEAD and 34 against the earliest retained resumed snapshot; these distinct limits remain explicit in [the execution ledger](specs/kotodama_v1_redesign.md). |
+| Taira reset and startup | Release69 staged all four validators after reclaiming obsolete source imports, binaries and caches from the full Mac backing disk. Its completed systemd stop exposed a numeric-status parser bug: `ExecMainCode=1` was compared with `exited`, leaving stop and rollback pending. The correction also requires `active/running` for a long-running validator restart. Captured systemd evidence and seven lifecycle regressions are included in the early gate. Nginx logs were rotated without restarting the master; a headless background job now checks them every five minutes and retains four compressed archives. Its 18 tests pass. | No validator started and public Taira is not ready. The failed69 journal remains retained as incomplete. All 30 corrected native regressions pass in 195 seconds; the next build and rollout are pending the shared checkpoint. Public finality, signed canaries and application connectivity remain unverified. |
 | KAGEMUSHA release work | The default-stack production-services restart and inline-carrier size regressions pass after the retained-carrier allocation fix. The Linux build adapter passes ten tests and a real crypto-symbol link through the Cargo-Zig compiler path. | Full Linux release/runtime, remaining startup recovery, aggregate proofs and device resource limits, governed physical profiles and independent review remain unqualified. See [current readiness](specs/kagemusha_v1_production_readiness.md). |
 | Privacy V1 admission and field carriers | Canonical 48-byte digest and 32-byte Fp4 carriers; complete signed synthetic qualification passes bounded decoding. Rust capability FFI passes 2 tests; corrected Exact12 fixtures pass JS 23, Python 94, Kotlin 16 and C# 13. SDK admission source checks pass 86 regressions; model privacy selection passes 127 tests and the final intent KAT is independently reproduced. Shared six-lane framing passes 39 primitive tests and the ACE selection passes 26; AXT binding passes 76 FASTPQ and 7 Core regressions. | Core native selection passes all 63 tests; the corrected complete proof crate passes 1,299 with zero failures and 13 ignored. Current SDK origin/network checks pass JS 37, Python 103, Kotlin 63, C# 17 and Swift source-only 35. Apple duplicate archive ownership is corrected and three target link controls pass; the previous full XCFramework build was lost during host restart and has no final artifact; complete GPU proof dispatch, AXT authoritative state/execution binding, independent review and four-validator qualification remain open in the [closure ledger](specs/privacy_first_release_closure.md). Synthetic signatures are validator tests only. |
 | SCCP TON scoped audit | [Validated fixes and evidence](docs/source/sccp_ton_security_audit_2026_09.md): ordinary transfer funding, bounded replay work, native TL-B parsing, exact checkpoint identity, complete breaker readbacks, builder Git/verifier/attribute isolation, and canonical wire identifiers across Rust/SDKs, circuits and contracts. Earlier focused Rust/Core/model/production compile checks pass. Fresh validation: 459 Python tests with zero skips, 45 TON contract tests, authenticated StateInit write/check, and pinned EVM/TRON compiler plus EVM runtime smoke pass. Rust validator suites pass 22/27 tests, and the compiled Rust wire fixture passes. Policy/proof negatives have positive controls and precise rejection checks. All 8 R1CS identities are freshly measured, with a verified source closure and no pending profiles. | Full Core/workspace and Torii runtime tests are unclaimed. Production keys/proofs, trusted release signatures and authenticated deployment readbacks remain separate release artifacts. |
@@ -91,7 +154,7 @@ verification and all 145 Node tooling tests are recorded as passing.
 | Configuration and status HTTP contracts | Shared configuration DTOs have 22 wire tests, 3 node conversion tests and 14 Core runtime tests. Shared status preserves 32 captured named DTO frames/hashes/JSON; 93 telemetry tests pass. Core, SDK/CLI, test-network, schema generation, Mochi and grouped consumers compile. | Named records are qualified by focused fixtures; arbitrary generic-envelope schema identity is not yet cut over or fully qualified. |
 | Core integration fixtures | The `core_api` harness compiles after all 21 identified fixture errors were repaired through canonical APIs. | The new four-validator configuration startup/restart/readback/isolation scenario has not run against rebuilt binaries. Compilation is not runtime evidence. |
 | Torii evidence API | Grouped telemetry harness compiles. All 3 evidence runtime tests pass, including genuine four-validator BLS proof-of-possession/signature material and tamper rejection. | These tests do not qualify the full node consensus/release corridor. |
-| Atomic private settlement | Historical Core/Torii functional suites pass 520/221 tests, protected-body recovery passes 228, optimized preflights pass 307, and exact-body rejection diagnostics pass 75 focused tests. The subsequent native full proof passes, but concurrent source drift prevents qualification. | No completed private settlement. The last completed sixteen-process run fails with `DecidedBodyInvalid`; a fresh pinned-binary diagnostic is still running. A funding-note helper and shared pool-before-proof harness sequence remove guessed next-block authority heights. All four selected Core regressions pass in 1720.884 seconds including compilation; a concurrent status-file/workspace change prevents current-source qualification. Harness compilation and execution remain pending. This intentional source change does not alter the running binaries and cannot qualify their run against current source. Ten positive networks, full proofs, fault/leakage/performance, audit and release gates remain open. See [the protocol](specs/private_settlement.md). |
+| Atomic private settlement | Historical Core/Torii functional suites pass 520/221 tests, protected-body recovery passes 228, optimized preflights pass 307, and exact-body rejection diagnostics pass 75 focused tests. Four pool-funding regressions and the corrected full Nexus compiler check pass; concurrent source drift prevents current-source qualification. | No completed private settlement. The latest sixteen-process diagnostic fails during activation after durable merge-candidate revalidation shuts down one global validator; all final runtime logs are archived. The preceding `DecidedBodyInvalid` reason remains unresolved. Revalidation now distinguishes byte/digest mismatch and retains the semantic reason; two regressions and existing signing/funding tests await validation after the active Git merge. The pool-before-proof harness execution attempt fails during concurrent IVM/data-model changes before tests run. Ten positive networks, full proofs, fault/leakage/performance, audit and release gates remain open. See [the protocol](specs/private_settlement.md). |
 | Norito schema preparation | Canonical identity kernel, derive support, primitive/crypto declarations and strict UI tests pass. All 19 planned base-model declarations preserve 189 captured frames, signatures, JSON, storage keys and schema output. All 25 generated event sets preserve 225 captured frames and 75 JSON values; 12 enclosing event enums preserve their identities. Another 17 Musubi generated types preserve 196 frames across 49 values; 16 governance hash wrappers preserve 256 frames and 64 JSON values. Another 127 generated queries preserve 684 frames across 171 payloads, and 62 privacy/spentness carriers preserve 992 frames across 248 payloads. The complete model group_02 harness passes 178 tests (two fixture writers ignored), including all 28 query tests. The derive suites pass 48 tests, strict Clippy and the executable EventSet documentation example. | Active frame-identity selection remains unchanged. Complete declaration coverage, atomic cutover and model moves remain pending; see [the identity contract](specs/norito_schema_identity.md). |
 | Norito migration capture | Eight probe-generator, 17 driver and 32 syntax/context-graph tests pass. Controlled crypto/model captures pass 206/6,112 probes. Another 108 crypto declarations pass nine module suites and seven existing wire/identity golden tests. The reviewed 1,771-declaration model batch preserves every pre-capture identity and its 110 owner-scoped fixture tests pass on the sealed post-declaration harness. Native AMX participant finality now uses a finite `NativeAmxParticipantSettlement` wire record; canonical Rust, Python, JavaScript, Kotlin and Swift fixtures use its domain-separated typed hash and reject the removed recursive field. Norito encoding also returns a typed nesting error before recursive user values can exhaust the native stack. | Generic, local, remaining generated families and other feature selections remain incomplete. The complete local model-library result is recorded below; other feature selections and release qualification remain open. |
 | Instruction identity and registry | All 292 generated instruction declarations require captured identities. The original capture retains 357 values and 1,428 frames across 322 types. Five Kaigi private cases now correctly reject retired hash-shaped scalars; their public cases retain exact frames. New canonical private captures preserve root/vector/option/map coverage. Registry fixture updates account for 14 game and three NFT-market additions, with no removed or reassigned wire IDs. | All 409 focused tests and the complete 3,576-test model suite pass; six unrelated cases remain ignored. Other features and release qualification remain open. |
@@ -140,24 +203,30 @@ have passed together against one immutable source tree.
 ## Build and architecture qualification
 
 SoraFS goal execution is tracked in the [V1 implementation goals](specs/sorafs/v1_implementation_goals.md).
-The post-reboot manifest library passes **896 tests**, zero failures or ignored
+The post-reboot manifest library now passes **908 tests**, zero failures or ignored
 tests, including canonical identities/signatures under alternate caller layouts.
 The new local result and binary/source hashes are retained in ignored
-`target/evidence/sorafs-v1/manifest-canonical-identity-result.json`.
+`target/evidence/sorafs-v1/manifest-reference-04-result.json`.
 The retention-request model selection also passes three tests. Provider/rollout
 source contracts pass 410 checks, with two unfinished-source closure failures.
 The review corrects canonical manifest/deal/audit/replication identities, retention
 request digests, pin-accounting keys, and node billing/reputation/governance
-checkpoint and publication framing. The fresh node retry passes **19 of 19**
-regressions after correcting the two-slot encoder and fixtures; compression is
-rejected before allocation. The full node suite reports **1,378 passed, 48 failed
-and two Kubo cases ignored**; retained failure diagnostics are under review.
-Canonical Core state/nonce keys and SDK reference frame admission are being
-completed before the shared Core capture; broader qualification remains pending.
+checkpoint and publication framing. The earlier full Node suite reports
+**1,378 passed, 48 failed and two Kubo cases ignored**. The next rebuilt security
+selection now reports **74 passed and four failed**, with zero ignored; all 48
+original failures still pass. The remaining failures identify two unsafe fixture
+file modes, a fixture assumption about intentionally hedged encryption randomness,
+and insufficient cumulative quarantine decode budget at its exact byte limit.
+Bounded corrections and the next full-suite execution remain pending.
+The rebuilt Core SoraFS selection now passes **406 tests**, zero failures or
+ignored, in 58.198 seconds with unchanged scoped source/binary hashes. It covers
+all 42 earlier failures, the reputation policy cutover fence, exact permission
+tokens under zero allocation, and authenticated snapshot timing. The combined
+build still fails on Torii test include paths; this pass qualifies only the
+captured Core selection. Node focused/full validation remains in progress.
 The host reboot cleared previous `/tmp` SoraFS logs and interrupted native
 captures; those older observations cannot serve as retained current evidence.
-The former Core run exposed 113 failures, and its fixture/security corrections
-still require the coordinated rebuild. Matched daemon/harness four-validator
+Matched daemon/harness four-validator
 execution, full workspace/SDK validation, source/bootstrap seals, genuine HSM
 custody and all deployment evidence remain open. See the
 [current closure checkpoint](specs/sorafs/v1_closure_ledger.md#2026-09-07-post-reboot-checkpoint).

@@ -1230,8 +1230,8 @@ internal static class SccpSubmitValidation
                 var publicKey = DecodeByteVector(
                     cursor.TakeField("authority.public_key"),
                     "authority.public_key",
-                    byte.MaxValue + 1);
-                RequireCanonicalCompactPublicKey(publicKey, byte.MaxValue, "authority.public_key");
+                    ushort.MaxValue + 1);
+                RequireCanonicalCompactPublicKey(publicKey, ushort.MaxValue, "authority.public_key");
                 canonicalController = CanonicalSingleController(publicKey);
                 break;
             }
@@ -1258,7 +1258,7 @@ internal static class SccpSubmitValidation
         var addressPayload = new byte[controller.Length + 1];
         addressPayload[0] = controller[0] switch
         {
-            0 => 0x02,
+            0 or 2 => 0x02,
             1 => 0x0A,
             _ => throw new ArgumentException("AccountId uses an unknown controller tag."),
         };
@@ -1286,16 +1286,26 @@ internal static class SccpSubmitValidation
         switch (controller[0])
         {
             case 0:
+            case 2:
                 {
-                    var keyLength = controller[2];
-                    if (controller.Length != 3 + keyLength)
+                    var extended = controller[0] == 2;
+                    var keyOffset = extended ? 4 : 3;
+                    if (controller.Length < keyOffset)
+                    {
+                        throw new ArgumentException("Single-key AccountId controller is truncated.");
+                    }
+
+                    var keyLength = extended
+                        ? BinaryPrimitives.ReadUInt16BigEndian(controller[2..])
+                        : controller[2];
+                    if (controller.Length != keyOffset + keyLength || (extended && keyLength <= byte.MaxValue))
                     {
                         throw new ArgumentException("Single-key AccountId controller is malformed.");
                     }
 
                     var publicKey = new byte[1 + keyLength];
                     publicKey[0] = CompactAlgorithmTag(controller[1]);
-                    controller[3..].CopyTo(publicKey.AsSpan(1));
+                    controller[keyOffset..].CopyTo(publicKey.AsSpan(1));
                     writer.WriteUInt32LittleEndian(0);
                     writer.WriteField(EncodeCompactByteVector(publicKey));
                     return writer.ToArray();
@@ -1445,12 +1455,15 @@ internal static class SccpSubmitValidation
 
     private static byte[] CanonicalSingleController(byte[] publicKey)
     {
-        var keyLength = checked((byte)(publicKey.Length - 1));
-        var result = new byte[3 + keyLength];
-        result[0] = 0;
+        var keyLength = checked((ushort)(publicKey.Length - 1));
+        var extended = keyLength > byte.MaxValue;
+        var keyOffset = extended ? 4 : 3;
+        var result = new byte[keyOffset + keyLength];
+        result[0] = extended ? (byte)2 : (byte)0;
         result[1] = CanonicalCurveId(publicKey[0]);
-        result[2] = keyLength;
-        publicKey.AsSpan(1).CopyTo(result.AsSpan(3));
+        if (extended) BinaryPrimitives.WriteUInt16BigEndian(result.AsSpan(2), keyLength);
+        else result[2] = (byte)keyLength;
+        publicKey.AsSpan(1).CopyTo(result.AsSpan(keyOffset));
         return result;
     }
 

@@ -73,6 +73,17 @@ performing out-of-band queries. Public inputs (`dsid`, `slot`, roots,
 count bookkeeping. Missing, malformed, unpaired, or root-mismatched SMT
 witnesses are rejected before proof construction.
 
+The `fastpq_json` and `fastpq_fixture_rebind` tools accept only the canonical
+`FastpqTransitionBatch` frame at their batch boundary. Internal prover structs,
+bare payloads, alternate layouts, and trailing bytes are rejected. JSON-tool
+proofs, relay references, touch-manifest commitments, and emitted Norito objects
+use the canonical V1 frame independently of ambient layout guards.
+Torii recovery emits the same public batch frame, counting the borrowed source
+before model conversion and enforcing the per-batch and aggregate byte budgets.
+The Core prover lane canonically encodes persisted proofs within the smaller of
+the configured sidecar budget and the production verifier's proof-byte cap;
+`proof_digest` hashes the exact admitted frame.
+
 V1 uses a 32-bit path for each canonical `FastpqBalanceKeyV1` Norito frame. The
 `iroha_data_model::fastpq::transfer_balance_key` owner frames the typed asset definition
 followed by the complete domainless `AccountId`, with schema identity
@@ -87,6 +98,12 @@ free; a collision advances with wrapping `u32` linear probing to the first free
 path. The probe window is bounded by the number of distinct keys. The verifier
 reconstructs this allocation from the complete transcript vector and rejects a
 witness whose `path_bits` selects any other path. Consequently colliding full keys receive distinct deterministic leaves on every peer.
+
+`fixtures/fastpq/balance_key_v1.json` pins the exact canonical frames for all
+eleven supported single-key algorithms, weighted/threshold-sensitive multisig
+policies, a policy combining all algorithms, and a 256-member policy. The Rust
+`kotlin-fixture-gen fastpq-balance-keys-v1` command regenerates these frames from
+the independently validated complete-controller fixture.
 
 ## Gadget Layout
 
@@ -118,13 +135,13 @@ witness whose `path_bits` selects any other path. Consequently colliding full ke
 | `ivm::host` & tests | Core/Default hosts treat `transfer_v1` as a batch append while the scope is active, surface `SYSCALL_TRANSFER_V1_BATCH_{BEGIN,END,APPLY}`, and the mock WSV host buffers entries before committing so regression tests can assert deterministic balance updates.【crates/ivm/src/core_host.rs:1001】【crates/ivm/src/host.rs:451】【crates/ivm/src/mock_wsv.rs:3713】【crates/ivm/tests/wsv_host_pointer_tlv.rs:219】【crates/ivm/tests/wsv_host_pointer_tlv.rs:287】
 | `iroha_core` | Emit `TransferTranscript` after the state transition, build `FastpqTransitionBatch` records with explicit `public_inputs` during `StateBlock::capture_exec_witness`, and run the FASTPQ prover lane so both Torii/CLI tooling and the V1 backend receive canonical `TransitionBatch` inputs. `TransferAssetBatch` groups sequential transfers into a single transcript, omitting the poseidon digest for multi-delta batches so the gadget can iterate across entries deterministically. |
 | `fastpq_prover` | `gadgets::transfer` now validates multi-delta transcripts (balance arithmetic + Poseidon digest), requires real paired SMT witness material, checks chained roots from `public_inputs.old_root` to `public_inputs.new_root`, and surfaces validated witnesses for the planner (`crates/fastpq_prover/src/gadgets/transfer.rs`). `trace::build_trace` decodes those transcripts out of batch metadata, rejects transfer batches missing `transfer_transcripts`, rejects malformed witness paths, attaches the validated witnesses to `Trace::transfer_witnesses`, and `TracePolynomialData::transfer_plan()` keeps the aggregated plan alive until the planner consumes the gadget (`crates/fastpq_prover/src/trace.rs`). Row-count regression evidence now comes from execution-captured V1 batches; standalone synthetic row generation has been removed. |
-| Kotodama | Lowers the `transfer_batch((from,to,asset,amount), …)` helper into `transfer_v1_batch_begin`, sequential `transfer_asset` calls, and `transfer_v1_batch_end`. Each tuple argument must follow the `(AccountId, AccountId, AssetDefinitionId, quantity)` shape; single transfers keep the existing builder. |
+| Kotodama | Lowers `ledger::asset::transfer_batch(transfers: entries)` for `List<(AccountId, AccountId, AssetDefinitionId, quantity), N>` with `N` in 1..64. The complete list is evaluated left-to-right before one batch begin, its active elements are transferred in order, and one batch end publishes the atomic batch. Saved lists use the same bounded traversal; empty lists return Unit without opening a batch, and capacity does not determine active length. |
 
 Example Kotodama usage:
 
 ```text
 fn pay(AccountId a, AccountId b, AssetDefinitionId asset, quantity x) {
-    transfer_batch((a, b, asset, x), (b, a, asset, 1));
+    ledger::asset::transfer_batch(transfers: [(a, b, asset, x), (b, a, asset, 1)]);
 }
 ```
 

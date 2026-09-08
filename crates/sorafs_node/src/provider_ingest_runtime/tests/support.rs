@@ -1,10 +1,25 @@
-use std::{
-    io,
-    sync::{
-        Mutex,
-        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+use super::*;
+use crate::provider_ingest_outbox::{
+    ProviderIngestCompletionStateV1, ProviderIngestDeliveryStateV1, ProviderIngestOutboxPolicyV1,
+};
+use crate::{
+    FinalizedProviderIngestError, NodeHandle,
+    config::StorageConfig,
+    provider_attestation_journal::{
+        MusubiProviderAttestationInventoryErrorV1, MusubiProviderAttestationInventoryItemV1,
+        MusubiProviderAttestationInventoryQualificationV1,
+        MusubiProviderAttestationInventoryReadbackV1, MusubiProviderAttestationInventoryReaderV1,
+        MusubiProviderAttestationInventoryRuntimeErrorV1,
+        MusubiProviderAttestationInventoryRuntimeV1, MusubiProviderAttestationInventoryScopeV1,
+        MusubiProviderAttestationInventorySinkV1, MusubiProviderAttestationInventoryV1,
+        MusubiProviderAttestationJournalCasOutcomeV1, MusubiProviderAttestationJournalPolicyV1,
+        MusubiProviderAttestationJournalStoreErrorV1,
+        MusubiProviderAttestationJournalStoreSnapshotV1, MusubiProviderAttestationJournalStoreV1,
+        MusubiProviderAttestationJournalV1, musubi_provider_attestation_approval_id_v1,
+        musubi_provider_attestation_journal_checkpoint_revision_v1,
     },
-    time::Instant,
+    scheduler::{StorageSchedulerConfig, StorageSchedulersRuntime},
+    store::StorageBackend,
 };
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, SignatureOf};
 use iroha_data_model::{
@@ -37,36 +52,33 @@ use sorafs_manifest::{
     BLAKE3_256_MULTIHASH_CODE, DagCodecId, ManifestBuilder, ManifestV1,
     capacity::{REPLICATION_ORDER_VERSION_V1, ReplicationAssignmentV1, ReplicationOrderSlaV1},
 };
-use super::*;
-use crate::provider_ingest_outbox::{
-    ProviderIngestCompletionStateV1, ProviderIngestDeliveryStateV1, ProviderIngestOutboxPolicyV1,
-};
-use crate::{
-    FinalizedProviderIngestError, NodeHandle,
-    config::StorageConfig,
-    provider_attestation_journal::{
-        MusubiProviderAttestationInventoryErrorV1, MusubiProviderAttestationInventoryItemV1,
-        MusubiProviderAttestationInventoryQualificationV1,
-        MusubiProviderAttestationInventoryReadbackV1, MusubiProviderAttestationInventoryReaderV1,
-        MusubiProviderAttestationInventoryRuntimeErrorV1,
-        MusubiProviderAttestationInventoryRuntimeV1, MusubiProviderAttestationInventoryScopeV1,
-        MusubiProviderAttestationInventorySinkV1, MusubiProviderAttestationInventoryV1,
-        MusubiProviderAttestationJournalCasOutcomeV1, MusubiProviderAttestationJournalPolicyV1,
-        MusubiProviderAttestationJournalStoreErrorV1,
-        MusubiProviderAttestationJournalStoreSnapshotV1, MusubiProviderAttestationJournalStoreV1,
-        MusubiProviderAttestationJournalV1, musubi_provider_attestation_approval_id_v1,
-        musubi_provider_attestation_journal_checkpoint_revision_v1,
+use std::{
+    io,
+    sync::{
+        Mutex,
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     },
-    scheduler::{StorageSchedulerConfig, StorageSchedulersRuntime},
-    store::StorageBackend,
+    time::Instant,
 };
 const LOCAL_PROVIDER: [u8; 32] = [0x11; 32];
 const SOURCE_PROVIDER: [u8; 32] = [0x22; 32];
+const THIRD_PROVIDER: [u8; 32] = [0x33; 32];
 const TEST_GENESIS_BLOCK_HASH: [u8; 32] = [0xA7; 32];
 fn test_network_id() -> NetworkId {
     NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
         Hash::prehashed(TEST_GENESIS_BLOCK_HASH),
     ))
+}
+fn unmarked_test_network_id() -> NetworkId {
+    let mut hash = Hash::prehashed([0; 32]);
+    // Test-only logically invalid material: the safe Hash representation has no invalid bit pattern.
+    iroha_crypto::zeroize_value_for_confidential_discard(&mut hash);
+    assert_eq!(
+        hash.as_ref()[31] & 1,
+        0,
+        "negative fixture must actually be unmarked"
+    );
+    NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(hash))
 }
 fn foreign_test_network_id() -> NetworkId {
     NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
@@ -207,8 +219,8 @@ fn fixture_row(order_seed: u8) -> ProviderIngestFinalizedAssignmentV1 {
                 lane: None,
             },
         ],
-        issued_at: 100,
-        deadline_at: 200,
+        issued_at: 7,
+        deadline_at: 20,
         sla: ReplicationOrderSlaV1 {
             ingest_deadline_secs: 10,
             min_availability_percent_milli: 99_000,
@@ -233,7 +245,7 @@ fn fixture_row(order_seed: u8) -> ProviderIngestFinalizedAssignmentV1 {
             issued_by: account(1),
             issued_epoch: 7,
             deadline_epoch: 20,
-            canonical_order: norito::to_bytes(&order_body).expect("order bytes"),
+            canonical_order: norito::encode_canonical(&order_body).expect("order bytes"),
             assignment_revision: 1,
             provider_completions: Vec::new(),
             status: ReplicationOrderStatus::Pending,
@@ -295,8 +307,24 @@ fn musubi_binding_for_row(
         commitment,
     )
 }
+fn configure_musubi_replication_fixture(row: &mut ProviderIngestFinalizedAssignmentV1) {
+    let mut order = decode_bound_replication_order(&row.order).expect("canonical generic fixture");
+    order.target_replicas = iroha_data_model::musubi::MUSUBI_MIN_HEALTHY_REPLICAS_V1;
+    order.assignments.push(ReplicationAssignmentV1 {
+        provider_id: THIRD_PROVIDER,
+        slice_gib: 1,
+        lane: None,
+    });
+    order
+        .validate()
+        .expect("canonical three-replica Musubi order");
+    assert_eq!(order.assignments.len(), usize::from(order.target_replicas));
+    row.order.canonical_order = norito::encode_canonical(&order).expect("canonical Musubi order");
+    row.pin.manifest.policy.min_replicas = order.target_replicas;
+}
 fn fixture_musubi_row(order_seed: u8, commitment_seed: u8) -> ProviderIngestFinalizedAssignmentV1 {
     let mut row = fixture_row(order_seed);
+    configure_musubi_replication_fixture(&mut row);
     let binding = musubi_binding_for_row(&row, commitment_seed);
     let claim = ProviderIngestFinalizedClaimFactoryV1::new(test_network_id(), LOCAL_PROVIDER)
         .seal_musubi_archive(
@@ -583,7 +611,10 @@ fn completed_attestation_manifest(fixture: &VerifiedAttestationBundleFixtureV1) 
         .content_length(fixture.plan.content_length)
         .car_digest(*car_stats.car_archive_digest.as_bytes())
         .car_size(car_stats.car_size)
-        .pin_policy(sorafs_manifest::PinPolicy::default())
+        .pin_policy(sorafs_manifest::PinPolicy {
+            min_replicas: iroha_data_model::musubi::MUSUBI_MIN_HEALTHY_REPLICAS_V1,
+            ..sorafs_manifest::PinPolicy::default()
+        })
         .build()
         .expect("completed-attestation fixture manifest")
 }
@@ -617,7 +648,10 @@ fn completed_attestation_capture_source_row_with_order_id(
         manifest.chunk_digest_sha3_256,
         manifest.por_root,
         manifest.content_length,
-        PinPolicy::default(),
+        PinPolicy {
+            min_replicas: iroha_data_model::musubi::MUSUBI_MIN_HEALTHY_REPLICAS_V1,
+            ..PinPolicy::default()
+        },
         account(8),
         8,
         None,
@@ -632,13 +666,16 @@ fn completed_attestation_capture_source_row_with_order_id(
         manifest_cid: manifest.root_cid.clone(),
         manifest_digest: *manifest_digest.as_bytes(),
         chunking_profile: chunker.to_handle(),
-        target_replicas: 1,
-        assignments: vec![ReplicationAssignmentV1 {
-            provider_id: LOCAL_PROVIDER,
-            slice_gib: 1,
-            lane: None,
-        }],
-        issued_at: 1,
+        target_replicas: iroha_data_model::musubi::MUSUBI_MIN_HEALTHY_REPLICAS_V1,
+        assignments: [LOCAL_PROVIDER, SOURCE_PROVIDER, THIRD_PROVIDER]
+            .into_iter()
+            .map(|provider_id| ReplicationAssignmentV1 {
+                provider_id,
+                slice_gib: 1,
+                lane: None,
+            })
+            .collect(),
+        issued_at: 8,
         deadline_at: 20,
         sla: ReplicationOrderSlaV1 {
             ingest_deadline_secs: 10,
@@ -664,13 +701,14 @@ fn completed_attestation_capture_source_row_with_order_id(
             manifest_root_cid: manifest_root,
             musubi_archive: Some(claim.archive_id()),
             issued_by: account(1),
-            issued_epoch: 1,
+            issued_epoch: 8,
             deadline_epoch: 20,
-            canonical_order: norito::to_bytes(&order_body)
+            canonical_order: norito::encode_canonical(&order_body)
                 .expect("encode completed-attestation replication order"),
             assignment_revision: 1,
             provider_completions: vec![claim.completion().clone()],
-            status: ReplicationOrderStatus::Completed(8),
+            // The local provider is complete; the two remote assignments remain pending.
+            status: ReplicationOrderStatus::Pending,
         },
         Some(claim.binding.clone()),
         Some(account(8)),

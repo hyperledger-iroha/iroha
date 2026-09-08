@@ -7,6 +7,10 @@ use super::ast::{Block, Expr, Item, Pattern, PatternBinding, Program, Statement}
 use crate::builtins::{Builtin, BuiltinSurface, PointerConstructor};
 use crate::i18n::{self, Language, Message as I18nMessage, StateShadowContext};
 use crate::pointer_abi::{self, PointerType};
+use crate::{
+    source::{SourceFile, SourceRange, TextRange},
+    spanned_ast::{AstFacts, DeclarationKind},
+};
 use iroha_data_model::{
     isi::{
         BurnBox, ExecuteTrigger, GrantBox, InstructionBox, Log, MintBox, RegisterBox,
@@ -14,7 +18,7 @@ use iroha_data_model::{
     },
     query::{QueryRequest, SingularQueryBox},
 };
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 /// A lint warning produced by [`lint_program`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LintWarning {
@@ -28,6 +32,7 @@ pub struct LintWarning {
     pub category: LintCategory,
     /// Optional source span for inline editor surfacing.
     pub source: Option<LintSourceSpan>,
+    range: Option<SourceRange>,
 }
 impl LintWarning {
     fn new(code: &'static str, message: LintMessage) -> Self {
@@ -37,7 +42,12 @@ impl LintWarning {
             severity: LintSeverity::Warning,
             category: lint_category(code),
             source: None,
+            range: None,
         }
+    }
+    fn at_source(mut self, range: Option<SourceRange>) -> Self {
+        self.range = range;
+        self
     }
     /// Render the lint message in the requested language.
     pub fn localized_message(&self, lang: Language) -> String {
@@ -57,6 +67,45 @@ impl LintWarning {
             "opaque-access-hints" => "K5009",
             _ => "K5099",
         }
+    }
+    /// Project this lint through the same exact diagnostic model used by compiler failures.
+    pub fn to_diagnostic(
+        &self,
+        source_name: &str,
+        package_identity: Option<&str>,
+        language: Language,
+    ) -> crate::diagnostic::Diagnostic {
+        use crate::diagnostic::{Diagnostic, DiagnosticPhase, SourcePosition, SourceSpan};
+        let span = self.source.as_ref().map(|span| SourceSpan {
+            package_identity: package_identity.map(ToOwned::to_owned),
+            source: Some(source_name.to_owned()),
+            start: SourcePosition {
+                line: span.line,
+                column: span.column,
+            },
+            end: SourcePosition {
+                line: span.end_line,
+                column: span.end_column,
+            },
+            byte_range: Some(span.byte_range),
+        });
+        let mut diagnostic = Diagnostic::warning(
+            self.diagnostic_code(),
+            DiagnosticPhase::Semantic,
+            self.localized_message(language),
+            span,
+        );
+        diagnostic.notes.push(format!(
+            "lint `{}` in category `{}`",
+            self.code,
+            self.category.as_str()
+        ));
+        if let Some(span) = &self.source {
+            // The compiler has already authenticated this source; display path remapping
+            // does not replace its immutable bytes with a filesystem or open-buffer read.
+            diagnostic.primary_source = Some(span.source_file.clone());
+        }
+        diagnostic
     }
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -89,8 +138,102 @@ impl LintCategory {
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LintSourceSpan {
+    /// One-based Unicode-scalar start line.
     pub line: usize,
+    /// One-based Unicode-scalar start column.
     pub column: usize,
+    /// One-based Unicode-scalar end line.
+    pub end_line: usize,
+    /// One-based Unicode-scalar end column.
+    pub end_column: usize,
+    /// Exact parser-owned UTF-8 byte range.
+    pub byte_range: TextRange,
+    /// Immutable source shared by all warnings from this compilation unit.
+    pub source_file: SourceFile,
+}
+/// Attach only parser-owned declarations, bindings, and expression ranges to lint findings.
+pub(crate) fn lint_with_sources(
+    program: &Program,
+    facts: &AstFacts,
+    source: &SourceFile,
+) -> Vec<LintWarning> {
+    let mut functions = BTreeMap::new();
+    let mut states = BTreeMap::new();
+    let mut parameters = BTreeMap::new();
+    for declaration in &facts.declarations {
+        let Some(range) = facts.source_map.source_range(declaration.name_node) else {
+            continue;
+        };
+        match declaration.kind {
+            DeclarationKind::Function => {
+                functions.insert(declaration.name.as_str(), declaration.node);
+            }
+            DeclarationKind::State => {
+                states.insert(declaration.name.as_str(), range);
+            }
+            DeclarationKind::Parameter => {
+                if let Some(owner) = declaration.owner {
+                    parameters.insert((owner, declaration.name.as_str()), range);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut bindings = BTreeMap::<&str, BTreeMap<u32, SourceRange>>::new();
+    for binding in &facts.bindings {
+        if let Some(range) = facts.source_map.source_range(binding.name_node) {
+            bindings
+                .entry(binding.name.as_str())
+                .or_default()
+                .insert(range.range.start, range);
+        }
+    }
+    let mut warnings = lint_program(program);
+    for warning in &mut warnings {
+        let declaration = match &warning.message {
+            LintMessage::UnusedState { name } => states.get(name.as_str()),
+            LintMessage::UnusedParameter { func, name }
+            | LintMessage::StateShadowed {
+                func,
+                name,
+                context: StateShadowContext::Parameter,
+            } => functions
+                .get(func.as_str())
+                .and_then(|owner| parameters.get(&(*owner, name.as_str()))),
+            _ => None,
+        };
+        let mut range = declaration.copied().or(warning.range);
+        if let (Some(context), LintMessage::StateShadowed { name, .. }) = (range, &warning.message)
+            && let Some(named) = bindings.get(name.as_str())
+        {
+            let mut candidates = named
+                .range(context.range.start..context.range.end)
+                .map(|(_, range)| *range)
+                .filter(|candidate| {
+                    candidate.source == context.source && candidate.range.end <= context.range.end
+                });
+            if let Some(binding) = candidates.next()
+                && candidates.next().is_none()
+            {
+                range = Some(binding);
+            }
+        }
+        if let Some(range) =
+            range.filter(|range| range.source == source.id() && source.slice(range.range).is_some())
+        {
+            let start = source.line_column(range.range.start);
+            let end = source.line_column(range.range.end);
+            warning.source = Some(LintSourceSpan {
+                line: start.line,
+                column: start.column,
+                end_line: end.line,
+                end_column: end.column,
+                byte_range: range.range,
+                source_file: source.clone(),
+            });
+        }
+    }
+    warnings
 }
 fn lint_category(code: &str) -> LintCategory {
     match code {
@@ -470,7 +613,7 @@ fn lint_state_path_expr(expr: &Expr, warnings: &mut Vec<LintWarning>) {
                             "{name} uses a non-literal path; production compilation requires compiler-derived bounded state access"
                         ),
                     },
-                ));
+                ).at_source(expr.source()));
             }
             for arg in args {
                 lint_state_path_expr(arg, warnings);
@@ -678,7 +821,7 @@ fn lint_opaque_access_expr(expr: &Expr, warnings: &mut Vec<LintWarning>) {
                             "call to `{name}` uses opaque host access; production compilation requires precise compiler-derived access metadata"
                         ),
                     },
-                ));
+                ).at_source(expr.source()));
             }
             for arg in args {
                 lint_opaque_access_expr(arg, warnings);
@@ -1066,14 +1209,17 @@ fn lint_statement_state_shadowing(
             collect_pattern_names(pat, &mut bound_names);
             for name in bound_names {
                 if state_names.contains(name) && !name.starts_with('_') {
-                    warnings.push(LintWarning::new(
-                        "state-shadowed",
-                        LintMessage::StateShadowed {
-                            func: func_name.to_owned(),
-                            name: name.to_owned(),
-                            context: StateShadowContext::Binding,
-                        },
-                    ));
+                    warnings.push(
+                        LintWarning::new(
+                            "state-shadowed",
+                            LintMessage::StateShadowed {
+                                func: func_name.to_owned(),
+                                name: name.to_owned(),
+                                context: StateShadowContext::Binding,
+                            },
+                        )
+                        .at_source(stmt.source()),
+                    );
                 }
             }
         }
@@ -1103,14 +1249,17 @@ fn lint_statement_state_shadowing(
                 && state_names.contains(name)
                 && !name.starts_with('_')
             {
-                warnings.push(LintWarning::new(
-                    "state-shadowed",
-                    LintMessage::StateShadowed {
-                        func: func_name.to_owned(),
-                        name: name.clone(),
-                        context: StateShadowContext::Binding,
-                    },
-                ));
+                warnings.push(
+                    LintWarning::new(
+                        "state-shadowed",
+                        LintMessage::StateShadowed {
+                            func: func_name.to_owned(),
+                            name: name.clone(),
+                            context: StateShadowContext::Binding,
+                        },
+                    )
+                    .at_source(stmt.source()),
+                );
             }
             lint_statement_shadowing_block(then_branch, state_names, warnings, func_name);
             if let Some(else_block) = else_branch {
@@ -1131,31 +1280,23 @@ fn lint_statement_state_shadowing(
             }
             lint_statement_shadowing_block(body, state_names, warnings, func_name);
         }
-        Statement::ForEachMap {
-            key, value, body, ..
-        } => {
-            if state_names.contains(key) && !key.starts_with('_') {
-                warnings.push(LintWarning::new(
-                    "state-shadowed",
-                    LintMessage::StateShadowed {
-                        func: func_name.to_owned(),
-                        name: key.clone(),
-                        context: StateShadowContext::MapBinding,
-                    },
-                ));
-            }
-            if let Some(value_name) = value
-                && state_names.contains(value_name)
-                && !value_name.starts_with('_')
-            {
-                warnings.push(LintWarning::new(
-                    "state-shadowed",
-                    LintMessage::StateShadowed {
-                        func: func_name.to_owned(),
-                        name: value_name.clone(),
-                        context: StateShadowContext::MapBinding,
-                    },
-                ));
+        Statement::ForEachMap { pat, body, .. } => {
+            let mut names = Vec::new();
+            collect_pattern_names(pat, &mut names);
+            for name in names {
+                if state_names.contains(name) && !name.starts_with('_') {
+                    warnings.push(
+                        LintWarning::new(
+                            "state-shadowed",
+                            LintMessage::StateShadowed {
+                                func: func_name.to_owned(),
+                                name: name.to_owned(),
+                                context: StateShadowContext::MapBinding,
+                            },
+                        )
+                        .at_source(stmt.source()),
+                    );
+                }
             }
             lint_statement_shadowing_block(body, state_names, warnings, func_name);
         }
@@ -1316,12 +1457,15 @@ fn lint_unreachable_after_return(program: &Program, warnings: &mut Vec<LintWarni
                 let mut saw_return = false;
                 for stmt in &block.statements {
                     if saw_return {
-                        warnings.push(LintWarning::new(
-                            "unreachable-return",
-                            LintMessage::UnreachableAfterReturn {
-                                context: context.clone(),
-                            },
-                        ));
+                        warnings.push(
+                            LintWarning::new(
+                                "unreachable-return",
+                                LintMessage::UnreachableAfterReturn {
+                                    context: context.clone(),
+                                },
+                            )
+                            .at_source(stmt.source()),
+                        );
                         break;
                     }
                     match stmt.kind() {
@@ -1375,6 +1519,9 @@ fn lint_unreachable_after_return(program: &Program, warnings: &mut Vec<LintWarni
 fn collect_pattern_names<'a>(pattern: &'a Pattern, out: &mut Vec<&'a str>) {
     match pattern {
         Pattern::Name(name) => out.push(name.as_str()),
+        Pattern::Struct { fields, .. } => {
+            out.extend(fields.iter().map(|field| field.binding.as_str()));
+        }
         Pattern::Tuple(names) => {
             for name in names {
                 out.push(name.as_str());
@@ -1583,28 +1730,30 @@ const POINTER_CONSTRUCTORS: &[PointerConstructor] = &[
     PointerConstructor::Json,
     PointerConstructor::DataSpaceId,
 ];
+/// Literals are reusable only within the same pointer constructor and result type.
+type PointerLiteralOccurrences = BTreeMap<(String, String), (usize, Option<SourceRange>)>;
 fn lint_pointer_constructor_usage(program: &Program, warnings: &mut Vec<LintWarning>) {
     let constructors: HashSet<&str> = POINTER_CONSTRUCTORS
         .iter()
         .map(|constructor| Builtin::PointerConstructor(*constructor).source_name())
         .collect();
-    let mut literal_counts: HashMap<String, usize> = HashMap::new();
+    let mut literal_counts = PointerLiteralOccurrences::new();
     for item in &program.items {
         if let Item::Function(func) = item {
             collect_pointer_literals_from_block(&func.body, &constructors, &mut literal_counts);
             lint_unused_pointer_constructor_block(&func.body, &constructors, &func.name, warnings);
         }
     }
-    for (literal, count) in literal_counts {
+    for ((literal, constructor), (count, source)) in literal_counts {
         if count > 1 {
             warnings.push(LintWarning::new(
                 "duplicate-pointer-literal",
                 LintMessage::Custom {
                     message: format!(
-                        "literal `{literal}` appears multiple times in pointer constructors; bind it once (for example, `let id = AccountId::parse(\"{literal}\");`) and reuse the binding"
+                        "literal {literal:?} appears multiple times in `{constructor}`; bind it once (for example, `let id = {constructor}({literal:?});`) and reuse the binding"
                     ),
                 },
-            ));
+            ).at_source(source));
         }
     }
 }
@@ -1708,7 +1857,7 @@ fn lint_trigger_specs_in_expr(expr: &Expr, func_name: &str, warnings: &mut Vec<L
                                 "trigger spec in `{func_name}` is non-literal; production access metadata requires a canonical Json::parse(\"...\") literal"
                             ),
                         },
-                    ));
+                    ).at_source(expr.source()));
                 }
             }
             for arg in args {
@@ -1825,7 +1974,7 @@ fn is_literal_trigger_spec(expr: &Expr) -> bool {
 fn collect_pointer_literals_from_stmt(
     stmt: &Statement,
     constructors: &HashSet<&str>,
-    counts: &mut HashMap<String, usize>,
+    counts: &mut PointerLiteralOccurrences,
 ) {
     match stmt.kind() {
         Statement::Source { .. } | Statement::Resolved { .. } => {
@@ -1902,7 +2051,7 @@ fn collect_pointer_literals_from_stmt(
 fn collect_pointer_literals_from_block(
     block: &Block,
     constructors: &HashSet<&str>,
-    counts: &mut HashMap<String, usize>,
+    counts: &mut PointerLiteralOccurrences,
 ) {
     for stmt in &block.statements {
         collect_pointer_literals_from_stmt(stmt, constructors, counts);
@@ -1914,7 +2063,7 @@ fn collect_pointer_literals_from_block(
 fn collect_pointer_literals_from_expr(
     expr: &Expr,
     constructors: &HashSet<&str>,
-    counts: &mut HashMap<String, usize>,
+    counts: &mut PointerLiteralOccurrences,
 ) {
     match expr.kind() {
         Expr::Source { .. } | Expr::Resolved { .. } => {
@@ -1930,7 +2079,11 @@ fn collect_pointer_literals_from_expr(
                     _ => None,
                 })
             {
-                *counts.entry(lit.clone()).or_default() += 1;
+                let entry = counts.entry((lit.clone(), name.clone())).or_default();
+                entry.0 += 1;
+                if entry.1.is_none() {
+                    entry.1 = args.first().and_then(Expr::source);
+                }
             }
             for (index, arg) in args.iter().enumerate() {
                 if index == 1
@@ -2125,12 +2278,93 @@ fn warn_if_unused_pointer_call(
                     "result of `{name}` is unused in function `{func_name}`; assign it to a `let` binding or pass it to a syscall"
                 ),
             },
-        ));
+        ).at_source(expr.source()));
     }
 }
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn lint_provenance_uses_parser_ranges_for_declarations_bindings_and_calls() {
+        use crate::source::{FrontendBudget, SourceId};
+        let text = format!(
+            r#"seiyaku Spans {{
+            /* 金庫😀 */ state int untouched;
+            state int total;
+            fn other(int _ unused) {{ let _ = unused; }}
+            fn probe(int total, int unused) {{
+                let total = 1;
+                Json::parse("{{}}");
+                let duplicate = Json::parse("{{}}");
+                state::get(path);
+                execute_instruction(payload);
+                {}(spec);
+                return;
+                let dead = 0;
+            }}
+        }}"#,
+            Builtin::RegisterTrigger.source_name()
+        );
+        let source = SourceFile::new(SourceId(7), "spans.ko", &text);
+        let (program, _) =
+            crate::parser::parse_source_spanned(&source, FrontendBudget::v1()).unwrap();
+        let warnings = lint_with_sources(&program.program, &program.facts, &source);
+        let expected = [
+            ("unused-state", "untouched"),
+            ("state-shadowed", "total"),
+            ("unused-parameter", "unused"),
+            ("unreachable-return", "let dead = 0;"),
+            ("duplicate-pointer-literal", "\"{}\""),
+            ("unused-pointer-constructor", "Json::parse(\"{}\")"),
+            (
+                "nonliteral-trigger-spec",
+                Builtin::RegisterTrigger.source_name(),
+            ),
+            ("nonliteral-state-path", "state::get(path)"),
+            ("opaque-access-hints", "execute_instruction(payload)"),
+        ];
+        for (code, expected) in expected {
+            assert!(
+                warnings
+                    .iter()
+                    .filter(|warning| warning.code == code)
+                    .any(|warning| {
+                        let span = warning
+                            .source
+                            .as_ref()
+                            .expect("every compiler lint retains its exact source");
+                        source.slice(span.byte_range).unwrap().starts_with(expected)
+                    }),
+                "missing located {code}: {warnings:?}"
+            );
+        }
+        assert!(warnings.iter().all(|warning| warning.source.is_some()));
+        let unused = warnings.iter().find(|warning| matches!(&warning.message, LintMessage::UnusedParameter { func, name } if func == "probe" && name == "unused")).unwrap();
+        assert_eq!(
+            unused.source.as_ref().unwrap().byte_range.start as usize,
+            text.find("int unused)").unwrap() + 4
+        );
+        let diagnostic = unused.to_diagnostic(
+            "file:///日本語.ko",
+            Some("example/spans@1.0.0"),
+            Language::English,
+        );
+        assert_eq!(
+            diagnostic
+                .primary_span
+                .as_ref()
+                .unwrap()
+                .package_identity
+                .as_deref(),
+            Some("example/spans@1.0.0")
+        );
+        assert_eq!(diagnostic.primary_source.as_ref().unwrap().text(), text);
+        assert!(diagnostic.notes[0].contains("unused-parameter"));
+        assert_eq!(
+            warnings,
+            lint_with_sources(&program.program, &program.facts, &source)
+        );
+    }
     use crate::{i18n::Language, parser::parse_test_fragment as parse};
     use iroha_data_model::DomainId;
 
@@ -2276,6 +2510,42 @@ mod tests {
             warnings
                 .iter()
                 .any(|w| w.code == "duplicate-pointer-literal")
+        );
+    }
+    #[test]
+    fn duplicate_pointer_help_preserves_constructor_type_and_escaped_literal() {
+        for (constructor, literal) in [
+            ("AssetDefinitionId::parse", "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
+            ("DataSpaceId::parse", "0"),
+            ("Json::parse", r#"{"金庫":"quoted\\value"}"#),
+        ] {
+            let call = format!("{constructor}({literal:?})");
+            let program = parse(&format!(
+                "fn main() {{ let first = {call}; let second = {call}; }}"
+            ))
+            .unwrap();
+            let warnings = lint_program(&program);
+            let diagnostic = warnings
+                .iter()
+                .find(|warning| warning.code == "duplicate-pointer-literal")
+                .unwrap()
+                .to_diagnostic("example.ko", None, Language::English);
+            assert_eq!(diagnostic.code, "K5005");
+            assert!(
+                diagnostic.message.contains(&format!("`let id = {call};`")),
+                "{}",
+                diagnostic.message
+            );
+            assert!(!diagnostic.message.contains("AccountId::parse"));
+            parse(&format!("fn main() {{ let id = {call}; }}"))
+                .expect("suggested source preserves escaping");
+        }
+        let program = parse("fn main() { let name = Name::parse(\"0\"); let dataspace = DataSpaceId::parse(\"0\"); }").unwrap();
+        assert!(
+            !lint_program(&program)
+                .iter()
+                .any(|warning| warning.code == "duplicate-pointer-literal"),
+            "different pointer types cannot share one typed binding"
         );
     }
     #[test]

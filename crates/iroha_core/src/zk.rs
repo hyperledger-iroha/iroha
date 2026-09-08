@@ -1561,10 +1561,9 @@ fn stark_open_verify_circuit_id_matches_backend(backend: &str, circuit_id: &str)
     if stark_open_verify_circuit_id_uses_reserved_proof_family(trimmed) {
         return false;
     }
-    if backend == ZK_BACKEND_STARK_FRI_V1 {
-        return true;
-    }
-    if trimmed == ZK_BACKEND_STARK_FRI_V1 || trimmed.starts_with("stark/fri:") {
+    // The sole production backend is a concrete commitment profile. A circuit
+    // naming another profile or the retired generic family cannot inherit it.
+    if trimmed == "stark/fri" || trimmed.starts_with("stark/fri:") {
         return false;
     }
     if trimmed.starts_with("stark/fri/") {
@@ -1958,14 +1957,14 @@ fn prove_stark_fri_open_verify_envelope_with_policy(
     if vk_box.backend != backend {
         return Err("STARK verifying key backend mismatch".to_owned());
     }
+    if !stark_open_verify_circuit_id_matches_backend(backend, circuit_id) {
+        return Err("STARK circuit_id does not match backend family".to_owned());
+    }
     let vk_payload =
         validate_stark_fri_verifying_key_v1(backend, circuit_id, vk_box.bytes.as_slice())
             .map_err(|err| format!("invalid STARK verifying key payload: {err}"))?;
     let env_circuit_id = normalize_stark_fri_circuit_id_for_backend(backend, circuit_id)
         .ok_or_else(|| "invalid STARK circuit_id".to_owned())?;
-    if !stark_open_verify_circuit_id_matches_backend(backend, circuit_id) {
-        return Err("STARK circuit_id does not match backend family".to_owned());
-    }
     let is_ivm_execution_circuit = normalized_ivm_execution_stark_circuit_id_for_backend(backend)
         .as_deref()
         == Some(env_circuit_id.as_str());
@@ -2087,7 +2086,8 @@ fn prove_stark_fri_open_verify_envelope_with_policy(
 ///
 /// This is the STARK analogue to [`prove_halo2_ipa_ivm_execution_envelope`]. It binds
 /// `(code_hash, overlay_hash, events_commitment, gas_policy_commitment)` as backend-native
-/// public inputs in a `StarkFriOpenProofV1` wrapper.
+/// public inputs in a `StarkFriOpenProofV1` wrapper. Verification uses the dedicated
+/// IVM binding AIR context, and admission still requires deterministic VM replay.
 #[cfg(feature = "zk-stark")]
 pub fn prove_stark_fri_ivm_execution_envelope(
     backend: &str,
@@ -5191,8 +5191,15 @@ fn verify_stark_fri_open_verify_envelope_with_limits(
     if air.public_digest != expected_public_digest {
         return reject("STARK AIR public digest mismatch");
     }
-    let stark_ok =
-        crate::zk_stark::verify_stark_fri_envelope_with_limits(&open.envelope_bytes, limits);
+    let stark_ok = if is_ivm_execution_circuit {
+        crate::zk_stark::verify_stark_fri_ivm_execution_air_envelope_with_limits(
+            &open.envelope_bytes,
+            limits,
+            &expected_public_digest,
+        )
+    } else {
+        crate::zk_stark::verify_stark_fri_envelope_with_limits(&open.envelope_bytes, limits)
+    };
     if !stark_ok {
         return reject("inner STARK/FRI verifier rejected proof");
     }
@@ -5957,6 +5964,29 @@ mod stark_backend_tag_tests {
         }
     }
     #[test]
+    fn stark_open_verify_circuit_ids_are_bound_to_the_sole_production_profile() {
+        let backend = ZK_BACKEND_STARK_FRI_V1;
+        for circuit_id in ["binding-air".to_owned(), format!("{backend}:binding-air")] {
+            assert!(stark_open_verify_circuit_id_matches_backend(
+                backend,
+                &circuit_id
+            ));
+        }
+        for circuit_id in [
+            "stark/fri".to_owned(),
+            "stark/fri:binding-air".to_owned(),
+            "stark/fri/poseidon2-goldilocks:binding-air".to_owned(),
+            backend.to_owned(),
+            format!("{backend}:"),
+            format!("{backend}-other:binding-air"),
+        ] {
+            assert!(
+                !stark_open_verify_circuit_id_matches_backend(backend, &circuit_id),
+                "circuit `{circuit_id}` must not inherit the canonical backend profile"
+            );
+        }
+    }
+    #[test]
     fn stark_open_verify_circuit_id_rejects_trusted_setup_family_aliases() {
         assert!(stark_open_verify_circuit_id_matches_backend(
             ZK_BACKEND_STARK_FRI_V1,
@@ -6582,9 +6612,9 @@ mod stark_prover_tests {
                 vec![vec![[0x33; 32]]],
             )
             .expect_err("generic STARK prover must not target ZK-ACE circuit aliases");
-            assert!(
-                err.contains("ZK-ACE"),
-                "unexpected ZK-ACE alias rejection for {circuit_id}: {err}"
+            assert_eq!(
+                err, "STARK circuit_id does not match backend family",
+                "reserved privacy namespaces must reject before verifier-key decoding: {circuit_id}"
             );
         }
     }
@@ -8161,7 +8191,7 @@ mod guardrails_tests {
             norito::decode_from_bytes(&proof.bytes).expect("decode outer STARK envelope");
         let open: StarkFriOpenProofV1 =
             norito::decode_from_bytes(&outer.proof_bytes).expect("decode STARK open proof");
-        proof.backend = ZK_BACKEND_STARK_FRI_V1.into();
+        proof.backend = "stark/fri".into();
         assert_guardrails_reject!(
             backend,
             &proof,
@@ -11833,59 +11863,25 @@ mod preverify_tests {
     }
     #[test]
     fn preverify_rejects_stark_open_verify_circuit_mismatch_before_dedup() {
-        for (case, backend, accepted_circuit_id, mismatched_circuit_id) in [
+        let backend = ZK_BACKEND_STARK_FRI_V1;
+        let accepted_circuit_id = format!("{backend}:preverify-test");
+        for (case, mismatched_circuit_id) in [
             (
-                "profile backend with sibling STARK profile",
-                "stark/fri/poseidon-x7-goldilocks-6x64-v1",
-                "stark/fri/poseidon-x7-goldilocks-6x64-v1:preverify-test",
+                "sibling STARK profile",
                 "stark/fri/poseidon2-goldilocks:preverify-test",
             ),
+            ("retired generic STARK prefix", "stark/fri:preverify-test"),
+            ("bare generic STARK family", "stark/fri"),
+            ("halo2 circuit", "halo2/ipa:preverify-test"),
+            ("colon-form halo2 circuit", "halo2:preverify-test"),
+            ("colon-form kzg circuit", "kzg:trusted-setup-spoof"),
+            ("bare trusted-setup curve circuit", "bn254"),
             (
-                "profile backend with generic STARK prefix",
-                "stark/fri/poseidon-x7-goldilocks-6x64-v1",
-                "stark/fri/poseidon-x7-goldilocks-6x64-v1:preverify-test",
-                "stark/fri:preverify-test",
-            ),
-            (
-                "profile backend with bare generic STARK family",
-                "stark/fri/poseidon-x7-goldilocks-6x64-v1",
-                "stark/fri/poseidon-x7-goldilocks-6x64-v1:preverify-test",
-                "stark/fri",
-            ),
-            (
-                "generic STARK backend with halo2 circuit",
-                ZK_BACKEND_STARK_FRI_V1,
-                "stark/fri:preverify-test",
-                "halo2/ipa:preverify-test",
-            ),
-            (
-                "generic STARK backend with colon-form halo2 circuit",
-                ZK_BACKEND_STARK_FRI_V1,
-                "stark/fri:preverify-test",
-                "halo2:preverify-test",
-            ),
-            (
-                "generic STARK backend with colon-form kzg circuit",
-                ZK_BACKEND_STARK_FRI_V1,
-                "stark/fri:preverify-test",
-                "kzg:trusted-setup-spoof",
-            ),
-            (
-                "generic STARK backend with bare trusted-setup curve circuit",
-                ZK_BACKEND_STARK_FRI_V1,
-                "stark/fri:preverify-test",
-                "bn254",
-            ),
-            (
-                "generic STARK backend with STARK-prefixed trusted-setup circuit",
-                ZK_BACKEND_STARK_FRI_V1,
-                "stark/fri:preverify-test",
+                "STARK-prefixed trusted-setup circuit",
                 "stark/fri:universal-srs",
             ),
             (
-                "profile backend with profile-prefixed trusted-setup circuit",
-                "stark/fri/poseidon-x7-goldilocks-6x64-v1",
-                "stark/fri/poseidon-x7-goldilocks-6x64-v1:preverify-test",
+                "profile-prefixed trusted-setup circuit",
                 "stark/fri/poseidon-x7-goldilocks-6x64-v1:structured-reference-string",
             ),
         ] {
@@ -11894,7 +11890,7 @@ mod preverify_tests {
             let accepted = preverify_enveloped_proof_for_backend(
                 backend,
                 BackendTag::Stark,
-                accepted_circuit_id,
+                &accepted_circuit_id,
                 expected,
             );
             let mismatched = preverify_enveloped_proof_for_backend(

@@ -11,8 +11,8 @@
             }
 
             kotoage fn main() -> int authorize("WriteState") {
-                let int second_value = record(2);
-                let int first_value = record(1);
+                let int second_value = record(value: 2);
+                let int first_value = record(value: 1);
                 let pair = Pair {
                     first: first_value,
                     second: second_value,

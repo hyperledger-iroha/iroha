@@ -517,6 +517,15 @@ fn storage_config_with_temp_dir() -> (StorageConfig, TempDir) {
     let cfg = enabled_storage_builder(root.join("storage")).build();
     (cfg, temp_dir)
 }
+fn validator_storage_config_with_temp_dir() -> (StorageConfig, TempDir) {
+    let temp_dir = tempfile::tempdir().expect("create validator checkpoint temp dir");
+    let root = temp_dir.path().canonicalize().expect("canonical temp dir");
+    let cfg = StorageConfig::builder()
+        .enabled(false)
+        .data_dir(root.join("validator-state"))
+        .build();
+    (cfg, temp_dir)
+}
 fn test_quarantine_key_provider_config()
 -> iroha_config::parameters::actual::SorafsModerationQuarantineKeyProviderBinding {
     test_quarantine_key_provider_config_for(TEST_QUARANTINE_KEY_PROVIDER_QUALIFICATION)
@@ -1476,11 +1485,18 @@ fn node_startup_rejects_unsafe_programmatic_reserve_worker_policy() {
     let temp_dir = tempfile::tempdir().expect("create invalid reserve policy temp dir");
     let mut actual = iroha_config::parameters::actual::SorafsStorage::default();
     actual.enabled = false;
-    actual.data_dir = temp_dir.path().join("validator-state");
+    actual.data_dir = temp_dir
+        .path()
+        .canonicalize()
+        .expect("canonical temp dir")
+        .join("validator-state");
     actual.reserve_worker.scan_batch_limit = 0;
     let error = NodeHandle::try_new(StorageConfig::from(actual))
         .expect_err("unsafe programmatic reserve worker policy must fail closed");
-    assert!(matches!(error, NodeInitError::ReserveWorkerConfig { .. }));
+    assert!(
+        matches!(error, NodeInitError::ReserveWorkerConfig { .. }),
+        "unexpected startup error: {error:?}"
+    );
 }
 const TEST_QUARANTINE_KEY_PROVIDER_HANDLE: &str = "software://sorafs/moderation/quarantine/primary";
 const TEST_QUARANTINE_KEY_PROVIDER_QUALIFICATION: ModerationQuarantineKeyProviderQualificationV1 =
@@ -2531,40 +2547,6 @@ fn local_checkpoint_roundtrip_is_bounded_and_atomic() {
     );
     assert!(write_local_checkpoint_atomic_bounded(&path, b"too-large", 4).is_err());
     assert!(read_local_checkpoint_bounded(&path, 4).is_err());
-}
-#[test]
-fn local_checkpoint_decoder_rejects_trailing_bytes_and_sequence_bombs() {
-    let value = vec![1_u64, 2];
-    let canonical = norito::to_bytes(&value).expect("encode canonical checkpoint fixture");
-    assert_eq!(
-        decode_local_checkpoint_canonical::<Vec<u64>>(&canonical, 4_096, 2)
-            .expect("decode canonical checkpoint fixture"),
-        value
-    );
-    let mut trailing = canonical;
-    trailing.push(0);
-    assert!(
-        decode_local_checkpoint_canonical::<Vec<u64>>(&trailing, 4_096, 2).is_err(),
-        "trailing bytes must not be accepted as an equivalent checkpoint"
-    );
-    let oversized_sequence =
-        norito::to_bytes(&vec![1_u64, 2, 3]).expect("encode sequence bomb fixture");
-    assert!(
-        decode_local_checkpoint_canonical::<Vec<u64>>(&oversized_sequence, 4_096, 2).is_err(),
-        "declared sequence length must fail before allocation beyond the configured bound"
-    );
-}
-#[test]
-fn local_checkpoint_decode_limits_follow_actual_wire_size() {
-    let limits = local_checkpoint_decode_limits(64, 4_096, usize::MAX)
-        .expect("derive bounded checkpoint limits");
-    assert_eq!(limits.max_sequence_elements(), 64 * 8);
-    assert_eq!(limits.max_field_bytes(), 64);
-    assert_eq!(limits.max_total_elements(), 64 * 8);
-    assert_eq!(limits.max_total_allocated_bytes(), 4_096 * 4);
-    assert_eq!(limits.max_nesting_depth(), 64);
-    assert!(local_checkpoint_decode_limits(0, 4_096, 1).is_err());
-    assert!(local_checkpoint_decode_limits(4_097, 4_096, 1).is_err());
 }
 #[test]
 fn local_checkpoint_distinguishes_precommit_and_visible_uncertain_failures() {
@@ -4284,7 +4266,7 @@ fn moderation_model_registry_checkpoint_persists_and_reloads_snapshot() {
 }
 #[test]
 fn moderation_model_registry_restore_rejects_duplicate_records() {
-    let cfg = StorageConfig::builder().enabled(false).build();
+    let (cfg, _dir) = validator_storage_config_with_temp_dir();
     let handle = NodeHandle::new(cfg);
     let record = ModerationReproRegistryRecord {
         manifest_id: [0x14; 16],
@@ -4314,7 +4296,7 @@ fn moderation_model_registry_restore_rejects_duplicate_records() {
 }
 #[test]
 fn moderation_screening_records_deterministic_quarantine_queue() {
-    let cfg = StorageConfig::builder().enabled(false).build();
+    let (cfg, _dir) = validator_storage_config_with_temp_dir();
     let handle = NodeHandle::new(cfg);
     let input = moderation_screening_input_fixture(
         "cid:bafy-screening",
@@ -4353,7 +4335,7 @@ fn moderation_screening_records_deterministic_quarantine_queue() {
 }
 #[test]
 fn moderation_screening_pass_does_not_create_quarantine_record() {
-    let cfg = StorageConfig::builder().enabled(false).build();
+    let (cfg, _dir) = validator_storage_config_with_temp_dir();
     let handle = NodeHandle::new(cfg);
     let outcome = handle
         .record_moderation_screening_result(moderation_screening_input_fixture(
@@ -5234,8 +5216,15 @@ fn moderation_evidence_viewer_audit_report_publish_due_configured_uses_storage_c
 }
 #[test]
 fn moderation_evidence_viewer_audit_report_publish_due_configured_skips_when_disabled() {
+    let temp = tempfile::tempdir().expect("create validator checkpoint root");
     let cfg = StorageConfig::builder()
         .enabled(false)
+        .data_dir(
+            temp.path()
+                .canonicalize()
+                .expect("canonical temp dir")
+                .join("validator-state"),
+        )
         .evidence_viewer_audit_schedule(None)
         .build();
     let handle = NodeHandle::new(cfg);
@@ -5255,7 +5244,7 @@ fn moderation_evidence_viewer_audit_report_publish_due_configured_skips_when_dis
 }
 #[test]
 fn moderation_evidence_viewer_audit_report_publish_due_reports_empty_and_bad_schedules() {
-    let cfg = StorageConfig::builder().enabled(false).build();
+    let (cfg, _dir) = validator_storage_config_with_temp_dir();
     let empty = NodeHandle::new(cfg);
     let schedule = PrivacyAggregateScheduleConfig {
         first_cycle_start_unix: 1_800_000_000,
@@ -5327,7 +5316,7 @@ fn moderation_evidence_viewer_audit_report_publish_due_reports_empty_and_bad_sch
 }
 #[test]
 fn moderation_evidence_viewer_audit_report_rejects_unsafe_and_tampered_inputs() {
-    let cfg = StorageConfig::builder().enabled(false).build();
+    let (cfg, _dir) = validator_storage_config_with_temp_dir();
     let handle = NodeHandle::new(cfg);
     let mut unsafe_input =
         moderation_evidence_viewer_audit_report_input(1_800_000_000, 1_800_086_400, 1_800_086_401);
@@ -5371,7 +5360,7 @@ fn moderation_evidence_viewer_audit_report_rejects_unsafe_and_tampered_inputs() 
 }
 #[test]
 fn moderation_quarantine_release_requires_review() {
-    let cfg = StorageConfig::builder().enabled(false).build();
+    let (cfg, _dir) = validator_storage_config_with_temp_dir();
     let handle = NodeHandle::new(cfg);
     let outcome = handle
         .record_moderation_screening_result(moderation_screening_input_fixture(
@@ -5399,7 +5388,7 @@ fn moderation_quarantine_release_requires_review() {
 }
 #[test]
 fn moderation_screening_restore_rejects_tampered_digest() {
-    let cfg = StorageConfig::builder().enabled(false).build();
+    let (cfg, _dir) = validator_storage_config_with_temp_dir();
     let handle = NodeHandle::new(cfg);
     let outcome = handle
         .record_moderation_screening_result(moderation_screening_input_fixture(
@@ -5447,8 +5436,15 @@ fn manifest_metadata_resolves_by_digest() {
 }
 #[test]
 fn moderation_state_limit_allows_boundary_replays_and_existing_updates() {
+    let temp = tempfile::tempdir().expect("create validator checkpoint root");
     let cfg = StorageConfig::builder()
         .enabled(false)
+        .data_dir(
+            temp.path()
+                .canonicalize()
+                .expect("canonical temp dir")
+                .join("validator-state"),
+        )
         .runtime_retention(RuntimeRetentionPolicy::new(1, 1, 1024 * 1024))
         .build();
     let handle = NodeHandle::new(cfg);
@@ -7031,131 +7027,7 @@ fn privacy_cycle_prf_derives_distinct_requests_for_catch_up_windows() {
     assert_ne!(requests[0].cycle_id(), requests[1].cycle_id());
     assert_ne!(requests[0].binding_digest(), requests[1].binding_digest());
 }
-#[test]
-fn privacy_cycle_prf_startup_requires_runtime_provider() {
-    let temp_dir = tempfile::tempdir().expect("create temp dir");
-    let root = temp_dir.path().canonicalize().expect("canonical temp dir");
-    let cfg = privacy_aggregate_storage_config(&root);
-    assert!(matches!(
-        NodeHandle::try_new(cfg),
-        Err(NodeInitError::PrivacyCyclePrfProviderQualification {
-            error: TransparencyRuntimeProviderQualificationErrorV1::MissingProvider,
-        })
-    ));
-}
-#[test]
-fn privacy_cycle_prf_qualification_fails_before_persistence() {
-    let cases: [(
-        Arc<dyn ProductionPrivacyCyclePrfProviderV1>,
-        TransparencyRuntimeProviderQualificationErrorV1,
-    ); 5] = [
-        (
-            Arc::new(TestPrivacyCyclePrfProvider::with_qualification(
-                "threshold-prf:transparency:secondary",
-                1,
-                [0xC7; 32],
-                false,
-            )),
-            TransparencyRuntimeProviderQualificationErrorV1::SubstitutedProvider,
-        ),
-        (
-            Arc::new(TestPrivacyCyclePrfProvider::with_qualification(
-                TEST_PRIVACY_CYCLE_PRF_PROVIDER_HANDLE,
-                2,
-                [0xC7; 32],
-                false,
-            )),
-            TransparencyRuntimeProviderQualificationErrorV1::ConfiguredQualificationMismatch,
-        ),
-        (
-            Arc::new(TestPrivacyCyclePrfProvider::with_qualification(
-                TEST_PRIVACY_CYCLE_PRF_PROVIDER_HANDLE,
-                1,
-                [0xC8; 32],
-                false,
-            )),
-            TransparencyRuntimeProviderQualificationErrorV1::ConfiguredQualificationMismatch,
-        ),
-        (
-            Arc::new(TestPrivacyCyclePrfProvider::with_qualification(
-                "threshold-prf:test:primary",
-                1,
-                [0xC7; 32],
-                false,
-            )),
-            TransparencyRuntimeProviderQualificationErrorV1::TestMarkedProviderHandle,
-        ),
-        (
-            Arc::new(TestPrivacyCyclePrfProvider::with_qualification(
-                TEST_PRIVACY_CYCLE_PRF_PROVIDER_HANDLE,
-                1,
-                [0xC7; 32],
-                true,
-            )),
-            TransparencyRuntimeProviderQualificationErrorV1::UnavailableOrStale,
-        ),
-    ];
-    for (provider, expected) in cases {
-        let temp_dir = tempfile::tempdir().expect("create temp dir");
-        let root = temp_dir.path().canonicalize().expect("canonical temp dir");
-        let cfg = privacy_aggregate_storage_config(&root);
-        let data_dir = cfg.data_dir().clone();
-        assert!(!data_dir.exists());
-        let error = NodeHandle::try_new_with_runtime_deps(
-            cfg,
-            privacy_runtime_deps(provider, test_privacy_release_anchor()),
-        )
-        .expect_err("invalid production threshold-PRF qualification must fail startup");
-        assert!(matches!(
-            &error,
-            NodeInitError::PrivacyCyclePrfProviderQualification { error }
-                if *error == expected
-        ));
-        assert!(!error.to_string().contains("must-never-escape"));
-        assert!(!format!("{error:?}").contains("must-never-escape"));
-        assert!(
-            !data_dir.exists(),
-            "provider qualification must complete before persistence opens"
-        );
-    }
-}
-#[test]
-fn differential_privacy_startup_requires_finalized_release_anchor() {
-    let temp_dir = tempfile::tempdir().expect("create temp dir");
-    let root = temp_dir.path().canonicalize().expect("canonical temp dir");
-    let cfg = privacy_aggregate_storage_config(&root);
-    assert!(matches!(
-        NodeHandle::try_new_with_runtime_deps(
-            cfg,
-            NodeRuntimeDeps::default()
-                .with_privacy_cycle_prf_provider(test_privacy_cycle_prf_provider()),
-        ),
-        Err(NodeInitError::PrivacyReleaseAnchorQualification {
-            error: TransparencyRuntimeProviderQualificationErrorV1::MissingProvider,
-        })
-    ));
-}
-#[test]
-fn differential_privacy_startup_requires_transparency_leader_lease_provider() {
-    let temp_dir = tempfile::tempdir().expect("create temp dir");
-    let root = temp_dir.path().canonicalize().expect("canonical temp dir");
-    let cfg = privacy_aggregate_storage_config(&root);
-    assert!(matches!(
-        NodeHandle::try_new_with_runtime_deps(
-            cfg,
-            NodeRuntimeDeps::default()
-                .with_privacy_cycle_prf_provider(test_privacy_cycle_prf_provider())
-                .with_privacy_release_anchor(test_privacy_release_anchor()),
-        ),
-        Err(
-            NodeInitError::TransparencyLeaderLeaseProviderQualification {
-                error: TransparencyLeaderLeaseErrorV1::ProviderQualification(
-                    TransparencyRuntimeProviderQualificationErrorV1::MissingProvider
-                ),
-            }
-        )
-    ));
-}
+include!("lib/privacy_startup_qualification_tests.rs");
 #[test]
 fn differential_privacy_startup_requires_fused_target_binding_and_both_runtime_roles() {
     let temp_dir = tempfile::tempdir().expect("create temp dir");
@@ -9537,3 +9409,6 @@ fn node_handle_reconciliation_emits_report() {
 include!("lib/reconciliation_and_repair_tests.rs");
 include!("lib/storage_disabled_test.rs");
 include!("lib/governance_dag_test_support.rs");
+include!("lib/local_checkpoint_canonical_tests.rs");
+include!("lib/local_checkpoint_writer_tests.rs");
+include!("lib/quarantine_canonical_tests.rs");

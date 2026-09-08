@@ -3,6 +3,62 @@ import XCTest
 @testable import IrohaSwift
 
 final class AccountControllerFinalV1Tests: XCTestCase {
+  func testCanonicalAccountParsersRejectSurroundingUnicodeWhitespace() throws {
+    let literal = "sorauﾛ1P2PMｲbjRｦ2jrLFﾁｽｸFjjBヱYﾜｴ3ﾋNRjﾌｸﾆｺNXcfﾒXSKXAW"
+    let parsers: [(String) throws -> Void] = [
+      { _ = try AccountAddress.parseEncoded($0) },
+      { _ = try AccountAddress.fromI105($0) },
+      { _ = try AccountAddress.parseCanonicalI105($0) },
+      { _ = try AccountAddress.inspectI105NetworkPrefix($0) },
+    ]
+    for whitespace in [" ", "\t", "\r\n", "\u{00a0}", "\u{2003}", "\u{202f}", "\u{3000}"] {
+      for invalid in [whitespace + literal, literal + whitespace] {
+        for parse in parsers {
+          XCTAssertThrowsError(try parse(invalid)) { error in
+            XCTAssertEqual(error as? AccountAddressError, .unsupportedAddressFormat)
+          }
+        }
+      }
+    }
+  }
+
+  func testPublicAccountConstructionRequiresNativeAdmission() throws {
+    let key = try keys(1)[0]
+    if NoritoNativeBridge.shared.isAccountAddressCodecAvailable {
+      XCTAssertNoThrow(try AccountAddress.fromAccount(publicKey: key))
+    } else {
+      XCTAssertThrowsError(try AccountAddress.fromAccount(publicKey: key)) { error in
+        XCTAssertEqual(error as? AccountAddressError, .nativeBridgeUnavailable)
+      }
+      XCTAssertThrowsError(try MultisigPolicyBuilder().setThreshold(1)
+        .addMember(algorithm: .ed25519, weight: 1, publicKey: key).build()) { error in
+        XCTAssertEqual(error as? AccountAddressError, .nativeBridgeUnavailable)
+      }
+    }
+  }
+
+  func testNativeAdmissionRejectsMalformedCurvePoints() throws {
+    XCTAssertTrue(NoritoNativeBridge.shared.isAccountAddressCodecAvailable,
+                  "The final SDK requires the real ABI-23 address validator.")
+    var cases: [(UInt8, Data)] = [
+      (1, Data([1]) + Data(repeating: 0, count: 31)),
+      (1, Data(repeating: 255, count: 32)),
+      (4, Data([2]) + Data(repeating: 255, count: 32)),
+      (3, Data(repeating: 255, count: 48)),
+      (5, Data(repeating: 255, count: 96)),
+      (15, Data([0, 0, 4]) + Data(repeating: 255, count: 64)),
+    ]
+    for curve: UInt8 in [10, 11, 12, 13, 14] {
+      cases.append((curve, Data(repeating: 255, count: curve >= 13 ? 128 : 64)))
+    }
+    for (curve, key) in cases {
+      let canonical = Data([2, 0, curve, UInt8(key.count)]) + key
+      XCTAssertThrowsError(try AccountAddress.fromCanonicalBytes(canonical)) { error in
+        XCTAssertEqual(error as? AccountAddressError, .invalidPublicKey)
+      }
+    }
+  }
+
   func testAllRustOwnedFullControllerFixturesMatchCanonicalWire() throws {
     let url = URL(fileURLWithPath: #filePath)
       .deletingLastPathComponent().deletingLastPathComponent()
@@ -18,6 +74,8 @@ final class AccountControllerFinalV1Tests: XCTestCase {
       XCTAssertEqual(item["layout_flags"] as? Int, 2, name)
       let literal = try XCTUnwrap(item["i105"] as? String)
       let address = try AccountAddress.parseEncoded(literal, expectedPrefix: 753)
+      XCTAssertEqual(try AccountAddress.fromI105(literal, expectedPrefix: 753).canonicalBytes(),
+        try address.canonicalBytes(), name)
       let canonical = try XCTUnwrap(Data(hexString: XCTUnwrap(item["canonical_address_hex"] as? String)))
       XCTAssertEqual(try address.canonicalBytes(), canonical, name)
       let expected = try XCTUnwrap(Data(hexString: XCTUnwrap(item["account_id_payload_hex"] as? String)))

@@ -4271,13 +4271,25 @@ mod tests {
         let mut metadata = Metadata::default();
         metadata.insert(
             Name::from_str(SAMPLE_MULTIPLIER_METADATA_KEY).expect("valid metadata key"),
-            r#"{"default":2,"sorafs.sf1@1.0.0":3,"sorafs.sf2@1.0.0":"4"}"#,
+            norito::json!({"default": 2, "sorafs.sf1@1.0.0": 3, "sorafs.sf2@1.0.0": "4"}),
         );
         let policy =
             PorSamplePolicy::from_metadata([0x11; 32], &metadata).expect("policy overrides");
         assert_eq!(policy.multiplier_for("sorafs.sf1@1.0.0"), 3);
         assert_eq!(policy.multiplier_for("sorafs.sf2@1.0.0"), 4);
         assert_eq!(policy.multiplier_for("sorafs.sf3@1.0.0"), 2);
+    }
+    #[test]
+    fn sample_policy_rejects_object_text_inside_a_json_string() {
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            Name::from_str(SAMPLE_MULTIPLIER_METADATA_KEY).expect("valid metadata key"),
+            r#"{"default":2,"sorafs.sf1@1.0.0":3}"#,
+        );
+        assert!(matches!(
+            PorSamplePolicy::from_metadata([0x11; 32], &metadata),
+            Err(PorChallengePlannerError::InvalidSampleMultiplier { .. })
+        ));
     }
     #[test]
     fn sample_policy_rejects_out_of_range_multiplier() {

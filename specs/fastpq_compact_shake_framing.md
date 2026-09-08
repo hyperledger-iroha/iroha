@@ -1,6 +1,7 @@
 # SHAKE prefix/body candidate framing
 
-2026-09-06. This describes the isolated `compact_shake_candidate` implementation.
+2026-09-08. The framing and arithmetic below describe the prospective
+401-label `compact_shake_candidate` successor.
 It is not a qualified proof profile or a production admission path. The existing
 136-query diagnostic protocol does not use this candidate. The mathematical
 conditions remain those of [projected-XOF model](fastpq_compact_projected_xof.md) and
@@ -17,7 +18,7 @@ are `fastpq_prover::compact_candidate::ShakePrefixV1` and
 `P` fields, in order:
 
 1. `version: u16 = 1`.
-2. `identity: Vec<u8> = b"fastpq:compact-shake256:h16:g375:342cols:923slots:65536rows:8blowup:17folds:prefix-body:v1"`.
+2. `identity: Vec<u8> = b"fastpq:compact-shake256:h16:g375:c401:342cols:923slots:65536rows:8blowup:17folds:prefix-body:v1"`.
 3. `context: Vec<u8>`: complete immutable public context, 1..=262144 bytes.
 
 `B` fields, in order:
@@ -39,8 +40,9 @@ require exact canonical frames, correct schemas, full consumption and permitted
 field combinations. Treat all other raw inputs as the independent auxiliary
 namespace described by the projected-XOF argument.
 
-`Arc` shares the immutable *already encoded* prefix and its absorb state. There
-is no `Arc` in either encoded schema. Norito's `Arc<T>` encoding adds an owned
+`Arc` shares the immutable prefix absorb state; tests also retain its encoded
+bytes. Normal prefix construction still encodes the complete local P before
+initializing that state. There is no `Arc` in either encoded schema. Norito's `Arc<T>` encoding adds an owned
 payload length; it is not byte-transparent. Two initial baseline KATs caught a
 reference encoder that had omitted that prefix. A direct Rust frame dump and
 independent hashlib SHAKE calculation identified the discrepancy; it was not a
@@ -64,25 +66,45 @@ H always squeezes 128 bytes, selects the first six canonical little-endian
 Goldilocks values from 16 candidates and aborts if six are unavailable. G keeps
 all raw tape bytes, including unused and rejected samples. The 22 verifier
 messages and 21 chain updates, fixed zero anchor, 375 sorted query positions and
-permanent decode/hash abort behavior are unchanged by prefix reuse. A completed
-transcript alone is not proof acceptance.
+permanent decode/hash abort behavior are unchanged by prefix reuse. The
+successor query tape contains 401 labels of 19 bits in 953 bytes. Its last
+label consumes bits 0..2 of byte 952; only the five high padding bits are
+ignored when decoding labels. The G input fixes the complete 953-byte raw-output length; the decoder
+ignores only the final five padding bits. Changing the identity to `:g375:c401:` changes every
+context-dependent hash and proof; it does not change the 375 accepted queries,
+wire schemas or protocol version. A completed transcript alone is not proof
+acceptance.
 
-## Resource evidence
+## Successor resource arithmetic
 
 For the q375 upper-bound expansion (44,562 H and 22 G calls), the bodies total at
-most 9,988,761 bytes. At the 262144-byte context cap, P is 262297 bytes, and its
-partial rate buffer is 89 bytes. The logical inputs still total at most
-11,704,238,209 bytes. With prefix reuse the absorb API receives at most 10,251,058
-bytes: P once plus all B values. It performs at most 145,500 Keccak permutations,
-versus 86,101,524 without reuse for the same framed calls. These are integer
+most 9,988,761 bytes. At the 262144-byte context cap, P is 262302 bytes, and its
+partial rate buffer is 94 bytes. The logical inputs still total at most
+11,704,461,129 bytes. With prefix reuse the absorb API receives at most 10,251,063
+bytes: P once plus all B values. It performs at most 145,501 Keccak permutations,
+versus 86,101,525 without reuse for the same framed calls. These are integer
 bounds, not measured proof times, heap limits or an adversarial query discount.
-The state clone and body encoding work remain real costs.
+The state clone and body encoding work remain real costs. Relative to the
+predecessor, P is five bytes longer and the query tape grows by three bytes.
+The final tape crosses seven 136-byte output blocks and requires an eighth,
+adding one squeezing permutation per segment. These Python calculations are
+build-independent checks; successor Rust compilation and fresh full-proof
+execution have not run.
 
 Canonical body lengths are 2817 bytes for a full row, 184 for a parent, 29724 for
-the largest chain input, and 127 for G. The fixed-prefix state is 352 bytes in the
-local aarch64 test build. The callback-based Merkle adapter retains the existing
-O(q log L) schedule and caller limits; it does not construct a full tree during
+the largest chain input, and 127 for G. The callback-based Merkle adapter
+retains the existing O(q log L) schedule and caller limits; it does not construct a full tree during
 verification.
+
+## Retained predecessor measurements
+
+All measurements, test counts, artifact hashes and applied-stage statements in
+this section and the retained sections below belong to the predecessor identity
+without `:c401:`. They are retained history, not evidence for this successor.
+The earlier local aarch64 build measured a 352-byte prefix state. New sampler
+vectors are independently derived by the Python checker, but the existing
+full-proof pins must be regenerated and reconciled under the successor before
+its retained-artifact tests can be counted as evidence.
 
 A direct-rustc staged harness passed 26 tests (6 XOF, 13 candidate and 7 actual
 field tests), including partial block boundaries and all tree/message roles. One
@@ -100,7 +122,7 @@ tests with 11 explicit diagnostics ignored in 89.58 seconds. Its SHA-256 is
 evidence is `target/fastpq-production-validation/compact-shake-prefix-binaries.json`.
 The focused source snapshot stayed unchanged.
 
-## Applied engine binding and measured proof
+## Engine binding and retained predecessor proof
 
 The common engine stage adds a fixed descriptor selected by the trusted entry
 point. A proof cannot select that descriptor. It reuses the existing AIR,
@@ -113,9 +135,10 @@ Before prefix construction, `ShakeEngineStatementV1` canonically frames the
 relation identity, trace/extended row counts, width, constraint count, base
 modulus, extension nonresidue, domain root/log size/coset, blowup, arity, fold
 count, terminal length/degree, query count and full public statement bytes in
-that order. Its fixture is 225 bytes and its complete prefix is 377 bytes. Five
-independent zero-leaf roots match Python Norito/SHAKE calculations. Canonical
-String uses a compact length, while Vec uses the fixed sequence count; the
+that order. Its fixture remains 225 bytes and the successor complete prefix is
+382 bytes (the predecessor was 377 bytes). The five successor zero-leaf roots are rebound
+from independent Python Norito/SHAKE calculations; their Rust assertions have
+not yet run. Canonical String uses a compact length, while Vec uses the fixed sequence count; the
 reference encoder's initial mismatch was corrected without changing the engine.
 The self-contained `scripts/fastpq/check_compact_shake_encoding.py`
 reproduces these and the prefix/body/resource controls without retained artifacts.
@@ -124,11 +147,17 @@ A distinct `ShakeSharedProofV1` has the same bounded payload fields as the
 prototype frame. Moves between internal owned tables allocate no replacement
 row/query tables; schema cross-decoding fails. The raw cap precedes geometry and
 header work, and decode budgets come from the fixed 375-query descriptor plus
-explicit caller allocation policy. A maximum loose-shape codec fixture encodes
-6,759,875 bytes and consumes 57,789,201 allocation-charge bytes under a 64 MiB
-scope. It is not a valid proof and exceeds the smaller valid-frame ceiling.
+explicit caller allocation policy. With the current canonical 32-byte Fp4
+carrier, a maximum loose-shape codec fixture encodes 6,713,525 bytes and checks
+that cumulative allocation charges remain below a 64 MiB scope. The exact
+framing projection with minimal frontiers is 4,279,877 bytes; the existing
+4,326,227-byte runtime ceiling is unchanged. The loose shape is not a valid
+proof and exceeds that ceiling. The prior 37-byte-carrier fixture measured
+6,759,875 encoded bytes and 57,789,201 allocation-charge bytes; those are
+historical measurements, not current carrier measurements.
 
-The isolated engine compile passes with pinned copies of 439 Cargo fingerprints
+The following predecessor engine evidence is unchanged. Its isolated compile
+passes with pinned copies of 439 Cargo fingerprints
 and 2,431 source/artifact inputs; this is not a complete dependency-source release
 closure. Its final unit suite passes 960 tests with 12 diagnostics ignored
 in 109.89 seconds, including the independent structured-context and largest-shape
@@ -160,7 +189,7 @@ reviewed engine stage is applied; its later workspace gate and full971 suite pas
 verification still requires replay.
 
 
-## Applied public facade, bundle and model-artifact evidence
+## Retained predecessor facade, bundle and model-artifact evidence
 
 The typed candidate facades use the same public AIR constructors and require the
 fixed 375-query candidate codec. Separate ordinary/AXT carrier schemas also bind

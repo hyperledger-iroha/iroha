@@ -18,22 +18,29 @@
 //! and touched-balance roots do not establish finalized source-state authority.
 
 use iroha_data_model::nexus::{AxtFastpqBinding, AxtRemoteSpendClaimV1};
-use norito::{NoritoSerialize, SerializePayload, codec::Encode};
+#[cfg(test)]
+use norito::{NoritoSerialize, codec::Encode};
 
 use super::compact_value_domain::CompactTransferValue;
+#[cfg(test)]
 use super::{compact_protocol::FixedAir, compact_public_transfer::PublicTransferAir};
 use crate::{
     Error, Result, VerifyLimits,
-    axt_binding::{
-        AxtProofContextMirrors, AxtPublicMetadataBytes, validate_axt_public_metadata,
-        validate_axt_public_transfer_facts,
-    },
+    axt_binding::AxtPublicMetadataBytes,
     gadgets::public_transfer_statement::{PreparedPublicTransfers, PublicTransferLimits},
+};
+
+#[cfg(test)]
+use crate::{
+    axt_binding::{
+        AxtProofContextMirrors, validate_axt_public_metadata, validate_axt_public_transfer_facts,
+    },
     proof::PublicIO,
 };
 
 #[derive(NoritoSerialize)]
 #[norito(schema_name = "fastpq_prover::compact_prototype::AxtTransferContextV1")]
+#[cfg(test)]
 struct BoundContext {
     version: u16,
     public_transfer_context: Vec<u8>,
@@ -49,6 +56,7 @@ struct BoundContext {
 /// source root or spend. The prepared table must select AXT transfer semantics
 /// and contain exactly one delta; its original public claims and all seven
 /// PublicIO fields are bound by `PublicTransferAir` before this wrapper is built.
+#[cfg(test)]
 pub(super) fn encode_context<V: CompactTransferValue>(
     prepared: &PreparedPublicTransfers<'_, V>,
     expected: &PublicIO,

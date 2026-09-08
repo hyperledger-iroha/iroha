@@ -9,8 +9,8 @@ use iroha_data_model::{
     sorafs::pin_registry::{ManifestDigest, StorageClass},
 };
 use norito::{
+    DeserializePayload,
     codec::{DecodeAll as _, Encode as _},
-    core::NoritoDeserialize,
     from_bytes,
 };
 use std::{convert::TryFrom, str::FromStr};

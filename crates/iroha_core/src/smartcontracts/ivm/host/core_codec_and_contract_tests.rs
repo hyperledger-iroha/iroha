@@ -212,8 +212,10 @@ fn build_authenticated_test_contract_program_with_states(
             kind: iroha_data_model::smart_contract::manifest::EntryPointKind::Kotoage,
             params: Vec::new(),
             argument_schema: None,
-            return_type: None,
-            return_schema: None,
+            return_type: Some("()".to_owned()),
+            return_schema: Some(iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeV1 {
+                nodes: vec![iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeNodeV1::Unit],
+            }),
             permission: Some("CanRunCoreHostHarness".to_owned()),
             read_keys: Vec::new(),
             write_keys: Vec::new(),
@@ -223,7 +225,7 @@ fn build_authenticated_test_contract_program_with_states(
             entry_pc: 0,
         }],
         states,
-        error_codes: Vec::new(),
+        error_types: Vec::new(),
     };
     let mut program = ivm::ProgramMetadata {
         version_major: 1,
@@ -625,10 +627,8 @@ fn install_contract_with_interface_and_lifecycle(
         DataSpaceId::UNIVERSAL,
     )
     .expect("derive contract address");
-    tx.world.bind_inactive_contract_subject_for_testing(
-        contract_address.clone(),
-        authority.clone(),
-    );
+    tx.world
+        .bind_inactive_contract_subject_for_testing(contract_address.clone(), authority.clone());
     activate_instance(authority, contract_address.clone(), 1, code_hash, &mut tx)
         .expect("activate contract");
     // Most host tests exercise an isolated syscall and use a fixture that represents a
@@ -646,4 +646,166 @@ fn install_contract_with_interface_and_lifecycle(
         .commit_world_overlay_for_testing()
         .expect("commit contract registration block");
     contract_address
+}
+#[test]
+fn call_contract_syscall_cursor_cannot_authorize_other_or_revoked_caller() {
+    use iroha_data_model::smart_contract::entrypoint::{
+        EntrypointValueKindV1, EntrypointValueTypeNodeV1, EntrypointValueTypeV1,
+    };
+
+    let authority: AccountId = fixture_account("alice");
+    let state = contract_test_state(&authority);
+    let caller_source = "seiyaku CursorCaller { view fn main() -> int { return 0; } }";
+    let reader = install_contract(&state, &authority, caller_source, 0);
+    let other = install_contract(&state, &authority, caller_source, 1);
+    let callee = install_contract(
+        &state,
+        &authority,
+        r#"
+seiyaku ProtectedPages {
+  state StateMap<int, int> Entries;
+
+  kotoage fn seed() authorize("WriteState") {
+    Entries[1] = 10;
+    Entries[2] = 20;
+  }
+
+  view fn first() -> Option<StateCursor<int>> authorize("ReadState") {
+    let page = Entries.page(after: Option::none, limit: 1);
+    return page.next;
+  }
+
+  view fn resume(Option<StateCursor<int>> after) -> int authorize("ReadState") {
+    let page = Entries.page(after: after, limit: 1);
+    return page.items.len();
+  }
+}
+"#,
+        2,
+    );
+    grant_named_permission_to_account(&state, &authority, authority.clone(), "WriteState");
+    // A grant to the outer transaction authority does not authorize a different
+    // calling contract subject at the nested boundary.
+    grant_named_permission_to_account(&state, &authority, authority.clone(), "ReadState");
+    grant_named_permission_to_account(&state, &authority, reader.subject_id(), "ReadState");
+    grant_named_permission_to_account(&state, &authority, other.subject_id(), "OtherOps");
+    let mut cache = crate::smartcontracts::ivm::cache::IvmCache::new();
+    execute_contract_call_transaction(
+        &state,
+        &authority,
+        &fixture_signing_keypair(&authority),
+        contract_invocation_from_json(&state, callee.clone(), "seed", &Json::new(())),
+        &mut cache,
+    );
+
+    let (result, vm, overlay, _) = dispatch_call_contract_syscall(
+        &state,
+        &authority,
+        &reader,
+        &callee,
+        "first",
+        Json::new(()),
+        1_000_000,
+    );
+    result.expect("authorized first page should produce a live continuation");
+    assert!(
+        overlay.is_empty(),
+        "reading the first page must not write state"
+    );
+    let returned = vm
+        .memory
+        .validate_tlv(vm.register(10))
+        .expect("cursor return record");
+    assert_eq!(returned.type_id, PointerType::NoritoBytes);
+    let schema = EntrypointValueTypeV1 {
+        nodes: vec![
+            EntrypointValueTypeNodeV1::Option,
+            EntrypointValueTypeNodeV1::StateCursor(EntrypointValueKindV1::Int),
+        ],
+    };
+    let record =
+        super::super::return_value::decode_entrypoint_return_record(&schema, returned.payload)
+            .expect("canonical optional cursor return");
+    let after = super::super::return_value::render_entrypoint_return_record(&schema, &record)
+        .expect("render actual cursor for public arguments");
+    let cursor_hex = after
+        .get("some")
+        .and_then(norito::json::Value::as_str)
+        .expect("two stored positions and limit one must yield a continuation");
+    let cursor_frame = hex::decode(cursor_hex.strip_prefix("0x").expect("cursor hex prefix"))
+        .expect("canonical cursor frame hex");
+    let cursor =
+        iroha_data_model::smart_contract::state_cursor::StateCursorV1::decode_frame(&cursor_frame)
+            .expect("cursor came from the production page implementation");
+    assert_eq!(cursor.map.as_ref(), "Entries");
+    assert_eq!(cursor.key_type, EntrypointValueKindV1::Int);
+    let payload = Json::from(
+        norito::json::object([("after", after)]).expect("unchanged continuation argument"),
+    );
+
+    let assert_can_resume = |caller: &ContractAddress| {
+        let (result, vm, overlay, _) = dispatch_call_contract_syscall(
+            &state,
+            &authority,
+            caller,
+            &callee,
+            "resume",
+            payload.clone(),
+            1_000_000,
+        );
+        result
+            .expect("same cursor, instance, map and schema must remain valid with read permission");
+        assert!(overlay.is_empty(), "resuming a page must not write state");
+        let returned = vm
+            .memory
+            .validate_tlv(vm.register(10))
+            .expect("page length return");
+        assert_eq!(returned.type_id, PointerType::NoritoBytes);
+        assert_eq!(decode_nested_int(returned.payload), 1);
+    };
+    let assert_cannot_resume = |caller: &ContractAddress| {
+        let (result, vm, overlay, target_ptr) = dispatch_call_contract_syscall(
+            &state,
+            &authority,
+            caller,
+            &callee,
+            "resume",
+            payload.clone(),
+            1_000_000,
+        );
+        let error = result.expect_err("cursor possession cannot grant ReadState");
+        assert!(matches!(
+            error.as_unmetered(),
+            ivm::VMError::PermissionDenied
+        ));
+        assert_eq!(
+            vm.register(10),
+            target_ptr,
+            "denied admission must not publish a page"
+        );
+        assert!(overlay.is_empty(), "denied admission must not change state");
+    };
+    assert_can_resume(&reader);
+    assert_cannot_resume(&other);
+    grant_named_permission_to_account(&state, &authority, other.subject_id(), "ReadState");
+    assert_can_resume(&other);
+
+    let next_height = u64::try_from(state.view().height() + 1)
+        .ok()
+        .and_then(core::num::NonZeroU64::new)
+        .expect("next permission block height");
+    let mut block = state.block(BlockHeader::new(next_height, None, None, None, 0, 0));
+    let mut tx = block.transaction();
+    assert!(tx.world.remove_account_permission(
+        &other.subject_id(),
+        &Permission::new("ReadState".to_owned(), Json::new(())),
+    ));
+    tx.apply();
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit ReadState revocation");
+    assert_cannot_resume(&other);
+    assert_can_resume(&reader);
+    grant_named_permission_to_account(&state, &authority, other.subject_id(), "ReadState");
+    assert_can_resume(&other);
 }

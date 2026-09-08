@@ -22,6 +22,8 @@ use std::{
 mod model {
     use super::*;
     /// Error which indicates max instruction count was reached
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::transaction::error::model::TransactionLimitError")]
     #[derive(Debug, Display, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[repr(transparent)]
     // SAFETY: `TransactionLimitError` has no trap representation in `String`
@@ -31,6 +33,8 @@ mod model {
         pub reason: String,
     }
     /// Transaction was rejected because of one of its instructions failing.
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::transaction::error::model::InstructionExecutionFail")]
     #[derive(Getters, Debug, Clone, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     pub struct InstructionExecutionFail {
@@ -41,6 +45,8 @@ mod model {
         pub reason: String,
     }
     /// Transaction was rejected because execution of IVM bytecode failed
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::transaction::error::model::IvmExecutionFail")]
     #[derive(Debug, Display, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[display("Failed to execute IVM bytecode: {reason}")]
     #[repr(transparent)]
@@ -51,6 +57,8 @@ mod model {
         pub reason: String,
     }
     /// Possible reasons for trigger-specific execution failure.
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::transaction::error::model::TriggerExecutionFail")]
     #[derive(Debug, Display, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     #[repr(u32)]
@@ -88,6 +96,10 @@ mod model {
         }
     }
     /// The reason for rejecting transaction which happened because of transaction.
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(
+        name = "iroha_data_model::transaction::error::model::TransactionRejectionReason"
+    )]
     #[derive(
         Debug,
         Clone,

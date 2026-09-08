@@ -1,14 +1,34 @@
 {
-  "name": "language-kotodama",
+  "name": "kotodama",
+  "publisher": "hyperledger-iroha",
   "displayName": "Kotodama Language",
-  "description": "TextMate grammar for the Kotodama smart-contract language",
-  "version": "0.0.1",
+  "description": "Kotodama syntax, semantic editing, diagnostics, and formatting through the canonical koto toolchain",
+  "version": "0.1.0",
+  "engines": { "vscode": "^1.91.0" },
+  "main": "./client/extension.cjs",
+  "activationEvents": ["onLanguage:kotodama", "onCommand:kotodama.restart"],
+  "capabilities": { "untrustedWorkspaces": { "supported": false } },
+  "scripts": {
+    "test": "node --test client/config.test.cjs",
+    "package": "vsce package --out kotodama.vsix"
+  },
+  "dependencies": { "vscode-languageclient": "10.1.1" },
+  "devDependencies": { "@vscode/vsce": "3.9.2" },
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/<org>/language-kotodama"
+    "url": "https://github.com/hyperledger-iroha/iroha"
   },
   "contributes": {
+    "commands": [{ "command": "kotodama.restart", "title": "Kotodama: Restart Language Server" }],
+    "configuration": {
+      "title": "Kotodama",
+      "properties": {
+        "kotodama.serverPath": { "type": "string", "default": "koto", "description": "Path to the canonical koto executable.", "scope": "machine-overridable" },
+        "kotodama.project": { "type": "string", "default": "kotodama.project.json", "description": "Exact project graph, relative to the workspace folder. Supports ${workspaceFolder}.", "scope": "resource" },
+        "kotodama.zk": { "type": "boolean", "default": false, "description": "Enable the explicit ZK compilation capability for this project's diagnostics.", "scope": "resource" }
+      }
+    },
     "languages": [
       {
         "id": "kotodama",

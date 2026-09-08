@@ -294,10 +294,6 @@ fn guess_defaults(n: u32) -> (String, String, String) {
         args = "r10=&Blob or &NoritoBytes (validated public TLV)".into();
         ret = "r10=&NoritoBytes(same payload)".into();
         gas = "G_pointer + bytes".into();
-    } else if up.contains("STATE_KEYS") || n == 0x01_0030 {
-        args = "r10=&NoritoBytes(StatePath prefix), r11=offset:u64, r12=limit:u64 (0..=64)".into();
-        ret = "r10=ptr (&NoritoBytes(Vec<StatePath>)), r11=total:u64, r12=count:u64".into();
-        gas = "G_state_keys + canonical prefix frame bytes + 1 per examined candidate + examined candidate UTF-8 bytes + canonical response frame bytes".into();
     } else if up.contains("STATE_HAS") || n == 0x01_0031 {
         args = "r10=&NoritoBytes(StatePath)".into();
         ret = "r10=present:u64".into();

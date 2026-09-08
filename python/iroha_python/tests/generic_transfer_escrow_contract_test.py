@@ -668,7 +668,8 @@ def test_verified_contract_rejection_is_manifest_typed_and_fail_closed() -> None
         "rejection_message": "contract rejection",
         "contract_rejection": {
             "contract": "BoiFiLiquidity",
-            "namespace": "FiLiquidityError",
+            "error_type": "example/boifi@1::BoiFiLiquidity::FiLiquidityError",
+            "schema_hash": [7] * 32,
             "name": "BelowMinimum",
             "code": 18,
         },
@@ -679,7 +680,8 @@ def test_verified_contract_rejection_is_manifest_typed_and_fail_closed() -> None
     assert verified.rejection_code == "BelowMinimum"
     assert verified.contract_rejection == {
         "contract": "BoiFiLiquidity",
-        "namespace": "FiLiquidityError",
+        "error_type": "example/boifi@1::BoiFiLiquidity::FiLiquidityError",
+        "schema_hash": (7,) * 32,
         "name": "BelowMinimum",
         "code": 18,
     }
@@ -705,6 +707,25 @@ def test_verified_contract_rejection_is_manifest_typed_and_fail_closed() -> None
             "code": invalid_code,
         }
         with pytest.raises((TypeError, ValueError), match="contract rejection code"):
+            VerifiedCommittedTransaction.from_payload(malformed)
+
+    for field, invalid_value in (
+        ("error_type", "bad identity"),
+        ("error_type", "__kotodama_link_hidden"),
+        ("schema_hash", [7] * 31),
+        ("schema_hash", [7] * 33),
+        ("schema_hash", [7] * 31 + [True]),
+        ("schema_hash", [7] * 31 + [256]),
+        ("schema_hash", [7] * 31 + [6]),
+        ("schema_hash", "07" * 32),
+        ("name", "bad name"),
+    ):
+        malformed = dict(payload)
+        malformed["contract_rejection"] = {
+            **payload["contract_rejection"],
+            field: invalid_value,
+        }
+        with pytest.raises((TypeError, ValueError), match="contract rejection"):
             VerifiedCommittedTransaction.from_payload(malformed)
 
 

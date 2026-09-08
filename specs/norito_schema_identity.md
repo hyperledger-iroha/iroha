@@ -656,3 +656,67 @@ directional hashes still require completion before physical model moves. These
 stages change no active frame-selection algorithm, codec layout, ABI version,
 dependencies or optimization setting. Full workspace/release and strict-lint
 qualification remain separate requirements.
+
+## Version diagnostic ownership
+
+The lower `iroha_version` dependency declares its two actual public frame owners:
+RawVersioned and UnsupportedVersion. Their 26 captured root/Option/Vec frames
+and complete rejection controls are documented in the
+[version fixture contract](../crates/iroha_version/tests/fixtures/README.md).
+RawVersioned's slice adapter now reconstructs the canonical complete enum;
+its former one-byte parser rejected the derived encoder's u32-tagged payload.
+Explicit 0/1 tags retain the captured layout. Typed field/depth/allocation errors,
+exact consumption and caller layout context survive reconstruction.
+
+The crate explicitly selects Norito's existing base-codec surface, and its JSON
+error conversion follows the existing JSON feature. Both default and minimal
+selections compile independently. Default version/derive tests pass 16 cases;
+minimal version tests pass 11, including the same 26 immutable frames. Strict
+all-target Clippy passes for both selections, with all final runs bound to the
+same 19,343 inputs. No ABI version, accepted legacy layout or alternate frame
+identity is introduced.
+
+The reviewed dependency fingerprint now includes this explicit base-codec
+selection and the earlier public model-test target registration. All five
+scope counts/limits and all 16 resolved dependency boundaries remain intact.
+Current-root CLI feature and Python packaging metadata changes have their own
+manifest reconciliation; they do not extend this runtime qualification to the
+whole root. Remaining aggregate and service declarations, atomic identity
+selection, physical model extraction and full release checks remain open.
+
+## Transaction owner declaration closure
+
+The remaining 25 ordinary transaction frame owners now declare their captured
+nominal identities: 15 fee/admission/signed/multisig/sealed/result records, five
+executable records and five rejection records. Three private owner-scoped tests
+check all captured names and both codec-direction hashes. Every existing item
+body and codec/FFI attribute is retained; SignedTransaction, receipt records and
+previously declared owners are not duplicated. TransactionSignature retains its
+own tuple identity and its existing slice adapter, distinct from its inner typed
+signature. No new frame corpus is claimed for these unchanged payload owners.
+
+The exact five-path patch is
+`cfffe049b5adf68b50e97a260c5c09495eb6cd1e8e362a12c2f525c87a46505d`.
+The local `transaction-owner-closure-preparation/` record binds all 25 complete
+items to the successful controlled compiler capture, checks both directions and
+preserves 58 transaction/fixture/generator source files. The committed
+`transaction/captured_transaction_identity_tests.rs` retains every expected
+nominal name and directional hash for subsequent physical moves.
+
+One combined build and its selected runtimes use 19,344 unchanged inputs without
+a stack override. All **499 selected tests pass**: 442 model tests, 21 public
+frame tests, 35 query/SM/signed-block integration tests and one allocation test.
+The model selection includes all transaction tests, three new identity suites,
+exact signed Norito RPC/hash fixtures, both base-model fixture tests, all 32
+Native AMX regressions and all 16 preceding event-identity suites. The existing
+operator-only intent KAT generator remains ignored; its expected constants and
+ordinary verification tests are unchanged. Public tests preserve all 525 frame
+rows, and base-model tests retain their separate 189-frame corpus.
+
+Formatting and codec checks pass. Source budgets retain exactly 235 findings
+and 173 exceptions with unchanged limits. Strict Clippy stops in the model
+library with 225 reported errors, before linting the public test target. These
+results qualify this captured selection, not other features, the concurrent
+root workspace or a release. Remaining model/service owners, atomic frame
+identity selection, physical extraction, memory reduction and full native/
+consensus/workspace qualification remain outstanding.

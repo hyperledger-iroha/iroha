@@ -1925,6 +1925,12 @@ impl Kura {
         expected_network_id: iroha_data_model::NetworkId,
         expected_epoch: u64,
     ) -> std::result::Result<LaneBlockProposalV1, &'static str> {
+        #[cfg(test)]
+        AUTONOMOUS_ARTIFACT_VALIDATIONS.with(|count| {
+            if let Some(current) = count.get() {
+                count.set(Some(current + 1));
+            }
+        });
         artifact
             .encode_framed()
             .map_err(|_| "autonomous lane block exceeds the merge source byte limit")?;

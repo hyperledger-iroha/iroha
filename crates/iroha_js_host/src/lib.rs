@@ -169,6 +169,8 @@ use std::{
 // direct construction remains deliberately confined to tests.
 #[cfg(test)]
 use iroha_data_model::isi::settlement::FxCorridorOracleEvidence;
+#[cfg(test)]
+use iroha_primitives::numeric::Numeric;
 use iroha_primitives::{
     json::Json,
     numeric::Quantity,
@@ -16840,7 +16842,7 @@ seiyaku Privacy {
                     text: "Ledger Contract".to_owned(),
                 }],
             }]),
-            error_codes: None,
+            error_types: None,
             provenance: None,
         }
         .signed(&signing_key);

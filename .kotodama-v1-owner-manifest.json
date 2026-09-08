@@ -1,0 +1,440 @@
+{
+  "schema": "iroha.kotodama.generated-owner.v1",
+  "root_mode": "0700",
+  "directories": [
+    {
+      "path": "crates",
+      "mode": "0755"
+    },
+    {
+      "path": "crates/ivm",
+      "mode": "0755"
+    },
+    {
+      "path": "crates/ivm/docs",
+      "mode": "0755"
+    },
+    {
+      "path": "crates/ivm/docs/examples",
+      "mode": "0755"
+    },
+    {
+      "path": "crates/ivm/tests",
+      "mode": "0755"
+    },
+    {
+      "path": "crates/ivm/tests/data",
+      "mode": "0755"
+    },
+    {
+      "path": "crates/kotodama_lang",
+      "mode": "0755"
+    },
+    {
+      "path": "crates/kotodama_lang/src",
+      "mode": "0755"
+    },
+    {
+      "path": "crates/kotodama_lang/src/samples",
+      "mode": "0755"
+    },
+    {
+      "path": "demo",
+      "mode": "0755"
+    },
+    {
+      "path": "examples",
+      "mode": "0755"
+    },
+    {
+      "path": "examples/hello",
+      "mode": "0755"
+    },
+    {
+      "path": "examples/map",
+      "mode": "0755"
+    },
+    {
+      "path": "examples/nft",
+      "mode": "0755"
+    },
+    {
+      "path": "examples/transfer",
+      "mode": "0755"
+    },
+    {
+      "path": "integration_tests",
+      "mode": "0755"
+    },
+    {
+      "path": "integration_tests/fixtures",
+      "mode": "0755"
+    },
+    {
+      "path": "integration_tests/fixtures/ivm",
+      "mode": "0755"
+    }
+  ],
+  "files": [
+    {
+      "path": "crates/ivm/docs/examples/01_hajimari.to",
+      "mode": "0644",
+      "size": 793,
+      "sha256": "56d05112379a11ed3c8bd222a0fc9fc273c391fe67a5a15b5bcf8f828d01d93d"
+    },
+    {
+      "path": "crates/ivm/docs/examples/02_kotoage_public_fn.to",
+      "mode": "0644",
+      "size": 1229,
+      "sha256": "1c9085b6fdea4138eb16965c41fd9635c8479b3d7b3dc7d733bc78b62f8daf34"
+    },
+    {
+      "path": "crates/ivm/docs/examples/03_kaizen_permission.to",
+      "mode": "0644",
+      "size": 1165,
+      "sha256": "5a09db5bc32c28667e044f06b04efcd85b2ae84a7e6de37578546b2d6380c058"
+    },
+    {
+      "path": "crates/ivm/docs/examples/04_foreach_map.to",
+      "mode": "0644",
+      "size": 2749,
+      "sha256": "be68233c38e28739ad6e66fd645ac34833543734e36ee12e015f6574a907c037"
+    },
+    {
+      "path": "crates/ivm/docs/examples/05_range_for.to",
+      "mode": "0644",
+      "size": 1589,
+      "sha256": "b72d1ba48967a1683e34ad243fdcba1be08c047b955a1708333cf012e46641fe"
+    },
+    {
+      "path": "crates/ivm/docs/examples/06_map_ops.to",
+      "mode": "0644",
+      "size": 2489,
+      "sha256": "56ad54d859c4dc633c5f98b134a776de2ac11b06b3aa39a616aea6888823e684"
+    },
+    {
+      "path": "crates/ivm/docs/examples/07_set_detail_authority.to",
+      "mode": "0644",
+      "size": 1233,
+      "sha256": "5f264724c11a3895e0839a92803df8dbab7f8a7fcaf1633ad7eb6c0accd471ac"
+    },
+    {
+      "path": "crates/ivm/docs/examples/08_call_transfer_asset.to",
+      "mode": "0644",
+      "size": 3173,
+      "sha256": "435c4a0bc222a02d11fff87112571af6005fafa75dfad7fd0560a7e39199aa92"
+    },
+    {
+      "path": "crates/ivm/docs/examples/09_struct_and_state.to",
+      "mode": "0644",
+      "size": 2065,
+      "sha256": "ea58a720028bea5b82623c151221cfe4ec09b691706384b4b79798ba760e1332"
+    },
+    {
+      "path": "crates/ivm/docs/examples/10_meta_header.to",
+      "mode": "0644",
+      "size": 777,
+      "sha256": "83f3b60b90a0a9e5efca1a3030fcd5b2b38330d3deccf0100665acdacec52ed6"
+    },
+    {
+      "path": "crates/ivm/docs/examples/11_detail_and_transfer.to",
+      "mode": "0644",
+      "size": 3629,
+      "sha256": "72189baa880c888e82dd50d95b4d44af18a6abaafbe1863766dad7c735f4a436"
+    },
+    {
+      "path": "crates/ivm/docs/examples/12_nft_flow.to",
+      "mode": "0644",
+      "size": 2297,
+      "sha256": "e06655feb80db6962d5cdcc7307c687b72434f569cacfd6e254371d2ce0fa1bb"
+    },
+    {
+      "path": "crates/ivm/docs/examples/13_register_and_mint.to",
+      "mode": "0644",
+      "size": 2477,
+      "sha256": "0a09d041275931388462a93f44b2423e5a0e08ebead7e7d69b329b7be55f29e6"
+    },
+    {
+      "path": "crates/ivm/docs/examples/14_map_sum_take2.to",
+      "mode": "0644",
+      "size": 1917,
+      "sha256": "88376a6a3c3ace9036225eb32bf3f4432b172fba5da7f8ae873202c3a869268d"
+    },
+    {
+      "path": "crates/ivm/docs/examples/15_modulo.to",
+      "mode": "0644",
+      "size": 1205,
+      "sha256": "78ec8f21810b3bc63059f0e683de31b4a65560d1ad218d4fb8e7473b7405cd7a"
+    },
+    {
+      "path": "crates/ivm/docs/examples/16_register_domain.to",
+      "mode": "0644",
+      "size": 993,
+      "sha256": "3a63510cf6967721ca3676c8df3091f3f8ef4d4d721aa1ee9699e75595781cd9"
+    },
+    {
+      "path": "crates/ivm/docs/examples/18_ternary.to",
+      "mode": "0644",
+      "size": 1217,
+      "sha256": "03afaf708cadd764dfdd6e40eef37cfbb3b68d5ab02cbc9440bb3f6ee71cbaf6"
+    },
+    {
+      "path": "crates/ivm/docs/examples/19_contract_flow_test.to",
+      "mode": "0644",
+      "size": 2633,
+      "sha256": "ab37113001e1e3b9dec507d32b8dcb7a9cfc44df5eb5b95ee5d3b4551960688d"
+    },
+    {
+      "path": "crates/ivm/tests/data/add.to",
+      "mode": "0644",
+      "size": 1197,
+      "sha256": "3a51cb3131c7cd5ac313d27dbef31650958c23c1e965521c932fd0c29003bd79"
+    },
+    {
+      "path": "crates/ivm/tests/data/amm.to",
+      "mode": "0644",
+      "size": 1485,
+      "sha256": "bdeea49f0e5a7fcbbd462e0cc38a19185f4404b9851a83ac2ad364f1dcc41342"
+    },
+    {
+      "path": "crates/ivm/tests/data/complex.to",
+      "mode": "0644",
+      "size": 1409,
+      "sha256": "c37c4e7fa11e098d93f7b502e10ad02e4e677e6d07092e226024d24d221e6f02"
+    },
+    {
+      "path": "crates/ivm/tests/data/control.to",
+      "mode": "0644",
+      "size": 1789,
+      "sha256": "74e6575122fb9f49ce51887c7cba43b87063e7762de33ad175ae109653a5f465"
+    },
+    {
+      "path": "crates/ivm/tests/data/mfc.to",
+      "mode": "0644",
+      "size": 3005,
+      "sha256": "3217e95d402e0dc0dd5eac44353c5129b7764a22db5cbc240b21e9f012af97b3"
+    },
+    {
+      "path": "crates/kotodama_lang/src/samples/asset_ops.to",
+      "mode": "0644",
+      "size": 2205,
+      "sha256": "3a92bbfa807247728ebc98396b2ccb45bcbce7ca2bd57c802baf62708b9963b6"
+    },
+    {
+      "path": "crates/kotodama_lang/src/samples/create_nft_for_every_user_trigger.to",
+      "mode": "0644",
+      "size": 789,
+      "sha256": "08d85f73f0717dd41afe3dc8a396718397de32cce96abf8accf2d1d553d9ad6d"
+    },
+    {
+      "path": "crates/kotodama_lang/src/samples/dex_contract.to",
+      "mode": "0644",
+      "size": 3253,
+      "sha256": "f148ed57bdeb8b99bcad523ada697a8e3064adb5d05afb45f75f33723e176a94"
+    },
+    {
+      "path": "crates/kotodama_lang/src/samples/dex_simple.to",
+      "mode": "0644",
+      "size": 3273,
+      "sha256": "64d299c39f8856afdab9358c8af374c8b67cab1d2178e9c3c59955d058285f11"
+    },
+    {
+      "path": "crates/kotodama_lang/src/samples/domain_ops.to",
+      "mode": "0644",
+      "size": 1081,
+      "sha256": "06ebbcc6332e878b6793786c92b89481f690691df040dd5879b4fbd5b450eab4"
+    },
+    {
+      "path": "crates/kotodama_lang/src/samples/irohaswap.to",
+      "mode": "0644",
+      "size": 18585,
+      "sha256": "cd7ac4a9054d7b801d7c358a36f07835bd5fc35d25bc557cf1fc62f748e24cf2"
+    },
+    {
+      "path": "crates/kotodama_lang/src/samples/kotodama_swap.to",
+      "mode": "0644",
+      "size": 2849,
+      "sha256": "025391708f0bc00f244cd0d2a3022ac4d03d0e36b7de02294f2b560e02420334"
+    },
+    {
+      "path": "crates/kotodama_lang/src/samples/lending_simple.to",
+      "mode": "0644",
+      "size": 3933,
+      "sha256": "7845cd5be15a30c8128756ab1d0cabed6081250161c79a50bd2d4251aaa2b09e"
+    },
+    {
+      "path": "crates/kotodama_lang/src/samples/mint_rose_trigger.to",
+      "mode": "0644",
+      "size": 1805,
+      "sha256": "3bab57fc18e2e4b619d7d8f5d68d2ceb9949a3c041d6559e1eaef2655a7b9e0a"
+    },
+    {
+      "path": "crates/kotodama_lang/src/samples/native_escrow.to",
+      "mode": "0644",
+      "size": 4545,
+      "sha256": "58f9339d49c3297aadea84140bd95c96bdaa1f2e405f04be06809c868ddf0d49"
+    },
+    {
+      "path": "crates/kotodama_lang/src/samples/perp_funding.to",
+      "mode": "0644",
+      "size": 3729,
+      "sha256": "88cb035f38e5e8f76d3d20ab3f0930cee3e1a8cb34f4ff5acee2dead6473a1dc"
+    },
+    {
+      "path": "crates/kotodama_lang/src/samples/query_assets_and_save_cursor.to",
+      "mode": "0644",
+      "size": 1233,
+      "sha256": "7c8e804f65cdc067d63ec465f3faf554cbccfcc5c558ff9c4c18d4c56b40a6e1"
+    },
+    {
+      "path": "crates/kotodama_lang/src/samples/smart_contract_can_filter_queries.to",
+      "mode": "0644",
+      "size": 1185,
+      "sha256": "da5111ccb29f04c9c18e8d298e790b74ad3916d0c9195992f2f45e9534eeb4c3"
+    },
+    {
+      "path": "crates/kotodama_lang/src/samples/stablecoin_simple.to",
+      "mode": "0644",
+      "size": 3717,
+      "sha256": "3c4e7c626a28bff333347849381955ad0c09022ed46fede83506e6cbc2f7ee08"
+    },
+    {
+      "path": "crates/kotodama_lang/src/samples/subscription_billing_trigger.to",
+      "mode": "0644",
+      "size": 871,
+      "sha256": "a703ec80b612bfda7d50342be2f82d1100a2a223375de0648d0c513be3758465"
+    },
+    {
+      "path": "crates/kotodama_lang/src/samples/subscription_usage_recorder.to",
+      "mode": "0644",
+      "size": 881,
+      "sha256": "2fc44e99fc89207263497dac720576eeae7d328ca3b9bcf10fbb746dc8428fc7"
+    },
+    {
+      "path": "crates/kotodama_lang/src/samples/threshold_escrow.to",
+      "mode": "0644",
+      "size": 12549,
+      "sha256": "06597f10d2dfd414f3dadc57dc4aa27be9c7718efc66bba69d448322abbb9ea8"
+    },
+    {
+      "path": "crates/kotodama_lang/src/samples/tuple_return_demo.to",
+      "mode": "0644",
+      "size": 993,
+      "sha256": "840c1cccd665ad7852fa5e8262501317dd9ecb05cb71cd9b04a943cde5521aac"
+    },
+    {
+      "path": "crates/kotodama_lang/src/samples/zk_vote_ballot.to",
+      "mode": "0644",
+      "size": 2545,
+      "sha256": "b1c9e7b8f3c4d23f7706ef5cb142925e5b6a5dbbd65ec7feffaa10abe131fead"
+    },
+    {
+      "path": "demo/authority_probe.manifest.json",
+      "mode": "0644",
+      "size": 2346,
+      "sha256": "25e37e24f487ec72105f2c51a438b70bc989048cb43d43883a84b7f4a3d13609"
+    },
+    {
+      "path": "demo/authority_probe.to",
+      "mode": "0644",
+      "size": 1645,
+      "sha256": "d504d36bfeeab8a03663aa5be835412300e144f40e362fe554f680ab32c8fa03"
+    },
+    {
+      "path": "demo/irohaswap.manifest.json",
+      "mode": "0644",
+      "size": 13546,
+      "sha256": "2408ca8a926d45f6bb172d1a31869a16c4f96ec9e020421e230d3b47932a8833"
+    },
+    {
+      "path": "demo/irohaswap.to",
+      "mode": "0644",
+      "size": 18585,
+      "sha256": "cd7ac4a9054d7b801d7c358a36f07835bd5fc35d25bc557cf1fc62f748e24cf2"
+    },
+    {
+      "path": "demo/ivm_smoke.manifest.json",
+      "mode": "0644",
+      "size": 3889,
+      "sha256": "93834f06d3c9c6a1eb573744414859bfa239e2adc070ca0c8051733fc0da91dd"
+    },
+    {
+      "path": "demo/ivm_smoke.to",
+      "mode": "0644",
+      "size": 3165,
+      "sha256": "c7dc0d543fa7192cbbf1b60ca2c922daff55c8b26f6951e9451f2e7d99bea9d3"
+    },
+    {
+      "path": "demo/prediction_market.manifest.json",
+      "mode": "0644",
+      "size": 6176,
+      "sha256": "0ccde871c4719b27a91dd730073c18711eafebe78a7c50b7f7aa060983d20e39"
+    },
+    {
+      "path": "demo/prediction_market.to",
+      "mode": "0644",
+      "size": 7393,
+      "sha256": "20271be8ad2bd8b271f317e462b116c982a3655e2673fb72a29c5190506ed55e"
+    },
+    {
+      "path": "demo/transfer.to",
+      "mode": "0644",
+      "size": 3181,
+      "sha256": "2ba2edc244982fac6980aa018209a2054dac425528f5b1d9b93160fdcab92dc3"
+    },
+    {
+      "path": "examples/hello/hello.to",
+      "mode": "0644",
+      "size": 1717,
+      "sha256": "3433dba3cdbfadd11e312055b83686c890b396221691e14c01f5d99a39d4f784"
+    },
+    {
+      "path": "examples/map/map.to",
+      "mode": "0644",
+      "size": 1921,
+      "sha256": "c5430eb4bb3e277db0585762ab19527474758a67be46dbc42d4f768dbe2e2f9d"
+    },
+    {
+      "path": "examples/nft/nft.to",
+      "mode": "0644",
+      "size": 2277,
+      "sha256": "12145c1854d31f6b40e8eb9df5a1f1841117ed6f60c7c13fea9775193a08b74b"
+    },
+    {
+      "path": "examples/transfer/transfer.to",
+      "mode": "0644",
+      "size": 3181,
+      "sha256": "2ba2edc244982fac6980aa018209a2054dac425528f5b1d9b93160fdcab92dc3"
+    },
+    {
+      "path": "integration_tests/fixtures/ivm/create_nft_for_every_user_trigger.to",
+      "mode": "0644",
+      "size": 789,
+      "sha256": "08d85f73f0717dd41afe3dc8a396718397de32cce96abf8accf2d1d553d9ad6d"
+    },
+    {
+      "path": "integration_tests/fixtures/ivm/mint_rose_trigger.to",
+      "mode": "0644",
+      "size": 1805,
+      "sha256": "3bab57fc18e2e4b619d7d8f5d68d2ceb9949a3c041d6559e1eaef2655a7b9e0a"
+    },
+    {
+      "path": "integration_tests/fixtures/ivm/query_assets_and_save_cursor.to",
+      "mode": "0644",
+      "size": 1233,
+      "sha256": "7c8e804f65cdc067d63ec465f3faf554cbccfcc5c558ff9c4c18d4c56b40a6e1"
+    },
+    {
+      "path": "integration_tests/fixtures/ivm/smart_contract_can_filter_queries.to",
+      "mode": "0644",
+      "size": 1185,
+      "sha256": "da5111ccb29f04c9c18e8d298e790b74ad3916d0c9195992f2f45e9534eeb4c3"
+    },
+    {
+      "path": "integration_tests/fixtures/ivm/threshold_escrow.to",
+      "mode": "0644",
+      "size": 12549,
+      "sha256": "06597f10d2dfd414f3dadc57dc4aa27be9c7718efc66bba69d448322abbb9ea8"
+    }
+  ]
+}

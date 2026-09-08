@@ -915,13 +915,13 @@ mod tests {
     }
     #[test]
     fn cst_recovery_preserves_mixed_call_arguments() {
-        let text = "seiyaku Demo { fn invalid() { target(1, second: 2); } }";
+        let text = "seiyaku Demo { fn invalid() { target(first: 1, 2); } }";
         let source = SourceFile::new(SourceId(0), "mixed.ko", text);
         let output = parse(&source, FrontendBudget::v1());
         assert!(!output.is_ok());
         assert_eq!(
             output.diagnostics.diagnostics[0].code,
-            "E_MIXED_CALL_ARGUMENTS"
+            "E_POSITIONAL_ARGUMENT_ORDER"
         );
         assert_eq!(output.tree.text(&source), text);
     }

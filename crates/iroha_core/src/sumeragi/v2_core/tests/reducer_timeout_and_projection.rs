@@ -1,4 +1,367 @@
 #[test]
+fn recovery_restores_tc_promoted_lock_body_before_any_retry() {
+    let fixture = reducer();
+    let context = fixture.context.clone();
+    let locked = certificate(&context, 0, Phase::Prepare, Subject::repeat(0xd1), 0xd2);
+    let entries = [WalEntry::new(
+        PersistenceId::new(1),
+        WalRecord::InstallTimeout(timeout_certificate(&context, 0, Some(locked.clone()))),
+    )];
+    let mut recovered = Reducer::recover(
+        context.clone(),
+        fixture.local_validator,
+        Generation::INITIAL,
+        entries,
+    )
+    .expect("restore the TC-promoted lock without a local Commit intent");
+    assert_eq!(recovered.durable.locked(), Some(&locked));
+    assert!(recovered.durable.commit_intent_for_lock(&locked).is_none());
+    assert_eq!(recovered.body_work.len(), 1);
+    assert!(recovered.pending_prepare.is_empty());
+    assert_eq!(recovered.known_prepare.len(), 1);
+    assert_eq!(
+        recovered.body_work[&(locked.round(), locked.subject())],
+        BodyWork {
+            manifest: None,
+            state: BodyState::Missing,
+        }
+    );
+    let completion = Event::BodyAvailable {
+        tag: recovered.current_tag(),
+        round: locked.round(),
+        subject: locked.subject(),
+    };
+    let before = recovered.clone();
+    let fenced = recovered
+        .step(completion.clone())
+        .expect("startup is still gated");
+    assert_eq!(
+        fenced.disposition(),
+        StepDisposition::Ignored(IgnoreReason::RecoveryPending)
+    );
+    assert!(fenced.effects().is_empty());
+    assert_eq!(recovered, before);
+    let resumed = recovered
+        .step(Event::ResumeAfterReplay {
+            tag: recovered.current_tag(),
+        })
+        .expect("resume the exact durable authority");
+    assert_eq!(resumed.disposition(), StepDisposition::Applied);
+    assert!(
+        resumed.effects().is_empty(),
+        "constructor seed must not invent a startup Fetch or signature"
+    );
+    for (round, subject) in [
+        (Round::new(context.height(), 1), locked.subject()),
+        (locked.round(), Subject::repeat(0xd3)),
+    ] {
+        let before = recovered.clone();
+        let ignored = recovered
+            .step(Event::BodyAvailable {
+                tag: recovered.current_tag(),
+                round,
+                subject,
+            })
+            .expect("unrelated completion remains a stutter");
+        assert_eq!(
+            ignored.disposition(),
+            StepDisposition::Ignored(IgnoreReason::NoMatchingWork)
+        );
+        assert!(ignored.effects().is_empty());
+        assert_eq!(recovered, before);
+    }
+    let available = recovered
+        .step(completion)
+        .expect("the retained exact completion applies before any retry timer");
+    assert_eq!(
+        available.effects(),
+        &[Effect::StoreBody {
+            tag: recovered.current_tag(),
+            round: locked.round(),
+            subject: locked.subject(),
+        }]
+    );
+    assert_eq!(
+        recovered.body_state(locked.round(), locked.subject()),
+        BodyState::Available
+    );
+    let _fetch = recovered.ensure_body_fetch(&locked);
+    assert_eq!(
+        recovered.body_state(locked.round(), locked.subject()),
+        BodyState::Available,
+        "sharing Missing insertion must not reset a live body stage"
+    );
+    assert_eq!(recovered.body_work.len(), 1);
+    let stored = recovered
+        .step(Event::BodyStored {
+            tag: recovered.current_tag(),
+            round: locked.round(),
+            subject: locked.subject(),
+        })
+        .expect("the exact stored completion advances the retained pipeline");
+    assert_eq!(
+        stored.effects(),
+        &[Effect::ValidateBody {
+            tag: recovered.current_tag(),
+            round: locked.round(),
+            subject: locked.subject(),
+        }]
+    );
+    assert_eq!(
+        recovered.body_state(locked.round(), locked.subject()),
+        BodyState::Durable
+    );
+    assert!(recovered.pending_prepare.is_empty());
+    assert!(recovered.awaiting_signature.is_none());
+}
+#[test]
+fn recovery_body_seeds_are_bounded_and_decision_exclusive() {
+    let fixture = reducer();
+    let context = fixture.context.clone();
+    let locked = certificate(&context, 0, Phase::Prepare, Subject::repeat(0xd4), 0xd5);
+    let current = certificate(&context, 1, Phase::Prepare, Subject::repeat(0xd6), 0xd7);
+    let mut entries = vec![
+        WalEntry::new(
+            PersistenceId::new(1),
+            WalRecord::InstallTimeout(timeout_certificate(&context, 0, Some(locked.clone()))),
+        ),
+        WalEntry::new(
+            PersistenceId::new(2),
+            WalRecord::ObservePrepare(current.clone()),
+        ),
+    ];
+    let recovered = Reducer::recover(
+        context.clone(),
+        fixture.local_validator,
+        Generation::INITIAL,
+        entries.clone(),
+    )
+    .expect("restore exactly the historical lock and open-view high");
+    assert_eq!(
+        recovered.body_work.keys().copied().collect::<Vec<_>>(),
+        vec![
+            (locked.round(), locked.subject()),
+            (current.round(), current.subject())
+        ]
+    );
+    assert_eq!(recovered.pending_prepare.len(), 1);
+    assert_eq!(
+        recovered.pending_prepare.get(&current.reference()),
+        Some(&current)
+    );
+    assert!(!recovered.pending_prepare.contains_key(&locked.reference()));
+    let decision = certificate(&context, 1, Phase::Commit, current.subject(), 0xd8);
+    entries.push(WalEntry::new(
+        PersistenceId::new(3),
+        WalRecord::Decision(decision.clone()),
+    ));
+    let mut decided = Reducer::recover(
+        context,
+        fixture.local_validator,
+        Generation::INITIAL,
+        entries,
+    )
+    .expect("a Decision owns the existing exclusive recovery path");
+    assert!(decided.body_work.is_empty());
+    assert!(decided.pending_prepare.is_empty());
+    let outcome = decided
+        .step(Event::ResumeAfterReplay {
+            tag: decided.current_tag(),
+        })
+        .expect("resume only the exact Decision body");
+    assert!(
+        matches!(outcome.effects(), [Effect::FetchBody { round, subject, certificate: Some(actual), .. }]
+        if *round == decision.proposal_round() && *subject == decision.subject() && actual == &decision)
+    );
+    assert_eq!(decided.body_work.len(), 1);
+    assert!(
+        !decided
+            .body_work
+            .contains_key(&(locked.round(), locked.subject()))
+    );
+}
+#[test]
+fn recovery_without_timeout_preserves_the_exact_caller_generation_seed() {
+    let fixture = reducer();
+    let context = fixture.context.clone();
+    let local = fixture.local_validator.expect("validator fixture");
+    let prepare = WalEntry::new(
+        PersistenceId::new(1),
+        WalRecord::PrepareIntent(Vote::new(
+            context.id(),
+            Round::new(context.height(), 0),
+            Phase::Prepare,
+            Subject::repeat(0xd9),
+            local,
+        )),
+    );
+    for seed in [
+        Generation::INITIAL,
+        Generation::new(37),
+        Generation::new(u64::MAX),
+    ] {
+        for entries in [vec![], vec![prepare.clone()]] {
+            let expected = DurableState::replay(&context, Some(local), entries.clone())
+                .expect("valid no-TC history");
+            let recovered = Reducer::recover(context.clone(), Some(local), seed, entries)
+                .expect("retain caller seed");
+            assert_eq!(recovered.current_tag().generation(), seed);
+            assert_eq!(recovered.durable, expected);
+            assert!(!recovered.replay_resumed);
+        }
+    }
+}
+#[test]
+fn recovery_reconstructs_live_generation_for_each_timeout_and_non_timeout_frame() {
+    let fixture = reducer();
+    let context = fixture.context.clone();
+    let high0 = certificate(&context, 0, Phase::Prepare, Subject::repeat(0xda), 0xdb);
+    let high1 = certificate(&context, 1, Phase::Prepare, Subject::repeat(0xdc), 0xdd);
+    let high2 = certificate(&context, 2, Phase::Prepare, Subject::repeat(0xde), 0xdf);
+    let records = [
+        (
+            WalRecord::InstallTimeout(timeout_certificate(&context, 0, None)),
+            1,
+            0,
+        ),
+        (
+            WalRecord::InstallTimeout(timeout_certificate(&context, 1, None)),
+            2,
+            0,
+        ),
+        (
+            WalRecord::InstallTimeout(timeout_certificate(&context, 1, Some(high0))),
+            2,
+            1,
+        ),
+        (
+            WalRecord::InstallTimeout(timeout_certificate(&context, 1, Some(high1))),
+            2,
+            2,
+        ),
+        (WalRecord::ObservePrepare(high2.clone()), 2, 2),
+        (
+            WalRecord::InstallTimeout(timeout_certificate(&context, 2, Some(high2))),
+            3,
+            0,
+        ),
+    ];
+    for seed in [
+        Generation::INITIAL,
+        Generation::new(37),
+        Generation::new(u64::MAX),
+    ] {
+        let mut live = Reducer::new(context.clone(), None, seed).expect("live observer");
+        let mut entries = Vec::new();
+        for (record, expected_view, expected_generation) in records.clone() {
+            let event = match &record {
+                WalRecord::InstallTimeout(certificate) => Event::TimeoutCertificateReceived {
+                    tag: live.current_tag(),
+                    certificate: certificate.clone(),
+                },
+                WalRecord::ObservePrepare(certificate) => Event::QuorumCertificateReceived {
+                    tag: live.current_tag(),
+                    certificate: certificate.clone(),
+                },
+                _ => unreachable!("fixture admits only TC and observed Prepare frames"),
+            };
+            let outcome = live
+                .step(event)
+                .expect("ordinary ingress stages the exact next durable frame");
+            let mut persisted = outcome.effects().iter().filter_map(|effect| match effect {
+                Effect::Persist { entry, .. } => Some(entry.clone()),
+                _ => None,
+            });
+            let entry = persisted.next().expect("one WAL append is required");
+            assert!(persisted.next().is_none());
+            assert_eq!(entry.record(), &record);
+            live.step(Event::Persisted {
+                tag: live.current_tag(),
+                id: entry.id(),
+            })
+            .expect("acknowledge the live transition");
+            entries.push(entry);
+            assert_eq!(
+                live.current_tag(),
+                EventTag::new(
+                    context.height(),
+                    expected_view,
+                    Generation::new(expected_generation)
+                )
+            );
+            let recovered = Reducer::recover(context.clone(), None, seed, entries.clone())
+                .expect("recover the complete exact acknowledged prefix");
+            assert_eq!(recovered.current_tag(), live.current_tag());
+            assert_eq!(recovered.durable, live.durable);
+            assert!(!recovered.replay_resumed);
+            assert!(recovered.pending_persistence.is_none());
+            assert!(recovered.awaiting_signature.is_none());
+        }
+    }
+}
+#[test]
+fn recovery_generation_fold_retains_ordered_wal_rejections() {
+    let fixture = reducer();
+    let context = fixture.context.clone();
+    let timeout = timeout_certificate(&context, 0, None);
+    let first = WalEntry::new(
+        PersistenceId::new(1),
+        WalRecord::InstallTimeout(timeout.clone()),
+    );
+    let foreign = TimeoutCertificate::new(
+        ContextId::repeat(0xe1),
+        timeout.round(),
+        timeout.groups().to_vec(),
+    );
+    let malformed = TimeoutCertificate::new(context.id(), timeout.round(), vec![]);
+    let decision = certificate(&context, 0, Phase::Commit, Subject::repeat(0xe2), 0xe3);
+    let histories = [
+        vec![WalEntry::new(
+            PersistenceId::new(1),
+            WalRecord::InstallTimeout(foreign),
+        )],
+        vec![WalEntry::new(
+            PersistenceId::new(1),
+            WalRecord::InstallTimeout(malformed),
+        )],
+        vec![
+            WalEntry::new(PersistenceId::new(1), WalRecord::Decision(decision)),
+            WalEntry::new(
+                PersistenceId::new(2),
+                WalRecord::InstallTimeout(timeout.clone()),
+            ),
+        ],
+        vec![WalEntry::new(
+            PersistenceId::new(2),
+            WalRecord::InstallTimeout(timeout.clone()),
+        )],
+        vec![
+            first.clone(),
+            WalEntry::new(
+                PersistenceId::new(3),
+                WalRecord::InstallTimeout(timeout.clone()),
+            ),
+        ],
+        vec![
+            first,
+            WalEntry::new(PersistenceId::new(2), WalRecord::InstallTimeout(timeout)),
+        ],
+    ];
+    for entries in histories {
+        let expected = DurableState::replay(&context, fixture.local_validator, entries.clone())
+            .expect_err("invalid history must fail the canonical durable validator");
+        assert_eq!(
+            Reducer::recover(
+                context.clone(),
+                fixture.local_validator,
+                Generation::new(u64::MAX),
+                entries
+            ),
+            Err(ReducerError::Replay(expected))
+        );
+    }
+}
+#[test]
 fn view_advancing_timeout_install_resets_an_exhausted_generation() {
     let (mut pending, event) =
         pending_timeout_install_at_generation(Generation::new(u64::MAX), None);

@@ -18,7 +18,7 @@ final class ToriiContractAPITests: XCTestCase {
     }
     private let merchantAccount = "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"
     private let contractAlias = "bisp::hbl.sbp"
-    private let contractAddress = "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
+    private let contractAddress = "irohac1qyqqqqqqqqqqqqz6putm9wv6wkf4r22v02ktg4af7n3n7egd607g2"
     private let assetId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
     private let codeHash = String(repeating: "a", count: 63) + "b"
     private let abiHash = String(repeating: "b", count: 64)

@@ -38318,9 +38318,12 @@ publish_delay_seconds = 17
             resources.insert("max_transient_bytes".into(), Value::Integer(128));
             resources.insert(field.into(), Value::Integer(value));
             snapshot.insert("resources".into(), Value::Table(resources));
+            let error = actual::Root::from_toml_source(TomlSource::inline(table))
+                .expect_err("incoherent snapshot resource policy must fail configuration parsing");
+            let report = format!("{error:?}");
             assert!(
-                actual::Root::from_toml_source(TomlSource::inline(table)).is_err(),
-                "incoherent snapshot resource field {field} must fail configuration parsing"
+                report.contains(field),
+                "incoherent snapshot resource field {field} must report its own budget violation: {report}"
             );
         }
     }

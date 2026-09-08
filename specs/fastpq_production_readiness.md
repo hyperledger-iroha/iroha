@@ -1,6 +1,6 @@
 # FASTPQ production readiness
 
-Updated: 2026-09-07. **Production qualification is unavailable.** The selected
+Updated: 2026-09-08. **Production qualification is unavailable.** The selected
 completion target is succinct verification from bounded authenticated openings.
 A successful local test, feature build, arithmetic calculation, or benchmark
 manifest is not a release qualification decision.
@@ -8,27 +8,58 @@ manifest is not a release qualification decision.
 ## Current optimizations integration
 
 Work is restricted to `/Users/takemiyamakoto/dev/iroha`, branch `optimizations`.
-The scoped integration candidate remains under ignored
-`target/fastpq-optimizations-integration/port-candidate` during the coordinated
-source freeze. It has not been applied to the branch or compiled there. The
-retained implementation and validation records below identify their own source
-snapshots; they do not qualify this integration candidate.
+The bounded-opening verifier is applied and compiled in this checkout. Normal
+callers can use `fastpq_prover::offline_compact` for complete ordinary and AXT
+quantity artifacts. Both routes require independently expected PublicIO, ordering
+and the complete canonical statement digest; AXT also requires independent binding,
+metadata, mirror and remote-spend expectations. Limits cover transport, public
+preparation, every segment, cumulative queries and cumulative Norito decode charges.
+The opaque success result covers every ordered child and retains all six coordinates
+of each AIR row root. This API grants no source finality or admission authority.
 
-The port preserves the branch's ordered canonical transaction-wire commitment in
-`PublicIO.tx_set_hash`. It independently binds every ordered execution source,
-including entries without transfer statements, through the manifest's
-`source_entries_digest`. Missing or zero wire commitments reject before source
-digest finalization; no execution-identity-list fallback is allowed. Source archive
-validation receives the complete expected entry projection separately and retains
-its bounded leaf decoder. Artifact persistence preserves the current Kura lock
-order and checks pending canonical and reserved lifecycle/recovery capacity before
-publishing new bytes. These reconciliations have unrun regression tests.
+The fixed candidate identity is
+`fastpq:compact-shake256:h16:g375:c401:342cols:923slots:65536rows:8blowup:17folds:prefix-body:v1`.
+Its sampler takes 401 candidates to produce 375 query positions. Fresh complete
+single and two-segment ordinary/AXT proofs pass verification after private paths
+and traces are dropped. Both complete transport-artifact tests and the separate
+136-query typed-transfer diagnostic also pass. The normal library and registered
+integration harness compile without compiler warnings; the library suite passes
+909 tests, with 20 opt-in diagnostics ignored by that default run. The complete
+registered integration suite passes all 19 tests, with four opt-in CPU measurements
+ignored by that default run. Its resource fixture now uses canonical balance keys,
+and both ordering goldens are regenerated for the current key and operation-tag
+encodings. The three current profile/framing scripts,
+retired-codec guard and workspace formatting check pass. Scoped Clippy still reports
+154 findings and is not a passing gate.
 
-The imported reference completed 544 selected tests and two complete ordinary/AXT
-artifact cases on a different source snapshot. Those receipts establish reference
-behavior only. Current-branch compilation, exact test inventory, fresh complete
-proof runs and immutable source capture are required after integration. Production
-continues to use replay; the compact admission registry remains unqualified.
+| Fresh two-segment quantity artifact | Complete transport bytes | Raw verification, CPU test profile | Checked work |
+| --- | ---: | ---: | --- |
+| Ordinary | 7,967,817 | 8.40 s | 750 AIR evaluations, two terminal checks |
+| AXT | 8,024,804 | 9.28 s | 750 AIR evaluations, two terminal checks |
+
+These are single local diagnostics, not release latency or peak-memory guarantees.
+The four separate CPU measurements of the existing public replay API also pass:
+two and four transition rows produce accepted canonical proofs of 150,028 and
+323,936 bytes; eight and sixteen rows reject at the unchanged 524,288-byte
+approximate proof limit. The rejected size hints are not encoded proof lengths.
+Those tests expose the current admitted capacity limit and do not measure the
+compact candidate or establish a workload SLO.
+The ordinary/AXT transport SHA-256 digests are
+`74ef89e30e22916cd7e02bb119a853037504469788de55f89f71cabdd630da4c` and
+`2c297c2eed8dca60b36bd4b6cd899fb9c19da617d980ec75724f54ff4849411b`.
+Retained commands, logs, proof digests and scoped source/executable hashes live in
+`target/fastpq-optimizations-integration/integrated-verifier-r1`; generated proofs
+live in `target/fastpq-production-validation`. Those local evidence directories
+are ignored and are not published release artifacts.
+
+Production node verification still replays the complete witness. Core has no
+consumer of this offline facade. Execution-owned source quotas and atomic D7
+publication, finalized source authentication, AXT authorization, independent
+cryptographic qualification, hardware/resource measurements and four-validator
+rollout/recovery remain unfinished. The source inventory/archive helpers preserve
+canonical transaction-wire commitments and separate execution-entry commitments,
+but their local ownership checks do not establish finality. No production profile
+or admission registry has been activated by this integration.
 
 ## Completion goals
 
@@ -36,7 +67,7 @@ continues to use replay; the compact admission registry remains unqualified.
 | --- | --- | --- |
 | G1: Close admission and evidence gaps | Regression rejection of unanchored remote spend, exact bound arithmetic, full-width contextual commitments, authenticated benchmark evidence | Corrections in progress; validation below |
 | G2: Constrain the complete transfer statement | Reviewed AIR ledger or equivalent bounded public-input checks, with negative tests for every relation below | Complete 923-slot one-delta hash/SMT ledgers, bounded public checks and typed PublicIO/claim adapter pass; external authority/root authentication remains separate |
-| G3: Implement succinct verification | Quotient/zerofier relation, correct terminal degree bound, bounded openings, no witness/trace reconstruction in the public verifier | One-delta and ordered two-delta ordinary/AXT bundles verify after dropping all private traces; public production API still replays |
+| G3: Implement succinct verification | Quotient/zerofier relation, correct terminal degree bound, bounded openings, no witness/trace reconstruction in the public verifier | Normal offline ordinary/AXT quantity APIs compile and complete fresh bounded-opening proof checks; authenticated Core admission remains unwired and production still replays |
 | G4: Qualify cryptography | Protocol-specific qROM argument, final multi-target digest analysis, independently reproduced constants and vectors, independent review bound to final artifacts | Unavailable |
 | G5: Qualify performance and resources | End-to-end proof/verification latency and peak memory, proof size, CPU/Metal/CUDA parity and failure quarantine on release hardware | Native Digest384 proof commitments/transcript and proof LDE execute on CPU; 423 M4 Max dispatch comparisons cover auxiliary shader ABI only; end-to-end, fleet and CUDA qualification remain incomplete |
 | G6: Qualify integration and release | Same-source four-validator tests, restart/recovery and adversarial admission, signed immutable source and artifacts, rollout/rollback evidence | Incomplete |
@@ -45,8 +76,14 @@ Goals G2 and G3 must complete together before removing replay. The selected
 product remains a transfer proof system; replacing it with a replay-only format
 would not satisfy this goal.
 
+## Protocol design and prior-snapshot evidence
+
+The older test counts, timings and staged implementation descriptions below retain
+their original source scope. They do not replace the current-checkout results above
+or establish qualification of the fixed quantity candidate.
+
 The [compact profile analysis](fastpq_compact_profile_analysis.md) derives
-2,865,251 framed bytes for one complete delta at 136 queries and 4,213,091 at
+2,826,491 framed bytes for one complete delta at 136 queries and 4,156,091 at
 200, using the current separate-path wire. The exact-shape Rust test confirms
 the 136-query hash and complete-transfer sizes; the 200-query projection is
 not an implemented or qualified profile. The

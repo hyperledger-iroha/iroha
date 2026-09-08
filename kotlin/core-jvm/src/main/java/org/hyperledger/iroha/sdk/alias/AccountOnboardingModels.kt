@@ -329,7 +329,7 @@ class AccountFaucetPolicyV1(
         } catch (error: AccountAddressException) {
             throw IllegalArgumentException("faucetAuthority must be a canonical single-signatory account", error)
         }
-        require(parsed.singleKeyPayloadIgnoringCurveSupport() != null) {
+        require(parsed.singleKeyPayload() != null) {
             "faucetAuthority must be a single-signatory account"
         }
     }

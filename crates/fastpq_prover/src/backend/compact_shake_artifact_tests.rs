@@ -102,7 +102,7 @@ fn axt(fixture: &Fixture, bundle_frame: Vec<u8>) -> (FastpqAxtCompactArtifactV1,
 fn fixed_profile_and_nominal_route_cannot_be_chosen_by_artifact() {
     assert_eq!(
         hex::encode(diagnostic_profile_id().0),
-        "c1f0ca64798a78dc186b99fefd72645d584701dd3980886dcc50b5317011558e"
+        "19093354f57a228cf17a92d94212a4419167225d04e4e2ab46d0a2a6c6860ba4"
     );
     let fixture = Fixture::new(false);
     let (ordinary, expected) = ordinary(&fixture, Vec::new());

@@ -32,6 +32,7 @@ from iroha_python.crypto import (
     ed25519_public_key_account_id,
 )
 
+CANONICAL_ED25519_PUBLIC_KEY = bytes.fromhex("d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a")
 CANONICAL_ACCOUNT_ID = "sorauﾛ1PｺfMﾇﾘｾﾄoﾂﾊﾔH7ZdﾘhﾚmAｸdnｳu1ｱﾄ1ｺﾋuSﾑﾀﾇﾐuHEB5DP"
 
 
@@ -892,7 +893,7 @@ def test_propose_multisig_inherited_helper_rejects_negative_response_time() -> N
 
 
 def test_i105_roundtrip_uses_halfwidth_iroha_poem_alphabet() -> None:
-    address = AccountAddress.from_account(public_key=bytes([0x11] * 32))
+    address = AccountAddress.from_account(public_key=CANONICAL_ED25519_PUBLIC_KEY)
     literal = address.to_i105(0x02F1)
 
     parsed = AccountAddress.parse_encoded(literal, expected_discriminant=0x02F1)
@@ -919,7 +920,7 @@ def test_account_address_rejects_blank_or_padded_signing_algorithm_aliases(
 ) -> None:
     with pytest.raises(AccountAddressError, match=message):
         AccountAddress.from_account(
-            public_key=bytes([0x11] * 32),
+            public_key=CANONICAL_ED25519_PUBLIC_KEY,
             algorithm=algorithm,
         )
 
@@ -928,7 +929,7 @@ def test_account_address_rejects_blank_or_padded_signing_algorithm_aliases(
 def test_account_address_rejects_non_string_signing_algorithm_aliases(algorithm: object) -> None:
     with pytest.raises(AccountAddressError, match="signing algorithm must be a string"):
         AccountAddress.from_account(
-            public_key=bytes([0x11] * 32),
+            public_key=CANONICAL_ED25519_PUBLIC_KEY,
             algorithm=algorithm,  # type: ignore[arg-type]
         )
 
@@ -954,7 +955,7 @@ def test_account_address_rejects_non_string_signing_algorithm_aliases(algorithm:
 def test_account_address_rejects_confusable_signing_algorithm_aliases(algorithm: str) -> None:
     with pytest.raises(AccountAddressError, match="unsupported signing algorithm"):
         AccountAddress.from_account(
-            public_key=bytes([0x11] * 32),
+            public_key=CANONICAL_ED25519_PUBLIC_KEY,
             algorithm=algorithm,
         )
 
@@ -1012,7 +1013,7 @@ def test_account_address_rejects_reserved_headers_and_class_mismatches() -> None
                 norm_version=1,
             ),
             controller=AccountAddress.from_account(
-                public_key=bytes([0x11]) * 32
+                public_key=CANONICAL_ED25519_PUBLIC_KEY
             ).controller,
         )
 
@@ -1037,7 +1038,7 @@ def test_mldsa_account_address_rejects_non_protocol_key_material(
 
 
 def test_account_address_rejects_noncanonical_short_extended_controller() -> None:
-    public_key = bytes([0x11]) * 32
+    public_key = CANONICAL_ED25519_PUBLIC_KEY
     canonical = b"\x02\x02\x01\x00\x20" + public_key
     with pytest.raises(AccountAddressError, match="compact controller tag"):
         AccountAddress.from_canonical_bytes(canonical)
@@ -1071,7 +1072,7 @@ def test_account_identity_constructors_expose_only_the_domainless_api() -> None:
 
 
 def test_i105_parse_without_expected_discriminant_accepts_literal_prefix() -> None:
-    address = AccountAddress.from_account(public_key=bytes([0x11] * 32))
+    address = AccountAddress.from_account(public_key=CANONICAL_ED25519_PUBLIC_KEY)
     literal = address.to_i105(0x0171)
 
     parsed = AccountAddress.parse_encoded(literal)
@@ -1084,7 +1085,7 @@ def test_i105_parse_without_expected_discriminant_accepts_literal_prefix() -> No
 
 
 def test_i105_numeric_discriminant_must_fit_u16() -> None:
-    address = AccountAddress.from_account(public_key=bytes([0x11] * 32))
+    address = AccountAddress.from_account(public_key=CANONICAL_ED25519_PUBLIC_KEY)
     valid = address.to_i105(0xFFFF)
     payload = address.to_i105(0x02F1).removeprefix("sora")
 
@@ -1099,7 +1100,7 @@ def test_i105_numeric_discriminant_must_fit_u16() -> None:
 
 
 def test_i105_rejects_fullwidth_sentinel_literal() -> None:
-    address = AccountAddress.from_account(public_key=bytes([0x11] * 32))
+    address = AccountAddress.from_account(public_key=CANONICAL_ED25519_PUBLIC_KEY)
     literal = address.to_i105(0x02F1)
     noncanonical = literal.replace("sora", "ｓｏｒａ", 1)
 
@@ -1108,7 +1109,7 @@ def test_i105_rejects_fullwidth_sentinel_literal() -> None:
 
 
 def test_i105_rejects_noncanonical_fullwidth_kana_payload() -> None:
-    address = AccountAddress.from_account(public_key=bytes([0x11] * 32))
+    address = AccountAddress.from_account(public_key=CANONICAL_ED25519_PUBLIC_KEY)
     literal = address.to_i105(0x02F1)
     noncanonical = literal
     for halfwidth, fullwidth in (("ﾛ", "ロ"), ("ﾊ", "ハ"), ("ﾆ", "ニ"), ("ﾎ", "ホ")):
@@ -1117,7 +1118,7 @@ def test_i105_rejects_noncanonical_fullwidth_kana_payload() -> None:
             break
     assert noncanonical != literal
 
-    with pytest.raises(AccountAddressError, match="invalid i105 alphabet symbol"):
+    with pytest.raises(AccountAddressError, match="invalid character"):
         AccountAddress.parse_encoded(noncanonical, expected_discriminant=0x02F1)
 
 

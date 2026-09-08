@@ -801,9 +801,25 @@ mod tests {
                         .expect("record canonical receipt");
                 }
             }
+            // Direct fixture execution has no external or time entrypoint wires.
+            let tx_set_hash: [u8; 32] =
+                iroha_data_model::nexus::axt_ordered_transaction_set_digest_v1(std::iter::empty::<
+                    &iroha_data_model::transaction::TransactionEntrypoint,
+                >())
+                .unwrap()
+                .into();
+            state_block.set_fastpq_tx_set_hash(tx_set_hash);
             state_block
                 .finalize_fastpq_source_inventory(&[], &[], &[])
                 .unwrap();
+            assert_eq!(
+                state_block
+                    .fastpq_source_inventory()
+                    .unwrap()
+                    .unwrap()
+                    .tx_set_hash(),
+                tx_set_hash
+            );
             state_block.capture_exec_witness().unwrap();
             let witness = state_block
                 .take_exec_witness()

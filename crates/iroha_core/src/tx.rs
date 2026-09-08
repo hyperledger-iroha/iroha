@@ -9155,8 +9155,10 @@ pub mod tests {
                 kind: iroha_data_model::smart_contract::manifest::EntryPointKind::View,
                 params: Vec::new(),
                 argument_schema: None,
-                return_type: None,
-                return_schema: None,
+                return_type: Some("()".to_owned()),
+                return_schema: Some(iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeV1 {
+                    nodes: vec![iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeNodeV1::Unit],
+                }),
                 permission: None,
                 read_keys: Vec::new(),
                 write_keys: Vec::new(),
@@ -9165,7 +9167,7 @@ pub mod tests {
                 triggers: Vec::new(),
                 entry_pc: 0,
             }],
-            error_codes: Vec::new(),
+            error_types: Vec::new(),
             states: Vec::new(),
         };
         program.extend_from_slice(&interface.encode_section());
@@ -9452,7 +9454,7 @@ pub mod tests {
                 entrypoints: None,
                 states: None,
                 kotoba: None,
-                error_codes: None,
+                error_types: None,
                 provenance: None,
             }
             .signed(&fixture.keypair),
@@ -9476,7 +9478,7 @@ pub mod tests {
             entrypoints: None,
             states: None,
             kotoba: None,
-            error_codes: None,
+            error_types: None,
             provenance: None,
         }
         .signed(&fixture.keypair);
@@ -9534,7 +9536,7 @@ pub mod tests {
             entrypoints: None,
             states: None,
             kotoba: None,
-            error_codes: None,
+            error_types: None,
             provenance: None,
         }
         .signed(&fixture.keypair);
@@ -9574,7 +9576,7 @@ pub mod tests {
             entrypoints: None,
             states: None,
             kotoba: None,
-            error_codes: None,
+            error_types: None,
             provenance: None,
         }
         .signed(&fixture.keypair);
@@ -9613,7 +9615,7 @@ pub mod tests {
             entrypoints: None,
             states: None,
             kotoba: None,
-            error_codes: None,
+            error_types: None,
             provenance: None,
         }
         .signed(&fixture.keypair);
@@ -9662,7 +9664,7 @@ pub mod tests {
                 entrypoints: None,
                 states: None,
                 kotoba: None,
-                error_codes: None,
+                error_types: None,
                 provenance: None,
             }
             .signed(&fixture.keypair),
@@ -9684,7 +9686,7 @@ pub mod tests {
             entrypoints: None,
             states: None,
             kotoba: None,
-            error_codes: None,
+            error_types: None,
             provenance: None,
         }
         .signed(&fixture.keypair);
@@ -9851,7 +9853,7 @@ pub mod tests {
             entrypoints: None,
             states: None,
             kotoba: None,
-            error_codes: None,
+            error_types: None,
             provenance: None,
         }
         .signed(&fixture.keypair);

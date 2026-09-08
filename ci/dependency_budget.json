@@ -370,7 +370,7 @@
     "schema_version": 1
   },
   "baseline": {
-    "manifest_fingerprint": "sha256:ea7daf34b8d42d3d673f268b20b79d6a628818057b1310eacb74279ff646b1e0",
+    "manifest_fingerprint": "sha256:f2fed69b6903b7e8319fb2f74b84a3d8dfc8d80cffccdf505eb99f239bd0df1a",
     "refresh_command": "python3 scripts/check_dependency_budget.py --config ci/dependency_budget.json --write-baseline"
   },
   "denied_required_packages": [

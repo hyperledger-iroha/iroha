@@ -38,8 +38,12 @@ fn reconciliation_handle_with_governance(root: &Path) -> NodeHandle {
 #[test]
 fn governance_dag_file_reads_are_descriptor_rooted_and_bounded() {
     let temp = tempfile::tempdir().expect("create governance readback root");
-    let handle = reconciliation_handle_with_governance(temp.path());
-    let governance = temp.path().join("governance");
+    let root = temp
+        .path()
+        .canonicalize()
+        .expect("canonical governance readback root");
+    let handle = reconciliation_handle_with_governance(&root);
+    let governance = root.join("governance");
     fs::create_dir(governance.join("snapshots")).expect("create snapshot directory");
     fs::write(governance.join("snapshots/state.json"), b"state-v1")
         .expect("write governance snapshot");
@@ -85,15 +89,13 @@ fn governance_dag_file_reads_are_descriptor_rooted_and_bounded() {
         );
     }
 }
-fn weekly_rollup_publish_index_entry(root: &Path) -> JsonValue {
-    let publication_state_path = root
-        .join("governance")
-        .join("governance-publication-state-v1.json");
-    let publication_state = norito::json::from_slice::<JsonValue>(
-        &fs::read(&publication_state_path)
-            .expect("read authoritative governance publication state"),
-    )
-    .expect("decode authoritative governance publication state");
+fn weekly_rollup_publish_index_entry(handle: &NodeHandle) -> JsonValue {
+    let snapshot = handle
+        .governance_dag_publication_snapshot()
+        .expect("read authenticated governance publication snapshot")
+        .expect("weekly rollup initialized publication authority");
+    let publication_state = norito::json::from_slice::<JsonValue>(snapshot.canonical_bytes())
+        .expect("decode authoritative governance publication state");
     publication_state
         .get("publish_index")
         .expect("governance publication state publish index")
@@ -171,7 +173,7 @@ fn node_handle_reconciliation_ignores_tampered_rollup_json_mirror() {
             governance_submission_account(0xB9),
         )
         .expect("publish appeal finance weekly rollup");
-    let index_entry = weekly_rollup_publish_index_entry(&root);
+    let index_entry = weekly_rollup_publish_index_entry(&handle);
     let json_path = indexed_governance_artifact(&root, &index_entry, "json_path");
     fs::write(
         &json_path,
@@ -205,7 +207,7 @@ fn node_handle_reconciliation_rejects_rollup_source_substitution() {
             governance_submission_account(0xBA),
         )
         .expect("publish appeal finance weekly rollup");
-    let index_entry = weekly_rollup_publish_index_entry(&root);
+    let index_entry = weekly_rollup_publish_index_entry(&handle);
     let encoded_path = indexed_governance_artifact(&root, &index_entry, "encoded_path");
     let mut encoded = fs::read(&encoded_path).expect("read canonical weekly rollup");
     let last = encoded.last_mut().expect("weekly rollup is not empty");

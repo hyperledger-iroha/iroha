@@ -89,6 +89,7 @@ grammar rather than in this rendered copy or an editor grammar.
 | `=>` |
 | `::` |
 | `.` |
+| `..` |
 | `,` |
 | `:` |
 | `;` |
@@ -201,7 +202,7 @@ kaizen          = kaizen-keyword parameters block ;
 kaizen-keyword  = "kaizen" | "改善" ;
 authorization   = "authorize" "(" string-literal ")" ;
 parameters      = "(" (parameter ("," parameter)*)? ")" ;
-parameter       = type identifier ;
+parameter       = type "_"? identifier ;
 return-type     = "->" type ;
 
 trigger         = "trigger" identifier "->" trigger-call "{"
@@ -221,9 +222,13 @@ pipeline-filter = "pipeline" ("transaction" | "block") "approved"? ;
 ```
 
 Every parameter, field, constant, and state declaration has an explicit type.
+Parameters are named at calls by default. `int _ value` declares a positional-only
+parameter; positional parameters form a contiguous prefix of the signature.
+For example, `fn clamp(int _ value, int minimum, int maximum)` is called as
+`clamp(7, minimum: 0, maximum: 10)`.
 Declaration types always precede names; the retired `name: Type` form is a
 syntax error with a type-first diagnostic. Every error variant has an explicit,
-non-zero code representable as `int`, and names and codes are unique within the
+non-zero `u32` code, and names and codes are unique within the
 enum. Missing types, unknown types, duplicate declarations, reserved names,
 ambiguous resolution, recursive value types, duplicate parameters, and
 shadowing are compile errors.
@@ -289,8 +294,10 @@ gas before copying or decoding the record, rejects private or tainted target,
 selector, and argument registers, and decodes the canonical record exactly
 once against the callee's signed schema.
 
-Every non-unit public return has an exact flat-preorder
-`EntrypointValueTypeV1` tape in CNTR and the signed manifest. Aggregate children
+Every public return, including Unit, has an exact flat-preorder
+`EntrypointValueTypeV1` tape in CNTR and the signed manifest. Both the return type
+and its schema are required: an omitted source annotation emits `()` and a Unit
+schema, and admission rejects an absent descriptor pair. Aggregate children
 immediately follow their parent; a `List` node carries only its capacity and is
 followed by exactly one element subtree. The valid V1 boundary is 256 nodes and
 256 levels. Admission, decoding, materialization, and rendering use explicit
@@ -327,23 +334,24 @@ pointer or numeric zero as a request to re-read JSON trigger arguments.
 ```ebnf
 binding         = ("let" | "var") (type identifier | binding-pattern)
                   "=" expression ";" ;
-binding-pattern = identifier | positional-destructure ;
+binding-pattern = identifier | positional-destructure | struct-pattern ;
 positional-destructure = "(" identifier ("," identifier)* ")" ;
+struct-pattern  = type-name "{" (pattern-field ("," pattern-field)*)?
+                  (","? "..")? ","? "}" ;
+pattern-field   = identifier (":" identifier)? ;
 assignment      = place ("=" | "+=" | "-=" | "*=" | "/=" | "%=") expression ";" ;
 ```
 
-Every local binding is initialized at its declaration; there is no
-uninitialized-local state in V1. A positional destructure accepts a tuple or
-a declared struct and must contain exactly one identifier for every element or
-field. Tuple elements bind in tuple order; struct fields bind in declaration
-order, not struct-literal source order. `_` discards that position. Duplicate
-non-`_` names, a trailing comma, an arity mismatch, or a non-tuple/non-struct
-initializer is an error. Destructuring is one level only: nested binding
-patterns and named-field patterns such as `let Pair { left, right } = value;`
-are not V1 syntax. `var` applies mutability independently to every non-`_`
-binding produced by the pattern. Positional destructuring is inferred from its
-initializer and has no separate type annotation in V1; ordinary single-name
-annotations remain type-first.
+Every local binding is initialized at its declaration. Positional destructuring
+accepts tuples and contains exactly one identifier for every element; `_`
+discards a position. Structs use named fields, for example
+`let Receipt { amount, recipient: payee, memo: _ } = receipt;`. Field order is
+irrelevant, aliases choose local names, and a trailing `..` explicitly discards
+unspecified fields. Without `..`, every field must appear. Unknown or duplicate
+fields, duplicate non-`_` bindings, and a different nominal struct type are errors.
+Both forms evaluate the initializer once and support one level of binding.
+`var` makes every non-`_` binding mutable. Ordinary single-name annotations
+remain type-first.
 
 ## Types
 
@@ -352,13 +360,13 @@ The V1 type vocabulary is:
 <!-- BEGIN GENERATED: kotodama-v1-source-policy -->
 | Source policy | Canonical V1 values |
 | --- | --- |
-| Active type spellings | `int`, `decimal`, `quantity`, `bool`, `string`, `bytes`, `Json`, `AccountId`, `AssetDefinitionId`, `AssetId`, `DomainId`, `Name`, `NftId`, `DataSpaceId`, `Option`, `Result`, `List`, `StateMap`, `Secret`, `AccountView`, `AssetView`, `AssetDefinitionView`, `DomainView`, `NftView`, `QueryPage` |
+| Active type spellings | `int`, `decimal`, `quantity`, `bool`, `string`, `bytes`, `Json`, `AccountId`, `AssetDefinitionId`, `AssetId`, `DomainId`, `Name`, `NftId`, `DataSpaceId`, `Option`, `Result`, `List`, `ListError`, `NumericError`, `StateMap`, `StateCursor`, `StatePage`, `Secret`, `AccountView`, `AssetView`, `AssetDefinitionView`, `DomainView`, `NftView`, `QueryPage` |
 | Forbidden in every source identifier position | `Amount` |
 | Reserved retired numeric type spellings | `i8`, `i16`, `i32`, `i64`, `i128`, `isize`, `u8`, `u16`, `u32`, `u64`, `u128`, `usize`, `num`, `Int`, `Integer`, `float`, `f32`, `f64`, `Decimal`, `Fixed`, `FixedPoint`, `Amount`, `amount`, `money`, `Quantity`, `number` |
 | Ordinary value/function identifier examples | `amount` |
 | Retired literal suffixes with safe fix-its | `amt` (remove the suffix), `qty` (remove the suffix) |
 | Durable `StateMap` key types (ordered) | `int`, `decimal`, `quantity`, `bool`, `string`, `bytes`, `DataSpaceId`, `AccountId`, `AssetDefinitionId`, `AssetId`, `NftId`, `DomainId`, `Name` |
-| Dynamic-access bound kinds (ordered) | `range`, `take` |
+| Dynamic-access bound kinds (ordered) | `page`, `take` |
 | Dynamic-access key bound | `1..=64` |
 | Dynamic-access base | One direct declared top-level `StateMap`, encoded as `state:<state_declaration_identifier>` |
 | Dynamic-access scheduler semantics | Advisory only; never authorization or scheduler-authoritative evidence |
@@ -397,20 +405,31 @@ type names. Except for exact `Amount`, which is forbidden in every identifier
 position, the other retired type spellings remain available for ordinary
 function, parameter, and local value names; for example,
 `fn amount(quantity amount) -> quantity` is valid.
-Unit is an internal function-return state, not a source type: `()` and `(T)` are
-errors in type position. Omit the return type for a Unit-returning function;
-source tuple types always contain at least two elements.
+Unit is written `()` in both type and value position. Omitted return annotations
+mean `()`, and an omitted return value is the same canonical Unit value. Unit
+occupies one zero scalar word and renders as JSON `null`; schemas carry an
+explicit Unit node. It composes inside structs, lists, `Option`, `Result`, durable
+state, and public argument/return records. Nonzero Unit words reject. `(T)` is
+not a one-element tuple type; ordinary tuple types contain at least two elements.
+Payloadless declared error enums, `ListError`, and `NumericError` are nominal
+value types with equality, exhaustive matching, state, and boundary support.
 
 ```ebnf
-type            = "int" | "decimal" | "quantity" | "bool" | "string" | "bytes"
+type            = "(" ")" | "int" | "decimal" | "quantity" | "bool" | "string" | "bytes"
                 | "Json" | iroha-id-type | identifier
                 | tuple-type | "Option" "<" type ">"
                 | "Result" "<" type "," type ">"
                 | "List" "<" type "," capacity ">"
                 | "QueryPage" "<" query-view-type ">"
                 | "StateMap" "<" type "," type ">"
+                | "StateCursor" "<" type ">"
+                | "StatePage" "<" type "," type "," capacity ">"
                 | "Secret" "<" type ">" ;
-capacity        = integer-literal ;
+capacity        = integer-constant-expression ;
+integer-constant-expression = constant-term (("+" | "-") constant-term)* ;
+constant-term   = constant-factor (("*" | "/" | "%") constant-factor)* ;
+constant-factor = integer-literal | identifier | "-" constant-factor
+                | "(" integer-constant-expression ")" ;
 query-view-type = "AccountView" | "AssetView" | "AssetDefinitionView"
                 | "DomainView" | "NftView" ;
 tuple-type      = "(" type "," type ("," type)* ")" ;
@@ -442,12 +461,28 @@ another.
 
 V1 supports `if`/`else`, `return`, and compiler-proven bounded `for` loops. It rejects `while`, recursion, indirect source calls, and loops whose bound cannot be proven.
 
-Collection iteration is deterministic and limited to 64 items. `StateMap`
-iteration follows canonical Norito key order and must use `.take(end)` or
-`.range(start, end)` with non-negative `int` literals whose resulting span is
-at most 64. The former `#[bounded(N)]` spelling is not V1 syntax; `#[test]` is
-the only source attribute and is accepted only by test-mode tooling. `break`
-and `continue` are valid only inside an accepted bounded loop.
+Collection iteration accepts `List<T, N>` with a static capacity of at most
+64. The loop binding accepts a name, tuple pattern, or named struct pattern.
+`map.page(after: cursor, limit: N)` returns `StatePage<K, V, N>` containing
+`items: List<(K, V), N>` and `next: Option<StateCursor<K>>`. Pass `Option::none`
+for the first page. Limits are compile-time integer expressions, including
+named constants, in `1..=64`. `map.take(N)` returns the first page's items.
+Offset-based `map.range` is not supported.
+
+The same integer constant evaluator handles generic capacities such as
+`List<int, PAGE_SIZE * 2>` and `StatePage<int, int, PAGE_SIZE>`, numeric
+`range(PAGE_SIZE * 2)`, and `items.take(PAGE_SIZE)`. Integer constants are
+available to type annotations independently of the annotation's source order;
+constant declarations may reference earlier constants. Runtime variables cannot
+determine a capacity or loop limit.
+
+Each scan follows canonical state-key order and examines at most 64 candidate
+positions, stopping once it finds `N` live entries. Tombstones count toward
+the work bound. A continuation may therefore lead to an empty page; continue
+until `next` is `Option::none`. A cursor is opaque and binds the contract
+instance, declared map, value schema, and key type. Page items are materialized
+before the loop body executes. `break` and `continue` are valid only inside an
+accepted bounded loop. `#[test]` is the only source attribute.
 
 `&&` and `||` short-circuit. The right operand is evaluated only when required.
 
@@ -462,10 +497,7 @@ if-statement    = "if" expression block ("else" (block | if-statement))? ;
 if-let-statement = "if" "let" sum-pattern "=" expression block
                    ("else" block)? ;
 for-statement   = "for" identifier "in" "range" "(" expression ")" block
-                | "for" "(" identifier "," identifier ")" "in"
-                  bounded-collection block ;
-bounded-collection = expression "." ("take" "(" integer-literal ")"
-                   | "range" "(" integer-literal "," integer-literal ")") ;
+                | "for" binding-pattern "in" expression block ;
 
 expression      = conditional ;
 conditional     = logical-or ("?" expression ":" expression)? ;
@@ -480,7 +512,7 @@ postfix         = primary (("." identifier) | ("[" expression "]")
 primary         = integer-literal | exact-decimal-literal
                 | string-literal | bytes-literal
                 | "true" | "false" | qualified-name
-                | qualified-name call-arguments | "(" expression ")"
+                | qualified-name call-arguments | "(" expression ")" | "(" ")"
                 | tuple-expression | struct-literal | list-literal
                 | list-comprehension | if-expression | if-let-expression
                 | match-expression | sum-constructor | native-json ;
@@ -489,12 +521,14 @@ qualified-name  = identifier ("::" identifier)*
                 | identifier "::" "trigger" "::" identifier
                 | identifier "::" seiyaku-keyword "::" identifier
                 | identifier "::" kotoage-keyword ;
-call-arguments  = "(" (positional-arguments | named-arguments)? ")" ;
-positional-arguments = expression ("," expression)* ","? ;
-named-arguments = named-argument ("," named-argument)* ","? ;
-named-argument  = (identifier | kotoage-keyword) ":" expression ;
+call-arguments  = "(" (positional-arguments ("," named-arguments)?
+                      | named-arguments)? ","? ")" ;
+positional-arguments = expression ("," expression)* ;
+named-arguments = named-argument ("," named-argument)* ;
+named-argument  = (identifier | keyword) ":" expression ;
 tuple-expression = "(" expression "," expression ("," expression)* ")" ;
-struct-literal  = identifier "{" (struct-field ("," struct-field)* ","?)? "}" ;
+type-name       = identifier ("::" identifier)? ;
+struct-literal  = type-name "{" (struct-field ("," struct-field)* ","?)? "}" ;
 struct-field    = identifier (":" expression)? ;
 list-literal    = "[" (expression ("," expression)* ","?)? "]" ;
 list-comprehension = "[" expression "for" identifier "in" expression
@@ -518,8 +552,8 @@ json-array      = "[" (expression ("," expression)* ","?)? "]" ;
 ```
 
 `(expression)` is grouping and does not construct a one-element tuple. Bare
-`()` is not a source expression; use `return;` when a function returns no
-value. Tuple expressions, like tuple types, contain at least two elements.
+`()` is the Unit value and may be returned explicitly or with `return;`.
+Nonempty tuple expressions, like nonempty tuple types, contain at least two elements.
 
 A block's final expression has no semicolon and supplies the block value.
 Functions, `if`/`if let`, and `match` all use the same tail rule; explicit
@@ -530,20 +564,27 @@ error type returned by the enclosing function; V1 performs no implicit error
 conversion. The retired lowercase placeholder constructors are syntax errors
 with active-only fix-its.
 
-Calls never mix positional and named source arguments. Pagination is
-named-only, as are privileged/effectful calls with at least three parameters
-and signatures whose repeated parameter types are easy to transpose. Structs
-are constructed only with named fields; `Type(a, b)` is retired.
+Calls accept the declared positional prefix followed by named arguments.
+Named arguments may appear in any order; argument expressions always evaluate
+left to right in source order. A positional argument after a named argument,
+a name for a positional-only parameter, or a missing declared name is an error.
+Keywords are contextual argument labels immediately before `:`, so canonical
+builtins can use labels such as `trigger:`. This does not make keywords valid
+local binding names. Call labels depend only on the signature and are included in package interface
+fingerprints. Builtin call modes are explicit registry metadata. Structs are
+constructed with named fields. Locked packages may explicitly export struct
+and error types, referenced as `Alias::Type` in declarations and patterns.
 
 The branded `seiyaku`/`誓約` and `kotoage`/`言挙げ` tokens are contextual in
 canonical capability paths, and `kotoage`/`言挙げ` is contextual as the named
 selector argument for those capabilities. They normalize to the romanized
-registry spelling. These tokens remain reserved everywhere else: they cannot
+registry spelling. Outside paths and argument labels, these tokens remain reserved: they cannot
 be bindings, declarations, ordinary root namespaces, or compatibility aliases.
 
-The grammar above describes source control flow, not an escape hatch around the
-bounded-loop rule. The compiler must prove the effective trip count and reject
-any collection traversal that could exceed 64 items.
+Collection traversal materializes a `List` of at most 64 items. Integer `range`
+loops accept non-negative constant bounds; execution remains subject to the
+contract's gas budget. A page continuation supports traversing larger maps in
+separate bounded scans.
 
 ## Arithmetic
 
@@ -611,19 +652,39 @@ as `StateMap` or `Secret`. Every element schema must flatten to at least one
 runtime word; zero-field and recursively zero-sized product elements are
 rejected with `E_LIST_ZERO_SIZED_ELEMENT`.
 
-The bounded API is `len`, `get(index) -> Option<T>`, `try_set`, `try_push`,
-`pop() -> Option<T>`, `contains`, `take(constant_limit)`, and bounded
-`enumerate`. Unchecked list reads and writes are errors. Failed `try_set` and
-`try_push` leave the list unchanged. The mutating `try_set`, `try_push`, and
-`pop` methods require a `var` receiver; temporaries and immutable `let`
-bindings are rejected. `contains` is available when the element has canonical
-equality; structs, tuples, `Option`, `Result`, and nested `List` values are
-compared recursively by schema, tag, active payload, length, and element value.
-The migration fix for a complete simple `list[index] = value;` statement is
-`list.try_set(index: index, value: value);`: V1 defines that form as one attempted mutation,
-with an out-of-range `false` safely ignored. Code that must distinguish that
-case should bind or branch on the returned boolean. No automatic rewrite is
-offered for compound writes, comments, or incomplete source ranges.
+The bounded API includes `len`, `get(index) -> Option<T>`,
+`set(index: int, value: T) -> ()`, `push(value) -> ()`,
+`try_set(index: int, value: T) -> Result<(), ListError>`,
+`try_push(value) -> Result<(), ListError>`, `pop() -> Option<T>`, `contains`,
+`take(constant_limit)`, and bounded `enumerate`. `push` and `try_push` take their
+single value positionally. All four writes and `pop` require a mutable `var`
+receiver. Checked `set`/`push` abort and revert the invocation with the same
+nominal `ListError` their fallible counterpart returns. `IndexOutOfBounds = 1`
+and `CapacityExceeded = 2` are the complete compiler-owned ListError schema.
+Recoverable failures preserve both list contents and length. Resource exhaustion
+and malformed runtime values remain fatal faults.
+
+Indexed assignment is unsupported. Its diagnostic recommends
+`list.set(index: index, value: value);`. `contains` uses canonical equality,
+including nominal error identity and recursive structured values.
+
+Every `Result` value is must-use. Implicit expression discards, unread result
+bindings, and overwrites of unconsumed result bindings are compile errors,
+including control-flow paths which lose a value. Consume a result by returning,
+matching, propagating, or reading it into another checked use. `let _ = value;`
+is the explicit deliberate-discard form. Obligations follow product fields,
+`Option` and `Result` payloads, and `List` elements: observing another field,
+an outer tag, or a collection length does not handle nested results. Canonical
+whole-value equality, including `List.contains`, reads the compared values and
+consumes their obligations. Named
+pattern `_` fields and `..` explicitly discard their selected or omitted fields.
+List handles can be shared; when exact alias or dynamic-index facts are unknown,
+the checker conservatively retains potentially unread elements. Handle or
+explicitly discard outstanding values before overwriting a possibly shared
+slot. Traversal handles the items it visits, including every reachable exit
+path; elements appended after its initial length was captured remain must-use.
+`?` propagates only an identical error type; exhaustive `match` expresses
+conversion to another nominal error type.
 `take(limit)` accepts a compile-time constant from zero through the source
 capacity. `take(0)` returns an empty list with the minimum valid static capacity
 `List<T, 1>`; a positive limit `L` returns `List<T, L>`.
@@ -646,8 +707,14 @@ JSON object keys are identifiers or string literals, duplicates are errors,
 and encoded keys are sorted canonically regardless of source order. Each
 object or array node contains at most 64 entries or elements. JSON
 construction recursively accepts booleans, `int`, `decimal`, `quantity`,
-strings, canonical IDs, `Json`, `Option`, and `List`; bytes become lowercase
-`0x` hex. `Result` and arbitrary structs require explicit handling. Typed
+strings, canonical IDs, `Json`, `()`, nominal errors, `Option`, and `List`; bytes become lowercase
+`0x` hex. Unit becomes `null` and nominal errors become their variant names.
+Options always use the same tagged objects as public arguments and returns:
+`Option::some(value)` becomes `{"some": value}` and `Option::none` becomes
+`{"none": true}`. Thus `Option::some(())` becomes `{"some": null}`, while
+nested Options and list elements retain every active tag. No nullable Option
+encoding is accepted. Literal-only and dynamic native JSON expressions use
+the same schema-bound construction operation. `Result` and arbitrary structs require explicit handling. Typed
 getters return `Option<T>` and use `.get_int(key)`, `.get_decimal(key)`, and
 `.get_quantity(key)` for the three numeric domains. Retired numeric getter
 spellings are errors.
@@ -744,7 +811,18 @@ Compiler-derived access metadata is advisory until independently verified from b
 
 ## Errors and requirements
 
-Seiyaku units declare error enums. A requirement has the form `require(condition, Error::Variant)`. Error variants compile to stable seiyaku codes included in the public interface. Free-form failure strings are not part of the release contract.
+Seiyaku and reusable modules declare payloadless nominal `error enum` types.
+Each variant declares an explicit nonzero `u32` code, unique within that enum;
+different enums may use the same codes. The type identity binds the locked
+package, source unit, and enum name. The variant schema is hashed separately;
+link order never determines identity. Exported errors and structs resolve through
+the locked module graph. The signed interface includes the complete descriptors.
+
+`require(condition, error)` takes both arguments positionally and aborts with
+that exact nominal error value. Rejections preserve the error identity, variant
+schema hash and code, as well as the originating contract and symbolic variant,
+through nested calls and rollback. A wrong identity, schema or undeclared code
+rejects. Free-form failure strings are not part of the release contract.
 
 ```kotodama
 seiyaku Vault {
@@ -952,7 +1030,7 @@ generation, but it never invents imports or exports from the set of open
 documents. `koto lsp --project kotodama.project.json` loads the same exact
 locked graph as `check` and `build`; open buffers overlay their matching
 canonical project files while unopened files are read from that graph. Without
-`--project`, open documents have positional-check semantics and cross-file
+`--project`, open documents have standalone-source validation semantics and cross-file
 calls report `E_PROJECT_MANIFEST_REQUIRED` rather than appearing valid only in
 the editor.
 Positional `koto check` paths are independent sources: one seiyaku has
@@ -966,6 +1044,69 @@ diagnostic set. LSP
 framing, individual documents, open-document count, and aggregate retained text
 all have explicit bounds; rejected updates are not retained as stale formatter
 input.
+
+The compiler-owned `EditorSnapshot` retains source/package identities, resolved
+symbols and lexical bindings, exact argument-label ranges, typed expression
+facts, and canonical callable signatures. LSP completion filters by source,
+scope, explicit import/export graph, and receiver type. Argument templates use
+the declaration's explicit positional prefix and named suffix. Hover and
+signature help expose types and effect/permission metadata; definition,
+references, and rename use resolved identities. Rename rechecks the complete
+source and export graph and verifies that every reference retains its resolver
+identity, preventing capture while allowing names in disjoint scopes. A local
+project manifest owns its contained module sources: renaming an export updates
+its exact JSON string token together with declarations, references and call labels.
+Unrelated strings and import aliases are unchanged. External graphs without local
+manifest authority remain immutable. LSP edits include open-document versions,
+including unsaved manifest buffers; changed unopened sources or manifests require
+a reload. Incomplete graphs cannot produce rename edits.
+Completion-only recovery never returns a compilable recovered AST.
+The server invalidates its bounded snapshot on document versions and source or
+project-manifest changes, and all protocol ranges use UTF-16 coordinates.
+An independent input reader registers cancellation and increasing document
+versions while analysis runs. The dispatcher checks request validity before
+analysis and before publishing the buffered result: cancellation returns LSP
+`-32800`, and a superseding document or project change returns `-32801`.
+Obsolete diagnostic batches are discarded; committed batches include open
+document versions and clear diagnostics for previously published closed files.
+Pending input is limited to 64 messages and 16 MiB, with at most 65 active or
+queued request IDs. Cancellation of unknown/completed IDs retains no state.
+Exceeding an input bound closes the transport rather than accumulating work.
+
+Human diagnostics capture immutable source text when their exact spans are
+produced. Bounded source excerpts underline the selected bytes using deterministic
+Unicode 15.1 display widths and four-column tab stops, including Japanese and
+combining characters.
+Related locations and help are projected into LSP diagnostics. JSON and SARIF
+retain canonical structured ranges and do not embed source contents.
+Compiler lint locations come from the same parser-owned declaration, binding,
+statement, and expression ranges. Warnings from one source share its immutable
+text and use the same diagnostic projection in `koto`, LSP, and
+`iroha contract dev check`, including dependencies that are not open in the editor.
+
+The local-only test helper requires
+`test::expect_reject_as(actor:, kotoage:, arguments:, expected:)`. The expected
+value is a nominal error variant (descriptor identity, schema hash, and enum-local
+code) or a compiler-owned `test::Rejection` stage/trap selector. Invocation
+permission, argument-schema rejection, and runtime permission are distinct
+selectors. The explicitly broad helper is
+`test::expect_any_reject_as(actor:, kotoage:, arguments:)`. Both use the existing
+private test syscall: r13 carries a canonical Norito expectation in a Blob;
+r14 and r15 are zero. Production admission does not enable test syscalls.
+Nested execution checkpoints are restored before accepting a rejection or
+reporting a mismatch.
+
+`iroha contract dev new <directory> --name <SeiyakuName>` stages and validates
+an offline project before publishing into a new or empty directory. Validation
+checks both manifests and the complete source graph, then compiles and executes
+every declared standalone test suite. A compilation failure or failed assertion
+leaves the destination untouched. It emits
+the contract, three standalone tests, explicit source graph, app manifest,
+README, ignore rules, and editor settings. The fixture contains only a public
+local identity; no signing material is generated. Local debugging and deployment
+continue through the existing `iroha contract` commands. The first-project guide
+is maintained at
+<https://docs.iroha.tech/blockchain/smart-contracts#first-project>.
 
 The project graph is canonical Norito JSON. Every field is explicit, version 1
 is the only accepted schema, source paths are relative to and contained by the
@@ -987,6 +1128,17 @@ manifest directory, and package identities are exact locked strings:
 
 Unknown or duplicate fields, duplicate sources/exports, path escapes, unknown
 packages, import cycles, undeclared aliases, and unexported calls fail closed.
+Locked package names use nonempty `/`-separated ASCII components matching
+`[A-Za-z0-9_][A-Za-z0-9_.-]*`, optionally followed by one `@revision` with the
+same component grammar. Revisions retain their exact spelling and are not
+interpreted as version ranges. Exported structs carry
+`package::SourceUnit::Struct` in public and durable schemas; the complete name
+is at most 1024 ASCII bytes, and both declaration components must be canonical
+unreserved source type names. Aliases never enter this identity. Qualified
+identities containing the compiler-private `__kotodama_link_` substring are
+invalid. Local structs keep their declared name. Schema hashes bind the exact
+name and field schema, so changing a locked package identity changes the schema.
+
 Diagnostic spans keep package identity separate from the logical source path,
 so two locked packages may both own `src/lib.ko` without ambiguous JSON, SARIF,
 or human output.

@@ -284,8 +284,10 @@ mod tests {
             r"\bjson\b(?=\s*[\{\[])",
             "TextMate must treat `json` as contextual object/array construction syntax"
         );
-        let mut member_names = V1_LIST_MEMBER_NAMES.to_vec();
+        let mut member_names = vec!["page"];
+        member_names.extend_from_slice(V1_LIST_MEMBER_NAMES);
         member_names.push("div_round");
+        member_names.push("mul_div_round");
         member_names.push("ratio_round");
         for builtin in Builtin::all() {
             if !matches!(

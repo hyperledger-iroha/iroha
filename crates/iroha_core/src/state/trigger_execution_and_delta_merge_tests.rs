@@ -6,7 +6,7 @@ async fn time_trigger_precommit_executes_and_emits_time_event() -> Result<()> {
     let query_handle = LiveQueryStore::start_test();
     let state = State::new(World::default(), kura, query_handle);
     // Prepare world and a simple pre-commit time trigger that sets account metadata
-    let block = new_dummy_block_with_payload(|h| {
+    let block = result_bearing_time_trigger_block(&state, |h| {
         h.set_height(NonZeroU64::new(1).unwrap());
     });
     let mut state_block = state.block(block.as_ref().header());
@@ -40,7 +40,7 @@ async fn time_trigger_precommit_executes_and_emits_time_event() -> Result<()> {
     let _ = state_block.apply_without_execution(&block, Vec::new());
     state_block.commit().unwrap();
     // Apply a new block: time trigger should fire during apply
-    let block2 = new_dummy_block_with_payload(|h| {
+    let block2 = result_bearing_time_trigger_block(&state, |h| {
         h.set_height(NonZeroU64::new(2).unwrap());
         h.creation_time_ms = 1;
     });
@@ -136,9 +136,9 @@ async fn time_trigger_precommit_executes_and_emits_time_event() -> Result<()> {
         }
         true
     }));
-    // Drop the mutable block scope before we borrow a view; otherwise
-    // the view lock blocks waiting for this block to finish applying.
-    state_block2.commit_world_overlay_for_testing().unwrap();
+    // Publish the applied block and its exact membership before borrowing a view.
+    // A world-only fixture commit cannot consume staged block metadata.
+    state_block2.commit().unwrap();
     // And the effect should be visible
     let tick_val = state
         .view()
@@ -228,7 +228,7 @@ fn time_trigger_revalidates_a_sibling_replaced_after_matching() {
     });
     let mut state_block2 = state.block(block2.as_ref().header());
     let _ = state_block2.apply(&block2, Vec::new());
-    state_block2.commit_world_overlay_for_testing().unwrap();
+    state_block2.commit().unwrap();
 
     {
         let view = state.view();
@@ -252,7 +252,7 @@ fn time_trigger_revalidates_a_sibling_replaced_after_matching() {
     });
     let mut state_block3 = state.block(block3.as_ref().header());
     let _ = state_block3.apply(&block3, Vec::new());
-    state_block3.commit_world_overlay_for_testing().unwrap();
+    state_block3.commit().unwrap();
 
     let view = state.view();
     let account = view.world.account(&ALICE_ID).expect("alice account");
@@ -326,7 +326,7 @@ fn scheduled_time_trigger_retry_succeeds_once_and_consumes_repeats_on_success() 
         [],
     );
     let state = State::new(world, kura.clone(), query_handle);
-    let block1 = new_dummy_block_with_payload(|header| {
+    let block1 = result_bearing_time_trigger_block(&state, |header| {
         header.set_height(NonZeroU64::new(1).unwrap());
         header.creation_time_ms = 0;
     });
@@ -355,7 +355,7 @@ fn scheduled_time_trigger_retry_succeeds_once_and_consumes_repeats_on_success() 
     let _ = state_block1.apply_without_execution(&block1, Vec::new());
     state_block1.commit().unwrap();
     persist_committed_test_block(&kura, &block1);
-    let block2 = new_dummy_block_with_payload(|header| {
+    let block2 = result_bearing_time_trigger_block(&state, |header| {
         header.set_height(NonZeroU64::new(2).unwrap());
         header.creation_time_ms = 6;
     });
@@ -384,7 +384,7 @@ fn scheduled_time_trigger_retry_succeeds_once_and_consumes_repeats_on_success() 
         completions2[0].outcome(),
         TriggerCompletedOutcome::Failure(_)
     ));
-    state_block2.commit_world_overlay_for_testing().unwrap();
+    state_block2.commit().unwrap();
     persist_committed_test_block(&kura, &block2);
     {
         let view = state.view();
@@ -403,7 +403,7 @@ fn scheduled_time_trigger_retry_succeeds_once_and_consumes_repeats_on_success() 
             })
         );
     }
-    let block3 = new_dummy_block_with_payload(|header| {
+    let block3 = result_bearing_time_trigger_block(&state, |header| {
         header.set_height(NonZeroU64::new(3).unwrap());
         header.creation_time_ms = 8;
     });
@@ -423,7 +423,7 @@ fn scheduled_time_trigger_retry_succeeds_once_and_consumes_repeats_on_success() 
     let _ = state_block3.apply_without_execution(&block3, Vec::new());
     state_block3.commit().unwrap();
     persist_committed_test_block(&kura, &block3);
-    let block4 = new_dummy_block_with_payload(|header| {
+    let block4 = result_bearing_time_trigger_block(&state, |header| {
         header.set_height(NonZeroU64::new(4).unwrap());
         header.creation_time_ms = 12;
     });
@@ -441,7 +441,7 @@ fn scheduled_time_trigger_retry_succeeds_once_and_consumes_repeats_on_success() 
         completions4[0].outcome(),
         TriggerCompletedOutcome::Success
     ));
-    state_block4.commit_world_overlay_for_testing().unwrap();
+    state_block4.commit().unwrap();
     persist_committed_test_block(&kura, &block4);
     let view = state.view();
     let alice_asset = view
@@ -534,7 +534,7 @@ fn scheduled_time_trigger_retry_budget_exhaustion_unregisters_trigger() {
         completions2[0].outcome(),
         TriggerCompletedOutcome::Failure(_)
     ));
-    state_block2.commit_world_overlay_for_testing().unwrap();
+    state_block2.commit().unwrap();
     persist_committed_test_block(&kura, &block2);
     {
         let view = state.view();
@@ -571,7 +571,7 @@ fn scheduled_time_trigger_retry_budget_exhaustion_unregisters_trigger() {
         completions3[0].outcome(),
         TriggerCompletedOutcome::Failure(_)
     ));
-    state_block3.commit_world_overlay_for_testing().unwrap();
+    state_block3.commit().unwrap();
     persist_committed_test_block(&kura, &block3);
     let view = state.view();
     assert!(
@@ -610,7 +610,7 @@ fn periodic_time_trigger_drops_missed_ticks_while_retry_pending() {
         parameters.sumeragi.block_cadence_ms = nonzero!(1_u64);
         parameters.commit();
     }
-    let block1 = new_dummy_block_with_payload(|header| {
+    let block1 = result_bearing_time_trigger_block(&state, |header| {
         header.set_height(NonZeroU64::new(1).unwrap());
         header.creation_time_ms = 0;
     });
@@ -640,7 +640,7 @@ fn periodic_time_trigger_drops_missed_ticks_while_retry_pending() {
     let _ = state_block1.apply_without_execution(&block1, Vec::new());
     state_block1.commit().unwrap();
     persist_committed_test_block(&kura, &block1);
-    let block2 = new_dummy_block_with_payload(|header| {
+    let block2 = result_bearing_time_trigger_block(&state, |header| {
         header.set_height(NonZeroU64::new(2).unwrap());
         header.creation_time_ms = 2;
     });
@@ -669,7 +669,7 @@ fn periodic_time_trigger_drops_missed_ticks_while_retry_pending() {
         completions2[0].outcome(),
         TriggerCompletedOutcome::Failure(_)
     ));
-    state_block2.commit_world_overlay_for_testing().unwrap();
+    state_block2.commit().unwrap();
     persist_committed_test_block(&kura, &block2);
     {
         let view = state.view();
@@ -688,7 +688,7 @@ fn periodic_time_trigger_drops_missed_ticks_while_retry_pending() {
             })
         );
     }
-    let block3 = new_dummy_block_with_payload(|header| {
+    let block3 = result_bearing_time_trigger_block(&state, |header| {
         header.set_height(NonZeroU64::new(3).unwrap());
         header.creation_time_ms = 6;
     });
@@ -717,7 +717,7 @@ fn periodic_time_trigger_drops_missed_ticks_while_retry_pending() {
         completions3.is_empty(),
         "scheduled ticks must be suppressed while retry is pending"
     );
-    state_block3.commit_world_overlay_for_testing().unwrap();
+    state_block3.commit().unwrap();
     persist_committed_test_block(&kura, &block3);
     {
         let view = state.view();
@@ -736,7 +736,7 @@ fn periodic_time_trigger_drops_missed_ticks_while_retry_pending() {
             })
         );
     }
-    let block4 = new_dummy_block_with_payload(|header| {
+    let block4 = result_bearing_time_trigger_block(&state, |header| {
         header.set_height(NonZeroU64::new(4).unwrap());
         header.creation_time_ms = 8;
     });
@@ -754,7 +754,7 @@ fn periodic_time_trigger_drops_missed_ticks_while_retry_pending() {
         completions4[0].outcome(),
         TriggerCompletedOutcome::Success
     ));
-    state_block4.commit_world_overlay_for_testing().unwrap();
+    state_block4.commit().unwrap();
     persist_committed_test_block(&kura, &block4);
     {
         let view = state.view();
@@ -772,7 +772,7 @@ fn periodic_time_trigger_drops_missed_ticks_while_retry_pending() {
         assert_eq!(action.repeats, Repeats::Exactly(2));
         assert_eq!(action.retry_state, None);
     }
-    let block5 = new_dummy_block_with_payload(|header| {
+    let block5 = result_bearing_time_trigger_block(&state, |header| {
         header.set_height(NonZeroU64::new(5).unwrap());
         header.creation_time_ms = 10;
     });
@@ -794,7 +794,7 @@ fn periodic_time_trigger_drops_missed_ticks_while_retry_pending() {
         completions5[0].outcome(),
         TriggerCompletedOutcome::Success
     ));
-    state_block5.commit_world_overlay_for_testing().unwrap();
+    state_block5.commit().unwrap();
     persist_committed_test_block(&kura, &block5);
     let view = state.view();
     let alice_asset = view
@@ -994,8 +994,10 @@ fn contract_query_cache_isolated_and_reuses_owned_runtime() {
             kind: EntryPointKind::View,
             params: Vec::new(),
             argument_schema: None,
-            return_type: None,
-            return_schema: None,
+            return_type: Some("()".to_owned()),
+            return_schema: Some(iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeV1 {
+                nodes: vec![iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeNodeV1::Unit],
+            }),
             permission: None,
             read_keys: Vec::new(),
             write_keys: Vec::new(),
@@ -1004,7 +1006,7 @@ fn contract_query_cache_isolated_and_reuses_owned_runtime() {
             triggers: Vec::new(),
             entry_pc: 0,
         }],
-        error_codes: Vec::new(),
+        error_types: Vec::new(),
         states: Vec::new(),
     };
     program.extend_from_slice(&interface.encode_section());

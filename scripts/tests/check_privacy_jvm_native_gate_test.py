@@ -11,7 +11,7 @@ FROZEN_LOCK_SHA256 = (
     "cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79"
 )
 TRACKED_ROOT_LOCK_SHA256 = (
-    "d5b8bf5efbdc3ce2a8b1c0d2d75e1c5d1a343a072f836cfb76205bc6ea4cf15f"
+    "051423addf3830895e208c6276429a0e8f46c61954159b0ef913e8cfed33d3aa"
 )
 
 
@@ -204,7 +204,8 @@ def test_python_lane_authenticates_and_executes_real_pyo3_abi23() -> None:
     integration = read(
         "python/iroha_python/tests/privacy_native_integration_test.py"
     )
-    assert 'import_module("iroha_python._crypto")' in integration
+    assert "from iroha_native import load_crypto_extension" in integration
+    assert "native = load_crypto_extension()" in integration
     assert "connect_norito_bridge_abi_version()" in integration
     assert "is_privacy_native_available()" in integration
     assert "privacy_validate_compiled_profile_catalog_v1" in integration

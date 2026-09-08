@@ -2,6 +2,7 @@
 
 #[test]
 fn replication_order_rejects_compression_before_allocation() {
+    let authority = alice();
     let state = make_state_with_completion_anchor();
     let mut block = state.block(block_header_at_epoch(9));
     let mut stx = block.transaction();
@@ -59,19 +60,22 @@ fn replication_order_rejects_compression_before_allocation() {
             deadline_epoch: 15,
             musubi_archive: None,
         };
-        let error =
-            norito::with_decode_limits_scope(zero_allocation, || issue.execute(&alice(), &mut stx))
-                .expect_err("issuance rejects compression before allocating");
+        let (result, usage) = norito::core::with_decode_limits_measured(zero_allocation, || {
+            issue.execute(&authority, &mut stx)
+        });
+        assert_eq!(usage.total_allocated_bytes(), 0);
+        let error = result.expect_err("issuance rejects compression before allocating");
         assert!(matches!(error, InstructionExecutionError::InvalidParameter(
             InvalidParameterError::SmartContract(message)
         ) if message.contains("canonical first-release Norito")));
         assert!(stx.world.replication_orders.get(&attempted_id).is_none());
         let mut substituted = record.clone();
         substituted.canonical_order = bytes.to_vec();
-        let error = norito::with_decode_limits_scope(zero_allocation, || {
+        let (result, usage) = norito::core::with_decode_limits_measured(zero_allocation, || {
             validate_stored_replication_order(&substituted, "substituted order")
-        })
-        .expect_err("stored order rejects compression before allocating");
+        });
+        assert_eq!(usage.total_allocated_bytes(), 0);
+        let error = result.expect_err("stored order rejects compression before allocating");
         assert!(
             matches!(error, InstructionExecutionError::InvariantViolation(message)
             if message.contains("not canonical or bound to its record"))

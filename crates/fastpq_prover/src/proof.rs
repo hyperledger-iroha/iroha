@@ -1139,12 +1139,13 @@ struct FriFinalVerification<'a> {
     round: usize,
 }
 
-/// Test-only bridge for the compact AIR protocol to reuse the production FRI verifier.
-#[cfg(test)]
+/// Fixed FRI geometry shared with the bounded compact candidate verifier.
+/// Standalone prototype query verification remains test-only.
 pub(crate) mod compact_fri_support {
     use super::*;
 
-    /// Caller-fixed FRI geometry and transcript challenges for one opening.
+    /// Caller-fixed FRI geometry and transcript challenges for one prototype opening.
+    #[cfg(test)]
     #[derive(Clone, Copy)]
     pub(crate) struct Context<'a> {
         pub(crate) query_pos: usize,
@@ -1159,6 +1160,7 @@ pub(crate) mod compact_fri_support {
     }
 
     /// Apply the existing exact-index/path/fold/terminal checks without replaying a trace.
+    #[cfg(test)]
     pub(crate) fn verify_query(
         merkle_cache: &mut backend::MerkleNodeCache,
         opening: &FriQueryOpening,

@@ -2361,12 +2361,16 @@ fn rewrite_instr_uses<F: FnMut(&mut Temp)>(instr: &mut ir::Instr, mut f: F) {
         }
         NumericRound {
             dividend,
+            multiplier,
             divisor,
             scale,
             mode,
             ..
         } => {
             f(dividend);
+            if let Some(multiplier) = multiplier {
+                f(multiplier);
+            }
             f(divisor);
             f(scale);
             f(mode);
@@ -2395,15 +2399,21 @@ fn rewrite_instr_uses<F: FnMut(&mut Temp)>(instr: &mut ir::Instr, mut f: F) {
             entrypoint,
             payload,
             ..
-        }
-        | ExpectRejectAs {
-            actor,
-            entrypoint,
-            payload,
         } => {
             f(actor);
             f(entrypoint);
             f(payload);
+        }
+        ExpectRejectAs {
+            actor,
+            entrypoint,
+            payload,
+            expectation,
+        } => {
+            f(actor);
+            f(entrypoint);
+            f(payload);
+            f(expectation);
         }
         ActorAccount { actor, .. } | ActorPublicKey { actor, .. } => f(actor),
         ActorSign { actor, message, .. } => {
@@ -2533,8 +2543,13 @@ fn rewrite_instr_uses<F: FnMut(&mut Temp)>(instr: &mut ir::Instr, mut f: F) {
             f(right);
         }
         Assert { cond } => f(cond),
-        AbortIf { cond, code } => {
+        AbortIf {
+            cond,
+            descriptor,
+            code,
+        } => {
             f(cond);
+            f(descriptor);
             f(code);
         }
         Info { msg } => f(msg),
@@ -2811,14 +2826,11 @@ fn rewrite_instr_uses<F: FnMut(&mut Temp)>(instr: &mut ir::Instr, mut f: F) {
             f(value);
         }
         StateDel { path } => f(path),
-        StateKeys {
-            prefix,
-            offset,
-            limit,
-            ..
+        StateScan {
+            base, after, limit, ..
         } => {
-            f(prefix);
-            f(offset);
+            f(base);
+            f(after);
             f(limit);
         }
         StateMapKeyAt {
@@ -2978,7 +2990,6 @@ fn dest_temp_mut(instr: &mut ir::Instr) -> Option<&mut Temp> {
         | ir::Instr::Load64Imm { dest, .. }
         | ir::Instr::Load64 { dest, .. }
         | ir::Instr::StateGet { dest, .. }
-        | ir::Instr::StateKeys { dest, .. }
         | ir::Instr::StateMapKeyAt { dest, .. }
         | ir::Instr::StateValueEncode { dest, .. }
         | ir::Instr::StateHas { dest, .. }
@@ -3117,6 +3128,7 @@ fn dest_temp_mut(instr: &mut ir::Instr) -> Option<&mut Temp> {
         ir::Instr::CallMulti { .. }
         | ir::Instr::InvokeEntrypointAsMulti { .. }
         | ir::Instr::MapLoadPair { .. }
+        | ir::Instr::StateScan { .. }
         | ir::Instr::CoreQueryPage { .. } => None,
     }
 }
@@ -3125,6 +3137,18 @@ fn rewrite_instr_definitions<F: FnMut(&mut Temp)>(instruction: &mut ir::Instr, m
         visit(destination);
     }
     match instruction {
+        ir::Instr::StateScan {
+            page,
+            next,
+            count,
+            examined,
+            ..
+        } => {
+            visit(page);
+            visit(next);
+            visit(count);
+            visit(examined);
+        }
         ir::Instr::MapLoadPair {
             dest_key, dest_val, ..
         } => {

@@ -4078,29 +4078,19 @@ mod new {
 }
 pub(crate) mod valid {
     #[cfg(test)]
+    #[path = "admission_batching.rs"]
+    mod admission_batching_tests;
+    #[cfg(test)]
     use super::event::map_sig_err_to_reason;
     use super::{event::map_block_err_to_reason, *};
     use crate::smartcontracts::ivm::cache::IvmCache;
     use crate::state::{StateBlock, StateTransaction, storage_transactions::TransactionsReadOnly};
     use crate::sumeragi::network_topology::Role;
-    #[cfg(test)]
-    use crate::{
-        soracloud_runtime::{
-            SoracloudOrderedMailboxExecutionRequest, SoracloudOrderedMailboxExecutionResult,
-            SoracloudRuntimeExecutionError,
-        },
-        state::StateReadOnly,
-    };
     use commit::CommittedBlock;
     #[cfg(test)]
     use iroha_data_model::ChainId;
     use iroha_data_model::events::pipeline::PipelineEventBox;
     use iroha_data_model::nexus::AxtPolicySnapshot;
-    #[cfg(test)]
-    use iroha_data_model::soracloud::{
-        SoraRuntimeReceiptV1, SoraServiceHandlerClassV1, SoraServiceHealthStatusV1,
-        SoraServiceMailboxMessageV1, SoraServiceRuntimeStateV1,
-    };
     use iroha_logger::warn;
     use iroha_primitives::time::TimeSource;
     use std::{num::NonZeroUsize, time::Instant};
@@ -4485,373 +4475,6 @@ pub(crate) mod valid {
         Enforce,
         #[cfg(test)]
         Defer,
-    }
-    #[cfg(test)]
-    fn collect_ready_soracloud_mailbox_messages(
-        state_transaction: &StateTransaction<'_, '_>,
-    ) -> Vec<SoraServiceMailboxMessageV1> {
-        let observed_height = state_transaction.block_height();
-        let consumed: BTreeSet<Hash> = state_transaction
-            .world
-            .soracloud_runtime_receipts
-            .iter()
-            .filter_map(|(_receipt_id, receipt)| receipt.mailbox_message_id)
-            .collect();
-        let mut messages: Vec<_> = state_transaction
-            .world
-            .soracloud_mailbox_messages
-            .iter()
-            .filter_map(|(message_id, message)| {
-                if consumed.contains(message_id) {
-                    return None;
-                }
-                if message.available_after_height > observed_height {
-                    return None;
-                }
-                if message.expires_at_height <= observed_height {
-                    return None;
-                }
-                Some(message.clone())
-            })
-            .collect();
-        messages.sort_unstable_by(|left, right| {
-            left.available_after_height
-                .cmp(&right.available_after_height)
-                .then_with(|| left.enqueue_sequence.cmp(&right.enqueue_sequence))
-                .then_with(|| left.message_id.cmp(&right.message_id))
-        });
-        messages
-    }
-    #[cfg(test)]
-    fn authoritative_pending_mailbox_messages(
-        state_transaction: &StateTransaction<'_, '_>,
-        service_name: &iroha_data_model::name::Name,
-    ) -> u32 {
-        let current_height = state_transaction.block_height();
-        let consumed: BTreeSet<Hash> = state_transaction
-            .world
-            .soracloud_runtime_receipts
-            .iter()
-            .filter_map(|(_receipt_id, receipt)| receipt.mailbox_message_id)
-            .collect();
-        u32::try_from(
-            state_transaction
-                .world
-                .soracloud_mailbox_messages
-                .iter()
-                .filter(|(message_id, message)| {
-                    !consumed.contains(message_id)
-                        && message.to_service == *service_name
-                        && message.expires_at_height > current_height
-                })
-                .count(),
-        )
-        .unwrap_or(u32::MAX)
-    }
-    #[cfg(test)]
-    fn synthetic_mailbox_runtime_failure(
-        request: SoracloudOrderedMailboxExecutionRequest,
-        error: SoracloudRuntimeExecutionError,
-    ) -> SoracloudOrderedMailboxExecutionResult {
-        let outcome_label = error.kind.label();
-        let result_commitment = Hash::new(
-            format!(
-                "soracloud:runtime-failure:{}:{}:{}:{}:{}",
-                request.mailbox_message.message_id,
-                request.deployment.service_name,
-                request.deployment.current_service_version,
-                request.mailbox_message.to_handler,
-                outcome_label,
-            )
-            .as_bytes(),
-        );
-        let receipt_id = Hash::new(
-            format!(
-                "soracloud:runtime-failure-receipt:{}:{}:{}:{}",
-                request.mailbox_message.message_id,
-                request.deployment.service_name,
-                request.deployment.current_service_version,
-                outcome_label,
-            )
-            .as_bytes(),
-        );
-        let mut runtime_state = request.runtime_state.unwrap_or(SoraServiceRuntimeStateV1 {
-            schema_version: iroha_data_model::soracloud::SORA_SERVICE_RUNTIME_STATE_VERSION_V1,
-            service_name: request.deployment.service_name.clone(),
-            active_service_version: request.deployment.current_service_version.clone(),
-            health_status: SoraServiceHealthStatusV1::Degraded,
-            load_factor_bps: 0,
-            materialized_bundle_hash: request.bundle.container.bundle_hash,
-        });
-        runtime_state.health_status = SoraServiceHealthStatusV1::Degraded;
-        SoracloudOrderedMailboxExecutionResult {
-            state_mutations: Vec::new(),
-            outbound_mailbox_messages: Vec::new(),
-            response_bytes: Vec::new(),
-            content_type: None,
-            runtime_state: Some(runtime_state),
-            runtime_receipt: iroha_data_model::soracloud::SoraRuntimeReceiptV1 {
-                schema_version: iroha_data_model::soracloud::SORA_RUNTIME_RECEIPT_VERSION_V1,
-                receipt_id,
-                service_name: request.deployment.service_name,
-                service_version: request.deployment.current_service_version,
-                handler_name: request.mailbox_message.to_handler.clone(),
-                handler_class: request
-                    .handler
-                    .as_ref()
-                    .map(|handler| handler.class)
-                    .unwrap_or(iroha_data_model::soracloud::SoraServiceHandlerClassV1::Update),
-                request_commitment: request.mailbox_message.payload_commitment,
-                result_commitment,
-                certified_by: iroha_data_model::soracloud::SoraCertifiedResponsePolicyV1::None,
-                emitted_sequence: 0,
-                mailbox_message_id: Some(request.mailbox_message.message_id),
-                journal_artifact_hash: None,
-                checkpoint_artifact_hash: None,
-                execution_host: None,
-            },
-        }
-    }
-    #[cfg(test)]
-    fn validate_mailbox_runtime_receipt(
-        request: &SoracloudOrderedMailboxExecutionRequest,
-        receipt: &SoraRuntimeReceiptV1,
-    ) -> Result<(), String> {
-        let deployment = &request.deployment;
-        let mailbox_message = &request.mailbox_message;
-        let expected_handler_class = request
-            .handler
-            .as_ref()
-            .map(|handler| handler.class)
-            .unwrap_or(SoraServiceHandlerClassV1::Update);
-        if receipt.service_name.as_ref() != deployment.service_name.as_ref() {
-            return Err(format!(
-                "receipt service `{}` does not match request service `{}`",
-                receipt.service_name.as_ref(),
-                deployment.service_name.as_ref()
-            ));
-        }
-        if receipt.service_version.as_str() != deployment.current_service_version.as_str() {
-            return Err(format!(
-                "receipt service version `{}` does not match request version `{}`",
-                receipt.service_version.as_str(),
-                deployment.current_service_version.as_str()
-            ));
-        }
-        if receipt.handler_name.as_ref() != mailbox_message.to_handler.as_ref() {
-            return Err(format!(
-                "receipt handler `{}` does not match mailbox handler `{}`",
-                receipt.handler_name.as_ref(),
-                mailbox_message.to_handler.as_ref()
-            ));
-        }
-        if receipt.handler_class != expected_handler_class {
-            return Err(format!(
-                "receipt handler class `{:?}` does not match expected `{:?}`",
-                receipt.handler_class, expected_handler_class
-            ));
-        }
-        if receipt.mailbox_message_id.as_ref() != Some(&mailbox_message.message_id) {
-            return Err(format!(
-                "receipt mailbox message id `{:?}` does not match request mailbox message `{}`",
-                &receipt.mailbox_message_id, &mailbox_message.message_id
-            ));
-        }
-        if receipt.request_commitment != mailbox_message.payload_commitment {
-            return Err(format!(
-                "receipt request commitment `{}` does not match mailbox commitment `{}`",
-                &receipt.request_commitment, &mailbox_message.payload_commitment
-            ));
-        }
-        if receipt.emitted_sequence != 0 {
-            return Err(format!(
-                "receipt emitted sequence `{}` is not the required submission sentinel",
-                receipt.emitted_sequence
-            ));
-        }
-        Ok(())
-    }
-    /// Test-only harness for deterministic block-time mailbox execution.
-    ///
-    /// Production replay must not depend on a local Soracloud runtime. Runtime
-    /// effects must be persisted through explicit Soracloud ISIs in committed
-    /// transactions so Kura replay reconstructs the same WSV on every peer.
-    #[cfg(test)]
-    fn execute_soracloud_mailbox_runtime(state_block: &mut StateBlock<'_>) {
-        let Some(runtime) = state_block.soracloud_runtime.clone() else {
-            return;
-        };
-        let mut state_transaction = state_block.transaction();
-        let ready_messages = collect_ready_soracloud_mailbox_messages(&state_transaction);
-        if ready_messages.is_empty() {
-            return;
-        }
-        let mut failed = false;
-        for message in ready_messages {
-            let (deployment, bundle) =
-                match crate::smartcontracts::isi::soracloud::load_active_bundle(
-                    &state_transaction,
-                    &message.to_service,
-                ) {
-                    Ok(context) => context,
-                    Err(error) => {
-                        warn!(
-                            ?error,
-                            message_id = %message.message_id,
-                            service = %message.to_service,
-                            "skipping Soracloud mailbox execution because the active bundle context is missing"
-                        );
-                        continue;
-                    }
-                };
-            let handler = bundle
-                .service
-                .handlers
-                .iter()
-                .find(|handler| handler.handler_name == message.to_handler)
-                .cloned();
-            let request = SoracloudOrderedMailboxExecutionRequest {
-                observed_height: state_transaction.block_height(),
-                observed_block_hash: StateReadOnly::latest_block_hash(&state_transaction)
-                    .map(Hash::from),
-                observed_sequence:
-                    crate::smartcontracts::isi::soracloud::next_soracloud_audit_sequence(
-                        &state_transaction,
-                    )
-                    .expect("test mailbox execution requires an available Soracloud audit sequence"),
-                deployment,
-                bundle,
-                handler,
-                mailbox_message: message.clone(),
-                runtime_state: state_transaction
-                    .world
-                    .soracloud_service_runtime
-                    .get(&message.to_service)
-                    .cloned(),
-                authoritative_pending_mailbox_messages: authoritative_pending_mailbox_messages(
-                    &state_transaction,
-                    &message.to_service,
-                ),
-            };
-            let result = match runtime.execute_ordered_mailbox(request.clone()) {
-                Ok(result) => result,
-                Err(error) => synthetic_mailbox_runtime_failure(request.clone(), error),
-            };
-            let SoracloudOrderedMailboxExecutionResult {
-                state_mutations,
-                outbound_mailbox_messages,
-                response_bytes: _response_bytes,
-                content_type: _content_type,
-                runtime_state,
-                mut runtime_receipt,
-            } = result;
-            if let Err(error) = validate_mailbox_runtime_receipt(&request, &runtime_receipt) {
-                warn!(
-                    error = %error,
-                    message_id = %message.message_id,
-                    "Soracloud mailbox execution returned a receipt that does not match the execution request"
-                );
-                failed = true;
-                break;
-            }
-            for mutation in state_mutations {
-                let binding_name: iroha_data_model::name::Name = match mutation.binding_name.parse()
-                {
-                    Ok(binding_name) => binding_name,
-                    Err(error) => {
-                        warn!(
-                            ?error,
-                            message_id = %message.message_id,
-                            binding_name = %mutation.binding_name,
-                            "Soracloud mailbox execution returned an invalid binding name"
-                        );
-                        failed = true;
-                        break;
-                    }
-                };
-                if let Err(error) =
-                    crate::smartcontracts::isi::soracloud::apply_soracloud_state_mutation(
-                        &mut state_transaction,
-                        &request.deployment.service_name,
-                        &binding_name,
-                        &mutation.state_key,
-                        mutation.operation,
-                        mutation.payload,
-                        mutation.encryption,
-                        None,
-                        None,
-                        None,
-                        runtime_receipt.receipt_id,
-                        request.observed_sequence,
-                    )
-                {
-                    warn!(
-                        ?error,
-                        message_id = %message.message_id,
-                        binding_name = %binding_name,
-                        state_key = %mutation.state_key,
-                        "failed to persist Soracloud service-state mutation returned by mailbox execution"
-                    );
-                    failed = true;
-                    break;
-                }
-            }
-            if failed {
-                break;
-            }
-            for outbound in outbound_mailbox_messages {
-                if let Err(error) =
-                    crate::smartcontracts::isi::soracloud::write_soracloud_mailbox_message(
-                        &mut state_transaction,
-                        outbound,
-                    )
-                {
-                    warn!(
-                        ?error,
-                        message_id = %message.message_id,
-                        "failed to persist outbound Soracloud mailbox message"
-                    );
-                    failed = true;
-                    break;
-                }
-            }
-            if failed {
-                break;
-            }
-            if let Some(runtime_state) = runtime_state
-                && let Err(error) =
-                    crate::smartcontracts::isi::soracloud::write_soracloud_runtime_state(
-                        &mut state_transaction,
-                        runtime_state,
-                    )
-            {
-                warn!(
-                    ?error,
-                    message_id = %message.message_id,
-                    "failed to persist Soracloud runtime-state write-back"
-                );
-                failed = true;
-                break;
-            }
-            runtime_receipt.emitted_sequence = 0;
-            if let Err(error) =
-                crate::smartcontracts::isi::soracloud::write_soracloud_runtime_receipt(
-                    &mut state_transaction,
-                    runtime_receipt,
-                )
-            {
-                warn!(
-                    ?error,
-                    message_id = %message.message_id,
-                    "failed to persist Soracloud runtime receipt"
-                );
-                failed = true;
-                break;
-            }
-        }
-        if !failed {
-            state_transaction.apply();
-        }
     }
     #[cfg(feature = "telemetry")]
     type MetricsRef<'a> = Option<&'a crate::telemetry::StateTelemetry>;
@@ -7264,6 +6887,7 @@ pub(crate) mod valid {
             WithEvents::new(Ok(ValidBlock::new_signatures_verified(block)))
         }
         /// Validate signed genesis against its authenticated consensus mode without committing it.
+        /// The staged state stays boxed across validation and event delivery to bound stack use.
         ///
         /// The mode must come from the canonical signed genesis handshake metadata. It is threaded
         /// explicitly because the pre-execution world cannot yet contain genesis parameters.
@@ -7276,7 +6900,7 @@ pub(crate) mod valid {
             state: &'state State,
             voting_block: &mut Option<VotingBlock>,
             consensus_mode: iroha_data_model::block::consensus_v2::ConsensusMode,
-        ) -> WithEvents<Result<(ValidBlock, StateBlock<'state>), Error>> {
+        ) -> WithEvents<Result<(ValidBlock, Box<StateBlock<'state>>), Error>> {
             if !block.header().is_genesis() {
                 return WithEvents::new(Err((
                     Box::new(block),
@@ -7299,13 +6923,12 @@ pub(crate) mod valid {
                 false,
                 None,
             )
-            .unbox_state_block()
         }
         /// Validate a unit fixture through the current Sumeragi-v2 profile.
         ///
         /// This adapter retains the fixture controls needed by checkpoint and validation-cache
         /// tests. It does not relax execution-context, routing, consensus-mode, transaction, or
-        /// execution-witness validation.
+        /// execution-witness validation. Callers supply cadence independently of candidate time.
         #[cfg(test)]
         #[allow(clippy::too_many_arguments)]
         pub(crate) fn validate_sumeragi_v2_fixture_keep_voting_block<'state>(
@@ -7313,12 +6936,17 @@ pub(crate) mod valid {
             topology: &Topology,
             genesis_account: &AccountId,
             time_source: &TimeSource,
+            block_cadence: Duration,
             state: &'state State,
             voting_block: &mut Option<VotingBlock>,
             soft_fork: bool,
             skip_block_signatures: bool,
-        ) -> WithEvents<Result<(ValidBlock, StateBlock<'state>), Error>> {
-            let validation_profile = Self::sumeragi_v2_fixture_profile(&block);
+            validation_context: SumeragiV2ValidationContext,
+        ) -> WithEvents<Result<(ValidBlock, Box<StateBlock<'state>>), Error>> {
+            let validation_profile = ConsensusValidationProfile::SumeragiV2 {
+                block_cadence,
+                context: validation_context,
+            };
             Self::validate_keep_voting_block_inner(
                 block,
                 topology,
@@ -7333,7 +6961,6 @@ pub(crate) mod valid {
                 false,
                 None,
             )
-            .unbox_state_block()
         }
         /// Validate a Sumeragi v2 proposal body after the exact-body store has
         /// authenticated its immutable origin-view block signature.
@@ -7360,7 +6987,7 @@ pub(crate) mod valid {
             validation_context: SumeragiV2ValidationContext,
             state: &'state State,
             voting_block: &mut Option<VotingBlock>,
-        ) -> WithEvents<Result<(ValidBlock, StateBlock<'state>), Error>> {
+        ) -> WithEvents<Result<(ValidBlock, Box<StateBlock<'state>>), Error>> {
             Self::validate_keep_voting_block_inner(
                 block,
                 topology,
@@ -7378,7 +7005,6 @@ pub(crate) mod valid {
                 true,
                 None,
             )
-            .unbox_state_block()
         }
         /// Exercise a Sumeragi-v2 unit fixture with an externally prevalidated block signature.
         ///
@@ -7387,6 +7013,7 @@ pub(crate) mod valid {
         /// transaction signatures, state-dependent block invariants,
         /// transaction limits, duplicate detection, and execution-context alignment.
         /// It skips only the block signature set authenticated by the commit certificate.
+        /// Callers supply cadence independently of the candidate timestamp.
         #[cfg(test)]
         #[allow(clippy::too_many_arguments)]
         fn validate_sumeragi_v2_fixture_prevalidated_with_events_and_timing<
@@ -7397,12 +7024,17 @@ pub(crate) mod valid {
             topology: &Topology,
             genesis_account: &AccountId,
             time_source: &TimeSource,
+            block_cadence: Duration,
             state: &'state State,
             voting_block: &mut Option<VotingBlock>,
+            validation_context: SumeragiV2ValidationContext,
             timings: &mut ValidationTimings,
             mut send_events: F,
-        ) -> WithEvents<Result<(ValidBlock, StateBlock<'state>), Error>> {
-            let validation_profile = Self::sumeragi_v2_fixture_profile(&block);
+        ) -> WithEvents<Result<(ValidBlock, Box<StateBlock<'state>>), Error>> {
+            let validation_profile = ConsensusValidationProfile::SumeragiV2 {
+                block_cadence,
+                context: validation_context,
+            };
             Self::validate_keep_voting_block_inner(
                 block,
                 topology,
@@ -7417,7 +7049,6 @@ pub(crate) mod valid {
                 false,
                 Some(&mut send_events),
             )
-            .unbox_state_block()
         }
         fn validate_sccp_commitment_root(block: &SignedBlock) -> Result<(), BlockValidationError> {
             crate::bridge::validate_sccp_commitment_root_for_signed_block(block).map_err(|error| {
@@ -8099,7 +7730,7 @@ pub(crate) mod valid {
             validation_context: SumeragiV2ValidationContext,
             timings: &mut ValidationTimings,
             mut send_events: F,
-        ) -> WithEvents<Result<(ValidBlock, StateBlock<'state>), Error>> {
+        ) -> WithEvents<Result<(ValidBlock, Box<StateBlock<'state>>), Error>> {
             let validation_profile = ConsensusValidationProfile::SumeragiV2 {
                 block_cadence: Duration::from_millis(1),
                 context: validation_context,
@@ -8118,7 +7749,6 @@ pub(crate) mod valid {
                 false,
                 Some(&mut send_events),
             )
-            .unbox_state_block()
         }
         /// All static checks that require a state snapshot.
         fn canonical_v2_block_time(
@@ -11809,8 +11439,6 @@ pub(crate) mod valid {
             )?;
             let (time_trgs, mut time_hashes, mut time_results, time_execution_hashes) =
                 state_block.execute_time_triggers(&block.header());
-            #[cfg(test)]
-            execute_soracloud_mailbox_runtime(state_block);
             let pruned_sealed_commitments =
                 crate::tx::prune_expired_sealed_commitments(state_block);
             if pruned_sealed_commitments > 0 {
@@ -15669,8 +15297,6 @@ pub(crate) mod valid {
             if let (Some(timings), Some(start)) = (timings.as_deref_mut(), time_triggers_start) {
                 timings.execution_tx_time_triggers_ms = to_ms(start.elapsed());
             }
-            #[cfg(test)]
-            execute_soracloud_mailbox_runtime(state_block);
             let pruned_sealed_commitments =
                 crate::tx::prune_expired_sealed_commitments(state_block);
             if pruned_sealed_commitments > 0 {
@@ -16230,9 +15856,10 @@ pub(crate) mod valid {
             soracloud_runtime::{
                 SoracloudApartmentExecutionRequest, SoracloudApartmentExecutionResult,
                 SoracloudDeterministicStateMutation, SoracloudLocalReadRequest,
-                SoracloudLocalReadResponse, SoracloudRuntime, SoracloudRuntimeExecutionError,
-                SoracloudRuntimeExecutionErrorKind, SoracloudRuntimeReadHandle,
-                SoracloudRuntimeSnapshot,
+                SoracloudLocalReadResponse, SoracloudOrderedMailboxExecutionRequest,
+                SoracloudOrderedMailboxExecutionResult, SoracloudRuntime,
+                SoracloudRuntimeExecutionError, SoracloudRuntimeExecutionErrorKind,
+                SoracloudRuntimeReadHandle, SoracloudRuntimeSnapshot,
             },
             state::{State, World},
             sumeragi::network_topology::{Topology, test_topology_with_keys},
@@ -16272,7 +15899,7 @@ pub(crate) mod valid {
                 SoraContainerRuntimeV1, SoraDeploymentBundleV1, SoraLifecycleHooksV1,
                 SoraMailboxContractV1, SoraNetworkPolicyV1, SoraResourceLimitsV1,
                 SoraRolloutPolicyV1, SoraRuntimeReceiptV1, SoraServiceDeploymentStateV1,
-                SoraServiceHandlerClassV1, SoraServiceHandlerV1, SoraServiceLifecycleActionV1,
+                SoraServiceHandlerClassV1, SoraServiceHandlerV1, SoraServiceHealthStatusV1,
                 SoraServiceMailboxMessageV1, SoraServiceManifestV1, SoraServiceRuntimeStateV1,
                 SoraStateBindingV1, SoraStateEncryptionV1, SoraStateMutabilityV1,
                 SoraStateMutationOperationV1,
@@ -16337,58 +15964,71 @@ pub(crate) mod valid {
             };
         }
         macro_rules! validate_voting_test_block {
-            ($block:expr, $topology:expr, $time_source:expr, $state:expr, $voting_block:expr) => {
+            ($block:expr, $topology:expr, $time_source:expr, $state:expr, $voting_block:expr, $keys:expr, $cadence:expr) => {{
+                let context = authenticated_permissioned_successor_context($state, $keys);
                 ValidBlock::validate_sumeragi_v2_fixture_keep_voting_block(
                     $block,
                     $topology,
                     &ALICE_ID,
                     $time_source,
+                    $cadence,
                     $state,
                     $voting_block,
                     false,
                     false,
+                    SumeragiV2ValidationContext::from_height_context(&context),
                 )
-            };
+            }};
+            (without_authenticated_context; $block:expr, $topology:expr, $time_source:expr, $state:expr, $voting_block:expr, $cadence:expr) => {{
+                let block = $block;
+                let context =
+                    SumeragiV2ValidationContext::for_body_without_context_bound_attachments(&block);
+                ValidBlock::validate_sumeragi_v2_fixture_keep_voting_block(
+                    block,
+                    $topology,
+                    &ALICE_ID,
+                    $time_source,
+                    $cadence,
+                    $state,
+                    $voting_block,
+                    false,
+                    false,
+                    context,
+                )
+            }};
         }
-        macro_rules! setup_single_leader_world {
+        macro_rules! setup_static_validation_world {
             ($kura:ident, $query:ident, $key_pairs:ident, $topology:ident, $leader:ident, $world:ident) => {
                 let $kura = Arc::new(Kura::blank_kura_for_testing());
                 let $query = LiveQueryStore::start_test();
-                let $key_pairs = vec![crate::block::checked_keypair_with_algorithm(
-                    Algorithm::BlsNormal,
-                )];
+                let mut $key_pairs = core::iter::repeat_with(|| {
+                    crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal)
+                })
+                .take(4)
+                .collect::<Vec<_>>();
+                $key_pairs.sort_by_key(|key| PeerId::new(key.public_key().clone()));
                 let $topology = test_topology_with_keys(&$key_pairs);
                 let $leader = &$key_pairs[0];
                 let mut $world = World::new();
-                insert_consensus_key(
-                    &mut $world,
-                    "leader",
-                    $leader,
-                    0,
-                    None,
-                    ConsensusKeyStatus::Active,
-                );
+                insert_active_consensus_keys(&mut $world, &$key_pairs);
             };
         }
         macro_rules! setup_da_validation_world {
-            ($kura:ident, $query:ident, $leader:ident, $topology:ident, $world:ident) => {
+            ($kura:ident, $query:ident, $leader:ident, $topology:ident, $world:ident, $keys:ident) => {
                 let $kura = Arc::new(Kura::blank_kura_for_testing());
                 let $query = LiveQueryStore::start_test();
-                let $leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-                let $topology = Topology::new(vec![PeerId::new($leader.public_key().clone())]);
+                let mut $keys = (0..4)
+                    .map(|_| checked_keypair_with_algorithm(Algorithm::BlsNormal))
+                    .collect::<Vec<_>>();
+                $keys.sort_by_key(|key| PeerId::new(key.public_key().clone()));
+                let $leader = $keys[0].clone();
+                let $topology = test_topology_with_keys(&$keys);
                 let mut $world = World::new();
-                insert_consensus_key(
-                    &mut $world,
-                    "validator",
-                    &$leader,
-                    0,
-                    None,
-                    ConsensusKeyStatus::Active,
-                );
+                insert_active_consensus_keys(&mut $world, &$keys);
             };
         }
         macro_rules! validate_signed_voting_test_block {
-            ($signed:ident, $topology:ident, $state:ident, $voting_block:ident, $time_source:ident, $result:ident) => {
+            ($signed:ident, $topology:ident, $state:ident, $voting_block:ident, $time_source:ident, $result:ident, $keys:ident, $cadence:expr) => {
                 let mut $voting_block = None;
                 let (_handle, $time_source) =
                     TimeSource::new_mock($signed.header().creation_time());
@@ -16397,7 +16037,9 @@ pub(crate) mod valid {
                     &$topology,
                     &$time_source,
                     &$state,
-                    &mut $voting_block
+                    &mut $voting_block,
+                    &$keys,
+                    $cadence
                 )
                 .unpack(|_| {});
             };
@@ -16467,11 +16109,6 @@ pub(crate) mod valid {
         ) -> iroha_data_model::block::consensus_v2::HeightContext {
             use iroha_data_model::block::consensus_v2 as wire;
 
-            let parent = state
-                .view()
-                .latest_block()
-                .expect("authenticated cache fixture has a committed parent");
-            assert_eq!(parent.header().height().get(), 1);
             let mut ordered_validator_keys = validator_keys.iter().collect::<Vec<_>>();
             ordered_validator_keys.sort_by_key(|key| PeerId::new(key.public_key().clone()));
             let roster = ordered_validator_keys
@@ -16490,7 +16127,7 @@ pub(crate) mod valid {
                 .finality_epoch_id()
                 .expect("cache fixture mint-finality roster is canonical");
             let genesis_parameters = wire::SumeragiV2GenesisContextParameters::recommended();
-            let parent_context = wire::HeightContext {
+            let mut parent_context = wire::HeightContext {
                 network_id: state.network_id,
                 protocol_version: wire::PROTOCOL_VERSION,
                 height: 1,
@@ -16513,82 +16150,90 @@ pub(crate) mod valid {
             parent_context
                 .validate()
                 .expect("cache fixture parent height context is canonical");
-            let subject = wire::BlockSubject {
-                parent_block_hash: parent.header().prev_block_hash(),
-                block_hash: parent.hash(),
-                payload_hash: parent
-                    .canonical_proposal_wire_hash()
-                    .expect("cache fixture parent has canonical proposal bytes"),
-            };
-            let round = wire::ConsensusRound {
-                context_id: parent_context.id(),
-                height: parent_context.height,
-                view: parent.header().view_change_index(),
-            };
-            let parent_wire = parent
-                .encode_wire()
-                .expect("cache fixture parent has canonical executed bytes");
-            let execution_commitment =
-                wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
-                    Hash::new(b"cache fixture parent state"),
-                    Hash::new(b"cache fixture post state"),
-                    Hash::new(b"cache fixture ordinary writes"),
-                    u64::try_from(parent_wire.len()).expect("cache fixture parent length fits u64"),
-                    parent
-                        .executed_block_wire_hash()
-                        .expect("cache fixture parent has a result-bearing wire hash"),
+            for height in 1..=state.view().height() {
+                let parent = state
+                    .kura()
+                    .get_block(NonZeroUsize::new(height).expect("parent height is nonzero"))
+                    .expect("authenticated validation fixture retains each parent body");
+                let subject = wire::BlockSubject {
+                    parent_block_hash: parent.header().prev_block_hash(),
+                    block_hash: parent.hash(),
+                    payload_hash: parent
+                        .canonical_proposal_wire_hash()
+                        .expect("cache fixture parent has canonical proposal bytes"),
+                };
+                let round = wire::ConsensusRound {
+                    context_id: parent_context.id(),
+                    height: parent_context.height,
+                    view: parent.header().view_change_index(),
+                };
+                let parent_wire = parent
+                    .encode_wire()
+                    .expect("cache fixture parent has canonical executed bytes");
+                let execution_commitment =
+                    wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+                        Hash::new(b"cache fixture parent state"),
+                        Hash::new(b"cache fixture post state"),
+                        Hash::new(b"cache fixture ordinary writes"),
+                        u64::try_from(parent_wire.len())
+                            .expect("cache fixture parent length fits u64"),
+                        parent
+                            .executed_block_wire_hash()
+                            .expect("cache fixture parent has a result-bearing wire hash"),
+                    );
+                let vote = wire::Vote {
+                    round,
+                    proposal_round: round,
+                    phase: wire::GlobalPhase::Commit,
+                    subject,
+                    execution_commitment,
+                    signer: 0,
+                    signature: Vec::new(),
+                };
+                let preimage = vote.signature_preimage();
+                let shares = ordered_validator_keys[..3]
+                    .iter()
+                    .map(|key| {
+                        Signature::new(key.private_key(), &preimage)
+                            .payload()
+                            .to_vec()
+                    })
+                    .collect::<Vec<_>>();
+                let parent_qc = wire::QuorumCertificate {
+                    round,
+                    proposal_round: round,
+                    phase: wire::GlobalPhase::Commit,
+                    subject,
+                    execution_commitment,
+                    signers: vec![0, 1, 2],
+                    aggregate_signature: iroha_crypto::bls_normal_aggregate_signatures(
+                        &shares.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+                    )
+                    .expect("aggregate cache fixture parent CommitQC"),
+                };
+                let validator_set_pops = ordered_validator_keys
+                    .iter()
+                    .map(|key| {
+                        iroha_crypto::bls_normal_pop_prove(key.private_key())
+                            .expect("cache fixture validator PoP")
+                    })
+                    .collect::<Vec<_>>();
+                let parent_artifact = wire::finality::V2FinalityArtifact::new(
+                    parent_context,
+                    subject,
+                    parent_qc,
+                    validator_set_pops,
                 );
-            let vote = wire::Vote {
-                round,
-                proposal_round: round,
-                phase: wire::GlobalPhase::Commit,
-                subject,
-                execution_commitment,
-                signer: 0,
-                signature: Vec::new(),
-            };
-            let preimage = vote.signature_preimage();
-            let shares = ordered_validator_keys[..3]
-                .iter()
-                .map(|key| {
-                    Signature::new(key.private_key(), &preimage)
-                        .payload()
-                        .to_vec()
-                })
-                .collect::<Vec<_>>();
-            let parent_qc = wire::QuorumCertificate {
-                round,
-                proposal_round: round,
-                phase: wire::GlobalPhase::Commit,
-                subject,
-                execution_commitment,
-                signers: vec![0, 1, 2],
-                aggregate_signature: iroha_crypto::bls_normal_aggregate_signatures(
-                    &shares.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+                let verified_parent = VerifiedV2FinalityArtifact::verify(parent_artifact)
+                    .expect("cache fixture parent finality is genuinely signed");
+                parent_context = crate::sumeragi::v2_context::build_successor_height_context(
+                    verified_parent.artifact(),
+                    Hash::new(b"cache fixture successor nexus context"),
+                    None,
                 )
-                .expect("aggregate cache fixture parent CommitQC"),
-            };
-            let validator_set_pops = ordered_validator_keys
-                .iter()
-                .map(|key| {
-                    iroha_crypto::bls_normal_pop_prove(key.private_key())
-                        .expect("cache fixture validator PoP")
-                })
-                .collect::<Vec<_>>();
-            let parent_artifact = wire::finality::V2FinalityArtifact::new(
-                parent_context,
-                subject,
-                parent_qc,
-                validator_set_pops,
-            );
-            let verified_parent = VerifiedV2FinalityArtifact::verify(parent_artifact)
-                .expect("cache fixture parent finality is genuinely signed");
-            crate::sumeragi::v2_context::build_successor_height_context(
-                verified_parent.artifact(),
-                Hash::new(b"cache fixture successor nexus context"),
-                None,
-            )
-            .expect("cache fixture has a canonical successor height context")
+                .expect("cache fixture has a canonical successor height context");
+            }
+            parent_context
         }
         macro_rules! setup_cacheable_transaction {
             ($state:ident, $tx_handle:ident, $tx_time_source:ident, $tx_hash:ident, $accepted:ident) => {
@@ -17442,6 +17087,7 @@ pub(crate) mod valid {
         #[test]
         fn autonomous_anchor_predecessor_accepts_exact_hash_only_snapshot_artifact() {
             let (state, kura, topology, time_source, keys) = lane_payload_context_fixture();
+            let mut snapshot_context = authenticated_permissioned_successor_context(&state, &keys);
             let leader = &keys[0];
             let mut predecessor = signed_lane_payload_context_block(
                 &state,
@@ -17456,11 +17102,19 @@ pub(crate) mod valid {
                 .external_entrypoints_cloned()
                 .map(|entrypoint| entrypoint.hash())
                 .collect::<Vec<_>>();
+            let axt_snapshot = state.block(predecessor.header()).axt_policy_snapshot();
             predecessor
-                .set_transaction_results(
+                .set_transaction_results_with_transcripts(
                     Vec::new(),
                     &predecessor_entrypoint_hashes,
-                    vec![Ok(DataTriggerSequence::default())],
+                    vec![
+                        iroha_data_model::transaction::signed::TransactionResultInner::Ok(
+                            DataTriggerSequence::default(),
+                        ),
+                    ],
+                    BTreeMap::new(),
+                    Vec::new(),
+                    axt_snapshot,
                 )
                 .expect("attach the canonical predecessor result and AXT policy snapshot");
             let predecessor_descriptor_hash = predecessor
@@ -17489,8 +17143,47 @@ pub(crate) mod valid {
                 2,
                 Some(predecessor_descriptor_hash),
             );
-            kura.force_hash_only_block_for_testing(nonzero!(2_usize))
-                .expect("evict snapshot predecessor body");
+            let snapshot_parent = state.view().latest_block().expect("snapshot parent body");
+            snapshot_context.height = 3;
+            snapshot_context.parent_commit_qc = None;
+            snapshot_context.snapshot_bootstrap = Some(
+                iroha_data_model::block::consensus_v2::SnapshotBootstrapAnchor {
+                    snapshot_height: 2,
+                    snapshot_block_hash: snapshot_parent.hash(),
+                    snapshot_block_creation_time_ms: snapshot_parent.header().creation_time_ms,
+                    snapshot_state_hash: crate::snapshot::canonical_state_snapshot_hash(&state),
+                },
+            );
+            snapshot_context.nexus_amx_context_hash =
+                crate::sumeragi::v2_recovery::committed_nexus_amx_context_hash(&state);
+            snapshot_context.execution_policy_hash =
+                crate::sumeragi::v2_recovery::committed_execution_policy_hash(&state)
+                    .expect("snapshot execution policy");
+            let snapshot_record =
+                iroha_data_model::block::consensus_v2::SnapshotV2BootstrapRecord {
+                    version:
+                        iroha_data_model::block::consensus_v2::SnapshotV2BootstrapRecord::VERSION,
+                    context: snapshot_context,
+                    validator_set_pops: keys
+                        .iter()
+                        .map(|key| {
+                            iroha_crypto::bls_normal_pop_prove(key.private_key())
+                                .expect("snapshot validator proof of possession")
+                        })
+                        .collect(),
+                };
+            snapshot_record
+                .validate()
+                .expect("canonical snapshot bootstrap record");
+            let snapshot_payload =
+                crate::snapshot::AuthenticatedSnapshotBootstrapPayload::for_testing(
+                    snapshot_record,
+                    state.committed_block_hashes_snapshot(),
+                );
+            kura.install_authenticated_snapshot_prefix_for_testing(&snapshot_payload)
+                .expect("install the exact authenticated snapshot prefix");
+            assert!(kura.is_audited_snapshot_import_height(nonzero!(2_usize)));
+            assert!(kura.read_block_body(nonzero!(2_usize)).unwrap().is_none());
             let successor_ownership = successor
                 .execution_context()
                 .and_then(|bundle| bundle.lane_payload_ownerships.first())
@@ -17804,10 +17497,54 @@ pub(crate) mod valid {
             (!digest.is_empty()).then_some(digest)
         }
         fn with_current_state_da_sidecars(
-            builder: BlockBuilder<Chained>,
+            mut builder: BlockBuilder<Chained>,
             state: &State,
         ) -> BlockBuilder<Chained> {
             let height = builder.0.header.height().get();
+            if builder.0.execution_context.is_none() && !builder.0.transactions.is_empty() {
+                let validators = state
+                    .resolve_lane_committee_at_height(
+                        crate::state::LaneAuthorityRoute::new(
+                            LaneId::SINGLE,
+                            DataSpaceId::UNIVERSAL,
+                        ),
+                        height,
+                    )
+                    .expect("validation fixture default lane has exact committee authority")
+                    .into_validators();
+                let hashes = builder
+                    .0
+                    .transactions
+                    .iter()
+                    .map(AcceptedTransaction::hash_as_entrypoint)
+                    .collect::<Vec<_>>();
+                let external = hashes
+                    .iter()
+                    .map(|hash| {
+                        ExternalExecutionContext::new(*hash, LaneId::SINGLE, DataSpaceId::UNIVERSAL)
+                    })
+                    .collect();
+                let ownership = sample_lane_payload_ownership_for_context_at_slot(
+                    height,
+                    builder.0.header.view_change_index(),
+                    LaneId::SINGLE,
+                    DataSpaceId::UNIVERSAL,
+                    state
+                        .lane_incarnation_at_height(LaneId::SINGLE, height)
+                        .expect("fixture lane is active"),
+                    1,
+                    0,
+                    (0..hashes.len())
+                        .map(|i| u64::try_from(i).expect("fixture index fits u64"))
+                        .collect(),
+                    hashes.into_iter().map(Hash::from).collect(),
+                    &validators,
+                );
+                builder = builder.with_execution_context(Some(
+                    BlockExecutionContextBundle::new(external)
+                        .with_lane_payload_ownerships(vec![ownership]),
+                ));
+            }
             let nexus = state.nexus_snapshot();
             let proof_policies = crate::da::active_proof_policy_bundle_at_height(&nexus, height);
             builder
@@ -19594,22 +19331,19 @@ pub(crate) mod valid {
         }
         #[test]
         fn validate_static_snapshot_accepts_valid_block() {
-            setup_single_leader_world!(kura, query, key_pairs, topology, leader, world);
+            setup_static_validation_world!(kura, query, key_pairs, topology, leader, world);
             let state = State::new_for_testing(world, Arc::clone(&kura), query);
+            install_test_lane_manifests_for_keypairs(&state, &key_pairs);
             let prev_hash =
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 1);
-            let candidate =
-                ValidBlock::new_dummy_and_modify_header(leader.private_key(), |header| {
-                    header.set_height(nonzero!(2_u64));
-                    header.set_prev_block_hash(Some(prev_hash));
-                    header.creation_time_ms = 2;
-                });
-            let signed = with_current_state_confidential_features(
-                candidate.into(),
-                &state,
-                &[(0, leader.private_key())],
-            );
             let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(2));
+            let candidate = BlockBuilder::new_with_time_source(Vec::new(), time_source.clone())
+                .chain(0, state.view().latest_block().as_deref());
+            let signed: SignedBlock = with_current_state_da_sidecars(candidate, &state)
+                .sign(leader.private_key())
+                .unpack(|_| {})
+                .into();
+            assert_eq!(signed.header().prev_block_hash(), Some(prev_hash));
             let static_data = {
                 let view = state.query_view();
                 validate_static_test_block!(&signed, &topology, &view, &time_source)
@@ -19696,18 +19430,16 @@ pub(crate) mod valid {
         }
         #[test]
         fn consensus_mode_effects_permissioned_skips_npos_derivation_without_signed_parameters() {
-            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let state = State::new_for_testing(
-                World::new(),
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
-            let block = npos_effects_block(leader.private_key(), 2, None);
+            setup_stateless_cache_state!(kura, state, leader_private, topology, validator_keys);
+            let block = npos_effects_block(&leader_private, 2, None);
             ValidBlock::validate_npos_effects_with_state(
                 &block,
                 &state,
                 Some(iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned),
-                None,
+                Some(&authenticated_permissioned_successor_context(
+                    &state,
+                    &validator_keys,
+                )),
             )
             .expect("permissioned validation must not derive NPoS-only penalties");
         }
@@ -19780,8 +19512,9 @@ pub(crate) mod valid {
         }
         #[test]
         fn validate_static_snapshot_rejects_invalid_signature() {
-            setup_single_leader_world!(kura, query, key_pairs, topology, leader, world);
+            setup_static_validation_world!(kura, query, key_pairs, topology, leader, world);
             let state = State::new_for_testing(world, Arc::clone(&kura), query);
+            install_test_lane_manifests_for_keypairs(&state, &key_pairs);
             let _prev_hash =
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 1);
             let (alice_id, alice_keypair) = gen_account_in("wonderland");
@@ -19845,8 +19578,9 @@ pub(crate) mod valid {
         }
         #[test]
         fn validate_static_snapshot_rejects_duplicate_signed_transaction_hashes() {
-            setup_single_leader_world!(kura, query, key_pairs, topology, leader, world);
+            setup_static_validation_world!(kura, query, key_pairs, topology, leader, world);
             let state = State::new_for_testing(world, Arc::clone(&kura), query);
+            install_test_lane_manifests_for_keypairs(&state, &key_pairs);
             let _prev_hash =
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 1);
             let (authority, signer) = gen_account_in("duplicate-check");
@@ -19870,10 +19604,25 @@ pub(crate) mod valid {
                 .sign(leader.private_key())
                 .unpack(|_| {});
             let signed: SignedBlock = new_block.into();
+            // Canonical lane ownership also rejects duplicate identities. Snapshot this
+            // ordinary admission policy directly so the stateless duplicate guard is
+            // exercised independently of that earlier state-dependent rejection.
             let static_data = {
                 let view = state.query_view();
-                validate_static_current_test_block!(&signed, &topology, &view, &time_source)
-                    .expect("static state-dependent validation should succeed")
+                let pipeline_cfg = view.pipeline().clone();
+                StaticValidationData {
+                    expected_block_height: view.height() + 1,
+                    max_clock_drift: view.world().parameters().sumeragi().max_clock_drift(),
+                    tx_params: view.world().parameters().transaction(),
+                    crypto_cfg: view.crypto(),
+                    pipeline_parallelism: crate::state::PipelineParallelism::new(&pipeline_cfg),
+                    pipeline_cfg,
+                    aggregate_lane: view.nexus().routing_policy.default_lane,
+                    queue_plan_stateless_validation_times: vec![
+                        None;
+                        signed.external_entrypoint_count()
+                    ],
+                }
             };
             let prepared_txs = ValidBlock::prepare_external_transactions(&signed);
             let committed_heights = {
@@ -19906,8 +19655,9 @@ pub(crate) mod valid {
         }
         #[test]
         fn validate_static_snapshot_rejects_replayed_sealed_signed_identity() {
-            setup_single_leader_world!(kura, query, key_pairs, topology, leader, world);
+            setup_static_validation_world!(kura, query, key_pairs, topology, leader, world);
             let state = State::new_for_testing(world, Arc::clone(&kura), query);
+            install_test_lane_manifests_for_keypairs(&state, &key_pairs);
             let prev_hash =
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 1);
             let (authority, signer) = gen_account_in("sealed-replay-static");
@@ -20007,8 +19757,9 @@ pub(crate) mod valid {
         }
         #[test]
         fn validate_static_state_dependent_rejects_missing_execution_context() {
-            setup_single_leader_world!(kura, query, key_pairs, topology, leader, world);
+            setup_static_validation_world!(kura, query, key_pairs, topology, leader, world);
             let state = State::new_for_testing(world, Arc::clone(&kura), query);
+            install_test_lane_manifests_for_keypairs(&state, &key_pairs);
             let _prev_hash =
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 1);
             let (authority, signer) = gen_account_in("context-check");
@@ -20023,8 +19774,9 @@ pub(crate) mod valid {
             .sign(signer.private_key());
             let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
             time_handle.advance(Duration::from_millis(1));
-            let new_block = BlockBuilder::new_with_time_source(vec![accepted], time_source.clone())
-                .chain(0, state.view().latest_block().as_deref())
+            let builder = BlockBuilder::new_with_time_source(vec![accepted], time_source.clone())
+                .chain(0, state.view().latest_block().as_deref());
+            let new_block = with_current_state_da_sidecars(builder, &state)
                 .sign(leader.private_key())
                 .unpack(|_| {});
             let mut signed: SignedBlock = new_block.into();
@@ -20044,8 +19796,9 @@ pub(crate) mod valid {
         }
         #[test]
         fn validate_static_state_dependent_rejects_execution_context_route_mismatch() {
-            setup_single_leader_world!(kura, query, key_pairs, topology, leader, world);
+            setup_static_validation_world!(kura, query, key_pairs, topology, leader, world);
             let state = State::new_for_testing(world, Arc::clone(&kura), query);
+            install_test_lane_manifests_for_keypairs(&state, &key_pairs);
             let _prev_hash =
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 1);
             let (authority, signer) = gen_account_in("context-check");
@@ -21507,8 +21260,9 @@ pub(crate) mod valid {
         }
         #[test]
         fn validate_static_state_dependent_rejects_stale_geometry_da_proof_policy_hash() {
-            setup_single_leader_world!(kura, query, key_pairs, topology, leader, world);
+            setup_static_validation_world!(kura, query, key_pairs, topology, leader, world);
             let state = State::new_for_testing(world, Arc::clone(&kura), query);
+            install_test_lane_manifests_for_keypairs(&state, &key_pairs);
             let _prev_hash =
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 1);
             let stale_lane = LaneId::new(1);
@@ -21605,8 +21359,9 @@ pub(crate) mod valid {
         }
         #[test]
         fn validate_static_state_dependent_rejects_future_created_autoscale_da_policy_hash() {
-            setup_single_leader_world!(kura, query, key_pairs, topology, leader, world);
+            setup_static_validation_world!(kura, query, key_pairs, topology, leader, world);
             let state = State::new_for_testing(world, Arc::clone(&kura), query);
+            install_test_lane_manifests_for_keypairs(&state, &key_pairs);
             let _prev_hash =
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 1);
             let future_created_lane = LaneId::new(1);
@@ -21648,8 +21403,9 @@ pub(crate) mod valid {
         }
         #[test]
         fn validate_static_state_dependent_accepts_height_aware_da_policy_hash() {
-            setup_single_leader_world!(kura, query, key_pairs, topology, leader, world);
+            setup_static_validation_world!(kura, query, key_pairs, topology, leader, world);
             let state = State::new_for_testing(world, Arc::clone(&kura), query);
+            install_test_lane_manifests_for_keypairs(&state, &key_pairs);
             let _prev_hash =
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 1);
             let future_created_lane = LaneId::new(1);
@@ -21969,8 +21725,9 @@ pub(crate) mod valid {
         }
         #[test]
         fn validate_keep_voting_block_rejects_unknown_da_lane() {
-            setup_da_validation_world!(kura, query, leader, topology, world);
+            setup_da_validation_world!(kura, query, leader, topology, world, validator_keys);
             let state = State::new_for_testing(world, Arc::clone(&kura), query);
+            install_test_lane_manifests_for_keypairs(&state, &validator_keys);
             let _prev_hash =
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 0);
             let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
@@ -22001,7 +21758,9 @@ pub(crate) mod valid {
                 state,
                 voting_block,
                 time_source,
-                result
+                result,
+                validator_keys,
+                Duration::from_millis(1)
             );
             let Err((_, err)) = result else {
                 panic!("expected DA commitment bundle rejection");
@@ -22020,8 +21779,9 @@ pub(crate) mod valid {
         }
         #[test]
         fn validate_keep_voting_block_rejects_stale_geometry_da_commitment_lane() {
-            setup_da_validation_world!(kura, query, leader, topology, world);
+            setup_da_validation_world!(kura, query, leader, topology, world, validator_keys);
             let state = State::new_for_testing(world, Arc::clone(&kura), query);
+            install_test_lane_manifests_for_keypairs(&state, &validator_keys);
             let _prev_hash =
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 0);
             let stale_lane = LaneId::new(1);
@@ -22071,7 +21831,9 @@ pub(crate) mod valid {
                 state,
                 voting_block,
                 time_source,
-                result
+                result,
+                validator_keys,
+                Duration::from_millis(1)
             );
             let Err((_, err)) = result else {
                 panic!("expected stale-geometry DA commitment rejection");
@@ -22085,8 +21847,9 @@ pub(crate) mod valid {
         }
         #[test]
         fn validate_keep_voting_block_rejects_stale_geometry_da_pin_intent_lane() {
-            setup_da_validation_world!(kura, query, leader, topology, world);
+            setup_da_validation_world!(kura, query, leader, topology, world, validator_keys);
             let state = State::new_for_testing(world, Arc::clone(&kura), query);
+            install_test_lane_manifests_for_keypairs(&state, &validator_keys);
             let _prev_hash =
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 0);
             let stale_lane = LaneId::new(1);
@@ -22130,7 +21893,9 @@ pub(crate) mod valid {
                 state,
                 voting_block,
                 time_source,
-                result
+                result,
+                validator_keys,
+                Duration::from_millis(1)
             );
             let Err((_, err)) = result else {
                 panic!("expected stale-geometry DA pin-intent rejection");
@@ -22144,8 +21909,9 @@ pub(crate) mod valid {
         }
         #[test]
         fn validate_keep_voting_block_rejects_future_created_autoscale_da_pin_intent_lane() {
-            setup_da_validation_world!(kura, query, leader, topology, world);
+            setup_da_validation_world!(kura, query, leader, topology, world, validator_keys);
             let state = State::new_for_testing(world, Arc::clone(&kura), query);
+            install_test_lane_manifests_for_keypairs(&state, &validator_keys);
             let _prev_hash =
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 0);
             let future_created_lane = LaneId::new(1);
@@ -22197,7 +21963,9 @@ pub(crate) mod valid {
                 state,
                 voting_block,
                 time_source,
-                result
+                result,
+                validator_keys,
+                Duration::from_millis(1)
             );
             let Err((_, err)) = result else {
                 panic!("expected future-created autoscale DA pin-intent rejection");
@@ -22211,8 +21979,9 @@ pub(crate) mod valid {
         }
         #[test]
         fn validate_keep_voting_block_rejects_duplicate_da_manifest() {
-            setup_da_validation_world!(kura, query, leader, topology, world);
+            setup_da_validation_world!(kura, query, leader, topology, world, validator_keys);
             let state = State::new_for_testing(world, Arc::clone(&kura), query);
+            install_test_lane_manifests_for_keypairs(&state, &validator_keys);
             let _prev_hash =
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 0);
             let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
@@ -22245,7 +22014,9 @@ pub(crate) mod valid {
                 state,
                 voting_block,
                 time_source,
-                result
+                result,
+                validator_keys,
+                Duration::from_millis(1)
             );
             let Err((_, err)) = result else {
                 panic!("expected DA commitment duplicate-manifest rejection");
@@ -22259,8 +22030,9 @@ pub(crate) mod valid {
         }
         #[test]
         fn validate_keep_voting_block_rejects_duplicate_da_storage_ticket() {
-            setup_da_validation_world!(kura, query, leader, topology, world);
+            setup_da_validation_world!(kura, query, leader, topology, world, validator_keys);
             let state = State::new_for_testing(world, Arc::clone(&kura), query);
+            install_test_lane_manifests_for_keypairs(&state, &validator_keys);
             let _prev_hash =
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 0);
             let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
@@ -22293,7 +22065,9 @@ pub(crate) mod valid {
                 state,
                 voting_block,
                 time_source,
-                result
+                result,
+                validator_keys,
+                Duration::from_millis(1)
             );
             let Err((_, err)) = result else {
                 panic!("expected DA commitment duplicate-storage-ticket rejection");
@@ -22307,8 +22081,9 @@ pub(crate) mod valid {
         }
         #[test]
         fn validate_keep_voting_block_rejects_da_commitment_hash_mismatch() {
-            setup_da_validation_world!(kura, query, leader, topology, world);
+            setup_da_validation_world!(kura, query, leader, topology, world, validator_keys);
             let state = State::new_for_testing(world, Arc::clone(&kura), query);
+            install_test_lane_manifests_for_keypairs(&state, &validator_keys);
             let _prev_hash =
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 0);
             let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
@@ -22342,7 +22117,9 @@ pub(crate) mod valid {
                 state,
                 voting_block,
                 time_source,
-                result
+                result,
+                validator_keys,
+                Duration::from_millis(1)
             );
             let Err((_, err)) = result else {
                 panic!("expected DA commitment hash mismatch rejection");
@@ -22355,8 +22132,9 @@ pub(crate) mod valid {
         }
         #[test]
         fn validate_keep_voting_block_rejects_da_pin_intent_hash_mismatch() {
-            setup_da_validation_world!(kura, query, leader, topology, world);
+            setup_da_validation_world!(kura, query, leader, topology, world, validator_keys);
             let state = State::new_for_testing(world, Arc::clone(&kura), query);
+            install_test_lane_manifests_for_keypairs(&state, &validator_keys);
             let _prev_hash =
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 0);
             let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
@@ -22375,6 +22153,7 @@ pub(crate) mod valid {
             let mut chained = BlockBuilder::new_with_time_source(Vec::new(), time_source.clone())
                 .chain(0, state.view().latest_block().as_deref())
                 .with_da_pin_intents(Some(bundle));
+            chained = with_current_state_da_sidecars(chained, &state);
             chained.0.header.set_da_pin_intents_hash(forged);
             assert_ne!(expected, forged, "fixture forged hash must differ");
             let signature = BlockSignature::new(
@@ -22399,7 +22178,9 @@ pub(crate) mod valid {
                 state,
                 voting_block,
                 time_source,
-                result
+                result,
+                validator_keys,
+                Duration::from_millis(1)
             );
             let Err((_, err)) = result else {
                 panic!("expected DA pin-intent hash mismatch rejection");
@@ -22414,7 +22195,7 @@ pub(crate) mod valid {
         }
         #[test]
         fn validate_keep_voting_block_rejects_duplicate_da_pin_intent_ticket() {
-            setup_da_validation_world!(kura, query, leader, topology, world);
+            setup_da_validation_world!(kura, query, leader, topology, world, validator_keys);
             insert_test_da_owner(&mut world);
             let state = State::new_with_chain_and_network_id_for_testing(
                 world,
@@ -22454,7 +22235,9 @@ pub(crate) mod valid {
                 state,
                 voting_block,
                 time_source,
-                result
+                result,
+                validator_keys,
+                Duration::from_millis(1)
             );
             let Err((_, err)) = result else {
                 panic!("expected DA pin-intent duplicate-ticket rejection");
@@ -22475,7 +22258,7 @@ pub(crate) mod valid {
         }
         #[test]
         fn validate_keep_voting_block_enforces_consensus_da_ingest_quota() {
-            setup_da_validation_world!(kura, query, leader, topology, world);
+            setup_da_validation_world!(kura, query, leader, topology, world, validator_keys);
             insert_test_da_owner(&mut world);
             let state = State::new_with_chain_and_network_id_for_testing(
                 world,
@@ -22519,7 +22302,9 @@ pub(crate) mod valid {
                 state,
                 voting_block,
                 time_source,
-                result
+                result,
+                validator_keys,
+                Duration::from_millis(1)
             );
             let Err((_, err)) = result else {
                 panic!("expected consensus DA ingest quota rejection");
@@ -22537,7 +22322,7 @@ pub(crate) mod valid {
         }
         #[test]
         fn validate_keep_voting_block_rejects_committed_da_pin_intent_identity_reuse() {
-            setup_da_validation_world!(kura, query, leader, topology, world);
+            setup_da_validation_world!(kura, query, leader, topology, world, validator_keys);
             let da_owner = iroha_data_model::account::AccountId::new(
                 test_da_owner_keypair().public_key().clone(),
             );
@@ -22605,7 +22390,9 @@ pub(crate) mod valid {
                     &topology,
                     &time_source,
                     &state,
-                    &mut voting_block
+                    &mut voting_block,
+                    &validator_keys,
+                    now
                 )
                 .unpack(|_| {});
                 let Err((_, err)) = result else {
@@ -22658,8 +22445,9 @@ pub(crate) mod valid {
         }
         #[test]
         fn validate_keep_voting_block_rejects_unsupported_da_pin_intent_version() {
-            setup_da_validation_world!(kura, query, leader, topology, world);
+            setup_da_validation_world!(kura, query, leader, topology, world, validator_keys);
             let state = State::new_for_testing(world, Arc::clone(&kura), query);
+            install_test_lane_manifests_for_keypairs(&state, &validator_keys);
             let _prev_hash =
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 0);
             let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
@@ -22685,7 +22473,9 @@ pub(crate) mod valid {
                 state,
                 voting_block,
                 time_source,
-                result
+                result,
+                validator_keys,
+                Duration::from_millis(1)
             );
             let Err((_, err)) = result else {
                 panic!("expected DA pin-intent version rejection");
@@ -22699,8 +22489,9 @@ pub(crate) mod valid {
         }
         #[test]
         fn validate_keep_voting_block_rejects_da_cursor_regression() {
-            setup_da_validation_world!(kura, query, leader, topology, world);
+            setup_da_validation_world!(kura, query, leader, topology, world, validator_keys);
             let state = State::new_for_testing(world, Arc::clone(&kura), query);
+            install_test_lane_manifests_for_keypairs(&state, &validator_keys);
             let _prev_hash =
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 0);
             let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(2));
@@ -22760,7 +22551,9 @@ pub(crate) mod valid {
                 state,
                 voting_block,
                 time_source,
-                result
+                result,
+                validator_keys,
+                Duration::from_millis(2)
             );
             let Err((_, err)) = result else {
                 panic!("expected DA shard cursor regression rejection");
@@ -22779,10 +22572,13 @@ pub(crate) mod valid {
             let query = LiveQueryStore::start_test();
             let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let proxy_tail = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let topology = Topology::new(vec![
-                PeerId::new(leader.public_key().clone()),
-                PeerId::new(proxy_tail.public_key().clone()),
-            ]);
+            let validator_keys = vec![
+                leader.clone(),
+                proxy_tail.clone(),
+                checked_keypair_with_algorithm(Algorithm::BlsNormal),
+                checked_keypair_with_algorithm(Algorithm::BlsNormal),
+            ];
+            let topology = test_topology_with_keys(&validator_keys);
             let mut params = Parameters::default();
             params.sumeragi.key_overlap_grace_blocks = 0;
             params.sumeragi.key_expiry_grace_blocks = 0;
@@ -22804,17 +22600,21 @@ pub(crate) mod valid {
                 Some(1),
                 ConsensusKeyStatus::Active,
             );
+            insert_active_consensus_keys(&mut world, &validator_keys[2..]);
             let state = State::new(world, Arc::clone(&kura), query);
+            install_test_lane_manifests_for_keypairs(&state, &validator_keys);
             let _prev_hash =
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 0);
             let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(2));
             let prev_block = state.view().latest_block().expect("previous block");
-            let mut signed: SignedBlock =
+            let mut signed: SignedBlock = with_current_state_da_sidecars(
                 BlockBuilder::new_with_time_source(Vec::new(), time_source.clone())
-                    .chain(0, Some(prev_block.as_ref()))
-                    .sign(leader.private_key())
-                    .unpack(|_| {})
-                    .into();
+                    .chain(0, Some(prev_block.as_ref())),
+                &state,
+            )
+            .sign(leader.private_key())
+            .unpack(|_| {})
+            .into();
             let block_hash = signed.hash();
             let proxy_idx = topology
                 .position(proxy_tail.public_key())
@@ -22832,7 +22632,9 @@ pub(crate) mod valid {
                 &topology,
                 &time_source,
                 &state,
-                &mut voting_block
+                &mut voting_block,
+                &validator_keys,
+                Duration::from_millis(2)
             )
             .unpack(|_| {});
             let Err((_, err)) = result else {
@@ -22851,10 +22653,13 @@ pub(crate) mod valid {
             let query = LiveQueryStore::start_test();
             let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let proxy_tail = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let topology = Topology::new(vec![
-                PeerId::new(leader.public_key().clone()),
-                PeerId::new(proxy_tail.public_key().clone()),
-            ]);
+            let validator_keys = vec![
+                leader.clone(),
+                proxy_tail.clone(),
+                checked_keypair_with_algorithm(Algorithm::BlsNormal),
+                checked_keypair_with_algorithm(Algorithm::BlsNormal),
+            ];
+            let topology = test_topology_with_keys(&validator_keys);
             let mut params = Parameters::default();
             params.sumeragi.key_overlap_grace_blocks = 1;
             params.sumeragi.key_expiry_grace_blocks = 0;
@@ -22876,7 +22681,26 @@ pub(crate) mod valid {
                 Some(2),
                 ConsensusKeyStatus::Retiring,
             );
+            insert_active_consensus_keys(&mut world, &validator_keys[2..]);
+            // Signature grace authenticates the bound global roster. A newly selected lane
+            // committee must use active keys, so replace its retiring member explicitly.
+            let lane_replacement = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            insert_consensus_key(
+                &mut world,
+                "lane-replacement",
+                &lane_replacement,
+                0,
+                None,
+                ConsensusKeyStatus::Active,
+            );
+            let lane_keys = vec![
+                validator_keys[0].clone(),
+                validator_keys[2].clone(),
+                validator_keys[3].clone(),
+                lane_replacement,
+            ];
             let state = State::new(world, Arc::clone(&kura), query);
+            install_test_lane_manifests_for_keypairs(&state, &lane_keys);
             let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(2));
             let _prev_hash =
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 0);
@@ -22914,7 +22738,9 @@ pub(crate) mod valid {
                 &topology,
                 &time_source,
                 &state,
-                &mut voting_block
+                &mut voting_block,
+                &validator_keys,
+                Duration::from_millis(2)
             )
             .unpack(|_| {});
             if let Err((_, err)) = result {
@@ -22927,10 +22753,13 @@ pub(crate) mod valid {
             let query = LiveQueryStore::start_test();
             let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let proxy_tail = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let topology = Topology::new(vec![
-                PeerId::new(leader.public_key().clone()),
-                PeerId::new(proxy_tail.public_key().clone()),
-            ]);
+            let validator_keys = vec![
+                leader.clone(),
+                proxy_tail.clone(),
+                checked_keypair_with_algorithm(Algorithm::BlsNormal),
+                checked_keypair_with_algorithm(Algorithm::BlsNormal),
+            ];
+            let topology = test_topology_with_keys(&validator_keys);
             let mut params = Parameters::default();
             params.sumeragi.key_overlap_grace_blocks = 0;
             params.sumeragi.key_expiry_grace_blocks = 0;
@@ -22945,7 +22774,9 @@ pub(crate) mod valid {
                 ConsensusKeyStatus::Active,
             );
             // Deliberately omit the proxy-tail consensus key to exercise the missing-key path.
+            insert_active_consensus_keys(&mut world, &validator_keys[2..]);
             let state = State::new(world, Arc::clone(&kura), query);
+            install_test_lane_manifests_for_keypairs(&state, &validator_keys);
             let prev_hash =
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 0);
             let mut candidate =
@@ -22955,8 +22786,13 @@ pub(crate) mod valid {
                     header.creation_time_ms = 1;
                 });
             candidate.sign(&proxy_tail, &topology);
+            let mut signed: SignedBlock = candidate.into();
+            signed.set_da_proof_policies(Some(crate::da::active_proof_policy_bundle_at_height(
+                &state.nexus_snapshot(),
+                2,
+            )));
             let signed = with_current_state_confidential_features(
-                candidate.into(),
+                signed,
                 &state,
                 &[(0, leader.private_key()), (1, proxy_tail.private_key())],
             );
@@ -22967,7 +22803,9 @@ pub(crate) mod valid {
                 &topology,
                 &time_source,
                 &state,
-                &mut voting_block
+                &mut voting_block,
+                &validator_keys,
+                Duration::from_millis(1)
             )
             .unpack(|_| {});
             let Err((_, err)) = result else {
@@ -23157,36 +22995,8 @@ pub(crate) mod valid {
         }
         #[test]
         fn empty_block_rejected_during_validation() {
-            let kura = Arc::new(Kura::blank_kura_for_testing());
-            let query = LiveQueryStore::start_test();
-            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let mut world = World::new();
-            insert_consensus_key(
-                &mut world,
-                "empty-block-validator",
-                &leader,
-                0,
-                None,
-                ConsensusKeyStatus::Active,
-            );
-            let state = State::new_for_testing(world, Arc::clone(&kura), query);
-            let (leader_public, leader_private) = leader.into_parts();
-            let topology = Topology::new(vec![PeerId::new(leader_public.clone())]);
-            // Commit a dummy previous block so the state has height == 1.
-            let prev_valid = ValidBlock::new_dummy_and_modify_header(&leader_private, |header| {
-                header.set_height(nonzero!(1_u64));
-                header.creation_time_ms = 0;
-            });
-            let prev_committed = prev_valid.commit_unchecked().unpack(|_| {});
-            {
-                let mut prev_state_block = state.block(prev_committed.as_ref().header());
-                let _ = prev_state_block
-                    .apply_without_execution(&prev_committed, topology.as_ref().to_owned());
-                prev_state_block.commit().unwrap();
-            }
-            kura.store_block(prev_committed.clone())
-                .expect("store previous block");
-            let prev_hash = prev_committed.as_ref().hash();
+            setup_stateless_cache_state!(kura, state, leader_private, topology, validator_keys);
+            let prev_hash = state.view().latest_block().expect("fixture parent").hash();
             // Candidate block with no overlays (should be rejected).
             let candidate_block = {
                 let valid = ValidBlock::new_dummy_and_modify_header(&leader_private, |header| {
@@ -23257,24 +23067,15 @@ pub(crate) mod valid {
                 }));
             }
             let mut v2_voting_block: Option<super::super::VotingBlock> = None;
-            let parent_time = state
-                .view()
-                .latest_block()
-                .expect("heartbeat fixture parent")
-                .header()
-                .creation_time();
-            let v2_cadence = candidate_block
-                .header()
-                .creation_time()
-                .saturating_sub(parent_time);
+            let v2_cadence = Duration::from_millis(1);
             let v2_result = ValidBlock::validate_sumeragi_v2_candidate_keep_voting_block(
                 candidate_block.clone(),
                 &topology,
                 &ALICE_ID,
                 &time_source,
                 v2_cadence,
-                SumeragiV2ValidationContext::for_body_without_context_bound_attachments(
-                    &candidate_block,
+                SumeragiV2ValidationContext::from_height_context(
+                    &authenticated_permissioned_successor_context(&state, &validator_keys),
                 ),
                 &state,
                 &mut v2_voting_block,
@@ -23291,7 +23092,9 @@ pub(crate) mod valid {
                 &topology,
                 &time_source,
                 &state,
-                &mut voting_block
+                &mut voting_block,
+                &validator_keys,
+                Duration::from_millis(1)
             )
             .unpack(|_| {});
             let err = match result {
@@ -23302,21 +23105,10 @@ pub(crate) mod valid {
         }
         #[test]
         fn v2_validation_is_wall_clock_independent_and_uses_height_context_for_reconfiguration() {
-            let kura = Arc::new(Kura::blank_kura_for_testing());
-            let query = LiveQueryStore::start_test();
-            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let mut world = World::new();
-            insert_consensus_key(
-                &mut world,
-                "v2-wall-clock-validator",
-                &leader,
-                0,
-                None,
-                ConsensusKeyStatus::Active,
-            );
+            setup_da_validation_world!(kura, query, leader, topology, world, validator_keys);
             let state = State::new_for_testing(world, Arc::clone(&kura), query);
-            let (leader_public, leader_private) = leader.into_parts();
-            let topology = Topology::new(vec![PeerId::new(leader_public)]);
+            install_test_lane_manifests_for_keypairs(&state, &validator_keys);
+            let leader_private = leader.private_key().clone();
             let first =
                 commit_block_at_height(&state, &kura, &topology, &leader_private, 1, None, 1);
             let _second = commit_block_at_height(
@@ -23361,7 +23153,9 @@ pub(crate) mod valid {
                 &ALICE_ID,
                 &local_time,
                 Duration::from_millis(999_998),
-                SumeragiV2ValidationContext::for_body_without_context_bound_attachments(&candidate),
+                SumeragiV2ValidationContext::from_height_context(
+                    &authenticated_permissioned_successor_context(&state, &validator_keys),
+                ),
                 &state,
                 &mut v2_voting_block,
             )
@@ -23380,8 +23174,8 @@ pub(crate) mod valid {
                 &ALICE_ID,
                 &local_time,
                 Duration::from_millis(999_998),
-                SumeragiV2ValidationContext::for_body_without_context_bound_attachments(
-                    &noncanonical,
+                SumeragiV2ValidationContext::from_height_context(
+                    &authenticated_permissioned_successor_context(&state, &validator_keys),
                 ),
                 &state,
                 &mut noncanonical_voting_block,
@@ -23405,21 +23199,9 @@ pub(crate) mod valid {
         }
         #[test]
         fn v2_snapshot_parent_enforces_authenticated_hash_height_and_logical_time() {
-            let kura = Arc::new(Kura::blank_kura_for_testing());
-            let query = LiveQueryStore::start_test();
-            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let mut world = World::new();
-            insert_consensus_key(
-                &mut world,
-                "v2-snapshot-validator",
-                &leader,
-                0,
-                None,
-                ConsensusKeyStatus::Active,
-            );
+            setup_da_validation_world!(kura, query, leader, topology, world, validator_keys);
             let state = State::new_for_testing(world, Arc::clone(&kura), query);
-            let peer = PeerId::new(leader.public_key().clone());
-            let topology = Topology::new(vec![peer.clone()]);
+            install_test_lane_manifests_for_keypairs(&state, &validator_keys);
             let first =
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 1);
             let second = commit_block_at_height(
@@ -23445,18 +23227,7 @@ pub(crate) mod valid {
                 snapshot_block_creation_time_ms: 2,
                 snapshot_state_hash: crate::snapshot::canonical_state_snapshot_hash(&state),
             };
-            let mut roster_peers = vec![peer];
-            roster_peers.extend(
-                core::iter::repeat_with(|| {
-                    PeerId::new(
-                        crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal)
-                            .public_key()
-                            .clone(),
-                    )
-                })
-                .take(3),
-            );
-            roster_peers.sort();
+            let roster_peers = topology.as_ref().to_vec();
             let roster = roster_peers
                 .into_iter()
                 .map(|validator| consensus_v2::ValidatorPower {
@@ -23567,8 +23338,9 @@ pub(crate) mod valid {
         }
         #[test]
         fn da_only_block_is_not_rejected_as_empty() {
-            setup_da_validation_world!(kura, query, leader, topology, world);
+            setup_da_validation_world!(kura, query, leader, topology, world, validator_keys);
             let state = State::new_for_testing(world, Arc::clone(&kura), query);
+            install_test_lane_manifests_for_keypairs(&state, &validator_keys);
             let _prev_hash =
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 0);
             let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
@@ -23631,7 +23403,9 @@ pub(crate) mod valid {
                     &topology,
                     &validation_time_source,
                     &state,
-                    &mut voting_block
+                    &mut voting_block,
+                    &validator_keys,
+                    Duration::from_millis(1)
                 )
                 .unpack(|_| {})
                 .expect("DA-only block should be accepted");
@@ -23639,26 +23413,7 @@ pub(crate) mod valid {
         }
         #[test]
         fn rejection_only_block_is_not_treated_as_empty() {
-            let kura = Arc::new(Kura::blank_kura_for_testing());
-            let query = LiveQueryStore::start_test();
-            let state = State::new(World::new(), Arc::clone(&kura), query);
-            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let (leader_public, leader_private) = leader.into_parts();
-            let topology = Topology::new(vec![PeerId::new(leader_public.clone())]);
-            // Commit a dummy previous block so the state has height == 1.
-            let prev_valid = ValidBlock::new_dummy_and_modify_header(&leader_private, |header| {
-                header.set_height(nonzero!(1_u64));
-                header.creation_time_ms = 0;
-            });
-            let prev_committed = prev_valid.commit_unchecked().unpack(|_| {});
-            {
-                let mut prev_state_block = state.block(prev_committed.as_ref().header());
-                let _ = prev_state_block
-                    .apply_without_execution(&prev_committed, topology.as_ref().to_owned());
-                prev_state_block.commit().unwrap();
-            }
-            kura.store_block(prev_committed.clone())
-                .expect("store previous block");
+            setup_stateless_cache_state!(kura, state, leader_private, topology, validator_keys);
             // Build a transaction that will be rejected (authority account is absent).
             let (authority, signer) = gen_account_in("wonderland");
             let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(10));
@@ -23673,7 +23428,7 @@ pub(crate) mod valid {
             let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
             // Assemble and validate a block that contains the rejected transaction.
             let builder = BlockBuilder::new_with_time_source(vec![accepted], time_source.clone());
-            let builder = builder.chain(0, Some(prev_committed.as_ref()));
+            let builder = builder.chain(0, state.view().latest_block().as_deref());
             let new_block = with_current_state_da_sidecars(builder, &state)
                 .sign(&leader_private)
                 .unpack(|_| {});
@@ -23684,7 +23439,9 @@ pub(crate) mod valid {
                 &topology,
                 &time_source,
                 &state,
-                &mut voting_block
+                &mut voting_block,
+                &validator_keys,
+                Duration::from_millis(10)
             )
             .unpack(|_| {});
             let (valid_block, state_block) =
@@ -23700,25 +23457,8 @@ pub(crate) mod valid {
         }
         #[test]
         fn validate_keep_voting_block_rejects_forged_committed_fragment_count() {
-            let kura = Arc::new(Kura::blank_kura_for_testing());
-            let query = LiveQueryStore::start_test();
-            let state = State::new(World::new(), Arc::clone(&kura), query);
-            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let (leader_public, leader_private) = leader.into_parts();
-            let topology = Topology::new(vec![PeerId::new(leader_public.clone())]);
-            let prev_valid = ValidBlock::new_dummy_and_modify_header(&leader_private, |header| {
-                header.set_height(nonzero!(1_u64));
-                header.creation_time_ms = 0;
-            });
-            let prev_committed = prev_valid.commit_unchecked().unpack(|_| {});
-            {
-                let mut prev_state_block = state.block(prev_committed.as_ref().header());
-                let _ = prev_state_block
-                    .apply_without_execution(&prev_committed, topology.as_ref().to_owned());
-                prev_state_block.commit().unwrap();
-            }
-            kura.store_block(prev_committed.clone())
-                .expect("store previous block");
+            setup_stateless_cache_state!(kura, state, leader_private, topology, validator_keys);
+            let prev_committed = state.view().latest_block().expect("fixture parent");
             let (authority, signer) = gen_account_in("wonderland");
             let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(10));
             let tx = TransactionBuilder::new_with_time_source(
@@ -23758,7 +23498,9 @@ pub(crate) mod valid {
                 &topology,
                 &time_source,
                 &state,
-                &mut voting_block
+                &mut voting_block,
+                &validator_keys,
+                Duration::from_millis(10)
             )
             .unpack(|_| {});
             let Err((_, err)) = result else {
@@ -23774,25 +23516,8 @@ pub(crate) mod valid {
         }
         #[test]
         fn advertised_zero_committed_fragment_count_is_rejected() {
-            let kura = Arc::new(Kura::blank_kura_for_testing());
-            let query = LiveQueryStore::start_test();
-            let state = State::new(World::new(), Arc::clone(&kura), query);
-            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let (leader_public, leader_private) = leader.into_parts();
-            let topology = Topology::new(vec![PeerId::new(leader_public.clone())]);
-            let prev_valid = ValidBlock::new_dummy_and_modify_header(&leader_private, |header| {
-                header.set_height(nonzero!(1_u64));
-                header.creation_time_ms = 0;
-            });
-            let prev_committed = prev_valid.commit_unchecked().unpack(|_| {});
-            {
-                let mut prev_state_block = state.block(prev_committed.as_ref().header());
-                let _ = prev_state_block
-                    .apply_without_execution(&prev_committed, topology.as_ref().to_owned());
-                prev_state_block.commit().unwrap();
-            }
-            kura.store_block(prev_committed.clone())
-                .expect("store previous block");
+            setup_stateless_cache_state!(kura, state, leader_private, topology, validator_keys);
+            let prev_committed = state.view().latest_block().expect("fixture parent");
             let (authority, signer) = gen_account_in("wonderland");
             let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(10));
             let tx = TransactionBuilder::new_with_time_source(
@@ -23836,7 +23561,9 @@ pub(crate) mod valid {
                 &topology,
                 &time_source,
                 &state,
-                &mut voting_block
+                &mut voting_block,
+                &validator_keys,
+                Duration::from_millis(10)
             )
             .unpack(|_| {});
             let Err((_, error)) = result else {
@@ -24062,14 +23789,16 @@ pub(crate) mod valid {
         }
         fn validate_queue_plan_ttl_fixture(
             fixture: &QueuePlanTtlFixture,
-        ) -> Result<(ValidBlock, StateBlock<'_>), Error> {
+        ) -> Result<(ValidBlock, Box<StateBlock<'_>>), Error> {
             let mut voting_block = None;
-            validate_voting_test_block!(
+            // External QueuePlan roles are rejected before height-context validation.
+            validate_voting_test_block!(without_authenticated_context;
                 fixture.block.clone(),
                 &fixture.topology,
                 &fixture.block_time_source,
                 &fixture.state,
-                &mut voting_block
+                &mut voting_block,
+                Duration::from_millis(1)
             )
             .unpack(|_| {})
         }
@@ -24217,14 +23946,7 @@ pub(crate) mod valid {
         }
         #[test]
         fn validate_keep_voting_block_uses_block_time_for_ttl_checks() {
-            let kura = Arc::new(Kura::blank_kura_for_testing());
-            let query = LiveQueryStore::start_test();
-            let state = State::new(World::new(), Arc::clone(&kura), query);
-            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let (leader_public, leader_private) = leader.into_parts();
-            let topology = Topology::new(vec![PeerId::new(leader_public.clone())]);
-            // Seed the chain with a committed block so height and timestamps are set.
-            let _ = commit_block_at_height(&state, &kura, &topology, &leader_private, 1, None, 0);
+            setup_stateless_cache_state!(kura, state, leader_private, topology, validator_keys);
             // Build a transaction that is valid at block time but would be expired against wall-clock now.
             let (_tx_handle, tx_time_source) = TimeSource::new_mock(Duration::from_millis(0));
             let (authority, signer) = gen_account_in("ttl-synced-block");
@@ -24256,7 +23978,9 @@ pub(crate) mod valid {
                 &topology,
                 &validation_time_source,
                 &state,
-                &mut voting_block
+                &mut voting_block,
+                &validator_keys,
+                Duration::from_millis(50)
             )
             .unpack(|_| {});
             assert!(
@@ -24282,7 +24006,9 @@ pub(crate) mod valid {
                 &topology,
                 &block_time_source,
                 &state,
-                &mut voting_block
+                &mut voting_block,
+                &validator_keys,
+                Duration::from_millis(1)
             )
             .unpack(|_| {});
             assert!(
@@ -24325,7 +24051,9 @@ pub(crate) mod valid {
                 &topology,
                 &TimeSource::new_system(),
                 &state,
-                &mut voting_block
+                &mut voting_block,
+                &validator_keys,
+                Duration::from_millis(10)
             )
             .unpack(|_| {})
             .expect("valid block should warm stateless cache");
@@ -24352,24 +24080,15 @@ pub(crate) mod valid {
                 );
             }
             let mut v2_voting_block: Option<super::super::VotingBlock> = None;
-            let parent_time = state
-                .view()
-                .latest_block()
-                .expect("signature fixture parent")
-                .header()
-                .creation_time();
-            let v2_cadence = invalid_signed_block
-                .header()
-                .creation_time()
-                .saturating_sub(parent_time);
+            let v2_cadence = Duration::from_millis(20);
             let v2_result = ValidBlock::validate_sumeragi_v2_candidate_keep_voting_block(
                 invalid_signed_block.clone(),
                 &topology,
                 &ALICE_ID,
                 &TimeSource::new_system(),
                 v2_cadence,
-                SumeragiV2ValidationContext::for_body_without_context_bound_attachments(
-                    &invalid_signed_block,
+                SumeragiV2ValidationContext::from_height_context(
+                    &authenticated_permissioned_successor_context(&state, &validator_keys),
                 ),
                 &state,
                 &mut v2_voting_block,
@@ -24390,7 +24109,9 @@ pub(crate) mod valid {
                 &topology,
                 &TimeSource::new_system(),
                 &state,
-                &mut voting_block
+                &mut voting_block,
+                &validator_keys,
+                Duration::from_millis(20)
             )
             .unpack(|_| {});
             let Err(err) = result else {
@@ -24487,14 +24208,74 @@ pub(crate) mod valid {
             );
         }
         #[test]
+        fn fixture_voting_adapters_enforce_configured_block_cadence() {
+            setup_stateless_cache_state!(kura, state, leader_private, topology, validator_keys);
+            setup_cacheable_transaction!(state, _tx_handle, tx_time_source, _tx_hash, accepted);
+            build_cacheable_block!(
+                state,
+                leader_private,
+                accepted,
+                _block_handle,
+                block_time_source,
+                canonical
+            );
+            let context = authenticated_permissioned_successor_context(&state, &validator_keys);
+            for creation_time_ms in [1, 2] {
+                let mut candidate = canonical.clone();
+                let mut header = candidate.header();
+                header.creation_time_ms = creation_time_ms;
+                candidate.replace_header_for_testing(header);
+                let candidate = with_current_state_confidential_features(
+                    candidate,
+                    &state,
+                    &[(0, &leader_private)],
+                );
+                for prevalidated in [false, true] {
+                    let mut voting_block = None;
+                    let mut timings = ValidationTimings::new();
+                    let validation_context =
+                        SumeragiV2ValidationContext::from_height_context(&context);
+                    let result = if prevalidated {
+                        ValidBlock::validate_sumeragi_v2_fixture_prevalidated_with_events_and_timing(
+                            candidate.clone(), &topology, &ALICE_ID, &block_time_source,
+                            Duration::from_millis(1), &state, &mut voting_block,
+                            validation_context, &mut timings, |_| {},
+                        ).unpack(|_| {})
+                    } else {
+                        ValidBlock::validate_sumeragi_v2_fixture_keep_voting_block(
+                            candidate.clone(),
+                            &topology,
+                            &ALICE_ID,
+                            &block_time_source,
+                            Duration::from_millis(1),
+                            &state,
+                            &mut voting_block,
+                            false,
+                            false,
+                            validation_context,
+                        )
+                        .unpack(|_| {})
+                    };
+                    if creation_time_ms == 1 {
+                        drop(result.expect("configured cadence accepts the canonical candidate"));
+                    } else {
+                        let Err((_, error)) = result else {
+                            panic!("candidate time cannot redefine validation cadence");
+                        };
+                        assert!(matches!(
+                            *error,
+                            BlockValidationError::NonCanonicalV2BlockTime {
+                                expected_ms: 1,
+                                actual_ms: 2,
+                            }
+                        ));
+                    }
+                }
+            }
+        }
+        #[test]
         fn prevalidated_commit_skips_only_the_authenticated_block_signature() {
-            let kura = Arc::new(Kura::blank_kura_for_testing());
-            let query = LiveQueryStore::start_test();
-            let state = State::new(World::new(), Arc::clone(&kura), query);
-            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let (leader_public, leader_private) = leader.into_parts();
-            let topology = Topology::new(vec![PeerId::new(leader_public.clone())]);
-            let _ = commit_block_at_height(&state, &kura, &topology, &leader_private, 1, None, 0);
+            setup_stateless_cache_state!(kura, state, leader_private, topology, validator_keys);
             let (_tx_handle, tx_time_source) = TimeSource::new_mock(Duration::from_millis(0));
             let (authority, signer) = gen_account_in("prevalidated-commit");
             let tx = TransactionBuilder::new_with_time_source(
@@ -24512,12 +24293,6 @@ pub(crate) mod valid {
                 BlockBuilder::new_with_time_source(vec![accepted], block_time_source.clone());
             let wrong_leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let builder = builder.chain(0, state.view().latest_block().as_deref());
-            let execution_context = default_test_execution_context(
-                &builder.0.transactions,
-                &builder.0.header,
-                PeerId::new(leader_public),
-            );
-            let builder = builder.with_execution_context(Some(execution_context));
             let new_block = with_current_state_da_sidecars(builder, &state)
                 .sign(wrong_leader.private_key())
                 .unpack(|_| {});
@@ -24528,7 +24303,9 @@ pub(crate) mod valid {
                 &topology,
                 &block_time_source,
                 &state,
-                &mut full_voting_block
+                &mut full_voting_block,
+                &validator_keys,
+                Duration::from_millis(10)
             )
             .unpack(|_| {});
             assert!(
@@ -24536,24 +24313,15 @@ pub(crate) mod valid {
                 "ordinary validation should reject the intentionally wrong leader signature"
             );
             let mut v2_voting_block: Option<super::super::VotingBlock> = None;
-            let parent_time = state
-                .view()
-                .latest_block()
-                .expect("leader-signature fixture parent")
-                .header()
-                .creation_time();
-            let v2_cadence = signed_block
-                .header()
-                .creation_time()
-                .saturating_sub(parent_time);
+            let v2_cadence = Duration::from_millis(10);
             let v2_result = ValidBlock::validate_sumeragi_v2_candidate_keep_voting_block(
                 signed_block.clone(),
                 &topology,
                 &ALICE_ID,
                 &block_time_source,
                 v2_cadence,
-                SumeragiV2ValidationContext::for_body_without_context_bound_attachments(
-                    &signed_block,
+                SumeragiV2ValidationContext::from_height_context(
+                    &authenticated_permissioned_successor_context(&state, &validator_keys),
                 ),
                 &state,
                 &mut v2_voting_block,
@@ -24572,8 +24340,12 @@ pub(crate) mod valid {
                     &topology,
                     &ALICE_ID,
                     &block_time_source,
+                    Duration::from_millis(10),
                     &state,
                     &mut voting_block,
+                    SumeragiV2ValidationContext::from_height_context(
+                        &authenticated_permissioned_successor_context(&state, &validator_keys),
+                    ),
                     &mut timings,
                     |event| events.push(event),
                 )
@@ -24605,17 +24377,9 @@ pub(crate) mod valid {
                 block_time_source.clone(),
             )
             .chain(0, state.view().latest_block().as_deref());
-            let invalid_execution_context = default_test_execution_context(
-                &invalid_builder.0.transactions,
-                &invalid_builder.0.header,
-                topology.as_ref()[0].clone(),
-            );
-            let invalid_block = with_current_state_da_sidecars(
-                invalid_builder.with_execution_context(Some(invalid_execution_context)),
-                &state,
-            )
-            .sign(wrong_leader.private_key())
-            .unpack(|_| {});
+            let invalid_block = with_current_state_da_sidecars(invalid_builder, &state)
+                .sign(wrong_leader.private_key())
+                .unpack(|_| {});
             let mut invalid_voting_block: Option<super::super::VotingBlock> = None;
             let mut invalid_events = Vec::new();
             let mut invalid_timings = ValidationTimings::new();
@@ -24625,8 +24389,12 @@ pub(crate) mod valid {
                     &topology,
                     &ALICE_ID,
                     &block_time_source,
+                    Duration::from_millis(10),
                     &state,
                     &mut invalid_voting_block,
+                    SumeragiV2ValidationContext::from_height_context(
+                        &authenticated_permissioned_successor_context(&state, &validator_keys),
+                    ),
                     &mut invalid_timings,
                     |event| invalid_events.push(event),
                 )
@@ -24727,8 +24495,13 @@ pub(crate) mod valid {
                 .expect("fraud-cache-test domain");
             let domain = Domain::new(domain_id.clone()).build(&authority);
             let account = Account::new(authority.clone()).build(&authority);
-            let world = World::with([domain], [account], iter::empty::<AssetDefinition>());
+            let mut world = World::with([domain], [account], iter::empty::<AssetDefinition>());
+            let validator_keys = (0..4)
+                .map(|_| checked_keypair_with_algorithm(Algorithm::BlsNormal))
+                .collect::<Vec<_>>();
+            insert_active_consensus_keys(&mut world, &validator_keys);
             let mut state = State::new(world, Arc::clone(&kura), query);
+            install_test_lane_manifests_for_keypairs(&state, &validator_keys);
             let mut pipeline = state.view().pipeline().clone();
             pipeline.stateless_cache_cap = 64;
             state.set_pipeline(pipeline);
@@ -24738,9 +24511,8 @@ pub(crate) mod valid {
                 missing_assessment_grace: Duration::ZERO,
                 ..Default::default()
             });
-            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let (leader_public, leader_private) = leader.into_parts();
-            let topology = Topology::new(vec![PeerId::new(leader_public.clone())]);
+            let leader_private = validator_keys[0].private_key().clone();
+            let topology = test_topology_with_keys(&validator_keys);
             let _ = commit_block_at_height(&state, &kura, &topology, &leader_private, 1, None, 0);
             let (_tx_handle, tx_time_source) = TimeSource::new_mock(Duration::from_millis(0));
             let tx = TransactionBuilder::new_with_time_source(
@@ -24767,7 +24539,9 @@ pub(crate) mod valid {
                 &topology,
                 &TimeSource::new_system(),
                 &state,
-                &mut voting_block
+                &mut voting_block,
+                &validator_keys,
+                Duration::from_millis(10)
             )
             .unpack(|_| {})
             .expect("block validation should complete and record transaction result");
@@ -25008,48 +24782,17 @@ pub(crate) mod valid {
     }
     #[test]
     fn insufficient_commit_quorum_maps_to_a_rejection_reason() {
-        use crate::{
-            kura::Kura, query::store::LiveQueryStore, sumeragi::network_topology::Topology,
-            tx::AcceptedTransaction,
-        };
-        use iroha_data_model::peer::PeerId;
-        use iroha_data_model::{isi::Log, transaction::TransactionBuilder};
-        use iroha_logger::Level;
-        use iroha_test_samples::gen_account_in;
-        use std::{borrow::Cow, time::Duration};
-        // Build a fresh state (height = 0)
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = LiveQueryStore::start_test();
-        let state = State::new(World::default(), kura, query_handle);
-        // Topology with two peers (consensus required);
-        // only leader will sign the block, causing rejection on commit check.
-        let kp1 = crate::block::checked_keypair();
-        let kp2 = crate::block::checked_keypair();
-        let peer1 = PeerId::new(kp1.public_key().clone());
-        let peer2 = PeerId::new(kp2.public_key().clone());
-        let topology = Topology::new(vec![peer1, peer2]);
-        // Create a signed block with only leader signature
-        let (account_id, keypair) = gen_account_in("dummy");
-        let mut builder = TransactionBuilder::new(
-            state.network_id,
-            account_id,
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        let keypairs = (0..4)
+            .map(|_| checked_keypair_with_algorithm(Algorithm::BlsNormal))
+            .collect::<Vec<_>>();
+        let topology = Topology::new(
+            keypairs
+                .iter()
+                .map(|key| PeerId::new(key.public_key().clone())),
         );
-        builder.set_creation_time(Duration::from_millis(0));
-        let tx = builder
-            .with_instructions([Log::new(Level::INFO, "dummy".to_owned())])
-            .sign(keypair.private_key());
-        let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
-        let unverified_block = BlockBuilder::new(vec![accepted])
-            .chain(
-                topology.view_change_index(),
-                state.view().latest_block().as_deref(),
-            )
-            .sign(kp1.private_key())
-            .unpack(|_| {});
-        let signed: SignedBlock = unverified_block.into();
+        let signed: SignedBlock = ValidBlock::new_dummy(keypairs[0].private_key()).into();
         let error = ValidBlock::is_commit(&signed, &topology)
-            .expect_err("commit should fail with insufficient signatures");
+            .expect_err("one valid BLS leader signature cannot satisfy the four-validator quorum");
         assert!(matches!(
             map_sig_err_to_reason(&error),
             iroha_data_model::block::error::BlockRejectionReason::InsufficientBlockSignatures
@@ -27974,18 +27717,6 @@ mod event {
             Self(source)
         }
     }
-    impl<'state, B, U>
-        WithEvents<Result<(B, Box<StateBlock<'state>>), (U, Box<BlockValidationError>)>>
-    {
-        pub(super) fn unbox_state_block(
-            self,
-        ) -> WithEvents<Result<(B, StateBlock<'state>), (U, Box<BlockValidationError>)>> {
-            WithEvents(match self.0 {
-                Ok((block, state_block)) => Ok((block, *state_block)),
-                Err(error) => Err(error),
-            })
-        }
-    }
     impl<B: EventProducer, U> WithEvents<Result<B, (U, Box<BlockValidationError>)>> {
         pub fn unpack<F: FnMut(PipelineEventBox)>(
             self,
@@ -27998,12 +27729,12 @@ mod event {
         }
     }
     impl<'state, B: EventProducer, U>
-        WithEvents<Result<(B, StateBlock<'state>), (U, Box<BlockValidationError>)>>
+        WithEvents<Result<(B, Box<StateBlock<'state>>), (U, Box<BlockValidationError>)>>
     {
         pub fn unpack<F: FnMut(PipelineEventBox)>(
             self,
             f: F,
-        ) -> Result<(B, StateBlock<'state>), (U, Box<BlockValidationError>)> {
+        ) -> Result<(B, Box<StateBlock<'state>>), (U, Box<BlockValidationError>)> {
             match self.0 {
                 Ok((ok, state)) => Ok((WithEvents(ok).unpack(f), state)),
                 Err(err) => Err(WithEvents(err).unpack(f)),
@@ -30256,21 +29987,6 @@ pub(crate) mod tests {
         unexpected_leg.participant_settlement =
             iroha_data_model::block::consensus::NativeAmxParticipantSettlement::try_new(
                 unexpected_leg.lane_id,
-                unexpected_leg.participant_settlement.dataspace_id(),
-                unexpected_leg.participant_settlement.lane_incarnation(),
-                unexpected_leg
-                    .participant_settlement
-                    .participant_lane_block_height(),
-                unexpected_leg
-                    .participant_settlement
-                    .authority_context_height(),
-                None,
-                unexpected_leg.participant_settlement.source_ids().to_vec(),
-            )
-            .expect("valid conflicting Native control identity");
-        unexpected_leg.participant_settlement =
-            iroha_data_model::block::consensus::NativeAmxParticipantSettlement::try_new(
-                unexpected_leg.participant_settlement.lane_id(),
                 unexpected_leg.dataspace_id,
                 unexpected_leg.participant_settlement.lane_incarnation(),
                 unexpected_leg
@@ -30279,9 +29995,7 @@ pub(crate) mod tests {
                 unexpected_leg
                     .participant_settlement
                     .authority_context_height(),
-                unexpected_leg
-                    .participant_settlement
-                    .previous_native_settlement_hash(),
+                None,
                 unexpected_leg.participant_settlement.source_ids().to_vec(),
             )
             .expect("valid conflicting Native control identity");
@@ -30324,14 +30038,13 @@ pub(crate) mod tests {
         world.parameters = mv::cell::Cell::new(params);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let state = State::try_new_with_chain_and_network_id_with_default_telemetry(
+        let state = State::new_with_chain_and_network_id_for_testing(
             world,
             kura,
             query_handle,
             chain_id.clone(),
             deterministic_test_network_id(0x0B),
-        )
-        .expect("test state must accept its explicit network id");
+        );
         install_test_lane_manifests(&state);
         state
     }
@@ -30340,6 +30053,21 @@ pub(crate) mod tests {
         let chain_id = ChainId::from("rejected-overlay-confidential-budget");
         let (authority, keypair) = gen_account_in("wonderland");
         let mut state = state_with_transaction_policy(&chain_id, &authority, false, false);
+        // Generic proof verification requires an explicitly installed executor.
+        // This deterministic policy admits the instruction; Core still enforces
+        // its production circuit registry, proof-work budgets, and registered VK.
+        let verdict = norito::codec::Encode::encode(&Ok::<(), ValidationFail>(()));
+        let executor_program = crate::executor::build_program_from_encoded_result(&verdict);
+        let executor = crate::executor::LoadedExecutor::load(
+            iroha_data_model::executor::Executor::new(IvmBytecode::from_compiled(executor_program)),
+        )
+        .expect("load proof-verification executor policy");
+        state.world.executor =
+            mv::cell::Cell::new(crate::executor::Executor::UserProvided(executor));
+        let mut pipeline = state.pipeline.clone();
+        pipeline.parallel_overlay = true;
+        pipeline.workers = 2;
+        state.set_pipeline(pipeline);
         let mut zk = state.zk.clone();
         zk.max_confidential_ops_per_block = 1;
         zk.max_verify_calls_per_block = 1;
@@ -30350,8 +30078,10 @@ pub(crate) mod tests {
             .set_zk(zk)
             .expect("empty SCCP state accepts focused confidential limits");
 
-        let fixture =
-            crate::zk::test_utils::halo2_fixture_envelope("halo2/ipa:tiny-add", [0_u8; 32]);
+        let fixture = crate::zk::test_utils::halo2_fixture_envelope(
+            crate::zk::IVM_EXECUTION_V1_CIRCUIT_ID,
+            [0_u8; 32],
+        );
         let proof = fixture.proof_box("halo2/ipa");
         let proof_bytes = u64::try_from(proof.bytes.len()).expect("proof length fits u64");
         let instruction: InstructionBox = iroha_data_model::isi::zk::VerifyProof::new(
@@ -30387,7 +30117,12 @@ pub(crate) mod tests {
             .map(|(_, _, result)| result.0.clone())
             .collect::<Vec<_>>();
         assert!(
-            matches!(results.as_slice(), [Err(_)]),
+            matches!(
+                results.as_slice(),
+                [Err(TransactionRejectionReason::Validation(ValidationFail::InstructionFailed(
+                    iroha_data_model::isi::error::InstructionExecutionError::InvariantViolation(message)
+                )))] if message.as_ref() == "proof must reference a registered verifying key reference; inline verifying keys are not supported"
+            ),
             "missing verifying key must reject after attempting its proof: {results:?}"
         );
         assert_eq!(state_block.zk_confidential_ops_in_block, 1);
@@ -30402,7 +30137,15 @@ pub(crate) mod tests {
         let error = next
             .register_confidential_proof(1)
             .expect_err("the rejected overlay must exhaust the one-operation block budget");
-        assert!(error.to_string().contains("per block exceeded"));
+        assert!(
+            matches!(
+                error,
+                iroha_data_model::isi::error::InstructionExecutionError::InvalidParameter(
+                    iroha_data_model::isi::error::InvalidParameterError::SmartContract(message)
+                ) if message == "confidential verify calls per block exceeded"
+            ),
+            "the next proof must fail the exact exhausted block verification quota"
+        );
     }
     #[test]
     fn ordinary_prepared_overlay_block_cap_prevents_post_cap_execution() {
@@ -30440,7 +30183,9 @@ pub(crate) mod tests {
                 })
                 .collect::<Vec<_>>();
             let previous = previous_block_at_height(1);
-            let block = BlockBuilder::new(accepted)
+            finalize_test_genesis_assets(&state, &previous);
+            let (_clock, time_source) = TimeSource::new_mock(Duration::from_millis(10));
+            let block = BlockBuilder::new_with_time_source(accepted, time_source)
                 .chain(1, Some(&previous))
                 .sign(keypair.private_key())
                 .unpack(|_| {});
@@ -30484,7 +30229,11 @@ pub(crate) mod tests {
         let chain_id = ChainId::from("rejected-overlay-exact-gas");
         let (authority, keypair) = gen_account_in("wonderland");
         let (missing_account, _) = gen_account_in("missing");
-        let state = state_with_transaction_policy(&chain_id, &authority, false, false);
+        let mut state = state_with_transaction_policy(&chain_id, &authority, false, false);
+        let mut pipeline = state.pipeline.clone();
+        pipeline.parallel_overlay = true;
+        pipeline.workers = 2;
+        state.set_pipeline(pipeline);
         let instruction = InstructionBox::from(SetKeyValue::account(
             missing_account,
             "rejected_overlay_marker".parse().expect("metadata key"),
@@ -30500,6 +30249,7 @@ pub(crate) mod tests {
         .with_instructions([instruction])
         .sign(keypair.private_key());
         let previous = previous_block_at_height(1);
+        finalize_test_genesis_assets(&state, &previous);
         let block = BlockBuilder::new(vec![AcceptedTransaction::new_unchecked(Cow::Owned(
             transaction,
         ))])
@@ -30788,6 +30538,24 @@ seiyaku GuardedOverlay {
         world
             .contract_instances
             .insert(contract_address.clone(), code_hash);
+        let contract_subject = contract_address.subject_id();
+        world.accounts.insert(
+            contract_subject.clone(),
+            iroha_data_model::account::AccountValue::new(
+                iroha_data_model::account::AccountDetails::default(),
+            ),
+        );
+        world.contract_subject_bindings.insert(
+            contract_address.clone(),
+            crate::smartcontracts::code::ContractSubjectBinding::new_direct(
+                &contract_address,
+                authority.clone(),
+            )
+            .with_active_code_hash(code_hash),
+        );
+        world
+            .contract_subject_addresses
+            .insert(contract_subject, contract_address.clone());
         let state = State::new_with_chain_for_testing(
             world,
             Kura::blank_kura_for_testing(),
@@ -31465,14 +31233,13 @@ seiyaku DynamicTarget {
         );
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let mut state = State::try_new_with_chain_and_network_id_with_default_telemetry(
+        let mut state = State::new_with_chain_and_network_id_for_testing(
             world,
             kura,
             query_handle,
             chain_id.clone(),
             network_id,
-        )
-        .expect("test state must accept its explicit network id");
+        );
         install_test_lane_manifests(&state);
         // Settlement finality binds the exact dataspace proof policy as well as lane status.
         let manifest = iroha_data_model::nexus::AssetPermissionManifest {
@@ -31699,14 +31466,13 @@ seiyaku DynamicTarget {
         );
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let state = State::try_new_with_chain_and_network_id_with_default_telemetry(
+        let state = State::new_with_chain_and_network_id_for_testing(
             world,
             kura,
             query_handle,
             chain_id.clone(),
             network_id,
-        )
-        .expect("test state must accept its explicit network id");
+        );
         install_test_lane_manifests(&state);
         let metadata_key = Name::from_str("sealed_only_commitment_marker").expect("metadata key");
         let (commitment_entrypoint, _reveal_entrypoint) =
@@ -32295,6 +32061,7 @@ seiyaku DynamicTarget {
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
         let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(10));
         let previous = previous_block_at_height(1);
+        finalize_test_genesis_assets(&state, &previous);
         let unverified_block = BlockBuilder::new_with_time_source(vec![accepted], time_source)
             .chain(0, Some(&previous))
             .sign(keypair.private_key())
@@ -32334,6 +32101,7 @@ seiyaku DynamicTarget {
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
         let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(10));
         let previous = previous_block_at_height(1);
+        finalize_test_genesis_assets(&state, &previous);
         let unverified_block = BlockBuilder::new_with_time_source(vec![accepted], time_source)
             .chain(0, Some(&previous))
             .sign(keypair.private_key())
@@ -32351,7 +32119,7 @@ seiyaku DynamicTarget {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("Valid");
         let account = Account::new(alice_id.clone()).build(&alice_id);
-        let domain = Domain::new(domain_id).build(&alice_id);
+        let domain = Domain::new(domain_id.clone()).build(&alice_id);
         let world = World::with([domain], [account], []);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
@@ -32382,32 +32150,35 @@ seiyaku DynamicTarget {
                     asset_definition_id.clone(),
                     "xor",
                     iroha_data_model::asset::AssetBalancePolicy::Global,
-                    None,
+                    Some(domain_id.clone()),
                 ))])
                 .sign(alice_keypair.private_key())
         };
         let first_tx = make_transaction(0);
         let second_tx = make_transaction(1);
+        let (_clock, time_source) = TimeSource::new_mock(Duration::from_millis(10));
         let crypto_cfg = state.crypto();
-        let first_tx = AcceptedTransaction::accept(
+        let first_tx = AcceptedTransaction::accept_with_time_source(
             first_tx,
             &state.network_id,
             max_clock_drift,
             tx_limits,
             crypto_cfg.as_ref(),
+            &time_source,
         )
         .expect("Valid");
-        let second_tx = AcceptedTransaction::accept(
+        let second_tx = AcceptedTransaction::accept_with_time_source(
             second_tx,
             &state.network_id,
             max_clock_drift,
             tx_limits,
             crypto_cfg.as_ref(),
+            &time_source,
         )
         .expect("Valid");
         // Creating a block of two semantically repetitive transactions and validating it
         let transactions = vec![first_tx, second_tx];
-        let unverified_block = BlockBuilder::new(transactions)
+        let unverified_block = BlockBuilder::new_with_time_source(transactions, time_source)
             .chain(0, state.view().latest_block().as_deref())
             .sign(alice_keypair.private_key())
             .unpack(|_| {});
@@ -32439,7 +32210,7 @@ seiyaku DynamicTarget {
             let params = state_view.parameters();
             (params.sumeragi().max_clock_drift(), params.transaction())
         };
-        let create_domain = Register::domain(Domain::new(created_domain_id));
+        let create_domain = Register::domain(Domain::new(created_domain_id.clone()));
         let asset_definition_id =
             iroha_data_model::asset::AssetDefinitionId::derive_from_components(
                 DomainId::try_new("domain", "universal").unwrap(),
@@ -32449,7 +32220,7 @@ seiyaku DynamicTarget {
             asset_definition_id,
             "coin",
             iroha_data_model::asset::AssetBalancePolicy::Global,
-            None,
+            Some(created_domain_id),
         ));
         let fail_isi = Unregister::domain(DomainId::try_new("dummy", "universal").unwrap());
         let tx_fail = TransactionBuilder::new(

@@ -1,4 +1,4 @@
-//! Bounded canonical raw-byte admission for the shared-opening prototype.
+//! Bounded canonical raw-byte verification for the shared-opening candidate.
 //!
 //! The caller's byte ceiling applies before header parsing or checksum work.
 //! Trusted AIR geometry bounds every sequence and the sum of all dynamic
@@ -10,13 +10,14 @@
 //! The allocation ceiling counts cumulative Norito allocation charges; it is
 //! not an RSS measurement or an assertion about allocator capacity rounding.
 //! TODO: Qualify the complete production profile and caller migration. This
-//! prototype changes neither default proof limits nor production admission.
+//! candidate changes neither default proof limits nor production admission.
 
 use norito::DecodeLimits;
 
 use super::*;
 
 /// Maximum cumulative allocation requests charged by Norito during one decode.
+#[cfg(test)]
 const MAX_DECODE_ALLOCATION_CHARGES: usize = 32 * 1024 * 1024;
 /// The deepest current field path has nine nested decodes, including arrays.
 const MAX_DECODE_DEPTH: usize = 16;
@@ -48,6 +49,7 @@ impl SequenceBudget {
     }
 }
 
+#[cfg(test)]
 fn decode_limits(
     relation: &impl FixedAir,
     geometry: &Geometry,
@@ -136,6 +138,7 @@ fn decode_limits_with_allocation(
 
 // Deliberately private: this bounded decode alone does not establish exact
 // dimensions, field canonicality, the AIR relation or authenticated openings.
+#[cfg(test)]
 fn decode_bounded(
     relation: &impl FixedAir,
     bytes: &[u8],
@@ -171,6 +174,7 @@ impl VerifiedSharedProof {
 }
 
 /// Return the exact authenticated row root without decoding the frame again.
+#[cfg(test)]
 pub(in crate::backend) fn decode_and_verify_committed(
     relation: &impl FixedAir,
     bytes: &[u8],
@@ -190,6 +194,7 @@ pub(in crate::backend) fn decode_and_verify_committed(
 /// The trusted relation supplies schema geometry and authenticated public
 /// inputs. This entry point accepts no private witness or replay material and
 /// never derives admission limits from proof-supplied counts.
+#[cfg(test)]
 pub(in crate::backend) fn decode_and_verify(
     relation: &impl FixedAir,
     bytes: &[u8],
@@ -198,6 +203,7 @@ pub(in crate::backend) fn decode_and_verify(
     Ok(decode_and_verify_committed(relation, bytes, limits)?.work())
 }
 
+#[cfg(test)]
 fn decode_and_verify_recorded(
     relation: &impl FixedAir,
     bytes: &[u8],
@@ -215,6 +221,7 @@ fn decode_and_verify_recorded(
 /// The raw cap precedes geometry/header work. Sequence limits come from the
 /// caller-fixed 375-query descriptor, never the encoded counts. The allocation
 /// cap is diagnostic caller policy; no production default is raised here.
+#[cfg(test)]
 pub(in crate::backend) fn decode_and_verify_shake(
     relation: &impl FixedAir,
     bytes: &[u8],
@@ -889,7 +896,8 @@ mod tests {
         // These dummy roots/indices do not constitute a valid proof or AIR.
         let proof = ShakeSharedProof::from_shared(largest_shape(&geometry));
         let bytes = norito::encode_canonical(&proof).unwrap();
-        assert_eq!(bytes.len(), 6_759_875);
+        // The 9,270 Fp4 values each use the canonical 32-byte carrier.
+        assert_eq!(bytes.len(), 6_713_525);
         assert!(bytes.len() > candidate_limits().max_proof_bytes);
         let limits = VerifyLimits {
             max_proof_bytes: 8 * 1024 * 1024,

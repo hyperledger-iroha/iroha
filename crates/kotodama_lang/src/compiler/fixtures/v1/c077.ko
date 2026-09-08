@@ -3,11 +3,11 @@ seiyaku CompilerFixture {
 
 fn verify(bytes payload) {
   let _proof = crypto::vrf::verify(request: payload);
-  let _batch = crypto::vrf::verify_batch(payload);
+  let _batch = crypto::vrf::verify_batch(request: payload);
 }
 
 view fn main() {
-  verify(b"\x01\x02\x03");
+  verify(payload: b"\x01\x02\x03");
 }
 
 }

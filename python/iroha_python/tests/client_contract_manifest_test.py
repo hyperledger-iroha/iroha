@@ -199,7 +199,7 @@ def _full_manifest_payload() -> Dict[str, Any]:
             }
         ],
         "states": [{"name": "Balances", "type_name": "StateMap<AccountId, quantity>"}],
-        "error_codes": [{"namespace": "TransferError", "name": "InsufficientFunds", "code": 1001}],
+        "error_types": [{"identity": "example/transfer@1::Transfer::TransferError", "variants": [{"name": "InsufficientFunds", "code": 1001}]}],
         "kotoba": [
             {
                 "msg_id": "transfer.denied",
@@ -317,8 +317,8 @@ def test_contract_manifest_preserves_exact_v1_interface_shape() -> None:
     assert manifest.declared_triggers == (trigger,)
     assert manifest.states is not None
     assert manifest.states[0].type_name == "StateMap<AccountId, quantity>"
-    assert manifest.error_codes is not None
-    assert manifest.error_codes[0].code == 1001
+    assert manifest.error_types is not None
+    assert manifest.error_types[0].variants[0].code == 1001
     assert manifest.kotoba is not None
     assert manifest.kotoba[0].translations[1].language == "ja"
     assert manifest.provenance is not None
@@ -613,7 +613,7 @@ def test_manifest_rejects_noncanonical_dynamic_access_hints(
     ("base_key", "key_type", "bound_kind", "max_keys"),
     [
         ("state:Balances", "AccountId", "take", 1),
-        ("state:amount", "quantity", "range", 64),
+        ("state:amount", "quantity", "page", 64),
     ],
 )
 def test_manifest_accepts_exact_dynamic_access_hints(
@@ -657,7 +657,7 @@ def test_manifest_rejects_duplicate_dynamic_access_hints_per_list(field: str) ->
 def test_manifest_allows_distinct_dynamic_access_hints_per_list(field: str) -> None:
     payload = _full_manifest_payload()
     first = deepcopy(payload["access_set_hints"]["dynamic_reads"][0])
-    second = {**first, "bound_kind": "range", "max_keys": 2}
+    second = {**first, "bound_kind": "page", "max_keys": 2}
     _replace_dynamic_hints(payload, field, [first, second])
 
     parsed = ContractManifest.from_payload(payload)
@@ -720,7 +720,7 @@ def test_manifest_accepts_state_amount_dynamic_hint(field: str) -> None:
     hint = {
         "base_key": "state:amount",
         "key_type": "quantity",
-        "bound_kind": "range",
+        "bound_kind": "page",
         "max_keys": 64,
     }
     _replace_dynamic_hints(payload, field, [hint])
@@ -744,22 +744,22 @@ def test_manifest_allows_same_dynamic_hint_once_in_each_list() -> None:
     )
 
 
-@pytest.mark.parametrize("retired", ["Amount", "amount"])
-def test_manifest_rejects_retired_error_namespaces(retired: str) -> None:
+@pytest.mark.parametrize("retired", ["bad identity", "bad<identity>", "__kotodama_link_hidden"])
+def test_manifest_rejects_malformed_error_identities(retired: str) -> None:
     payload = _full_manifest_payload()
-    payload["error_codes"][0]["namespace"] = retired
+    payload["error_types"][0]["identity"] = retired
 
-    with pytest.raises(TypeError, match="canonical Kotodama identifiers"):
+    with pytest.raises(TypeError, match="canonical nominal identity"):
         ContractManifest.from_payload(payload)
 
 
 def test_manifest_allows_amount_as_error_variant_name() -> None:
     payload = _full_manifest_payload()
-    payload["error_codes"][0]["name"] = "amount"
+    payload["error_types"][0]["variants"][0]["name"] = "amount"
 
     manifest = ContractManifest.from_payload(payload)
 
-    assert manifest.error_codes[0].name == "amount"
+    assert manifest.error_types[0].variants[0].name == "amount"
 
 
 def test_manifest_rejects_exact_amount_in_every_identifier_position() -> None:
@@ -768,7 +768,7 @@ def test_manifest_rejects_exact_amount_in_every_identifier_position() -> None:
         ("parameter", ("entrypoints", 0, "params", 0, "name"), "Amount"),
         ("state", ("states", 0, "name"), "Amount"),
         ("struct field", ("states", 0, "type_name"), "Transfer{Amount: quantity}"),
-        ("error variant", ("error_codes", 0, "name"), "Amount"),
+        ("error variant", ("error_types", 0, "variants", 0, "name"), "Amount"),
         (
             "dynamic state base",
             ("access_set_hints", "dynamic_reads", 0, "base_key"),
@@ -1106,7 +1106,7 @@ def test_contract_manifest_rejects_retired_or_ambiguous_manifest_fields() -> Non
             "entryPoint", "transfer"
         ),
         lambda payload: payload["states"][0].__setitem__("typeName", "quantity"),
-        lambda payload: payload["error_codes"][0].__setitem__("errorCode", 1001),
+        lambda payload: payload["error_types"][0]["variants"][0].__setitem__("errorCode", 1001),
         lambda payload: payload["kotoba"][0].__setitem__("msgId", "transfer.denied"),
         lambda payload: payload["kotoba"][0]["translations"][0].__setitem__(
             "language", "en"
@@ -1137,8 +1137,8 @@ def test_contract_manifest_rejects_duplicate_and_unsafe_trigger_metadata() -> No
             "kind": {"kind": "View", "value": None},
             "params": [],
             "argument_schema": None,
-            "return_type": None,
-            "return_schema": None,
+            "return_type": "()",
+            "return_schema": {"nodes": [{"kind": "Unit", "value": None}]},
             "permission": None,
             "read_keys": [],
             "write_keys": [],
@@ -1202,7 +1202,7 @@ def test_contract_manifest_rejects_non_null_enum_payloads() -> None:
             "canonical V1 schema",
         ),
         (
-            lambda payload: payload["error_codes"][0].__setitem__("code", 0),
+            lambda payload: payload["error_types"][0]["variants"][0].__setitem__("code", 0),
             "non-zero u32",
         ),
         (

@@ -189,7 +189,7 @@ fn native_json_executes_once_and_returns_canonical_recursive_values() {
             "amount": "1.25",
             "blobs": ["0xaa", "0xbb"],
             "labels": ["primary", "secondary"],
-            "maybe": "1.25",
+            "maybe": { "some": "1.25" },
             "z_bytes": "0xab01",
         })
     );
@@ -203,6 +203,53 @@ fn native_json_executes_once_and_returns_canonical_recursive_values() {
         key_positions.windows(2).all(|pair| pair[0] < pair[1]),
         "object keys must be encoded in canonical lexical order: {rendered}"
     );
+}
+#[test]
+fn native_json_literal_and_dynamic_options_preserve_identical_tags() {
+    let vm = compile_and_run(
+        r#"
+        seiyaku TaggedJson {
+            fn pass(Option<()> _ value) -> Option<()> { value }
+            fn increment(int _ value) -> int { value + 1 }
+            view fn run() -> Json {
+                let Option<()> absent = Option::none;
+                let present = pass(Option::some(()));
+                let dynamic_absent = pass(absent);
+                json {
+                    literal: json {
+                        present: Option::some(()),
+                        absent: absent,
+                        nested: Option::some(Option::some(())),
+                        present_absent: Option::some(absent),
+                        items: [Option::some(()), absent],
+                        folded: Option::some(1 + 2),
+                    },
+                    dynamic: json {
+                        present: present,
+                        absent: dynamic_absent,
+                        nested: Option::some(present),
+                        present_absent: Option::some(dynamic_absent),
+                        items: [present, dynamic_absent],
+                        folded: Option::some(increment(2)),
+                    },
+                }
+            }
+        }
+    "#,
+    );
+    let json: Json = norito::decode_from_bytes(vm.validate_tlv(vm.register(10)).unwrap().payload)
+        .expect("canonical native JSON result");
+    let value: njson::Value = json.try_into_any_norito().unwrap();
+    let expected = norito::json!({
+        "present": { "some": null },
+        "absent": { "none": true },
+        "nested": { "some": { "some": null } },
+        "present_absent": { "some": { "none": true } },
+        "items": [{ "some": null }, { "none": true }],
+        "folded": { "some": "3" },
+    });
+    assert_eq!(value.get("literal"), Some(&expected));
+    assert_eq!(value.get("dynamic"), Some(&expected));
 }
 #[test]
 fn native_json_and_typed_getters_execute_with_default_host() {

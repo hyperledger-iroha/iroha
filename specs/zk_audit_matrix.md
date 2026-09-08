@@ -33,6 +33,12 @@ statement before verification, and which paths are demo-only or non-ZK.
 - Production ledger verification remains centered on the guarded
   `iroha_core::zk::verify_backend_with_timing_guardrails` path and should stay
   the reference implementation for future proof-bearing features.
+- STARK `ivm-execution-v1` dispatch uses a dedicated binding AIR context after
+  authenticating the exact circuit, VK, schema and public-input digest. It
+  reconstructs the full deterministic trace and zero-composition commitments
+  within the exact reconstruction domain cap; auxiliary composition is rejected.
+  The generic AIR verifier still rejects reserved IVM circuits, and `IvmProved`
+  admission always replays the VM to check execution semantics.
 - The pre-release decode-only `/v1/zk/verify` and `/v1/zk/submit-proof`
   routes were removed instead of retaining success responses that could be
   confused with cryptographic or ledger acceptance.

@@ -55,8 +55,8 @@ use iroha_data_model::{
     query::{QueryRequest, SingularQueryBox},
     role::RoleId,
     smart_contract::manifest::{
-        AccessSetHints, ContractErrorCodeDescriptor, DynamicAccessHint, EntryPointKind,
-        EntrypointParamDescriptor, StateDescriptor, TriggerCallback, TriggerDescriptor,
+        AccessSetHints, DynamicAccessHint, EntryPointKind, EntrypointParamDescriptor,
+        StateDescriptor, TriggerCallback, TriggerDescriptor,
     },
     state_path::StatePath,
     trigger::{Trigger, TriggerId},
@@ -2538,7 +2538,7 @@ mod tests {
             "function tail expressions must add no emitted instructions"
         );
         let positional = executable_code(
-            "seiyaku Equivalence { fn choose(int count, bool enabled) -> int { if enabled { count } else { 0 } } view fn main() -> int { choose(7, true) } }",
+            "seiyaku Equivalence { fn choose(int _ count, bool _ enabled) -> int { if enabled { count } else { 0 } } view fn main() -> int { choose(7, true) } }",
         );
         let named = executable_code(
             "seiyaku Equivalence { fn choose(int count, bool enabled) -> int { if enabled { count } else { 0 } } view fn main() -> int { choose(count: 7, enabled: true) } }",
@@ -3296,8 +3296,8 @@ mod tests {
     fn unknown_ledger_argument_before_literal_keeps_helper_hints_conservative() {
         let source = r#"
 seiyaku CompilerFixture {
-  fn remove_role(Name role) {
-    ledger::role::delete(role);
+  fn remove_role(Name _ role) {
+    ledger::role::delete(role: role);
   }
 
   kotoage fn main(Name dynamic_role) authorize("CompilerFixture") {
@@ -3334,8 +3334,8 @@ seiyaku CompilerFixture {
     fn dynamic_account_before_authority_keeps_helper_hints_conservative() {
         let source = r#"
 seiyaku CompilerFixture {
-  fn remove_account(AccountId account) {
-    ledger::account::unregister(account);
+  fn remove_account(AccountId _ account) {
+    ledger::account::unregister(account: account);
   }
 
   kotoage fn main(AccountId dynamic_account) authorize("CompilerFixture") {
@@ -3722,11 +3722,11 @@ kotoage fn main() authorize("EscrowAdmin") {{
     amount: 10,
     evidence: evidence,
   );
-  ledger::escrow::accept(Name::parse("aitai_offer"));
-  ledger::escrow::mark_payment_sent(Name::parse("aitai_offer"));
-  ledger::escrow::release(Name::parse("aitai_offer"));
-  ledger::escrow::cancel(Name::parse("aitai_offer"));
-  ledger::escrow::open_dispute(Name::parse("aitai_offer"), evidence);
+  ledger::escrow::accept(offer: Name::parse("aitai_offer"));
+  ledger::escrow::mark_payment_sent(offer: Name::parse("aitai_offer"));
+  ledger::escrow::release(offer: Name::parse("aitai_offer"));
+  ledger::escrow::cancel(offer: Name::parse("aitai_offer"));
+  ledger::escrow::open_dispute(offer: Name::parse("aitai_offer"), evidence: evidence);
   ledger::escrow::resolve_dispute(
     offer: Name::parse("aitai_offer"),
     buyer_amount: 6,
@@ -3833,9 +3833,9 @@ seiyaku CompilerFixture {{
 kotoage fn main() authorize("CompilerFixture") {{
   let account = AccountId::parse("{account}");
   let signatory = Json::parse("\"ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774\"");
-  ledger::account::add_signatory(account, signatory);
-  ledger::account::remove_signatory(account, signatory);
-  ledger::account::set_quorum(account, 2);
+  ledger::account::add_signatory(account: account, signatory: signatory);
+  ledger::account::remove_signatory(account: account, signatory: signatory);
+  ledger::account::set_quorum(account: account, quorum: 2);
 }}
 
 }}
@@ -3962,7 +3962,7 @@ seiyaku CompilerFixture {{
 view fn read() -> quantity {{
   let account = AccountId::parse("{account}");
   let asset = AssetDefinitionId::parse("{asset_definition}");
-  return ledger::asset::balance(account, asset);
+  return ledger::asset::balance(account: account, asset_definition: asset);
 }}
 
 }}
@@ -4254,11 +4254,11 @@ kotoage fn main() authorize("CompilerFixture") {{
   ledger::nft::mint(nft: NftId::parse("{nft}"), owner: AccountId::parse("{owner_literal}"));
   ledger::nft::set_metadata(nft: NftId::parse("{nft}"), key: Name::parse("issued"), value: Json::parse("{{\"meta\":1}}"));
   ledger::nft::transfer(source: AccountId::parse("{owner_literal}"), nft: NftId::parse("{nft}"), destination: AccountId::parse("{recipient_literal}"));
-  ledger::nft::burn(NftId::parse("{nft}"));
+  ledger::nft::burn(nft: NftId::parse("{nft}"));
   ledger::nft::mint(nft: NftId::parse("{nft_alt}"), owner: AccountId::parse("{recipient_literal}"));
   ledger::nft::set_metadata(nft: NftId::parse("{nft_alt}"), key: Name::parse("mirror"), value: Json::parse("{{\"meta\":2}}"));
   ledger::nft::transfer(source: AccountId::parse("{recipient_literal}"), nft: NftId::parse("{nft_alt}"), destination: AccountId::parse("{owner_literal}"));
-  ledger::nft::burn(NftId::parse("{nft_alt}"));
+  ledger::nft::burn(nft: NftId::parse("{nft_alt}"));
 }}
 
 }}
@@ -4376,22 +4376,22 @@ kotoage fn main() authorize("CompilerFixture") {{
   let owner = AccountId::parse("{owner_literal}");
   let recipient = AccountId::parse("{recipient_literal}");
   let asset = AssetDefinitionId::parse("{asset_literal}");
-  ledger::domain::register(domain_id);
-  ledger::domain::unregister(domain_id);
+  ledger::domain::register(domain: domain_id);
+  ledger::domain::unregister(domain: domain_id);
   ledger::domain::transfer(source: owner, domain: domain_id, destination: recipient);
-  ledger::account::register(owner);
-  ledger::account::unregister(recipient);
+  ledger::account::register(account: owner);
+  ledger::account::unregister(account: recipient);
   ledger::asset::register(asset_definition: asset, name: "ROSE", scale: 0, mintable: 1);
   ledger::asset::create(asset_definition: asset, name: "ROSE", scale: 7, owner: owner, mintable: 1);
-  ledger::asset::unregister(asset);
-  ledger::domain::register(domain_id);
-  ledger::domain::unregister(domain_id);
+  ledger::asset::unregister(asset_definition: asset);
+  ledger::domain::register(domain: domain_id);
+  ledger::domain::unregister(domain: domain_id);
   ledger::domain::transfer(source: owner, domain: domain_id, destination: recipient);
-  ledger::account::register(recipient);
-  ledger::account::unregister(owner);
+  ledger::account::register(account: recipient);
+  ledger::account::unregister(account: owner);
   ledger::asset::register(asset_definition: asset, name: "ROSE", scale: 0, mintable: 1);
   ledger::asset::create(asset_definition: asset, name: "ROSE", scale: 3, owner: owner, mintable: 1);
-  ledger::asset::unregister(asset);
+  ledger::asset::unregister(asset_definition: asset);
 }}
 
 }}
@@ -4564,18 +4564,18 @@ kotoage fn main() authorize("CompilerFixture") {{
   let account = AccountId::parse("{account_literal}");
   let role = Name::parse("auditor");
   let perm = Name::parse("read_blocks");
-  ledger::role::create(role, Json::parse("{{}}"));
-  ledger::role::grant(account, role);
-  ledger::role::revoke(account, role);
-  ledger::permission::grant(account, perm);
-  ledger::permission::revoke(account, perm);
-  ledger::role::delete(role);
-  ledger::role::create(role, Json::parse("{{}}"));
-  ledger::role::grant(account, role);
-  ledger::role::revoke(account, role);
-  ledger::permission::grant(account, perm);
-  ledger::permission::revoke(account, perm);
-  ledger::role::delete(role);
+  ledger::role::create(role: role, permissions: Json::parse("{{}}"));
+  ledger::role::grant(account: account, role: role);
+  ledger::role::revoke(account: account, role: role);
+  ledger::permission::grant(account: account, permission: perm);
+  ledger::permission::revoke(account: account, permission: perm);
+  ledger::role::delete(role: role);
+  ledger::role::create(role: role, permissions: Json::parse("{{}}"));
+  ledger::role::grant(account: account, role: role);
+  ledger::role::revoke(account: account, role: role);
+  ledger::permission::grant(account: account, permission: perm);
+  ledger::permission::revoke(account: account, permission: perm);
+  ledger::role::delete(role: role);
 }}
 
 }}
@@ -4839,7 +4839,7 @@ kotoage fn main() authorize("CompilerFixture") {{
             ),
             (
                 include_str!("compiler/fixtures/v1/c058.ko"),
-                "require expects a declared error variant as its second argument",
+                "require expects (bool, ErrorEnum::Variant)",
             ),
             (
                 include_str!("compiler/fixtures/v1/c059.ko"),
@@ -4905,7 +4905,7 @@ kotoage fn main() authorize("CompilerFixture") {{
             ),
             (
                 include_str!("compiler/fixtures/v1/c063.ko"),
-                "crypto::commit_output expects no arguments",
+                "call `crypto::commit_output` expects at most 0 arguments",
             ),
         ] {
             let parsed = parse(src).expect("parse source");
@@ -4983,7 +4983,7 @@ seiyaku CompilerFixture {{
 
 kotoage fn apply_batch() authorize("Admin") {{
   let batch = b"{batch_literal}";
-  ledger::asset::batch::apply(batch);
+  ledger::asset::batch::apply(batch: batch);
 }}
 
 }}
@@ -5111,19 +5111,19 @@ kotoage fn apply_batch() authorize("Admin") {{
         for (src, expected) in [
             (
                 include_str!("compiler/fixtures/v1/c066.ko"),
-                "ledger::asset::batch::begin expects ()",
+                "call `ledger::asset::batch::begin` expects at most 0 arguments",
             ),
             (
                 include_str!("compiler/fixtures/v1/c067.ko"),
-                "ledger::asset::batch::end expects ()",
+                "call `ledger::asset::batch::end` expects at most 0 arguments",
             ),
             (
                 include_str!("compiler/fixtures/v1/c068.ko"),
-                "ledger::asset::batch::begin expects ()",
+                "call `ledger::asset::batch::begin` expects at most 0 arguments",
             ),
             (
                 include_str!("compiler/fixtures/v1/c069.ko"),
-                "ledger::asset::batch::end expects ()",
+                "call `ledger::asset::batch::end` expects at most 0 arguments",
             ),
         ] {
             let parsed = parse(src).expect("parse source");
@@ -5157,20 +5157,28 @@ kotoage fn apply_batch() authorize("Admin") {{
                 _ => {}
             }
         }
-        assert_eq!(begins, 2, "expected direct and call-sugar batch begin");
-        assert_eq!(transfers, 2, "expected one transfer per batch entry");
-        assert_eq!(ends, 2, "expected direct and call-sugar batch end");
+        assert_eq!(begins, 1, "one nonempty batch opens one atomic scope");
+        assert_eq!(transfers, 1, "one bounded loop visits each active entry");
+        assert_eq!(ends, 1, "one nonempty batch closes one atomic scope");
+        for source in [
+            "seiyaku EmptyBatch { kotoage fn main() authorize(\"Writer\") { ledger::asset::transfer_batch(transfers: []); } }",
+            "seiyaku SavedBatch { kotoage fn main() authorize(\"Writer\") { let List<(AccountId, AccountId, AssetDefinitionId, quantity), 8> transfers = []; ledger::asset::transfer_batch(transfers: transfers); } }",
+        ] {
+            Compiler::new()
+                .compile_source(source)
+                .expect("empty and saved typed lists compile");
+        }
     }
     #[test]
     fn transfer_batch_builtin_rejects_invalid_arguments() {
         for (src, expected) in [
             (
                 include_str!("compiler/fixtures/v1/c071.ko"),
-                "ledger::asset::transfer_batch expects at least one entry",
+                "call `ledger::asset::transfer_batch` is missing required argument `transfers`",
             ),
             (
                 include_str!("compiler/fixtures/v1/c072.ko"),
-                "ledger::asset::transfer_batch expects (AccountId, AccountId, AssetDefinitionId, quantity) tuple entries",
+                "ledger::asset::transfer_batch expects named transfers: List<(AccountId, AccountId, AssetDefinitionId, quantity), N>",
             ),
         ] {
             let parsed = parse(src).expect("parse invalid transfer_batch source");
@@ -5301,7 +5309,7 @@ kotoage fn apply_batch() authorize("Admin") {{
         let entrypoints = manifest.entrypoints.expect("entrypoints must be present");
         let proof = entrypoints
             .iter()
-            .find(|entry| entry.name == "proof")
+            .find(|entry| entry.name == "summary")
             .expect("proof entrypoint");
         assert_ne!(proof.access_hints_complete, Some(false));
         assert!(proof.access_hints_skipped.is_empty());
@@ -5314,7 +5322,7 @@ kotoage fn apply_batch() authorize("Admin") {{
         let err = analyze(&parsed).expect_err("semantic analysis should reject proof arguments");
         assert!(
             err.message
-                .contains("crypto::execution_summary expects no arguments"),
+                .contains("call `crypto::execution_summary` expects at most 0 arguments"),
             "unexpected semantic error: {}",
             err.message
         );
@@ -5774,7 +5782,7 @@ kotoage fn main() authorize("CompilerFixture") {{
             ),
             (
                 include_str!("compiler/fixtures/v1/c087.ko"),
-                "ledger::subscription::record_usage expects no arguments",
+                "call `ledger::subscription::record_usage` expects at most 0 arguments",
             ),
         ] {
             let parsed = parse(src).expect("parse source");
@@ -6285,19 +6293,19 @@ kotoage fn main() authorize("CompilerFixture") {{
         for (source, expected) in [
             (
                 include_str!("compiler/fixtures/v1/c106.ko"),
-                "context::authority expects no arguments",
+                "call `context::authority` expects at most 0 arguments",
             ),
             (
                 include_str!("compiler/fixtures/v1/c107.ko"),
-                "context::seiyaku_subject expects no arguments",
+                "call `context::seiyaku_subject` expects at most 0 arguments",
             ),
             (
                 include_str!("compiler/fixtures/v1/c108.ko"),
-                "context::block_height expects no arguments",
+                "call `context::block_height` expects at most 0 arguments",
             ),
             (
                 include_str!("compiler/fixtures/v1/c109.ko"),
-                "context::chain_id expects no arguments",
+                "call `context::chain_id` expects at most 0 arguments",
             ),
         ] {
             let parsed = parse(source).expect("parse invalid runtime sysvar call");
@@ -6380,11 +6388,11 @@ kotoage fn main() authorize("CompilerFixture") {{
             ),
             (
                 include_str!("compiler/fixtures/v1/c116.ko"),
-                "ledger::account::recovery::cancel expects (string)",
+                "call `ledger::account::recovery::cancel` expects at most 1 arguments",
             ),
             (
                 include_str!("compiler/fixtures/v1/c117.ko"),
-                "ledger::account::recovery::finalize expects (string)",
+                "call `ledger::account::recovery::finalize` is missing required argument `alias`",
             ),
         ] {
             let parsed = parse(source).expect("parse invalid native control/recovery call");
@@ -6423,7 +6431,7 @@ kotoage fn main() authorize("CompilerFixture") {{
         let err = analyze(&parsed).expect_err("semantic analysis should reject unexpected args");
         assert!(
             err.message
-                .contains("ledger::nft::create_for_all_users expects no arguments"),
+                .contains("call `ledger::nft::create_for_all_users` expects at most 0 arguments"),
             "unexpected semantic error: {}",
             err.message
         );
@@ -6618,7 +6626,7 @@ view fn account() -> AccountId {{ return AccountId::parse("{canonical}"); }}
         }
     }
     #[test]
-    fn require_exports_stable_error_code_and_uses_contract_abort_syscall() {
+    fn require_exports_nominal_error_type_and_uses_contract_abort_syscall() {
         let src = include_str!("compiler/fixtures/v1/c126.ko");
         let compiler = test_mode_compiler();
         let output = compiler
@@ -6636,17 +6644,19 @@ view fn account() -> AccountId {{ return AccountId::parse("{canonical}"); }}
             parsed.contract_interface.is_none(),
             "local test harness must keep its interface in the sidecar"
         );
-        let sidecar_codes = output.contract_interface.error_codes.as_slice();
-        let manifest_codes = manifest
-            .error_codes
+        let sidecar_types = output.contract_interface.error_types.as_slice();
+        let manifest_types = manifest
+            .error_types
             .as_deref()
-            .expect("manifest error codes");
-        for codes in [sidecar_codes, manifest_codes] {
-            assert_eq!(codes.len(), 1);
-            assert_eq!(codes[0].namespace, "PaymentError");
-            assert_eq!(codes[0].name, "Unauthorized");
-            assert_eq!(codes[0].code, 1001);
-        }
+            .expect("manifest error types");
+        assert_eq!(sidecar_types, manifest_types);
+        let payment_error = sidecar_types
+            .iter()
+            .find(|descriptor| descriptor.identity.ends_with("::PaymentError"))
+            .expect("PaymentError descriptor");
+        assert_eq!(payment_error.variants.len(), 1);
+        assert_eq!(payment_error.variants[0].name, "Unauthorized");
+        assert_eq!(payment_error.variants[0].code, 1001);
         let mut found_abort = false;
         let mut found_zk_assert = false;
         for chunk in bytes[parsed.code_offset..].chunks_exact(4) {
@@ -6879,11 +6889,11 @@ seiyaku ReachableHintControlFlow {{
         let cases = [
             (
                 include_str!("compiler/fixtures/v1/c137.ko"),
-                ("state:Entries", "Name", "take", 3),
+                ("state:Entries", "Name", "take", 64),
             ),
             (
                 include_str!("compiler/fixtures/v1/c138.ko"),
-                ("state:Entries", "int", "range", 2),
+                ("state:Entries", "int", "page", 64),
             ),
         ];
         for (source, expected) in cases {
@@ -6911,13 +6921,16 @@ seiyaku ReachableHintControlFlow {{
     #[test]
     fn optimized_ir_dynamic_provenance_must_match_the_emitted_state_schema() {
         use iroha_data_model::smart_contract::manifest::DynamicAccessHint;
-        fn state_keys(hint: Option<DynamicAccessHint>) -> ir::Instr {
-            ir::Instr::StateKeys {
-                dest: ir::Temp(0),
-                prefix: ir::Temp(1),
-                offset: ir::Temp(2),
-                limit: ir::Temp(3),
-                dynamic_access_hint: hint,
+        fn state_scan(dynamic_access_hint: DynamicAccessHint) -> ir::Instr {
+            ir::Instr::StateScan {
+                page: ir::Temp(0),
+                next: ir::Temp(1),
+                count: ir::Temp(2),
+                examined: ir::Temp(3),
+                base: ir::Temp(4),
+                after: ir::Temp(5),
+                limit: ir::Temp(6),
+                dynamic_access_hint,
             }
         }
         fn hint(key_type: &str) -> DynamicAccessHint {
@@ -6925,7 +6938,7 @@ seiyaku ReachableHintControlFlow {{
                 base_key: "state:Orders".to_owned(),
                 key_type: key_type.to_owned(),
                 bound_kind: "take".to_owned(),
-                max_keys: 1,
+                max_keys: 64,
             }
         }
         fn state(name: &str, ty: EmbeddedStateType) -> EmbeddedStateDescriptor {
@@ -6945,7 +6958,7 @@ seiyaku ReachableHintControlFlow {{
         let (reads, writes) = collect_dynamic_access_hints(
             &[call_graph_function(
                 "scan",
-                vec![state_keys(Some(exact_hint.clone()))],
+                vec![state_scan(exact_hint.clone())],
             )],
             &exact_states,
         )
@@ -6954,12 +6967,15 @@ seiyaku ReachableHintControlFlow {{
         assert!(writes.is_empty());
         let (reads, writes) = collect_dynamic_access_hints(
             &[call_graph_function(
-                "direct_state_keys",
-                vec![state_keys(None)],
+                "direct_state_count",
+                vec![ir::Instr::StateCount {
+                    dest: ir::Temp(0),
+                    prefix: ir::Temp(1),
+                }],
             )],
             &[],
         )
-        .expect("direct state::keys has no compiler-proven StateMap hint");
+        .expect("a raw count has no bounded traversal provenance");
         assert!(reads.is_empty());
         assert!(writes.is_empty());
         for (states, expected) in [
@@ -6980,10 +6996,7 @@ seiyaku ReachableHintControlFlow {{
             ),
         ] {
             let error = collect_dynamic_access_hints(
-                &[call_graph_function(
-                    "scan",
-                    vec![state_keys(Some(hint("int")))],
-                )],
+                &[call_graph_function("scan", vec![state_scan(hint("int"))])],
                 &states,
             )
             .expect_err("unknown, scalar, or key-mismatched provenance must fail closed");
@@ -7015,10 +7028,9 @@ seiyaku ReachableHintControlFlow {{
         assert_eq!(
             dynamic_reads,
             vec![
-                ("state:Names", "Name", "range", 4),
-                ("state:Names", "Name", "take", 2),
-                ("state:Names", "Name", "take", 5),
-                ("state:Quantities", "quantity", "range", 1),
+                ("state:Names", "Name", "page", 64),
+                ("state:Names", "Name", "take", 64),
+                ("state:Quantities", "quantity", "page", 64),
             ]
         );
         assert!(
@@ -7027,12 +7039,11 @@ seiyaku ReachableHintControlFlow {{
         );
     }
     #[test]
-    fn zero_length_state_map_scans_are_exact_bytecode_no_ops() {
-        let baseline = include_str!("compiler/fixtures/v1/c140.ko");
-        let (baseline_artifact, baseline_manifest) = Compiler::new()
-            .compile_source_with_manifest(baseline)
-            .expect("compile no-scan baseline");
-        for iterator in ["Entries.take(0)", "Entries.range(3, 3)"] {
+    fn zero_length_state_map_scan_limits_are_rejected() {
+        for iterator in [
+            "Entries.take(0)",
+            "Entries.page(after: Option::none, limit: 0).items",
+        ] {
             let source = format!(
                 r#"
 seiyaku ZeroScanNoOp {{
@@ -7048,21 +7059,10 @@ seiyaku ZeroScanNoOp {{
 }}
 "#
             );
-            let (artifact, manifest) = Compiler::new()
+            let error = Compiler::new()
                 .compile_source_with_manifest(&source)
-                .unwrap_or_else(|error| panic!("compile zero scan `{iterator}`: {error}"));
-            assert_eq!(
-                artifact, baseline_artifact,
-                "{iterator} must emit no STATE_KEYS query, loop bytecode, gas work, or host access"
-            );
-            assert_eq!(manifest.code_hash, baseline_manifest.code_hash);
-            assert!(
-                manifest
-                    .access_set_hints
-                    .as_ref()
-                    .is_none_or(|hints| hints.dynamic_reads.is_empty()),
-                "{iterator} must emit no dynamic-access hint"
-            );
+                .expect_err("scan limits are always positive");
+            assert!(error.contains("E_ITERATION_LIMIT"), "{iterator}: {error}");
         }
     }
     #[test]
@@ -7085,11 +7085,9 @@ seiyaku ExactScanProvenance {{
             );
             let error = Compiler::new()
                 .compile_source_with_manifest(&source)
-                .expect_err("only postfix StateMap.take/range may provide scan provenance");
+                .expect_err("unresolved free calls cannot provide scan provenance");
             assert!(
-                error.contains(
-                    "StateMap iteration requires `.take(N)` or `.range(start, end)` with int literals"
-                ),
+                error.contains(iterator.split('(').next().expect("call name")),
                 "{iterator}: {error}"
             );
         }
@@ -7137,7 +7135,7 @@ seiyaku ExactScanProvenance {{
             .expect_err("V1 build must reject nonliteral iteration bounds");
         assert!(error.contains("E_UNBOUNDED_ITERATION"), "{error}");
         assert!(
-            error.contains("requires a non-negative int literal"),
+            error.contains("bound must be a compile-time int constant expression"),
             "{error}"
         );
     }
@@ -7375,8 +7373,8 @@ kotoage fn main() authorize("AssetAdmin") {{
     scale: 0,
     mintable: 1,
   );
-  ledger::role::create(Name::parse("minter"), Json::parse("{{\"perms\":[\"mint_asset:{asset_literal}\"]}}"));
-  ledger::role::grant(context::authority(), Name::parse("minter"));
+  ledger::role::create(role: Name::parse("minter"), permissions: Json::parse("{{\"perms\":[\"mint_asset:{asset_literal}\"]}}"));
+  ledger::role::grant(account: context::authority(), role: Name::parse("minter"));
   ledger::asset::mint(
     account: context::authority(),
     asset_definition: AssetDefinitionId::parse("{asset_literal}"),
@@ -7549,7 +7547,9 @@ kotoage fn main() authorize("AssetAdmin") {{
         fn source_expression(self) -> String {
             match self {
                 Self::Literal(alias) => format!(r#"AccountId::parse("{alias}")"#),
-                Self::Resolved(alias) => format!(r#"ledger::account::resolve_alias("{alias}")"#),
+                Self::Resolved(alias) => {
+                    format!(r#"ledger::account::resolve_alias(alias: "{alias}")"#)
+                }
             }
         }
     }
@@ -7733,7 +7733,7 @@ kotoage fn main() authorize("AssetAdmin") {{
             entrypoints: None,
             states: None,
             kotoba: None,
-            error_codes: None,
+            error_types: None,
             provenance: None,
         };
         let register_code = norito::to_bytes(
@@ -7838,8 +7838,8 @@ kotoage fn main() authorize("AssetAdmin") {{
             r#"
 seiyaku Test {{
   kotoage fn peers() authorize("Admin") {{
-    ledger::peer::register(Json::parse("{{\"pop\":[],\"public_key\":\"{public_key}\"}}"));
-    ledger::peer::unregister(Json::parse("{{\"public_key\":\"{public_key}\"}}"));
+    ledger::peer::register(peer: Json::parse("{{\"pop\":[],\"public_key\":\"{public_key}\"}}"));
+    ledger::peer::unregister(peer: Json::parse("{{\"public_key\":\"{public_key}\"}}"));
   }}
 }}
 "#
@@ -8830,7 +8830,7 @@ seiyaku Test {{
         let raw_json = norito::json::to_string(&json_value).expect("trigger json");
         let escaped = raw_json.replace('\\', "\\\\").replace('"', "\\\"");
         let src = format!(
-            r#"seiyaku Test {{ kotoage fn main() authorize("Admin") {{ ledger::trigger::register(Json::parse("{escaped}")); }} }}"#
+            r#"seiyaku Test {{ kotoage fn main() authorize("Admin") {{ ledger::trigger::register(trigger: Json::parse("{escaped}")); }} }}"#
         );
         let compiler = Compiler::new();
         let (_bytes, manifest) = compiler
@@ -13096,6 +13096,7 @@ impl Compiler {
                             actor,
                             entrypoint,
                             payload,
+                            expectation,
                         } => {
                             load_pointer(actor, 10, scratch1, DataKind::Blob, &mut code)?;
                             load_pointer(entrypoint, 11, scratch1, DataKind::Blob, &mut code)?;
@@ -13115,6 +13116,9 @@ impl Compiler {
                                 let rs_payload = src_reg(payload, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(12, rs_payload, 0)?);
                             }
+                            load_pointer(expectation, 13, scratch1, DataKind::Blob, &mut code)?;
+                            push_word(&mut code, encode_addi(14, 0, 0)?);
+                            push_word(&mut code, encode_addi(15, 0, 0)?);
                             push_syscall(&mut code, syscalls::SYSCALL_KOTO_TEST_EXPECT_REJECT_AS);
                         }
                         Instr::ActorAccount { dest, actor } => {
@@ -13477,17 +13481,23 @@ impl Compiler {
                         }
                         Instr::AbortIf {
                             cond,
+                            descriptor,
                             code: error_code,
                         } => {
                             let rs = src_reg(cond, scratch1, &mut code)?;
-                            let error_code = src_reg(error_code, scratch2, &mut code)?;
-                            // Skip ABORT if the condition is false (i.e., == 0).
-                            // Branch offsets are relative to the branch PC, so 12 bytes skips
-                            // over the error-code move and following syscall.
-                            let skip_word = encode_branch_rv(0x0, rs, 0, 12)?;
-                            push_word(&mut code, skip_word);
-                            push_word(&mut code, encode_addi(10, error_code, 0)?);
+                            let branch_offset = code.len();
+                            push_word(&mut code, 0);
+                            emit_values_to_abi_registers(&[*descriptor, *error_code], &mut code)?;
+                            code.extend_from_slice(&publish_tlv);
+                            for reserved in 12..=15 {
+                                push_word(&mut code, encode_addi(reserved, 0, 0)?);
+                            }
                             push_syscall_imm8(&mut code, syscalls::SYSCALL_CONTRACT_ABORT);
+                            let distance = i16::try_from(code.len() - branch_offset)
+                                .map_err(|_| "nominal abort branch exceeds encoding range")?;
+                            let branch = encode_branch_rv(0x0, rs, 0, distance)?;
+                            code[branch_offset..branch_offset + 4]
+                                .copy_from_slice(&branch.to_le_bytes());
                         }
                         Instr::Info { msg } => {
                             let r_msg = src_reg(msg, scratch1, &mut code)?;
@@ -13877,31 +13887,53 @@ impl Compiler {
                             code.extend_from_slice(&publish_tlv);
                             push_syscall_imm8(&mut code, syscalls::SYSCALL_STATE_DEL);
                         }
-                        Instr::StateKeys {
-                            dest,
-                            prefix,
-                            offset,
+                        Instr::StateScan {
+                            page,
+                            next,
+                            count,
+                            examined,
+                            base,
+                            after,
                             limit,
                             ..
                         } => {
+                            emit_values_to_abi_registers(&[*base, *after, *limit], &mut code)?;
                             if let Some(key) = state_path_literal_data_key(
                                 func_idx,
-                                *prefix,
+                                *base,
                                 &string_map,
                                 &dataref_kind_map,
                             )? {
                                 emit_literal_load(&mut code, &fixups, 10, key);
-                            } else {
-                                let r = src_reg(prefix, scratch1, &mut code)?;
-                                push_word(&mut code, encode_addi(10, r, 0)?);
                             }
                             code.extend_from_slice(&publish_tlv);
-                            let offset_reg = src_reg(offset, scratch1, &mut code)?;
-                            push_word(&mut code, encode_addi(11, offset_reg, 0)?);
-                            let limit_reg = src_reg(limit, scratch1, &mut code)?;
-                            push_word(&mut code, encode_addi(12, limit_reg, 0)?);
-                            push_syscall(&mut code, syscalls::SYSCALL_STATE_KEYS);
-                            spill_syscall_result(dest, &mut code)?;
+                            push_word(&mut code, encode_addi(scratch2, 10, 0)?);
+                            let skip = i16::try_from(publish_tlv.len() + 12)
+                                .map_err(|_| "cursor publication branch too large")?;
+                            push_word(&mut code, encode_branch_rv(0x0, 11, 0, skip)?);
+                            push_word(&mut code, encode_addi(10, 11, 0)?);
+                            code.extend_from_slice(&publish_tlv);
+                            push_word(&mut code, encode_addi(11, 10, 0)?);
+                            push_word(&mut code, encode_addi(10, scratch2, 0)?);
+                            for register in 13..=15 {
+                                push_word(&mut code, encode_addi(register, 0, 0)?);
+                            }
+                            push_syscall(&mut code, syscalls::SYSCALL_STATE_SCAN);
+                            // Store spilled outputs before parallel register moves so
+                            // allocator destinations cannot destroy an unread result.
+                            let mut moves = Vec::new();
+                            for (index, destination) in
+                                [page, next, count, examined].into_iter().enumerate()
+                            {
+                                let source = 10 + index as u8;
+                                let (target, spilled, offset) = dst_reg(destination);
+                                if spilled {
+                                    emit_store64(&mut code, &fixups, sp, source, offset, scratch2)?;
+                                } else if alloc.regs.contains_key(destination) {
+                                    moves.push((target, source));
+                                }
+                            }
+                            emit_parallel_register_moves(&mut code, moves, scratch1)?;
                         }
                         Instr::StateMapKeyAt {
                             dest,
@@ -14351,59 +14383,99 @@ impl Compiler {
                         Instr::NumericRound {
                             dest,
                             dividend,
+                            multiplier,
                             divisor,
                             scale,
                             mode,
                             op,
                             ..
                         } => {
-                            let load_ptr = |temp: &ir::Temp,
-                                            target: u8,
-                                            scratch: u8,
-                                            code: &mut Vec<u8>|
-                             -> Result<(), String> {
-                                if let Some(kind) =
-                                    dataref_kind_map.get(&(func_idx, *temp)).copied()
-                                    && let Some(lit) = string_map.get(&(func_idx, *temp)).cloned()
-                                {
-                                    emit_literal_load(
-                                        code,
-                                        &fixups,
-                                        target,
-                                        data_key_for_pointer(kind, &lit),
-                                    );
-                                } else {
-                                    let rs = src_reg(temp, scratch, code)?;
-                                    push_word(code, encode_addi(target, rs, 0)?);
+                            if let Some(multiplier) = multiplier {
+                                emit_values_to_abi_registers(
+                                    &[*dividend, *multiplier, *divisor, *scale, *mode],
+                                    &mut code,
+                                )?;
+                                code.extend_from_slice(&publish_tlv);
+                                push_word(&mut code, encode_addi(scratch2, 10, 0)?);
+                                for register in 11..=13 {
+                                    push_word(&mut code, encode_addi(10, register, 0)?);
+                                    code.extend_from_slice(&publish_tlv);
+                                    push_word(&mut code, encode_addi(register, 10, 0)?);
                                 }
-                                Ok(())
-                            };
-                            load_ptr(dividend, 10, scratch1, &mut code)?;
-                            code.extend_from_slice(&publish_tlv);
-                            push_word(&mut code, encode_addi(scratch2, 10, 0)?);
-                            load_ptr(divisor, 10, scratch1, &mut code)?;
-                            code.extend_from_slice(&publish_tlv);
-                            push_word(&mut code, encode_addi(11, 10, 0)?);
-                            load_ptr(scale, 10, scratch1, &mut code)?;
-                            code.extend_from_slice(&publish_tlv);
-                            push_word(&mut code, encode_addi(12, 10, 0)?);
-                            push_word(&mut code, encode_addi(10, scratch2, 0)?);
-                            let rounding = src_reg(mode, scratch1, &mut code)?;
-                            push_word(&mut code, encode_addi(13, rounding, 0)?);
-                            push_word(&mut code, encode_addi(14, 0, 0)?);
-                            let syscall = match op {
-                                ir::NumericRoundOp::DecimalDiv => {
-                                    syscalls::SYSCALL_DECIMAL_DIV_ROUND
-                                }
-                                ir::NumericRoundOp::QuantityDiv => {
-                                    syscalls::SYSCALL_QUANTITY_DIV_DECIMAL_ROUND
-                                }
-                                ir::NumericRoundOp::QuantityRatio => {
-                                    syscalls::SYSCALL_QUANTITY_RATIO_ROUND
-                                }
-                            };
-                            push_syscall(&mut code, syscall);
-                            spill_syscall_result(dest, &mut code)?;
+                                push_word(&mut code, encode_addi(10, scratch2, 0)?);
+                                push_word(&mut code, encode_addi(15, 0, 0)?);
+                                let syscall = match op {
+                                    ir::NumericRoundOp::DecimalMulDiv => {
+                                        syscalls::SYSCALL_DECIMAL_MUL_DIV_ROUND
+                                    }
+                                    ir::NumericRoundOp::QuantityMulDiv => {
+                                        syscalls::SYSCALL_QUANTITY_MUL_DIV_ROUND
+                                    }
+                                    _ => {
+                                        return Err(
+                                            "non-fused operation carries a multiplier".into()
+                                        );
+                                    }
+                                };
+                                push_syscall(&mut code, syscall);
+                                spill_syscall_result(dest, &mut code)?;
+                            } else {
+                                let load_ptr =
+                                    |temp: &ir::Temp,
+                                     target: u8,
+                                     scratch: u8,
+                                     code: &mut Vec<u8>|
+                                     -> Result<(), String> {
+                                        if let Some(kind) =
+                                            dataref_kind_map.get(&(func_idx, *temp)).copied()
+                                            && let Some(lit) =
+                                                string_map.get(&(func_idx, *temp)).cloned()
+                                        {
+                                            emit_literal_load(
+                                                code,
+                                                &fixups,
+                                                target,
+                                                data_key_for_pointer(kind, &lit),
+                                            );
+                                        } else {
+                                            let rs = src_reg(temp, scratch, code)?;
+                                            push_word(code, encode_addi(target, rs, 0)?);
+                                        }
+                                        Ok(())
+                                    };
+                                load_ptr(dividend, 10, scratch1, &mut code)?;
+                                code.extend_from_slice(&publish_tlv);
+                                push_word(&mut code, encode_addi(scratch2, 10, 0)?);
+                                load_ptr(divisor, 10, scratch1, &mut code)?;
+                                code.extend_from_slice(&publish_tlv);
+                                push_word(&mut code, encode_addi(11, 10, 0)?);
+                                load_ptr(scale, 10, scratch1, &mut code)?;
+                                code.extend_from_slice(&publish_tlv);
+                                push_word(&mut code, encode_addi(12, 10, 0)?);
+                                push_word(&mut code, encode_addi(10, scratch2, 0)?);
+                                let rounding = src_reg(mode, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(13, rounding, 0)?);
+                                push_word(&mut code, encode_addi(14, 0, 0)?);
+                                let syscall = match op {
+                                    ir::NumericRoundOp::DecimalMulDiv
+                                    | ir::NumericRoundOp::QuantityMulDiv => {
+                                        return Err(
+                                            "fused operation is missing its multiplier".into()
+                                        );
+                                    }
+                                    ir::NumericRoundOp::DecimalDiv => {
+                                        syscalls::SYSCALL_DECIMAL_DIV_ROUND
+                                    }
+                                    ir::NumericRoundOp::QuantityDiv => {
+                                        syscalls::SYSCALL_QUANTITY_DIV_DECIMAL_ROUND
+                                    }
+                                    ir::NumericRoundOp::QuantityRatio => {
+                                        syscalls::SYSCALL_QUANTITY_RATIO_ROUND
+                                    }
+                                };
+                                push_syscall(&mut code, syscall);
+                                spill_syscall_result(dest, &mut code)?;
+                            }
                         }
                         Instr::DecimalToInt {
                             dest,
@@ -15692,8 +15764,8 @@ impl Compiler {
                 kind: EntryPointKind::View,
                 params: Vec::new(),
                 argument_schema: None,
-                return_type: None,
-                return_schema: None,
+                return_type: Some("()".to_owned()),
+                return_schema: ir::entrypoint_return_schema(KOTO_TEST_RETURN_ENTRYPOINT, None)?,
                 permission: None,
                 read_keys: Vec::new(),
                 write_keys: Vec::new(),
@@ -15742,15 +15814,7 @@ impl Compiler {
             access_set_hints: access_set_hints.clone(),
             kotoba: message_entries.clone(),
             entrypoints: entrypoint_descriptors.clone(),
-            error_codes: typed
-                .error_codes
-                .iter()
-                .map(|error| ContractErrorCodeDescriptor {
-                    namespace: error.namespace.clone(),
-                    name: error.name.clone(),
-                    code: error.code,
-                })
-                .collect(),
+            error_types: typed.error_types.clone(),
             states: state_descriptors,
         };
         // Compute the indexed literal table and patch LDLIT/LDI64 words.
@@ -15992,8 +16056,8 @@ impl Compiler {
                     .collect(),
             ),
             states: Some(manifest_state_descriptors(&contract_interface.states)),
-            error_codes: (!contract_interface.error_codes.is_empty())
-                .then_some(contract_interface.error_codes.clone()),
+            error_types: (!contract_interface.error_types.is_empty())
+                .then_some(contract_interface.error_types.clone()),
             kotoba: (!contract_interface.kotoba.is_empty())
                 .then_some(contract_interface.kotoba.clone()),
             provenance: None,
@@ -16181,12 +16245,12 @@ fn collect_dynamic_access_hints(
     for function in ir_functions {
         for block in &function.blocks {
             for instruction in &block.instrs {
-                let ir::Instr::StateKeys {
-                    dynamic_access_hint: Some(hint),
-                    ..
-                } = instruction
-                else {
-                    continue;
+                let hint = match instruction {
+                    ir::Instr::StateScan {
+                        dynamic_access_hint: hint,
+                        ..
+                    } => hint,
+                    _ => continue,
                 };
                 ivm_abi::access_hints::validate_dynamic_access_hint_v1(hint).map_err(|error| {
                     format!(
@@ -16284,6 +16348,28 @@ fn manifest_state_descriptors(states: &[EmbeddedStateDescriptor]) -> Vec<StateDe
 }
 fn manifest_state_type_name(ty: &EmbeddedStateType) -> String {
     match ty {
+        EmbeddedStateType::StateCursor(key) => {
+            use ivm_abi::entrypoint::EntrypointValueKindV1 as K;
+            let key = match key {
+                K::Int => "int",
+                K::Decimal => "decimal",
+                K::Quantity => "quantity",
+                K::Bool => "bool",
+                K::String => "string",
+                K::Blob => "bytes",
+                K::Json => "Json",
+                K::Name => "Name",
+                K::AccountId => "AccountId",
+                K::AssetId => "AssetId",
+                K::AssetDefinitionId => "AssetDefinitionId",
+                K::DomainId => "DomainId",
+                K::NftId => "NftId",
+                K::DataSpaceId => "DataSpaceId",
+            };
+            format!("StateCursor<{key}>")
+        }
+        EmbeddedStateType::Unit => "()".to_string(),
+        EmbeddedStateType::Error(descriptor) => descriptor.identity.clone(),
         EmbeddedStateType::Int => "int".to_string(),
         EmbeddedStateType::Decimal => "decimal".to_string(),
         EmbeddedStateType::Quantity => "quantity".to_string(),
@@ -16343,6 +16429,12 @@ fn build_state_type_descriptor(ty: &semantic::Type) -> Result<EmbeddedStateType,
         Type::Decimal => EmbeddedStateType::Decimal,
         Type::Quantity => EmbeddedStateType::Quantity,
         Type::Bool => EmbeddedStateType::Bool,
+        Type::Unit => EmbeddedStateType::Unit,
+        Type::StateCursor(key) => EmbeddedStateType::StateCursor(
+            crate::abi_schema::state_cursor_key_kind(&key)
+                .ok_or_else(|| "StateCursor requires a canonical map key type".to_owned())?,
+        ),
+        Type::ErrorEnum(descriptor) => EmbeddedStateType::Error((*descriptor).clone()),
         Type::String => EmbeddedStateType::String,
         Type::Bytes => EmbeddedStateType::Bytes,
         Type::DataSpaceId => EmbeddedStateType::DataSpaceId,
@@ -16391,8 +16483,7 @@ fn build_state_type_descriptor(ty: &semantic::Type) -> Result<EmbeddedStateType,
                 "state type `{name}` was not resolved before CNTR schema emission"
             ));
         }
-        Type::Unit
-        | Type::Secret(_)
+        Type::Secret(_)
         | Type::AxtDescriptor
         | Type::AssetHandle
         | Type::ProofBlob
@@ -16625,7 +16716,8 @@ fn derive_state_access_hints(
                                 .insert(STATE_WILDCARD_KEY.to_string());
                         }
                     }
-                    ir::Instr::StateKeys { prefix, .. } | ir::Instr::StateCount { prefix, .. } => {
+                    ir::Instr::StateCount { prefix, .. }
+                    | ir::Instr::StateScan { base: prefix, .. } => {
                         debug_assert_eq!(coarse_access, BuiltinAccess::StateRead);
                         if let Some(key) =
                             render_state_scan_hint(state_path_hints.get(&(func_idx, *prefix)))
@@ -18882,7 +18974,7 @@ fn classify_ir_access(instr: &ir::Instr) -> IrAccessClass {
         ir::Instr::StateGet { .. } => access_class_for_builtin(Builtin::StateGet),
         ir::Instr::StateSet { .. } => access_class_for_builtin(Builtin::StateSet),
         ir::Instr::StateDel { .. } => access_class_for_builtin(Builtin::StateDel),
-        ir::Instr::StateKeys { .. } => access_class_for_builtin(Builtin::StateKeys),
+        ir::Instr::StateScan { .. } => IrAccessClass::State(BuiltinAccess::StateRead),
         ir::Instr::StateHas { .. } => access_class_for_builtin(Builtin::StateHas),
         ir::Instr::StateLen { .. } => access_class_for_builtin(Builtin::StateLen),
         ir::Instr::StateCount { .. } => access_class_for_builtin(Builtin::StateCount),
@@ -19282,7 +19374,8 @@ fn validate_codegen_supported(tp: &semantic::TypedProgram) -> Result<(), Vec<ir:
                 expr_ok(target)?;
                 expr_ok(index)
             }
-            EK::IntLiteral(_)
+            EK::ErrorValue(_)
+            | EK::IntLiteral(_)
             | EK::DecimalLiteral { .. }
             | EK::Bool(_)
             | EK::String(_)

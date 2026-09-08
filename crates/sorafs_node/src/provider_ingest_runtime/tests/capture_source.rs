@@ -280,7 +280,7 @@ impl ProviderIngestCompletedMusubiSignedCaptureLedgerV1 for CaptureCoordinatorPr
     }
 }
 fn capture_coordinator_test_handle(root: &std::path::Path) -> NodeHandle {
-    let root = std::fs::canonicalize(root).expect("canonicalize owned coordinator fixture root");
+    let root = root.canonicalize().expect("canonical coordinator test root");
     NodeHandle::try_new(
         StorageConfig::builder()
             .enabled(true)
@@ -295,7 +295,6 @@ fn capture_coordinator_test_handle(root: &std::path::Path) -> NodeHandle {
 fn completed_musubi_capture_coordinator_tenure_is_take_once_and_reader_stable() {
     let first_root = tempfile::tempdir().expect("first coordinator root");
     let second_root = tempfile::tempdir().expect("second coordinator root");
-    let failed_root = tempfile::tempdir().expect("failed coordinator root");
     let handle = capture_coordinator_test_handle(first_root.path());
     let cloned_handle = handle.clone();
     let retained_reader = Arc::new(CaptureCoordinatorProbeLedgerV1::new(false, 0xC1));
@@ -354,28 +353,41 @@ fn completed_musubi_capture_coordinator_tenure_is_take_once_and_reader_stable() 
         .try_activate()
         .expect("bind reader under independent restarted handle");
     assert_eq!(substituted_reader.binding_calls.load(Ordering::SeqCst), 1);
-    let failed_handle = capture_coordinator_test_handle(failed_root.path());
-    let never_read = Arc::new(CaptureCoordinatorProbeLedgerV1::new(true, 0xC3));
-    assert!(matches!(
-        failed_handle.take_provider_ingest_completed_musubi_capture_coordinator(
+    for (network_id, max_page_rows, expected_error) in [
+        (
+            unmarked_test_network_id(),
+            1,
+            ProviderIngestRuntimeErrorV1::InvalidNetworkId,
+        ),
+        (
             test_network_id(),
             0,
-            never_read.clone(),
+            ProviderIngestRuntimeErrorV1::InvalidPolicy,
         ),
-        Err(FinalizedProviderIngestError::Runtime(
-            ProviderIngestRuntimeErrorV1::InvalidPolicy
-        ))
-    ));
-    assert!(matches!(
-        failed_handle.take_provider_ingest_completed_musubi_capture_coordinator(
-            test_network_id(),
-            1,
-            never_read.clone(),
-        ),
-        Err(FinalizedProviderIngestError::CompletedMusubiCaptureCoordinatorTaken)
-    ));
-    assert_eq!(never_read.binding_calls.load(Ordering::SeqCst), 0);
-    assert_eq!(never_read.page_reads.load(Ordering::SeqCst), 0);
+    ] {
+        let failed_root = tempfile::tempdir().expect("failed coordinator root");
+        let failed_handle = capture_coordinator_test_handle(failed_root.path());
+        let never_read = Arc::new(CaptureCoordinatorProbeLedgerV1::new(true, 0xC3));
+        assert!(matches!(
+            failed_handle.take_provider_ingest_completed_musubi_capture_coordinator(
+                network_id,
+                max_page_rows,
+                never_read.clone(),
+            ),
+            Err(FinalizedProviderIngestError::Runtime(error))
+                if std::mem::discriminant(&error) == std::mem::discriminant(&expected_error)
+        ));
+        assert!(matches!(
+            failed_handle.take_provider_ingest_completed_musubi_capture_coordinator(
+                test_network_id(),
+                1,
+                never_read.clone(),
+            ),
+            Err(FinalizedProviderIngestError::CompletedMusubiCaptureCoordinatorTaken)
+        ));
+        assert_eq!(never_read.binding_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(never_read.page_reads.load(Ordering::SeqCst), 0);
+    }
 }
 #[tokio::test]
 async fn completed_musubi_capture_reconciliation_retries_without_skipping_and_enqueues_once() {
@@ -912,6 +924,7 @@ fn completed_musubi_capture_scanner_enforces_identity_and_page_bounds() {
     for (provider_id, network_id, max_page_rows, expected) in [
         ([0; 32], test_network_id(), 1, "provider"),
         (LOCAL_PROVIDER, foreign_test_network_id(), 1, "binding"),
+        (LOCAL_PROVIDER, unmarked_test_network_id(), 1, "network"),
         (LOCAL_PROVIDER, test_network_id(), 0, "policy"),
         (
             LOCAL_PROVIDER,
@@ -935,6 +948,10 @@ fn completed_musubi_capture_scanner_enforces_identity_and_page_bounds() {
             "binding" => assert!(matches!(
                 result,
                 Err(ProviderIngestRuntimeErrorV1::InvalidFinalizedBinding)
+            )),
+            "network" => assert!(matches!(
+                result,
+                Err(ProviderIngestRuntimeErrorV1::InvalidNetworkId)
             )),
             "policy" => assert!(matches!(
                 result,

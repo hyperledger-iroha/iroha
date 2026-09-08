@@ -38,7 +38,8 @@ impl ProductionLifecycleAdapterStartupV1 {
             DurableStoreValidateAdapterPreparationV1::Blocked(_) => {
                 return Err("recovered Decision Validate reducer preview is blocked");
             }
-            DurableStoreValidateAdapterPreparationV1::Inactive => {
+            DurableStoreValidateAdapterPreparationV1::Inactive
+            | DurableStoreValidateAdapterPreparationV1::Superseded(_) => {
                 return Err("recovered Decision Validate reducer preview is inactive");
             }
         };

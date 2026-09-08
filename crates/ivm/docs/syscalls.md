@@ -134,7 +134,7 @@ Lifecycle / Utility
 - 0x01 EXIT — Args: `r10=status:u64` → Return: `u64=status` — Gas: G_exit
 - 0x02 ABORT — Args: none → Return: `u64=0` — Gas: G_abort (halts and marks the run failed)
 - 0x03 DEBUG_LOG — Args: `r10=&Json|&Blob|&NoritoBytes` → Return: 0 — Gas: G_debug
-- 0x04 CONTRACT_ABORT — Args: `r10=code:u64` → Return: `u64=0` — Gas: G_abort (halts with a manifest-declared application error code)
+- 0x04 CONTRACT_ABORT — Args: `r10=&NoritoBytes(ContractErrorTypeDescriptor), r11=code:u32, r12..r15=0` → Return: `u64=0` — Gas: G_abort + descriptor bytes (halts with an exact signed-CNTR-authenticated nominal rejection; descriptor frame at most 64 KiB)
 - 0xA8 CURRENT_TIME_MS — Args: none → Return: `u64=deterministic_execution_time_ms` — Gas: G_sysvar
 - 0xE0 INPUT_PUBLISH_TLV — Args: `r10=&Blob(TLV)` → Return: `ptr (r10)` — Gas: G_input_publish + bytes (rejects invalid TLV envelopes and disallowed pointer types)
 - 0x90 SM3_HASH — Args: `r10=&Blob(message)` → Return: `ptr (&Blob(digest))` — Gas: G_hash + bytes
@@ -218,7 +218,12 @@ Native JSON construction
 - Native construction uses Gas: `G_json_build`; typed getters use Gas: `G_json_get`.
 - Object keys are canonicalized by lexical key order, duplicate keys and
   malformed schemas are rejected, and nested `Option`/`List` handles are read
-  recursively. Booleans remain JSON primitives; `int`, `decimal`, and
+  with an iterative bounded traversal. Options are exactly `{"some": value}`
+  or `{"none": true}`, matching public argument and return JSON. Unit is `null`,
+  so `Some(())` remains `{"some": null}`; nested Options retain each active tag.
+  Nullable Option encodings are not supported. Every Option contributes one
+  collection element to gas, and encoded-byte gas includes the complete tag object.
+  Booleans remain JSON primitives; `int`, `decimal`, and
   `quantity` render as canonical base-10 JSON strings, including the complete
   signed 512-bit `int` domain, and bytes are lowercase `0x` hex. No
   floating-point conversion or host JSON integer-width conversion occurs.
@@ -383,14 +388,12 @@ Extended query/sysvar surface (`SYSTEM` / SCALLX)
 - 0x010211 ACCOUNT_RECOVERY_APPROVE — Args: `r10=&Blob(alias)` → 0 — Gas: G_sci + bytes
 - 0x010212 ACCOUNT_RECOVERY_CANCEL — Args: `r10=&Blob(alias)` → 0 — Gas: G_sci + bytes
 - 0x010213 ACCOUNT_RECOVERY_FINALIZE — Args: `r10=&Blob(alias)` → 0 — Gas: G_sci + bytes
-- 0x010030 STATE_KEYS — Args: `r10=&NoritoBytes(StatePath prefix), r11=offset, r12=limit` (`0..=64`, where `0` returns an empty page) → `ptr (&NoritoBytes(Vec<StatePath>))`, `r11=total`, `r12=count` — Gas: G_state_keys + count + bytes
-  - Enumerates durable-state keys in canonical sorted order. With CNTR metadata, the prefix must resolve to a declared path; a bare `StateMap` base is accepted here and by `STATE_COUNT`, but rejected by value operations. In contract-runtime scope, internal storage prefixes are stripped before return, and staged tombstones are applied before pagination. The ledger host seeks directly to the scoped ordered prefix and does not materialize unrelated global keys; its `count` gas component conservatively includes every textual-prefix candidate examined across persisted state and the transaction overlay. Limits above 64 are rejected by every host.
 - 0x010031 STATE_HAS — Args: `r10=&NoritoBytes(StatePath)` → `r10=present` — Gas: G_state_has
   - Tests durable-state key presence with the same scoped overlay, base-state, and tombstone resolution as `STATE_GET`.
 - 0x010032 STATE_LEN — Args: `r10=&NoritoBytes(StatePath)` → `r10=len`, `r11=found` — Gas: G_state_len + bytes
   - Returns the `NoritoBytes` payload length for present values, excluding the TLV envelope. Missing values return `len=0, found=0`.
 - 0x010033 STATE_COUNT — Args: `r10=&NoritoBytes(StatePath prefix)` → `r10=total` — Gas: G_state_count + count
-  - Counts durable-state keys with the same canonical sorted prefix matching, scope stripping, overlay, and tombstone resolution as `STATE_KEYS`, without cloning or returning the key list. The ledger host charges for every ordered-range candidate examined, including candidates rejected by path-segment matching and overlay tombstones.
+  - Counts durable-state keys through canonical sorted prefix matching, contract scope stripping, and current overlay/tombstone resolution, without cloning or returning the key list. This explicit total-count operation is independent of bounded map pagination. The ledger host charges for every ordered-range candidate examined, including candidates rejected by path-segment matching and overlay tombstones.
 - 0x010034 STATE_MAP_KEY_AT — Args: `r10=&NoritoBytes(Vec<StatePath>), r11=&Name(base), r12=index` → `ptr (&NoritoBytes(canonical key))` or `0` — Gas: G_path + bytes
   - Compiler-internal decoder for bounded `StateMap` iteration. It accepts at most 64 paths in a 1 MiB page, requires an exact `base/<lowercase hex>` child, binds the recovered key to the base's CNTR-declared nominal key type, and rejects missing schemas, type confusion, malformed, non-canonical, or over-4-KiB keys.
 - 0x010035 STATE_VALUE_ENCODE — Args: `r10=&NoritoBytes(StateValueSchemaV1), r11=&[u64], r12=word_count` → `ptr (&NoritoBytes(StateValueRecordV1))` — Gas: G_state_value + schema + words + pointers + output
@@ -400,6 +403,8 @@ Extended query/sysvar surface (`SYSTEM` / SCALLX)
 - 0x010037 STATE_PATH_FROM_NAME — Args: `r10=&Name` → `ptr (&NoritoBytes(StatePath))` — Gas: G_path + bytes
   - Compiler-internal conversion for durable-state helper parameters. It does
     not make `Name` a valid carrier for any state operation.
+- 0x010038 STATE_SCAN — Args: `r10=&NoritoBytes(StatePath map), r11=&NoritoBytes(StateCursorV1)` or `0`, `r12=limit` (`1..=64`), `r13..r15=0` → `r10=&NoritoBytes(Vec<StatePath>), r11=&NoritoBytes(StateCursorV1)` or `0`, `r12=selected`, `r13=examined` — Gas: G_state_query + canonical map and cursor input frame bytes + canonical map schema bytes + instance UTF-8 bytes + 1 per examined candidate + examined physical key UTF-8 bytes + canonical response frame bytes
+  - Seeks after the cursor's last examined key in the current ordered map and overlay. Each call returns at most `limit` live keys and examines at most 64 candidate positions, including tombstones. It performs no lookahead or total count, so a continuation can lead to a terminal empty page. The host binds the canonical cursor frame to its authoritative contract instance, the declared map, its exact key/value schema hash, and its scalar key type before examining state.
 
 Canonical instruction bridge
 - `EXECUTE_INSTRUCTION` accepts only a pointer-ABI `NoritoBytes` payload containing the canonical
@@ -576,7 +581,7 @@ node enforces that policy unconditionally.
 | 0x01 | EXIT | r10=status:u64 | u64=status | asset:gas/G_exit@ivm.core/v2 |
 | 0x02 | ABORT | - | u64=0 | asset:gas/G_abort@ivm.core/v2 |
 | 0x03 | DEBUG_LOG | r10=&Json | u64=0 | asset:gas/G_debug@ivm.core/v2 |
-| 0x04 | CONTRACT_ABORT | r10=code:u64 | u64=0 | asset:gas/G_abort@ivm.core/v2 |
+| 0x04 | CONTRACT_ABORT | r10=&NoritoBytes(ContractErrorTypeDescriptor), r11=code:u32, r12=0, r13=0, r14=0, r15=0 | u64=0 | asset:gas/G_abort@ivm.core/v2 + descriptor bytes |
 | 0x10 | REGISTER_DOMAIN | r10=&DomainId | u64=0 | asset:gas/G_reg_domain@ivm.core/v2 |
 | 0x11 | UNREGISTER_DOMAIN | r10=&DomainId | u64=0 | asset:gas/G_unreg_domain@ivm.core/v2 |
 | 0x12 | TRANSFER_DOMAIN | r10=&DomainId, r11=&AccountId(to) | u64=0 | asset:gas/G_transfer_domain@ivm.core/v2 |
@@ -720,7 +725,6 @@ node enforces that policy unconditionally.
 | 0x10027 | SYSVAR_CONTRACT_SUBJECT | - | r10=ptr (&AccountId(contract subject)) | asset:gas/G_sysvar@ivm.core/v2 + bytes |
 | 0x10028 | NORMALIZE_NORITO_BYTES | r10=&Blob or &NoritoBytes (validated public TLV) | r10=&NoritoBytes(same payload) | asset:gas/G_pointer@ivm.core/v2 + bytes |
 | 0x10029 | CALL_CONTRACT_QUANTITY2 | r10=&Blob(contract_address), r11=&Blob(literal entrypoint), r12=&Quantity(amount_in), r13=&Quantity(min_out) | r10=ptr (&Quantity) | asset:gas/G_call_contract@ivm.core/v2 + request bytes + return bytes + child gas |
-| 0x10030 | STATE_KEYS | r10=&NoritoBytes(StatePath prefix), r11=offset:u64, r12=limit:u64 (0..=64) | r10=ptr (&NoritoBytes(Vec<StatePath>)), r11=total:u64, r12=count:u64 | asset:gas/G_state_keys@ivm.core/v2 + canonical prefix frame bytes + 1 per examined candidate + examined candidate UTF-8 bytes + canonical response frame bytes |
 | 0x10031 | STATE_HAS | r10=&NoritoBytes(StatePath) | r10=present:u64 | asset:gas/G_state_has@ivm.core/v2 + canonical path frame bytes |
 | 0x10032 | STATE_LEN | r10=&NoritoBytes(StatePath) | r10=len:u64, r11=found:u64 | asset:gas/G_state_len@ivm.core/v2 + canonical path frame bytes |
 | 0x10033 | STATE_COUNT | r10=&NoritoBytes(StatePath prefix) | r10=total:u64 | asset:gas/G_state_count@ivm.core/v2 + canonical prefix frame bytes + 1 per examined candidate + examined candidate UTF-8 bytes |
@@ -728,6 +732,7 @@ node enforces that policy unconditionally.
 | 0x10035 | STATE_VALUE_ENCODE | r10=&NoritoBytes(StateValueSchemaV1), r11=&[u64], r12=word_count:u64 | r10=ptr (&NoritoBytes(StateValueRecordV1)) | asset:gas/G_state_value@ivm.core/v2 + schema + words + pointers + output |
 | 0x10036 | STATE_VALUE_DECODE | r10=&NoritoBytes(StateValueSchemaV1), r11=&NoritoBytes(StateValueRecordV1) | r10=ptr (&Blob(pad:u8 then [u64; word_count])) | asset:gas/G_state_value@ivm.core/v2 + schema + record + pointers + output |
 | 0x10037 | STATE_PATH_FROM_NAME | r10=&Name | r10=ptr (&NoritoBytes(StatePath)) | asset:gas/G_path@ivm.core/v2 + bytes |
+| 0x10038 | STATE_SCAN | r10=&NoritoBytes(StatePath map), r11=&NoritoBytes(StateCursorV1) or 0, r12=limit(1..64), r13=0, r14=0, r15=0 | r10=&NoritoBytes(Vec<StatePath>), r11=&NoritoBytes(StateCursorV1) or 0, r12=selected, r13=examined | asset:gas/G_state_query@ivm.core/v2 + canonical map and cursor input frame bytes + canonical map schema bytes + instance UTF-8 bytes + 1 per examined candidate + examined physical key UTF-8 bytes + canonical response frame bytes; at most 64 candidate positions, no count or lookahead |
 | 0x1004E | JSON_BUILD | r10=&NoritoBytes(JsonConstructionSchemaV1), r11=word_table, r12=word_count | r10=&Json | asset:gas/G_json_build@ivm.core/v2 + schema bytes + source bytes + words + collection elements + encoded bytes |
 | 0x10100 | INT_FROM_I64 | r10=value:i64 | r10=&Int, r11=status:0 | asset:gas/G_numeric_staged@ivm.core/v2 |
 | 0x10101 | INT_FROM_U64 | r10=value:u64 | r10=&Int, r11=status:0 | asset:gas/G_numeric_staged@ivm.core/v2 |
@@ -765,6 +770,7 @@ node enforces that policy unconditionally.
 | 0x1012D | DECIMAL_TRY_TO_INT_EXACT | r10=&Decimal | r10=&Int-or-zero, r11=NumericFaultV1-or-zero | asset:gas/G_numeric_staged@ivm.core/v2 |
 | 0x1012E | DECIMAL_TO_INT_TRUNC | r10=&Decimal | r10=&Int-or-zero, r11=NumericFaultV1-or-zero | asset:gas/G_numeric_staged@ivm.core/v2 |
 | 0x1012F | DECIMAL_TO_INT_ROUND | r10=&Decimal, r11=reserved:0, r12=reserved:0, r13=RoundingModeV1 | r10=&Int-or-zero, r11=NumericFaultV1-or-zero | asset:gas/G_numeric_staged@ivm.core/v2 |
+| 0x10130 | DECIMAL_MUL_DIV_ROUND | r10=&Decimal, r11=&Decimal multiplier, r12=&Decimal divisor, r13=&Int scale, r14=rounding:u64, r15=0 | r10=&Decimal | asset:gas/G_numeric_staged@ivm.core/v2 |
 | 0x10140 | QUANTITY_TRY_FROM_INT | r10=&Int | r10=&Quantity-or-zero, r11=NumericFaultV1-or-zero | asset:gas/G_numeric_staged@ivm.core/v2 |
 | 0x10141 | QUANTITY_TRY_FROM_DECIMAL | r10=&Decimal | r10=&Quantity-or-zero, r11=NumericFaultV1-or-zero | asset:gas/G_numeric_staged@ivm.core/v2 |
 | 0x10142 | QUANTITY_TO_DECIMAL | r10=&Quantity | r10=&Decimal | asset:gas/G_numeric_staged@ivm.core/v2 |
@@ -781,6 +787,7 @@ node enforces that policy unconditionally.
 | 0x1014D | QUANTITY_LE | r10=&Quantity, r11=&Quantity | r10=0/1 | asset:gas/G_numeric_staged@ivm.core/v2 |
 | 0x1014E | QUANTITY_GT | r10=&Quantity, r11=&Quantity | r10=0/1 | asset:gas/G_numeric_staged@ivm.core/v2 |
 | 0x1014F | QUANTITY_GE | r10=&Quantity, r11=&Quantity | r10=0/1 | asset:gas/G_numeric_staged@ivm.core/v2 |
+| 0x10150 | QUANTITY_MUL_DIV_ROUND | r10=&Quantity, r11=&Decimal multiplier, r12=&Decimal divisor, r13=&Int scale, r14=rounding:u64, r15=0 | r10=&Quantity | asset:gas/G_numeric_staged@ivm.core/v2 |
 | 0x10160 | JSON_GET_INT | r10=&Json(object), r11=&Name(key) | r10=Option<&Int> sum handle | asset:gas/G_json_get@ivm.core/v2 + input bytes + active payload + sum allocation |
 | 0x10161 | JSON_GET_DECIMAL | r10=&Json(object), r11=&Name(key) | r10=Option<&Decimal> sum handle | asset:gas/G_json_get@ivm.core/v2 + input bytes + active payload + sum allocation |
 | 0x10162 | JSON_GET_QUANTITY | r10=&Json(object), r11=&Name(key) | r10=Option<&Quantity> sum handle | asset:gas/G_json_get@ivm.core/v2 + input bytes + active payload + sum allocation |

@@ -1087,12 +1087,15 @@ ledger::nft::create_for_all_users();
     world
         .contract_manifests
         .insert(code_hash, manifest.signed(&ALICE_KEYPAIR));
-    world
-        .contract_instances
-        .insert(contract_address.clone(), code_hash);
     let_row! { state = State::new( world, Kura::blank_kura_for_testing(), LiveQueryStore::start_test(), ) };
     let mut state_block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
     let mut state_transaction = state_block.transaction();
+    // The contract-call fixture needs a canonical active lifecycle and bound
+    // subject, not an orphan instance entry rejected by State initialization.
+    state_transaction.world.bind_active_contract_subject_for_testing(
+        contract_address.clone(),
+        code_hash,
+    );
     let_row! { invocation = ContractInvocation { contract_address, expected_code_hash: code_hash, entrypoint: "run".to_owned(), arguments: None, } };
     let_row! { executable = ExecutableRef::Batch(ConstVec::from(vec![ ExecutableBatchItem::ContractCall(invocation.clone()), ExecutableBatchItem::ContractCall(invocation), ])) };
     let trigger_id: TriggerId = "sequential_nft_batch".parse().expect("valid trigger id");
@@ -33052,7 +33055,16 @@ state_test! { sync capture_exec_witness_stashes_reads_and_writes
     let_row! { asset_def_id = AssetDefinitionId::derive_from_components( DomainId::try_new("wonderland", "universal").unwrap(), "rose".parse().unwrap(), ) };
     let asset_id = AssetId::new(asset_def_id, ALICE_ID.clone());
     crate::sumeragi::witness::record_write_asset(&asset_id, &Quantity::from(42_u32));
+    // Direct fixture execution has no external or time entrypoint wires.
+    let tx_set_hash: [u8; 32] =
+        iroha_data_model::nexus::axt_ordered_transaction_set_digest_v1(
+            std::iter::empty::<&iroha_data_model::transaction::TransactionEntrypoint>(),
+        )
+        .unwrap()
+        .into();
+    state_block.set_fastpq_tx_set_hash(tx_set_hash);
     state_block.finalize_fastpq_source_inventory(&[], &[], &[]).unwrap();
+    assert_eq!(state_block.fastpq_source_inventory().unwrap().unwrap().tx_set_hash(), tx_set_hash);
     state_block.capture_exec_witness().unwrap();
     let witness = state_block.take_exec_witness().expect("witness captured");
     assert_eq!(witness.writes.len(), 3);
@@ -39526,6 +39538,17 @@ state_test! { sync data_trigger_depth_u8_max_rejects_without_panicking_or_wrappi
         Register::account(new_sample_account(&ALICE_ID))
             .execute(&ALICE_ID, &mut transaction)
             .expect("register account");
+        // The Any filter intentionally drives a global recursive cascade.
+        Grant::account_permission(
+            Permission::from(
+                iroha_executor_data_model::permission::trigger::CanRegisterGlobalDataTrigger {
+                    authority: ALICE_ID.clone(),
+                },
+            ),
+            ALICE_ID.clone(),
+        )
+        .execute(&ALICE_ID, &mut transaction)
+        .expect("grant the fixture authority its explicit global data-trigger permission");
         let_row! { trigger = Trigger::new( trigger_id.clone(), Action::new( [InstructionBox::from(SetKeyValue::account( ALICE_ID.clone(), flag_key, Json::from(true), ))], Repeats::Exactly(u32::from(u8::MAX) + 1), ALICE_ID.clone(), data_pre::DataEventFilter::Any, ) .expect("trigger action fixture satisfies validation invariants"), ) };
         Register::trigger(trigger)
             .execute(&ALICE_ID, &mut transaction)
@@ -40069,7 +40092,7 @@ state_test! { sync authenticated_generic_ivm_trigger_executes_without_contract_i
             entrypoints: None,
             states: None,
             kotoba: None,
-            error_codes: None,
+            error_types: None,
             provenance: None,
         },
     );
@@ -41076,6 +41099,17 @@ state_test! { sync execute_data_trigger_supports_alias_resolve_and_json_amount_t
             "contract_address".parse().expect("metadata key"),
             Json::new(contract_address.to_string()),
         );
+        // The callback observes BOB's asset while executing under ALICE's authority.
+        Grant::account_permission(
+            Permission::from(
+                iroha_executor_data_model::permission::trigger::CanRegisterGlobalDataTrigger {
+                    authority: ALICE_ID.clone(),
+                },
+            ),
+            ALICE_ID.clone(),
+        )
+        .execute(&ALICE_ID, &mut stx)
+        .expect("grant the fixture authority its explicit global data-trigger permission");
         let_row! { trigger = Trigger::new( trigger_id.clone(), Action::new( Executable::Ivm(bytecode), Repeats::Indefinitely, ALICE_ID.clone(), data_pre::DataEventFilter::Asset( data_pre::AssetEventFilter::new() .for_events(data_pre::AssetEventSet::Added) .for_asset(rose_target.clone()), ), ) .expect("trigger action fixture satisfies validation invariants") .with_metadata(callback_metadata), ) };
         Register::trigger(trigger)
             .execute(&ALICE_ID, &mut stx)

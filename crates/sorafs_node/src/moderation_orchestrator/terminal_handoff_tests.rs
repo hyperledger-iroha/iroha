@@ -164,6 +164,7 @@ fn cold_terminal_handoff_rebuild_requires_exact_retained_event() {
         [3; 32],
         governance.clone(),
     );
+    let valid_snapshot = finalized.clone();
     finalized.events[0].event = SorafsModerationLedgerEvent::new(
         SorafsModerationLedgerEventKind::PolicyActivated,
         None,
@@ -171,19 +172,39 @@ fn cold_terminal_handoff_rebuild_requires_exact_retained_event() {
         governance,
         61,
     );
-    let orchestrator = ModerationOrchestratorV1::open(
-        config(&temp, "terminal-missing-event.norito"),
-        deps(
-            Arc::new(MockSnapshotReader::new(finalized)),
-            Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::Unknown)),
-        ),
-    )
-    .expect("orchestrator");
+    let checkpoint = config(&temp, "terminal-missing-event.norito");
+    let reader = Arc::new(MockSnapshotReader::new(finalized));
+    let submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::Unknown));
+    let settlement = Arc::new(MockHandoffSink::default());
+    let publication = Arc::new(MockHandoffSink::default());
+    let dependencies = || {
+        let mut runtime = deps(reader.clone(), submitter.clone());
+        runtime.settlement_sink = settlement.clone();
+        runtime.publication_sink = publication.clone();
+        runtime
+    };
+    let orchestrator =
+        ModerationOrchestratorV1::open(checkpoint.clone(), dependencies()).expect("orchestrator");
+    let initialized = reader.checkpoint_store.latest();
     assert!(matches!(
         orchestrator.reconcile(),
         Err(ModerationOrchestratorError::InvalidFinalizedSnapshot(message))
-            if message.contains("no retained exact finalization event")
+            if message == "terminal handoff initial scan lacks exact finalized-event history"
     ));
+    assert_eq!(reader.checkpoint_store.latest(), initialized);
+    assert_eq!(settlement.calls(), 0);
+    assert_eq!(publication.calls(), 0);
+    drop(orchestrator);
+    reader.replace(valid_snapshot);
+    let recovered = ModerationOrchestratorV1::open(checkpoint, dependencies())
+        .expect("recover unchanged authority with complete source history");
+    recovered
+        .reconcile()
+        .expect("exact finalization event permits both terminal handoffs");
+    assert_eq!(settlement.calls(), 1);
+    assert_eq!(publication.calls(), 1);
+    assert_eq!(settlement.delivered().len(), 1);
+    assert_eq!(publication.delivered().len(), 1);
 }
 #[test]
 fn checkpoint_and_pending_terminal_handoff_are_network_fenced() {

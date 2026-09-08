@@ -72,6 +72,8 @@ mod model {
     use crate::account::AccountId;
     use iroha_primitives::const_vec::ConstVec;
     /// Fee system whose charge is bounded by a signed transaction limit.
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::transaction::signed::model::FeeChargeKind")]
     #[derive(
         Debug,
         Clone,
@@ -99,6 +101,8 @@ mod model {
         PipelineGas,
     }
     /// Signature-bound upper bound for one fee component and asset.
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::transaction::signed::model::FeeChargeLimit")]
     #[derive(
         Debug,
         Clone,
@@ -122,6 +126,8 @@ mod model {
         pub max_amount: Quantity,
     }
     /// Signature-bound limits for authority-paid fees.
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::transaction::signed::model::AuthorityFeePayment")]
     #[derive(
         Debug,
         Clone,
@@ -144,6 +150,8 @@ mod model {
         pub gas_limit: Option<NonZeroU64>,
     }
     /// Signature-bound limits and exact revision for sponsor-program fees.
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::transaction::signed::model::SponsorFeePayment")]
     #[derive(
         Debug,
         Clone,
@@ -170,6 +178,8 @@ mod model {
         pub gas_limit: Option<NonZeroU64>,
     }
     /// Required signature-bound choice of fee funding source and limits.
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::transaction::signed::model::FeePaymentIntent")]
     #[derive(
         Debug,
         Clone,
@@ -232,6 +242,10 @@ mod model {
     ///
     /// Relays and proposers cannot downgrade this value without invalidating the
     /// transaction signature and changing its canonical entrypoint identity.
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(
+        name = "iroha_data_model::transaction::signed::model::TransactionAdmissionIntent"
+    )]
     #[derive(
         Debug,
         Clone,
@@ -259,6 +273,8 @@ mod model {
         QueuePlanSynced,
     }
     /// Canonical unsigned transaction draft used by quote, signing, and verification APIs.
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::transaction::signed::model::TransactionPayload")]
     #[derive(
         Debug,
         Clone,
@@ -303,6 +319,8 @@ mod model {
         pub attachments: Option<crate::proof::ProofAttachmentList>,
     }
     /// Signature of a transaction, encoded in its declared tuple-field frame.
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::transaction::signed::model::TransactionSignature")]
     #[derive(
         Debug,
         Clone,
@@ -319,6 +337,8 @@ mod model {
     #[norito(decode_from_slice)]
     pub struct TransactionSignature(pub SignatureOf<TransactionPayload>);
     /// A single signature produced by a multisig member.
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::transaction::signed::model::MultisigSignature")]
     #[derive(
         Debug,
         Clone,
@@ -349,6 +369,8 @@ mod model {
         }
     }
     /// Collection of multisig signatures attached to a transaction.
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::transaction::signed::model::MultisigSignatures")]
     #[derive(
         Debug,
         Clone,
@@ -391,6 +413,10 @@ mod model {
         }
     }
     /// Payload signed when committing to a sealed transaction.
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(
+        name = "iroha_data_model::transaction::signed::model::SealedTransactionCommitmentPayload"
+    )]
     #[derive(
         Debug,
         Clone,
@@ -419,6 +445,10 @@ mod model {
         pub nonce: Option<NonZeroU64>,
     }
     /// Signed sealed-transaction commitment.
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(
+        name = "iroha_data_model::transaction::signed::model::SignedSealedTransactionCommitment"
+    )]
     #[derive(
         Debug,
         Clone,
@@ -439,6 +469,8 @@ mod model {
         pub(super) payload: SealedTransactionCommitmentPayload,
     }
     /// Reveal data for a previously committed sealed transaction.
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::transaction::signed::model::SealedTransactionReveal")]
     #[derive(
         Debug,
         Clone,
@@ -546,6 +578,8 @@ mod model {
     }
     /// The outcome of processing a transaction:
     /// either a sequence of data triggers, or a rejection reason.
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::transaction::signed::model::TransactionResult")]
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     pub struct TransactionResult(
@@ -558,6 +592,8 @@ mod model {
     pub type TransactionResultInner =
         Result<DataTriggerSequence, error::TransactionRejectionReason>;
     /// Single execution step in a transaction, comprising ordered instructions.
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::transaction::signed::model::ExecutionStep")]
     #[derive(
         Debug,
         Clone,

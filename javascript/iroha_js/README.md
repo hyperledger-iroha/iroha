@@ -116,12 +116,14 @@ that binary-only state. Remove that unverified leftover and rerun
 The registry tarball intentionally contains no platform-specific `.node`
 binary, Cargo workspace, install hook, or implicit downloader. Consequently,
 `npm run build:native` is a source-checkout command, not a supported operation
-inside a clean registry installation. Registry consumers can use the portable
-browser exports (`/browser`, `/transaction-codec`, `/canonical-request`,
-`/ivm-artifact`, `/smart-contract-deployment`, `/connect-browser`, and
-`/nexus-app`) and the
-Node Ed25519 fallback without a native host. Applications that need native-only
-APIs must
+inside a clean registry installation. Registry consumers can load the portable browser exports and use operations
+that do not admit accounts, such as artifact hashing and unauthenticated
+transport. Account construction, I105/raw account decoding, controller/key
+admission, and account-dependent signing or deployment require the canonical
+Rust owner. Every browser account-admission entry point throws the explicit
+native-unavailable error before reading its input; there is no browser account
+parser. The same public exports and TypeScript types remain available. Node
+applications that use native APIs must
 provide a separately built and checksum-verified host through
 `IROHA_JS_NATIVE_DIR` before the first native-dependent call. The verified host
 surface is then captured as an immutable runtime dependency; later environment
@@ -420,13 +422,14 @@ import { noritoEncodeInstruction } from "@iroha/iroha-js/norito";
 import { generateKeyPair } from "@iroha/iroha-js/crypto";
 ```
 
-### Browser-safe external transaction signing
+### External transaction signing
 
-Use `@iroha/iroha-js/transaction-codec` when a browser wallet needs to build
-and finalize a canonical transparent transfer without loading the native Node
-binding. This deliberately narrow surface supports one `Transfer::Asset`
-instruction, single-key Ed25519 I105 authorities, canonical asset identifiers,
-and accounts sharing one Taira-style network prefix/chain discriminant.
+Use `@iroha/iroha-js/transaction-codec` in a Node runtime with the verified
+native account owner to build and finalize canonical transparent transfers.
+The browser bundle exposes the same API, but account admission is unavailable
+and account-dependent operations throw. This surface supports one
+`Transfer::Asset` instruction, single-key Ed25519 I105 authorities, canonical
+asset identifiers, and accounts sharing one network prefix/chain discriminant.
 Every ordinary transaction carries a nominal `NetworkId`: the exact marked
 32-byte genesis-header hash, rendered as a canonical checksummed Iroha hash
 literal. Human-readable `chain`, `chainId`, and `chain_id` transaction fields
@@ -596,16 +599,17 @@ const mixed = buildExecutableBatchTransaction({
 });
 ```
 
-For external browser signing, pass the same ordered `entries` shape to
+For external signing with the native account owner, pass the same ordered `entries` shape to
 `buildBrowserExecutableBatchPayload`, then use
 `validateBrowserExecutableBatchSignable` and
 `finalizeBrowserExecutableBatchTransaction`. Keep using `buildTransaction` or
 `buildBrowserInstructionTransactionPayload` for instruction-only transactions;
 those APIs use the canonical `Executable::Instructions` wire tag.
 
-The `@iroha/iroha-js/nexus-app` export is also a browser-only dependency graph:
-it uses the browser codec and strict browser Ed25519 verifier by default and
-contains no native binding or `node:` imports. Supplying `toriiBaseUrl` gives
+The `@iroha/iroha-js/nexus-app` browser export contains no native binding or
+`node:` imports. It retains bounded transport and hashing; transaction building,
+Connect account admission, and account-dependent finalization require the Node
+runtime with the native account owner. Supplying `toriiBaseUrl` gives
 the facade a bounded Fetch-based pipeline submit/status client; applications
 may instead inject `toriiClient` and `transactionCodec`. Torii response bodies
 are capped at 64 KiB, submission requests time out after 15 seconds, polling
@@ -615,7 +619,7 @@ headers, response-body reads/cancellation, and asynchronous status callbacks.
 Requests omit ambient credentials and referrers and reject redirects.
 
 The built-in Connect path keeps session proof keys separate from transaction
-signing keys. Browser Connect verifies the approval proof and returns its
+signing keys. With the native account owner, Connect verifies the approval proof and returns its
 `accountId`, 32-byte X25519 `walletPublicKey`, and 64-byte `signature`.
 `walletPublicKey` authenticates the Connect session proof; it is not the
 Ed25519 transaction key. Each approval consumer receives an immutable wrapper
@@ -939,10 +943,10 @@ const keys = Crypto.generateKeyPair();
 > derived keys share the same handling guarantees.
 
 ```js
-import { AccountAddress } from "@iroha/iroha-js";
+import { AccountAddress, generateKeyPair } from "@iroha/iroha-js";
 
 const address = AccountAddress.fromAccount({
-  publicKey: new Uint8Array(32),
+  publicKey: generateKeyPair().publicKey,
 });
 console.log(address.canonicalHex());
 console.log(address.toI105(753));
@@ -953,13 +957,18 @@ console.log(formats.i105);
 console.log(formats.i105Warning);
 ```
 
-Every V1 controller family is deterministic and always available in the
-address codec: `ed25519`, `secp256k1`, `ml-dsa`,
+Every V1 controller family is deterministic and available through the verified
+native address codec: `ed25519`, `secp256k1`, `ml-dsa`,
 `gost3410-2012-256-paramset-a`, `gost3410-2012-256-paramset-b`,
 `gost3410-2012-256-paramset-c`, `gost3410-2012-512-paramset-a`,
 `gost3410-2012-512-paramset-b`, `sm2`, `bls_normal`, and `bls_small`.
 There is no process-wide curve toggle. Pass exactly one of these canonical
 labels; aliases and case-folded spellings are rejected before encoding.
+Every constructor, canonical-byte decoder, and I105 parser requires cryptographic
+admission by the Rust codec. Missing or stale native bindings fail closed, including
+in browser builds; byte lengths alone never admit account identities. I105 input
+must be exact, without surrounding whitespace. Constructor inputs are copied into
+private state so later caller mutation cannot replace an admitted controller.
 
 > ℹ️ When showing addresses in wallets, explorers, or SDK samples, follow the
 > single-format UX checklist captured in

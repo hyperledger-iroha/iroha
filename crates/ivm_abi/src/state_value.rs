@@ -5,6 +5,8 @@
 //! a canonical Norito record bound to that schema.
 use crate::pointer_abi::PointerType;
 use iroha_crypto::Hash;
+use iroha_data_model::smart_contract::entrypoint::EntrypointValueKindV1;
+use iroha_data_model::smart_contract::manifest::ContractErrorTypeDescriptor;
 #[cfg(test)]
 use norito::core::serialize_to_buffer;
 use norito::{
@@ -326,6 +328,15 @@ impl StateValueKindV1 {
 /// One preorder node in a compiler-emitted durable-value schema.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub enum StateValueNodeV1 {
+    /// Unit value represented by one canonical zero scalar.
+    #[codec(index = 6)]
+    Unit,
+    /// Finite nominal error schema; values contain only a validated variant code.
+    #[codec(index = 7)]
+    Error(ContractErrorTypeDescriptor),
+    /// Canonical opaque cursor for an exact scalar map-key kind.
+    #[codec(index = 8)]
+    StateCursor(EntrypointValueKindV1),
     /// Named product type. Children immediately follow in field order.
     #[codec(index = 0)]
     Struct {
@@ -359,6 +370,12 @@ pub enum StateValueNodeV1 {
     Leaf(StateValueKindV1),
 }
 impl StateValueNodeV1 {
+    /// Stable unit schema tag.
+    pub const UNIT_TAG: u32 = 6;
+    /// Stable nominal error schema tag.
+    pub const ERROR_TAG: u32 = 7;
+    /// Stable cursor schema tag.
+    pub const STATE_CURSOR_TAG: u32 = 8;
     /// Stable Norito discriminant for [`Self::Struct`].
     pub const STRUCT_TAG: u32 = 0;
     /// Stable Norito discriminant for [`Self::Tuple`].
@@ -375,6 +392,9 @@ impl StateValueNodeV1 {
     #[must_use]
     pub const fn tag(&self) -> u32 {
         match self {
+            Self::Unit => Self::UNIT_TAG,
+            Self::Error(_) => Self::ERROR_TAG,
+            Self::StateCursor(_) => Self::STATE_CURSOR_TAG,
             Self::Struct { .. } => Self::STRUCT_TAG,
             Self::Tuple { .. } => Self::TUPLE_TAG,
             Self::Option => Self::OPTION_TAG,
@@ -497,6 +517,13 @@ fn encode_state_value_schema_payload(schema: &StateValueSchemaV1) -> Result<Vec<
                 })?;
                 serialize_to_writer(&node_tag, &mut payload)?;
                 match node {
+                    StateValueNodeV1::StateCursor(key) => {
+                        serialize_to_writer(key, &mut payload)?;
+                    }
+                    StateValueNodeV1::Unit => {}
+                    StateValueNodeV1::Error(error) => {
+                        serialize_to_writer(error, &mut payload)?;
+                    }
                     StateValueNodeV1::Struct { name, fields } => {
                         payload.ensure_additional(
                             name.encoded_len_exact()
@@ -719,6 +746,42 @@ fn decode_state_value_schema_payload(encoded: &[u8]) -> Result<StateValueSchemaV
                 let tag = decode_state_value_schema_field::<u8>(encoded, &mut offset)?;
                 let child_depth = depth.checked_add(1).ok_or(NoritoError::LengthMismatch)?;
                 let constructor = match u32::from(tag) {
+                    StateValueNodeV1::STATE_CURSOR_TAG => {
+                        let key = decode_state_value_schema_field::<EntrypointValueKindV1>(
+                            encoded,
+                            &mut offset,
+                        )?;
+                        if key == EntrypointValueKindV1::Json {
+                            return Err(state_value_schema_codec_error(
+                                "Json is not a state cursor key kind",
+                            ));
+                        }
+                        completed.push(StateValueSchemaV1 {
+                            nodes: vec![StateValueNodeV1::StateCursor(key)],
+                        });
+                        None
+                    }
+                    StateValueNodeV1::UNIT_TAG => {
+                        completed.push(StateValueSchemaV1 {
+                            nodes: vec![StateValueNodeV1::Unit],
+                        });
+                        None
+                    }
+                    StateValueNodeV1::ERROR_TAG => {
+                        let error = decode_state_value_schema_field::<ContractErrorTypeDescriptor>(
+                            encoded,
+                            &mut offset,
+                        )?;
+                        if !error.validate() {
+                            return Err(state_value_schema_codec_error(
+                                "invalid nominal error descriptor",
+                            ));
+                        }
+                        completed.push(StateValueSchemaV1 {
+                            nodes: vec![StateValueNodeV1::Error(error)],
+                        });
+                        None
+                    }
                     StateValueNodeV1::STRUCT_TAG => {
                         let name = decode_state_value_schema_string(encoded, &mut offset)?;
                         let fields = decode_state_value_schema_strings(
@@ -934,6 +997,9 @@ pub fn state_value_schema_for_embedded_type_v1(
                 let child_depth = depth.checked_add(1)?;
                 let nodes = node_streams.get_mut(target)?;
                 match ty {
+                    Embedded::StateCursor(key) => nodes.push(StateValueNodeV1::StateCursor(*key)),
+                    Embedded::Unit => nodes.push(StateValueNodeV1::Unit),
+                    Embedded::Error(error) => nodes.push(StateValueNodeV1::Error(error.clone())),
                     Embedded::Int => nodes.push(StateValueNodeV1::Leaf(Kind::Int)),
                     Embedded::Decimal => nodes.push(StateValueNodeV1::Leaf(Kind::Decimal)),
                     Embedded::Quantity => nodes.push(StateValueNodeV1::Leaf(Kind::Quantity)),
@@ -1026,6 +1092,42 @@ pub fn admissible_state_value_schema_for_embedded_type_v1(
     let encoded = crate::codec::encode_canonical_norito(&schema).ok()?;
     (encoded.len() <= MAX_STATE_VALUE_SCHEMA_BYTES).then_some(schema)
 }
+fn valid_state_page_shape(nodes: &[StateValueNodeV1], index: usize, fields: &[String]) -> bool {
+    use EntrypointValueKindV1 as E;
+    use StateValueKindV1 as S;
+    if fields != ["items", "next"] {
+        return false;
+    }
+    let Some(StateValueNodeV1::List { element, .. }) = nodes.get(index + 1) else {
+        return false;
+    };
+    if element.nodes.first() != Some(&StateValueNodeV1::Tuple { arity: 2 })
+        || nodes.get(index + 2) != Some(&StateValueNodeV1::Option)
+    {
+        return false;
+    }
+    let (Some(StateValueNodeV1::Leaf(key)), Some(StateValueNodeV1::StateCursor(cursor))) =
+        (element.nodes.get(1), nodes.get(index + 3))
+    else {
+        return false;
+    };
+    matches!(
+        (key, cursor),
+        (S::Int, E::Int)
+            | (S::Decimal, E::Decimal)
+            | (S::Quantity, E::Quantity)
+            | (S::Bool, E::Bool)
+            | (S::String, E::String)
+            | (S::Bytes, E::Blob)
+            | (S::AccountId, E::AccountId)
+            | (S::AssetDefinitionId, E::AssetDefinitionId)
+            | (S::AssetId, E::AssetId)
+            | (S::DomainId, E::DomainId)
+            | (S::NftId, E::NftId)
+            | (S::Name, E::Name)
+            | (S::DataSpaceId, E::DataSpaceId)
+    )
+}
 impl StateValueSchemaV1 {
     fn analyze(&self) -> Option<StateValueAnalysisV1> {
         #[derive(Clone, Copy)]
@@ -1099,10 +1201,36 @@ impl StateValueSchemaV1 {
                         contains_resource_handle: false,
                     };
                     match node {
+                        StateValueNodeV1::Unit
+                        | StateValueNodeV1::Error(_)
+                        | StateValueNodeV1::StateCursor(_) => {
+                            if matches!(
+                                node,
+                                StateValueNodeV1::StateCursor(EntrypointValueKindV1::Json)
+                            ) {
+                                return None;
+                            }
+                            if let StateValueNodeV1::Error(error) = node
+                                && !error.validate()
+                            {
+                                return None;
+                            }
+                            completed.push(Completed {
+                                analysis: StateValueAnalysisV1 {
+                                    max_words: 1,
+                                    ..base
+                                },
+                                next_index,
+                            });
+                        }
                         StateValueNodeV1::Struct { name, fields } => {
-                            if name.is_empty()
+                            if !crate::entrypoint::is_canonical_kotodama_struct_name(name)
+                                || (name == "StatePage"
+                                    && !valid_state_page_shape(nodes, index, fields))
                                 || fields.is_empty()
-                                || fields.iter().any(|field| field.is_empty())
+                                || fields.iter().any(|field| {
+                                    !crate::entrypoint::is_canonical_kotodama_identifier(field)
+                                })
                                 || fields
                                     .iter()
                                     .collect::<std::collections::BTreeSet<_>>()
@@ -1380,7 +1508,11 @@ fn skip_state_value_node(nodes: &[StateValueNodeV1], node_index: &mut usize) -> 
             StateValueNodeV1::Tuple { arity } => usize::from(*arity),
             StateValueNodeV1::Option => 1,
             StateValueNodeV1::Result => 2,
-            StateValueNodeV1::List { .. } | StateValueNodeV1::Leaf(_) => 0,
+            StateValueNodeV1::List { .. }
+            | StateValueNodeV1::Leaf(_)
+            | StateValueNodeV1::Unit
+            | StateValueNodeV1::Error(_)
+            | StateValueNodeV1::StateCursor(_) => 0,
         };
         let Some(next_remaining) = remaining.checked_add(children) else {
             return false;
@@ -1399,6 +1531,21 @@ fn max_state_value_word_kinds(
         let node = nodes.get(*node_index)?;
         *node_index = node_index.checked_add(1)?;
         match node {
+            StateValueNodeV1::StateCursor(key) => {
+                if record_kind {
+                    words.push(StateValueWordKindV1::StateCursor(*key));
+                }
+            }
+            StateValueNodeV1::Unit => {
+                if record_kind {
+                    words.push(StateValueWordKindV1::Unit);
+                }
+            }
+            StateValueNodeV1::Error(_) => {
+                if record_kind {
+                    words.push(StateValueWordKindV1::Error);
+                }
+            }
             StateValueNodeV1::Struct { fields, .. } => {
                 pending.extend((0..fields.len()).map(|_| record_kind));
             }
@@ -1499,6 +1646,42 @@ fn walk_state_value_atoms<'a>(
                 let node = cursor.nodes.get(cursor.node_index)?;
                 cursor.node_index = cursor.node_index.checked_add(1)?;
                 match node {
+                    StateValueNodeV1::StateCursor(key) => {
+                        if !matches!(
+                            cursor.atoms.get(cursor.atom_index),
+                            Some(StateValueAtomV1::Pointer(_))
+                        ) {
+                            return None;
+                        }
+                        cursor.atom_index = cursor.atom_index.checked_add(1)?;
+                        if record_kind {
+                            kinds.push(StateValueWordKindV1::StateCursor(*key));
+                        }
+                    }
+                    StateValueNodeV1::Unit => {
+                        if !matches!(
+                            cursor.atoms.get(cursor.atom_index),
+                            Some(StateValueAtomV1::Unit)
+                        ) {
+                            return None;
+                        }
+                        cursor.atom_index = cursor.atom_index.checked_add(1)?;
+                        if record_kind {
+                            kinds.push(StateValueWordKindV1::Unit);
+                        }
+                    }
+                    StateValueNodeV1::Error(error) => {
+                        let StateValueAtomV1::ErrorCode(code) =
+                            cursor.atoms.get(cursor.atom_index)?
+                        else {
+                            return None;
+                        };
+                        error.variant(*code)?;
+                        cursor.atom_index = cursor.atom_index.checked_add(1)?;
+                        if record_kind {
+                            kinds.push(StateValueWordKindV1::Error);
+                        }
+                    }
                     StateValueNodeV1::Struct { fields, .. } => {
                         pending.extend((0..fields.len()).map(|_| Pending::Visit {
                             cursor: cursor_id,
@@ -1638,6 +1821,12 @@ fn walk_state_value_atoms<'a>(
 /// Flattened word role derived from a validated schema.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StateValueWordKindV1 {
+    /// Canonical opaque cursor pointer with an exact scalar key kind.
+    StateCursor(EntrypointValueKindV1),
+    /// Canonical zero unit scalar.
+    Unit,
+    /// Validated enum-local error code scalar.
+    Error,
     /// One active-only compiler-owned Option/Result handle.
     Sum,
     /// One schema-bound canonical list-sequence pointer.
@@ -1652,6 +1841,12 @@ pub enum StateValueWordKindV1 {
 /// not used by the KRV1 aggregate-state boundary.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub enum StateValueAtomV1 {
+    /// Canonical unit value.
+    #[codec(index = 4)]
+    Unit,
+    /// Validated enum-local error code.
+    #[codec(index = 5)]
+    ErrorCode(u32),
     /// Option/Result tag.
     #[codec(index = 0)]
     Tag(bool),
@@ -1666,6 +1861,10 @@ pub enum StateValueAtomV1 {
     List(Vec<Vec<StateValueAtomV1>>),
 }
 impl StateValueAtomV1 {
+    /// Stable unit value tag.
+    pub const UNIT_TAG: u32 = 4;
+    /// Stable error code value tag.
+    pub const ERROR_CODE_TAG: u32 = 5;
     /// Stable Norito discriminant for [`Self::Tag`].
     pub const TAG_TAG: u32 = 0;
     /// Stable Norito discriminant for [`Self::Bool`].
@@ -1678,6 +1877,8 @@ impl StateValueAtomV1 {
     #[must_use]
     pub const fn tag(&self) -> u32 {
         match self {
+            Self::Unit => Self::UNIT_TAG,
+            Self::ErrorCode(_) => Self::ERROR_CODE_TAG,
             Self::Tag(_) => Self::TAG_TAG,
             Self::Bool(_) => Self::BOOL_TAG,
             Self::Pointer(_) => Self::POINTER_TAG,
@@ -1745,6 +1946,13 @@ fn encode_state_value_record_payload(record: &StateValueRecordV1) -> Result<Vec<
                 })?;
                 extend_state_value_record_payload(&mut payload, &[tag])?;
                 match atom {
+                    StateValueAtomV1::Unit => {}
+                    StateValueAtomV1::ErrorCode(code) => {
+                        if *code == 0 {
+                            return Err(state_value_record_codec_error("zero error code"));
+                        }
+                        extend_state_value_record_payload(&mut payload, &code.to_le_bytes())?;
+                    }
                     StateValueAtomV1::Tag(value) | StateValueAtomV1::Bool(value) => {
                         extend_state_value_record_payload(&mut payload, &[u8::from(*value)])?;
                     }
@@ -2125,6 +2333,14 @@ fn decode_state_value_record_payload(encoded: &[u8]) -> Result<StateValueRecordV
         };
         let tag = decode_state_value_record_u8(encoded, &mut offset)?;
         match u32::from(tag) {
+            StateValueAtomV1::UNIT_TAG => append_atom(&mut frames, StateValueAtomV1::Unit),
+            StateValueAtomV1::ERROR_CODE_TAG => {
+                let code = decode_state_value_record_u32(encoded, &mut offset)?;
+                if code == 0 {
+                    return Err(state_value_record_codec_error("zero error code"));
+                }
+                append_atom(&mut frames, StateValueAtomV1::ErrorCode(code));
+            }
             StateValueAtomV1::TAG_TAG => {
                 let value = match decode_state_value_record_u8(encoded, &mut offset)? {
                     0 => false,
@@ -2298,6 +2514,156 @@ pub fn decode_canonical_state_value_record_v1(
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn durable_state_pages_require_exact_fields_and_matching_scalar_keys() {
+        use super::*;
+        let schema = StateValueSchemaV1 {
+            nodes: vec![
+                StateValueNodeV1::Struct {
+                    name: "StatePage".into(),
+                    fields: vec!["items".into(), "next".into()],
+                },
+                StateValueNodeV1::List {
+                    element: Box::new(StateValueSchemaV1 {
+                        nodes: vec![
+                            StateValueNodeV1::Tuple { arity: 2 },
+                            StateValueNodeV1::Leaf(StateValueKindV1::Int),
+                            StateValueNodeV1::Unit,
+                        ],
+                    }),
+                    capacity: 8,
+                },
+                StateValueNodeV1::Option,
+                StateValueNodeV1::StateCursor(EntrypointValueKindV1::Int),
+            ],
+        };
+        assert!(schema.validate());
+        let bytes = norito::to_bytes(&schema).unwrap();
+        assert_eq!(
+            norito::decode_from_bytes::<StateValueSchemaV1>(&bytes).unwrap(),
+            schema
+        );
+        for mutation in 0..3 {
+            let mut bad = schema.clone();
+            match mutation {
+                0 => {
+                    if let StateValueNodeV1::Struct { fields, .. } = &mut bad.nodes[0] {
+                        fields[0] = "forged".into();
+                    }
+                }
+                1 => bad.nodes[3] = StateValueNodeV1::StateCursor(EntrypointValueKindV1::Bool),
+                _ => {
+                    if let StateValueNodeV1::List { capacity, .. } = &mut bad.nodes[1] {
+                        *capacity = 0;
+                    }
+                }
+            }
+            assert!(!bad.validate());
+            assert!(norito::to_bytes(&bad).is_err());
+        }
+    }
+
+    #[test]
+    fn exported_struct_state_schema_binds_qualified_identity() {
+        use super::*;
+        let make = |name: &str| StateValueSchemaV1 {
+            nodes: vec![
+                StateValueNodeV1::Struct {
+                    name: name.into(),
+                    fields: vec!["completed".into()],
+                },
+                StateValueNodeV1::Unit,
+            ],
+        };
+        let schema = make("std/math@1.0.0::Math::Receipt");
+        let bytes = norito::to_bytes(&schema).unwrap();
+        assert_eq!(
+            norito::decode_from_bytes::<StateValueSchemaV1>(&bytes).unwrap(),
+            schema
+        );
+        let different = norito::to_bytes(&make("std/math@2.0.0::Math::Receipt")).unwrap();
+        assert_ne!(
+            state_value_schema_hash_v1(&bytes),
+            state_value_schema_hash_v1(&different)
+        );
+        for name in [
+            "std//math@1::Math::Receipt",
+            "std/math@1::Math::ListError",
+            "a::b",
+        ] {
+            assert!(!make(name).validate());
+            assert!(norito::to_bytes(&make(name)).is_err());
+        }
+    }
+
+    #[test]
+    fn cursor_schema_roundtrips_both_embedded_and_durable_codecs() {
+        let embedded = crate::metadata::EmbeddedStateType::StateCursor(EntrypointValueKindV1::Int);
+        let frame = norito::encode_canonical(&embedded).unwrap();
+        assert_eq!(
+            norito::decode_canonical::<crate::metadata::EmbeddedStateType>(&frame).unwrap(),
+            embedded
+        );
+        let schema = StateValueSchemaV1 {
+            nodes: vec![StateValueNodeV1::StateCursor(EntrypointValueKindV1::Int)],
+        };
+        assert_eq!(
+            schema.word_kinds(),
+            Some(vec![StateValueWordKindV1::StateCursor(
+                EntrypointValueKindV1::Int
+            )])
+        );
+        let frame = norito::encode_canonical(&schema).unwrap();
+        assert_eq!(
+            norito::decode_canonical::<StateValueSchemaV1>(&frame).unwrap(),
+            schema
+        );
+        assert!(
+            !StateValueSchemaV1 {
+                nodes: vec![StateValueNodeV1::StateCursor(EntrypointValueKindV1::Json)]
+            }
+            .validate()
+        );
+    }
+    #[test]
+    fn unit_and_nominal_error_state_codecs_are_schema_bound() {
+        let error = crate::error_types::list_error_type();
+        let schema = StateValueSchemaV1 {
+            nodes: vec![
+                StateValueNodeV1::Result,
+                StateValueNodeV1::Unit,
+                StateValueNodeV1::Error(error),
+            ],
+        };
+        assert!(schema.validate());
+        let schema_frame = norito::to_bytes(&schema).expect("encode schema");
+        assert_eq!(
+            norito::decode_from_bytes::<StateValueSchemaV1>(&schema_frame).expect("decode schema"),
+            schema
+        );
+        for atoms in [
+            vec![StateValueAtomV1::Tag(true), StateValueAtomV1::Unit],
+            vec![StateValueAtomV1::Tag(false), StateValueAtomV1::ErrorCode(2)],
+        ] {
+            assert!(schema.validate_atoms(&atoms));
+            let record = StateValueRecordV1 {
+                schema_hash: state_value_schema_hash_v1(&schema_frame),
+                atoms,
+            };
+            let frame = norito::to_bytes(&record).expect("encode record");
+            assert_eq!(
+                norito::decode_from_bytes::<StateValueRecordV1>(&frame).expect("decode record"),
+                record
+            );
+        }
+        assert!(!schema.validate_atoms(&[
+            StateValueAtomV1::Tag(false),
+            StateValueAtomV1::ErrorCode(99)
+        ]));
+        assert!(
+            !schema.validate_atoms(&[StateValueAtomV1::Tag(true), StateValueAtomV1::Bool(false)])
+        );
+    }
     use super::*;
     fn assert_norito_discriminant<T: norito::codec::Encode>(value: &T, expected: u32) {
         let encoded = norito::codec::Encode::encode(value);
@@ -2343,12 +2709,12 @@ mod tests {
         nodes.push(StateValueNodeV1::Leaf(StateValueKindV1::Bool));
         StateValueSchemaV1 { nodes }
     }
-    fn schema_with_name_len(name_len: usize) -> StateValueSchemaV1 {
+    fn schema_with_field_name_len(name_len: usize) -> StateValueSchemaV1 {
         StateValueSchemaV1 {
             nodes: vec![
                 StateValueNodeV1::Struct {
-                    name: "n".repeat(name_len),
-                    fields: vec!["x".to_owned()],
+                    name: "Boundary".to_owned(),
+                    fields: vec!["x".repeat(name_len)],
                 },
                 StateValueNodeV1::Leaf(StateValueKindV1::Bool),
             ],
@@ -2362,15 +2728,16 @@ mod tests {
         serialize_to_buffer(&2_u16, &mut payload).expect("serialize schema node count");
         serialize_to_buffer(&(StateValueNodeV1::STRUCT_TAG as u8), &mut payload)
             .expect("serialize Struct tag");
-        serialize_to_buffer(&"n".repeat(name_len), &mut payload).expect("serialize schema name");
-        serialize_to_buffer(&vec!["x".to_owned()], &mut payload).expect("serialize schema fields");
+        serialize_to_buffer(&"Boundary".to_owned(), &mut payload).expect("serialize schema name");
+        serialize_to_buffer(&vec!["x".repeat(name_len)], &mut payload)
+            .expect("serialize schema fields");
         serialize_to_buffer(&(StateValueNodeV1::LEAF_TAG as u8), &mut payload)
             .expect("serialize Leaf tag");
         serialize_to_buffer(&(StateValueKindV1::Bool.tag() as u8), &mut payload)
             .expect("serialize leaf kind");
         payload
     }
-    fn schema_name_len_at_payload_limit() -> usize {
+    fn schema_field_name_len_at_payload_limit() -> usize {
         let payload_limit =
             state_value_payload_limit::<StateValueSchemaV1>(MAX_STATE_VALUE_SCHEMA_BYTES)
                 .expect("schema payload limit");
@@ -2483,6 +2850,9 @@ mod tests {
                 capacity: 1,
             },
             StateValueNodeV1::Leaf(StateValueKindV1::Int),
+            StateValueNodeV1::Unit,
+            StateValueNodeV1::Error(crate::error_types::list_error_type()),
+            StateValueNodeV1::StateCursor(EntrypointValueKindV1::Int),
         ];
         for (expected, node) in nodes.into_iter().enumerate() {
             assert_eq!(node.tag(), u32::try_from(expected).expect("node tag"));
@@ -2493,6 +2863,8 @@ mod tests {
             StateValueAtomV1::Bool(false),
             StateValueAtomV1::Pointer(Vec::new()),
             StateValueAtomV1::List(Vec::new()),
+            StateValueAtomV1::Unit,
+            StateValueAtomV1::ErrorCode(1),
         ];
         for (expected, atom) in atoms.into_iter().enumerate() {
             assert_eq!(atom.tag(), u32::try_from(expected).expect("atom tag"));
@@ -2854,8 +3226,8 @@ mod tests {
         let payload_limit =
             state_value_payload_limit::<StateValueSchemaV1>(MAX_STATE_VALUE_SCHEMA_BYTES)
                 .expect("schema payload limit");
-        let boundary_name_len = schema_name_len_at_payload_limit();
-        let schema = schema_with_name_len(boundary_name_len);
+        let boundary_field_name_len = schema_field_name_len_at_payload_limit();
+        let schema = schema_with_field_name_len(boundary_field_name_len);
         let payload =
             encode_state_value_schema_payload(&schema).expect("encode boundary KSV1 payload");
         assert_eq!(payload.len(), payload_limit);
@@ -2869,11 +3241,11 @@ mod tests {
         let decoded = norito::decode_canonical::<StateValueSchemaV1>(&frame)
             .expect("decode boundary schema frame");
         assert_eq!(decoded, schema);
-        let oversized_name_len = boundary_name_len + 1;
-        let oversized = schema_with_name_len(oversized_name_len);
+        let oversized_field_name_len = boundary_field_name_len + 1;
+        let oversized = schema_with_field_name_len(oversized_field_name_len);
         assert!(encode_state_value_schema_payload(&oversized).is_err());
         assert!(norito::encode_canonical(&oversized).is_err());
-        let oversized_payload = encode_schema_payload_without_limit(oversized_name_len);
+        let oversized_payload = encode_schema_payload_without_limit(oversized_field_name_len);
         assert_eq!(
             state_value_complete_frame_len::<StateValueSchemaV1>(oversized_payload.len())
                 .expect("oversized schema frame length"),

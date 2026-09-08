@@ -19,7 +19,7 @@ fn contract_manifest_roundtrip_norito() {
         entrypoints: None,
         states: None,
         kotoba: None,
-        error_codes: None,
+        error_types: None,
         provenance: None,
     };
     let bytes = norito::to_bytes(&manifest).expect("encode manifest");

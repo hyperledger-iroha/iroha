@@ -163,14 +163,16 @@ mod model {
         Encode,
         IntoSchema,
     )]
-    #[display("Contract {contract} rejected with {namespace}::{name} ({code})")]
-    #[derive(crate :: DeriveJsonSerialize, crate :: DeriveJsonDeserialize)]
+    #[display("Seiyaku {contract} rejected with {error_type}::{name} ({code})")]
+    #[derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
     pub struct ContractRejection {
         /// Canonical source-level contract identity embedded in the artifact.
         pub contract: String,
-        /// Declared error enum namespace.
-        pub namespace: String,
+        /// Stable nominal error type identity.
+        pub error_type: String,
+        /// Hash of the exact declared variant schema.
+        pub schema_hash: [u8; 32],
         /// Declared variant name.
         pub name: String,
         /// Explicit stable non-zero application error code.
@@ -473,6 +475,28 @@ mod tests {
     use super::*;
     use crate::transaction::executable::IvmBytecode;
     use norito::codec::{DecodeAll, Encode};
+    #[test]
+    fn nominal_contract_rejection_roundtrips_without_losing_callee_identity() {
+        let rejection = ContractRejection {
+            contract: "金庫".into(),
+            error_type: "example/vault@1::金庫::拒否".into(),
+            schema_hash: [7; 32],
+            name: "不足".into(),
+            code: 1,
+        };
+        let encoded = norito::encode_canonical(&rejection).unwrap();
+        let decoded = norito::decode_canonical::<ContractRejection>(&encoded).unwrap();
+        assert_eq!(decoded, rejection);
+        assert_eq!(
+            rejection.to_string(),
+            "Seiyaku 金庫 rejected with example/vault@1::金庫::拒否::不足 (1)"
+        );
+        let json = norito::json::to_json(&rejection).unwrap();
+        let decoded: ContractRejection = norito::json::from_str(&json).unwrap();
+        assert_eq!(decoded, rejection);
+        assert!(json.contains("error_type") && json.contains("schema_hash"));
+        assert!(!json.contains("namespace"));
+    }
     #[test]
     fn bytecode_getter_returns_inner_bytecode() {
         let code = IvmBytecode::from_compiled(vec![1, 2, 3]);

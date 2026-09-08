@@ -27,7 +27,7 @@ use iroha_data_model::{
     peer::PeerId,
 };
 use norito::{
-    DeserializePayload, NoritoDeserialize,
+    DeserializePayload,
     codec::{Decode, DecodeAll, Encode},
 };
 use std::{

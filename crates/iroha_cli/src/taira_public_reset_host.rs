@@ -2931,7 +2931,7 @@ struct UnitRestartEvidence {
 impl UnitRestartEvidence {
     fn is_terminal_active(&self) -> bool {
         self.active_state == "active"
-            && !matches!(self.sub_state.as_str(), "start" | "stop" | "running")
+            && self.sub_state == "running"
             && matches!(self.job.as_str(), "" | "0")
     }
 }
@@ -4179,17 +4179,44 @@ fn host_preflight(admitted: &HostAdmission) -> Result<()> {
     Ok(())
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", all(test, unix)))]
 #[allow(
     unsafe_code,
-    reason = "KVM_GET_API_VERSION is the fixed Linux host preflight ABI"
+    reason = "KVM_GET_API_VERSION requires a zero operand and returns its version directly"
 )]
-fn require_kvm_api_v12() -> Result<()> {
-    use std::os::fd::AsRawFd as _;
-    unsafe extern "C" {
-        fn ioctl(fd: i32, request: std::ffi::c_ulong, ...) -> i32;
+fn kvm_api_version(file: &File) -> rustix::io::Result<rustix::ioctl::IoctlOutput> {
+    struct KvmGetApiVersion;
+
+    // SAFETY: the fixed KVM query takes no memory operand, writes no userspace
+    // memory, and returns the API version in the syscall result. NoArg discards
+    // that result, so this request must preserve it for the exact version check.
+    unsafe impl rustix::ioctl::Ioctl for KvmGetApiVersion {
+        type Output = rustix::ioctl::IoctlOutput;
+        const IS_MUTATING: bool = false;
+
+        fn opcode(&self) -> rustix::ioctl::Opcode {
+            0xAE00
+        }
+
+        fn as_ptr(&mut self) -> *mut std::ffi::c_void {
+            std::ptr::null_mut()
+        }
+
+        unsafe fn output_from_ptr(
+            output: rustix::ioctl::IoctlOutput,
+            _: *mut std::ffi::c_void,
+        ) -> rustix::io::Result<Self::Output> {
+            Ok(output)
+        }
     }
-    const KVM_GET_API_VERSION: std::ffi::c_ulong = 0xAE00;
+
+    // SAFETY: production passes the fixed /dev/kvm descriptor. The Unix test
+    // passes a regular file, where this operand-free query must return ENOTTY.
+    unsafe { rustix::ioctl::ioctl(file, KvmGetApiVersion) }
+}
+
+#[cfg(target_os = "linux")]
+fn require_kvm_api_v12() -> Result<()> {
     let file = File::from(
         rustix::fs::open(
             "/dev/kvm",
@@ -4198,8 +4225,11 @@ fn require_kvm_api_v12() -> Result<()> {
         )
         .wrap_err("failed to open fixed /dev/kvm")?,
     );
-    if unsafe { ioctl(file.as_raw_fd(), KVM_GET_API_VERSION) } != 12 {
-        return Err(eyre!("validator KVM API version is not exact 12"));
+    let version = kvm_api_version(&file).wrap_err("KVM_GET_API_VERSION ioctl failed")?;
+    if version != 12 {
+        return Err(eyre!(
+            "validator KVM API version is {version}; expected exact 12"
+        ));
     }
     Ok(())
 }
@@ -7223,6 +7253,34 @@ fn installed_preseed_binary(admitted: &HostAdmission, carrier: &ValidatorV1) -> 
     Ok(path)
 }
 
+fn canonical_preseed_receipt_targets(
+    stores: &[ValidatorPreseedStore],
+) -> Vec<OperatorPreseedTargetReceiptV1> {
+    let mut targets = stores
+        .iter()
+        .map(|store| OperatorPreseedTargetReceiptV1 {
+            validator_account_id: store.placement.validator_account_id.to_string(),
+            peer_id: store.placement.peer_id.clone(),
+            store_root: store.data_dir.to_string_lossy().into_owned(),
+        })
+        .collect::<Vec<_>>();
+    // The receipt protocol orders encoded identity strings, while placement
+    // targets order typed account controllers. Their orderings may differ.
+    targets.sort_by(|left, right| {
+        (
+            left.validator_account_id.as_str(),
+            left.peer_id.as_str(),
+            left.store_root.as_str(),
+        )
+            .cmp(&(
+                right.validator_account_id.as_str(),
+                right.peer_id.as_str(),
+                right.store_root.as_str(),
+            ))
+    });
+    targets
+}
+
 fn parse_preseed_session_receipt(
     output: &[u8],
     stores: &[ValidatorPreseedStore],
@@ -7243,14 +7301,7 @@ fn parse_preseed_session_receipt(
     receipt
         .validate()
         .map_err(|error| eyre!("invalid SoraFS preseed helper receipt: {error}"))?;
-    let expected_targets = stores
-        .iter()
-        .map(|store| OperatorPreseedTargetReceiptV1 {
-            validator_account_id: store.placement.validator_account_id.to_string(),
-            peer_id: store.placement.peer_id.clone(),
-            store_root: store.data_dir.to_string_lossy().into_owned(),
-        })
-        .collect::<Vec<_>>();
+    let expected_targets = canonical_preseed_receipt_targets(stores);
     let expected_mode = if verify_only { "verify_only" } else { "ingest" };
     let expected_artifacts = BTreeMap::from([
         (
@@ -7877,6 +7928,18 @@ fn classify_manager_operation_evidence(
     if values["LoadState"] == "not-found" {
         return Ok(ManagerOperationEvidence::Absent);
     }
+    // `systemctl show` exposes the numeric waitid(2) CLD_* code here.
+    // The human-readable `code=exited` belongs to the separate ExecStart
+    // rendering; it is not the ExecMainCode property representation.
+    let main_code = values["ExecMainCode"];
+    if !matches!(main_code, "0" | "1" | "2" | "3" | "4" | "5" | "6") {
+        return Err(eyre!("manager ExecMainCode is not a canonical CLD code"));
+    }
+    let main_status = values["ExecMainStatus"]
+        .parse::<u8>()
+        .ok()
+        .filter(|status| status.to_string() == values["ExecMainStatus"])
+        .ok_or_else(|| eyre!("manager ExecMainStatus is not a canonical exit or signal status"))?;
     let job = values["Job"];
     if !matches!(job, "" | "0")
         || matches!(
@@ -7907,14 +7970,16 @@ fn classify_manager_operation_evidence(
     if values["ActiveState"] == "active"
         && values["SubState"] == "exited"
         && values["Result"] == "success"
-        && values["ExecMainCode"] == "exited"
-        && values["ExecMainStatus"] == "0"
+        && main_code == "1"
+        && main_status == 0
     {
         return Ok(ManagerOperationEvidence::Applied);
     }
     if values["ActiveState"] == "failed"
         || values["Result"] != "success"
-        || values["ExecMainStatus"] != "0"
+        || main_status != 0
+        || matches!(main_code, "2" | "3" | "4" | "5" | "6")
+        || (values["ActiveState"] == "active" && values["SubState"] == "exited")
     {
         return Ok(ManagerOperationEvidence::Rejected);
     }
@@ -10552,6 +10617,7 @@ fn run_bounded_process(spec: &ProcessSpec) -> Result<ProcessOutput> {
     let mut file_range = 0..0;
     let mut stdin_complete = false;
     let mut stdin_aborted = false;
+    let mut stdin_error = None;
     let mut stdout_bytes = Vec::new();
     let mut stderr_bytes = Vec::new();
     let mut stdout_eof = false;
@@ -10560,18 +10626,44 @@ fn run_bounded_process(spec: &ProcessSpec) -> Result<ProcessOutput> {
     loop {
         if Instant::now() >= deadline {
             terminate_owned_child(&mut child)?;
+            let copied = sources
+                .iter()
+                .fold(prefix_offset as u64, |total, (_, _, copied)| {
+                    total.saturating_add(*copied)
+                });
+            let expected = sources
+                .iter()
+                .fold(spec.stdin_prefix.len() as u64, |total, (_, size, _)| {
+                    total.saturating_add(*size)
+                });
             return Err(eyre!(
-                "`{}` exceeded its absolute deadline while streaming or draining pipes",
-                spec.program.display()
+                "`{}` exceeded its absolute deadline while streaming or draining pipes: \
+                 copied_bytes={copied} expected_bytes={expected} source_index={source_index} \
+                 sources={} stdin_complete={stdin_complete} stdout_bytes={} stderr_bytes={} \
+                 stdout_eof={stdout_eof} stderr_eof={stderr_eof} child_exit_observed={}",
+                spec.program.display(),
+                sources.len(),
+                stdout_bytes.len(),
+                stderr_bytes.len(),
+                status.is_some()
             ));
         }
+        let mut made_progress = false;
         if !stdin_complete && !stdin_aborted {
             let writer = stdin.as_mut().expect("stdin exists until complete");
             let write_result = if prefix_offset < spec.stdin_prefix.len() {
                 writer
                     .write(&spec.stdin_prefix[prefix_offset..])
-                    .map(|written| {
+                    .and_then(|written| {
+                        if written == 0 {
+                            return Err(std::io::Error::new(
+                                std::io::ErrorKind::WriteZero,
+                                "child stdin accepted zero bytes",
+                            ));
+                        }
                         prefix_offset += written;
+                        made_progress = true;
+                        Ok(())
                     })
             } else if let Some((file, expected, copied)) = sources.get_mut(source_index) {
                 if file_range.is_empty() && *copied < *expected {
@@ -10579,56 +10671,99 @@ fn run_bounded_process(spec: &ProcessSpec) -> Result<ProcessOutput> {
                         usize::try_from((*expected - *copied).min(file_buffer.len() as u64))
                             .expect("bounded stream chunk");
                     let read = match file.read(&mut file_buffer[..remaining]) {
-                        Ok(read) => read,
+                        Ok(read) => Some(read),
+                        Err(error) if error.kind() == std::io::ErrorKind::Interrupted => None,
                         Err(error) => {
                             terminate_owned_child(&mut child)?;
                             return Err(error).wrap_err("failed to read pinned streamed input");
                         }
                     };
-                    if read == 0 {
-                        terminate_owned_child(&mut child)?;
-                        return Err(eyre!(
-                            "pinned streamed input ended before its declared length"
-                        ));
+                    if let Some(read) = read {
+                        if read == 0 {
+                            terminate_owned_child(&mut child)?;
+                            return Err(eyre!(
+                                "pinned streamed input ended before its declared length"
+                            ));
+                        }
+                        file_range = 0..read;
                     }
-                    file_range = 0..read;
                 }
-                if file_range.is_empty() {
+                if file_range.is_empty() && *copied < *expected {
+                    // An interrupted read retries on the next fair, deadline-checked turn.
+                    Ok(())
+                } else if file_range.is_empty() {
                     source_index += 1;
                     stdin_complete = source_index == sources.len();
+                    made_progress = true;
                     Ok(())
                 } else {
                     writer
                         .write(&file_buffer[file_range.clone()])
-                        .map(|written| {
+                        .and_then(|written| {
+                            if written == 0 {
+                                return Err(std::io::Error::new(
+                                    std::io::ErrorKind::WriteZero,
+                                    "child stdin accepted zero bytes",
+                                ));
+                            }
                             file_range.start += written;
                             *copied += u64::try_from(written).expect("write count fits u64");
+                            made_progress = true;
+                            Ok(())
                         })
                 }
             } else {
                 stdin_complete = true;
+                made_progress = true;
                 Ok(())
             };
             match write_result {
                 Ok(()) => {}
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
+                    ) => {}
                 Err(error) => {
-                    terminate_owned_child(&mut child)?;
-                    return Err(error).wrap_err("failed to stream bounded child stdin");
+                    // A rejecting child may close stdin before emitting its diagnostic.
+                    // Keep the same bounded drain and deadline so its exit and stderr
+                    // survive, including when the diagnostic exceeds pipe capacity.
+                    stdin_error = Some(error);
+                    stdin_aborted = true;
+                    drop(stdin.take());
+                    made_progress = true;
                 }
             }
             if stdin_complete {
                 drop(stdin.take());
             }
         }
-        if let Err(error) = drain_nonblocking(&mut stdout, &mut stdout_bytes, &mut stdout_eof) {
+        let output_before = (
+            stdout_bytes.len(),
+            stderr_bytes.len(),
+            stdout_eof,
+            stderr_eof,
+        );
+        // Bound both drains: a chatty stdout must not starve stdin, stderr or the deadline.
+        if let Err(error) =
+            drain_nonblocking_with_read_budget(&mut stdout, &mut stdout_bytes, &mut stdout_eof, 4)
+        {
             terminate_owned_child(&mut child)?;
             return Err(error).wrap_err("failed to drain bounded child stdout");
         }
-        if let Err(error) = drain_nonblocking(&mut stderr, &mut stderr_bytes, &mut stderr_eof) {
+        if let Err(error) =
+            drain_nonblocking_with_read_budget(&mut stderr, &mut stderr_bytes, &mut stderr_eof, 4)
+        {
             terminate_owned_child(&mut child)?;
             return Err(error).wrap_err("failed to drain bounded child stderr");
         }
+        made_progress |= output_before
+            != (
+                stdout_bytes.len(),
+                stderr_bytes.len(),
+                stdout_eof,
+                stderr_eof,
+            );
         if status.is_none() {
             status = match child.try_wait() {
                 Ok(value) => value,
@@ -10638,6 +10773,7 @@ fn run_bounded_process(spec: &ProcessSpec) -> Result<ProcessOutput> {
                 }
             };
             if status.is_some() {
+                made_progress = true;
                 stdin_aborted = !stdin_complete;
                 drop(stdin.take());
             }
@@ -10645,19 +10781,58 @@ fn run_bounded_process(spec: &ProcessSpec) -> Result<ProcessOutput> {
         if status.is_some() && stdout_eof && stderr_eof {
             break;
         }
+        if made_progress {
+            continue;
+        }
         let remaining = spec.deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
             continue;
         }
-        std::thread::sleep(PROCESS_POLL_INTERVAL.min(remaining));
+        // Wait only after a turn made no progress. POLLOUT wakes immediately
+        // when SSH consumes input; the polling interval limits child-exit checks,
+        // never the stream throughput. EOF streams must not cause HUP busy loops.
+        let mut descriptors = Vec::with_capacity(3);
+        if let Some(stdin) = stdin.as_ref() {
+            descriptors.push(rustix::event::PollFd::new(
+                stdin,
+                rustix::event::PollFlags::OUT,
+            ));
+        }
+        if !stdout_eof {
+            descriptors.push(rustix::event::PollFd::new(
+                &stdout,
+                rustix::event::PollFlags::IN,
+            ));
+        }
+        if !stderr_eof {
+            descriptors.push(rustix::event::PollFd::new(
+                &stderr,
+                rustix::event::PollFlags::IN,
+            ));
+        }
+        let timeout = rustix::event::Timespec::try_from(PROCESS_POLL_INTERVAL.min(remaining))
+            .expect("bounded process poll timeout");
+        match rustix::event::poll(&mut descriptors, Some(&timeout)) {
+            Ok(_) | Err(rustix::io::Errno::INTR) => {}
+            Err(error) => {
+                terminate_owned_child(&mut child)?;
+                return Err(error).wrap_err("failed to wait for bounded child pipe readiness");
+            }
+        }
     }
-    if !stdin_complete {
+    let status = status.expect("loop exits only after child status");
+    if status.success() && !stdin_complete {
+        if let Some(error) = stdin_error {
+            return Err(error).wrap_err("child exited before consuming its exact framed stdin");
+        }
         return Err(eyre!(
             "child exited before consuming its exact framed stdin"
         ));
     }
+    // Nonzero exits remain failures at the existing require_success boundary,
+    // with the child's bounded stderr instead of a secondary local pipe error.
     Ok(ProcessOutput {
-        status: status.expect("loop exits only after child status"),
+        status,
         stdout: stdout_bytes,
         stderr: stderr_bytes,
     })
@@ -10833,8 +11008,18 @@ fn run_locked_preseed_session(
 }
 
 fn drain_nonblocking(reader: &mut impl Read, output: &mut Vec<u8>, eof: &mut bool) -> Result<()> {
+    // Preserve the preseed barrier's full drain-to-WouldBlock/EOF contract.
+    drain_nonblocking_with_read_budget(reader, output, eof, usize::MAX)
+}
+
+fn drain_nonblocking_with_read_budget(
+    reader: &mut impl Read,
+    output: &mut Vec<u8>,
+    eof: &mut bool,
+    read_budget: usize,
+) -> Result<()> {
     let mut buffer = [0_u8; 16 * 1024];
-    loop {
+    for _ in 0..read_budget {
         match reader.read(&mut buffer) {
             Ok(0) => {
                 *eof = true;
@@ -10847,9 +11032,11 @@ fn drain_nonblocking(reader: &mut impl Read, output: &mut Vec<u8>, eof: &mut boo
                 output.extend_from_slice(&buffer[..count]);
             }
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => return Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
             Err(error) => return Err(error.into()),
         }
     }
+    Ok(())
 }
 
 fn require_success(output: ProcessOutput, label: &str) -> Result<Vec<u8>> {
@@ -11731,6 +11918,43 @@ fn inherited_client_config_args(
     ))
 }
 
+/// Keep SSH inputs in this launcher: OpenSSH closes every inherited descriptor
+/// above stderr before parsing its options. Parent proc paths name the pinned
+/// inodes across that sweep without reopening provenance or copying secrets.
+struct ParentHeldSshInputs {
+    identity_path: PathBuf,
+    known_hosts_path: PathBuf,
+    _identity_file: File,
+    _known_hosts_file: File,
+}
+
+impl ParentHeldSshInputs {
+    fn new(identity: &super::PinnedInput, known_hosts: &super::PinnedInput) -> Result<Self> {
+        // Fake process runners can inspect the exact Linux argv on any test host.
+        if !cfg!(any(target_os = "linux", test)) {
+            return Err(eyre!(
+                "public-reset SSH preflight and apply require a Linux controller"
+            ));
+        }
+        let identity_file = super::clone_revalidated_pinned(identity, "OpenSSH identity")?.file;
+        let known_hosts_file =
+            super::clone_revalidated_pinned(known_hosts, "OpenSSH known-hosts")?.file;
+        let parent_path = |file: &File| {
+            PathBuf::from(format!(
+                "/proc/{}/fd/{}",
+                std::process::id(),
+                file.as_raw_fd()
+            ))
+        };
+        Ok(Self {
+            identity_path: parent_path(&identity_file),
+            known_hosts_path: parent_path(&known_hosts_file),
+            _identity_file: identity_file,
+            _known_hosts_file: known_hosts_file,
+        })
+    }
+}
+
 fn inherited_input_path(input: &super::PinnedInput, label: &str) -> Result<(PathBuf, File)> {
     revalidate_pinned(input, label)?;
     let file = input
@@ -12086,6 +12310,38 @@ impl<'a> SealCleanupSshTransport<'a> {
     }
 }
 
+/// Check all five logical targets without runtime signing custody or a journal.
+pub(super) fn preflight_hosts(admitted: &AdmittedReset) -> Result<()> {
+    preflight_hosts_with_runner(admitted, &mut RealProcessRunner)
+}
+
+fn preflight_hosts_with_runner<R: ProcessRunner>(
+    admitted: &AdmittedReset,
+    runner: &mut R,
+) -> Result<()> {
+    let timeout_secs = admitted.inventory.timeouts.install_secs;
+    for validator in &admitted.inventory.validators {
+        dispatch_custodied_host_action(
+            admitted,
+            runner,
+            &validator.slug,
+            &validator.endpoint,
+            HostAction::Preflight,
+            timeout_secs,
+        )
+        .wrap_err_with(|| format!("read-only host preflight failed for {}", validator.slug))?;
+    }
+    dispatch_custodied_host_action(
+        admitted,
+        runner,
+        &admitted.inventory.edge.slug,
+        &admitted.inventory.edge.endpoint,
+        HostAction::Preflight,
+        timeout_secs,
+    )
+    .wrap_err("read-only host preflight failed for edge")
+}
+
 fn dispatch_custodied_host_action<R: ProcessRunner>(
     admitted: &AdmittedReset,
     runner: &mut R,
@@ -12096,9 +12352,11 @@ fn dispatch_custodied_host_action<R: ProcessRunner>(
 ) -> Result<()> {
     if !matches!(
         action,
-        HostAction::Rollback | HostAction::Seal | HostAction::Cleanup
+        HostAction::Preflight | HostAction::Rollback | HostAction::Seal | HostAction::Cleanup
     ) {
-        return Err(eyre!("minimal host dispatch rejects forward action"));
+        return Err(eyre!(
+            "minimal host dispatch permits only preflight, rollback, seal, or cleanup"
+        ));
     }
     let timeout_ms = timeout_secs
         .checked_mul(1_000)
@@ -12140,11 +12398,13 @@ fn dispatch_custodied_host_action<R: ProcessRunner>(
     frame.extend_from_slice(&request_bytes);
     let remote_command = format!("{FIXED_DISPATCHER} {HOST_DISPATCH_SUFFIX}");
     validate_remote_command(&remote_command)?;
-    let (identity_path, identity_file) =
-        inherited_input_path(&admitted.ssh_identity, "OpenSSH identity")?;
-    let (known_hosts_path, known_hosts_file) =
-        inherited_input_path(&admitted.known_hosts, "OpenSSH known-hosts")?;
-    let mut args = ssh_common_args(endpoint, &identity_path, &known_hosts_path, timeout_secs);
+    let ssh_inputs = ParentHeldSshInputs::new(&admitted.ssh_identity, &admitted.known_hosts)?;
+    let mut args = ssh_common_args(
+        endpoint,
+        &ssh_inputs.identity_path,
+        &ssh_inputs.known_hosts_path,
+        timeout_secs,
+    );
     args.push(OsString::from("--"));
     args.push(OsString::from(format!(
         "{}@{}",
@@ -12158,10 +12418,10 @@ fn dispatch_custodied_host_action<R: ProcessRunner>(
             stdin_prefix: frame,
             stdin_file: None,
             stdin_files: Vec::new(),
-            inherited_files: vec![identity_file, known_hosts_file],
+            inherited_files: Vec::new(),
             deadline,
         })?,
-        "pinned SSH minimal terminal dispatch",
+        "pinned SSH minimal host dispatch",
     )?;
     let receipt: HostReceiptV1 =
         json::from_slice(&output).wrap_err("minimal host dispatch returned no exact receipt")?;
@@ -12568,11 +12828,14 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
         frame.extend_from_slice(&stage_frame);
         let remote_command = format!("{FIXED_DISPATCHER} {HOST_DISPATCH_SUFFIX}");
         validate_remote_command(&remote_command)?;
-        let (identity_path, identity_file) =
-            inherited_input_path(&self.admitted.ssh_identity, "OpenSSH identity")?;
-        let (known_hosts_path, known_hosts_file) =
-            inherited_input_path(&self.admitted.known_hosts, "OpenSSH known-hosts")?;
-        let mut args = ssh_common_args(endpoint, &identity_path, &known_hosts_path, timeout_secs);
+        let ssh_inputs =
+            ParentHeldSshInputs::new(&self.admitted.ssh_identity, &self.admitted.known_hosts)?;
+        let mut args = ssh_common_args(
+            endpoint,
+            &ssh_inputs.identity_path,
+            &ssh_inputs.known_hosts_path,
+            timeout_secs,
+        );
         args.push(OsString::from("--"));
         args.push(OsString::from(format!(
             "{}@{}",
@@ -12585,7 +12848,7 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
             stdin_prefix: frame,
             stdin_file,
             stdin_files,
-            inherited_files: vec![identity_file, known_hosts_file],
+            inherited_files: Vec::new(),
             deadline,
         };
         let ambiguous_recoverable =
@@ -16626,7 +16889,9 @@ fn validate_receipt_name(name: &str) -> Result<()> {
         || name.len() > 128
         || !name.ends_with(".json")
         || !name.bytes().all(|byte| {
-            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'.')
+            byte.is_ascii_lowercase()
+                || byte.is_ascii_digit()
+                || matches!(byte, b'-' | b'_' | b'.')
         })
     {
         return Err(eyre!("receipt name escaped the closed local namespace"));
@@ -18339,6 +18604,88 @@ mod tests {
     }
 
     #[test]
+    fn host_receipt_names_cover_every_action_and_artifact_role() {
+        // The same list builds the test inputs and an exhaustive enum match:
+        // adding a HostAction without testing its receipt name cannot compile.
+        macro_rules! all_host_actions {
+            ($($variant:ident),+ $(,)?) => {{
+                let actions = [$(HostAction::$variant),+];
+                for action in &actions {
+                    match action { $(HostAction::$variant => (),)+ }
+                }
+                actions
+            }};
+        }
+        let actions = all_host_actions!(
+            Preflight,
+            Upload,
+            Stage,
+            InrouStageUpload,
+            Stop,
+            Install,
+            Reset,
+            Preseed,
+            Start,
+            Restart,
+            EdgeStage,
+            EdgeCutover,
+            EdgeVerify,
+            Seal,
+            Cleanup,
+            Rollback,
+            MutationReserve,
+        );
+        let roles = super::super::VALIDATOR_ARTIFACT_ROLES
+            .iter()
+            .chain(&super::super::EDGE_ARTIFACT_ROLES)
+            .copied()
+            .collect::<BTreeSet<_>>();
+        let mut names = BTreeSet::new();
+        for action in actions {
+            assert_eq!(HostAction::parse(action.label()).unwrap(), action);
+            if action == HostAction::Upload {
+                for role in &roles {
+                    let name = host_receipt_name(action, role)
+                        .unwrap_or_else(|error| panic!("canonical upload role {role}: {error}"));
+                    assert_eq!(name, format!("upload-{role}.json"));
+                    validate_receipt_name(&name).expect("shared receipt namespace");
+                    assert!(names.insert(name), "canonical receipt names must be unique");
+                }
+            } else {
+                let name = host_receipt_name(action, "")
+                    .unwrap_or_else(|error| panic!("canonical action {action:?}: {error}"));
+                assert_eq!(name, format!("{}.json", action.label()));
+                validate_receipt_name(&name).expect("shared receipt namespace");
+                assert!(names.insert(name), "canonical receipt names must be unique");
+            }
+        }
+        // The upload fixture uses the exact inventory role constants, so a new
+        // canonical artifact role automatically participates in this gate.
+        assert!(names.contains("upload-iroha3d.json"));
+        assert!(names.contains("upload-iroha_cli.json"));
+        assert!(names.contains("inrou_stage_upload.json"));
+    }
+
+    #[test]
+    fn receipt_names_reject_path_control_and_unicode_escape() {
+        for name in [
+            "", ".", "..", "receipt", "../receipt.json", "/receipt.json",
+            "dir/receipt.json", "dir\\receipt.json", "receipt.json/..",
+            "receipt.json\0", "receipt.json\n", "receipt.json\r", "receipt\t.json",
+            "receipt name.json", "Receipt.json", "réceipt.json", "receipt．json",
+        ] {
+            assert!(validate_receipt_name(name).is_err(), "unsafe receipt {name:?}");
+        }
+        let longest = format!("{}.json", "a".repeat(123));
+        validate_receipt_name(&longest).expect("exact 128-byte bound");
+        assert!(validate_receipt_name(&format!("a{longest}")).is_err());
+        for role in ["", "../iroha_cli", "iroha/cli", "iroha\\cli", "iroha.cli", "iroha-cli", "iroha_cli\0", "iroha_cli\n", "iróha_cli"] {
+            assert!(host_receipt_name(HostAction::Upload, role).is_err(), "unsafe role {role:?}");
+        }
+        assert!(host_receipt_name(HostAction::Upload, &"a".repeat(65)).is_err());
+    }
+
+    #[test]
     fn host_progress_requires_explicit_nullable_prepared_action_slot() {
         let admitted = progress_admission();
         let progress = initial_host_progress(&admitted);
@@ -18551,6 +18898,247 @@ mod tests {
     }
 
     #[test]
+    fn process_runner_streams_large_closure_with_bidirectional_backpressure() {
+        let directory = tempfile::tempdir().expect("temporary large stream directory");
+        let prefix = b"exact-framed-prefix\n".to_vec();
+        let mut expected = Sha256::new();
+        expected.update(&prefix);
+        let file_size = 32_u64 * 1024 * 1024;
+        let mut files = Vec::new();
+        for (name, byte) in [("first", b'a'), ("second", b'b')] {
+            let path = directory.path().join(name);
+            let mut file = File::create(&path).expect("create harmless streamed fixture");
+            let chunk = [byte; 64 * 1024];
+            for _ in 0..512 {
+                file.write_all(&chunk)
+                    .expect("write harmless streamed fixture");
+                expected.update(chunk);
+            }
+            drop(file);
+            files.push((
+                File::open(path).expect("pin harmless streamed fixture"),
+                file_size,
+            ));
+        }
+        let expected_len = prefix.len() as u64 + 2 * file_size;
+        // Each output exceeds real pipe capacity before the child consumes input.
+        // The old one-64KiB-write/20ms loop takes at least 20s for these files;
+        // the 10s bound allows loaded CI without accepting that rate limiter.
+        let output = run_bounded_process(&ProcessSpec {
+            program: PathBuf::from("/usr/bin/python3"),
+            args: vec![
+                "-I".into(),
+                "-c".into(),
+                r#"
+import hashlib, sys
+sys.stdout.buffer.write(b'o' * 131072)
+sys.stdout.buffer.flush()
+sys.stderr.buffer.write(b'e' * 131072)
+sys.stderr.buffer.flush()
+h = hashlib.sha256()
+count = 0
+while True:
+    chunk = sys.stdin.buffer.read(131072)
+    if not chunk:
+        break
+    h.update(chunk)
+    count += len(chunk)
+sys.stdout.buffer.write((h.hexdigest() + ' ' + str(count) + '\n').encode())
+sys.stdout.buffer.flush()
+"#
+                .into(),
+            ],
+            stdin_prefix: prefix,
+            stdin_file: Some(files.remove(0)),
+            stdin_files: files,
+            inherited_files: Vec::new(),
+            deadline: Instant::now() + Duration::from_secs(10),
+        })
+        .expect("readiness-driven 64MiB exact stream with both output pipes backpressured");
+        assert!(output.status.success());
+        let mut expected_stdout = vec![b'o'; 131072];
+        expected_stdout
+            .extend_from_slice(format!("{:x} {expected_len}\n", expected.finalize()).as_bytes());
+        assert_eq!(output.stdout, expected_stdout);
+        assert_eq!(output.stderr, vec![b'e'; 131072]);
+    }
+
+    #[test]
+    fn process_runner_output_budget_bounds_continuous_and_interrupted_readers() {
+        struct ReadyReader {
+            calls: usize,
+            interrupted: bool,
+        }
+        impl Read for ReadyReader {
+            fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+                self.calls += 1;
+                if self.interrupted {
+                    return Err(std::io::ErrorKind::Interrupted.into());
+                }
+                buffer.fill(b'x');
+                Ok(buffer.len())
+            }
+        }
+        for interrupted in [false, true] {
+            let mut reader = ReadyReader {
+                calls: 0,
+                interrupted,
+            };
+            let mut output = Vec::new();
+            let mut eof = false;
+            drain_nonblocking_with_read_budget(&mut reader, &mut output, &mut eof, 4)
+                .expect("one bounded fair output turn");
+            assert_eq!(reader.calls, 4);
+            assert_eq!(output.len(), if interrupted { 0 } else { 64 * 1024 });
+            assert!(!eof);
+        }
+    }
+
+    #[test]
+    fn process_runner_deadline_kills_descendant_holding_output_pipes() {
+        use std::os::{fd::OwnedFd, unix::net::UnixStream};
+        let (mut observer, held) = UnixStream::pair().expect("owned descendant witness socket");
+        observer
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let held = File::from(OwnedFd::from(held));
+        let descriptor = held.as_raw_fd();
+        let started = Instant::now();
+        let error = run_bounded_process(&ProcessSpec {
+            program: PathBuf::from("/usr/bin/python3"),
+            args: vec![
+                "-I".into(),
+                "-c".into(),
+                r#"
+import os, sys, time
+if os.fork():
+    os._exit(0)
+os.write(int(sys.argv[1]), b'descendant-ready')
+time.sleep(30)
+"#
+                .into(),
+                descriptor.to_string().into(),
+            ],
+            stdin_prefix: Vec::new(),
+            stdin_file: None,
+            stdin_files: Vec::new(),
+            inherited_files: vec![held],
+            deadline: Instant::now() + Duration::from_secs(1),
+        })
+        .expect_err("a descendant retaining output must obey the same absolute deadline");
+        let diagnostic = error.to_string();
+        assert!(diagnostic.contains("copied_bytes=0 expected_bytes=0"));
+        assert!(diagnostic.contains("child_exit_observed=true"));
+        assert!(diagnostic.contains("stdout_eof=false stderr_eof=false"));
+        let mut witness = Vec::new();
+        observer
+            .read_to_end(&mut witness)
+            .expect("owned descendant must close its inherited socket");
+        assert_eq!(witness, b"descendant-ready");
+        assert!(started.elapsed() < Duration::from_secs(4));
+    }
+
+    #[test]
+    fn preseed_receipt_targets_follow_receipt_order_for_reversed_stores() {
+        use sorafs_manifest::operator_preseed::OperatorPreseedArtifactReceiptV1;
+
+        let _chain = ChainDiscriminantGuard::enter(super::super::CHAIN_DISCRIMINANT);
+        let mut admitted = progress_admission();
+        let HostTarget::Validator(target) = &mut admitted.target else {
+            panic!("validator fixture");
+        };
+        // The real parser reaches this deterministic post-binding sentinel
+        // before any filesystem access. It needs no root privileges or live state.
+        target.reset_guard = "/invalid-preseed-fixture/guard".to_owned();
+        let mut stores = admitted
+            .inventory
+            .inrou_canary
+            .placement_targets
+            .iter()
+            .enumerate()
+            .map(|(index, placement)| ValidatorPreseedStore {
+                slug: format!("taira-validator-{}", index + 1),
+                placement: placement.clone(),
+                data_dir: PathBuf::from(format!("/var/lib/taira/validator-{index}/sorafs")),
+                max_capacity_bytes: 1024,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(stores.len(), 4);
+        let mut targets = stores
+            .iter()
+            .map(|store| OperatorPreseedTargetReceiptV1 {
+                validator_account_id: store.placement.validator_account_id.to_string(),
+                peer_id: store.placement.peer_id.clone(),
+                store_root: store.data_dir.to_string_lossy().into_owned(),
+            })
+            .collect::<Vec<_>>();
+        targets.sort_by_key(|target| {
+            (
+                target.validator_account_id.clone(),
+                target.peer_id.clone(),
+                target.store_root.clone(),
+            )
+        });
+        let canary = &admitted.inventory.inrou_canary;
+        let mut artifacts = [
+            &canary.bundle_manifest_digest_hex,
+            &canary.guest_manifest_digest_hex,
+            &canary.discovery_manifest_digest_hex,
+        ]
+        .into_iter()
+        .map(|digest| OperatorPreseedArtifactReceiptV1 {
+            manifest_digest_blake3: digest.clone(),
+            payload_digest_blake3: "22".repeat(32),
+            content_length: 1,
+            store_count: 4,
+        })
+        .collect::<Vec<_>>();
+        artifacts.sort_by(|left, right| {
+            left.manifest_digest_blake3
+                .cmp(&right.manifest_digest_blake3)
+        });
+        let mut receipt = OperatorPreseedSessionReceiptV1 {
+            schema_version: 1,
+            status: "ready".to_owned(),
+            mode: "ingest".to_owned(),
+            max_capacity_bytes: 1024,
+            targets,
+            artifacts,
+        };
+        receipt.validate().expect("canonical producer receipt");
+        stores.sort_by_key(|store| store.placement.validator_account_id.to_string());
+        stores.reverse();
+        let parse = |receipt: &OperatorPreseedSessionReceiptV1| {
+            let mut wire = json::to_json(receipt)
+                .expect("canonical receipt")
+                .into_bytes();
+            wire.push(b'\n');
+            parse_preseed_session_receipt(&wire, &stores, &admitted, false)
+                .expect_err("fixture sentinel or explicit receipt rejection")
+                .to_string()
+        };
+        assert_eq!(
+            parse(&receipt),
+            "reset guard escaped the fixed host-global control root",
+            "all receipt and exact-binding checks must pass before stage access"
+        );
+
+        receipt.targets.swap(0, 1);
+        assert!(parse(&receipt).contains("targets must be strictly ordered"));
+        receipt.targets.swap(0, 1);
+        receipt.targets[0].store_root.push_str("-different");
+        receipt
+            .validate()
+            .expect("well-shaped but differently bound receipt");
+        assert_eq!(
+            parse(&receipt),
+            "SoraFS preseed helper receipt differs from the exact requested stores and artifacts"
+        );
+        receipt.targets[0] = receipt.targets[1].clone();
+        assert!(parse(&receipt).contains("identities must each be distinct"));
+    }
+
+    #[test]
     fn locked_preseed_session_releases_only_after_ready_receipt_validation() {
         let mut validated = false;
         run_locked_preseed_session(
@@ -18664,10 +19252,108 @@ mod tests {
             deadline: Instant::now() + Duration::from_secs(2),
         })
         .expect_err("early child exit must reject an incomplete framed stdin");
-        assert!(
-            error.to_string().contains("stdin") || error.to_string().contains("stream"),
-            "unexpected error: {error:?}"
+        assert_eq!(
+            error.to_string(),
+            "child exited before consuming its exact framed stdin"
         );
+    }
+
+    #[test]
+    fn process_runner_preserves_rejection_after_child_closes_stdin() {
+        const DIAGNOSTIC_SIZE: usize = 2 * 1024 * 1024;
+        let output = run_bounded_process(&ProcessSpec {
+            program: PathBuf::from("/usr/bin/python3"),
+            args: vec![
+                "-I".into(),
+                "-c".into(),
+                r#"
+import os, sys
+os.close(0)
+sys.stdout.buffer.write(b'fixture-stdout-must-not-enter-errors')
+sys.stdout.buffer.flush()
+sys.stderr.buffer.write(b'e' * (2 * 1024 * 1024))
+sys.stderr.buffer.write(b'\nfixture-remote-rejection\n')
+sys.stderr.buffer.flush()
+os._exit(23)
+"#
+                .into(),
+                "fixture-argument-must-not-enter-errors".into(),
+            ],
+            stdin_prefix: b"fixture-input-must-not-enter-errors".repeat(128 * 1024),
+            stdin_file: None,
+            stdin_files: Vec::new(),
+            inherited_files: Vec::new(),
+            deadline: Instant::now() + Duration::from_secs(5),
+        })
+        .expect("rejection must preserve the child's exit status and full bounded diagnostic");
+        assert_eq!(output.status.code(), Some(23));
+        assert_eq!(
+            output.stderr.len(),
+            DIAGNOSTIC_SIZE + b"\nfixture-remote-rejection\n".len()
+        );
+        assert!(
+            output.stderr[..DIAGNOSTIC_SIZE]
+                .iter()
+                .all(|byte| *byte == b'e')
+        );
+        assert!(output.stderr.ends_with(b"\nfixture-remote-rejection\n"));
+        let error = require_success(output, "fixture dispatch")
+            .expect_err("a rejected incomplete frame must never become success");
+        let diagnostic = error.to_string();
+        assert!(diagnostic.contains("fixture dispatch failed with"));
+        assert!(diagnostic.contains("23"));
+        assert!(diagnostic.ends_with("\nfixture-remote-rejection\n"));
+        assert!(!diagnostic.contains("fixture-stdout-must-not-enter-errors"));
+        assert!(!diagnostic.contains("fixture-argument-must-not-enter-errors"));
+        assert!(!diagnostic.contains("fixture-input-must-not-enter-errors"));
+    }
+
+    #[test]
+    fn process_runner_deadline_reaps_child_after_stdin_closure() {
+        use std::os::{fd::OwnedFd, unix::net::UnixStream};
+        let (mut observer, held) = UnixStream::pair().expect("owned child witness socket");
+        observer
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let held = File::from(OwnedFd::from(held));
+        let descriptor = held.as_raw_fd();
+        let started = Instant::now();
+        let error = run_bounded_process(&ProcessSpec {
+            program: PathBuf::from("/usr/bin/python3"),
+            args: vec![
+                "-I".into(),
+                "-c".into(),
+                r#"
+import os, sys, time
+os.close(0)
+os.write(int(sys.argv[1]), str(os.getpid()).encode('ascii'))
+time.sleep(30)
+"#
+                .into(),
+                descriptor.to_string().into(),
+            ],
+            stdin_prefix: vec![b'x'; 4 * 1024 * 1024],
+            stdin_file: None,
+            stdin_files: Vec::new(),
+            inherited_files: vec![held],
+            deadline: Instant::now() + Duration::from_secs(1),
+        })
+        .expect_err("a child closing stdin then hanging must obey the original deadline");
+        let diagnostic = error.to_string();
+        assert!(diagnostic.contains("exceeded its absolute deadline"));
+        assert!(diagnostic.contains("stdin_complete=false"));
+        assert!(diagnostic.contains("child_exit_observed=false"));
+        let mut witness = String::new();
+        observer
+            .read_to_string(&mut witness)
+            .expect("terminated child must release its inherited socket");
+        let pid = rustix::process::Pid::from_raw(witness.parse().expect("child PID witness"))
+            .expect("positive child PID");
+        assert!(matches!(
+            rustix::process::waitpid(Some(pid), rustix::process::WaitOptions::NOHANG),
+            Err(rustix::io::Errno::CHILD)
+        ));
+        assert!(started.elapsed() < Duration::from_secs(4));
     }
 
     #[test]
@@ -20304,7 +20990,7 @@ mod tests {
 
     fn manager_evidence(active: &str, sub: &str, result: &str, status: &str, job: &str) -> Vec<u8> {
         format!(
-            "LoadState=loaded\nActiveState={active}\nSubState={sub}\nResult={result}\nExecMainCode=exited\nExecMainStatus={status}\nInvocationID=0123456789abcdef0123456789abcdef\nExecStart={{ path=/usr/bin/systemctl ; argv[]=/usr/bin/systemctl restart taira-validator-1.service ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }}\nJob={job}\n"
+            "LoadState=loaded\nActiveState={active}\nSubState={sub}\nResult={result}\nExecMainCode=1\nExecMainStatus={status}\nInvocationID=0123456789abcdef0123456789abcdef\nExecStart={{ path=/usr/bin/systemctl ; argv[]=/usr/bin/systemctl restart taira-validator-1.service ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }}\nJob={job}\n"
         )
         .into_bytes()
     }
@@ -20336,6 +21022,128 @@ mod tests {
             .expect("rejected evidence"),
             ManagerOperationEvidence::Rejected
         );
+    }
+
+    #[test]
+    fn manager_evidence_accepts_captured_systemd_numeric_exit_after_deadline() {
+        let mut intent = manager_intent_fixture();
+        intent.verb = "stop".to_owned();
+        intent.target_unit = "iroha3d-taira-validator-1.service".to_owned();
+        // Actual systemctl show properties from a completed retained oneshot.
+        // ExecMainCode is numeric even though ExecStart renders code=exited.
+        let captured = b"ActiveState=active\nExecMainCode=1\nExecMainStatus=0\nExecStart={ path=/usr/bin/systemctl ; argv[]=/usr/bin/systemctl stop iroha3d-taira-validator-1.service ; ignore_errors=no ; start_time=[Mon 2026-09-07 23:57:26 UTC] ; stop_time=[Mon 2026-09-07 23:57:26 UTC] ; pid=25862 ; code=exited ; status=0 }\nInvocationID=b706c56d582b49e5b9e580fdd5d4ee14\nJob=\nLoadState=loaded\nResult=success\nSubState=exited\n";
+        assert_eq!(
+            classify_manager_operation_at(captured, &intent, intent.action_deadline_unix_ms + 1,)
+                .expect("retained successful stop remains observable after its mutation deadline"),
+            ManagerOperationEvidence::Applied
+        );
+    }
+
+    #[test]
+    fn manager_evidence_requires_exact_numeric_exit_code_and_status() {
+        let intent = manager_intent_fixture();
+        let completed = String::from_utf8(manager_evidence("active", "exited", "success", "0", ""))
+            .expect("UTF-8 fixture");
+        for code in ["0", "2", "3", "4", "5", "6"] {
+            let evidence = completed.replace("ExecMainCode=1\n", &format!("ExecMainCode={code}\n"));
+            assert_eq!(
+                classify_manager_operation_evidence(evidence.as_bytes(), &intent)
+                    .expect("canonical numeric non-exit code"),
+                ManagerOperationEvidence::Rejected,
+                "active/exited cannot prove success with CLD code {code}"
+            );
+        }
+        for code in [
+            "",
+            "exited",
+            "01",
+            "+1",
+            "-1",
+            "1 ",
+            " 1",
+            "7",
+            "2147483648",
+        ] {
+            let evidence = completed.replace("ExecMainCode=1\n", &format!("ExecMainCode={code}\n"));
+            assert!(
+                classify_manager_operation_evidence(evidence.as_bytes(), &intent).is_err(),
+                "malformed ExecMainCode {code:?} must not be accepted"
+            );
+        }
+        for status in ["", "00", "+0", "-1", "0 ", " 0", "256", "success"] {
+            let evidence =
+                completed.replace("ExecMainStatus=0\n", &format!("ExecMainStatus={status}\n"));
+            assert!(
+                classify_manager_operation_evidence(evidence.as_bytes(), &intent).is_err(),
+                "malformed ExecMainStatus {status:?} must not be accepted"
+            );
+        }
+        for status in ["1", "15", "255"] {
+            assert_eq!(
+                classify_manager_operation_evidence(
+                    &manager_evidence("failed", "failed", "exit-code", status, ""),
+                    &intent,
+                )
+                .expect("canonical nonzero status"),
+                ManagerOperationEvidence::Rejected
+            );
+        }
+    }
+
+    #[test]
+    fn manager_evidence_keeps_unexecuted_and_running_operations_pending() {
+        let intent = manager_intent_fixture();
+        let unexecuted =
+            String::from_utf8(manager_evidence("inactive", "dead", "success", "0", ""))
+                .expect("UTF-8 fixture")
+                .replace("ExecMainCode=1\n", "ExecMainCode=0\n");
+        assert_eq!(
+            classify_manager_operation_evidence(unexecuted.as_bytes(), &intent)
+                .expect("no process has exited yet"),
+            ManagerOperationEvidence::Pending
+        );
+        for (active, sub, job) in [
+            ("activating", "start", "123"),
+            ("active", "running", ""),
+            ("active", "exited", "123"),
+        ] {
+            assert_eq!(
+                classify_manager_operation_evidence(
+                    &manager_evidence(active, sub, "success", "0", job),
+                    &intent,
+                )
+                .expect("outstanding manager work"),
+                ManagerOperationEvidence::Pending
+            );
+        }
+    }
+
+    #[test]
+    fn validator_restart_evidence_requires_running_service_and_settled_job() {
+        let mut evidence = UnitRestartEvidence {
+            invocation: "0123456789abcdef0123456789abcdef".to_owned(),
+            active_enter_monotonic_ms: 1,
+            boot_id: "01234567-89ab-cdef-0123-456789abcdef".to_owned(),
+            active_state: "active".to_owned(),
+            sub_state: "running".to_owned(),
+            job: String::new(),
+        };
+        assert!(evidence.is_terminal_active());
+        evidence.job = "0".to_owned();
+        assert!(evidence.is_terminal_active());
+        for (active, sub, job) in [
+            ("active", "exited", ""),
+            ("active", "start", ""),
+            ("active", "stop", ""),
+            ("active", "running", "123"),
+            ("activating", "running", ""),
+            ("failed", "failed", ""),
+        ] {
+            evidence.active_state = active.to_owned();
+            evidence.sub_state = sub.to_owned();
+            evidence.job = job.to_owned();
+            assert!(!evidence.is_terminal_active(), "{active}/{sub} job={job}");
+        }
     }
 
     #[test]
@@ -21200,5 +22008,291 @@ mod tests {
             .expect("durable retry accepts the same admitted prior inode");
         assert_eq!(route.metadata().expect("durable config inode").ino(), inode);
         assert_eq!(fs::read(&route).expect("durable prior bytes"), bytes);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn kvm_api_query_preserves_notty_for_regular_files() {
+        let file = tempfile::tempfile().expect("disposable regular-file descriptor");
+        assert_eq!(kvm_api_version(&file), Err(rustix::io::Errno::NOTTY));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn preflight_dispatches_five_read_only_hosts_without_runtime_custody() {
+        use std::os::unix::process::ExitStatusExt as _;
+
+        struct ProbeRunner {
+            seen: Vec<String>,
+            fail_at: Option<usize>,
+            corrupt_receipt: bool,
+            timeout_secs: u64,
+        }
+        impl ProcessRunner for ProbeRunner {
+            fn run(&mut self, spec: &ProcessSpec) -> Result<ProcessOutput> {
+                assert_eq!(spec.program, Path::new(SSH));
+                assert!(
+                    spec.inherited_files.is_empty(),
+                    "OpenSSH closes inherited inputs"
+                );
+                assert!(spec.stdin_file.is_none());
+                assert!(spec.stdin_files.is_empty());
+                assert!(
+                    spec.args
+                        .contains(&OsString::from("StrictHostKeyChecking=yes"))
+                );
+                assert!(spec.args.contains(&OsString::from("IdentityAgent=none")));
+                assert!(spec.args.contains(&OsString::from(format!(
+                    "ConnectTimeout={}",
+                    self.timeout_secs
+                ))));
+                let parent_prefix = format!("/proc/{}/fd/", std::process::id());
+                let identity_index = spec
+                    .args
+                    .iter()
+                    .position(|arg| arg == "-i")
+                    .expect("exact identity");
+                let identity = Path::new(&spec.args[identity_index + 1]);
+                assert!(identity.to_string_lossy().starts_with(&parent_prefix));
+                #[cfg(target_os = "linux")]
+                let fixture_read_path = identity.to_path_buf();
+                #[cfg(not(target_os = "linux"))]
+                let fixture_read_path = Path::new("/dev/fd").join(identity.file_name().unwrap());
+                use std::os::unix::fs::FileExt as _;
+                let mut fixture_bytes = [0_u8; b"SSH-FIXTURE-ONLY".len()];
+                File::open(fixture_read_path)
+                    .expect("live parent-held fixture")
+                    .read_exact_at(&mut fixture_bytes, 0)
+                    .expect("read fixture without changing shared offsets");
+                assert_eq!(&fixture_bytes, b"SSH-FIXTURE-ONLY");
+                assert!(spec.args.iter().any(|arg| {
+                    arg.to_string_lossy()
+                        .starts_with(&format!("UserKnownHostsFile={parent_prefix}"))
+                }));
+                assert_eq!(&spec.stdin_prefix[8..9], b"\n");
+                let length = usize::from_str_radix(
+                    std::str::from_utf8(&spec.stdin_prefix[..8]).unwrap(),
+                    16,
+                )
+                .unwrap();
+                assert_eq!(
+                    spec.stdin_prefix.len(),
+                    length + 9,
+                    "only one public request frame"
+                );
+                let request: HostRequestV1 =
+                    json::from_slice(&spec.stdin_prefix[9..]).expect("host request");
+                assert_eq!(request.action, "preflight");
+                assert!(!request.recovery_only);
+                assert!(request.artifact_role.is_empty() && request.artifact_sha256.is_empty());
+                assert_eq!(request.artifact_size, 0);
+                assert!(
+                    request.mutation_kind.is_empty() && request.mutation_prepared_base64.is_empty()
+                );
+                assert!(request.mutation_evidence_base64.is_empty());
+                for secret in [
+                    b"SSH-FIXTURE-ONLY".as_slice(),
+                    b"KNOWN-HOSTS-FIXTURE-ONLY".as_slice(),
+                ] {
+                    assert!(
+                        !spec
+                            .stdin_prefix
+                            .windows(secret.len())
+                            .any(|part| part == secret)
+                    );
+                    let encoded = BASE64.encode(secret);
+                    assert!(
+                        !spec
+                            .stdin_prefix
+                            .windows(encoded.len())
+                            .any(|part| part == encoded.as_bytes())
+                    );
+                }
+                let (inventory, _chain) = super::super::decode_inventory(
+                    &BASE64.decode(&request.inventory_base64).unwrap(),
+                    "fixture inventory",
+                )
+                .expect("inventory boundary");
+                self.seen.push(request.host_slug.clone());
+                if self.fail_at == Some(self.seen.len()) {
+                    return Err(eyre!("injected SSH preflight failure"));
+                }
+                let receipt = HostReceiptV1 {
+                    schema: HOST_RECEIPT_SCHEMA_V1.to_owned(),
+                    action: request.action.clone(),
+                    host_slug: if self.corrupt_receipt {
+                        "wrong-host".to_owned()
+                    } else {
+                        request.host_slug.clone()
+                    },
+                    request_sha256: host_request_identity_sha256(&request)?,
+                    inventory_sha256: sha256_hex(&BASE64.decode(&request.inventory_base64)?),
+                    authorization_sha256: request.authorization_semantic_sha256.clone(),
+                    authorization_nonce: inventory.authorization_nonce,
+                    status: "ok".to_owned(),
+                    idempotent: false,
+                    bytes_before: 0,
+                    bytes_after: 0,
+                    reclaimed_bytes: 0,
+                    detail: "read-only fixture preflight".to_owned(),
+                    mutation_state: String::new(),
+                    mutation_prepared_base64: String::new(),
+                    mutation_prepared_sha256: String::new(),
+                    mutation_transaction_hash: String::new(),
+                };
+                Ok(ProcessOutput {
+                    status: ExitStatus::from_raw(0),
+                    stdout: json::to_vec(&receipt)?,
+                    stderr: Vec::new(),
+                })
+            }
+        }
+        let _chain = ChainDiscriminantGuard::enter(super::super::CHAIN_DISCRIMINANT);
+        let directory = super::super::private_custody_test_dir("taira-read-only-preflight-");
+        let mut admitted = admitted_reset_fixture();
+        for (name, bytes) in [
+            ("identity", b"SSH-FIXTURE-ONLY".as_slice()),
+            ("known-hosts", b"KNOWN-HOSTS-FIXTURE-ONLY".as_slice()),
+        ] {
+            let path = directory.path().join(name);
+            fs::write(&path, bytes).expect("harmless fixture");
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).expect("private fixture");
+        }
+        admitted.ssh_identity =
+            pin_owner_private_file(&directory.path().join("identity"), "fixture identity").unwrap();
+        admitted.known_hosts =
+            pin_owner_private_file(&directory.path().join("known-hosts"), "fixture hosts").unwrap();
+        // No runtime custody, artifact descriptors or journal are available.
+        assert!(admitted.pinned_artifacts.is_empty());
+        let before = fs::read_dir(directory.path()).unwrap().count();
+        let expected = admitted
+            .inventory
+            .validators
+            .iter()
+            .map(|validator| validator.slug.clone())
+            .chain(std::iter::once(admitted.inventory.edge.slug.clone()))
+            .collect::<Vec<_>>();
+        assert_eq!(expected.len(), 5);
+        let mut runner = ProbeRunner {
+            seen: Vec::new(),
+            fail_at: None,
+            corrupt_receipt: false,
+            timeout_secs: admitted.inventory.timeouts.install_secs,
+        };
+        preflight_hosts_with_runner(&admitted, &mut runner)
+            .expect("five exact read-only host receipts");
+        assert_eq!(runner.seen, expected);
+        assert_eq!(fs::read_dir(directory.path()).unwrap().count(), before);
+        for absent in [
+            "journal-v1",
+            "local-receipts-v1",
+            "runtime-client.toml",
+            "onboarding-token",
+            "inrou-stage",
+        ] {
+            assert!(
+                !directory.path().join(absent).exists(),
+                "preflight created {absent}"
+            );
+        }
+        runner.seen.clear();
+        runner.fail_at = Some(2);
+        let error = preflight_hosts_with_runner(&admitted, &mut runner)
+            .expect_err("SSH failure cannot report readiness");
+        assert!(format!("{error:#}").contains("injected SSH preflight failure"));
+        assert_eq!(runner.seen, expected[..2]);
+        runner.seen.clear();
+        runner.fail_at = None;
+        runner.corrupt_receipt = true;
+        let error = preflight_hosts_with_runner(&admitted, &mut runner)
+            .expect_err("wrong-host receipt must fail");
+        assert!(
+            format!("{error:#}").contains("remote host receipt does not exactly bind its request")
+        );
+        assert_eq!(runner.seen.len(), 1);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn openssh_parent_pinned_inputs_survive_descriptor_sweep_without_network() {
+        let directory = super::super::private_custody_test_dir("taira-openssh-parent-fd-");
+        let identity_path = directory.path().join("identity");
+        let config_path = directory.path().join("harmless-ssh-config");
+        for (path, bytes) in [
+            (&identity_path, b"harmless-not-a-key\n".as_slice()),
+            (&config_path, b"Host *\n  User fixture-user\n".as_slice()),
+        ] {
+            fs::write(path, bytes).expect("harmless fixture");
+            fs::set_permissions(path, fs::Permissions::from_mode(0o600)).expect("private fixture");
+        }
+        let identity = pin_owner_private_file(&identity_path, "fixture identity").unwrap();
+        let config = pin_owner_private_file(&config_path, "fixture config").unwrap();
+        let inherited = identity.file.try_clone().unwrap();
+        let old_path = inherited_file_path(&inherited).unwrap();
+        let old = run_bounded_process(&ProcessSpec {
+            program: PathBuf::from(SSH),
+            args: vec![
+                "-G".into(),
+                "-F".into(),
+                "/dev/null".into(),
+                "-i".into(),
+                old_path.as_os_str().to_owned(),
+                "fixture.invalid".into(),
+            ],
+            stdin_prefix: Vec::new(),
+            stdin_file: None,
+            stdin_files: Vec::new(),
+            inherited_files: vec![inherited],
+            deadline: Instant::now() + Duration::from_secs(10),
+        })
+        .expect("actual OpenSSH configuration-only child");
+        assert!(old.status.success());
+        assert!(String::from_utf8_lossy(&old.stderr).contains(&format!(
+            "Identity file {} not accessible",
+            old_path.display()
+        )));
+        let held = ParentHeldSshInputs::new(&identity, &config).expect("parent-held custody");
+        assert!(
+            rustix::io::fcntl_getfd(&held._identity_file)
+                .unwrap()
+                .contains(rustix::io::FdFlags::CLOEXEC)
+        );
+        assert!(
+            rustix::io::fcntl_getfd(&held._known_hosts_file)
+                .unwrap()
+                .contains(rustix::io::FdFlags::CLOEXEC)
+        );
+        fs::rename(&identity_path, directory.path().join("retained-identity")).unwrap();
+        fs::rename(&config_path, directory.path().join("retained-config")).unwrap();
+        fs::write(&identity_path, b"replacement identity").unwrap();
+        fs::write(&config_path, b"this is not valid SSH config").unwrap();
+        let result = run_bounded_process(&ProcessSpec {
+            program: PathBuf::from(SSH),
+            args: vec![
+                "-G".into(),
+                "-F".into(),
+                held.known_hosts_path.as_os_str().to_owned(),
+                "-i".into(),
+                held.identity_path.as_os_str().to_owned(),
+                "fixture.invalid".into(),
+            ],
+            stdin_prefix: Vec::new(),
+            stdin_file: None,
+            stdin_files: Vec::new(),
+            inherited_files: Vec::new(),
+            deadline: Instant::now() + Duration::from_secs(10),
+        })
+        .expect("OpenSSH reads parent descriptors after closing inherited descriptors");
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&result.stdout)
+                .lines()
+                .any(|line| line == "user fixture-user")
+        );
+        assert!(!String::from_utf8_lossy(&result.stderr).contains("not accessible"));
     }
 }

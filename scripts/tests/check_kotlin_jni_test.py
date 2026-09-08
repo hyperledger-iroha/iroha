@@ -73,6 +73,7 @@ def release_methods():
             JVM.Method("encodeRegisterZkAssetSignedTransaction",
                        "(IL" + SDK + "core/model/NetworkId;I)V", JVM.ACC_PUBLIC | JVM.ACC_STATIC),
             native("nativeEncodeRegisterZkAssetSignedTransaction", "(I[BI)V"),
+            native("nativeValidateAccountAddressCanonical", "([B)[B"),
         ),
     }
 
@@ -258,14 +259,14 @@ def test_release_api_constraints_replace_reflection(mutation):
             JVM.Method("encodeRegisterZkAssetSignedTransaction", "(ILjava/lang/String;I)V", JVM.ACC_PUBLIC),
         )
     else:
-        public, private = declarations[SIGNER]
+        public, private, account = declarations[SIGNER]
         if mutation == "public_native_bytes":
             public = JVM.Method(public.name, "(I[BI)V", public.flags | JVM.ACC_NATIVE)
         elif mutation == "implicit_public_network":
             public = JVM.Method(public.name, "(ILjava/lang/String;I)V", public.flags)
         else:
             private = native(private.name, "(II[B)V")
-        declarations[SIGNER] = (public, private)
+        declarations[SIGNER] = (public, private, account)
     classes = {owner: JVM.parse_class(class_bytes(owner, methods)) for owner, methods in declarations.items()}
     with pytest.raises(GUARD.AuditError):
         GUARD.validate_release_api(classes)
@@ -279,7 +280,7 @@ def test_audit_seals_inputs_without_claiming_runtime_qualification(tmp_path, mon
     library.write_bytes(b"test export inventory")
     monkeypatch.setattr(GUARD.ARTIFACT, "inspect_exported_symbols", lambda *args, **kwargs: tuple(exports))
     report = GUARD.audit(roots, library)
-    assert report["valid"] and report["native_method_count"] == 4
+    assert report["valid"] and report["native_method_count"] == 5
     assert not report["native_execution_qualified"]
     assert not report["native_signatures_qualified"]
     assert not report["source_build_provenance_qualified"]
@@ -293,6 +294,32 @@ def test_audit_seals_inputs_without_claiming_runtime_qualification(tmp_path, mon
     monkeypatch.setattr(GUARD.ARTIFACT, "inspect_exported_symbols", change_class)
     with pytest.raises(GUARD.AuditError, match="classes changed"):
         GUARD.audit(roots, library)
+
+
+@pytest.mark.parametrize("mutation", ("missing", "return_type", "instance", "managed", "curve_switch", "bypass", "retired_config"))
+def test_complete_account_native_admission_is_required(mutation):
+    declarations = release_methods()
+    public, private, account = declarations[SIGNER]
+    if mutation == "missing":
+        declarations[SIGNER] = (public, private)
+    elif mutation in {"return_type", "instance", "managed"}:
+        descriptor = "([B)Z" if mutation == "return_type" else account.descriptor
+        flags = account.flags
+        if mutation == "instance":
+            flags &= ~JVM.ACC_STATIC
+        if mutation == "managed":
+            flags &= ~JVM.ACC_NATIVE
+        declarations[SIGNER] = (public, private, JVM.Method(account.name, descriptor, flags))
+    elif mutation == "retired_config":
+        declarations[SDK + "address/CurveSupportConfig"] = ()
+    else:
+        name = "configureCurveSupport" if mutation == "curve_switch" else "parseEncodedIgnoringCurveSupport"
+        declarations[SDK + "address/AccountAddress$Companion"] = (
+            JVM.Method(name, "()V", JVM.ACC_PUBLIC),
+        )
+    classes = {owner: JVM.parse_class(class_bytes(owner, methods)) for owner, methods in declarations.items()}
+    with pytest.raises(GUARD.AuditError, match="account"):
+        GUARD.validate_release_api(classes)
 
 
 def test_cli_does_not_overwrite_build_inputs(tmp_path):

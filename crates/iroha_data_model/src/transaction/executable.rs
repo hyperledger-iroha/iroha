@@ -18,6 +18,8 @@ mod model {
     use iroha_crypto::Hash;
     use iroha_primitives::const_vec::ConstVec;
     /// An executable transaction or trigger payload.
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::transaction::executable::model::Executable")]
     #[derive(
         derive_more::Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema,
     )]
@@ -47,6 +49,8 @@ mod model {
         Batch(ConstVec<ExecutableBatchItem>),
     }
     /// One ordered item in [`Executable::Batch`].
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::transaction::executable::model::ExecutableBatchItem")]
     #[derive(
         derive_more::Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema,
     )]
@@ -60,6 +64,8 @@ mod model {
     /// Wrapper for IVM bytecode used by [`Executable::Ivm`].
     ///
     /// Uses **base64** (de-)serialization format.
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::transaction::executable::model::IvmBytecode")]
     #[derive(
         derive_more::Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema,
     )]
@@ -72,6 +78,8 @@ mod model {
         pub(super) Vec<u8>,
     );
     /// Wrapper for proved IVM executions.
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::transaction::executable::model::IvmProved")]
     #[derive(
         derive_more::Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema,
     )]
@@ -96,6 +104,8 @@ mod model {
     )]
     pub struct ContractArgumentRecord(pub(super) Vec<u8>);
     /// By-reference invocation of a deployed contract instance.
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::transaction::executable::model::ContractInvocation")]
     #[derive(
         derive_more::Debug,
         Clone,

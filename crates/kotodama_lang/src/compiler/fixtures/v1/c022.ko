@@ -2,7 +2,7 @@
 seiyaku CompilerFixture {
 
 fn main(AccountId account) {
-  ledger::account::set_quorum(account, Json::parse("{}"));
+  ledger::account::set_quorum(account: account, quorum: Json::parse("{}"));
 }
 
 }

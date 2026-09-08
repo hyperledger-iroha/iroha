@@ -1,4 +1,4 @@
-//! Typed public-input facade for test-only shared compact proof verification.
+//! Internal typed public-input dispatch for offline compact proof verification.
 //!
 //! Ordinary transfers and AXT transfers have separate entry points. The caller
 //! supplies validated public transfer facts and independently expected PublicIO;
@@ -11,30 +11,34 @@
 //! Existing production APIs continue to require replay and their default limits.
 //!
 //! TODO: Complete independent protocol qualification and an authenticated core
-//! context before exposing this facade outside tests. Proving integration must
+//! context before production admission. Proving integration must
 //! separate public claims from private witness material and retain distinct wire
 //! identity; it must not silently replace legacy `Proof` or AXT payload bytes.
 
 use iroha_data_model::nexus::{AxtFastpqBinding, AxtRemoteSpendClaimV1};
 
+use super::compact_protocol::{
+    FixedAir,
+    shared_openings::codec::{VerifiedSharedProof, decode_and_verify_shake_committed},
+};
+#[cfg(test)]
 use super::compact_value_domain::CompactTransferValue;
+use crate::{
+    Result, VerifyLimits,
+    axt_binding::{AxtProofContextMirrors, AxtPublicMetadataBytes},
+};
+
+#[cfg(test)]
 use super::{
     compact_axt_air::AxtTransferAir,
-    compact_protocol::{
-        FixedAir,
-        shared_openings::{
-            SharedVerificationWork,
-            codec::{
-                VerifiedSharedProof, decode_and_verify_committed, decode_and_verify_shake_committed,
-            },
-        },
+    compact_protocol::shared_openings::{
+        SharedVerificationWork, codec::decode_and_verify_committed,
     },
     compact_public_transfer::PublicTransferAir,
 };
+#[cfg(test)]
 use crate::{
-    Error, ProofSemantics, Result, VerifyLimits,
-    axt_binding::{AxtProofContextMirrors, AxtPublicMetadataBytes},
-    gadgets::public_transfer_statement::PreparedPublicTransfers,
+    Error, ProofSemantics, gadgets::public_transfer_statement::PreparedPublicTransfers,
     proof::PublicIO,
 };
 
@@ -43,6 +47,7 @@ use crate::{
 #[derive(Clone, Copy)]
 pub(super) enum SharedVerifier {
     /// Original diagnostic transcript and bounded codec.
+    #[cfg(test)]
     Prototype,
     /// Fixed 375-query whole-tape candidate with an explicit child decode cap.
     ShakeCandidate {
@@ -54,17 +59,20 @@ impl SharedVerifier {
     /// Fixed initial query count for one complete segment.
     pub(super) fn queries(self) -> usize {
         match self {
+            #[cfg(test)]
             Self::Prototype => fastpq_isi::FASTPQ_FINAL_V1.fri.queries as usize,
             Self::ShakeCandidate { .. } => 375,
         }
     }
 
     /// Whether the selected entry point requires the distinct candidate frame.
+    #[cfg(test)]
     pub(super) const fn is_shake(self) -> bool {
         matches!(self, Self::ShakeCandidate { .. })
     }
 
     /// Authenticate a frame using the selected transcript and unchanged relation.
+    #[cfg(test)]
     pub(super) fn verify_frame(
         self,
         relation: &impl FixedAir,
@@ -83,6 +91,7 @@ impl SharedVerifier {
         limits: VerifyLimits,
     ) -> Result<VerifiedSharedProof> {
         match self {
+            #[cfg(test)]
             Self::Prototype => decode_and_verify_committed(relation, bytes, limits),
             Self::ShakeCandidate {
                 max_decode_allocation_charges,
@@ -119,11 +128,13 @@ pub(super) struct AxtVerificationContext<'a> {
 /// supplied by the caller and exactly checked by the selected relation before
 /// the bounded raw-byte verifier authenticated the complete shared proof.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg(test)]
 pub(super) struct VerifiedPublicTransfer {
     public_io: PublicIO,
     work: SharedVerificationWork,
 }
 
+#[cfg(test)]
 impl VerifiedPublicTransfer {
     /// Return the caller-expected PublicIO checked by the selected relation.
     pub(super) const fn public_io(&self) -> PublicIO {
@@ -141,6 +152,7 @@ impl VerifiedPublicTransfer {
 /// A prepared AXT or opaque profile is rejected even when its transfer rows
 /// otherwise have the same shape. AXT context cannot be omitted via this route.
 /// `limits` is an explicit test policy and never production qualification.
+#[cfg(test)]
 pub(super) fn verify_transfer<V: CompactTransferValue>(
     prepared: &PreparedPublicTransfers<'_, V>,
     expected: &PublicIO,
@@ -156,6 +168,7 @@ pub(super) fn verify_transfer<V: CompactTransferValue>(
     )
 }
 
+#[cfg(test)]
 fn verify_transfer_with<V: CompactTransferValue>(
     prepared: &PreparedPublicTransfers<'_, V>,
     expected: &PublicIO,
@@ -178,6 +191,7 @@ fn verify_transfer_with<V: CompactTransferValue>(
 /// The shared AXT constructor performs all canonical binding, public-fact and
 /// mirror checks. The returned result cannot authorize handles or source roots;
 /// the surrounding caller retains those obligations and post-proof ABI checks.
+#[cfg(test)]
 pub(super) fn verify_axt_transfer<V: CompactTransferValue>(
     prepared: &PreparedPublicTransfers<'_, V>,
     expected: &PublicIO,
@@ -195,6 +209,7 @@ pub(super) fn verify_axt_transfer<V: CompactTransferValue>(
     )
 }
 
+#[cfg(test)]
 fn verify_axt_transfer_with<V: CompactTransferValue>(
     prepared: &PreparedPublicTransfers<'_, V>,
     expected: &PublicIO,
@@ -222,6 +237,7 @@ fn verify_axt_transfer_with<V: CompactTransferValue>(
 
 /// Verify candidate ordinary bytes under exact expected public inputs and caller limits.
 /// The prepared semantics cannot select AXT or omit its context through this path.
+#[cfg(test)]
 pub(super) fn verify_shake_transfer<V: CompactTransferValue>(
     prepared: &PreparedPublicTransfers<'_, V>,
     expected: &PublicIO,
@@ -242,6 +258,7 @@ pub(super) fn verify_shake_transfer<V: CompactTransferValue>(
 
 /// Verify candidate AXT bytes with every original binding, mirror and remote preimage.
 /// Successful mathematical verification grants no source-state authority or finality.
+#[cfg(test)]
 pub(super) fn verify_shake_axt_transfer<V: CompactTransferValue>(
     prepared: &PreparedPublicTransfers<'_, V>,
     expected: &PublicIO,
@@ -262,6 +279,7 @@ pub(super) fn verify_shake_axt_transfer<V: CompactTransferValue>(
     )
 }
 
+#[cfg(test)]
 fn preflight_inputs<V: CompactTransferValue>(
     prepared: &PreparedPublicTransfers<'_, V>,
     bytes: &[u8],
@@ -289,6 +307,7 @@ fn preflight_inputs<V: CompactTransferValue>(
     Ok(())
 }
 
+#[cfg(test)]
 fn require_profile(actual: ProofSemantics, required: ProofSemantics) -> Result<()> {
     if actual != required {
         return Err(Error::InvalidProofSemantics {

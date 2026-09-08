@@ -564,13 +564,13 @@ fn decimal_to_int_conversions_match_folding_for_success_and_failure() {
             "seiyaku FoldedExactConversion {{\n\
                  const decimal VALUE = {value};\n\
                  view fn run() -> int {{\n\
-                     return decimal::to_int_exact(value: VALUE) + 0;\n\
+                     return decimal::to_int_exact(VALUE) + 0;\n\
                  }}\n\
              }}"
         );
         let runtime_source = "seiyaku RuntimeExactConversion {\n\
              view fn run(decimal value) -> int {\n\
-                 return decimal::to_int_exact(value: value) + 0;\n\
+                 return decimal::to_int_exact(value) + 0;\n\
              }\n\
          }";
         let payload = format!(r#"{{"value":"{value}"}}"#);
@@ -588,12 +588,12 @@ fn decimal_to_int_conversions_match_folding_for_success_and_failure() {
         "decimal-to-int-trunc",
         "seiyaku FoldedTruncConversion {\n\
              view fn run() -> int {\n\
-                 return decimal::to_int_trunc(value: -1.9);\n\
+                 return decimal::to_int_trunc(-1.9);\n\
              }\n\
          }",
         "seiyaku RuntimeTruncConversion {\n\
              view fn run(decimal value) -> int {\n\
-                 return decimal::to_int_trunc(value: value);\n\
+                 return decimal::to_int_trunc(value);\n\
              }\n\
          }",
         r#"{"value":"-1.9"}"#,
@@ -614,7 +614,7 @@ fn decimal_to_int_conversions_match_folding_for_success_and_failure() {
             "seiyaku FoldedRoundedConversion {{\n\
                  view fn run() -> int {{\n\
                      return decimal::to_int_round(\n\
-                         value: 2.5, mode: Rounding::{mode});\n\
+                         2.5, mode: Rounding::{mode});\n\
                  }}\n\
              }}"
         );
@@ -622,7 +622,7 @@ fn decimal_to_int_conversions_match_folding_for_success_and_failure() {
             "seiyaku RuntimeRoundedConversion {{\n\
                  view fn run(decimal value) -> int {{\n\
                      return decimal::to_int_round(\n\
-                         value: value, mode: Rounding::{mode});\n\
+                         value, mode: Rounding::{mode});\n\
                  }}\n\
              }}"
         );
@@ -769,6 +769,107 @@ fn quantity_arithmetic_folding_matches_parameterized_vm_execution() {
     }
 }
 #[test]
+fn dex_samples_floor_input_and_payout_at_each_declared_precision() {
+    for (sample_name, sample) in [
+        (
+            "dex_simple",
+            include_str!("../../kotodama_lang/src/samples/dex_simple.ko"),
+        ),
+        (
+            "dex_contract",
+            include_str!("../../kotodama_lang/src/samples/dex_contract.ko"),
+        ),
+    ] {
+        // Add only a public test entrypoint. Execute the sample's real private
+        // quote helper and its declared precision/rounding policies unchanged.
+        let body = sample
+            .trim_end()
+            .strip_suffix('}')
+            .expect("one final seiyaku brace");
+        let runtime_source = format!(
+            "{body}\n view fn run(quantity reserve_in, quantity reserve_out, quantity amount_in) -> quantity {{ quote_sell(reserve_in: reserve_in, reserve_out: reserve_out, amount_in: amount_in) }}\n}}"
+        );
+        let runtime_program = compile(&runtime_source);
+        assert!(contains_extended_syscall(
+            &runtime_program,
+            syscalls::SYSCALL_QUANTITY_MUL_DIV_ROUND,
+        ));
+        for (reserve_in, reserve_out, amount_in, effective, payout) in [
+            // With integer attounits x: effective=floor(x*997/1000), then
+            // payout=floor(reserve_out*effective/(reserve_in+effective)).
+            // Omitting input floor OR rounding payout up gives ...2024.
+            (
+                "2",
+                "7",
+                "1.000000000000000019",
+                "0.997000000000000018",
+                "2.328661995328662023",
+            ),
+            // The first floor removes the whole input. Rounding only the final
+            // payout would instead produce 0.000000000996999999.
+            ("1", "1000000000", "0.000000000000000001", "0", "0"),
+        ] {
+            let payload = Json::try_new(norito::json!({
+                "reserve_in": reserve_in,
+                "reserve_out": reserve_out,
+                "amount_in": amount_in,
+            }))
+            .expect("exact decimal quantity arguments");
+            let runtime = execute_numeric_program(
+                &runtime_program,
+                Some(&payload),
+                NumericReturnKind::Quantity,
+            );
+            let expected = NumericOutcome::Value(NumericValue::Quantity(
+                payout
+                    .parse()
+                    .expect("independently calculated two-floor payout"),
+            ));
+            assert_eq!(runtime, expected, "{sample_name}, input {amount_in}");
+            let folded_effective_expression = "AMOUNT_IN.mul_div_round(multiplier: 997, divisor: 1000, scale: 18, mode: Rounding::floor)";
+            let folded_payout_expression = format!(
+                "RESERVE_OUT.mul_div_round(multiplier: decimal::from_quantity({folded_effective_expression}), divisor: decimal::from_quantity(RESERVE_IN + {folded_effective_expression}), scale: 18, mode: Rounding::floor)"
+            );
+            let folded_source = format!(
+                "seiyaku FoldedDex {{
+                    const quantity RESERVE_IN = {reserve_in};
+                    const quantity RESERVE_OUT = {reserve_out};
+                    const quantity AMOUNT_IN = {amount_in};
+                    view fn run() -> quantity {{ {folded_payout_expression} }}
+                }}"
+            );
+            let folded_program = compile(&folded_source);
+            assert!(
+                !contains_extended_syscall(
+                    &folded_program,
+                    syscalls::SYSCALL_QUANTITY_MUL_DIV_ROUND
+                ),
+                "the constant reference must exercise folding rather than the same runtime primitive",
+            );
+            let folded =
+                execute_numeric_program(&folded_program, None, NumericReturnKind::Quantity);
+            assert_eq!(folded, runtime, "{sample_name}, input {amount_in}");
+            // Pin the independently calculated first-stage reference too. The
+            // vectors also distinguish skipping that floor from the real sample.
+            let folded_effective = compile(
+                &folded_source.replace(&folded_payout_expression, folded_effective_expression),
+            );
+            assert!(
+                !contains_extended_syscall(
+                    &folded_effective,
+                    syscalls::SYSCALL_QUANTITY_MUL_DIV_ROUND
+                ),
+                "the intermediate reference must also be constant-folded",
+            );
+            assert_eq!(
+                execute_numeric_program(&folded_effective, None, NumericReturnKind::Quantity),
+                NumericOutcome::Value(NumericValue::Quantity(effective.parse().unwrap())),
+            );
+        }
+    }
+}
+
+#[test]
 fn constant_quantity_exact_division_rejects_each_failure_class_at_compile_time() {
     for (case, value, divisor, expected_code) in [
         ("zero divisor", "1", "0", "E_DIVISION_BY_ZERO"),
@@ -820,7 +921,7 @@ fn explicit_quantity_conversions_match_for_values_and_negative_failures() {
         let folded_source = format!(
             "seiyaku FoldedQuantityConversion {{\n\
                  view fn run() -> quantity {{\n\
-                     let outcome = {conversion}(value: {value});\n\
+                     let outcome = {conversion}({value});\n\
                      return match outcome {{\n\
                          Result::ok(converted) => converted,\n\
                          Result::err(_) => 0\n\
@@ -831,7 +932,7 @@ fn explicit_quantity_conversions_match_for_values_and_negative_failures() {
         let runtime_source = format!(
             "seiyaku RuntimeQuantityConversion {{\n\
                  view fn run({source_type} value) -> quantity {{\n\
-                     let outcome = {conversion}(value: value);\n\
+                     let outcome = {conversion}(value);\n\
                      return match outcome {{\n\
                          Result::ok(converted) => converted,\n\
                          Result::err(_) => 0\n\
@@ -873,22 +974,24 @@ fn explicit_quantity_conversions_match_for_values_and_negative_failures() {
         };
         let folded_source = format!(
             "seiyaku FoldedNegativeQuantityConversion {{\n\
+                 error enum ConversionCheck {{ WrongError = 1 }}\n\
                  view fn run() -> int {{\n\
-                     let outcome = {conversion}(value: {value});\n\
+                     let outcome = {conversion}({value});\n\
                      return match outcome {{\n\
-                         Result::ok(_) => 0,\n\
-                         Result::err(code) => code\n\
+                         Result::ok(_) => {{ require(false, ConversionCheck::WrongError); 0 }},\n\
+                         Result::err(failure) => {{ require(failure == NumericError::NegativeQuantity, ConversionCheck::WrongError); 1 }}\n\
                      }};\n\
                  }}\n\
              }}"
         );
         let runtime_source = format!(
             "seiyaku RuntimeNegativeQuantityConversion {{\n\
+                 error enum ConversionCheck {{ WrongError = 1 }}\n\
                  view fn run({source_type} value) -> int {{\n\
-                     let outcome = {conversion}(value: value);\n\
+                     let outcome = {conversion}(value);\n\
                      return match outcome {{\n\
-                         Result::ok(_) => 0,\n\
-                         Result::err(code) => code\n\
+                         Result::ok(_) => {{ require(false, ConversionCheck::WrongError); 0 }},\n\
+                         Result::err(failure) => {{ require(failure == NumericError::NegativeQuantity, ConversionCheck::WrongError); 1 }}\n\
                      }};\n\
                  }}\n\
              }}"
@@ -909,12 +1012,12 @@ fn explicit_quantity_conversions_match_for_values_and_negative_failures() {
         "seiyaku FoldedQuantityToDecimal {\n\
              const quantity VALUE = 1.25;\n\
              view fn run() -> decimal {\n\
-                 return decimal::from_quantity(value: VALUE) + 0.0;\n\
+                 return decimal::from_quantity(VALUE) + 0.0;\n\
              }\n\
          }",
         "seiyaku RuntimeQuantityToDecimal {\n\
              view fn run(quantity value) -> decimal {\n\
-                 return decimal::from_quantity(value: value) + 0.0;\n\
+                 return decimal::from_quantity(value) + 0.0;\n\
              }\n\
          }",
         r#"{"value":"1.25"}"#,

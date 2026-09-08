@@ -257,3 +257,12 @@ cover the complete Java publication, resource or JNI inventory.
 - Android/device, publication/provenance and CUDA hardware qualification remain
   open. The remaining capability gaps above and duplicate Java implementation have
   not yet been retired.
+
+- **Exact12 fixture owner:** the Java fixture codec and its two outer model
+  classes are retired. All seven original Java tests, including every assertion,
+  now compile against the canonical Kotlin API in
+  `PrivacyExact12FixtureJavaConsumerTest`. JVM CI runs that consumer alongside
+  the six Kotlin fixture tests; all 13 pass with the unchanged Rust-derived
+  archive. This is codec/fixture execution evidence, not JNI or native packaging
+  qualification. The privacy source guard takes its exact six C exports from
+  the manifest parity auditor's single approved inventory.

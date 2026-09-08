@@ -40,6 +40,17 @@ fn test_confidential_features(state: &State, height: u64) -> Option<Confidential
         compute_confidential_feature_digest(view.world(), view.zk(), view.sccp_registry(), height);
     (!digest.is_empty()).then_some(digest)
 }
+/// Finalize preseeded fixture definitions at their exact genesis boundary before
+/// executing a successor. Later candidates must retain these registration tokens.
+fn finalize_test_genesis_assets(state: &State, genesis: &SignedBlock) {
+    assert_eq!(genesis.header().height().get(), 1);
+    assert!(genesis.header().prev_block_hash().is_none());
+    assert!(state.block_hashes.view().is_empty());
+    state
+        .block(genesis.header())
+        .commit_world_overlay_for_testing()
+        .expect("fixture genesis asset registrations must finalize before successor execution");
+}
 fn test_world_with_assets<D, A, Ad, As, N>(
     domains: D,
     accounts: A,

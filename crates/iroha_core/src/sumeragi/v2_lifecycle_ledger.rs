@@ -2682,6 +2682,8 @@ enum ProductionLifecycleStartupErrorKindV1 {
     ServePayload(#[source] CertifiedServePayloadStoreError),
     #[error("the complete body-pipeline census could not enter its startup phase")]
     InvalidBodyPipelineCensus,
+    #[error("authenticated body-pipeline adapter replay failed: {0}")]
+    BodyPipelineAdapterReplay(&'static str),
     #[error("lifecycle recovery assembly failed: {0}")]
     Recovery(#[source] LifecycleRecoveryAssemblyError),
     #[error("the recovered body-pipeline census cannot enter an empty registry")]
@@ -2840,9 +2842,9 @@ impl AuthenticatedDurableCertifiedBodyPipelineStorageRecoveryCutV1 {
         })?;
         let (body_pipeline, adapter_startup) = body_pipeline
             .replay_adapter_startup(adapter_startup)
-            .map_err(|_| {
+            .map_err(|reason| {
                 ProductionLifecycleStartupErrorV1::new(
-                    ProductionLifecycleStartupErrorKindV1::InvalidBodyPipelineCensus,
+                    ProductionLifecycleStartupErrorKindV1::BodyPipelineAdapterReplay(reason),
                 )
             })?;
         let mut registry = LifecycleWorkRegistryHolder::empty();

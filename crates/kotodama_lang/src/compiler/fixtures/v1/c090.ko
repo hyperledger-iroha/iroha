@@ -2,7 +2,7 @@
 seiyaku CompilerFixture {
 
 fn main() {
-  let _bad = crypto::sm3(1);
+  let _bad = crypto::sm3( 1);
 }
 
 }

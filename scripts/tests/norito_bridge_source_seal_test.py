@@ -64,6 +64,7 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
             "scripts/check_mobile_sdk_artifacts.sh": "#!/bin/sh\n",
             "scripts/exec_with_file_lock.py": "#!/usr/bin/env python3\n",
             "scripts/norito_bridge_source_seal.py": "# fixture\n",
+            "scripts/normalize_pqcrypto_archive.py": "# archive normalization fixture\n",
             "scripts/norito_bridge_apple_slice_handoff.py": "#!/usr/bin/env python3\n",
             "scripts/package_mobile_sdk_artifacts.sh": "#!/bin/sh\n",
             "scripts/render_norito_bridge_podspec.py": "#!/usr/bin/env python3\n",
@@ -113,6 +114,7 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
         self.assertIn("scripts/exec_with_file_lock.py", apple)
         self.assertIn("scripts/archive_norito_xcframework.py", apple)
         self.assertIn("scripts/norito_bridge_apple_slice_handoff.py", apple)
+        self.assertIn("scripts/normalize_pqcrypto_archive.py", apple)
         self.assertIn("scripts/package_mobile_sdk_artifacts.sh", apple)
         self.assertIn("scripts/render_norito_bridge_podspec.py", apple)
         self.assertIn("scripts/update_norito_bridge_swift_pins.py", apple)
@@ -167,6 +169,16 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
         self.assertNotIn(relative, seal.listed_files(self.root, inputs))
         self.assertNotEqual(original, seal.fingerprint(self.root, inputs))
         self.assertIn(f" D {relative}", seal.status(self.root, inputs))
+
+    def test_apple_fingerprint_authenticates_archive_normalizer_logic(self) -> None:
+        inputs = self.inputs("apple")
+        original = seal.fingerprint(self.root, inputs)
+        normalizer = self.root / "scripts/normalize_pqcrypto_archive.py"
+        normalizer.write_text(
+            normalizer.read_text(encoding="utf-8") + "# changed normalization logic\n",
+            encoding="utf-8",
+        )
+        self.assertNotEqual(original, seal.fingerprint(self.root, inputs))
 
     def test_selected_lock_is_root_lock_in_metadata_and_fingerprint(self) -> None:
         root_lock = self.root / "Cargo.lock"

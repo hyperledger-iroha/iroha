@@ -635,7 +635,7 @@ fn runtime_dag_decode_allocation_budget_is_scaled_and_absolutely_capped() {
     );
 }
 #[test]
-fn runtime_dag_decode_allocation_floor_admits_one_composite_state_but_rejects_two() {
+fn runtime_dag_decode_allocation_floor_admits_stack_state_but_rejects_owned_composite() {
     let state = FencedPrivacyStateV1 {
         version: GOVERNANCE_FENCED_PRIVACY_STATE_VERSION_V1,
         pending: None,
@@ -653,10 +653,13 @@ fn runtime_dag_decode_allocation_floor_admits_one_composite_state_but_rejects_tw
         decode_canonical_runtime_dag(&bytes, "empty fenced privacy state")
             .expect("decode production empty fenced privacy state");
     assert_eq!(decoded, state);
-    let composite = (state.clone(), state);
+    // Empty optional fields need no retained allocation when decoded on the stack.
+    // A vector must still charge the full owned element width before reserving it.
+    let count = DAG_DECODE_MIN_BYTES_V1 / std::mem::size_of::<FencedPrivacyStateV1>() + 1;
+    let composite = vec![state; count];
     let composite_bytes =
-        encode_governance_two_slot_value_v1(&composite, "two empty fenced privacy states")
-            .expect("encode two empty fenced privacy states");
+        encode_governance_two_slot_value_v1(&composite, "owned empty fenced privacy states")
+            .expect("encode owned empty fenced privacy states");
     assert!(
         composite_bytes.len()
             <= DAG_DECODE_MIN_BYTES_V1 / GOVERNANCE_RUNTIME_DAG_DECODE_ALLOCATION_MULTIPLIER_V1,
@@ -666,11 +669,16 @@ fn runtime_dag_decode_allocation_floor_admits_one_composite_state_but_rejects_tw
         runtime_dag_decode_allocation_limit(composite_bytes.len()),
         DAG_DECODE_MIN_BYTES_V1
     );
-    let error = decode_canonical_runtime_dag::<(FencedPrivacyStateV1, FencedPrivacyStateV1)>(
+    assert_eq!(
+        norito::decode_canonical::<Vec<FencedPrivacyStateV1>>(&composite_bytes)
+            .expect("owned composite is valid canonical wire under the general codec budget"),
+        composite
+    );
+    let error = decode_canonical_runtime_dag::<Vec<FencedPrivacyStateV1>>(
         &composite_bytes,
-        "two empty fenced privacy states",
+        "owned empty fenced privacy states",
     )
-    .expect_err("two composite records must exceed the bounded allocation floor");
+    .expect_err("owned element storage must exceed the bounded allocation floor");
     let message = error.to_string();
     assert!(
         message.contains("cumulative allocation") && message.contains("exceeds decode limit 2048"),

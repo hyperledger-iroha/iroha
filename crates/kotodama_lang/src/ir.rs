@@ -153,6 +153,10 @@ pub enum WideNumericKind {
 /// Rounded exact-decimal operation selected by the typed source method.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NumericRoundOp {
+    /// Fused `decimal * decimal / decimal -> decimal`, rounded once.
+    DecimalMulDiv,
+    /// Fused `quantity * decimal / decimal -> quantity`, rounded once.
+    QuantityMulDiv,
     /// `decimal / decimal -> decimal`.
     DecimalDiv,
     /// `quantity / decimal -> quantity`.
@@ -266,6 +270,8 @@ pub enum Instr {
     NumericRound {
         dest: Temp,
         dividend: Temp,
+        /// Present for a fused multiplication/division operation.
+        multiplier: Option<Temp>,
         divisor: Temp,
         scale: Temp,
         mode: Temp,
@@ -533,6 +539,7 @@ pub enum Instr {
     /// This is a non-ZK assertion primitive intended for fast on-chain checks.
     AbortIf {
         cond: Temp,
+        descriptor: Temp,
         code: Temp,
     },
     /// Log an info message (development only).
@@ -846,6 +853,7 @@ pub enum Instr {
         actor: Temp,
         entrypoint: Temp,
         payload: Temp,
+        expectation: Temp,
     },
     /// Test-only actor registry lookup helpers.
     ActorAccount {
@@ -999,21 +1007,21 @@ pub enum Instr {
     StateDel {
         path: Temp,
     },
-    /// Durable state key enumeration: r10 = &NoritoBytes(StatePath prefix);
-    /// r11 = offset; r12 = limit.
-    StateKeys {
-        dest: Temp,
-        prefix: Temp,
-        offset: Temp,
+    /// Bounded durable-state scan. The four results are the selected paths,
+    /// continuation cursor (or zero), live count, and examined candidate count.
+    StateScan {
+        page: Temp,
+        next: Temp,
+        count: Temp,
+        examined: Temp,
+        base: Temp,
+        after: Temp,
         limit: Temp,
-        /// Exact source scan provenance retained through SSA optimization.
-        ///
-        /// Direct `state::keys` calls carry `None`; only a semantically validated bounded scan of a
-        /// declared top-level StateMap carries a manifest hint.
-        dynamic_access_hint: Option<DynamicAccessHint>,
+        /// Exact declared-map provenance; every scan examines at most 64 candidates.
+        dynamic_access_hint: DynamicAccessHint,
     },
-    /// Decode a canonical map key from a `Vec<StatePath>` page returned by
-    /// `STATE_KEYS`. The declared map base remains a `Name`.
+    /// Decode a canonical map key from a `Vec<StatePath>` scan result.
+    /// The declared map base remains a `Name`.
     StateMapKeyAt {
         dest: Temp,
         page: Temp,
@@ -1284,6 +1292,7 @@ fn pointer_kind_for_type(ty: &Type) -> Option<DataRefKind> {
         Type::Decimal => Some(DataRefKind::Decimal),
         Type::Quantity => Some(DataRefKind::Quantity),
         Type::String | Type::Bytes => Some(DataRefKind::Blob),
+        Type::StateCursor(_) => Some(DataRefKind::NoritoBytes),
         _ => None,
     }
 }
@@ -1369,7 +1378,12 @@ fn collect_state_value_words(
             let item = emit_tuple_get(ctx, value, index);
             collect_state_value_words(ctx, item, item_ty, words)
         }),
-        Type::Option(_) | Type::Result(_, _) | Type::List(_, _) => {
+        Type::Unit
+        | Type::ErrorEnum(_)
+        | Type::Option(_)
+        | Type::Result(_, _)
+        | Type::List(_, _)
+        | Type::StateCursor(_) => {
             words.push(value);
             true
         }
@@ -1533,9 +1547,12 @@ fn rebuild_state_value_from_table(
             let dest = emit_tuple_pack(ctx, items);
             Some(dest)
         }
-        Type::Option(_) | Type::Result(_, _) | Type::List(_, _) => {
-            load_state_value_word(ctx, table, index)
-        }
+        Type::Unit
+        | Type::ErrorEnum(_)
+        | Type::Option(_)
+        | Type::Result(_, _)
+        | Type::List(_, _)
+        | Type::StateCursor(_) => load_state_value_word(ctx, table, index),
         leaf => {
             state_value_kind_for_type(&leaf)?;
             load_state_value_word(ctx, table, index)
@@ -2292,6 +2309,51 @@ fn lower_list_try_set(
     ctx.start_block(end);
     result
 }
+fn lower_list_mutation_result(
+    ctx: &mut LowerCtx,
+    success: Temp,
+    error_code: i64,
+    result_ty: &Type,
+) -> Temp {
+    let code = emit_i64_const(ctx, error_code);
+    let unit = emit_i64_const(ctx, 0);
+    if *result_ty == Type::Unit {
+        let encoded =
+            ivm_abi::codec::encode_canonical_norito(&ivm_abi::error_types::list_error_type())
+                .expect("compiler-owned ListError schema encodes");
+        let descriptor = emit_data_ref(
+            ctx,
+            DataRefKind::NoritoBytes,
+            format!("0x{}", hex::encode(encoded)),
+        );
+        let cond = emit_unary(ctx, UnaryOp::Not, success);
+        ctx.current_instr(Instr::AbortIf {
+            cond,
+            descriptor,
+            code,
+        });
+        return unit;
+    }
+    let ok = ctx.new_label();
+    let err = ctx.new_label();
+    let end = ctx.new_label();
+    let result = ctx.new_temp();
+    ctx.finish_current(Terminator::Branch {
+        cond: success,
+        then_bb: ok,
+        else_bb: err,
+    });
+    ctx.start_block(ok);
+    let value = emit_sum_value(ctx, result_ty, 1, Some(unit));
+    emit_copy(ctx, result, value);
+    ctx.finish_current(Terminator::Jump(end));
+    ctx.start_block(err);
+    let value = emit_sum_value(ctx, result_ty, 0, Some(code));
+    emit_copy(ctx, result, value);
+    ctx.finish_current(Terminator::Jump(end));
+    ctx.start_block(end);
+    result
+}
 fn lower_list_try_push(
     ctx: &mut LowerCtx,
     args: &[TypedExpr],
@@ -2517,8 +2579,14 @@ fn lower_list_intrinsic(
             emit_int_from_u64(ctx, len)
         }
         semantic::LIST_GET_INTRINSIC => lower_list_get(ctx, args, result_ty, vars),
-        semantic::LIST_TRY_SET_INTRINSIC => lower_list_try_set(ctx, args, vars),
-        semantic::LIST_TRY_PUSH_INTRINSIC => lower_list_try_push(ctx, args, vars),
+        semantic::LIST_SET_INTRINSIC | semantic::LIST_TRY_SET_INTRINSIC => {
+            let success = lower_list_try_set(ctx, args, vars);
+            lower_list_mutation_result(ctx, success, 1, result_ty)
+        }
+        semantic::LIST_PUSH_INTRINSIC | semantic::LIST_TRY_PUSH_INTRINSIC => {
+            let success = lower_list_try_push(ctx, args, vars);
+            lower_list_mutation_result(ctx, success, 2, result_ty)
+        }
         semantic::LIST_POP_INTRINSIC => lower_list_pop(ctx, args, result_ty, vars),
         semantic::LIST_CONTAINS_INTRINSIC => lower_list_contains(ctx, args, vars),
         semantic::LIST_TAKE_INTRINSIC => lower_list_take(ctx, args, result_ty, vars),
@@ -2533,6 +2601,12 @@ fn lower_numeric_round_intrinsic(
     vars: &mut HashMap<String, Temp>,
 ) -> Option<Temp> {
     let (op, result_kind) = match name {
+        semantic::DECIMAL_MUL_DIV_ROUND_INTRINSIC => {
+            (NumericRoundOp::DecimalMulDiv, WideNumericKind::Decimal)
+        }
+        semantic::QUANTITY_MUL_DIV_ROUND_INTRINSIC => {
+            (NumericRoundOp::QuantityMulDiv, WideNumericKind::Quantity)
+        }
         semantic::DECIMAL_DIV_ROUND_INTRINSIC => {
             (NumericRoundOp::DecimalDiv, WideNumericKind::Decimal)
         }
@@ -2544,7 +2618,11 @@ fn lower_numeric_round_intrinsic(
         }
         _ => return None,
     };
-    if args.len() != 4 {
+    let fused = matches!(
+        op,
+        NumericRoundOp::DecimalMulDiv | NumericRoundOp::QuantityMulDiv
+    );
+    if args.len() != if fused { 5 } else { 4 } {
         ctx.record_error(
             "internal error: rounded numeric division requires dividend, divisor, scale, and mode"
                 .into(),
@@ -2552,13 +2630,16 @@ fn lower_numeric_round_intrinsic(
         return Some(emit_i64_const(ctx, 0));
     }
     let dividend = lower_expr(ctx, &args[0], vars);
-    let divisor = lower_expr(ctx, &args[1], vars);
-    let scale = lower_expr(ctx, &args[2], vars);
-    let mode = lower_expr_as_u64(ctx, &args[3], vars);
+    let multiplier = fused.then(|| lower_expr(ctx, &args[1], vars));
+    let offset = usize::from(fused);
+    let divisor = lower_expr(ctx, &args[1 + offset], vars);
+    let scale = lower_expr(ctx, &args[2 + offset], vars);
+    let mode = lower_expr_as_u64(ctx, &args[3 + offset], vars);
     let dest = ctx.new_temp();
     ctx.current_instr(Instr::NumericRound {
         dest,
         dividend,
+        multiplier,
         divisor,
         scale,
         mode,
@@ -2594,10 +2675,45 @@ fn lower_decimal_to_int_intrinsic(
     Some(dest)
 }
 fn sum_pattern_tag(pattern: &semantic::TypedSumPattern) -> u64 {
-    match pattern.pattern.variant {
+    match &pattern.pattern.variant {
         SumVariant::OptionNone | SumVariant::ResultErr => 0,
         SumVariant::OptionSome | SumVariant::ResultOk => 1,
+        SumVariant::Error { .. } => u64::from(pattern.error_code.expect("resolved error variant")),
     }
+}
+fn pattern_matches(ctx: &mut LowerCtx, pattern: &semantic::TypedSumPattern, value: Temp) -> Temp {
+    let observed = if pattern.error_code.is_some() {
+        value
+    } else {
+        load_sum_tag(ctx, value)
+    };
+    let expected = emit_i64_const(ctx, sum_pattern_tag(pattern) as i64);
+    emit_binary(ctx, BinaryOp::Eq, observed, expected)
+}
+fn branch_on_sum_pattern(
+    ctx: &mut LowerCtx,
+    pattern: &semantic::TypedSumPattern,
+    value: Temp,
+    matched: Label,
+    unmatched: Label,
+) {
+    let (cond, then_bb, else_bb) = match &pattern.pattern.variant {
+        // Option and Result use canonical zero/one tags. Branch on the tag
+        // directly, as exhaustive match does, without adding a comparison.
+        SumVariant::OptionSome | SumVariant::ResultOk => {
+            (load_sum_tag(ctx, value), matched, unmatched)
+        }
+        SumVariant::OptionNone | SumVariant::ResultErr => {
+            (load_sum_tag(ctx, value), unmatched, matched)
+        }
+        // Nominal errors have explicit nonzero codes, not boolean tags.
+        SumVariant::Error { .. } => (pattern_matches(ctx, pattern, value), matched, unmatched),
+    };
+    ctx.finish_current(Terminator::Branch {
+        cond,
+        then_bb,
+        else_bb,
+    });
 }
 fn bind_sum_pattern(
     ctx: &mut LowerCtx,
@@ -2621,7 +2737,7 @@ fn propagation_match_return<'a>(
     return_ty: &Type,
     arms: &'a [semantic::TypedMatchArm],
 ) -> Option<(&'a semantic::TypedMatchArm, &'a semantic::TypedMatchArm)> {
-    if arms.len() != 2 {
+    if arms.len() != 2 || matches!(value_ty, Type::ErrorEnum(_)) {
         return None;
     }
     let success = arms.iter().find(|arm| sum_pattern_tag(&arm.pattern) == 1)?;
@@ -3082,7 +3198,8 @@ fn lower_function_named(
             .unwrap_or(Type::Unit);
         finish_value_return(&mut ctx, value, &tail_ty);
     } else {
-        ctx.finish_current(Terminator::Return(None));
+        let unit = emit_i64_const(&mut ctx, 0);
+        ctx.finish_current(Terminator::Return(Some(unit)));
     }
     let function = Function {
         name: symbol_name.to_string(),
@@ -3201,7 +3318,8 @@ fn lower_entrypoint_wrapper(
             args,
             dest: None,
         });
-        Terminator::Return(None)
+        let unit = emit_i64_const(&mut ctx, 0);
+        Terminator::Return(Some(unit))
     } else if let Some(word_types) = function_value_word_types(return_ty) {
         let mut dests = Vec::with_capacity(word_types.len());
         for _ in word_types {
@@ -3387,6 +3505,11 @@ fn append_entrypoint_value_type_nodes(
         EntrypointValueTypeNodeV1 as Node,
     };
     match semantic::resolve_struct_type(ty) {
+        Type::Unit => nodes.push(Node::Unit),
+        Type::ErrorEnum(descriptor) => nodes.push(Node::Error((*descriptor).clone())),
+        Type::StateCursor(key) => {
+            nodes.push(Node::StateCursor(entrypoint_value_kind(value_name, &key)?))
+        }
         Type::Struct { name, fields } => {
             nodes.push(Node::Struct(StructNode {
                 name,
@@ -3435,17 +3558,12 @@ fn entrypoint_value_type(
     }
     Ok(ty)
 }
-/// Build the exact recursive schema for a non-unit public return value.
+/// Build the exact recursive schema for every public return value, including Unit.
 pub(crate) fn entrypoint_return_schema(
     entrypoint_name: &str,
     ty: Option<&Type>,
 ) -> Result<Option<ivm_abi::entrypoint::EntrypointValueTypeV1>, String> {
-    let Some(ty) = ty else {
-        return Ok(None);
-    };
-    if matches!(semantic::resolve_struct_type(ty), Type::Unit) {
-        return Ok(None);
-    }
+    let ty = ty.unwrap_or(&Type::Unit);
     let schema = entrypoint_value_type(entrypoint_name, ty)?;
     let words = schema
         .word_count()
@@ -3635,7 +3753,8 @@ fn collect_expr_reads(expr: &TypedExpr, reads: &mut BTreeSet<String>) {
         semantic::ExprKind::Ident(name) => {
             reads.insert(name.clone());
         }
-        semantic::ExprKind::IntLiteral(_)
+        semantic::ExprKind::ErrorValue(_)
+        | semantic::ExprKind::IntLiteral(_)
         | semantic::ExprKind::DecimalLiteral { .. }
         | semantic::ExprKind::Bool(_)
         | semantic::ExprKind::String(_)
@@ -3910,13 +4029,7 @@ fn lower_expression_block(
         seal_unreachable_continuation(ctx);
         return None;
     }
-    if value.is_none() {
-        ctx.record_error(
-            "internal error: non-divergent expression block has no value-producing tail".into(),
-        );
-        ctx.current = None;
-    }
-    value
+    Some(value.unwrap_or_else(|| emit_i64_const(ctx, 0)))
 }
 fn seal_unreachable_continuation(ctx: &mut LowerCtx) {
     if let Some(label) = ctx.current.as_ref().map(|block| block.label) {
@@ -3946,9 +4059,13 @@ fn lower_statement(
     match stmt {
         TypedStatement::Let { name, value } => {
             let t = lower_expr(ctx, value, vars);
-            vars.insert(name.clone(), t);
-            if ctx.state_name_literals.contains_key(name) {
+            if ctx.state_name_literals.contains_key(name)
+                || ctx.state_runtime_roots.contains_key(name)
+            {
                 emit_state_set(ctx, name, &value.ty, t);
+                ctx.state_value_cache.insert(name.clone(), t);
+            } else {
+                vars.insert(name.clone(), t);
             }
         }
         TypedStatement::Expr(e) => {
@@ -3994,20 +4111,10 @@ fn lower_statement(
         } => {
             let entry_env = vars.clone();
             let sum = lower_expr(ctx, value, vars);
-            let tag = load_sum_tag(ctx, sum);
             let then_label = ctx.new_label();
             let else_label = ctx.new_label();
             let end_label = ctx.new_label();
-            let (tag_one, tag_zero) = if sum_pattern_tag(pattern) == 1 {
-                (then_label, else_label)
-            } else {
-                (else_label, then_label)
-            };
-            ctx.finish_current(Terminator::Branch {
-                cond: tag,
-                then_bb: tag_one,
-                else_bb: tag_zero,
-            });
+            branch_on_sum_pattern(ctx, pattern, sum, then_label, else_label);
             ctx.start_block(then_label);
             let mut then_vars = entry_env.clone();
             bind_sum_pattern(ctx, pattern, sum, &mut then_vars);
@@ -4148,7 +4255,8 @@ fn lower_statement(
                 let value = lower_expr(ctx, e, vars);
                 finish_value_return(ctx, value, &e.ty);
             } else {
-                ctx.finish_current(Terminator::Return(None));
+                let unit = emit_i64_const(ctx, 0);
+                ctx.finish_current(Terminator::Return(Some(unit)));
             }
             // Start a fresh (unreachable) block to continue lowering subsequent statements gracefully
             let cont = ctx.new_label();
@@ -4159,44 +4267,15 @@ fn lower_statement(
             value,
             map,
             body,
-            start,
-            bound,
-            bound_kind,
         } => {
-            if let Some(base_name) = state_map_base_name(map)
-                && let Some(spec) = ctx.state_map_configs.get(&base_name).cloned()
-                && key_codec_for_type(&spec.key).is_some()
-            {
-                lower_state_foreach_map(
-                    ctx,
-                    key,
-                    value,
-                    map,
-                    body,
-                    *start,
-                    *bound,
-                    *bound_kind,
-                    &base_name,
-                    &spec.key,
-                    &spec.value,
-                    vars,
-                    live_after,
-                );
+            let Type::List(element, _) = semantic::resolve_struct_type(&map.ty) else {
+                ctx.record_error("internal error: bounded iteration requires a List".into());
                 return;
-            }
-            // Deterministic bounded lowering using a compact loop (stride = 16 bytes per pair).
+            };
+            debug_assert!(value.is_none());
             let base = lower_expr(ctx, map, vars);
-            // In-memory maps use a fixed single-entry layout; clamp iterations to 1 to avoid
-            // reading past the allocated pair.
-            let max_iters = bound.unwrap_or(1).min(1);
-            let max_iters_i64 = (max_iters.min(i64::MAX as usize)) as i64;
-            // Non-state maps always start at index 0; clamp defensively to avoid OOB loads.
-            debug_assert_eq!(*start, 0);
-            let base_start_i64: i64 = 0;
-            let limit_value = base_start_i64.saturating_add(max_iters_i64);
-            let index = emit_i64_const(ctx, base_start_i64);
-            let limit = emit_i64_const(ctx, limit_value);
-            let sixteen = emit_i64_const(ctx, 16);
+            let limit = emit_load64_imm(ctx, base, 0);
+            let index = emit_i64_const(ctx, 0);
             let one = emit_i64_const(ctx, 1);
             let loop_label = ctx.new_label();
             let body_label = ctx.new_label();
@@ -4222,14 +4301,8 @@ fn lower_statement(
             });
             ctx.start_block(body_label);
             let mut body_vars = loop_env;
-            let offset_bytes = emit_binary(ctx, BinaryOp::Mul, index, sixteen);
-            let addr = emit_binary(ctx, BinaryOp::Add, base, offset_bytes);
-            let key_temp = emit_load64_imm(ctx, addr, 0);
-            let value_temp = emit_load64_imm(ctx, addr, 8);
+            let key_temp = load_list_element(ctx, base, index, &element);
             body_vars.insert(key.clone(), key_temp);
-            if let Some(val_name) = value {
-                body_vars.insert(val_name.clone(), value_temp);
-            }
             let mut body_live_after = loop_reads;
             body_live_after.extend(live_after.iter().cloned());
             lower_block_with_live_after(ctx, body, &mut body_vars, &body_live_after);
@@ -4267,53 +4340,6 @@ fn lower_statement(
         }
     }
 }
-#[allow(clippy::too_many_arguments)]
-fn lower_state_foreach_map(
-    ctx: &mut LowerCtx,
-    key: &str,
-    value: &Option<String>,
-    _map: &TypedExpr,
-    body: &TypedBlock,
-    start: u64,
-    bound: Option<usize>,
-    bound_kind: semantic::StateMapIterationBoundKind,
-    base_name: &str,
-    key_ty: &Type,
-    value_ty: &Type,
-    vars: &mut HashMap<String, Temp>,
-    live_after: &BTreeSet<String>,
-) {
-    // A statically empty scan is a source-level no-op. In particular, do not
-    // issue STATE_KEYS with limit zero: the host would still traverse and
-    // charge for the matching durable-state prefix.
-    if bound == Some(0) {
-        return;
-    }
-    let offset = emit_i64_const(ctx, i64::from_le_bytes(start.to_le_bytes()));
-    let limit = emit_i64_const(ctx, bound.unwrap_or(0).min(i64::MAX as usize) as i64);
-    let dynamic_access_hint = DynamicAccessHint {
-        base_key: format!("{}{base_name}", semantic::V1_DYNAMIC_ACCESS_BASE_PREFIX),
-        key_type: semantic::type_name(key_ty),
-        bound_kind: bound_kind.as_str().to_owned(),
-        max_keys: bound
-            .and_then(|value| u32::try_from(value).ok())
-            .unwrap_or_default(),
-    };
-    lower_state_foreach_page(
-        ctx,
-        key,
-        value,
-        body,
-        offset,
-        limit,
-        dynamic_access_hint,
-        base_name,
-        key_ty,
-        value_ty,
-        vars,
-        live_after,
-    );
-}
 fn decode_state_map_key(ctx: &mut LowerCtx, key_blob: Temp, key_ty: &Type) -> Option<Temp> {
     match semantic::resolve_struct_type(key_ty) {
         Type::Bool => {
@@ -4341,50 +4367,91 @@ fn decode_state_map_key(ctx: &mut LowerCtx, key_blob: Temp, key_ty: &Type) -> Op
         _ => None,
     }
 }
-#[allow(clippy::too_many_arguments)]
-fn lower_state_foreach_page(
+fn lower_state_page_intrinsic(
     ctx: &mut LowerCtx,
-    key_name: &str,
-    value_name: &Option<String>,
-    body: &TypedBlock,
-    offset: Temp,
-    limit: Temp,
-    dynamic_access_hint: DynamicAccessHint,
-    base_name: &str,
-    key_ty: &Type,
-    value_ty: &Type,
+    name: &str,
+    args: &[TypedExpr],
+    result_ty: &Type,
     vars: &mut HashMap<String, Temp>,
-    live_after: &BTreeSet<String>,
-) {
-    let prefix = build_state_root_path(ctx, base_name);
-    let base = build_state_base_name(ctx, base_name);
-    let page = ctx.new_temp();
-    ctx.current_instr(Instr::StateKeys {
-        dest: page,
-        prefix,
-        offset,
-        limit,
-        dynamic_access_hint: Some(dynamic_access_hint),
+) -> Option<Temp> {
+    if !matches!(
+        name,
+        semantic::STATE_PAGE_INTRINSIC | semantic::STATE_TAKE_INTRINSIC
+    ) {
+        return None;
+    }
+    let base_name = state_map_base_name(&args[0]).expect("validated declared StateMap scan");
+    let Type::StateMap(key_ty, value_ty) = semantic::resolve_struct_type(&args[0].ty) else {
+        unreachable!("validated StateMap scan receiver");
+    };
+    let take = name == semantic::STATE_TAKE_INTRINSIC;
+    let list_ty = if take {
+        result_ty.clone()
+    } else {
+        let Type::Struct { fields, .. } = semantic::resolve_struct_type(result_ty) else {
+            unreachable!("validated StatePage result");
+        };
+        fields[0].1.clone()
+    };
+    let option_ty = args[1].ty.clone();
+    let option = lower_expr(ctx, &args[1], vars);
+    let tag = load_sum_tag(ctx, option);
+    let after = ctx.new_temp();
+    let some_bb = ctx.new_label();
+    let none_bb = ctx.new_label();
+    let scan_bb = ctx.new_label();
+    ctx.finish_current(Terminator::Branch {
+        cond: tag,
+        then_bb: some_bb,
+        else_bb: none_bb,
     });
+    ctx.start_block(some_bb);
+    let cursor = load_sum_payload(ctx, option, &Type::StateCursor(key_ty.clone()));
+    ctx.current_instr(Instr::Copy {
+        dest: after,
+        src: cursor,
+    });
+    ctx.finish_current(Terminator::Jump(scan_bb));
+    ctx.start_block(none_bb);
+    let zero = emit_i64_const(ctx, 0);
+    ctx.current_instr(Instr::Copy {
+        dest: after,
+        src: zero,
+    });
+    ctx.finish_current(Terminator::Jump(scan_bb));
+    ctx.start_block(scan_bb);
+    let limit = lower_expr_as_u64(ctx, &args[2], vars);
+    let path = build_state_root_path(ctx, &base_name);
+    let base = build_state_base_name(ctx, &base_name);
+    let page = ctx.new_temp();
+    let next = ctx.new_temp();
+    let count = ctx.new_temp();
+    let examined = ctx.new_temp();
+    ctx.current_instr(Instr::StateScan {
+        page,
+        next,
+        count,
+        examined,
+        base: path,
+        after,
+        limit,
+        dynamic_access_hint: DynamicAccessHint {
+            base_key: format!("{}{base_name}", semantic::V1_DYNAMIC_ACCESS_BASE_PREFIX),
+            key_type: semantic::type_name(&key_ty),
+            bound_kind: if take { "take" } else { "page" }.into(),
+            max_keys: 64,
+        },
+    });
+    let items = emit_list_allocation(ctx, &list_ty, 0);
+    emit_store64_imm(ctx, items, 0, count);
     let index = emit_i64_const(ctx, 0);
     let one = emit_i64_const(ctx, 1);
     let loop_label = ctx.new_label();
     let body_label = ctx.new_label();
-    let step_label = ctx.new_label();
     let exit_label = ctx.new_label();
-    let entry_vars = vars.clone();
-    let mut mutations = BTreeSet::new();
-    collect_block_mutations(body, &mut mutations);
-    let mut loop_reads = BTreeSet::new();
-    collect_block_reads(body, &mut loop_reads);
-    let phi_names = loop_phi_names(vars, &mutations, &loop_reads, live_after);
-    let loop_phi = initialize_loop_phi(ctx, vars, &phi_names);
-    let loop_env = env_with_loop_phi(&entry_vars, &loop_phi);
-    ctx.push_loop(step_label, exit_label);
-    ctx.set_loop_phi(loop_phi.clone());
     ctx.finish_current(Terminator::Jump(loop_label));
     ctx.start_block(loop_label);
-    let cond_t = emit_binary(ctx, BinaryOp::Lt, index, limit);
+    let cond_t = emit_binary(ctx, BinaryOp::Lt, index, count);
     ctx.finish_current(Terminator::Branch {
         cond: cond_t,
         then_bb: body_label,
@@ -4398,35 +4465,13 @@ fn lower_state_foreach_page(
         base,
         index,
     });
-    let zero = emit_i64_const(ctx, 0);
-    let has_key = emit_binary(ctx, BinaryOp::Ne, key_blob, zero);
-    let present_bb = ctx.new_label();
-    ctx.finish_current(Terminator::Branch {
-        cond: has_key,
-        then_bb: present_bb,
-        else_bb: exit_label,
-    });
-    ctx.start_block(present_bb);
-    let key_temp = decode_state_map_key(ctx, key_blob, key_ty).unwrap_or_else(|| {
-        ctx.record_error("durable StateMap iteration key type is not decodable".into());
-        zero
-    });
-    let value_temp = lower_state_map_get_value(ctx, base_name, key_temp, key_ty, value_ty)
-        .unwrap_or_else(|| {
-            ctx.record_error("durable StateMap iteration value type is not decodable".into());
-            zero
-        });
-    let mut body_vars = loop_env;
-    body_vars.insert(key_name.to_string(), key_temp);
-    if let Some(val_name) = value_name {
-        body_vars.insert(val_name.clone(), value_temp);
-    }
-    let mut body_live_after = loop_reads;
-    body_live_after.extend(live_after.iter().cloned());
-    lower_block_with_live_after(ctx, body, &mut body_vars, &body_live_after);
-    copy_env_to_loop_phi(ctx, &body_vars);
-    ctx.finish_current(Terminator::Jump(step_label));
-    ctx.start_block(step_label);
+    let key_temp =
+        decode_state_map_key(ctx, key_blob, &key_ty).expect("validated StateMap key decoder");
+    let value_temp = lower_state_map_get_value(ctx, &base_name, key_temp, &key_ty, &value_ty)
+        .expect("validated StateMap value decoder");
+    let element = Type::Tuple(vec![*key_ty, *value_ty]);
+    let pair = emit_tuple_pack(ctx, vec![key_temp, value_temp]);
+    store_list_element(ctx, items, index, pair, &element);
     ctx.current_instr(Instr::Binary {
         dest: index,
         op: BinaryOp::Add,
@@ -4434,10 +4479,35 @@ fn lower_state_foreach_page(
         right: one,
     });
     ctx.finish_current(Terminator::Jump(loop_label));
-    ctx.pop_loop();
     ctx.start_block(exit_label);
-    *vars = entry_vars;
-    apply_loop_phi(vars, &loop_phi);
+    if take {
+        return Some(items);
+    }
+    let some_bb = ctx.new_label();
+    let none_bb = ctx.new_label();
+    let end_bb = ctx.new_label();
+    let continuation = ctx.new_temp();
+    ctx.finish_current(Terminator::Branch {
+        cond: next,
+        then_bb: some_bb,
+        else_bb: none_bb,
+    });
+    ctx.start_block(some_bb);
+    let some = emit_sum_value(ctx, &option_ty, 1, Some(next));
+    ctx.current_instr(Instr::Copy {
+        dest: continuation,
+        src: some,
+    });
+    ctx.finish_current(Terminator::Jump(end_bb));
+    ctx.start_block(none_bb);
+    let none = emit_sum_value(ctx, &option_ty, 0, None);
+    ctx.current_instr(Instr::Copy {
+        dest: continuation,
+        src: none,
+    });
+    ctx.finish_current(Terminator::Jump(end_bb));
+    ctx.start_block(end_bb);
+    Some(emit_tuple_pack(ctx, vec![items, continuation]))
 }
 fn lower_expr_as_i64(
     ctx: &mut LowerCtx,
@@ -4753,22 +4823,56 @@ fn lower_transfer_batch_call(
     args: &[semantic::TypedExpr],
     vars: &mut HashMap<String, Temp>,
 ) -> Temp {
+    // Evaluate the complete list (including every literal element) before the
+    // host begins buffering this batch. The bounded list ABI supplies its active length.
+    let transfers = lower_expr(ctx, &args[0], vars);
+    let Type::List(element, _) = semantic::resolve_struct_type(&args[0].ty) else {
+        ctx.record_error("internal error: transfer_batch lost its bounded list type".into());
+        return emit_i64_const(ctx, 0);
+    };
+    let length = emit_load64_imm(ctx, transfers, 0);
+    let index = emit_i64_const(ctx, 0);
+    let one = emit_i64_const(ctx, 1);
+    let header = ctx.new_label();
+    let body = ctx.new_label();
+    let close = ctx.new_label();
+    let end = ctx.new_label();
+    let open = ctx.new_label();
+    let nonempty = emit_binary(ctx, BinaryOp::Lt, index, length);
+    ctx.finish_current(Terminator::Branch {
+        cond: nonempty,
+        then_bb: open,
+        else_bb: end,
+    });
+    ctx.start_block(open);
     ctx.current_instr(Instr::TransferBatchBegin);
-    for entry in args {
-        let tuple = lower_expr(ctx, entry, vars);
-        let from = emit_tuple_get(ctx, tuple, 0);
-        let to = emit_tuple_get(ctx, tuple, 1);
-        let asset = emit_tuple_get(ctx, tuple, 2);
-        let amount_raw = emit_tuple_get(ctx, tuple, 3);
-        let amount = amount_raw;
-        ctx.current_instr(Instr::TransferBatchAsset {
-            from,
-            to,
-            asset,
-            amount,
-        });
-    }
+    ctx.finish_current(Terminator::Jump(header));
+    ctx.start_block(header);
+    let has_entry = emit_binary(ctx, BinaryOp::Lt, index, length);
+    ctx.finish_current(Terminator::Branch {
+        cond: has_entry,
+        then_bb: body,
+        else_bb: close,
+    });
+    ctx.start_block(body);
+    let tuple = load_list_element(ctx, transfers, index, &element);
+    let from = emit_tuple_get(ctx, tuple, 0);
+    let to = emit_tuple_get(ctx, tuple, 1);
+    let asset = emit_tuple_get(ctx, tuple, 2);
+    let amount = emit_tuple_get(ctx, tuple, 3);
+    ctx.current_instr(Instr::TransferBatchAsset {
+        from,
+        to,
+        asset,
+        amount,
+    });
+    let next = emit_binary(ctx, BinaryOp::Add, index, one);
+    emit_copy(ctx, index, next);
+    ctx.finish_current(Terminator::Jump(header));
+    ctx.start_block(close);
     ctx.current_instr(Instr::TransferBatchEnd);
+    ctx.finish_current(Terminator::Jump(end));
+    ctx.start_block(end);
     emit_i64_const(ctx, 0)
 }
 
@@ -5420,20 +5524,6 @@ fn lower_surface_builtin_call(
             ctx.current_instr(Instr::StateDel { path });
             emit_i64_const(ctx, 0)
         }
-        Builtin::StateKeys => {
-            let prefix = lower_expr(ctx, &args[0], vars);
-            let offset = lower_expr_as_u64(ctx, &args[1], vars);
-            let limit = lower_expr_as_u64(ctx, &args[2], vars);
-            let dest = ctx.new_temp();
-            ctx.current_instr(Instr::StateKeys {
-                dest,
-                prefix,
-                offset,
-                limit,
-                dynamic_access_hint: None,
-            });
-            dest
-        }
         Builtin::StateHas => {
             let path = lower_expr(ctx, &args[0], vars);
             let dest = ctx.new_temp();
@@ -5620,9 +5710,23 @@ fn lower_surface_builtin_call(
         }
         Builtin::Require => {
             let cond = lower_expr(ctx, &args[0], vars);
-            let code = lower_expr_as_u64(ctx, &args[1], vars);
+            let code = lower_expr(ctx, &args[1], vars);
+            let Type::ErrorEnum(error_type) = &args[1].ty else {
+                unreachable!("typed nominal error")
+            };
+            let encoded = ivm_abi::codec::encode_canonical_norito(error_type.as_ref())
+                .expect("validated nominal error schema encodes");
+            let descriptor = emit_data_ref(
+                ctx,
+                DataRefKind::NoritoBytes,
+                format!("0x{}", hex::encode(encoded)),
+            );
             let reject = emit_unary(ctx, UnaryOp::Not, cond);
-            ctx.current_instr(Instr::AbortIf { cond: reject, code });
+            ctx.current_instr(Instr::AbortIf {
+                cond: reject,
+                descriptor,
+                code,
+            });
             emit_i64_const(ctx, 0)
         }
         Builtin::Info => {
@@ -6215,6 +6319,7 @@ fn lower_surface_builtin_call(
         Builtin::TestInvokeEntrypoint
         | Builtin::TestInvokeEntrypointAs
         | Builtin::TestExpectRejectAs
+        | Builtin::TestExpectAnyRejectAs
         | Builtin::TestActorAccount
         | Builtin::TestActorPublicKey
         | Builtin::TestActorSign => {
@@ -6237,7 +6342,8 @@ fn named_argument_requires_capture(argument: &TypedExpr) -> bool {
     }
     !matches!(
         argument.kind(),
-        semantic::ExprKind::IntLiteral(_)
+        semantic::ExprKind::ErrorValue(_)
+            | semantic::ExprKind::IntLiteral(_)
             | semantic::ExprKind::DecimalLiteral { .. }
             | semantic::ExprKind::Bool(_)
             | semantic::ExprKind::String(_)
@@ -6316,6 +6422,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
         return temp;
     }
     match &expr.expr {
+        semantic::ExprKind::ErrorValue(code) => emit_i64_const(ctx, i64::from(*code)),
         semantic::ExprKind::JsonObject(_) | semantic::ExprKind::JsonArray(_) => {
             lower_json_construction(ctx, expr, vars)
         }
@@ -6351,6 +6458,9 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
             emit_tuple_pack(ctx, items)
         }
         semantic::ExprKind::Tuple(elems) => {
+            if elems.is_empty() {
+                return emit_i64_const(ctx, 0);
+            }
             let mut items = Vec::with_capacity(elems.len());
             for e in elems {
                 items.push(lower_expr(ctx, e, vars));
@@ -6421,13 +6531,16 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
             t
         }
         semantic::ExprKind::Ident(name) => {
-            if (ctx.state_name_literals.contains_key(name)
-                || ctx.state_runtime_roots.contains_key(name))
-                && !vars.contains_key(name)
-                && let Some(value) = lower_state_binding_value(ctx, name, &expr.ty)
+            if ctx.state_name_literals.contains_key(name)
+                || ctx.state_runtime_roots.contains_key(name)
             {
-                vars.insert(name.clone(), value);
-                return value;
+                if let Some(value) = ctx.state_value_cache.get(name).copied() {
+                    return value;
+                }
+                if let Some(value) = lower_state_binding_value(ctx, name, &expr.ty) {
+                    ctx.state_value_cache.insert(name.clone(), value);
+                    return value;
+                }
             }
             if let Some(temp) = vars.get(name) {
                 *temp
@@ -6489,8 +6602,13 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                 );
                 return emit_i64_const(ctx, 0);
             };
-            if semantic::resolve_struct_type(&error_type) != Type::Int {
-                ctx.record_error("internal error: numeric fault payload must be int".into());
+            if !matches!(
+                semantic::resolve_struct_type(&error_type),
+                Type::ErrorEnum(_)
+            ) {
+                ctx.record_error(
+                    "internal error: numeric fault payload must be NumericError".into(),
+                );
                 return emit_i64_const(ctx, 0);
             }
             let destination = wide_numeric_kind_for_type(&ok_type)
@@ -6520,11 +6638,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
             emit_copy(ctx, result, ok);
             ctx.finish_current(Terminator::Jump(end));
             ctx.start_block(failure);
-            let fault = ctx.new_temp();
-            ctx.current_instr(Instr::IntFromU64 {
-                dest: fault,
-                value: status,
-            });
+            let fault = status;
             let error = emit_sum_value(ctx, &expr.ty, 0, Some(fault));
             emit_copy(ctx, result, error);
             ctx.finish_current(Terminator::Jump(end));
@@ -6661,24 +6775,14 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
             else_branch,
         } => {
             let sum = lower_expr(ctx, value, vars);
-            let tag = load_sum_tag(ctx, sum);
             let then_label = ctx.new_label();
             let else_label = ctx.new_label();
             let end_label = ctx.new_label();
+            branch_on_sum_pattern(ctx, pattern, sum, then_label, else_label);
             let result_words = runtime_value_word_types(&expr.ty)
                 .into_iter()
                 .map(|_| ctx.new_temp())
                 .collect::<Vec<_>>();
-            let (tag_one, tag_zero) = if sum_pattern_tag(pattern) == 1 {
-                (then_label, else_label)
-            } else {
-                (else_label, then_label)
-            };
-            ctx.finish_current(Terminator::Branch {
-                cond: tag,
-                then_bb: tag_one,
-                else_bb: tag_zero,
-            });
             ctx.start_block(then_label);
             let mut then_vars = vars.clone();
             bind_sum_pattern(ctx, pattern, sum, &mut then_vars);
@@ -6695,6 +6799,38 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
             rebuild_runtime_value(ctx, &expr.ty, &result_words)
         }
         semantic::ExprKind::Match { value, arms } => {
+            if matches!(&value.ty, Type::ErrorEnum(_)) {
+                let code = lower_expr(ctx, value, vars);
+                let end = ctx.new_label();
+                let result_words = runtime_value_word_types(&expr.ty)
+                    .into_iter()
+                    .map(|_| ctx.new_temp())
+                    .collect::<Vec<_>>();
+                for (index, arm) in arms.iter().enumerate() {
+                    let body = ctx.new_label();
+                    let next = ctx.new_label();
+                    if index + 1 == arms.len() {
+                        ctx.finish_current(Terminator::Jump(body));
+                    } else {
+                        let cond = pattern_matches(ctx, &arm.pattern, code);
+                        ctx.finish_current(Terminator::Branch {
+                            cond,
+                            then_bb: body,
+                            else_bb: next,
+                        });
+                    }
+                    ctx.start_block(body);
+                    if let Some(value) = lower_expression_block(ctx, &arm.body, &mut vars.clone()) {
+                        copy_runtime_value_words(ctx, value, &expr.ty, &result_words);
+                        ctx.finish_current(Terminator::Jump(end));
+                    }
+                    if index + 1 < arms.len() {
+                        ctx.start_block(next);
+                    }
+                }
+                ctx.start_block(end);
+                return rebuild_runtime_value(ctx, &expr.ty, &result_words);
+            }
             // Normalize the canonical exhaustive early-return spelling of
             // same-family propagation before CFG construction. This keeps
             // postfix `?` genuine zero-cost syntax sugar: both source forms
@@ -6766,6 +6902,9 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
             evaluation_order,
         } => lower_named_call(ctx, &expr.ty, name, args, evaluation_order, vars),
         semantic::ExprKind::Call { name, args } => {
+            if let Some(value) = lower_state_page_intrinsic(ctx, name, args, &expr.ty, vars) {
+                return value;
+            }
             if let Some(value) = lower_numeric_round_intrinsic(ctx, name, args, vars) {
                 return value;
             }
@@ -6787,6 +6926,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                     Builtin::TestInvokeEntrypoint
                         | Builtin::TestInvokeEntrypointAs
                         | Builtin::TestExpectRejectAs
+                        | Builtin::TestExpectAnyRejectAs
                         | Builtin::TestActorAccount
                         | Builtin::TestActorPublicKey
                         | Builtin::TestActorSign
@@ -6860,7 +7000,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                         }
                     }
                 }
-                "expect_reject_as" => {
+                "expect_reject_as" | "expect_any_reject_as" => {
                     let actor = match args[0].kind() {
                         semantic::ExprKind::String(value) => lower_blob_literal(ctx, value),
                         _ => panic!("expect_reject_as actor must be a literal string"),
@@ -6870,10 +7010,12 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                         _ => panic!("expect_reject_as entrypoint must be a literal string"),
                     };
                     let payload = lower_expr(ctx, &args[2], vars);
+                    let expectation = lower_expr(ctx, &args[3], vars);
                     ctx.current_instr(Instr::ExpectRejectAs {
                         actor,
                         entrypoint,
                         payload,
+                        expectation,
                     });
                     emit_i64_const(ctx, 0)
                 }
@@ -7023,14 +7165,12 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                     name.push_str(&i.to_string());
                 }
                 if ctx.state_name_literals.contains_key(&name) {
-                    if !vars.contains_key(&name)
-                        && let Some(value) = lower_state_binding_value(ctx, &name, &expr.ty)
-                    {
-                        vars.insert(name.clone(), value);
+                    if let Some(value) = ctx.state_value_cache.get(&name).copied() {
                         return value;
                     }
-                    if let Some(t) = vars.get(&name).copied() {
-                        return t;
+                    if let Some(value) = lower_state_binding_value(ctx, &name, &expr.ty) {
+                        ctx.state_value_cache.insert(name.clone(), value);
+                        return value;
                     }
                 } else if let Some(t) = vars.get(&name).copied() {
                     return t;
@@ -7284,6 +7424,10 @@ struct LowerCtx {
     state_name_literals: HashMap<String, String>,
     /// Runtime Name roots for `state` helper parameters.
     state_runtime_roots: HashMap<String, Temp>,
+    /// Durable values valid only in the current basic block since its last
+    /// possible state mutation. Keep these out of local SSA environments so
+    /// branch merges and loop backedges cannot restore stale memory values.
+    state_value_cache: HashMap<String, Temp>,
     /// Dynamic iteration cap for first-release dynamic bounds.
     _dyn_iter_cap: usize,
     /// Declared return type used when `?` must materialize a differently-sized
@@ -7313,6 +7457,7 @@ impl LowerCtx {
             state_map_configs: Default::default(),
             state_name_literals: Default::default(),
             state_runtime_roots: Default::default(),
+            state_value_cache: Default::default(),
             _dyn_iter_cap: dyn_iter_cap,
             function_return_type,
             call_renames,
@@ -7340,6 +7485,7 @@ impl LowerCtx {
         l
     }
     fn start_block(&mut self, label: Label) {
+        self.state_value_cache.clear();
         if self.current.is_some() {
             self.record_error("internal error: current block not finished".to_string());
             self.current = None;
@@ -7351,6 +7497,22 @@ impl LowerCtx {
         });
     }
     fn current_instr(&mut self, instr: Instr) {
+        if matches!(
+            &instr,
+            Instr::Call { .. }
+                | Instr::CallMulti { .. }
+                | Instr::StateSet { .. }
+                | Instr::StateDel { .. }
+                | Instr::InvokeEntrypointAs { .. }
+                | Instr::InvokeEntrypointAsMulti { .. }
+                | Instr::ExpectRejectAs { .. }
+                | Instr::DirectHelperSyscall { .. }
+                | Instr::VendorExecuteInstruction { .. }
+                | Instr::SmartContractLifecycle { .. }
+                | Instr::SoracloudHostCall { .. }
+        ) {
+            self.state_value_cache.clear();
+        }
         if let Some(ref mut bb) = self.current {
             bb.instrs.push(instr);
         }
@@ -7766,7 +7928,7 @@ mod tests {
         assert_eq!(f.blocks.len(), 1); // only entry block
     }
     #[test]
-    fn named_calls_evaluate_in_source_order_and_permute_only_temp_references() {
+    fn mixed_calls_evaluate_in_source_order_and_permute_only_temp_references() {
         let src = include_str!("ir/fixtures/v1/i001.ko");
         let typed = analyze(&parse(src).expect("parse named call")).expect("analyze named call");
         let ir = lower(&typed).expect("lower named call");
@@ -7791,11 +7953,12 @@ mod tests {
                 .iter()
                 .map(|(callee, _, _)| *callee)
                 .collect::<Vec<_>>(),
-            ["second", "first", "combine"]
+            ["initial", "second", "first", "combine"]
         );
-        let second = calls[0].2.expect("second returns a value");
-        let first = calls[1].2.expect("first returns a value");
-        assert_eq!(calls[2].1, [first, second]);
+        let initial = calls[0].2.expect("initial returns a value");
+        let second = calls[1].2.expect("second returns a value");
+        let first = calls[2].2.expect("first returns a value");
+        assert_eq!(calls[3].1, [initial, first, second]);
     }
     #[test]
     fn named_list_intrinsic_evaluates_source_order_before_abi_slots() {
@@ -9399,16 +9562,11 @@ mod tests {
                 _ => None,
             })
             .expect("returned accumulator");
-        let entry = function
-            .blocks
-            .iter()
-            .find(|block| block.label == function.entry)
-            .expect("entry block");
         assert!(
-            entry.instrs.iter().any(
+            function.blocks.iter().flat_map(|block| &block.instrs).any(
                 |instruction| matches!(instruction, Instr::Copy { dest, .. } if *dest == returned)
             ),
-            "the returned accumulator must be initialized as a loop phi"
+            "the returned accumulator must be initialized as a loop phi after the page snapshot is materialized"
         );
         assert!(
             function
@@ -9424,61 +9582,46 @@ mod tests {
         );
     }
     #[test]
-    fn state_map_range_offsets_preserve_all_u64_bits() {
-        for (start, end) in [(1_u64 << 63, (1_u64 << 63) + 1), (u64::MAX - 1, u64::MAX)] {
-            let source = format!(
-                r#"
-seiyaku RangeOffsetBits {{
-  state StateMap<int, int> Values;
-
-  view fn scan() -> int {{
-    var int total = 0;
-    for (key, value) in Values.range({start}, {end}) {{
-      total = total + key + value;
-    }}
-    return total;
-  }}
-}}
-"#
-            );
-            let typed = analyze(&parse(&source).expect("parse u64 range offset"))
-                .expect("analyze u64 range offset");
-            let ir = lower(&typed).expect("lower u64 range offset");
-            let function = ir
-                .functions
+    fn state_page_lowering_emits_one_bounded_scan_with_cursor_schema() {
+        let source = "const int LIMIT = 2; state StateMap<int, int> Values; fn scan(Option<StateCursor<int>> after) -> StatePage<int, int, 4> { Values.page(after: after, limit: LIMIT * 2) }";
+        let typed = analyze(&parse(source).expect("parse typed page")).expect("analyze page");
+        let ir = lower(&typed).expect("lower typed page");
+        let function = &ir.functions[0];
+        let scans = function
+            .blocks
+            .iter()
+            .flat_map(|block| &block.instrs)
+            .filter_map(|instruction| {
+                if let Instr::StateScan {
+                    limit,
+                    dynamic_access_hint,
+                    ..
+                } = instruction
+                {
+                    Some((*limit, dynamic_access_hint))
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(scans.len(), 1);
+        assert_eq!(scans[0].1.bound_kind, "page");
+        assert_eq!(scans[0].1.max_keys, 64);
+        assert_eq!(scans[0].1.key_type, "int");
+        assert!(function.blocks.iter().flat_map(|block| &block.instrs).any(|instruction| matches!(instruction, Instr::Const { dest, value: 4 } if *dest == scans[0].0)));
+        let schema = entrypoint_argument_schema(
+            typed
+                .items
                 .iter()
-                .find(|function| function.name == "scan")
-                .expect("scan function");
-            let (offset, hint) = function
-                .blocks
-                .iter()
-                .flat_map(|block| block.instrs.iter())
-                .find_map(|instruction| match instruction {
-                    Instr::StateKeys {
-                        offset,
-                        dynamic_access_hint: Some(hint),
-                        ..
-                    } => Some((*offset, hint)),
-                    _ => None,
+                .find_map(|item| {
+                    let TypedItem::Function(function) = item;
+                    (function.name == "scan").then_some(function.param_types.as_slice())
                 })
-                .expect("bounded StateMap scan");
-            let encoded_offset = function
-                .blocks
-                .iter()
-                .flat_map(|block| block.instrs.iter())
-                .find_map(|instruction| match instruction {
-                    Instr::Const { dest, value } if *dest == offset => Some(*value),
-                    _ => None,
-                })
-                .expect("range offset constant");
-            assert_eq!(
-                encoded_offset,
-                i64::from_le_bytes(start.to_le_bytes()),
-                "STATE_KEYS must receive the exact u64 bit pattern"
-            );
-            assert_eq!(hint.bound_kind, "range");
-            assert_eq!(hint.max_keys, 1);
-        }
+                .expect("scan parameters"),
+        )
+        .expect("cursor argument schema")
+        .expect("one cursor parameter");
+        assert!(schema.validate());
     }
     #[test]
     fn nested_loops_do_not_carry_outer_invariants() {
@@ -9785,7 +9928,7 @@ seiyaku RangeOffsetBits {{
     alias_lowering_case!(
         lower_resolve_account_alias_builtin,
         AliasSource::Exact(
-            "fn main() { let _acct = ledger::account::resolve_alias(\"banking@centralbank\"); }",
+            "fn main() { let _acct = ledger::account::resolve_alias(alias: \"banking@centralbank\"); }",
         ),
         AliasLiteral::Ignore,
         Some(true),
@@ -9794,7 +9937,7 @@ seiyaku RangeOffsetBits {{
     alias_lowering_case!(
         lower_resolve_account_alias_builtin_uses_string_literal,
         AliasSource::Exact(
-            r#"fn main() { let _acct = ledger::account::resolve_alias("merchant@paynet"); }"#,
+            r#"fn main() { let _acct = ledger::account::resolve_alias(alias: "merchant@paynet"); }"#,
         ),
         AliasLiteral::String("merchant@paynet"),
         Some(true),
@@ -9803,7 +9946,7 @@ seiyaku RangeOffsetBits {{
     alias_lowering_case!(
         lower_resolve_account_alias_invalid_literal_uses_string_literal,
         AliasSource::Exact(
-            r#"fn main() { let _acct = ledger::account::resolve_alias("merchant@"); }"#,
+            r#"fn main() { let _acct = ledger::account::resolve_alias(alias: "merchant@"); }"#,
         ),
         AliasLiteral::String("merchant@"),
         Some(true),
@@ -9812,7 +9955,7 @@ seiyaku RangeOffsetBits {{
     alias_lowering_case!(
         lower_resolve_account_alias_domain_qualified_builtin_uses_string_literal,
         AliasSource::Exact(
-            r#"fn main() { let _acct = ledger::account::resolve_alias("merchant@bank.paynet"); }"#,
+            r#"fn main() { let _acct = ledger::account::resolve_alias(alias: "merchant@bank.paynet"); }"#,
         ),
         AliasLiteral::String("merchant@bank.paynet"),
         Some(true),
@@ -9821,7 +9964,7 @@ seiyaku RangeOffsetBits {{
     alias_lowering_case!(
         lower_resolve_account_alias_invalid_domain_qualified_literal_uses_string_literal,
         AliasSource::Exact(
-            r#"fn main() { let _acct = ledger::account::resolve_alias("merchant@bank."); }"#,
+            r#"fn main() { let _acct = ledger::account::resolve_alias(alias: "merchant@bank."); }"#,
         ),
         AliasLiteral::String("merchant@bank."),
         Some(true),
@@ -10564,6 +10707,38 @@ seiyaku RangeOffsetBits {{
         assert_eq!(
             decodes, 0,
             "a scalar read immediately after its write must reuse the live value"
+        );
+    }
+    #[test]
+    fn durable_state_cache_reloads_after_guest_calls() {
+        let source = "state int trace; hajimari() { trace = 0; } fn mutate() { trace = 7; } fn main() -> int { trace = 0; let before = trace; mutate(); let after = trace; before + after }";
+        let lowered = lower(
+            &analyze(&parse(source).expect("parse state cache regression"))
+                .expect("analyze state cache regression"),
+        )
+        .expect("lower state cache regression");
+        let main = lowered
+            .functions
+            .iter()
+            .find(|function| function.name == "main")
+            .expect("main function");
+        let instructions = main
+            .blocks
+            .iter()
+            .flat_map(|block| &block.instrs)
+            .collect::<Vec<_>>();
+        let call = instructions.iter().position(|instruction| matches!(instruction, Instr::Call { callee, .. } if callee == "mutate")).expect("effectful guest call");
+        assert!(
+            !instructions[..call]
+                .iter()
+                .any(|instruction| matches!(instruction, Instr::StateGet { .. })),
+            "immediate read-after-write retains the local block cache"
+        );
+        assert!(
+            instructions[call + 1..]
+                .iter()
+                .any(|instruction| matches!(instruction, Instr::StateGet { .. })),
+            "a callee may change durable state before the next source read"
         );
     }
     #[test]

@@ -1,20 +1,39 @@
-# language-kotodama
+# Kotodama for Visual Studio Code
 
-TextMate grammar scaffold for the Kotodama smart-contract language used by the
-Iroha Virtual Machine.
+Kotodama language support for `.ko` contracts and test modules. The client starts
+`koto lsp` and uses the compiler's explicit `kotodama.project.json` source graph.
+The extension also ships the canonical TextMate grammar for highlighting.
 
-This repository layout is intended for two jobs:
-- editor syntax highlighting during grammar development; and
-- GitHub Linguist ingestion via:
+Install the repository's `koto` executable and put it on `PATH`, or set
+`kotodama.serverPath` to its absolute path. Open the generated project folder:
 
 ```sh
-script/add-grammar https://github.com/<org>/language-kotodama
+iroha contract dev new counter
+code counter
 ```
 
-The current grammar targets the syntax described in:
-- `specs/kotodama_grammar.md`
-- `crates/kotodama_lang/src/lexer.rs`
-- `crates/kotodama_lang/src/parser.rs`
+To build this extension from source:
 
-The scaffold intentionally keeps the grammar self-contained so it can be split
-out of this workspace into a dedicated repository with minimal changes.
+```sh
+npm ci --ignore-scripts
+npm test
+npm run package
+code --install-extension kotodama.vsix
+```
+
+The extension starts one language server per workspace folder. Set
+`kotodama.project` to the explicit project manifest (the default is
+`kotodama.project.json`). `${workspaceFolder}` expands to that folder. A missing
+manifest selects single-file analysis; imports are never inferred from disk.
+Source overlays and source/manifest change notifications reach the compiler.
+Configuration changes restart clients. Use **Kotodama: Restart Language Server**
+after replacing the compiler executable.
+
+`kotodama.zk` enables the compiler's ZK checks. The client requires a trusted
+workspace before starting a configured executable, and passes arguments without
+a shell. Formatting, diagnostics, and semantic editor operations use the installed
+compiler; use the compiler and extension from the same checkout or release.
+
+[Language documentation](https://docs.iroha.tech/blockchain/smart-contracts#first-project).
+The grammar mirrors `specs/kotodama_grammar.md` and
+`crates/kotodama_lang/grammar/v1.lex` and remains usable by GitHub Linguist.

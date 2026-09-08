@@ -27,8 +27,8 @@ fn kotodama_create_and_grant_role_enables_mint() {
           // Bootstrap the asset definition used by the role permission.
           ledger::asset::register(asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), name: "ROSE", scale: 0, mintable: 1);
           // Create role with mint permission and grant it to the caller.
-          ledger::role::create(Name::parse("minter"), Json::parse("{\"perms\":[\"mint_asset:62Fk4FPcMuLvW5QjDGNF2a4jAmjM\"]}"));
-          ledger::role::grant(context::authority(), Name::parse("minter"));
+          ledger::role::create(role: Name::parse("minter"), permissions: Json::parse("{\"perms\":[\"mint_asset:62Fk4FPcMuLvW5QjDGNF2a4jAmjM\"]}"));
+          ledger::role::grant(account: context::authority(), role: Name::parse("minter"));
           // Mint using role permission
           ledger::asset::mint(account: context::authority(), asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), amount: 1);
         }
@@ -53,13 +53,13 @@ fn kotodama_grant_role_accepts_runtime_account_argument() {
     let src = r#"
         seiyaku RuntimeRoleGrant {
         fn grant_it(AccountId who) {
-          ledger::role::grant(who, Name::parse("minter"));
+          ledger::role::grant(account: who, role: Name::parse("minter"));
         }
 
         kotoage fn main() authorize("ManageRoles") {
-          ledger::role::create(Name::parse("minter"), Json::parse("{\"perms\":[\"mint_asset:62Fk4FPcMuLvW5QjDGNF2a4jAmjM\"]}"));
+          ledger::role::create(role: Name::parse("minter"), permissions: Json::parse("{\"perms\":[\"mint_asset:62Fk4FPcMuLvW5QjDGNF2a4jAmjM\"]}"));
           let who = AccountId::parse("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV");
-          grant_it(who);
+          grant_it(who: who);
         }
         }
     "#;
@@ -85,12 +85,12 @@ fn kotodama_grant_permission_accepts_runtime_account_argument() {
     let src = r#"
         seiyaku RuntimePermissionGrant {
         fn grant_it(AccountId who) {
-          ledger::permission::grant(who, Name::parse("BenefitSpend"));
+          ledger::permission::grant(account: who, permission: Name::parse("BenefitSpend"));
         }
 
         kotoage fn main() authorize("ManagePermissions") {
           let who = AccountId::parse("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV");
-          grant_it(who);
+          grant_it(who: who);
         }
         }
     "#;
@@ -114,12 +114,12 @@ fn kotodama_runtime_account_argument_survives_syscall_before_grant_permission() 
         seiyaku RuntimePermissionGrantAfterSyscall {
         fn grant_it(AccountId who) {
           let _now = context::current_time_ms();
-          ledger::permission::grant(who, Name::parse("BenefitSpend"));
+          ledger::permission::grant(account: who, permission: Name::parse("BenefitSpend"));
         }
 
         kotoage fn main() authorize("ManagePermissions") {
           let who = AccountId::parse("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV");
-          grant_it(who);
+          grant_it(who: who);
         }
         }
     "#;

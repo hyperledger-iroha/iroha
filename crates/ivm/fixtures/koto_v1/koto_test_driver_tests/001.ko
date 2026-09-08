@@ -18,7 +18,7 @@
 
                 #[test]
                 fn maximum_survives_helper_match() {
-                    validate(Json::parse("{\"source_change_sequence\":18446744073709551615}"));
+                    validate(signed_json: Json::parse("{\"source_change_sequence\":\"18446744073709551615\"}"));
                 }
             }
             

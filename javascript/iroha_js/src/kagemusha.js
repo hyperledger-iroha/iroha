@@ -1,3 +1,4 @@
+import { rejectRange, rejectType } from "./validationThrow.js";
 // SPDX-License-Identifier: Apache-2.0
 
 import { sha256 } from "@noble/hashes/sha2";
@@ -130,9 +131,9 @@ class KagemushaAccountIdV1 {
     const payload = typeof value === "string"
       ? encodeAccountIdNoritoValue(value, "KAGEMUSHA V1 account")
       : bytes(value, "KAGEMUSHA V1 account payload");
-    if (payload.length === 0 || payload.length > 512) throw new RangeError("KAGEMUSHA V1 account payload is empty or oversized");
+    if (payload.length === 0 || payload.length > 512) rejectRange("KAGEMUSHA V1 account payload is empty or oversized");
     const canonical = _canonicalAccountIdNoritoValue(payload, "KAGEMUSHA V1 account");
-    if (!equalBytes(payload, canonical)) throw new TypeError("KAGEMUSHA V1 account payload is not canonical");
+    if (!equalBytes(payload, canonical)) rejectType("KAGEMUSHA V1 account payload is not canonical");
     this.#payload = Uint8Array.from(payload);
     Object.freeze(this);
   }
@@ -145,7 +146,7 @@ class KagemushaAssetIncarnationV1 {
 
   constructor(value) {
     const raw = bytes(value, "KAGEMUSHA V1 asset incarnation");
-    if (raw.length !== 32 || (raw[31] & 1) !== 1) throw new TypeError("KAGEMUSHA V1 asset incarnation must be a marked 32-byte Iroha hash");
+    if (raw.length !== 32 || (raw[31] & 1) !== 1) rejectType("KAGEMUSHA V1 asset incarnation must be a marked 32-byte Iroha hash");
     this.#hash = Uint8Array.from(raw);
     Object.freeze(this);
   }
@@ -158,7 +159,7 @@ class KagemushaDevicePublicKeyV1 {
 
   constructor(value) {
     const raw = bytes(value, "KAGEMUSHA V1 device public key");
-    if (raw.length !== 65 || raw[0] !== 4 || isZero(raw.subarray(1))) throw new TypeError("KAGEMUSHA V1 device public key must be nonzero 65-byte uncompressed SEC1");
+    if (raw.length !== 65 || raw[0] !== 4 || isZero(raw.subarray(1))) rejectType("KAGEMUSHA V1 device public key must be nonzero 65-byte uncompressed SEC1");
     this.#bytes = Uint8Array.from(raw);
     Object.freeze(this);
   }
@@ -171,7 +172,7 @@ class KagemushaDeviceSignatureV1 {
 
   constructor(value) {
     const raw = bytes(value, "KAGEMUSHA V1 device signature");
-    if (raw.length !== 64 || isZero(raw.subarray(0, 32)) || isZero(raw.subarray(32))) throw new TypeError("KAGEMUSHA V1 device signature must be nonzero fixed-width r || s");
+    if (raw.length !== 64 || isZero(raw.subarray(0, 32)) || isZero(raw.subarray(32))) rejectType("KAGEMUSHA V1 device signature must be nonzero fixed-width r || s");
     this.#bytes = Uint8Array.from(raw);
     Object.freeze(this);
   }
@@ -179,27 +180,39 @@ class KagemushaDeviceSignatureV1 {
   rawBytes() { return Uint8Array.from(this.#bytes); }
 }
 
-const T = Object.freeze({
-  U8: "u8", U16: "u16", U32: "u32", U64: "u64", U128: "u128", FIXED32: "fixed32", RAW32: "raw32",
-  FIXED24: "fixed24", NETWORK: "network", ASSET: "asset", INCARNATION: "incarnation", ACCOUNT: "account",
-  PUBLIC_KEY: "publicKey", SIGNATURE: "signature", VECTOR: "vector",
-  OPERATION_KIND: "operationKind", CREDIT_PURPOSE: "creditPurpose",
-  COMMIT_EVIDENCE: "commitEvidence",
-  OPTIONAL_MINT_AUTHORIZATION: "optionalMintAuthorization",
-  MINT_FRAME: "mintFrame",
-});
+// Private wire discriminants remain literal strings while their identifiers minify.
+const K_TYPE_U8 = "u8";
+const K_TYPE_U16 = "u16";
+const K_TYPE_U32 = "u32";
+const K_TYPE_U64 = "u64";
+const K_TYPE_U128 = "u128";
+const K_TYPE_FIXED32 = "fixed32";
+const K_TYPE_RAW32 = "raw32";
+const K_TYPE_FIXED24 = "fixed24";
+const K_TYPE_NETWORK = "network";
+const K_TYPE_ASSET = "asset";
+const K_TYPE_INCARNATION = "incarnation";
+const K_TYPE_ACCOUNT = "account";
+const K_TYPE_PUBLIC_KEY = "publicKey";
+const K_TYPE_SIGNATURE = "signature";
+const K_TYPE_VECTOR = "vector";
+const K_TYPE_OPERATION_KIND = "operationKind";
+const K_TYPE_CREDIT_PURPOSE = "creditPurpose";
+const K_TYPE_COMMIT_EVIDENCE = "commitEvidence";
+const K_TYPE_MINT_FRAME = "mintFrame";
 
-const DEFINITIONS = {};
+// Private constructor metadata keeps unrelated model graphs independently removable.
+const MODEL_DEFINITIONS = new WeakMap();
 const MODEL_VALUES = new WeakMap();
 
-function defineModel(name, fields, validate) {
+function defineModel(name, fields, validate, alignment = 16) {
   const Model = class {
     constructor(input) {
       exactRecord(input, name, fields.map(([fieldName]) => fieldName));
       const normalized = {};
       for (const [fieldName, type] of fields) normalized[fieldName] = normalizeType(type, input[fieldName], `${name}.${fieldName}`);
       validate?.(normalized);
-      MODEL_VALUES.set(this, normalized);
+      MODEL_VALUES.set(this, { values: normalized, fields, alignment });
       Object.freeze(this);
     }
   };
@@ -207,72 +220,73 @@ function defineModel(name, fields, validate) {
   for (const [fieldName] of fields) {
     Object.defineProperty(Model.prototype, fieldName, {
       enumerable: true,
-      get() { return cloneValue(MODEL_VALUES.get(this)[fieldName]); },
+      get() { return cloneValue(rawValues(this)[fieldName]); },
     });
   }
-  DEFINITIONS[name] = { Model, fields };
+  MODEL_DEFINITIONS.set(Model, { fields, alignment });
   return Model;
 }
 
-const KagemushaHardwareCredentialV1 = defineModel(
+const KagemushaHardwareCredentialV1 = /* @__PURE__ */ defineModel(
   "KagemushaHardwareCredentialV1",
-  [["version", T.U16], ["credentialId", T.FIXED32], ["networkId", T.NETWORK], ["hardwareProfileId", T.FIXED32],
-    ["suiteId", T.FIXED32], ["firmwarePolicyDigest", T.FIXED32], ["policyEpoch", T.U64], ["laneCommitment", T.FIXED32],
-    ["hardwareEpochId", T.FIXED32], ["hardwareEpochGeneration", T.U64], ["devicePublicKey", T.PUBLIC_KEY],
-    ["deviceKeyReference", T.FIXED32], ["issuedAtMs", T.U64], ["expiresAtMs", T.U64], ["governanceSignature", T.SIGNATURE]],
+  [["version", K_TYPE_U16], ["credentialId", K_TYPE_FIXED32], ["networkId", K_TYPE_NETWORK], ["hardwareProfileId", K_TYPE_FIXED32],
+    ["suiteId", K_TYPE_FIXED32], ["firmwarePolicyDigest", K_TYPE_FIXED32], ["policyEpoch", K_TYPE_U64], ["laneCommitment", K_TYPE_FIXED32],
+    ["hardwareEpochId", K_TYPE_FIXED32], ["hardwareEpochGeneration", K_TYPE_U64], ["devicePublicKey", K_TYPE_PUBLIC_KEY],
+    ["deviceKeyReference", K_TYPE_FIXED32], ["issuedAtMs", K_TYPE_U64], ["expiresAtMs", K_TYPE_U64], ["governanceSignature", K_TYPE_SIGNATURE]],
   (v) => {
     requireVersion(v.version);
-    if (v.policyEpoch === 0n || v.issuedAtMs >= v.expiresAtMs) throw new TypeError("KAGEMUSHA V1 hardware credential header is invalid");
+    if (v.policyEpoch === 0n || v.issuedAtMs >= v.expiresAtMs) rejectType("KAGEMUSHA V1 hardware credential header is invalid");
     requireEqual(v.deviceKeyReference, deviceKeyReference(v.devicePublicKey), "hardware credential device key reference");
   },
 );
 
-const KagemushaPastaStateCommitmentV1 = defineModel(
-  "KagemushaPastaStateCommitmentV1", [["eq", T.RAW32], ["ep", T.RAW32]],
-  (v) => { if (isZero(v.eq) !== isZero(v.ep)) throw new TypeError("Pasta state commitment must be fully zero or fully present"); },
+const KagemushaPastaStateCommitmentV1 = /* @__PURE__ */ defineModel(
+  "KagemushaPastaStateCommitmentV1", [["eq", K_TYPE_RAW32], ["ep", K_TYPE_RAW32]],
+  (v) => { if (isZero(v.eq) !== isZero(v.ep)) rejectType("Pasta state commitment must be fully zero or fully present"); },
 );
 
-const KagemushaPairedProofV1 = defineModel(
+const KagemushaPairedProofV1 = /* @__PURE__ */ defineModel(
   "KagemushaPairedProofV1",
-  [["version", T.U16], ["eqProtocolDigest", T.FIXED32], ["epProtocolDigest", T.FIXED32], ["semanticDigest", T.FIXED32],
-    ["guardEqCredentialAudit", T.FIXED32], ["guardEpCredentialAudit", T.FIXED32], ["eqDeferredAudit", T.FIXED32],
-    ["epDeferredAudit", T.FIXED32], ["eqProof", T.VECTOR], ["epProof", T.VECTOR], ["eqHistory", T.VECTOR], ["epHistory", T.VECTOR]],
+  [["version", K_TYPE_U16], ["eqProtocolDigest", K_TYPE_FIXED32], ["epProtocolDigest", K_TYPE_FIXED32], ["semanticDigest", K_TYPE_FIXED32],
+    ["guardEqCredentialAudit", K_TYPE_FIXED32], ["guardEpCredentialAudit", K_TYPE_FIXED32], ["eqDeferredAudit", K_TYPE_FIXED32],
+    ["epDeferredAudit", K_TYPE_FIXED32], ["eqProof", K_TYPE_VECTOR], ["epProof", K_TYPE_VECTOR], ["eqHistory", K_TYPE_VECTOR], ["epHistory", K_TYPE_VECTOR]],
   validatePairedProofValues,
 );
 
-const KagemushaCreditOpeningV1 = defineModel(
+const KagemushaCreditOpeningV1 = /* @__PURE__ */ defineModel(
   "KagemushaCreditOpeningV1",
-  [["version", T.U16], ["creditId", T.FIXED32], ["amount", T.U128], ["creditCommitmentOpening", T.FIXED32],
-    ["recipientBindingOpening", T.FIXED32], ["recoveryNonce", T.FIXED32]],
-  (v) => { requireVersion(v.version); if (v.amount === 0n) throw new TypeError("KAGEMUSHA V1 credit opening amount must be positive"); },
+  [["version", K_TYPE_U16], ["creditId", K_TYPE_FIXED32], ["amount", K_TYPE_U128], ["creditCommitmentOpening", K_TYPE_FIXED32],
+    ["recipientBindingOpening", K_TYPE_FIXED32], ["recoveryNonce", K_TYPE_FIXED32]],
+  (v) => { requireVersion(v.version); if (v.amount === 0n) rejectType("KAGEMUSHA V1 credit opening amount must be positive"); },
 );
-const KagemushaEncryptedCreditAadV1 = defineModel(
+const KagemushaEncryptedCreditAadV1 = /* @__PURE__ */ defineModel(
   "KagemushaEncryptedCreditAadV1",
-  [["version", T.U16], ["purpose", T.CREDIT_PURPOSE], ["contextDigest", T.FIXED32], ["issuanceOrTransitionCommitment", T.FIXED32],
-    ["creditId", T.FIXED32], ["amount", T.U128]],
-  (v) => { requireVersion(v.version); if (v.amount === 0n) throw new TypeError("KAGEMUSHA V1 encrypted-credit AAD amount must be positive"); },
+  [["version", K_TYPE_U16], ["purpose", K_TYPE_CREDIT_PURPOSE], ["contextDigest", K_TYPE_FIXED32], ["issuanceOrTransitionCommitment", K_TYPE_FIXED32],
+    ["creditId", K_TYPE_FIXED32], ["amount", K_TYPE_U128]],
+  (v) => { requireVersion(v.version); if (v.amount === 0n) rejectType("KAGEMUSHA V1 encrypted-credit AAD amount must be positive"); },
 );
-const KagemushaEncryptedCreditEnvelopeV1 = defineModel(
+const KagemushaEncryptedCreditEnvelopeV1 = /* @__PURE__ */ defineModel(
   "KagemushaEncryptedCreditEnvelopeV1",
-  [["version", T.U16], ["ephemeralX25519PublicKey", T.RAW32], ["nonce", T.FIXED24], ["ciphertextAndTag", T.VECTOR]],
+  [["version", K_TYPE_U16], ["ephemeralX25519PublicKey", K_TYPE_RAW32], ["nonce", K_TYPE_FIXED24], ["ciphertextAndTag", K_TYPE_VECTOR]],
   (v) => {
     requireVersion(v.version);
     requireX25519Key(v.ephemeralX25519PublicKey, "encrypted-credit ephemeral key");
-    if (v.ciphertextAndTag.length !== ENCRYPTED_CREDIT_BYTES) throw new TypeError(`KAGEMUSHA V1 ciphertext and tag must be exactly ${ENCRYPTED_CREDIT_BYTES} bytes`);
+    if (v.ciphertextAndTag.length !== ENCRYPTED_CREDIT_BYTES) rejectType(`KAGEMUSHA V1 ciphertext and tag must be exactly ${ENCRYPTED_CREDIT_BYTES} bytes`);
   },
+  8,
 );
 
 const OPERATION_KINDS = Object.freeze(["bootstrap", "mintFold", "sendSplit", "receiveFold", "redeemSplit", "rotate"]);
 const CREDIT_PURPOSES = Object.freeze(["mint", "peer"]);
-const KagemushaLifecycleBindingV1 = defineModel(
+const KagemushaLifecycleBindingV1 = /* @__PURE__ */ defineModel(
   "KagemushaLifecycleBindingV1",
-  [["version", T.U16], ["networkId", T.NETWORK], ["protocolVersion", T.U16], ["suiteId", T.FIXED32], ["vkDigest", T.FIXED32],
-    ["releaseId", T.FIXED32], ["asset", T.ASSET], ["assetIncarnation", T.INCARNATION], ["scale", T.U32],
-    ["liabilityPoolId", T.FIXED32], ["hardwareProfileId", T.FIXED32], ["policyEpoch", T.U64], ["operationKind", T.OPERATION_KIND],
-    ["requestId", T.RAW32], ["receiverLaneCommitment", T.RAW32], ["creditId", T.RAW32], ["ciphertextDigest", T.RAW32]],
+  [["version", K_TYPE_U16], ["networkId", K_TYPE_NETWORK], ["protocolVersion", K_TYPE_U16], ["suiteId", K_TYPE_FIXED32], ["vkDigest", K_TYPE_FIXED32],
+    ["releaseId", K_TYPE_FIXED32], ["asset", K_TYPE_ASSET], ["assetIncarnation", K_TYPE_INCARNATION], ["scale", K_TYPE_U32],
+    ["liabilityPoolId", K_TYPE_FIXED32], ["hardwareProfileId", K_TYPE_FIXED32], ["policyEpoch", K_TYPE_U64], ["operationKind", K_TYPE_OPERATION_KIND],
+    ["requestId", K_TYPE_RAW32], ["receiverLaneCommitment", K_TYPE_RAW32], ["creditId", K_TYPE_RAW32], ["ciphertextDigest", K_TYPE_RAW32]],
   (v) => {
     requireVersion(v.version);
-    if (v.protocolVersion !== 1 || v.policyEpoch === 0n) throw new TypeError("KAGEMUSHA V1 lifecycle header is invalid");
+    if (v.protocolVersion !== 1 || v.policyEpoch === 0n) rejectType("KAGEMUSHA V1 lifecycle header is invalid");
     requireEqual(v.liabilityPoolId, liabilityPoolId(v.networkId, v.asset, v.assetIncarnation), "lifecycle liability pool");
     const requestFieldsAreSet = !isZero(v.requestId) && !isZero(v.receiverLaneCommitment);
     const requestFieldsAreZero = isZero(v.requestId) && isZero(v.receiverLaneCommitment);
@@ -281,196 +295,202 @@ const KagemushaLifecycleBindingV1 = defineModel(
     if ((v.operationKind === "sendSplit" && !(requestFieldsAreSet && creditFieldsAreSet))
         || (v.operationKind === "mintFold" && (!requestFieldsAreZero || !creditFieldsAreSet))
         || (!new Set(["sendSplit", "mintFold"]).has(v.operationKind) && !allAreZero)) {
-      throw new TypeError("KAGEMUSHA V1 lifecycle operation identities are invalid");
+      rejectType("KAGEMUSHA V1 lifecycle operation identities are invalid");
     }
   },
 );
-const KagemushaPaymentRequestV1 = defineModel(
+const KagemushaPaymentRequestV1 = /* @__PURE__ */ defineModel(
   "KagemushaPaymentRequestV1",
-  [["version", T.U16], ["releaseId", T.FIXED32], ["networkId", T.NETWORK], ["asset", T.ASSET], ["assetIncarnation", T.INCARNATION],
-    ["scale", T.U32], ["liabilityPoolId", T.FIXED32], ["recipient", T.ACCOUNT], ["amount", T.U128],
-    ["recipientEncryptionKey", T.FIXED32],
-    ["hardwareCredential", "KagemushaHardwareCredentialV1"], ["requestId", T.FIXED32],
-    ["issuedAtMs", T.U64], ["expiresAtMs", T.U64],
-    ["signature", T.SIGNATURE]],
+  [["version", K_TYPE_U16], ["releaseId", K_TYPE_FIXED32], ["networkId", K_TYPE_NETWORK], ["asset", K_TYPE_ASSET], ["assetIncarnation", K_TYPE_INCARNATION],
+    ["scale", K_TYPE_U32], ["liabilityPoolId", K_TYPE_FIXED32], ["recipient", K_TYPE_ACCOUNT], ["amount", K_TYPE_U128],
+    ["recipientEncryptionKey", K_TYPE_FIXED32],
+    ["hardwareCredential", KagemushaHardwareCredentialV1], ["requestId", K_TYPE_FIXED32],
+    ["issuedAtMs", K_TYPE_U64], ["expiresAtMs", K_TYPE_U64],
+    ["signature", K_TYPE_SIGNATURE]],
   (v) => {
     header(v);
-    if (v.amount === 0n) throw new TypeError("KAGEMUSHA V1 request amount must be positive");
+    if (v.amount === 0n) rejectType("KAGEMUSHA V1 request amount must be positive");
     requireX25519Key(v.recipientEncryptionKey, "request recipient encryption key");
-    if (v.expiresAtMs <= v.issuedAtMs || v.expiresAtMs - v.issuedAtMs > 300000n) throw new RangeError("KAGEMUSHA V1 request validity window is invalid");
+    if (v.expiresAtMs <= v.issuedAtMs || v.expiresAtMs - v.issuedAtMs > 300000n) rejectRange("KAGEMUSHA V1 request validity window is invalid");
     if (!equalBytes(networkIdBytes(v.networkId), networkIdBytes(v.hardwareCredential.networkId))
-        || v.issuedAtMs < v.hardwareCredential.issuedAtMs || v.expiresAtMs > v.hardwareCredential.expiresAtMs) throw new TypeError("KAGEMUSHA V1 request credential binding is invalid");
+        || v.issuedAtMs < v.hardwareCredential.issuedAtMs || v.expiresAtMs > v.hardwareCredential.expiresAtMs) rejectType("KAGEMUSHA V1 request credential binding is invalid");
   },
 );
-const KagemushaPeerCreditContextV1 = defineModel(
+const KagemushaPeerCreditContextV1 = /* @__PURE__ */ defineModel(
   "KagemushaPeerCreditContextV1",
-  [["version", T.U16], ["requestDigest", T.FIXED32], ["amount", T.U128],
-    ["senderBeforeCommitment", T.FIXED32], ["senderAfterCommitment", T.FIXED32],
-    ["preparedTransferDigest", T.FIXED32], ["recipientEncryptionKey", T.FIXED32]],
+  [["version", K_TYPE_U16], ["requestDigest", K_TYPE_FIXED32], ["amount", K_TYPE_U128],
+    ["senderBeforeCommitment", K_TYPE_FIXED32], ["senderAfterCommitment", K_TYPE_FIXED32],
+    ["preparedTransferDigest", K_TYPE_FIXED32], ["recipientEncryptionKey", K_TYPE_FIXED32]],
   (v) => {
     requireVersion(v.version);
     if (v.amount === 0n || equalBytes(v.senderBeforeCommitment, v.senderAfterCommitment)) {
-      throw new TypeError("KAGEMUSHA V1 peer credit context is invalid");
+      rejectType("KAGEMUSHA V1 peer credit context is invalid");
     }
     requireX25519Key(v.recipientEncryptionKey, "peer credit recipient key");
   },
 );
-const KagemushaTrustedCommitTimeV1 = defineModel(
-  "KagemushaTrustedCommitTimeV1", [["timeEvidenceCommitment", T.FIXED32]],
+const KagemushaTrustedCommitTimeV1 = /* @__PURE__ */ defineModel(
+  "KagemushaTrustedCommitTimeV1", [["timeEvidenceCommitment", K_TYPE_FIXED32]],
 );
-const KagemushaMonotonicLeaseV1 = defineModel(
-  "KagemushaMonotonicLeaseV1", [["leaseEvidenceCommitment", T.FIXED32]],
+const KagemushaMonotonicLeaseV1 = /* @__PURE__ */ defineModel(
+  "KagemushaMonotonicLeaseV1", [["leaseEvidenceCommitment", K_TYPE_FIXED32]],
 );
-const KagemushaOutboxReservationV1 = defineModel(
+const KagemushaOutboxReservationV1 = /* @__PURE__ */ defineModel(
   "KagemushaOutboxReservationV1",
-  [["reservationId", T.FIXED32], ["operationKind", T.OPERATION_KIND], ["reservedOutboxBytes", T.U32], ["issuedAtMs", T.U64], ["expiresAtMs", T.U64]],
+  [["reservationId", K_TYPE_FIXED32], ["operationKind", K_TYPE_OPERATION_KIND], ["reservedOutboxBytes", K_TYPE_U32], ["issuedAtMs", K_TYPE_U64], ["expiresAtMs", K_TYPE_U64]],
   (v) => {
     const minimum = v.operationKind === "sendSplit" ? 25728 : v.operationKind === "redeemSplit" ? 26112 : null;
-    if (minimum === null || v.reservedOutboxBytes < minimum || v.issuedAtMs >= v.expiresAtMs) throw new TypeError("KAGEMUSHA V1 outbox reservation is invalid");
+    if (minimum === null || v.reservedOutboxBytes < minimum || v.issuedAtMs >= v.expiresAtMs) rejectType("KAGEMUSHA V1 outbox reservation is invalid");
   },
 );
-const KagemushaHardwareTerminalBodyV1 = defineModel(
+const KagemushaHardwareTerminalBodyV1 = /* @__PURE__ */ defineModel(
   "KagemushaHardwareTerminalBodyV1",
-  [["version", T.U16], ["candidateEnvelopeDigest", T.FIXED32], ["lifecycleBindingDigest", T.FIXED32],
-    ["transitionNullifier", T.FIXED32], ["outboxReservationCommitment", T.FIXED32], ["commitEvidence", T.COMMIT_EVIDENCE],
-    ["hardwareProfileId", T.FIXED32], ["policyEpoch", T.U64], ["privateSuccessorCommitment", T.FIXED32],
-    ["privateJournalCommitment", T.FIXED32], ["privateRecoveryCommitment", T.FIXED32]],
-  (v) => { requireVersion(v.version); if (v.policyEpoch === 0n) throw new TypeError("KAGEMUSHA V1 terminal body policy epoch must be positive"); },
+  [["version", K_TYPE_U16], ["candidateEnvelopeDigest", K_TYPE_FIXED32], ["lifecycleBindingDigest", K_TYPE_FIXED32],
+    ["transitionNullifier", K_TYPE_FIXED32], ["outboxReservationCommitment", K_TYPE_FIXED32], ["commitEvidence", K_TYPE_COMMIT_EVIDENCE],
+    ["hardwareProfileId", K_TYPE_FIXED32], ["policyEpoch", K_TYPE_U64], ["privateSuccessorCommitment", K_TYPE_FIXED32],
+    ["privateJournalCommitment", K_TYPE_FIXED32], ["privateRecoveryCommitment", K_TYPE_FIXED32]],
+  (v) => { requireVersion(v.version); if (v.policyEpoch === 0n) rejectType("KAGEMUSHA V1 terminal body policy epoch must be positive"); },
 );
-const KagemushaCommitCertificateV1 = defineModel(
+const KagemushaCommitCertificateV1 = /* @__PURE__ */ defineModel(
   "KagemushaCommitCertificateV1",
-  [["version", T.U16], ["certificateId", T.FIXED32], ["candidateEnvelopeDigest", T.FIXED32],
-    ["lifecycleBindingDigest", T.FIXED32], ["transitionNullifier", T.FIXED32], ["outboxReservationCommitment", T.FIXED32],
-    ["commitEvidence", T.COMMIT_EVIDENCE], ["hardwareProfileId", T.FIXED32], ["policyEpoch", T.U64],
-    ["hardwareTerminalCommitment", T.FIXED32]],
-  (v) => { requireVersion(v.version); if (v.policyEpoch === 0n) throw new TypeError("KAGEMUSHA V1 commit certificate policy epoch must be positive"); },
+  [["version", K_TYPE_U16], ["certificateId", K_TYPE_FIXED32], ["candidateEnvelopeDigest", K_TYPE_FIXED32],
+    ["lifecycleBindingDigest", K_TYPE_FIXED32], ["transitionNullifier", K_TYPE_FIXED32], ["outboxReservationCommitment", K_TYPE_FIXED32],
+    ["commitEvidence", K_TYPE_COMMIT_EVIDENCE], ["hardwareProfileId", K_TYPE_FIXED32], ["policyEpoch", K_TYPE_U64],
+    ["hardwareTerminalCommitment", K_TYPE_FIXED32]],
+  (v) => { requireVersion(v.version); if (v.policyEpoch === 0n) rejectType("KAGEMUSHA V1 commit certificate policy epoch must be positive"); },
+  8,
 );
-const KagemushaRedemptionProofV1 = defineModel(
+const KagemushaRedemptionProofV1 = /* @__PURE__ */ defineModel(
   "KagemushaRedemptionProofV1",
-  [["version", T.U16], ["eqProtocolDigest", T.FIXED32], ["epProtocolDigest", T.FIXED32], ["semanticDigest", T.FIXED32],
-    ["candidateEnvelopeDigest", T.FIXED32], ["commitCertificateDigest", T.FIXED32], ["eqDeferredAudit", T.FIXED32],
-    ["epDeferredAudit", T.FIXED32], ["eqProof", T.VECTOR], ["epProof", T.VECTOR], ["eqHistory", T.VECTOR], ["epHistory", T.VECTOR]],
+  [["version", K_TYPE_U16], ["eqProtocolDigest", K_TYPE_FIXED32], ["epProtocolDigest", K_TYPE_FIXED32], ["semanticDigest", K_TYPE_FIXED32],
+    ["candidateEnvelopeDigest", K_TYPE_FIXED32], ["commitCertificateDigest", K_TYPE_FIXED32], ["eqDeferredAudit", K_TYPE_FIXED32],
+    ["epDeferredAudit", K_TYPE_FIXED32], ["eqProof", K_TYPE_VECTOR], ["epProof", K_TYPE_VECTOR], ["eqHistory", K_TYPE_VECTOR], ["epHistory", K_TYPE_VECTOR]],
   validateProofVectors,
+  8,
 );
-const KagemushaPaymentProofV1 = defineModel(
+const KagemushaPaymentProofV1 = /* @__PURE__ */ defineModel(
   "KagemushaPaymentProofV1",
-  [["version", T.U16], ["eqProtocolDigest", T.FIXED32], ["epProtocolDigest", T.FIXED32], ["semanticDigest", T.FIXED32],
-    ["candidateEnvelopeDigest", T.FIXED32], ["commitCertificateDigest", T.FIXED32], ["eqDeferredAudit", T.FIXED32],
-    ["epDeferredAudit", T.FIXED32], ["eqProof", T.VECTOR], ["epProof", T.VECTOR], ["eqHistory", T.VECTOR], ["epHistory", T.VECTOR]],
+  [["version", K_TYPE_U16], ["eqProtocolDigest", K_TYPE_FIXED32], ["epProtocolDigest", K_TYPE_FIXED32], ["semanticDigest", K_TYPE_FIXED32],
+    ["candidateEnvelopeDigest", K_TYPE_FIXED32], ["commitCertificateDigest", K_TYPE_FIXED32], ["eqDeferredAudit", K_TYPE_FIXED32],
+    ["epDeferredAudit", K_TYPE_FIXED32], ["eqProof", K_TYPE_VECTOR], ["epProof", K_TYPE_VECTOR], ["eqHistory", K_TYPE_VECTOR], ["epHistory", K_TYPE_VECTOR]],
   validateProofVectors,
+  8,
 );
-const KagemushaPaymentOutputV1 = defineModel(
+const KagemushaPaymentOutputV1 = /* @__PURE__ */ defineModel(
   "KagemushaPaymentOutputV1",
-  [["version", T.U16], ["requestDigest", T.FIXED32], ["amount", T.U128],
-    ["senderBeforeCommitment", T.FIXED32], ["senderAfterCommitment", T.FIXED32],
-    ["transitionNullifier", T.FIXED32], ["creditId", T.FIXED32], ["ciphertextCommitment", T.FIXED32],
-    ["commitEvidence", T.COMMIT_EVIDENCE], ["committedAtMs", T.U64]],
+  [["version", K_TYPE_U16], ["requestDigest", K_TYPE_FIXED32], ["amount", K_TYPE_U128],
+    ["senderBeforeCommitment", K_TYPE_FIXED32], ["senderAfterCommitment", K_TYPE_FIXED32],
+    ["transitionNullifier", K_TYPE_FIXED32], ["creditId", K_TYPE_FIXED32], ["ciphertextCommitment", K_TYPE_FIXED32],
+    ["commitEvidence", K_TYPE_COMMIT_EVIDENCE], ["committedAtMs", K_TYPE_U64]],
   (v) => {
     requireVersion(v.version);
     if (v.amount === 0n || v.committedAtMs === 0n || equalBytes(v.senderBeforeCommitment, v.senderAfterCommitment)) {
-      throw new TypeError("KAGEMUSHA V1 payment output is invalid");
+      rejectType("KAGEMUSHA V1 payment output is invalid");
     }
   },
 );
-const KagemushaPaymentV1 = defineModel(
+const KagemushaPaymentV1 = /* @__PURE__ */ defineModel(
   "KagemushaPaymentV1",
-  [["version", T.U16], ["output", "KagemushaPaymentOutputV1"], ["encryptedCredit", T.VECTOR],
-    ["commitCertificate", "KagemushaCommitCertificateV1"], ["proof", "KagemushaPaymentProofV1"]],
-  (v) => { requireVersion(v.version); if (v.output.version !== v.version || v.commitCertificate.version !== v.version || v.proof.version !== v.version) throw new TypeError("KAGEMUSHA V1 payment version mismatch"); },
+  [["version", K_TYPE_U16], ["output", KagemushaPaymentOutputV1], ["encryptedCredit", K_TYPE_VECTOR],
+    ["commitCertificate", KagemushaCommitCertificateV1], ["proof", KagemushaPaymentProofV1]],
+  (v) => { requireVersion(v.version); if (v.output.version !== v.version || v.commitCertificate.version !== v.version || v.proof.version !== v.version) rejectType("KAGEMUSHA V1 payment version mismatch"); },
 );
-const KagemushaInboxReceiptV1 = defineModel(
-  "KagemushaInboxReceiptV1", [["version", T.U16], ["creditId", T.FIXED32], ["receiptCommitment", T.FIXED32]],
+const KagemushaInboxReceiptV1 = /* @__PURE__ */ defineModel(
+  "KagemushaInboxReceiptV1", [["version", K_TYPE_U16], ["creditId", K_TYPE_FIXED32], ["receiptCommitment", K_TYPE_FIXED32]],
   (v) => requireVersion(v.version),
 );
-const KagemushaAcknowledgementV1 = defineModel(
+const KagemushaAcknowledgementV1 = /* @__PURE__ */ defineModel(
   "KagemushaAcknowledgementV1",
-  [["version", T.U16], ["requestDigest", T.FIXED32], ["paymentDigest", T.FIXED32], ["inboxReceipt", "KagemushaInboxReceiptV1"], ["signature", T.SIGNATURE]],
-  (v) => { requireVersion(v.version); if (v.inboxReceipt.version !== v.version) throw new TypeError("KAGEMUSHA V1 acknowledgement version mismatch"); },
+  [["version", K_TYPE_U16], ["requestDigest", K_TYPE_FIXED32], ["paymentDigest", K_TYPE_FIXED32], ["inboxReceipt", KagemushaInboxReceiptV1], ["signature", K_TYPE_SIGNATURE]],
+  (v) => { requireVersion(v.version); if (v.inboxReceipt.version !== v.version) rejectType("KAGEMUSHA V1 acknowledgement version mismatch"); },
+  2,
 );
 
-const KagemushaMintAuthorizationContextV1 = defineModel(
+const KagemushaMintAuthorizationContextV1 = /* @__PURE__ */ defineModel(
   "KagemushaMintAuthorizationContextV1",
-  [["version", T.U16], ["operationId", T.FIXED32], ["releaseId", T.FIXED32], ["suiteId", T.FIXED32], ["vkDigest", T.FIXED32],
-    ["artifactManifestDigest", T.FIXED32], ["networkId", T.NETWORK], ["asset", T.ASSET], ["assetIncarnation", T.INCARNATION],
-    ["scale", T.U32], ["liabilityPoolId", T.FIXED32], ["amount", T.U128], ["payer", T.ACCOUNT], ["recipient", T.ACCOUNT],
-    ["hardwareCredentialId", T.FIXED32], ["hardwareProfileId", T.FIXED32], ["policyEpoch", T.U64],
-    ["recipientCredentialCommitment", T.FIXED32], ["creditCommitment", T.FIXED32], ["recipientOneTimeKey", T.FIXED32]],
+  [["version", K_TYPE_U16], ["operationId", K_TYPE_FIXED32], ["releaseId", K_TYPE_FIXED32], ["suiteId", K_TYPE_FIXED32], ["vkDigest", K_TYPE_FIXED32],
+    ["artifactManifestDigest", K_TYPE_FIXED32], ["networkId", K_TYPE_NETWORK], ["asset", K_TYPE_ASSET], ["assetIncarnation", K_TYPE_INCARNATION],
+    ["scale", K_TYPE_U32], ["liabilityPoolId", K_TYPE_FIXED32], ["amount", K_TYPE_U128], ["payer", K_TYPE_ACCOUNT], ["recipient", K_TYPE_ACCOUNT],
+    ["hardwareCredentialId", K_TYPE_FIXED32], ["hardwareProfileId", K_TYPE_FIXED32], ["policyEpoch", K_TYPE_U64],
+    ["recipientCredentialCommitment", K_TYPE_FIXED32], ["creditCommitment", K_TYPE_FIXED32], ["recipientOneTimeKey", K_TYPE_FIXED32]],
   (v) => {
     header(v, true);
-    if (v.policyEpoch === 0n) throw new TypeError("mint authorization policy epoch must be positive");
+    if (v.policyEpoch === 0n) rejectType("mint authorization policy epoch must be positive");
     requireX25519Key(v.recipientOneTimeKey, "mint recipient key");
     requireEqual(v.liabilityPoolId, liabilityPoolId(v.networkId, v.asset, v.assetIncarnation), "mint authorization liability pool");
   },
 );
-const KagemushaMintAuthorizationStatementV1 = defineModel(
+const KagemushaMintAuthorizationStatementV1 = /* @__PURE__ */ defineModel(
   "KagemushaMintAuthorizationStatementV1",
-  [["version", T.U16], ["context", "KagemushaMintAuthorizationContextV1"], ["issuanceCommitment", T.FIXED32], ["creditId", T.FIXED32], ["ciphertextDigest", T.FIXED32]],
-  (v) => { requireVersion(v.version); if (v.context.version !== v.version) throw new TypeError("mint authorization statement version mismatch"); },
+  [["version", K_TYPE_U16], ["context", KagemushaMintAuthorizationContextV1], ["issuanceCommitment", K_TYPE_FIXED32], ["creditId", K_TYPE_FIXED32], ["ciphertextDigest", K_TYPE_FIXED32]],
+  (v) => { requireVersion(v.version); if (v.context.version !== v.version) rejectType("mint authorization statement version mismatch"); },
 );
-const KagemushaMintAuthorizationV1 = defineModel(
+const KagemushaMintAuthorizationV1 = /* @__PURE__ */ defineModel(
   "KagemushaMintAuthorizationV1",
-  [["version", T.U16], ["statement", "KagemushaMintAuthorizationStatementV1"], ["proof", "KagemushaPairedProofV1"]],
-  (v) => { requireVersion(v.version); if (v.statement.version !== v.version || v.proof.version !== v.version) throw new TypeError("mint authorization version mismatch"); },
+  [["version", K_TYPE_U16], ["statement", KagemushaMintAuthorizationStatementV1], ["proof", KagemushaPairedProofV1]],
+  (v) => { requireVersion(v.version); if (v.statement.version !== v.version || v.proof.version !== v.version) rejectType("mint authorization version mismatch"); },
 );
-const KagemushaMintCreditStatementV1 = defineModel(
+const KagemushaMintCreditStatementV1 = /* @__PURE__ */ defineModel(
   "KagemushaMintCreditStatementV1",
-  [["version", T.U16], ["lifecycle", "KagemushaLifecycleBindingV1"], ["recipientCredentialCommitment", T.FIXED32],
-    ["authorizationContextDigest", T.FIXED32], ["mintAuthorizationDigest", T.FIXED32], ["amount", T.U128],
-    ["issuanceCommitment", T.FIXED32], ["recipient", T.ACCOUNT], ["creditCommitment", T.FIXED32], ["mintedAtMs", T.U64]],
-  (v) => { requireVersion(v.version); if (v.lifecycle.version !== v.version || v.lifecycle.operationKind !== "mintFold" || v.amount === 0n || v.mintedAtMs === 0n) throw new TypeError("KAGEMUSHA V1 mint statement is invalid"); },
+  [["version", K_TYPE_U16], ["lifecycle", KagemushaLifecycleBindingV1], ["recipientCredentialCommitment", K_TYPE_FIXED32],
+    ["authorizationContextDigest", K_TYPE_FIXED32], ["mintAuthorizationDigest", K_TYPE_FIXED32], ["amount", K_TYPE_U128],
+    ["issuanceCommitment", K_TYPE_FIXED32], ["recipient", K_TYPE_ACCOUNT], ["creditCommitment", K_TYPE_FIXED32], ["mintedAtMs", K_TYPE_U64]],
+  (v) => { requireVersion(v.version); if (v.lifecycle.version !== v.version || v.lifecycle.operationKind !== "mintFold" || v.amount === 0n || v.mintedAtMs === 0n) rejectType("KAGEMUSHA V1 mint statement is invalid"); },
 );
-const KagemushaMintCreditV1 = defineModel(
+const KagemushaMintCreditV1 = /* @__PURE__ */ defineModel(
   "KagemushaMintCreditV1",
-  [["version", T.U16], ["statement", "KagemushaMintCreditStatementV1"], ["proof", "KagemushaPairedProofV1"],
-    ["finalityCertificateBinding", T.FIXED32], ["finalityAuthorityHead", T.FIXED32], ["finalityGenesisRosterId", T.FIXED32],
-    ["finalityProofBindingDigest", T.FIXED32], ["encryptedCredit", T.VECTOR], ["artifactManifestDigest", T.FIXED32]],
-  (v) => { requireVersion(v.version); if (v.statement.version !== v.version || v.proof.version !== v.version) throw new TypeError("mint credit version mismatch"); },
+  [["version", K_TYPE_U16], ["statement", KagemushaMintCreditStatementV1], ["proof", KagemushaPairedProofV1],
+    ["finalityCertificateBinding", K_TYPE_FIXED32], ["finalityAuthorityHead", K_TYPE_FIXED32], ["finalityGenesisRosterId", K_TYPE_FIXED32],
+    ["finalityProofBindingDigest", K_TYPE_FIXED32], ["encryptedCredit", K_TYPE_VECTOR], ["artifactManifestDigest", K_TYPE_FIXED32]],
+  (v) => { requireVersion(v.version); if (v.statement.version !== v.version || v.proof.version !== v.version) rejectType("mint credit version mismatch"); },
 );
 
 // Operation 16 exposes only public canonical archives; native hardware keeps reservations,
 // openings, journal snapshots, and complete Guard certificates private.
-const KagemushaDeviceMintStageCommandV1 = defineModel(
+const KagemushaDeviceMintStageCommandV1 = /* @__PURE__ */ defineModel(
   "KagemushaDeviceMintStageCommandV1",
-  [["version", T.U16], ["canonicalAuthorization", T.MINT_FRAME], ["canonicalMintCredit", T.MINT_FRAME]],
+  [["version", K_TYPE_U16], ["canonicalAuthorization", K_TYPE_MINT_FRAME], ["canonicalMintCredit", K_TYPE_MINT_FRAME]],
   (v) => requireVersion(v.version),
+  8,
 );
-const KagemushaDeviceMintStageResultV1 = defineModel(
+const KagemushaDeviceMintStageResultV1 = /* @__PURE__ */ defineModel(
   "KagemushaDeviceMintStageResultV1",
-  [["version", T.U16], ["disposition", T.U8], ["creditId", T.FIXED32]],
+  [["version", K_TYPE_U16], ["disposition", K_TYPE_U8], ["creditId", K_TYPE_FIXED32]],
   (v) => {
     requireVersion(v.version);
-    if (v.disposition !== 0 && v.disposition !== 1) throw new TypeError("KAGEMUSHA V1 mint-stage disposition must be 0 or 1");
+    if (v.disposition !== 0 && v.disposition !== 1) rejectType("KAGEMUSHA V1 mint-stage disposition must be 0 or 1");
   },
+  2,
 );
 
-const KagemushaRedemptionStatementV1 = defineModel(
+const KagemushaRedemptionStatementV1 = /* @__PURE__ */ defineModel(
   "KagemushaRedemptionStatementV1",
-  [["version", T.U16], ["lifecycle", "KagemushaLifecycleBindingV1"], ["amount", T.U128], ["beneficiary", T.ACCOUNT],
-    ["terminalNullifier", T.FIXED32], ["redemptionCommitment", T.FIXED32], ["redemptionId", T.FIXED32],
-    ["commitEvidence", T.COMMIT_EVIDENCE]],
+  [["version", K_TYPE_U16], ["lifecycle", KagemushaLifecycleBindingV1], ["amount", K_TYPE_U128], ["beneficiary", K_TYPE_ACCOUNT],
+    ["terminalNullifier", K_TYPE_FIXED32], ["redemptionCommitment", K_TYPE_FIXED32], ["redemptionId", K_TYPE_FIXED32],
+    ["commitEvidence", K_TYPE_COMMIT_EVIDENCE]],
   (v) => { requireVersion(v.version); if (v.lifecycle.version !== v.version || v.lifecycle.operationKind !== "redeemSplit"
-    || v.amount === 0n) throw new TypeError("KAGEMUSHA V1 redemption statement is invalid"); },
+    || v.amount === 0n) rejectType("KAGEMUSHA V1 redemption statement is invalid"); },
 );
-const KagemushaRedemptionVoucherV1 = defineModel(
+const KagemushaRedemptionVoucherV1 = /* @__PURE__ */ defineModel(
   "KagemushaRedemptionVoucherV1",
-  [["version", T.U16], ["statement", "KagemushaRedemptionStatementV1"], ["commitCertificate", "KagemushaCommitCertificateV1"],
-    ["proof", "KagemushaRedemptionProofV1"], ["artifactManifestDigest", T.FIXED32]],
-  (v) => { requireVersion(v.version); if (v.statement.version !== v.version || v.commitCertificate.version !== v.version || v.proof.version !== v.version) throw new TypeError("redemption voucher version mismatch"); },
+  [["version", K_TYPE_U16], ["statement", KagemushaRedemptionStatementV1], ["commitCertificate", KagemushaCommitCertificateV1],
+    ["proof", KagemushaRedemptionProofV1], ["artifactManifestDigest", K_TYPE_FIXED32]],
+  (v) => { requireVersion(v.version); if (v.statement.version !== v.version || v.commitCertificate.version !== v.version || v.proof.version !== v.version) rejectType("redemption voucher version mismatch"); },
 );
 
-const KagemushaTopUpRequestV1 = defineModel(
+const KagemushaTopUpRequestV1 = /* @__PURE__ */ defineModel(
   "KagemushaTopUpRequestV1",
-  [["version", T.U16], ["operationId", T.FIXED32], ["issuanceCommitment", T.FIXED32], ["creditId", T.FIXED32],
-    ["releaseId", T.FIXED32], ["suiteId", T.FIXED32], ["vkDigest", T.FIXED32], ["networkId", T.NETWORK], ["asset", T.ASSET],
-    ["assetIncarnation", T.INCARNATION], ["scale", T.U32], ["amount", T.U128], ["liabilityPoolId", T.FIXED32],
-    ["payer", T.ACCOUNT], ["recipient", T.ACCOUNT], ["hardwareCredential", "KagemushaHardwareCredentialV1"],
-    ["recipientCredentialCommitment", T.FIXED32], ["creditCommitment", T.FIXED32], ["recipientOneTimeKey", T.FIXED32],
-    ["encryptedCredit", T.VECTOR], ["artifactManifestDigest", T.FIXED32], ["mintAuthorization", T.OPTIONAL_MINT_AUTHORIZATION]],
+  [["version", K_TYPE_U16], ["operationId", K_TYPE_FIXED32], ["issuanceCommitment", K_TYPE_FIXED32], ["creditId", K_TYPE_FIXED32],
+    ["releaseId", K_TYPE_FIXED32], ["suiteId", K_TYPE_FIXED32], ["vkDigest", K_TYPE_FIXED32], ["networkId", K_TYPE_NETWORK], ["asset", K_TYPE_ASSET],
+    ["assetIncarnation", K_TYPE_INCARNATION], ["scale", K_TYPE_U32], ["amount", K_TYPE_U128], ["liabilityPoolId", K_TYPE_FIXED32],
+    ["payer", K_TYPE_ACCOUNT], ["recipient", K_TYPE_ACCOUNT], ["hardwareCredential", KagemushaHardwareCredentialV1],
+    ["recipientCredentialCommitment", K_TYPE_FIXED32], ["creditCommitment", K_TYPE_FIXED32], ["recipientOneTimeKey", K_TYPE_FIXED32],
+    ["encryptedCredit", K_TYPE_VECTOR], ["artifactManifestDigest", K_TYPE_FIXED32], ["mintAuthorization", { optional: KagemushaMintAuthorizationV1 }]],
   (v) => { header(v, true); requireX25519Key(v.recipientOneTimeKey, "top-up recipient key"); },
 );
-const KagemushaRedemptionRequestV1 = defineModel(
-  "KagemushaRedemptionRequestV1", [["version", T.U16], ["operationId", T.FIXED32], ["voucher", "KagemushaRedemptionVoucherV1"]],
-  (v) => { requireVersion(v.version); if (v.voucher.version !== v.version) throw new TypeError("redemption request version mismatch"); },
+const KagemushaRedemptionRequestV1 = /* @__PURE__ */ defineModel(
+  "KagemushaRedemptionRequestV1", [["version", K_TYPE_U16], ["operationId", K_TYPE_FIXED32], ["voucher", KagemushaRedemptionVoucherV1]],
+  (v) => { requireVersion(v.version); if (v.voucher.version !== v.version) rejectType("redemption request version mismatch"); },
 );
 
 function encodeTopLevel(value, Model, schema, maximum, validate) {
@@ -536,16 +556,16 @@ const decodeEncryptedCreditEnvelope = (raw, recipientKey) => decodeTopLevel(raw,
 
 function encodeCreditOpening(value) {
   const raw = encodeTopLevel(value, KagemushaCreditOpeningV1, SCHEMAS.creditOpening, 256);
-  if (raw.length !== CREDIT_OPENING_BYTES) throw new TypeError("KAGEMUSHA V1 credit opening has a noncanonical fixed size");
+  if (raw.length !== CREDIT_OPENING_BYTES) rejectType("KAGEMUSHA V1 credit opening has a noncanonical fixed size");
   return raw;
 }
 
 function decodeCreditOpening(raw, creditIdValue, amount) {
   const opening = decodeTopLevel(raw, KagemushaCreditOpeningV1, SCHEMAS.creditOpening, 256, (value) => {
     if (creditIdValue !== undefined) requireEqual(value.creditId, fixed32(creditIdValue, "creditId"), "credit opening credit ID");
-    if (amount !== undefined && value.amount !== unsigned(amount, MAX_U128, "amount")) throw new TypeError("credit opening amount does not match");
+    if (amount !== undefined && value.amount !== unsigned(amount, MAX_U128, "amount")) rejectType("credit opening amount does not match");
   });
-  if (bytes(raw, "credit opening").length !== CREDIT_OPENING_BYTES) throw new TypeError("KAGEMUSHA V1 credit opening has a noncanonical fixed size");
+  if (bytes(raw, "credit opening").length !== CREDIT_OPENING_BYTES) rejectType("KAGEMUSHA V1 credit opening has a noncanonical fixed size");
   return opening;
 }
 
@@ -564,7 +584,7 @@ function lifecycleDigest(lifecycle) {
 }
 
 function commitEvidenceTranscript(evidence) {
-  const selected = normalizeType(T.COMMIT_EVIDENCE, evidence, "commit evidence");
+  const selected = normalizeType(K_TYPE_COMMIT_EVIDENCE, evidence, "commit evidence");
   if (selected instanceof KagemushaTrustedCommitTimeV1) return join(u32(0), selected.timeEvidenceCommitment);
   return join(u32(1), selected.leaseEvidenceCommitment);
 }
@@ -590,12 +610,12 @@ function commitCertificateTranscript(certificate) {
 function validateCommitCertificate(certificate, lifecycle, evidence, nullifier) {
   const value = rawValues(instance(certificate, KagemushaCommitCertificateV1, "commit certificate"));
   const boundLifecycle = instance(lifecycle, KagemushaLifecycleBindingV1, "lifecycle binding");
-  const boundEvidence = normalizeType(T.COMMIT_EVIDENCE, evidence, "commit evidence");
+  const boundEvidence = normalizeType(K_TYPE_COMMIT_EVIDENCE, evidence, "commit evidence");
   requireEqual(value.lifecycleBindingDigest, lifecycleDigest(boundLifecycle), "commit certificate lifecycle digest");
   requireEqual(value.transitionNullifier, fixed32(nullifier, "transition nullifier"), "commit certificate transition nullifier");
   requireEqual(encodeCommitEvidence(value.commitEvidence), encodeCommitEvidence(boundEvidence), "commit certificate evidence");
   requireEqual(value.hardwareProfileId, boundLifecycle.hardwareProfileId, "commit certificate hardware profile");
-  if (value.policyEpoch !== boundLifecycle.policyEpoch) throw new TypeError("commit certificate policy epoch does not match");
+  if (value.policyEpoch !== boundLifecycle.policyEpoch) rejectType("commit certificate policy epoch does not match");
   requireEqual(value.certificateId, expectedCommitCertificateId(certificate), "commit certificate ID");
 }
 
@@ -610,10 +630,10 @@ function validatePaymentOutput(output, request) {
   const bound = instance(request, KagemushaPaymentRequestV1, "payment request");
   const requestDigest = paymentRequestDigest(bound);
   requireEqual(value.requestDigest, requestDigest, "payment request digest");
-  if (value.amount !== bound.amount) throw new TypeError("payment amount does not match request");
+  if (value.amount !== bound.amount) rejectType("payment amount does not match request");
   requireEqual(value.creditId, creditId(value.transitionNullifier, requestDigest), "payment credit ID");
   if (value.committedAtMs < bound.issuedAtMs || value.committedAtMs >= bound.expiresAtMs) {
-    throw new TypeError("payment commit time is outside the request window");
+    rejectType("payment commit time is outside the request window");
   }
 }
 function validatePayment(payment, request) {
@@ -682,7 +702,7 @@ function mintCreditId(statement) {
   const lifecycle = rawValues(s.lifecycle);
   // The frozen context ends at operationKind: current credit ID, ciphertext, and
   // authorization proof bytes are intentionally absent from the issuance preimage.
-  const contextFields = DEFINITIONS.KagemushaLifecycleBindingV1.fields.slice(0, 13);
+  const contextFields = MODEL_DEFINITIONS.get(KagemushaLifecycleBindingV1).fields.slice(0, 13);
   const contextPreimage = join(...contextFields.map(([name, type]) => field(encodeType(type, lifecycle[name]))));
   const contextDigest = digestEncoded(DOMAIN.mintLifecycleContextDigest,
     frame("iroha.kagemusha.v1.mint-lifecycle-context-preimage", contextPreimage, 8));
@@ -718,7 +738,7 @@ function validateDeviceMintStageCommand(command) {
 function validateDeviceMintStageResult(result) {
   const value = rawValues(instance(result, KagemushaDeviceMintStageResultV1, "mint-stage result"));
   requireVersion(value.version);
-  if (value.disposition !== 0 && value.disposition !== 1) throw new TypeError("KAGEMUSHA V1 mint-stage disposition must be 0 or 1");
+  if (value.disposition !== 0 && value.disposition !== 1) rejectType("KAGEMUSHA V1 mint-stage disposition must be 0 or 1");
   fixed32(value.creditId, "mint-stage result credit ID");
 }
 
@@ -738,11 +758,11 @@ function expectedRedemptionId(statement) {
     "redemption statement",
   ));
   const preimage = join(
-    field(encodeType(T.FIXED32, lifecycleDigest(value.lifecycle))),
-    field(encodeType(T.FIXED32, value.terminalNullifier)),
-    field(encodeType(T.U128, value.amount)),
-    field(encodeType(T.ACCOUNT, value.beneficiary)),
-    field(encodeType(T.FIXED32, value.redemptionCommitment)),
+    field(encodeType(K_TYPE_FIXED32, lifecycleDigest(value.lifecycle))),
+    field(encodeType(K_TYPE_FIXED32, value.terminalNullifier)),
+    field(encodeType(K_TYPE_U128, value.amount)),
+    field(encodeType(K_TYPE_ACCOUNT, value.beneficiary)),
+    field(encodeType(K_TYPE_FIXED32, value.redemptionCommitment)),
   );
   return digestEncoded(
     DOMAIN.redemptionId,
@@ -759,7 +779,7 @@ function validateRedemptionStatement(statement) {
   if (equalBytes(value.terminalNullifier, value.redemptionCommitment)
       || equalBytes(value.terminalNullifier, value.redemptionId)
       || equalBytes(value.redemptionCommitment, value.redemptionId)) {
-    throw new TypeError("redemption statement identities must be distinct");
+    rejectType("redemption statement identities must be distinct");
   }
   requireEqual(value.redemptionId, expectedRedemptionId(statement), "redemption ID");
 }
@@ -808,14 +828,14 @@ function validateMintCreditAgainstAuthorization(credit, authorization) {
       || !equalBytes(statement.lifecycle.suiteId, context.suiteId)
       || !equalBytes(statement.lifecycle.vkDigest, context.vkDigest)
       || !equalBytes(networkIdBytes(statement.lifecycle.networkId), networkIdBytes(context.networkId))
-      || !equalBytes(encodeType(T.ASSET, statement.lifecycle.asset), encodeType(T.ASSET, context.asset))
-      || !equalBytes(encodeType(T.INCARNATION, statement.lifecycle.assetIncarnation), encodeType(T.INCARNATION, context.assetIncarnation))
+      || !equalBytes(encodeType(K_TYPE_ASSET, statement.lifecycle.asset), encodeType(K_TYPE_ASSET, context.asset))
+      || !equalBytes(encodeType(K_TYPE_INCARNATION, statement.lifecycle.assetIncarnation), encodeType(K_TYPE_INCARNATION, context.assetIncarnation))
       || statement.lifecycle.scale !== context.scale
       || !equalBytes(statement.lifecycle.liabilityPoolId, context.liabilityPoolId)
       || !equalBytes(statement.lifecycle.hardwareProfileId, context.hardwareProfileId)
       || statement.lifecycle.policyEpoch !== context.policyEpoch
       || !equalBytes(c.artifactManifestDigest, context.artifactManifestDigest)) {
-    throw new TypeError("mint authorization context binding is invalid");
+    rejectType("mint authorization context binding is invalid");
   }
   requireEqual(a.statement.ciphertextDigest, ciphertextDigest(c.encryptedCredit), "mint authorization ciphertext digest");
   decodeEncryptedCreditEnvelope(c.encryptedCredit, context.recipientOneTimeKey);
@@ -857,7 +877,7 @@ function encryptedCreditAadForPeer(output, request) {
   });
 }
 function validateTopUpRequest(request) {
-  if (request.mintAuthorization === null) throw new TypeError("canonical KAGEMUSHA V1 top-up requires mint authorization");
+  if (request.mintAuthorization === null) rejectType("canonical KAGEMUSHA V1 top-up requires mint authorization");
   validateMintAuthorization(request.mintAuthorization);
   const context = request.mintAuthorization.statement.context;
   requireEqual(request.liabilityPoolId, liabilityPoolId(request.networkId, request.asset, request.assetIncarnation), "top-up liability pool");
@@ -869,8 +889,8 @@ function validateTopUpRequest(request) {
       || !equalBytes(request.suiteId, context.suiteId)
       || !equalBytes(request.vkDigest, context.vkDigest)
       || !equalBytes(networkIdBytes(request.networkId), networkIdBytes(context.networkId))
-      || !equalBytes(encodeType(T.ASSET, request.asset), encodeType(T.ASSET, context.asset))
-      || !equalBytes(encodeType(T.INCARNATION, request.assetIncarnation), encodeType(T.INCARNATION, context.assetIncarnation))
+      || !equalBytes(encodeType(K_TYPE_ASSET, request.asset), encodeType(K_TYPE_ASSET, context.asset))
+      || !equalBytes(encodeType(K_TYPE_INCARNATION, request.assetIncarnation), encodeType(K_TYPE_INCARNATION, context.assetIncarnation))
       || request.scale !== context.scale || request.amount !== context.amount
       || !equalBytes(request.liabilityPoolId, context.liabilityPoolId)
       || !equalBytes(request.payer.canonicalPayload(), context.payer.canonicalPayload())
@@ -882,7 +902,7 @@ function validateTopUpRequest(request) {
       || !equalBytes(request.creditCommitment, context.creditCommitment)
       || !equalBytes(request.recipientOneTimeKey, context.recipientOneTimeKey)
       || !equalBytes(request.artifactManifestDigest, context.artifactManifestDigest)) {
-    throw new TypeError("top-up mint authorization context binding is invalid");
+    rejectType("top-up mint authorization context binding is invalid");
   }
 }
 
@@ -893,20 +913,20 @@ function validateEnvelopeRecipient(_envelope, recipientKey) {
 function encodeText(kind, raw) {
   const [maximumRaw, maximumText] = kindLimits(kind);
   const payload = bounded(bytes(raw, "KAGEMUSHA V1 payload"), maximumRaw, "payload");
-  if (payload.length === 0) throw new TypeError("KAGEMUSHA V1 payload is empty");
+  if (payload.length === 0) rejectType("KAGEMUSHA V1 payload is empty");
   const text = `kgm1:${Buffer.from(payload).toString("base64url")}`;
-  if (text.length > maximumText) throw new RangeError("KAGEMUSHA V1 text is oversized");
+  if (text.length > maximumText) rejectRange("KAGEMUSHA V1 text is oversized");
   return text;
 }
 
 function decodeText(kind, text) {
   const [maximumRaw, maximumText] = kindLimits(kind);
-  if (typeof text !== "string" || text.length > maximumText || !text.startsWith("kgm1:")) throw new TypeError("KAGEMUSHA V1 text prefix or size is invalid");
+  if (typeof text !== "string" || text.length > maximumText || !text.startsWith("kgm1:")) rejectType("KAGEMUSHA V1 text prefix or size is invalid");
   const body = text.slice("kgm1:".length);
-  if (!/^[A-Za-z0-9_-]+$/u.test(body) || body.length % 4 === 1) throw new TypeError("KAGEMUSHA V1 text is not canonical unpadded base64url");
+  if (!/^[A-Za-z0-9_-]+$/u.test(body) || body.length % 4 === 1) rejectType("KAGEMUSHA V1 text is not canonical unpadded base64url");
   const raw = Uint8Array.from(Buffer.from(body, "base64url"));
   bounded(raw, maximumRaw, "payload");
-  if (encodeText(kind, raw) !== text) throw new TypeError("KAGEMUSHA V1 text is not canonical");
+  if (encodeText(kind, raw) !== text) rejectType("KAGEMUSHA V1 text is not canonical");
   return raw;
 }
 
@@ -919,7 +939,7 @@ function encodeTypedText(kind, value, ...bindings) {
     mintCredit: encodeMintCredit,
     redemptionVoucher: encodeRedemptionVoucher,
   };
-  if (!Object.hasOwn(encoders, kind)) throw new TypeError("unknown KAGEMUSHA V1 payload kind");
+  if (!Object.hasOwn(encoders, kind)) rejectType("unknown KAGEMUSHA V1 payload kind");
   return encodeText(kind, encoders[kind](value, ...bindings));
 }
 
@@ -932,7 +952,7 @@ function decodeTypedText(kind, text, ...bindings) {
     mintCredit: decodeMintCredit,
     redemptionVoucher: decodeRedemptionVoucher,
   };
-  if (!Object.hasOwn(decoders, kind)) throw new TypeError("unknown KAGEMUSHA V1 payload kind");
+  if (!Object.hasOwn(decoders, kind)) rejectType("unknown KAGEMUSHA V1 payload kind");
   return decoders[kind](decodeText(kind, text), ...bindings);
 }
 
@@ -989,7 +1009,7 @@ function validateCompleteExchange(request, payment, acknowledgement) {
   const textBytes = parts.reduce((sum, value) => sum + textLength(value.length), 0);
   if (rawBytes > COMPLETE_EXCHANGE_MAX_RAW_BYTES
       || textBytes > COMPLETE_EXCHANGE_MAX_TEXT_BYTES) {
-    throw new RangeError("KAGEMUSHA V1 complete three-message exchange is oversized");
+    rejectRange("KAGEMUSHA V1 complete three-message exchange is oversized");
   }
   return rawBytes;
 }
@@ -1005,20 +1025,20 @@ function pastaStateCommitment(value) {
 }
 
 function liabilityPoolId(networkId, asset, assetIncarnation) {
-  const network = normalizeType(T.NETWORK, networkId, "networkId");
-  const definition = normalizeType(T.ASSET, asset, "asset");
-  const incarnation = normalizeType(T.INCARNATION, assetIncarnation, "assetIncarnation");
-  const payload = join(field(networkIdBytes(network)), field(definition.canonicalPayload()), field(encodeType(T.INCARNATION, incarnation)));
+  const network = normalizeType(K_TYPE_NETWORK, networkId, "networkId");
+  const definition = normalizeType(K_TYPE_ASSET, asset, "asset");
+  const incarnation = normalizeType(K_TYPE_INCARNATION, assetIncarnation, "assetIncarnation");
+  const payload = join(field(networkIdBytes(network)), field(definition.canonicalPayload()), field(encodeType(K_TYPE_INCARNATION, incarnation)));
   return digestEncoded(DOMAIN.liabilityPool, frame("iroha.kagemusha.v1.liability-pool-preimage", payload, 1));
 }
 
 function assetIdentityDigest(asset) {
-  const value = normalizeType(T.ASSET, asset, "asset");
+  const value = normalizeType(K_TYPE_ASSET, asset, "asset");
   return digestEncoded(DOMAIN.assetIdentity, frame("iroha_data_model::asset::id::model::AssetDefinitionId", value.canonicalPayload(), 1));
 }
 
 function accountIdentityDigest(account) {
-  const value = normalizeType(T.ACCOUNT, account, "account");
+  const value = normalizeType(K_TYPE_ACCOUNT, account, "account");
   return digestEncoded(DOMAIN.accountIdentity, frame("iroha_data_model::account::model::AccountId", value.canonicalPayload(), 8));
 }
 
@@ -1066,7 +1086,7 @@ function peerCreditOpeningCommitment(
   recoveryNonce,
 ) {
   const exactAmount = unsigned(amount, MAX_U128, "amount");
-  if (exactAmount === 0n) throw new TypeError("amount must be positive");
+  if (exactAmount === 0n) rejectType("amount must be positive");
   return sha256(join(
     DOMAIN.peerCreditOpeningCommitment,
     Uint8Array.of(0),
@@ -1086,32 +1106,31 @@ function preparedTransferDigest(request, senderBeforeCommitment, senderAfterComm
   validateRequest(bound);
   const before = fixed32(senderBeforeCommitment, "senderBeforeCommitment");
   const after = fixed32(senderAfterCommitment, "senderAfterCommitment");
-  if (equalBytes(before, after)) throw new TypeError("sender state commitments must differ");
+  if (equalBytes(before, after)) rejectType("sender state commitments must differ");
   return digestEncoded(DOMAIN.preparedTransfer, join(u16(1), paymentRequestDigest(request),
     u128(bound.amount), before, after, fixed32(transitionNullifier, "transitionNullifier"),
     bound.recipientEncryptionKey, fixed32(ciphertextCommitment, "ciphertextCommitment")));
 }
 function validatePairedProofValues(v) {
-  if (equalBytes(v.guardEqCredentialAudit, v.guardEpCredentialAudit)) throw new TypeError("KAGEMUSHA V1 proof credential audits are aliased");
+  if (equalBytes(v.guardEqCredentialAudit, v.guardEpCredentialAudit)) rejectType("KAGEMUSHA V1 proof credential audits are aliased");
   validateProofVectors(v);
 }
 
 function validateProofVectors(v) {
   requireVersion(v.version);
-  if (equalBytes(v.eqProtocolDigest, v.epProtocolDigest) || equalBytes(v.eqDeferredAudit, v.epDeferredAudit)) throw new TypeError("KAGEMUSHA V1 proof parity bindings are invalid");
-  if (v.eqProof.length === 0 || v.epProof.length === 0 || v.eqProof.length > 2495 || v.epProof.length > 2495 || v.eqProof.length + v.epProof.length > 4990) throw new RangeError("KAGEMUSHA V1 current proof bytes are out of bounds");
-  if (v.eqHistory.length !== 544 || v.epHistory.length !== 544 || isZero(v.eqHistory) || isZero(v.epHistory) || equalBytes(v.eqHistory, v.epHistory)) throw new TypeError("KAGEMUSHA V1 history accumulators are invalid");
+  if (equalBytes(v.eqProtocolDigest, v.epProtocolDigest) || equalBytes(v.eqDeferredAudit, v.epDeferredAudit)) rejectType("KAGEMUSHA V1 proof parity bindings are invalid");
+  if (v.eqProof.length === 0 || v.epProof.length === 0 || v.eqProof.length > 2495 || v.epProof.length > 2495 || v.eqProof.length + v.epProof.length > 4990) rejectRange("KAGEMUSHA V1 current proof bytes are out of bounds");
+  if (v.eqHistory.length !== 544 || v.epHistory.length !== 544 || isZero(v.eqHistory) || isZero(v.epHistory) || equalBytes(v.eqHistory, v.epHistory)) rejectType("KAGEMUSHA V1 history accumulators are invalid");
 }
 
 function encodeModel(value) {
-  const definition = DEFINITIONS[value.constructor.name];
-  if (!definition) throw new TypeError("value is not a KAGEMUSHA V1 model");
-  const raw = rawValues(value);
-  return join(...definition.fields.map(([name, type]) => field(encodeType(type, raw[name]))));
+  const state = MODEL_VALUES.get(value);
+  if (!state) rejectType("value is not a KAGEMUSHA V1 model");
+  return join(...state.fields.map(([name, type]) => field(encodeType(type, state.values[name]))));
 }
 
 function decodeModel(Model, payload) {
-  const definition = DEFINITIONS[Model.name];
+  const definition = MODEL_DEFINITIONS.get(Model);
   const reader = new Reader(payload, Model.name);
   const value = {};
   for (const [name, type] of definition.fields) value[name] = decodeType(type, reader.readField(name), `${Model.name}.${name}`);
@@ -1121,57 +1140,59 @@ function decodeModel(Model, payload) {
 
 function encodeType(type, value) {
   switch (type) {
-    case T.U8: return Uint8Array.of(value);
-    case T.U16: return u16(value);
-    case T.U32: return u32(value);
-    case T.U64: return u64(value);
-    case T.U128: return u128(value);
-    case T.FIXED32: case T.RAW32: return fixedArray(value);
-    case T.FIXED24: return bytes(value, "fixed24");
-    case T.NETWORK: return networkIdBytes(value);
-    case T.ASSET: case T.ACCOUNT: return value.canonicalPayload();
-    case T.INCARNATION: return field(value.hashBytes());
-    case T.PUBLIC_KEY: return value.sec1Bytes();
-    case T.SIGNATURE: return value.rawBytes();
-    case T.VECTOR: case T.MINT_FRAME: return vector(value);
-    case T.OPERATION_KIND: return encodeUnitEnum(value, OPERATION_KINDS, "operation kind");
-    case T.CREDIT_PURPOSE: return encodeUnitEnum(value, CREDIT_PURPOSES, "credit purpose");
-    case T.COMMIT_EVIDENCE: return encodeCommitEvidence(value);
-    case T.OPTIONAL_MINT_AUTHORIZATION: return value === null ? Uint8Array.of(0) : join(Uint8Array.of(1), field(encodeModel(value)));
-    default: return encodeModel(value);
+    case K_TYPE_U8: return Uint8Array.of(value);
+    case K_TYPE_U16: return u16(value);
+    case K_TYPE_U32: return u32(value);
+    case K_TYPE_U64: return u64(value);
+    case K_TYPE_U128: return u128(value);
+    case K_TYPE_FIXED32: case K_TYPE_RAW32: return fixedArray(value);
+    case K_TYPE_FIXED24: return bytes(value, "fixed24");
+    case K_TYPE_NETWORK: return networkIdBytes(value);
+    case K_TYPE_ASSET: case K_TYPE_ACCOUNT: return value.canonicalPayload();
+    case K_TYPE_INCARNATION: return field(value.hashBytes());
+    case K_TYPE_PUBLIC_KEY: return value.sec1Bytes();
+    case K_TYPE_SIGNATURE: return value.rawBytes();
+    case K_TYPE_VECTOR: case K_TYPE_MINT_FRAME: return vector(value);
+    case K_TYPE_OPERATION_KIND: return encodeUnitEnum(value, OPERATION_KINDS, "operation kind");
+    case K_TYPE_CREDIT_PURPOSE: return encodeUnitEnum(value, CREDIT_PURPOSES, "credit purpose");
+    case K_TYPE_COMMIT_EVIDENCE: return encodeCommitEvidence(value);
+    default: return type.optional
+      ? value === null ? Uint8Array.of(0) : join(Uint8Array.of(1), field(encodeModel(value)))
+      : encodeModel(value);
   }
 }
 
 function decodeType(type, payload, context) {
   switch (type) {
-    case T.U8: return Number(readUnsigned(payload, 1, context));
-    case T.U16: return Number(readUnsigned(payload, 2, context));
-    case T.U32: return Number(readUnsigned(payload, 4, context));
-    case T.U64: return readUnsigned(payload, 8, context);
-    case T.U128: return readUnsigned(payload, 16, context);
-    case T.FIXED32: return fixed32(payload, context);
-    case T.RAW32: return raw32(payload, context);
-    case T.FIXED24: return fixedBytes(payload, 24, context, false);
-    case T.NETWORK: if (payload.length !== 32) throw new TypeError(`${context} must be 32 bytes`); return NetworkId.fromBytes(payload);
-    case T.ASSET: return new KagemushaAssetDefinitionIdV1(payload);
-    case T.INCARNATION: return decodeIncarnation(payload, context);
-    case T.ACCOUNT: return new KagemushaAccountIdV1(payload);
-    case T.PUBLIC_KEY: return new KagemushaDevicePublicKeyV1(payload);
-    case T.SIGNATURE: return new KagemushaDeviceSignatureV1(payload);
-    case T.VECTOR: case T.MINT_FRAME: return readVector(payload, context);
-    case T.OPERATION_KIND: return decodeUnitEnum(payload, OPERATION_KINDS, context);
-    case T.CREDIT_PURPOSE: return decodeUnitEnum(payload, CREDIT_PURPOSES, context);
-    case T.COMMIT_EVIDENCE: return decodeCommitEvidence(payload, context);
-    case T.OPTIONAL_MINT_AUTHORIZATION: return decodeOptionalMintAuthorization(payload, context);
-    default: return decodeModel(DEFINITIONS[type].Model, payload);
+    case K_TYPE_U8: return Number(readUnsigned(payload, 1, context));
+    case K_TYPE_U16: return Number(readUnsigned(payload, 2, context));
+    case K_TYPE_U32: return Number(readUnsigned(payload, 4, context));
+    case K_TYPE_U64: return readUnsigned(payload, 8, context);
+    case K_TYPE_U128: return readUnsigned(payload, 16, context);
+    case K_TYPE_FIXED32: return fixed32(payload, context);
+    case K_TYPE_RAW32: return raw32(payload, context);
+    case K_TYPE_FIXED24: return fixedBytes(payload, 24, context, false);
+    case K_TYPE_NETWORK: if (payload.length !== 32) rejectType(`${context} must be 32 bytes`); return NetworkId.fromBytes(payload);
+    case K_TYPE_ASSET: return new KagemushaAssetDefinitionIdV1(payload);
+    case K_TYPE_INCARNATION: return decodeIncarnation(payload, context);
+    case K_TYPE_ACCOUNT: return new KagemushaAccountIdV1(payload);
+    case K_TYPE_PUBLIC_KEY: return new KagemushaDevicePublicKeyV1(payload);
+    case K_TYPE_SIGNATURE: return new KagemushaDeviceSignatureV1(payload);
+    case K_TYPE_VECTOR: case K_TYPE_MINT_FRAME: return readVector(payload, context);
+    case K_TYPE_OPERATION_KIND: return decodeUnitEnum(payload, OPERATION_KINDS, context);
+    case K_TYPE_CREDIT_PURPOSE: return decodeUnitEnum(payload, CREDIT_PURPOSES, context);
+    case K_TYPE_COMMIT_EVIDENCE: return decodeCommitEvidence(payload, context);
+    default: return type.optional
+      ? decodeOptionalModel(type.optional, payload, context)
+      : decodeModel(type, payload);
   }
 }
 
-function decodeOptionalMintAuthorization(payload, context) {
+function decodeOptionalModel(Model, payload, context) {
   if (payload.length === 1 && payload[0] === 0) return null;
-  if (payload.length < 3 || payload[0] !== 1) throw new TypeError(`${context} has an invalid option tag`);
+  if (payload.length < 3 || payload[0] !== 1) rejectType(`${context} has an invalid option tag`);
   const reader = new Reader(payload.subarray(1), context);
-  const value = decodeModel(KagemushaMintAuthorizationV1, reader.readField("value"));
+  const value = decodeModel(Model, reader.readField("value"));
   reader.eof();
   return value;
 }
@@ -1184,27 +1205,27 @@ function decodeIncarnation(payload, context) {
 }
 
 function encodeUnitEnum(value, variants, context) {
-  if (typeof value !== "string" || !variants.includes(value)) throw new TypeError(`unknown KAGEMUSHA V1 ${context}`);
+  if (typeof value !== "string" || !variants.includes(value)) rejectType(`unknown KAGEMUSHA V1 ${context}`);
   return u32(variants.indexOf(value));
 }
 
 function decodeUnitEnum(payload, variants, context) {
   const tag = Number(readUnsigned(payload, 4, context));
-  if (tag >= variants.length) throw new TypeError(`${context} has an unknown tag`);
+  if (tag >= variants.length) rejectType(`${context} has an unknown tag`);
   return variants[tag];
 }
 
 function encodeCommitEvidence(value) {
   if (value instanceof KagemushaTrustedCommitTimeV1) return join(u32(0), field(encodeModel(value)));
   if (value instanceof KagemushaMonotonicLeaseV1) return join(u32(1), field(encodeModel(value)));
-  throw new TypeError("unknown KAGEMUSHA V1 commit evidence");
+  rejectType("unknown KAGEMUSHA V1 commit evidence");
 }
 
 function decodeCommitEvidence(payload, context) {
-  if (payload.length < 5) throw new TypeError(`${context} is truncated`);
+  if (payload.length < 5) rejectType(`${context} is truncated`);
   const tag = Number(readUnsigned(payload.subarray(0, 4), 4, `${context}.tag`));
   const Model = [KagemushaTrustedCommitTimeV1, KagemushaMonotonicLeaseV1][tag];
-  if (Model === undefined) throw new TypeError(`${context} has an unknown tag`);
+  if (Model === undefined) rejectType(`${context} has an unknown tag`);
   const reader = new Reader(payload.subarray(4), context);
   const value = decodeModel(Model, reader.readField("evidence"));
   reader.eof();
@@ -1213,16 +1234,16 @@ function decodeCommitEvidence(payload, context) {
 
 function decodeExact(raw, maximum, schema, Model, reencode) {
   const canonical = bounded(bytes(raw, Model.name), maximum, Model.name);
-  if (canonical.length === 0) throw new TypeError(`${Model.name} archive is empty`);
+  if (canonical.length === 0) rejectType(`${Model.name} archive is empty`);
   const decoded = validateNoritoFrame(canonical, { context: Model.name, expectedTypeName: schema, expectedPaddingLength: headerPadding(modelAlignment(Model)), requireNonEmptyPayload: true });
-  if (decoded.flags !== COMPACT_LENGTHS) throw new TypeError(`${Model.name} must use compact field lengths`);
+  if (decoded.flags !== COMPACT_LENGTHS) rejectType(`${Model.name} must use compact field lengths`);
   const value = decodeModel(Model, decoded.payload);
   requireEqual(canonical, reencode(value), `${Model.name} canonical archive`);
   return value;
 }
 
 function digestModel(domain, schema, value, alignment = undefined) {
-  const selectedAlignment = alignment ?? modelAlignment(value.constructor);
+  const selectedAlignment = alignment ?? MODEL_VALUES.get(value).alignment;
   return digestEncoded(domain, frame(schema, encodeModel(value), selectedAlignment));
 }
 function digestEncoded(domain, canonical) { return sha256(join(domain, Uint8Array.of(0), u64(canonical.length), canonical)); }
@@ -1240,22 +1261,12 @@ function frame(typeName, payload, alignment) {
   return join(headerBytes, new Uint8Array(padding), payload);
 }
 function headerPadding(alignment) { return alignment <= 1 ? 0 : (alignment - (HEADER_BYTES % alignment)) % alignment; }
-function modelAlignment(Model) {
-  if (Model === KagemushaDeviceMintStageCommandV1) return 8;
-  if (Model === KagemushaDeviceMintStageResultV1) return 2;
-  if (Model === KagemushaEncryptedCreditEnvelopeV1) return 8;
-  if (Model === KagemushaPaymentV1 || Model === KagemushaPaymentOutputV1
-      || Model === KagemushaPeerCreditContextV1) return 16;
-  if (Model === KagemushaCommitCertificateV1) return 8;
-  if (Model === KagemushaRedemptionProofV1 || Model === KagemushaPaymentProofV1) return 8;
-  if (Model === KagemushaAcknowledgementV1) return 2;
-  return 16;
-}
+function modelAlignment(Model) { return MODEL_DEFINITIONS.get(Model).alignment; }
 
 function field(payload) { const raw = bytes(payload, "field"); return join(compact(raw.length), raw); }
 function compact(input) {
   let value = BigInt(input);
-  if (value < 0n || value > MAX_U64) throw new RangeError("compact length is out of range");
+  if (value < 0n || value > MAX_U64) rejectRange("compact length is out of range");
   const out = [];
   do { let byte = Number(value & 0x7fn); value >>= 7n; if (value !== 0n) byte |= 0x80; out.push(byte); } while (value !== 0n);
   return Uint8Array.from(out);
@@ -1263,95 +1274,96 @@ function compact(input) {
 function fixedArray(value) { return bytes(value, "fixed array"); }
 function vector(value) { const raw = bytes(value, "byte vector"); return join(u64(raw.length), raw); }
 function readVector(payload, context) {
-  if (payload.length < 8) throw new TypeError(`${context} is truncated`);
+  if (payload.length < 8) rejectType(`${context} is truncated`);
   const length = readUnsigned(payload.subarray(0, 8), 8, `${context}.length`);
-  if (length > BigInt(Number.MAX_SAFE_INTEGER) || Number(length) !== payload.length - 8) throw new TypeError(`${context} length is invalid`);
+  if (length > BigInt(Number.MAX_SAFE_INTEGER) || Number(length) !== payload.length - 8) rejectType(`${context} length is invalid`);
   return Uint8Array.from(payload.subarray(8));
 }
 function u16(value) { const out = new Uint8Array(2); new DataView(out.buffer).setUint16(0, Number(value), true); return out; }
 function u32(value) { const out = new Uint8Array(4); new DataView(out.buffer).setUint32(0, Number(value), true); return out; }
 function u64(value) { return unsignedLittleEndian(BigInt(value), 8); }
 function u128(value) { return unsignedLittleEndian(BigInt(value), 16); }
-function unsignedLittleEndian(value, width) { const out = new Uint8Array(width); for (let index = 0; index < width; index += 1) { out[index] = Number(value & 0xffn); value >>= 8n; } if (value !== 0n) throw new RangeError("unsigned integer is out of range"); return out; }
-function readUnsigned(payload, width, context) { if (payload.length !== width) throw new TypeError(`${context} must contain ${width} bytes`); let value = 0n; for (let index = width - 1; index >= 0; index -= 1) value = (value << 8n) | BigInt(payload[index]); return value; }
+function unsignedLittleEndian(value, width) { const out = new Uint8Array(width); for (let index = 0; index < width; index += 1) { out[index] = Number(value & 0xffn); value >>= 8n; } if (value !== 0n) rejectRange("unsigned integer is out of range"); return out; }
+function readUnsigned(payload, width, context) { if (payload.length !== width) rejectType(`${context} must contain ${width} bytes`); let value = 0n; for (let index = width - 1; index >= 0; index -= 1) value = (value << 8n) | BigInt(payload[index]); return value; }
 
 class Reader {
   constructor(value, context) { this.value = bytes(value, context); this.offset = 0; this.context = context; }
   readField(name) {
     let length = 0n; let shift = 0n; let used = 0;
     for (; used < 10; used += 1) {
-      if (this.offset >= this.value.length) throw new TypeError(`${this.context}.${name} is truncated`);
+      if (this.offset >= this.value.length) rejectType(`${this.context}.${name} is truncated`);
       const byte = this.value[this.offset++];
-      if (used === 9 && (byte & 0xfe) !== 0) throw new TypeError(`${this.context}.${name} length exceeds u64`);
+      if (used === 9 && (byte & 0xfe) !== 0) rejectType(`${this.context}.${name} length exceeds u64`);
       length |= BigInt(byte & 0x7f) << shift;
-      if ((byte & 0x80) === 0) { if (used > 0 && byte === 0) throw new TypeError(`${this.context}.${name} length is not minimal`); break; }
+      if ((byte & 0x80) === 0) { if (used > 0 && byte === 0) rejectType(`${this.context}.${name} length is not minimal`); break; }
       shift += 7n;
     }
-    if (used === 10 || length > BigInt(this.value.length - this.offset)) throw new TypeError(`${this.context}.${name} length is invalid`);
+    if (used === 10 || length > BigInt(this.value.length - this.offset)) rejectType(`${this.context}.${name} length is invalid`);
     const end = this.offset + Number(length); const payload = this.value.subarray(this.offset, end); this.offset = end; return payload;
   }
-  eof() { if (this.offset !== this.value.length) throw new TypeError(`${this.context} contains trailing bytes`); }
+  eof() { if (this.offset !== this.value.length) rejectType(`${this.context} contains trailing bytes`); }
 }
 
 function normalizeType(type, value, context) {
   switch (type) {
-    case T.U8: return Number(unsigned(value, 0xffn, context));
-    case T.U16: return Number(unsigned(value, 0xffffn, context));
-    case T.U32: return Number(unsigned(value, 0xffff_ffffn, context));
-    case T.U64: return unsigned(value, MAX_U64, context);
-    case T.U128: return unsigned(value, MAX_U128, context);
-    case T.FIXED32: return fixed32(value, context);
-    case T.RAW32: return raw32(value, context);
-    case T.FIXED24: return fixedBytes(value, 24, context, false);
-    case T.NETWORK: if (!(value instanceof NetworkId)) throw new TypeError(`${context} must be a NetworkId`); return value;
-    case T.ASSET: return value instanceof KagemushaAssetDefinitionIdV1 ? value : new KagemushaAssetDefinitionIdV1(value);
-    case T.INCARNATION: return value instanceof KagemushaAssetIncarnationV1 ? value : new KagemushaAssetIncarnationV1(value);
-    case T.ACCOUNT: return value instanceof KagemushaAccountIdV1 ? value : new KagemushaAccountIdV1(value);
-    case T.PUBLIC_KEY: return value instanceof KagemushaDevicePublicKeyV1 ? value : new KagemushaDevicePublicKeyV1(value);
-    case T.SIGNATURE: return value instanceof KagemushaDeviceSignatureV1 ? value : new KagemushaDeviceSignatureV1(value);
-    case T.VECTOR: return bytes(value, context);
-    case T.MINT_FRAME: return boundedBytes(value, 7936, context);
-    case T.OPERATION_KIND: if (typeof value !== "string" || !OPERATION_KINDS.includes(value)) throw new TypeError(`${context} is invalid`); return value;
-    case T.CREDIT_PURPOSE: if (typeof value !== "string" || !CREDIT_PURPOSES.includes(value)) throw new TypeError(`${context} is invalid`); return value;
-    case T.COMMIT_EVIDENCE: encodeCommitEvidence(value); return value;
-    case T.OPTIONAL_MINT_AUTHORIZATION: return value === null ? null : instance(value, KagemushaMintAuthorizationV1, context);
-    default: return instance(value, DEFINITIONS[type].Model, context);
+    case K_TYPE_U8: return Number(unsigned(value, 0xffn, context));
+    case K_TYPE_U16: return Number(unsigned(value, 0xffffn, context));
+    case K_TYPE_U32: return Number(unsigned(value, 0xffff_ffffn, context));
+    case K_TYPE_U64: return unsigned(value, MAX_U64, context);
+    case K_TYPE_U128: return unsigned(value, MAX_U128, context);
+    case K_TYPE_FIXED32: return fixed32(value, context);
+    case K_TYPE_RAW32: return raw32(value, context);
+    case K_TYPE_FIXED24: return fixedBytes(value, 24, context, false);
+    case K_TYPE_NETWORK: if (!(value instanceof NetworkId)) rejectType(`${context} must be a NetworkId`); return value;
+    case K_TYPE_ASSET: return value instanceof KagemushaAssetDefinitionIdV1 ? value : new KagemushaAssetDefinitionIdV1(value);
+    case K_TYPE_INCARNATION: return value instanceof KagemushaAssetIncarnationV1 ? value : new KagemushaAssetIncarnationV1(value);
+    case K_TYPE_ACCOUNT: return value instanceof KagemushaAccountIdV1 ? value : new KagemushaAccountIdV1(value);
+    case K_TYPE_PUBLIC_KEY: return value instanceof KagemushaDevicePublicKeyV1 ? value : new KagemushaDevicePublicKeyV1(value);
+    case K_TYPE_SIGNATURE: return value instanceof KagemushaDeviceSignatureV1 ? value : new KagemushaDeviceSignatureV1(value);
+    case K_TYPE_VECTOR: return bytes(value, context);
+    case K_TYPE_MINT_FRAME: return boundedBytes(value, 7936, context);
+    case K_TYPE_OPERATION_KIND: if (typeof value !== "string" || !OPERATION_KINDS.includes(value)) rejectType(`${context} is invalid`); return value;
+    case K_TYPE_CREDIT_PURPOSE: if (typeof value !== "string" || !CREDIT_PURPOSES.includes(value)) rejectType(`${context} is invalid`); return value;
+    case K_TYPE_COMMIT_EVIDENCE: encodeCommitEvidence(value); return value;
+    default: return type.optional
+      ? value === null ? null : instance(value, type.optional, context)
+      : instance(value, type, context);
   }
 }
 
-function unsigned(value, maximum, context) { let normalized; if (typeof value === "bigint") normalized = value; else if (typeof value === "number" && Number.isSafeInteger(value)) normalized = BigInt(value); else throw new TypeError(`${context} must be an unsigned integer`); if (normalized < 0n || normalized > maximum) throw new RangeError(`${context} is out of range`); return normalized; }
-function header(value, positiveAmount = false) { requireVersion(value.version); if (value.scale > 28) throw new RangeError("KAGEMUSHA V1 asset scale exceeds 28"); if (positiveAmount && value.amount === 0n) throw new RangeError("KAGEMUSHA V1 amount must be positive"); }
-function requireVersion(value) { if (value !== 1) throw new TypeError("KAGEMUSHA V1 wire version must be 1"); }
-function requireX25519Key(value, context) { if (value.length !== 32 || isZero(value)) throw new TypeError(`${context} must be a nonzero 32-byte X25519 key`); }
-function bytes(value, context) { if (value instanceof ArrayBuffer) return new Uint8Array(value.slice(0)); if (ArrayBuffer.isView(value)) return Uint8Array.from(new Uint8Array(value.buffer, value.byteOffset, value.byteLength)); throw new TypeError(`${context} must be binary data`); }
+function unsigned(value, maximum, context) { let normalized; if (typeof value === "bigint") normalized = value; else if (typeof value === "number" && Number.isSafeInteger(value)) normalized = BigInt(value); else rejectType(`${context} must be an unsigned integer`); if (normalized < 0n || normalized > maximum) rejectRange(`${context} is out of range`); return normalized; }
+function header(value, positiveAmount = false) { requireVersion(value.version); if (value.scale > 28) rejectRange("KAGEMUSHA V1 asset scale exceeds 28"); if (positiveAmount && value.amount === 0n) rejectRange("KAGEMUSHA V1 amount must be positive"); }
+function requireVersion(value) { if (value !== 1) rejectType("KAGEMUSHA V1 wire version must be 1"); }
+function requireX25519Key(value, context) { if (value.length !== 32 || isZero(value)) rejectType(`${context} must be a nonzero 32-byte X25519 key`); }
+function bytes(value, context) { if (value instanceof ArrayBuffer) return new Uint8Array(value.slice(0)); if (ArrayBuffer.isView(value)) return Uint8Array.from(new Uint8Array(value.buffer, value.byteOffset, value.byteLength)); rejectType(`${context} must be binary data`); }
 function boundedBytes(value, maximum, context) {
-  if (!(value instanceof ArrayBuffer) && !ArrayBuffer.isView(value)) throw new TypeError(`${context} must be binary data`);
-  if (value.byteLength > maximum) throw new RangeError(`KAGEMUSHA V1 ${context} exceeds ${maximum} bytes`);
+  if (!(value instanceof ArrayBuffer) && !ArrayBuffer.isView(value)) rejectType(`${context} must be binary data`);
+  if (value.byteLength > maximum) rejectRange(`KAGEMUSHA V1 ${context} exceeds ${maximum} bytes`);
   return bytes(value, context);
 }
-function fixedBytes(value, width, context, nonzero = true) { const raw = bytes(value, context); if (raw.length !== width || (nonzero && isZero(raw))) throw new TypeError(`${context} must be ${nonzero ? "one nonzero " : ""}${width}-byte value`); return raw; }
+function fixedBytes(value, width, context, nonzero = true) { const raw = bytes(value, context); if (raw.length !== width || (nonzero && isZero(raw))) rejectType(`${context} must be ${nonzero ? "one nonzero " : ""}${width}-byte value`); return raw; }
 function fixed32(value, context) { return fixedBytes(value, 32, context, true); }
 function raw32(value, context) { return fixedBytes(value, 32, context, false); }
-function requireFixedArchive(payload, width, context) { if (payload.length !== width * 2) throw new TypeError(`${context} has an invalid fixed-array length`); for (let index = 0; index < width; index += 1) if (payload[index * 2] !== 1) throw new TypeError(`${context} is not a canonical fixed-byte-array payload`); }
+function requireFixedArchive(payload, width, context) { if (payload.length !== width * 2) rejectType(`${context} has an invalid fixed-array length`); for (let index = 0; index < width; index += 1) if (payload[index * 2] !== 1) rejectType(`${context} is not a canonical fixed-byte-array payload`); }
 function ascii(value) { return UTF8.encode(value); }
 function join(...parts) { const arrays = parts.map((part) => bytes(part, "bytes")); const out = new Uint8Array(arrays.reduce((sum, part) => sum + part.length, 0)); let offset = 0; for (const part of arrays) { out.set(part, offset); offset += part.length; } return out; }
 function isZero(value) { return value.every((byte) => byte === 0); }
 function equalBytes(left, right) { return left.length === right.length && left.every((byte, index) => byte === right[index]); }
-function requireEqual(actual, expected, context) { if (!equalBytes(actual, expected)) throw new TypeError(`${context} does not match`); }
-function bounded(value, maximum, context) { if (value.length > maximum) throw new RangeError(`KAGEMUSHA V1 ${context} exceeds ${maximum} bytes`); return Uint8Array.from(value); }
-function instance(value, Model, context) { if (!(value instanceof Model)) throw new TypeError(`${context} must be a ${Model.name}`); return value; }
-function rawValues(value) { return MODEL_VALUES.get(value); }
+function requireEqual(actual, expected, context) { if (!equalBytes(actual, expected)) rejectType(`${context} does not match`); }
+function bounded(value, maximum, context) { if (value.length > maximum) rejectRange(`KAGEMUSHA V1 ${context} exceeds ${maximum} bytes`); return Uint8Array.from(value); }
+function instance(value, Model, context) { if (!(value instanceof Model)) rejectType(`${context} must be a ${Model.name}`); return value; }
+function rawValues(value) { return MODEL_VALUES.get(value).values; }
 function cloneValue(value) { return value instanceof Uint8Array ? Uint8Array.from(value) : value; }
-function exactRecord(value, context, fields) { if (value === null || typeof value !== "object" || Array.isArray(value)) throw new TypeError(`${context} must be an object`); const actual = Object.keys(value); const expected = new Set(fields); if (actual.length !== fields.length || actual.some((key) => !expected.has(key))) throw new TypeError(`${context} contains missing or unknown fields`); }
-function kindLimits(kind) { if (typeof kind !== "string" || !Object.hasOwn(LIMITS, kind)) throw new TypeError("unknown KAGEMUSHA V1 payload kind"); return LIMITS[kind]; }
+function exactRecord(value, context, fields) { if (value === null || typeof value !== "object" || Array.isArray(value)) rejectType(`${context} must be an object`); const actual = Object.keys(value); const expected = new Set(fields); if (actual.length !== fields.length || actual.some((key) => !expected.has(key))) rejectType(`${context} contains missing or unknown fields`); }
+function kindLimits(kind) { if (typeof kind !== "string" || !Object.hasOwn(LIMITS, kind)) rejectType("unknown KAGEMUSHA V1 payload kind"); return LIMITS[kind]; }
 function ipm1PayloadTag(kind) {
-  if (typeof kind !== "string" || !Object.hasOwn(IPM1_PAYLOAD_KINDS, kind)) throw new TypeError("unknown KAGEMUSHA V1 IPM1 payload kind");
+  if (typeof kind !== "string" || !Object.hasOwn(IPM1_PAYLOAD_KINDS, kind)) rejectType("unknown KAGEMUSHA V1 IPM1 payload kind");
   return IPM1_PAYLOAD_KINDS[kind].tag;
 }
 function ipm1PayloadKindFromTag(tag) {
-  if (!Number.isInteger(tag)) throw new TypeError("KAGEMUSHA V1 IPM1 payload tag must be an integer");
+  if (!Number.isInteger(tag)) rejectType("KAGEMUSHA V1 IPM1 payload tag must be an integer");
   const entry = Object.entries(IPM1_PAYLOAD_KINDS).find(([, value]) => value.tag === tag);
-  if (entry === undefined) throw new TypeError("unknown KAGEMUSHA V1 IPM1 payload tag");
+  if (entry === undefined) rejectType("unknown KAGEMUSHA V1 IPM1 payload tag");
   return entry[0];
 }
 
@@ -1360,7 +1372,7 @@ function ipm1PayloadKindFromTag(tag) {
  * Monetary proofs, signing, encryption, decryption, and hardware state changes must be supplied
  * by the release-pinned native implementation; this namespace intentionally has no fallback.
  */
-export const Kagemusha = Object.freeze({
+export const Kagemusha = /* @__PURE__ */ (() => Object.freeze({
   wireVersion: 1,
   deviceLifecycleVersion: 1,
   handoffCapability: "kagemusha_handoff_v1",
@@ -1461,4 +1473,7 @@ export const Kagemusha = Object.freeze({
   ipm1PayloadTag, ipm1PayloadKindFromTag,
   mintAuthorizationContextDigest, mintAuthorizationStatementDigest, mintAuthorizationDigest,
   mintCreditId, mintCreditStatementDigest,
-});
+}))();
+
+// Internal Torii boundary: importing one operation must not retain every wallet type.
+export { encodeRedemptionRequest as _encodeRedemptionRequestV1 };

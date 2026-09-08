@@ -773,8 +773,22 @@ fn encode_fastpq_recovery_batch(
     // any request-local Norito decode flags on this thread.
     let _canonical_flags =
         norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+    // Count the borrowed source before the public-model conversion clones its row buffers.
+    // The final model frame is counted again by the bounded encoder before output allocation.
+    let source_bytes =
+        norito::core::encoded_frame_len(batch).map_err(|source| Error::SerializationFailure {
+            context: "pipeline_recovery_fastpq_batch",
+            source: Box::new(source),
+        })?;
+    if source_bytes > PIPELINE_FASTPQ_RECOVERY_MAX_BATCH_BYTES {
+        return Err(fastpq_recovery_capacity_error(format!(
+            "FASTPQ batch exceeds the {} byte per-batch budget",
+            PIPELINE_FASTPQ_RECOVERY_MAX_BATCH_BYTES
+        )));
+    }
+    let model = fastpq_prover::transition_batch_to_model(batch);
     let bytes =
-        match norito::core::to_bytes_bounded(batch, PIPELINE_FASTPQ_RECOVERY_MAX_BATCH_BYTES) {
+        match norito::core::to_bytes_bounded(&model, PIPELINE_FASTPQ_RECOVERY_MAX_BATCH_BYTES) {
             Ok(bytes) => bytes,
             Err(norito::core::BoundedEncodeError::FrameTooLarge { .. }) => {
                 return Err(fastpq_recovery_capacity_error(format!(

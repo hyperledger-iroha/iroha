@@ -1,7 +1,7 @@
 {
   "seiyaku_name": "AuthorityProbe",
-  "code_hash": "hash:3E229F1B0D4427DD61A629D87822E4F1A2C3D769D9B56933430E6868C0C1DB95#AB07",
-  "abi_hash": "hash:EAFE4EA7C8ABE41B61757C506F607B733B4E848D0E348D6E495CD07FF8A98941#961D",
+  "code_hash": "hash:A2D62E2100F5D164E83D55E7DF08D6F509E1DD345AE82DE3E60C01F12F641D43#FC66",
+  "abi_hash": "hash:DB4259AA28486967F2D8799B4E66E1B919F4D18690DB2D94CD96EFA05EE840A3#4407",
   "compiler_fingerprint": "kotodama_lang/2.0.0-rc.2.0",
   "features_bitmap": 0,
   "access_set_hints": {
@@ -24,8 +24,15 @@
       },
       "params": [],
       "argument_schema": null,
-      "return_type": null,
-      "return_schema": null,
+      "return_type": "()",
+      "return_schema": {
+        "nodes": [
+          {
+            "kind": "Unit",
+            "value": null
+          }
+        ]
+      },
       "permission": "Admin",
       "read_keys": [
         "account:$authority",
@@ -40,7 +47,62 @@
     }
   ],
   "states": [],
-  "error_codes": null,
+  "error_types": [
+    {
+      "identity": "kotodama::ListError",
+      "variants": [
+        {
+          "name": "IndexOutOfBounds",
+          "code": 1
+        },
+        {
+          "name": "CapacityExceeded",
+          "code": 2
+        }
+      ]
+    },
+    {
+      "identity": "kotodama::NumericError",
+      "variants": [
+        {
+          "name": "MantissaOverflow",
+          "code": 1
+        },
+        {
+          "name": "ScaleOverflow",
+          "code": 2
+        },
+        {
+          "name": "DivisionByZero",
+          "code": 3
+        },
+        {
+          "name": "RepeatingDecimal",
+          "code": 4
+        },
+        {
+          "name": "ExactDivisionScaleOverflow",
+          "code": 5
+        },
+        {
+          "name": "InvalidScale",
+          "code": 6
+        },
+        {
+          "name": "InexactConversion",
+          "code": 7
+        },
+        {
+          "name": "NegativeQuantity",
+          "code": 8
+        },
+        {
+          "name": "QuantityUnderflow",
+          "code": 9
+        }
+      ]
+    }
+  ],
   "kotoba": null,
   "provenance": null
 }

@@ -41,37 +41,28 @@ pub(crate) use merkle_cache::MerkleNodeCache;
 #[cfg(test)]
 #[path = "backend/compact_axt_air.rs"]
 mod compact_axt_air;
-#[cfg(test)]
 #[path = "backend/compact_axt_batch.rs"]
 mod compact_axt_batch;
 #[cfg(test)]
 #[path = "backend/compact_axt_bundle_diagnostic.rs"]
 mod compact_axt_bundle_diagnostic;
-#[cfg(test)]
 #[path = "backend/compact_axt_context.rs"]
 mod compact_axt_context;
-#[cfg(test)]
 #[path = "backend/compact_bundle.rs"]
 mod compact_bundle;
 #[cfg(test)]
 #[path = "backend/compact_bundle_diagnostic.rs"]
 mod compact_bundle_diagnostic;
-#[cfg(test)]
 #[path = "backend/compact_hash_quotient.rs"]
 mod compact_hash_quotient;
-#[cfg(test)]
 #[path = "backend/compact_model_statement.rs"]
 mod compact_model_statement;
-#[cfg(test)]
 #[path = "backend/compact_protocol.rs"]
 mod compact_protocol;
-#[cfg(test)]
 #[path = "backend/compact_public_api.rs"]
 mod compact_public_api;
-#[cfg(test)]
 #[path = "backend/compact_public_batch.rs"]
 mod compact_public_batch;
-#[cfg(test)]
 #[path = "backend/compact_public_transfer.rs"]
 mod compact_public_transfer;
 #[cfg(test)]
@@ -80,36 +71,30 @@ mod compact_quantity_diagnostic;
 #[cfg(test)]
 #[path = "backend/compact_quantity_tests.rs"]
 mod compact_quantity_tests;
-#[cfg(test)]
 #[path = "backend/compact_shake_candidate.rs"]
 mod compact_shake_candidate;
-#[cfg(test)]
 #[path = "backend/compact_smt_quotient.rs"]
 mod compact_smt_quotient;
-#[cfg(test)]
 #[path = "backend/compact_transfer_air.rs"]
 mod compact_transfer_air;
-#[cfg(test)]
 #[path = "backend/compact_value_domain.rs"]
 mod compact_value_domain;
 #[cfg(test)]
 #[path = "backend/extension_trace.rs"]
 mod extension_trace;
-#[cfg(test)]
 #[path = "backend/fixed_domain.rs"]
 mod fixed_domain;
-#[cfg(test)]
 #[path = "backend/fixed_schedule.rs"]
 mod fixed_schedule;
 #[path = "backend/fri_openings.rs"]
 mod fri_openings;
-#[cfg(test)]
 #[path = "backend/merkle_multiproof.rs"]
 mod merkle_multiproof;
+#[path = "backend/offline_compact.rs"]
+pub mod offline_compact;
 #[cfg(test)]
 #[path = "backend/phased_trace.rs"]
 mod phased_trace;
-#[cfg(test)]
 #[path = "backend/public_table.rs"]
 mod public_table;
 const FIELD_ONE: u64 = 1;

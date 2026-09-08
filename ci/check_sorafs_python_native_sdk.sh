@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT_DIR="${SORAFS_PYTHON_SDK_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 PYTHON_BIN="${SORAFS_PYTHON_SDK_PYTHON_BIN:-python3}"
 SDK_SESSION="$(mktemp -d "${TMPDIR:-/tmp}/iroha-sorafs-python-sdk.XXXXXX")"
+SDK_SESSION="$(cd -P "${SDK_SESSION}" && pwd -P)"
 
 cleanup_sdk_session() {
   rm -rf -- "${SDK_SESSION}"
@@ -25,7 +26,12 @@ TRACKED_NATIVE_EXTENSIONS="$(
     'python/iroha_python/src/iroha_python/*.so.*' \
     'python/iroha_python/src/iroha_python/*.dylib' \
     'python/iroha_python/src/iroha_python/*.pyd' \
-    'python/iroha_python/src/iroha_python/*.dll'
+    'python/iroha_python/src/iroha_python/*.dll' \
+    'python/iroha_native/src/iroha_native/*.so' \
+    'python/iroha_native/src/iroha_native/*.so.*' \
+    'python/iroha_native/src/iroha_native/*.dylib' \
+    'python/iroha_native/src/iroha_native/*.pyd' \
+    'python/iroha_native/src/iroha_native/*.dll'
 )"
 if [[ -n "${TRACKED_NATIVE_EXTENSIONS}" ]]; then
   echo "error: Python native SDK artifacts must be rebuilt in the ABI-23 lane, not tracked:" >&2
@@ -45,12 +51,43 @@ export PATH="${VIRTUAL_ENV}/bin:${PATH}"
   "${ROOT_DIR}/python/norito_py" \
   "${ROOT_DIR}/python/iroha_torii_client"
 
+NATIVE_WHEELS="${SDK_SESSION}/native-wheels"
+SDK_WHEELS="${SDK_SESSION}/sdk-wheels"
+mkdir -m 700 "${NATIVE_WHEELS}" "${SDK_WHEELS}"
+cd "${ROOT_DIR}/python/iroha_native"
+"${VENV_PYTHON}" -m maturin build --release --locked --out "${NATIVE_WHEELS}"
 cd "${ROOT_DIR}/python/iroha_python"
-"${VENV_PYTHON}" -m maturin develop --release --locked
-export PYTHONPATH="${ROOT_DIR}/python/iroha_python/src:${ROOT_DIR}/python/norito_py/src:${ROOT_DIR}/python${PYTHONPATH:+:${PYTHONPATH}}"
+"${VENV_PYTHON}" -I -B -m pip --isolated wheel --no-deps --no-index \
+  --no-build-isolation --wheel-dir "${SDK_WHEELS}" .
+select_wheel() {
+  "${VENV_PYTHON}" -I -B - "$1" <<'PYSELECT'
+from pathlib import Path
+import sys
+root = Path(sys.argv[1])
+entries = tuple(root.iterdir())
+if len(entries) != 1 or entries[0].suffix != ".whl":
+    raise SystemExit("each Python owner must produce exactly one fresh wheel")
+print(entries[0])
+PYSELECT
+}
+NATIVE_WHEEL="$(select_wheel "${NATIVE_WHEELS}")"
+SDK_WHEEL="$(select_wheel "${SDK_WHEELS}")"
+WHEEL_VERIFIER="${ROOT_DIR}/ci/verify_privacy_python_wheel.py"
+NATIVE_SEAL="$("${VENV_PYTHON}" -I -B "${WHEEL_VERIFIER}" --seal "${NATIVE_WHEEL}")"
+SDK_SEAL="$("${VENV_PYTHON}" -I -B "${WHEEL_VERIFIER}" --seal "${SDK_WHEEL}")"
+"${VENV_PYTHON}" -I -B "${WHEEL_VERIFIER}" --preflight native "${NATIVE_WHEEL}" "${NATIVE_SEAL}"
+"${VENV_PYTHON}" -I -B "${WHEEL_VERIFIER}" --preflight sdk "${SDK_WHEEL}" "${SDK_SEAL}"
+"${VENV_PYTHON}" -I -B -m pip --isolated install --no-compile --no-deps --no-index \
+  "${NATIVE_WHEEL}" "${SDK_WHEEL}"
+verify_installed_wheels() {
+  "${VENV_PYTHON}" -I -B "${WHEEL_VERIFIER}" "${SDK_SESSION}/venv" \
+    "${NATIVE_WHEEL}" "${NATIVE_SEAL}" \
+    "${ROOT_DIR}/python/norito_py/src" "${ROOT_DIR}/python/iroha_torii_client" \
+    "${SDK_WHEEL}" "${SDK_SEAL}"
+}
+NATIVE_EXTENSION="$(verify_installed_wheels)"
+export PYTHONPATH="${ROOT_DIR}/python/norito_py/src:${ROOT_DIR}/python"
 
-NATIVE_EXTENSION="$("${VENV_PYTHON}" -I -c \
-  'import iroha_python._crypto as native; print(native.__file__)')"
 NATIVE_TARGET="$("${VENV_PYTHON}" -I -c \
   'import platform, sys; print(f"{platform.system().lower()}-{platform.machine().lower()}-python{sys.version_info.major}{sys.version_info.minor}")')"
 NATIVE_MANIFEST="${SDK_SESSION}/python-native-abi23.json"
@@ -111,3 +148,5 @@ fi
   --source-root "${ROOT_DIR}" \
   --python "${VENV_PYTHON}" \
   "${VERIFY_EVIDENCE_ARGS[@]}"
+
+verify_installed_wheels >/dev/null

@@ -9,8 +9,8 @@ import { blake2b256 } from "./blake2b.js";
 import { verifyEd25519Strict as verifyEd25519 } from "./ed25519Strict.js";
 import {
   BrowserTransactionCodecError,
-  browserTransactionCodec,
-  browserSignedTransactionHashHex,
+  buildBrowserTransferPayload,
+  _browserSignedTransferTransactionHashHex,
   finalizeBrowserSignedTransaction,
   validateBrowserTransferSignable,
 } from "./transactionCodec.js";
@@ -948,7 +948,7 @@ function normalizeSignature(signature) {
 }
 
 function defaultBuildTransferPayload(input) {
-  return browserTransactionCodec.buildTransferPayload(input);
+  return buildBrowserTransferPayload(input);
 }
 
 function defaultFinalizeSignedTransaction(signable, signature, publicKey) {
@@ -994,7 +994,7 @@ function normalizePayloadBuildResult(result) {
 function canonicalSignedTransactionHashHex(signedTransaction) {
   try {
     return exactHashHex(
-      browserSignedTransactionHashHex(signedTransaction),
+      _browserSignedTransferTransactionHashHex(signedTransaction),
       "canonical signed transaction hash",
       "invalid_transaction_hash",
     );

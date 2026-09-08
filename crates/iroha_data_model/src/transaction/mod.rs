@@ -44,3 +44,6 @@ pub mod prelude {
         require_transaction_gas_limit,
     };
 }
+
+#[cfg(test)]
+mod captured_transaction_identity_tests;

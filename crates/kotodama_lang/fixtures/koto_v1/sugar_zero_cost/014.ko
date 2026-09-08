@@ -8,7 +8,7 @@
             view fn main() -> int {
                 let bool right_value = second();
                 let int left_value = first();
-                combine(left_value, right_value)
+                combine(left: left_value, right: right_value)
             }
         }
     

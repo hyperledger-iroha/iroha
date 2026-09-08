@@ -6,7 +6,7 @@ from urllib.parse import quote
 
 import pytest
 
-import iroha_python._native as native_loader
+import iroha_native._loader as native_loader
 import iroha_python.connect as connect
 
 _STALE_LIBPYTHON_PATH = (
@@ -798,17 +798,21 @@ def test_native_loader_rejects_direct_runtime_before_import(
     candidate.write_bytes(b"")
     _mock_otool(monkeypatch, _otool_output(candidate, _STALE_LIBPYTHON_PATH))
     spec = native_loader.importlib.machinery.ModuleSpec(
-        "iroha_python._crypto",
-        loader=None,
+        "iroha_native._crypto",
+        loader=native_loader.importlib.machinery.ExtensionFileLoader("iroha_native._crypto", str(candidate)),
         origin=str(candidate),
     )
-    monkeypatch.delitem(native_loader.sys.modules, "iroha_python._crypto", raising=False)
-    monkeypatch.setattr(native_loader.importlib.util, "find_spec", lambda _name: spec)
+    loader_source = tmp_path / "_loader.py"
+    loader_source.write_text("# canonical test loader location\n")
+    monkeypatch.setattr(native_loader, "__file__", str(loader_source))
+    monkeypatch.delitem(native_loader.sys.modules, "iroha_native._crypto", raising=False)
+    monkeypatch.setattr(native_loader, "_verified_native_module", None)
+    monkeypatch.setattr(native_loader.importlib.machinery.PathFinder, "find_spec", lambda _name, _path: spec)
 
-    def fail_import(_name: str) -> None:
+    def fail_import(_spec) -> None:
         pytest.fail("stale extension reached importlib before linkage rejection")
 
-    monkeypatch.setattr(native_loader.importlib, "import_module", fail_import)
+    monkeypatch.setattr(native_loader.importlib.util, "module_from_spec", fail_import)
 
     with pytest.raises(RuntimeError, match="links directly to an alternate Python runtime"):
         native_loader.load_crypto_extension()

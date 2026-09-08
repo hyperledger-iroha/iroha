@@ -506,6 +506,43 @@ def _production_trace_unique_function(
         )
         return None
     item = matches[0]
+    if re.search(r"\bproof\s+fn\b", item.structural_source):
+        # A Verus ensures clause can contain an unparenthesized if/else block.
+        # The general Rust extractor stops at that first brace. Retain the
+        # complete theorem through its separate proof block instead.
+        structural = mask_rust_comments_and_literals(source)
+        start = sum(len(line) for line in source.splitlines(keepends=True)[:item.line - 1])
+        stack: list[str] = []
+        body_start = None
+        body_end = None
+        closes = {")": "(", "]": "[", "}": "{"}
+        for index in range(start, len(structural)):
+            char = structural[index]
+            if char in "([{":
+                if char == "{" and not stack:
+                    line_start = structural.rfind("\n", start, index) + 1
+                    prior = structural[start:index].rstrip()
+                    if not structural[line_start:index].strip() and prior.endswith(","):
+                        body_start = index
+                stack.append(char)
+            elif char in ")]}":
+                if not stack or stack.pop() != closes[char]:
+                    break
+                if body_start is not None and not stack:
+                    body_end = index + 1
+                    break
+            elif char == ";" and not stack:
+                break
+        if body_start is None or body_end is None:
+            errors.append(f"production trace theorem {qualified} lacks a complete separate proof block")
+            return None
+        item = RustItem(
+            name=item.name, line=item.line, source=source[start:body_end],
+            body=source[body_start + 1:body_end - 1],
+            structural_source=structural[start:body_end],
+            brace_context=item.brace_context, delimiter_context=item.delimiter_context,
+            attributes=item.attributes, ancestor_inner_attributes=item.ancestor_inner_attributes,
+        )
     if _rust_item_is_test_only(item):
         errors.append(
             f"production trace-extraction theorem item {relative}!{qualified} "
@@ -524,6 +561,139 @@ def _production_trace_unique_function(
         )
         return None
     return item
+
+
+def _production_trace_shared_kernel_dispatch_tags(
+    source: str, errors: list[str],
+) -> tuple[str, ...]:
+    """Read the final action dispatch, excluding preceding global predicates."""
+
+    tokens = rust_code_tokens(source)
+    prefix = rust_code_tokens(
+        "macro_rules! production_in_flight_first_release_transition_body "
+        "{ ($projection:expr) => {{"
+    )
+    if tokens[:len(prefix)] != prefix or tokens[-4:] != ("}", "}", ";", "}"):
+        errors.append("production shared-kernel dispatch has an unexpected macro envelope")
+        return ()
+    body = tokens[len(prefix):-4]
+    pairs: dict[int, int] = {}
+    stack: list[tuple[str, int]] = []
+    closes = {")": "(", "]": "[", "}": "{"}
+    for index, token in enumerate(body):
+        if token in ("(", "[", "{"):
+            stack.append((token, index))
+        elif token in closes:
+            if not stack or stack[-1][0] != closes[token]:
+                errors.append("production shared-kernel dispatch has unbalanced delimiters")
+                return ()
+            _, opening = stack.pop()
+            pairs[opening] = index
+    if stack:
+        errors.append("production shared-kernel dispatch has unbalanced delimiters")
+        return ()
+
+    def chain(start: int) -> tuple[int, list[tuple[str, ...]], tuple[str, ...]] | None:
+        headers: list[tuple[str, ...]] = []
+        cursor = start
+        while cursor < len(body) and body[cursor] == "if":
+            condition = cursor + 1
+            opening = condition
+            while opening < len(body) and body[opening] != "{":
+                opening = pairs.get(opening, opening) + 1
+            if opening >= len(body):
+                return None
+            headers.append(body[condition:opening])
+            cursor = pairs[opening] + 1
+            if cursor >= len(body) or body[cursor] != "else":
+                return None
+            cursor += 1
+            if cursor < len(body) and body[cursor] == "if":
+                continue
+            if cursor >= len(body) or body[cursor] != "{":
+                return None
+            end = pairs[cursor]
+            return end + 1, headers, body[cursor + 1:end]
+        return None
+
+    terminal = []
+    index = 0
+    while index < len(body):
+        if body[index] == "if":
+            parsed = chain(index)
+            if parsed is not None:
+                if parsed[0] == len(body):
+                    terminal.append((index, parsed))
+                index = parsed[0]
+                continue
+        index = pairs.get(index, index) + 1
+    if len(terminal) != 1:
+        errors.append("production shared-kernel dispatch requires one complete top-level terminal chain")
+        return ()
+    start, (_, headers, fallback) = terminal[0]
+    if start == 0 or body[start - 1] != "&&":
+        errors.append("production shared-kernel dispatch must remain conjoined with global state guards")
+        return ()
+    if fallback != ("false",):
+        errors.append("production shared-kernel dispatch must reject every unmapped action")
+        return ()
+    tags = []
+    header_prefix = rust_code_tokens("projection.action == refinement_tag_value!(")
+    for header in headers:
+        if (
+            header[:len(header_prefix)] != header_prefix
+            or len(header) != len(header_prefix) + 2
+            or header[-1] != ")"
+            or re.fullmatch(r"IN_FLIGHT_FIRST_RELEASE_ACTION_[A-Z0-9_]+", header[-2]) is None
+        ):
+            errors.append("production shared-kernel dispatch requires one exact action equality per arm")
+            return ()
+        tags.append(header[-2])
+    expected = tuple(row[1] for row in PRODUCTION_TRACE_EXTRACTION_ACTION_WITNESS_MAPPINGS)
+    if len(tags) != 28 or set(tags) != set(expected):
+        errors.append("production shared-kernel dispatch must contain the exact 28-action partition")
+    return tuple(tags)
+
+
+def _production_trace_replica_observation_source_errors(root_dir: Path) -> list[str]:
+    """Check every concrete authority owner for the previously omitted action 28."""
+
+    errors: list[str] = []
+    bindings = [
+        binding for binding in PRODUCTION_TRACE_EXTRACTION_BINDINGS
+        if binding["id"] == "replica_queue_disposition_observation"
+    ]
+    if len(bindings) != 1:
+        return ["replica observation requires exactly one authenticated source binding"]
+    binding = bindings[0]
+    owners = (
+        {**binding, "required_tokens": (*binding["action_tags"], *binding["additional_tokens"])},
+        binding["checked_transition_source"],
+        *binding["supporting_sources"],
+        binding["authorization_source"],
+        binding["checked_transition_consumer"],
+    )
+    for owner in owners:
+        item = _production_trace_unique_function(
+            root_dir=root_dir, relative=owner["path"], symbol=owner["symbol"],
+            impl_name=owner["impl"], errors=errors,
+        )
+        if item is None:
+            continue
+        tokens = rust_code_tokens(item.source)
+        missing = [
+            token for token in owner["required_tokens"]
+            if _token_sequence_count(tokens, rust_code_tokens(token)) == 0
+        ]
+        order = _production_trace_ordered_token_sequence_error(
+            tokens, owner.get("ordered_tokens", ()),
+        )
+        if missing or order:
+            errors.append(
+                f"replica observation authority {owner['path']}!{owner['symbol']} "
+                f"lost required code {missing!r}; ordered authority: {order!r}"
+            )
+    return errors
 
 
 def _production_trace_first_release_identity_contract(
@@ -648,6 +818,10 @@ def _production_trace_first_release_dispatch_arms(source: str) -> dict[str, int]
     expected = {tag for _, tag, _ in PRODUCTION_TRACE_EXTRACTION_ACTION_WITNESS_MAPPINGS}
     if set(counts) != expected or any(count != 1 for count in counts.values()):
         raise ValueError("first-release dispatch must contain each canonical action exactly once")
+    partition_errors: list[str] = []
+    _production_trace_shared_kernel_dispatch_tags(source, partition_errors)
+    if partition_errors:
+        raise ValueError("; ".join(partition_errors))
     return counts
 
 
@@ -658,6 +832,7 @@ def _production_trace_extraction_source_snapshot(
 
     errors: list[str] = []
     root_dir = root_dir.resolve()
+    errors.extend(_production_trace_replica_observation_source_errors(root_dir))
     model_relative = "formal/sumeragi_v2/SumeragiV2InFlightFirstRelease.tla"
     bindings_relative = "formal/sumeragi_v2/multilane_source_bindings.json"
     model_path = root_dir / model_relative

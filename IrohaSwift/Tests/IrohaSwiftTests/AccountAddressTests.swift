@@ -789,6 +789,8 @@ final class AccountAddressTests: XCTestCase {
 private extension AccountAddressError {
     var identifier: String {
         switch self {
+        case .nativeBridgeUnavailable:
+            return "NativeBridgeUnavailable"
         case .unsupportedAlgorithm:
             return "UnsupportedAlgorithm"
         case .keyPayloadTooLong:

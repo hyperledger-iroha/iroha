@@ -36,8 +36,10 @@ fn minimal_contract_interface() -> ivm::EmbeddedContractInterfaceV1 {
             kind: iroha_data_model::smart_contract::manifest::EntryPointKind::Kotoage,
             params: Vec::new(),
             argument_schema: None,
-            return_type: None,
-            return_schema: None,
+            return_type: Some("()".to_owned()),
+            return_schema: Some(iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeV1 {
+                nodes: vec![iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeNodeV1::Unit],
+            }),
             permission: Some("CanRegisterSmartContractCode".to_owned()),
             read_keys: Vec::new(),
             write_keys: Vec::new(),
@@ -46,7 +48,7 @@ fn minimal_contract_interface() -> ivm::EmbeddedContractInterfaceV1 {
             triggers: Vec::new(),
             entry_pc: 0,
         }],
-        error_codes: Vec::new(),
+        error_types: Vec::new(),
         states: Vec::new(),
     }
 }

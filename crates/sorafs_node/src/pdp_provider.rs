@@ -3,6 +3,7 @@
 //! The runtime in this module is deliberately transport-neutral. Torii supplies council-verified
 //! admission records, while the runtime owns canonical replay protection, deadline enforcement,
 //! exhaustive proof verification, durable terminal handoff state, and deterministic queue ordering.
+use crate::durable_transaction_forwarder::{CheckpointStoreError, CheckpointWriterGuard};
 use iroha_crypto::{Algorithm, KeyPair, Signature as IrohaSignature};
 use norito::derive::{NoritoDeserialize, NoritoSerialize};
 pub use sorafs_manifest::pdp::{
@@ -23,9 +24,8 @@ use sorafs_manifest::{
     },
 };
 #[cfg(unix)]
-use std::os::unix::{
-    fs::{DirBuilderExt as _, MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _},
-    io::AsRawFd as _,
+use std::os::unix::fs::{
+    DirBuilderExt as _, MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _,
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -58,8 +58,6 @@ const DEFAULT_MAX_FUTURE_SKEW_SECS: u64 = 5;
 const DEFAULT_TERMINAL_RETENTION_SECS: u64 = 24 * 60 * 60;
 const CHECKPOINT_LOCK_FILE_NAME: &str = "pdp-provider-state.lock";
 static CHECKPOINT_TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
-#[cfg(unix)]
-const LOCK_EXCLUSIVE_NONBLOCKING: std::os::raw::c_int = 2 | 4;
 #[cfg(any(target_os = "linux", target_os = "android"))]
 const SAFE_OPEN_FLAGS: std::os::raw::c_int = 0x0002_0000 | 0x0008_0000;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
@@ -74,10 +72,6 @@ const SAFE_OPEN_FLAGS: std::os::raw::c_int = 0x0000_0100 | 0x0100_0000;
     ))
 ))]
 const SAFE_OPEN_FLAGS: std::os::raw::c_int = 0;
-#[cfg(unix)]
-unsafe extern "C" {
-    fn flock(fd: std::os::raw::c_int, operation: std::os::raw::c_int) -> std::os::raw::c_int;
-}
 /// Governance-controlled resource and timing bounds for the embedded PDP runtime.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct PdpProviderProtocolPolicyV1 {
@@ -1245,7 +1239,7 @@ impl PdpCheckpointStore {
     fn load(
         &self,
     ) -> Result<(Option<PdpProviderCheckpointV1>, Option<[u8; 32]>), PdpProviderProtocolError> {
-        let _writer = CheckpointWriterGuard::acquire(&self.lock_path)?;
+        let _writer = acquire_checkpoint_writer(&self.lock_path)?;
         let Some(bytes) =
             read_checkpoint_bytes(&self.checkpoint_path, self.policy.checkpoint_max_bytes)?
         else {
@@ -1289,7 +1283,7 @@ impl PdpCheckpointStore {
                 limit: usize::try_from(self.policy.checkpoint_max_bytes).unwrap_or(usize::MAX),
             });
         }
-        let _writer = CheckpointWriterGuard::acquire(&self.lock_path)?;
+        let _writer = acquire_checkpoint_writer(&self.lock_path)?;
         let current =
             read_checkpoint_bytes(&self.checkpoint_path, self.policy.checkpoint_max_bytes)?;
         let current_fingerprint = current
@@ -1347,49 +1341,16 @@ impl PdpCheckpointStore {
         Ok(*blake3::hash(&bytes).as_bytes())
     }
 }
-struct CheckpointWriterGuard {
-    _file: File,
-    _process_lease: crate::checkpoint_file_lease::CheckpointFileLease,
-}
-impl CheckpointWriterGuard {
-    fn acquire(path: &Path) -> Result<Self, PdpProviderProtocolError> {
-        let mut options = OpenOptions::new();
-        options.read(true).write(true).create(true);
-        #[cfg(unix)]
-        {
-            options.mode(0o600);
-            options.custom_flags(SAFE_OPEN_FLAGS);
-        }
-        let file = options.open(path).map_err(|error| {
-            PdpProviderProtocolError::CheckpointIo(format!(
-                "open PDP checkpoint writer lock: {error}"
-            ))
-        })?;
-        validate_open_regular_file(path, &file, 0, true)?;
-        let process_lease = crate::checkpoint_file_lease::CheckpointFileLease::try_acquire(&file)
-            .map_err(|error| {
-                PdpProviderProtocolError::CheckpointIo(format!(
-                    "claim checkpoint file ownership: {error}"
-                ))
-            })?
-            .ok_or(PdpProviderProtocolError::CheckpointBusy)?;
-        #[cfg(unix)]
-        {
-            // SAFETY: `flock` only borrows the live lock-file descriptor and does not
-            // take ownership. The descriptor remains open in this guard.
-            let result = unsafe { flock(file.as_raw_fd(), LOCK_EXCLUSIVE_NONBLOCKING) };
-            if result != 0 {
-                return Err(PdpProviderProtocolError::CheckpointBusy);
-            }
-        }
-        // Recheck the path after acquiring both leases, before publishing a
-        // writer whose opened lock file may have been replaced during locking.
-        validate_open_regular_file(path, &file, 0, true)?;
-        Ok(Self {
-            _file: file,
-            _process_lease: process_lease,
-        })
-    }
+fn acquire_checkpoint_writer(
+    path: &Path,
+) -> Result<CheckpointWriterGuard, PdpProviderProtocolError> {
+    CheckpointWriterGuard::acquire(path).map_err(|error| match error {
+        CheckpointStoreError::Busy => PdpProviderProtocolError::CheckpointBusy,
+        CheckpointStoreError::RuntimePoisoned => PdpProviderProtocolError::RuntimePoisoned,
+        other => PdpProviderProtocolError::CheckpointIo(format!(
+            "acquire PDP checkpoint writer: {other}"
+        )),
+    })
 }
 fn ensure_private_state_directory(path: &Path) -> Result<(), PdpProviderProtocolError> {
     match fs::symlink_metadata(path) {
@@ -2332,11 +2293,11 @@ mod tests {
             .canonicalize()
             .unwrap()
             .join(CHECKPOINT_LOCK_FILE_NAME);
-        let first = CheckpointWriterGuard::acquire(&first_path).expect("first writer");
-        let _second = CheckpointWriterGuard::acquire(&second_path)
+        let first = acquire_checkpoint_writer(&first_path).expect("first writer");
+        let _second = acquire_checkpoint_writer(&second_path)
             .expect("an independent checkpoint root must not contend");
         assert!(matches!(
-            CheckpointWriterGuard::acquire(&first_path),
+            acquire_checkpoint_writer(&first_path),
             Err(PdpProviderProtocolError::CheckpointBusy)
         ));
         let alias = first_path
@@ -2345,11 +2306,11 @@ mod tests {
             .join(".")
             .join(CHECKPOINT_LOCK_FILE_NAME);
         assert!(matches!(
-            CheckpointWriterGuard::acquire(&alias),
+            acquire_checkpoint_writer(&alias),
             Err(PdpProviderProtocolError::CheckpointBusy)
         ));
         drop(first);
-        drop(CheckpointWriterGuard::acquire(&first_path).expect("released identity is reusable"));
+        drop(acquire_checkpoint_writer(&first_path).expect("released identity is reusable"));
     }
     const PROVIDER_ID: [u8; 32] = [0x31; 32];
     const MANIFEST_DIGEST: [u8; 32] = [0x42; 32];
@@ -2667,6 +2628,60 @@ mod tests {
                 ISSUED_AT,
             )
             .expect("enqueue challenge")
+    }
+    #[test]
+    fn checkpoint_writers_are_independent_per_directory_and_fence_aliases_and_os_locks() {
+        let first = TempDir::new().expect("first state root");
+        let second = TempDir::new().expect("second state root");
+        ensure_private_state_directory(first.path()).unwrap();
+        ensure_private_state_directory(second.path()).unwrap();
+        let lock_path = first.path().join(CHECKPOINT_LOCK_FILE_NAME);
+        let held = acquire_checkpoint_writer(&lock_path).expect("hold first writer");
+        let policy = PdpProviderProtocolPolicyV1::default();
+        let independent = PdpProviderProtocol::open(policy, second.path())
+            .expect("unrelated state root remains available");
+        let alias = first.path().join(".").join(CHECKPOINT_LOCK_FILE_NAME);
+        for path in [&lock_path, &alias] {
+            assert!(matches!(
+                acquire_checkpoint_writer(path),
+                Err(PdpProviderProtocolError::CheckpointBusy)
+            ));
+        }
+        assert!(matches!(
+            PdpProviderProtocol::open(policy, first.path()),
+            Err(PdpProviderProtocolError::CheckpointBusy)
+        ));
+        drop(held);
+        drop(acquire_checkpoint_writer(&alias).expect("released alias becomes available"));
+        let lock_file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&lock_path)
+            .unwrap();
+        lock_file
+            .try_lock()
+            .expect("hold independent operating-system lock");
+        assert!(matches!(
+            acquire_checkpoint_writer(&lock_path),
+            Err(PdpProviderProtocolError::CheckpointBusy)
+        ));
+        drop(lock_file);
+        drop(acquire_checkpoint_writer(&lock_path).expect("OS lock released"));
+        drop(independent);
+        #[cfg(unix)]
+        {
+            let hardlink = first.path().join("duplicate.lock");
+            fs::hard_link(&lock_path, &hardlink).unwrap();
+            assert!(matches!(
+                acquire_checkpoint_writer(&hardlink),
+                Err(PdpProviderProtocolError::CheckpointIo(_))
+            ));
+            fs::remove_file(hardlink).unwrap();
+            drop(
+                acquire_checkpoint_writer(&lock_path)
+                    .expect("failed acquisition releases reservation"),
+            );
+        }
     }
     #[test]
     fn policy_rejects_inert_or_inconsistent_bounds() {

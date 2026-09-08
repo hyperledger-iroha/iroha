@@ -2,7 +2,7 @@
 seiyaku CompilerFixture {
 
 view fn read_input() -> bytes {
-  return context::public_input(Name::parse("proof_payload"));
+  return context::public_input(name: Name::parse("proof_payload"));
 }
 
 }

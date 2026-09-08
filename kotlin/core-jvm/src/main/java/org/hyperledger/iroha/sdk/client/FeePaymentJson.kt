@@ -19,8 +19,8 @@ import org.hyperledger.iroha.sdk.core.model.TransactionPayload
 import org.hyperledger.iroha.sdk.numeric.KotodamaQuantity
 
 internal fun sameFeeQuoteAccountIdentity(left: String, right: String): Boolean = try {
-    val leftBytes = AccountAddress.parseEncodedIgnoringCurveSupport(left, null).canonicalBytes
-    val rightBytes = AccountAddress.parseEncodedIgnoringCurveSupport(right, null).canonicalBytes
+    val leftBytes = AccountAddress.parseEncoded(left, null).canonicalBytes
+    val rightBytes = AccountAddress.parseEncoded(right, null).canonicalBytes
     leftBytes.contentEquals(rightBytes)
 } catch (error: AccountAddressException) {
     throw IllegalArgumentException("fee quote account identity must use canonical I105", error)

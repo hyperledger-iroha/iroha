@@ -1853,6 +1853,11 @@ where
             RegisterBox::Account(r) => add_account_rw(&mut set, r.object.id()),
             RegisterBox::AssetDefinition(r) => {
                 add_asset_def_rw(&mut set, r.object.id(), state_ro);
+                // The signed owner domain is independent of the optional
+                // routing alias and is read when registration is authorized.
+                if let Some(domain) = r.object.owning_domain.as_ref() {
+                    add_domain_r(&mut set, domain);
+                }
                 if let Some(alias) = r.object.alias.as_ref()
                     && let Some(domain_name) = alias.domain_segment()
                     && let Ok(domain) = DomainId::try_new(domain_name, alias.dataspace_segment())
@@ -2766,7 +2771,7 @@ mod tests {
             access_set_hints,
             kotoba: Vec::new(),
             entrypoints: embedded_entrypoints,
-            error_codes: Vec::new(),
+            error_types: Vec::new(),
             states: Vec::new(),
         };
         let mut artifact = meta.encode();
@@ -2833,8 +2838,10 @@ mod tests {
             kind: iroha_data_model::smart_contract::manifest::EntryPointKind::Kotoage,
             params: Vec::new(),
             argument_schema: None,
-            return_type: None,
-            return_schema: None,
+            return_type: Some("()".to_owned()),
+            return_schema: Some(iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeV1 {
+                nodes: vec![iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeNodeV1::Unit],
+            }),
             permission: Some("ExecuteContract".to_owned()),
             read_keys: Vec::new(),
             write_keys: Vec::new(),
@@ -3049,16 +3056,29 @@ mod tests {
             crate::query::store::LiveQueryStore::start_test(),
         )
     }
+    fn prepass_test_header() -> iroha_data_model::block::BlockHeader {
+        // Execution uses its block's authenticated timestamp, including the
+        // valid zero timestamp; a pre-genesis committed view has no anchor.
+        iroha_data_model::block::BlockHeader::new(
+            core::num::NonZeroU64::new(1).expect("genesis height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        )
+    }
     #[test]
     fn dynamic_generic_prepass_enforces_contract_only_syscall_profile() {
         let (alice, _) = iroha_test_samples::gen_account_in("wonderland");
         let state = generic_prepass_test_state(&alice);
+        let block = state.block(prepass_test_header());
         let metadata = Metadata::default();
         let error = derive_from_ivm_dynamic(
             &generic_state_get_test_program(),
             &alice,
             &metadata,
-            &state.view(),
+            &block,
             TEST_GAS_LIMIT,
         )
         .expect_err("generic prepass must reject contract-owned durable-state access");
@@ -3092,16 +3112,12 @@ mod tests {
     fn dynamic_generic_prepass_still_accepts_stateless_programs() {
         let (alice, _) = iroha_test_samples::gen_account_in("wonderland");
         let state = generic_prepass_test_state(&alice);
+        let block = state.block(prepass_test_header());
         let mut halt = ivm::ProgramMetadata::default().encode();
         halt.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
-        let set = derive_from_ivm_dynamic(
-            &halt,
-            &alice,
-            &Metadata::default(),
-            &state.view(),
-            TEST_GAS_LIMIT,
-        )
-        .expect("stateless generic prepass must remain executable");
+        let set =
+            derive_from_ivm_dynamic(&halt, &alice, &Metadata::default(), &block, TEST_GAS_LIMIT)
+                .expect("stateless generic prepass must remain executable");
         assert!(set.write_keys.contains("*"));
     }
     #[test]
@@ -3262,7 +3278,7 @@ mod tests {
                 entrypoints: Some(vec![entrypoint]),
                 states: None,
                 kotoba: None,
-                error_codes: None,
+                error_types: None,
                 provenance: None,
             };
             assert!(
@@ -3288,6 +3304,12 @@ mod tests {
                 key_type: "int".to_owned(),
                 bound_kind: "take".to_owned(),
                 max_keys: 1,
+            },
+            DynamicAccessHint {
+                base_key: "state:Orders".to_owned(),
+                key_type: "int".to_owned(),
+                bound_kind: "page".to_owned(),
+                max_keys: 64,
             },
             DynamicAccessHint {
                 base_key: "state:Victim".to_owned(),
@@ -3327,7 +3349,7 @@ mod tests {
                     entrypoints: None,
                     states: None,
                     kotoba: None,
-                    error_codes: None,
+                    error_types: None,
                     provenance: None,
                 };
                 assert!(
@@ -4349,7 +4371,7 @@ seiyaku DynamicAccessCounter {
             asset_def_id.clone(),
             "coin".to_owned(),
             iroha_data_model::asset::AssetBalancePolicy::Global,
-            None,
+            Some(domain_id.clone()),
         );
         let isis: Vec<iroha_data_model::isi::InstructionBox> = vec![
             Register::account(account).into(),
@@ -4377,6 +4399,39 @@ seiyaku DynamicAccessCounter {
         assert!(set.write_keys.contains(&k_asset_def));
     }
     #[test]
+    fn register_asset_definition_reads_explicit_owner_and_alias_route_independently() {
+        let owner_domain = DomainId::try_new("owner", "universal").expect("owner domain");
+        let alias_domain = DomainId::try_new("route", "universal").expect("alias domain");
+        let id_domain = wonderland_domain_id();
+        let definition_id = AssetDefinitionId::derive_from_components(
+            id_domain.clone(),
+            "coin".parse().expect("asset name"),
+        );
+        for (owner, alias) in [(false, false), (true, false), (false, true), (true, true)] {
+            let definition = AssetDefinition::numeric(
+                definition_id.clone(),
+                "coin".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                owner.then(|| owner_domain.clone()),
+            )
+            .with_alias(alias.then(|| "coin#route.universal".parse().expect("asset alias")));
+            let instruction = Register::asset_definition(definition).into();
+            let set = derive_from_instruction(
+                &instruction,
+                None::<&crate::state::StateView<'_>>,
+                &mut BTreeSet::new(),
+                0,
+                0,
+            );
+            assert_eq!(set.read_keys.contains(&key_domain(&owner_domain)), owner);
+            assert_eq!(set.read_keys.contains(&key_domain(&alias_domain)), alias);
+            assert!(
+                !set.read_keys.contains(&key_domain(&id_domain)),
+                "opaque asset identifiers do not establish domain ownership"
+            );
+        }
+    }
+    #[test]
     fn ivm_access_dynamic_prepass_set_account_detail_sentinel() {
         // World and state for view
         let (alice, kp) = iroha_test_samples::gen_account_in("wonderland");
@@ -4387,7 +4442,7 @@ seiyaku DynamicAccessCounter {
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
         let state = State::new(world, kura, query);
-        let view = state.view();
+        let view = state.block(prepass_test_header());
         // Program: GET_AUTHORITY; INPUT_PUBLISH_TLV (key/value); SET_ACCOUNT_DETAIL; HALT
         let key: Name = "cursor".parse().expect("key name");
         let key_payload = norito::to_bytes(&key).expect("encode key");
@@ -4557,7 +4612,7 @@ seiyaku DynamicAccessCounter {
             ));
             parameters.commit();
         }
-        let view = state.view();
+        let view = state.block(prepass_test_header());
         let mut program = ivm::ProgramMetadata {
             version_major: 1,
             version_minor: 0,
@@ -4736,6 +4791,20 @@ seiyaku DynamicAccessCounter {
         assert_eq!(prepared_source, Some(AccessSetSource::ConservativeFallback));
     }
     #[test]
+    fn state_scan_and_retired_key_enumeration_keep_conservative_fences() {
+        for (syscall, expected) in [
+            (ivm::syscalls::SYSCALL_STATE_SCAN, "state:*"),
+            (0x01_0030, "*"),
+        ] {
+            let mut program = ivm::ProgramMetadata::default().encode();
+            program.extend_from_slice(&ivm::encoding::wide::encode_syscallx(syscall).to_le_bytes());
+            program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+            let mut set = AccessSet::new();
+            assert!(apply_unverified_ivm_access_fence(&program, &mut set));
+            assert_eq!(set.write_keys, BTreeSet::from([expected.to_owned()]));
+        }
+    }
+    #[test]
     fn syscall_access_registry_fails_closed_for_unknown_numbers() {
         use ivm::syscalls::SyscallAccess;
         assert_eq!(
@@ -4745,6 +4814,14 @@ seiyaku DynamicAccessCounter {
         assert_eq!(
             ivm::syscalls::syscall_access(ivm::syscalls::SYSCALL_STATE_GET),
             SyscallAccess::StateRead
+        );
+        assert_eq!(
+            ivm::syscalls::syscall_access(ivm::syscalls::SYSCALL_STATE_SCAN),
+            SyscallAccess::StateRead
+        );
+        assert_eq!(
+            ivm::syscalls::syscall_access(0x01_0030),
+            SyscallAccess::Dynamic
         );
         assert_eq!(
             ivm::syscalls::syscall_access(ivm::syscalls::SYSCALL_TRANSFER_ASSET_SCOPED),
@@ -4879,7 +4956,7 @@ seiyaku DynamicAccessCounter {
             iroha_data_model::smart_contract::manifest::DynamicAccessHint {
                 base_key: "state:Orders".to_owned(),
                 key_type: "int".to_owned(),
-                bound_kind: "range".to_owned(),
+                bound_kind: "page".to_owned(),
                 max_keys: 64,
             },
         ];
@@ -4932,9 +5009,11 @@ seiyaku DynamicAccessCounter {
         let valid = DynamicAccessHint {
             base_key: "state:Orders".to_owned(),
             key_type: "int".to_owned(),
-            bound_kind: "range".to_owned(),
+            bound_kind: "page".to_owned(),
             max_keys: 1,
         };
+        assert!(access_set_from_hint_keys(&[], &[], &[valid.clone()], &[]).is_some());
+        assert!(access_set_from_hint_keys(&[], &[], &[], &[valid.clone()]).is_some());
         let invalid = [
             DynamicAccessHint {
                 max_keys: 0,
@@ -4974,6 +5053,10 @@ seiyaku DynamicAccessCounter {
             },
             DynamicAccessHint {
                 bound_kind: "bounded".to_owned(),
+                ..valid.clone()
+            },
+            DynamicAccessHint {
+                bound_kind: "range".to_owned(),
                 ..valid.clone()
             },
         ];
@@ -5172,7 +5255,7 @@ seiyaku DynamicAccessCounter {
             entrypoints: None,
             states: None,
             kotoba: None,
-            error_codes: None,
+            error_types: None,
             provenance: None,
         }
         .signed(&kp);
@@ -5209,7 +5292,7 @@ seiyaku DynamicAccessCounter {
             entrypoints: None,
             states: None,
             kotoba: None,
-            error_codes: None,
+            error_types: None,
             provenance: None,
         }
         .signed(&kp);
@@ -5256,7 +5339,7 @@ seiyaku DynamicAccessCounter {
             entrypoints: None,
             states: None,
             kotoba: None,
-            error_codes: None,
+            error_types: None,
             provenance: None,
         }
         .signed(&kp);
@@ -5313,8 +5396,10 @@ seiyaku DynamicAccessCounter {
                 kind: EntryPointKind::Kotoage,
                 params: Vec::new(),
                 argument_schema: None,
-                return_type: None,
-                return_schema: None,
+                return_type: Some("()".to_owned()),
+                return_schema: Some(iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeV1 {
+                    nodes: vec![iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeNodeV1::Unit],
+                }),
                 permission: Some("ExecuteContract".to_owned()),
                 read_keys: vec!["state:alpha".to_owned()],
                 write_keys: vec!["state:beta".to_owned()],
@@ -5327,8 +5412,10 @@ seiyaku DynamicAccessCounter {
                 kind: EntryPointKind::Kotoage,
                 params: Vec::new(),
                 argument_schema: None,
-                return_type: None,
-                return_schema: None,
+                return_type: Some("()".to_owned()),
+                return_schema: Some(iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeV1 {
+                    nodes: vec![iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeNodeV1::Unit],
+                }),
                 permission: Some("ExecuteContract".to_owned()),
                 read_keys: vec!["state:run-read".to_owned()],
                 write_keys: vec!["state:run-write".to_owned()],
@@ -5352,7 +5439,7 @@ seiyaku DynamicAccessCounter {
             entrypoints: Some(entrypoints),
             states: None,
             kotoba: None,
-            error_codes: None,
+            error_types: None,
             provenance: None,
         }
         .signed(&kp);
@@ -5416,8 +5503,10 @@ seiyaku DynamicAccessCounter {
             kind: EntryPointKind::Kotoage,
             params: Vec::new(),
             argument_schema: None,
-            return_type: None,
-            return_schema: None,
+            return_type: Some("()".to_owned()),
+            return_schema: Some(iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeV1 {
+                nodes: vec![iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeNodeV1::Unit],
+            }),
             permission: Some("ExecuteContract".to_owned()),
             read_keys: vec!["state:alpha".to_owned()],
             write_keys: vec!["state:beta".to_owned()],
@@ -5435,7 +5524,7 @@ seiyaku DynamicAccessCounter {
             entrypoints: Some(entrypoints),
             states: None,
             kotoba: None,
-            error_codes: None,
+            error_types: None,
             provenance: None,
         }
         .signed(&kp);
@@ -5501,8 +5590,10 @@ seiyaku DynamicAccessCounter {
             kind: EntryPointKind::Kotoage,
             params: Vec::new(),
             argument_schema: None,
-            return_type: None,
-            return_schema: None,
+            return_type: Some("()".to_owned()),
+            return_schema: Some(iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeV1 {
+                nodes: vec![iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeNodeV1::Unit],
+            }),
             permission: Some("ExecuteContract".to_owned()),
             read_keys: vec![format!("account:{alice}")],
             write_keys: vec![format!("asset:{asset_id}")],
@@ -5520,7 +5611,7 @@ seiyaku DynamicAccessCounter {
             entrypoints: Some(entrypoints),
             states: None,
             kotoba: None,
-            error_codes: None,
+            error_types: None,
             provenance: None,
         }
         .signed(&kp);
@@ -5697,16 +5788,17 @@ seiyaku DynamicAccessCounter {
             Some(&state.view()),
             IvmStrategy::Conservative,
         );
-        let asset_def_id: AssetDefinitionId =
-            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "rose".parse().unwrap(),
-            );
-        let asset_id = AssetId::of(asset_def_id.clone(), alice.clone());
-        let asset_key = key_asset(&asset_id);
-        let asset_def_key = key_asset_def(&asset_def_id);
-        assert!(set.write_keys.contains(&asset_key));
-        assert!(set.write_keys.contains(&asset_def_key));
+        assert!(
+            set.write_keys.contains("*"),
+            "the trigger must retain the mint's global fence for dynamic asset policy and routing reads"
+        );
+        let trigger_id = "mint_asset_trigger".parse().expect("trigger id");
+        assert!(set.read_keys.contains(&key_trigger(&trigger_id)));
+        assert!(set.write_keys.contains(&key_trigger(&trigger_id)));
+        assert!(
+            set.write_keys
+                .contains(&key_trigger_repetitions(&trigger_id))
+        );
     }
     #[test]
     fn execute_trigger_includes_trigger_metadata_keys() {

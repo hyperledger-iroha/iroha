@@ -1,6 +1,7 @@
 import type {
   ContractDynamicAccessHintInput,
   ContractEntrypointParamInput,
+  ContractEntrypointInput,
   ContractStateDescriptorInput,
 } from "../../../index.js";
 import type {
@@ -16,13 +17,13 @@ const camelHint: ContractDynamicAccessHintInput = {
 const snakeHint: ContractDynamicAccessHintInput = {
   base_key: "state:Balances",
   key_type: "AccountId",
-  bound_kind: "range",
+  bound_kind: "page",
   max_keys: 1,
 };
 const mixedHint: ContractDynamicAccessHintInput = {
   baseKey: "state:Balances",
   key_type: "Name",
-  boundKind: "range",
+  boundKind: "page",
   max_keys: 2,
 };
 const equalAliasesHint: ContractDynamicAccessHintInput = {
@@ -30,8 +31,8 @@ const equalAliasesHint: ContractDynamicAccessHintInput = {
   base_key: "state:Balances",
   keyType: "Name",
   key_type: "Name",
-  boundKind: "range",
-  bound_kind: "range",
+  boundKind: "page",
+  bound_kind: "page",
   maxKeys: 2,
   max_keys: 2,
 };
@@ -78,7 +79,7 @@ const invalidKeyType: ContractDynamicAccessHintInput = {
 const compiledHint: KotodamaCompiledDynamicAccessHint = {
   base_key: "state:amount",
   key_type: "quantity",
-  bound_kind: "range",
+  bound_kind: "page",
   max_keys: 64,
 };
 const invalidCompiledHint: KotodamaCompiledDynamicAccessHint = {
@@ -129,3 +130,27 @@ void missingParamType;
 void camelState;
 void snakeState;
 void missingStateType;
+
+const unitEntry: ContractEntrypointInput = {
+  name: "read",
+  kind: "View",
+  returnType: "()",
+  returnSchema: { nodes: [{ kind: "Unit", value: null }] },
+};
+// @ts-expect-error Every public entrypoint requires both return descriptors.
+const absentUnitReturn: ContractEntrypointInput = { name: "read", kind: "View" };
+// @ts-expect-error A return type without its exact schema is incomplete.
+const partialUnitReturn: ContractEntrypointInput = {
+  name: "read", kind: "View", returnType: "()",
+};
+const nullUnitReturn: ContractEntrypointInput = {
+  name: "read",
+  kind: "View",
+  returnType: "()",
+  // @ts-expect-error Unit is an explicit schema, never a null descriptor.
+  returnSchema: null,
+};
+void unitEntry;
+void absentUnitReturn;
+void partialUnitReturn;
+void nullUnitReturn;

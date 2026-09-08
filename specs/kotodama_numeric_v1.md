@@ -285,6 +285,27 @@ quantity.div_round(decimal divisor, int scale, rounding-mode mode) -> quantity
 quantity.ratio_round(quantity divisor, int scale, rounding-mode mode) -> decimal
 ```
 
+Fused operations additionally expose:
+
+```text
+decimal.mul_div_round(multiplier: decimal, divisor: decimal, scale: int, mode: rounding-mode) -> decimal
+quantity.mul_div_round(multiplier: decimal, divisor: decimal, scale: int, mode: rounding-mode) -> quantity
+```
+
+All four arguments are named. These operations retain the mathematical product
+before division and round exactly once at the requested scale. The product does
+not pass through the ordinary bounded multiplication result type; an overflowing
+intermediate is allowed when the final rounded result is representable. Constant
+folding and execution use the same fused primitive and all existing deterministic
+rounding modes. No compiler or diagnostic selects a financial rounding policy.
+
+`DECIMAL_MUL_DIV_ROUND` (`0x010130`) and `QUANTITY_MUL_DIV_ROUND`
+(`0x010150`) take value, decimal multiplier, decimal divisor, Int scale, and raw
+rounding mode in `r10..r14`; `r15` must be zero. `r10` returns the typed result.
+The existing observed fused primitive charges canonical envelopes, exact limb
+multiplication/division and final rounding under staged metering. These calls
+must not lower to separate bounded multiplication and division syscalls.
+
 All three methods require the three argument names shown above. `rounding-mode`
 denotes one of the seven `Rounding::*` paths below, not a user-declarable type
 or an integer tag. `scale` is
@@ -340,8 +361,8 @@ The source conversion surface is explicit and complete:
 | `decimal::to_int_exact(value)` | `int` | succeeds only when the mathematical value is integral; otherwise `InexactConversion` |
 | `decimal::to_int_trunc(value)` | `int` | discards the fractional part toward zero |
 | `decimal::to_int_round(value, mode)` | `int` | rounds to scale zero using exactly one of the seven modes above |
-| `quantity::try_from_int(value)` | `Result<quantity, int>` | exact scale-zero conversion; a negative input returns the stable numeric fault tag |
-| `quantity::try_from_decimal(value)` | `Result<quantity, int>` | preserves the exact canonical value; a negative input returns the stable numeric fault tag |
+| `quantity::try_from_int(value)` | `Result<quantity, NumericError>` | exact scale-zero conversion; a negative input returns `NumericError::NegativeQuantity` |
+| `quantity::try_from_decimal(value)` | `Result<quantity, NumericError>` | preserves the exact canonical value; a negative input returns `NumericError::NegativeQuantity` |
 | `decimal::from_quantity(value)` | `decimal` | exact nominal-domain exit with identical mantissa and scale |
 
 The `int` error payload of a recoverable quantity conversion is the stable
@@ -467,7 +488,7 @@ reconstruct and validate.
 When CNTR metadata is present, `STATE_GET`, `STATE_SET`, `STATE_DEL`,
 `STATE_HAS`, and `STATE_LEN` accept only a declared scalar path or a canonical
 child of a declared `StateMap`; a bare map base is a collection prefix, not a
-value. `STATE_KEYS` and `STATE_COUNT` also accept that bare map base. Before a
+value. `STATE_SCAN` and `STATE_COUNT` accept that bare map base; only `STATE_SCAN` produces bounded live keyset pages. Before a
 write mutates state, and before a present read publishes bytes to the guest,
 the host reconstructs the exact schema from CNTR and requires a canonical
 `StateValueRecordV1` whose schema hash, active atom stream, pointer types,
@@ -522,8 +543,8 @@ ABI V1 contains the unconditional numeric syscall blocks:
 
 ```text
 0x010100..0x010113  int
-0x010120..0x01012f  decimal
-0x010140..0x01014f  quantity
+0x010120..0x010130  decimal
+0x010140..0x010150  quantity
 ```
 
 Typed exact-number JSON getters occupy exactly `0x010160..0x010162`: `int`,

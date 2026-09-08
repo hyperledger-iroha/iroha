@@ -16,7 +16,7 @@ fn kotodama_register_domain_e2e() {
     let src = r#"
         seiyaku RegisterDomain {
         kotoage fn main() authorize("RegisterDomain") {
-            ledger::domain::register(DomainId::parse("e2e_domain.universal"));
+            ledger::domain::register(domain: DomainId::parse("e2e_domain.universal"));
         }
         }
     "#;

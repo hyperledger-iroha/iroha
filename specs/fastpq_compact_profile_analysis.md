@@ -1,10 +1,14 @@
 # Compact FASTPQ profile capacity and qualification
 
-Source snapshot: 2026-09-06. This is an implementation-coupled sizing analysis,
-not a production parameter approval. The current compact protocol is private
-test code; production replay and its qualification gate remain in force. The
-required target is aggregate 128-bit qROM security. No profile below has an
-established bound for the complete implemented protocol.
+Sizing refreshed: 2026-09-08; historical measurements below retain their
+2026-09-06 snapshot context. This is an implementation-coupled sizing analysis,
+not a production parameter approval. The repeated-opening prototype sized
+below remains test code. The normal library now exposes fixed quantity
+ordinary/AXT offline verification through `offline_compact`, using a distinct
+375-query SHAKE shared-opening candidate; these tables do not size that route.
+Production replay and its qualification gate remain in force. The required
+target is aggregate 128-bit qROM security. No profile below has an established
+bound for the complete implemented protocol.
 
 ## Geometry and established algebra
 
@@ -37,7 +41,7 @@ full-Fp4 column and numerator batching, quotient identity, complete row
 openings and joint FRI are implemented; their end-to-end security reduction
 remains a separate obligation.
 
-## Current wire size, including canonical Norito framing
+## Repeated-opening prototype size under current canonical Norito framing
 
 [`CompactProof`](../crates/fastpq_prover/src/backend/compact_protocol.rs) carries
 complete current/next rows per query, four separate Merkle paths per query,
@@ -60,35 +64,51 @@ convention. Proof roots add `48*(r+4)` bytes. At w=342, ell=19, t=4, r=17,
 this is 19,300 bytes per query before framing, including 247 siblings.
 
 Framing is material: canonical default Norito uses compact per-field lengths,
-u64 vector counts and per-element lengths. An Fp4 is 37 bytes, not its 32-byte
-coefficient payload: four length-prefixed u64s plus its struct field prefix.
+u64 vector counts and per-element lengths. An Fp4 now has an exact 32-byte
+canonical coefficient payload; its enclosing field or vector element supplies
+the length prefix. The former 37-byte struct payload is not the current carrier.
 For a payload of n bytes define `P(n)=n+varint_len(n)`. Then a homogeneous
 vector is `V(k,n)=8+k*P(n)`, a default struct is the sum of `P(field_size)`, and
 the current proof frame adds 40 bytes (its alignment adds no padding).
-Applying these rules to the exact structs gives:
+Writing that struct sum as `S(...)`, the exact nested payload lengths are:
+
+```
+round_j = S(4, 4, V(2,32), 32, V(ell-j-1,48))
+fri     = S(4, 8+sum(P(round_j), j=0..r-1), 4, V(t,32), V(1,48))
+query   = S(4, V(w,8), V(w,8), V(ell,48), V(ell,48),
+            32, V(ell,48), 32, V(ell,48), fri)
+frame   = 40+S(48, 48, 48, V(r+1,48), V(q,query))
+```
+
+Applying these rules to the exact structs, including every varint width, gives:
 
 | Relation / candidate | N | Blowup / terminal | Queries | Raw payload bytes | Canonical frame bytes |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Existing hash-only diagnostic, w=310 | 512 | 8 / 4 | 136 | 1,588,608 | 1,762,083 |
-| Current complete compact schema | 65,536 | 8 / 4 | 136 | 2,625,808 | 2,865,251 |
-| Diagnostic calculator minimum | 65,536 | 8 / 4 | 200 | 3,861,008 | 4,213,091 |
-| Lower-memory qualification lane | 65,536 | 8 / 4 | 256 | 4,941,808 | 5,392,451 |
-| Expanded-domain qualification lane | 65,536 | 16 / 8 | 160 | 3,270,768 | 3,559,811 |
-| Largest-domain comparison lane | 65,536 | 32 / 16 | 128 | 2,778,608 | 3,018,691 |
+| Existing hash-only diagnostic, w=310 | 512 | 8 / 4 | 136 | 1,588,608 | 1,737,603 |
+| Complete repeated-opening prototype | 65,536 | 8 / 4 | 136 | 2,625,808 | 2,826,491 |
+| Diagnostic calculator minimum | 65,536 | 8 / 4 | 200 | 3,861,008 | 4,156,091 |
+| Lower-memory qualification lane | 65,536 | 8 / 4 | 256 | 4,941,808 | 5,319,491 |
+| Expanded-domain qualification lane | 65,536 | 16 / 8 | 160 | 3,270,768 | 3,511,011 |
+| Largest-domain comparison lane | 65,536 | 32 / 16 | 128 | 2,778,608 | 2,974,531 |
 
-The 136-query hash and complete-transfer lengths now match both
-`encoded_frame_len` and actual canonical encoding of the exact Rust proof
-structs in the 688-pass CPU suite. The valid hash proof also measures exactly
-1,762,083 bytes. Full typed-transfer proving and bounded verification also
-passed at 2,865,251 bytes, using an explicit 4 MiB diagnostic envelope; default
-512 KiB admission still rejects. Other rows remain
-source-derived projections, not implemented profiles or latency evidence.
-Malformed-shape preflight tests pass. Future profiles use the current wire
-layout for this comparison; a schema change requires recomputing the table.
+The 136-query hash and complete-transfer lengths match both
+`encoded_frame_len` and actual canonical encoding in
+`canonical_wire_sizes_match_complete_hash_and_transfer_opening_shapes` at
+1,737,603 and 2,826,491 bytes. Full typed-transfer proving and bounded
+verification also passed at 2,826,491 bytes in
+`complete_typed_transfer_verifies_after_private_witnesses_are_dropped`, using
+an explicit 4 MiB diagnostic envelope; default 512 KiB admission still rejects.
+Other rows remain source-derived projections, not implemented profiles or
+latency evidence. For every row above and in the larger-capacity table below,
+changing the Fp4 payload from 37 to 32 bytes leaves all enclosing varint widths
+unchanged, reducing the frame by exactly `5*q*(2+3*r+t)` bytes. Future profiles
+use the current repeated-opening layout for this comparison; a schema change
+requires recomputing the table.
 
 The legacy 512 KiB cap is impossible for this complete row-opening layout:
-rows alone are 744,192 bytes at 136 queries and 1,094,400 at 200. Even a 4 MiB
-replacement misses the current framed q=200 layout by 18,787 bytes. Narrow
+rows alone are 744,192 bytes at 136 queries and 1,094,400 at 200. A 4 MiB
+envelope admits the current framed q=200 projection with 38,213 bytes of
+headroom; this size result does not qualify that query count. Narrow
 u32 base-row registers do not allow u32 LDE opening encodings: evaluated trace
 polynomials range over the whole canonical Goldilocks field.
 
@@ -130,28 +150,31 @@ blowup 8 and q=200 only to show scaling:
 
 | D capacity | N | LDE rows | Reductions / roots | Raw trace LDE bytes | Framed proof projection |
 | ---: | ---: | ---: | ---: | ---: | ---: |
-| 1 | 65,536 | 524,288 | 17 / 18 | 1,434,451,968 | 4,213,091 |
-| 2 | 131,072 | 1,048,576 | 18 / 19 | 2,868,903,936 | 4,467,540 |
-| 4 | 262,144 | 2,097,152 | 19 / 20 | 5,737,807,872 | 4,731,789 |
-| 8 | 524,288 | 4,194,304 | 20 / 21 | 11,475,615,744 | 5,005,838 |
+| 1 | 65,536 | 524,288 | 17 / 18 | 1,434,451,968 | 4,156,091 |
+| 2 | 131,072 | 1,048,576 | 18 / 19 | 2,868,903,936 | 4,407,540 |
+| 4 | 262,144 | 2,097,152 | 19 / 20 | 5,737,807,872 | 4,668,789 |
+| 8 | 524,288 | 4,194,304 | 20 / 21 | 11,475,615,744 | 4,939,838 |
 
 Only the one-delta program exists. Larger capacities require authenticated
 inter-delta root boundaries, deterministic inactive-delta padding, generalized
 public polynomials and exact capacity admission, new domain roots/logs and
 FRI limits. Existing admission for 256 transition rows is not private compact
-capacity. A per-delta proof bundle is an alternative with roughly linear
-proof bytes and verification work, explicit root chaining and a revised
-aggregate security count; it is not a free increase of this profile's capacity.
+capacity. The separate offline per-delta proof bundle has roughly linear
+proof bytes and verification work and explicit root chaining. It requires its
+own aggregate security count; it does not increase this single-trace profile's
+capacity.
 
 ## Merkle multipaths before a smaller wire target
 
-A tested private canonical multiproof helper now derives the minimal sibling
-frontier from trusted sorted query indices and verifies with bounded memory;
-the new test-only shared-opening wire passed Cargo/unit validation, including
-the full hash relation at 972,311 canonical bytes and the complete transfer at
-1,608,631 bytes. The transfer's measured shared verification was 10.870 seconds
-in a concurrent local test-profile run, using an explicit 4 MiB diagnostic cap.
-Production wire admission is unchanged. It shares row leaves at
+A canonical multiproof helper derives the minimal sibling frontier from
+trusted sorted query indices and verifies with bounded memory. Historical
+2026-09-06 measurements of the test-only shared-opening prototype reported
+972,311 canonical bytes for the full hash relation, 1,608,631 bytes for the
+complete transfer, and 10.870 seconds for shared transfer verification in a
+concurrent local test-profile run with an explicit 4 MiB diagnostic cap.
+Those byte counts and timings belong to that historical encoding and run;
+they are not current 32-byte-carrier or 375-query candidate measurements.
+Production wire admission is unchanged. Shared openings use row leaves at
 `I union (I+blowup mod L)`,
 mixed/Q leaves at I, and FRI pair leaves at each derived layer index. Include
 each terminal vector once, and derive folded values from the authenticated
@@ -195,7 +218,7 @@ additional terms; they are not substitute security reductions. Choosing 200
 because the calculator passes would leave its explicitly documented blocker
 unresolved.
 
-The actual query sampler rejects biased field residues, deduplicates a
+The 136-query prototype's sampler rejects biased field residues, deduplicates a
 `BTreeSet`, and returns sorted distinct indices. If a fixed bad set of b out
 of L positions were sampled uniformly without replacement, its all-hit
 probability would be `C(b,q)/C(L,q) <= (b/L)^q`. That combinatorial fact does

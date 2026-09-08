@@ -48,8 +48,10 @@ fn state_program(number: u32, write: bool) -> Vec<u8> {
         },
         params: Vec::new(),
         argument_schema: None,
-        return_type: None,
-        return_schema: None,
+        return_type: Some("()".to_owned()),
+        return_schema: Some(ivm_abi::entrypoint::EntrypointValueTypeV1 {
+            nodes: vec![ivm_abi::entrypoint::EntrypointValueTypeNodeV1::Unit],
+        }),
         permission: write.then(|| "Execute".to_owned()),
         read_keys: (!write).then_some(access_key.clone()).into_iter().collect(),
         write_keys: write.then_some(access_key).into_iter().collect(),
@@ -70,7 +72,7 @@ fn state_program(number: u32, write: bool) -> Vec<u8> {
             name: "roundtrip_key".to_owned(),
             ty: EmbeddedStateType::Bytes,
         }],
-        error_codes: Vec::new(),
+        error_types: Vec::new(),
     };
     let mut program = ProgramMetadata::default().encode();
     program.extend_from_slice(&interface.encode_section());

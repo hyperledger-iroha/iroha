@@ -3132,6 +3132,41 @@ set {NETWORK_PERMIT_WAIT_TIMEOUT_ENV}=0 to disable timeout or provide an isolate
         waited = waited.saturating_add(NETWORK_PERMIT_POLL_INTERVAL);
     }
 }
+/// Immutable canonical genesis prepared before a peer cohort starts its timers.
+#[derive(Clone)]
+struct PreparedPeerGenesis {
+    bytes: Arc<[u8]>,
+}
+impl PreparedPeerGenesis {
+    async fn prepare(block: GenesisBlock) -> Result<Self> {
+        Self::prepare_with_encoder(block, NetworkPeer::canonical_genesis_bytes).await
+    }
+
+    async fn prepare_optional(block: Option<&GenesisBlock>) -> Result<Option<Self>> {
+        match block {
+            Some(block) => Self::prepare(block.clone()).await.map(Some),
+            None => Ok(None),
+        }
+    }
+
+    // One blocking owner runs the canonical encoder and its existing sanity checks.
+    // The injectable encoder keeps the ownership/async handoff test deterministic;
+    // production callers always select `canonical_genesis_bytes` through `prepare`.
+    async fn prepare_with_encoder(
+        block: GenesisBlock,
+        encode: impl FnOnce(&GenesisBlock) -> Result<Vec<u8>> + Send + 'static,
+    ) -> Result<Self> {
+        spawn_blocking(move || {
+            init_instruction_registry();
+            encode(&block).map(|bytes| Self {
+                bytes: bytes.into(),
+            })
+        })
+        .await
+        .wrap_err("failed to join canonical genesis preparation")?
+    }
+}
+
 /// Network of peers
 pub struct Network {
     env: Environment,
@@ -3448,13 +3483,15 @@ impl Network {
                 self.peers.len()
             ));
         }
+        // Canonical encoding can be expensive in debug integration builds. Finish
+        // it once, off the async worker, before any validator starts its clock.
+        let prepared_genesis = PreparedPeerGenesis::prepare(self.genesis()).await?;
         // Bind every published observer endpoint before validators start. The
         // relay retains accepted sockets and retries the private upstream until
         // the validators-first bootstrap reaches the observer stage.
         if let Some(relays) = &self.observer_slow_reader_relays {
             relays.start().await?;
         }
-        let genesis_block = Arc::new(self.genesis());
         let genesis_order = Arc::new(submitters.clone());
         let genesis_lookup = Arc::new(
             submitters
@@ -3482,7 +3519,7 @@ impl Network {
         let validator_start_futures = self.peers.iter().enumerate().map(|(index, peer)| {
             let genesis_lookup = genesis_lookup.clone();
             let genesis_order = genesis_order.clone();
-            let genesis_block = genesis_block.clone();
+            let prepared_genesis = prepared_genesis.clone();
             async move {
                 let stage = genesis_lookup.get(&index).copied();
                 let mnemonic = peer.mnemonic().to_string();
@@ -3529,7 +3566,7 @@ impl Network {
                         tokio::time::sleep(delay).await;
                     }
                 }
-                peer.start_checked(self.config_layers(), Some(genesis_block.as_ref()))
+                peer.start_checked_prepared(self.config_layers(), Some(&prepared_genesis))
                     .await?;
                 info!(
                     index,
@@ -3552,7 +3589,7 @@ impl Network {
                 .iter()
                 .enumerate()
                 .map(|(committee_index, peer)| {
-                    let genesis_block = genesis_block.clone();
+                    let prepared_genesis = prepared_genesis.clone();
                     async move {
                         let index = self.peers.len().saturating_add(committee_index);
                         let mnemonic = peer.mnemonic().to_string();
@@ -3571,9 +3608,9 @@ impl Network {
                             role = "committee_validator",
                             "starting non-global committee validator"
                         );
-                        peer.start_checked(
+                        peer.start_checked_prepared(
                             self.config_layers_for_peer(peer),
-                            Some(genesis_block.as_ref()),
+                            Some(&prepared_genesis),
                         )
                         .await?;
                         Self::wait_for_block_1_with_watchdog(
@@ -3596,7 +3633,7 @@ impl Network {
                     .iter()
                     .enumerate()
                     .map(|(observer_index, peer)| {
-                        let genesis_block = genesis_block.clone();
+                        let prepared_genesis = prepared_genesis.clone();
                         let observer_role = self.observer_start_layer(peer);
                         async move {
                             let index = self
@@ -3620,10 +3657,10 @@ impl Network {
                                 role = "observer",
                                 "starting signed observer replica"
                             );
-                            peer.start_checked(
+                            peer.start_checked_prepared(
                                 self.config_layers()
                                     .chain(iter::once(Cow::Owned(observer_role))),
-                                Some(genesis_block.as_ref()),
+                                Some(&prepared_genesis),
                             )
                             .await?;
                             Self::wait_for_block_1_with_watchdog(
@@ -8829,6 +8866,15 @@ impl NetworkPeer {
         config_layers: impl Iterator<Item = T>,
         genesis: Option<&GenesisBlock>,
     ) -> Result<()> {
+        let genesis = PreparedPeerGenesis::prepare_optional(genesis).await?;
+        self.start_prepared(config_layers, genesis.as_ref()).await
+    }
+
+    async fn start_prepared<T: AsRef<Table>>(
+        &self,
+        config_layers: impl Iterator<Item = T>,
+        genesis: Option<&PreparedPeerGenesis>,
+    ) -> Result<()> {
         if self.should_run_bind_preflight() {
             let preflight = preflight_bind_addresses([self.p2p_address(), self.api_address()]);
             if let Err(err) = preflight {
@@ -9487,9 +9533,19 @@ impl NetworkPeer {
         config_layers: impl Iterator<Item = T>,
         genesis: Option<&GenesisBlock>,
     ) -> Result<()> {
+        let genesis = PreparedPeerGenesis::prepare_optional(genesis).await?;
+        self.start_checked_prepared(config_layers, genesis.as_ref())
+            .await
+    }
+
+    async fn start_checked_prepared<T: AsRef<Table>>(
+        &self,
+        config_layers: impl Iterator<Item = T>,
+        genesis: Option<&PreparedPeerGenesis>,
+    ) -> Result<()> {
         let mut events = self.events();
         let has_genesis = genesis.is_some();
-        self.start(config_layers, genesis).await?;
+        self.start_prepared(config_layers, genesis).await?;
         let context = self
             .startup_context_summary()
             .unwrap_or_else(|| "<startup context not initialized>".to_string());
@@ -10117,7 +10173,7 @@ impl NetworkPeer {
     async fn write_run_config<T: AsRef<Table>>(
         &self,
         cfg_extra_layers: impl Iterator<Item = T>,
-        genesis: Option<&GenesisBlock>,
+        genesis: Option<&PreparedPeerGenesis>,
         existing_genesis_path: Option<&Path>,
         run: usize,
     ) -> Result<PathBuf> {
@@ -10147,10 +10203,7 @@ impl NetworkPeer {
             let path = self.dir.join(format!("run-{run}-genesis.nrt"));
             final_config =
                 final_config.write(["genesis", "file"], path.to_string_lossy().to_string());
-            // Ensure instruction/type registries are initialized before encoding.
-            init_instruction_registry();
-            let framed = Self::canonical_genesis_bytes(block)?;
-            tokio::fs::write(path, framed).await?;
+            tokio::fs::write(path, block.bytes.as_ref()).await?;
         } else if let Some(path) = existing_genesis_path {
             final_config =
                 final_config.write(["genesis", "file"], path.to_string_lossy().to_string());
@@ -16596,6 +16649,85 @@ mod tests {
         user.parse()
             .map_err(|error| eyre!("parse peer run config {}: {error:?}", path.display()))
     }
+    #[tokio::test(flavor = "current_thread")]
+    async fn shared_genesis_preparation_precedes_all_peer_configs_and_keeps_async_progress()
+    -> Result<()> {
+        let network = NetworkBuilder::new().with_peers(4).build();
+        let genesis = network.genesis();
+        let expected = genesis.0.encode_wire()?;
+        let async_thread = std::thread::current().id();
+        let preparations = Arc::new(AtomicUsize::new(0));
+        let timer_progress = Arc::new(AtomicBool::new(false));
+        let (started_tx, started_rx) = oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let preparation_count = Arc::clone(&preparations);
+        let preparation = PreparedPeerGenesis::prepare_with_encoder(genesis, move |block| {
+            // This assertion runs before waiting, so an accidental synchronous
+            // implementation fails immediately instead of deadlocking the test.
+            assert_ne!(std::thread::current().id(), async_thread);
+            assert_eq!(preparation_count.fetch_add(1, Ordering::SeqCst), 0);
+            started_tx.send(()).expect("announce encoder ownership");
+            release_rx.recv().expect("async consumer releases encoder");
+            NetworkPeer::canonical_genesis_bytes(block)
+        });
+        let progress = async {
+            started_rx.await.expect("encoder reached blocking worker");
+            tokio::task::yield_now().await;
+            tokio::time::sleep(Duration::from_millis(1)).await;
+            timer_progress.store(true, Ordering::SeqCst);
+            release_tx.send(()).expect("release blocking encoder");
+        };
+        let (prepared, ()) = tokio::join!(preparation, progress);
+        let prepared = prepared?;
+        assert!(timer_progress.load(Ordering::SeqCst));
+        assert_eq!(preparations.load(Ordering::SeqCst), 1);
+        assert_eq!(prepared.bytes.as_ref(), expected.as_slice());
+        let layers = network
+            .config_layers()
+            .map(Cow::into_owned)
+            .collect::<Vec<_>>();
+        let consumers = network.peers().iter().map(|peer| {
+            let prepared = prepared.clone();
+            let layers = &layers;
+            let preparations = Arc::clone(&preparations);
+            async move {
+                assert_eq!(preparations.load(Ordering::SeqCst), 1);
+                peer.write_run_config(layers.iter().map(Cow::Borrowed), Some(&prepared), None, 1)
+                    .await?;
+                let wire = tokio::fs::read(peer.dir.join("run-1-genesis.nrt")).await?;
+                Ok::<_, Report>((prepared, wire))
+            }
+        });
+        let consumers = futures::future::try_join_all(consumers).await?;
+        assert_eq!(consumers.len(), 4);
+        for (consumer, wire) in consumers {
+            assert!(Arc::ptr_eq(&consumer.bytes, &prepared.bytes));
+            assert_eq!(wire, expected);
+        }
+        assert_eq!(preparations.load(Ordering::SeqCst), 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn shared_genesis_preparation_error_never_publishes_bytes() -> Result<()> {
+        let network = NetworkBuilder::new().with_peers(4).build();
+        let prepared = PreparedPeerGenesis::prepare_with_encoder(network.genesis(), |_| {
+            Err(eyre!("canonical genesis preparation fixture failure"))
+        })
+        .await;
+        assert!(prepared.is_err());
+        assert!(
+            prepared
+                .err()
+                .expect("checked error")
+                .to_string()
+                .contains("canonical genesis preparation fixture failure")
+        );
+        assert!(PreparedPeerGenesis::prepare_optional(None).await?.is_none());
+        assert!(network.peers().iter().all(|peer| !peer.is_running()));
+        Ok(())
+    }
+
     #[tokio::test]
     async fn peer_run_configs_reuse_exact_genesis_expected_hash_without_hashing_restart_artifact()
     -> Result<()> {
@@ -16617,8 +16749,14 @@ mod tests {
             expected_hash,
             "a first start without a local artifact must still receive the operator anchor"
         );
+        let prepared_genesis = PreparedPeerGenesis::prepare(genesis).await?;
         let bootstrap_config = peer
-            .write_run_config(layers.iter().map(Cow::Borrowed), Some(&genesis), None, 1)
+            .write_run_config(
+                layers.iter().map(Cow::Borrowed),
+                Some(&prepared_genesis),
+                None,
+                1,
+            )
             .await?;
         assert_eq!(
             parse_peer_run_config(&bootstrap_config)?

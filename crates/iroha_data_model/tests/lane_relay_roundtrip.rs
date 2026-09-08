@@ -13,8 +13,8 @@ use iroha_data_model::{
     },
 };
 use norito::{
+    DeserializePayload,
     codec::{DecodeAll as _, Encode as _},
-    core::NoritoDeserialize,
 };
 use std::num::NonZeroU64;
 fn sample_block_header(da_hash: Option<HashOf<commitment::DaCommitmentBundle>>) -> BlockHeader {

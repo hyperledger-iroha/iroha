@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import importlib
+from iroha_native import load_crypto_extension
 
 import pytest
 
@@ -16,7 +16,7 @@ from iroha_python.crypto import (
 
 
 def test_authenticated_pyo3_abi23_executes_the_privacy_catalog_contract() -> None:
-    native = importlib.import_module("iroha_python._crypto")
+    native = load_crypto_extension()
     assert native.connect_norito_bridge_abi_version() == PRIVACY_REQUIRED_BRIDGE_ABI_VERSION
     assert native.privacy_bridge_abi_version() == PRIVACY_REQUIRED_BRIDGE_ABI_VERSION
     assert callable(native.privacy_compiled_profile_catalog_v1)
@@ -47,7 +47,7 @@ def test_authenticated_pyo3_abi23_executes_the_privacy_catalog_contract() -> Non
 
 
 def test_native_capability_fetch_requires_the_transport_owner_and_rejects_archives() -> None:
-    native = importlib.import_module("iroha_python._crypto")
+    native = load_crypto_extension()
     assert callable(native._privacy_fetch_exact12_capability_manifest_v1)
     assert callable(native.privacy_validate_exact12_capability_manifest_v1)
     # An archive, duck-typed object, or locally available catalog cannot stand in
