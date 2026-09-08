@@ -171,7 +171,7 @@ fn pending_abandonment_fixture() -> (tempfile::TempDir, AdmittedReset, DurableJo
 
 #[test]
 fn abandonment_cli_requires_explicit_flag_digest_and_original_authority() {
-    use clap::Parser;
+    use clap::Parser as _;
     #[derive(clap::Parser)]
     struct Parser {
         #[command(flatten)]

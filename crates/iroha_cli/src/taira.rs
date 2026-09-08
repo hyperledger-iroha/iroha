@@ -7857,7 +7857,7 @@ mod tests {
         let transaction = validated.transaction().unwrap().clone();
         let result = TransactionResult::new(Ok(DataTriggerSequence::default()));
         let committed = CommittedTransaction {
-            block_hash: HashOf::from_untyped_unchecked(Hash::new(b"confirmed block")),
+            block_hash: iroha_crypto::HashOf::from_untyped_unchecked(Hash::new(b"confirmed block")),
             entrypoint_hash: transaction.hash_as_entrypoint(),
             entrypoint_proof: iroha_crypto::MerkleProof::from_audit_path(0, Vec::new()),
             entrypoint: TransactionEntrypoint::External(transaction.clone()),
@@ -11654,11 +11654,11 @@ mod tests {
             {
                 let mut response = doctor_mock_response(request, None);
                 let mut payload: Value =
-                    json::from_str(&response.body).expect("mock discovery JSON");
+                    json::from_slice(&response.body).expect("mock discovery JSON");
                 *payload
                     .pointer_mut("/result/supportedVersions")
                     .expect("mock supportedVersions") = norito::json!(["2024-11-05"]);
-                response.body = json::to_json(&payload).expect("encode mock discovery JSON");
+                response.body = json::to_vec(&payload).expect("encode mock discovery JSON");
                 response
             } else {
                 doctor_mock_response(request, None)
@@ -11761,13 +11761,13 @@ mod tests {
                 {
                     let mut response = doctor_mock_response(request, None);
                     let mut payload: Value =
-                        json::from_str(&response.body).expect("mock tools/list JSON");
+                        json::from_slice(&response.body).expect("mock tools/list JSON");
                     payload
                         .pointer_mut("/result/tools")
                         .and_then(Value::as_array_mut)
                         .expect("mock tools array")
                         .push(hostile_tool.clone());
-                    response.body = json::to_json(&payload).expect("encode mock tools/list JSON");
+                    response.body = json::to_vec(&payload).expect("encode mock tools/list JSON");
                     response
                 } else {
                     doctor_mock_response(request, None)
